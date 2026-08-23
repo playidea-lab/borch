@@ -180,6 +180,15 @@ ADDED_AFTER = frozenset({
     "opt::Adam(maximize)/0.weight", "opt::Adam(maximize)/손실",
     "opt::RMSprop(maximize)/0.weight", "opt::RMSprop(maximize)/손실",
     "opt::SGD(the default rate)/0.weight", "opt::SGD(the default rate)/손실",
+    # The four algorithm variants that were absent from the optimizers — `amsgrad`,
+    # `centered`, `momentum`, `decoupled_weight_decay`. Same era, same reason: they
+    # train through `CrossEntropyLoss` and they pass, so the helper stops being one
+    # *every* failing case went through.
+    "opt::Adam(amsgrad)/0.weight", "opt::Adam(amsgrad)/손실",
+    "opt::RMSprop(centered)/0.weight", "opt::RMSprop(centered)/손실",
+    "opt::RMSprop(momentum)/0.weight", "opt::RMSprop(momentum)/손실",
+    "opt::NAdam(decoupled_weight_decay)/0.weight",
+    "opt::NAdam(decoupled_weight_decay)/손실",
 })
 
 

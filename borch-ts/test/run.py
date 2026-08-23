@@ -302,8 +302,13 @@ NOT_PORTED = {
     # disagree about. That one is `없음` in a row of `아직`, and it is counted here
     # rather than split into a row of its own because a one-case prefix would read as
     # a category.
-    "opt::": (6, "아직 — `maximize` on Adam and RMSprop needs a kernel each; and "
-                 "borch.ts's SGD requires `lr`, so it has no default rate to ask about"),
+    # 6 → 14. The core took torch's whole optimizer surface — `amsgrad`, `centered`,
+    # `momentum`, `decoupled_weight_decay` and the execution switches — and borch.ts
+    # has none of the four. **They are algorithm, not performance**: each changes the
+    # values, so each is a kernel over there rather than an argument threaded through.
+    "opt::": (14, "아직 — `maximize`, `amsgrad`, `centered`, `momentum` and "
+                  "`decoupled_weight_decay` are each a kernel on that side; and "
+                  "borch.ts's SGD requires `lr`, so it has no default rate to ask about"),
     # 158 → 86. **One reason was covering eight groups.** `아직` means a backlog, and
     # what was actually backed up was `자리만::` 63 and `묻는것::` 9 alone — both pure
     # properties of the other side, asking `t.dtype` and nothing else, and both should have

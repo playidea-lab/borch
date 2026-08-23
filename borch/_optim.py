@@ -16,6 +16,41 @@ from ._base import (
 
 # ================================================================ optim
 
+def _execution_switches(who, *, foreach=None, fused=None, capturable=False,
+                        differentiable=False):
+    """torch's four per-optimizer switches, which say *how* a step is computed
+    rather than *what* it computes.
+
+    **`foreach` and `fused` are accepted and ignored, and that is not the "accepted
+    and unused becomes a lie" shape this file refuses elsewhere.** Measured across
+    every optimizer torch offers them on — sixteen settings, four steps each —
+    **all sixteen reproduce the default answer exactly.** They choose a multi-tensor
+    or a fused kernel; there is one kernel here and it is the same arithmetic. An
+    argument that cannot change the answer is not a capability being faked.
+
+    **`capturable` and `differentiable` are refused, because torch refuses them
+    too.** On CPU `capturable=True` asserts the parameters are on a CUDA-like device
+    and `differentiable=True` walks into the in-place guard — measured, on ten
+    optimizers each. Matching torch means matching that: a caller gets the refusal
+    here they would get there, rather than a silence torch would not have given.
+
+    **Their order and their kind are torch's, per optimizer, and torch is not
+    consistent with itself.** `SGD` has `maximize` before `foreach`; `Adam` the other
+    way. `Adamax` puts `differentiable` before `capturable` and `Rprop` puts
+    `capturable` first. `ASGD` and `RMSprop` take theirs *positionally* where the
+    rest take them keyword-only. Tidying that would be measuring a preference.
+    """
+    if capturable:
+        raise RuntimeError(
+            f"{who}(capturable=True) needs a CUDA-like device — torch asserts the "
+            "same thing, and there is no such device here.")
+    if differentiable:
+        raise RuntimeError(
+            f"{who}(differentiable=True) is not here — the step edits its parameters "
+            "in place, which is what torch refuses for it too.")
+    del foreach, fused          # performance only; measured identical, see above
+
+
 class Optimizer:
     """A torch optimiser carries a list called `param_groups`.
 
@@ -87,7 +122,7 @@ class Optimizer:
 
 class SGD(Optimizer):
     def __init__(self, params, lr=1e-3, momentum=0.0, dampening=0.0,
-                 weight_decay=0.0, nesterov=False, *, maximize=False):
+                 weight_decay=0.0, nesterov=False, *, maximize=False, foreach=None, differentiable=False, fused=None):
         """torch's order, with `dampening` third and `nesterov` sixth.
 
         **The default learning rate was `0.01` and torch's is `1e-3`** — ten times
@@ -114,6 +149,7 @@ class SGD(Optimizer):
         """
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
+        _execution_switches("SGD", foreach=foreach, differentiable=differentiable, fused=fused)
         super().__init__(params, dict(lr=lr, momentum=momentum, dampening=dampening,
                                       weight_decay=weight_decay, nesterov=nesterov,
                                       maximize=maximize))
@@ -142,9 +178,22 @@ class SGD(Optimizer):
 
 
 class Adam(Optimizer):
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
-                 maximize=False):
-        super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, maximize=maximize))
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
+                 weight_decay=0.0, amsgrad=False, *, foreach=None, maximize=False, capturable=False, differentiable=False, fused=None, decoupled_weight_decay=False):
+        """`decoupled_weight_decay=True` **is `AdamW`**, and torch says so — the two
+        agree to the last digit (measured, three steps).
+
+        The switch already existed here as a class attribute, because `AdamW`
+        subclasses this and flips it. What was missing was the argument. A capability
+        present in the file and unreachable from outside is the cheapest kind of
+        absence and the one nothing notices, because every internal use works.
+        """
+        _execution_switches("Adam", foreach=foreach, capturable=capturable, differentiable=differentiable, fused=fused)
+        super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
+                                      weight_decay=weight_decay, amsgrad=amsgrad,
+                                      maximize=maximize))
+        if decoupled_weight_decay:
+            self.decoupled = True
 
     decoupled = False          # True for AdamW — the decay applies to the weights directly rather than to the gradient
 
@@ -165,7 +214,25 @@ class Adam(Optimizer):
                 st["exp_avg"] = b1 * st["exp_avg"] + (1 - b1) * g
                 st["exp_avg_sq"] = b2 * st["exp_avg_sq"] + (1 - b2) * (g * g)
                 mh = st["exp_avg"] / (1 - b1 ** st["step"])
-                vh = st["exp_avg_sq"] / (1 - b2 ** st["step"])
+                second = st["exp_avg_sq"]
+                if group["amsgrad"]:
+                    # **The running maximum, not the running average.** `amsgrad`
+                    # keeps the largest second moment seen so far, so the step size
+                    # can only shrink — the fix for Adam's non-convergence proof.
+                    # It was absent, and torch takes it *positionally*, so it was not
+                    # on the keyword-only list of what this file owed.
+                    #
+                    # **The maximum is over the raw moment and the bias correction
+                    # comes after.** Taking it over the corrected value instead is
+                    # the reading that looks equivalent — the correction is a
+                    # positive scalar, so it commutes with `max` at a fixed step —
+                    # and it is not, because the scalar changes every step: an early
+                    # entry corrected by a small `1 − β₂ᵗ` can beat a later, larger
+                    # raw moment. Measured against torch at 6.6e-04 after six steps.
+                    st.setdefault("max_exp_avg_sq", _np.zeros_like(p.data))
+                    st["max_exp_avg_sq"] = _np.maximum(st["max_exp_avg_sq"], second)
+                    second = st["max_exp_avg_sq"]
+                vh = second / (1 - b2 ** st["step"])
                 new = p.data - group["lr"] * mh / (_np.sqrt(vh) + group["eps"])
                 if group["weight_decay"] and self.decoupled:
                     new = new - group["lr"] * group["weight_decay"] * p.data
@@ -179,15 +246,34 @@ class AdamW(Adam):
     decoupled = True
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0.01, *, maximize=False):
+                 weight_decay=0.01, amsgrad=False, *, maximize=False, foreach=None, capturable=False, differentiable=False, fused=None):
+        _execution_switches("AdamW", foreach=foreach, capturable=capturable, differentiable=differentiable, fused=fused)
         super().__init__(params, lr=lr, betas=betas, eps=eps,
-                         weight_decay=weight_decay, maximize=maximize)
+                         weight_decay=weight_decay, amsgrad=amsgrad,
+                         maximize=maximize)
 
 
 class RMSprop(Optimizer):
-    def __init__(self, params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0, *,
-                 maximize=False):
-        super().__init__(params, dict(lr=lr, alpha=alpha, eps=eps, weight_decay=weight_decay, maximize=maximize))
+    def __init__(self, params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0,
+                 momentum=0.0, centered=False, capturable=False, foreach=None, maximize=False, differentiable=False):
+        """**`momentum` and `centered` were missing and both are the algorithm.**
+
+        `centered` subtracts a running mean of the gradient from the running mean of
+        its square, which makes the denominator an estimate of the *variance* rather
+        than of the second moment — that is the version Graves proposed and the one
+        several recipes ask for by name. `momentum` gives it a velocity buffer, as
+        `SGD` has.
+
+        Neither was on `KEYWORD_ONLY_ABSENCES`, which had been the list of things
+        owed here, **because torch takes both positionally.** The count was measuring
+        one axis while two real features sat on the other, and `RMSprop(0.01, 0.99,
+        1e-8, 0, 0.9)` — a recipe asking for momentum — raised a `TypeError` that
+        named nothing.
+        """
+        _execution_switches("RMSprop", capturable=capturable, foreach=foreach, differentiable=differentiable)
+        super().__init__(params, dict(lr=lr, alpha=alpha, eps=eps,
+                                      weight_decay=weight_decay, momentum=momentum,
+                                      centered=centered, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -201,7 +287,18 @@ class RMSprop(Optimizer):
                     g = g + group["weight_decay"] * p.data
                 st["square_avg"] = (group["alpha"] * st["square_avg"]
                                     + (1 - group["alpha"]) * g * g)
-                p._array = p.data - group["lr"] * g / (_np.sqrt(st["square_avg"]) + group["eps"])
+                avg = st["square_avg"]
+                if group["centered"]:
+                    st.setdefault("grad_avg", _np.zeros_like(p.data))
+                    st["grad_avg"] = (group["alpha"] * st["grad_avg"]
+                                      + (1 - group["alpha"]) * g)
+                    avg = avg - st["grad_avg"] * st["grad_avg"]
+                step = g / (_np.sqrt(avg) + group["eps"])
+                if group["momentum"]:
+                    st.setdefault("momentum_buffer", _np.zeros_like(p.data))
+                    st["momentum_buffer"] = group["momentum"] * st["momentum_buffer"] + step
+                    step = st["momentum_buffer"]
+                p._array = p.data - group["lr"] * step
 
 
 
@@ -215,13 +312,14 @@ class Adagrad(Optimizer):
     """
 
     def __init__(self, params, lr=0.01, lr_decay=0.0, weight_decay=0.0,
-                 initial_accumulator_value=0.0, eps=1e-10, *, maximize=False):
+                 initial_accumulator_value=0.0, eps=1e-10, foreach=None, *, maximize=False, differentiable=False, fused=None):
         """torch's order — `initial_accumulator_value` sits **before** `eps`.
 
         Without it `Adagrad(p, 0.01, 0, 0, 1e-8)` set the accumulator's start where
         the caller meant the epsilon, and an accumulator seeded at 1e-8 rather than 0
         is a different first step from the one they asked for.
         """
+        _execution_switches("Adagrad", foreach=foreach, differentiable=differentiable, fused=fused)
         super().__init__(params, dict(
             lr=lr, lr_decay=lr_decay, weight_decay=weight_decay,
             initial_accumulator_value=initial_accumulator_value, eps=eps,
@@ -253,8 +351,8 @@ class Adadelta(Optimizer):
     takes, it is wildly large.
     """
 
-    def __init__(self, params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0, *,
-                 maximize=False):
+    def __init__(self, params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0, foreach=None, *, capturable=False, maximize=False, differentiable=False):
+        _execution_switches("Adadelta", foreach=foreach, capturable=capturable, differentiable=differentiable)
         super().__init__(params, dict(lr=lr, rho=rho, eps=eps,
                                       weight_decay=weight_decay, maximize=maximize))
 
@@ -281,8 +379,8 @@ class Adamax(Optimizer):
     """Adam's second moment kept as **a maximum rather than a mean of squares.**
     The infinity-norm version."""
 
-    def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
-                 maximize=False):
+    def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, foreach=None, *, maximize=False, differentiable=False, capturable=False):
+        _execution_switches("Adamax", foreach=foreach, differentiable=differentiable, capturable=capturable)
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
                                       weight_decay=weight_decay, maximize=maximize))
 
@@ -317,11 +415,17 @@ class NAdam(Optimizer):
     """
 
     def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0.0, momentum_decay=4e-3, *,
-                 maximize=False):
+                 weight_decay=0.0, momentum_decay=4e-3,
+                 decoupled_weight_decay=False, *, foreach=None, maximize=False, capturable=False, differentiable=False):
+        """`decoupled_weight_decay` applies the decay to the weights rather than to
+        the gradient — `AdamW`'s split, offered here as an argument. torch takes it
+        positionally, so it was never on the keyword-only list of what was owed."""
+        _execution_switches("NAdam", foreach=foreach, capturable=capturable, differentiable=differentiable)
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
                                       weight_decay=weight_decay,
-                                      momentum_decay=momentum_decay, maximize=maximize))
+                                      momentum_decay=momentum_decay,
+                                      decoupled_weight_decay=decoupled_weight_decay,
+                                      maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -338,8 +442,11 @@ class NAdam(Optimizer):
                 st["step"] += 1
                 t = st["step"]
                 g = -p.grad.data if group["maximize"] else p.grad.data
-                if group["weight_decay"]:
+                decoupled = group["decoupled_weight_decay"]
+                if group["weight_decay"] and not decoupled:
                     g = g + group["weight_decay"] * p.data
+                if decoupled and group["weight_decay"]:
+                    p._array = p.data * (1 - group["lr"] * group["weight_decay"])
                 mu = b1 * (1 - 0.5 * 0.96 ** (t * psi))
                 mu_next = b1 * (1 - 0.5 * 0.96 ** ((t + 1) * psi))
                 st["mu_product"] = st["mu_product"] * mu
@@ -361,10 +468,14 @@ class RAdam(Optimizer):
     Adam's, so the golden walks five steps.
     """
 
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
-                 maximize=False):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
+                 weight_decay=0.0, decoupled_weight_decay=False, *, foreach=None, maximize=False, capturable=False, differentiable=False):
+        """See `NAdam` on `decoupled_weight_decay`."""
+        _execution_switches("RAdam", foreach=foreach, capturable=capturable, differentiable=differentiable)
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
-                                      weight_decay=weight_decay, maximize=maximize))
+                                      weight_decay=weight_decay,
+                                      decoupled_weight_decay=decoupled_weight_decay,
+                                      maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -380,8 +491,11 @@ class RAdam(Optimizer):
                 st["step"] += 1
                 t = st["step"]
                 g = -p.grad.data if group["maximize"] else p.grad.data
-                if group["weight_decay"]:
+                decoupled = group["decoupled_weight_decay"]
+                if group["weight_decay"] and not decoupled:
                     g = g + group["weight_decay"] * p.data
+                if decoupled and group["weight_decay"]:
+                    p._array = p.data * (1 - group["lr"] * group["weight_decay"])
                 st["exp_avg"] = b1 * st["exp_avg"] + (1 - b1) * g
                 st["exp_avg_sq"] = b2 * st["exp_avg_sq"] + (1 - b2) * g * g
                 mh = st["exp_avg"] / (1 - b1 ** t)
@@ -412,8 +526,8 @@ class ASGD(Optimizer):
     """
 
     def __init__(self, params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6,
-                 weight_decay=0.0, *,
-                 maximize=False):
+                 weight_decay=0.0, foreach=None, maximize=False, differentiable=False, capturable=False):
+        _execution_switches("ASGD", foreach=foreach, differentiable=differentiable, capturable=capturable)
         super().__init__(params, dict(lr=lr, lambd=lambd, alpha=alpha, t0=t0,
                                       weight_decay=weight_decay, maximize=maximize))
 
@@ -454,8 +568,8 @@ class Rprop(Optimizer):
     different, and an input whose signs never flip never catches it.
     """
 
-    def __init__(self, params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50), *,
-                 maximize=False):
+    def __init__(self, params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50), *, capturable=False, foreach=None, maximize=False, differentiable=False):
+        _execution_switches("Rprop", capturable=capturable, foreach=foreach, differentiable=differentiable)
         super().__init__(params, dict(lr=lr, etas=etas, step_sizes=step_sizes, maximize=maximize))
 
     def step(self):
@@ -497,8 +611,8 @@ class Adafactor(Optimizer):
     """
 
     def __init__(self, params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3),
-                 d=1.0, weight_decay=0.0, *,
-                 maximize=False):
+                 d=1.0, weight_decay=0.0, *, foreach=None, maximize=False):
+        _execution_switches("Adafactor", foreach=foreach)
         super().__init__(params, dict(lr=lr, beta2_decay=beta2_decay, eps=eps,
                                       d=d, weight_decay=weight_decay, maximize=maximize))
 

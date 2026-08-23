@@ -3565,6 +3565,23 @@ _OPTIMIZERS = [
     # every case above names its own rate, so nothing had ever asked. This row omits
     # it on purpose.
     ("SGD(the default rate)", {}),
+    # **Four algorithm variants that were absent and were not on the list of what was
+    # owed.** `KEYWORD_ONLY_ABSENCES` had been that list, and torch takes all four
+    # positionally, so the count was measuring one axis while the things most worth
+    # owing sat on the other. Each changes values; each is asked at a value that
+    # changes them.
+    #
+    # `amsgrad` keeps the largest second moment seen so far, so the step can only
+    # shrink. `centered` divides by an estimate of the variance rather than of the
+    # second moment. `momentum` gives RMSprop a velocity buffer. `decoupled` applies
+    # the decay to the weights rather than to the gradient, which is what makes
+    # `AdamW` a separate name — so it is asked *with* a weight decay, since without
+    # one the two branches are the same arithmetic.
+    ("Adam(amsgrad)", {"lr": 0.05, "amsgrad": True, "weight_decay": 0.1}),
+    ("RMSprop(centered)", {"lr": 0.05, "centered": True}),
+    ("RMSprop(momentum)", {"lr": 0.05, "momentum": 0.9}),
+    ("NAdam(decoupled_weight_decay)",
+     {"lr": 0.05, "decoupled_weight_decay": True, "weight_decay": 0.1}),
 ]
 
 # `(name, constructor arguments, how many steps)`. The learning rate's **trajectory** is asked.

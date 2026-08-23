@@ -252,7 +252,12 @@ SHORTER = {
     # 12 → 10. Two optimizers left for `agree` when they took `maximize`: torch has
     # it keyword-only, so their positional lists were already level and the name was
     # the whole difference.
-    "optim": 10,
+    # 10 → 0. **Every optimizer agrees with torch exactly**, which is the first time
+    # a namespace in this table has emptied. `amsgrad`, `centered`, `momentum` and
+    # `decoupled_weight_decay` were the four that changed values; the rest are
+    # torch's execution switches, accepted where they cannot change an answer and
+    # refused where torch refuses them.
+    "optim": 0,
     "optim.lr_scheduler": 1,
     "linalg": 0,
     "utils.data": 1,
@@ -446,7 +451,25 @@ def test_the_measurement_still_runs_as_a_script():
 # `capturable`, `differentiable`, `fused` — which change no value. `Adam`'s
 # `decoupled_weight_decay` and `dim_order`'s `ambiguity_check` are the two that are
 # still work.
-KEYWORD_ONLY_ABSENCES = 33
+# 33 → 5, and **every one of the twelve optimizers now matches torch name-for-name
+# and kind-for-kind.** The five left are `dim_order`'s `ambiguity_check` and
+# `DataLoader`'s four worker settings.
+#
+# The last pass split the 33 by measuring rather than by reading:
+#
+#   `foreach`, `fused`   accepted and ignored. Sixteen settings across every
+#                        optimizer torch offers them on, four steps each — **all
+#                        sixteen reproduce the default answer exactly.** They pick a
+#                        kernel; there is one kernel here.
+#   `capturable`,        refused, because **torch refuses them too** on CPU:
+#   `differentiable`     `AssertionError` and `RuntimeError`, measured on ten each.
+#
+# **And four real features were hiding among them.** `amsgrad` on Adam and AdamW,
+# `centered` and `momentum` on RMSprop, `decoupled_weight_decay` on NAdam and RAdam —
+# all algorithm variants that change values, all absent, and **none of them on this
+# list**, because torch takes them positionally. This number was the list of what was
+# owed here, and the four things most worth owing were on the other axis.
+KEYWORD_ONLY_ABSENCES = 5
 
 
 def _keyword_only_gaps():
@@ -566,7 +589,9 @@ def test_a_forbidden_shift_is_not_reported_as_one():
 # scope mistake one level up: a true observation about `Adagrad` turned into a
 # category, in a file whose whole subject is categories claiming more than their
 # evidence.
-TORCH_REACHES_FURTHER_BY_POSITION = 57
+# 57 → 48. Nine optimizers stopped taking fewer positional arguments than torch when
+# they took `foreach`, `capturable` and the rest in torch's own seats.
+TORCH_REACHES_FURTHER_BY_POSITION = 48
 
 # **`agree` rows with the same problem: none.** Worth pinning precisely because it
 # is empty. `agree` means the two name lists match, and the worry — raised while

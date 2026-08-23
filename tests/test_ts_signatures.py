@@ -198,15 +198,22 @@ UNALIGNED = {
                 #     same as two sides drifting**, and this bucket cannot tell them
                 #     apart on its own; that is what the comment is for.
     "nn.functional": 1,
-    # 7 → 1. **Six rows left the worst bucket, and not because borch.ts moved.**
-    # `maximize` went onto ten core optimizers; borch.ts already spells its own
-    # switches at the same positions, so the two lists became the same length and
-    # the difference became a spelling — `renamed` rather than `unaligned`.
+    # 7 → 1 → 7. It went down when `maximize` landed on both sides at the same
+    # length, and back up when the core took torch's **whole** optimizer surface —
+    # `amsgrad`, `centered`, `momentum`, `decoupled_weight_decay` and the four
+    # execution switches — and borch.ts did not follow.
     #
-    # A row leaving `unaligned` is worth more than a row leaving `shorter`: this is
-    # the bucket that means *nobody can tell from the names whether these are the
-    # same arguments*, so it is the one that has to be read by a person.
-    "optim": 1,
+    # **This is the axis paying its stated price, not a regression.** The comment
+    # below already says it: closing a gap against torch opens one between our own
+    # two libraries first, because the core can only move toward the outside
+    # authority by moving away from borch.ts until borch.ts follows. `optim` on the
+    # core-to-torch axis is 0 now — the first namespace there to empty — and these
+    # seven are what that cost.
+    #
+    # **`Adam` would stay here even after borch.ts follows**: over there the pair is
+    # `beta1, beta2` where torch has one `betas`, so the lists cannot be the same
+    # length whatever else is added. That one is a shape difference and not a debt.
+    "optim": 7,
     "optim.lr_scheduler": 3,
     "linalg": 6,
     "utils.data": 0,
@@ -230,10 +237,9 @@ RENAMED = {
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     "nn.functional": 1,
-    # 1 → 7, all six arriving from `unaligned` above. Same length, different
-    # spellings, which is a row somebody can still get wrong — `renamed` is not a
-    # clean bill, it is `unaligned`'s equal-length sibling.
-    "optim": 7,
+    # 7 → 1: the six went back to `unaligned` when the core took torch's whole
+    # optimizer surface and borch.ts stayed where it was. See the note there.
+    "optim": 1,
     "optim.lr_scheduler": 0,
     "linalg": 17,
     "utils.data": 0,
@@ -280,10 +286,10 @@ SHORTER = {
     # landing on the wrong parameter. `SGD` did get `maximize` on both sides in the
     # same edit and is not here.
     #
-    # 1 → 4. Three optimizers now take one argument more than borch.ts does, because
-    # `maximize` landed on the core and the far side has it on `SGD` alone. A short
-    # tail is the safe end of that: one argument too many raises rather than landing
-    # somewhere.
+    # 1 → 4, and it stayed there. Four optimizers whose borch.ts list is still a
+    # prefix of the core's after the core took torch's whole surface — the safe end
+    # of the parting, where one argument too many raises rather than landing
+    # somewhere. The six that are not prefixes are in `unaligned`.
     "optim": 4,
     # 12 → 11. borch.ts's `ReduceLROnPlateau` followed the core into torch's
     # list in the same edit, so the row stopped being a truncation. The
