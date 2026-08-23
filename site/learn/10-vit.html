@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vision Transformer — borch Learn</title>
+<meta name="description" content="Patches as tokens, attention, a class token — and the four places borch.ts is narrower than torch.">
+<link rel="alternate" hreflang="ko" href="../ko/learn/10-vit.html">
+<!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
+     `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
+     does not follow a relative path, and hard-coding the deployed address here would go
+     stale quietly the day the domain changes. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Vision Transformer — borch Learn">
+<meta property="og:description" content="Patches as tokens, attention, a class token — and the four places borch.ts is narrower than torch.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/learn/10-vit.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">Python</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/learn/10-vit.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Learn</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-tensors.html">1 · Tensors</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · Modules</a>
+      <a href="04-training.html">4 · Training</a>
+      <a href="05-cnn.html">5 · Convolution</a>
+      <a href="06-save-load.html">6 · Saving</a>
+      <a href="07-data.html">7 · Data</a>
+      <a href="08-debugging.html">8 · Debugging</a>
+      <a href="09-resnet.html">9 · Residual</a>
+      <a href="10-vit.html" class="on">10 · Transformer</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Learn · 10</p>
+    <h1>Vision Transformer</h1>
+    <p class="lead">
+      A convolution looks at neighbours. A transformer lets every patch look at every
+      other patch and decide what matters. Cutting the image into patches is one
+      convolution with the stride set to the patch size — after that there is no image
+      left, only a sequence.
+    </p>
+    <p class="lead">
+      This is also the lesson where borch.ts is narrower than torch in four places. They
+      are named where you meet them rather than in a footnote, because each one is a line
+      copied from a torch tutorial that will not run.
+    </p>
+
+    <h2>Patches are tokens</h2>
+    <p>
+      <code>Conv2d(1, D, patch, patch, 0)</code> gives one D-length vector per patch, laid
+      out as <code>[N, D, H', W']</code>. A sequence wants <code>[N, tokens, D]</code>, so
+      the map is flattened and the last two axes swapped.
+    </p>
+    <div class="note-box">
+      <strong>Divergence 1 — <code>transpose</code> is two-dimensional here.</strong>
+      torch's <code>x.transpose(1, 2)</code> on a 3-D tensor has no equivalent;
+      <code>permute([0, 2, 1])</code> says the same thing and does work.
+    </div>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const D = 32, PATCH = 4;
+        const patchify = new nn.Conv2d(1, D, PATCH, PATCH, 0);
+
+        const x = Tensor.randn([2, 1, 8, 8]);
+        const map = patchify.call(x);
+        log("image     :", JSON.stringify(x.shape));
+        log("patch map :", JSON.stringify(map.shape), " (a 2x2 grid of patches)");
+
+        const tokens = map.reshape([2, D, 4]).permute([0, 2, 1]);
+        log("as tokens :", JSON.stringify(tokens.shape), " (N, tokens, D)");
+      </script>
+    </div>
+
+    <h2>Attention, and a linear layer that is not batched</h2>
+    <p>
+      <code>nn.MultiheadAttention(D, heads)</code> takes query, key and value. Feeding it
+      the same tensor three times is self-attention: each token asks every token what it
+      has.
+    </p>
+    <div class="note-box">
+      <strong>Divergence 2 — attention returns a bare tensor.</strong> torch returns
+      <code>(output, weights)</code>, so <code>const [out] = att(...)</code> destructures
+      a tensor here and gives you something unusable.<br><br>
+      <strong>Divergence 3 — <code>nn.Linear</code> is two-dimensional.</strong> Handed a
+      <code>[N, tokens, D]</code> tensor it refuses, and says why:
+      <em>mm is 2-D by 2-D. Batching is not here yet.</em> Folding the batch and token
+      axes together and unfolding afterwards is exact, not an approximation — a linear
+      layer treats every row independently anyway.
+    </div>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const D = 32;
+        const seq = Tensor.randn([2, 4, D]);
+
+        const att = new nn.MultiheadAttention(D, 4);
+        const out = att.call(seq, seq, seq);
+        log("attention out:", JSON.stringify(out.shape), " — a tensor, not a pair");
+
+        const fc = new nn.Linear(D, D * 2);
+        try {
+          fc.call(seq);
+        } catch (e) {
+          log("Linear on 3-D:", e.message);
+        }
+
+        // Fold [N, T, D] to [N*T, D], apply, unfold. Rows are independent either way.
+        const perToken = (f, t, dOut) => {
+          const [n, k, d] = t.shape;
+          return f(t.reshape([n * k, d])).reshape([n, k, dOut]);
+        };
+        log("folded       :", JSON.stringify(perToken(u => fc.call(u), seq, D * 2).shape));
+      </script>
+    </div>
+
+    <h2>The class token</h2>
+    <p>
+      Something has to turn a sequence into one prediction. Averaging the tokens is the
+      obvious move and here it is the wrong one: in the task below exactly one patch is
+      bright, and its contribution to the average is the same wherever it sits — the
+      answer is averaged away. A transformer instead prepends one learned token that
+      belongs to no patch, lets attention fill it, and reads the class off that.
+    </p>
+    <div class="note-box">
+      <strong>Divergence 4 — <code>expand</code> and <code>repeat</code> take loose
+      arguments, not an array.</strong> <code>repeat([n, 1, 1])</code> is read as a
+      one-element shape and fails claiming a dimension would shrink;
+      <code>repeat(n, 1, 1)</code> is the same call torch would take. The message points
+      at the wrong thing, which is worth knowing before it costs you ten minutes.
+    </div>
+
+    <h2>Put together</h2>
+    <p>
+      Eight-by-eight images, one of the four quadrants bright, and the label is which
+      quadrant. Attention has something real to do: find the patch that is on, and report
+      where it was. Position is not in the patch contents at all — it is in the learned
+      positional embedding added to the sequence.
+    </p>
+    <p>
+      This is the slowest block on the site — around ten seconds. The progress lines are
+      printed as it goes so you can see it moving rather than wonder whether it hung.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const D = 32, HEADS = 4, PATCH = 4, TOK = 4, N = 24;
+
+        // One bright quadrant per image; the label is which one.
+        const pixels = new Float32Array(N * 64);
+        const labels = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const q = i % 4;
+          labels[i] = q;
+          const r0 = (q >> 1) * 4, c0 = (q & 1) * 4;
+          for (let r = 0; r < 4; r++)
+            for (let c = 0; c < 4; c++) pixels[i * 64 + (r0 + r) * 8 + (c0 + c)] = 1;
+        }
+        const x = keepAlive(Tensor.from(pixels, [N, 1, 8, 8]));
+        const y = keepAlive(Tensor.from(labels, [N], { dtype: "int64" }));
+
+        const perToken = (f, t, dOut) => {
+          const [n, k, d] = t.shape;
+          return f(t.reshape([n * k, d])).reshape([n, k, dOut]);
+        };
+
+        class Block extends nn.Module {
+          constructor() {
+            super();
+            this.n1 = new nn.LayerNorm([D]);
+            this.att = new nn.MultiheadAttention(D, HEADS);
+            this.n2 = new nn.LayerNorm([D]);
+            this.fc1 = new nn.Linear(D, D * 2);
+            this.fc2 = new nn.Linear(D * 2, D);
+          }
+          forward(t) {
+            const h = this.n1.call(t);
+            const r = t.add(this.att.call(h, h, h));          // attention, then add back
+            const z = this.n2.call(r);
+            const wide = perToken(u => this.fc1.call(u), z, D * 2).gelu();
+            return r.add(perToken(u => this.fc2.call(u), wide, D));
+          }
+        }
+
+        class ViT extends nn.Module {
+          constructor(classes) {
+            super();
+            this.patchify = new nn.Conv2d(1, D, PATCH, PATCH, 0);
+            this.cls = new nn.Parameter(Tensor.randn([1, 1, D]).mul(Tensor.full([], 0.02)));
+            this.pos = new nn.Parameter(Tensor.randn([1, TOK + 1, D]).mul(Tensor.full([], 0.02)));
+            this.block = new Block();
+            this.norm = new nn.LayerNorm([D]);
+            this.head = new nn.Linear(D, classes);
+          }
+          forward(img) {
+            const n = img.shape[0];
+            const patches = this.patchify.call(img).reshape([n, D, TOK]).permute([0, 2, 1]);
+            const seq = Tensor.cat([this.cls.repeat(n, 1, 1), patches], 1).add(this.pos);
+            const done = this.norm.call(this.block.call(seq));
+            return this.head.call(done.narrow(1, 0, 1).reshape([n, D]));  // the class token
+          }
+        }
+
+        const net = new ViT(4);
+        const opt = new optim.Adam(net.parameters(), 0.01);
+        const crit = new nn.CrossEntropyLoss();
+
+        log("parameters:", net.parameters().length);
+        for (let s = 0; s < 120; s++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(net.call(x), y);
+            loss.backward();
+            opt.step();
+            if (s % 20 === 0 || s === 119) log(`step ${String(s).padStart(3)}  loss ${(await loss.item()).toFixed(4)}`);
+          });
+        }
+
+        await scope(async () => {
+          const pred = Array.from(await net.call(x).argmax(1).toArray());
+          const right = pred.filter((p, i) => p === labels[i]).length;
+          log(`accuracy: ${right}/${N}`);
+        });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Make it smaller and watch it stall.</strong> At <code>D = 16</code> with two
+      heads this model settles at a loss of 0.3466 and gets exactly three quarters right,
+      on every seed — it separates one pair of quadrants and gives up on the other. That
+      number is <code>ln(2) / 2</code>, which is what a model scoring an even split on half
+      its examples earns. Before blaming the library it was worth checking:
+      <code>cat</code>, <code>narrow</code> and <code>permute</code> all carry the right
+      gradients, and the head count does change the answer. The plateau is the model's,
+      not the runtime's. The run above passes through that same value on its way down —
+      look for a loss near 0.347 that sits for a while and then leaves.
+    </div>
+
+    <p>
+      That is the last lesson. The <a href="../tutorials/">tutorials</a> take one problem
+      to the end instead, and the <a href="../playground.html">playground</a> is the same
+      runtime with nothing written in it yet.
+    </p>
+
+    <div class="pager">
+      <a href="09-resnet.html">← 9 · Residual</a>
+      <a href="../playground.html" style="text-align:right">Then<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

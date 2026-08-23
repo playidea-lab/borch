@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Residual networks — borch Learn</title>
+<meta name="description" content="Skip connections, a BasicBlock, and measuring the gradient they carry.">
+<link rel="alternate" hreflang="ko" href="../ko/learn/09-resnet.html">
+<!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
+     `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
+     does not follow a relative path, and hard-coding the deployed address here would go
+     stale quietly the day the domain changes. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Residual networks — borch Learn">
+<meta property="og:description" content="Skip connections, a BasicBlock, and measuring the gradient they carry.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/learn/09-resnet.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">Python</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/learn/09-resnet.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Learn</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-tensors.html">1 · Tensors</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · Modules</a>
+      <a href="04-training.html">4 · Training</a>
+      <a href="05-cnn.html">5 · Convolution</a>
+      <a href="06-save-load.html">6 · Saving</a>
+      <a href="07-data.html">7 · Data</a>
+      <a href="08-debugging.html">8 · Debugging</a>
+      <a href="09-resnet.html" class="on">9 · Residual</a>
+      <a href="10-vit.html">10 · Transformer</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Learn · 9</p>
+    <h1>Residual networks</h1>
+    <p class="lead">
+      Lesson 5 stacked convolutions. Stack enough of them and training stops working —
+      not because the model is too small, but because almost nothing reaches the first
+      layer. A residual network adds one line to each block, <code>+ x</code>, and that
+      line is the whole idea. Here you can measure what it carries.
+    </p>
+
+    <h2>The block</h2>
+    <p>
+      A <em>BasicBlock</em> is two convolutions and a way back. When the block changes
+      the shape — more channels, or a stride that halves the image — the way back cannot
+      be the input itself, so a 1&times;1 convolution reshapes it. When the shape is
+      unchanged there is no shortcut layer at all: the tensor is added as it arrived.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        class BasicBlock extends nn.Module {
+          constructor(inC, outC, stride) {
+            super();
+            this.c1 = new nn.Conv2d(inC, outC, 3, stride, 1);
+            this.b1 = new nn.BatchNorm2d(outC);
+            this.c2 = new nn.Conv2d(outC, outC, 3, 1, 1);
+            this.b2 = new nn.BatchNorm2d(outC);
+            // A shortcut layer appears only when the shape changes.
+            this.down = (stride !== 1 || inC !== outC)
+              ? new nn.Sequential(new nn.Conv2d(inC, outC, 1, stride, 0), new nn.BatchNorm2d(outC))
+              : null;
+          }
+          forward(x) {
+            const h = this.b2.call(this.c2.call(this.b1.call(this.c1.call(x)).relu()));
+            return h.add(this.down ? this.down.call(x) : x).relu();
+          }
+        }
+
+        const shrink = new BasicBlock(3, 8, 2);
+        const same = new BasicBlock(8, 8, 1);
+
+        const x = Tensor.randn([2, 3, 16, 16]);
+        log("shrink:", JSON.stringify(x.shape), "->", JSON.stringify(shrink.call(x).shape),
+            " shortcut layer:", shrink.down !== null);
+
+        const h = Tensor.randn([2, 8, 8, 8]);
+        log("same  :", JSON.stringify(h.shape), "->", JSON.stringify(same.call(h).shape),
+            " shortcut layer:", same.down !== null);
+      </script>
+    </div>
+
+    <h2>What the shortcut carries</h2>
+    <p>
+      The argument for <code>+ x</code> is usually drawn rather than measured. It does
+      not have to be. Below, the same eight convolutions are stacked twice — once plainly,
+      once with each layer's output added back to its input — and the gradient that
+      reaches the <em>first</em> layer's weight is read out of both.
+    </p>
+    <p>
+      The two runs share a seed, so the layers start identical. Only the wiring differs.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        async function firstLayerGradient(useSkip) {
+          manualSeed(1);                       // so both cases start from identical layers.
+          const layers = [];
+          for (let i = 0; i < 8; i++) layers.push(new nn.Conv2d(4, 4, 3, 1, 1));
+          const input = Tensor.randn([1, 4, 8, 8]);
+
+          let squared = 0;
+          await scope(async () => {
+            let t = input;
+            for (const c of layers) t = useSkip ? c.call(t).relu().add(t) : c.call(t).relu();
+            t.sum().backward();
+            const g = layers[0].weight.grad;
+            squared = await g.mul(g).sum().item();
+          });
+          return Math.sqrt(squared);
+        }
+
+        const withSkip = await firstLayerGradient(true);
+        const plain = await firstLayerGradient(false);
+
+        log("eight layers deep, gradient size at the first layer");
+        log("  with +x :", withSkip.toFixed(4));
+        log("  plain   :", plain.toFixed(6));
+        log("  ratio   :", (withSkip / plain).toFixed(0) + "x");
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>The ratio is not a constant.</strong> It depends on the seed, the depth and
+      the activation, and this page prints whatever this run produced rather than a number
+      typed in once and left there. What survives the change of seed is the direction:
+      the plain stack arrives small, the residual stack does not.
+    </div>
+
+    <h2>A small ResNet, trained</h2>
+    <p>
+      A stem, two blocks — one keeping the shape, one halving it — then pool, flatten and
+      a linear head. That is the arrangement of every ResNet; a real one differs by
+      repeating the middle, not by structure.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        class BasicBlock extends nn.Module {
+          constructor(inC, outC, stride) {
+            super();
+            this.c1 = new nn.Conv2d(inC, outC, 3, stride, 1);
+            this.b1 = new nn.BatchNorm2d(outC);
+            this.c2 = new nn.Conv2d(outC, outC, 3, 1, 1);
+            this.b2 = new nn.BatchNorm2d(outC);
+            this.down = (stride !== 1 || inC !== outC)
+              ? new nn.Sequential(new nn.Conv2d(inC, outC, 1, stride, 0), new nn.BatchNorm2d(outC))
+              : null;
+          }
+          forward(x) {
+            const h = this.b2.call(this.c2.call(this.b1.call(this.c1.call(x)).relu()));
+            return h.add(this.down ? this.down.call(x) : x).relu();
+          }
+        }
+
+        const net = new nn.Sequential(
+          new nn.Conv2d(1, 8, 3, 1, 1), new nn.BatchNorm2d(8), new nn.ReLU(),
+          new BasicBlock(8, 8, 1),
+          new BasicBlock(8, 16, 2),
+          new nn.AvgPool2d(8), new nn.Flatten(), new nn.Linear(16, 3));
+
+        const B = 12;
+        const x = keepAlive(Tensor.randn([B, 1, 16, 16]));
+        const labels = new Float32Array(B);
+        for (let i = 0; i < B; i++) labels[i] = i % 3;
+        const y = keepAlive(Tensor.from(labels, [B], { dtype: "int64" }));
+
+        const opt = new optim.Adam(net.parameters(), 0.01);
+        const crit = new nn.CrossEntropyLoss();
+
+        log("parameters:", net.parameters().length);
+        for (let s = 0; s < 60; s++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const out = net.call(x);
+            if (s === 0) log("logits:", JSON.stringify(out.shape));
+            const loss = crit.call(out, y);
+            loss.backward();
+            opt.step();
+            if (s % 20 === 0 || s === 59) log(`step ${String(s).padStart(2)}  loss ${(await loss.item()).toFixed(4)}`);
+          });
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong><code>AdaptiveAvgPool2d</code> is not here.</strong> torchvision's ResNet
+      ends with it, so a line copied from there will not run; <code>AvgPool2d</code> with
+      the feature-map size — 8 above — does the same thing when you know that size, which
+      on a fixed input you do. This is one of the absences the
+      <a href="../#measured">measured table</a> counts rather than papers over.
+    </div>
+
+    <p>
+      A ready-made <code>ResNet18Cifar</code> lives in the model catalogue, built from the
+      same <code>Conv2d</code> and batch-norm layers as the block above — nothing in it is
+      a special case the library knows about.
+    </p>
+
+    <div class="pager">
+      <a href="08-debugging.html">← 8 · Debugging</a>
+      <a href="10-vit.html" style="text-align:right">Next<b>10 · Transformer</b></a>
+    </div>
+  </main>
+</div>
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

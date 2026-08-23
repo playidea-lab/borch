@@ -443,6 +443,49 @@ def test_every_page_carries_the_same_global_nav():
     assert not problems, "\n".join(problems)
 
 
+SIDEBAR = re.compile(r'<aside class="sidebar">.*?<nav>(.*?)</nav>', re.S)
+
+
+def test_a_section_sidebar_lists_the_same_pages_on_every_page_of_it():
+    """Within one section the sidebar has to be **one and the same list**.
+
+    The global nav above is checked already; the sidebar was not, and it drifted the way
+    an unchecked list always drifts. `site/learn/06-save-load.html` and its Korean twin
+    listed six lessons while eight existed — a reader who arrived at lesson 6 was shown a
+    course that ended there. **Nothing was broken**: every link on the page worked, the
+    page rendered, and the link checker above was satisfied, because a link that is simply
+    absent is not a broken link.
+
+    What makes it catchable is that the sidebar is a **claim about its siblings**, so the
+    siblings can be asked. Marking the current place is `class="on"`, exactly as in the
+    global nav, so it is stripped before the lists are compared.
+    """
+    sections = {}
+    problems = []
+    for page in _pages():
+        found = SIDEBAR.search(page.read_text(encoding="utf-8"))
+        if not found:
+            continue
+        block = re.sub(r' class="on"| aria-current="page"', "", found.group(1))
+        entries = tuple(re.findall(r'<a href="([^"]+)"[^>]*>([^<]*)</a>', block))
+        sections.setdefault(page.parent, {}).setdefault(entries, []).append(
+            page.relative_to(ROOT).as_posix())
+
+    for folder, found in sections.items():
+        if len(found) > 1:
+            biggest = max(found, key=lambda e: len(found[e]))
+            for entries, pages in found.items():
+                if entries == biggest:
+                    continue
+                missing = [href for href, _ in biggest if href not in dict(entries)]
+                problems.append(
+                    f"{folder.relative_to(ROOT)}: {', '.join(pages)} list "
+                    f"{len(entries)} entries where {len(biggest)} is usual"
+                    + (f" (absent: {', '.join(missing)})" if missing else ""))
+
+    assert not problems, "a section's sidebar disagrees with itself:\n  " + "\n  ".join(problems)
+
+
 def test_site_links_to_this_repository():
     """The GitHub address the site points at has to be **this repository's**.
 

@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10 · 비전 트랜스포머 — borch 배우기</title>
+<meta name="description" content="패치를 토큰으로, 어텐션, 클래스 토큰 — 그리고 borch.ts 가 torch 보다 좁은 네 곳.">
+<link rel="alternate" hreflang="en" href="../../learn/10-vit.html">
+<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
+     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
+     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="10 · 비전 트랜스포머 — borch 배우기">
+<meta property="og:description" content="패치를 토큰으로, 어텐션, 클래스 토큰 — 그리고 borch.ts 가 torch 보다 좁은 네 곳.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/learn/10-vit.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../learn/10-vit.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · 모듈</a>
+      <a href="04-training.html">4 · 학습</a>
+      <a href="05-cnn.html">5 · 합성곱</a>
+      <a href="06-save-load.html">6 · 저장과 파이썬</a>
+      <a href="07-data.html">7 · 데이터</a>
+      <a href="08-debugging.html">8 · 디버깅</a>
+      <a href="09-resnet.html">9 · 잔차</a>
+      <a href="10-vit.html" class="on">10 · 트랜스포머</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">배우기 · 10</p>
+    <h1>비전 트랜스포머</h1>
+    <p class="lead">
+      합성곱은 이웃을 본다. 트랜스포머는 모든 패치가 모든 패치를 보고 무엇이 중요한지
+      스스로 정하게 한다. 그림을 패치로 자르는 일은 stride 를 패치 크기로 맞춘 합성곱
+      하나다 — 그다음부터는 그림이 없다. 수열만 있다.
+    </p>
+    <p class="lead">
+      이 레슨은 borch.ts 가 torch 보다 좁은 네 곳이 드러나는 자리이기도 하다. 각각을
+      각주가 아니라 마주치는 자리에서 이름 붙였다. 넷 다 torch 튜토리얼에서 복사해 오면
+      돌지 않는 줄이기 때문이다.
+    </p>
+
+    <h2>패치가 곧 토큰</h2>
+    <p>
+      <code>Conv2d(1, D, patch, patch, 0)</code> 는 패치마다 길이 D 벡터 하나를
+      <code>[N, D, H', W']</code> 배치로 낸다. 수열은 <code>[N, 토큰, D]</code> 를 원하므로
+      맵을 펴고 뒤 두 축을 맞바꾼다.
+    </p>
+    <div class="note-box">
+      <strong>차이 1 — 여기서 <code>transpose</code> 는 2차원 전용이다.</strong>
+      3차원 텐서에 대한 torch 의 <code>x.transpose(1, 2)</code> 에 해당하는 것이 없다.
+      <code>permute([0, 2, 1])</code> 이 같은 말을 하고, 이쪽은 돈다.
+    </div>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const D = 32, PATCH = 4;
+        const patchify = new nn.Conv2d(1, D, PATCH, PATCH, 0);
+
+        const x = Tensor.randn([2, 1, 8, 8]);
+        const map = patchify.call(x);
+        log("그림    :", JSON.stringify(x.shape));
+        log("패치 맵 :", JSON.stringify(map.shape), " (패치 2x2 격자)");
+
+        const tokens = map.reshape([2, D, 4]).permute([0, 2, 1]);
+        log("토큰으로:", JSON.stringify(tokens.shape), " (N, 토큰, D)");
+      </script>
+    </div>
+
+    <h2>어텐션, 그리고 배치가 안 되는 선형층</h2>
+    <p>
+      <code>nn.MultiheadAttention(D, heads)</code> 는 질의·키·값을 받는다. 같은 텐서를
+      셋 다 넣으면 self-attention 이다 — 토큰마다 모든 토큰에게 무엇을 가졌는지 묻는다.
+    </p>
+    <div class="note-box">
+      <strong>차이 2 — 어텐션은 텐서 하나를 낸다.</strong> torch 는
+      <code>(출력, 가중치)</code> 를 내므로 <code>const [out] = att(...)</code> 는 여기서
+      텐서를 구조 분해해 쓸 수 없는 것을 준다.<br><br>
+      <strong>차이 3 — <code>nn.Linear</code> 는 2차원 전용이다.</strong>
+      <code>[N, 토큰, D]</code> 를 주면 거절하고 이유를 말한다:
+      <em>mm 은 2차원 곱하기 2차원. 배치는 아직 없다.</em> 배치 축과 토큰 축을 접었다가
+      뒤에 펴는 것은 근사가 아니라 정확히 같은 계산이다 — 선형층은 어차피 행마다
+      독립적으로 처리한다.
+    </div>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const D = 32;
+        const seq = Tensor.randn([2, 4, D]);
+
+        const att = new nn.MultiheadAttention(D, 4);
+        const out = att.call(seq, seq, seq);
+        log("어텐션 출력:", JSON.stringify(out.shape), " — 짝이 아니라 텐서 하나");
+
+        const fc = new nn.Linear(D, D * 2);
+        try {
+          fc.call(seq);
+        } catch (e) {
+          log("3차원에 Linear:", e.message);
+        }
+
+        // [N, T, D] 를 [N*T, D] 로 접고, 적용하고, 편다. 어느 쪽이든 행은 독립이다.
+        const perToken = (f, t, dOut) => {
+          const [n, k, d] = t.shape;
+          return f(t.reshape([n * k, d])).reshape([n, k, dOut]);
+        };
+        log("접어서 적용 :", JSON.stringify(perToken(u => fc.call(u), seq, D * 2).shape));
+      </script>
+    </div>
+
+    <h2>클래스 토큰</h2>
+    <p>
+      수열을 예측 하나로 바꿀 무언가가 필요하다. 토큰을 평균 내는 것이 뻔한 수인데
+      여기서는 틀린 수다. 아래 과제에서는 패치 하나만 밝고, 그것이 평균에 보태는 몫은
+      어디에 있든 같다 — 답이 평균에 지워진다. 트랜스포머는 대신 어느 패치에도 속하지
+      않는 학습되는 토큰 하나를 앞에 붙이고, 어텐션이 그것을 채우게 한 뒤 거기서 클래스를 읽는다.
+    </p>
+    <div class="note-box">
+      <strong>차이 4 — <code>expand</code> 와 <code>repeat</code> 은 배열이 아니라 인자를
+      낱개로 받는다.</strong> <code>repeat([n, 1, 1])</code> 은 원소 하나짜리 모양으로 읽혀
+      차원이 줄어든다며 실패한다. <code>repeat(n, 1, 1)</code> 이 torch 도 받는 그 호출이다.
+      오류 메시지가 엉뚱한 곳을 가리키므로, 십 분을 쓰기 전에 알아 둘 값어치가 있다.
+    </div>
+
+    <h2>합치면</h2>
+    <p>
+      8&times;8 그림, 사분면 중 하나가 밝고, 라벨은 어느 사분면인가다. 어텐션에게 진짜
+      할 일이 있다 — 켜진 패치를 찾아 그것이 어디였는지 알리기. 위치는 패치 내용에
+      아예 없다. 수열에 더해지는, 학습되는 위치 임베딩에 있다.
+    </p>
+    <p>
+      이것이 이 사이트에서 가장 느린 블록이다 — 십 초쯤 걸린다. 멈춘 건가 싶지 않도록
+      진행 줄을 도중에 찍는다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const D = 32, HEADS = 4, PATCH = 4, TOK = 4, N = 24;
+
+        // 그림마다 밝은 사분면 하나. 라벨은 그것이 어느 쪽인가.
+        const pixels = new Float32Array(N * 64);
+        const labels = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const q = i % 4;
+          labels[i] = q;
+          const r0 = (q >> 1) * 4, c0 = (q & 1) * 4;
+          for (let r = 0; r < 4; r++)
+            for (let c = 0; c < 4; c++) pixels[i * 64 + (r0 + r) * 8 + (c0 + c)] = 1;
+        }
+        const x = keepAlive(Tensor.from(pixels, [N, 1, 8, 8]));
+        const y = keepAlive(Tensor.from(labels, [N], { dtype: "int64" }));
+
+        const perToken = (f, t, dOut) => {
+          const [n, k, d] = t.shape;
+          return f(t.reshape([n * k, d])).reshape([n, k, dOut]);
+        };
+
+        class Block extends nn.Module {
+          constructor() {
+            super();
+            this.n1 = new nn.LayerNorm([D]);
+            this.att = new nn.MultiheadAttention(D, HEADS);
+            this.n2 = new nn.LayerNorm([D]);
+            this.fc1 = new nn.Linear(D, D * 2);
+            this.fc2 = new nn.Linear(D * 2, D);
+          }
+          forward(t) {
+            const h = this.n1.call(t);
+            const r = t.add(this.att.call(h, h, h));          // 어텐션, 그리고 되더하기
+            const z = this.n2.call(r);
+            const wide = perToken(u => this.fc1.call(u), z, D * 2).gelu();
+            return r.add(perToken(u => this.fc2.call(u), wide, D));
+          }
+        }
+
+        class ViT extends nn.Module {
+          constructor(classes) {
+            super();
+            this.patchify = new nn.Conv2d(1, D, PATCH, PATCH, 0);
+            this.cls = new nn.Parameter(Tensor.randn([1, 1, D]).mul(Tensor.full([], 0.02)));
+            this.pos = new nn.Parameter(Tensor.randn([1, TOK + 1, D]).mul(Tensor.full([], 0.02)));
+            this.block = new Block();
+            this.norm = new nn.LayerNorm([D]);
+            this.head = new nn.Linear(D, classes);
+          }
+          forward(img) {
+            const n = img.shape[0];
+            const patches = this.patchify.call(img).reshape([n, D, TOK]).permute([0, 2, 1]);
+            const seq = Tensor.cat([this.cls.repeat(n, 1, 1), patches], 1).add(this.pos);
+            const done = this.norm.call(this.block.call(seq));
+            return this.head.call(done.narrow(1, 0, 1).reshape([n, D]));  // 클래스 토큰
+          }
+        }
+
+        const net = new ViT(4);
+        const opt = new optim.Adam(net.parameters(), 0.01);
+        const crit = new nn.CrossEntropyLoss();
+
+        log("파라미터:", net.parameters().length, "개");
+        for (let s = 0; s < 120; s++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(net.call(x), y);
+            loss.backward();
+            opt.step();
+            if (s % 20 === 0 || s === 119) log(`step ${String(s).padStart(3)}  loss ${(await loss.item()).toFixed(4)}`);
+          });
+        }
+
+        await scope(async () => {
+          const pred = Array.from(await net.call(x).argmax(1).toArray());
+          const right = pred.filter((p, i) => p === labels[i]).length;
+          log(`정확도: ${right}/${N}`);
+        });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>줄여 놓고 멈추는 것을 보라.</strong> <code>D = 16</code> 에 헤드 둘이면 이
+      모델은 loss 0.3466 에 앉고 정확히 네 중 셋을 맞힌다 — 씨앗을 바꿔도 그렇다. 사분면
+      한 쌍을 못 가르고 포기하는 것이다. 저 숫자는 <code>ln(2) / 2</code> 이고, 예제의
+      절반에서 반반으로 갈린 모델이 받는 값이 그것이다. 라이브러리를 탓하기 전에 확인할
+      값어치가 있었다: <code>cat</code>·<code>narrow</code>·<code>permute</code> 는 모두
+      기울기를 옳게 나르고, 헤드 수는 답을 실제로 바꾼다. 정체는 모델의 것이지 런타임의
+      것이 아니다. 위의 실행도 내려가는 길에 같은 값을 지난다 — loss 0.347 근처에서 한동안
+      머물다 빠져나가는 대목을 보라.
+    </div>
+
+    <p>
+      여기까지가 마지막 레슨이다. <a href="../tutorials/">튜토리얼</a>은 대신 문제 하나를
+      끝까지 끌고 가고, <a href="../playground.html">Playground</a> 는 아무것도 안 쓰인
+      같은 런타임이다.
+    </p>
+
+    <div class="pager">
+      <a href="09-resnet.html">← 9 · 잔차</a>
+      <a href="../playground.html" style="text-align:right">그다음<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>
