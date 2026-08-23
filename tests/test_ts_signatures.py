@@ -198,7 +198,17 @@ UNALIGNED = {
     # measurement reaches further, not because anything parted.
     # 26 → 27. `Hardtanh`, which took torch's deprecated `min_value`/`max_value`
     # alongside `inplace` and so is no longer a prefix of borch.ts's list.
-    "nn": 27,   # -1, Bilinear: borch.ts gained a fourth parameter and the two lists
+    # 27 → 36. **The core-to-torch `shorter` row fell from 45 to 20 and this is
+    # where the difference went.** Carrying `device`/`dtype` in order to refuse
+    # them lines the core up with the outside authority and moves it away from
+    # borch.ts, which has neither and no seat for them.
+    #
+    # That trade was refused once already, on the thirteen normalisation
+    # layers, and taken here — the difference is size: five rows into
+    # `unaligned` for thirteen out of `shorter` was not worth it, twenty-five
+    # for nine is. Written down because the two look like one decision made
+    # twice and are one decision made on different numbers.
+    "nn": 36,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -253,7 +263,10 @@ RENAMED = {
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.
     # 20 → 19. `Hardtanh` left for `unaligned`.
-    "nn": 19,   # Bilinear arrived from `unaligned`: borch.ts spells the flag
+    # 19 → 10. Nine layers left for `unaligned` when the core took torch's
+    # `device`/`dtype`: same names as borch.ts up to a point, then two more that
+    # borch.ts has no seat for at all.
+    "nn": 10,   # Bilinear arrived from `unaligned`: borch.ts spells the flag
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     "nn.functional": 1,
@@ -308,7 +321,19 @@ SHORTER = {
     # followed; five of them are now longer than their borch.ts counterpart rather
     # than the same length. The safe end of the parting — one argument too many
     # raises rather than landing somewhere.
-    "nn": 24,
+    # 24 → 27. `AvgPool2d`, `Flatten` and a third grew past borch.ts's list when
+    # they took torch's arguments. The safe end of the parting.
+    # 27 → 36. **The core-to-torch `shorter` row fell from 45 to 20 and this is
+    # where the difference went.** Carrying `device`/`dtype` in order to refuse
+    # them lines the core up with the outside authority and moves it away from
+    # borch.ts, which has neither and no reason to.
+    #
+    # That trade was refused once already, on the thirteen normalisation layers,
+    # and taken here — the difference is the size: five rows into `unaligned` for
+    # thirteen out of `shorter` was not worth it, and nine for twenty-five is.
+    # Written down because the two look like the same decision made twice, and
+    # they are the same decision made on different numbers.
+    "nn": 28,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too

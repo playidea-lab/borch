@@ -262,7 +262,16 @@ SHORTER = {
     # makes a new one is a promise about *memory*, which no value comparison catches.
     # `Hardtanh` took torch's deprecated `min_value`/`max_value` with it, so a
     # positional call reaching that far lands where torch lands.
-    "nn": 45,
+    # 45 → 20. **Seventeen layers took torch's `device` and `dtype`**, carried and
+    # refused, which is what `_no_device_dtype` was written for and what eight layers
+    # already did. `AvgPool2d` took its four real ones at the same time and `Flatten`
+    # took `end_dim`.
+    #
+    # Carrying an argument in order to refuse it is not a fiction: the *seat* is
+    # torch's, so a positional call that reaches it lands where torch lands, and the
+    # refusal names which argument it was. Left out, the same call lands on nothing
+    # and the two lists part at every layer that has them.
+    "nn": 18,
     "nn.functional": 0,
     # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far
     # as `maximize` and stops, because `foreach`, `differentiable` and `fused` are
@@ -654,7 +663,10 @@ def test_a_forbidden_shift_is_not_reported_as_one():
 # 48 → 49. `LazyLinear`, which is short of torch's `device`/`dtype` like the rest of
 # the layers, and could not be counted here at all while its signature was variadic.
 # 49 → 36. The thirteen activations, which were all short by exactly `inplace`.
-TORCH_REACHES_FURTHER_BY_POSITION = 36
+# 36 → 11. Seventeen `device`/`dtype` pairs, `AvgPool2d`'s four and `Flatten`'s
+# `end_dim`. The eleven left are named arguments this library does not have —
+# `create_graph`, `align_to_window`, `ceil_mode` on the LP pools, and the rest.
+TORCH_REACHES_FURTHER_BY_POSITION = 9
 
 # **`agree` rows with the same problem: none.** Worth pinning precisely because it
 # is empty. `agree` means the two name lists match, and the worry — raised while

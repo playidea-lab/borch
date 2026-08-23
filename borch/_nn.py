@@ -258,8 +258,9 @@ class Module:
 
 
 class Linear(Module):
-    def __init__(self, in_features, out_features, bias=True):
+    def __init__(self, in_features, out_features, bias=True, device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("Linear", device, dtype)
         self.in_features = in_features
         self.out_features = out_features
         # Real torch's initialisation (the Kaiming uniform family):
@@ -297,12 +298,16 @@ class Tanh(Module):
 
 
 class Flatten(Module):
-    def __init__(self, start_dim=1):
+    def __init__(self, start_dim=1, end_dim=-1):
+        """`end_dim` folds a run of axes and leaves the rest — `Flatten(1, 2)` on
+        `(N, C, H, W)` gives `(N, C·H, W)`. `Tensor.flatten` took it already; this
+        layer did not, so the two forms of one operation disagreed about which
+        arguments exist."""
         super().__init__()
-        self.start_dim = start_dim
+        self.start_dim, self.end_dim = start_dim, end_dim
 
     def forward(self, x):
-        return x.flatten(self.start_dim)
+        return x.flatten(self.start_dim, self.end_dim)
 
 
 class Identity(Module):
@@ -947,8 +952,9 @@ class LayerNorm(Module):
     """
 
     def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True,
-                 bias=True):
+                 bias=True, device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("LayerNorm", device, dtype)
         shape = ((normalized_shape,) if isinstance(normalized_shape, int)
                  else tuple(normalized_shape))
         self.normalized_shape = shape
@@ -993,7 +999,7 @@ class BatchNorm2d(Module):
     the layer eval() changes in chapter 6."""
 
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
-                 track_running_stats=True, *, bias=True):
+                 track_running_stats=True, device=None, dtype=None, *, bias=True):
         """torch's `affine` and `bias`, which this took neither of.
 
         `affine=False` is the layer with no learnable scale or shift at all —
@@ -1009,6 +1015,7 @@ class BatchNorm2d(Module):
         what made it work rather than a note somebody would meet later.
         """
         super().__init__()
+        _no_device_dtype("BatchNorm2d", device, dtype)
         if not track_running_stats:
             # The forward pass reads the buffers in evaluation mode, so ignoring
             # this would leave training right and evaluation quietly wrong — the
@@ -1274,12 +1281,25 @@ class RNNCellBase(Module):
 
     gates = 1
 
-    def __init__(self, input_size, hidden_size, bias=True):
+    def __init__(self, input_size, hidden_size, bias=True, num_chunks=None,
+                 device=None, dtype=None):
+        """**`num_chunks` sits fourth, where torch has it**, and it decides how many
+        gate blocks the weights hold — 1 for `RNNCell`, 3 for `GRUCell`, 4 for
+        `LSTMCell`. The subclasses set it as a class attribute, so it had never been
+        an argument here; adding `device` and `dtype` without it put `device` in its
+        seat, and `RNNCellBase(4, 8, True, 3)` would have set a device to 3.
+
+        Caught by the signature axis on the same run as the edit that caused it —
+        the `shifted` bucket, the one that means *a positional call lands on the
+        wrong parameter*. It is the first row that bucket has held since the
+        optimizers, and it was mine.
+        """
         super().__init__()
+        _no_device_dtype(type(self).__name__, device, dtype)
         self.input_size, self.hidden_size = input_size, hidden_size
         self.has_bias = bias
         bound = 1.0 / _math.sqrt(hidden_size)
-        g = self.gates
+        g = self.gates if num_chunks is None else int(num_chunks)
         self.weight_ih = Parameter(_rng.uniform(
             -bound, bound, (g * hidden_size, input_size)).astype(_DEFAULT_DTYPE))
         self.weight_hh = Parameter(_rng.uniform(
@@ -1305,11 +1325,12 @@ class RNNCellBase(Module):
 class RNNCell(RNNCellBase):
     gates = 1
 
-    def __init__(self, input_size, hidden_size, bias=True, nonlinearity="tanh"):
+    def __init__(self, input_size, hidden_size, bias=True, nonlinearity="tanh",
+                 device=None, dtype=None):
         if nonlinearity not in ("tanh", "relu"):
             raise ValueError("nonlinearity must be 'tanh' or 'relu'.")
         self.nonlinearity = nonlinearity
-        super().__init__(input_size, hidden_size, bias)
+        super().__init__(input_size, hidden_size, bias, device=device, dtype=dtype)
 
     def forward(self, x, hx=None):
         h = self._zeros(x) if hx is None else hx
@@ -1333,6 +1354,15 @@ class GRUCell(RNNCellBase):
 
     gates = 3
 
+    def __init__(self, input_size, hidden_size, bias=True, device=None, dtype=None):
+        """**torch's list, without `num_chunks`.** The base takes it because torch's
+        base does; a cell with a fixed number of gates does not, and inheriting the
+        base's list put `num_chunks` in `device`'s seat here while torch has `device`
+        there. `GRUCell(4, 8, True, "cpu")` would have set a chunk count to a string.
+        """
+        super().__init__(input_size, hidden_size, bias, device=device, dtype=dtype)
+
+
     def forward(self, x, hx=None):
         h = self._zeros(x) if hx is None else hx
         H = self.hidden_size
@@ -1355,6 +1385,15 @@ class LSTMCell(RNNCellBase):
     """
 
     gates = 4
+
+    def __init__(self, input_size, hidden_size, bias=True, device=None, dtype=None):
+        """**torch's list, without `num_chunks`.** The base takes it because torch's
+        base does; a cell with a fixed number of gates does not, and inheriting the
+        base's list put `num_chunks` in `device`'s seat here while torch has `device`
+        there. `LSTMCell(4, 8, True, "cpu")` would have set a chunk count to a string.
+        """
+        super().__init__(input_size, hidden_size, bias, device=device, dtype=dtype)
+
 
     def forward(self, x, hx=None):
         h, c = (self._zeros(x), self._zeros(x)) if hx is None else hx
@@ -1504,7 +1543,7 @@ class MultiheadAttention(Module):
 
     def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True,
                  add_bias_kv=False, add_zero_attn=False, kdim=None, vdim=None,
-                 batch_first=False):
+                 batch_first=False, device=None, dtype=None):
         """torch's parameter list, in torch's order.
 
         **This took `(embed_dim, num_heads, bias, batch_first)`**, so
@@ -1523,6 +1562,7 @@ class MultiheadAttention(Module):
         `dropout` is the one that works: the function applies it while training.
         """
         super().__init__()
+        _no_device_dtype("MultiheadAttention", device, dtype)
         if embed_dim % num_heads:
             raise ValueError(f"embed_dim({embed_dim}) is not divisible by num_heads({num_heads}).")
         if add_bias_kv:
@@ -2083,8 +2123,9 @@ class PReLU(Module):
     diverging name means somebody else's checkpoint is unreadable.
     """
 
-    def __init__(self, num_parameters=1, init=0.25):
+    def __init__(self, num_parameters=1, init=0.25, device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("PReLU", device, dtype)
         self.num_parameters = num_parameters
         self.weight = Parameter(_np.full(num_parameters, init, dtype=_DEFAULT_DTYPE))
 
@@ -2101,10 +2142,11 @@ class GroupNorm(Module):
     independent of the batch size.
     """
 
-    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True, *,
+    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True, device=None, dtype=None, *,
                  bias=True):
         """See `BatchNorm2d` on `bias` — it drops the shift and keeps the scale."""
         super().__init__()
+        _no_device_dtype("GroupNorm", device, dtype)
         self.num_groups, self.num_channels, self.eps = num_groups, num_channels, eps
         self.weight = (Parameter(_np.ones(num_channels, dtype=_DEFAULT_DTYPE))
                        if affine else None)
@@ -2125,9 +2167,10 @@ class _InstanceNorm(Module):
     """
 
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=False,
-                 track_running_stats=False, *, bias=True):
+                 track_running_stats=False, device=None, dtype=None, *, bias=True):
         """See `BatchNorm2d` on `bias`."""
         super().__init__()
+        _no_device_dtype(type(self).__name__, device, dtype)
         self.num_features, self.eps = num_features, eps
         self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
                        if affine else None)
@@ -2165,8 +2208,9 @@ class RMSNorm(Module):
     """**It does not subtract the mean.** That is the only difference from
     `LayerNorm`."""
 
-    def __init__(self, normalized_shape, eps=None, elementwise_affine=True):
+    def __init__(self, normalized_shape, eps=None, elementwise_affine=True, device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("RMSNorm", device, dtype)
         if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         self.normalized_shape = tuple(normalized_shape)
@@ -2274,12 +2318,19 @@ class LogSoftmax(Module):
 
 
 class AvgPool2d(Module):
-    def __init__(self, kernel_size, stride=None):
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
+                 count_include_pad=True, divisor_override=None):
+        """torch's list. Four of the six were missing, and the pair that decides the
+        *divisor* is the reason it is more than plumbing — see `F.avg_pool2d`."""
         super().__init__()
-        self.kernel_size, self.stride = kernel_size, stride
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        self.ceil_mode, self.count_include_pad = ceil_mode, count_include_pad
+        self.divisor_override = divisor_override
 
     def forward(self, x):
-        return avg_pool2d(x, self.kernel_size, self.stride)
+        return avg_pool2d(x, self.kernel_size, self.stride, self.padding,
+                          self.ceil_mode, self.count_include_pad,
+                          self.divisor_override)
 
 
 class _PoolND(Module):
@@ -2394,8 +2445,9 @@ class AdaptiveLogSoftmaxWithLoss(Module):
     """
 
     def __init__(self, in_features, n_classes, cutoffs, div_value=4.0,
-                 head_bias=False):
+                 head_bias=False, device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("AdaptiveLogSoftmaxWithLoss", device, dtype)
         cutoffs = list(cutoffs)
         self.in_features = in_features
         self.n_classes = n_classes
@@ -2597,9 +2649,10 @@ class NLLLoss(_WrittenLoss):
 
 class BatchNorm1d(Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
-                 track_running_stats=True, *, bias=True):
+                 track_running_stats=True, device=None, dtype=None, *, bias=True):
         """See `BatchNorm2d` on `affine` and `bias`."""
         super().__init__()
+        _no_device_dtype("BatchNorm1d", device, dtype)
         if not track_running_stats:
             _unsupported("BatchNorm1d with track_running_stats=False")
         self.eps, self.momentum, self.affine = eps, momentum, affine
@@ -2839,8 +2892,9 @@ class Bilinear(Module):
     """Mixes two inputs **at once.** The weights have three axes, so
     `(out, in1, in2)`."""
 
-    def __init__(self, in1_features, in2_features, out_features, bias=True):
+    def __init__(self, in1_features, in2_features, out_features, bias=True, device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("Bilinear", device, dtype)
         self.in1_features, self.in2_features = in1_features, in2_features
         self.out_features = out_features
         bound = 1.0 / _math.sqrt(in1_features)

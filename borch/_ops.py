@@ -4931,28 +4931,79 @@ def dropout(t, p=0.5, training=True):
     return t * Tensor(mask)
 
 
-def avg_pool2d(x, kernel_size, stride=None):
+def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
+               count_include_pad=True, divisor_override=None):
     """**It takes a different window per axis.** Because
     `adaptive_avg_pool2d` has to be able to reduce the height and the width
-    differently — taking squares only leaves nothing to build it on."""
+    differently — taking squares only leaves nothing to build it on.
+
+    **Four of torch's seven arguments were missing**, and the pair that decides the
+    *divisor* is the reason this is more than plumbing: an average over a padded
+    window can count the padding or not, and `count_include_pad=False` is what makes
+    an edge window an average of the values that are really there. torch's default is
+    `True`, so the padded edges are pulled toward zero — a choice, not an accident,
+    and one a caller has to be able to reverse.
+
+    `divisor_override` replaces the count outright, which is how a fixed-scale
+    pooling layer is built.
+
+    The zeros are laid down explicitly rather than through `_pool_windows`, because
+    with `count_include_pad=False` the divisor is **per window** — every edge window
+    has a different count of real cells — and a shared helper that returns windows
+    has nowhere to carry that.
+    """
     kh, kw = _pair(kernel_size)
     sh, sw = _pair(stride if stride is not None else kernel_size)
+    ph, pw = _pair(padding)
     xd = x.data
     N, C, H, W = xd.shape
-    OH = (H - kh) // sh + 1
-    OW = (W - kw) // sw + 1
+    if ph or pw:
+        xd = _np.pad(xd, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
+    PH, PW = xd.shape[2], xd.shape[3]
+    up = (lambda a, b: -(-a // b)) if ceil_mode else (lambda a, b: a // b)
+    OH = up(PH - kh, sh) + 1
+    OW = up(PW - kw, sw) + 1
+    # torch drops a ceil-mode window that begins inside the padding on the far side.
+    if ceil_mode:
+        while (OH - 1) * sh >= PH - ph:
+            OH -= 1
+        while (OW - 1) * sw >= PW - pw:
+            OW -= 1
+    need_h = (OH - 1) * sh + kh
+    need_w = (OW - 1) * sw + kw
+    if need_h > PH or need_w > PW:
+        xd = _np.pad(xd, ((0, 0), (0, 0), (0, max(0, need_h - PH)),
+                          (0, max(0, need_w - PW))))
     win = _np.lib.stride_tricks.sliding_window_view(xd, (kh, kw), axis=(2, 3))
-    win = win[:, :, ::sh, ::sw, :, :]
-    out = win.mean(axis=(4, 5))
-    area = kh * kw
+    win = win[:, :, ::sh, ::sw, :, :][:, :, :OH, :OW]
+    totals = win.sum(axis=(4, 5))
+    if divisor_override is not None:
+        counts = _np.full((OH, OW), float(divisor_override))
+    else:
+        # **One mask decides every divisor, and the two kinds of padding differ.**
+        # Explicit `padding` counts or does not, by `count_include_pad`. The zeros a
+        # ceil-mode window runs into past the end of the input **never** count —
+        # torch divides that clipped window by its real cells whichever way the flag
+        # is set (measured: a 5×5 with `kernel=2, stride=2, ceil_mode=True` gives
+        # `24.0` in the corner, which is the single cell and not a quarter of it).
+        #
+        # Written as a mask rather than as two cases because the count is **per
+        # window** once anything is clipped, and a formula has nowhere to put that.
+        real = _np.zeros(xd.shape[2:], dtype=_np.float64)
+        real[ph:ph + H, pw:pw + W] = 1.0
+        if count_include_pad:
+            real[:PH, :PW] = 1.0
+        rw = _np.lib.stride_tricks.sliding_window_view(real, (kh, kw), axis=(0, 1))
+        counts = rw[::sh, ::sw][:OH, :OW].sum(axis=(2, 3))
+    out = totals / counts
 
     def back(g):
-        g = _np.asarray(g) / area
-        gx = _np.zeros_like(xd)
+        g = _np.asarray(g) / counts
+        gx = _np.zeros(xd.shape, dtype=xd.dtype)
         for i in range(kh):
             for j in range(kw):
                 gx[:, :, i:i + OH * sh:sh, j:j + OW * sw:sw] += g
-        return (gx,)
+        return (gx[:, :, ph:ph + H, pw:pw + W],)
 
     return x._make(out, (x,), back, "AvgPool2DBackward0")
 
