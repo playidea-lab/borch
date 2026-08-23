@@ -252,10 +252,99 @@ class Tensor:
             yield self[i]
 
     def __bool__(self):
-        return bool(self.data)
+        """**The class of the exception was numpy's, not torch's.**
+
+        `bool(t)` on more than one element left `numpy`'s `ValueError` to escape —
+        *the truth value of an array … is ambiguous* — where torch raises
+        `RuntimeError`. Nothing about the values differed, so no comparison here could
+        see it; what differs is which `except` clause catches, and `if t:` inside a
+        `try` is ordinary code.
+        """
+        if self.data.size != 1:
+            raise RuntimeError(_like_torch(
+                f"A tensor with {self.data.size} values has no single truth value. "
+                "Use `.any()` or `.all()`.",
+                "Boolean value of Tensor with more than one value is ambiguous"))
+        return bool(self.data.reshape(-1)[0])
 
     def __float__(self):
-        return float(self.item())
+        return float(self._scalar())
+
+    def __int__(self):
+        """`int(t)`. **It was missing entirely**, so `int(t)` raised `TypeError` on a
+        tensor holding a single number, where torch answers.
+
+        Truncates toward zero, as `int()` does everywhere in Python and as torch does.
+        """
+        return int(self._scalar())
+
+    def _scalar(self):
+        """The single value, raising **the way `int()` and `float()` raise in torch.**
+
+        `.item()` raises `RuntimeError` and that is torch's class for `.item()`. But
+        torch's `int()` and `float()` raise `ValueError` — *only one element tensors
+        can be converted to Python scalars* — so passing `.item()`'s exception straight
+        through was right about the message and wrong about the class, in the opposite
+        direction from `__bool__` on the line above. The two were crossed.
+        """
+        if self.data.size != 1:
+            raise ValueError(_like_torch(
+                f"A tensor with {self.data.size} values cannot become one number. "
+                "Use `.tolist()` or index into it first.",
+                "only one element tensors can be converted to Python scalars"))
+        return self.data.reshape(-1)[0]
+
+    def __index__(self):
+        """What lets a tensor be used **as an index** — `xs[t]`, `range(t)`, `"ab" * t`.
+
+        Python demands an exact integer here and offers no coercion: a float tensor has
+        to raise, and torch raises `TypeError` for one. Without this method the failure
+        was an `AttributeError` from somewhere inside the interpreter, which names
+        nothing a caller can act on.
+
+        **Both halves of torch's condition raise `TypeError` — integer *and* one
+        element.** The first version checked only the dtype and let `.item()` raise for
+        the size, so a three-element integer tensor came back `RuntimeError` where torch
+        says `TypeError`. It was missed because the grid probing this file had `many`
+        only as floats, and a float never reaches the second check: **the instrument's
+        list of shapes decided what the instrument could see**, which is the same fault
+        as a parser whose correctness was a property of its input.
+
+        Adding that shape then showed the size check is worth more than a class name.
+        Take it off this line while the body reads `reshape(-1)[0]` and `xs[t]` with a
+        three-element tensor **silently indexes by the first element** — measured, not
+        supposed. The `.item()` this replaced had been covering for the missing
+        condition, so removing one and not adding the other turns a loud wrong class
+        into a quiet wrong answer.
+        """
+        if self.data.dtype.kind not in "iub" or self.data.size != 1:
+            raise TypeError(_like_torch(
+                "only an integer tensor holding one value can be used as an index.",
+                "only integer tensors of a single element can be converted to an index"))
+        return int(self.data.reshape(-1)[0])
+
+    def __array__(self, dtype=None, copy=None):
+        """**How numpy is supposed to ask.** Without it, numpy falls back to guessing
+        with `len()` and `__getitem__`, and the guess loses axes.
+
+        `np.asarray(t)` on a `(0, 3)` tensor came back `(0,)`; on `(2, 0, 4)` it came
+        back `(2, 0)`. The sequence walk descends by indexing, **a zero-length axis has
+        nothing to descend into**, and every axis past the first zero is simply not
+        discovered. `t.shape` was right the whole time; only the conversion was wrong,
+        and it was wrong silently, producing an array of the correct dtype and the
+        wrong rank.
+
+        That is not a hypothetical shape. An augmentation whose random draw selects no
+        rows produces exactly it, and the value then travels as a correctly-typed empty
+        array into arithmetic that reports something else as the fault.
+
+        `copy` and `dtype` are numpy 2's keywords. Accepting them is not optional —
+        numpy calls with `copy=False` and warns loudly at anything that cannot take it.
+        """
+        out = self.data if dtype is None else self.data.astype(dtype)
+        if copy is False and out is not self.data:
+            raise ValueError("a copy is needed for this dtype and copy=False was asked")
+        return _np.array(out, copy=True) if copy else out
 
     def __hash__(self):
         return id(self)
