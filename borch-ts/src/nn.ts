@@ -1360,9 +1360,9 @@ export function scaledDotProductAttention(
   attnMask: Tensor | null = null,
   dropoutP = 0.0,
   isCausal = false,
-  scaleOverride: number | null = null,
+  scale: number | null = null,
 ): Tensor {
-  // **`dropoutP` and `scaleOverride` sit in torch's seats, and both were absent.**
+  // **`dropoutP` and `scale` sit in torch's seats, and both were absent.**
   //
   // The binding accepted them and dropped them on the floor — `scaled_dot_product_
   // attention(q, k, v, mask, 0.1)` set no dropout and said nothing, and a `scale`
@@ -1377,8 +1377,11 @@ export function scaledDotProductAttention(
   const dim = query.shape[rank - 1] ?? 1;
   const len = query.shape[rank - 2] ?? 1;
   const keyLen = key.shape[key.shape.length - 2] ?? 1;
-  const scale = Tensor.full(
-    [], scaleOverride === null ? 1 / Math.sqrt(dim) : scaleOverride);
+  // The local yields the name; the parameter is torch's. Spelling the argument
+  // `scaleOverride` to keep this line's `scale` is the wrong way round — the caller
+  // reads the parameter and only this function reads the local.
+  const scaleT = Tensor.full(
+    [], scale === null ? 1 / Math.sqrt(dim) : scale);
 
   // The mask that blocks the upper triangle. Built from 0 and a large negative, and
   // **added.**
@@ -1392,7 +1395,7 @@ export function scaledDotProductAttention(
   }
 
   const one = (q: Tensor, k: Tensor, v: Tensor): Tensor => {
-    let scores = q.mm(k.transpose()).binary("mul", scale);
+    let scores = q.mm(k.transpose()).binary("mul", scaleT);
     if (causal) scores = scores.add(causal);
     if (attnMask) scores = scores.add(attnMask);
     return scores.softmax(-1).dropout(dropoutP, true).mm(v);
@@ -1496,18 +1499,18 @@ export class MaxPool3d extends Module {
  * the positions are wanted. `MaxUnpool` is the layer that consumes them.
  */
 export class AdaptiveMaxPool1d extends Module {
-  constructor(protected readonly outSize: number | readonly number[],
+  constructor(protected readonly outputSize: number | readonly number[],
               readonly returnIndices = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.adaptiveMaxPoolWithIndices(this.outSize).values;
+    return x.adaptiveMaxPoolWithIndices(this.outputSize).values;
   }
 
   /** The values and the positions that produced them. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
-    return x.adaptiveMaxPoolWithIndices(this.outSize);
+    return x.adaptiveMaxPoolWithIndices(this.outputSize);
   }
 }
 
@@ -1570,12 +1573,12 @@ export class Flatten extends Module {
  */
 export class Unflatten extends Module {
   constructor(private readonly dim: number,
-              private readonly sizes: readonly number[]) {
+              private readonly unflattenedSize: readonly number[]) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.unflatten(this.dim, this.sizes);
+    return x.unflatten(this.dim, this.unflattenedSize);
   }
 }
 
@@ -1724,23 +1727,23 @@ export class AvgPool3d extends Module {
  * different size quietly, which is why the name is separated by `Adaptive`.
  */
 export class AdaptiveAvgPool1d extends Module {
-  constructor(private readonly outSize: number | readonly number[]) {
+  constructor(private readonly outputSize: number | readonly number[]) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.adaptivePool("avg", this.outSize);
+    return x.adaptivePool("avg", this.outputSize);
   }
 }
 
 /** `torch.nn.AdaptiveAvgPool3d`. It takes the output size. */
 export class AdaptiveAvgPool3d extends Module {
-  constructor(private readonly outSize: number | readonly number[]) {
+  constructor(private readonly outputSize: number | readonly number[]) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.adaptivePool("avg", this.outSize);
+    return x.adaptivePool("avg", this.outputSize);
   }
 }
 
@@ -2307,15 +2310,23 @@ export class EmbeddingBag extends Module {
 // and the characters printed.
 
 export class PixelShuffle extends Module {
-  constructor(readonly factor: number) { super(); }
-  override forward(x: Tensor): Tensor { return x.pixelShuffle(this.factor); }
-  override describe(): string { return `PixelShuffle(upscale_factor=${this.factor})`; }
+  // **`describe` printed `upscale_factor` while the constructor took `factor`.** The
+  // printed name was torch's and the callable one was not, which is the core's
+  // `_Rearrange` defect in this file: a repr you cannot feed back in. Positional
+  // construction hid it here — JavaScript never says the name out loud.
+  constructor(readonly upscaleFactor: number) { super(); }
+  override forward(x: Tensor): Tensor { return x.pixelShuffle(this.upscaleFactor); }
+  override describe(): string {
+    return `PixelShuffle(upscale_factor=${this.upscaleFactor})`;
+  }
 }
 
 export class PixelUnshuffle extends Module {
-  constructor(readonly factor: number) { super(); }
-  override forward(x: Tensor): Tensor { return x.pixelUnshuffle(this.factor); }
-  override describe(): string { return `PixelUnshuffle(downscale_factor=${this.factor})`; }
+  constructor(readonly downscaleFactor: number) { super(); }
+  override forward(x: Tensor): Tensor { return x.pixelUnshuffle(this.downscaleFactor); }
+  override describe(): string {
+    return `PixelUnshuffle(downscale_factor=${this.downscaleFactor})`;
+  }
 }
 
 export class ChannelShuffle extends Module {
@@ -3209,18 +3220,18 @@ export class ZeroPad3d extends PadNd {
   constructor(padding: number | readonly number[]) { super("ZeroPad3d", padding, "constant", 3); }
 }
 export class ConstantPad1d extends PadNd {
-  constructor(padding: number | readonly number[], v = 0) {
-    super("ConstantPad1d", padding, "constant", 1, v);
+  constructor(padding: number | readonly number[], value = 0) {
+    super("ConstantPad1d", padding, "constant", 1, value);
   }
 }
 export class ConstantPad2d extends PadNd {
-  constructor(padding: number | readonly number[], v = 0) {
-    super("ConstantPad2d", padding, "constant", 2, v);
+  constructor(padding: number | readonly number[], value = 0) {
+    super("ConstantPad2d", padding, "constant", 2, value);
   }
 }
 export class ConstantPad3d extends PadNd {
-  constructor(padding: number | readonly number[], v = 0) {
-    super("ConstantPad3d", padding, "constant", 3, v);
+  constructor(padding: number | readonly number[], value = 0) {
+    super("ConstantPad3d", padding, "constant", 3, value);
   }
 }
 

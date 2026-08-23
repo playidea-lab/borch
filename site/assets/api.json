@@ -8193,7 +8193,7 @@
     {
      "kind": "function",
      "name": "scaledDotProductAttention",
-     "signature": "export declare function scaledDotProductAttention(query: Tensor, key: Tensor, value: Tensor, attnMask?: Tensor | null, dropoutP?: number, isCausal?: boolean, scaleOverride?: number | null): Tensor",
+     "signature": "export declare function scaledDotProductAttention(query: Tensor, key: Tensor, value: Tensor, attnMask?: Tensor | null, dropoutP?: number, isCausal?: boolean, scale?: number | null): Tensor",
      "doc": "The core of attention. **The computation `MultiheadAttention` was doing\ninside, given a name.**\n\nThe layer existed and this function did not. Code that writes attention\nby hand rather than using the layer calls this name, and that is the\nbasic form of modern transformer code.\n\n**A mask is added, not multiplied.** A large negative number is added so\nthat softmax produces zero — it is not a multiplication by zero, because\nmultiplying after softmax has already normalised leaves the remaining\nslots not summing back to 1.\n\nWith a batch axis it runs per sample. That is because `mm` is\ntwo-dimensional; when a batched matrix multiply exists, this is the place\nto change.",
      "members": [],
      "torch": "scaled_dot_product_attention",
@@ -8291,11 +8291,11 @@
      "doc": "Adaptive max pooling. **It takes `returnIndices`, which the average side\ndoes not** — and the argument changes what comes back.\n\nThe underlying `adaptiveMaxPoolWithIndices` always returns both, so the layer\nhas to choose. Accepting the argument and returning the pair regardless would\nbe an argument taken and dropped, and the caller would meet the difference as\na shape error somewhere else.\n\n`forward` is the plain half so this fits in a `Sequential`; ask `pick()` when\nthe positions are wanted. `MaxUnpool` is the layer that consumes them.",
      "members": [
       {
-       "name": "outSize",
-       "signature": "protected readonly outSize: number | readonly number[]",
+       "name": "outputSize",
+       "signature": "protected readonly outputSize: number | readonly number[]",
        "doc": "",
        "protected": true,
-       "torch": "out_size"
+       "torch": "output_size"
       },
       {
        "name": "returnIndices",
@@ -8305,7 +8305,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(outSize: number | readonly number[], returnIndices?: boolean)",
+       "signature": "constructor(outputSize: number | readonly number[], returnIndices?: boolean)",
        "doc": ""
       },
       {
@@ -8426,7 +8426,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(dim: number, sizes: readonly number[])",
+       "signature": "constructor(dim: number, unflattenedSize: readonly number[])",
        "doc": ""
       },
       {
@@ -8551,7 +8551,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outSize: number | readonly number[])",
+       "signature": "constructor(outputSize: number | readonly number[])",
        "doc": ""
       },
       {
@@ -8570,7 +8570,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outSize: number | readonly number[])",
+       "signature": "constructor(outputSize: number | readonly number[])",
        "doc": ""
       },
       {
@@ -9286,13 +9286,14 @@
      "doc": "",
      "members": [
       {
-       "name": "factor",
-       "signature": "readonly factor: number",
-       "doc": ""
+       "name": "upscaleFactor",
+       "signature": "readonly upscaleFactor: number",
+       "doc": "",
+       "torch": "upscale_factor"
       },
       {
        "name": "constructor",
-       "signature": "constructor(factor: number)",
+       "signature": "constructor(upscaleFactor: number)",
        "doc": ""
       },
       {
@@ -9314,13 +9315,14 @@
      "doc": "",
      "members": [
       {
-       "name": "factor",
-       "signature": "readonly factor: number",
-       "doc": ""
+       "name": "downscaleFactor",
+       "signature": "readonly downscaleFactor: number",
+       "doc": "",
+       "torch": "downscale_factor"
       },
       {
        "name": "constructor",
-       "signature": "constructor(factor: number)",
+       "signature": "constructor(downscaleFactor: number)",
        "doc": ""
       },
       {
@@ -10840,7 +10842,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(padding: number | readonly number[], v?: number)",
+       "signature": "constructor(padding: number | readonly number[], value?: number)",
        "doc": ""
       }
      ]
@@ -10853,7 +10855,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(padding: number | readonly number[], v?: number)",
+       "signature": "constructor(padding: number | readonly number[], value?: number)",
        "doc": ""
       }
      ]
@@ -10866,7 +10868,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(padding: number | readonly number[], v?: number)",
+       "signature": "constructor(padding: number | readonly number[], value?: number)",
        "doc": ""
       }
      ]

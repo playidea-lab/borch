@@ -361,20 +361,44 @@ RENAMED = {
     # 10 → 9. The `_Rearrange` family: `PixelShuffle`, `PixelUnshuffle` and
     # `ChannelShuffle` shared one base whose parameter was `value`, collapsing three
     # different torch names (`upscale_factor`, `downscale_factor`, `groups`) into
-    # one. borch.ts already spelled them torch's way, so this row was the core being
-    # the odd one. One of the three now agrees outright and the other two moved.
+    # one. One of the three now agrees outright and the other two moved.
     #
     # **The tell was a `repr` that would not run.** It printed
     # `PixelShuffle(upscale_factor=2)` while the constructor refused that keyword —
     # so the author knew the three names differ and had applied the knowledge to the
     # printing side alone.
-    "nn": 9,    # Bilinear arrived from `unaligned`: borch.ts spells the flag
+    #
+    # **The line above used to say borch.ts already spelled them torch's way, and it
+    # did not.** Its constructors took `factor` for both `PixelShuffle` and
+    # `PixelUnshuffle`; what carried torch's name was `describe()`, the same
+    # printing-side-only knowledge the core had, in the same two classes. Searching
+    # the file for `upscale_factor` finds it — in a template string. **A name found
+    # in a file is not a name the callable has**, and this is the second time in one
+    # day that reading one implementation while writing about the other produced a
+    # sentence that was confident and wrong.
+    #
+    # **9 → 0. The `nn` renames are gone.** `outSize` → `outputSize` on the three
+    # adaptive pools, `v` → `value` on the three `ConstantPad`s, `factor` →
+    # `upscaleFactor`/`downscaleFactor`, `sizes` → `unflattenedSize`. All of it on
+    # borch.ts's side, none of it a behaviour change, and `PixelShuffle`'s `describe`
+    # now prints a name its constructor answers to.
+    "nn": 0,    # Bilinear arrived from `unaligned`: borch.ts spells the flag
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     # 1 → 2. `scaled_dot_product_attention` arrived from `shifted`: same
     # length now, and `scale` against `scaleOverride` is the whole of what
     # differs.
-    "nn.functional": 2,
+    #
+    # 2 → 1. It took torch's spelling. The function already had a local `scale`
+    # holding the tensor, which is why the parameter had the longer name — **the
+    # wrong way round**, since the caller reads the parameter and only this function
+    # reads the local. The local yielded.
+    #
+    # The one left is `gumbel_softmax`, and it is not a spelling: borch.ts has no
+    # `eps` because torch's does nothing (`deprecated and has no effect`), and a
+    # `noise` seat exists so a caller can supply the draw. Both are written down
+    # where they are.
+    "nn.functional": 1,
     # 7 → 1: the six went back to `unaligned` when the core took torch's whole
     # optimizer surface and borch.ts stayed where it was. See the note there.
     "optim": 1,
