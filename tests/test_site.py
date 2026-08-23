@@ -494,6 +494,50 @@ def test_a_section_sidebar_lists_every_page_of_its_section():
                           + "\n  ".join(problems))
 
 
+# ── where a page tells the reader a name is absent ─────────────────────
+#
+# A lesson that says "`AdaptiveAvgPool2d` is not here, use `AvgPool2d` instead" is making
+# a claim about **another file's contents**, and the usual way such a claim breaks is that
+# somebody closes the gap. Then the page teaches a workaround for a problem that no longer
+# exists, and the reader who tries the real name finds it works — which is worse than a
+# missing feature, because it teaches distrust of the page.
+#
+# Both ends are checked, the same way the heading quotes above are: the page must still
+# carry the sentence, and the name must still be absent. Neither side can move alone.
+
+ABSENCES_A_PAGE_TEACHES = (
+    ("site/learn/09-resnet.html", "<code>AdaptiveAvgPool2d</code> is not here.",
+     "AdaptiveAvgPool2d"),
+    ("site/ko/learn/09-resnet.html", "<code>AdaptiveAvgPool2d</code> 는 여기 없다.",
+     "AdaptiveAvgPool2d"),
+)
+
+
+def test_a_page_teaching_around_a_missing_name_is_still_missing_it():
+    """The names lesson pages tell readers to work around have to still be gone.
+
+    `tests/ts_axis.py` already knows the whole TypeScript surface, so this asks it rather
+    than keeping a second list. At the time of writing, `nn`'s gap was being worked down
+    from fifteen, and `AdaptiveAvgPool2d` was one of the names in it.
+    """
+    import ts_axis
+
+    surface = ts_axis.ts_names()
+    problems = []
+    for page_path, sentence, name in ABSENCES_A_PAGE_TEACHES:
+        page = ROOT / page_path
+        text = page.read_text(encoding="utf-8")
+        if sentence not in text:
+            problems.append(
+                f"{page_path} no longer says {sentence!r} — "
+                f"if the lesson was rewritten, this table is what tells you to update it")
+        if name in surface:
+            problems.append(
+                f"{name} is in borch.ts now, and {page_path} still teaches around it")
+
+    assert not problems, "\n  ".join([""] + problems)
+
+
 def test_site_links_to_this_repository():
     """The GitHub address the site points at has to be **this repository's**.
 
