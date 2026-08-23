@@ -514,28 +514,46 @@ def test_a_section_sidebar_lists_every_page_of_its_section():
 # Both ends are checked, the same way the heading quotes above are: the page must still
 # carry the sentence, and the name must still be absent. Neither side can move alone.
 
+# The third column is a **positive control**: a name that must be found. A negative
+# answer is only worth as much as the surface it was asked of, and that surface has a
+# known hole — `site/build_api.py`'s `MODULES` does not list `functional`, so a name
+# living only there is absent from the index and reads as absent from borch.ts. Without
+# a control, a namespace dropping out of the index would make every claim here *pass
+# harder*. The control is the sibling the lesson itself points at.
+
 ABSENCES_A_PAGE_TEACHES = (
     ("site/learn/09-resnet.html",
      "<code>AdaptiveAvgPool2d</code> is not here — but the pooling is.",
-     "AdaptiveAvgPool2d"),
+     "AdaptiveAvgPool2d", "AdaptiveAvgPool1d"),
     ("site/ko/learn/09-resnet.html",
      "<code>AdaptiveAvgPool2d</code> 는 여기 없다 — 그런데 그 풀링은 있다.",
-     "AdaptiveAvgPool2d"),
+     "AdaptiveAvgPool2d", "AdaptiveAvgPool1d"),
 )
 
 
 def test_a_page_teaching_around_a_missing_name_is_still_missing_it():
     """The names lesson pages tell readers to work around have to still be gone.
 
-    `tests/ts_axis.py` already knows the whole TypeScript surface, so this asks it rather
-    than keeping a second list. At the time of writing, `nn`'s gap was being worked down
-    from fifteen, and `AdaptiveAvgPool2d` was one of the names in it.
+    `tests/ts_axis.py` reads the generated name index, so this asks it rather than keeping
+    a second list that would drift. At the time of writing, `nn`'s gap was being worked
+    down from fifteen and `AdaptiveAvgPool2d` was one of the names in it.
+
+    **That index is not the whole surface**, which the first version of this docstring
+    said it was. `site/build_api.py` does not sweep `functional`, so a name living only
+    there is missing from the index — and a check that reads "absent" off an incomplete
+    list cannot tell a real absence from an unswept one. Hence the control below: the
+    sibling that must be found makes the surface prove it can see this namespace before
+    its silence about a name is believed.
     """
     import ts_axis
 
     surface = ts_axis.ts_names()
     problems = []
-    for page_path, sentence, name in ABSENCES_A_PAGE_TEACHES:
+    for page_path, sentence, name, control in ABSENCES_A_PAGE_TEACHES:
+        if control not in surface:
+            problems.append(
+                f"{control} is not in the name index either, so the index cannot see "
+                f"this namespace and its silence about {name} means nothing")
         page = ROOT / page_path
         text = page.read_text(encoding="utf-8")
         if sentence not in text:
