@@ -706,6 +706,14 @@ class Tensor:
 
     def permute(self, *dims):
         dims = dims[0] if len(dims) == 1 and isinstance(dims[0], (tuple, list)) else dims
+        if len(dims) != self.data.ndim:
+            # numpy's own words here are "axes don't match array", as a
+            # `ValueError`. torch says which two numbers disagree and raises
+            # `RuntimeError`, which is what a caller's `except` clause names.
+            raise RuntimeError(
+                "permute: number of dimensions in the tensor input does not match "
+                f"the length of the desired ordering: got {self.data.ndim} and "
+                f"{len(dims)}")
         inv = _np.argsort(dims)
         return self._make(_np.transpose(self.data, dims), (self,),
                           lambda g: (_np.transpose(g, inv),))

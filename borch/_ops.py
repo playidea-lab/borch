@@ -364,6 +364,15 @@ def _wrap(t):
 
 def stack(items, dim=0):
     items = [_wrap(t) for t in items]
+    # **Mismatched shapes came out as numpy's `ValueError`.** torch raises
+    # `RuntimeError` and names which two entries disagree; numpy's says only that
+    # the arrays differ, and a torch user's `except RuntimeError` does not catch it.
+    for i, one in enumerate(items[1:], 1):
+        if one.data.shape != items[0].data.shape:
+            raise RuntimeError(
+                f"stack expects each tensor to be equal size, but got "
+                f"{list(items[0].data.shape)} at entry 0 and "
+                f"{list(one.data.shape)} at entry {i}")
     out = _np.stack([t.data for t in items], axis=dim)
     if not items:
         return Tensor(out)
@@ -2060,8 +2069,17 @@ def split(t, size, dim=0):
     t = _wrap(t)
     dim = _pos_dim(t, dim)
     n = t.data.shape[dim]
+    if not isinstance(size, (list, tuple)) and size <= 0 and not (size == 0 and n == 0):
+        # **`n // 0` was reaching the caller as `ZeroDivisionError`.** That is not a
+        # wrong choice of exception, it is no choice at all: an arithmetic error from
+        # inside, naming nothing the caller did, and not caught by the `except
+        # RuntimeError` a torch user writes. torch allows `0` only where the
+        # dimension is empty too.
+        raise RuntimeError(
+            f"split_size can only be 0 if dimension size is 0, but got dimension "
+            f"size of {n}")
     sizes = size if isinstance(size, (list, tuple)) else \
-        [size] * (n // size) + ([n % size] if n % size else [])
+        [size] * (n // size) + ([n % size] if n % size else []) if size else [0]
     cuts, out, start = [], [], 0
     for sz in sizes[:-1]:
         start += sz
@@ -2071,6 +2089,9 @@ def split(t, size, dim=0):
 
 def chunk(t, chunks, dim=0):
     t = _wrap(t)
+    if chunks <= 0:
+        raise RuntimeError(
+            f"chunk expects `chunks` to be greater than 0, got: {chunks}")
     n = t.data.shape[dim]
     size = -(-n // chunks)
     return split(t, size, dim)
@@ -2102,8 +2123,24 @@ def unbind(t, dim=0):
 
 
 def narrow(t, dim, start, length):
+    """**A run that would leave the end refuses.** A Python slice does not — it
+    stops at the end and hands back what it has — so `narrow(0, 1, 9)` on a length
+    of three answered `[2., 3.]`, a plausible tensor of the wrong length, and
+    nothing said so. torch raises.
+
+    Found by asking which refusals differ from torch's in the *class* they raise:
+    two of the thirty asked turned out not to raise at all. Looking for a missing
+    exception is what found a wrong answer — there was no golden case, because
+    writing one needs somebody who already suspected.
+    """
     t = _wrap(t)
-    return t[_slice_at(_pos_dim(t, dim), start, start + length)]
+    axis = _pos_dim(t, dim)
+    size = t.data.shape[axis]
+    start = start + size if start < 0 else start
+    if length < 0 or start < 0 or start + length > size:
+        raise RuntimeError(
+            f"start ({start}) + length ({length}) exceeds dimension size ({size}).")
+    return t[_slice_at(axis, start, start + length)]
 
 
 def flip(t, dims):
@@ -2611,7 +2648,22 @@ def repeat(t, *reps):
     """Repeat the whole thing and join. **The same job as `tile`** — torch simply
     keeps two names, so neither side is rewritten."""
     want = reps[0] if len(reps) == 1 and isinstance(reps[0], (list, tuple)) else reps
-    return tile(t, tuple(int(r) for r in want))
+    want = tuple(int(r) for r in want)
+    # **Fewer repeats than dimensions is refused, and this is where `repeat` and
+    # `tile` part.** numpy's `tile` pads the count on the left, so `repeat(2)` on a
+    # `(1, 2)` answered `[[1., 2., 1., 2.]]` — the tile of a shape the caller did not
+    # give. torch refuses: a repeat count shorter than the tensor's rank is a call
+    # that cannot mean one thing.
+    #
+    # So "the same job as `tile`" is true of the arithmetic and not of the contract,
+    # which is the kind of sentence that stays true while what it is used to justify
+    # stops being.
+    if len(want) < _wrap(t).data.ndim:
+        raise RuntimeError(
+            "Number of dimensions of repeat dims can not be smaller than number of "
+            f"dimensions of tensor: got {len(want)} for a tensor of "
+            f"{_wrap(t).data.ndim}.")
+    return tile(t, want)
 
 
 def ravel(t):
@@ -2794,6 +2846,15 @@ def masked_fill(t, mask, value):
 def masked_select(t, mask):
     t = _wrap(t)
     m = mask.data.astype(bool) if isinstance(mask, Tensor) else _np.asarray(mask, dtype=bool)
+    # A mask that does not broadcast came out as numpy's `IndexError` about a
+    # boolean index. torch treats it as the shape mismatch it is.
+    if m.shape != t.data.shape:
+        try:
+            _np.broadcast_shapes(m.shape, t.data.shape)
+        except ValueError:
+            raise RuntimeError(
+                f"The size of tensor a {list(m.shape)} must match the size of "
+                f"tensor b {list(t.data.shape)}") from None
     return t[m]
 
 
@@ -3954,6 +4015,10 @@ def cummin(t, dim):
 def kthvalue(t, k, dim=-1, keepdim=False):
     """The **k-th smallest** value. torch counts from 1."""
     t = _wrap(t)
+    size = t.data.shape[dim]
+    if not 1 <= k <= size:
+        raise RuntimeError(
+            f"kthvalue(): selected number k out of range for dimension {dim}")
     order = _np.argsort(t.data, axis=dim, kind="stable")
     at = _np.take(order, k - 1, axis=dim)
     at_e = _np.expand_dims(at, dim)
@@ -4192,6 +4257,8 @@ def _order(data, dim, descending):
 def topk(t, k, dim=-1, largest=True):
     """The top k as (values, indices). Chapter 32's top-k sampling is this."""
     t = _wrap(t)
+    if not 0 <= k <= t.data.shape[dim]:
+        raise RuntimeError("selected index k out of range")
     order = _order(t.data, dim, largest)
     idx = _np.take(order, _np.arange(k), axis=dim)
     return _MinMax(_pick(t, idx, dim, "TopkBackward0"), Tensor(idx))
