@@ -319,7 +319,27 @@ UNALIGNED = {
     # `_TAKES_OUT`, which lists names on `torch` itself, and `normalize` lives only
     # under `torch.nn.functional` — adding it there asked `test_out_names.py` for
     # `torch.normalize`, which does not exist. Written into the function instead.
-    "nn.functional": 10,
+    #
+    # **10 → 6, and the four that left took two defects out with them.** Eleven
+    # losses called their first parameter `pred`, `logits`, `p` or `log_probs` where
+    # torch says `input`; renamed, the lists could be lined up for the first time and
+    # two rows fell straight out of here into buckets that name something sharp:
+    #
+    #   `smooth_l1_loss`  reordered — the third and fourth arguments were exchanged.
+    #                     `nn.SmoothL1Loss` had this same swap and was corrected long
+    #                     ago; the *function* kept it, which is what happens when a
+    #                     family is fixed one member at a time.
+    #   `nll_loss`        inserted  — `weight` and `ignore_index` were missing, while
+    #                     `nn.NLLLoss` two thousand lines up had both. The function
+    #                     was a second, poorer implementation; it routes to the layer
+    #                     now, the way `cross_entropy` already did.
+    #
+    # **Renaming a parameter is cosmetic and what it uncovers is not.** That is the
+    # third time in this file that clearing a vague classification showed a specific
+    # defect underneath — `F.normalize`'s missing `out=` and `isclose`'s `equal_nan`
+    # were the others — and the first time the vague bucket was cleared *on purpose*
+    # to find out what it was hiding.
+    "nn.functional": 6,
     "optim": 0,
     "optim.lr_scheduler": 0,
     # 0 → 4, from the same docstring reading as `Tensor` above. All four are

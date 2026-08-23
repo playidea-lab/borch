@@ -5495,20 +5495,50 @@ def embedding(idx, weight):
     return weight._make(out, (weight,), back, "EmbeddingBackward0")
 
 
-def nll_loss(log_probs, target, reduction="mean"):
-    n = log_probs.data.shape[0]
-    picked = log_probs[_np.arange(n), target.data.astype(int)]
+def nll_loss(input, target, reduction="mean"):  # noqa: A002
+    n = input.data.shape[0]
+    picked = input[_np.arange(n), target.data.astype(int)]
     return _reduce(-picked, reduction)
 
 
-def l1_loss(pred, target, reduction="mean"):
-    return _reduce((_wrap(pred) - _wrap(target)).abs(), reduction)
+def _refuse_loss_weight(where_, weight):
+    """torch's `weight` on the elementwise losses. **The seat is taken and the value
+    is refused**, which is what `_WrittenLoss` decided for the classification losses
+    and the reason carries over unchanged: under `mean` torch divides by the sum of
+    the weights rather than by the sample count, so a `weight` accepted and unused
+    changes the number quietly and sends the reader after the learning rate.
+
+    Taking the seat is not a fiction — `F.l1_loss(a, b, 'sum', w)` lands on `weight`
+    in torch and now lands on `weight` here, where it says so by name. Left out, the
+    same call lands on nothing.
+    """
+    if weight is not None:
+        _unsupported(f"{where_}(weight=…) — torch's `mean` divides by the sum of "
+                     "the weights, so accepting it unused would change the loss")
 
 
-def smooth_l1_loss(pred, target, beta=1.0, reduction="mean"):
+def l1_loss(input, target, reduction="mean", weight=None):  # noqa: A002
+    _refuse_loss_weight("l1_loss", weight)
+    return _reduce((_wrap(input) - _wrap(target)).abs(), reduction)
+
+
+def smooth_l1_loss(input, target, reduction="mean", beta=1.0):  # noqa: A002
     """Squared for small errors and absolute for large ones. Less shaken by
-    outliers."""
-    diff = _wrap(pred) - _wrap(target)
+    outliers.
+
+    **The third and fourth arguments were the other way round**, so
+    `F.smooth_l1_loss(a, b, 'sum')` set `beta` to a string here and `reduction` in
+    torch. The layer `nn.SmoothL1Loss` had this same swap and was corrected long ago
+    — it is the row the core↔borch.ts axis was built on — and the *function* kept it,
+    which is what happens when a family is fixed one member at a time.
+
+    **It was invisible until the first parameter was renamed.** While this was
+    `pred` and torch said `input`, the lists could not be lined up at all, so the row
+    sat in `unaligned` and reported nothing further. Matching the name was cosmetic;
+    what it uncovered was not. That is the third time in this repository that
+    clearing a vague classification showed a specific defect beneath it.
+    """
+    diff = _wrap(input) - _wrap(target)
     small = _np.abs(diff.data) < beta
     return _reduce(where(Tensor(small), 0.5 * diff * diff / beta,
                          diff.abs() - 0.5 * beta), reduction)
@@ -5542,21 +5572,25 @@ def _reduce(out, reduction):
     return out.mean()
 
 
-def huber_loss(pred, target, reduction="mean", delta=1.0):
+def huber_loss(input, target, reduction="mean", delta=1.0,   # noqa: A002
+               weight=None):
     """**It equals `SmoothL1Loss` at δ=1 alone.**
 
     The actual relation is `huber(δ) = δ · smooth_l1(β=δ)`. Measured at the
     defaults only, treating the two as one function still passes, so the golden
     asks with δ changed.
+
+    `weight` — see `_refuse_loss_weight`.
     """
-    diff = _wrap(pred) - _wrap(target)
+    _refuse_loss_weight("huber_loss", weight)
+    diff = _wrap(input) - _wrap(target)
     small = _np.abs(diff.data) < delta
     return _reduce(where(Tensor(small), 0.5 * diff * diff,
                          delta * (diff.abs() - 0.5 * delta)), reduction)
 
 
-def kl_div(pred, target, reduction="mean", log_target=False):
-    """`target · (log target − pred)`. `pred` has to be **already logged.**
+def kl_div(input, target, reduction="mean", log_target=False):  # noqa: A002
+    """`target · (log target − input)`. `input` has to be **already logged.**
 
     **`reduction` has four settings here.** `mean` divides by the element count
     and `batchmean` by the batch size — the latter is what matches the
@@ -5564,14 +5598,14 @@ def kl_div(pred, target, reduction="mean", log_target=False):
     coming release. The present values have to match, so the present rule is
     followed.
     """
-    p, t = _wrap(pred), _wrap(target)
+    p, t = _wrap(input), _wrap(target)
     out = (t.exp() * (t - p)) if log_target else (t * (t.log() - p))
     if reduction == "batchmean":
         return out.sum() / out.data.shape[0]
     return _reduce(out, reduction)
 
 
-def poisson_nll_loss(pred, target, log_input=True, full=False, eps=1e-8,
+def poisson_nll_loss(input, target, log_input=True, full=False, eps=1e-8,
                      reduction="mean"):
     """The Poisson negative log likelihood.
 
@@ -5579,7 +5613,7 @@ def poisson_nll_loss(pred, target, log_input=True, full=False, eps=1e-8,
     unconditionally it is wrong only where the target is small — confirmed by
     measurement (at targets of 0, 0.5 and 1 the difference is 0).
     """
-    p, t = _wrap(pred), _wrap(target)
+    p, t = _wrap(input), _wrap(target)
     out = (p.exp() - t * p) if log_input else (p - t * (p + eps).log())
     if full:
         big = t.data > 1
@@ -5619,7 +5653,7 @@ def cosine_embedding_loss(input1, input2, target, margin=0.0, reduction="mean"):
     return _reduce(same * (1 - cos) + (1 - same) * relu(cos - margin), reduction)
 
 
-def hinge_embedding_loss(pred, target, margin=1.0, reduction="mean"):
+def hinge_embedding_loss(input, target, margin=1.0, reduction="mean"):  # noqa: A002
     """`x` itself at `y=1` and `max(0, margin − x)` at `y=−1`.
 
     **The two are added rather than branched between.** torch puts the margin term
@@ -5631,17 +5665,17 @@ def hinge_embedding_loss(pred, target, margin=1.0, reduction="mean"):
     taking ±1 alone is no guarantee that the values arriving are only those, and
     `sign()` produces 0.
     """
-    p, t = _wrap(pred), _wrap(target)
+    p, t = _wrap(input), _wrap(target)
     dt = p.data.dtype
     not_one = Tensor((t.data != 1).astype(dt))
     not_neg = Tensor((t.data != -1).astype(dt))
     return _reduce(not_one * relu(margin - p) + not_neg * p, reduction)
 
 
-def soft_margin_loss(pred, target, reduction="mean"):
+def soft_margin_loss(input, target, reduction="mean"):  # noqa: A002
     """`log(1 + e^{−y·x})`. The log and the exponential used directly overflow at
     large values, so it goes through `softplus`."""
-    p, t = _wrap(pred), _wrap(target)
+    p, t = _wrap(input), _wrap(target)
     return _reduce(softplus(-t * p), reduction)
 
 
@@ -5698,24 +5732,24 @@ def triplet_margin_with_distance_loss(anchor, positive, negative,
     return _reduce(relu(dp - dn + margin), reduction)
 
 
-def multilabel_soft_margin_loss(pred, target, weight=None, reduction="mean"):
+def multilabel_soft_margin_loss(input, target, weight=None, reduction="mean"):  # noqa: A002
     """An independent binary classification per position, **averaged over the
     whole class set.**"""
-    p, t = _wrap(pred), _wrap(target)
+    p, t = _wrap(input), _wrap(target)
     each = t * logsigmoid(p) + (1 - t) * logsigmoid(-p)
     if weight is not None:
         each = each * _wrap(weight)
     return _reduce(-each.mean(dim=-1), reduction)
 
 
-def multi_margin_loss(pred, target, p=1, margin=1.0, weight=None, reduction="mean"):
+def multi_margin_loss(input, target, p=1, margin=1.0, weight=None, reduction="mean"):  # noqa: A002
     """The margin between the correct position and the rest.
 
     **Divided by the class count** — not by the number of pairs compared. That
     means the correct position enters the denominator too, and dividing by the
     pair count gives 3/2 times the value at three classes.
     """
-    x, t = _wrap(pred), _wrap(target)
+    x, t = _wrap(input), _wrap(target)
     n, classes = x.data.shape
     idx = _np.arange(n)
     correct = x[idx, t.data.astype(_np.intp)].unsqueeze(1)
@@ -5728,14 +5762,14 @@ def multi_margin_loss(pred, target, p=1, margin=1.0, weight=None, reduction="mea
     return _reduce((each * Tensor(keep)).sum(dim=1) / classes, reduction)
 
 
-def multilabel_margin_loss(pred, target, reduction="mean"):
+def multilabel_margin_loss(input, target, reduction="mean"):  # noqa: A002
     """**The target is a list of positions and −1 marks the end.**
 
     `[3, 0, -1, 1]` means "3 and 0 are correct" and the trailing 1 is not read.
     Without that convention, −1 gets counted as one of the classes or reading
     continues past the end.
     """
-    x, t = _wrap(pred), _wrap(target)
+    x, t = _wrap(input), _wrap(target)
     rows, classes = x.data.shape
     total = None
     for r in range(rows):

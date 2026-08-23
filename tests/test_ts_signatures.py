@@ -343,7 +343,17 @@ RENAMED = {
     # 19 → 10. Nine layers left for `unaligned` when the core took torch's
     # `device`/`dtype`: same names as borch.ts up to a point, then two more that
     # borch.ts has no seat for at all.
-    "nn": 10,   # Bilinear arrived from `unaligned`: borch.ts spells the flag
+    # 10 → 9. The `_Rearrange` family: `PixelShuffle`, `PixelUnshuffle` and
+    # `ChannelShuffle` shared one base whose parameter was `value`, collapsing three
+    # different torch names (`upscale_factor`, `downscale_factor`, `groups`) into
+    # one. borch.ts already spelled them torch's way, so this row was the core being
+    # the odd one. One of the three now agrees outright and the other two moved.
+    #
+    # **The tell was a `repr` that would not run.** It printed
+    # `PixelShuffle(upscale_factor=2)` while the constructor refused that keyword —
+    # so the author knew the three names differ and had applied the knowledge to the
+    # printing side alone.
+    "nn": 9,    # Bilinear arrived from `unaligned`: borch.ts spells the flag
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     # 1 → 2. `scaled_dot_product_attention` arrived from `shifted`: same

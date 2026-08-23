@@ -13,7 +13,8 @@ from ._base import (
     _DEFAULT_DTYPE, _like_torch, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _reduce, _renorm_rows, _rng, _spread, _wrap,
+    _Namespace, _gelu, _pool_all, _reduce, _refuse_loss_weight, _renorm_rows,
+    _rng, _spread, _wrap,
     adaptive_avg_pool1d,
     adaptive_avg_pool2d, adaptive_avg_pool3d, adaptive_max_pool1d,
     adaptive_max_pool2d, adaptive_max_pool3d, avg_pool1d, avg_pool2d, avg_pool3d,
@@ -2819,7 +2820,13 @@ class SmoothL1Loss(_WrittenLoss):
         self.beta = beta
 
     def forward(self, pred, target):
-        return smooth_l1_loss(pred, target, self.beta, self.reduction)
+        # **Passed by keyword now.** The function's third and fourth arguments were
+        # in the other order and were corrected to torch's; this call had the two
+        # positionally, so it was reading correctly against the old order and would
+        # have gone on reading — with `beta` and `reduction` exchanged — against the
+        # new one. The layer was the one row in this family that was already right,
+        # which is exactly the call a positional fix leaves broken.
+        return smooth_l1_loss(pred, target, reduction=self.reduction, beta=self.beta)
 
 
 class NLLLoss(_WrittenLoss):
@@ -3240,33 +3247,62 @@ for _cls in (Unfold, Fold, Bilinear, LocalResponseNorm, Softmax2d, RReLU,
 # characters printed differ.
 
 class _Rearrange(Module):
+    """**`_arg` existed for the `repr` alone, and the `repr` printed a line that
+    would not run.**
+
+    torch calls this argument three different things — `upscale_factor`,
+    `downscale_factor`, `groups` — and one shared base collapsed all three into
+    `value`. So `nn.PixelShuffle(upscale_factor=2)`, the spelling torch's own
+    documentation uses, stopped with
+
+        TypeError: _Rearrange.__init__() got an unexpected keyword argument
+
+    naming a private base the caller has never heard of. Meanwhile `repr` answered
+    `PixelShuffle(upscale_factor=2)` — **a string that is not valid as code here**,
+    which is the tell: whoever wrote `_arg` knew the three names differ and applied
+    that knowledge to the printing side only.
+
+    Now `_arg` names the parameter, the attribute and the `repr` at once — one fact
+    used three ways rather than a decoration beside two places that ignore it. The
+    `repr` evaluating is what holds it together: read off the attribute it names, it
+    cannot drift from the constructor again.
+    """
+
     _fn = None
     _arg = "factor"
 
-    def __init__(self, value):
-        super().__init__()
-        self.value = value
-
     def forward(self, x):
-        return type(self)._fn(x, self.value)
+        return type(self)._fn(x, getattr(self, type(self)._arg))
 
     def __repr__(self):
-        return f"{type(self).__name__}({self._arg}={self.value})"
+        return f"{type(self).__name__}({self._arg}={getattr(self, self._arg)})"
 
 
 class PixelShuffle(_Rearrange):
     _fn = staticmethod(pixel_shuffle)
     _arg = "upscale_factor"
 
+    def __init__(self, upscale_factor):
+        super().__init__()
+        self.upscale_factor = upscale_factor
+
 
 class PixelUnshuffle(_Rearrange):
     _fn = staticmethod(pixel_unshuffle)
     _arg = "downscale_factor"
 
+    def __init__(self, downscale_factor):
+        super().__init__()
+        self.downscale_factor = downscale_factor
+
 
 class ChannelShuffle(_Rearrange):
     _fn = staticmethod(channel_shuffle)
     _arg = "groups"
+
+    def __init__(self, groups):
+        super().__init__()
+        self.groups = groups
 
 
 class _FeatureDropout(Module):
@@ -3953,7 +3989,28 @@ class _Functional(_Namespace):
     avg_pool2d = staticmethod(avg_pool2d)
     layer_norm = staticmethod(layer_norm)
     embedding = staticmethod(embedding)
-    nll_loss = staticmethod(nll_loss)
+    @staticmethod
+    def nll_loss(input, target, weight=None, ignore_index=-100,   # noqa: A002
+                 reduction="mean"):
+        """torch's list, and **the work was already next door.**
+
+        This was `staticmethod(nll_loss)` — the bare `_ops` function, which takes
+        `(input, target, reduction)` and nothing else. So `weight` and
+        `ignore_index` were missing here while `nn.NLLLoss` two thousand lines up
+        had both: `ignore_index` through the shared `_reduce_ignoring`, and `weight`
+        refused with the reason written out (torch's `mean` divides by the sum of
+        the weights, so accepting it unused changes the loss silently).
+
+        Nothing is implemented here. It routes to the layer, which is what
+        `cross_entropy` above already does — **the second implementation is the one
+        that was missing arguments, not the one that had to be written.** Read off a
+        gap list, this row says "two arguments absent"; read against the file, it
+        says "one of two spellings does less than the other".
+
+        By keyword, for the reason `cross_entropy`'s docstring gives.
+        """
+        return NLLLoss(weight=weight, ignore_index=ignore_index,
+                       reduction=reduction)(input, target)
     l1_loss = staticmethod(l1_loss)
     smooth_l1_loss = staticmethod(smooth_l1_loss)
     pad = staticmethod(pad)
@@ -3977,8 +4034,11 @@ class _Functional(_Namespace):
     # positional call is a silent bet that the callee's parameter order never moves,
     # and this file has just moved six of them.
     @staticmethod
-    def mse_loss(pred, target, reduction="mean"):
-        return MSELoss(reduction=reduction)(pred, target)
+    def mse_loss(input, target, reduction="mean", weight=None):   # noqa: A002
+        """`weight` — the seat is torch's and the value is refused, for the reason
+        `_ops._refuse_loss_weight` gives."""
+        _refuse_loss_weight("mse_loss", weight)
+        return MSELoss(reduction=reduction)(input, target)
 
     @staticmethod
     def binary_cross_entropy_with_logits(logits, target, weight=None,

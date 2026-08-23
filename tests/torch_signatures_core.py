@@ -42,6 +42,26 @@ comparison, because a true fold still has to be attested somewhere a reader can 
 it — which is the lesson `_camel` taught by folding `eq_` onto `eq` and reporting a
 name present that was not.
 
+**"ignores them whenever `reduction` is passed" was too strong, and the gap is
+exactly where the fold can mislead.** It holds for a keyword call, and a positional
+call is the only kind that reaches these seats — measured:
+
+    F.l1_loss(a, b, 'sum')        torch: 2.5  (the *mean*)   here: 10.0 (the sum)
+    F.mse_loss(a, b, 'sum')       torch: 7.5  (the mean)     here: 30.0
+    F.smooth_l1_loss(a, b, 'sum') torch: 2.0  (the mean)     here: 8.0
+    F.huber_loss(a, b, 'sum')     torch: 8.0  (the sum)      here: 8.0
+
+torch's third seat there is `size_average`, and its legacy path reads a truthy value
+as `reduction='mean'`. `huber_loss` is the control: it is newer and carries no
+deprecated pair, so its third seat really is `reduction` and the two agree.
+
+So on the five that carry the pair, **`agree` in this table means the names line up
+once two are removed, and not that the same call means the same thing.** Recorded
+rather than fixed, because carrying `size_average` and `reduce` means implementing a
+reinterpretation torch itself warns about on every use, and that is a decision about
+what this subset promises rather than a patch — the same standing the `SHIFTED` table
+above gives its own rows.
+
 ## The limit that matters: 571 rows where torch is C
 
 `inspect` cannot read a C implementation, and `torch.Tensor` is almost entirely C —
