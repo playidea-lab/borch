@@ -598,8 +598,18 @@ def _reduce_ignoring(each, idx, ignore_index, reduction):
     return total if reduction == "sum" else total / int((idx != ignore_index).sum())
 
 
-class _Loss(Module):
-    """`reduction` is accepted in one place. Written per loss, the places
+class _WrittenLoss(Module):
+    """The base of the losses whose classes are **written out below.**
+
+    **This and `_GeneratedLoss` were both called `_Loss`**, and both were live. The
+    eight losses written by hand inherit from this one because they are defined
+    before line 3151; the thirteen built from `_LOSSES` inherit from the other
+    because they are built after it. Which class the name meant depended on where in
+    the file a reader was standing — and searching for `_Loss` from `NLLLoss` found
+    the later one, which does something else and raises nothing when mistaken for
+    this.
+
+    `reduction` is accepted in one place. Written per loss, the places
     diverge.
 
     **`weight` and `pos_weight` are refused here.** torch registers the two as
@@ -636,7 +646,7 @@ class _Loss(Module):
         self.label_smoothing = label_smoothing
 
 
-class MSELoss(_Loss):
+class MSELoss(_WrittenLoss):
     def __init__(self, reduction="mean"):
         """**torch's `MSELoss` has no `weight` at all**, and this offered one —
         keyword-only, and refused when given, but offered. An argument that only
@@ -648,7 +658,7 @@ class MSELoss(_Loss):
         return _reduce((pred - target) ** 2, self.reduction)
 
 
-class BCEWithLogitsLoss(_Loss):
+class BCEWithLogitsLoss(_WrittenLoss):
     def __init__(self, weight=None, reduction="mean", pos_weight=None):
         """torch's order — and `pos_weight` is **last**, after `reduction`, which is
         the only loss that puts it there."""
@@ -661,7 +671,7 @@ class BCEWithLogitsLoss(_Loss):
                        self.reduction)
 
 
-class BCELoss(_Loss):
+class BCELoss(_WrittenLoss):
     def __init__(self, weight=None, reduction="mean"):
         """torch's order. **No `pos_weight`** — that belongs to the logits form
         alone, and offering it here would be an argument torch does not have."""
@@ -673,7 +683,7 @@ class BCELoss(_Loss):
                        self.reduction)
 
 
-class CrossEntropyLoss(_Loss):
+class CrossEntropyLoss(_WrittenLoss):
     def __init__(self, weight=None, ignore_index=-100, reduction="mean",
                  label_smoothing=0.0):
         """torch's order: `weight` first, `reduction` **third.**
@@ -2486,7 +2496,7 @@ class Unflatten(Module):
         return x.reshape(shape[:dim] + self.unflattened_size + shape[dim + 1:])
 
 
-class L1Loss(_Loss):
+class L1Loss(_WrittenLoss):
     def __init__(self, reduction="mean"):
         """No `weight` in torch either — the same correction as `MSELoss`."""
         super().__init__(reduction)
@@ -2495,7 +2505,7 @@ class L1Loss(_Loss):
         return l1_loss(pred, target, self.reduction)
 
 
-class SmoothL1Loss(_Loss):
+class SmoothL1Loss(_WrittenLoss):
     """**`reduction` comes first, as in torch.**
 
     torch's live arguments are `(reduction, beta)` — the deprecated `size_average`
@@ -2517,7 +2527,7 @@ class SmoothL1Loss(_Loss):
         return smooth_l1_loss(pred, target, self.beta, self.reduction)
 
 
-class NLLLoss(_Loss):
+class NLLLoss(_WrittenLoss):
     def __init__(self, weight=None, ignore_index=-100, reduction="mean"):
         """torch's order — `weight`, then `ignore_index`, then `reduction`."""
         super().__init__(reduction, weight=weight, ignore_index=ignore_index)
@@ -3199,9 +3209,14 @@ nn.Buffer = Buffer
 # times. Only the argument names are kept in a table and the rest is stamped out
 # here.
 
-class _Loss(Module):
-    """The root of the loss layers. `_fn` names the function and `_keys` names
-    the arguments to pass.
+class _GeneratedLoss(Module):
+    """The root of the losses **built from the `_LOSSES` table**, not of all of
+    them — the eight written out above descend from `_WrittenLoss` instead.
+
+    Both classes were called `_Loss`. The name said nothing about which, and the
+    answer was the reader's line number.
+
+    `_fn` names the function and `_keys` names the arguments to pass.
 
     **The constructor is generated per subclass with torch's own parameter list**,
     rather than shared as `(*args, reduction="mean", **kw)`. That shared version
@@ -3291,15 +3306,15 @@ def _loss_init(params):
     """
     names = [p.split("=")[0] for p in params if p != "*"]
     src = (f"def __init__(self, {', '.join(params)}):\n"
-           f"    _Loss.__init__(self, "
+           f"    _GeneratedLoss.__init__(self, "
            + ", ".join(f"{n}={n}" for n in names) + ")\n")
-    scope = {"_Loss": _Loss}
+    scope = {"_GeneratedLoss": _GeneratedLoss}
     exec(src, scope)                                     # noqa: S102 — see docstring
     return scope["__init__"]
 
 
 def _make_losses():
-    return {name: type(name, (_Loss,), {
+    return {name: type(name, (_GeneratedLoss,), {
         "_fn": staticmethod(globals()[fn]),
         "_keys": tuple(p.split("=")[0] for p in params if p != "*"),
         "__init__": _loss_init(params),

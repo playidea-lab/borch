@@ -68,9 +68,28 @@ def test_it_is_still_a_parameter():
 
 
 def test_an_optimizer_takes_it_before_the_first_forward():
-    """**torch allows this.** There is code written in that order."""
+    """**torch allows this.** There is code written in that order.
+
+    **The first version of this called both and asserted nothing**, so it passed
+    unless something raised — and every other test in this file compares the two
+    libraries. An implementation that handed the optimizer an *empty* parameter list
+    also raises nothing, and would have passed while silently training nothing.
+
+    So the count is compared. It is 1 on both sides: a `LazyLinear` has an
+    uninitialised weight and no bias tensor yet, and the optimizer has to be holding
+    that one thing rather than nothing at all.
+    """
+    counts = []
     for lib in (borch, torch):
-        lib.optim.SGD(lib.nn.LazyLinear(3).parameters(), lr=0.1)
+        opt = lib.optim.SGD(lib.nn.LazyLinear(3).parameters(), lr=0.1)
+        counts.append(len(opt.param_groups[0]["params"]))
+    assert counts[0] == counts[1], (
+        f"the optimizer holds {counts[0]} parameters here and {counts[1]} in torch.\n"
+        "  Constructing it raises on neither side, so only the count says which.")
+    assert counts[0] > 0, (
+        "the optimizer was built over an empty parameter list on both sides.\n"
+        "  That raises nothing and trains nothing — the shape this assertion exists\n"
+        "  to refuse, since the test it replaced could not tell it from working.")
 
 
 def test_buffer_is_just_the_tensor():

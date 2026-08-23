@@ -146,6 +146,76 @@ class _Size(tuple):
     __str__ = __repr__
 
 
+# The names `__getattr__` must not forward, each with the reason it cannot be.
+#
+# **Lifted out of `__getattr__`.** In there it made a 165-line function, of which
+# 93 lines were comment and 45 were this list; the dispatch itself is about twenty.
+# The rule that stops a function at a hundred lines exists to catch several
+# responsibilities in one place, and this was one responsibility and a table. Out
+# here the function reads at its real size, and the table can be checked directly —
+# which nothing could do while it was an expression inside a method.
+_NOT_FORWARDED = ("clamp", "clip", "split", "chunk", "aminmax", "flip",
+            "pow", "squeeze", "repeat_interleave", "flatten",
+            "sum", "norm", "transpose", "swapdims", "remainder",
+            # `max` and `min` split three ways by argument. Over there
+            # only the middle one exists and its default dimension is 0,
+            # so forwarding makes `x.max()` produce a pair reduced along
+            # dimension 0 instead of the overall maximum.
+            "max", "min",
+            # The indexing side — the names and arguments differ from
+            # borch.ts's.
+            "scatter", "scatter_add", "index_add", "index_copy",
+            "index_fill", "take", "take_along_dim",
+            # **Names on the module that borch.ts does not have.**
+            # Everything here is a combination of computations that
+            # already exist, so no name was added over there — which left
+            # a one-sided link where `borch.t(x)` works and `x.t()` does
+            # not. torch offers both, and textbook code uses the method
+            # form more.
+            #
+            # This list checks itself: every name has a golden case, and
+            # the golden was frozen **by running real torch**, so a name
+            # torch does not have stops at the freezing step.
+            "multiply", "true_divide", "floor_divide", "lerp",
+            "greater", "less_equal", "isclose", "nan_to_num", "fmax",
+            "inner", "adjoint", "moveaxis", "t", "corrcoef", "cov",
+            "vdot", "kron", "broadcast_to",
+            # Six were missing. **The pair was above and only the alias
+            # was absent**, so `x.multiply_(3)` worked and
+            # `x.divide_(2)` did not — two names standing side by side
+            # with one of them running is the least visible kind. It
+            # turned up while filling in forty-one in-place names in the
+            # core and measuring all three against each other.
+            "divide", "subtract", "greater_equal", "less", "not_equal",
+            "logical_xor",
+            # On bool it has to branch to logical negation, and that
+            # branch lives in `_ops`.
+            "bitwise_not",
+            # The shape and indexing ones **hand-written on the module.**
+            # They take a list of tensors (`index_put`) or answer with a
+            # tuple (`tensor_split`), so forwarding the name gets caught
+            # on the JavaScript side at integer conversion or list form.
+            "index_put", "index_put_", "tensor_split",
+            "split_with_sizes", "unique_consecutive",
+            # Sparse-only, so they only refuse — borch.ts has no such
+            # names.
+            "sspaddmm",
+            # **The two whose names collide with the `linalg` namespace.**
+            # Forwarded, `luSolve` gets picked up and answers differently
+            # with the argument order reversed.
+            "lu", "lu_solve",
+            # The statistics ones hand-written on the module — random
+            # draws, refusals, compositions, and `histogramdd`, which
+            # takes its edges as a list.
+            "bernoulli", "float_power", "stft", "istft", "hash_tensor", "trapz",
+            "histogramdd",
+            # Complex's neighbours — identities, so borch.ts has no name
+            # for them.
+            "real", "conj", "conj_physical", "conj_physical_",
+            "resolve_conj", "resolve_neg", "imag", "angle",
+            "is_complex", "is_conj", "is_neg")
+
+
 class Tensor:
     """Wraps one borch.ts tensor.
 
@@ -643,66 +713,7 @@ class Tensor:
         # in this file, so the underscore side has to pass through it as well.
         inplace = name.endswith("_") and not name.endswith("__")
         bare = name[:-1] if inplace else name
-        if bare in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
-                    "pow", "squeeze", "repeat_interleave", "flatten",
-                    "sum", "norm", "transpose", "swapdims", "remainder",
-                    # `max` and `min` split three ways by argument. Over there
-                    # only the middle one exists and its default dimension is 0,
-                    # so forwarding makes `x.max()` produce a pair reduced along
-                    # dimension 0 instead of the overall maximum.
-                    "max", "min",
-                    # The indexing side — the names and arguments differ from
-                    # borch.ts's.
-                    "scatter", "scatter_add", "index_add", "index_copy",
-                    "index_fill", "take", "take_along_dim",
-                    # **Names on the module that borch.ts does not have.**
-                    # Everything here is a combination of computations that
-                    # already exist, so no name was added over there — which left
-                    # a one-sided link where `borch.t(x)` works and `x.t()` does
-                    # not. torch offers both, and textbook code uses the method
-                    # form more.
-                    #
-                    # This list checks itself: every name has a golden case, and
-                    # the golden was frozen **by running real torch**, so a name
-                    # torch does not have stops at the freezing step.
-                    "multiply", "true_divide", "floor_divide", "lerp",
-                    "greater", "less_equal", "isclose", "nan_to_num", "fmax",
-                    "inner", "adjoint", "moveaxis", "t", "corrcoef", "cov",
-                    "vdot", "kron", "broadcast_to",
-                    # Six were missing. **The pair was above and only the alias
-                    # was absent**, so `x.multiply_(3)` worked and
-                    # `x.divide_(2)` did not — two names standing side by side
-                    # with one of them running is the least visible kind. It
-                    # turned up while filling in forty-one in-place names in the
-                    # core and measuring all three against each other.
-                    "divide", "subtract", "greater_equal", "less", "not_equal",
-                    "logical_xor",
-                    # On bool it has to branch to logical negation, and that
-                    # branch lives in `_ops`.
-                    "bitwise_not",
-                    # The shape and indexing ones **hand-written on the module.**
-                    # They take a list of tensors (`index_put`) or answer with a
-                    # tuple (`tensor_split`), so forwarding the name gets caught
-                    # on the JavaScript side at integer conversion or list form.
-                    "index_put", "index_put_", "tensor_split",
-                    "split_with_sizes", "unique_consecutive",
-                    # Sparse-only, so they only refuse — borch.ts has no such
-                    # names.
-                    "sspaddmm",
-                    # **The two whose names collide with the `linalg` namespace.**
-                    # Forwarded, `luSolve` gets picked up and answers differently
-                    # with the argument order reversed.
-                    "lu", "lu_solve",
-                    # The statistics ones hand-written on the module — random
-                    # draws, refusals, compositions, and `histogramdd`, which
-                    # takes its edges as a list.
-                    "bernoulli", "float_power", "stft", "istft", "hash_tensor", "trapz",
-                    "histogramdd",
-                    # Complex's neighbours — identities, so borch.ts has no name
-                    # for them.
-                    "real", "conj", "conj_physical", "conj_physical_",
-                    "resolve_conj", "resolve_neg", "imag", "angle",
-                    "is_complex", "is_conj", "is_neg"):
+        if bare in _NOT_FORWARDED:
             from . import _ops
             # **`max` and `min` are not in the module globals.** Putting those
             # names in `_ops` shadows the Python builtins inside that file, and

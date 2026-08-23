@@ -1563,13 +1563,23 @@ def Embedding(num, dim, padding_idx=None, max_norm=None, norm_type=2.0,
 
 
 def _undefined():
-    """JavaScript's `undefined`, which is what makes a TypeScript default apply.
+    """JavaScript's `undefined`, for the gaps `_MISC_ARGS` leaves in the middle —
+    `LocalResponseNorm(2, k=2.0)` fills the first and last of four slots.
 
-    **`null` does not.** A skipped middle slot handed across as `None` arrives as a
-    `null`, the default never fires, and the layer computes with it — `_optim.py` met
-    this at `OneCycleLR` and every rate on the curve came back `NaN`. The same hazard
-    reaches here the moment a table has a gap in it, which is the moment `_MISC_ARGS`
-    below created: `LocalResponseNorm(2, k=2.0)` leaves two slots unfilled.
+    **This is a guard, not a fix, and the docstring here said otherwise.** It claimed
+    a `None` would arrive as `null`, the TypeScript default would not fire, and the
+    layer would compute with it — citing an `OneCycleLR` defect in `_optim.py`.
+    Measured in the browser afterwards: **Pyodide hands a Python `None` across as
+    `undefined`, and the default does apply.** So this changes nothing, and the
+    `OneCycleLR` `NaN` came from a stale row in that file's table rather than from
+    the conversion.
+
+    Written that way because the sentence was copied from `_optim.py` rather than
+    measured — **which is how a wrong reason spreads**: it was plausible, it sat
+    beside working code, and repeating it made it look confirmed. Kept as a guard
+    because it costs nothing and Pyodide's conversion is not ours to promise across
+    versions; if it ever starts mattering, that is a change underneath and this is
+    the place that says so.
     """
     import js
     return js.undefined
@@ -1631,6 +1641,12 @@ def _misc_layer(name):
             if key not in order:
                 raise TypeError(f"{name}() got an unexpected keyword argument {key!r}")
             at = order.index(key)
+            # **A slot given twice is a refusal**, as it is in torch and as Python
+            # enforces for the core's real signatures. `LocalResponseNorm(2, 1.0,
+            # alpha=2.0)` used to take the keyword and answer.
+            if at < len(args):
+                raise TypeError(
+                    f"{name}() got multiple values for argument {key!r}")
             while len(laid) <= at:
                 laid.append(_undefined())
             laid[at] = (_js_list(list(value))

@@ -525,19 +525,42 @@ def _sched(js_name):
     def make(opt, *args, **kw):
         from ._ops import _arg
         out = list(args)
-        for i, key in enumerate(_SCHED_ARGS.get(js_name, ())):
+        order = _SCHED_ARGS.get(js_name, ())
+        # **A slot given twice is a refusal.** `StepLR(opt, 2, step_size=3)` used the
+        # keyword and answered; torch raises `TypeError: got multiple values`.
+        clash = [key for i, key in enumerate(order) if i < len(args) and key in kw]
+        if clash:
+            raise TypeError(
+                f"{js_name}() got multiple values for argument '{clash[0]}'")
+        for i, key in enumerate(order):
             if key in kw:
                 while len(out) <= i:
                     out.append(_DEFAULT)
                 out[i] = kw[key]
         while out and out[-1] is _DEFAULT:
             out.pop()
-        # **A skipped middle slot has to reach JavaScript as `undefined`, not `null`.**
-        # A TypeScript default parameter applies for `undefined` and *not* for `null`,
-        # so `OneCycleLR(max_lr=…, total_steps=…, div_factor=10)` — which leaves seven
-        # slots unfilled between them — would hand `pctStart` a null, and every rate on
-        # the curve comes back `NaN`. With six names in the table above there was never
-        # a gap wide enough to notice; with thirteen there is.
+        # **This distinction is belt-and-braces, and the comment that used to be here
+        # named it as the cause of a defect it did not cause.**
+        #
+        # It said: a TypeScript default applies for `undefined` and not for `null`, so
+        # a skipped middle slot arriving as `None` would hand `pctStart` a null and
+        # every rate on the curve would come back `NaN`. The first half is true about
+        # JavaScript. The second half is not what happens here — **measured in the
+        # browser: Pyodide hands a Python `None` across as `undefined`, and the
+        # TypeScript default does apply to it.** So both branches below produce the
+        # same thing, and this line changes no behaviour.
+        #
+        # The `NaN` was real and came from the other half of the same commit: the table
+        # above listed five names where borch.ts takes thirteen, so `div_factor` landed
+        # in `stepsPerEpoch`'s seat and `pct_start` in `epochs`'. Widening the row is
+        # what fixed it. **A true sentence standing where the cause belongs is the
+        # defect this repository spent a day removing**, and it reached the remedy
+        # itself here.
+        #
+        # Kept because it costs nothing and Pyodide's conversion is not ours to
+        # guarantee across versions — but kept as a guard, not as an explanation. If it
+        # ever becomes load-bearing, something changed underneath and this comment is
+        # the place that says so.
         out = [None if a is None else (_undefined() if a is _DEFAULT else a)
                for a in out]
         # Python functions become proxies and are held — `LambdaLR` calls one later.

@@ -397,6 +397,16 @@ def positional(name, args, kw):
                 f"`{name}` does not take keyword arguments (got: {sorted(kw)})\n"
                 f"  If it should, write the positional order into `_SIGNATURE`.")
         out = list(args)
+        # **A slot given twice is a refusal, not a preference.** Filling `out[i]`
+        # unconditionally let `x.quantile(0.5, q=0.9)` through and used the keyword,
+        # where torch raises `TypeError: got multiple values for argument 'q'`. The
+        # core is a real Python signature so Python refuses it there; only this path
+        # answered — which is the shape this repository spends its checks on, a call
+        # torch declines and we oblige.
+        clash = [key for i, key in enumerate(order) if i < len(args) and key in kw]
+        if clash:
+            raise TypeError(
+                f"{name}() got multiple values for argument '{clash[0]}'")
         for i, key in enumerate(order):
             if key in kw:
                 while len(out) <= i:
