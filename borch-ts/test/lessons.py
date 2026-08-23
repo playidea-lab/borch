@@ -50,19 +50,28 @@ PAGES = [
     "/site/ko/learn/10-vit.html",
 ]
 
-# **This list is hand-kept and reads as coverage.** Thirty-two pages under `site` carry a
-# `data-lang="js"` block. These press twelve. The four lessons above were added only
+# **This list is hand-kept and reads as coverage.** Thirty-four pages under `site` carry a
+# `data-lang="js"` block. These press twelve.
+#
+# (It said thirty-two, and thirty-two is `12 + 20` — the pages pressed plus the pages with
+# no reason. The two `04-image-classifier` pages, left out on purpose below, were counted
+# in neither and so fell out of the total as well. **A number that says "pages under
+# `site` carrying a block" has to include the ones deliberately skipped**, or the sentence
+# is about a different set from the one it names. Counted from the directory rather than
+# re-derived: 34 = 12 pressed + 20 unexplained + 2 deliberate.) The four lessons above were added only
 # because their author went looking for the harness after a sister session found it had
 # been running two of three implementations and calling it green.
 #
 # **A page absent from here is not reported as unwatched — it is not reported at all**,
-# which on screen is indistinguishable from a page that passed. Twenty pages (about
-# seventy-nine blocks) are in that state with no reason recorded: lessons 1–5, 7 and 8 in
+# which on screen is indistinguishable from a page that passed. Twenty pages (**84
+# blocks**, counted; the estimate here read seventy-nine) are in that state with no reason
+# recorded: lessons 1–5, 7 and 8 in
 # both languages, tutorials 02 and 06, and `python.html`. Only `04-image-classifier` below
 # is left out on purpose.
 #
 # **The cost is why it is not simply derived from the directory.** Measured on a software
-# adapter: twelve pages take 544s, of which the two `10-vit` pages are 154s — a ViT page
+# adapter: twelve pages take 544–554s (two runs, two trees), of which the two `10-vit`
+# pages are 154s — a ViT page
 # is about two and a half times an ordinary one, because its last block trains. Pressing
 # all thirty-two would be several times this, and `gpu.yml` carries no `push` trigger for
 # it (a real adapter is needed), so **this check runs only when a person runs it.** Making

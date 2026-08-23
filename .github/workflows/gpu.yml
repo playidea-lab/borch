@@ -77,8 +77,14 @@
 # as the first one. The peer who owned that number is the one who noticed, and re-ran
 # it merged: 12 of 12, 533s, values identical step for step across the 1320 lines.
 #
-# On **this** tree `lessons:ts` covers 8 pages (the other 4 are on that branch) and
-# passes 8/8 over 26 JS blocks. That is the number this file can stand behind.
+# On **this** tree `lessons:ts` covers 12 pages and passes **12/12 over 38 JS blocks
+# in 554s**. It read 8/8 over 26 blocks until that branch merged, which is what a
+# number with its tree named is supposed to do: go stale visibly rather than quietly
+# become a claim about a tree it was never measured on.
+#
+# Measured here rather than taken from the merge. The peer's run of the same command
+# on the merged tree gave 533s — close, and close is not the same as counted, which
+# is the whole reason the tree gets named.
 #
 # Cite a number from elsewhere by all means — name whose tree it is, or it silently
 # becomes a claim about this one.
