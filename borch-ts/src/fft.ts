@@ -763,3 +763,4 @@ export function ihfft2(input: Tensor, s?: (number | null)[] | null,
                        dim: number[] = [-2, -1], norm?: string | null): Tensor {
   return ihfftn(input, s, dim, norm);
 }
+

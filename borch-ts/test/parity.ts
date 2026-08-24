@@ -10,8 +10,8 @@
  */
 
 import {
-  device, type DType, init, keepAlive, linalg, manualSeed, nn, noGrad, optim, scope,
-  slice, Tensor, vision,
+  device, type DType, igamma, igammac, init, keepAlive, linalg, manualSeed, nn, noGrad,
+  optim, polygamma, scope, slice, stft, Tensor, vision,
 } from "../src/index.js";
 
 interface Check { name: string; ok: boolean; note: string }
@@ -772,6 +772,34 @@ export async function report(): Promise<Report> {
   // golden cannot ask, because the binding routes torch's `sum(0)` to `sumDim`
   // already — this is met only by somebody writing TypeScript.
   //
+  // **The five method spellings, called as methods.** torch has both forms for each and
+  // this library had only the free function, so `x.stft(8, …)` — the way torch's own
+  // tutorials write it — was a `TypeError`, and the name axis counted the free function
+  // as satisfying the method so nothing asked.
+  //
+  // They are asked here rather than in the golden because the golden goes through the
+  // binding, which calls the free functions. **And they are asked at all because the
+  // methods import their bodies back from `fft.ts` and `special.ts` — a cycle that
+  // holds only if nothing is touched while the modules load.** A type cannot say that;
+  // calling one can.
+  //
+  // **What retires this line:** the two spellings ceasing to be two.
+  {
+    const sig = Tensor.from(Array.from({ length: 32 }, (_, i) => Math.sin(i / 3)), [32]);
+    const spec = sig.stft(8, { returnComplex: true });
+    const x = Tensor.from([1.5, 2.5], [2]);
+    const y = Tensor.from([2, 3], [2]);
+    want("x.stft(n) is stft(x, n)",
+      same(await spec.abs().toArray(),
+        await stft(sig, 8, { returnComplex: true }).abs().toArray()));
+    want("x.polygamma(1) is polygamma(1, x)",
+      same(await x.polygamma(1).toArray(), await polygamma(1, x).toArray()));
+    want("x.igamma(y) is igamma(x, y)",
+      same(await x.igamma(y).toArray(), await igamma(x, y).toArray()));
+    want("x.igammac(y) is igammac(x, y)",
+      same(await x.igammac(y).toArray(), await igammac(x, y).toArray()));
+  }
+
   // **What retires this line:** `sum` losing either overload.
   {
     const m = Tensor.from([1, 2, 3, 4], [2, 2]);

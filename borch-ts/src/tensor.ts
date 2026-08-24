@@ -11,6 +11,18 @@ import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device, type DeviceKind, type InitOptions } from "./device.js";
 import { type AxisPlan, isSlice, planAxis, type Slice } from "./indexing.js";
 import { gauss, uniform } from "./random.js";
+// **A cycle on purpose, and it holds because nothing is touched while loading.**
+// `fft.ts` and `special.ts` import `Tensor` from here; these five methods import their
+// bodies back. Every use is inside a method, so by the time one runs both modules have
+// finished. The alternative was a `declare module` augmentation, which type-checks and
+// runs — and which `site/build_api.py` does not read, so the five methods would exist
+// and the API index would say they do not.
+import {
+  istft as istftImpl, type IstftOptions, stft as stftImpl, type StftOptions,
+} from "./fft.js";
+import {
+  igamma as igammaImpl, igammac as igammacImpl, polygamma as polygammaImpl,
+} from "./special.js";
 import {
   byRank, type DType, floatsPerElement, isComplexDType, promote, rankOf,
 } from "./dtype.js";
@@ -9982,6 +9994,41 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       result = result.add(bias.reshape(shape));
     }
     return result;
+  }
+
+  /**
+   * `torch.Tensor.stft`. **torch has both spellings and this had only the free one**,
+   * so `x.stft(8, …)` — how torch's own tutorials write it — was a `TypeError`. The
+   * name axis counted the free function as satisfying the method and reported no gap.
+   *
+   * The receiver is the first argument, **measured**: `sig.stft(8)` equals
+   * `torch.stft(sig, 8)`. It is measured because the receiver's position is not a rule
+   * — `polygamma`'s is the second, and the core has a note about copying that pair the
+   * wrong way round out of a table.
+   */
+  stft(nFft: number, options: StftOptions = {}): Tensor {
+    return stftImpl(this, nFft, options);
+  }
+
+  /** `torch.Tensor.istft`. The receiver is the first argument, measured. */
+  istft(nFft: number, options: IstftOptions = {}): Tensor {
+    return istftImpl(this, nFft, options);
+  }
+
+  /** `torch.Tensor.polygamma`. **The receiver is the second argument** —
+   *  `x.polygamma(1)` is `torch.polygamma(1, x)`. */
+  polygamma(n: number): Tensor {
+    return polygammaImpl(n, this);
+  }
+
+  /** `torch.Tensor.igamma`. The receiver is the first. */
+  igamma(other: Tensor): Tensor {
+    return igammaImpl(this, other);
+  }
+
+  /** `torch.Tensor.igammac`. The receiver is the first. */
+  igammac(other: Tensor): Tensor {
+    return igammacImpl(this, other);
   }
 
   /**

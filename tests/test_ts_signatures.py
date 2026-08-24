@@ -1073,8 +1073,24 @@ SHORTER = {
 # These are not spelling differences. `x.stft(512)` is a `TypeError` in borch.ts, and
 # every torch tutorial that touches the short-time Fourier transform writes it that
 # way.
+#
+# **5 → 0. All five are methods now**, and the retirement condition above described
+# what happened exactly: they moved to `two declarations`, which went 1 → 4.
+#
+# The receiver's position was measured one function at a time rather than read off a
+# pattern, and the pattern would have been wrong: `x.polygamma(1)` is
+# `torch.polygamma(1, x)` — the receiver is the *second* argument — while the other
+# four take it first.
+#
+# **The methods import their bodies back from `fft.ts` and `special.ts`, which import
+# `Tensor` from here.** The cycle holds because every use is inside a method body, so
+# both modules have finished loading before one runs — and a type cannot say that, so
+# `parity.ts` calls all five. The alternative was a `declare module` augmentation,
+# which type-checks and runs and which `site/build_api.py` does not read: the methods
+# would exist and the index would say they do not. **Teaching the instrument a new
+# trick to support a pattern introduced twenty minutes earlier is the wrong order.**
 FREE_FUNCTION = {
-    "Tensor": 5,
+    "Tensor": 0,
     "nn": 0,
     "nn.functional": 0,
     "optim": 0,
@@ -1084,6 +1100,35 @@ FREE_FUNCTION = {
     "transforms": 0,
     "transforms.functional": 0,
 }
+
+# **The bucket that means *two spellings exist and neither was compared*.**
+#
+# It was not held by anything until three rows moved into it. `FREE_FUNCTION` above
+# says why that matters, about itself: *a number nobody holds is a number that can
+# move to zero unnoticed* — and this one can move the other way just as quietly,
+# because every row in it is a row the axis declined to judge.
+#
+# The four are `stft`, `istft`, `igamma` and `igammac`: torch has a module function
+# and a method for each, borch.ts now has both too, and the axis will not guess which
+# pair to compare. **That is the right thing for it to say and the wrong thing to
+# leave uncounted**, which is the whole reason this table exists rather than a
+# comment.
+#
+# **What retires a row**: one of the two spellings going away, on either side. None
+# should — torch has both — so this is a table that is expected to sit still, and a
+# table expected to sit still is exactly the kind that drifts without one.
+TWO_DECLARATIONS = {
+    "Tensor": 4,
+    "nn": 0,
+    "nn.functional": 0,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    "utils.data": 0,
+    "transforms": 0,
+    "transforms.functional": 0,
+}
+
 
 
 def _stale():
@@ -1115,7 +1160,8 @@ def test_the_signature_axis_has_not_widened():
 
     moved = []
     for space, found in sorted(rows.items()):
-        got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0, "free": 0}
+        got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0, "free": 0,
+               "two": 0}
         for _n, _m, _y, note in found:
             if note in ("dropped", "inserted", "reordered"):
                 got["shifted"] += 1
@@ -1127,9 +1173,12 @@ def test_the_signature_axis_has_not_widened():
                 got["renamed"] += 1
             elif note.startswith("only a free function"):
                 got["free"] += 1
+            elif note.startswith("ambiguous"):
+                got["two"] += 1
         for key, table in (("shifted", SHIFTED), ("shorter", SHORTER),
                            ("unaligned", UNALIGNED), ("renamed", RENAMED),
-                           ("free", FREE_FUNCTION)):
+                           ("free", FREE_FUNCTION),
+                           ("two", TWO_DECLARATIONS)):
             if got[key] != table[space]:
                 moved.append(f"{space} {key}: {got[key]} now, {table[space]} written")
     assert not moved, (
