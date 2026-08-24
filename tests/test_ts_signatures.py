@@ -395,7 +395,16 @@ UNALIGNED = {
     # fires on nothing, so closing the difference retired the line automatically
     # rather than leaving it to look like work.
     "optim.lr_scheduler": 0,
-    "linalg": 6,
+    # 6 → 7. The core took torch's `linalg` names — about half `A`, about half
+    # `input`, plus `tensors`, `LU`, `LD` and `x` — and borch.ts spells them `a`.
+    # One row moved here from `renamed` because its two lists stopped being the same
+    # length as well as the same words.
+    #
+    # **This is the debt the core creates by reaching torch**, the mechanism the
+    # `nn` note describes, and it falls when borch.ts follows. **What closes this
+    # line:** borch.ts taking the same per-function names — they cannot come from a
+    # rule, because torch has none here.
+    "linalg": 7,
     "utils.data": 0,
 }
 
@@ -588,7 +597,19 @@ RENAMED = {
     # says `a, b`. **The row appeared because the core moved toward torch**, not
     # because borch.ts moved away — the direction a rising count usually means, and
     # the reason it is written here rather than only counted.
-    "linalg": 18,
+    #
+    # 18 → 14. The core took torch's `linalg` names outright — thirty-four of them —
+    # and four rows stopped being a rename because the two lists parted in length as
+    # well, moving to `shorter` and `unaligned` next door. **Four left this bucket by
+    # getting worse-looking**, which is the direction that needs saying: `renamed`
+    # means *a spelling*, and the buckets it feeds mean *a missing tail* and *cannot
+    # be compared*. The rows did not improve; they became legible.
+    #
+    # **What closes the remaining fourteen:** borch.ts taking the same per-function
+    # names. They cannot come from a rule — torch is about half `A` and half `input`
+    # inside `linalg`, with `tensors`, `LU`, `LD` and `x` besides — so the table has
+    # to be measured there too, by calling torch with each keyword.
+    "linalg": 14,
     "utils.data": 0,
 }
 
@@ -772,7 +793,10 @@ SHORTER = {
     # 12 → 15. The three that left `unaligned`; what they are short of is
     # `last_epoch`, which every scheduler here lacks.
     "optim.lr_scheduler": 15,
-    "linalg": 2,
+    # 2 → 1. One of the two left for `unaligned` when the core took torch's `linalg`
+    # names — a prefix stopped being a prefix once the words changed. See the note
+    # in `RENAMED`.
+    "linalg": 1,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
     # that they exist at all.

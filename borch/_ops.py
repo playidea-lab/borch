@@ -4329,7 +4329,7 @@ def median(t, dim=None, keepdim=False):
     return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take))
 
 
-def norm(t, p=2, dim=None, keepdim=False, dtype=None):
+def norm(input, p=2, dim=None, keepdim=False, dtype=None):  # noqa: A002
     """torch's order — `keepdim` between `dim` and `dtype`.
 
     **It was missing from the middle**, so `x.norm(2, 1, True)` set the dtype to
@@ -4338,43 +4338,43 @@ def norm(t, p=2, dim=None, keepdim=False, dtype=None):
     reduction that keeps its rank for `p=2` and drops it for `p=inf` is a shape that
     changes with a hyperparameter.
     """
-    t = _wrap(t)
+    input = _wrap(input)
     # **The dtype is converted before computing** — torch does that (measured:
     # a float32 asked with `dtype=float64` answers in float64). Converted after
     # computing the precision has already been cut and the value differs.
     if dtype is not None:
-        t = _wrap(t.data.astype(_np_of(dtype)))
+        input = _wrap(input.data.astype(_np_of(dtype)))
     _needs_float(
-        t.data,
+        input.data,
         "A norm exists over the reals only — a square root does not fit in an "
         "integer cell. Call `.float()` first.",
         "linalg.vector_norm: Expected a floating point or complex tensor as input")
     if p == 1:
-        return t.abs().sum(dim=dim, keepdim=keepdim)
+        return input.abs().sum(dim=dim, keepdim=keepdim)
     if p == 2:
-        return (t * t).sum(dim=dim, keepdim=keepdim) ** 0.5
+        return (input * input).sum(dim=dim, keepdim=keepdim) ** 0.5
     # **`p` arrives as more than 1 and 2.** Everything else was counted as 2 for
     # a long time — `dist(a, b, 3)` handed back the L2 and the value was plausible
     # (the same order of magnitude), so it went unseen. `inf` is the largest
     # absolute value, `-inf` the smallest, and `0` the count of non-zeros
     # (measured).
     if p == float("inf"):
-        return (t.abs().max(dim=dim) if dim is None
-                else t.abs().amax(dim=dim, keepdim=keepdim))
+        return (input.abs().max(dim=dim) if dim is None
+                else input.abs().amax(dim=dim, keepdim=keepdim))
     if p == -float("inf"):
-        return (t.abs().min(dim=dim) if dim is None
-                else t.abs().amin(dim=dim, keepdim=keepdim))
+        return (input.abs().min(dim=dim) if dim is None
+                else input.abs().amin(dim=dim, keepdim=keepdim))
     if p == 0:
-        # **`t * 0` is added to carry the graph through.** Counting is a step, so
+        # **`input * 0` is added to carry the graph through.** Counting is a step, so
         # the derivative is 0, and 0 is the right answer rather than "absent".
         # Without it, `norm(0).backward()` stops and torch does not — it keeps a
         # `grad_fn`, never reaches a leaf, and `grad` stays None (measured). The
         # only difference is that 0 accumulates here and None stays there, and
         # added into a loss the effect on training is the same. **Stopping is the
         # furthest of the three from right.**
-        return ((t != 0).float().sum(dim=dim, keepdim=keepdim)
-                + (t * 0).sum(dim=dim, keepdim=keepdim))
-    return (t.abs() ** float(p)).sum(dim=dim, keepdim=keepdim) ** (1.0 / float(p))
+        return ((input != 0).float().sum(dim=dim, keepdim=keepdim)
+                + (input * 0).sum(dim=dim, keepdim=keepdim))
+    return (input.abs() ** float(p)).sum(dim=dim, keepdim=keepdim) ** (1.0 / float(p))
 
 
 # ---- the rest of the reductions
@@ -6941,27 +6941,28 @@ def logdet(input):
                    "LogdetBackward0")
 
 
-def slogdet(input):
-    input = _mat(input, "slogdet")
-    sign, logabs = _np.linalg.slogdet(input.data)
-    return _Slogdet(Tensor(_np.asarray(sign, dtype=input.data.dtype)),
-                    input._make(_np.asarray(logabs, dtype=input.data.dtype), (input,),
+def slogdet(input):                                          # noqa: A002
+    """`input` at the top level and `A` under `linalg` — see `_linalg_A` below."""
+    A = _mat(input, "slogdet")                               # noqa: N806
+    sign, logabs = _np.linalg.slogdet(A.data)
+    return _Slogdet(Tensor(_np.asarray(sign, dtype=A.data.dtype)),
+                    A._make(_np.asarray(logabs, dtype=A.data.dtype), (A,),
                             lambda g: (_np.asarray(g)[..., None, None]
-                                       * _T(_guard("slogdet", _np.linalg.inv, input.data)),),
+                                       * _T(_guard("slogdet", _np.linalg.inv, A.data)),),
                             "SlogdetBackward0"))
 
 
-def inverse(input):
+def inverse(A):  # noqa: N803
     """The inverse. Its gradient is `-A⁻ᵀ G A⁻ᵀ`."""
-    input = _mat(input, "inverse")
-    _reject_singular(input.data, "inv")
-    out = _guard("inv", _np.linalg.inv, input.data)
+    A = _mat(A, "inverse")
+    _reject_singular(A.data, "inv")
+    out = _guard("inv", _np.linalg.inv, A.data)
     out_t = _T(out)
-    return input._make(out, (input,),
+    return A._make(out, (A,),
                    lambda g: (-(out_t @ _np.asarray(g) @ out_t),), "InverseBackward0")
 
 
-def inv_ex(t, check_errors=False):
+def inv_ex(A, check_errors=False):  # noqa: N803
     """The same as `inv` and **it does not throw** — it puts a non-zero number in
     `info` instead.
 
@@ -6969,19 +6970,19 @@ def inv_ex(t, check_errors=False):
     singular, the throwing side kills all of them and this says which one is bad
     through `info`.
     """
-    t = _mat(t, "inv_ex")
+    A = _mat(A, "inv_ex")
     try:
-        _reject_singular(t.data, "inv_ex")
-        out = _np.linalg.inv(t.data)
-        info = _np.zeros(t.data.shape[:-2], dtype=_np.int32)
+        _reject_singular(A.data, "inv_ex")
+        out = _np.linalg.inv(A.data)
+        info = _np.zeros(A.data.shape[:-2], dtype=_np.int32)
     except LinAlgError:
         if check_errors:
             raise
-        out = _np.full_like(t.data, _np.inf)
+        out = _np.full_like(A.data, _np.inf)
         # LAPACK records which leading pivot is zero. This says only "bad".
-        info = _np.full(t.data.shape[:-2], _SINGULAR_INFO, dtype=_np.int32)
+        info = _np.full(A.data.shape[:-2], _SINGULAR_INFO, dtype=_np.int32)
         return _InvEx(Tensor(out), Tensor(info))
-    return _InvEx(t._make(out, (t,),
+    return _InvEx(A._make(out, (A,),
                           lambda g: (-(_T(out) @ _np.asarray(g) @ _T(out)),),
                           "InverseBackward0"), Tensor(info))
 
@@ -6991,27 +6992,27 @@ def inv_ex(t, check_errors=False):
 _SINGULAR_INFO = 2
 
 
-def solve(a, b):
+def solve(A, b):  # noqa: N803
     """Solve `A x = b`. More accurate and faster than building the inverse and
     multiplying.
 
-    When `b` has one axis fewer than `A` it is read as **a batch of vectors.** The
+    When `b` has one axis fewer than `A` it is read as **A batch of vectors.** The
     outer product in the backward hangs on that distinction.
 
     **A place that must not be left to numpy.** numpy 2.0 changed the rule and now
-    reads a batch of vectors only when `b` is 1-D — given `A(3,2,2)` and `b(3,2)`
-    it reads a matrix and throws about mismatched dimensions. torch keeps the old
+    reads A batch of vectors only when `b` is 1-D — given `A(3,2,2)` and `b(3,2)`
+    it reads A matrix and throws about mismatched dimensions. torch keeps the old
     rule. So the axis is stood up here.
     """
-    a = _mat(a, "solve")
-    _reject_singular(a.data, "solve")
+    A = _mat(A, "solve")
+    _reject_singular(A.data, "solve")
     bt = _wrap(b)
-    vector = bt.data.ndim == a.data.ndim - 1
+    vector = bt.data.ndim == A.data.ndim - 1
     rhs = bt.data[..., None] if vector else bt.data
-    x = _guard("solve", _np.linalg.solve, a.data, rhs)
+    x = _guard("solve", _np.linalg.solve, A.data, rhs)
     if vector:
         x = x[..., 0]
-    inv_t = _T(_guard("solve", _np.linalg.inv, a.data))
+    inv_t = _T(_guard("solve", _np.linalg.inv, A.data))
 
     def back(g):
         gg = _np.asarray(g)
@@ -7023,22 +7024,22 @@ def solve(a, b):
             ga = -(gb @ _T(x))
         return (ga, gb)
 
-    return a._make(x, (a, bt), back, "SolveBackward0")
+    return A._make(x, (A, bt), back, "SolveBackward0")
 
 
-def solve_ex(a, b, check_errors=False):
+def solve_ex(A, b, check_errors=False):  # noqa: N803
     """`solve`'s non-throwing side."""
-    a = _mat(a, "solve_ex")
+    A = _mat(A, "solve_ex")
     try:
-        out = solve(a, b)
+        out = solve(A, b)
     except LinAlgError:
         if check_errors:
             raise
         bt = _wrap(b)
         return _SolveEx(Tensor(_np.full_like(bt.data, _np.inf)),
-                        Tensor(_np.full(a.data.shape[:-2], _SINGULAR_INFO,
+                        Tensor(_np.full(A.data.shape[:-2], _SINGULAR_INFO,
                                         dtype=_np.int32)))
-    return _SolveEx(out, Tensor(_np.zeros(a.data.shape[:-2], dtype=_np.int32)))
+    return _SolveEx(out, Tensor(_np.zeros(A.data.shape[:-2], dtype=_np.int32)))
 
 
 def _cholesky_raw(data, upper):
@@ -7071,19 +7072,19 @@ def cholesky(input, upper=False):
     return input._make(out, (input,), back, "CholeskyBackward0")
 
 
-def cholesky_ex(t, upper=False, check_errors=False):
+def cholesky_ex(input, upper=False, check_errors=False):  # noqa: A002
     """`cholesky`'s non-throwing side. `info` is non-zero when it is not positive
     definite."""
-    t = _mat(t, "cholesky_ex")
+    input = _mat(input, "cholesky_ex")
     try:
-        out = cholesky(t, upper=upper)
+        out = cholesky(input, upper=upper)
     except LinAlgError:
         if check_errors:
             raise
-        return _CholeskyEx(Tensor(_np.full_like(t.data, _np.nan)),
-                           Tensor(_np.full(t.data.shape[:-2], _SINGULAR_INFO,
+        return _CholeskyEx(Tensor(_np.full_like(input.data, _np.nan)),
+                           Tensor(_np.full(input.data.shape[:-2], _SINGULAR_INFO,
                                            dtype=_np.int32)))
-    return _CholeskyEx(out, Tensor(_np.zeros(t.data.shape[:-2], dtype=_np.int32)))
+    return _CholeskyEx(out, Tensor(_np.zeros(input.data.shape[:-2], dtype=_np.int32)))
 
 
 def matrix_power(input, n):
@@ -7113,8 +7114,10 @@ def matrix_power(input, n):
 # position by position, so getting one wrong is wrong loudly rather than
 # quietly.
 
-def qr(t, mode="reduced"):
+def qr(input, mode="reduced"):                               # noqa: A002
     """The QR factorisation. **It has a gradient.**
+
+    `input` at the top level and `A` under `linalg` — see `_linalg_A` below.
 
         N = Qᵀ·Q̄ − R̄·Rᵀ
         Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ
@@ -7130,9 +7133,9 @@ def qr(t, mode="reduced"):
     came under suspicion when the trouble was the transpose rather than the
     derivation. `X·R⁻ᵀ` is `solve(R, Xᵀ)ᵀ`, not `solve(Rᵀ, Xᵀ)ᵀ`.
     """
-    t = _mat(t, "qr", square=False)
-    q, r = _np.linalg.qr(t.data, mode=mode)
-    if mode != "reduced" or t.data.shape[-2] < t.data.shape[-1]:
+    A = _mat(input, "qr", square=False)                      # noqa: N806
+    q, r = _np.linalg.qr(A.data, mode=mode)
+    if mode != "reduced" or A.data.shape[-2] < A.data.shape[-1]:
         # The complete form leaves extra columns in `Q` and no information flows
         # towards them — a different derivation.
         return _QR(Tensor(_np.ascontiguousarray(q)), Tensor(_np.ascontiguousarray(r)))
@@ -7142,10 +7145,10 @@ def qr(t, mode="reduced"):
         inner = _np.tril(n - _T(n), -1) - n
         return _T(_np.linalg.solve(r, _T(gq + q @ inner)))
 
-    qt = t._make(_np.ascontiguousarray(q), (t,),
+    qt = A._make(_np.ascontiguousarray(q), (A,),
                  lambda g: (back_from(_np.asarray(g), _np.zeros_like(r)),),
                  "QrBackward0")
-    rt = t._make(_np.ascontiguousarray(r), (t,),
+    rt = A._make(_np.ascontiguousarray(r), (A,),
                  lambda g: (back_from(_np.zeros_like(q), _np.asarray(g)),),
                  "QrBackward0")
     return _QR(qt, rt)
@@ -7206,7 +7209,7 @@ def svd(input, some=True, compute_uv=True):
         _np.swapaxes(vh, -1, -2))))
 
 
-def linalg_svd(t, full_matrices=True):
+def linalg_svd(A, full_matrices=True):  # noqa: N803
     """`torch.linalg.svd` — **the other one.** It gives `Vh` and defaults to the
     full form, where `torch.svd` gives `V` and defaults to the reduced one.
 
@@ -7216,8 +7219,8 @@ def linalg_svd(t, full_matrices=True):
     and `vander` all diverge and the note about them sits in `__init__.py`, in a
     different file from the claim it contradicts.
     """
-    t = _mat(t, "linalg.svd", square=False)
-    u, s, vh = _svd_raw(t.data, full_matrices)
+    A = _mat(A, "linalg.svd", square=False)
+    u, s, vh = _svd_raw(A.data, full_matrices)
     k = s.shape[-1]
     u_thin, vh_thin = u[..., :, :k], vh[..., :k, :]
 
@@ -7228,7 +7231,7 @@ def linalg_svd(t, full_matrices=True):
         mid[..., idx, idx] = gg
         return (u_thin @ mid @ vh_thin,)
 
-    return _SVD(Tensor(u), t._make(s, (t,), back, "SvdBackward0"), Tensor(vh))
+    return _SVD(Tensor(u), A._make(s, (A,), back, "SvdBackward0"), Tensor(vh))
 
 
 def pinverse(input, rcond=1e-15):
@@ -7260,12 +7263,12 @@ def pinverse(input, rcond=1e-15):
     return input._make(p, (input,), back, "PinverseBackward0")
 
 
-def matrix_rank(t, tol=None):
-    t = _mat(t, "matrix_rank", square=False)
-    return Tensor(_np.asarray(_np.linalg.matrix_rank(t.data, tol=tol), dtype=_np.int64))
+def matrix_rank(input, tol=None):  # noqa: A002
+    input = _mat(input, "matrix_rank", square=False)
+    return Tensor(_np.asarray(_np.linalg.matrix_rank(input.data, tol=tol), dtype=_np.int64))
 
 
-def eigh(t, UPLO="L"):
+def eigh(input, UPLO="L"):  # noqa: A002
     """The eigenvalues and eigenvectors of a symmetric matrix. **Both have
     gradients.**
 
@@ -7280,8 +7283,8 @@ def eigh(t, UPLO="L"):
     eigenvalues repeat.** torch blows up alongside, so this is the same limit
     rather than an imitation.
     """
-    t = _mat(t, "eigh")
-    w, v = _np.linalg.eigh(t.data, UPLO=UPLO)
+    input = _mat(input, "eigh")
+    w, v = _np.linalg.eigh(input.data, UPLO=UPLO)
     v = _np.ascontiguousarray(v)
     vt = _T(v)
 
@@ -7309,11 +7312,11 @@ def eigh(t, UPLO="L"):
         # measurement.
         return ((raw + _T(raw)) * 0.5,)
 
-    return _Eigh(t._make(w, (t,), back_values, "EighBackward0"),
-                 t._make(v, (t,), back_vectors, "EighBackward0"))
+    return _Eigh(input._make(w, (input,), back_values, "EighBackward0"),
+                 input._make(v, (input,), back_vectors, "EighBackward0"))
 
 
-def eig(t):
+def eig(input):  # noqa: A002
     """The eigenvalues and eigenvectors of **a non-symmetric matrix.** The answer
     is complex.
 
@@ -7338,20 +7341,20 @@ def eig(t):
     end. The complex gradient convention is `∂L/∂re + i·∂L/∂im`, so the imaginary
     part means nothing at that point.
     """
-    t = _mat(t, "eig")
+    input = _mat(input, "eig")
     # **The backward is computed in double precision.** The answer comes out as
     # complex64, and the `1/(λⱼ − λᵢ)` inside it grows as the eigenvalues come
     # closer, so computed in single precision it diverges from torch at 3×3
     # already (measured). The arithmetic ahead of it stays double and it is cut
     # **only on the way out.**
-    w64, v64 = _np.linalg.eig(t.data.astype(_np.float64))
+    w64, v64 = _np.linalg.eig(input.data.astype(_np.float64))
     v64 = _np.ascontiguousarray(v64)
     w, v = w64.astype(_np.complex64), v64.astype(_np.complex64)
     vh = _np.conjugate(_T(v64))
     vinv_h = _np.conjugate(_T(_np.linalg.inv(v64)))
 
     def _pull(mid):
-        return (_np.real(vinv_h @ mid @ vh).astype(t.data.dtype),)
+        return (_np.real(vinv_h @ mid @ vh).astype(input.data.dtype),)
 
     def back_values(g):
         gg = _np.asarray(g, dtype=_np.complex128)
@@ -7391,28 +7394,28 @@ def eig(t):
         f[..., idx, idx] = 0.0
         return _pull(f * (vh @ gg))
 
-    return _Eig(t._make(w, (t,), back_values, "LinalgEigBackward0"),
-                t._make(v, (t,), back_vectors, "LinalgEigBackward0"))
+    return _Eig(input._make(w, (input,), back_values, "LinalgEigBackward0"),
+                input._make(v, (input,), back_vectors, "LinalgEigBackward0"))
 
 
-def eigvals(t):
+def eigvals(input):  # noqa: A002
     """`eig`'s eigenvalues alone. Where the eigenvectors are not used, this is
     torch's name."""
-    return eig(t).eigenvalues
+    return eig(input).eigenvalues
 
 
-def lstsq(a, b):
+def lstsq(input, b):  # noqa: A002
     """The least-squares solution. **Values alone.**
 
     It has to be asked through `.solution` — torch gives the residuals, the rank
-    and the singular values alongside the solution. Handing back a bare tensor
-    makes torch code stop at `.solution`, and that becomes a place where "the
+    and the singular values alongside the solution. Handing back input bare tensor
+    makes torch code stop at `.solution`, and that becomes input place where "the
     value is right and it does not work".
     """
-    a, bt = _mat(a, "lstsq", square=False), _wrap(b)
-    if a.data.ndim != 2:
+    input, bt = _mat(input, "lstsq", square=False), _wrap(b)
+    if input.data.ndim != 2:
         _unsupported("lstsq (batched)")
-    sol, res, rank, sv = _np.linalg.lstsq(a.data, bt.data, rcond=None)
+    sol, res, rank, sv = _np.linalg.lstsq(input.data, bt.data, rcond=None)
     return _Lstsq(Tensor(_np.ascontiguousarray(sol)), Tensor(_np.asarray(res)),
                   Tensor(_np.asarray(rank, dtype=_np.int64)), Tensor(_np.asarray(sv)))
 
@@ -7422,9 +7425,9 @@ def lstsq(a, b):
 # The LU factorisation was already running underneath `det`, `inv` and `solve`.
 # It simply was not exposed.
 #
-# **The pivots count from 1.** LAPACK's convention, inherited by torch — on a 2×2
+# **The pivots count from 1.** LAPACK's convention, inherited by torch — on input 2×2
 # with no swaps `pivots` is `[1, 2]` rather than `[0, 1]`. Counting from 0 makes
-# `lu_solve` give a different answer without a sound. Matched by measurement.
+# `lu_solve` give input different answer without input sound. Matched by measurement.
 
 def _lu_pack(data):
     """Partially pivoted LU. One packed `LU` matrix and a swap table **counting
@@ -7449,15 +7452,15 @@ def _lu_pack(data):
     return flat.reshape(a.shape), piv.reshape(data.shape[:-2] + (k,))
 
 
-def lu_factor(t):
+def lu_factor(A):  # noqa: N803
     """The factorisation packed into one `LU` matrix, plus the swap table. Values
     alone."""
-    t = _mat(t, "lu_factor", square=False)
-    lu_data, piv = _lu_pack(t.data)
-    return _LuFactor(Tensor(lu_data.astype(t.data.dtype)), Tensor(piv))
+    A = _mat(A, "lu_factor", square=False)
+    lu_data, piv = _lu_pack(A.data)
+    return _LuFactor(Tensor(lu_data.astype(A.data.dtype)), Tensor(piv))
 
 
-def lu_factor_ex(t, pivot=True, check_errors=False):
+def lu_factor_ex(A, pivot=True, check_errors=False):  # noqa: N803
     """`lu_factor` with **one more field, `info`.** It reports through a number
     rather than throwing.
 
@@ -7466,10 +7469,10 @@ def lu_factor_ex(t, pivot=True, check_errors=False):
     from the throwing version (`lu_factor`) so that solving a batch can carry on
     with the rest when one matrix is bad.
     """
-    t = _mat(t, "lu_factor_ex", square=False)
+    A = _mat(A, "lu_factor_ex", square=False)
     if not pivot:
         _unsupported("lu_factor_ex(pivot=False)")
-    lu_data, piv = _lu_pack(t.data)
+    lu_data, piv = _lu_pack(A.data)
     n, m = lu_data.shape[-2], lu_data.shape[-1]
     k = min(n, m)
     flat = lu_data.reshape(-1, n, m)
@@ -7477,8 +7480,8 @@ def lu_factor_ex(t, pivot=True, check_errors=False):
     for b in range(flat.shape[0]):
         zero = _np.flatnonzero(_np.diagonal(flat[b])[:k] == 0)
         info[b] = 0 if zero.size == 0 else int(zero[0]) + 1
-    shape = t.data.shape[:-2]
-    return _LuFactorEx(Tensor(lu_data.astype(t.data.dtype)), Tensor(piv),
+    shape = A.data.shape[:-2]
+    return _LuFactorEx(Tensor(lu_data.astype(A.data.dtype)), Tensor(piv),
                        Tensor(info.reshape(shape) if shape else info[0]))
 
 
@@ -7516,29 +7519,29 @@ def _ldl_pack(data):
     return out.reshape(a.shape), piv.reshape(data.shape[:-2] + (n,))
 
 
-def ldl_factor(t, hermitian=False):
+def ldl_factor(input, hermitian=False):  # noqa: A002
     """A symmetric matrix as `L D Lᵀ`. It gives the packed `LD` and the swap
     table."""
-    t = _mat(t, "ldl_factor")
-    ld, piv = _ldl_pack(t.data)
-    return _LdlFactor(Tensor(ld.astype(t.data.dtype)), Tensor(piv))
+    input = _mat(input, "ldl_factor")
+    ld, piv = _ldl_pack(input.data)
+    return _LdlFactor(Tensor(ld.astype(input.data.dtype)), Tensor(piv))
 
 
-def ldl_factor_ex(t, hermitian=False, check_errors=False):
+def ldl_factor_ex(input, hermitian=False, check_errors=False):  # noqa: A002
     """`ldl_factor` with `info` attached. It is always 0 here — the bad cases are
     refused."""
-    t = _mat(t, "ldl_factor_ex")
-    ld, piv = _ldl_pack(t.data)
-    shape = t.data.shape[:-2]
+    input = _mat(input, "ldl_factor_ex")
+    ld, piv = _ldl_pack(input.data)
+    shape = input.data.shape[:-2]
     zero = _np.zeros(shape, dtype=_np.int32) if shape else _np.int32(0)
-    return _LdlFactorEx(Tensor(ld.astype(t.data.dtype)), Tensor(piv), Tensor(zero))
+    return _LdlFactorEx(Tensor(ld.astype(input.data.dtype)), Tensor(piv), Tensor(zero))
 
 
-def ldl_solve(ld, pivots, b, hermitian=False):
+def ldl_solve(LD, pivots, b, hermitian=False):  # noqa: N803
     """Solve using the factorisation `ldl_factor` produced. Three steps:
     `L y = b`, `D z = y`, `Lᵀ x = z`."""
-    ld = _mat(ld, "ldl_solve")
-    packed = _np.asarray(ld.data, dtype=_np.float64)
+    LD = _mat(LD, "ldl_solve")
+    packed = _np.asarray(LD.data, dtype=_np.float64)
     rhs = _np.asarray(_wrap(b).data, dtype=_np.float64)
     n = packed.shape[-1]
     flat_ld = packed.reshape(-1, n, n)
@@ -7592,7 +7595,7 @@ def geqrf(input):
                   Tensor(taus.reshape(a.shape[:-2] + (min(m, n),)).astype(input.data.dtype)))
 
 
-def householder_product(t, tau):
+def householder_product(input, tau):  # noqa: A002
     """Multiply the reflectors together to build `Q`. `geqrf`'s partner.
 
     `H_i = I − τ_i v_i v_iᵀ` are multiplied in turn. `v_i` has 1 on the diagonal
@@ -7600,8 +7603,8 @@ def householder_product(t, tau):
     store it**, so reading that cell and using it mistakes the `R` the
     factorisation packed there for a reflector.
     """
-    t = _mat(t, "householder_product", square=False)
-    a = _np.asarray(t.data, dtype=_np.float64)
+    input = _mat(input, "householder_product", square=False)
+    a = _np.asarray(input.data, dtype=_np.float64)
     taus = _np.asarray(_wrap(tau).data, dtype=_np.float64)
     m, n = a.shape[-2], a.shape[-1]
     flat = a.reshape(-1, m, n)
@@ -7616,15 +7619,15 @@ def householder_product(t, tau):
             q -= flat_tau[b, j] * _np.outer(v, v @ q)
         outs.append(q[:, :n])
     got = _np.stack(outs).reshape(a.shape[:-2] + (m, n))
-    return Tensor(got.astype(t.data.dtype))
+    return Tensor(got.astype(input.data.dtype))
 
 
-def lu(t, pivot=True):
+def lu(A, pivot=True):  # noqa: N803
     """Spread into `P`, `L` and `U`. Easier to read than the packed form."""
-    t = _mat(t, "lu", square=False)
+    A = _mat(A, "lu", square=False)
     if not pivot:
         _unsupported("lu(pivot=False)")
-    lu_data, piv = _lu_pack(t.data)
+    lu_data, piv = _lu_pack(A.data)
     n, m = lu_data.shape[-2], lu_data.shape[-1]
     k = min(n, m)
     flat_lu = lu_data.reshape(-1, n, m)
@@ -7648,16 +7651,16 @@ def lu(t, pivot=True):
         ps.append(perm)
 
     def pack(arrs, shape):
-        return Tensor(_np.asarray(arrs).reshape(shape).astype(t.data.dtype))
+        return Tensor(_np.asarray(arrs).reshape(shape).astype(A.data.dtype))
 
-    lead = t.data.shape[:-2]
+    lead = A.data.shape[:-2]
     return _Lu(pack(ps, lead + (n, n)), pack(ls, lead + (n, k)),
                pack(us, lead + (k, m)))
 
 
-def lu_solve(lu_data, pivots, b, left=True, adjoint=False):
+def lu_solve(LU, pivots, b, left=True, adjoint=False):  # noqa: N803
     """Solve `A x = b` with what `lu_factor` produced."""
-    lu_t, piv_t, bt = _wrap(lu_data), _wrap(pivots), _wrap(b)
+    lu_t, piv_t, bt = _wrap(LU), _wrap(pivots), _wrap(b)
     if not left or adjoint:
         _unsupported("lu_solve(left=False or adjoint=True)")
     n = lu_t.data.shape[-1]
@@ -7679,11 +7682,11 @@ def lu_solve(lu_data, pivots, b, left=True, adjoint=False):
 # Mostly places attaching a name to something that already exists. The one that
 # needs new computation is `matrix_exp`, and that one has no closed form.
 
-def vecdot(a, b, dim=-1):
-    return (_wrap(a) * _wrap(b)).sum(dim=dim)
+def vecdot(x, b, dim=-1):
+    return (_wrap(x) * _wrap(b)).sum(dim=dim)
 
 
-def diagonal_linalg(t, offset=0, dim1=-2, dim2=-1):
+def diagonal_linalg(A, offset=0, dim1=-2, dim2=-1):  # noqa: N803
     """**The default axes differ from `torch.diagonal`'s.**
 
     This looks at the last two axes (`-2, -1`) and that one at the first two
@@ -7692,20 +7695,20 @@ def diagonal_linalg(t, offset=0, dim1=-2, dim2=-1):
     thing and they differ starting at the shape. So the defaults are written out
     by hand.
     """
-    return diagonal(t, offset=offset, dim1=dim1, dim2=dim2)
+    return diagonal(A, offset=offset, dim1=dim1, dim2=dim2)
 
 
-def svdvals(t):
+def svdvals(A):  # noqa: N803
     """The singular values alone. The middle of `svd`."""
-    return linalg_svd(t, full_matrices=False).S
+    return linalg_svd(A, full_matrices=False).S
 
 
-def eigvalsh(t, UPLO="L"):
+def eigvalsh(input, UPLO="L"):  # noqa: A002
     """The eigenvalues alone, for a symmetric matrix."""
-    return eigh(t, UPLO=UPLO).eigenvalues
+    return eigh(input, UPLO=UPLO).eigenvalues
 
 
-def vector_norm(t, ord=2, dim=None, keepdim=False):
+def vector_norm(input, ord=2, dim=None, keepdim=False):  # noqa: A002
     """A norm measured over the elements as a vector. **Given a matrix it
     flattens the whole thing** — where it parts from `matrix_norm`.
 
@@ -7713,7 +7716,7 @@ def vector_norm(t, ord=2, dim=None, keepdim=False):
     absolute values — branches that must not go into the power formula, so they
     are written out separately.
     """
-    x = _wrap(t).abs()
+    x = _wrap(input).abs()
     if dim is None and x.data.ndim > 1:
         x = x.reshape(-1)
     if ord == _np.inf:
@@ -7734,7 +7737,7 @@ def vector_norm(t, ord=2, dim=None, keepdim=False):
 _SPECTRAL = ("nuc", 2, -2)
 
 
-def matrix_norm(t, ord="fro", dim=(-2, -1), keepdim=False):
+def matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False):  # noqa: A002
     """A norm measured over the matrix. **A different number per branch.**
 
     The default is Frobenius; `2` is the largest singular value, `nuc` the sum of
@@ -7742,7 +7745,7 @@ def matrix_norm(t, ord="fro", dim=(-2, -1), keepdim=False):
     `inf` the row-wise one. Given a rank-1 matrix the first three happen to
     coincide and cannot be told apart, so the golden asks at rank 2.
     """
-    x = _wrap(t)
+    x = _wrap(input)
     if dim != (-2, -1):
         x = x.movedim(dim[0], -2).movedim(dim[1], -1)
     if ord in _SPECTRAL:
@@ -7767,10 +7770,10 @@ def matrix_norm(t, ord="fro", dim=(-2, -1), keepdim=False):
     return out if keepdim else out.reshape(out.shape[:-2])
 
 
-def cond(t, p=None):
+def cond(input, p=None):  # noqa: A002
     """The condition number. The default is `‖A‖₂·‖A⁻¹‖₂`, which is the ratio of
     the singular values."""
-    x = _mat(t, "cond")
+    x = _mat(input, "cond")
     if p is None or p == 2:
         s = svdvals(x)
         return amax(s, dim=-1) / amin(s, dim=-1)
@@ -7780,12 +7783,12 @@ def cond(t, p=None):
     return matrix_norm(x, ord=p) * matrix_norm(inverse(x), ord=p)
 
 
-def multi_dot(mats):
+def multi_dot(tensors):
     """Multiply several matrices together. **The grouping does not change the
     value** — multiplication is associative. Only the operation count changes, so
     they are multiplied in order here."""
-    out = _wrap(mats[0])
-    for m in mats[1:]:
+    out = _wrap(tensors[0])
+    for m in tensors[1:]:
         out = out @ _wrap(m)
     return out
 
@@ -7809,15 +7812,15 @@ def _vander_increasing(x, N=None):
     return stack(cols, dim=-1)
 
 
-def solve_triangular(a, b, upper, left=True, unitriangular=False):
+def solve_triangular(input, b, upper, left=True, unitriangular=False):  # noqa: A002
     """Solve **knowing** the matrix is triangular. One forward and one backward
     sweep finish it.
 
-    `unitriangular` **ignores the diagonal and treats it as 1** — a branch whose
+    `unitriangular` **ignores the diagonal and treats it as 1** — input branch whose
     values change quietly when it is not honoured. `left=False` solves `X A = B`,
     so both sides are transposed and sent down the same path.
     """
-    at, bt = _mat(a, "solve_triangular"), _wrap(b)
+    at, bt = _mat(input, "solve_triangular"), _wrap(b)
     tri = _np.triu(at.data) if upper else _np.tril(at.data)
     if unitriangular:
         idx = _np.arange(tri.shape[-1])
@@ -7829,9 +7832,9 @@ def solve_triangular(a, b, upper, left=True, unitriangular=False):
     return Tensor(_np.linalg.solve(tri, bt.data))
 
 
-def tensorsolve(a, b, dims=None):
-    """Fold the tensor into a matrix, solve, and spread it back."""
-    at, bt = _wrap(a), _wrap(b)
+def tensorsolve(input, b, dims=None):  # noqa: A002
+    """Fold the tensor into input matrix, solve, and spread it back."""
+    at, bt = _wrap(input), _wrap(b)
     if dims is not None:
         _unsupported("tensorsolve(dims)")
     n = bt.data.size
@@ -7839,8 +7842,8 @@ def tensorsolve(a, b, dims=None):
     return Tensor(out.reshape(at.data.shape[bt.data.ndim:]))
 
 
-def tensorinv(a, ind=2):
-    at = _wrap(a)
+def tensorinv(input, ind=2):  # noqa: A002
+    at = _wrap(input)
     lead = at.data.shape[:ind]
     n = int(_np.prod(lead))
     out = _np.linalg.inv(at.data.reshape(n, -1))
@@ -7872,25 +7875,25 @@ def _expm_raw(a):
     return out
 
 
-def matrix_exp(A):
-    """The matrix exponential `e^A`. **It goes by scaling and squaring.**
+def matrix_exp(input):  # noqa: A002
+    """The matrix exponential `e^input`. **It goes by scaling and squaring.**
 
-    Taylor alone does not converge on a large matrix — the answer for `A*5` is
+    Taylor alone does not converge on a large matrix — the answer for `input*5` is
     4.8e+10, and there the growing terms overflow first. Lowering the 1-norm of
-    `A/2^s` below 0.5, running the series and then squaring `s` times gives the
-    same answer safely (`e^A = (e^{A/2^s})^{2^s}`).
+    `input/2^s` below 0.5, running the series and then squaring `s` times gives the
+    same answer safely (`e^input = (e^{input/2^s})^{2^s}`).
 
     **The gradient is obtained from the function itself.** The Fréchet derivative
-    of `e^A` carries this identity:
+    of `e^input` carries this identity:
 
         the upper-right block of expm([[Aᵀ, Ḡ], [0, Aᵀ]]) = Ā
 
     An identity rather than an approximation. So **calling the same series the
     forward used** brings the gradient with it — there is nowhere to derive and
-    write a new derivative. That is why this method was chosen. A derived formula
+    write a new derivative. That is why this method was chosen. input derived formula
     can be wrong, and wrong quietly.
     """
-    x = _mat(A, "matrix_exp")
+    x = _mat(input, "matrix_exp")
     a = x.data.astype(_np.float64)
     n = a.shape[-1]
 
@@ -7903,7 +7906,44 @@ def matrix_exp(A):
         block[..., n:, n:] = at
         return (_expm_raw(block)[..., :n, n:].astype(x.data.dtype),)
 
-    return A._make(_expm_raw(a).astype(x.data.dtype), (A,), back, "MatrixExpBackward0")
+    return input._make(_expm_raw(a).astype(x.data.dtype), (input,), back, "MatrixExpBackward0")
+
+
+# **torch spells the two namespaces differently for three names.**
+# `torch.det(input=…)` is taken and `torch.det(A=…)` is not; under `linalg` it is the
+# other way round, and the same for `qr` and `slogdet`. One function cannot answer to
+# both, so the top-level definitions keep `input` and `linalg` gets these three.
+#
+# It is the third shape of this in a day — `Tensor.split` against `torch.split`,
+# `Tensor.softmax` against `F.softmax`, and now the top level against `linalg`. Each
+# time a single implementation was serving two names torch spells apart, and each time
+# the answer is a wrapper rather than a choice between them.
+#
+# **Written out rather than made by a factory**, and the first version was a factory
+# taking `(A, *args, **kw)`. That reads as *variadic* to the signature axis, so three
+# rows left `agree` for a bucket meaning **cannot judge** — an absorbing state, and
+# the axis has a check watching for exactly that drop because it shipped with every C
+# method silently classified as absent. A wrapper that hides the signature it exists
+# to correct is worse than no wrapper.
+#
+# **torch is not consistent inside `linalg` either.** Roughly half take `A` and half
+# take `input`, with `multi_dot` on `tensors`, `lu_solve` on `LU`, `ldl_solve` on `LD`
+# and `vecdot` on `x`. Every one was measured by calling it; no rule short of the
+# table gets more than half of them right.
+
+def _linalg_det(A):                                          # noqa: N803
+    """`linalg.det`. `torch.det` takes `input`; this takes `A`."""
+    return det(A)
+
+
+def _linalg_slogdet(A):                                      # noqa: N803
+    """`linalg.slogdet`. `torch.slogdet` takes `input`; this takes `A`."""
+    return slogdet(A)
+
+
+def _linalg_qr(A, mode="reduced"):                           # noqa: N803
+    """`linalg.qr`. `torch.qr` takes `input`; this takes `A`."""
+    return qr(A, mode)
 
 
 class _Linalg(_Namespace):
@@ -7917,13 +7957,16 @@ class _Linalg(_Namespace):
     powers the other way. Four now, with `svd`: `torch.svd` gives `V` and the
     reduced form, `torch.linalg.svd` gives `Vh` and the full one.
 
+    Five, counting the argument *names*: `det`, `qr` and `slogdet` are `input` at
+    the top level and `A` here, so those three go through `_linalg_A`.
+
     The note listing the first three sits in `__init__.py`, in a different file from
     the sentence it contradicted — which is why the sentence went on being read.
     """
 
     LinAlgError = LinAlgError
-    det = staticmethod(det)
-    slogdet = staticmethod(slogdet)
+    det = staticmethod(_linalg_det)
+    slogdet = staticmethod(_linalg_slogdet)
     inv = staticmethod(inverse)
     inv_ex = staticmethod(inv_ex)
     solve = staticmethod(solve)
@@ -7931,7 +7974,7 @@ class _Linalg(_Namespace):
     cholesky = staticmethod(cholesky)
     cholesky_ex = staticmethod(cholesky_ex)
     matrix_power = staticmethod(matrix_power)
-    qr = staticmethod(qr)
+    qr = staticmethod(_linalg_qr)
     svd = staticmethod(linalg_svd)
     pinv = staticmethod(pinverse)
     matrix_rank = staticmethod(matrix_rank)
@@ -9493,7 +9536,7 @@ def lu_solve_top(b, lu_data, pivots):
     return lu_solve(lu_data, pivots, b)
 
 
-def lu_top(a, pivot=True, get_infos=False):
+def lu_top(A, pivot=True, get_infos=False):                  # noqa: N803
     """`(LU, pivots)`. **A different thing from `linalg.lu`** — that one spreads
     it into `P`, `L` and `U` and this gives **one packed matrix plus the swap
     list** (measured).
@@ -9501,10 +9544,14 @@ def lu_top(a, pivot=True, get_infos=False):
     With `get_infos=True` an info code is attached as a third field. It is always
     0 here — meeting a singular matrix it throws at that point rather than
     reporting quietly through a code.
+
+    `A` is torch's name at the top level too. `torch.lu` is one of the few that took
+    the `linalg` spelling with it — most did not, and `det`, `qr` and `slogdet` below
+    take `input` at the top and `A` under `linalg`.
     """
     if not pivot:
         _unsupported("lu(pivot=False)")
-    data, piv = lu_factor(a)
+    data, piv = lu_factor(A)
     if get_infos:
         return _LuInfos(data, piv, Tensor(_np.zeros((), dtype=_np.int32)))
     return _LuFactor(data, piv)

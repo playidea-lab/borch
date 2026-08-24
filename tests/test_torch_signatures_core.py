@@ -371,7 +371,26 @@ UNALIGNED = {
     # 0 → 4, from the same docstring reading as `Tensor` above. All four are
     # `householder_product`, `lu`, `matrix_power` and `qr` naming their input `A`
     # where the core says `t`, plus torch's `out` — a spelling and a tail.
-    "linalg": 4,
+    #
+    # **4 → 2. The spelling half went; the `out` half is what is left.**
+    # Thirty-four `linalg` functions took the name torch answers to, and the two
+    # remaining rows — `householder_product` and `matrix_power` — differ only by
+    # torch's `out=`, which this library does not carry here.
+    #
+    # **torch is not consistent inside `linalg`.** Roughly half take `A` and half
+    # take `input`: `det(A)` and `cholesky(input)` sit side by side, `multi_dot`
+    # takes `tensors`, `lu_solve` takes `LU`, `ldl_solve` takes `LD`, `vecdot` takes
+    # `x`. Every one was measured by calling torch with the keyword, because a rule
+    # anybody can state in a sentence gets about half of them wrong — an earlier
+    # summary of this namespace said "fifteen use `A`" and the real count is nine.
+    #
+    # **And three names are spelled differently in the two namespaces.**
+    # `torch.det(input=…)` is taken and `torch.det(A=…)` is not, while `linalg.det`
+    # is the reverse; the same for `qr` and `slogdet`. One function cannot answer to
+    # both, so the top-level definitions keep `input` and `linalg` has three
+    # wrappers. Third time in a day — `Tensor.split`/`torch.split` and
+    # `Tensor.softmax`/`F.softmax` were the others.
+    "linalg": 2,
     # 1 → 0. `DataLoader` had seven of torch's seventeen names **and two of them
     # in the wrong seats** — `collate_fn` is torch's seventh and `drop_last` its
     # ninth, where here they were sixth and seventh. `DataLoader(ds, 4, False,
@@ -533,7 +552,12 @@ SHORTER = {
     #
     # **This namespace and `optim` are both empty now.** Two of the seven.
     "optim.lr_scheduler": 0,
-    "linalg": 0,
+    # 0 → 2. `lu` and `qr` became readable when they took torch's names, and what
+    # showed underneath is that torch declares an `out=` on both and this does not.
+    # **A row arriving in `shorter` from `unaligned` is the axis working**: the vague
+    # bucket said *these lists cannot be lined up* and this one says *torch has a
+    # tail we do not*, which is a thing somebody can act on.
+    "linalg": 2,
     "utils.data": 0,
 }
 
