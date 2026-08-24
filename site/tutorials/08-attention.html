@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>8 · Attention — borch Tutorials</title>
+<meta name="description" content="Attention written out as three lines of arithmetic, trained on a task it is built for, and then the thing it cannot do at all.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/08-attention.html">
+<!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
+     `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
+     does not follow a relative path, and hard-coding the deployed address here would go
+     stale quietly the day the domain changes. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="8 · Attention — borch Tutorials">
+<meta property="og:description" content="Attention written out as three lines of arithmetic, trained on a task it is built for, and then the thing it cannot do at all.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/tutorials/08-attention.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">Python</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/tutorials/08-attention.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+      <a href="07-signals-fft.html">7 · Signals and the FFT</a>
+      <a href="08-attention.html" class="on">8 · Attention</a>
+      <a href="09-autoencoder.html">9 · Autoencoder</a>
+      <a href="10-least-squares.html">10 · Least squares</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 8</p>
+    <h1>Attention</h1>
+    <p class="lead">
+      Attention is a weighted average where the weights are computed from the data. That
+      is the whole of it, and it is three lines of arithmetic you can read. This tutorial
+      writes those lines out, trains them on a task built for them, reaches for
+      <code>nn.MultiheadAttention</code> once the hand-written version is understood, and
+      finishes on the thing attention genuinely cannot do.
+    </p>
+
+    <h2>1 · Three lines, no training</h2>
+    <p>
+      Six tokens, each a vector. Compare every token with every token
+      (<code>Q·Kᵀ</code>), turn the comparisons into weights that sum to one
+      (<code>softmax</code>), and average the values with them. The two copies of "the"
+      have the same vector, so they end up attending to each other — visible in the map
+      before anything has been trained.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const WORDS = ["the", "cat", "sat", "on", "the", "mat"];
+        const D = 16;
+
+        // One vector per distinct word — the two "the" tokens share theirs.
+        const book = {};
+        for (const word of new Set(WORDS)) book[word] = await Tensor.randn([D]).toArray();
+
+        const rows = new Float32Array(WORDS.length * D);
+        WORDS.forEach((w, i) => rows.set(book[w], i * D));
+        const x = keepAlive(Tensor.from(rows, [WORDS.length, D]));
+
+        // Attention, with Q = K = V = x. No parameters at all.
+        const scores = x.mm(x.transpose()).div(Tensor.full([], Math.sqrt(D)));
+        const weights = scores.softmax(1);
+        const out = weights.mm(x);
+
+        const w = Array.from(await weights.toArray());
+        log("who attends to whom (rows sum to 1):");
+        log("            " + WORDS.map((s) => s.padStart(6)).join(""));
+        WORDS.forEach((word, i) => {
+          log(`  ${word.padEnd(6)}` + WORDS.map((_, j) =>
+            w[i * WORDS.length + j].toFixed(2).padStart(6)).join(""));
+        });
+
+        log("");
+        log("the same thing as a picture — bright is high:");
+        await show(weights, { scale: 24 });
+        log("output shape:", out.shape.join("×"), "— one averaged vector per token");
+      </script>
+    </div>
+    <p class="small">
+      Row 0 and row 4 are the same row: identical vectors compare identically against
+      everything. That is attention having no notion of <em>where</em> a token sits, which
+      block 4 is about.
+    </p>
+
+    <h2>2 · A task that needs it</h2>
+    <p>
+      Eight positions. Each carries a random value, and exactly one carries a flag. The
+      answer is the value at the flagged position — a product of two inputs, so no linear
+      model can reach it, and a network that averages everything cannot either. One query
+      vector, learned, is enough: it has to learn to look at the flag.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const LEN = 8, WIDE = 2;   // each token is [value, flag]
+
+        function makeSet(count) {
+          const cells = new Float32Array(count * LEN * WIDE);
+          const answer = [];
+          for (let i = 0; i < count; i++) {
+            const flagged = Math.floor(Math.random() * LEN);
+            for (let t = 0; t < LEN; t++) {
+              const value = Math.random() * 2 - 1;
+              cells[(i * LEN + t) * WIDE] = value;
+              cells[(i * LEN + t) * WIDE + 1] = t === flagged ? 1 : 0;
+              if (t === flagged) answer.push(value);
+            }
+          }
+          return { cells: keepAlive(Tensor.from(cells, [count * LEN, WIDE])),
+                   answer: keepAlive(Tensor.from(answer, [count, 1])), count };
+        }
+
+        const train = makeSet(200), test = makeSet(200);
+        window.__attn = { LEN, WIDE, makeSet, train, test };
+
+        manualSeed(0);
+        const D = 8;
+        const toKey = new nn.Linear(WIDE, D);
+        const toValue = new nn.Linear(WIDE, D);
+        const head = new nn.Linear(D, 1);
+        // The query is one vector and it is learned — nothing else asks the question.
+        const start = Array.from({ length: D }, () => Math.random() * 0.2 - 0.1);
+        const query = keepAlive(Tensor.from(start, [D, 1], { requiresGrad: true }));
+
+        const forward = (set) => {
+          const weights = toKey.call(set.cells).mm(query).reshape([set.count, LEN]).softmax(1);
+          const values = toValue.call(set.cells).reshape([set.count, LEN, D]);
+          return { out: head.call(weights.unsqueeze(2).mul(values).sumDim(1)), weights };
+        };
+        window.__attnModel = { forward, D };
+
+        const opt = new optim.Adam(
+          [...toKey.parameters(), ...toValue.parameters(), ...head.parameters(), query], 0.02);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 400; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(forward(train).out, train.answer);
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+
+        const guessed = forward(test);
+        // Predicting the average of everything is the score to beat.
+        const flat = await crit.call(Tensor.zeros([test.count, 1]), test.answer).item();
+        log("error on unseen sequences:", (await crit.call(guessed.out, test.answer).item()).toFixed(4));
+        log("saying zero every time:   ", flat.toFixed(4));
+
+        const w = Array.from(await guessed.weights.toArray());
+        const cells = Array.from(await test.cells.toArray());
+        log("");
+        log("where it looked, for the first three sequences (flag marked ▲):");
+        for (let i = 0; i < 3; i++) {
+          log("  weight " + Array.from({ length: LEN }, (_, t) =>
+            w[i * LEN + t].toFixed(2).padStart(6)).join(""));
+          log("  flag   " + Array.from({ length: LEN }, (_, t) =>
+            (cells[(i * LEN + t) * WIDE + 1] > 0.5 ? "▲" : "·").padStart(6)).join(""));
+        }
+      </script>
+    </div>
+
+    <h2>3 · The same thing, packaged</h2>
+    <p>
+      <code>nn.MultiheadAttention</code> is that arithmetic with the projections built in
+      and several heads running side by side. It also takes a mask, and the useful mask is
+      the causal one — it fills the upper triangle with <code>-Infinity</code> so that
+      softmax gives those positions zero weight, which is what makes a language model
+      unable to read ahead.
+    </p>
+    <p>
+      Note the shape it is handed: <code>[length, batch, embed]</code>, because that is
+      torch's default and this class follows it. <code>batchFirst</code> is the option,
+      not the rule — a layer that reads <code>[batch, length, embed]</code> unconditionally
+      is the one setting torch does not have.
+    </p>
+    <p>
+      A mask is easy to believe and easy to get wrong, so this measures it: change the
+      last token and see whether the <em>first</em> position's output moves.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const LEN = 6, EMBED = 8;
+        const attention = new nn.MultiheadAttention(EMBED, 2);
+
+        const before = new Float32Array(LEN * EMBED);
+        for (let i = 0; i < before.length; i++) before[i] = Math.random() * 2 - 1;
+        const after = before.slice();
+        for (let k = 0; k < EMBED; k++) after[(LEN - 1) * EMBED + k] = Math.random() * 2 - 1;
+
+        // [length, batch, embed] — torch's order, and this class's default.
+        const one = Tensor.from(before, [LEN, 1, EMBED]);
+        const two = Tensor.from(after, [LEN, 1, EMBED]);
+        const mask = nn.MultiheadAttention.causalMask(LEN);
+
+        // How far the first position's output moves when the last token is rewritten.
+        async function moved(left, right) {
+          const a = Array.from(await left.toArray());
+          const b = Array.from(await right.toArray());
+          let worst = 0;
+          for (let k = 0; k < EMBED; k++) worst = Math.max(worst, Math.abs(a[k] - b[k]));
+          return worst;
+        }
+
+        log("output shape:", attention.call(one).shape.join("×"));
+        log("");
+        log("rewrite the last token, then look at position 0:");
+        log("  no mask      ", (await moved(attention.attend(one, null), attention.attend(two, null))).toFixed(5));
+        log("  causal mask  ", (await moved(attention.attend(one, mask), attention.attend(two, mask))).toFixed(5));
+        log("");
+        log("the mask itself — the upper triangle is -Infinity:");
+        const shown = Array.from(await mask.toArray()).map((v) => (v === 0 ? 0 : 1));
+        await show(Tensor.from(new Float32Array(shown), [LEN, LEN]), { scale: 24, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      Exactly zero, not nearly zero. The masked positions contribute nothing at all,
+      because <code>softmax</code> of <code>-Infinity</code> is 0 and not a small number —
+      worth checking rather than assuming, since a mask that is merely very negative gives
+      a leak that no loss curve will show you.
+    </p>
+
+    <h2>4 · Attention does not know what order anything is in</h2>
+    <p>
+      Now the answer is "the value at position 2" — no flag to find. Attention compares
+      content with content, and the tokens are indistinguishable, so it cannot get there.
+      The fix is to write the position into the token, and <strong>how</strong> you write
+      it decides whether the fix works: a ramp <code>t/7</code> only lets a query prefer
+      "later" or "earlier", while a sine and cosine put the positions on a circle where a
+      query can point at one of them.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        const LEN = 8, TARGET = 2;
+
+        // mode 0: value only · 1: value + a ramp · 2: value + sin/cos
+        function makeSet(count, mode) {
+          const wide = mode === 0 ? 1 : mode === 1 ? 2 : 3;
+          const cells = new Float32Array(count * LEN * wide);
+          const answer = [];
+          for (let i = 0; i < count; i++) {
+            for (let t = 0; t < LEN; t++) {
+              const at = (i * LEN + t) * wide;
+              cells[at] = Math.random() * 2 - 1;
+              if (mode === 1) cells[at + 1] = t / (LEN - 1);
+              if (mode === 2) {
+                cells[at + 1] = Math.sin(2 * Math.PI * t / LEN);
+                cells[at + 2] = Math.cos(2 * Math.PI * t / LEN);
+              }
+              if (t === TARGET) answer.push(cells[at]);
+            }
+          }
+          return { cells: keepAlive(Tensor.from(cells, [count * LEN, wide])),
+                   answer: keepAlive(Tensor.from(answer, [count, 1])), count, wide };
+        }
+
+        async function trial(name, mode) {
+          manualSeed(0);
+          const train = makeSet(200, mode), test = makeSet(200, mode);
+          const D = 8;
+          const toKey = new nn.Linear(train.wide, D);
+          const toValue = new nn.Linear(train.wide, D);
+          const head = new nn.Linear(D, 1);
+          const start = Array.from({ length: D }, () => Math.random() * 0.2 - 0.1);
+          const query = keepAlive(Tensor.from(start, [D, 1], { requiresGrad: true }));
+
+          const forward = (set) => {
+            const weights = toKey.call(set.cells).mm(query).reshape([set.count, LEN]).softmax(1);
+            const values = toValue.call(set.cells).reshape([set.count, LEN, D]);
+            return { out: head.call(weights.unsqueeze(2).mul(values).sumDim(1)), weights };
+          };
+
+          const opt = new optim.Adam(
+            [...toKey.parameters(), ...toValue.parameters(), ...head.parameters(), query], 0.02);
+          const crit = new nn.MSELoss();
+          for (let step = 0; step < 500; step++) {
+            if (stopped()) break;
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(forward(train).out, train.answer);
+              loss.backward();
+              opt.step();
+            });
+          }
+          const got = forward(test);
+          const err = await crit.call(got.out, test.answer).item();
+          const flat = await crit.call(Tensor.zeros([test.count, 1]), test.answer).item();
+          log(`${name.padEnd(22)} error ${err.toFixed(4)}   (saying zero: ${flat.toFixed(4)})`);
+          return got.weights;
+        }
+
+        await trial("value only", 0);
+        await trial("value + ramp", 1);
+        const weights = await trial("value + sin/cos", 2);
+
+        const w = Array.from(await weights.toArray());
+        log("");
+        log(`where the last one looks — position ${TARGET} is the answer:`);
+        for (let i = 0; i < 3; i++) {
+          log("  " + Array.from({ length: LEN }, (_, t) => w[i * LEN + t].toFixed(2).padStart(6)).join(""));
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Where to take it.</strong> The ramp failing and the circle working is the
+      reason positional encodings are sinusoids rather than a counter, and it is a claim
+      you just measured rather than read. From here, stack
+      <code>nn.MultiheadAttention</code> with <code>nn.LayerNorm</code> and a two-layer
+      <code>nn.Sequential</code> and you have a transformer block; feed it the names from
+      <a href="06-char-rnn.html">tutorial 6</a> and compare it against the RNN on the same
+      45 words.
+    </div>
+
+    <div class="pager">
+      <a href="07-signals-fft.html">← 7 · Signals and the FFT</a>
+      <a href="09-autoencoder.html" style="text-align:right">Next<b>9 · Autoencoder</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

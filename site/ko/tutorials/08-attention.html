@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>8 · 어텐션 — borch 튜토리얼</title>
+<meta name="description" content="산수 세 줄로 적은 어텐션, 그것을 위해 만들어진 과제, 그리고 어텐션이 아예 못 하는 일.">
+<link rel="alternate" hreflang="en" href="../../tutorials/08-attention.html">
+<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
+     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
+     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="8 · 어텐션 — borch 튜토리얼">
+<meta property="og:description" content="산수 세 줄로 적은 어텐션, 그것을 위해 만들어진 과제, 그리고 어텐션이 아예 못 하는 일.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/tutorials/08-attention.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../tutorials/08-attention.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+      <a href="07-signals-fft.html">7 · 신호와 FFT</a>
+      <a href="08-attention.html" class="on">8 · 어텐션</a>
+      <a href="09-autoencoder.html">9 · 오토인코더</a>
+      <a href="10-least-squares.html">10 · 최소제곱</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 8</p>
+    <h1>어텐션</h1>
+    <p class="lead">
+      어텐션은 가중 평균인데 그 가중치를 데이터에서 계산한다. 그게 전부이고, 읽을 수 있는
+      산수 세 줄이다. 이 튜토리얼은 그 세 줄을 적고, 그것을 위해 만들어진 과제로 학습시키고,
+      손으로 쓴 판을 이해한 다음에야 <code>nn.MultiheadAttention</code> 을 집고, 어텐션이
+      정말로 못 하는 일로 끝낸다.
+    </p>
+
+    <h2>1 · 세 줄, 학습 없음</h2>
+    <p>
+      토큰 여섯, 각각 벡터 하나. 모든 토큰을 모든 토큰과 견주고(<code>Q·Kᵀ</code>), 견준
+      값을 합이 1 인 가중치로 바꾸고(<code>softmax</code>), 그 가중치로 값을 평균한다.
+      "the" 둘은 벡터가 같으니 서로를 보게 되고, 아무것도 학습하기 전에 그 그림에 나온다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const WORDS = ["the", "cat", "sat", "on", "the", "mat"];
+        const D = 16;
+
+        // One vector per distinct word — the two "the" tokens share theirs.
+        const book = {};
+        for (const word of new Set(WORDS)) book[word] = await Tensor.randn([D]).toArray();
+
+        const rows = new Float32Array(WORDS.length * D);
+        WORDS.forEach((w, i) => rows.set(book[w], i * D));
+        const x = keepAlive(Tensor.from(rows, [WORDS.length, D]));
+
+        // Attention, with Q = K = V = x. No parameters at all.
+        const scores = x.mm(x.transpose()).div(Tensor.full([], Math.sqrt(D)));
+        const weights = scores.softmax(1);
+        const out = weights.mm(x);
+
+        const w = Array.from(await weights.toArray());
+        log("who attends to whom (rows sum to 1):");
+        log("            " + WORDS.map((s) => s.padStart(6)).join(""));
+        WORDS.forEach((word, i) => {
+          log(`  ${word.padEnd(6)}` + WORDS.map((_, j) =>
+            w[i * WORDS.length + j].toFixed(2).padStart(6)).join(""));
+        });
+
+        log("");
+        log("the same thing as a picture — bright is high:");
+        await show(weights, { scale: 24 });
+        log("output shape:", out.shape.join("×"), "— one averaged vector per token");
+      </script>
+    </div>
+    <p class="small">
+      0 행과 4 행은 같은 행이다. 같은 벡터는 모든 것과 똑같이 견주어진다. 그것이 어텐션에
+      토큰이 <em>어디에</em> 있는지에 대한 개념이 없다는 뜻이고, 4 번 블록이 그 이야기다.
+    </p>
+
+    <h2>2 · 어텐션이 있어야 하는 과제</h2>
+    <p>
+      자리 여덟. 각 자리에 무작위 값이 있고, 정확히 한 자리에 깃발이 있다. 답은 깃발이 선
+      자리의 값이다 — 입력 둘의 곱이므로 어떤 선형 모델도 닿지 못하고, 전부를 평균하는 망도
+      닿지 못한다. 학습되는 질의 벡터 하나면 된다. 그 벡터가 깃발을 보도록 배워야 한다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const LEN = 8, WIDE = 2;   // each token is [value, flag]
+
+        function makeSet(count) {
+          const cells = new Float32Array(count * LEN * WIDE);
+          const answer = [];
+          for (let i = 0; i < count; i++) {
+            const flagged = Math.floor(Math.random() * LEN);
+            for (let t = 0; t < LEN; t++) {
+              const value = Math.random() * 2 - 1;
+              cells[(i * LEN + t) * WIDE] = value;
+              cells[(i * LEN + t) * WIDE + 1] = t === flagged ? 1 : 0;
+              if (t === flagged) answer.push(value);
+            }
+          }
+          return { cells: keepAlive(Tensor.from(cells, [count * LEN, WIDE])),
+                   answer: keepAlive(Tensor.from(answer, [count, 1])), count };
+        }
+
+        const train = makeSet(200), test = makeSet(200);
+        window.__attn = { LEN, WIDE, makeSet, train, test };
+
+        manualSeed(0);
+        const D = 8;
+        const toKey = new nn.Linear(WIDE, D);
+        const toValue = new nn.Linear(WIDE, D);
+        const head = new nn.Linear(D, 1);
+        // The query is one vector and it is learned — nothing else asks the question.
+        const start = Array.from({ length: D }, () => Math.random() * 0.2 - 0.1);
+        const query = keepAlive(Tensor.from(start, [D, 1], { requiresGrad: true }));
+
+        const forward = (set) => {
+          const weights = toKey.call(set.cells).mm(query).reshape([set.count, LEN]).softmax(1);
+          const values = toValue.call(set.cells).reshape([set.count, LEN, D]);
+          return { out: head.call(weights.unsqueeze(2).mul(values).sumDim(1)), weights };
+        };
+        window.__attnModel = { forward, D };
+
+        const opt = new optim.Adam(
+          [...toKey.parameters(), ...toValue.parameters(), ...head.parameters(), query], 0.02);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 400; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(forward(train).out, train.answer);
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+
+        const guessed = forward(test);
+        // Predicting the average of everything is the score to beat.
+        const flat = await crit.call(Tensor.zeros([test.count, 1]), test.answer).item();
+        log("error on unseen sequences:", (await crit.call(guessed.out, test.answer).item()).toFixed(4));
+        log("saying zero every time:   ", flat.toFixed(4));
+
+        const w = Array.from(await guessed.weights.toArray());
+        const cells = Array.from(await test.cells.toArray());
+        log("");
+        log("where it looked, for the first three sequences (flag marked ▲):");
+        for (let i = 0; i < 3; i++) {
+          log("  weight " + Array.from({ length: LEN }, (_, t) =>
+            w[i * LEN + t].toFixed(2).padStart(6)).join(""));
+          log("  flag   " + Array.from({ length: LEN }, (_, t) =>
+            (cells[(i * LEN + t) * WIDE + 1] > 0.5 ? "▲" : "·").padStart(6)).join(""));
+        }
+      </script>
+    </div>
+
+    <h2>3 · 같은 것, 포장된 판</h2>
+    <p>
+      <code>nn.MultiheadAttention</code> 은 그 산수에 사영을 넣고 머리 여럿을 나란히 돌리는
+      것이다. 마스크도 받는데, 쓸모 있는 마스크는 인과 마스크다 — 위쪽 삼각형을
+      <code>-Infinity</code> 로 채워 softmax 가 그 자리에 0 을 주게 만들고, 그것이 언어
+      모델이 앞을 못 읽게 하는 장치다.
+    </p>
+    <p>
+      건네는 모양을 보라. <code>[길이, 배치, 임베딩]</code> 이다. torch 의 기본이 그렇고 이
+      클래스도 그것을 따른다. <code>batchFirst</code> 는 규칙이 아니라 선택지다 —
+      <code>[배치, 길이, 임베딩]</code> 을 무조건 읽는 층이야말로 torch 에 없는 설정이다.
+    </p>
+    <p>
+      마스크는 믿기 쉽고 틀리기도 쉽다. 그래서 재 본다. 마지막 토큰을 바꾸고
+      <em>첫</em> 자리의 출력이 움직이는지 본다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const LEN = 6, EMBED = 8;
+        const attention = new nn.MultiheadAttention(EMBED, 2);
+
+        const before = new Float32Array(LEN * EMBED);
+        for (let i = 0; i < before.length; i++) before[i] = Math.random() * 2 - 1;
+        const after = before.slice();
+        for (let k = 0; k < EMBED; k++) after[(LEN - 1) * EMBED + k] = Math.random() * 2 - 1;
+
+        // [length, batch, embed] — torch's order, and this class's default.
+        const one = Tensor.from(before, [LEN, 1, EMBED]);
+        const two = Tensor.from(after, [LEN, 1, EMBED]);
+        const mask = nn.MultiheadAttention.causalMask(LEN);
+
+        // How far the first position's output moves when the last token is rewritten.
+        async function moved(left, right) {
+          const a = Array.from(await left.toArray());
+          const b = Array.from(await right.toArray());
+          let worst = 0;
+          for (let k = 0; k < EMBED; k++) worst = Math.max(worst, Math.abs(a[k] - b[k]));
+          return worst;
+        }
+
+        log("output shape:", attention.call(one).shape.join("×"));
+        log("");
+        log("rewrite the last token, then look at position 0:");
+        log("  no mask      ", (await moved(attention.attend(one, null), attention.attend(two, null))).toFixed(5));
+        log("  causal mask  ", (await moved(attention.attend(one, mask), attention.attend(two, mask))).toFixed(5));
+        log("");
+        log("the mask itself — the upper triangle is -Infinity:");
+        const shown = Array.from(await mask.toArray()).map((v) => (v === 0 ? 0 : 1));
+        await show(Tensor.from(new Float32Array(shown), [LEN, LEN]), { scale: 24, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      거의 0 이 아니라 정확히 0 이다. 가려진 자리는 아무것도 보태지 않는다.
+      <code>-Infinity</code> 의 softmax 는 작은 수가 아니라 0 이기 때문이다 — 가정하지 말고
+      확인할 값어치가 있다. 아주 작은 음수로 만든 마스크는 새고, 그 샘은 어떤 손실 곡선에도
+      안 보인다.
+    </p>
+
+    <h2>4 · 어텐션은 순서를 모른다</h2>
+    <p>
+      이제 답은 "2 번 자리의 값" 이다 — 찾을 깃발이 없다. 어텐션은 내용을 내용과 견주는데
+      토큰들이 서로 구별되지 않으니 닿을 수 없다. 고치는 방법은 자리를 토큰 안에 적어 넣는
+      것이고, <strong>어떻게</strong> 적는지가 고쳐지는지 아닌지를 정한다. 경사
+      <code>t/7</code> 은 질의가 "뒤쪽" 이나 "앞쪽" 을 선호하게 할 뿐이고, 사인과 코사인은
+      자리를 원 위에 놓아 질의가 그중 하나를 가리킬 수 있게 한다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        const LEN = 8, TARGET = 2;
+
+        // mode 0: value only · 1: value + a ramp · 2: value + sin/cos
+        function makeSet(count, mode) {
+          const wide = mode === 0 ? 1 : mode === 1 ? 2 : 3;
+          const cells = new Float32Array(count * LEN * wide);
+          const answer = [];
+          for (let i = 0; i < count; i++) {
+            for (let t = 0; t < LEN; t++) {
+              const at = (i * LEN + t) * wide;
+              cells[at] = Math.random() * 2 - 1;
+              if (mode === 1) cells[at + 1] = t / (LEN - 1);
+              if (mode === 2) {
+                cells[at + 1] = Math.sin(2 * Math.PI * t / LEN);
+                cells[at + 2] = Math.cos(2 * Math.PI * t / LEN);
+              }
+              if (t === TARGET) answer.push(cells[at]);
+            }
+          }
+          return { cells: keepAlive(Tensor.from(cells, [count * LEN, wide])),
+                   answer: keepAlive(Tensor.from(answer, [count, 1])), count, wide };
+        }
+
+        async function trial(name, mode) {
+          manualSeed(0);
+          const train = makeSet(200, mode), test = makeSet(200, mode);
+          const D = 8;
+          const toKey = new nn.Linear(train.wide, D);
+          const toValue = new nn.Linear(train.wide, D);
+          const head = new nn.Linear(D, 1);
+          const start = Array.from({ length: D }, () => Math.random() * 0.2 - 0.1);
+          const query = keepAlive(Tensor.from(start, [D, 1], { requiresGrad: true }));
+
+          const forward = (set) => {
+            const weights = toKey.call(set.cells).mm(query).reshape([set.count, LEN]).softmax(1);
+            const values = toValue.call(set.cells).reshape([set.count, LEN, D]);
+            return { out: head.call(weights.unsqueeze(2).mul(values).sumDim(1)), weights };
+          };
+
+          const opt = new optim.Adam(
+            [...toKey.parameters(), ...toValue.parameters(), ...head.parameters(), query], 0.02);
+          const crit = new nn.MSELoss();
+          for (let step = 0; step < 500; step++) {
+            if (stopped()) break;
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(forward(train).out, train.answer);
+              loss.backward();
+              opt.step();
+            });
+          }
+          const got = forward(test);
+          const err = await crit.call(got.out, test.answer).item();
+          const flat = await crit.call(Tensor.zeros([test.count, 1]), test.answer).item();
+          log(`${name.padEnd(22)} error ${err.toFixed(4)}   (saying zero: ${flat.toFixed(4)})`);
+          return got.weights;
+        }
+
+        await trial("value only", 0);
+        await trial("value + ramp", 1);
+        const weights = await trial("value + sin/cos", 2);
+
+        const w = Array.from(await weights.toArray());
+        log("");
+        log(`where the last one looks — position ${TARGET} is the answer:`);
+        for (let i = 0; i < 3; i++) {
+          log("  " + Array.from({ length: LEN }, (_, t) => w[i * LEN + t].toFixed(2).padStart(6)).join(""));
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>어디로 더 갈 수 있나.</strong> 경사는 안 되고 원은 되는 것이 위치 인코딩이
+      계수기가 아니라 사인인 이유이고, 읽은 것이 아니라 방금 잰 주장이다. 여기서
+      <code>nn.MultiheadAttention</code> 에 <code>nn.LayerNorm</code> 과 두 층짜리
+      <code>nn.Sequential</code> 을 쌓으면 트랜스포머 블록이다.
+      <a href="06-char-rnn.html">튜토리얼 6</a> 의 이름들을 넣어 같은 45 단어에서 RNN 과
+      견줘 보라.
+    </div>
+
+    <div class="pager">
+      <a href="07-signals-fft.html">← 7 · 신호와 FFT</a>
+      <a href="09-autoencoder.html" style="text-align:right">다음<b>9 · 오토인코더</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

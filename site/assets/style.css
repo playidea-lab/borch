@@ -498,6 +498,17 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   align-items: start;
 }
 @media (max-width: 900px) { .docs { grid-template-columns: 1fr; } }
+/* **The header and the page under it have to share one edge.** `.top .wrap` is centred
+   on `--page`, while this grid was pinned to both edges of the window, so on a wide
+   screen the two never met: measured at 2560px, the brand sat at x=736 and the sidebar
+   at x=0, and the reading column stopped 832px short of the nav directly above it.
+   Nothing about a narrow window changes — the query starts at the width where centring
+   begins to do anything at all (`--page` plus the 3rem the wrap keeps at its sides). */
+@media (min-width: 1136px) {
+  .docs { width: min(var(--page), calc(100% - 3rem)); margin-inline: auto; }
+  /* The rail now has two free sides rather than one, so it is bordered on both. */
+  .sidebar { border-left: 1px solid var(--line-soft); }
+}
 
 .sidebar {
   position: sticky; top: 58px;

@@ -21,7 +21,7 @@ Korean is below that, at `/ko/`.
 |---|---|
 | `index.html` | The landing page. The hero's demo really runs |
 | `learn/` | Eight lessons (concepts). **Every code block runs where it stands** |
-| `tutorials/` | Six projects. Things that finish if you follow them |
+| `tutorials/` | Ten projects. Things that finish if you follow them |
 | `api/` | The API reference. The list comes from `assets/api.json` |
 | `playground.html` | A large editor · a loss curve · GPU instrumentation |
 | `ko/` | The Korean edition of the four above. Uses the same assets through `../assets/` |

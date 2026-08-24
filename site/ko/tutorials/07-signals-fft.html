@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7 · 신호와 FFT — borch 튜토리얼</title>
+<meta name="description" content="신호 안에 든 주파수를 찾고, 그것으로 걸러 내고, 입력을 다르게 적는 일이 얼마나 값하는지 잰다.">
+<link rel="alternate" hreflang="en" href="../../tutorials/07-signals-fft.html">
+<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
+     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
+     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="7 · 신호와 FFT — borch 튜토리얼">
+<meta property="og:description" content="신호 안에 든 주파수를 찾고, 그것으로 걸러 내고, 입력을 다르게 적는 일이 얼마나 값하는지 잰다.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/tutorials/07-signals-fft.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../tutorials/07-signals-fft.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+      <a href="07-signals-fft.html" class="on">7 · 신호와 FFT</a>
+      <a href="08-attention.html">8 · 어텐션</a>
+      <a href="09-autoencoder.html">9 · 오토인코더</a>
+      <a href="10-least-squares.html">10 · 최소제곱</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 7</p>
+    <h1>신호와 FFT</h1>
+    <p class="lead">
+      망에 건네지는 것은 숫자이고, 그 숫자를 <em>어떻게 적었는가</em> 가 일의 어려움을
+      거의 다 정한다. 이 튜토리얼은 신호 하나를 놓고 그 안의 주파수를 보고, 일부를 버리고,
+      같은 작은 모델을 두 번 — 파형으로 한 번, 스펙트럼으로 한 번 — 학습시켜 적는 방식이
+      만드는 차이를 잰다.
+    </p>
+
+    <h2>1 · 신호 안에 든 것</h2>
+    <p>
+      사인파 둘을 더한 것. <code>fft.rfft</code> 는 표본 64 개를 복소수 33 개로 — 주파수마다
+      하나씩 — 바꾸고, 각 복소수의 크기가 그 주파수가 얼마나 들어 있는지를 말한다. 실수
+      입력의 스펙트럼은 좌우가 겹치므로 <code>rfft</code> 는 거울이 아닌 절반만 남긴다.
+      <code>fft.fft</code> 와의 차이는 그것뿐이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const N = 64;
+        const wave = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          wave[i] = Math.sin(2 * Math.PI * 4 * i / N)          // 4 cycles, full size
+                  + 0.5 * Math.sin(2 * Math.PI * 11 * i / N);  // 11 cycles, half size
+        }
+        window.__sig = { N, wave };
+
+        const x = Tensor.from(wave, [N]);
+        const spectrum = fft.rfft(x);
+        log(`${N} samples in →`, spectrum.shape[0], "frequencies out, complex:", spectrum.isComplex());
+
+        // The size of a complex number is what "how much of this frequency" means.
+        const size = Array.from(await spectrum.abs().toArray());
+        const hz = Array.from(await fft.rfftfreq(N, 1).toArray());
+
+        log("");
+        log("the bins that carry anything:");
+        size.forEach((v, k) => {
+          if (v > 1) log(`  bin ${String(k).padStart(2)}   ${(hz[k] * N).toFixed(0).padStart(2)} cycles   size ${v.toFixed(1)}`);
+        });
+
+        // Each bin as a column filled from the bottom — a bar chart, painted into a tensor.
+        const H = 48, W = size.length;
+        const chart = new Float32Array(H * W);
+        const tallest = Math.max(...size);
+        for (let k = 0; k < W; k++) {
+          const high = Math.round(size[k] / tallest * (H - 1));
+          for (let y = 0; y <= high; y++) chart[(H - 1 - y) * W + k] = 1;
+        }
+        log("");
+        log("the whole spectrum — 0 cycles at the left edge, 32 at the right:");
+        await show(Tensor.from(chart, [H, W]), { scale: 8, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      막대 둘, 4 주기와 11 주기에, 크기 비 2:1 — 넣은 그대로다. 여기서 학습된 것은 없다.
+      산수이고, 텐서가 이미 거기 있으니 GPU 에서 돈다.
+    </p>
+
+    <h2>2 · 거르기는 칸을 지우는 일이다</h2>
+    <p>
+      신호를 잡음에 묻고, 주파수로 보내고, 12 주기 위의 칸을 0 으로 만들고,
+      <code>fft.irfft</code> 로 돌아온다. 저역 통과 필터는 그것이고 그 이상이 아니다.
+      깨끗한 신호에 대한 오차가 됐는지 안 됐는지를 말한다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__sig) throw new Error("Run block 1 first.");
+        const { N, wave } = window.__sig;
+
+        const noisy = new Float32Array(N);
+        for (let i = 0; i < N; i++) noisy[i] = wave[i] + (Math.random() - 0.5) * 1.2;
+
+        const clean = Tensor.from(wave, [N]);
+        const dirty = Tensor.from(noisy, [N]);
+        const bins = Math.floor(N / 2) + 1;
+
+        // Keep the low frequencies, drop the rest. The mask is a tensor like any other.
+        // 12 is above both of the real components (4 and 11) and below most of the noise.
+        const CUT = 12;
+        const keep = new Float32Array(bins);
+        for (let k = 0; k <= CUT; k++) keep[k] = 1;
+
+        const filtered = fft.irfft(fft.rfft(dirty).mul(Tensor.from(keep, [bins])), N);
+
+        const err = new nn.MSELoss();
+        log("error against the clean signal");
+        log("  noisy    ", (await err.call(dirty, clean).item()).toFixed(4));
+        log("  filtered ", (await err.call(filtered, clean).item()).toFixed(4));
+
+        // Draw the waveforms rather than list them: one row of pixels per value,
+        // the clean signal in red and whatever it is being compared with in green.
+        const back = Array.from(await filtered.toArray());
+        const H = 64;
+        const height = (v) => Math.max(0, Math.min(H - 1, Math.round((1 - (v + 3) / 6) * (H - 1))));
+        const against = (other) => {
+          const canvas = new Float32Array(3 * H * N);
+          for (let i = 0; i < N; i++) {
+            canvas[0 * H * N + height(wave[i]) * N + i] = 1;    // red   = clean
+            canvas[1 * H * N + height(other[i]) * N + i] = 1;   // green = the other one
+          }
+          return Tensor.from(canvas, [3, H, N]);
+        };
+
+        log("");
+        log("red = clean, green = noisy (yellow where they land on the same pixel)");
+        await show(against(noisy), { scale: 6, range: [0, 1] });
+        log("red = clean, green = filtered");
+        await show(against(back), { scale: 6, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      살아남은 잡음은 마침 12 주기 아래에 앉아 있던 몫이다. 필터는 신호와 잡음을 가르지
+      못한다. 주파수를 가를 뿐이고, 둘이 겹치지 않을 때만 그 둘이 같은 일이다.
+    </p>
+
+    <h2>3 · 같은 모델, 입력을 적는 두 방식</h2>
+    <p>
+      신호 세 갈래 — 5, 6, 7 주기 — 각각 진폭과 위상이 무작위이고 잡음이 얹힌다. 날 표본
+      64 개로 작은 망 하나를 학습시키고, 똑같은 망을 스펙트럼 크기 33 개로 학습시킨다.
+      학습 데이터 크기를 넷으로 바꿔 가면서. 두 열 사이에서 모델은 아무것도 바뀌지 않는다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const N = 64, BINS = Math.floor(N / 2) + 1;
+        const CYCLES = [5, 6, 7];
+        const TEST = 90;
+
+        function makeSet(count) {
+          const raw = new Float32Array(count * N);
+          const label = [];
+          for (let i = 0; i < count; i++) {
+            const cls = i % CYCLES.length;
+            const amp = 0.6 + Math.random() * 0.8;
+            const phase = Math.random() * 2 * Math.PI;
+            for (let t = 0; t < N; t++) {
+              raw[i * N + t] = amp * Math.sin(2 * Math.PI * CYCLES[cls] * t / N + phase)
+                             + (Math.random() - 0.5) * 0.6;
+            }
+            label.push(cls);
+          }
+          return { raw: keepAlive(Tensor.from(raw, [count, N])),
+                   label: keepAlive(Tensor.from(label, [count], { dtype: "int64" })) };
+        }
+
+        // Train the same architecture on whatever is handed in, and report test accuracy.
+        async function accuracy(trainX, trainY, testX, testY, inputs) {
+          manualSeed(0);
+          const model = new nn.Sequential(
+            new nn.Linear(inputs, 32), new nn.ReLU(), new nn.Linear(32, CYCLES.length));
+          const opt = new optim.Adam(model.parameters(), 0.01);
+          const crit = new nn.CrossEntropyLoss();
+
+          for (let step = 0; step < 300; step++) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(model.call(trainX), trainY);
+              loss.backward();
+              opt.step();
+            });
+          }
+          const guess = Array.from(await model.call(testX).argmax(1).toArray());
+          const truth = Array.from(await testY.toArray());
+          const right = guess.filter((g, i) => Number(g) === Number(truth[i])).length;
+          return Math.round(100 * right / truth.length);
+        }
+
+        const test = makeSet(TEST);
+        // The spectrum of a whole batch: rfft runs along the last axis on its own.
+        const testSpec = keepAlive(fft.rfft(test.raw).abs());
+
+        log("training examples   waveform   spectrum");
+        for (const count of [12, 24, 48, 96]) {
+          if (stopped()) break;
+          const train = makeSet(count);
+          const trainSpec = keepAlive(fft.rfft(train.raw).abs());
+          const wave = await accuracy(train.raw, train.label, test.raw, test.label, N);
+          const spec = await accuracy(trainSpec, train.label, testSpec, test.label, BINS);
+          log(`${String(count).padStart(13)}       ${String(wave).padStart(4)}%      ${String(spec).padStart(4)}%`);
+        }
+      </script>
+    </div>
+    <p class="small">
+      차이는 데이터가 적은 쪽 끝에 있고, 데이터가 늘면 닫힌다. 파형 모델은 <em>밀린 사인도
+      같은 사인</em> 이라는 사실을 배워야 하고, 스펙트럼 모델은 복소수의 크기가 위상을
+      떨구므로 그것을 공짜로 얻는다 — 그러니 변환이 사 주는 것은 정확도가 아니라
+      <em>예제</em> 이고, 예제가 충분해지면 아무것도 사 주지 않는다. 특징 공학이 하는 일의
+      정직한 판이고, 딥러닝이 와도 사라지지 않은 이유다. 데이터가 가장 비싼 자리에서
+      정확히 가장 값한다.
+    </p>
+
+    <h2>4 · 스펙트럼이 거짓말하는 자리</h2>
+    <p>
+      칸은 정수 주기다. 4.5 주기짜리 신호는 어느 칸에도 안 맞고, 그 힘은 이웃으로
+      번진다 — <em>스펙트럼 누설</em> 이고, 그때 변환이 잘못된 것은 아무것도 없다. 창을
+      씌우면 번짐이 좁아지고, 없어지지는 않는다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        const N = 64, bins = Math.floor(N / 2) + 1;
+
+        const at = (cycles) => {
+          const a = new Float32Array(N);
+          for (let i = 0; i < N; i++) a[i] = Math.sin(2 * Math.PI * cycles * i / N);
+          return Tensor.from(a, [N]);
+        };
+
+        const exact = Array.from(await fft.rfft(at(4)).abs().toArray());
+        const between = Array.from(await fft.rfft(at(4.5)).abs().toArray());
+        const windowed = Array.from(await fft.rfft(at(4.5).mul(Tensor.hannWindow(N))).abs().toArray());
+
+        log("bin   4.0 cycles   4.5 cycles   4.5 with a Hann window");
+        for (let k = 2; k <= 8; k++) {
+          log(`${String(k).padStart(3)}   ${exact[k].toFixed(2).padStart(9)}   ` +
+              `${between[k].toFixed(2).padStart(10)}   ${windowed[k].toFixed(2).padStart(12)}`);
+        }
+
+        const H = 48;
+        const chart = new Float32Array(3 * H * bins);
+        const tallest = Math.max(...exact, ...between, ...windowed);
+        const bars = (channel, values) => {
+          for (let k = 0; k < bins; k++) {
+            const high = Math.round(values[k] / tallest * (H - 1));
+            for (let y = 0; y <= high; y++) chart[channel * H * bins + (H - 1 - y) * bins + k] = 1;
+          }
+        };
+        bars(0, exact);
+        bars(1, between);
+        bars(2, windowed);
+        log("");
+        log("red = 4.0 cycles, green = 4.5, blue = 4.5 through a Hann window");
+        await show(Tensor.from(chart, [3, H, bins]), { scale: 8, range: [0, 1] });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>어디로 더 갈 수 있나.</strong> <code>fft.stft</code> 는 신호를 겹치는 토막으로
+      잘라 각각을 변환한다 — 스펙트로그램이 그렇게 만들어진다. 그것을
+      <a href="04-image-classifier.html">튜토리얼 4</a> 의 합성곱 망에 넣으면 가로가 시간,
+      세로가 주파수인 그림을 다루는 오디오 분류가 된다. <code>fft.fft2</code> 는 같은 일을
+      이미지에 하고, 거기서 저역 통과는 조리법을 읽을 수 있는 흐리기다.
+    </div>
+
+    <div class="pager">
+      <a href="06-char-rnn.html">← 6 · 문자 RNN</a>
+      <a href="08-attention.html" style="text-align:right">다음<b>8 · 어텐션</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

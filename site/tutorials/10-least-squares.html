@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10 · Least squares — borch Tutorials</title>
+<meta name="description" content="Some models are solved rather than trained. lstsq and svd, what they answer exactly, and how to tell when the exact answer is worthless.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/10-least-squares.html">
+<!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
+     `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
+     does not follow a relative path, and hard-coding the deployed address here would go
+     stale quietly the day the domain changes. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="10 · Least squares — borch Tutorials">
+<meta property="og:description" content="Some models are solved rather than trained. lstsq and svd, what they answer exactly, and how to tell when the exact answer is worthless.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/tutorials/10-least-squares.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">Python</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/tutorials/10-least-squares.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+      <a href="07-signals-fft.html">7 · Signals and the FFT</a>
+      <a href="08-attention.html">8 · Attention</a>
+      <a href="09-autoencoder.html">9 · Autoencoder</a>
+      <a href="10-least-squares.html" class="on">10 · Least squares</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 10</p>
+    <h1>Least squares</h1>
+    <p class="lead">
+      Not everything is trained. When a model is linear in its parameters the best answer
+      can be computed outright — no learning rate, no steps, no seed — and
+      <code>linalg</code> is the part of borch that does it. This tutorial solves what can
+      be solved, then spends the rest of its time on the more useful skill: knowing when an
+      exact answer is worth nothing.
+    </p>
+
+    <h2>1 · The line, twice</h2>
+    <p>
+      Forty noisy points off a straight line. Fit it with gradient descent the way the
+      earlier tutorials do, then fit it again with <code>linalg.lstsq</code>, which is one
+      call and no loop. They land on the same place because they are answering the same
+      question.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const N = 40, SLOPE = 2.5, OFFSET = -1;
+        const xs = new Float32Array(N), ys = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          xs[i] = i / (N - 1) * 4 - 2;
+          ys[i] = SLOPE * xs[i] + OFFSET + (Math.random() - 0.5) * 0.8;
+        }
+        window.__ls = { N, xs, ys };
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+        const crit = new nn.MSELoss();
+
+        // The trained answer.
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.Adam(model.parameters(), 0.05);
+        const started = performance.now();
+        for (let step = 0; step < 400; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+        const trainedMs = performance.now() - started;
+        const weights = Array.from(await model.parameters()[0].toArray());
+        const bias = Array.from(await model.parameters()[1].toArray());
+
+        // The solved answer. vander(x, 2) is the matrix [x, 1] — one column per unknown.
+        const solvedAt = performance.now();
+        const A = Tensor.vander(Tensor.from(xs, [N]), 2);
+        const beta = Array.from(await (await linalg.lstsq(A, y)).toArray());
+        const solvedMs = performance.now() - solvedAt;
+
+        log(`truth      slope ${SLOPE.toFixed(4)}   offset ${OFFSET.toFixed(4)}`);
+        log(`400 steps  slope ${weights[0].toFixed(4)}   offset ${bias[0].toFixed(4)}   ${trainedMs.toFixed(0)} ms`);
+        log(`lstsq      slope ${beta[0].toFixed(4)}   offset ${beta[1].toFixed(4)}   ${solvedMs.toFixed(0)} ms`);
+        log("");
+        log("error of each fit");
+        log("  trained ", (await crit.call(model.call(x), y).item()).toFixed(6));
+        log("  solved  ", (await crit.call(A.mm(Tensor.from(beta, [2, 1])), y).item()).toFixed(6));
+      </script>
+    </div>
+    <p class="small">
+      <code>lstsq</code> is not an approximation of the trained answer — it is the exact
+      minimum, and the trained one approaches it. When your model is linear in its
+      parameters, reaching for an optimizer is a choice to arrive later, and the reason to
+      make that choice anyway is size: the closed form wants the whole matrix at once.
+    </p>
+
+    <h2>2 · Exactly the wrong question</h2>
+    <p>
+      Twelve noisy points from a smooth curve, fitted by polynomials of degree 1, 3, 5 and
+      11. Degree 11 has as many unknowns as there are points, so it passes through every
+      one of them and its training error goes to zero. Then each is asked about the two
+      hundred points it never saw.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const truth = (v) => Math.sin(1.5 * v) + 0.3 * v;
+        const M = 12;
+        const seen = new Float32Array(M), noisy = new Float32Array(M);
+        for (let i = 0; i < M; i++) {
+          seen[i] = i / (M - 1) * 4 - 2;
+          noisy[i] = truth(seen[i]) + (Math.random() - 0.5) * 0.4;
+        }
+        // Somewhere it has not been asked about, between the points it was given.
+        const K = 200;
+        const dense = new Float32Array(K), real = new Float32Array(K);
+        for (let i = 0; i < K; i++) {
+          dense[i] = i / (K - 1) * 4 - 2;
+          real[i] = truth(dense[i]);
+        }
+
+        const seenT = Tensor.from(seen, [M]);
+        const denseT = Tensor.from(dense, [K]);
+        const target = Tensor.from(noisy, [M, 1]);
+        const realT = Tensor.from(real, [K, 1]);
+        const crit = new nn.MSELoss();
+
+        log("degree   unknowns   error on the 12 points   error on the true curve   condition number");
+        for (const degree of [1, 3, 5, 11]) {
+          const A = Tensor.vander(seenT, degree + 1);
+          const beta = await linalg.lstsq(A, target);
+          const wide = Tensor.vander(denseT, degree + 1);
+          const fitted = await crit.call(A.mm(beta), target).item();
+          const out = await crit.call(wide.mm(beta), realT).item();
+          const cond = await (await linalg.cond(A)).item();
+          log(`${String(degree).padStart(6)}   ${String(degree + 1).padStart(8)}   ` +
+              `${fitted.toFixed(6).padStart(21)}   ${out.toFixed(4).padStart(23)}   ` +
+              `${cond.toExponential(1).padStart(16)}`);
+        }
+      </script>
+    </div>
+    <p class="small">
+      The last row is the useful one. <code>linalg.cond</code> says how much an answer can
+      move when the input moves a little, and it is <em>computable before you look at any
+      result</em> — a large condition number is a warning that arrives in time to be acted
+      on, unlike a test error, which arrives after you have already believed the fit.
+    </p>
+
+    <h2>3 · PCA is a singular value decomposition</h2>
+    <p>
+      A cloud of two-dimensional points that mostly lie along one direction. Centre it,
+      take <code>linalg.svd</code>, and the rows of <code>vt</code> come out as the
+      directions of the cloud, longest first, with <code>s</code> saying how long. Nothing
+      is fitted; this is a property of the matrix.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const P = 300;
+        const pts = new Float32Array(P * 2);
+        for (let i = 0; i < P; i++) {
+          const along = (Math.random() - 0.5) * 4;              // the direction it varies in
+          const across = (Math.random() - 0.5) * 0.5;           // and the thickness
+          pts[i * 2] = along * 0.9 - across * 0.4;
+          pts[i * 2 + 1] = along * 0.45 + across * 0.9;
+        }
+        const cloud = keepAlive(Tensor.from(pts, [P, 2]));
+        const centred = keepAlive(cloud.sub(cloud.mean(0, true)));
+
+        const { s, vt } = await linalg.svd(centred, false);
+        const lengths = Array.from(await s.toArray());
+        const dirs = Array.from(await vt.toArray());
+
+        log("direction 1:", dirs[0].toFixed(3), dirs[1].toFixed(3), "  length", lengths[0].toFixed(2));
+        log("direction 2:", dirs[2].toFixed(3), dirs[3].toFixed(3), "  length", lengths[1].toFixed(2));
+        log("");
+        const share = lengths[0] ** 2 / (lengths[0] ** 2 + lengths[1] ** 2);
+        log(`the first direction holds ${(share * 100).toFixed(1)}% of the spread`);
+
+        // Keep one direction and put the points back: project, then project back.
+        const keep1 = Tensor.from([dirs[0], dirs[1]], [2, 1]);
+        const keep2 = Tensor.from([dirs[2], dirs[3]], [2, 1]);
+        const through = (axis) => centred.mm(axis).mm(axis.transpose());
+        const crit = new nn.MSELoss();
+        log(`keeping direction 1 only, the points move ${(await crit.call(through(keep1), centred).item()).toFixed(4)}`);
+        log(`keeping direction 2 only, the points move ${(await crit.call(through(keep2), centred).item()).toFixed(4)}`);
+
+        // Draw it: the cloud in red, the one-dimensional version in green.
+        const G = 80;
+        const canvas = new Float32Array(3 * G * G);
+        const flat = Array.from(await centred.toArray());
+        const back = Array.from(await through(keep1).toArray());
+        const put = (channel, px, py) => {
+          const col = Math.round((px / 5 + 0.5) * (G - 1));
+          const row = Math.round((0.5 - py / 5) * (G - 1));
+          if (col >= 0 && col < G && row >= 0 && row < G) canvas[channel * G * G + row * G + col] = 1;
+        };
+        for (let i = 0; i < P; i++) {
+          put(0, flat[i * 2], flat[i * 2 + 1]);
+          put(1, back[i * 2], back[i * 2 + 1]);
+        }
+        log("");
+        log("red = the cloud, green = the same points with one direction dropped");
+        await show(Tensor.from(canvas, [3, G, G]), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>4 · How many dimensions are actually in there</h2>
+    <p>
+      Eight columns built out of three hidden factors, plus noise. The singular values say
+      how much each direction carries, and the answer is supposed to be three. Counting
+      them means choosing where "small" begins, so this counts twice — once at a threshold
+      written down here, and once by <code>linalg.matrixRank</code>, which chooses its own.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const ROWS = 200, COLS = 8, FACTORS = 3;
+
+        function build(noise) {
+          const mix = [];
+          for (let f = 0; f < FACTORS; f++) {
+            const row = [];
+            for (let c = 0; c < COLS; c++) row.push(Math.random() * 2 - 1);
+            mix.push(row);
+          }
+          const cells = new Float32Array(ROWS * COLS);
+          for (let r = 0; r < ROWS; r++) {
+            const weight = Array.from({ length: FACTORS }, () => Math.random() * 2 - 1);
+            for (let c = 0; c < COLS; c++) {
+              let v = 0;
+              for (let f = 0; f < FACTORS; f++) v += weight[f] * mix[f][c];
+              cells[r * COLS + c] = v + (Math.random() - 0.5) * noise;
+            }
+          }
+          return Tensor.from(cells, [ROWS, COLS]);
+        }
+
+        log("noise    the eight singular values                             over 5%   matrixRank");
+        for (const noise of [0.001, 0.05, 0.4, 2.0]) {
+          const A = build(noise);
+          const s = Array.from(await (await linalg.svdvals(A)).toArray());
+          const biggest = Math.max(...s);
+          const overFivePercent = s.filter((v) => v > biggest * 0.05).length;
+          const rank = Number(await (await linalg.matrixRank(A)).item());
+          log(`${noise.toFixed(3)}   ${s.map((v) => v.toFixed(2).padStart(7)).join("")}   ` +
+              `${String(overFivePercent).padStart(7)}   ${String(rank).padStart(10)}`);
+        }
+      </script>
+    </div>
+    <p class="small">
+      While the noise stays well under the signal there is a cliff after the third value
+      and a person counts three; by the last row there is no cliff and the count is
+      whatever threshold was picked. <code>linalg.matrixRank</code> answers eight
+      throughout, and it is not wrong — its threshold is the numerical one, near float32's
+      precision, and a direction a thousandth the size of the largest is still not an
+      absent one. It
+      answers "is anything there at all", where the question was "is anything there worth
+      keeping", and only one of those two is about your data.
+    </p>
+
+    <div class="note-box">
+      <strong>Where to take it.</strong> Run the block-3 decomposition on the codes from
+      <a href="09-autoencoder.html">tutorial 9</a> and you can measure whether the
+      autoencoder used both of its two numbers or quietly collapsed onto one.
+      <code>linalg.qr</code>, <code>linalg.cholesky</code> and <code>linalg.eigh</code> are
+      in the same module and each of them has an "and this is what it costs" of the kind
+      block 2 is about.
+    </div>
+
+    <div class="pager">
+      <a href="09-autoencoder.html">← 9 · Autoencoder</a>
+      <a href="../playground.html" style="text-align:right">Then<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
