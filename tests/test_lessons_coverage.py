@@ -83,6 +83,48 @@ def test_an_undecided_page_reaches_the_exit_code():
         "  problem, so `lessons.py` exits 0 with part of the site unexamined.")
 
 
+def test_no_page_is_both_pressed_and_declined():
+    """**A page in both lists, and it happened rather than being imagined.**
+
+    `coverage()` has caught this since it was written — but only inside `lessons.py`,
+    which needs a browser and a person, and this is a contradiction between two lines
+    of a Python list. It surfaced for real during a rebase: this commit put
+    `08-debugging` into `PAGES` while the site branch had it in `DECLINED`, and the
+    merged file both pressed and excused the same two pages. The peer noticed by
+    reading their own conflict, which is exactly the discipline the runner exists to
+    replace.
+
+    So the same question is asked where it costs eleven seconds rather than four
+    minutes and a display. The rule stays in `lessons.py` too: `problems` is what
+    gives that command its exit code, and moving the check out of it would trade one
+    reader for another.
+    """
+    mod = _lessons()
+    both = sorted(set(mod.PAGES) & set(mod.DECLINED))
+    assert not both, (
+        "listed as pressed and as declined at once: " + ", ".join(both) + "\n\n"
+        "  The two lists mean opposite things — *this page is run* and *this page is\n"
+        "  not run, for this reason*. Whichever wins, the other line is a sentence\n"
+        "  the file states and does not honour.")
+
+
+def test_every_listed_page_still_exists():
+    """**A name in either list that is not a page on disk.**
+
+    Same shape from the other side: a page renamed or removed leaves its name behind,
+    and `PAGES` then names something nobody presses while reading as coverage. Held
+    here for the same reason as above — the runner catches it and the runner is not
+    what people run.
+    """
+    mod = _lessons()
+    _p, _d, _u, problems = mod.coverage()
+    stale = [p for p in problems if "no JS block on disk" in p]
+    assert not stale, (
+        "listed, and not a page with runnable JS:\n  " + "\n  ".join(stale) + "\n\n"
+        "  A name that matches nothing is coverage on paper. Remove it, or fix the\n"
+        "  spelling to the page it meant.")
+
+
 def test_the_word_net_exemption_is_keyed_on_something_that_can_match():
     """**An exemption compared against the wrong string is inert, not wrong.**
 
