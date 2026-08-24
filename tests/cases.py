@@ -12344,11 +12344,29 @@ def ops_cases(inp=None):
         (OPS_PREFIX + "nms(half)", op(lambda O, to: O.nms(to(_boxes), to(_scores), 0.5))),
         (OPS_PREFIX + "nms(everything survives)",
          op(lambda O, to: O.nms(to(_boxes), to(_scores), 1.0))),
-        # Per class, by moving each class out of the others' reach. With the labels
-        # here the duplicate is in the same class as the box it duplicates, so the
-        # offset trick has something to prove.
+        # Per class, by moving each class out of the others' reach.
+        #
+        # **This row does not test the offset**, and the comment that used to sit here
+        # said it did — *the duplicate is in the same class as the box it duplicates, so
+        # the offset trick has something to prove.* The premise is true and the
+        # conclusion does not follow: a duplicate is suppressed whether or not the
+        # classes were separated first. Measured by deleting the offset from an
+        # implementation — this case stayed green.
+        #
+        # What the offset changes is a pair in **different** classes that overlap enough
+        # to suppress each other, and with these labels the largest such overlap is 0.22
+        # against a threshold of 0.5. So it is kept, because a frozen value is worth
+        # keeping, and the row below is what actually asks the question.
         (OPS_PREFIX + "batched_nms",
          op(lambda O, to: O.batched_nms(to(_boxes), to(_scores), to(_labels), 0.5))),
+        # `_labels` again with the second box moved to the other class. Now box 1 is
+        # class 1 while box 0 — which overlaps it at 0.68 — is class 0, so a single pass
+        # over the unshifted boxes drops box 1 and the per-class answer keeps it. The
+        # two spellings differ in **length**, not only in content.
+        (OPS_PREFIX + "batched_nms(classes that would suppress each other)",
+         op(lambda O, to: O.batched_nms(to(_boxes), to(_scores),
+                                        to(np.array([0, 1, 1, 1, 0], dtype=np.int64)),
+                                        0.5))),
         (OPS_PREFIX + "masks_to_boxes", op(lambda O, to: O.masks_to_boxes(to(_masks)))),
     ]
     return cases

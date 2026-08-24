@@ -32,6 +32,7 @@ import { igamma, igammac, polygamma } from "../src/special.js";
 import * as optim from "../src/optim.js";
 import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
+import * as ops from "../src/ops.js";
 import * as data from "../src/data.js";
 import * as F from "../src/functional.js";
 import { LinAlgError } from "../src/errors.js";
@@ -548,6 +549,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addNumeric(out, inputs);
   addRecent(out);
   addVision(out, inputs);
+  addOps(out);
   addSeq(out, inputs);
   addEdge(out);
   addComplex(out);
@@ -1466,6 +1468,78 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
  * to crop, and asks about the deterministic part alone. Waving it away here as "random, so
  * it cannot be compared" would be recording something unlooked-at as looked-at.
  */
+/**
+ * `ops::` — box geometry.
+ *
+ * **The boxes are written out rather than drawn**, and that is the whole design of this
+ * block. Overlaps have to be *arranged*: random boxes in a field large enough to hold
+ * them mostly miss each other, and a table of zeros passes against an implementation
+ * computing entirely the wrong thing. The five below overlap in three different amounts,
+ * one sits far away from everything, and one is **a duplicate** — which is what gives
+ * `nms` at a low threshold anything to do.
+ *
+ * Nothing here is drawn, so unlike the rest of the vision side there is no distribution
+ * half and no seed. The numbers are the case.
+ */
+function addOps(out: Map<string, Case>): void {
+  const boxes = () => Tensor.from(
+    [0, 0, 10, 10, 1, 1, 11, 11, 5, 5, 15, 15, 30, 30, 40, 40, 0, 0, 10, 10], [5, 4]);
+  const others = () => Tensor.from([2, 2, 8, 8, 12, 0, 22, 10, 30, 31, 41, 39], [3, 4]);
+  const scores = () => Tensor.from([0.9, 0.75, 0.6, 0.95, 0.5]);
+  const labels = () => Tensor.from([0, 0, 1, 1, 0]);
+
+  out.set("ops::box_area", () => ops.boxArea(boxes()));
+  // The same boxes read three ways. **`fmt` is a claim about four numbers that look
+  // identical either way**, so a wrong one is a wrong answer with nothing raised — and
+  // the round trip is what pins the pair of conversions to each other.
+  out.set("ops::box_convert(xyxy to xywh)", () => ops.boxConvert(boxes(), "xyxy", "xywh"));
+  out.set("ops::box_convert(xyxy to cxcywh)",
+    () => ops.boxConvert(boxes(), "xyxy", "cxcywh"));
+  out.set("ops::box_convert(cxcywh back to xyxy)", async () =>
+    ops.boxConvert(await ops.boxConvert(boxes(), "xyxy", "cxcywh"), "cxcywh", "xyxy"));
+  out.set("ops::box_area(cxcywh)", async () =>
+    ops.boxArea(await ops.boxConvert(boxes(), "xyxy", "cxcywh"), "cxcywh"));
+  // **N by M and not a paired list.** Five boxes against three gives fifteen numbers,
+  // and an implementation that pairs them off returns three.
+  out.set("ops::box_iou", () => ops.boxIou(boxes(), others()));
+  // The three penalised IoUs. They agree with plain IoU wherever the boxes overlap and
+  // part from it where they do not, which is why `others` holds one box that misses
+  // everything — without it all four functions would return the same table.
+  out.set("ops::generalized_box_iou", () => ops.generalizedBoxIou(boxes(), others()));
+  out.set("ops::distance_box_iou", () => ops.distanceBoxIou(boxes(), others()));
+  out.set("ops::complete_box_iou", () => ops.completeBoxIou(boxes(), others()));
+  out.set("ops::clip_boxes_to_image", () => ops.clipBoxesToImage(boxes(), [20, 25]));
+  out.set("ops::remove_small_boxes", () => ops.removeSmallBoxes(boxes(), 10.5));
+  // **`> threshold` and not `>=`.** At zero, boxes that merely touch both survive; the
+  // duplicate does not. Both ends of the range are asked.
+  out.set("ops::nms(nothing may overlap)", () => ops.nms(boxes(), scores(), 0.0));
+  out.set("ops::nms(half)", () => ops.nms(boxes(), scores(), 0.5));
+  out.set("ops::nms(everything survives)", () => ops.nms(boxes(), scores(), 1.0));
+  // Per class, by moving each class out of the others' reach.
+  //
+  // **The first row does not test the offset.** Measured, by deleting the shift from
+  // `batchedNms` and running these sixteen: it stayed green. A duplicate is suppressed
+  // whether or not the classes were separated first, and with these labels no pair in
+  // *different* classes overlaps past the threshold — the largest such is 0.22 against
+  // 0.5. It is kept because the frozen value is worth keeping; the row after it is what
+  // asks the question.
+  out.set("ops::batched_nms", () => ops.batchedNms(boxes(), scores(), labels(), 0.5));
+  // Box 1 moved to the other class. It overlaps box 0 at 0.68, so one pass over
+  // unshifted boxes drops it and the per-class answer keeps it — the two spellings
+  // differ in **length**, which no tolerance can absorb.
+  out.set("ops::batched_nms(classes that would suppress each other)", () =>
+    ops.batchedNms(boxes(), scores(), Tensor.from([0, 1, 1, 1, 0]), 0.5));
+  // A stack with **one blank plane — and the blank is the case**: torchvision answers
+  // zeros rather than raising, which is what lets a batch carrying an empty annotation
+  // still stack.
+  out.set("ops::masks_to_boxes", () => {
+    const masks = new Float32Array(3 * 6 * 8);
+    for (let i = 1; i < 4; i++) for (let j = 2; j < 6; j++) masks[i * 8 + j] = 1;
+    for (let i = 0; i < 2; i++) masks[6 * 8 + i * 8] = 1;
+    return ops.masksToBoxes(Tensor.from(masks, [3, 6, 8]));
+  });
+}
+
 function addVision(out: Map<string, Case>, inp: Inputs): void {
   const mean = [0.5, 0.4, 0.3];
   const std = [0.2, 0.3, 0.4];

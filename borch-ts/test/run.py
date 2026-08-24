@@ -594,17 +594,20 @@ NOT_PORTED = {
     # as text plus RandAugment(num_ops=0), the one configuration of any of them that
     # does not draw. Without being told that boundary, an hour goes into hunting for
     # an AugMix value case that does not exist and concluding something was missed.
-    # `ops::` is a new prefix. The eleven box-geometry functions of `borchvision.ops`
-    # arrived on the Python side and borch.ts has no such namespace yet.
+    # `ops::` **was** a row here, reading *아직 — the eleven box-geometry functions.
+    # Pure arithmetic, so carrying them across needs no model.* It is gone because
+    # `borch-ts/src/ops.ts` exists now and all sixteen cases passed on their first run.
     #
-    # **The marker is `아직` and not `없음`.** That borch.ts has no `nms` is true, but
-    # these eleven touch no weights and no feature map — **pure arithmetic**, so
-    # carrying them across needs no model. There is a value to carry and it has not
-    # been carried. The other twenty-eight of torchvision's `ops` (RoI, FPN, detection
-    # losses) do need a detector, and they are absent from the Python side too, so they
-    # are not part of the debt this row records.
-    "ops::": (16, "아직 — the eleven box-geometry functions. Pure arithmetic, so "
-                  "carrying them across needs no model"),
+    # The prediction in that row is worth keeping even though the row is not. It said
+    # the marker was `아직` and not `없음` — that borch.ts having no `nms` was true but
+    # not the point, because these eleven touch no weights and no feature map and so
+    # needed no model to carry across. That turned out to be the whole story: the port
+    # is arithmetic on rows of four numbers, read back once per call. **A debt written
+    # down with the reason it was cheap gets paid; one written as a number does not.**
+    #
+    # The other twenty-eight of torchvision's `ops` (RoI, FPN, detection losses) do want
+    # a detector, and they are absent from the Python side too — so they were never part
+    # of what this row recorded, and their absence is not a debt this file can see.
     # 52 of the 71 are **repr strings**. v2 computes what v1 computes and differs only
     # in what it prints, and that difference is the whole reason these names are not a
     # re-export — so the strings are frozen as strings. The other 19 are values at the
