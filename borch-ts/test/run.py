@@ -426,18 +426,23 @@ NOT_PORTED = {
     # took it and dropped it. The four cases are the core's own.
     "pad::": (4, "파이썬 — JS keeps no arity, so a surplus argument is not received "
                  "rather than refused"),
-    # **borch.ts answers these; nobody has written the TS bodies.** The seven cases
-    # went in with the kernel work that made them answerable — `PoolNDShape` grew a
-    # padding, a `countIncludePad` and a `divisorOverride`, and `poolOut` grew the
-    # ceiling — so this row is the ordinary kind of owed, a case list not carried
-    # across, and not an argument that does nothing.
+    # `pool::` **was** a row here, reading *아직 — the arguments work in borch.ts; only
+    # the TS case bodies are unwritten*, and that was the whole story: the eleven bodies
+    # were written against `nn.AvgPool1d/3d` and `nn.LPPool1d/2d` exactly as they
+    # already stood, and all eleven passed first time.
+    #
+    # It is worth keeping why they were owed rather than declined. The arguments —
+    # `padding`, `countIncludePad`, `divisorOverride`, `ceilMode` — were **reachable
+    # here before any case asked**, and a seat that is declared and a seat that works
+    # look identical to the name axis, which counts declared names. So "borch.ts has
+    # the argument" was never evidence that passing it did anything, and this row was
+    # the ordinary kind of owed: a case list not carried across, not an argument that
+    # does nothing.
     # **borch.ts's `RNNBase` takes three arguments** — `(mode, inputSize, hidden)` —
     # so there is no `batchFirst` to write a TS body against. The binding honours the
     # flag itself, by turning the input on the way in, which is why the case exists at
     # all: it was being taken and thrown away there until the `**kw` sweep.
     "seq::": (3, "아직 — borch.ts's RNNBase has no batchFirst seat"),
-    "pool::": (11, "아직 — the arguments work in borch.ts; only the TS case bodies "
-                  "are unwritten"),
     # 47 → 50. The **kinds** of `finfo` and `iinfo`, and the no-argument default dtype. A
     # Python-side matter — neither name is in borch.ts.
     # 50 → 39. **The reason was explaining only eleven of them.** "top-level in-place

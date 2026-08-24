@@ -4729,6 +4729,49 @@ function addPool(out: Map<string, Case>, inp: Inputs): void {
   add("F.lp_pool2d(p=2)", (x) => x.lpPool(2, 2), "img");
   add("F.lp_pool2d(p=1)", (x) => x.lpPool(1, 2), "img");
   out.set("pool::nn.LPPool2d", () => inp.get("img").lpPool(2, 2));
+
+  // ── the pooling arguments that had a seat and no case ──
+  //
+  // `padding`, `countIncludePad`, `divisorOverride` and `ceilMode` were all reachable
+  // here before any of these lines existed. **That is exactly why they needed cases**:
+  // a seat that is declared and a seat that works are indistinguishable to the name
+  // axis, which counts declared names, so the arguments being present was never
+  // evidence that anything happened when they were passed.
+  //
+  // Every one changes the answer, which is how they were chosen. Four change the
+  // **shape** — the padding and the three `ceilMode`s — so a wrong one cannot hide
+  // under a tolerance; the other two change the divisor, where a wrong one is a
+  // perfectly plausible number.
+  //
+  // **The argument order is torch's, and it is not the obvious one.** `AvgPool` takes
+  // `ceilMode` before `countIncludePad`, and `LPPool` leads with the norm rather than
+  // the kernel. Getting either backwards gives a run that works and answers something
+  // else, so the Python spellings are transcribed here position by position.
+  const layer = (name: string, make: () => nn.Module, key: string, grad: boolean): void => {
+    out.set(`pool::nn.${name}`, () => make().call(inp.get(key)) as Tensor);
+    if (!grad) return;
+    out.set(`pool::grad::nn.${name}`, () => {
+      const x = inp.get(key, true);
+      seeded(make().call(x) as Tensor).backward();
+      return gradOf(x, name);
+    });
+  };
+
+  // `countIncludePad` needs a padding to have anything to include — hence the 1 — and
+  // the pair differs only in that flag, which is what makes the pair the measurement.
+  layer("AvgPool1d(테두리 채움)", () => new nn.AvgPool1d(2, 2, 1), "nd_seq", true);
+  layer("AvgPool1d(가장자리 빼기)",
+    () => new nn.AvgPool1d(2, 2, 1, false, false), "nd_seq", true);
+  layer("AvgPool3d(테두리 채움)", () => new nn.AvgPool3d(2, 2, 1), "nd_vol", false);
+  // `divisorOverride` needs **overlapping windows** for the difference to show, which
+  // is the stride of 1 rather than the kernel's 2.
+  layer("AvgPool3d(나눗수 지정)",
+    () => new nn.AvgPool3d(2, 1, 0, false, true, 4), "nd_vol", true);
+  // **A 3 and not a 2, because the volume is 4³.** Written as a 2 it divides evenly,
+  // `ceilMode` changes nothing, and the case freezes what its neighbour already froze.
+  layer("AvgPool3d(올림)", () => new nn.AvgPool3d(3, 3, 0, true), "nd_vol", true);
+  layer("LPPool1d(올림)", () => new nn.LPPool1d(2, 3, 3, true), "nd_seq", false);
+  layer("LPPool2d(올림)", () => new nn.LPPool2d(2, 3, 3, true), "img", false);
 }
 
 /**
