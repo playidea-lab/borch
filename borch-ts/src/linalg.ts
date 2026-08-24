@@ -57,23 +57,23 @@ export function slogdet(a: Tensor): Promise<{ sign: Tensor; logabs: Tensor }> {
 }
 
 /** `matrix_power(A, n)` — `A` multiplied by itself `n` times. */
-export function matrixPower(a: Tensor, n: number): Tensor {
-  return a.matrixPower(n);
+export function matrixPower(input: Tensor, n: number): Tensor {
+  return input.matrixPower(n);
 }
 
 /** `matrix_rank(A)` — how many singular values are above the tolerance. */
-export function matrixRank(a: Tensor): Promise<Tensor> {
-  return a.matrixRank();
+export function matrixRank(input: Tensor): Promise<Tensor> {
+  return input.matrixRank();
 }
 
 /** `matrix_exp(A)` — the matrix exponential. */
-export function matrixExp(a: Tensor): Promise<Tensor> {
-  return a.matrixExp();
+export function matrixExp(input: Tensor): Promise<Tensor> {
+  return input.matrixExp();
 }
 
 /** `cholesky(A, upper=False)` — the Cholesky factor. */
-export function cholesky(a: Tensor, upper = false): Promise<Tensor> {
-  return a.cholesky(upper);
+export function cholesky(input: Tensor, upper = false): Promise<Tensor> {
+  return input.cholesky(upper);
 }
 
 /** `qr(A, mode="reduced")` — the QR decomposition. */
@@ -101,20 +101,20 @@ export function eig(a: Tensor): Promise<{ values: Tensor; vectors: Tensor }> {
 }
 
 /** `eigvals(A)` — the eigenvalues alone. */
-export function eigvals(a: Tensor): Promise<Tensor> {
-  return a.eigvals();
+export function eigvals(input: Tensor): Promise<Tensor> {
+  return input.eigvals();
 }
 
 /** `eigh(A, UPLO="L")` — the symmetric (Hermitian) eigendecomposition. */
 export function eigh(
-  a: Tensor, uplo: "L" | "U" = "L",
+  input: Tensor, UPLO: "L" | "U" = "L",
 ): Promise<{ values: Tensor; vectors: Tensor }> {
-  return a.eigh(uplo);
+  return input.eigh(UPLO);
 }
 
 /** `eigvalsh(A, UPLO="L")` — the symmetric eigenvalues alone. */
-export function eigvalsh(a: Tensor, uplo: "L" | "U" = "L"): Promise<Tensor> {
-  return a.eigvalsh(uplo);
+export function eigvalsh(input: Tensor, UPLO: "L" | "U" = "L"): Promise<Tensor> {
+  return input.eigvalsh(UPLO);
 }
 
 /** `solve(A, B)` — solve `A x = B`. */
@@ -124,44 +124,44 @@ export function solve(a: Tensor, b: Tensor): Promise<Tensor> {
 
 /** `solve_triangular(A, B, upper, left=True, unitriangular=False)`. */
 export function solveTriangular(
-  a: Tensor, b: Tensor, upper: boolean, left = true, unitriangular = false,
+  input: Tensor, b: Tensor, upper: boolean, left = true, unitriangular = false,
 ): Promise<Tensor> {
-  return a.solveTriangular(b, upper, left, unitriangular);
+  return input.solveTriangular(b, upper, left, unitriangular);
 }
 
 /** `lstsq(A, B)` — the least-squares solution. */
-export function lstsq(a: Tensor, b: Tensor): Promise<Tensor> {
-  return a.lstsq(b);
+export function lstsq(input: Tensor, b: Tensor): Promise<Tensor> {
+  return input.lstsq(b);
 }
 
 /** `matrix_norm(A, ord="fro")`. */
-export function matrixNorm(a: Tensor, ord: number | string = "fro"): Promise<Tensor> {
-  return a.matrixNorm(ord);
+export function matrixNorm(input: Tensor, ord: number | string = "fro"): Promise<Tensor> {
+  return input.matrixNorm(ord);
 }
 
 /** `vector_norm(x, ord=2, dim=None)`. */
-export function vectorNorm(x: Tensor, ord = 2, dim?: number): Tensor {
-  return x.vectorNorm(ord, dim);
+export function vectorNorm(input: Tensor, ord = 2, dim?: number): Tensor {
+  return input.vectorNorm(ord, dim);
 }
 
 /** `norm(A)` — the Frobenius norm of the whole tensor. */
-export function norm(a: Tensor): Tensor {
-  return a.norm();
+export function norm(input: Tensor): Tensor {
+  return input.norm();
 }
 
 /** `cond(A, p=None)` — the condition number. */
-export function cond(a: Tensor, p: number | string | null = null): Promise<Tensor> {
-  return a.cond(p);
+export function cond(input: Tensor, p: number | string | null = null): Promise<Tensor> {
+  return input.cond(p);
 }
 
 /** `cross(a, b, dim=-1)` — the cross product. */
-export function cross(a: Tensor, b: Tensor, dim = -1): Tensor {
-  return a.cross(b, dim);
+export function cross(input: Tensor, other: Tensor, dim = -1): Tensor {
+  return input.cross(other, dim);
 }
 
 /** `householder_product(A, tau)` — the product of the Householder reflectors. */
-export function householderProduct(a: Tensor, tau: Tensor): Promise<Tensor> {
-  return a.householderProduct(tau);
+export function householderProduct(input: Tensor, tau: Tensor): Promise<Tensor> {
+  return input.householderProduct(tau);
 }
 
 /** `lu_factor(A)` — the packed LU factors and the pivots. */
@@ -170,8 +170,8 @@ export function luFactor(a: Tensor): Promise<{ LU: Tensor; pivots: Tensor }> {
 }
 
 /** `lu(A)` — the LU decomposition, expanded into `P`, `L` and `U`. */
-export function lu(a: Tensor): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
-  return a.lu();
+export function lu(A: Tensor): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+  return A.lu();
 }
 
 /** `vander(x, N=None)` — the Vandermonde matrix. */
@@ -187,13 +187,13 @@ export function inv(a: Tensor): Promise<Tensor> {
 }
 
 /** `pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`. */
-export function pinv(a: Tensor): Promise<Tensor> {
-  return a.pinverse();
+export function pinv(input: Tensor): Promise<Tensor> {
+  return input.pinverse();
 }
 
 /** `matmul(A, B)` — matrix multiplication. The method is `mm`. */
-export function matmul(a: Tensor, b: Tensor): Tensor {
-  return a.mm(b);
+export function matmul(input: Tensor, other: Tensor): Tensor {
+  return input.mm(other);
 }
 
 // ── The two whose receiver is not the first argument ────────────────────
@@ -205,8 +205,8 @@ export function matmul(a: Tensor, b: Tensor): Tensor {
  * positionally would swap `LU` and `B`, and with square matrices nothing about the call
  * would look wrong.
  */
-export function luSolve(luData: Tensor, pivots: Tensor, b: Tensor): Promise<Tensor> {
-  return luData.luSolveFactored(pivots, b);
+export function luSolve(LU: Tensor, pivots: Tensor, b: Tensor): Promise<Tensor> {
+  return LU.luSolveFactored(pivots, b);
 }
 
 /**
@@ -237,23 +237,23 @@ export function diagonal(a: Tensor, offset = 0, dim1 = -2, dim2 = -1): Tensor {
  * **The values are not bit-identical across orders.** Floating-point addition does not
  * associate, so the chosen order is part of the answer to a last-digit comparison.
  */
-export function multiDot(chain: readonly Tensor[]): Tensor {
-  if (chain.length === 0) throw new RuntimeError("linalg.multiDot: the chain is empty");
-  if (chain.length === 1) return chain[0]!;
-  if (chain.length === 2) return chain[0]!.mm(chain[1]!);
+export function multiDot(tensors: readonly Tensor[]): Tensor {
+  if (tensors.length === 0) throw new RuntimeError("linalg.multiDot: the tensors is empty");
+  if (tensors.length === 1) return tensors[0]!;
+  if (tensors.length === 2) return tensors[0]!.mm(tensors[1]!);
 
   // `dims[i]` is the row count of factor `i`, and the last entry its column count.
   const dims: number[] = [];
-  for (const t of chain) {
+  for (const t of tensors) {
     if (t.shape.length !== 2) {
       throw new RuntimeError(
         `linalg.multiDot: every factor has to be a matrix — got [${t.shape}]`);
     }
     dims.push(t.shape[0]!);
   }
-  dims.push(chain[chain.length - 1]!.shape[1]!);
+  dims.push(tensors[tensors.length - 1]!.shape[1]!);
 
-  const n = chain.length;
+  const n = tensors.length;
   const cost = Array.from({ length: n }, () => new Array<number>(n).fill(0));
   const split = Array.from({ length: n }, () => new Array<number>(n).fill(0));
   for (let len = 2; len <= n; len++) {
@@ -271,7 +271,7 @@ export function multiDot(chain: readonly Tensor[]): Tensor {
     }
   }
   const walk = (i: number, j: number): Tensor => {
-    if (i === j) return chain[i]!;
+    if (i === j) return tensors[i]!;
     const k = split[i]![j]!;
     return walk(i, k).mm(walk(k + 1, j));
   };
@@ -287,8 +287,8 @@ export function multiDot(chain: readonly Tensor[]): Tensor {
  * declarations colliding on one lookup key — the collision check another session added
  * this morning, after a normaliser folded `eq_` onto `eq`.
  */
-export function tensorsolve(a: Tensor, b: Tensor): Promise<Tensor> {
-  return a.tensorSolve(b);
+export function tensorsolve(input: Tensor, b: Tensor): Promise<Tensor> {
+  return input.tensorSolve(b);
 }
 
 /**
@@ -296,6 +296,6 @@ export function tensorsolve(a: Tensor, b: Tensor): Promise<Tensor> {
  *
  * The method is `tensorInv`, and it was already there too. See `tensorsolve` above.
  */
-export function tensorinv(a: Tensor, ind = 2): Promise<Tensor> {
-  return a.tensorInv(ind);
+export function tensorinv(input: Tensor, ind = 2): Promise<Tensor> {
+  return input.tensorInv(ind);
 }

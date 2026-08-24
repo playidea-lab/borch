@@ -417,7 +417,10 @@ UNALIGNED = {
     # `nn` note describes, and it falls when borch.ts follows. **What closes this
     # line:** borch.ts taking the same per-function names — they cannot come from a
     # rule, because torch has none here.
-    "linalg": 7,
+    # **7 → 0, and this namespace is empty in every bucket but `shorter`.** Nothing
+    # here was a divergence of behaviour: the two libraries answered the same values
+    # all along and disagreed about what to call the matrix.
+    "linalg": 0,
     "utils.data": 0,
 }
 
@@ -622,7 +625,18 @@ RENAMED = {
     # names. They cannot come from a rule — torch is about half `A` and half `input`
     # inside `linalg`, with `tensors`, `LU`, `LD` and `x` besides — so the table has
     # to be measured there too, by calling torch with each keyword.
-    "linalg": 14,
+    # **14 → 0. torch's names are a table, not a rule.** Nine of its `linalg`
+    # functions call the first argument `A` and fifteen call it `input`, with
+    # `det(A)` and `cholesky(input)` sitting next to each other — so any sentence
+    # short enough to be a rule is wrong about half of them. The core measured each
+    # one by calling torch with the keyword; borch.ts took the core's spellings,
+    # which are that measurement.
+    #
+    # **The summary that started this was mine and it was wrong** — "torch writes `A`
+    # in fifteen of them", read off the first docstring line of a handful and
+    # generalised. The peer's probe found 9 and 15. A summary is a claim about every
+    # row, and this one had been checked against six.
+    "linalg": 0,
     "utils.data": 0,
 }
 
@@ -809,7 +823,10 @@ SHORTER = {
     # 2 → 1. One of the two left for `unaligned` when the core took torch's `linalg`
     # names — a prefix stopped being a prefix once the words changed. See the note
     # in `RENAMED`.
-    "linalg": 1,
+    # 1 → 8. The seven that left `unaligned` and `renamed` — what they are short of
+    # is `dim`, `keepdim` and `dtype` on the norms, and `pivot`/`left`/`adjoint` on
+    # the factorisations.
+    "linalg": 8,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
     # that they exist at all.

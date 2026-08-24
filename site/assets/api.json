@@ -15258,7 +15258,7 @@
     {
      "kind": "function",
      "name": "matrixPower",
-     "signature": "export declare function matrixPower(a: Tensor, n: number): Tensor",
+     "signature": "export declare function matrixPower(input: Tensor, n: number): Tensor",
      "doc": "`matrix_power(A, n)` — `A` multiplied by itself `n` times.",
      "members": [],
      "torch": "matrix_power",
@@ -15267,7 +15267,7 @@
     {
      "kind": "function",
      "name": "matrixRank",
-     "signature": "export declare function matrixRank(a: Tensor): Promise<Tensor>",
+     "signature": "export declare function matrixRank(input: Tensor): Promise<Tensor>",
      "doc": "`matrix_rank(A)` — how many singular values are above the tolerance.",
      "members": [],
      "torch": "matrix_rank",
@@ -15276,7 +15276,7 @@
     {
      "kind": "function",
      "name": "matrixExp",
-     "signature": "export declare function matrixExp(a: Tensor): Promise<Tensor>",
+     "signature": "export declare function matrixExp(input: Tensor): Promise<Tensor>",
      "doc": "`matrix_exp(A)` — the matrix exponential.",
      "members": [],
      "torch": "matrix_exp",
@@ -15285,7 +15285,7 @@
     {
      "kind": "function",
      "name": "cholesky",
-     "signature": "export declare function cholesky(a: Tensor, upper?: boolean): Promise<Tensor>",
+     "signature": "export declare function cholesky(input: Tensor, upper?: boolean): Promise<Tensor>",
      "doc": "`cholesky(A, upper=False)` — the Cholesky factor.",
      "members": [],
      "doc_ko": "`cholesky(A, upper=False)` — 콜레스키 인수."
@@ -15325,7 +15325,7 @@
     {
      "kind": "function",
      "name": "eigvals",
-     "signature": "export declare function eigvals(a: Tensor): Promise<Tensor>",
+     "signature": "export declare function eigvals(input: Tensor): Promise<Tensor>",
      "doc": "`eigvals(A)` — the eigenvalues alone.",
      "members": [],
      "doc_ko": "`eigvals(A)` — 고윳값만."
@@ -15333,7 +15333,7 @@
     {
      "kind": "function",
      "name": "eigh",
-     "signature": "export declare function eigh(a: Tensor, uplo?: \"L\" | \"U\"): Promise<{ values: Tensor; vectors: Tensor; }>",
+     "signature": "export declare function eigh(input: Tensor, UPLO?: \"L\" | \"U\"): Promise<{ values: Tensor; vectors: Tensor; }>",
      "doc": "`eigh(A, UPLO=\"L\")` — the symmetric (Hermitian) eigendecomposition.",
      "members": [],
      "doc_ko": "`eigh(A, UPLO=\"L\")` — 대칭(에르미트) 고유분해."
@@ -15341,7 +15341,7 @@
     {
      "kind": "function",
      "name": "eigvalsh",
-     "signature": "export declare function eigvalsh(a: Tensor, uplo?: \"L\" | \"U\"): Promise<Tensor>",
+     "signature": "export declare function eigvalsh(input: Tensor, UPLO?: \"L\" | \"U\"): Promise<Tensor>",
      "doc": "`eigvalsh(A, UPLO=\"L\")` — the symmetric eigenvalues alone.",
      "members": [],
      "doc_ko": "`eigvalsh(A, UPLO=\"L\")` — 대칭 고윳값만."
@@ -15357,7 +15357,7 @@
     {
      "kind": "function",
      "name": "solveTriangular",
-     "signature": "export declare function solveTriangular(a: Tensor, b: Tensor, upper: boolean, left?: boolean, unitriangular?: boolean): Promise<Tensor>",
+     "signature": "export declare function solveTriangular(input: Tensor, b: Tensor, upper: boolean, left?: boolean, unitriangular?: boolean): Promise<Tensor>",
      "doc": "`solve_triangular(A, B, upper, left=True, unitriangular=False)`.",
      "members": [],
      "torch": "solve_triangular",
@@ -15366,7 +15366,7 @@
     {
      "kind": "function",
      "name": "lstsq",
-     "signature": "export declare function lstsq(a: Tensor, b: Tensor): Promise<Tensor>",
+     "signature": "export declare function lstsq(input: Tensor, b: Tensor): Promise<Tensor>",
      "doc": "`lstsq(A, B)` — the least-squares solution.",
      "members": [],
      "doc_ko": "`lstsq(A, B)` — 최소제곱 해."
@@ -15374,7 +15374,7 @@
     {
      "kind": "function",
      "name": "matrixNorm",
-     "signature": "export declare function matrixNorm(a: Tensor, ord?: number | string): Promise<Tensor>",
+     "signature": "export declare function matrixNorm(input: Tensor, ord?: number | string): Promise<Tensor>",
      "doc": "`matrix_norm(A, ord=\"fro\")`.",
      "members": [],
      "torch": "matrix_norm",
@@ -15383,7 +15383,7 @@
     {
      "kind": "function",
      "name": "vectorNorm",
-     "signature": "export declare function vectorNorm(x: Tensor, ord?: number, dim?: number): Tensor",
+     "signature": "export declare function vectorNorm(input: Tensor, ord?: number, dim?: number): Tensor",
      "doc": "`vector_norm(x, ord=2, dim=None)`.",
      "members": [],
      "torch": "vector_norm",
@@ -15392,7 +15392,7 @@
     {
      "kind": "function",
      "name": "norm",
-     "signature": "export declare function norm(a: Tensor): Tensor",
+     "signature": "export declare function norm(input: Tensor): Tensor",
      "doc": "`norm(A)` — the Frobenius norm of the whole tensor.",
      "members": [],
      "doc_ko": "`norm(A)` — 텐서 전체의 프로베니우스 노름."
@@ -15400,7 +15400,7 @@
     {
      "kind": "function",
      "name": "cond",
-     "signature": "export declare function cond(a: Tensor, p?: number | string | null): Promise<Tensor>",
+     "signature": "export declare function cond(input: Tensor, p?: number | string | null): Promise<Tensor>",
      "doc": "`cond(A, p=None)` — the condition number.",
      "members": [],
      "doc_ko": "`cond(A, p=None)` — 조건수."
@@ -15408,7 +15408,7 @@
     {
      "kind": "function",
      "name": "cross",
-     "signature": "export declare function cross(a: Tensor, b: Tensor, dim?: number): Tensor",
+     "signature": "export declare function cross(input: Tensor, other: Tensor, dim?: number): Tensor",
      "doc": "`cross(a, b, dim=-1)` — the cross product.",
      "members": [],
      "doc_ko": "`cross(a, b, dim=-1)` — 외적."
@@ -15416,7 +15416,7 @@
     {
      "kind": "function",
      "name": "householderProduct",
-     "signature": "export declare function householderProduct(a: Tensor, tau: Tensor): Promise<Tensor>",
+     "signature": "export declare function householderProduct(input: Tensor, tau: Tensor): Promise<Tensor>",
      "doc": "`householder_product(A, tau)` — the product of the Householder reflectors.",
      "members": [],
      "torch": "householder_product",
@@ -15434,7 +15434,7 @@
     {
      "kind": "function",
      "name": "lu",
-     "signature": "export declare function lu(a: Tensor): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
+     "signature": "export declare function lu(A: Tensor): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
      "doc": "`lu(A)` — the LU decomposition, expanded into `P`, `L` and `U`.",
      "members": [],
      "doc_ko": "`lu(A)` — LU 분해를 `P`·`L`·`U` 로 펴서."
@@ -15458,7 +15458,7 @@
     {
      "kind": "function",
      "name": "pinv",
-     "signature": "export declare function pinv(a: Tensor): Promise<Tensor>",
+     "signature": "export declare function pinv(input: Tensor): Promise<Tensor>",
      "doc": "`pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`.",
      "members": [],
      "doc_ko": "`pinv(A)` — 무어-펜로즈 유사역행렬. 메서드 이름은 `pinverse` 다."
@@ -15466,7 +15466,7 @@
     {
      "kind": "function",
      "name": "matmul",
-     "signature": "export declare function matmul(a: Tensor, b: Tensor): Tensor",
+     "signature": "export declare function matmul(input: Tensor, other: Tensor): Tensor",
      "doc": "`matmul(A, B)` — matrix multiplication. The method is `mm`.",
      "members": [],
      "doc_ko": "`matmul(A, B)` — 행렬 곱. 메서드 이름은 `mm` 이다."
@@ -15474,7 +15474,7 @@
     {
      "kind": "function",
      "name": "luSolve",
-     "signature": "export declare function luSolve(luData: Tensor, pivots: Tensor, b: Tensor): Promise<Tensor>",
+     "signature": "export declare function luSolve(LU: Tensor, pivots: Tensor, b: Tensor): Promise<Tensor>",
      "doc": "`lu_solve(LU, pivots, B)` — solve using factors from `lu_factor`.\n\n**The factors come first here and the method is received by `B`.** Forwarding this one\npositionally would swap `LU` and `B`, and with square matrices nothing about the call\nwould look wrong.",
      "members": [],
      "torch": "lu_solve",
@@ -15491,7 +15491,7 @@
     {
      "kind": "function",
      "name": "multiDot",
-     "signature": "export declare function multiDot(chain: readonly Tensor[]): Tensor",
+     "signature": "export declare function multiDot(tensors: readonly Tensor[]): Tensor",
      "doc": "`multi_dot([A, B, C, …])` — a chain of matrix products.\n\nMatrix multiplication is associative, so **every order gives the same matrix**; what\ndiffers is the work. `(A·B)·C` and `A·(B·C)` cost `n·m·p + n·p·q` and `m·p·q + n·m·q`,\nwhich for a thin middle factor differ by orders of magnitude. So the cheapest\nparenthesisation is found first, by the usual dynamic program, which is the whole reason\ntorch offers this name at all.\n\n**The values are not bit-identical across orders.** Floating-point addition does not\nassociate, so the chosen order is part of the answer to a last-digit comparison.",
      "members": [],
      "torch": "multi_dot",
@@ -15500,7 +15500,7 @@
     {
      "kind": "function",
      "name": "tensorsolve",
-     "signature": "export declare function tensorsolve(a: Tensor, b: Tensor): Promise<Tensor>",
+     "signature": "export declare function tensorsolve(input: Tensor, b: Tensor): Promise<Tensor>",
      "doc": "`tensorsolve(A, B)` — solve `A x = B` where `A` and `B` carry more than two axes.\n\nThe method is `tensorSolve`. **It was already there and this file nearly reimplemented\nit**, because the search for it used torch's spelling (`tensorsolve`) against the\ncamelCase method names and matched nothing. `test_binding_fills_in.py` caught the two\ndeclarations colliding on one lookup key — the collision check another session added\nthis morning, after a normaliser folded `eq_` onto `eq`.",
      "members": [],
      "doc_ko": "`tensorsolve(A, B)` — 축이 둘보다 많은 `A`·`B` 에 대해 `A x = B` 를 푼다.\n\n메서드 이름은 `tensorSolve` 다. **이미 있었는데 이 파일이 하마터면 다시 구현할\n뻔했다.** 없다고 판정한 검색이 torch 의 철자(`tensorsolve`)를 camelCase 메서드 이름에\n대고 물어서 아무것도 안 맞았기 때문이다. 붙잡은 것은 `test_binding_fills_in.py` 가 두\n선언이 한 열쇠로 접히는 것을 본 것이고, 그 검사는 다른 세션이 오늘 아침 정규화기가\n`eq_` 를 `eq` 로 접는 것을 보고 붙인 것이다."
@@ -15508,7 +15508,7 @@
     {
      "kind": "function",
      "name": "tensorinv",
-     "signature": "export declare function tensorinv(a: Tensor, ind?: number): Promise<Tensor>",
+     "signature": "export declare function tensorinv(input: Tensor, ind?: number): Promise<Tensor>",
      "doc": "`tensorinv(A, ind=2)` — the inverse of `A` folded into a matrix at axis `ind`.\n\nThe method is `tensorInv`, and it was already there too. See `tensorsolve` above.",
      "members": [],
      "doc_ko": "`tensorinv(A, ind=2)` — `A` 를 축 `ind` 에서 행렬로 접은 것의 역.\n\n메서드 이름은 `tensorInv` 이고, 이것도 이미 있었다. 위의 `tensorsolve` 를 보라."
