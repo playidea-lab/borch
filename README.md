@@ -1171,12 +1171,32 @@ accuracy run refuse outright on a software adapter.
 
 ### How much it does
 
-**The golden matches on every case** across two vendors, Apple Metal and NVIDIA
-(RTX 4090) — which is to say the hand-written WGSL is not Metal-only. (The 4090
-figures were measured against the table as it stood then. That machine has not been
-available since the table grew, so it has not been measured again, and what has not
-been measured is not written down as though it had been.) The benchmark's
-ResNet-18 itself was also confirmed to match real torch on the forward pass, the
+**The golden matches on every case on Apple Metal**, and on **one vendor only** —
+this paragraph said two until today, and the second one was never measured.
+
+The claim rested on one run: 845/845 on an RTX 4090 box, on SwiftShader.
+`tests/browser/launch.py` has recorded that since the day it happened:
+
+> Running the golden cases headless on a Linux GPU server gave 845/845 while the
+> adapter was `google / swiftshader` — the pass was real and the claim "confirmed
+> on another vendor" was false.
+
+**The pass was real; the vendor was not.** Headless hands back Chrome's software
+rasteriser, which answers every WebGPU call correctly — so the values were evidence
+that the logic is right and evidence of nothing about a GPU. The sentence here took
+the number and dropped the adapter, which is the whole distinction.
+
+Three things around it were true and checkable — 845 was the table's size then, it is
+not today's 3438, and that machine really has been unavailable since. A single false
+claim ringed by three verifiable ones is one a reader confirms their way past.
+
+So: **no run on an NVIDIA WebGPU adapter exists in this repository.** Not the 845
+(SwiftShader), not today's attempts — one 4090 has a card off the PCI bus and never
+opened a browser, and the 5080 has no login session, so headless gave SwiftShader
+again and headed could not start. What is not measured is not written down as though
+it had been, and that rule now applies to the sentence that stated the rule.
+
+The benchmark's ResNet-18 was confirmed to match real torch on the forward pass, the
 loss and the backward pass.
 
 **This table is the evidence for deleting the TF.js version.** It is a record
