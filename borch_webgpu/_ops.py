@@ -587,7 +587,7 @@ def arange(*args, **kw):
     adding**, which is a different computation whose rounding accumulates
     differently. The other side takes all three now.
     """
-    _no_out(kw)
+    _no_out(kw.get("out"))
     if len(args) == 1:
         start, stop, step = 0, args[0], 1
     elif len(args) == 2:
@@ -667,22 +667,22 @@ def _made(out, kw):
 
 
 def zeros(*shape, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _made(_ts.Tensor.zeros(_shape_of(shape)), kw)
 
 
 def ones(*shape, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _made(_ts.Tensor.ones(_shape_of(shape)), kw)
 
 
 def full(shape, value, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _made(_ts.Tensor.full(_js_list(shape), float(value)), kw)
 
 
 def eye(n, m=None, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _made(_ts.Tensor.eye(n, n if m is None else m), kw)
 
 
@@ -1205,7 +1205,7 @@ class iinfo:
 
 
 def linspace(start, end, count, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _made(_ts.Tensor.linspace(start, end, count), kw)
 
 
@@ -1228,7 +1228,7 @@ def hann_window(n, periodic=True, **kw):
 
 
 def hamming_window(n, periodic=True, alpha=0.54, beta=0.46, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _made(_ts.Tensor.hammingWindow(n, periodic, alpha, beta), kw)
 
 
@@ -1305,7 +1305,7 @@ def randn(*shape, **kw):
     asks about values, this belongs in borch.ts properly — what is here goes
     through the CPU once.
     """
-    _no_out(kw)
+    _no_out(kw.get("out"))
     from ._base import tensor as _t
 
     return _t(_rng.standard_normal(tuple(_shaped(shape))).astype("float32"),
@@ -1313,35 +1313,54 @@ def randn(*shape, **kw):
 
 
 def rand(*shape, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     from ._base import tensor as _t
 
     return _t(_rng.random(tuple(_shaped(shape))).astype("float32"),
               requires_grad=kw.get("requires_grad", False))
 
 
-def _no_out(kw):
-    """`out=` is **not swallowed quietly.** The core's gate for the core's
-    reason — only a place taking `**kw` can swallow it, and six of them were."""
-    if "out" in kw:
+def _no_out(out):
+    """`out=` is **not swallowed quietly.** The core's gate for the core's reason.
+
+    **It used to take the `**kw` bag, and that was the whole hazard.** A bag is the
+    only thing that can swallow a keyword, so the gate and the hazard were the same
+    parameter: forty seats here declared `**kw`, called this once, and thereby accepted
+    every other unknown keyword in silence — `bernoulli(x, zzz=1)` went through where
+    torch refuses.
+
+    The bags are gone and `out` is a seat of its own, so this now takes the value.
+    Python answers `unexpected keyword argument` for everything else, for free, in the
+    wording torch uses for the same mistake — which is the half that cannot be
+    imitated by hand, since torch has two wordings and picking one is wrong twice.
+    """
+    if out is not None:
         from borch._base import _unsupported
         _unsupported("`out=` (writing into a tensor you made beforehand)")
 
 
-def randint(low, high=None, size=(), **kw):
-    _no_out(kw)
+def randint(low, high=None, size=(), *, out=None, dtype=None,
+            requires_grad=False):
+    """**`dtype` and `requires_grad` were falling into `**kw`.** torch declares both,
+    keyword-only, and the label that came out here was whatever the body produced —
+    `int64`, which is torch's default, so the values and the label agreed and nothing
+    ever parted. Removing the bag is what asked the question; `_made` is the same seam
+    the other factories already go through."""
+    _no_out(out)
     from ._base import tensor as _t
 
     if high is None:
         low, high = 0, low
-    return _t(_rng.integers(low, high, tuple(size)).astype("int64"))
+    made = _t(_rng.integers(low, high, tuple(size)).astype("int64"))
+    return _made(made, {"dtype": dtype, "requires_grad": requires_grad})
 
 
-def randperm(n, **kw):
-    _no_out(kw)
+def randperm(n, *, out=None, dtype=None, requires_grad=False):
+    _no_out(out)
     from ._base import tensor as _t
 
-    return _t(_rng.permutation(n).astype("int64"))
+    return _made(_t(_rng.permutation(n).astype("int64")),
+                 {"dtype": dtype, "requires_grad": requires_grad})
 
 
 def einsum(spec, *operands):
@@ -1385,9 +1404,9 @@ def matrix_power(x, n):
     return guarded(h.matrixPower, n)
 
 
-def quantile(x, q, dim=None, **kw):
+def quantile(x, q, dim=None, out=None):
     """`q` may be one number or a list — borch.ts always takes a list."""
-    _no_out(kw)
+    _no_out(out)
     one = isinstance(q, (int, float))
     qs = [float(v) for v in ([q] if one else q)]
     out = guarded(handle(x).quantile, _to_js(qs))
@@ -1615,24 +1634,24 @@ def swapdims(x, dim0=None, dim1=None, **kw):
 def add(a, b, alpha=1, **kw):
     """`a + alpha·b`. A function rather than an alias **because the operator has
     no `alpha`.**"""
-    _no_out(kw)
+    _no_out(kw.get("out"))
     alpha = kw.get("alpha", alpha)
     return wrap(a) + (b if alpha == 1 else wrap(b) * alpha)
 
 
 def sub(a, b, alpha=1, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     alpha = kw.get("alpha", alpha)
     return wrap(a) - (b if alpha == 1 else wrap(b) * alpha)
 
 
-def mul(a, b, **kw):
-    _no_out(kw)
+def mul(a, b, out=None):
+    _no_out(out)
     return wrap(a) * b
 
 
 def div(a, b, rounding_mode=None, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     mode = kw.get("rounding_mode", rounding_mode)
     out = wrap(a) / b
     if mode is None:
@@ -1644,22 +1663,22 @@ def div(a, b, rounding_mode=None, **kw):
     raise RuntimeError(f"rounding_mode is one of None, 'floor', 'trunc': {mode!r}")
 
 
-def floor_divide(a, b, **kw):
-    _no_out(kw)
+def floor_divide(a, b, out=None):
+    _no_out(out)
     return wrap(guarded(handle(wrap(a)).floorDivide, handle(wrap(b))))
 
 
-def remainder(a, b, **kw):
+def remainder(a, b, out=None):
     """**The sign follows the divisor.** That is where it parts from `fmod`."""
-    _no_out(kw)
+    _no_out(out)
     a, b = wrap(a), wrap(b)
     return a - wrap(guarded(handle(a / b).unary, "floor")) * b
 
 
-def fmod(a, b, **kw):
+def fmod(a, b, out=None):
     """**The sign follows the dividend.** C's rule, and the opposite of
     `remainder`."""
-    _no_out(kw)
+    _no_out(out)
     a, b = wrap(a), wrap(b)
     return a - wrap(guarded(handle(a / b).unary, "trunc")) * b
 
@@ -1724,9 +1743,9 @@ def _handles(tensors):
     return _to_js([handle(wrap(v)) for v in tensors])
 
 
-def hstack(tensors, **kw):
+def hstack(tensors, out=None):
     """1-D concatenates; above that it joins **along the columns.**"""
-    _no_out(kw)
+    _no_out(out)
     return wrap(guarded(_ts.Tensor.hstack, _handles(tensors)))
 
 
@@ -1740,8 +1759,8 @@ def _lift(x, rank):
     return wrap(guarded(h.reshape, _js_list([1] * (rank - len(shape)) + shape)))
 
 
-def vstack(tensors, **kw):
-    _no_out(kw)
+def vstack(tensors, out=None):
+    _no_out(out)
     return wrap(guarded(_ts.Tensor.vstack, _handles(tensors)))
 
 
@@ -1765,15 +1784,15 @@ def _atleast3(x):
     return wrap(guarded(h.reshape, _js_list(shape)))
 
 
-def dstack(tensors, **kw):
-    _no_out(kw)
+def dstack(tensors, out=None):
+    _no_out(out)
     return wrap(guarded(_ts.Tensor.dstack, _handles(tensors)))
 
 
-def column_stack(tensors, **kw):
+def column_stack(tensors, out=None):
     """1-D is **stood up as a single column** and joined. Where it parts from
     `hstack`."""
-    _no_out(kw)
+    _no_out(out)
     return wrap(guarded(_ts.Tensor.columnStack, _handles(tensors)))
 
 
@@ -1800,17 +1819,17 @@ def _shape_list(x):
 # the core's surface is written out here.
 
 def empty(*shape, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _made(_ts.Tensor.zeros(_shape_of(shape)), kw)
 
 
 def zeros_like(t, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _kept(zeros(*_shape_list(t)), kw)
 
 
 def ones_like(t, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _kept(ones(*_shape_list(t)), kw)
 
 
@@ -1819,22 +1838,22 @@ def full_like(t, value, **kw):
 
 
 def empty_like(t, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _kept(zeros(*_shape_list(t)), kw)
 
 
 def rand_like(t, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _kept(rand(*_shape_list(t)), kw)
 
 
 def randn_like(t, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _kept(randn(*_shape_list(t)), kw)
 
 
 def randint_like(t, low, high=None, **kw):
-    _no_out(kw)
+    _no_out(kw.get("out"))
     if high is None:
         low, high = 0, low
     return _kept(randint(low, high, tuple(_shape_list(t))), kw)
@@ -1846,7 +1865,7 @@ def scalar_tensor(value, **kw):
 
 def logspace(start, end, steps, base=10.0, **kw):
     """Evenly spaced as powers of `base`. `linspace` supplies the exponents."""
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return _kept(wrap(guarded(_ts.Tensor.logspace, start, end, steps, base)), kw)
 
 
@@ -1857,10 +1876,10 @@ def meshgrid(*tensors, indexing="ij"):
                  guarded(_ts.Tensor.meshgrid, _handles(tensors), indexing))
 
 
-def lerp(start, end, weight, **kw):
+def lerp(start, end, weight, out=None):
     """**The weight may be a tensor** — different at every position. Taking a
     number only loses that branch."""
-    _no_out(kw)
+    _no_out(out)
     w = handle(weight) if isinstance(weight, Tensor) else weight
     return wrap(guarded(handle(wrap(start)).lerp, handle(wrap(end)), w))
 
@@ -1869,7 +1888,7 @@ def _unary(x, name):
     return wrap(guarded(handle(x).unary, name))
 
 
-def nan_to_num(t, nan=0.0, posinf=None, neginf=None, **kw):
+def nan_to_num(t, nan=0.0, posinf=None, neginf=None, out=None):
     """NaN and infinities to finite numbers. **Given nothing, f32's extremes.**
 
     **The assembly moved over there.** While it lived here the name did not exist
@@ -1877,17 +1896,17 @@ def nan_to_num(t, nan=0.0, posinf=None, neginf=None, **kw):
     green — a name missing only for the people writing TypeScript.
     `tests/test_binding_fills_in.py` counts that place.
     """
-    _no_out(kw)
+    _no_out(out)
     return wrap(guarded(handle(wrap(t)).nanToNum, nan, posinf, neginf))
 
 
-def isposinf(t, **kw):
-    _no_out(kw)
+def isposinf(t, out=None):
+    _no_out(out)
     return wrap(guarded(handle(wrap(t)).isposinf))
 
 
-def isneginf(t, **kw):
-    _no_out(kw)
+def isneginf(t, out=None):
+    _no_out(out)
     return wrap(guarded(handle(wrap(t)).isneginf))
 
 
@@ -1923,8 +1942,8 @@ fmax = _nan_extreme("fmax")
 fmin = _nan_extreme("fmin")
 
 
-def float_power(a, b, **kw):
-    _no_out(kw)
+def float_power(a, b, out=None):
+    _no_out(out)
     e = handle(b) if isinstance(b, Tensor) else b
     return wrap(guarded(handle(wrap(a)).floatPower, e))
 
@@ -2034,18 +2053,18 @@ def lu(a, pivot=True, get_infos=False):
     return tuple(got) if get_infos else (got.LU, got.pivots)
 
 
-def lu_solve(b, lu_data, lu_pivots, **kw):
+def lu_solve(b, lu_data, lu_pivots, out=None):
     """**The argument order is reversed from `linalg.lu_solve`** — `b` comes
     first here."""
-    _no_out(kw)
+    _no_out(out)
     return wrap(guarded(handle(b).luSolveTop, handle(lu_data),
                         handle(lu_pivots)))
 
 
-def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True, **kw):
+def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True, out=None):
     """**Turned off it gives an empty tensor, not `None`** (measured: the shape
     is `(0,)`)."""
-    _no_out(kw)
+    _no_out(out)
     got = guarded(handle(lu_data).luUnpack, handle(lu_pivots), unpack_data,
                   unpack_pivots)
     return (got.P, got.L, got.U)
@@ -2090,7 +2109,7 @@ def _is_cplx(t):
     return str(handle(t).dtype) == "complex64"
 
 
-def complex(re, im, **kw):
+def complex(re, im, out=None):
     """Weave a real part and an imaginary part together.
 
     **This name shadows the Python builtin `complex`.** That is why `_is_cplx` is
@@ -2098,14 +2117,14 @@ def complex(re, im, **kw):
     the same choice in the same place, and this is the third builtin whose name
     gets shadowed (`abs`, `bool`, `max`, `range`).
     """
-    _no_out(kw)
+    _no_out(out)
     return wrap(_ts.Tensor.complex(handle(re), handle(im)))
 
 
-def polar(abs, angle, **kw):                                    # noqa: A002
+def polar(abs, angle, out=None):                                    # noqa: A002
     """From a magnitude and an angle. The parameter name is torch's, so it
     shadows the builtin `abs`."""
-    _no_out(kw)
+    _no_out(out)
     return wrap(_ts.Tensor.polar(handle(abs), handle(angle)))
 
 
@@ -2144,8 +2163,8 @@ def conj(t):
     return wrap(guarded(handle(t).conjPhysical)) if _is_cplx(t) else _alias(t)
 
 
-def conj_physical(t, **kw):
-    _no_out(kw)
+def conj_physical(t, out=None):
+    _no_out(out)
     return conj(t)
 
 
@@ -2232,28 +2251,28 @@ def frombuffer(buffer, dtype=None, count=-1, offset=0, requires_grad=False):
 def range_top(start, end=None, step=1, **kw):
     """**The end is included** — `arange` excludes it (measured). Forwarded
     quietly to `arange`, one element goes missing."""
-    _no_out(kw)
+    _no_out(kw.get("out"))
     if end is None:
         start, end = 0, start
     return _made(_ts.Tensor.range(start, end, step), kw)
 
 
-def empty_strided(size, stride, **kw):
+def empty_strided(size, stride, out=None):
     """**Absent because strides cannot be expressed.** A different place from
     `as_strided` — there the values are the answer, so a copy gives the same
     answer, and here **the strides themselves are the only answer.**"""
-    _no_out(kw)
+    _no_out(out)
     raise RuntimeError(
         "torch.empty_strided — there is no such thing as a stride here.")
 
 
-def empty_permuted(size, physical_layout, **kw):
-    _no_out(kw)
+def empty_permuted(size, physical_layout, out=None):
+    _no_out(out)
     raise RuntimeError(
         "torch.empty_permuted — there is no such thing as a stride here.")
 
 
-def histogramdd(t, bins=10, **kw):
+def histogramdd(t, bins=10, out=None):
     """A histogram over several axes.
 
     **The edges arrive as a list of tensors.** borch.ts hands over a JS array and
@@ -2261,7 +2280,7 @@ def histogramdd(t, bins=10, **kw):
     Python side — the receiver can use neither `.shape` nor `._h`. They are
     wrapped one at a time here.
     """
-    _no_out(kw)
+    _no_out(out)
     from ._base import _Fields
 
     got = guarded(handle(t).histogramdd, _arg(bins))
@@ -2281,7 +2300,7 @@ def normal(mean=0.0, std=1.0, size=None, **kw):
     factories were gathered under `_made`, this one was outside the list. `out=`
     was being swallowed by the same `**kw`.
     """
-    _no_out(kw)
+    _no_out(kw.get("out"))
     from ._base import tensor as _t
 
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
@@ -2475,8 +2494,8 @@ def _dim_arg(dim):
 for _n in ("fft2", "ifft2", "fftn", "ifftn", "rfft2", "irfft2", "rfftn", "irfftn",
            "hfft2", "ihfft2", "hfftn", "ihfftn"):
     def _make_many(name):
-        def call(input, s=None, dim=None, norm=None, **kw):
-            _no_out(kw)
+        def call(input, s=None, dim=None, norm=None, out=None):
+            _no_out(out)
             if dim is None and name.endswith("2"):
                 dim = (-2, -1)
             return _Fft._many(name, input, s, dim, norm)
@@ -2487,8 +2506,8 @@ del _n
 
 
 def _fft_one(name):
-    def call(input, n=None, dim=-1, norm=None, **kw):
-        _no_out(kw)
+    def call(input, n=None, dim=-1, norm=None, out=None):
+        _no_out(out)
         return wrap(guarded(getattr(_ts.fft, name), handle(input), n, int(dim), norm))
     call.__name__ = name
     return staticmethod(call)
@@ -2582,22 +2601,22 @@ rnn_relu_cell = _cell_one("rnnReluCell")
 # quantisation and takes reals and produces reals, and `dequantize` is the
 # identity over the reals — only measuring showed they were not refusals.
 
-def igamma(input, other, **kw):                                 # noqa: A002
+def igamma(input, other, out=None):                                 # noqa: A002
     """The regularised lower incomplete gamma. **The gradient exists on the `x`
     side only** (measured)."""
-    _no_out(kw)
+    _no_out(out)
     return wrap(guarded(_ts.igamma, handle(input), handle(other)))
 
 
-def igammac(input, other, **kw):                                # noqa: A002
-    _no_out(kw)
+def igammac(input, other, out=None):                                # noqa: A002
+    _no_out(out)
     return wrap(guarded(_ts.igammac, handle(input), handle(other)))
 
 
-def polygamma(n, input, **kw):                                  # noqa: A002
+def polygamma(n, input, out=None):                                  # noqa: A002
     """**`n` comes first** — the tensor is second. That is torch's
     signature."""
-    _no_out(kw)
+    _no_out(out)
     return wrap(guarded(_ts.polygamma, int(n), handle(input)))
 
 
@@ -2656,11 +2675,11 @@ def hash_tensor(*args):
         "torch.hash_tensor — there is no uint64 and no settled hash spec.")
 
 
-def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):
+def sspaddmm(input, mat1, mat2, beta=1, alpha=1, out=None):
     """**Sparse-only, so it is absent.** The core's place and the core's reason
     for refusing — imitated with a dense tensor, the shape matches and what comes
     back has a different storage layout."""
-    _no_out(kw)
+    _no_out(out)
     raise RuntimeError(
         "torch.sspaddmm — there is no sparse tensor layout here. "
         "Use real PyTorch on your own machine.")
@@ -2676,7 +2695,7 @@ def fill(x, value):
     return wrap(guarded(handle(x).fillWith, float(value)))
 
 
-def bitwise_not(x, **kw):
+def bitwise_not(x, out=None):
     """**On booleans it is logical negation.** On integers it is `~x`, so
     `~1 == -2`, and applied to true torch gives false (measured) — the two
     branches differ outright in value.
@@ -2690,44 +2709,44 @@ def bitwise_not(x, **kw):
     TypeScript gets **a wrong answer** rather than no answer. That side knows its
     own dtype, so the branch belongs there.
     """
-    _no_out(kw)
+    _no_out(out)
     return wrap(guarded(handle(wrap(x)).bitwise_not))
 
 
-def var_mean(t, dim=None, keepdim=False, **kw):
+def var_mean(t, dim=None, keepdim=False, out=None):
     """**Both at once.** Asking for one leaves the other free to be wrong
     uncaught."""
-    _no_out(kw)
+    _no_out(out)
     t = wrap(t)
     return (t.var(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
 
-def std_mean(t, dim=None, keepdim=False, **kw):
-    _no_out(kw)
+def std_mean(t, dim=None, keepdim=False, out=None):
+    _no_out(out)
     t = wrap(t)
     return (t.std(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
 
-def inner(a, b, **kw):
-    _no_out(kw)
+def inner(a, b, out=None):
+    _no_out(out)
     return wrap(guarded(handle(wrap(a)).inner, handle(wrap(b))))
 
 
-def vdot(a, b, **kw):
-    _no_out(kw)
+def vdot(a, b, out=None):
+    _no_out(out)
     return (wrap(a) * wrap(b)).sum()
 
 
-def kron(a, b, **kw):
+def kron(a, b, out=None):
     """**1-D only.** The version that lived here looked at one axis, so 2-D
     input gave a quietly wrong answer — moving it over there turned that place
     into a refusal."""
-    _no_out(kw)
+    _no_out(out)
     return wrap(guarded(handle(wrap(a)).kron, handle(wrap(b))))
 
 
-def cross(a, b, dim=-1, **kw):
-    _no_out(kw)
+def cross(a, b, dim=-1, out=None):
+    _no_out(out)
     a, b = wrap(a), wrap(b)
     rank = len(_shape_list(a))
     axis = dim + rank if dim < 0 else dim
@@ -2831,10 +2850,10 @@ def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
                                    zero_infinity)
 
 
-def geqrf(t, **kw):
+def geqrf(t, out=None):
     """QR in reflector form. The partner to `linalg.householder_product`, so it
     exists at top level too."""
-    _no_out(kw)
+    _no_out(out)
     return guarded(handle(t).geqrf)
 
 
@@ -2942,8 +2961,8 @@ def take(t, index):
                         _js_list([int(n) for n in handle(index).shape])))
 
 
-def take_along_dim(t, indices, dim=None, **kw):
-    _no_out(kw)
+def take_along_dim(t, indices, dim=None, out=None):
+    _no_out(out)
     if dim is None:
         return take(t, indices)
     return wrap(guarded(handle(t).gather, dim, handle(indices)))
@@ -2962,7 +2981,7 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
     right on both sides from the start. Only one argument each is off, so the
     values look plausible.
     """
-    _no_out(kw)
+    _no_out(kw.get("out"))
     side = kw.get("side", side)
     right = kw.get("right", right)
     if side is not None:
@@ -2991,7 +3010,7 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
 def bucketize(values, boundaries, right=False, **kw):
     """**The argument order is reversed from `searchsorted`.** That is the whole
     difference between the two names."""
-    _no_out(kw)
+    _no_out(kw.get("out"))
     return searchsorted(boundaries, values, right=kw.get("right", right))
 
 
@@ -3106,10 +3125,10 @@ def clamp(x, min=None, max=None):                        # noqa: A002
 clip = clamp
 
 
-def aminmax(x, **kw):
+def aminmax(x, out=None):
     """The minimum and the maximum together. borch.ts keeps them separately, so
     they are paired here."""
-    _no_out(kw)
+    _no_out(out)
     h = handle(x)
     return _MinMax(wrap(h.amin()), wrap(h.amax()))
 

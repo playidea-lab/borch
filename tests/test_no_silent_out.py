@@ -86,3 +86,67 @@ def test_no_function_can_swallow_out():
         "written with no error at all, and that value surfaces much later somewhere\n"
         "unrelated."
     )
+
+
+# ── the same property, asked of a population that does not shrink ────────────
+#
+# **The check above stops seeing a function the moment it is repaired.** Its intake is
+# *functions with a `**kw` bag*, and the repair for this whole class is to take the bag
+# away and give `out` a seat of its own — forty in `borch_webgpu` left its view in one
+# edit, and it stayed green by having less to look at. The core met the identical shape
+# and answered it with `test_out_is_not_swallowed.py`, which **calls** each name.
+#
+# Calling is not open here: the binding runs inside a browser, and a pytest process has
+# no `borch_webgpu` to import. So the property is asked of the source with the intake
+# turned around — **every name torch takes `out=` for**, which is a list that does not
+# move when a bag is removed.
+
+def _binding_functions():
+    """`{name: source of its definition}` across the binding, top level only."""
+    out = {}
+    for path in sorted((ROOT / "borch_webgpu").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        for node in ast.parse(text).body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            end = getattr(node, "end_lineno", node.lineno)
+            out.setdefault(node.name, []).append(
+                (path.relative_to(ROOT), "\n".join(lines[node.lineno - 1:end])))
+    return out
+
+
+def test_every_binding_name_torch_gives_out_has_a_door():
+    """It must **name `out`** — as a seat or through the bag — and reach `_no_out`.
+
+    **It does not require the argument to be honoured.** Refusing is the right answer
+    here and `_no_out` is the refusal; what is forbidden is the third thing, taking it
+    and going on, which leaves the caller's tensor unwritten with no error at all.
+    """
+    taking_out = _torch_names_taking_out()
+    naked = []
+    for name, defs in _binding_functions().items():
+        torch_name = "range" if name == "range_top" else name
+        if torch_name not in taking_out:
+            continue
+        for where, src in defs:
+            head = src.split("\n", 1)[0]
+            if "out" not in head and "**kw" not in head:
+                continue                    # the name is not offered here at all
+            if "_no_out" not in src:
+                naked.append(f"{where} — {name}")
+    assert not naked, (
+        "binding names torch gives an `out=` and this takes with no door:\n  "
+        + "\n  ".join(sorted(naked)) + "\n\n"
+        "  Either pass it to `_no_out`, which refuses and says why, or do not offer\n"
+        "  the parameter. Taking it and going on writes nothing and raises nothing.")
+
+
+def test_the_door_check_is_looking_at_something():
+    """**A population that shrinks to nothing passes.** That is the shape this pair of
+    checks exists to survive, so the size is held rather than assumed."""
+    taking_out = _torch_names_taking_out()
+    seen = [n for n in _binding_functions() if n in taking_out]
+    assert len(seen) >= 30, (
+        f"only {len(seen)} binding names overlap torch's `out=` list — the scan broke, "
+        "not the binding.")
