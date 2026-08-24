@@ -87,7 +87,7 @@ def _conv_transpose(x, weight, bias=None, stride=1, padding=0):
 def _pool_fn(kind, adaptive):
     """One pooling. **No per-dimension names over there** — `poolND` does all of
     them."""
-    def call(x, size, stride=None, return_indices=False, **kw):
+    def call(x, size, stride=None, return_indices=False):
         h = handle(x)
         if return_indices:
             return _pool_with_indices(x, size, stride, adaptive)
@@ -97,7 +97,7 @@ def _pool_fn(kind, adaptive):
     return call
 
 
-def _pool_with_indices(x, size, stride=None, adaptive=False, **kw):
+def _pool_with_indices(x, size, stride=None, adaptive=False):
     """Hands back the values together with **where each one won.** The index is
     a flat position inside the plane.
 
@@ -128,7 +128,7 @@ def _fractional(spatial):
     this side and passed across — and `manual_seed` reaches that generator.
     """
     def call(x, kernel_size, output_size=None, output_ratio=None,
-             return_indices=False, _random_samples=None, **kw):
+             return_indices=False, _random_samples=None):
         h = handle(x)
         shape = [int(n) for n in h.shape]
         if (output_size is None) == (output_ratio is None):
@@ -160,7 +160,7 @@ def _fractional_indices(spatial):
     fn = _fractional(spatial)
 
     def call(x, kernel_size, output_size=None, output_ratio=None,
-             _random_samples=None, **kw):
+             _random_samples=None):
         return fn(x, kernel_size, output_size, output_ratio, True, _random_samples)
     return call
 
@@ -192,7 +192,7 @@ def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
         int(blank), reduction, bool(zero_infinity)))
 
 
-def _lp_pool(x, norm_type, kernel_size, stride=None, ceil_mode=False, **kw):
+def _lp_pool(x, norm_type, kernel_size, stride=None, ceil_mode=False):
     """`ceil_mode` was inside the `**kw` and went nowhere. borch.ts's `lpPool` has no
     seat for it, so it is refused rather than swallowed."""
     if ceil_mode:
@@ -301,7 +301,7 @@ _LOSSES = {
 }
 
 
-def _dropout1d(x, p=0.5, training=True, **kw):
+def _dropout1d(x, p=0.5, training=True):
     """**Refuses 4-D.** torch does, and the name carries the number of spatial
     dimensions."""
     rank = len(handle(x).shape)
@@ -315,7 +315,7 @@ def _dropout1d(x, p=0.5, training=True, **kw):
 
 
 def _alpha_dropout(per_channel):
-    def call(x, p=0.5, training=False, **kw):
+    def call(x, p=0.5, training=False):
         return wrap(guarded(handle(x).alphaDropout, float(p), bool(training),
                             per_channel))
     return call
@@ -368,7 +368,7 @@ def _triplet_with_distance(anchor, positive, negative, distance_function=None,
 
 
 def _interpolate(x, size=None, scale_factor=2, mode="nearest",
-                 align_corners=None, **kw):
+                 align_corners=None):
     """**A place that accepted `mode` and never used it.**
 
     The general path forwards to `upsample`, which does nearest only, so asking
@@ -399,7 +399,7 @@ def _interpolate(x, size=None, scale_factor=2, mode="nearest",
 
 
 def _upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None,
-              **kw):
+              ):
     """`interpolate`'s old name. torch warns that it is deprecated and keeps
     taking it."""
     return _interpolate(x, size, scale_factor, mode, align_corners)
@@ -444,7 +444,7 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
                  need_weights=True, attn_mask=None, use_separate_proj_weight=False,
                  q_proj_weight=None, k_proj_weight=None, v_proj_weight=None,
                  static_k=None, static_v=None, average_attn_weights=True,
-                 is_causal=False, **kw):
+                 is_causal=False):
     """The computation `MultiheadAttention` performs inside. **Branches it does
     not do are refused loudly.**
 
@@ -514,19 +514,19 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
     return (out, None) if got.weights is None else (out, wrap(got.weights))
 
 
-def _affine_grid(theta, size, align_corners=False, **kw):
+def _affine_grid(theta, size, align_corners=False):
     return wrap(_ts.nn.affineGrid(handle(theta), _js_list(list(size)),
                                   bool(align_corners)))
 
 
 def _grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
-                 align_corners=False, **kw):
+                 align_corners=False):
     return wrap(_ts.nn.gridSample(handle(x), handle(grid), mode, padding_mode,
                                   bool(align_corners)))
 
 
 def _batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
-                training=False, momentum=0.1, eps=1e-5, **kw):
+                training=False, momentum=0.1, eps=1e-5):
     """The function form of the layer. **In training it edits the running
     statistics in place** — torch does that."""
     return wrap(_ts.nn.batchNorm(
@@ -541,7 +541,7 @@ def _batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
 def _embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
                    scale_grad_by_freq=False, mode="mean", sparse=False,
                    per_sample_weights=None, include_last_offset=False,
-                   padding_idx=None, **kw):
+                   padding_idx=None):
     """**torch's order, and the call across the boundary is positional.**
 
     `mode` used to be fourth here and fourth over there, and both moved to sixth —
@@ -566,7 +566,7 @@ def _embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
         None if padding_idx is None else int(padding_idx)))
 
 
-def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1, **kw):
+def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
     """**Random, and gradients still flow.** Even with `hard`, the gradient
     taken is the soft one's.
 
@@ -1594,7 +1594,7 @@ def _to_list(t):
 
 def EmbeddingBag(num, dim, max_norm=None, norm_type=2.0, scale_grad_by_freq=False,
                  mode="mean", sparse=False, _weight=None, include_last_offset=False,
-                 padding_idx=None, **kw):
+                 padding_idx=None):
     """torch's list, and **the call across the boundary is positional.**
 
     `mode` was third here and third over there until both moved to sixth — in two
@@ -1615,7 +1615,7 @@ def EmbeddingBag(num, dim, max_norm=None, norm_type=2.0, scale_grad_by_freq=Fals
 
 def Embedding(num, dim, padding_idx=None, max_norm=None, norm_type=2.0,
               scale_grad_by_freq=False, sparse=False, _weight=None, _freeze=False,
-              **kw):
+              ):
     """torch's list, in torch's order, across a positional bridge.
 
     **`padding_idx` is second and `max_norm` third**, which is the opposite of
@@ -1994,7 +1994,13 @@ def Flatten(start_dim=1, end_dim=-1):
 
 def Identity(*args, **kw):
     """torch accepts any arguments at all (measured) — `Identity(64,
-    unused=True)` runs."""
+    unused=True)` runs.
+
+    **The `**kw` is the point here, not an oversight.** It was swept out with
+    ninety-four others that took it and never looked at it, and this is the one where
+    swallowing *is* the contract: torch declares `Identity(*args, **kwargs)` and the
+    golden case is named after it. Restoring it is what the case said to do, and the
+    sweep is why anybody read the case again."""
     return _layer("Identity")
 
 
@@ -2494,9 +2500,23 @@ class _Recurrent(Module):
     `(layers, batch, hidden)`, one dimension more.
     """
 
+    def __init__(self, module, batch_first=False):
+        super().__init__(module)
+        object.__setattr__(self, "_batch_first", batch_first)
+
     def __call__(self, x, *rest):
+        # **`batch_first` decides which of the first two axes is which.** borch.ts's
+        # `run` takes the length first, as torch's does, so the flag is honoured by
+        # turning the input on the way in and the output on the way back — the same
+        # shape `_Attention` next door uses, and the same place it was being dropped.
+        from ._ops import transpose as _t
+
+        if self._batch_first:
+            x = _t(x, 0, 1)
         got = self._m.run(handle(x))
         out, h = wrap(got.output), wrap(got.hidden)
+        if self._batch_first:
+            out = _t(out, 0, 1)
         # **Brought to three dimensions.** torch's final state is
         # `(layers, batch, hidden)`. Adding one unconditionally at first made it
         # four — already three, it is left alone.
@@ -2515,7 +2535,33 @@ class _Recurrent(Module):
 
 
 def _recurrent(kind):
-    def make(inp, hid, **kw):
+    def make(input_size, hidden_size, num_layers=1, bias=True, batch_first=False,
+             dropout=0.0, bidirectional=False, proj_size=0, device=None, dtype=None):
+        """torch's ten. **This took two and swallowed the rest.**
+
+        `GRU(3, 4, batch_first=True)` set nothing at all here and said nothing —
+        `**kw` took the flag and dropped it, so the layer read `(length, batch, …)`
+        while the caller had written `(batch, length, …)`. The golden agreed only
+        because every case passes the default.
+
+        Six are refused rather than implemented: borch.ts's `RNNBase` builds one
+        unidirectional layer with a bias, so anything else has nowhere to go. The
+        refusal names the argument, which is the difference between a feature that is
+        absent and an answer that is wrong.
+        """
+        from borch._base import _unsupported
+
+        for what, given in (("device", device), ("dtype", dtype)):
+            if given is not None:
+                _unsupported(f"{kind}({what}=…) — one device, one precision")
+        for what, given, wanted in (("num_layers", num_layers, 1),
+                                    ("bias", bias, True),
+                                    ("dropout", dropout, 0.0),
+                                    ("bidirectional", bidirectional, False),
+                                    ("proj_size", proj_size, 0)):
+            if given != wanted:
+                _unsupported(f"{kind}({what}={given!r})")
+        inp, hid = input_size, hidden_size
         # **`RNNBase` is the class's name now** — torch's, where borch.ts had
         # `Recurrent` alone. The alias still resolves at runtime, and
         # `test_binding_arguments.py` reads *source*: it looks for a `class` with
@@ -2527,7 +2573,7 @@ def _recurrent(kind):
         # recurrent case failed at once — six of six under one prefix, which is the
         # shape the runner calls *one cause rather than many*. The signature axis
         # could not have said so: it reads declarations, and this is a call.
-        return _Recurrent(_ts.nn.RNNBase.new(kind, inp, hid))
+        return _Recurrent(_ts.nn.RNNBase.new(kind, inp, hid), batch_first)
     return make
 
 
@@ -2551,7 +2597,7 @@ class _Attention(Module):
         object.__setattr__(self, "_batch_first", batch_first)
 
     def __call__(self, q, k=None, v=None, attn_mask=None, need_weights=True,
-                 key_padding_mask=None, average_attn_weights=True, **kw):
+                 key_padding_mask=None, average_attn_weights=True):
         from ._ops import transpose as _t
         k = q if k is None else k
         v = q if v is None else v

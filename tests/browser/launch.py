@@ -56,7 +56,20 @@ def refuse_if_software(adapter, what):
 
 def warn_if_software(adapter, what):
     """For things that **ask about values only**, as the golden run does. Does not block; only
-    narrows what was proved."""
+    narrows what was proved.
+
+    **It went unread again, a whole session of it.** Every browser golden run in one day —
+    twenty and more, across three implementations, including four freshly written WGSL kernels
+    — came out of `google / swiftshader`, and the warning was on screen every time. It was
+    read past because the reader was tailing the last three lines for the pass count, and this
+    line is at the top.
+
+    The docstring above already predicted exactly that: *unless a person reads the first line
+    of the log, it goes straight through.* Predicting it did not stop it. What would is putting
+    the sentence where the number is rather than where the run starts — that is a change to
+    every runner's output and is written down here rather than made, because the split between
+    this and `refuse_if_software` is deliberate and a person should choose whether to widen it.
+    """
     if is_software(adapter):
         print(f"  (Software adapter — that {what} is right is proved, but this run does not\n"
               "   prove that the GPU path runs.)")

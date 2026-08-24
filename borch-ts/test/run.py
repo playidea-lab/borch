@@ -431,6 +431,11 @@ NOT_PORTED = {
     # padding, a `countIncludePad` and a `divisorOverride`, and `poolOut` grew the
     # ceiling — so this row is the ordinary kind of owed, a case list not carried
     # across, and not an argument that does nothing.
+    # **borch.ts's `RNNBase` takes three arguments** — `(mode, inputSize, hidden)` —
+    # so there is no `batchFirst` to write a TS body against. The binding honours the
+    # flag itself, by turning the input on the way in, which is why the case exists at
+    # all: it was being taken and thrown away there until the `**kw` sweep.
+    "seq::": (3, "아직 — borch.ts's RNNBase has no batchFirst seat"),
     "pool::": (11, "아직 — the arguments work in borch.ts; only the TS case bodies "
                   "are unwritten"),
     # 47 → 50. The **kinds** of `finfo` and `iinfo`, and the no-argument default dtype. A

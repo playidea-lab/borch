@@ -534,7 +534,7 @@ def _resolve_name(name):
     js_name = camel(name)
 
     if name in _BINARY_ONLY:
-        def call(a, b, *rest, **kw):
+        def call(a, b, *rest):
             return guarded(handle(a).binary, js_name, handle(b))
         call.__name__ = name
         return call
@@ -1397,7 +1397,7 @@ def quantile(x, q, dim=None, **kw):
     return wrap(out._h.reshape(_js_list([]))) if one else out
 
 
-def numel(x, **kw):
+def numel(x):
     """The element count. In borch.ts it is a **property** called `size` — a
     different name and a different shape."""
     return int(handle(x).size)
@@ -1664,26 +1664,26 @@ def fmod(a, b, **kw):
     return a - wrap(guarded(handle(a / b).unary, "trunc")) * b
 
 
-def rsub(a, b, alpha=1, **kw):
+def rsub(a, b, alpha=1):
     return wrap(guarded(handle(wrap(a)).rsub, handle(wrap(b)), alpha))
 
 
-def t(x, **kw):
+def t(x):
     """A 2-D transpose. **1-D and below are left alone** — that is what torch
     does."""
     h = handle(x)
     return wrap(h) if len(h.shape) < 2 else transpose(x, 0, 1)
 
 
-def adjoint(x, **kw):
+def adjoint(x):
     return wrap(guarded(handle(wrap(x)).adjoint))
 
 
-def moveaxis(x, source, destination, **kw):
+def moveaxis(x, source, destination):
     return wrap(guarded(handle(x).movedim, source, destination))
 
 
-def broadcast_to(x, shape, **kw):
+def broadcast_to(x, shape):
     """The name over in borch.ts is `expand` — it takes the axes **spread**."""
     return wrap(guarded(handle(x).expand, *[int(n) for n in shape]))
 
@@ -1891,16 +1891,16 @@ def isneginf(t, **kw):
     return wrap(guarded(handle(wrap(t)).isneginf))
 
 
-def isreal(t, **kw):
+def isreal(t):
     """Everything is real, so all of it is true. **Not a lie — a fact.**"""
     return wrap(guarded(handle(wrap(t)).isreal))
 
 
-def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **kw):
+def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
     return wrap(guarded(handle(wrap(a)).isclose, handle(wrap(b)), rtol, atol))
 
 
-def isin(elements, test_elements, **kw):
+def isin(elements, test_elements):
     """Is the element in that list. One broadcast solves it."""
     return wrap(guarded(handle(wrap(elements)).isin, handle(wrap(test_elements))))
 
@@ -1929,7 +1929,7 @@ def float_power(a, b, **kw):
     return wrap(guarded(handle(wrap(a)).floatPower, e))
 
 
-def logical_xor(a, b, **kw):
+def logical_xor(a, b):
     """Not in borch.ts's **binary table** — it is built by asking that side for
     inequality twice."""
     return wrap(guarded(handle(wrap(a)).logicalXor, handle(wrap(b))))
@@ -1950,26 +1950,26 @@ def _js_tensors(seq):
     return _js.Array.from_([handle(t) for t in seq])
 
 
-def index_put(t, indices, values, accumulate=False, **kw):
+def index_put(t, indices, values, accumulate=False):
     return wrap(guarded(handle(t).indexPut, _js_tensors(indices),
                         handle(values), accumulate))
 
 
-def index_put_(t, indices, values, accumulate=False, **kw):
+def index_put_(t, indices, values, accumulate=False):
     t = wrap(t)
     guarded(handle(t).indexPut_, _js_tensors(indices), handle(values),
             accumulate)
     return t
 
 
-def unravel_index(indices, shape, **kw):
+def unravel_index(indices, shape):
     """**One tensor per axis, returned as a tuple** (measured)."""
     got = guarded(handle(indices).unravelIndex, _js_list(shape))
     return tuple(wrap(p) for p in got)
 
 
 def unique_consecutive(t, return_inverse=False, return_counts=False, dim=None,
-                       **kw):
+                       ):
     """Collapses **consecutive** duplicates only. The length depends on the
     values, so borch.ts is asynchronous here — `settle` awaits that promise."""
     got = guarded(handle(t).uniqueConsecutive, return_inverse, return_counts,
@@ -1977,37 +1977,43 @@ def unique_consecutive(t, return_inverse=False, return_counts=False, dim=None,
     return tuple(got) if isinstance(got, list) else got
 
 
-def tensor_split(t, indices_or_sections, dim=0, **kw):
+def tensor_split(t, indices_or_sections, dim=0):
     return tuple(guarded(handle(t).tensorSplit, _arg(indices_or_sections), dim))
 
 
-def split_with_sizes(t, split_sizes, dim=0, **kw):
+def split_with_sizes(t, split_sizes, dim=0):
     return tuple(guarded(handle(t).splitWithSizes, _js_list(split_sizes), dim))
 
 
-def tril_indices(row, col, offset=0, **kw):
+def tril_indices(row, col, offset=0, *, dtype=None):
     """**A `(2, count)` table** — not pairs of positions but a row of rows and a
-    row of columns."""
-    return wrap(_ts.Tensor.trilIndices(row, col, offset))
+    row of columns.
+
+    **`dtype` was falling into `**kw`.** torch declares it keyword-only with a default
+    of `torch.long`, so the values agreed and the label was whatever came out — and
+    the golden's `tril_indices(dtype=int64)` case asked for the label torch already
+    gives, which is why nothing ever parted. `_made` is the same seam, gathered.
+    """
+    return _made(wrap(_ts.Tensor.trilIndices(row, col, offset)), {"dtype": dtype})
 
 
-def triu_indices(row, col, offset=0, **kw):
-    return wrap(_ts.Tensor.triuIndices(row, col, offset))
+def triu_indices(row, col, offset=0, *, dtype=None):
+    return _made(wrap(_ts.Tensor.triuIndices(row, col, offset)), {"dtype": dtype})
 
 
-def vander(x, N=None, increasing=False, **kw):
+def vander(x, N=None, increasing=False):
     return wrap(_ts.Tensor.vander(handle(x), N, increasing))
 
 
-def cartesian_prod(*tensors, **kw):
+def cartesian_prod(*tensors):
     return wrap(_ts.Tensor.cartesianProd(*[handle(t) for t in tensors]))
 
 
-def combinations(t, r=2, with_replacement=False, **kw):
+def combinations(t, r=2, with_replacement=False):
     return wrap(_ts.Tensor.combinations(handle(t), r, with_replacement))
 
 
-def chain_matmul(*matrices, **kw):
+def chain_matmul(*matrices):
     mats = (list(matrices[0]) if len(matrices) == 1
             and isinstance(matrices[0], (list, tuple)) else list(matrices))
     return wrap(_ts.Tensor.chainMatmul(*[handle(m) for m in mats]))
@@ -2020,7 +2026,7 @@ def chain_matmul(*matrices, **kw):
 # borch.ts belong to `linalg` and give different answers — the top-level ones are
 # `luTop` and `luSolveTop`.
 
-def lu(a, pivot=True, get_infos=False, **kw):
+def lu(a, pivot=True, get_infos=False):
     """`(LU, pivots)`. **A different thing from `linalg.lu`** — that one spreads
     it into `P`, `L` and `U`, and this one is a single packed matrix plus the
     list of swaps (measured)."""
@@ -2070,7 +2076,7 @@ def trapz(y, x=None, dx=1.0, dim=-1, **kw):
 # widens** — `conj_physical` broke exactly that way in the core, and here there
 # were six such names.
 
-def _alias(t, **kw):
+def _alias(t):
     """The identity. **`to(its own dtype)` is the shortest way to keep both the
     dtype and the graph** — borch.ts's `to` hands back the same tensor when the
     dtype matches, so no kernel runs."""
@@ -2103,23 +2109,23 @@ def polar(abs, angle, **kw):                                    # noqa: A002
     return wrap(_ts.Tensor.polar(handle(abs), handle(angle)))
 
 
-def view_as_real(t, **kw):
+def view_as_real(t):
     """Complex to pairs of reals. **A view** — borch.ts stores them
     interleaved."""
     return wrap(guarded(handle(t).viewAsReal))
 
 
-def view_as_complex(t, **kw):
+def view_as_complex(t):
     return wrap(guarded(handle(t).viewAsComplex))
 
 
-def real(t, **kw):
+def real(t):
     """The real part. **On a real tensor it is the tensor itself**, dtype
     included (measured)."""
     return wrap(guarded(handle(t).real)) if _is_cplx(t) else _alias(t)
 
 
-def imag(t, **kw):
+def imag(t):
     """The imaginary part. **torch itself refuses on a real tensor** (measured)
     — not a limit of ours."""
     if not _is_cplx(t):
@@ -2128,7 +2134,7 @@ def imag(t, **kw):
     return wrap(guarded(handle(t).imag))
 
 
-def conj(t, **kw):
+def conj(t):
     """The conjugate. Over the reals, the identity.
 
     **A divergence from torch.** torch's `conj` is lazy and only raises the
@@ -2143,22 +2149,22 @@ def conj_physical(t, **kw):
     return conj(t)
 
 
-def conj_physical_(t, **kw):
+def conj_physical_(t):
     x = wrap(t)
     return x._write_back(conj(x)) if _is_cplx(x) else _alias(x)
 
 
-def resolve_conj(t, **kw):
+def resolve_conj(t):
     """Materialise the conjugate flag. **There is no such flag here at all**, so
     it is always the identity."""
     return _alias(t)
 
 
-def resolve_neg(t, **kw):
+def resolve_neg(t):
     return _alias(t)
 
 
-def angle(t, **kw):
+def angle(t):
     """The angle. Complex is `atan2(imag, real)`; **real gives π for negatives**,
     and the dtype is always real."""
     if _is_cplx(t):
@@ -2170,19 +2176,19 @@ def angle(t, **kw):
     return wrap(guarded(handle(below).to, "float32")).mul(full([], math.pi))
 
 
-def is_complex(t, **kw):
+def is_complex(t):
     return _is_cplx(t)
 
 
-def is_conj(t, **kw):
+def is_conj(t):
     return False
 
 
-def is_neg(t, **kw):
+def is_neg(t):
     return False
 
 
-def asarray(obj, dtype=None, copy=None, **kw):
+def asarray(obj, dtype=None, copy=None):
     """**Given a tensor it is not a copy** (measured). `copy=True` makes it
     one."""
     from ._base import tensor as _t
@@ -2200,7 +2206,7 @@ def asarray(obj, dtype=None, copy=None, **kw):
     return _t(arr, dtype)
 
 
-def frombuffer(buffer, dtype=None, count=-1, offset=0, requires_grad=False, **kw):
+def frombuffer(buffer, dtype=None, count=-1, offset=0, requires_grad=False):
     """Read the bytes as they are. **`offset` is a byte count** — not an element
     count (measured).
 
@@ -2287,7 +2293,7 @@ def normal(mean=0.0, std=1.0, size=None, **kw):
     return _made(_t(_rng.normal(float(mean), float(std), shape).astype(_np.float32)), kw)
 
 
-def bernoulli(t, **kw):
+def bernoulli(t):
     """A 1 at each position with that probability. **0 gives all zeros, 1 gives
     all ones.**"""
     from ._base import tensor as _t
@@ -2326,14 +2332,14 @@ def float_power_(t, exponent, **kw):
         "operation's result requires dtype Double)")
 
 
-def poisson(t, **kw):
+def poisson(t):
     from ._base import tensor as _t
 
     lam = _np.asarray(wrap(t).numpy(), dtype=_np.float64)
     return _t(_rng.poisson(lam).astype(_np.float32))
 
 
-def binomial(count, prob, **kw):
+def binomial(count, prob):
     from ._base import tensor as _t
 
     n = _np.asarray(wrap(count).numpy(), dtype=_np.float64)
@@ -2382,7 +2388,7 @@ def _stft_options(hop_length, win_length, window, center, pad_mode,
 
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,
          center=True, pad_mode="reflect", normalized=False, onesided=None,
-         return_complex=None, align_to_window=None, **kw):
+         return_complex=None, align_to_window=None):
     """The short-time Fourier transform. **It refuses without `return_complex`**
     (measured).
 
@@ -2398,7 +2404,7 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,
 
 def istft(input, n_fft, hop_length=None, win_length=None, window=None,
           center=True, normalized=False, onesided=None, length=None,
-          return_complex=False, **kw):
+          return_complex=False):
     return wrap(guarded(
         _ts.istft, handle(input), int(n_fft),
         _stft_options(hop_length, win_length, window, center, None,
@@ -2410,15 +2416,15 @@ def istft(input, n_fft, hop_length=None, win_length=None, window=None,
 # named arguments into positions.
 class _Fft:
     @staticmethod
-    def fft(input, n=None, dim=-1, norm=None, **kw):
+    def fft(input, n=None, dim=-1, norm=None):
         return wrap(guarded(_ts.fft.fft, handle(input), n, int(dim), norm))
 
     @staticmethod
-    def ifft(input, n=None, dim=-1, norm=None, **kw):
+    def ifft(input, n=None, dim=-1, norm=None):
         return wrap(guarded(_ts.fft.ifft, handle(input), n, int(dim), norm))
 
     @staticmethod
-    def rfft(input, n=None, dim=-1, norm=None, **kw):
+    def rfft(input, n=None, dim=-1, norm=None):
         return wrap(guarded(_ts.fft.rfft, handle(input), n, int(dim), norm))
 
     # ── multi-axis and Hermitian — **borch.ts assembles them** ─────────────
@@ -2438,24 +2444,24 @@ class _Fft:
                             norm))
 
     @staticmethod
-    def irfft(input, n=None, dim=-1, norm=None, **kw):
+    def irfft(input, n=None, dim=-1, norm=None):
         return wrap(guarded(_ts.fft.irfft, handle(input), n, int(dim), norm))
 
     @staticmethod
-    def fftfreq(n, d=1.0, **kw):
+    def fftfreq(n, d=1.0):
         return wrap(guarded(_ts.fft.fftfreq, int(n), float(d)))
 
     @staticmethod
-    def rfftfreq(n, d=1.0, **kw):
+    def rfftfreq(n, d=1.0):
         return wrap(guarded(_ts.fft.rfftfreq, int(n), float(d)))
 
     @staticmethod
-    def fftshift(input, dim=None, **kw):
+    def fftshift(input, dim=None):
         return wrap(guarded(_ts.fft.fftshift, handle(input),
                             None if dim is None else _dim_arg(dim)))
 
     @staticmethod
-    def ifftshift(input, dim=None, **kw):
+    def ifftshift(input, dim=None):
         return wrap(guarded(_ts.fft.ifftshift, handle(input),
                             None if dim is None else _dim_arg(dim)))
 
@@ -2518,7 +2524,7 @@ def _rnn_params(params):
 
 
 def lstm(input, hx, params, has_biases, num_layers, dropout, train,     # noqa: A002
-         bidirectional, batch_first=False, **kw):
+         bidirectional, batch_first=False):
     """`(output, h_n, c_n)` — **all three spread.** The layer side groups them as
     `(output, (h, c))`."""
     got = guarded(_ts.lstm, handle(input),
@@ -2531,7 +2537,7 @@ def lstm(input, hx, params, has_biases, num_layers, dropout, train,     # noqa: 
 
 def _rnn_two(name):
     def call(input, hx, params, has_biases, num_layers, dropout, train,  # noqa: A002
-              bidirectional, batch_first=False, **kw):
+              bidirectional, batch_first=False):
         got = guarded(getattr(_ts, name), handle(input), handle(hx),
                       _rnn_params(params),
                       _rnn_options(has_biases, num_layers, dropout, train,
@@ -2546,7 +2552,7 @@ rnn_tanh = _rnn_two("rnnTanh")
 rnn_relu = _rnn_two("rnnRelu")
 
 
-def lstm_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None, **kw):       # noqa: A002
+def lstm_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None):       # noqa: A002
     got = guarded(_ts.lstmCell, handle(input),
                   _js.Array.from_([handle(hx[0]), handle(hx[1])]),
                   handle(w_ih), handle(w_hh),
@@ -2556,7 +2562,7 @@ def lstm_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None, **kw):       # noqa: 
 
 
 def _cell_one(name):
-    def call(input, hx, w_ih, w_hh, b_ih=None, b_hh=None, **kw):        # noqa: A002
+    def call(input, hx, w_ih, w_hh, b_ih=None, b_hh=None):        # noqa: A002
         return wrap(guarded(getattr(_ts, name), handle(input), handle(hx),
                             handle(w_ih), handle(w_hh),
                             None if b_ih is None else handle(b_ih),
@@ -2595,32 +2601,32 @@ def polygamma(n, input, **kw):                                  # noqa: A002
     return wrap(guarded(_ts.polygamma, int(n), handle(input)))
 
 
-def constant_pad_nd(input, pad, value=0.0, **kw):               # noqa: A002
+def constant_pad_nd(input, pad, value=0.0):               # noqa: A002
     return wrap(guarded(handle(input).constantPadNd, _js_list(pad),
                         float(value)))
 
 
 def fake_quantize_per_tensor_affine(input, scale, zero_point,   # noqa: A002
-                                    quant_min, quant_max, **kw):
+                                    quant_min, quant_max):
     return wrap(guarded(handle(input).fakeQuantizePerTensorAffine,
                         float(scale), float(zero_point), int(quant_min),
                         int(quant_max)))
 
 
 def fake_quantize_per_channel_affine(input, scale, zero_point,  # noqa: A002
-                                     axis, quant_min, quant_max, **kw):
+                                     axis, quant_min, quant_max):
     return wrap(guarded(handle(input).fakeQuantizePerChannelAffine,
                         handle(scale), handle(zero_point), int(axis),
                         int(quant_min), int(quant_max)))
 
 
-def dequantize(input, **kw):                                    # noqa: A002
+def dequantize(input):                                    # noqa: A002
     """The identity over the reals. There will **never** be a quantised dtype, so
     that is the complete answer."""
     return wrap(guarded(handle(input).dequantize))
 
 
-def resize_as_(input, other, **kw):                             # noqa: A002
+def resize_as_(input, other):                             # noqa: A002
     """In place, to `other`'s shape. **The values in the added cells are
     undefined** (measured).
 
@@ -2643,7 +2649,7 @@ def resize_as_(input, other, **kw):                             # noqa: A002
     return x
 
 
-def hash_tensor(*args, **kw):
+def hash_tensor(*args):
     """**No uint64 and no specification.** A name is not put down for something
     whose values cannot be matched."""
     raise RuntimeError(
@@ -2660,7 +2666,7 @@ def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):
         "Use real PyTorch on your own machine.")
 
 
-def fill(x, value, **kw):
+def fill(x, value):
     """**Not in place.** One character apart from `fill_` and a different job —
     this one produces a new tensor and leaves the original alone (measured).
 
@@ -2737,12 +2743,12 @@ def cross(a, b, dim=-1, **kw):
 # ── the numeric family. **The three computed as series live in WGSL and the
 # rest are combinations.** ──────────────────────────────────────────────────
 
-def cdist(a, b, p=2.0, **kw):
+def cdist(a, b, p=2.0):
     """The distance between every pair. One broadcast solves it."""
     return wrap(guarded(handle(wrap(a)).cdist, handle(wrap(b)), p))
 
 
-def cov(t, correction=1, **kw):
+def cov(t, correction=1):
     """Covariance. **Rows are variables and columns are observations** — the
     axes are the reverse of numpy's, which is confusing."""
     return wrap(guarded(handle(wrap(t)).cov, correction))
@@ -2806,7 +2812,7 @@ def grid_sampler(x, grid, interpolation_mode=0, padding_mode=0,
 
 
 def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
-                            ceil_mode=False, **kw):
+                            ceil_mode=False):
     from . import _nn
     if padding or dilation != 1 or ceil_mode:
         raise RuntimeError(
@@ -2832,13 +2838,13 @@ def geqrf(t, **kw):
     return guarded(handle(t).geqrf)
 
 
-def corrcoef(t, **kw):
+def corrcoef(t):
     """Covariance divided by the standard deviations. **The diagonal becomes
     1** — that is the check."""
     return wrap(guarded(handle(wrap(t)).corrcoef))
 
 
-def tensordot(a, b, dims=2, **kw):
+def tensordot(a, b, dims=2):
     """Fold the named axes together and multiply. The folded axes are herded
     together and one matmul finishes it.
 
@@ -2896,7 +2902,7 @@ def _spread_index(index, dim, shape):
     return broadcast_to(wrap(guarded(handle(index).reshape, _js_list(lifted))), shape)
 
 
-def scatter(t, dim, index, src, **kw):
+def scatter(t, dim, index, src):
     """**Overwrites** at the positions the indices point at. On a collision the
     last write survives."""
     t = wrap(t)
@@ -2905,28 +2911,28 @@ def scatter(t, dim, index, src, **kw):
     return wrap(guarded(handle(t).scatterSet, dim, handle(index), handle(src)))
 
 
-def scatter_add(t, dim, index, src, **kw):
+def scatter_add(t, dim, index, src):
     """**Adds** at the positions the indices point at. Collisions accumulate —
     where it parts from `scatter`."""
     return wrap(guarded(handle(t).scatterAdd, dim, handle(index), handle(src)))
 
 
-def index_add(t, dim, index, source, alpha=1, **kw):
+def index_add(t, dim, index, source, alpha=1):
     return wrap(guarded(handle(wrap(t)).indexAdd, dim, handle(wrap(index)),
                         handle(wrap(source)), alpha))
 
 
-def index_copy(t, dim, index, source, **kw):
+def index_copy(t, dim, index, source):
     return wrap(guarded(handle(wrap(t)).indexCopy, dim, handle(wrap(index)),
                         handle(wrap(source))))
 
 
-def index_fill(t, dim, index, value, **kw):
+def index_fill(t, dim, index, value):
     return wrap(guarded(handle(wrap(t)).indexFill, dim, handle(wrap(index)),
                         float(value)))
 
 
-def take(t, index, **kw):
+def take(t, index):
     """Takes from **the flattened tensor** — it has no notion of an axis."""
     h = handle(t)
     flat = wrap(guarded(h.reshape, _js_list([int(h.size)])))
@@ -3020,7 +3026,7 @@ def layer_norm(x, shape=None, weight=None, bias=None, eps=1e-5, **kw):
     return guarded(handle(x).layerNorm, dim, kw.get("eps", eps))
 
 
-def repeat_interleave(x, repeats, dim=None, **kw):
+def repeat_interleave(x, repeats, dim=None):
     """With no `dim`, torch repeats **after flattening.**"""
     h = handle(x)
     if dim is None:

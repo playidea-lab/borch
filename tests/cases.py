@@ -7974,6 +7974,28 @@ def train_cases(inp=None):
             recurrent(L, k)(L.tensor(seq_x))[1][0] if k == "LSTM"
             else recurrent(L, k)(L.tensor(seq_x))[1])))
 
+    # **`batch_first` had no case, and the binding was dropping it.** Every case above
+    # passes the default, so the flag could be taken and thrown away and the values
+    # still agreed — which is how it survived: `GRU(3, 4, batch_first=True)` set
+    # nothing at all and said nothing. The two axes cannot see it either, one reading
+    # declarations and the other never crossing into Python.
+    #
+    # Asked as **the same answer transposed**: the flag is honoured exactly when
+    # feeding `(batch, length, …)` gives back what `(length, batch, …)` gave, turned.
+    # A layer ignoring it reads `(2, 5, 3)` as length 2 and batch 5 and hands back
+    # `(2, 5, 4)` where the answer is `(5, 2, 4)` — measured, so the two cannot even
+    # be subtracted. `seq_x` being 5×2 rather than square is what gives that its
+    # teeth, and it was checked rather than assumed.
+    def batch_first_matches(L, kind):
+        turned = recurrent(L, kind, batch_first=True)(
+            L.tensor(seq_x).transpose(0, 1))[0].transpose(0, 1)
+        plain = recurrent(L, kind)(L.tensor(seq_x))[0]
+        return (turned - plain).abs().max()
+
+    for kind in ("RNN", "LSTM", "GRU"):
+        cases.append((f"seq::{kind}/batch_first 는 같은 답을 돌려놓는다",
+                      lambda L, k=kind: batch_first_matches(L, k)))
+
     def attention(L, mask=None):
         mod = L.nn.MultiheadAttention(4, 2, batch_first=True)
         fixed = {"in_proj_weight": L.tensor(inp["mha_in_w"]),
