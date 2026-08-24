@@ -300,8 +300,23 @@ def _log_softmax_method(self, dim=None, dtype=None):
     return log_softmax(self, dim=dim, dtype=dtype)
 
 
+def _split_method(self, split_size, dim=0):
+    """**torch's function and torch's method disagree, and refuse each other's
+    keyword.** `torch.split(t, split_size_or_sections=2)` is taken and
+    `torch.split(t, split_size=2)` is not; `t.split(split_size=2)` is taken and
+    `t.split(split_size_or_sections=2)` is not. Both measured.
+
+    So the method gets its own name for the same argument. This is the third pair in
+    a day where binding a module function straight on as a method carried the
+    function's signature into a place torch spells differently — `softmax` and
+    `log_softmax` above are the others.
+    """
+    return split(self, split_size, dim)
+
+
 Tensor.softmax = _softmax_method
 Tensor.log_softmax = _log_softmax_method
+Tensor.split = _split_method
 
 
 def _where_method(self, condition, other):

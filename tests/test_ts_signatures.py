@@ -403,7 +403,34 @@ RENAMED = {
     # The six left are the core's side: it spells four of them from torch's prose
     # (`value`, `value`, `indices_or_sections`, `divisor`) where torch answers
     # `TypeError`, and `b`/`size` in the other two.
-    "Tensor": 6,
+    # **6 → 0, and the other session did the six it had just named.** Each was called
+    # on real torch under both spellings before it was touched, which the paragraph
+    # above had already shown was the only way to know:
+    #
+    #     clamp_max     doc: (none)               takes `max`      was `value`
+    #     clamp_min     doc: (none)               takes `min`      was `value`
+    #     tensor_split  doc: indices_or_sections  takes `sections` was the doc's name
+    #     true_divide   doc: value                takes `other`    was `divisor`
+    #     remainder     doc: divisor              takes `other`    was `b`
+    #     split         see torch.split           takes `split_size` (method)
+    #
+    # **`true_divide` and `remainder` name each other's wrong argument.** The prose
+    # says `value` for the first and `divisor` for the second, and both actually take
+    # `other` — so a reader following the docstrings would have crossed them, and the
+    # handover above says `divisor` for `true_divide` for exactly that reason. Two
+    # sessions read the same prose and neither could tell without calling.
+    #
+    # **`split` needed two signatures, because torch has two.** The function takes
+    # `split_size_or_sections` and refuses `split_size`; the method takes
+    # `split_size` and refuses `split_size_or_sections`. `Tensor.split` is bound
+    # separately in `__init__`, joining `softmax` and `log_softmax` — the third pair
+    # in a day where a module function bound straight on as a method carried the
+    # function's signature into a place torch spells differently.
+    #
+    # **Zero here does not mean the two libraries name everything alike.** 24 rows
+    # were folded into `ts_signatures.RENAMES` long before this, and this bucket
+    # counts what is left over that fold.
+    "Tensor": 0,
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.

@@ -2365,8 +2365,27 @@ def minimum(input, other):
 
 # ------------------------------------------------------- shape and selection
 
-def split(t, size, dim=0):
-    t = _wrap(t)
+def split(tensor, split_size_or_sections, dim=0):
+    """**The function and the method take different keywords, and torch refuses
+    each other's.** Measured:
+
+        torch.split(t, split_size_or_sections=2)   accepted
+        torch.split(t, split_size=2)               TypeError
+        t.split(split_size=2)                      accepted
+        t.split(split_size_or_sections=2)          TypeError
+
+    So one signature cannot serve both, and this is the function's. `Tensor.split`
+    is bound separately in `__init__` — the same split `Tensor.softmax` needed an
+    hour earlier, and the same reason: sharing an implementation is not sharing a
+    signature.
+
+    The first parameter is `tensor`, not `input`. torch spells this one differently
+    from every other function in the namespace (`torch.split(input=…)` is a
+    `TypeError`), and matching an authority means matching where it disagrees with
+    itself.
+    """
+    t = _wrap(tensor)
+    size = split_size_or_sections
     dim = _pos_dim(t, dim)
     n = t.data.shape[dim]
     if not isinstance(size, (list, tuple)) and size <= 0 and not (size == 0 and n == 0):
@@ -2653,9 +2672,14 @@ def floor_divide(input, other):
     return div(input, other, rounding_mode="floor")
 
 
-def remainder(a, b):
-    """**The sign follows the divisor.** That is where it parts from `fmod`."""
-    return _wrap(a) % b
+def remainder(input, other):                                 # noqa: A002
+    """**The sign follows the divisor.** That is where it parts from `fmod`.
+
+    torch's docstring says `remainder(divisor)` and torch takes `other` — measured,
+    by calling it both ways. `fmod` next door was already on `(input, other)`, so the
+    two neighbours spelled the same pair of arguments differently.
+    """
+    return _wrap(input) % other
 
 
 def fmod(input, other):
@@ -2687,7 +2711,7 @@ divide = div
 subtract = sub
 
 
-def true_divide(dividend, divisor):
+def true_divide(input, other):                               # noqa: A002
     """**It cannot be `div`, because it is the one that has no `rounding_mode`.**
 
     `divide` is an alias and takes the argument; torch refuses it here —
@@ -2698,8 +2722,12 @@ def true_divide(dividend, divisor):
     floored. The answer was an integer where torch will not produce one at all, so
     code written here ran and the same code against torch raised — the divergence
     surfacing at the port rather than at the call.
+
+    **The parameters were `(dividend, divisor)` and torch takes `(input, other)`.**
+    Its docstring says `true_divide(value)`, which is a third name again and one
+    torch also refuses; only calling it settles which of the three is real.
     """
-    return div(dividend, divisor)
+    return div(input, other)
 
 greater = gt
 greater_equal = ge
@@ -8488,22 +8516,27 @@ def logcumsumexp(input, dim):
     return input._make(out, (input,), back, "LogcumsumexpBackward0")
 
 
-def clamp_max(x, value):
-    return clamp(x, None, value)
+# **These four have no docstring in torch at all**, so the prose reader had nothing
+# to read and the axis compared them by arity — same count, different name, no row.
+# Only the core↔borch.ts axis could see them, and only because borch.ts had already
+# taken torch's spelling. The names are `max` and `min`, confirmed by calling torch
+# with each: `x.clamp_max(max=2.0)` is taken and `x.clamp_max(value=2.0)` is not.
+def clamp_max(input, max):                                   # noqa: A002
+    return clamp(input, None, max)
 
 
-def clamp_min(x, value):
-    return clamp(x, value, None)
+def clamp_min(input, min):                                   # noqa: A002
+    return clamp(input, min, None)
 
 
-def clamp_max_(x, value):
-    x = _wrap(x)
-    return x._inplace(lambda: clamp(x, None, value), "clamp_max_")
+def clamp_max_(input, max):                                  # noqa: A002
+    input = _wrap(input)                                     # noqa: A001
+    return input._inplace(lambda: clamp(input, None, max), "clamp_max_")
 
 
-def clamp_min_(x, value):
-    x = _wrap(x)
-    return x._inplace(lambda: clamp(x, value, None), "clamp_min_")
+def clamp_min_(input, min):                                  # noqa: A002
+    input = _wrap(input)                                     # noqa: A001
+    return input._inplace(lambda: clamp(input, min, None), "clamp_min_")
 
 
 def arctan2(input, other):
@@ -8875,19 +8908,25 @@ def diag_embed(input, offset=0, dim1=-2, dim2=-1):
     return input._make(out, (input,), back, "DiagEmbedBackward0")
 
 
-def tensor_split(input, indices_or_sections, dim=0):
+def tensor_split(input, sections, dim=0):                    # noqa: A002
     """**The remainder is shared out from the front.** Splitting 10 into 4 gives
     3, 3, 2, 2 (measured).
 
     Different from `chunk` — that one fills the front large and the last piece
     takes what is left. Measured at sizes that divide evenly the two functions look
     the same.
+
+    **The parameter is `sections`, and torch's docstring says
+    `indices_or_sections`.** Called with the documented name torch answers
+    `received an invalid combination of arguments`; called with `sections` it works,
+    on the function and on the method alike. Unlike `split` next door, this pair
+    agrees with itself.
     """
-    input = _wrap(input)
-    if isinstance(indices_or_sections, (list, tuple)):
+    input = _wrap(input)                                     # noqa: A001
+    if isinstance(sections, (list, tuple)):
         return tuple(_wrap(p) for p in
-                     _split_at(input, list(indices_or_sections), dim))
-    k = int(indices_or_sections)
+                     _split_at(input, list(sections), dim))
+    k = int(sections)
     n = input.data.shape[dim]
     base, extra = divmod(n, k)
     cuts, at = [], 0
