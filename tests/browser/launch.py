@@ -136,6 +136,50 @@ def _headed(asked):
     has to be made here, at the one door — which is what this module is for; it exists
     because five runners were each launching with different arguments.
 
+    ## Why headless gives a CPU — **two causes, and this paragraph used to say one**
+
+    The file's opening called headless a repeated lesson without saying what makes it
+    one. There are two mechanisms, they are independent, and either alone is enough:
+
+    **1. Playwright headless is a different executable.** It downloads
+    `chromium-<rev>` and `chromium_headless_shell-<rev>` as separate binaries, and the
+    headless one has **no GPU process at all** — so `--enable-unsafe-webgpu
+    --enable-features=Vulkan` are not ignored, there is nothing running that could
+    receive them. Met from both sides on the same day: the session holding the site
+    found the shell binary eating 100% CPU under `ps`, and a run of mine that dropped
+    `BORCH_CHROME_CHANNEL` failed with `Executable doesn't exist at
+    .../chromium_headless_shell-1234/chrome-headless-shell` — the binary had never
+    been fetched.
+
+    **2. A real browser with no window still falls back.** `BORCH_CHROME_CHANNEL=chrome`
+    uses the machine's own Chrome, which is **one binary** running `--headless=new`, so
+    the GPU process does exist — and it starts in under a second where the shell binary
+    is absent entirely. It still reports `google / swiftshader`. Measured on two Linux
+    machines with `nvidia_icd.json` installed; forcing `--use-angle=vulkan` there gives
+    no adapter at all rather than a real one, which is the same fact from the other
+    side.
+
+    Keeping them apart matters because they have different fixes. The first is a flag
+    away. The second is not: it wants a display.
+
+    ## And a display is not the same as a display server that answers
+
+    The 4090 has a logged-in session on `:1`, and Chrome opens no window there —
+    measured four ways: `DISPLAY` alone, `DISPLAY` with the session's `XAUTHORITY`,
+    and again with five minutes of patience. All three fail identically, so it is
+    neither the cookie nor the wait. Chrome prints nothing while failing.
+
+    **A second client settles what one could not.** `Xephyr`, a nested X server, was
+    pointed at the same `:1`: it does not exit, does not complain, and never opens its
+    socket. Two unrelated programs, the same silence — so the fault is the display
+    server, not the browser. A browser that hangs and an X server that hangs look the
+    same from the outside, and only asking twice tells them apart.
+
+    That also rules out the nested route on principle rather than by trying harder:
+    `Xephyr` draws into its parent, so anything built on it inherits the wall. A
+    standalone framebuffer (`Xvfb`) is the one shape that does not, and it is not
+    installed there.
+
     So `headed=True` still means yes, and `False` now means *no preference*. Saying no
     takes `--headless` or `BORCH_HEADLESS=1`, and it is worth having: a machine with no
     display cannot open a window, and there the choice is a real one rather than a
