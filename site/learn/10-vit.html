@@ -139,8 +139,13 @@
         // Same attention, function form: the weights the layer does not hand back.
         // (L, N, E) here, so the batch-first sequence is permuted on the way in.
         const lengthFirst = seq.permute([1, 0, 2]);
-        const both = nn.multiHeadAttentionForward(lengthFirst, lengthFirst, lengthFirst, 4,
-          att.inWeight, att.inBias, att.outWeight, att.outBias);
+        // torch's order, and torch's count: `embedDimToCheck` comes before `numHeads`,
+        // and `biasK`, `biasV`, `addZeroAttn` and `dropoutP` sit between the input and
+        // output projections. Written without them, `att.outBias` lands on `biasK` and
+        // the call is refused by name.
+        const both = nn.multiHeadAttentionForward(lengthFirst, lengthFirst, lengthFirst,
+          null, 4, att.inWeight, att.inBias, null, null, false, 0,
+          att.outWeight, att.outBias);
         log("function form  :", Object.keys(both).join(", "),
             "->", JSON.stringify(both.weights.shape), "weights");
 

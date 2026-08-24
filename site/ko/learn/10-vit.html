@@ -136,8 +136,12 @@
         // 같은 어텐션의 함수형. 층이 안 돌려주는 가중치가 여기 있다.
         // 여기는 (L, N, E) 라 배치 우선 수열을 넣기 전에 축을 바꾼다.
         const lengthFirst = seq.permute([1, 0, 2]);
-        const both = nn.multiHeadAttentionForward(lengthFirst, lengthFirst, lengthFirst, 4,
-          att.inWeight, att.inBias, att.outWeight, att.outBias);
+        // torch 의 순서이고 torch 의 개수다. `embedDimToCheck` 가 `numHeads` 앞에 오고,
+        // `biasK`·`biasV`·`addZeroAttn`·`dropoutP` 가 입력 사영과 출력 사영 사이에 앉는다.
+        // 그것들을 빼고 쓰면 `att.outBias` 가 `biasK` 자리에 떨어져 이름으로 거절당한다.
+        const both = nn.multiHeadAttentionForward(lengthFirst, lengthFirst, lengthFirst,
+          null, 4, att.inWeight, att.inBias, null, null, false, 0,
+          att.outWeight, att.outBias);
         log("함수형       :", Object.keys(both).join(", "),
             "->", JSON.stringify(both.weights.shape), "가중치");
 
