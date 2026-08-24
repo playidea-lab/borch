@@ -416,9 +416,16 @@ RENAMED = {
     #
     # **`true_divide` and `remainder` name each other's wrong argument.** The prose
     # says `value` for the first and `divisor` for the second, and both actually take
-    # `other` — so a reader following the docstrings would have crossed them, and the
-    # handover above says `divisor` for `true_divide` for exactly that reason. Two
-    # sessions read the same prose and neither could tell without calling.
+    # `other` — so a reader following the docstrings would have crossed them.
+    #
+    # **This paragraph first said the handover above had been crossed that way, and
+    # that was a cause invented to fit.** The handover's `divisor` came from reading
+    # a row of axis output — `['divisor'] → ['other']`, the core on the left — and
+    # taking the left column for torch's. The docstring hazard is real and measured;
+    # attributing somebody else's slip to it was not. **A plausible cause written
+    # where the real one belongs** is the shape this repository keeps finding, and it
+    # is worse in a note about somebody else's work than in a note about one's own.
+    # Corrected on their say-so, which is the only way it could have been.
     #
     # **`split` needed two signatures, because torch has two.** The function takes
     # `split_size_or_sections` and refuses `split_size`; the method takes

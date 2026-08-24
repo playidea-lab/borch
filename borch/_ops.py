@@ -4482,10 +4482,25 @@ def _expand_reduced(g, shape, dim, keepdim):
     return _np.broadcast_to(gg, shape)
 
 
-def logsumexp(input, dim=None, keepdim=False):
+def logsumexp(input, dim, keepdim=False):                    # noqa: A002
     """`log(sum(exp(x)))` computed **without overflow** — the maximum is
-    subtracted before summing."""
-    input = _wrap(input)
+    subtracted before summing.
+
+    **`dim` is required, and it had a default of `None`.** torch refuses both
+    `t.logsumexp()` and `t.logsumexp(dim=None)` — the first for a missing argument
+    and the second because `dim` must be a tuple of ints (measured). This answered
+    the whole-tensor value for both.
+
+    Accepting what the authority refuses misleads exactly as much as accepting an
+    argument and ignoring it: code written here runs and the same line against torch
+    stops, with the divergence surfacing at the port rather than at the call. It is
+    the rule `true_divide` records for `rounding_mode`, the other way round.
+
+    Found by a sweep asking whether each reduction carries **both** of torch's
+    overloads, after a peer found borch.ts's `sum` carrying one of two. This is the
+    only row of twenty-one that parted, and it parted in our favour.
+    """
+    input = _wrap(input)                                     # noqa: A001
     # **It takes integers and booleans too and produces float32** (measured).
     # Left alone two places are wrong — numpy promotes integers to float64, and
     # booleans refuse `-` and stop at the subtraction below.
