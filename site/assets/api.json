@@ -7763,7 +7763,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(t: number, value: number)",
+       "signature": "constructor(threshold: number, value: number)",
        "doc": ""
       },
       {
@@ -8452,11 +8452,11 @@
      "kind": "class",
      "name": "FractionalMaxPoolND",
      "signature": "export declare class FractionalMaxPoolND extends Module",
-     "doc": "Max pooling whose window positions are shaken by a sample.\n\n**The sample is drawn on the host.** The window positions have to be\nbaked into the shader, so the values must be on the CPU, and reading GPU\nrandomness back is asynchronous — `forward` has to be synchronous, so it\nuses the stream in `random.ts`. `manualSeed` catches that stream too.\n\nPass `randomSamples` and it uses those. It is where torch's\n`_random_samples` goes, and it is needed to freeze values for comparison\n— without it the three implementations' generators differ and the values\ndo not match.\n\n**`outputSize` and `outputRatio` are one or the other.** Giving both, or\nneither, stops — as in torch.",
+     "doc": "Max pooling whose window positions are shaken by a sample.\n\n**The sample is drawn on the host.** The window positions have to be\nbaked into the shader, so the values must be on the CPU, and reading GPU\nrandomness back is asynchronous — `forward` has to be synchronous, so it\nuses the stream in `random.ts`. `manualSeed` catches that stream too.\n\nPass `_randomSamples` and it uses those. It is where torch's\n`_random_samples` goes, and it is needed to freeze values for comparison\n— without it the three implementations' generators differ and the values\ndo not match.\n\n**`outputSize` and `outputRatio` are one or the other.** Giving both, or\nneither, stops — as in torch.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(spatial: number, kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, randomSamples?: readonly (readonly number[])[] | null)",
+       "signature": "constructor(spatial: number, kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
        "doc": ""
       },
       {
@@ -8470,7 +8470,7 @@
        "doc": ""
       }
      ],
-     "doc_ko": "창 자리를 표본이 흔드는 최대 풀링.\n\n**표본은 호스트에서 뽑는다.** 창 자리를 셰이더에 구워야 해서 CPU 에 값이 있어야\n하는데, GPU 난수를 읽어 오는 것은 비동기다 — `forward` 는 동기여야 하므로\n`random.ts` 의 줄기를 쓴다. `manualSeed` 가 그 줄기도 잡는다.\n\n`randomSamples` 를 주면 그것을 쓴다. torch 의 `_random_samples` 자리이고, 값을\n굳혀 대조하려면 이 길이 필요하다 — 안 주면 셋의 난수기가 달라 값이 안 맞는다.\n\n**`outputSize` 와 `outputRatio` 는 둘 중 하나만** 받는다. 둘 다 주거나 둘 다\n안 주면 멈춘다 — torch 가 그렇다."
+     "doc_ko": "창 자리를 표본이 흔드는 최대 풀링.\n\n**표본은 호스트에서 뽑는다.** 창 자리를 셰이더에 구워야 해서 CPU 에 값이 있어야\n하는데, GPU 난수를 읽어 오는 것은 비동기다 — `forward` 는 동기여야 하므로\n`random.ts` 의 줄기를 쓴다. `manualSeed` 가 그 줄기도 잡는다.\n\n`_randomSamples` 를 주면 그것을 쓴다. torch 의 `_random_samples` 자리이고, 값을\n굳혀 대조하려면 이 길이 필요하다 — 안 주면 셋의 난수기가 달라 값이 안 맞는다.\n\n**`outputSize` 와 `outputRatio` 는 둘 중 하나만** 받는다. 둘 다 주거나 둘 다\n안 주면 멈춘다 — torch 가 그렇다."
     },
     {
      "kind": "class",
@@ -8480,7 +8480,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, randomSamples?: readonly (readonly number[])[] | null)",
+       "signature": "constructor(kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
        "doc": ""
       }
      ]
@@ -8493,7 +8493,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, randomSamples?: readonly (readonly number[])[] | null)",
+       "signature": "constructor(kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
        "doc": ""
       }
      ]
@@ -8951,19 +8951,22 @@
      "doc": "Mixes two inputs **at once.** The weight has three axes, `(out, in1,\nin2)`.",
      "members": [
       {
-       "name": "in1",
-       "signature": "readonly in1: number",
-       "doc": ""
+       "name": "in1Features",
+       "signature": "readonly in1Features: number",
+       "doc": "",
+       "torch": "in1_features"
       },
       {
-       "name": "in2",
-       "signature": "readonly in2: number",
-       "doc": ""
+       "name": "in2Features",
+       "signature": "readonly in2Features: number",
+       "doc": "",
+       "torch": "in2_features"
       },
       {
-       "name": "out",
-       "signature": "readonly out: number",
-       "doc": ""
+       "name": "outFeatures",
+       "signature": "readonly outFeatures: number",
+       "doc": "",
+       "torch": "out_features"
       },
       {
        "name": "weight",
@@ -8977,7 +8980,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(in1: number, in2: number, out: number, useBias?: boolean)",
+       "signature": "constructor(in1Features: number, in2Features: number, outFeatures: number, useBias?: boolean)",
        "doc": "**`bias` was accepted by the binding and had nowhere to go.** This constructor\ntook three numbers and always built a bias, so `Bilinear(a, b, c, bias=False)`\ngot one anyway — no error, a parameter the caller asked not to have, and a\ngradient flowing into it every step. Found by the argument check once it was\npointed at `nn` as well as at `optim`."
       },
       {
@@ -9132,14 +9135,16 @@
      "doc": "A trainable table turning an index into a vector.\n\n**This description belongs on the class, and putting a class here took someone\nelse's.** The JSDoc above `EmbeddingBag` was \"One row per bag…\", and inserting a\nnew class in front of it silently handed that sentence to this one — the emitted\n`.d.ts` attaches a comment to whatever declaration follows it, so the site would\nhave described `Embedding` as a bag and `EmbeddingBag` as nothing at all. Nothing\nraises; `test_site.py` noticed that a Korean entry had lost its source.",
      "members": [
       {
-       "name": "num",
-       "signature": "readonly num: number",
-       "doc": ""
+       "name": "numEmbeddings",
+       "signature": "readonly numEmbeddings: number",
+       "doc": "",
+       "torch": "num_embeddings"
       },
       {
-       "name": "dim",
-       "signature": "readonly dim: number",
-       "doc": ""
+       "name": "embeddingDim",
+       "signature": "readonly embeddingDim: number",
+       "doc": "",
+       "torch": "embedding_dim"
       },
       {
        "name": "maxNorm",
@@ -9177,7 +9182,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(num: number, dim: number, paddingIdx?: number | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, sparse?: boolean, weightIn?: Tensor | null, freeze?: boolean)",
+       "signature": "constructor(numEmbeddings: number, embeddingDim: number, paddingIdx?: number | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, sparse?: boolean, _weight?: Tensor | null, _freeze?: boolean)",
        "doc": "torch's nine, of which two do real work here.\n\n**The comment on `embedding()` said this layer was absent from all three and\nthat the golden did not ask for it.** That was true when it was written. The\ncore then took torch's nine arguments, seven cases were added, and this side\nwas not touched — so the binding answered `module 'borch_webgpu._nn' has no\nattribute 'Embedding'` seven times and the sentence explaining the absence was\nthe reason nobody looked.\n\nTwo arguments do real work and each has a case that fails without it:\n\n- **`maxNorm` shortens the rows that were looked up, in the table itself.** The\n  same side effect on a parameter that `embeddingBag` has, through the same\n  `renormRows`, not a second copy of the rule.\n- **`paddingIdx` stops that row learning.** The forward is untouched — torch\n  returns the padding row's values like any other — so an implementation that\n  masks the output instead passes every value case and fails only on the\n  gradient. Done here by splitting the table into a part the gradient flows\n  through and a detached part, which needs no new autograd machinery.\n\nAnd one line that is about **who supplied the weights** rather than about\npadding: a fresh table has its padding row zeroed and a given one does not.\ntorch draws it in the same place, and both halves are asked because either\nalone reads as a rule about padding."
       },
       {
@@ -9205,14 +9210,16 @@
      "doc": "One row per bag. Selecting from the table **and combining** is one layer.",
      "members": [
       {
-       "name": "num",
-       "signature": "readonly num: number",
-       "doc": ""
+       "name": "numEmbeddings",
+       "signature": "readonly numEmbeddings: number",
+       "doc": "",
+       "torch": "num_embeddings"
       },
       {
-       "name": "dim",
-       "signature": "readonly dim: number",
-       "doc": ""
+       "name": "embeddingDim",
+       "signature": "readonly embeddingDim: number",
+       "doc": "",
+       "torch": "embedding_dim"
       },
       {
        "name": "maxNorm",
@@ -9261,7 +9268,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(num: number, dim: number, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, weightIn?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null)",
+       "signature": "constructor(numEmbeddings: number, embeddingDim: number, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, _weight?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null)",
        "doc": "**`mode` sits sixth, where torch has it.**\n\nIt used to be third, so `new EmbeddingBag(10, 3, \"sum\")` set `maxNorm` in\ntorch and the mode here. Both readings then build a layer and return bags of\nthe right shape, and only the numbers differ."
       },
       {

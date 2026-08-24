@@ -288,7 +288,18 @@ UNALIGNED = {
     # **borch.ts was right about `value` from the start**: its fifteen classes each
     # write their own constructor and only `ConstantPad*` has one. The row was
     # about the core the whole time.
-    "nn": 23,
+    # **23 → 20.** `Threshold`, `Embedding` and `EmbeddingBag` left for `shorter`
+    # once they took torch's spelling.
+    #
+    # **Two rows in `agree` were wrong and this is where that was found.**
+    # `ts_axis._camel` ate a *leading* underscore — `_weight` became `Weight`, which
+    # folds to `weight` — while its own docstring explains at length why a *trailing*
+    # one is kept. So the core's `_random_samples` folded onto borch.ts's
+    # `randomSamples` and `FractionalMaxPool2d/3d` were reported as agreeing when
+    # they did not. **The instrument read a mismatch as a match**, which is the one
+    # direction a checker must not fail in. Fixed, the two rows appeared as `renamed`
+    # and borch.ts now spells it `_randomSamples`.
+    "nn": 20,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -639,7 +650,17 @@ SHORTER = {
     # two-dimensional kernel rather than `poolND`, so the same six arguments are a
     # second implementation and not a second constructor line. Left as it is until
     # the two paths are one.
-    "nn": 32,
+    #
+    # **32 → 35, and every one of the three arrived from `unaligned`** — the bucket
+    # where the lists cannot be lined up at all, so nothing beneath is reported.
+    # `Threshold` spelled its first argument `t`; `Embedding` and `EmbeddingBag`
+    # abbreviated `numEmbeddings`/`embeddingDim` to `num`/`dim`. Taking torch's
+    # spelling makes each a prefix of torch's list, which is the safe reading: what
+    # is accepted means what torch means, and one argument too many raises.
+    #
+    # A number going *up* here is the work, not a regression. `unaligned` hides; this
+    # bucket says exactly what is missing (`device`/`dtype`, mostly).
+    "nn": 35,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too

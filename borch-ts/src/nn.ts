@@ -903,12 +903,12 @@ export class Softplus extends Module {
 }
 
 export class Threshold extends Module {
-  constructor(private readonly t: number, private readonly value: number) {
+  constructor(private readonly threshold: number, private readonly value: number) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.threshold(this.t, this.value);
+    return x.threshold(this.threshold, this.value);
   }
 }
 
@@ -1590,7 +1590,7 @@ export class Unflatten extends Module {
  * randomness back is asynchronous — `forward` has to be synchronous, so it
  * uses the stream in `random.ts`. `manualSeed` catches that stream too.
  *
- * Pass `randomSamples` and it uses those. It is where torch's
+ * Pass `_randomSamples` and it uses those. It is where torch's
  * `_random_samples` goes, and it is needed to freeze values for comparison
  * — without it the three implementations' generators differ and the values
  * do not match.
@@ -1604,7 +1604,7 @@ export class FractionalMaxPoolND extends Module {
               private readonly outputSize: number | readonly number[] | null = null,
               private readonly outputRatio: number | readonly number[] | null = null,
               returnIndices = false,
-              private readonly randomSamples: readonly (readonly number[])[] | null
+              private readonly _randomSamples: readonly (readonly number[])[] | null
                 = null) {
     super();
     if ((outputSize === null) === (outputRatio === null)) {
@@ -1635,7 +1635,7 @@ export class FractionalMaxPoolND extends Module {
 
   pool(x: Tensor): { values: Tensor; indices: Tensor } {
     const planes = (x.shape[0] ?? 1) * (x.shape[1] ?? 1);
-    const samples: readonly (readonly number[])[] = this.randomSamples
+    const samples: readonly (readonly number[])[] = this._randomSamples
       ?? Array.from({ length: planes }, () =>
         Array.from({ length: this.spatial }, () => uniform01()));
     return x.fractionalMaxPool(this.kernel, this.sizesFor(x.shape), samples);
@@ -1651,8 +1651,8 @@ export class FractionalMaxPool2d extends FractionalMaxPoolND {
               outputSize: number | readonly number[] | null = null,
               outputRatio: number | readonly number[] | null = null,
               returnIndices = false,
-              randomSamples: readonly (readonly number[])[] | null = null) {
-    super(2, kernel, outputSize, outputRatio, returnIndices, randomSamples);
+              _randomSamples: readonly (readonly number[])[] | null = null) {
+    super(2, kernel, outputSize, outputRatio, returnIndices, _randomSamples);
   }
 }
 
@@ -1661,8 +1661,8 @@ export class FractionalMaxPool3d extends FractionalMaxPoolND {
               outputSize: number | readonly number[] | null = null,
               outputRatio: number | readonly number[] | null = null,
               returnIndices = false,
-              randomSamples: readonly (readonly number[])[] | null = null) {
-    super(3, kernel, outputSize, outputRatio, returnIndices, randomSamples);
+              _randomSamples: readonly (readonly number[])[] | null = null) {
+    super(3, kernel, outputSize, outputRatio, returnIndices, _randomSamples);
   }
 }
 
@@ -2031,12 +2031,12 @@ export class Bilinear extends Module {
    * gradient flowing into it every step. Found by the argument check once it was
    * pointed at `nn` as well as at `optim`.
    */
-  constructor(readonly in1: number, readonly in2: number, readonly out: number,
-              useBias = true) {
+  constructor(readonly in1Features: number, readonly in2Features: number,
+              readonly outFeatures: number, useBias = true) {
     super();
-    const bound = 1 / Math.sqrt(Math.max(1, in1));
-    this.weight = uniform([out, in1, in2], bound);
-    this.bias = useBias ? uniform([out], bound) : null;
+    const bound = 1 / Math.sqrt(Math.max(1, in1Features));
+    this.weight = uniform([outFeatures, in1Features, in2Features], bound);
+    this.bias = useBias ? uniform([outFeatures], bound) : null;
     this.claim(...(this.bias ? [this.weight, this.bias] : [this.weight]));
   }
 
@@ -2052,9 +2052,15 @@ export class Bilinear extends Module {
     return x1.bilinear(x2, this.weight, this.bias);
   }
 
+  // **This printed `in1_features` while the constructor took `in1`.** The third of
+  // that shape today — `PixelShuffle` and `PixelUnshuffle` were the others, and the
+  // core's `_Rearrange` was the same thing in Python, where it was a `TypeError`
+  // rather than a quiet mismatch. Here the repr claimed a name the class did not
+  // answer to and nothing could notice, because JavaScript is positional.
   override describe(): string {
-    return `Bilinear(in1_features=${this.in1}, in2_features=${this.in2}, ` +
-      `out_features=${this.out}, bias=${this.bias ? "True" : "False"})`;
+    return `Bilinear(in1_features=${this.in1Features}, ` +
+      `in2_features=${this.in2Features}, out_features=${this.outFeatures}, ` +
+      `bias=${this.bias ? "True" : "False"})`;
   }
 }
 
@@ -2177,14 +2183,14 @@ export class Embedding extends Module {
    * torch draws it in the same place, and both halves are asked because either
    * alone reads as a rule about padding.
    */
-  constructor(readonly num: number, readonly dim: number,
+  constructor(readonly numEmbeddings: number, readonly embeddingDim: number,
               paddingIdx: number | null = null,
               readonly maxNorm: number | null = null,
               readonly normType = 2,
               readonly scaleGradByFreq = false,
               readonly sparse = false,
-              weightIn: Tensor | null = null,
-              freeze = false) {
+              _weight: Tensor | null = null,
+              _freeze = false) {
     super();
     if (scaleGradByFreq) {
       throw new NotImplementedError("Embedding(scaleGradByFreq) is not carried across");
@@ -2194,28 +2200,28 @@ export class Embedding extends Module {
         "Embedding(sparse) is not carried across — there is no sparse gradient here");
     }
     if (paddingIdx !== null) {
-      if (paddingIdx >= num || paddingIdx < -num) {
+      if (paddingIdx >= numEmbeddings || paddingIdx < -numEmbeddings) {
         throw new Error("padding_idx must be within num_embeddings");
       }
-      if (paddingIdx < 0) paddingIdx = num + paddingIdx;
+      if (paddingIdx < 0) paddingIdx = numEmbeddings + paddingIdx;
     }
     this.paddingIdx = paddingIdx;
-    if (weightIn !== null) {
-      this.weight = weightIn;
+    if (_weight !== null) {
+      this.weight = _weight;
     } else {
-      const fresh = Tensor.randn([num, dim]);
+      const fresh = Tensor.randn([numEmbeddings, embeddingDim]);
       // Only a **fresh** table gets the padding row zeroed. A caller who handed
       // weights in meant them.
       this.weight = paddingIdx === null ? fresh : fresh.mul(this.rowMask(paddingIdx));
     }
-    this.weight.requiresGrad = !freeze;
+    this.weight.requiresGrad = !_freeze;
     this.claim(this.weight);
   }
 
-  /** `[num, 1]`, zero on `row` and one everywhere else. */
+  /** `[numEmbeddings, 1]`, zero on `row` and one everywhere else. */
   private rowMask(row: number): Tensor {
-    return Tensor.arange(0, this.num).ne(Tensor.full([], row))
-      .to("float32").reshape([this.num, 1]);
+    return Tensor.arange(0, this.numEmbeddings).ne(Tensor.full([], row))
+      .to("float32").reshape([this.numEmbeddings, 1]);
   }
 
   override ownParameters(): Record<string, Tensor> {
@@ -2232,13 +2238,13 @@ export class Embedding extends Module {
     if (this.paddingIdx !== null) {
       const keep = this.rowMask(this.paddingIdx);
       table = table.mul(keep)
-        .add(table.detach().mul(Tensor.full([this.num, 1], 1).sub(keep)));
+        .add(table.detach().mul(Tensor.full([this.numEmbeddings, 1], 1).sub(keep)));
     }
     return embedding(idx, table);
   }
 
   override describe(): string {
-    const parts = [`${this.num}, ${this.dim}`];
+    const parts = [`${this.numEmbeddings}, ${this.embeddingDim}`];
     if (this.paddingIdx !== null) parts.push(`padding_idx=${this.paddingIdx}`);
     // **`max_norm` is a float and `padding_idx` is an index.** `2.0` and `1`, and the
     // golden froze both spellings — this row failed on the punctuation alone.
@@ -2260,17 +2266,17 @@ export class EmbeddingBag extends Module {
    * torch and the mode here. Both readings then build a layer and return bags of
    * the right shape, and only the numbers differ.
    */
-  constructor(readonly num: number, readonly dim: number,
+  constructor(readonly numEmbeddings: number, readonly embeddingDim: number,
               readonly maxNorm: number | null = null,
               readonly normType = 2,
               readonly scaleGradByFreq = false,
               readonly mode: "sum" | "mean" | "max" = "mean",
               readonly sparse = false,
-              weightIn: Tensor | null = null,
+              _weight: Tensor | null = null,
               readonly includeLastOffset = false,
               readonly paddingIdx: number | null = null) {
     super();
-    this.weight = weightIn ?? uniform([num, dim], 1);
+    this.weight = _weight ?? uniform([numEmbeddings, embeddingDim], 1);
     this.claim(this.weight);
   }
 
@@ -2300,7 +2306,7 @@ export class EmbeddingBag extends Module {
   }
 
   override describe(): string {
-    return `EmbeddingBag(${this.num}, ${this.dim}, mode='${this.mode}')`;
+    return `EmbeddingBag(${this.numEmbeddings}, ${this.embeddingDim}, mode='${this.mode}')`;
   }
 }
 
@@ -2448,7 +2454,15 @@ class LazyConvBase extends LazyModule {
   }
 }
 
-type ConvArgs = [number, number, number?, number?, boolean?];
+/**
+ * The six lazy convolutions share one argument list, and **the tuple was unlabelled**
+ * — `[number, number, number?, number?, boolean?]`. A rest parameter takes its names
+ * from the tuple, so with none there the editor offered `a_0`, `a_1`, the generated
+ * declarations said `a`, and the signature axis could not line these six up against
+ * anything. Labels cost nothing and are the names torch uses.
+ */
+type ConvArgs = [outChannels: number, kernelSize: number, stride?: number,
+                 padding?: number, bias?: boolean];
 
 export class LazyConv1d extends LazyConvBase {
   constructor(...a: ConvArgs) { super(1, false, ...a); }
