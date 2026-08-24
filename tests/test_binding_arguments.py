@@ -57,6 +57,23 @@ property of the defect. `Tensor.sum(dtype)` was safe by accident because `DType`
 string union; `Tensor.std(correction)` was not, because a correction and an axis are
 both numbers, and the two signatures are the same shape side by side.
 
+## What this check does not catch, measured rather than reasoned
+
+**It finds a dropped argument, not a misplaced one**, and the two are only the same
+thing when the misplacement leaves a name unused. `NAdam` above is that case:
+`weight_decay` appeared nowhere in the call, so walking by position reached it.
+
+`_recurrent` is the other case, and it cost six red golden cases to learn.
+`RNNBase` took torch's order (`mode` first, where borch.ts had it last) and the call
+site read `RNNBase.new(inp, hid, kind)`. Nothing was dropped — all three arguments
+arrived, in the wrong seats — and `kind` is not a parameter of `make` at all but a
+closure variable, so there was no Python parameter to walk it against. This check saw
+the call site, had a rule, and the rule had nothing to say. **Measured**: with the
+old order restored, all three tests here pass.
+
+Only the browser run caught it, and it said so clearly — six of six under one prefix,
+which the runner calls one cause rather than many.
+
 So the coverage this repository appears to have on this class is mostly luck about
 type widths. The one place it is not luck is the check written for the question, and
 that is the argument for treating this file as the model rather than the exception:

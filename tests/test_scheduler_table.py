@@ -95,9 +95,11 @@ TABLES = {
 # borch.ts's name → the binding's (torch's) name. **One line each, by hand.** A blanket
 # rule here would swallow a real reordering: `up` and `stepSizeUp` are the same
 # parameter, and nothing about the strings says so.
+# **`up` and `fn` were here and are gone**, because borch.ts spells them
+# `stepSizeUp` and `lrLambda` now. A fold exists to bridge a difference; closing the
+# difference retires the fold, and the check below is what says so — it fails on a
+# fold that fires on nothing, so a stale line cannot sit here looking like work.
 RENAMED = {
-    "up": "step_size_up",
-    "fn": "lr_lambda",
     "kernel": "kernel_size",
     "outputSize": "output_size",
     # borch.ts has one way of asking for a bigger picture and torch has two. `size=` is

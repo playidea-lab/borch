@@ -4022,10 +4022,16 @@ export class RNNBase extends Module {
   readonly biasIh: Tensor;
   readonly biasHh: Tensor;
 
+  /**
+   * **`mode` comes first, as it does in torch.** It used to come last, so
+   * `new RNNBase(10, 20, "LSTM")` here was `RNNBase("LSTM", 10, 20)` there — and the
+   * row said nothing, because a name torch has at one end and we have at the other
+   * cannot be lined up, which puts it in the bucket that reports no detail.
+   */
   constructor(
+    readonly kind: RNNKind,
     inputSize: number,
     readonly hidden: number,
-    readonly kind: RNNKind,
   ) {
     super();
     const gates = kind === "LSTM" ? 4 : kind === "GRU" ? 3 : 1;
@@ -4123,7 +4129,7 @@ export type Recurrent = RNNBase;
 /** `torch.nn.RNN` — one layer, time-first. */
 export class RNN extends RNNBase {
   constructor(inputSize: number, hidden: number) {
-    super(inputSize, hidden, "RNN");
+    super("RNN", inputSize, hidden);
   }
 }
 
@@ -4133,14 +4139,14 @@ export class RNN extends RNNBase {
  */
 export class LSTM extends RNNBase {
   constructor(inputSize: number, hidden: number) {
-    super(inputSize, hidden, "LSTM");
+    super("LSTM", inputSize, hidden);
   }
 }
 
 /** `torch.nn.GRU` — one layer, time-first. */
 export class GRU extends RNNBase {
   constructor(inputSize: number, hidden: number) {
-    super(inputSize, hidden, "GRU");
+    super("GRU", inputSize, hidden);
   }
 }
 
@@ -4249,15 +4255,15 @@ export class MultiheadAttention extends Module {
   readonly outWeight: Tensor;
   readonly outBias: Tensor;
 
-  constructor(readonly embed: number, readonly heads: number) {
+  constructor(readonly embedDim: number, readonly numHeads: number) {
     super();
-    const bound = 1 / Math.sqrt(Math.max(1, embed));
-    this.inWeight = uniform([3 * embed, embed], bound);
+    const bound = 1 / Math.sqrt(Math.max(1, embedDim));
+    this.inWeight = uniform([3 * embedDim, embedDim], bound);
     // torch's attention starts the bias at 0 — this is not a place where symmetry
     // needs breaking.
-    this.inBias = Tensor.owned([3 * embed], 0);
-    this.outWeight = uniform([embed, embed], bound);
-    this.outBias = Tensor.owned([embed], 0);
+    this.inBias = Tensor.owned([3 * embedDim], 0);
+    this.outWeight = uniform([embedDim, embedDim], bound);
+    this.outBias = Tensor.owned([embedDim], 0);
     this.claim(this.inWeight, this.inBias, this.outWeight, this.outBias);
   }
 
@@ -4274,8 +4280,8 @@ export class MultiheadAttention extends Module {
 
   attend(x: Tensor, mask: Tensor | null): Tensor {
     const [batch = 1, len = 1] = x.shape;
-    const E = this.embed;
-    const head = E / this.heads;
+    const E = this.embedDim;
+    const head = E / this.numHeads;
     const flat = x.reshape([batch * len, E]);
     const projected = flat.linear(this.inWeight).add(this.inBias);
     const parts = [0, 1, 2].map((k) => projected.narrow(1, k * E, E));
@@ -4283,7 +4289,7 @@ export class MultiheadAttention extends Module {
     const outs: Tensor[] = [];
     for (let b = 0; b < batch; b++) {
       const perHead: Tensor[] = [];
-      for (let h = 0; h < this.heads; h++) {
+      for (let h = 0; h < this.numHeads; h++) {
         const take = (t: Tensor | undefined): Tensor => {
           if (!t) throw new Error("attention: the projections are missing");
           return t.reshape([batch, len, E]).select(0, b).narrow(1, h * head, head);
@@ -4580,7 +4586,7 @@ export class TransformerDecoderLayer extends Module {
     const a = this.multihead_attn;
     const { output } = multiHeadAttentionForward(
       x.swapaxes(0, 1), memory.swapaxes(0, 1), memory.swapaxes(0, 1),
-      a.heads, a.inWeight, a.inBias, a.outWeight, a.outBias);
+      a.numHeads, a.inWeight, a.inBias, a.outWeight, a.outBias);
     return output.swapaxes(0, 1);
   }
 

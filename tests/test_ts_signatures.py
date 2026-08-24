@@ -345,7 +345,12 @@ UNALIGNED = {
     # the order visible and the order was the defect. **Twice now a rename has been
     # the thing that exposed a shift**, which is the argument for doing the cheap
     # renames rather than leaving them as cosmetic.
-    "nn": 10,
+    #
+    # **10 → 9, and it was a third one.** `RNNBase` took `(inputSize, hidden, kind)`
+    # where torch takes `(mode, input_size, hidden_size, …)` — the same argument, at
+    # opposite ends of the list. `MultiheadAttention` left too, on names alone
+    # (`embed`/`heads` → `embedDim`/`numHeads`).
+    "nn": 9,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -383,7 +388,13 @@ UNALIGNED = {
     # `beta1, beta2` where torch has one `betas`, so the lists cannot be the same
     # length whatever else is added. That one is a shape difference and not a debt.
     "optim": 7,
-    "optim.lr_scheduler": 3,
+    # **3 → 0, and the bucket is empty.** `LambdaLR` and `MultiplicativeLR` called
+    # torch's `lr_lambda` `fn`, and `CyclicLR` called `step_size_up` `up`; all three
+    # were attested folds rather than divergences, and borch.ts spells them torch's
+    # way now. The folds went with them — `test_scheduler_table` fails on a fold that
+    # fires on nothing, so closing the difference retired the line automatically
+    # rather than leaving it to look like work.
+    "optim.lr_scheduler": 0,
     "linalg": 6,
     "utils.data": 0,
 }
@@ -728,7 +739,8 @@ SHORTER = {
     # is most of what these forty rows are short of.
     #
     # 40 → 41. `RNNCellBase` arrived from `unaligned` — see the note there.
-    "nn": 41,
+    # 41 → 42. `MultiheadAttention` and `RNNBase` likewise.
+    "nn": 42,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.
@@ -757,7 +769,9 @@ SHORTER = {
     # a cooldown starts counting patience again at once, which is a cut up to
     # `cooldown` steps early: small, plausible, invisible against a curve.
     # 11 → 12. `ChainedScheduler` took torch's `optimizer` and borch.ts has not.
-    "optim.lr_scheduler": 12,
+    # 12 → 15. The three that left `unaligned`; what they are short of is
+    # `last_epoch`, which every scheduler here lacks.
+    "optim.lr_scheduler": 15,
     "linalg": 2,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now

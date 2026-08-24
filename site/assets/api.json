@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 147
+  "missing": 148
  },
  "modules": [
   {
@@ -11059,13 +11059,13 @@
      "doc": "What `RNN`, `LSTM` and `GRU` share — the weights and the time loop.\n\n**torch calls this `RNNBase`**, and the name was `Recurrent` alone, so the name\naxis counted the base class as a feature borch.ts does not have while `RNN\nextends` it two hundred lines down. `RNNBase` is the exported name now and\n`Recurrent` stays beside it, because `src/rnn.ts` and the golden's own comments\nrefer to it by that name and a rename that reaches into prose is how a comment\nstarts lying.",
      "members": [
       {
-       "name": "hidden",
-       "signature": "readonly hidden: number",
+       "name": "kind",
+       "signature": "readonly kind: RNNKind",
        "doc": ""
       },
       {
-       "name": "kind",
-       "signature": "readonly kind: RNNKind",
+       "name": "hidden",
+       "signature": "readonly hidden: number",
        "doc": ""
       },
       {
@@ -11094,8 +11094,8 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, kind: RNNKind)",
-       "doc": ""
+       "signature": "constructor(kind: RNNKind, inputSize: number, hidden: number)",
+       "doc": "**`mode` comes first, as it does in torch.** It used to come last, so\n`new RNNBase(10, 20, \"LSTM\")` here was `RNNBase(\"LSTM\", 10, 20)` there — and the\nrow said nothing, because a name torch has at one end and we have at the other\ncannot be lined up, which puts it in the bucket that reports no detail."
       },
       {
        "name": "ownParameters",
@@ -11187,14 +11187,16 @@
      "doc": "",
      "members": [
       {
-       "name": "embed",
-       "signature": "readonly embed: number",
-       "doc": ""
+       "name": "embedDim",
+       "signature": "readonly embedDim: number",
+       "doc": "",
+       "torch": "embed_dim"
       },
       {
-       "name": "heads",
-       "signature": "readonly heads: number",
-       "doc": ""
+       "name": "numHeads",
+       "signature": "readonly numHeads: number",
+       "doc": "",
+       "torch": "num_heads"
       },
       {
        "name": "inWeight",
@@ -11222,7 +11224,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(embed: number, heads: number)",
+       "signature": "constructor(embedDim: number, numHeads: number)",
        "doc": ""
       },
       {
@@ -13090,7 +13092,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, fn: (epoch: number) => number)",
+       "signature": "constructor(opt: Optimizer, lrLambda: (epoch: number) => number)",
        "doc": ""
       },
       {
@@ -13150,7 +13152,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, baseLr: number, maxLr: number, up?: number, stepSizeDown?: number | null, mode?: \"triangular\" | \"triangular2\" | \"exp_range\", gamma?: number)",
+       "signature": "constructor(opt: Optimizer, baseLr: number, maxLr: number, stepSizeUp?: number, stepSizeDown?: number | null, mode?: \"triangular\" | \"triangular2\" | \"exp_range\", gamma?: number)",
        "doc": ""
       },
       {
@@ -13244,7 +13246,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, fn: (epoch: number) => number)",
+       "signature": "constructor(opt: Optimizer, lrLambda: (epoch: number) => number)",
        "doc": ""
       },
       {

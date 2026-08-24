@@ -2494,7 +2494,13 @@ def _recurrent(kind):
         # `test_binding_arguments.py` reads *source*: it looks for a `class` with
         # this name and found a `const`, so the call site had nothing to compare
         # against. Its own message says that is a call site with no rule.
-        return _Recurrent(_ts.nn.RNNBase.new(inp, hid, kind))
+        #
+        # **`kind` leads, because torch puts `mode` first.** This read
+        # `(inp, hid, kind)` until borch.ts took torch's order, and then every
+        # recurrent case failed at once — six of six under one prefix, which is the
+        # shape the runner calls *one cause rather than many*. The signature axis
+        # could not have said so: it reads declarations, and this is a call.
+        return _Recurrent(_ts.nn.RNNBase.new(kind, inp, hid))
     return make
 
 

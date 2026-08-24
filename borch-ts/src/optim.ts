@@ -1543,12 +1543,12 @@ export class PolynomialLR extends LRScheduler {
  * not the original.
  */
 export class MultiplicativeLR extends LRScheduler {
-  constructor(opt: Optimizer, private readonly fn: (epoch: number) => number) {
+  constructor(opt: Optimizer, private readonly lrLambda: (epoch: number) => number) {
     super(opt);
   }
 
   protected override compute(epoch: number): number {
-    return epoch === 0 ? this.base : this.current * this.fn(epoch);
+    return epoch === 0 ? this.base : this.current * this.lrLambda(epoch);
   }
 }
 
@@ -1720,18 +1720,18 @@ export class CyclicLR extends LRScheduler {
     opt: Optimizer,
     private readonly baseLr: number,
     private readonly maxLr: number,
-    private readonly up = 2000,
+    private readonly stepSizeUp = 2000,
     stepSizeDown: number | null = null,
     private readonly mode: "triangular" | "triangular2" | "exp_range" = "triangular",
     private readonly gamma = 1.0,
   ) {
     super(opt);
-    this.down = stepSizeDown ?? this.up;
+    this.down = stepSizeDown ?? this.stepSizeUp;
   }
 
   protected override compute(epoch: number): number {
-    const total = this.up + this.down;
-    const ratio = this.up / total;
+    const total = this.stepSizeUp + this.down;
+    const ratio = this.stepSizeUp / total;
     const cycle = Math.floor(1 + epoch / total);
     const x = 1 + epoch / total - cycle;
     // The climbing stretch and the descending stretch have different slopes.
@@ -1801,12 +1801,12 @@ export class CosineAnnealingLR extends LRScheduler {
 }
 
 export class LambdaLR extends LRScheduler {
-  constructor(opt: Optimizer, private readonly fn: (epoch: number) => number) {
+  constructor(opt: Optimizer, private readonly lrLambda: (epoch: number) => number) {
     super(opt);
   }
 
   protected override compute(epoch: number): number {
-    return this.base * this.fn(epoch);
+    return this.base * this.lrLambda(epoch);
   }
 }
 
