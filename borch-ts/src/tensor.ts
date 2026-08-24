@@ -1714,8 +1714,20 @@ export class Tensor implements Node<Tensor> {
    * `[1.7, −2.3, 0.9]` to int64 gives −1 truncating first and 0 truncating
    * last. torch does the former.
    */
-  sum(dtype?: DType): Tensor {
-    if (dtype !== undefined) return this.castFirst(dtype).sum().to(dtype);
+  sum(dim?: DType | number, keepdim = false, dtype?: DType): Tensor {
+    // **torch has two overloads under this one name** — `sum(dtype)` folds the whole
+    // tensor and `sum(dim, keepdim, dtype)` folds one axis — and only the first was
+    // here, with the axis form living next door as `sumDim`. The neighbouring comment
+    // on `variance` called that arrangement *safe by accident*: `x.sum(0)` would not
+    // compile because the first parameter was a `DType`. Safe and wrong are different
+    // things — the line a reader transcribes from torch has to work, not merely fail
+    // loudly, and this was the last row in the axis's `shifted` bucket.
+    //
+    // Told apart the way torch tells them apart: a string is a dtype, a number is an
+    // axis.
+    if (typeof dim === "number") return this.sumDim(dim, keepdim, dtype);
+    const only = dim ?? dtype;
+    if (only !== undefined) return this.castFirst(only).sum().to(only);
     // **Complex splits into two real reductions.** The sum applies to the real and
     // imaginary parts separately, so no new kernel is needed — `real`, `imag` and
     // `complex` already exist and all three know their backward.

@@ -77,7 +77,19 @@ SHIFTED = {
     # the odd one out — the nine other margin-taking losses all match torch exactly,
     # which is what showed the nine `inserted` rows this table briefly carried were
     # an artefact of dropping the core's `*args` rather than a fault in borch.ts.
-    "Tensor": 1,
+    #
+    # **1 → 0, and the bucket is empty on both namespaces.** The last row was `sum`:
+    # torch has two overloads under that name — `sum(dtype)` over the whole tensor and
+    # `sum(dim, keepdim, dtype)` over one axis — and borch.ts had the first, with the
+    # axis form next door as `sumDim`. The comment on `variance` called this *safe by
+    # accident*, because a `DType` first parameter meant `x.sum(0)` would not compile.
+    # Safe and right are different: the line a reader transcribes from torch has to
+    # work. It now tells the two apart the way torch does, a string being a dtype and
+    # a number an axis.
+    #
+    # **What refills this line:** a positional argument landing on a different
+    # parameter in the two libraries. Nothing does today.
+    "Tensor": 0,
 # **0 → 1 → 0 → 3 in one afternoon, and the shape of that trace is the finding.**
     #
     # `MaxPool1d/2d/3d`: the core took torch's `padding`, `dilation` and `ceil_mode`,
@@ -498,7 +510,13 @@ RENAMED = {
     # The peer session holding that library has it in hand; when it lands this goes
     # back to 0 and the paragraph above stays, because the reason it was ever 0 by
     # accident is the part worth keeping.
-    "nn": 2,    # Bilinear arrived from `unaligned`: borch.ts spells the flag
+    #
+    # **2 → 0. It landed.** borch.ts spells it `_randomSamples`, and the retirement
+    # condition written above is why this edit took one line instead of a re-reading:
+    # the number said what would make it stale, so meeting it was not a judgement
+    # call. That is the difference between this line and a parity check earlier today
+    # that kept passing after the thing it was named for had gone.
+    "nn": 0,    # Bilinear arrived from `unaligned`: borch.ts spells the flag
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     # 1 → 2. `scaled_dot_product_attention` arrived from `shifted`: same

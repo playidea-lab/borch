@@ -766,6 +766,20 @@ export async function report(): Promise<Report> {
     new nn.SmoothL1Loss(null, null, "none").call(lx(), ly()).size > 1
     && new nn.SmoothL1Loss(false, null, "none").call(lx(), ly()).size === 1);
 
+  // **`sum` answers both of torch's overloads.** The whole-tensor form takes a dtype
+  // and the axis form takes `(dim, keepdim, dtype)`; only the first was here, so
+  // `x.sum(0)` did not compile and the axis form had to be spelled `sumDim`. The
+  // golden cannot ask, because the binding routes torch's `sum(0)` to `sumDim`
+  // already — this is met only by somebody writing TypeScript.
+  //
+  // **What retires this line:** `sum` losing either overload.
+  {
+    const m = Tensor.from([1, 2, 3, 4], [2, 2]);
+    want("sum(dim) folds one axis and sum() folds all",
+      m.sum(0).shape.length === 1 && m.sum().shape.length === 0
+      && m.sum(0, true).shape.length === 2);
+  }
+
   // ── linalg: a namespace over methods that already carry the arithmetic ──
   //
   // **The golden cannot ask this either.** Every value here belongs to a `Tensor` method

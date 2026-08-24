@@ -625,7 +625,7 @@
       },
       {
        "name": "sum",
-       "signature": "sum(dtype?: DType): Tensor",
+       "signature": "sum(dim?: DType | number, keepdim?: boolean, dtype?: DType): Tensor",
        "doc": "Adds everything. Given `dtype` it converts **before** adding.\n\n**Every neighbour took that argument and only this one did not.**\n`mean`, `prod` and `nansum` are `(dim?, keepdim, dtype?)`, and `cumsum`\nand `cumprod` take it too. `sumDim`, the axis-taking side, takes it.\n**The single most-called name among the reductions** was the one\nmissing it, so there was nowhere to carry `torch.sum(x,\ndtype=torch.float32)` across to.\n\nOne of four not listening is worse than none of them listening —\nbecause no rule can be formed. `norm` had already shown this same place\nonce.\n\n**The order decides the value.** Convert first, then add — folding\n`[1.7, −2.3, 0.9]` to int64 gives −1 truncating first and 0 truncating\nlast. torch does the former.",
        "section": {
         "ko": "Reductions",
