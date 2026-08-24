@@ -456,7 +456,49 @@ def sqrt(input): return input.sqrt()
 def abs(input): return input.abs()
 
 
-def softmax(t, dim=-1):
+def _default_softmax_dim(ndim):
+    """The axis torch chooses when `dim` is not given.
+
+    **It is not `-1`.** It is 0 or 1 depending on the rank, and torch even warns
+    at that point ("Implicit dimension choice for softmax has been deprecated").
+    The rule was measured — rank 1 → 0, 2 → 1, 3 → **0**, 4 → 1.
+
+    **Asked at rank 2 only, this defect is invisible.** There `dim=1` and
+    `dim=-1` are the same axis, so a default of `-1` gives the same answer. It
+    really was left that way, quietly folding the wrong axis at rank 3.
+
+    It was written in `_nn.py` for the layers alone, and the three functions here
+    defaulted to `-1` — **the same rule known on one side of the file and not the
+    other**, which is the shape `nll_loss` and `embedding` were found in today.
+    """
+    return 0 if ndim in (0, 1, 3) else 1
+
+
+def _softmax_args(t, dim, dtype, stacklevel, name):
+    """The three arguments torch's softmax family shares, resolved in one place.
+
+    `dtype` casts **before** the softmax rather than after (measured: an integer
+    input with `dtype=float32` gives the real answer, not a cast of an integer one).
+
+    `_stacklevel` is torch's own private plumbing and its only observable effect is
+    where the deprecation warning points. Carrying it is not decoration: it sits
+    third, so `F.softmax(x, 1, 3, float32)` — a call torch takes — needs the seat, and
+    honouring it means the warning lands on the caller rather than in here.
+    """
+    t = _wrap(t)
+    if dtype is not None:
+        t = t.to(dtype)
+    if dim is None:
+        _warnings.warn(
+            f"Implicit dimension choice for {name} has been deprecated. "
+            "Change the call to include dim=X as an argument.",
+            UserWarning, stacklevel=stacklevel)
+        dim = _default_softmax_dim(t.data.ndim)
+    return t, dim
+
+
+def softmax(input, dim=None, _stacklevel=3, dtype=None):   # noqa: A002
+    t, dim = _softmax_args(input, dim, dtype, _stacklevel, "softmax")
     shifted = t.data - t.data.max(axis=dim, keepdims=True)
     e = _np.exp(shifted)
     out = e / e.sum(axis=dim, keepdims=True)
@@ -829,11 +871,31 @@ def group_norm(input, num_groups, weight=None, bias=None, eps=1e-5):
     return out
 
 
-def instance_norm(x, weight=None, bias=None, eps=1e-5):
+def instance_norm(input, running_mean=None, running_var=None, weight=None,   # noqa: A002
+                  bias=None, use_input_stats=True, momentum=0.1, eps=1e-5):
     """Per sample and per channel. `group_norm` with the group count set to the
-    channel count."""
-    x = _wrap(x)
-    return group_norm(x, x.data.shape[1], weight, bias, eps)
+    channel count.
+
+    **torch's first three seats were missing**, so `F.instance_norm(x, None, None, w)`
+    put the weight in `running_mean`'s place here and in `weight`'s there — the same
+    call, a different layer, no exception. The four running-statistics arguments are
+    torch's and the seats are carried; the tracking itself is refused, in the wording
+    `nn.InstanceNorm2d(track_running_stats=True)` already uses.
+
+    `use_input_stats=False` means *normalise by the stored statistics instead*, which
+    is the eval-time path and needs the buffers this does not keep. Accepting it and
+    normalising by the batch anyway would be the accepted-and-inert defect on the one
+    argument whose whole purpose is to change which numbers are used.
+    """
+    if running_mean is not None or running_var is not None:
+        _unsupported("instance_norm(running_mean=…, running_var=…) — "
+                     "there are no running statistics here")
+    if not use_input_stats:
+        _unsupported("instance_norm(use_input_stats=False) — it normalises by the "
+                     "running statistics, which this does not keep")
+    del momentum          # only moves running statistics, and there are none
+    input = _wrap(input)  # noqa: A001
+    return group_norm(input, input.data.shape[1], weight, bias, eps)
 
 
 def rms_norm(input, normalized_shape, weight=None, eps=None):
@@ -1448,9 +1510,19 @@ def _out_size(in_size, scale_factor):
     return tuple(int(_math.floor(n * float(sc))) for n, sc in zip(in_size, scales))
 
 
-def interpolate(x, size=None, scale_factor=2, mode="nearest", align_corners=None,
-                recompute_scale_factor=None):
+def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
+                align_corners=None, recompute_scale_factor=None, antialias=False):
     """Enlargement. Nearest and bilinear.
+
+    **`antialias` is torch's last seat and is refused rather than left out.** It
+    changes the values when *shrinking* with `bilinear` or `bicubic`: torch widens
+    the filter so every input cell reaches the output, where plain sampling skips
+    cells and aliases. Enlarging, it does nothing at all.
+
+    Left out, the seat did not exist and a positional call reaching it landed on
+    nothing; accepted and ignored, `interpolate(x, size=8, mode='bilinear',
+    antialias=True)` on a shrink would return the aliased answer under the name of
+    the filtered one — the same numbers a caller asked to stop getting.
 
     **`align_corners` changes the values.** True pins both ends and divides
     evenly between them (`src = i·(in−1)/(out−1)`); false measures from **the
@@ -1459,7 +1531,10 @@ def interpolate(x, size=None, scale_factor=2, mode="nearest", align_corners=None
     other by name alone puts the edges off — the interior is similar enough that
     the eye does not part them.
     """
-    x = _wrap(x)
+    if antialias:
+        _unsupported("interpolate(antialias=True) — the widened filter it uses when "
+                     "shrinking is not here")
+    x = _wrap(input)
     if mode == "bilinear":
         return _interpolate_bilinear(x, size, scale_factor, bool(align_corners),
                                      recompute_scale_factor)
@@ -5275,10 +5350,15 @@ def _threshold_body(t, threshold, value):                # noqa: A002
                    "ThresholdBackward0")
 
 
-def softmin(t, dim=-1):
+def softmin(input, dim=None, _stacklevel=3, dtype=None):   # noqa: A002
     """softmax(−x). **Without the negation it becomes softmax** — it diverges
-    only in the values."""
-    return softmax(-_wrap(t), dim=dim)
+    only in the values.
+
+    The negation happens here and the rest is `softmax`'s, `_stacklevel` included:
+    passed straight through, the warning names this caller and not this line.
+    """
+    t, dim = _softmax_args(input, dim, dtype, _stacklevel + 1, "softmin")
+    return softmax(-t, dim=dim)
 
 
 def glu(input, dim=-1):
@@ -5325,8 +5405,8 @@ def prelu(input, weight):
     return input._make(out.astype(d.dtype), (input, weight), back, "PreluBackward0")
 
 
-def log_softmax(t, dim=-1):
-    t = _wrap(t)
+def log_softmax(input, dim=None, _stacklevel=3, dtype=None):   # noqa: A002
+    t, dim = _softmax_args(input, dim, dtype, _stacklevel, "log_softmax")
     shifted = t.data - t.data.max(axis=dim, keepdims=True)
     out = shifted - _np.log(_np.exp(shifted).sum(axis=dim, keepdims=True))
     soft = _np.exp(out)
@@ -5482,14 +5562,39 @@ def layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):
     return out + bias if bias is not None else out
 
 
-def embedding(idx, weight):
-    ids = idx.data.astype(int)
+def embedding(input, weight, padding_idx=None, max_norm=None,   # noqa: A002
+              norm_type=2.0, scale_grad_by_freq=False, sparse=False):
+    """torch's list. **This took two of seven, while `nn.Embedding` had all of
+    them** — the layer carried `padding_idx` and `max_norm` and refused
+    `scale_grad_by_freq` and `sparse` by name, and the function beside it silently
+    did none of that.
+
+    So the direction of the fix is the interesting part. `F.nll_loss` was the same
+    shape earlier today and was pointed at its layer; here it goes the other way,
+    because a *function* is the primitive — it takes the caller's own weight tensor,
+    and building a layer around one would copy the table and cut the gradient. The
+    layer now calls this.
+
+    `max_norm` shortens rows **in the table itself** — a side effect on a parameter,
+    which `_renorm_rows` explains at length and which no output comparison can see.
+    """
+    if scale_grad_by_freq:
+        _unsupported("embedding(scale_grad_by_freq=True)")
+    if sparse:
+        _unsupported("embedding(sparse=True) — there is no sparse gradient here")
+    ids = _wrap(input).data.astype(int)
     dim = weight.data.shape[1]
+    if max_norm is not None:
+        _renorm_rows(weight, ids, max_norm, norm_type)
     out = weight.data[ids]
 
     def back(g):
         gw = _np.zeros_like(weight.data)
         _np.add.at(gw, ids.reshape(-1), _np.asarray(g).reshape(-1, dim))
+        # **The padding row learns nothing.** Left in, a pad token drifts toward
+        # whatever the loss wants and the mask stops meaning "ignore this".
+        if padding_idx is not None:
+            gw[padding_idx] = 0.0
         return (gw,)
 
     return weight._make(out, (weight,), back, "EmbeddingBackward0")

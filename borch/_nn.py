@@ -13,8 +13,8 @@ from ._base import (
     _DEFAULT_DTYPE, _like_torch, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _legacy_reduction, _pool_all, _reduce,
-    _refuse_loss_weight, _renorm_rows, _rng, _spread, _wrap,
+    _Namespace, _default_softmax_dim, _gelu, _legacy_reduction, _pool_all,
+    _reduce, _refuse_loss_weight, _renorm_rows, _rng, _spread, _wrap,
     adaptive_avg_pool1d,
     adaptive_avg_pool2d, adaptive_avg_pool3d, adaptive_max_pool1d,
     adaptive_max_pool2d, adaptive_max_pool3d, avg_pool1d, avg_pool2d, avg_pool3d,
@@ -975,23 +975,13 @@ class Embedding(Module):
         self.weight.requires_grad = not _freeze
 
     def forward(self, idx):
-        ids = idx.data.astype(int)
-        if self.max_norm is not None:
-            # **In the table itself**, as `embedding_bag` does it and as torch does.
-            # The same function, not a second copy of the rule.
-            _renorm_rows(self.weight, ids, self.max_norm, self.norm_type)
-        out = self.weight.data[ids]
-
-        def back(g):
-            gw = _np.zeros_like(self.weight.data)
-            _np.add.at(gw, ids.reshape(-1), _np.asarray(g).reshape(-1, self.embedding_dim))
-            # **The padding row learns nothing.** Left in, a pad token drifts toward
-            # whatever the loss wants and the mask stops meaning "ignore this".
-            if self.padding_idx is not None:
-                gw[self.padding_idx] = 0.0
-            return (gw,)
-
-        return self.weight._make(out, (self.weight,), back)
+        # **The body moved into `F.embedding`, which had two of torch's seven
+        # arguments while this had all of them.** Two neighbours disagreeing about
+        # the same five is the shape this repository keeps finding, and the copy
+        # here was the half that worked — so the fix ran the other way from
+        # `nll_loss`'s: the function is the primitive, and the layer calls it.
+        return embedding(idx, self.weight, padding_idx=self.padding_idx,
+                         max_norm=self.max_norm, norm_type=self.norm_type)
 
     def __repr__(self):
         parts = [f"{self.num_embeddings}, {self.embedding_dim}"]
@@ -2348,7 +2338,13 @@ class _InstanceNorm(Module):
             _unsupported("InstanceNorm with track_running_stats=True")
 
     def forward(self, x):
-        return instance_norm(x, self.weight, self.bias, self.eps)
+        # **By keyword.** `instance_norm` took torch's first three seats
+        # (`running_mean`, `running_var`, `use_input_stats`) and this call was
+        # positional, so the weight landed in `running_mean` and the refusal fired
+        # on four golden rows. The second time in two commits that adding torch's
+        # seats broke an internal positional call — which is the argument for
+        # keywords at every one of them.
+        return instance_norm(x, weight=self.weight, bias=self.bias, eps=self.eps)
 
 
 class InstanceNorm1d(_InstanceNorm):
@@ -2442,18 +2438,10 @@ class ConvTranspose3d(_ConvTransposeND):
     nd = 3
 
 
-def _default_softmax_dim(ndim):
-    """The axis torch chooses when `dim` is not given.
-
-    **It is not `-1`.** It is 0 or 1 depending on the rank, and torch even warns
-    at that point ("Implicit dimension choice for softmax has been deprecated").
-    The rule was measured — rank 1 → 0, 2 → 1, 3 → **0**, 4 → 1.
-
-    **Asked at rank 2 only, this defect is invisible.** There `dim=1` and
-    `dim=-1` are the same axis, so a default of `-1` gives the same answer. It
-    really was left that way, quietly folding the wrong axis at rank 3.
-    """
-    return 0 if ndim in (0, 1, 3) else 1
+# `_default_softmax_dim` lived here and moved to `_ops`, where the three functions
+# that needed it are. The layers below still use it and now share it with them —
+# the rule was written out once and reachable from one side only, which is how
+# `F.softmax` came to default to `-1` while `nn.Softmax` had this.
 
 
 class Softmax(Module):

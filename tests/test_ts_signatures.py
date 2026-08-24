@@ -279,7 +279,16 @@ UNALIGNED = {
                 #     **A count going up because a name became comparable is not the
                 #     same as two sides drifting**, and this bucket cannot tell them
                 #     apart on its own; that is what the comment is for.
-    "nn.functional": 1,
+    # 1 → 2. `F.embedding` took torch's five — `padding_idx`, `max_norm`,
+    # `norm_type`, and `scale_grad_by_freq`/`sparse` refused by name — and borch.ts
+    # still has `(idx, weight)`. It joins `multi_head_attention_forward`, which has
+    # been the lone row here.
+    #
+    # **The core had this on the layer and not on the function**, so the row is the
+    # tail of a fix rather than a new gap: `nn.Embedding` and `F.embedding` were two
+    # neighbours disagreeing about the same five arguments, and closing that on the
+    # core side opens this until borch.ts follows.
+    "nn.functional": 2,
     # 7 → 1 → 7. It went down when `maximize` landed on both sides at the same
     # length, and back up when the core took torch's **whole** optimizer surface —
     # `amsgrad`, `centered`, `momentum`, `decoupled_weight_decay` and the four
@@ -443,7 +452,18 @@ SHORTER = {
     # the lists could not be aligned at all; with the core on torch's names they
     # align, and what is left is borch.ts being short of `equal_nan`. An absence is
     # a more useful thing to be told than "these cannot be compared".
-    "Tensor": 16,
+    #
+    # 16 → 18. `softmax` and `log_softmax` took torch's `dtype`, which casts **before**
+    # the softmax — an integer input with `dtype=float32` gives the real answer, not a
+    # cast of an integer one — and borch.ts has not followed. The safe end of the
+    # parting.
+    #
+    # These two also sit in `TORCH_DOC_IS_WRONG` on the other axis: torch's docstring
+    # says `softmax(dim)` while the method takes `dtype` too. **One pair of rows, and
+    # the two axes disagree about which side is odd** — against torch's prose the core
+    # reads long, against borch.ts it reads right and borch.ts short. Only a call
+    # settles it, and the call says torch takes it.
+    "Tensor": 18,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and

@@ -235,7 +235,19 @@ DEPRECATED_IN = ("nn", "nn.functional")
 #
 # Held here rather than by making the reader smarter, because there is nothing to be
 # smart about: only a call can tell, and the reader does not make calls.
-TORCH_DOC_IS_WRONG = {"Tensor::atanh_", "Tensor::arctanh_"}
+#
+# **`Tensor.softmax` and `Tensor.log_softmax` are the other direction**: the docstring
+# says `softmax(dim) -> Tensor` and the method takes `dtype` as well —
+# `x.softmax(dim=1, dtype=torch.float32)` on an integer tensor returns the real
+# answer (measured). So the prose is short where `atanh_`'s was long, and the row
+# reads *the core has an argument torch does not* about an argument torch has.
+#
+# The direction matters for what the row tempts a reader to do. `atanh_`'s tempted
+# adding a parameter torch refuses; this one tempts **removing one torch accepts**,
+# which is the worse of the two — the first only widens the surface, the second takes
+# a working call away.
+TORCH_DOC_IS_WRONG = {"Tensor::atanh_", "Tensor::arctanh_",
+                      "Tensor::softmax", "Tensor::log_softmax"}
 
 
 def _spaces():

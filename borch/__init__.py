@@ -281,6 +281,29 @@ for _method in _AS_METHOD:
         setattr(Tensor, _method, globals()[_method])
 
 
+def _softmax_method(self, dim=None, dtype=None):
+    """**The method is not the function.** `F.softmax` carries torch's private
+    `_stacklevel` third, and binding the function straight on as a method put that
+    into `Tensor.softmax` too — where torch's method has `(dim, dtype)` and nothing
+    between them. `x.softmax(1, torch.float32)` would then have set a stack level.
+
+    The seat exists on the function because a positional call reaches it there; it
+    does not exist on the method because torch's method has no such seat. **Sharing
+    an implementation is not the same as sharing a signature**, and the loop above
+    cannot tell the two apart — it binds whatever the module has.
+    """
+    return softmax(self, dim=dim, dtype=dtype)
+
+
+def _log_softmax_method(self, dim=None, dtype=None):
+    """See `_softmax_method`."""
+    return log_softmax(self, dim=dim, dtype=dtype)
+
+
+Tensor.softmax = _softmax_method
+Tensor.log_softmax = _log_softmax_method
+
+
 def _where_method(self, condition, other):
     """**The argument order differs from the function's.**
     `x.where(condition, y)` is `torch.where(condition, x, y)`.

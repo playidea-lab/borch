@@ -339,7 +339,33 @@ UNALIGNED = {
     # defect underneath — `F.normalize`'s missing `out=` and `isclose`'s `equal_nan`
     # were the others — and the first time the vague bucket was cleared *on purpose*
     # to find out what it was hiding.
-    "nn.functional": 6,
+    #
+    # **6 → 0, and the last six were four functions that had the work next door.**
+    #
+    #   `embedding`      took two of torch's seven while `nn.Embedding` carried all
+    #                    of them — `padding_idx` and `max_norm` implemented,
+    #                    `scale_grad_by_freq` and `sparse` refused by name. The
+    #                    function is the primitive, so the body moved *into* it and
+    #                    the layer calls it; `nll_loss` earlier today went the other
+    #                    way, because there the layer was the primitive.
+    #   `softmax`,       defaulted `dim` to `-1` while `nn.Softmax` had the real
+    #   `log_softmax`,   rule — 0 or 1 by rank, and torch warns. **`-1` is right at
+    #   `softmin`        rank 2 and wrong at rank 3**, so it was invisible wherever
+    #                    the golden asked. `_default_softmax_dim` was written out in
+    #                    `_nn.py` and reachable from one side of the file only.
+    #   `instance_norm`  was missing torch's first three seats, so
+    #                    `F.instance_norm(x, None, None, w)` put the weight in
+    #                    `running_mean` here and in `weight` there.
+    #   `interpolate`    was missing `antialias`, which changes the values when
+    #                    shrinking. Carried and refused: accepted and ignored, it
+    #                    returns the aliased answer under the filtered one's name.
+    #
+    # **Three of the four were the same finding**: an argument absent from the
+    # function and present on the layer beside it, or a rule written for the layers
+    # and unreachable from the functions. A peer session put the shape into words
+    # while this was being worked — *read a gap list by name and you do the repair
+    # the name suggests* — and it was true four times out of four.
+    "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 0,
     # 0 → 4, from the same docstring reading as `Tensor` above. All four are
