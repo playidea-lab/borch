@@ -395,8 +395,10 @@ for step in range(201):
     <p class="small muted" style="margin-top:.8rem">
       On top of that, <strong>3438 golden cases</strong> hold all three implementations to the same expected values.
       Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
-      identically on Apple Metal. NVIDIA matched too — an RTX 4090, over 845 cases, against the table as it stood
-      then — and that machine has not been available since the table grew, so what is measured today is one vendor.
+      identically on Apple Metal. <strong>NVIDIA has not been measured.</strong> The one run that was read as a
+      second vendor passed 845 of 845 on a Linux GPU server whose adapter reported <code>google / swiftshader</code>
+      — the CPU. The values were right and the vendor claim was not, which is why the runners now judge the adapter
+      instead of printing it.
     </p>
   </div>
 </section>
