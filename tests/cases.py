@@ -7984,8 +7984,21 @@ def train_cases(inp=None):
     # feeding `(batch, length, …)` gives back what `(length, batch, …)` gave, turned.
     # A layer ignoring it reads `(2, 5, 3)` as length 2 and batch 5 and hands back
     # `(2, 5, 4)` where the answer is `(5, 2, 4)` — measured, so the two cannot even
-    # be subtracted. `seq_x` being 5×2 rather than square is what gives that its
-    # teeth, and it was checked rather than assumed.
+    # be subtracted. `seq_x` being 5×2 is what gives that its teeth, and it was
+    # checked rather than assumed.
+    #
+    # **"Rather than square" was the reason written here, and it is too weak a
+    # condition.** A third session met the same axis flip from the site's side and
+    # measured where it hides: `[1, 6, 8]` is not square, and read as `(len=1,
+    # batch=6)` it still comes back `[1, 6, 8]` after the transpose — the shapes
+    # round-trip and nothing can be subtracted apart. It stayed silent until a `[6,
+    # 6]` mask arrived and broke the symmetry.
+    #
+    # So the condition is **both axes not 1, and different from each other.** 5×2
+    # satisfies it and this case is sound; the sentence describing why did not, and a
+    # sentence that admits `[1, 6]` is one somebody will satisfy while losing the
+    # teeth. Written down here because the session that measured it has ended, and a
+    # reason kept only in a conversation is a reason that goes with the conversation.
     def batch_first_matches(L, kind):
         turned = recurrent(L, kind, batch_first=True)(
             L.tensor(seq_x).transpose(0, 1))[0].transpose(0, 1)

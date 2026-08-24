@@ -48,6 +48,17 @@ PAGES = [
     "/site/ko/learn/09-resnet.html",
     "/site/learn/10-vit.html",
     "/site/ko/learn/10-vit.html",
+    # **The two the word net was catching for working.** Added here rather than to
+    # `DECLINED`, and that is the point of the exemption above: declining them would
+    # take five blocks that call the library out of the check to fix a complaint about
+    # wording. Pressed, `div.err` still guards them.
+    #
+    # The other eighteen undecided pages are being added on the branch that holds the
+    # site, which is also editing this list — two branches rewriting one list is how
+    # the last two rebases went. These two are here because the exemption is, and an
+    # exemption for a page nobody presses is inert.
+    "/site/learn/08-debugging.html",
+    "/site/ko/learn/08-debugging.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page
@@ -121,6 +132,27 @@ def say_coverage():
               f"({sum(n for _, n in unwatched)} blocks)")
         for rel, n in unwatched:
             print(f"      {rel} — {n} blocks")
+        # **`wants reviewing` was printed and then thrown away.** It went to stdout,
+        # the exit code came from `bad` and `problems` alone, and a run covering a
+        # third of the pages ended green — measured on `ce93871`: *12 of 34 pages
+        # pressed (40 of 134 JS blocks)*, twenty pages and eighty-four blocks in this
+        # group, and the command said nothing but success.
+        #
+        # It was the same shape three times over in this repository's own week: an
+        # instrument that reports on what it looked at and is silent about what it
+        # did not. A page can leave `PAGES` and nothing turns red; a page can be added
+        # to `site/` and nothing turns red. **The only state that cannot arise by
+        # accident is every page being decided about**, and deciding is cheap — a name
+        # in `PAGES` or a sentence in `DECLINED`.
+        #
+        # **A count is deliberately not pinned here.** A frozen twenty has to be
+        # rewritten the moment somebody adds eight pages to `PAGES`, which makes the
+        # number an obstacle to the very work it is asking for, and a number rewritten
+        # to make a run pass stops being evidence. The direction is what is held: this
+        # group empties, and it never grows silently.
+        problems = problems + [
+            f"{len(unwatched)} page(s) with runnable JS are neither pressed nor "
+            f"declined — put each in `PAGES` or give it a reason in `DECLINED`"]
     for line in problems:
         print(f"  ! {line}", file=sys.stderr)
     return problems
@@ -155,12 +187,48 @@ ERROR_CLASS = "div.err"
 BAD = ("is not a function", "undefined is not", "Cannot read", "TypeError",
        "ReferenceError", "Error:", "throw")
 
+# **Pages whose subject is the error message, so the net catches them for working.**
+#
+# `08-debugging` is titled *Errors say what torch says*. Every one of its blocks throws
+# on purpose through a `shouldFail(label, body)` helper, catches, and prints what came
+# out — so a correct line reads `RuntimeError: mat1 and mat2 shapes cannot be multiplied
+# (2x3 and 4x5)`, and `Error:` is in the net. Measured in the browser: `div.err` on that
+# page is **zero**. The page is right and the net is wrong about it.
+#
+# **The comment fifteen lines up predicted this** — *a message reworded to start
+# `Error:` would fail a page that is working* — and said `10-vit` survived it by luck.
+# This is the page where the luck runs out, and it cannot be worded around: the wording
+# is the lesson.
+#
+# **Exempt from the net, not from the run**, and that distinction is the whole of it.
+# Declining the page instead would take five blocks that call the library out of the
+# check altogether, which is a bigger hole than the one being closed. `div.err` still
+# holds the gate here, and that is the check that survives a change of wording or of
+# language — the net was only ever there to catch a block that runs wrongly *without*
+# throwing.
+#
+# Two names, both attested by a browser run. `test_lessons_net_exemption_is_narrow`
+# holds it to that: a set that grows is a set that has stopped being about this page.
+WORD_NET_EXEMPT = {
+    "/site/learn/08-debugging.html",
+    "/site/ko/learn/08-debugging.html",
+}
+
 TIMEOUT_MS = 300_000
 
 
-def run_page(page, path):
-    """Press every JS block on one page; return (passed, what to say)."""
-    page.goto(path)
+def run_page(page, url, rel=None):
+    """Press every JS block on one page; return (passed, what to say).
+
+    **`rel` is the site-relative path and `url` is where to fetch it**, and they are
+    separate because `WORD_NET_EXEMPT` is keyed on the first. The first version of the
+    exemption compared its set against `url` — `http://127.0.0.1:39205/site/learn/…` —
+    which matches nothing, so the exemption would have been written, committed and
+    silently inert. The port changes every run, so it could never have matched by
+    accident either; it would simply never have fired.
+    """
+    rel = url if rel is None else rel
+    page.goto(url)
     page.wait_for_selector("div.runnable button.go", timeout=TIMEOUT_MS)
 
     said = []
@@ -196,10 +264,13 @@ def run_page(page, path):
         # catches here.
         for line in (out.query_selector_all(ERROR_CLASS) if out else []):
             said.append(f"block {i} — {line.inner_text().strip().splitlines()[0][:120]}")
-        for bad in BAD:
-            if bad in text:
-                said.append(f"block {i} — {text.splitlines()[0][:120]}")
-                break
+        # The mark above always applies. The word net does not, on the two pages whose
+        # subject is the wording itself — see `WORD_NET_EXEMPT`.
+        if rel not in WORD_NET_EXEMPT:
+            for bad in BAD:
+                if bad in text:
+                    said.append(f"block {i} — {text.splitlines()[0][:120]}")
+                    break
 
     if pressed == 0:
         # **Running 0 of them and seeing green is the worst outcome available.**
@@ -222,7 +293,8 @@ def main(argv):
             page.on("pageerror",
                     lambda e: rows.append((False, 0, [f"page exception: {e}"])))
             for rel in PAGES:
-                ok, pressed, said = run_page(page, f"http://127.0.0.1:{port}{rel}")
+                ok, pressed, said = run_page(
+                    page, f"http://127.0.0.1:{port}{rel}", rel)
                 rows.append((rel, ok, pressed, said))
     finally:
         stop()
