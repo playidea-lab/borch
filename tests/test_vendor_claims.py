@@ -109,6 +109,52 @@ def test_no_live_document_credits_that_run_to_a_vendor(rel):
         "  Say the adapter, or do not cite the run.")
 
 
+def test_the_three_documents_agree_that_it_was_never_measured():
+    """**One value, three files, and today it was three different values.**
+
+    Within an hour this afternoon the README said *across two vendors*, the English
+    landing said *NVIDIA matched too*, and the Korean landing said *두 벤더에서 골든이
+    전건 같다*. Three statements of one measurement, all published, none agreeing —
+    and each was corrected separately, which is how they came apart in the first place.
+
+    The checks above hold each file against `launch.py`. This one holds them against
+    **each other**, which is a different failure: every file can individually avoid
+    crediting the run and still leave a reader who opens two of them with two answers.
+
+    Asked as *does each say it was not measured*, not as *do they use the same words* —
+    the two landing pages are in different languages, and `test_site.py` already keeps
+    a wording contract where wording is what matters. Here it is the claim.
+
+    **The denial has to name the vendor, and the first version did not require that.**
+    Searching the README for *has not been measured* matched a paragraph five hundred
+    lines up about a benchmark that had not been re-measured — so deleting the NVIDIA
+    sentence left this passing on the strength of an unrelated one. Measured by removing
+    it: the check stayed green. Two sentences that say the same words about different
+    subjects, and only one of them is the claim.
+    """
+    denial = re.compile(
+        r"(NVIDIA|엔비디아)[^.。\n]{0,120}"
+        r"(has (never|not) been measured|측정된 적이 없다|재본 적이 없다)"
+        r"|(has (never|not) been measured|측정된 적이 없다|재본 적이 없다)"
+        r"[^.。\n]{0,120}(NVIDIA|엔비디아)", re.I)
+    said = {}
+    for rel in LIVE:
+        path = ROOT / rel
+        if not path.exists():
+            continue
+        # Line by line: across a whole file the vendor and the denial can be paragraphs
+        # apart and still fall inside one match.
+        said[rel] = any(denial.search(line)
+                        for line in path.read_text(encoding="utf-8").splitlines())
+    missing = sorted(rel for rel, ok in said.items() if not ok)
+    assert said and not missing, (
+        "these do not say NVIDIA was never measured: " + ", ".join(missing) + "\n\n"
+        "  Every live document has to carry the same answer. A reader who opens two of\n"
+        "  them and finds two answers learns that neither is load-bearing — and that is\n"
+        "  what today looked like from outside: three files, three claims, one\n"
+        "  measurement that never happened.")
+
+
 @pytest.mark.parametrize("rel", LIVE)
 def test_no_live_document_says_two_vendors(rel):
     """**The claim in its shortest form**, which is how it was actually written.

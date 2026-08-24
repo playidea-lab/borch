@@ -27,10 +27,35 @@
 # ## Then how is the GPU path checked
 #
 # A person calls it. Typed directly on the development machine, or sent to a GPU server
-# when there is one — it was actually put on a cq
-# worker and run on an RTX 4090 over 845 golden cases × two implementations, and the
-# values matched Apple Metal. That route uses an already authenticated channel, so it
-# opens no execution rights on the repository.
+# when there is one — it was actually put on a cq worker, which uses an already
+# authenticated channel and so opens no execution rights on the repository.
+#
+# **That run did not check the GPU path, and this paragraph said it did.** It read "run
+# on an RTX 4090 over 845 golden cases × two implementations, and the values matched
+# Apple Metal" until today. `tests/browser/launch.py` has recorded since 2026-08-15
+# what that run actually was:
+#
+#     Running the golden cases headless on a Linux GPU server gave 845/845 while the
+#     adapter was `google / swiftshader` — the pass was real and the claim "confirmed
+#     on another vendor" was false.
+#
+# There was a 4090 in the machine and the browser never reached it. Headless hands back
+# Chrome's software rasteriser, which answers every WebGPU call correctly, so the values
+# proved the logic and nothing about a GPU.
+#
+# **This sentence is where that claim was manufactured.** It travelled from here into
+# the README and, six days later, through a translation commit into the landing page in
+# both languages — every copy carrying the number and dropping the adapter. Two sessions
+# corrected the landing page today and the second correction re-asserted it, because the
+# number is checkable and the missing word is not visible.
+#
+# So the number stays here with what it was. Deleting it would leave the next person to
+# find 845 somewhere else and write this paragraph again — which is what happened today.
+#
+# `tests/test_vendor_claims.py` now compares the live documents against `launch.py`.
+# This file is not among them: it is a workflow rather than something a reader meets,
+# and putting it in the list would have the check police the comment that explains the
+# check. The guard here is the paragraph, and its retirement condition is a real run.
 #
 # When there is a reason to attach a runner, this trigger comes back. Attaching it is
 # a person's job.

@@ -1276,8 +1276,9 @@ cases, passing, proving the values and nothing about the GPU. `--headless` still
 exists and now has to be asked for; when it is used the score line says
 `[google / swiftshader]` and adds that the GPU path is unproved.
 
-NVIDIA has not been measured since these kernels were written. Metal passing is one
-vendor, not two.
+NVIDIA has never been measured. This line said *not since these kernels were written*,
+which reads as though it had been measured before them — and the run that would have
+been is the 845 on SwiftShader. Metal passing is one vendor, not two.
 
 ```bash
 uv run --with numpy --with torch python tests/golden.py dump   # stage 1: pin them
