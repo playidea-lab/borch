@@ -837,7 +837,16 @@ SHORTER = {
     # does not*. borch.ts's `polygamma(n, x)` takes the same one argument torch's
     # method does — the second is the **receiver**, because the free function carries
     # the tensor where the method has it implicitly. Counted in `FREE_FUNCTION`.
-    "Tensor": 19,
+    #
+    # 19 → 20. `bernoulli` arrived, and it arrived **by becoming readable**. It used
+    # to be `bernoulli(t, p=None, *, generator=None, **kw)`, and the bag made it
+    # variadic — uncomparable on this axis and on the core-against-torch one. The bag
+    # is gone and `out=` is written where torch has it, so the core's list is now
+    # `(p, generator, out)` and borch.ts's is short of all three.
+    #
+    # **A row appearing because a signature stopped lying is not the axis widening.**
+    # The gap was there the whole time; nothing could see it.
+    "Tensor": 20,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and

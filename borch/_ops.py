@@ -358,21 +358,41 @@ def _no_out(kw):
     **Being absent and swallowing are different things.** Stopping says so at
     that point; swallowing surfaces much later as a stray value.
 
-    `tests/test_no_silent_out.py` checks that this gate is present at every place
-    taking `**kw`.
+    **It takes the value now, not the bag.** The bag was the problem: `**kw` had to
+    exist for this gate to read `out` out of it, and while it existed it also
+    accepted every other keyword and dropped it. Seventeen functions in this module
+    swallowed anything at all — `bernoulli(x, dtype=…)`, `asarray(v, zzz=1)` — where
+    torch raises, and seventeen more only ever touched `kw` to hand it here.
+
+    So `out` is written as a keyword-only parameter at each of those seats and the
+    bag is gone. `out=` keeps this wording, which says *why* it is absent; everything
+    else gets Python's own `unexpected keyword argument`, which is one of the two
+    forms torch itself uses and is exact for free.
+
+    Called with `None` this must do nothing — `out=None` is the default and is not a
+    request. The first version checked `"out" in kw` and a literal translation of it
+    would refuse every call.
+
+    `tests/test_no_silent_out.py` no longer reads the source for `**kw`, because
+    removing the bag emptied that population and the check would have gone green by
+    having nothing to look at. It calls instead.
     """
-    if "out" in kw:
+    if isinstance(kw, dict):
+        if "out" in kw:
+            _unsupported("`out=` (writing into a tensor you made beforehand)")
+        return
+    if kw is not None:
         _unsupported("`out=` (writing into a tensor you made beforehand)")
 
 
-def randint(low, high, shape, dtype=None, requires_grad=False, **kw):
-    _no_out(kw)
+def randint(low, high, shape, dtype=None, requires_grad=False, *, out=None):
+    _no_out(out)
     return _made(_rng.integers(low, high, shape).astype(_np.int64),
                  dtype, requires_grad)
 
 
-def randperm(n, dtype=None, requires_grad=False, **kw):
-    _no_out(kw)
+def randperm(n, dtype=None, requires_grad=False, *, out=None):
+    _no_out(out)
     return _made(_rng.permutation(n).astype(_np.int64), dtype, requires_grad)
 
 
@@ -2052,6 +2072,19 @@ _PROMOTES_INTEGERS = frozenset({
 })
 
 
+# **`None` is a legitimate value here**, so absence cannot be spelled as `None`.
+# `flip(t, dims=None)` means *every axis* and is not the same call as `flip(t, 0)`.
+#
+# **Not called `_MISSING`, and the first version was.** That name is already a
+# module-level sentinel fifteen hundred lines up, holding `where`'s two optional
+# arguments apart from a real `None`. Rebinding it left `where`'s defaults pointing
+# at the old object while its own comparisons read the new one, so both branches went
+# false and the sentinel came back **as a value** — `where(cond)` returned a list of
+# them. A name collision inside one module, and the symptom was a tensor full of
+# `<object object>`.
+_NOT_GIVEN = object()
+
+
 def _loose(args, kw, key):
     """The axes given as loose numbers, as a sequence, or by keyword.
 
@@ -2062,9 +2095,22 @@ def _loose(args, kw, key):
     in the golden went red on exactly that, which is what a frozen case is for.
 
     Returns `()` when nothing was given, which every caller reads as *all axes*.
+
+    **What it pops is the only keyword these four take, and the rest was going
+    nowhere.** `kw` arrives as the callers' `**kw`, this reads one name out of it and
+    nothing ever looked at what stayed — so `flip(t, 0, zzz=1)` ran and said nothing
+    where torch raises. The other thirty-three seats in this module lost their bag
+    outright; these four keep one because `dims=` genuinely arrives that way, and the
+    refusal has to live here, at the one place that knows which key is legitimate.
+
+    The wording is Python's own, because that is what the caller would have met had
+    the parameter simply not existed — and it is one of the two forms torch uses.
     """
-    if key in kw:
-        got = kw.pop(key)
+    got = kw.pop(key, _NOT_GIVEN)
+    if kw:
+        stray = sorted(kw)[0]
+        raise TypeError(f"got an unexpected keyword argument {stray!r}")
+    if got is not _NOT_GIVEN:
         if got is None:
             return ()
         return tuple(got) if isinstance(got, (tuple, list)) else (got,)
@@ -2839,10 +2885,10 @@ row_stack = vstack
 
 # ── the ones where **the computation was missing**, not only the name ───────
 
-def empty_like(t, dtype=None, requires_grad=False, **kw):
+def empty_like(t, dtype=None, requires_grad=False, *, out=None):
     """It borrows the shape alone. The values are undefined — torch is the
     same."""
-    _no_out(kw)
+    _no_out(out)
     # **The dtype is borrowed as well as the shape** — `zeros_like` and `ones_like`
     # next door already do, and this one did not, so `empty_like(int_tensor)` came
     # back `float32`. The values being undefined is what made it invisible: nothing
@@ -2850,24 +2896,24 @@ def empty_like(t, dtype=None, requires_grad=False, **kw):
     return _made(_np.zeros_like(_wrap(t).data), dtype, requires_grad)
 
 
-def rand_like(t, dtype=None, requires_grad=False, **kw):
-    _no_out(kw)
+def rand_like(t, dtype=None, requires_grad=False, *, out=None):
+    _no_out(out)
     return _made(rand(*_wrap(t).data.shape).data, dtype, requires_grad)
 
 
-def randn_like(t, dtype=None, requires_grad=False, **kw):
-    _no_out(kw)
+def randn_like(t, dtype=None, requires_grad=False, *, out=None):
+    _no_out(out)
     return _made(randn(*_wrap(t).data.shape).data, dtype, requires_grad)
 
 
-def randint_like(t, low, high=None, dtype=None, requires_grad=False, **kw):
-    _no_out(kw)
+def randint_like(t, low, high=None, dtype=None, requires_grad=False, *, out=None):
+    _no_out(out)
     if high is None:
         low, high = 0, low
     return _made(randint(low, high, _wrap(t).data.shape).data, dtype, requires_grad)
 
 
-def scalar_tensor(value, dtype=None, requires_grad=False, **kw):
+def scalar_tensor(value, dtype=None, requires_grad=False):
     """A 0-D tensor from **a number**. torch refuses a tensor here outright, and
     this passed one straight through — `scalar_tensor(ones(2, 3))` returned a
     (2, 3), which is the one thing the name rules out."""
@@ -2882,9 +2928,9 @@ def scalar_tensor(value, dtype=None, requires_grad=False, **kw):
     return _made(_np.asarray(value, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
 
-def logspace(start, end, steps, base=10.0, dtype=None, requires_grad=False, **kw):
+def logspace(start, end, steps, base=10.0, dtype=None, requires_grad=False, *, out=None):
     """Evenly spaced as powers of `base`. `linspace` supplies the exponents."""
-    _no_out(kw)
+    _no_out(out)
     return _made((base ** _np.linspace(start, end, steps)).astype(_DEFAULT_DTYPE),
                  dtype, requires_grad)
 
@@ -2954,7 +3000,7 @@ def isneginf(input):
     return Tensor(_np.isneginf(_wrap(input).data))
 
 
-def isin(elements, test_elements, **kw):
+def isin(elements, test_elements):
     return Tensor(_np.isin(_wrap(elements).data, _wrap(test_elements).data))
 
 
@@ -2990,7 +3036,7 @@ def logical_xor(input, other):
     return Tensor(_np.logical_xor(_wrap(input).data != 0, _wrap(other).data != 0))
 
 
-def var_mean(t, dim=None, keepdim=False, **kw):
+def var_mean(t, dim=None, keepdim=False, *, out=None):
     """**Both at once.** Asking for one leaves the other free to be wrong
     uncaught.
 
@@ -3003,13 +3049,13 @@ def var_mean(t, dim=None, keepdim=False, **kw):
     `correction` now. The hazard is the same one and the sentence had to move with
     the name, or it would describe a slot that is no longer there.)
     """
-    _no_out(kw)
+    _no_out(out)
     t = _wrap(t)
     return (t.var(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
 
-def std_mean(t, dim=None, keepdim=False, **kw):
-    _no_out(kw)
+def std_mean(t, dim=None, keepdim=False, *, out=None):
+    _no_out(out)
     t = _wrap(t)
     return (t.std(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
@@ -3339,7 +3385,7 @@ def cdist(a, b, p=2.0):
     return ((diff.abs() ** p).sum(dim=2)) ** (1.0 / p)
 
 
-def cov(t, correction=1, **kw):
+def cov(t, correction=1):
     """Covariance. Rows are variables and columns are observations — the axes
     are the reverse of numpy's, which makes it a confusing place.
 
@@ -3383,7 +3429,7 @@ def corrcoef(input):
     return c / Tensor(scale.astype(d.dtype))
 
 
-def tensordot(a, b, dims=2, **kw):
+def tensordot(a, b, dims=2):
     """Fold the named axes together and multiply. Only the form taking lists of
     axes is handled — that is torch's basic form."""
     a, b = _wrap(a), _wrap(b)
@@ -3405,7 +3451,7 @@ def tensordot(a, b, dims=2, **kw):
     return (am @ bm).reshape(*(a_shape + b_shape))
 
 
-def trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
+def trapezoid(y, x=None, dx=1.0, dim=-1):
     """Trapezoidal integration. The mean of each neighbouring pair times the
     spacing, summed."""
     y = _wrap(y)
@@ -3421,7 +3467,7 @@ def trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
     return ((left + right) * step * 0.5).sum(dim=axis)
 
 
-def cumulative_trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
+def cumulative_trapezoid(y, x=None, dx=1.0, dim=-1):
     """The cumulative version of `trapezoid`. Its last value has to equal
     `trapezoid`."""
     y = _wrap(y)
@@ -4162,7 +4208,7 @@ def take_along_dim(input, indices, dim=None):
     return gather(input, dim, indices)
 
 
-def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
+def searchsorted(sorted_sequence, values, side=None, right=False, *, out=None):
     """Where a value would be inserted into something sorted. **Which side of a
     tie is decided by two arguments together.**
 
@@ -4177,7 +4223,7 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
     Disagreeing, torch stops (measured). Give one, or give both meaning the same
     thing.
     """
-    _no_out(kw)
+    _no_out(out)
     if side is not None:
         if side not in ("left", "right"):
             raise RuntimeError(_like_torch(
@@ -4196,10 +4242,10 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
                   .astype(_np.int64))
 
 
-def bucketize(values, boundaries, right=False, **kw):
+def bucketize(values, boundaries, right=False, *, out=None):
     """**The argument order is reversed from `searchsorted`.** That is the whole
     difference between the two names."""
-    _no_out(kw)
+    _no_out(out)
     return searchsorted(boundaries, values, right=right)
 
 
@@ -8815,29 +8861,29 @@ def _window(n, periodic, shape, dt=None, requires_grad=False):
 
 
 def bartlett_window(window_length, periodic=True, dtype=None,
-                    requires_grad=False, **kw):
+                    requires_grad=False):
     return _window(window_length, periodic,
                    lambda k, n: 1.0 - _np.abs(2.0 * k / (n - 1) - 1.0),
                    dtype, requires_grad)
 
 
 def hann_window(window_length, periodic=True, dtype=None,
-                requires_grad=False, **kw):
+                requires_grad=False):
     return _window(window_length, periodic,
                    lambda k, n: 0.5 - 0.5 * _np.cos(2 * _np.pi * k / (n - 1)),
                    dtype, requires_grad)
 
 
 def hamming_window(window_length, periodic=True, alpha=0.54, beta=0.46,
-                   dtype=None, requires_grad=False, **kw):
-    _no_out(kw)
+                   dtype=None, requires_grad=False, *, out=None):
+    _no_out(out)
     return _window(window_length, periodic,
                    lambda k, n: alpha - beta * _np.cos(2 * _np.pi * k / (n - 1)),
                    dtype, requires_grad)
 
 
 def blackman_window(window_length, periodic=True, dtype=None,
-                    requires_grad=False, **kw):
+                    requires_grad=False):
     def shape(k, n):
         t = 2 * _np.pi * k / (n - 1)
         return 0.42 - 0.5 * _np.cos(t) + 0.08 * _np.cos(2 * t)
@@ -8845,7 +8891,7 @@ def blackman_window(window_length, periodic=True, dtype=None,
 
 
 def kaiser_window(window_length, periodic=True, beta=12.0, dtype=None,
-                  requires_grad=False, **kw):
+                  requires_grad=False):
     def shape(k, n):
         half = (n - 1) / 2.0
         return _np.i0(beta * _np.sqrt(1.0 - ((k - half) / half) ** 2)) / _np.i0(beta)
@@ -9391,7 +9437,7 @@ def combinations(input, r=2, with_replacement=False):
     return Tensor(flat[_np.asarray(rows, dtype=_np.int64)])
 
 
-def tril_indices(row, col, offset=0, dtype=None, requires_grad=False, **kw):
+def tril_indices(row, col, offset=0, dtype=None, requires_grad=False):
     """The positions of the lower triangle. **A `(2, count)` int64 table**
     (measured) — not pairs of positions but a row of rows and a row of
     columns."""
@@ -9399,7 +9445,7 @@ def tril_indices(row, col, offset=0, dtype=None, requires_grad=False, **kw):
     return _made(_np.stack([r, c]).astype(_np.int64), dtype, requires_grad)
 
 
-def triu_indices(row, col, offset=0, dtype=None, requires_grad=False, **kw):
+def triu_indices(row, col, offset=0, dtype=None, requires_grad=False):
     r, c = _np.triu_indices(int(row), int(offset), int(col))
     return _made(_np.stack([r, c]).astype(_np.int64), dtype, requires_grad)
 
@@ -10076,7 +10122,7 @@ def nonzero_static(input, size, fill_value=-1):
     return Tensor(out)
 
 
-def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
+def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, *, out=None):
     """A normal sample. **With `std` at 0 it is the mean itself** — the golden asks
     about that place.
 
@@ -10090,7 +10136,7 @@ def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
     `frombuffer` (torch itself does not take the argument on `bernoulli`, and
     `empty_strided` already refuses).
     """
-    _no_out(kw)
+    _no_out(out)
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
         m = _np.asarray(_wrap(mean).data, dtype=_np.float64)
         s = _np.asarray(_wrap(std).data, dtype=_np.float64)
@@ -10102,7 +10148,7 @@ def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
                  dtype, requires_grad)
 
 
-def bernoulli(t, p=None, *, generator=None, **kw):
+def bernoulli(t, p=None, *, generator=None, out=None):
     """A 1 at each position with that probability. **0 gives all zeros and 1 all
     ones** — those two extremes are deterministic.
 
@@ -10111,7 +10157,7 @@ def bernoulli(t, p=None, *, generator=None, **kw):
     `x.bernoulli()` uses them. It stopped with a `TypeError` about the argument
     count — the tensor holding the probabilities is the form a tutorial uses second.
     """
-    _no_out(kw)
+    _no_out(out)
     t = _wrap(t)
     rng = generator.rng() if generator is not None else _rng
     probs = (_np.full(t.data.shape, float(p)) if p is not None
@@ -10119,7 +10165,7 @@ def bernoulli(t, p=None, *, generator=None, **kw):
     return Tensor((rng.random(probs.shape) < probs).astype(t.data.dtype))
 
 
-def poisson(t, **kw):
+def poisson(t):
     """A Poisson sample at that rate per position. **0 gives all zeros**
     (measured)."""
     t = _wrap(t)
@@ -10130,7 +10176,7 @@ def poisson(t, **kw):
     return Tensor(_np.asarray(_rng.poisson(lam)).astype(t.data.dtype))
 
 
-def binomial(count, prob, **kw):
+def binomial(count, prob):
     """The number of successes in `count` trials. **`p=0` gives 0 and `p=1` gives
     `count`.**"""
     n = _np.asarray(_wrap(count).data, dtype=_np.float64)
@@ -10409,7 +10455,7 @@ def is_neg(t):
     return False
 
 
-def asarray(obj, dtype=None, copy=None, **kw):
+def asarray(obj, dtype=None, copy=None):
     """**Given a tensor it is not a copy** (measured). `copy=True` makes it one.
 
     Almost the same as `as_tensor`, differing in taking `copy` explicitly — without
@@ -10427,7 +10473,7 @@ def asarray(obj, dtype=None, copy=None, **kw):
 
 
 def frombuffer(buffer, dtype=_float32, count=-1, offset=0,
-               requires_grad=False, **kw):
+               requires_grad=False):
     """Read the bytes as they are. **`offset` is a byte count** — not an element
     count (measured).
 
@@ -10443,7 +10489,7 @@ def frombuffer(buffer, dtype=_float32, count=-1, offset=0,
                                 offset=offset).copy(), None, requires_grad)
 
 
-def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
+def range_top(start, end=None, step=1, dtype=None, requires_grad=False, *, out=None):
     """**The end is included** — `arange` excludes it (measured: `range(0, 4)`
     gives five elements).
 
@@ -10457,7 +10503,7 @@ def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
     `borch/__init__.py` exports it as `range`. The ninth "a module name shadows a
     builtin" in this file.
     """
-    _no_out(kw)
+    _no_out(out)
     _needs_step(step, "range")
     if end is None:
         start, end = 0, start
@@ -10465,7 +10511,7 @@ def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
                  dtype, requires_grad)
 
 
-def empty_strided(size, stride, **kw):
+def empty_strided(size, stride, *, out=None):
     """**Absent because strides cannot be expressed.**
 
     A different place from `as_strided`. There **the values** are the answer, so a
@@ -10474,13 +10520,13 @@ def empty_strided(size, stride, **kw):
     handing back something whose shape merely matches creates code that believes
     the strides are what it asked for.
     """
-    _no_out(kw)
+    _no_out(out)
     _unsupported("torch.empty_strided — there is no such thing as a stride here")
 
 
-def empty_permuted(size, physical_layout, **kw):
+def empty_permuted(size, physical_layout, *, out=None):
     """Absent for `empty_strided`'s reason."""
-    _no_out(kw)
+    _no_out(out)
     _unsupported("torch.empty_permuted — there is no such thing as a stride here")
 
 

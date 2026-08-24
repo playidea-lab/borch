@@ -649,7 +649,15 @@ JUDGED = {
     # `ts_axis.refused()` learned to recognise their factory — they were refusals
     # all along. **The judged count did not move**, which is what says nothing was
     # lost: 386 of a smaller total is the same 386.
-    "Tensor": (386, 509),
+    #
+    # 386 → 388, and up is the safe direction this row exists to distinguish.
+    # `bernoulli` and `poisson` were `(**kw)` — the bag that let them accept any
+    # keyword at all and drop it — and a bag reads as *variadic*, which is the bucket
+    # meaning **cannot be judged**. They lost it: `bernoulli` declares `out=` (the
+    # seat torch has, refused here with the wording that says why) and `poisson`
+    # declares nothing more than it takes. Two rows left an absorbing state, which is
+    # the movement this check was written to make visible in the other direction.
+    "Tensor": (388, 509),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a
