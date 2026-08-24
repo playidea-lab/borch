@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 153
+  "missing": 154
  },
  "modules": [
   {
@@ -14103,12 +14103,12 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(size: number | readonly [number, number], padding?: number | null, fill?: number)",
-       "doc": "",
+       "signature": "constructor(size: number | readonly [number, number], padding?: number | readonly number[] | null, padIfNeeded?: boolean, fill?: number | readonly number[], paddingMode?: PaddingMode)",
+       "doc": "**The argument list is torchvision's, and it was not.** This took\n`(size, padding, fill)` where torchvision takes\n`(size, padding, padIfNeeded, fill, paddingMode)`, so `new RandomCrop(32, 4, true)`\n— the line somebody transcribing torch writes — put `true` in `fill` here and\n`pad_if_needed` there. It compiled, it ran, and it came out the right shape either\nway. The Python side had already been corrected and said so in its docstring; this\nside was left behind because nothing compared the two.\n\nWhat found it: `tests/ts_axis.py` gained the `transforms` namespace, which put the\nsignature axis on this constructor for the first time and it came back `shifted`.\nThe golden could not — it asks `RandomCrop((3,2), padding=4)` by keyword, so the\nthird position was never occupied on either side.\n\nThe padding itself was already here, one class over: `Pad` does all four modes and\na per-side padding, while this used a private `padded()` that only knew a constant\nfill and one symmetric width.",
        "tags": [
         {
          "tag": "param",
-         "text": "padding **`null` is the default, not `0`** — torchvision's is `None` and its repr prints that word. They pad identically, so the difference lives only in the printed line, and the golden's repr case passed `padding=4` and therefore never printed a default."
+         "text": "padding **`null` is the default, not `0`** — torchvision's is `None` and its repr prints that word. They pad identically, so the difference lives only in the printed line."
         }
        ]
       },

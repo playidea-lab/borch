@@ -601,22 +601,52 @@ export class RandomCrop implements Transform {
   private readonly size: [number, number];
 
   /**
-   * @param padding **`null` is the default, not `0`** — torchvision's is `None`
-   *   and its repr prints that word. They pad identically, so the difference
-   *   lives only in the printed line, and the golden's repr case passed
-   *   `padding=4` and therefore never printed a default.
+   * **The argument list is torchvision's, and it was not.** This took
+   * `(size, padding, fill)` where torchvision takes
+   * `(size, padding, padIfNeeded, fill, paddingMode)`, so `new RandomCrop(32, 4, true)`
+   * — the line somebody transcribing torch writes — put `true` in `fill` here and
+   * `pad_if_needed` there. It compiled, it ran, and it came out the right shape either
+   * way. The Python side had already been corrected and said so in its docstring; this
+   * side was left behind because nothing compared the two.
+   *
+   * What found it: `tests/ts_axis.py` gained the `transforms` namespace, which put the
+   * signature axis on this constructor for the first time and it came back `shifted`.
+   * The golden could not — it asks `RandomCrop((3,2), padding=4)` by keyword, so the
+   * third position was never occupied on either side.
+   *
+   * The padding itself was already here, one class over: `Pad` does all four modes and
+   * a per-side padding, while this used a private `padded()` that only knew a constant
+   * fill and one symmetric width.
+   *
+   * @param padding **`null` is the default, not `0`** — torchvision's is `None` and its
+   *   repr prints that word. They pad identically, so the difference lives only in the
+   *   printed line.
    */
   constructor(
     size: number | readonly [number, number],
-    private readonly padding: number | null = null,
-    private readonly fill = 0,
+    private readonly padding: number | readonly number[] | null = null,
+    private readonly padIfNeeded = false,
+    private readonly fill: number | readonly number[] = 0,
+    private readonly paddingMode: PaddingMode = "constant",
   ) {
     this.size = typeof size === "number" ? [size, size] : [size[0], size[1]];
   }
 
   apply(x: Image | Tensor): Image {
-    const img = padded(asImage(x, "RandomCrop"), this.padding ?? 0, this.fill);
+    let img = asImage(x, "RandomCrop");
+    if (this.padding !== null) {
+      img = new Pad(this.padding, this.fill, this.paddingMode).apply(img);
+    }
     const [th, tw] = this.size;
+    // **Width first and then height, each on its own** — torchvision pads them in two
+    // separate steps and the second reads the width the first produced. Done together,
+    // a picture short on both sides comes out a different size.
+    if (this.padIfNeeded && img.width < tw) {
+      img = new Pad([tw - img.width, 0], this.fill, this.paddingMode).apply(img);
+    }
+    if (this.padIfNeeded && img.height < th) {
+      img = new Pad([0, th - img.height], this.fill, this.paddingMode).apply(img);
+    }
     if (img.height < th || img.width < tw) {
       throw new Error(
         `Required crop size (${th}, ${tw}) is larger than input image size ` +
@@ -1372,21 +1402,6 @@ function asImage(x: Subject, who: string): Image {
     );
   }
   return x;
-}
-
-function padded(img: Image, pad: number, fill: number): Image {
-  if (pad === 0) return img;
-  const height = img.height + 2 * pad;
-  const width = img.width + 2 * pad;
-  const out = new Float64Array(height * width * img.channels).fill(fill);
-  for (let h = 0; h < img.height; h++) {
-    for (let w = 0; w < img.width; w++) {
-      const from = (h * img.width + w) * img.channels;
-      const to = ((h + pad) * width + (w + pad)) * img.channels;
-      for (let c = 0; c < img.channels; c++) out[to + c] = img.data[from + c] ?? 0;
-    }
-  }
-  return { ...img, data: out, height, width };
 }
 
 
