@@ -4254,23 +4254,74 @@ export function multiHeadAttentionForward(
   query: Tensor,
   key: Tensor,
   value: Tensor,
+  embedDimToCheck: number | null,
   numHeads: number,
-  inWeight: Tensor,
-  inBias: Tensor | null,
-  outWeight: Tensor,
-  outBias: Tensor | null,
-  attnMask: Tensor | null = null,
-  keyPaddingMask: Tensor | null = null,
-  averageWeights = true,
+  inProjWeight: Tensor,
+  inProjBias: Tensor | null,
+  biasK: Tensor | null = null,
+  biasV: Tensor | null = null,
+  addZeroAttn = false,
   dropoutP = 0.0,
+  outProjWeight: Tensor = inProjWeight,
+  outProjBias: Tensor | null = null,
   training = true,
-): { output: Tensor; weights: Tensor } {
+  keyPaddingMask: Tensor | null = null,
+  needWeights = true,
+  attnMask: Tensor | null = null,
+  useSeparateProjWeight = false,
+  qProjWeight: Tensor | null = null,
+  kProjWeight: Tensor | null = null,
+  vProjWeight: Tensor | null = null,
+  staticK: Tensor | null = null,
+  staticV: Tensor | null = null,
+  averageAttnWeights = true,
+  isCausal = false,
+): { output: Tensor; weights: Tensor | null } {
+  // **torch's twenty-five, in torch's order.** This took thirteen, in an order of its
+  // own, so `multiHeadAttentionForward(q, k, v, heads, …)` and torch's
+  // `(query, key, value, embed_dim_to_check, num_heads, …)` mean different things from
+  // the fourth argument on. Every one of the twelve that were missing sat *between*
+  // ones that were present, so each shifted what followed.
+  //
+  // Six are refused rather than implemented, which is the trade the core makes at the
+  // same place: quietly ignoring a branch like `biasK` or `staticK` makes the values
+  // plausibly different, and plausible is the one thing a comparison cannot catch.
+  for (const [what, given] of [["biasK", biasK], ["biasV", biasV],
+                               ["staticK", staticK], ["staticV", staticV],
+                               ["qProjWeight", qProjWeight],
+                               ["kProjWeight", kProjWeight],
+                               ["vProjWeight", vProjWeight]] as const) {
+    if (given != null) {
+      throw new NotImplementedError(`multiHeadAttentionForward(${what}=…)`);
+    }
+  }
+  for (const [what, on] of [["addZeroAttn", addZeroAttn],
+                            ["useSeparateProjWeight", useSeparateProjWeight]] as const) {
+    if (on) throw new NotImplementedError(`multiHeadAttentionForward(${what}=true)`);
+  }
+  const inWeight = inProjWeight;
+  const inBias = inProjBias;
+  const outWeight = outProjWeight;
+  const outBias = outProjBias;
+  const averageWeights = averageAttnWeights;
   const L = query.shape[0] ?? 1;
   const N = query.shape[1] ?? 1;
   const E = query.shape[2] ?? 1;
   const S = key.shape[0] ?? 1;
+  // **`!= null` on purpose, both spellings of absent.** Python's `None` arrives from
+  // the binding as `undefined`, not `null`, so a strict `!== null` made the guard fire
+  // on every call that declined it — *"was expecting embedding dimension of
+  // undefined"*, three golden cases at once. A parameter that crosses a language
+  // boundary has two empties, and the check has to know both.
+  if (embedDimToCheck != null && embedDimToCheck !== E) {
+    throw new Error(
+      `was expecting embedding dimension of ${embedDimToCheck}, but got ${E}`);
+  }
   const head = E / numHeads;
   const scale = Tensor.full([], 1 / Math.sqrt(head));
+  // `isCausal` is torch's shorthand for the upper-triangular mask, and torch takes
+  // the explicit one when both are given.
+  if (isCausal && attnMask === null) attnMask = MultiheadAttention.causalMask(L);
 
   /** Turns length-first into batch-first and projects. */
   const project = (t: Tensor, len: number, slot: number): Tensor => {
@@ -4319,7 +4370,9 @@ export function multiHeadAttentionForward(
   const weights = Tensor.cat(allWeights, 0);           // (N, H, L, S)
   return {
     output: out,
-    weights: averageWeights ? weights.mean(1, false) : weights,
+    // torch hands back `None` rather than weights nobody asked for.
+    weights: !needWeights ? null
+      : averageWeights ? weights.mean(1, false) : weights,
   };
 }
 
@@ -4725,9 +4778,13 @@ export class TransformerDecoderLayer extends Module {
    */
   private cross(x: Tensor, memory: Tensor): Tensor {
     const a = this.multihead_attn;
+    // `null` is `embedDimToCheck` — torch's fourth, an assertion rather than a
+    // setting, and the four `null`s after `dropoutP` are `biasK`, `biasV` and the
+    // rest, which this call has nothing to say about.
     const { output } = multiHeadAttentionForward(
       x.swapaxes(0, 1), memory.swapaxes(0, 1), memory.swapaxes(0, 1),
-      a.numHeads, a.inWeight, a.inBias, a.outWeight, a.outBias);
+      null, a.numHeads, a.inWeight, a.inBias, null, null, false, 0,
+      a.outWeight, a.outBias);
     return output.swapaxes(0, 1);
   }
 

@@ -1928,6 +1928,24 @@ def fft_cases(inp=None):
     add("stft 배치",
         pair(lambda L: L.stft(L.tensor(sig.reshape(1, 16).copy()), 8, 4,
                               window=hann(L), return_complex=True)))
+
+    # **`align_to_window` has no value case, because its whole behaviour is the
+    # refusal.** torch rejects it unless `center` is false, and with `center` false it
+    # answered the same at every setting — so the only thing to freeze is that the
+    # refusal happens and says what torch's says. Nothing asked before this line, in
+    # any of the three.
+    def align_refuses(L):
+        try:
+            L.stft(s(L), 8, 4, window=hann(L), return_complex=True,
+                   align_to_window=True)
+        except RuntimeError as exc:
+            return "거절" if "center = false" in str(exc) else f"다른 말 <{exc}>"
+        except Exception as exc:                                    # noqa: BLE001
+            return f"다른 예외 <{type(exc).__name__}>"
+        return "안 던졌다"
+
+    cases.append((FFT_PREFIX + "stft align_to_window(center 이면 거절)",
+                  align_refuses))
     add("istft(length=16)",
         lambda L: L.istft(L.stft(s(L), 8, 4, window=hann(L),
                                  return_complex=True),

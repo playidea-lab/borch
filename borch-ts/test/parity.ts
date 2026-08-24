@@ -1183,8 +1183,8 @@ export async function report(): Promise<Report> {
     const inW = Tensor.eye(2).repeat(3, 1);
     const outW = Tensor.eye(2);
     const attend = (p: number, training: boolean) =>
-      nn.multiHeadAttentionForward(q, q, q, 1, inW, null, outW, null,
-        null, null, true, p, training).output.toArray();
+      nn.multiHeadAttentionForward(q, q, q, null, 1, inW, null, null, null,
+        false, p, outW, null, training).output.toArray();
     const plain = await attend(0, true);
     want("attention at dropoutP=0 is the untouched answer", same(plain, await attend(0, false)));
     want("and training=false ignores p", same(plain, await attend(0.5, false)));

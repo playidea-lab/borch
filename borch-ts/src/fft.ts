@@ -461,6 +461,13 @@ function windowOf(window: Tensor | null | undefined, nFft: number,
   return window.padND([left, nFft - have - left]);
 }
 
+/**
+ * **Two interfaces, because torch has two lists.** One stood for both, so `stft`
+ * offered a `length` that belongs to `istft` and `istft` offered a `padMode` that
+ * belongs to `stft` — the same shape as one shared tuple standing for the plain and
+ * transposed convolutions, and it hides the same way: a caller who passes the wrong
+ * one is not told, because the type accepts it.
+ */
 export interface StftOptions {
   hopLength?: number | null;
   winLength?: number | null;
@@ -470,10 +477,32 @@ export interface StftOptions {
   normalized?: boolean;
   onesided?: boolean | null;
   returnComplex?: boolean | null;
+  /**
+   * **Accepted, and torch's own refusal is the whole of what it does.** torch rejects
+   * it unless `center` is false, and with `center` false it answered the same at every
+   * setting — so there is nothing to imitate but the refusal. The core says the same
+   * at the same place, and the seat is torch's either way.
+   */
+  alignToWindow?: boolean | null;
+}
+
+export interface IstftOptions {
+  hopLength?: number | null;
+  winLength?: number | null;
+  window?: Tensor | null;
+  center?: boolean;
+  normalized?: boolean;
+  onesided?: boolean | null;
   length?: number | null;
+  returnComplex?: boolean | null;
 }
 
 export function stft(input: Tensor, nFft: number, options: StftOptions = {}): Tensor {
+  // `!= null` covers both empties — Python's `None` crosses as `undefined`.
+  if (options.alignToWindow != null && (options.center ?? true)) {
+    throw new RuntimeError(
+      "stft align_to_window should only be set when center = false");
+  }
   const {
     hopLength = null, winLength = null, window = null, center = true,
     padMode = "reflect", normalized = false, onesided = null,
@@ -525,7 +554,7 @@ function swapLastTwo(t: Tensor): Tensor {
 }
 
 export function istft(input: Tensor, nFft: number,
-                      options: StftOptions = {}): Tensor {
+                      options: IstftOptions = {}): Tensor {
   const {
     hopLength = null, winLength = null, window = null, center = true,
     normalized = false, onesided = null, length = null,

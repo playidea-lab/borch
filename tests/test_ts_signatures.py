@@ -450,7 +450,17 @@ UNALIGNED = {
     # core side opens this until borch.ts follows.
     # 2 → 1. `F.embedding`'s first parameter was `idx`; torch says `input`, and with
     # the name matching the row is a prefix of torch's seven rather than unalignable.
-    "nn.functional": 1,
+    #
+    # **1 → 0.** `multi_head_attention_forward` took thirteen of torch's twenty-five in
+    # an order of its own, so the lists parted from the fourth argument on and each of
+    # the twelve missing ones sat *between* two that were present. Six are refused by
+    # name now — quietly skipping a branch like `biasK` or `staticK` makes the values
+    # plausibly different, and plausible is the one thing a comparison cannot catch.
+    #
+    # **The binding's call site had agreed only because both sides were wrong the same
+    # way**, and `tsc` plus that file's own check named every position the moment one
+    # of them stopped being wrong.
+    "nn.functional": 0,
     # 7 → 1 → 7. It went down when `maximize` landed on both sides at the same
     # length, and back up when the core took torch's **whole** optimizer surface —
     # `amsgrad`, `centered`, `momentum`, `decoupled_weight_decay` and the four

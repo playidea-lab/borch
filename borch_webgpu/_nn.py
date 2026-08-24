@@ -481,17 +481,37 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
     length = int(handle(query).shape[0])
     if is_causal and attn_mask is None:
         attn_mask = _np.triu(_np.ones((length, s), dtype=bool), k=1)
+    def _h(t):
+        """**Forwarded rather than checked here.** Each of these is refused by name on
+        the borch.ts side now, and passing a hard `None` in its place is the same as
+        dropping it — the shape this file's own check is for."""
+        return None if t is None else handle(t)
+
+    # **torch's twenty-five, in torch's order**, now that borch.ts takes them. This
+    # laid thirteen out in an order of its own, and the two lists happened to agree
+    # only because both were wrong in the same way — the moment borch.ts followed
+    # torch, `int(num_heads)` was landing on `embed_dim_to_check` and the masks on
+    # `bias_k`/`bias_v`. The refusals live over there now, so the four this function
+    # already refuses are passed as they arrived rather than re-checked here.
     got = _ts.nn.multiHeadAttentionForward(
-        handle(query), handle(key), handle(value), int(num_heads),
+        handle(query), handle(key), handle(value),
+        None if embed_dim_to_check is None else int(embed_dim_to_check),
+        int(num_heads),
         handle(in_proj_weight),
         handle(in_proj_bias) if in_proj_bias is not None else None,
+        _h(bias_k), _h(bias_v), bool(add_zero_attn), float(dropout_p),
         handle(out_proj_weight),
         handle(out_proj_bias) if out_proj_bias is not None else None,
-        _additive_mask(attn_mask),
+        bool(training),
         _additive_mask(key_padding_mask, (n, s)),
-        bool(average_attn_weights), float(dropout_p), bool(training))
+        bool(need_weights),
+        _additive_mask(attn_mask),
+        bool(use_separate_proj_weight),
+        _h(q_proj_weight), _h(k_proj_weight), _h(v_proj_weight),
+        _h(static_k), _h(static_v),
+        bool(average_attn_weights), bool(is_causal))
     out = wrap(got.output)
-    return (out, None) if not need_weights else (out, wrap(got.weights))
+    return (out, None) if got.weights is None else (out, wrap(got.weights))
 
 
 def _affine_grid(theta, size, align_corners=False, **kw):

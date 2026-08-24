@@ -1093,6 +1093,18 @@ function addFft(out: Map<string, Case>): void {
   out.set(`${P}stft 배치`, pair(() => stft(sig().reshape([1, 16]), 8, {
     hopLength: 4, window: hann(), returnComplex: true,
   })));
+  // `alignToWindow` has no value case anywhere: torch's whole behaviour for it is the
+  // refusal, and with `center` false it answers the same at every setting.
+  out.set(`${P}stft align_to_window(center 이면 거절)`, () => {
+    try {
+      stft(sig(), 8, {
+        hopLength: 4, window: hann(), returnComplex: true, alignToWindow: true,
+      });
+    } catch (e) {
+      return String(e).includes("center = false") ? "거절" : `다른 말 <${String(e)}>`;
+    }
+    return "안 던졌다";
+  });
   out.set(`${P}istft(length=16)`, () => istft(
     stft(sig(), 8, { hopLength: 4, window: hann(), returnComplex: true }),
     8, { hopLength: 4, window: hann(), length: 16 }));
@@ -2964,13 +2976,14 @@ function addUnpool(out: Map<string, Case>): void {
     pad?: Tensor | null;
     average?: boolean;
   } = {}) => nn.multiHeadAttentionForward(
-    mhaQ(), mhaK(), mhaV(), 2, mhaInW(), mhaInB(), mhaOutW(), mhaOutB(),
-    opts.mask ?? null, opts.pad ?? null, opts.average ?? true);
+    mhaQ(), mhaK(), mhaV(), null, 2, mhaInW(), mhaInB(), null, null, false, 0,
+    mhaOutW(), mhaOutB(), true, opts.pad ?? null, true, opts.mask ?? null,
+    false, null, null, null, null, null, opts.average ?? true);
 
   out.set("fname::mha::출력", () => runMha().output);
-  out.set("fname::mha::가중치(머리 평균)", () => runMha().weights);
+  out.set("fname::mha::가중치(머리 평균)", () => runMha().weights!);
   out.set("fname::mha::가중치(머리마다)",
-    () => runMha({ average: false }).weights);
+    () => runMha({ average: false }).weights!);
   // The causal mask — the upper triangle at -inf. An added float rather than a
   // boolean.
   const causalAdd = () => Tensor.from(
@@ -2985,11 +2998,11 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("fname::mha::key_padding_mask",
     () => runMha({ pad: padAdd() }).output);
   out.set("fname::mha::key_padding_mask 가중치",
-    () => runMha({ pad: padAdd() }).weights);
+    () => runMha({ pad: padAdd() }).weights!);
   out.set("fname::mha::grad(query)", () => {
     const q = mhaQ(true);
-    nn.multiHeadAttentionForward(q, mhaK(), mhaV(), 2, mhaInW(), mhaInB(),
-      mhaOutW(), mhaOutB()).output.sum().backward();
+    nn.multiHeadAttentionForward(q, mhaK(), mhaV(), null, 2, mhaInW(), mhaInB(),
+      null, null, false, 0, mhaOutW(), mhaOutB()).output.sum().backward();
     return gradOf(q, "multiHeadAttentionForward");
   });
 }

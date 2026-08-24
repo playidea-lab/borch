@@ -2273,7 +2273,8 @@ def binomial(count, prob, **kw):
 # was the convention, not the storage. Measuring and pinning it opened the door.
 
 def _stft_options(hop_length, win_length, window, center, pad_mode,
-                  normalized, onesided, return_complex, length=None):
+                  normalized, onesided, return_complex, length=None,
+                  align_to_window=None):
     """Into borch.ts's `StftOptions`. **What is absent is left out** — over
     there `undefined` and `null` mean different things (the default versus
     "explicitly none"), so forwarding Python's `None` as-is means the
@@ -2289,6 +2290,11 @@ def _stft_options(hop_length, win_length, window, center, pad_mode,
     if pad_mode is not None:
         kw["padMode"] = str(pad_mode)
     kw["normalized"] = bool(normalized)
+    # **Left out when absent, like the rest.** torch's whole behaviour for it is the
+    # refusal unless `center` is false, so what has to cross is *whether it was given*
+    # — forwarding a `None` would make borch.ts's guard fire on every call.
+    if align_to_window is not None:
+        kw["alignToWindow"] = bool(align_to_window)
     if onesided is not None:
         kw["onesided"] = bool(onesided)
     if return_complex is not None:
@@ -2300,13 +2306,18 @@ def _stft_options(hop_length, win_length, window, center, pad_mode,
 
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,
          center=True, pad_mode="reflect", normalized=False, onesided=None,
-         return_complex=None, **kw):
+         return_complex=None, align_to_window=None, **kw):
     """The short-time Fourier transform. **It refuses without `return_complex`**
-    (measured)."""
+    (measured).
+
+    **`align_to_window` was falling into `**kw`**, which is accepting an argument and
+    dropping it — torch rejects it unless `center` is false and this said nothing at
+    all. Named here so it crosses, and borch.ts refuses in torch's own words."""
     return wrap(guarded(
         _ts.stft, handle(input), int(n_fft),
         _stft_options(hop_length, win_length, window, center, pad_mode,
-                      normalized, onesided, return_complex)))
+                      normalized, onesided, return_complex,
+                      align_to_window=align_to_window)))
 
 
 def istft(input, n_fft, hop_length=None, win_length=None, window=None,
