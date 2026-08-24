@@ -3887,8 +3887,8 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     // they are the same optimiser, so a case built with the defaults passes under either
     // implementation.
     ["Adam(weight_decay)",
-      (ps) => new optim.Adam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
-    ["AdamW", (ps) => new optim.AdamW(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+      (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1)],
+    ["AdamW", (ps) => new optim.AdamW(ps, 0.05, [0.9, 0.999], 1e-8, 0.1)],
     // **Every optimiser taking `weightDecay` is asked with a non-zero value.**
     //
     // Until today there was no such case at all, and that absence hid seven defects — the
@@ -3903,11 +3903,11 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     ["Adadelta(weight_decay)",
       (ps) => new optim.Adadelta(ps, 0.5, 0.9, 1e-6, 0.1)],
     ["Adamax(weight_decay)",
-      (ps) => new optim.Adamax(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+      (ps) => new optim.Adamax(ps, 0.05, [0.9, 0.999], 1e-8, 0.1)],
     ["NAdam(weight_decay)",
-      (ps) => new optim.NAdam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+      (ps) => new optim.NAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1)],
     ["RAdam(weight_decay)",
-      (ps) => new optim.RAdam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+      (ps) => new optim.RAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1)],
     ["RMSprop(weight_decay)",
       (ps) => new optim.RMSprop(ps, 0.01, 0.99, 1e-8, 0.1)],
     ["ASGD(weight_decay)",
@@ -3927,18 +3927,18 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     // The arguments are the Python table's, value for value. Picking different
     // ones would ask a question torch never froze an answer to, and the row would
     // pass by comparing borch.ts against itself.
-    ["Adam(maximize)", (ps) => new optim.Adam(ps, 0.05, 0.9, 0.999, 1e-8, 0,
+    ["Adam(maximize)", (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0,
       false, { maximize: true })],
     ["RMSprop(maximize)", (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0,
       false, { maximize: true })],
     ["Adam(amsgrad)",
-      (ps) => new optim.Adam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1, true)],
+      (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, true)],
     ["RMSprop(centered)",
       (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0, true)],
     ["RMSprop(momentum)",
       (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0.9)],
     ["NAdam(decoupled_weight_decay)",
-      (ps) => new optim.NAdam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1, 4e-3, true)],
+      (ps) => new optim.NAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, 4e-3, true)],
   ];
   for (const [name, make] of kinds) {
     out.set(`opt::${name}/0.weight`, () => {
@@ -4222,15 +4222,15 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   out.set("opt::Rprop/부호 바뀜",
     walk((ps) => new optim.Rprop(ps, 0.1), flip));
   out.set("opt::Rprop/etas",
-    walk((ps) => new optim.Rprop(ps, 0.1, 0.4, 1.5), flip));
+    walk((ps) => new optim.Rprop(ps, 0.1, [0.4, 1.5]), flip));
   out.set("opt::Rprop/step_sizes 상한",
-    walk((ps) => new optim.Rprop(ps, 0.1, 0.5, 1.2, 1e-6, 0.11), ramp));
+    walk((ps) => new optim.Rprop(ps, 0.1, [0.5, 1.2], [1e-6, 0.11]), ramp));
 
   out.set("opt::Adafactor/기본값", walk((ps) => new optim.Adafactor(ps), ramp));
   out.set("opt::Adafactor/weight_decay",
-    walk((ps) => new optim.Adafactor(ps, 0.1, -0.8, null, 1e-3, 1.0, 0.1), ramp));
+    walk((ps) => new optim.Adafactor(ps, 0.1, -0.8, [null, 1e-3], 1.0, 0.1), ramp));
   out.set("opt::Adafactor/d",
-    walk((ps) => new optim.Adafactor(ps, 0.1, -0.8, null, 1e-3, 2.0), ramp));
+    walk((ps) => new optim.Adafactor(ps, 0.1, -0.8, [null, 1e-3], 2.0), ramp));
 
   // **From 2-D it factors into rows and columns** — asked with a vector alone that path
   // never runs.

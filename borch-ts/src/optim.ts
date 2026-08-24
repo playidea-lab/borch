@@ -420,17 +420,30 @@ export class Adam extends Optimizer {
    */
   protected readonly decoupled: boolean = false;
 
+  private readonly beta1: number;
+  private readonly beta2: number;
+
+  /**
+   * **`betas` is one argument, because torch makes it one.** This took `beta1` and
+   * `beta2` in two positions, so every later argument sat one seat early and
+   * `new Adam(p, 1e-3, 0.9, 0.999, 1e-8)` meant something different from
+   * `Adam(p, 1e-3, (0.9, 0.999), 1e-8)` — the lists could not be lined up at all,
+   * which is the bucket that reports nothing beneath it.
+   *
+   * A pair is not a rename and it is not a short tail; splitting it is the one shape
+   * of divergence the axis has no name for.
+   */
   constructor(
     params: ParamsArg,
     lr: number,
-    private readonly beta1 = 0.9,
-    private readonly beta2 = 0.999,
+    betas: readonly [number, number] = [0.9, 0.999],
     private readonly eps = 1e-8,
     private readonly weightDecay = 0,
     private readonly amsgrad = false,
     opts: { maximize?: boolean } = {},
   ) {
     super(params, lr, opts);
+    [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
     this.second = this.state(this.params);
     this.secondMax = amsgrad ? this.state(this.params) : [];
@@ -523,14 +536,13 @@ export class AdamW extends Adam {
   constructor(
     params: ParamsArg,
     lr = 1e-3,
-    beta1 = 0.9,
-    beta2 = 0.999,
+    betas: readonly [number, number] = [0.9, 0.999],
     eps = 1e-8,
     weightDecay = 0.01,
     amsgrad = false,
     opts: { maximize?: boolean } = {},
   ) {
-    super(params, lr, beta1, beta2, eps, weightDecay, amsgrad, opts);
+    super(params, lr, betas, eps, weightDecay, amsgrad, opts);
   }
 }
 
@@ -735,10 +747,15 @@ export class Adamax extends Composed {
   private readonly inf: Tensor[];
   private stepCount = 0;
 
-  constructor(params: ParamsArg, lr = 2e-3, private readonly beta1 = 0.9,
-              private readonly beta2 = 0.999, private readonly eps = 1e-8,
+  private readonly beta1: number;
+  private readonly beta2: number;
+
+  constructor(params: ParamsArg, lr = 2e-3,
+              betas: readonly [number, number] = [0.9, 0.999],
+              private readonly eps = 1e-8,
               weightDecay = 0, opts: { maximize?: boolean } = {}) {
     super(params, lr, weightDecay, opts);
+    [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
     this.inf = this.state(this.params);
   }
@@ -790,12 +807,17 @@ export class NAdam extends Composed {
    * nothing. It was the last of seven to be found, and the only one an
    * argument-count comparison could never have shown.
    */
-  constructor(params: ParamsArg, lr = 2e-3, private readonly beta1 = 0.9,
-              private readonly beta2 = 0.999, private readonly eps = 1e-8,
+  private readonly beta1: number;
+  private readonly beta2: number;
+
+  constructor(params: ParamsArg, lr = 2e-3,
+              betas: readonly [number, number] = [0.9, 0.999],
+              private readonly eps = 1e-8,
               weightDecay = 0, private readonly momentumDecay = 4e-3,
               private readonly decoupledWeightDecay = false,
               opts: { maximize?: boolean } = {}) {
     super(params, lr, weightDecay, opts);
+    [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
     this.second = this.state(this.params);
   }
@@ -861,10 +883,15 @@ export class RAdam extends Composed {
   private readonly second: Tensor[];
   private stepCount = 0;
 
-  constructor(params: ParamsArg, lr = 1e-3, private readonly beta1 = 0.9,
-              private readonly beta2 = 0.999, private readonly eps = 1e-8,
+  private readonly beta1: number;
+  private readonly beta2: number;
+
+  constructor(params: ParamsArg, lr = 1e-3,
+              betas: readonly [number, number] = [0.9, 0.999],
+              private readonly eps = 1e-8,
               weightDecay = 0, opts: { maximize?: boolean } = {}) {
     super(params, lr, weightDecay, opts);
+    [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
     this.second = this.state(this.params);
   }
@@ -974,11 +1001,18 @@ export class Rprop extends Composed {
   private readonly prev: Tensor[];
   private readonly stepSize: Tensor[];
 
-  constructor(params: ParamsArg, lr = 1e-2, private readonly etaMinus = 0.5,
-              private readonly etaPlus = 1.2, private readonly sizeMin = 1e-6,
-              private readonly sizeMax = 50,
+  private readonly etaMinus: number;
+  private readonly etaPlus: number;
+  private readonly sizeMin: number;
+  private readonly sizeMax: number;
+
+  constructor(params: ParamsArg, lr = 1e-2,
+              etas: readonly [number, number] = [0.5, 1.2],
+              stepSizes: readonly [number, number] = [1e-6, 50],
               opts: { maximize?: boolean } = {}) {
     super(params, lr, 0, opts);
+    [this.etaMinus, this.etaPlus] = etas;
+    [this.sizeMin, this.sizeMax] = stepSizes;
     this.prev = this.state(this.params);
     // **It must not be built with `Tensor.full`.** On a size-1 parameter that hands back
     // the value-cached global `lr` constant, and `update` below writes into it with
@@ -1206,11 +1240,15 @@ export class Adafactor extends Composed {
   private readonly variance: (Tensor | null)[] = [];
   private stepCount = 0;
 
+  private readonly eps1: number | null;
+  private readonly eps2: number;
+
   constructor(params: ParamsArg, lr = 1e-2, private readonly beta2Decay = -0.8,
-              private readonly eps1: number | null = null,
-              private readonly eps2 = 1e-3, private readonly d = 1.0,
+              eps: readonly [number | null, number] = [null, 1e-3],
+              private readonly d = 1.0,
               weightDecay = 0, opts: { maximize?: boolean } = {}) {
     super(params, lr, weightDecay, opts);
+    [this.eps1, this.eps2] = eps;
     this.extendState(this.params);
   }
 

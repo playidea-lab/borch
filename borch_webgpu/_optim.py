@@ -109,6 +109,24 @@ def _params(ps):
     return _js.Array.new(*[handle(p) for p in ps])
 
 
+def _pair(two):
+    """A two-element tuple, as a JavaScript array.
+
+    **torch packs these pairs and borch.ts used to split them** — `betas`, `etas`,
+    `step_sizes` and Adafactor's `eps` each became two positions over there, so this
+    file wrote `betas[0], betas[1]` and every later argument sat one seat early on
+    that side. borch.ts takes the pair now, and a Python tuple crossing as-is becomes
+    a proxy that is neither an array nor a list, so it is laid out by hand — the same
+    reason the padding layers convert theirs.
+    """
+    from js import Array as _Array
+
+    out = _Array.new()
+    for v in two:
+        out.push(v)
+    return out
+
+
 def _opts(maximize):
     """borch.ts's trailing options object.
 
@@ -136,8 +154,7 @@ def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
     `NotImplementedError` and `amsgrad` was not there at all, on the reasoning that
     holding the position was better than dropping the flag — which was right while it
     lasted, and is a reason with nothing left to hold now that borch.ts carries both."""
-    return _Opt(_ts.optim.Adam.new(_params(params), lr, betas[0], betas[1],
-                                   eps, weight_decay, amsgrad, _opts(maximize)))
+    return _Opt(_ts.optim.Adam.new(_params(params), lr, _pair(betas), eps, weight_decay, amsgrad, _opts(maximize)))
 
 
 def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01,
@@ -150,7 +167,7 @@ def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01,
     **An absence says so.** The defect a few lines below was a table sending arguments
     into the wrong seats, which said nothing at all for four of its eight.
     """
-    return _Opt(_ts.optim.AdamW.new(_params(params), lr, betas[0], betas[1],
+    return _Opt(_ts.optim.AdamW.new(_params(params), lr, _pair(betas),
                                     eps, weight_decay, amsgrad, _opts(maximize)))
 
 
@@ -189,14 +206,14 @@ def Adamax(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
-    return _Opt(_ts.optim.Adamax.new(_params(params), lr, betas[0], betas[1], eps,
+    return _Opt(_ts.optim.Adamax.new(_params(params), lr, _pair(betas), eps,
                                      weight_decay, _opts(maximize)))
 
 
 def NAdam(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
           momentum_decay=4e-3, decoupled_weight_decay=False, *,
           maximize=False):
-    return _Opt(_ts.optim.NAdam.new(_params(params), lr, betas[0], betas[1], eps,
+    return _Opt(_ts.optim.NAdam.new(_params(params), lr, _pair(betas), eps,
                                     weight_decay, momentum_decay,
                                     decoupled_weight_decay, _opts(maximize)))
 
@@ -207,7 +224,7 @@ def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
-    return _Opt(_ts.optim.RAdam.new(_params(params), lr, betas[0], betas[1], eps,
+    return _Opt(_ts.optim.RAdam.new(_params(params), lr, _pair(betas), eps,
                                     weight_decay, _opts(maximize)))
 
 
@@ -227,8 +244,8 @@ def Rprop(params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50), *,
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
-    return _Opt(_ts.optim.Rprop.new(_params(params), lr, etas[0], etas[1],
-                                    step_sizes[0], step_sizes[1], _opts(maximize)))
+    return _Opt(_ts.optim.Rprop.new(_params(params), lr, _pair(etas),
+                                    _pair(step_sizes), _opts(maximize)))
 
 
 def Adafactor(params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3), d=1.0,
@@ -239,7 +256,7 @@ def Adafactor(params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3), d=1.0,
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
     return _Opt(_ts.optim.Adafactor.new(_params(params), lr, beta2_decay,
-                                        eps[0], eps[1], d, weight_decay,
+                                        _pair(eps), d, weight_decay,
                                         _opts(maximize)))
 
 

@@ -222,9 +222,20 @@ UNREADABLE_TOTAL = 238
 # and not shown to be safe — a row to read, held apart so it is neither claimed as a
 # defect nor tidied in with the spelling differences.
 #
-# `optim`'s 7 are one shape worth naming: torch's `Adam(params, lr, betas, eps,
+# `optim`'s 7 were one shape worth naming: torch's `Adam(params, lr, betas, eps,
 # weight_decay)` against borch.ts's `(params, lr, beta1, beta2, eps, weightDecay)`.
 # The pair became two positions, which is a real arity change and not a rename.
+#
+# **They are 0 now, and reading the sentence above as a decision is what kept them.**
+# It describes the divergence and never says anyone chose it; a note further down even
+# said `Adam` "would stay here even after borch.ts follows", which is true only while
+# the pair stays split. borch.ts takes `betas`, `etas`, `stepSizes` and Adafactor's
+# `eps` as pairs now, and the seven land in `agree to the bag` — matching torch
+# exactly as far as borch.ts's options object.
+#
+# **A description left where a reason belongs is read as a reason.** That is the same
+# shape as a stale one, one step earlier: nothing here was ever wrong, and nothing
+# here ever said the divergence was wanted.
 UNALIGNED = {
     # 2 → 6. **Thirty-odd `Tensor` methods stopped being uncomparable** when the
     # method binders started setting `__wrapped__` — until then `inspect` saw
@@ -432,7 +443,8 @@ UNALIGNED = {
     # **`Adam` would stay here even after borch.ts follows**: over there the pair is
     # `beta1, beta2` where torch has one `betas`, so the lists cannot be the same
     # length whatever else is added. That one is a shape difference and not a debt.
-    "optim": 7,
+# 7 → 0. See the paragraph above `UNALIGNED`.
+    "optim": 0,
     # **3 → 0, and the bucket is empty.** `LambdaLR` and `MultiplicativeLR` called
     # torch's `lr_lambda` `fn`, and `CyclicLR` called `step_size_up` `up`; all three
     # were attested folds rather than divergences, and borch.ts spells them torch's

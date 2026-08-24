@@ -12542,8 +12542,8 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: { maximize?: boolean; })",
-       "doc": ""
+       "signature": "constructor(params: ParamsArg, lr: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: { maximize?: boolean; })",
+       "doc": "**`betas` is one argument, because torch makes it one.** This took `beta1` and\n`beta2` in two positions, so every later argument sat one seat early and\n`new Adam(p, 1e-3, 0.9, 0.999, 1e-8)` meant something different from\n`Adam(p, 1e-3, (0.9, 0.999), 1e-8)` — the lists could not be lined up at all,\nwhich is the bucket that reports nothing beneath it.\n\nA pair is not a rename and it is not a short tail; splitting it is the one shape\nof divergence the axis has no name for."
       },
       {
        "name": "step",
@@ -12579,7 +12579,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: { maximize?: boolean; })",
        "doc": ""
       }
      ]
@@ -12669,7 +12669,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -12707,8 +12707,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, momentumDecay?: number, decoupledWeightDecay?: boolean, opts?: { maximize?: boolean; })",
-       "doc": "**`weightDecay` goes before `momentumDecay`, not after** — torch's order,\nand the binding calls positionally.\n\nThis one is why an arity check cannot find a dropped argument. Before this,\nthe binding passed six and this took six, so the counts agreed perfectly\nwhile the sixth was `momentumDecay` at both ends and `weight_decay` reached\nnothing. It was the last of seven to be found, and the only one an\nargument-count comparison could never have shown."
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, momentumDecay?: number, decoupledWeightDecay?: boolean, opts?: { maximize?: boolean; })",
+       "doc": ""
       },
       {
        "name": "step",
@@ -12745,7 +12745,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -12821,7 +12821,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, etaMinus?: number, etaPlus?: number, sizeMin?: number, sizeMax?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, etas?: readonly [number, number], stepSizes?: readonly [number, number], opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -12875,7 +12875,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta2Decay?: number, eps1?: number | null, eps2?: number, d?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta2Decay?: number, eps?: readonly [number | null, number], d?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
