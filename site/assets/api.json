@@ -9514,7 +9514,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(...a: ConvArgs)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
        "doc": ""
       }
      ]
@@ -9527,7 +9527,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(...a: ConvArgs)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
        "doc": ""
       }
      ]
@@ -9540,7 +9540,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(...a: ConvArgs)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
        "doc": ""
       }
      ]
@@ -9553,7 +9553,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(...a: ConvArgs)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
        "doc": ""
       }
      ]
@@ -9566,7 +9566,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(...a: ConvArgs)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
        "doc": ""
       }
      ]
@@ -9579,7 +9579,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(...a: ConvArgs)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
        "doc": ""
       }
      ]

@@ -305,6 +305,61 @@ def sections_of(name):
     return out
 
 
+_TUPLE_ALIAS = re.compile(
+    r"^type\s+(\w+)\s*=\s*\[(.*?)\];", re.M | re.S)
+_REST_ARG = re.compile(r"\.\.\.\w+\s*:\s*(\w+)")
+
+
+def _tuple_aliases(text):
+    """`{name: "a: number, b?: number"}` for every **labelled tuple** alias.
+
+    TypeScript lets a tuple's elements carry names — `type ConvArgs = [outChannels:
+    number, kernelSize: number, …]` — and a class then spreads it as
+    `constructor(...a: ConvArgs)`. The editor shows the labels; a reader of the
+    declaration file sees one parameter called `a`.
+
+    Only labelled tuples are collected. An unlabelled `[number, number]` has no names
+    to give and expanding it would invent `arg0`, `arg1` — **a fold that manufactures
+    the thing it is folding**, which is worse than the rest parameter it replaces.
+    """
+    out = {}
+    for name, body in _TUPLE_ALIAS.findall(text):
+        parts, depth, current = [], 0, ""
+        for ch in body:
+            if ch in "<([{":
+                depth += 1
+            elif ch in ">)]}":
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append(current.strip())
+                current = ""
+            else:
+                current += ch
+        if current.strip():
+            parts.append(current.strip())
+        if parts and all(re.match(r"^\w+\??\s*:", p) for p in parts):
+            out[name] = ", ".join(parts)
+    return out
+
+
+def _expand_rest(sig, aliases):
+    """`(...a: ConvArgs)` → the tuple's own labelled parameters.
+
+    **The six `LazyConv` classes were reported `unaligned` because of this**, which is
+    a *wrong* verdict rather than an absent one: the axis read one parameter called
+    `a` against the core's ten, could line up neither, and said so. Expanded they are
+    `shorter` — torch's tail is missing and that is a thing to act on.
+
+    A signature the reader cannot resolve is not neutral. It lands in the bucket that
+    means *somebody has to look at this*, and then nobody does, because the row says
+    nothing about what is wrong.
+    """
+    def swap(m):
+        return aliases.get(m.group(1), m.group(0))
+
+    return _REST_ARG.sub(swap, sig) if aliases else sig
+
+
 def parse(path):
     """One declaration file → (module description, symbols).
 
@@ -314,7 +369,9 @@ def parse(path):
     **an index quietly coming up short** (hundreds of tensor methods arrived as eighteen).
     Absent and not-found have the same shape, so nothing draws the eye.
     """
-    lines = path.read_text(encoding="utf-8").splitlines()
+    text = path.read_text(encoding="utf-8")
+    aliases = _tuple_aliases(text)
+    lines = text.splitlines()
     module_doc = ""
     symbols = []
     pending = []          # the comment attached just above
@@ -395,6 +452,23 @@ def parse(path):
 
         pending = []
         depth = after
+
+    # **Expanded once, at the end, over everything the file produced.** Doing it at
+    # each of the three places a signature is set would be three places to forget,
+    # and the alias can be declared after the class that spreads it — `ConvArgs` is.
+    def expand(item):
+        item["signature"] = _expand_rest(item["signature"], aliases)
+        # **The overloads too.** `scope()` has two shapes and both are kept; a fold
+        # applied to the first alone would leave the second reading `...a: ConvArgs`
+        # beside a sibling that reads the real names, which looks like two different
+        # functions.
+        for i, sig in enumerate(item.get("overloads", ())):
+            item["overloads"][i] = _expand_rest(sig, aliases)
+
+    for symbol in symbols:
+        expand(symbol)
+        for member in symbol.get("members", ()):
+            expand(member)
 
     return module_doc, symbols
 
