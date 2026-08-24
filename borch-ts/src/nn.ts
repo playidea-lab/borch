@@ -792,9 +792,42 @@ export class Conv3d extends ConvND {
   }
 }
 
+/**
+ * `out`'s values written into `x`'s buffer, handing back **`x` itself**.
+ *
+ * What `inplace: true` buys is not the value — `new ReLU(true).call(x)` returns exactly
+ * what `new ReLU().call(x)` returns. It buys that the caller's tensor moved and the
+ * thing handed back *is* the caller's tensor. So the flag is honoured through
+ * `copyFrom` rather than by returning a new tensor, which would pass a value comparison
+ * and fail the only thing the flag is for.
+ *
+ * The leaf refusal comes free with it: `copyFrom` goes through `mutate`, which stops on
+ * a leaf that requires grad. torch stops there too, and letting it through means a
+ * backward pass reads a value that has already moved.
+ */
+function writeBack(x: Tensor, out: Tensor): Tensor {
+  return x.copyFrom(out);
+}
+
+/**
+ * **`inplace` is not a convenience seat.** `nn.ReLU(inplace=True)` is a line most torch
+ * models contain, and without the argument the call stops on the argument count rather
+ * than doing something subtly different — which is the good kind of failure, but only
+ * for someone reading the traceback.
+ *
+ * Six activations carry it here because six are what the golden asks about. torch gives
+ * it to more (`ReLU6`, `Hardsigmoid`, `Hardswish`, `Mish`), and those seats are absent
+ * rather than declared-and-unmeasured: a seat nothing asks about looks identical to a
+ * working one from every axis this repository has.
+ */
 export class ReLU extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("relu");
+    const out = x.unary("relu");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -835,8 +868,13 @@ export class ReLU6 extends Module {
 }
 
 export class SELU extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("selu");
+    const out = x.unary("selu");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -853,12 +891,13 @@ export class Tanhshrink extends Module {
 }
 
 export class CELU extends Module {
-  constructor(private readonly alpha = 1.0) {
+  constructor(private readonly alpha = 1.0, private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.celu(this.alpha);
+    const out = x.celu(this.alpha);
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -883,12 +922,14 @@ export class Softshrink extends Module {
 }
 
 export class Hardtanh extends Module {
-  constructor(private readonly minVal = -1.0, private readonly maxVal = 1.0) {
+  constructor(private readonly minVal = -1.0, private readonly maxVal = 1.0,
+              private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.hardtanh(this.minVal, this.maxVal);
+    const out = x.hardtanh(this.minVal, this.maxVal);
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -972,12 +1013,14 @@ export class Identity extends Module {
 }
 
 export class LeakyReLU extends Module {
-  constructor(private readonly negativeSlope = 0.01) {
+  constructor(private readonly negativeSlope = 0.01,
+              private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.leakyRelu(this.negativeSlope);
+    const out = x.leakyRelu(this.negativeSlope);
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -986,12 +1029,13 @@ export class LeakyReLU extends Module {
  * be told apart from the argument-free entry in the table.**
  */
 export class ELU extends Module {
-  constructor(private readonly alpha = 1.0) {
+  constructor(private readonly alpha = 1.0, private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.elu(this.alpha);
+    const out = x.elu(this.alpha);
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 

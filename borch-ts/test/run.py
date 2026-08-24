@@ -295,17 +295,25 @@ NOT_PORTED = {
     # buffer; writing back into the input means a second shader per activation, not a
     # flag threaded through. Twelve rows — six values and six identities.
     #
-    # **That reason was wrong within the hour and the row is kept to say so.** No
+    # **That reason was wrong within the hour and the row was kept to say so.** No
     # second shader is needed: `Tensor.copyFrom` already writes one buffer into
     # another, and the binding honours the flag with exactly that — run the ordinary
     # shader, copy the answer back over the input, hand the input back. It is the same
-    # call `Optimizer.update` has been making all along. So the row stays `아직`, which
-    # was the right marker, on a cause that turns out to be "the TS cases were not
+    # call `Optimizer.update` has been making all along. So the row stayed `아직`, which
+    # was the right marker, on a cause that turned out to be "the TS cases were not
     # written" rather than "the mechanism is missing". A reason that names a difficulty
     # the library does not actually have is the shape this repository keeps finding —
     # it reads like a decision and outlives the fact it was built on.
-    "act::": (12, "아직 — the TS cases were not written. `copyFrom` is the write-back "
-                  "and borch.ts already has it; the binding honours the flag with it"),
+    #
+    # **The row is gone and the corrected reason held exactly.** Six classes gained an
+    # `inplace` seat and one line each: run the ordinary path, then `copyFrom`. No new
+    # shader, no new kernel, and the leaf refusal came free because `copyFrom` goes
+    # through `mutate`, which already stops on a leaf that requires grad.
+    #
+    # Six and not thirteen. torch gives `inplace` to more of them (`ReLU6`,
+    # `Hardsigmoid`, `Hardswish`, `Mish`), and those seats are **absent rather than
+    # declared-and-unmeasured** — the `pool::` row three screens down is what that
+    # distinction costs when it goes the other way.
     "fft::": (4, "파이썬 — the gradient helper is what makes the leaf"),
     # **`opt::` has a row again, and its own comment above says the last three reasons
     # written here were each wrong in turn.** So this one names exactly what cannot

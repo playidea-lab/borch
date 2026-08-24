@@ -2480,6 +2480,33 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
   out.set("act::nn.LeakyReLU", () => new nn.LeakyReLU().call(inp.get("kinks")));
   out.set("act::nn.LeakyReLU(기울기)",
     () => new nn.LeakyReLU(0.2).call(inp.get("kinks")));
+  // **`inplace` is asked twice per activation, and the second question is the real one.**
+  // `ReLU(inplace=True)(x)` returns exactly what `ReLU()(x)` returns, so a version that
+  // computes the right numbers into a *new* tensor passes every value comparison and
+  // fails the only thing the flag exists for. What it buys is that the caller's tensor
+  // moved and the thing handed back **is** the caller's tensor, and identity is the sole
+  // observable of that.
+  //
+  // The flag is passed by **position**, because a positional call is what sees the seat.
+  // Given by name it would land in an options object and a missing seat would read as a
+  // silently ignored option rather than as an error.
+  for (const [name, make] of [
+    ["ReLU", (i: boolean) => new nn.ReLU(i)],
+    ["LeakyReLU", (i: boolean) => new nn.LeakyReLU(0.2, i)],
+    ["ELU", (i: boolean) => new nn.ELU(0.5, i)],
+    ["CELU", (i: boolean) => new nn.CELU(0.5, i)],
+    ["SELU", (i: boolean) => new nn.SELU(i)],
+    ["Hardtanh", (i: boolean) => new nn.Hardtanh(-0.5, 0.5, i)],
+  ] as const) {
+    out.set(`act::nn.${name}(inplace)`, () => make(true).call(inp.get("kinks")) as Tensor);
+    // A two-cell tensor of its own rather than the shared fixture: this one is written
+    // through, and handing the fixture to a layer that mutates it would leave the next
+    // case reading a value the case before it changed.
+    out.set(`act::nn.${name}(inplace)/같은 객체`, () => {
+      const x = Tensor.from([-1.0, 2.0]);
+      return verdict(make(true).call(x) === x);
+    });
+  }
   out.set("act::nn.Identity", () => new nn.Identity().call(inp.get("kinks")));
   // torch's `Identity` swallows any argument. JavaScript simply discards extra arguments
   // so this side does it by itself, and **what happens by itself is asked about anyway** —

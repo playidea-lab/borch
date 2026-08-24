@@ -961,9 +961,19 @@ SHORTER = {
     # seat, then still could not line them up because `RENAMES` was rewriting the
     # *core's* `kernel_size` into borch.ts's older `kernel`. Three layers, one row.
     #
+    # **49 → 46.** `CELU`, `ELU` and `LeakyReLU` gained an `inplace` seat and reached
+    # `agree`. `ReLU` and `SELU` gained one too and are not in this count — they had no
+    # argument list at all before, which is a different column.
+    #
+    # `Hardtanh` gained the same seat and **stays here**, because torch's signature is
+    # `(min_val, max_val, inplace, min_value, max_value)` and the last two are
+    # deprecated aliases of the first two. Closing this row means adding two arguments
+    # torch itself tells you not to use, so it is short on purpose — the count going
+    # down by three rather than four is the record of that.
+    #
     # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
-    # is what nearly all forty-nine are short of.
-    "nn": 49,
+    # is what nearly all forty-six are short of.
+    "nn": 46,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.
