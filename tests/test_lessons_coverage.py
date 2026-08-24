@@ -61,7 +61,7 @@ def _lessons():
 pytestmark = pytest.mark.skipif(not LESSONS.exists(), reason="no lessons.py")
 
 
-def test_an_undecided_page_reaches_the_exit_code():
+def test_an_undecided_page_reaches_the_exit_code(tmp_path, monkeypatch):
     """**Printing it was already what the check did.**
 
     `wants reviewing 20` went to stdout and the exit code came from the pages that were
@@ -69,15 +69,37 @@ def test_an_undecided_page_reaches_the_exit_code():
     become a problem.
 
     **This asks whether the mechanism fires, not whether the pages are decided.** The
-    second question belongs to `lessons.py` itself, which now exits 1 and names them —
-    and to the branch that is moving eighteen of them into `PAGES`. Asserting it here
-    as well would turn the whole suite red to hold somebody else's outstanding work,
-    and a suite red for that reason teaches people to run it less.
+    second question belongs to `lessons.py` itself, which exits 1 and names them.
+    Asserting it here as well would turn the whole suite red to hold outstanding work
+    in somebody else's branch, and a suite red for that reason teaches people to run it
+    less.
+
+    ## It used to skip when the site was tidy, and that was wrong
+
+    The first version read the live tree and skipped when nothing was unwatched. Then
+    the site branch landed, every page became decided, and this turned into a permanent
+    skip — **a check that no longer checks.** The mechanism could rot untouched, and
+    the day somebody adds a page `lessons.py` would quietly go back to exiting 0: the
+    exact failure this file exists to stop, arrived at through this file.
+
+    So the state is made rather than found. One page with a runnable block is written
+    into a temporary tree and `coverage()` is pointed at it, which exercises the path
+    on any tree — tidy or not.
     """
     mod = _lessons()
+    site = tmp_path / "site" / "learn"
+    site.mkdir(parents=True)
+    (site / "invented.html").write_text(
+        '<div class="runnable" data-lang="js"><button class="go">Run</button></div>',
+        encoding="utf-8")
+    monkeypatch.setattr(mod, "ROOT", tmp_path)
+    monkeypatch.setattr(mod, "PAGES", [])
+    monkeypatch.setattr(mod, "DECLINED", {})
+
     _p, _d, unwatched, _problems = mod.coverage()
-    if not unwatched:
-        pytest.skip("every page is decided about — the mechanism has nothing to report")
+    assert unwatched, (
+        "a page with a runnable JS block was not seen as unwatched at all — "
+        "`coverage()` is no longer finding pages by the mark the runner presses on.")
     assert any("neither pressed nor declined" in p for p in mod.say_coverage()), (
         "`say_coverage` lists the unwatched pages and does not return them as a\n"
         "  problem, so `lessons.py` exits 0 with part of the site unexamined.")
