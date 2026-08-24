@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>9 · Autoencoder — borch Tutorials</title>
+<meta name="description" content="Squeeze a picture through two numbers and back, then look at what those two numbers turned out to mean.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/09-autoencoder.html">
+<!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
+     `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
+     does not follow a relative path, and hard-coding the deployed address here would go
+     stale quietly the day the domain changes. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="9 · Autoencoder — borch Tutorials">
+<meta property="og:description" content="Squeeze a picture through two numbers and back, then look at what those two numbers turned out to mean.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/tutorials/09-autoencoder.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">Python</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/tutorials/09-autoencoder.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+      <a href="07-signals-fft.html">7 · Signals and the FFT</a>
+      <a href="08-attention.html">8 · Attention</a>
+      <a href="09-autoencoder.html" class="on">9 · Autoencoder</a>
+      <a href="10-least-squares.html">10 · Least squares</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 9</p>
+    <h1>Autoencoder</h1>
+    <p class="lead">
+      No labels here. The network is asked to reproduce its own input through a gap two
+      numbers wide, which it can only manage by finding what the pictures actually vary
+      by. The pictures are made with exactly two degrees of freedom, so afterwards you can
+      check whether it found them — most of this tutorial is that check.
+    </p>
+
+    <h2>1 · Two hundred and fifty-six pictures with two facts in them</h2>
+    <p>
+      Each picture is a soft dot on a 16×16 field, and the only thing that changes between
+      them is where the dot is. Every image is 256 pixels; every image is also two
+      numbers. Nothing in the training tells the network that.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const SIDE = 16, COUNT = 256, SPREAD = 2.2;
+
+        // A soft dot at (cx, cy), both in [3, 12].
+        function paint(into, at, cx, cy) {
+          for (let y = 0; y < SIDE; y++) {
+            for (let x = 0; x < SIDE; x++) {
+              const away = (x - cx) ** 2 + (y - cy) ** 2;
+              into[at + y * SIDE + x] = Math.exp(-away / (2 * SPREAD ** 2));
+            }
+          }
+        }
+
+        function makeSet(count) {
+          const pixels = new Float32Array(count * SIDE * SIDE);
+          const where = [];
+          for (let i = 0; i < count; i++) {
+            const cx = 3 + Math.random() * 9, cy = 3 + Math.random() * 9;
+            paint(pixels, i * SIDE * SIDE, cx, cy);
+            where.push([cx, cy]);
+          }
+          return { images: keepAlive(Tensor.from(pixels, [count, 1, SIDE, SIDE])), where, count };
+        }
+
+        window.__ae = { SIDE, COUNT, paint, makeSet, train: makeSet(COUNT), test: makeSet(64) };
+
+        log(`${COUNT} pictures of ${SIDE}×${SIDE} = ${COUNT * SIDE * SIDE} numbers,`);
+        log(`made from ${COUNT} × 2 = ${COUNT * 2} numbers.`);
+        log("");
+        log("sixteen of them:");
+        await show(window.__ae.train.images.narrow(0, 0, 16), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>2 · The gap</h2>
+    <p>
+      Two convolutions down to a code of 2, then <code>nn.ConvTranspose2d</code> — a
+      convolution run backwards, which is how you get bigger rather than smaller — back up
+      to 16×16. The loss compares the output with the input, so no labels exist and none
+      are needed.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__ae) throw new Error("Run block 1 first.");
+        const { train, test } = window.__ae;
+
+        const CODE = 2;
+        const encode = new nn.Sequential(
+          new nn.Conv2d(1, 8, 3, 2, 1), new nn.ReLU(),      // 16×16 → 8×8
+          new nn.Conv2d(8, 16, 3, 2, 1), new nn.ReLU(),     // 8×8 → 4×4
+          new nn.Flatten(), new nn.Linear(16 * 4 * 4, CODE));
+
+        const widen = new nn.Linear(CODE, 16 * 4 * 4);
+        const up1 = new nn.ConvTranspose2d(16, 8, 3, 2, 1, 1);   // 4×4 → 8×8
+        const up2 = new nn.ConvTranspose2d(8, 1, 3, 2, 1, 1);    // 8×8 → 16×16
+        const decode = (code) => up2.call(new nn.ReLU().call(
+          up1.call(widen.call(code).reshape([code.shape[0], 16, 4, 4]))));
+
+        const params = [...encode.parameters(), ...widen.parameters(),
+                        ...up1.parameters(), ...up2.parameters()];
+        const opt = new optim.Adam(params, 3e-3);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 600; step++) {
+          if (stopped()) break;
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(decode(encode.call(train.images)), train.images);
+            loss.backward();
+            opt.step();
+            const v = await loss.item();
+            plot("loss", v);
+            if (step % 150 === 0) log(`step ${String(step).padStart(3)}   loss ${v.toFixed(5)}`);
+          });
+        }
+
+        window.__aeModel = { encode, decode, CODE };
+        const rebuilt = decode(encode.call(test.images));
+        log("");
+        log("error on pictures it was not trained on:",
+            (await crit.call(rebuilt, test.images).item()).toFixed(5));
+        log("");
+        log("eight originals, then the same eight rebuilt from two numbers each:");
+        await show(test.images.narrow(0, 0, 8), { scale: 4, range: [0, 1] });
+        await show(rebuilt.narrow(0, 0, 8), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>3 · What the two numbers turned out to be</h2>
+    <p>
+      Nobody told it about coordinates. Encode the test pictures and compare each code
+      against the <code>(cx, cy)</code> they were painted from — not by eye but with a
+      correlation, and both codes against both coordinates, because the network is free to
+      swap, flip or rotate the pair and would still be right.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__aeModel) throw new Error("Run block 2 first.");
+        const { test, SIDE } = window.__ae;
+        const { encode } = window.__aeModel;
+
+        const codes = Array.from(await encode.call(test.images).toArray());
+        const first = codes.filter((_, i) => i % 2 === 0);
+        const second = codes.filter((_, i) => i % 2 === 1);
+        const xs = test.where.map((p) => p[0]);
+        const ys = test.where.map((p) => p[1]);
+
+        function correlation(a, b) {
+          const mean = (v) => v.reduce((s, t) => s + t, 0) / v.length;
+          const ma = mean(a), mb = mean(b);
+          let top = 0, la = 0, lb = 0;
+          for (let i = 0; i < a.length; i++) {
+            top += (a[i] - ma) * (b[i] - mb);
+            la += (a[i] - ma) ** 2;
+            lb += (b[i] - mb) ** 2;
+          }
+          return top / Math.sqrt(la * lb);
+        }
+
+        log("correlation between the invented numbers and the real ones");
+        log("            cx      cy");
+        log(`  code 1 ${correlation(first, xs).toFixed(3).padStart(7)} ${correlation(first, ys).toFixed(3).padStart(7)}`);
+        log(`  code 2 ${correlation(second, xs).toFixed(3).padStart(7)} ${correlation(second, ys).toFixed(3).padStart(7)}`);
+
+        // Draw the codes: each picture becomes a dot at its own (code 1, code 2),
+        // brightened by the cx it was painted from. Structure shows as a gradient.
+        const GRID = 48;
+        const canvas = new Float32Array(GRID * GRID);
+        const span = (v) => [Math.min(...v), Math.max(...v)];
+        const [lo1, hi1] = span(first), [lo2, hi2] = span(second);
+        const place = (v, lo, hi) => Math.max(0, Math.min(GRID - 1,
+          Math.round((v - lo) / (hi - lo || 1) * (GRID - 1))));
+        first.forEach((v, i) => {
+          const col = place(v, lo1, hi1), row = place(second[i], lo2, hi2);
+          canvas[row * GRID + col] = (xs[i] - 3) / 9;
+        });
+        log("");
+        log("every test picture, placed at its own code, brightness = the real cx:");
+        await show(Tensor.from(canvas, [GRID, GRID]), { scale: 6, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      A high correlation in a row that is not the diagonal is not a failure — it means the
+      network numbered the world in its own order. What would be a failure is a table of
+      small numbers everywhere, and that is worth knowing how to read before you trust any
+      latent space.
+    </p>
+
+    <h2>4 · Codes that came from no picture</h2>
+    <p>
+      The decoder takes two numbers and returns an image, and nothing stops those numbers
+      from being ones no picture ever produced. Walking from one real code to another
+      gives the frames in between; walking well outside the range they occupy gives what
+      the model has never had a reason to get right.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__aeModel) throw new Error("Run blocks 1 to 3 first.");
+        const { test } = window.__ae;
+        const { decode, encode } = window.__aeModel;
+
+        const codes = Array.from(await encode.call(test.images).toArray());
+        const from = [codes[0], codes[1]];
+        const to = [codes[20], codes[21]];
+
+        const STEPS = 8;
+        const walk = new Float32Array(STEPS * 2);
+        for (let i = 0; i < STEPS; i++) {
+          const t = i / (STEPS - 1);
+          walk[i * 2] = from[0] + (to[0] - from[0]) * t;
+          walk[i * 2 + 1] = from[1] + (to[1] - from[1]) * t;
+        }
+        log("eight codes in a straight line between two real ones:");
+        await show(decode(Tensor.from(walk, [STEPS, 2])), { scale: 4, range: [0, 1] });
+
+        // Far outside anything the encoder produced.
+        const wide = Math.max(...codes.map(Math.abs));
+        const outside = new Float32Array(STEPS * 2);
+        for (let i = 0; i < STEPS; i++) {
+          outside[i * 2] = wide * (2 + i);
+          outside[i * 2 + 1] = wide * (2 + i) * (i % 2 ? -1 : 1);
+        }
+        log("");
+        log(`codes 2× to ${2 + STEPS - 1}× beyond the range the encoder uses:`);
+        await show(decode(Tensor.from(outside, [STEPS, 2])), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      The line between two codes is a fair question and the answer is a dot sliding across
+      the field. The far ones are not — an autoencoder is a compressor, not a generator,
+      and it makes no promise whatsoever about codes it never saw. Models that do make
+      that promise (a VAE, a diffusion model) buy it by training for it, and the price is
+      in the loss function rather than in the architecture.
+    </p>
+
+    <div class="note-box">
+      <strong>Where to take it.</strong> Change <code>CODE</code> from 2 to 1 and the
+      error settles about four times higher — measured here, 0.009 against 0.002 — because
+      one number cannot hold two facts, which is the cheapest demonstration available that
+      the width of the gap is a claim about the data. Then raise it to 8: the
+      reconstruction sharpens again (0.0002) and the picture in block 3 stops meaning
+      anything. With the CIFAR images from
+      <a href="04-image-classifier.html">tutorial 4</a> the same network becomes a denoiser
+      if you feed it noisy inputs and ask for the clean ones.
+    </div>
+
+    <div class="pager">
+      <a href="08-attention.html">← 8 · Attention</a>
+      <a href="10-least-squares.html" style="text-align:right">Next<b>10 · Least squares</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

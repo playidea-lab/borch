@@ -59,6 +59,14 @@ PAGES = [
     # exemption for a page nobody presses is inert.
     "/site/learn/08-debugging.html",
     "/site/ko/learn/08-debugging.html",
+    "/site/tutorials/07-signals-fft.html",
+    "/site/ko/tutorials/07-signals-fft.html",
+    "/site/tutorials/08-attention.html",
+    "/site/ko/tutorials/08-attention.html",
+    "/site/tutorials/09-autoencoder.html",
+    "/site/ko/tutorials/09-autoencoder.html",
+    "/site/tutorials/10-least-squares.html",
+    "/site/ko/tutorials/10-least-squares.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page
@@ -169,6 +177,13 @@ def say_coverage():
 # several epochs, which takes minutes on a software adapter — out of proportion to what
 # this check measures (does a renamed name blow up). That page's `load` is the same single
 # line, and the four above watch it.
+
+# **What tutorials 7 to 10 cost.** They need no dataset and every block is small, yet a
+# software adapter still spends about a minute and a half on each page — measured, the
+# eight of them in roughly thirteen minutes, against seconds apiece on a real GPU. They
+# are pressed rather than declined because that price is paid by a person who typed the
+# command, not by a push. Tutorial 9 (the autoencoder, 600 convolution steps) is the slow
+# one of the four, and it is the first to move to `DECLINED` if this run stops being run.
 
 # **Structure first.** The page catches an exception and writes it to the screen
 # (`runnable.js`'s `write(describeError(err), "err")`), so a line that threw arrives

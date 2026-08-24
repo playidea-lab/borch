@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>9 · 오토인코더 — borch 튜토리얼</title>
+<meta name="description" content="그림을 숫자 둘로 짜냈다가 되돌리고, 그 숫자 둘이 무엇이 되었는지 확인한다.">
+<link rel="alternate" hreflang="en" href="../../tutorials/09-autoencoder.html">
+<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
+     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
+     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="9 · 오토인코더 — borch 튜토리얼">
+<meta property="og:description" content="그림을 숫자 둘로 짜냈다가 되돌리고, 그 숫자 둘이 무엇이 되었는지 확인한다.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/tutorials/09-autoencoder.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../tutorials/09-autoencoder.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+      <a href="07-signals-fft.html">7 · 신호와 FFT</a>
+      <a href="08-attention.html">8 · 어텐션</a>
+      <a href="09-autoencoder.html" class="on">9 · 오토인코더</a>
+      <a href="10-least-squares.html">10 · 최소제곱</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 9</p>
+    <h1>오토인코더</h1>
+    <p class="lead">
+      여기에 라벨은 없다. 망은 자기 입력을 숫자 둘 너비의 틈으로 통과시켜 다시 만들라는
+      요구를 받고, 그림들이 실제로 무엇으로 달라지는지를 찾아야만 해낼 수 있다. 그림은
+      자유도가 정확히 둘이 되게 만들었으니, 끝나고 나서 그것을 찾았는지 확인할 수 있다 —
+      이 튜토리얼의 대부분이 그 확인이다.
+    </p>
+
+    <h2>1 · 사실 둘이 든 그림 256 장</h2>
+    <p>
+      그림 하나는 16×16 판 위의 부드러운 점이고, 그림 사이에서 달라지는 것은 점의 자리뿐이다.
+      모든 이미지가 픽셀 256 개이고, 동시에 모든 이미지가 숫자 둘이다. 학습에서 그 사실을
+      망에 알려주는 것은 아무것도 없다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const SIDE = 16, COUNT = 256, SPREAD = 2.2;
+
+        // A soft dot at (cx, cy), both in [3, 12].
+        function paint(into, at, cx, cy) {
+          for (let y = 0; y < SIDE; y++) {
+            for (let x = 0; x < SIDE; x++) {
+              const away = (x - cx) ** 2 + (y - cy) ** 2;
+              into[at + y * SIDE + x] = Math.exp(-away / (2 * SPREAD ** 2));
+            }
+          }
+        }
+
+        function makeSet(count) {
+          const pixels = new Float32Array(count * SIDE * SIDE);
+          const where = [];
+          for (let i = 0; i < count; i++) {
+            const cx = 3 + Math.random() * 9, cy = 3 + Math.random() * 9;
+            paint(pixels, i * SIDE * SIDE, cx, cy);
+            where.push([cx, cy]);
+          }
+          return { images: keepAlive(Tensor.from(pixels, [count, 1, SIDE, SIDE])), where, count };
+        }
+
+        window.__ae = { SIDE, COUNT, paint, makeSet, train: makeSet(COUNT), test: makeSet(64) };
+
+        log(`${COUNT} pictures of ${SIDE}×${SIDE} = ${COUNT * SIDE * SIDE} numbers,`);
+        log(`made from ${COUNT} × 2 = ${COUNT * 2} numbers.`);
+        log("");
+        log("sixteen of them:");
+        await show(window.__ae.train.images.narrow(0, 0, 16), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>2 · 틈</h2>
+    <p>
+      합성곱 둘로 코드 2 까지 내려갔다가, <code>nn.ConvTranspose2d</code> — 거꾸로 돌린
+      합성곱이고, 작아지는 대신 커지는 방법이다 — 로 16×16 까지 올라온다. 손실은 출력을
+      입력과 견주므로 라벨은 없고 필요하지도 않다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__ae) throw new Error("Run block 1 first.");
+        const { train, test } = window.__ae;
+
+        const CODE = 2;
+        const encode = new nn.Sequential(
+          new nn.Conv2d(1, 8, 3, 2, 1), new nn.ReLU(),      // 16×16 → 8×8
+          new nn.Conv2d(8, 16, 3, 2, 1), new nn.ReLU(),     // 8×8 → 4×4
+          new nn.Flatten(), new nn.Linear(16 * 4 * 4, CODE));
+
+        const widen = new nn.Linear(CODE, 16 * 4 * 4);
+        const up1 = new nn.ConvTranspose2d(16, 8, 3, 2, 1, 1);   // 4×4 → 8×8
+        const up2 = new nn.ConvTranspose2d(8, 1, 3, 2, 1, 1);    // 8×8 → 16×16
+        const decode = (code) => up2.call(new nn.ReLU().call(
+          up1.call(widen.call(code).reshape([code.shape[0], 16, 4, 4]))));
+
+        const params = [...encode.parameters(), ...widen.parameters(),
+                        ...up1.parameters(), ...up2.parameters()];
+        const opt = new optim.Adam(params, 3e-3);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 600; step++) {
+          if (stopped()) break;
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(decode(encode.call(train.images)), train.images);
+            loss.backward();
+            opt.step();
+            const v = await loss.item();
+            plot("loss", v);
+            if (step % 150 === 0) log(`step ${String(step).padStart(3)}   loss ${v.toFixed(5)}`);
+          });
+        }
+
+        window.__aeModel = { encode, decode, CODE };
+        const rebuilt = decode(encode.call(test.images));
+        log("");
+        log("error on pictures it was not trained on:",
+            (await crit.call(rebuilt, test.images).item()).toFixed(5));
+        log("");
+        log("eight originals, then the same eight rebuilt from two numbers each:");
+        await show(test.images.narrow(0, 0, 8), { scale: 4, range: [0, 1] });
+        await show(rebuilt.narrow(0, 0, 8), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>3 · 그 숫자 둘이 무엇이 되었나</h2>
+    <p>
+      좌표에 대해 아무도 알려주지 않았다. 시험 그림을 인코딩해 각 코드를 그것을 그릴 때 쓴
+      <code>(cx, cy)</code> 와 견준다 — 눈이 아니라 상관계수로, 그리고 코드 둘을 좌표 둘
+      모두와. 망은 짝을 뒤바꾸거나 뒤집거나 돌려놓을 자유가 있고 그래도 맞은 것이기 때문이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__aeModel) throw new Error("Run block 2 first.");
+        const { test, SIDE } = window.__ae;
+        const { encode } = window.__aeModel;
+
+        const codes = Array.from(await encode.call(test.images).toArray());
+        const first = codes.filter((_, i) => i % 2 === 0);
+        const second = codes.filter((_, i) => i % 2 === 1);
+        const xs = test.where.map((p) => p[0]);
+        const ys = test.where.map((p) => p[1]);
+
+        function correlation(a, b) {
+          const mean = (v) => v.reduce((s, t) => s + t, 0) / v.length;
+          const ma = mean(a), mb = mean(b);
+          let top = 0, la = 0, lb = 0;
+          for (let i = 0; i < a.length; i++) {
+            top += (a[i] - ma) * (b[i] - mb);
+            la += (a[i] - ma) ** 2;
+            lb += (b[i] - mb) ** 2;
+          }
+          return top / Math.sqrt(la * lb);
+        }
+
+        log("correlation between the invented numbers and the real ones");
+        log("            cx      cy");
+        log(`  code 1 ${correlation(first, xs).toFixed(3).padStart(7)} ${correlation(first, ys).toFixed(3).padStart(7)}`);
+        log(`  code 2 ${correlation(second, xs).toFixed(3).padStart(7)} ${correlation(second, ys).toFixed(3).padStart(7)}`);
+
+        // Draw the codes: each picture becomes a dot at its own (code 1, code 2),
+        // brightened by the cx it was painted from. Structure shows as a gradient.
+        const GRID = 48;
+        const canvas = new Float32Array(GRID * GRID);
+        const span = (v) => [Math.min(...v), Math.max(...v)];
+        const [lo1, hi1] = span(first), [lo2, hi2] = span(second);
+        const place = (v, lo, hi) => Math.max(0, Math.min(GRID - 1,
+          Math.round((v - lo) / (hi - lo || 1) * (GRID - 1))));
+        first.forEach((v, i) => {
+          const col = place(v, lo1, hi1), row = place(second[i], lo2, hi2);
+          canvas[row * GRID + col] = (xs[i] - 3) / 9;
+        });
+        log("");
+        log("every test picture, placed at its own code, brightness = the real cx:");
+        await show(Tensor.from(canvas, [GRID, GRID]), { scale: 6, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      대각선이 아닌 자리의 큰 값은 실패가 아니다. 망이 세상을 제 순서로 번호 매겼다는 뜻이다.
+      실패는 표 전체가 작은 값일 때이고, 어떤 잠재 공간이든 믿기 전에 읽을 줄 알아야 하는
+      구분이다.
+    </p>
+
+    <h2>4 · 어느 그림에서도 나오지 않은 코드</h2>
+    <p>
+      디코더는 숫자 둘을 받아 이미지를 돌려주고, 그 숫자가 어떤 그림도 낸 적 없는 값이면
+      안 된다고 막는 것은 없다. 실제 코드 하나에서 다른 하나로 걸어가면 그 사이의 장면들이
+      나오고, 코드들이 차지한 범위 바깥으로 한참 걸어가면 모델이 제대로 할 이유가 한 번도
+      없었던 것이 나온다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__aeModel) throw new Error("Run blocks 1 to 3 first.");
+        const { test } = window.__ae;
+        const { decode, encode } = window.__aeModel;
+
+        const codes = Array.from(await encode.call(test.images).toArray());
+        const from = [codes[0], codes[1]];
+        const to = [codes[20], codes[21]];
+
+        const STEPS = 8;
+        const walk = new Float32Array(STEPS * 2);
+        for (let i = 0; i < STEPS; i++) {
+          const t = i / (STEPS - 1);
+          walk[i * 2] = from[0] + (to[0] - from[0]) * t;
+          walk[i * 2 + 1] = from[1] + (to[1] - from[1]) * t;
+        }
+        log("eight codes in a straight line between two real ones:");
+        await show(decode(Tensor.from(walk, [STEPS, 2])), { scale: 4, range: [0, 1] });
+
+        // Far outside anything the encoder produced.
+        const wide = Math.max(...codes.map(Math.abs));
+        const outside = new Float32Array(STEPS * 2);
+        for (let i = 0; i < STEPS; i++) {
+          outside[i * 2] = wide * (2 + i);
+          outside[i * 2 + 1] = wide * (2 + i) * (i % 2 ? -1 : 1);
+        }
+        log("");
+        log(`codes 2× to ${2 + STEPS - 1}× beyond the range the encoder uses:`);
+        await show(decode(Tensor.from(outside, [STEPS, 2])), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      두 코드 사이의 직선은 정당한 질문이고 답은 판 위를 미끄러지는 점이다. 멀리 있는 것들은
+      정당하지 않다 — 오토인코더는 압축기이지 생성기가 아니고, 본 적 없는 코드에 대해서는
+      아무 약속도 하지 않는다. 그 약속을 하는 모델(VAE, 확산 모델)은 그것을 위해 학습해서 사고,
+      값은 구조가 아니라 손실 함수에 치른다.
+    </p>
+
+    <div class="note-box">
+      <strong>어디로 더 갈 수 있나.</strong> <code>CODE</code> 를 2 에서 1 로 바꾸면 오차가
+      네 배쯤 높은 자리에 앉는다 — 여기서 재니 0.009 대 0.002 였다. 숫자 하나는 사실 둘을
+      담지 못하기 때문이고, 틈의 너비가 데이터에 대한 주장이라는 가장 싼 증명이다. 그다음
+      8 로 올려 보라 — 복원은 또 또렷해지고(0.0002) 3 번 블록의 그림은 뜻을 잃는다. <a href="04-image-classifier.html">튜토리얼 4</a> 의 CIFAR 이미지로는,
+      잡음 낀 입력을 넣고 깨끗한 것을 요구하면 같은 망이 잡음 제거기가 된다.
+    </div>
+
+    <div class="pager">
+      <a href="08-attention.html">← 8 · 어텐션</a>
+      <a href="10-least-squares.html" style="text-align:right">다음<b>10 · 최소제곱</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

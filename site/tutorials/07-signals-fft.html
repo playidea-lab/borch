@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7 · Signals and the FFT — borch Tutorials</title>
+<meta name="description" content="Find the frequencies inside a signal, filter with them, and watch a classifier get easier because the input was written differently.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/07-signals-fft.html">
+<!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
+     `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
+     does not follow a relative path, and hard-coding the deployed address here would go
+     stale quietly the day the domain changes. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="7 · Signals and the FFT — borch Tutorials">
+<meta property="og:description" content="Find the frequencies inside a signal, filter with them, and watch a classifier get easier because the input was written differently.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/tutorials/07-signals-fft.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">Python</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/tutorials/07-signals-fft.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+      <a href="07-signals-fft.html" class="on">7 · Signals and the FFT</a>
+      <a href="08-attention.html">8 · Attention</a>
+      <a href="09-autoencoder.html">9 · Autoencoder</a>
+      <a href="10-least-squares.html">10 · Least squares</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 7</p>
+    <h1>Signals and the FFT</h1>
+    <p class="lead">
+      A network is handed numbers, and how those numbers are written down decides most of
+      how hard its job is. This tutorial takes one signal, looks at the frequencies inside
+      it, throws some of them away, and then trains the same small model twice — once on
+      the waveform and once on the spectrum — to see the difference the writing makes.
+    </p>
+
+    <h2>1 · What is inside a signal</h2>
+    <p>
+      Two sine waves added together. <code>fft.rfft</code> takes the 64 samples to 33
+      complex numbers, one per frequency, and the size of each says how much of that
+      frequency is present. Real input has a symmetric spectrum, so <code>rfft</code>
+      keeps only the half that is not a mirror — that is the whole difference from
+      <code>fft.fft</code>.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const N = 64;
+        const wave = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          wave[i] = Math.sin(2 * Math.PI * 4 * i / N)          // 4 cycles, full size
+                  + 0.5 * Math.sin(2 * Math.PI * 11 * i / N);  // 11 cycles, half size
+        }
+        window.__sig = { N, wave };
+
+        const x = Tensor.from(wave, [N]);
+        const spectrum = fft.rfft(x);
+        log(`${N} samples in →`, spectrum.shape[0], "frequencies out, complex:", spectrum.isComplex());
+
+        // The size of a complex number is what "how much of this frequency" means.
+        const size = Array.from(await spectrum.abs().toArray());
+        const hz = Array.from(await fft.rfftfreq(N, 1).toArray());
+
+        log("");
+        log("the bins that carry anything:");
+        size.forEach((v, k) => {
+          if (v > 1) log(`  bin ${String(k).padStart(2)}   ${(hz[k] * N).toFixed(0).padStart(2)} cycles   size ${v.toFixed(1)}`);
+        });
+
+        // Each bin as a column filled from the bottom — a bar chart, painted into a tensor.
+        const H = 48, W = size.length;
+        const chart = new Float32Array(H * W);
+        const tallest = Math.max(...size);
+        for (let k = 0; k < W; k++) {
+          const high = Math.round(size[k] / tallest * (H - 1));
+          for (let y = 0; y <= high; y++) chart[(H - 1 - y) * W + k] = 1;
+        }
+        log("");
+        log("the whole spectrum — 0 cycles at the left edge, 32 at the right:");
+        await show(Tensor.from(chart, [H, W]), { scale: 8, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      Two bars, at 4 and 11 cycles, in a ratio of 2:1 — which is what was put in. Nothing
+      was learned here; this is arithmetic, and it runs on the GPU because the tensors
+      already live there.
+    </p>
+
+    <h2>2 · Filtering is deleting bins</h2>
+    <p>
+      Bury the signal in noise, take it to frequencies, set the bins above 12 cycles to
+      zero, and come back with <code>fft.irfft</code>. A low-pass filter is that and
+      nothing else. The error against the clean signal says whether it worked.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__sig) throw new Error("Run block 1 first.");
+        const { N, wave } = window.__sig;
+
+        const noisy = new Float32Array(N);
+        for (let i = 0; i < N; i++) noisy[i] = wave[i] + (Math.random() - 0.5) * 1.2;
+
+        const clean = Tensor.from(wave, [N]);
+        const dirty = Tensor.from(noisy, [N]);
+        const bins = Math.floor(N / 2) + 1;
+
+        // Keep the low frequencies, drop the rest. The mask is a tensor like any other.
+        // 12 is above both of the real components (4 and 11) and below most of the noise.
+        const CUT = 12;
+        const keep = new Float32Array(bins);
+        for (let k = 0; k <= CUT; k++) keep[k] = 1;
+
+        const filtered = fft.irfft(fft.rfft(dirty).mul(Tensor.from(keep, [bins])), N);
+
+        const err = new nn.MSELoss();
+        log("error against the clean signal");
+        log("  noisy    ", (await err.call(dirty, clean).item()).toFixed(4));
+        log("  filtered ", (await err.call(filtered, clean).item()).toFixed(4));
+
+        // Draw the waveforms rather than list them: one row of pixels per value,
+        // the clean signal in red and whatever it is being compared with in green.
+        const back = Array.from(await filtered.toArray());
+        const H = 64;
+        const height = (v) => Math.max(0, Math.min(H - 1, Math.round((1 - (v + 3) / 6) * (H - 1))));
+        const against = (other) => {
+          const canvas = new Float32Array(3 * H * N);
+          for (let i = 0; i < N; i++) {
+            canvas[0 * H * N + height(wave[i]) * N + i] = 1;    // red   = clean
+            canvas[1 * H * N + height(other[i]) * N + i] = 1;   // green = the other one
+          }
+          return Tensor.from(canvas, [3, H, N]);
+        };
+
+        log("");
+        log("red = clean, green = noisy (yellow where they land on the same pixel)");
+        await show(against(noisy), { scale: 6, range: [0, 1] });
+        log("red = clean, green = filtered");
+        await show(against(back), { scale: 6, range: [0, 1] });
+      </script>
+    </div>
+    <p class="small">
+      The noise that survived is the part of it that happened to sit below 12 cycles.
+      A filter cannot separate signal from noise; it separates frequencies, and that is
+      only the same thing when they do not overlap.
+    </p>
+
+    <h2>3 · The same model, two ways of writing the input</h2>
+    <p>
+      Three classes of signal — 5, 6 and 7 cycles — each with a random amplitude, a random
+      phase and noise on top. Train one small network on the raw 64 samples, and the
+      identical network on the 33 spectrum sizes, at four different training-set sizes.
+      Nothing about the model changes between the two columns.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const N = 64, BINS = Math.floor(N / 2) + 1;
+        const CYCLES = [5, 6, 7];
+        const TEST = 90;
+
+        function makeSet(count) {
+          const raw = new Float32Array(count * N);
+          const label = [];
+          for (let i = 0; i < count; i++) {
+            const cls = i % CYCLES.length;
+            const amp = 0.6 + Math.random() * 0.8;
+            const phase = Math.random() * 2 * Math.PI;
+            for (let t = 0; t < N; t++) {
+              raw[i * N + t] = amp * Math.sin(2 * Math.PI * CYCLES[cls] * t / N + phase)
+                             + (Math.random() - 0.5) * 0.6;
+            }
+            label.push(cls);
+          }
+          return { raw: keepAlive(Tensor.from(raw, [count, N])),
+                   label: keepAlive(Tensor.from(label, [count], { dtype: "int64" })) };
+        }
+
+        // Train the same architecture on whatever is handed in, and report test accuracy.
+        async function accuracy(trainX, trainY, testX, testY, inputs) {
+          manualSeed(0);
+          const model = new nn.Sequential(
+            new nn.Linear(inputs, 32), new nn.ReLU(), new nn.Linear(32, CYCLES.length));
+          const opt = new optim.Adam(model.parameters(), 0.01);
+          const crit = new nn.CrossEntropyLoss();
+
+          for (let step = 0; step < 300; step++) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(model.call(trainX), trainY);
+              loss.backward();
+              opt.step();
+            });
+          }
+          const guess = Array.from(await model.call(testX).argmax(1).toArray());
+          const truth = Array.from(await testY.toArray());
+          const right = guess.filter((g, i) => Number(g) === Number(truth[i])).length;
+          return Math.round(100 * right / truth.length);
+        }
+
+        const test = makeSet(TEST);
+        // The spectrum of a whole batch: rfft runs along the last axis on its own.
+        const testSpec = keepAlive(fft.rfft(test.raw).abs());
+
+        log("training examples   waveform   spectrum");
+        for (const count of [12, 24, 48, 96]) {
+          if (stopped()) break;
+          const train = makeSet(count);
+          const trainSpec = keepAlive(fft.rfft(train.raw).abs());
+          const wave = await accuracy(train.raw, train.label, test.raw, test.label, N);
+          const spec = await accuracy(trainSpec, train.label, testSpec, test.label, BINS);
+          log(`${String(count).padStart(13)}       ${String(wave).padStart(4)}%      ${String(spec).padStart(4)}%`);
+        }
+      </script>
+    </div>
+    <p class="small">
+      The gap is at the small end and it closes. The waveform model has to learn that a
+      shifted sine is the same sine; the spectrum model gets that for free, because the
+      size of a complex number drops the phase — so the transform buys <em>examples</em>,
+      not accuracy, and buys nothing once there are enough of them. Which is the honest
+      version of what feature engineering does, and the reason it did not disappear when
+      deep learning arrived: it is worth the most exactly where data is worth the most.
+    </p>
+
+    <h2>4 · Where the spectrum lies</h2>
+    <p>
+      The bins are whole numbers of cycles. A signal at 4.5 cycles fits none of them, so
+      its energy smears across the neighbours — <em>spectral leakage</em>, and nothing is
+      wrong with the transform when it happens. A window makes the smear narrower and
+      never removes it.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        const N = 64, bins = Math.floor(N / 2) + 1;
+
+        const at = (cycles) => {
+          const a = new Float32Array(N);
+          for (let i = 0; i < N; i++) a[i] = Math.sin(2 * Math.PI * cycles * i / N);
+          return Tensor.from(a, [N]);
+        };
+
+        const exact = Array.from(await fft.rfft(at(4)).abs().toArray());
+        const between = Array.from(await fft.rfft(at(4.5)).abs().toArray());
+        const windowed = Array.from(await fft.rfft(at(4.5).mul(Tensor.hannWindow(N))).abs().toArray());
+
+        log("bin   4.0 cycles   4.5 cycles   4.5 with a Hann window");
+        for (let k = 2; k <= 8; k++) {
+          log(`${String(k).padStart(3)}   ${exact[k].toFixed(2).padStart(9)}   ` +
+              `${between[k].toFixed(2).padStart(10)}   ${windowed[k].toFixed(2).padStart(12)}`);
+        }
+
+        const H = 48;
+        const chart = new Float32Array(3 * H * bins);
+        const tallest = Math.max(...exact, ...between, ...windowed);
+        const bars = (channel, values) => {
+          for (let k = 0; k < bins; k++) {
+            const high = Math.round(values[k] / tallest * (H - 1));
+            for (let y = 0; y <= high; y++) chart[channel * H * bins + (H - 1 - y) * bins + k] = 1;
+          }
+        };
+        bars(0, exact);
+        bars(1, between);
+        bars(2, windowed);
+        log("");
+        log("red = 4.0 cycles, green = 4.5, blue = 4.5 through a Hann window");
+        await show(Tensor.from(chart, [3, H, bins]), { scale: 8, range: [0, 1] });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Where to take it.</strong> <code>fft.stft</code> cuts the signal into
+      overlapping pieces and transforms each one, which is how a spectrogram is made —
+      feed that to the convolutional network from
+      <a href="04-image-classifier.html">tutorial 4</a> and you have audio classification,
+      with the picture being time across and frequency up. <code>fft.fft2</code> does the
+      same thing to an image, where a low-pass filter is a blur you can read the recipe
+      for.
+    </div>
+
+    <div class="pager">
+      <a href="06-char-rnn.html">← 6 · Char RNN</a>
+      <a href="08-attention.html" style="text-align:right">Next<b>8 · Attention</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
