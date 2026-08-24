@@ -10063,13 +10063,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       typeof v === "number" ? [v, v] : [v[0] ?? 1, v[1] ?? v[0] ?? 1];
     if (mode === "nearest") {
       if (size === null) return this.upsample(scaleFactor ?? 2);
-      // That kernel takes **exact multiples only.** Anything else stops rather than
-      // quietly approximating.
+      // **It no longer has to be a whole multiple.** The kernel takes the output
+      // extents and maps `src = floor(o · in / out)`, which is torch's rule.
       const [oh, ow] = pair(size);
-      if (oh % h || ow % w || oh / h !== ow / w) {
-        throw new RuntimeError("interpolate(size=) — nearest upsampling by a non-integer factor");
-      }
-      return this.upsample(oh / h);
+      return this.resizeNearest([oh, ow]);
     }
     const [oh, ow] = size === null
       ? [h * (scaleFactor ?? 2), w * (scaleFactor ?? 2)] : pair(size);
@@ -10080,21 +10077,27 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Nearest-neighbour enlargement. `Upsample` and `interpolate` are this.
    */
   upsample(scale: number): Tensor {
-    const spatial = this.shape.length - 2;
+    return this.resizeNearest(this.shape.slice(2).map((d) => d * scale));
+  }
+
+  /**
+   * Nearest resizing to given extents. `upsample(scale)` is this with the extents
+   * worked out from a whole multiple, and **a target that is not a multiple is the
+   * reason it takes extents at all** — `UpsamplingNearest2d(size=(3, 5))` from a 2×2
+   * is an answer torch and the core both give and this used to refuse.
+   */
+  resizeNearest(outDims: readonly number[]): Tensor {
     const inDims = this.shape.slice(2);
     const NC = (this.shape[0] ?? 1) * (this.shape[1] ?? 1);
-    const outShape = [
-      this.shape[0] ?? 1, this.shape[1] ?? 1, ...inDims.map((d) => d * scale),
-    ];
+    const outShape = [this.shape[0] ?? 1, this.shape[1] ?? 1, ...outDims];
     const n = outShape.reduce((a, b) => a * b, 1);
-    const key = `${NC}:${inDims}:${scale}`;
+    const key = `${NC}:${inDims}:${outDims}`;
     const out = dev().alloc(n);
     dev().run1d(
-      dev().pipeline(`up:${key}`, () => upsampleNearest(NC, inDims, scale)),
+      dev().pipeline(`up:${key}`, () => upsampleNearest(NC, inDims, outDims)),
       [this.buffer, out],
       n,
     );
-    void spatial;
     const shape = this.shape;
     return Tensor.make(
       out,
@@ -10104,7 +10107,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         const gi = dev().alloc(this.size);
         dev().run1d(
           dev().pipeline(`upb:${key}`,
-            () => upsampleNearestBackward(NC, inDims, scale)),
+            () => upsampleNearestBackward(NC, inDims, outDims)),
           [g.buffer, gi],
           this.size,
         );

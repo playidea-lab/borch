@@ -2811,19 +2811,30 @@ ${flatId(n)}
  * The backward gathers the outputs that read it, and with an integer scale that count is
  * constant.
  */
+/**
+ * **It takes the output extents rather than a scale**, which is what lets a target
+ * size that is not a whole multiple work at all. torch's rule is
+ * `src = floor(o · in / out)`, and integer division in WGSL is that floor — with a
+ * whole multiple it reduces to the division by the scale this used to do, so the
+ * generated source for every existing call is unchanged in meaning.
+ *
+ * The scale-taking form refused a non-integer factor rather than approximating, which
+ * was the right refusal while there was nothing behind it. `UpsamplingNearest2d(size=)`
+ * is what put something behind it: torch answers there and so does the core.
+ */
 export function upsampleNearest(
   NC: number,
   inDims: readonly number[],
-  scale: number,
+  outDims: readonly number[],
 ): string {
   const inSpace = inDims.reduce((a, b) => a * b, 1);
-  const outDims = inDims.map((d) => d * scale);
   const outSpace = outDims.reduce((a, b) => a * b, 1);
   const inStride = suffixStrides(inDims);
   const outStride = suffixStrides(outDims);
   const n = NC * outSpace;
   const terms = inDims.map((_, d) =>
-    `((r / ${outStride[d] ?? 1}u) % ${outDims[d] ?? 1}u / ${scale}u) * ${inStride[d] ?? 1}u`);
+    `((r / ${outStride[d] ?? 1}u) % ${outDims[d] ?? 1}u * ${inDims[d] ?? 1}u`
+    + ` / ${outDims[d] ?? 1}u) * ${inStride[d] ?? 1}u`);
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
@@ -2840,10 +2851,9 @@ ${flatId(n)}
 export function upsampleNearestBackward(
   NC: number,
   inDims: readonly number[],
-  scale: number,
+  outDims: readonly number[],
 ): string {
   const inSpace = inDims.reduce((a, b) => a * b, 1);
-  const outDims = inDims.map((d) => d * scale);
   const outSpace = outDims.reduce((a, b) => a * b, 1);
   const inStride = suffixStrides(inDims);
   const outStride = suffixStrides(outDims);
@@ -2853,10 +2863,15 @@ export function upsampleNearestBackward(
   const open: string[] = [];
   const close: string[] = [];
   const terms: string[] = [];
-  for (const [d] of inDims.entries()) {
-    open.push(`    for (var s${d} = 0u; s${d} < ${scale}u; s${d} = s${d} + 1u) {`);
+  // **The window is not a fixed width any more.** With a whole multiple every input
+  // cell is read by exactly `scale` outputs; at 2 → 5 the counts are 2 and 3, so the
+  // loop runs the whole output axis and keeps the positions whose source is this cell.
+  // Costlier per element and the only form that is right for both.
+  for (const [d, size] of outDims.entries()) {
+    open.push(`    for (var s${d} = 0u; s${d} < ${size}u; s${d} = s${d} + 1u) {`);
+    open.push(`      if (s${d} * ${inDims[d] ?? 1}u / ${size}u != i${d}) { continue; }`);
     close.push("    }");
-    terms.push(`(i${d} * ${scale}u + s${d}) * ${outStride[d] ?? 1}u`);
+    terms.push(`s${d} * ${outStride[d] ?? 1}u`);
   }
   return `
 @group(0) @binding(0) var<storage, read> G: array<f32>;

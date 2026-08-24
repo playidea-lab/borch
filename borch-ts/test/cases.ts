@@ -3013,12 +3013,21 @@ function addMisc(out: Map<string, Case>): void {
     ["rrelu(eval, 범위 지정)",
       () => Tensor.from([-1, -2, 1], [1, 3]).rrelu(0.2, 0.4, false)],
 
+    // **`null, 2` is `size` then `scaleFactor`.** These read `(2)` while the
+    // constructor took a scale alone; `size` leads now, as in torch, and `2` on its
+    // own became a 2×2 target. Both are numbers, so the compiler had nothing to say —
+    // the row `test_binding_arguments` calls *number into a number slot*.
+    // 3×5 from 2×2 — not a whole multiple, so it is an answer no scale gives.
+    ["층::UpsamplingNearest2d(크기)",
+      () => new nn.UpsamplingNearest2d([3, 5]).call(small())],
+    ["층::UpsamplingBilinear2d(크기)",
+      () => new nn.UpsamplingBilinear2d([3, 5]).call(small())],
     ["층::UpsamplingNearest2d",
-      () => new nn.UpsamplingNearest2d(2).call(small())],
+      () => new nn.UpsamplingNearest2d(null, 2).call(small())],
     ["층::UpsamplingBilinear2d",
-      () => new nn.UpsamplingBilinear2d(2).call(small())],
+      () => new nn.UpsamplingBilinear2d(null, 2).call(small())],
     ["UpsamplingBilinear2d 는 align_corners=True",
-      () => new nn.UpsamplingBilinear2d(2).call(small())
+      () => new nn.UpsamplingBilinear2d(null, 2).call(small())
         .sub(small().interpolateBilinear(4, 4, true))],
   ];
   for (const [name, fn] of value) out.set(`misc::${name}`, fn);

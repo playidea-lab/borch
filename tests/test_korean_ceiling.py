@@ -133,12 +133,13 @@ CEILINGS = {
     # 3157 → 3161. Two case names, `2층` and `마스크` — the transformer stack and
     # the causal mask, the last five names on the name axis.
     # 3161 → 3172. `run.py` 의 unasked 원장 한 줄 — `pad::거절::` 넷과 그 사유.
+    # 3180 → 3186. `misc::층::Upsampling*(크기)` 둘 — 이름이 키라 번역 대상이 아니다.
     # 3172 → 3180. `cases.ts` 에 `loss::가장자리::` 넷 — torch 의 폐기된
     # `size_average`/`reduce` 를 borch.ts 에서 실제로 접는 유일한 케이스들이다.
     # 이름은 키라서 번역 대상이 아니다.
     # 케이스 이름은 두 언어가 같은 문자열을 써야 대조되므로 원장 항목도 같은
     # 접두사를 그대로 든다.
-    "borch-ts/test": 3180,
+    "borch-ts/test": 3186,
 }
 
 

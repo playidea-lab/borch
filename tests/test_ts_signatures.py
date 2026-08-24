@@ -350,7 +350,20 @@ UNALIGNED = {
     # where torch takes `(mode, input_size, hidden_size, …)` — the same argument, at
     # opposite ends of the list. `MultiheadAttention` left too, on names alone
     # (`embed`/`heads` → `embedDim`/`numHeads`).
-    "nn": 9,
+    #
+    # **9 → 7. `UpsamplingNearest2d` and `UpsamplingBilinear2d` grew torch's `size`**,
+    # which they had no seat for at all — and with it torch's rule that exactly one of
+    # `size` and `scale_factor` is given. The old constructor defaulted the scale to 2,
+    # so `new UpsamplingNearest2d()` doubled where torch and the core both refuse:
+    # **a default that answers where the authority refuses is an argument accepted and
+    # dropped, one step earlier.**
+    #
+    # Everything downstream was written for the old shape and none of it could be
+    # caught by a type: the binding's table named `scale_factor` alone, so it would
+    # have laid the scale into `size`, and three TS case bodies read `(2)`. Both are
+    # numbers — the row `test_binding_arguments` calls *number into a number slot*,
+    # where `tsc` is silent by construction.
+    "nn": 7,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be

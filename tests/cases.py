@@ -6169,6 +6169,15 @@ def misc_cases(inp=None):
     add("repr::RReLU(정수 경계)", lambda L: repr(L.nn.RReLU(1.0, 2.0)))
 
     # ── Upsampling — the two old names ──
+    #
+    # **`size` is asked with a target that is not a whole multiple.** Both layers take
+    # `(size, scale_factor)` in torch and exactly one of the two; a target of 4×4 on a
+    # 2×2 input is the same answer a scale of 2 gives, so it would pin nothing. 3×5
+    # separates them, and the nearest form's rounding is the part worth freezing.
+    add("층::UpsamplingNearest2d(크기)",
+        lambda L: L.nn.UpsamplingNearest2d(size=(3, 5))(L.tensor(small)))
+    add("층::UpsamplingBilinear2d(크기)",
+        lambda L: L.nn.UpsamplingBilinear2d(size=(3, 5))(L.tensor(small)))
     add("층::UpsamplingNearest2d",
         lambda L: L.nn.UpsamplingNearest2d(scale_factor=2)(L.tensor(small)))
     add("층::UpsamplingBilinear2d",

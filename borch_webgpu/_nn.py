@@ -1664,15 +1664,18 @@ _MISC_ARGS = {
     # of asking and that side has no seat for it, so it is refused by name below rather
     # than dropped — an argument that raises with its own name beats one that silently
     # takes the default.
-    "UpsamplingNearest2d": ("scale_factor",),
-    "UpsamplingBilinear2d": ("scale_factor",),
+    # **`size` leads, because torch leads with it.** These read `("scale_factor",)`
+    # while borch.ts took a scale alone; it takes both now and refuses unless exactly
+    # one is given, so a row naming only the second would lay the scale into `size`.
+    # Both are numbers, so nothing in three languages would have said a word.
+    "UpsamplingNearest2d": ("size", "scale_factor"),
+    "UpsamplingBilinear2d": ("size", "scale_factor"),
 }
 
 # Accepted by the core and with nowhere to go on the other side. Refused rather than
 # ignored, and listed rather than counted.
 _MISC_REFUSED = {
-    ("UpsamplingNearest2d", "size"): "borch.ts takes a scale factor, not a target size",
-    ("UpsamplingBilinear2d", "size"): "borch.ts takes a scale factor, not a target size",
+
     ("RReLU", "inplace"): "there is no in-place activation on that side",
 }
 

@@ -2156,27 +2156,64 @@ export class RReLU extends Module {
  * alone, the edges come out misaligned.
  */
 class UpsamplingBase extends Module {
-  constructor(readonly label: string, readonly scale: number,
-              readonly mode: "nearest" | "bilinear") { super(); }
+  /**
+   * **`size` was missing, and its absence was not a short tail.** torch takes
+   * `(size, scale_factor)` and takes *exactly one of them*; this took a `scale`
+   * defaulting to 2, so three calls parted at once:
+   *
+   *     new UpsamplingNearest2d()            here doubled · torch and the core refuse
+   *     UpsamplingNearest2d(size=(5, 7))     here had no seat for it at all
+   *
+   * A default that answers where the authority refuses is the same fault as an
+   * argument accepted and dropped: the call that stops on real torch runs here, and
+   * the divergence shows up at the port rather than at the call.
+   */
+  constructor(readonly label: string,
+              readonly mode: "nearest" | "bilinear",
+              readonly size: number | readonly number[] | null = null,
+              readonly scaleFactor: number | null = null) {
+    super();
+    if ((size === null) === (scaleFactor === null)) {
+      throw new Error(
+        `${label}: only one of size or scale_factor should be defined`);
+    }
+  }
+
+  private target(x: Tensor): [number, number] {
+    if (this.size !== null) {
+      return typeof this.size === "number"
+        ? [this.size, this.size]
+        : [this.size[0] ?? 1, this.size[1] ?? this.size[0] ?? 1];
+    }
+    const k = this.scaleFactor ?? 1;
+    return [(x.shape[2] ?? 1) * k, (x.shape[3] ?? 1) * k];
+  }
 
   override forward(x: Tensor): Tensor {
-    if (this.mode === "nearest") return x.upsample(this.scale);
-    const h = (x.shape[2] ?? 1) * this.scale;
-    const w = (x.shape[3] ?? 1) * this.scale;
+    const [h, w] = this.target(x);
+    if (this.mode === "nearest") return x.interpolate([h, w], null, "nearest");
     return x.interpolateBilinear(h, w, true);
   }
 
   override describe(): string {
-    return `${this.label}(scale_factor=${this.scale.toFixed(1)}, ` +
-      `mode='${this.mode}')`;
+    const what = this.size !== null
+      ? `size=${JSON.stringify(this.size)}`
+      : `scale_factor=${(this.scaleFactor ?? 1).toFixed(1)}`;
+    return `${this.label}(${what}, mode='${this.mode}')`;
   }
 }
 
 export class UpsamplingNearest2d extends UpsamplingBase {
-  constructor(scale = 2) { super("UpsamplingNearest2d", scale, "nearest"); }
+  constructor(size: number | readonly number[] | null = null,
+              scaleFactor: number | null = null) {
+    super("UpsamplingNearest2d", "nearest", size, scaleFactor);
+  }
 }
 export class UpsamplingBilinear2d extends UpsamplingBase {
-  constructor(scale = 2) { super("UpsamplingBilinear2d", scale, "bilinear"); }
+  constructor(size: number | readonly number[] | null = null,
+              scaleFactor: number | null = null) {
+    super("UpsamplingBilinear2d", "bilinear", size, scaleFactor);
+  }
 }
 
 /**
