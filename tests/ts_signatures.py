@@ -331,12 +331,56 @@ def ts_signatures():
     return out
 
 
+def ts_members():
+    """`{module: {name}}` — the names declared **inside a class**, not beside one.
+
+    `ts_signatures` collapses both into one table, and for every namespace but
+    `Tensor` that is right: `nn.Linear` and `optim.SGD` are classes either way, and
+    where a thing lives is not what that axis asks.
+
+    **`Tensor` is different, because a method has a receiver and a function does
+    not.** borch.ts writes five of torch's tensor methods as module-level functions
+    only — `stft`, `istft`, `polygamma`, `igamma`, `igammac` — and the axis paired
+    torch's `x.stft(n_fft, …)` against `stft(input, nFft, options?)`. One list has
+    the tensor in it and the other does not, so they cannot line up, and the verdicts
+    said so in the wrong words: `stft` and `istft` landed in `unaligned` (*these
+    cannot be lined up*) and `polygamma` in `longer` (*we take an argument torch does
+    not*). All three are false. Line up `(n, x)` against `(n)` after dropping the
+    receiver and they agree.
+
+    Dropping borch.ts's first parameter would fix two of the three and break the
+    third: `polygamma(n, x)` carries the receiver **second**, because the core
+    reverses it too. The receiver's position is not a rule, so the honest move is not
+    to guess it — it is to say the method is not there.
+    """
+    if not API.exists():
+        raise SystemExit(f"no {API.relative_to(ROOT)} — run npm run docs:api first")
+    raw = json.loads(API.read_text(encoding="utf-8"))
+    modules = raw.get("modules") if isinstance(raw, dict) else raw
+    out = {}
+    for module in modules or []:
+        held = out.setdefault(module.get("name") or "?", set())
+        for sym in module.get("symbols") or []:
+            for member in sym.get("members") or []:
+                if member.get("name") and member.get("signature"):
+                    held.add(member["name"])
+    return out
+
+
 def _theirs(by_module, space, camel):
     """Every declaration of `camel` in the modules `space` may be paired against."""
     found = []
     for name in MODULES[space]:
         found += by_module.get(name, {}).get(camel, [])
     return found
+
+
+def _is_member(members, space, camel):
+    """Is `camel` declared inside a class anywhere `space` maps to?"""
+    for name in MODULES[space]:
+        if camel in members.get(name, ()):
+            return True
+    return False
 
 
 # One parameter, two spellings. **Folded so that the real shifts become visible** —
@@ -500,6 +544,7 @@ def compare():
     import ts_axis
 
     theirs = ts_signatures()
+    members = ts_members()
     stubs = ts_axis.refused()
     out = {}
     for space, _real, ours in torch_gap._spaces():
@@ -513,6 +558,21 @@ def compare():
             sigs = _theirs(theirs, space, camel) or _theirs(theirs, space, name)
             if not sigs:
                 continue                         # a name gap — the other axis counts it
+            # **A method's counterpart has to be a method.** In the `Tensor` space a
+            # module-level function is a different callable with a different arity —
+            # `x.stft(n_fft, …)` against `stft(input, nFft, …)` — and comparing the
+            # two lists produces a verdict about arguments where the difference is
+            # about the receiver. Three rows read falsely that way; see `ts_members`.
+            #
+            # It is filed rather than skipped. The name axis accepts the free function
+            # as satisfying the name (it gives up namespace precision on purpose and
+            # says so), so skipping here would leave **nobody asking whether
+            # `x.stft(…)` works** — and it does not.
+            if space == "Tensor" and not _is_member(members, space, camel) \
+                    and not _is_member(members, space, name):
+                rows.append((name, None, None,
+                             "only a free function — no method of this name"))
+                continue
             # In the `Tensor` space every name is reached through the class, so the
             # first parameter is the receiver — except a `staticmethod`, which has
             # none. Asked of the raw attribute so that a descriptor answers as
@@ -588,7 +648,7 @@ def main(argv):
             print(f"  {n:>4}  {a}  →  {b}")
         return 0
     differ = bagged = unreadable = ambiguous = agreed = shorter = renamed = 0
-    unaligned = 0
+    unaligned = freefn = 0
     for space, found in rows.items():
         d = [r for r in found if r[3] in ("dropped", "inserted", "reordered")]
         s = [r for r in found if r[3] in ("shorter", "longer")]
@@ -602,6 +662,13 @@ def main(argv):
         b = [r for r in found if r[3].startswith("agree to the bag")]
         a = [r for r in found if r[3].startswith("ambiguous")]
         u = [r for r in found if r[3].startswith("no ")]
+        # **Its own column too, and it had to be.** The verdict reads *only a free
+        # function — no method of this name*, which starts with neither "no " nor
+        # anything else already caught, so without this line it fell through to the
+        # residual and was counted as **agreement** — the one outcome worse than the
+        # false `unaligned` it replaced. A new verdict that nothing subtracts is a new
+        # verdict that reads as green.
+        f = [r for r in found if r[3].startswith("only a free function")]
         differ += len(d)
         shorter += len(s)
         bagged += len(b)
@@ -609,13 +676,15 @@ def main(argv):
         unreadable += len(u)
         renamed += len(n)
         unaligned += len(x)
-        agreed += len(found) - len(d) - len(s) - len(n) - len(x) - len(b) - len(a) - len(u)
-        mark = " " if not (d or x or n) else "✘"
+        freefn += len(f)
+        counted = len(d) + len(s) + len(n) + len(x) + len(b) + len(a) + len(u) + len(f)
+        agreed += len(found) - counted
+        mark = " " if not (d or x or n or f) else "✘"
         print(f"  {mark} {space:22s} "
-              f"agree {len(found) - len(d) - len(s) - len(n) - len(x) - len(b) - len(a) - len(u):>4}   "
+              f"agree {len(found) - counted:>4}   "
               f"shifted {len(d):>3}   unaligned {len(x):>3}   shorter {len(s):>4}   "
               f"renamed {len(n):>4}   bag {len(b):>3}   two {len(a):>3}   "
-              f"unread {len(u):>3}")
+              f"free {len(f):>3}   unread {len(u):>3}")
         if show is not None and space.startswith(show):
             # **The agreeing pairs print too.** A namespace reporting nothing wrong is
             # the one to distrust — `nn`'s 144 constructors went from unmeasurable to
@@ -627,7 +696,8 @@ def main(argv):
     print("\n이름이 양쪽에 있는데 인자가 다른 자리를 센다 — 형도 기본값도 값도 안 본다.")
     print(f"맞음 {agreed}건 · **밀림 {differ}건** · **못 맞춤 {unaligned}건** · "
           f"꼬리가 짧다 {shorter}건 · 이름만 다르다 {renamed}건 · "
-          f"보따리에서 멈춘 것 {bagged}건 · 두 선언 {ambiguous}건 · 못 읽음 {unreadable}건.")
+          f"보따리에서 멈춘 것 {bagged}건 · 두 선언 {ambiguous}건 · "
+          f"**메서드가 없고 자유 함수만 {freefn}건** · 못 읽음 {unreadable}건.")
     print("밀림은 이름으로 밀린 것이 보이는 자리다. 못 맞춤과 이름만 다름은 "
           "이름으로 가를 수 없어 사람이 읽어야 하는 자리다 —")
     print("  `gumbel_softmax` 는 길이가 같은데 셋째 자리가 한쪽은 eps 이고 한쪽은 dim 이었다.")

@@ -285,7 +285,20 @@ UNALIGNED = {
     # a change to either side.
     #
     # The two left are `stft` and `istft`, which really do stop at `nFft`.
-    "Tensor": 2,
+    #
+    # **2 → 0, and that sentence was wrong.** They do not stop at `nFft`: borch.ts's
+    # declaration is `stft(input, nFft, options?)`, and the `options` bag holds the
+    # eight torch spells positionally. What the axis was comparing is a **method**
+    # on torch's side against a **module-level function** on borch.ts's, so one list
+    # carried the tensor and the other did not — and `unaligned` is the bucket for
+    # *the names give nothing to align on*, which made a receiver look like an
+    # argument disagreement.
+    #
+    # A method's counterpart has to be a method. Those rows now say what is actually
+    # missing — there is no `x.stft(…)` in borch.ts — and are counted in
+    # `FREE_FUNCTION` below. `polygamma` came out of `SHORTER` for the same reason
+    # and `igamma`/`igammac` out of `unread`.
+    "Tensor": 0,
     # `SmoothL1Loss` left this table when a peer fixed it: the core took
     # `(beta, reduction)` and borch.ts `(reduction, beta)`. **borch.ts was right** —
     # torch's live arguments are `(reduction, beta)`, with the deprecated
@@ -818,7 +831,13 @@ SHORTER = {
     #
     # 18 → 20. `random_` and `uniform_` arrived from `unaligned` once `from_` was
     # folded onto torch's `from`; what they are short of is `generator`.
-    "Tensor": 20,
+    #
+    # 20 → 19. `polygamma` left, and it had been in the wrong bucket in the most
+    # misleading direction: filed as `longer`, meaning *we take an argument torch
+    # does not*. borch.ts's `polygamma(n, x)` takes the same one argument torch's
+    # method does — the second is the **receiver**, because the free function carries
+    # the tensor where the method has it implicitly. Counted in `FREE_FUNCTION`.
+    "Tensor": 19,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and
@@ -1031,6 +1050,41 @@ SHORTER = {
     "transforms.functional": 2,
 }
 
+# **Names torch reaches through the tensor and borch.ts only through the module.**
+#
+# The verdict behind this table was added the day the four rows it holds were found
+# to be filed wrongly — `stft` and `istft` as `unaligned`, `polygamma` as `longer`,
+# `igamma`/`igammac` as unreadable — all because a **method** was being compared
+# against a **module-level function**, so one argument list carried the tensor and
+# the other did not.
+#
+# **The table exists because the bucket would otherwise be a place to disappear
+# into.** The first version of the counting loop subtracted every other verdict from
+# the total and left the remainder as `agree`; the new one matched no subtraction and
+# so was counted as agreement — a wrong verdict turned green, which is worse than the
+# wrong verdict it replaced. The measurement is frozen here for the same reason every
+# other bucket is: a number nobody holds is a number that can move to zero unnoticed.
+#
+# **What retires a row**: borch.ts declaring the method on `Tensor`. Verified by
+# adding one to the emitted API and watching the count fall to four — it then moves
+# to `two declarations`, because both spellings exist and the axis will not guess
+# between them, which is the right thing for it to say.
+#
+# These are not spelling differences. `x.stft(512)` is a `TypeError` in borch.ts, and
+# every torch tutorial that touches the short-time Fourier transform writes it that
+# way.
+FREE_FUNCTION = {
+    "Tensor": 5,
+    "nn": 0,
+    "nn.functional": 0,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    "utils.data": 0,
+    "transforms": 0,
+    "transforms.functional": 0,
+}
+
 
 def _stale():
     """The emitted API is generated, and a stale one is measured against a surface
@@ -1061,7 +1115,7 @@ def test_the_signature_axis_has_not_widened():
 
     moved = []
     for space, found in sorted(rows.items()):
-        got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0}
+        got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0, "free": 0}
         for _n, _m, _y, note in found:
             if note in ("dropped", "inserted", "reordered"):
                 got["shifted"] += 1
@@ -1071,8 +1125,11 @@ def test_the_signature_axis_has_not_widened():
                 got["unaligned"] += 1
             elif note == "renamed":
                 got["renamed"] += 1
+            elif note.startswith("only a free function"):
+                got["free"] += 1
         for key, table in (("shifted", SHIFTED), ("shorter", SHORTER),
-                           ("unaligned", UNALIGNED), ("renamed", RENAMED)):
+                           ("unaligned", UNALIGNED), ("renamed", RENAMED),
+                           ("free", FREE_FUNCTION)):
             if got[key] != table[space]:
                 moved.append(f"{space} {key}: {got[key]} now, {table[space]} written")
     assert not moved, (
