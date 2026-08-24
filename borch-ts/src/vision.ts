@@ -1802,6 +1802,43 @@ export function toTensor(img: Image): Tensor {
   return new ToTensor().apply(img);
 }
 
+/**
+ * The five corners and the centre, as `FiveCrop` gives them.
+ *
+ * **These three were missing while their classes were here**, which is the
+ * shape a name-only reading of a gap keeps producing: `FiveCrop`, `TenCrop`
+ * and `Grayscale` all worked, and `F.five_crop(x, 32)` — the line a tutorial
+ * writes — stopped at a name that was not there.
+ *
+ * Nothing caught it. `tests/ts_axis.py` leaves `transforms` out on the grounds
+ * that the golden's `vision::` cases hold it name by name, and for these three
+ * the golden had no case, so each check was waiting on the other.
+ */
+export function fiveCrop(
+  img: Image, size: number | readonly [number, number],
+): readonly Image[] {
+  return new FiveCrop(size).apply(img);
+}
+
+/** `fiveCrop` of the image and of its flip — ten in the order torchvision returns. */
+export function tenCrop(
+  img: Image, size: number | readonly [number, number], verticalFlip = false,
+): readonly Image[] {
+  return new TenCrop(size, verticalFlip).apply(img);
+}
+
+/**
+ * The same conversion `rgbToGrayscale` does.
+ *
+ * **torchvision keeps both names** — this one belongs to the PIL path and
+ * `rgbToGrayscale` to the tensor path. They compute the same thing here, and
+ * the second name is kept because tutorials written against PIL call it. The
+ * Python side says the same in the same words.
+ */
+export function toGrayscale(img: Image, numOutputChannels = 1): Image {
+  return rgbToGrayscale(img, numOutputChannels);
+}
+
 export function normalize(x: Tensor, mean: readonly number[], std: readonly number[]): Tensor {
   return new Normalize(mean, std).apply(x);
 }

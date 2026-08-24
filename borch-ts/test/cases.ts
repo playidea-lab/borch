@@ -1583,6 +1583,18 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::TenCrop(vertical)", () =>
     stacked(new vision.TenCrop([3, 2], true).apply(f()) as readonly vision.Image[]));
 
+  // **The functional spellings, which did not exist here until the axis asked.** The
+  // classes above were present and `F.five_crop(x, 32)` — the line a tutorial writes —
+  // stopped at a name nobody had. These compare the same values the class cases do,
+  // which is the point: a delegating function and a reimplemented one read the same
+  // from outside, and only one of them stays right when the class changes.
+  out.set("vision::F.five_crop", () =>
+    stacked(vision.fiveCrop(f(), [3, 2])));
+  out.set("vision::F.ten_crop", () =>
+    stacked(vision.tenCrop(f(), [3, 2])));
+  out.set("vision::F.ten_crop(vertical)", () =>
+    stacked(vision.tenCrop(f(), [3, 2], true)));
+
   // The vertical flip. The probability is pinned so the draw does not matter.
   out.set("vision::VerticalFlip(p=1)", () =>
     toTensor(new vision.RandomVerticalFlip(1.0).apply(f()) as vision.Image));

@@ -253,6 +253,11 @@ MODULES = {
     "optim.lr_scheduler": frozenset({"optim"}),
     "linalg": frozenset({"linalg"}),
     "utils.data": frozenset({"data"}),
+    # Both of borchvision's namespaces are one file on this side: the classes and the
+    # functional spellings live together in `vision.ts`, so the same module answers for
+    # both rows.
+    "transforms": frozenset({"vision"}),
+    "transforms.functional": frozenset({"vision"}),
 }
 
 
