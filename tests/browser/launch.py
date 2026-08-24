@@ -155,9 +155,16 @@ def _headed(asked):
     uses the machine's own Chrome, which is **one binary** running `--headless=new`, so
     the GPU process does exist — and it starts in under a second where the shell binary
     is absent entirely. It still reports `google / swiftshader`. Measured on two Linux
-    machines with `nvidia_icd.json` installed; forcing `--use-angle=vulkan` there gives
+    machines with `nvidia_icd.json` installed.
+
+    An earlier draft of this paragraph added *forcing `--use-angle=vulkan` there gives
     no adapter at all rather than a real one, which is the same fact from the other
-    side.
+    side.* **The observation is real; the conclusion drawn from it was not.** ANGLE
+    translates GL and WebGL, and WebGPU does not go through it — Dawn talks to Vulkan
+    directly. Losing the adapter under that flag therefore says something about GPU
+    process startup and nothing about whether Vulkan can reach the card. A peer session
+    caught it while the commit was still unpushed. What is removed is the conclusion,
+    not the measurement, and re-measuring without that flag is still owed.
 
     Keeping them apart matters because they have different fixes. The first is a flag
     away. The second is not: it wants a display.
@@ -179,6 +186,18 @@ def _headed(asked):
     `Xephyr` draws into its parent, so anything built on it inherits the wall. A
     standalone framebuffer (`Xvfb`) is the one shape that does not, and it is not
     installed there.
+
+    **And then the process table said it outright.** `Xorg` on that machine has been
+    burning **81% of a core for twelve days**, while `gnome-shell` is fifty-four seconds
+    old — restarted over and over, with a dozen crash-reporter and update-manager
+    windows piled up behind it from previous rounds. The session is not idle and
+    unresponsive; it is **crash-looping**. That is why every client meets silence rather
+    than an error: nothing there fails, and nothing gets serviced either.
+
+    Worth recording because of how long it took to reach. Four launch variations, a
+    second X client, a device-node ACL check — all of them pointing at *something about
+    the display* — and then one `ps` sorted by CPU named the process and the duration.
+    **The cheapest question was asked last.**
 
     So `headed=True` still means yes, and `False` now means *no preference*. Saying no
     takes `--headless` or `BORCH_HEADLESS=1`, and it is worth having: a machine with no
