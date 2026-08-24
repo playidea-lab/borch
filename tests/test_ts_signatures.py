@@ -504,7 +504,8 @@ UNALIGNED = {
     # first and `vision.ts` names it `img` too, but the pair after it differs in
     # `erase` and `resized_crop`, which take a box torchvision spells out one number
     # per parameter.
-    "transforms.functional": 2,
+# 2 → 0. See the note in `RENAMED` below.
+    "transforms.functional": 0,
 }
 
 # Same arity, names differ. **Pinned, because this bucket was called harmless and
@@ -629,7 +630,11 @@ RENAMED = {
     # and `ts_signatures.RENAMES` has nowhere to write a per-symbol exception; the
     # file two directories over exists because a global fold on a per-row property
     # is how six `LazyConv` agreements were turned into six mismatches.
-    "Tensor": 2,
+    # **2 → 0.** `lstsq` and `solve` are the two torch keeps by name and refuses by
+    # body, and even a tombstone has a real argument list: the keyword is `other`, and
+    # `t.lstsq(b=v)` answers `TypeError` rather than a removal notice. borch.ts said
+    # `b`; the core measured torch and moved first.
+    "Tensor": 0,
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.
@@ -746,11 +751,25 @@ RENAMED = {
     # It was written as four while `kernelSize` was still counted, in the window
     # before a peer's `_camel` fix. The count moved on its own and the row had to say
     # why, which is the whole reason these numbers carry sentences.
-    "transforms": 3,
+    # **3 → 0.** `Lambda`, `LinearTransformation` and `RandomChoice` took
+    # torchvision's `lambd`, `transformationMatrix`/`meanVector` and `p`. The second
+    # collided with the field holding the lazily built tensor — **the argument keeps
+    # the outside name and the field yields**, since only the class reads the field.
+    "transforms": 0,
     # `center_crop(img, output_size)` → `(img, size)` and `to_tensor(pic)` → `(img)`.
     # The second is torchvision's own oddity: `pic` appears in that one function and
     # `img` in the rest of the namespace.
-    "transforms.functional": 2,
+    # **2 → 0**, and the two that left had collided harder than a spelling: `erase`
+    # takes torchvision's `i, j, h, w`, and all four ran into something the body
+    # already had — `i` the loop counter, `h` and `w` the tensor's own height and
+    # width. A blanket rename produced a body that compiled and meant something else,
+    # so it was rewritten by hand against the original.
+    #
+    # **`normalize` was renamed inside the wrong function first.** The helper matched
+    # on a prefix and `normalizeBatch` starts with `normalize`, so a private helper
+    # torchvision does not have got torchvision's parameter name while the real one
+    # kept `x`. `startswith` is not a name check.
+    "transforms.functional": 0,
 }
 
 # borch.ts takes a **prefix** of torch's arguments. Not a shift and not silent — one
@@ -1006,7 +1025,10 @@ SHORTER = {
     # `Normalize(mean, std, inplace)` against `(mean, std)` — there is no in-place
     # on this side, and a tail that is short only refuses extra arguments.
     "transforms": 1,
-    "transforms.functional": 0,
+# 0 → 2. `erase` and `normalize` arrived from `unaligned`; both are short of
+    # torchvision's `inplace`, which writes into the caller's tensor and has nothing
+    # to write into here.
+    "transforms.functional": 2,
 }
 
 

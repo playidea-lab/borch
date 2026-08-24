@@ -86,16 +86,16 @@ export class Compose implements Transform {
  * enter the pipeline — without it a one-line `x * 2` has to become a class.
  */
 export class Lambda implements Transform {
-  constructor(private readonly fn: (x: Subject) => Subject) {
-    if (typeof fn !== "function") {
+  constructor(private readonly lambd: (x: Subject) => Subject) {
+    if (typeof lambd !== "function") {
       throw new RuntimeError(
-        "Lambda takes a function — it received " + typeof fn + ".\n" +
+        "Lambda takes a function — it received " + typeof lambd + ".\n" +
         "(torch: Argument lambd should be callable)");
     }
   }
 
   apply(x: Subject): Subject {
-    return this.fn(x);
+    return this.lambd(x);
   }
 
   describe(): string {
@@ -161,7 +161,7 @@ export class RandomApply extends RandomTransforms {
 export class RandomChoice extends RandomTransforms {
   constructor(
     transforms: readonly Transform[],
-    private readonly weights: readonly number[] | null = null,
+    private readonly p: readonly number[] | null = null,
   ) {
     super("RandomChoice", transforms);
   }
@@ -176,22 +176,22 @@ export class RandomChoice extends RandomTransforms {
 
   private draw(): number {
     const n = this.transforms.length;
-    if (this.weights === null) return nextInt(n);
+    if (this.p === null) return nextInt(n);
     // **The weights are normalised here.** torch's `random.choices` takes
     // relative weights; handing them straight to a cumulative draw would make
     // `p=[1, 1]` mean something other than "evenly".
     let total = 0;
-    for (const w of this.weights) total += w;
+    for (const w of this.p) total += w;
     let r = nextFloat() * total;
     for (let i = 0; i < n; i++) {
-      r -= this.weights[i] ?? 0;
+      r -= this.p[i] ?? 0;
       if (r < 0) return i;
     }
     return n - 1;
   }
 
   override describe(): string {
-    const p = this.weights === null ? "None" : tuple(this.weights);
+    const p = this.p === null ? "None" : tuple(this.p);
     return `RandomChoice(${this.inner()}\n)(p=${p})`;
   }
 }
@@ -1034,32 +1034,36 @@ export class LinearTransformation implements Transform {
   // device, and the Python side prints without a GPU. As long as `repr` is treated as a
   // specification, having to bring up a device to see one is backwards — and a check
   // really did catch this.
-  private matrix: Tensor | null = null;
-  private meanVector: Tensor | null = null;
+  // **The lazily built tensors, renamed out of the way.** The constructor's arguments
+  // took torchvision's `transformationMatrix` and `meanVector`, and the second collided
+  // with the field holding the built tensor. The argument keeps the outside name; the
+  // field, which only this class reads, is the one that yields.
+  private matrixT: Tensor | null = null;
+  private meanT: Tensor | null = null;
 
   constructor(
-    private readonly rows: readonly (readonly number[])[],
-    private readonly mean: readonly number[],
+    private readonly transformationMatrix: readonly (readonly number[])[],
+    private readonly meanVector: readonly number[],
   ) {
-    this.side = rows.length;
-    if (rows.some((r) => r.length !== this.side)) {
+    this.side = transformationMatrix.length;
+    if (transformationMatrix.some((r) => r.length !== this.side)) {
       throw new RuntimeError(
-        `transformation_matrix should be square — it received ${rows.length} rows ` +
-        `of lengths ${rows.map((r) => r.length).join(", ")}.\n` +
+        `transformation_matrix should be square — it received ${transformationMatrix.length} transformationMatrix ` +
+        `of lengths ${transformationMatrix.map((r) => r.length).join(", ")}.\n` +
         "(torch: transformation_matrix should be square)");
     }
-    if (mean.length !== this.side) {
+    if (meanVector.length !== this.side) {
       throw new RuntimeError(
         `mean_vector should be as long as one side of the matrix ` +
-        `(${this.side}, ${this.side}) — it received ${mean.length}.\n` +
+        `(${this.side}, ${this.side}) — it received ${meanVector.length}.\n` +
         "(torch: mean_vector should have the same length)");
     }
   }
 
   private tensors(): [Tensor, Tensor] {
-    this.matrix ??= Tensor.from(this.rows.flat(), [this.side, this.side]);
-    this.meanVector ??= Tensor.from([...this.mean], [this.side]);
-    return [this.matrix, this.meanVector];
+    this.matrixT ??= Tensor.from(this.transformationMatrix.flat(), [this.side, this.side]);
+    this.meanT ??= Tensor.from([...this.meanVector], [this.side]);
+    return [this.matrixT, this.meanT];
   }
 
   apply(x: Subject): Tensor {
@@ -1086,9 +1090,9 @@ export class LinearTransformation implements Transform {
   }
 
   describe(): string {
-    const rows = this.rows.map((r) => `[${r.map(pyFloat).join(", ")}]`);
-    return `LinearTransformation(transformation_matrix=[${rows.join(", ")}]` +
-      `, mean_vector=[${this.mean.map(pyFloat).join(", ")}])`;
+    const transformationMatrix = this.transformationMatrix.map((r) => `[${r.map(pyFloat).join(", ")}]`);
+    return `LinearTransformation(transformation_matrix=[${transformationMatrix.join(", ")}]` +
+      `, mean_vector=[${this.meanVector.map(pyFloat).join(", ")}])`;
   }
 }
 
@@ -1776,8 +1780,8 @@ export function crop(img: Image, top: number, left: number,
   return cropAt(asImage(img, "crop"), top, left, height, width);
 }
 
-export function centerCrop(img: Image, size: number | readonly [number, number]): Image {
-  return new CenterCrop(size).apply(img);
+export function centerCrop(img: Image, outputSize: number | readonly [number, number]): Image {
+  return new CenterCrop(outputSize).apply(img);
 }
 
 export function resize(
@@ -1813,8 +1817,8 @@ export function rgbToGrayscale(img: Image, numOutputChannels = 1): Image {
   return toGray(asImage(img, "rgb_to_grayscale"), numOutputChannels, "rgb_to_grayscale");
 }
 
-export function toTensor(img: Image): Tensor {
-  return new ToTensor().apply(img);
+export function toTensor(pic: Image): Tensor {
+  return new ToTensor().apply(pic);
 }
 
 /**
@@ -1854,29 +1858,34 @@ export function toGrayscale(img: Image, numOutputChannels = 1): Image {
   return rgbToGrayscale(img, numOutputChannels);
 }
 
-export function normalize(x: Tensor, mean: readonly number[], std: readonly number[]): Tensor {
-  return new Normalize(mean, std).apply(x);
+export function normalize(tensor: Tensor, mean: readonly number[],
+                          std: readonly number[]): Tensor {
+  return new Normalize(mean, std).apply(tensor);
 }
 
 /**
  * Blank out a rectangle of a `(...,C,H,W)` tensor. **The position is given**,
  * where `RandomErasing` draws it.
  */
-export function erase(x: Tensor, top: number, left: number,
-                      height: number, width: number, v: Tensor): Tensor {
-  const shape = x.shape;
+export function erase(img: Tensor, i: number, j: number,
+                      h: number, w: number, v: Tensor): Tensor {
+  // **`i, j, h, w` are torchvision's names**, and all four collided with something the
+  // body already had: `i` with the loop counter, `h` and `w` with the tensor's own
+  // height and width. The arguments keep the outside names — those are what a caller
+  // writes — and the locals yield, because nothing outside this function reads them.
+  const shape = img.shape;
   if (shape.length < 3) {
     throw new RuntimeError(
       `erase takes (...,C,H,W) — it received (${shape.join(", ")}).`);
   }
-  const h = shape[shape.length - 2] ?? 1;
-  const w = shape[shape.length - 1] ?? 1;
-  const n = x.size;
+  const rows = shape[shape.length - 2] ?? 1;
+  const cols = shape[shape.length - 1] ?? 1;
+  const n = img.size;
   const mask = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    const col = i % w;
-    const row = Math.floor(i / w) % h;
-    if (row >= top && row < top + height && col >= left && col < left + width) mask[i] = 1;
+  for (let at = 0; at < n; at++) {
+    const col = at % cols;
+    const row = Math.floor(at / cols) % rows;
+    if (row >= i && row < i + h && col >= j && col < j + w) mask[at] = 1;
   }
   // **`v` is lifted into place at full size.** A different value can arrive per
   // position, so it must not be reduced to a single constant — the golden's case happens
@@ -1884,17 +1893,17 @@ export function erase(x: Tensor, top: number, left: number,
   // tell the difference rather than the code being right. `where` does not broadcast, so
   // the shapes have to match exactly.
   const rank = v.shape.length;
-  const placed = v.pad(rank - 2, top, h - top - height)
-    .pad(rank - 1, left, w - left - width);
+  const placed = v.pad(rank - 2, i, rows - i - h)
+    .pad(rank - 1, j, cols - j - w);
   if (placed.size !== n) {
     throw new RuntimeError(
       `erase: v padded to (${placed.shape.join(", ")}) does not match the image ` +
       `(${shape.join(", ")}).`);
   }
-  return placed.reshape(shape).where(Tensor.from(mask, shape), x);
+  return placed.reshape(shape).where(Tensor.from(mask, shape), img);
 }
 
-/** `[C, H, W]` — **height before width**, unlike `getImageSize` just below. */
+/** `[C, H, W]` — **h before w**, unlike `getImageSize` just below. */
 export function getDimensions(img: Image): [number, number, number] {
   const i = asImage(img, "get_dimensions");
   return [i.channels, i.height, i.width];

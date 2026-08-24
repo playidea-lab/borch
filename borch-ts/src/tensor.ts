@@ -6028,12 +6028,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * vectors** — torch's rule. The backward's outer product hangs on that
    * distinction.
    */
-  async solve(b: Tensor): Promise<Tensor> {
+  async solve(other: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
     const n = v.rows;
-    const vector = b.shape.length === this.shape.length - 1;
-    const cols = vector ? 1 : (b.shape[b.shape.length - 1] ?? 1);
-    const rhsFlat = LA.fromF32(await b.toArray());
+    const vector = other.shape.length === this.shape.length - 1;
+    const cols = vector ? 1 : (other.shape[other.shape.length - 1] ?? 1);
+    const rhsFlat = LA.fromF32(await other.toArray());
     const invTs = Tensor.invAll(v.mats, n, "solve")
       .map((m) => LA.transpose(m, n, n));
     const size = n * cols;
@@ -6042,13 +6042,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       xs.push(LA.luSolveFactored(
         LA.luFactor(v.mats[i]!, n, n), rhsFlat.slice(i * size, (i + 1) * size), cols));
     }
-    const out = Tensor.fromBatch(xs, b.shape);
+    const out = Tensor.fromBatch(xs, other.shape);
     const shape = this.shape;
     const gShape = vector ? [n] : [n, cols];
     return Tensor.make(
       out.buffer,
-      b.shape,
-      [this, b],
+      other.shape,
+      [this, other],
       (g) => {
         const gbs: Tensor[] = [];
         const ga = Tensor.perBatch(g, v.batch, gShape, shape, (gi, i) => {
@@ -6058,11 +6058,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           return gb.mm(Tensor.fromMat(xs[i]!, [n, cols]).transpose()).neg();
         });
         const gb = v.batch === 1
-          ? gbs[0]!.reshape(b.shape)
-          : Tensor.stack(gbs, 0).reshape(b.shape);
+          ? gbs[0]!.reshape(other.shape)
+          : Tensor.stack(gbs, 0).reshape(other.shape);
         return [
           this.requiresGrad ? ga : null,
-          b.requiresGrad ? gb : null,
+          other.requiresGrad ? gb : null,
         ];
       },
       "SolveBackward0",
@@ -6495,15 +6495,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The least-squares solution. Square and invertible, it gives the same
    * answer as `solve`.
    */
-  async lstsq(b: Tensor): Promise<Tensor> {
+  async lstsq(other: Tensor): Promise<Tensor> {
     const v = await this.asBatch(false);
     if (v.batch !== 1) throw new RuntimeError("lstsq: batching is not here yet");
     const { rows, cols } = v;
-    const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
-    const rhs = LA.fromF32(await b.toArray());
+    const width = other.shape.length === 1 ? 1 : (other.shape[other.shape.length - 1] ?? 1);
+    const rhs = LA.fromF32(await other.toArray());
     const sol = LA.matmul(
       LA.pinverse(v.mats[0]!, rows, cols), rhs, cols, rows, width);
-    return Tensor.fromMat(sol, b.shape.length === 1 ? [cols] : [cols, width]);
+    return Tensor.fromMat(sol, other.shape.length === 1 ? [cols] : [cols, width]);
   }
 
   /**

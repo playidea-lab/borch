@@ -2755,7 +2755,7 @@
       },
       {
        "name": "solve",
-       "signature": "solve(b: Tensor): Promise<Tensor>",
+       "signature": "solve(other: Tensor): Promise<Tensor>",
        "doc": "`A x = b`. The backward is `A⁻ᵀ·Ḡ` towards `b` and `-A⁻ᵀ·Ḡ·xᵀ` towards\n`A`.\n\nWhen `b` has one axis fewer than `A` it is read as **a bundle of\nvectors** — torch's rule. The backward's outer product hangs on that\ndistinction.",
        "section": {
         "ko": "Linear algebra",
@@ -2963,7 +2963,7 @@
       },
       {
        "name": "lstsq",
-       "signature": "lstsq(b: Tensor): Promise<Tensor>",
+       "signature": "lstsq(other: Tensor): Promise<Tensor>",
        "doc": "The least-squares solution. Square and invertible, it gives the same\nanswer as `solve`.",
        "section": {
         "ko": "Linear algebra",
@@ -13842,7 +13842,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(fn: (x: Subject) => Subject)",
+       "signature": "constructor(lambd: (x: Subject) => Subject)",
        "doc": ""
       },
       {
@@ -13888,7 +13888,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(transforms: readonly Transform[], weights?: readonly number[] | null)",
+       "signature": "constructor(transforms: readonly Transform[], p?: readonly number[] | null)",
        "doc": ""
       },
       {
@@ -14209,7 +14209,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(rows: readonly (readonly number[])[], mean: readonly number[])",
+       "signature": "constructor(transformationMatrix: readonly (readonly number[])[], meanVector: readonly number[])",
        "doc": ""
       },
       {
@@ -14433,7 +14433,7 @@
     {
      "kind": "function",
      "name": "centerCrop",
-     "signature": "export declare function centerCrop(img: Image, size: number | readonly [number, number]): Image",
+     "signature": "export declare function centerCrop(img: Image, outputSize: number | readonly [number, number]): Image",
      "doc": "",
      "members": [],
      "torch": "center_crop"
@@ -14471,7 +14471,7 @@
     {
      "kind": "function",
      "name": "toTensor",
-     "signature": "export declare function toTensor(img: Image): Tensor",
+     "signature": "export declare function toTensor(pic: Image): Tensor",
      "doc": "",
      "members": [],
      "torch": "to_tensor"
@@ -14503,14 +14503,14 @@
     {
      "kind": "function",
      "name": "normalize",
-     "signature": "export declare function normalize(x: Tensor, mean: readonly number[], std: readonly number[]): Tensor",
+     "signature": "export declare function normalize(tensor: Tensor, mean: readonly number[], std: readonly number[]): Tensor",
      "doc": "",
      "members": []
     },
     {
      "kind": "function",
      "name": "erase",
-     "signature": "export declare function erase(x: Tensor, top: number, left: number, height: number, width: number, v: Tensor): Tensor",
+     "signature": "export declare function erase(img: Tensor, i: number, j: number, h: number, w: number, v: Tensor): Tensor",
      "doc": "Blank out a rectangle of a `(...,C,H,W)` tensor. **The position is given**,\nwhere `RandomErasing` draws it.",
      "members": []
     },
@@ -14518,7 +14518,7 @@
      "kind": "function",
      "name": "getDimensions",
      "signature": "export declare function getDimensions(img: Image): [number, number, number]",
-     "doc": "`[C, H, W]` — **height before width**, unlike `getImageSize` just below.",
+     "doc": "`[C, H, W]` — **h before w**, unlike `getImageSize` just below.",
      "members": [],
      "torch": "get_dimensions"
     },
