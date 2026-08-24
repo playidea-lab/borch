@@ -274,6 +274,15 @@ FROZEN = {
     # lines above the loader that called it — a comment naming what something
     # *would* be called is not the name.
     "utils.data": 2,
+    # **These two were not measured at all until now.** `ts_axis.py` left them out
+    # because the golden's `vision::` cases were said to hold them name by name, and
+    # for `five_crop`, `ten_crop` and `to_grayscale` the golden had no case — the
+    # three sat in the seam between two checks that each named the other. They are in
+    # `vision.ts` now, and the one that remains in each row is `InterpolationMode`,
+    # which is not a missing name: TypeScript writes the choice as
+    # `"bilinear" | "nearest"`, so the compiler refuses a wrong mode before the call.
+    "transforms": 1,
+    "transforms.functional": 1,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the
@@ -297,6 +306,8 @@ REFUSALS = {
     "optim.lr_scheduler": 0,
     "linalg": 0,
     "utils.data": 0,
+    "transforms": 0,
+    "transforms.functional": 0,
 }
 
 

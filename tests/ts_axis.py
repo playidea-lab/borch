@@ -80,12 +80,26 @@ INDEX = ROOT / "site" / "assets" / "api-index.json"
 #
 # The methods themselves are still compared: they are the `Tensor` row.
 #
-# `transforms` and `transforms.functional` are `borchvision`'s. Their TypeScript side
-# is `vision.ts` and the golden's `vision::` cases hold it name by name, so measuring
-# it here would ask the same question twice.
+# `transforms` and `transforms.functional` are `borchvision`'s, and **they used to be
+# left out.** The reason written here was that their TypeScript side is `vision.ts` and
+# the golden's `vision::` cases hold it name by name, so measuring it here would ask the
+# same question twice.
+#
+# That sentence was true and it was not true of everything it covered. `five_crop`,
+# `ten_crop` and `to_grayscale` were in `borchvision` and absent from `vision.ts`, and
+# **the golden had no case for any of the three** — their classes had cases, the
+# functions did not. So this file did not ask because the golden was assumed to, and the
+# golden did not ask at all. A name can hide in the seam between two checks that each
+# name the other, and neither check is wrong when it happens.
+#
+# The overlap the old reason worried about is real: most of these names do have a
+# `vision::` case, and this row will re-ask about them. That is the cheaper mistake.
+# Asking twice costs a listing; asking neither time costs `F.five_crop(x, 32)` — the
+# line a tutorial writes — stopping at a name nobody had.
 SPACES = frozenset({
     "Tensor", "nn", "nn.functional",
     "optim", "optim.lr_scheduler", "linalg", "utils.data",
+    "transforms", "transforms.functional",
 })
 
 
@@ -277,6 +291,16 @@ DELIBERATE: dict[str, str] = {
                            "does the same arithmetic and could be shared",
     "Tensor::retain_grad": "owed — borch.ts keeps gradients on leaves only, and this "
                            "asks for one on a non-leaf",
+    # **Not absent — spelled as a type.** The core needs a runtime object because
+    # Python has no union of literals; TypeScript has one, so `vision.ts` writes the
+    # parameter as `"bilinear" | "nearest"` and the compiler refuses a third value
+    # before it runs. An exported enum beside it would be a second spelling of the
+    # same choice, and a reader who typed the wrong one would learn it at run time
+    # instead of while typing.
+    **{f"{ns}::InterpolationMode":
+       'not a name here: `vision.ts` takes `"bilinear" | "nearest"` as a type, so the '
+       "compiler refuses a wrong mode before the call runs"
+       for ns in ("transforms", "transforms.functional")},
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not

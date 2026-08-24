@@ -8578,6 +8578,33 @@ def vision_cases(inp=None):
         (VISION_PREFIX + "FiveCrop", crops(lambda T: T.FiveCrop((3, 2)))),
         (VISION_PREFIX + "TenCrop", crops(lambda T: T.TenCrop((3, 2)))),
         (VISION_PREFIX + "TenCrop(vertical)", crops(lambda T: T.TenCrop((3, 2), vertical_flip=True))),
+        # **The functional spellings of the three above.** They were absent from
+        # `vision.ts` while their classes were there, and nothing said so: `ts_axis.py`
+        # leaves `transforms` out because "the golden's `vision::` cases hold it name by
+        # name", and for these three the golden had no case. Each check was waiting on
+        # the other, so the seam between them is where they sat.
+        #
+        # These compare the same values the class cases do. That is the point — a
+        # functional form that delegates and a functional form that reimplements read
+        # the same from outside, and only one of them stays right.
+        (VISION_PREFIX + "F.five_crop",
+         crops(lambda T: lambda img: T.functional.five_crop(img, (3, 2)))),
+        (VISION_PREFIX + "F.ten_crop",
+         crops(lambda T: lambda img: T.functional.ten_crop(img, (3, 2)))),
+        (VISION_PREFIX + "F.ten_crop(vertical)",
+         crops(lambda T: lambda img: T.functional.ten_crop(img, (3, 2), vertical_flip=True))),
+        # **`to_grayscale` gets no value case, and the reason is not "nobody wrote one".**
+        # torchvision's is PIL-only — handed a tensor it says `Input should be PIL Image`
+        # (measured) — so the only path where both sides accept the call is the uint8 one,
+        # and there they are **documented to differ by one**: `borchvision.py`'s `_to_gray`
+        # truncates because torch's `.to(dtype)` truncates, while PIL's `convert("L")`
+        # rounds. Writing the case anyway would freeze a difference this repository chose
+        # on purpose and read as though the choice were a defect.
+        #
+        # What holds it instead: ours delegates to `rgb_to_grayscale`, whose tensor path
+        # the `Grayscale` cases above compare, and `tests/ts_axis.py` now carries the
+        # `transforms` namespace so the **name** cannot go missing again unremarked. Both
+        # halves are asked; they are asked in the two places that can ask them.
         # **The cap has to actually bite.** On this 5x4 picture most `max_size` values never
         # reach it — the long side barely grows — and the case then compares an ordinary
         # resize while reading as though it compared the cap. 8 with a cap of 9 is where it

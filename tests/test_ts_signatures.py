@@ -203,6 +203,21 @@ SHIFTED = {
     "optim.lr_scheduler": 0,
     "linalg": 0,
     "utils.data": 0,
+    # **`transforms` is 1, and it is the row this namespace was added for.**
+    # torchvision:  `RandomCrop(size, padding, pad_if_needed, fill, padding_mode)`
+    # borch.ts:     `RandomCrop(size, padding, fill)`
+    #
+    # `fill` sits at position three where torch has `pad_if_needed`, so
+    # `new RandomCrop(32, 4, true)` — the line somebody transcribing torch writes —
+    # compiles, runs, and pads with `true` instead of padding when it is needed. The
+    # same shape as `std(correction)` above: a positional call that is accepted and
+    # means something else.
+    #
+    # Nothing was watching. `ts_axis.py` left `transforms` out because the golden's
+    # `vision::` cases hold it, and the golden asks `RandomCrop((3,2), padding=4)` by
+    # keyword, so the third position was never occupied on either side.
+    "transforms": 1,
+    "transforms.functional": 0,
 }
 
 # **238 pairs cannot be compared at all, and that is the largest number here.**
@@ -466,6 +481,12 @@ UNALIGNED = {
     # all along and disagreed about what to call the matrix.
     "linalg": 0,
     "utils.data": 0,
+    "transforms": 0,
+    # Two, and both are the picture argument: torchvision's functional takes `img`
+    # first and `vision.ts` names it `img` too, but the pair after it differs in
+    # `erase` and `resized_crop`, which take a box torchvision spells out one number
+    # per parameter.
+    "transforms.functional": 2,
 }
 
 # Same arity, names differ. **Pinned, because this bucket was called harmless and
@@ -682,6 +703,22 @@ RENAMED = {
     # row, and this one had been checked against six.
     "linalg": 0,
     "utils.data": 0,
+    # **Three, and none of them is camel case** — `kernelSize` folds onto
+    # `kernel_size` and lands in `agree`. What is left is three places that chose a
+    # different word: `Lambda(lambd)` → `(fn)`, `LinearTransformation`'s
+    # `transformation_matrix`/`mean_vector` → `rows`/`mean`, and `RandomChoice`'s
+    # second parameter, `p` → `weights`. Each is clearer than torch's and each costs
+    # a keyword call that does not carry across; the trade is visible here rather
+    # than in a reader's confusion.
+    #
+    # It was written as four while `kernelSize` was still counted, in the window
+    # before a peer's `_camel` fix. The count moved on its own and the row had to say
+    # why, which is the whole reason these numbers carry sentences.
+    "transforms": 3,
+    # `center_crop(img, output_size)` → `(img, size)` and `to_tensor(pic)` → `(img)`.
+    # The second is torchvision's own oddity: `pic` appears in that one function and
+    # `img` in the rest of the namespace.
+    "transforms.functional": 2,
 }
 
 # borch.ts takes a **prefix** of torch's arguments. Not a shift and not silent — one
@@ -898,6 +935,10 @@ SHORTER = {
     # and the number is here rather than the reason so that the day the door opens,
     # all four move at once and one of them not moving is visible.
     "utils.data": 4,
+    # `Normalize(mean, std, inplace)` against `(mean, std)` — there is no in-place
+    # on this side, and a tail that is short only refuses extra arguments.
+    "transforms": 1,
+    "transforms.functional": 0,
 }
 
 

@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 150
+  "missing": 153
  },
  "modules": [
   {
@@ -14478,6 +14478,30 @@
     },
     {
      "kind": "function",
+     "name": "fiveCrop",
+     "signature": "export declare function fiveCrop(img: Image, size: number | readonly [number, number]): readonly Image[]",
+     "doc": "The five corners and the centre, as `FiveCrop` gives them.\n\n**These three were missing while their classes were here**, which is the\nshape a name-only reading of a gap keeps producing: `FiveCrop`, `TenCrop`\nand `Grayscale` all worked, and `F.five_crop(x, 32)` — the line a tutorial\nwrites — stopped at a name that was not there.\n\nNothing caught it. `tests/ts_axis.py` leaves `transforms` out on the grounds\nthat the golden's `vision::` cases hold it name by name, and for these three\nthe golden had no case, so each check was waiting on the other.",
+     "members": [],
+     "torch": "five_crop"
+    },
+    {
+     "kind": "function",
+     "name": "tenCrop",
+     "signature": "export declare function tenCrop(img: Image, size: number | readonly [number, number], verticalFlip?: boolean): readonly Image[]",
+     "doc": "`fiveCrop` of the image and of its flip — ten in the order torchvision returns.",
+     "members": [],
+     "torch": "ten_crop"
+    },
+    {
+     "kind": "function",
+     "name": "toGrayscale",
+     "signature": "export declare function toGrayscale(img: Image, numOutputChannels?: number): Image",
+     "doc": "The same conversion `rgbToGrayscale` does.\n\n**torchvision keeps both names** — this one belongs to the PIL path and\n`rgbToGrayscale` to the tensor path. They compute the same thing here, and\nthe second name is kept because tutorials written against PIL call it. The\nPython side says the same in the same words.",
+     "members": [],
+     "torch": "to_grayscale"
+    },
+    {
+     "kind": "function",
      "name": "normalize",
      "signature": "export declare function normalize(x: Tensor, mean: readonly number[], std: readonly number[]): Tensor",
      "doc": "",
@@ -14987,7 +15011,7 @@
      ]
     }
    ],
-   "count": 196,
+   "count": 199,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -16510,5 +16534,5 @@
    "count": 9
   }
  ],
- "total": 2174
+ "total": 2177
 }
