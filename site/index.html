@@ -395,7 +395,8 @@ for step in range(201):
     <p class="small muted" style="margin-top:.8rem">
       On top of that, <strong>3438 golden cases</strong> hold all three implementations to the same expected values.
       Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
-      identically on Apple Metal and on NVIDIA — the hand-written WGSL is not one vendor's.
+      identically on Apple Metal. NVIDIA matched too — an RTX 4090, over 845 cases, against the table as it stood
+      then — and that machine has not been available since the table grew, so what is measured today is one vendor.
     </p>
   </div>
 </section>
