@@ -109,10 +109,17 @@ function mount(box) {
   const openLink = box.querySelector("a.open");
 
   const paint = () => {
+    // The trailing `\n ` is a line the painted layer carries and the value does not.
     painted.innerHTML = highlight(`${editor.value}\n `, lang);
-    // Sized to the text — a scrollbar on every block breaks the flow of reading.
-    const rows = editor.value.split("\n").length;
-    box.querySelector(".edit").style.height = `${rows * 1.6 * 12.5 + 28}px`;
+    // **The box is no longer measured in arithmetic.** It used to be
+    // `rows * 1.6 * 12.5 + 28`, which is the line height, the font size and the padding
+    // copied out of `style.css` — three numbers in two places, and it was short by a
+    // line on every block: the count missed the line painted just above, and a block
+    // whose code is wider than the box loses another ten pixels to the horizontal
+    // scrollbar. Measured on `learn/10-vit.html`: 288px of box against 307px of text on
+    // the first block, 1648 against 1657 on the third, so the last line was cut on all
+    // four. The `<pre>` is in flow and already knows all of it — the textarea over it is
+    // `inset: 0`, so it follows whatever the `<pre>` comes out as.
   };
   const setCode = (text) => {
     editor.value = text;
