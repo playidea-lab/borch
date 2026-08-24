@@ -3434,12 +3434,27 @@ function addLoss(out: Map<string, Case>): void {
   ];
   for (const [name, fn] of value) out.set(`loss::${name}`, fn);
 
+  // **torch's deprecated pair, and it beats `reduction`.** The last two read wrongly
+  // at a glance and are the point: all three given folds to the *mean*, and the
+  // positional string lands on `sizeAverage`, which is truthy, so it folds there too.
+  // Nothing else in this file runs `legacyReduction`.
+  const legacy: [string, () => Tensor][] = [
+    ["size_average=False", () => new nn.L1Loss(false).call(a(), b())],
+    ["reduce=False", () => new nn.L1Loss(null, false).call(a(), b())],
+    ["셋 다", () => new nn.L1Loss(true, true, "sum").call(a(), b())],
+    // `"sum"` is not a boolean, so this one needs the cast TypeScript would
+    // otherwise refuse — which is the whole hazard stated in the type system.
+    ["L1Loss('sum') 위치",
+      () => new nn.L1Loss("sum" as unknown as boolean).call(a(), b())],
+  ];
+  for (const [name, fn] of legacy) out.set(`loss::가장자리::${name}`, fn);
+
   const layers: [string, () => Tensor][] = [
     // `delta` moved behind `reduction` to match torch. The Python case passes
     // `delta=0.5` by keyword, so its value never moved and the golden is unchanged —
     // which is exactly why nothing caught the order being wrong.
     ["HuberLoss", () => new nn.HuberLoss("mean", 0.5).call(x(), y())],
-    ["KLDivLoss", () => new nn.KLDivLoss("batchmean").call(logp(), tgtp())],
+    ["KLDivLoss", () => new nn.KLDivLoss(null, null, "batchmean").call(logp(), tgtp())],
     ["PoissonNLLLoss", () => new nn.PoissonNLLLoss().call(positive(), counts())],
     ["GaussianNLLLoss",
       () => new nn.GaussianNLLLoss().call(x(), y(), variance())],
@@ -3466,16 +3481,16 @@ function addLoss(out: Map<string, Case>): void {
     // back one element short.
     ...(["mean", "sum", "none"] as const).map((r) =>
       [`CrossEntropyLoss(ignore_index, ${r})`,
-        () => new nn.CrossEntropyLoss(undefined, -100, r).call(
+        () => new nn.CrossEntropyLoss(undefined, null, -100, null, r).call(
           Tensor.from([2, 1, 0.1, 0.5, 2.5, 0.3, 1, 0.2, 3], [3, 3]),
           Tensor.from([0, -100, 2], [3], { dtype: "int64" }))] as
         [string, () => Tensor]),
     ["CrossEntropyLoss(label_smoothing)",
-      () => new nn.CrossEntropyLoss(undefined, -100, "mean", 0.1).call(
+      () => new nn.CrossEntropyLoss(undefined, null, -100, null, "mean", 0.1).call(
         Tensor.from([2, 1, 0.1, 0.5, 2.5, 0.3, 1, 0.2, 3], [3, 3]),
         Tensor.from([0, 1, 2], [3], { dtype: "int64" }))],
     ["NLLLoss(ignore_index)",
-      () => new nn.NLLLoss(undefined, -100).call(
+      () => new nn.NLLLoss(undefined, null, -100).call(
         Tensor.from([0.7, 0.2, 0.1, 0.1, 0.8, 0.1, 0.2, 0.2, 0.6], [3, 3]).log(),
         Tensor.from([0, -100, 2], [3], { dtype: "int64" }))],
     ["MultiMarginLoss", () => new nn.MultiMarginLoss().call(mm(), mmt())],
@@ -3529,23 +3544,29 @@ function addLoss(out: Map<string, Case>): void {
       [`binary_cross_entropy(${reduction})`,
         () => bceP().bce(bceT(), reduction)],
       [`nn.BCELoss(${reduction})`,
-        () => new nn.BCELoss(undefined, reduction).call(bceP(), bceT())],
+        () => new nn.BCELoss(undefined, null, null, reduction).call(bceP(), bceT())],
       // Six layers were **missing** for a while too. borch.ts's `nn` had the rare ones
       // such as `HuberLoss` and was missing the common ones, and **the binding was filling
       // in by building layers over the tensor methods itself**, so the golden saw none of
       // it — every case goes through the binding. They were names missing only for somebody
       // writing TypeScript directly.
+      // **`null, null` is torch's deprecated pair, not padding.** These read
+      // `new MSELoss(reduction)` until the two legacy seats went in ahead of it, at
+      // which point the string landed on `sizeAverage` — the very shift the seats
+      // were added to close. TypeScript refused to compile it, which is the whole
+      // difference between this file and the Python side, where the same mistake
+      // ran and had to be caught by comparing values against torch.
       [`nn.MSELoss(${reduction})`,
-        () => new nn.MSELoss(reduction).call(x(), y())],
+        () => new nn.MSELoss(null, null, reduction).call(x(), y())],
       [`nn.L1Loss(${reduction})`,
-        () => new nn.L1Loss(reduction).call(x(), y())],
+        () => new nn.L1Loss(null, null, reduction).call(x(), y())],
       [`nn.SmoothL1Loss(${reduction})`,
-        () => new nn.SmoothL1Loss(reduction, 1.0).call(x(), y())],
+        () => new nn.SmoothL1Loss(null, null, reduction, 1.0).call(x(), y())],
       [`nn.CrossEntropyLoss(${reduction})`,
-        () => new nn.CrossEntropyLoss(undefined, -100, reduction)
+        () => new nn.CrossEntropyLoss(undefined, null, -100, null, reduction)
           .call(ceX(), ceT())],
       [`nn.NLLLoss(${reduction})`,
-        () => new nn.NLLLoss(undefined, -100, reduction).call(ceLogp(), ceT())],
+        () => new nn.NLLLoss(undefined, null, -100, null, reduction).call(ceLogp(), ceT())],
     ];
     for (const [name, fn] of fns) out.set(`loss::reduction::${name}`, fn);
   }

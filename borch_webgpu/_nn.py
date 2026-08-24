@@ -1747,20 +1747,37 @@ _LOSS_LAYERS = {
     # constructor validates its own string — the same luck that made the scheduler
     # table's break findable, and the opposite of what happened to `nll_loss` next
     # door, where the wrong seat was a number and swallowed a string as NaN.
+    # **`size_average` and `reduce` are in these rows because borch.ts now has the
+    # seats.** They are torch's deprecated pair, and this table is read as *borch.ts's
+    # parameter order* — a row that omits them puts the reduction two seats early, so
+    # `MSELoss(reduction="sum")` would arrive as `sizeAverage="sum"` and fold to the
+    # mean. The three rows where the pair is not adjacent are torch's doing, not a
+    # transcription slip: `ignore_index` and `eps` sit between them.
+    #
+    # `HuberLoss`, `GaussianNLLLoss` and `TripletMarginWithDistanceLoss` have no pair
+    # in torch either — newer names, and they are the control that says the rows above
+    # are copied rather than pattern-filled.
     "HuberLoss": ("reduction", "delta"),
-    "KLDivLoss": ("reduction", "log_target"),
-    "PoissonNLLLoss": ("log_input", "full", "eps", "reduction"),
+    "KLDivLoss": ("size_average", "reduce", "reduction", "log_target"),
+    "PoissonNLLLoss": ("log_input", "full", "size_average", "eps", "reduce",
+                       "reduction"),
     "GaussianNLLLoss": ("full", "eps", "reduction"),
-    "MarginRankingLoss": ("margin", "reduction"),
-    "CosineEmbeddingLoss": ("margin", "reduction"),
-    "HingeEmbeddingLoss": ("margin", "reduction"),
-    "SoftMarginLoss": ("reduction",),
-    "TripletMarginLoss": ("margin", "p", "eps", "swap", "reduction"),
+    "MarginRankingLoss": ("margin", "size_average", "reduce", "reduction"),
+    "CosineEmbeddingLoss": ("margin", "size_average", "reduce", "reduction"),
+    "HingeEmbeddingLoss": ("margin", "size_average", "reduce", "reduction"),
+    "SoftMarginLoss": ("size_average", "reduce", "reduction"),
+    "TripletMarginLoss": ("margin", "p", "eps", "swap", "size_average", "reduce",
+                          "reduction"),
     "TripletMarginWithDistanceLoss": ("distance_function", "margin", "swap",
                                       "reduction"),
-    "MultiLabelSoftMarginLoss": ("reduction",),
-    "MultiMarginLoss": ("p", "margin", "weight", "reduction"),
-    "MultiLabelMarginLoss": ("reduction",),
+    # **`weight` was missing from this row and borch.ts has taken it first for a
+    # while.** `MultiLabelSoftMarginLoss(reduction="sum")` laid the string out into
+    # the first seat, which is the class weights — the exact defect the comment on
+    # `HuberLoss` above describes, sitting two rows below it.
+    "MultiLabelSoftMarginLoss": ("weight", "size_average", "reduce", "reduction"),
+    "MultiMarginLoss": ("p", "margin", "weight", "size_average", "reduce",
+                        "reduction"),
+    "MultiLabelMarginLoss": ("size_average", "reduce", "reduction"),
     "PairwiseDistance": ("p", "eps", "keepdim"),
     "CosineSimilarity": ("dim", "eps"),
 }
@@ -2372,43 +2389,73 @@ def _no_class_weights(who, weight, pos_weight):
         _unsupported(f"{who}(pos_weight=…)")
 
 
-def L1Loss(reduction="mean"):
+def _legacy_reduction(size_average, reduce, reduction):
+    """torch's deprecated `size_average`/`reduce`, folded into a `reduction`.
+
+    **The same rule as the core's helper of the same name, and it has to be here
+    too.** The seven layers below call a `Tensor` method rather than standing
+    borch.ts's layer up, so borch.ts's own fold never runs for them — the arguments
+    would be taken and dropped, which is the shape of defect this whole file keeps
+    finding.
+
+    `reduce=False` gives `none`, else `size_average=False` gives `sum`, else `mean`.
+    **The pair beats `reduction`**, which is torch's behaviour and the opposite of
+    what the word *deprecated* suggests.
+    """
+    if size_average is None and reduce is None:
+        return reduction
+    return ("none" if reduce is False
+            else "sum" if size_average is False
+            else "mean")
+
+
+def L1Loss(size_average=None, reduce=None, reduction="mean"):
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     return _Wrap(lambda a, b: wrap(handle(a).l1Loss(handle(b), reduction)))
 
 
-def MSELoss(reduction="mean"):
+def MSELoss(size_average=None, reduce=None, reduction="mean"):
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     return _Wrap(lambda a, b: wrap(handle(a).mseLoss(handle(b), reduction)))
 
 
-def SmoothL1Loss(reduction="mean", beta=1.0):
-    # `reduction` first, as in torch and in borch.ts. See `borch/_nn.py`.
+def SmoothL1Loss(size_average=None, reduce=None, reduction="mean", beta=1.0):
+    # torch's four in torch's order, and `beta` last. See `borch/_nn.py`.
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     return _Wrap(lambda a, b: wrap(
         handle(a).smoothL1Loss(handle(b), beta, reduction)))
 
 
-def NLLLoss(weight=None, ignore_index=-100, reduction="mean"):
-    """torch's order, minus the two it has deprecated."""
+def NLLLoss(weight=None, size_average=None, ignore_index=-100, reduce=None,
+            reduction="mean"):
+    """torch's order — and **the deprecated pair is not adjacent here**, with
+    `ignore_index` between the two."""
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     _no_class_weights("NLLLoss", weight, None)
     return _Wrap(lambda a, b: wrap(
         handle(a).nllLoss(handle(b), int(ignore_index), reduction)))
 
 
-def BCELoss(weight=None, reduction="mean"):
+def BCELoss(weight=None, size_average=None, reduce=None, reduction="mean"):
     """torch's order. **No `pos_weight`** — that belongs to the logits form alone,
     and offering it here would be an argument torch does not have. The core says the
     same at the same place."""
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     _no_class_weights("BCELoss", weight, None)
     return _Wrap(lambda a, b: wrap(handle(a).bce(handle(b), reduction)))
 
 
-def BCEWithLogitsLoss(reduction="mean", *, weight=None, pos_weight=None):
+def BCEWithLogitsLoss(weight=None, size_average=None, reduce=None,
+                      reduction="mean", pos_weight=None):
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     _no_class_weights("BCEWithLogitsLoss", weight, pos_weight)
     return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b), reduction)))
 
 
-def CrossEntropyLoss(weight=None, ignore_index=-100, reduction="mean",
-                     label_smoothing=0.0):
-    """torch's order, minus the two it has deprecated."""
+def CrossEntropyLoss(weight=None, size_average=None, ignore_index=-100,
+                     reduce=None, reduction="mean", label_smoothing=0.0):
+    """torch's order — `ignore_index` sits between the deprecated pair."""
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     _no_class_weights("CrossEntropyLoss", weight, None)
     return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(
         handle(b), int(ignore_index), reduction, float(label_smoothing))))

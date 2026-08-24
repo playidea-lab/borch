@@ -149,7 +149,26 @@ SHIFTED = {
     # refuses what it cannot reach and a shift answers. Closing it is borch.ts's
     # side of the same edit; the peer session holding that library has been told
     # which seventeen and where the seats are.
-    "nn": 17,
+    #
+    # **17 → 0, closed the same afternoon.** All seventeen carry `sizeAverage` and
+    # `reduce` at torch's seats now, with one `legacyReduction` helper doing the fold
+    # so the rule lives in one place on each side rather than seventeen.
+    #
+    # Two things came out of doing it that the count cannot show:
+    #
+    #   **`tsc` refused to compile the call sites.** Ten of them across `cases.ts` and
+    #   `parity.ts` passed a reduction positionally into what had just become
+    #   `sizeAverage`, and the compiler named every one. The core had the identical
+    #   mistake in `L1Loss.forward` and Python took it happily — it was found by
+    #   comparing values against torch. Same defect, two languages, and only one of
+    #   them asked.
+    #
+    #   **A parity check named `SmoothL1Loss takes reduction first` kept passing after
+    #   it stopped being true.** It was written to pin a difference between the two
+    #   libraries, the difference is gone, and what it actually asserted was that the
+    #   first seat is not `beta`. It now asserts the fold, which nothing but torch's
+    #   order could produce.
+    "nn": 0,
     # 1 → 2 → 1. `F.embedding_bag` moved `mode` from third to sixth on the core side,
     # and `F.embeddingBag` followed. **`tsc` named all eight call sites the instant it
     # moved** — five golden cases and the layer's own two — because a mode string does

@@ -2730,7 +2730,11 @@ export class CTCLoss {
 // through the binding, so it never asked.
 
 export class MSELoss {
-  constructor(readonly reduction: Reduction = "mean") {}
+  readonly reduction: Reduction;
+  constructor(sizeAverage: boolean | null = null, reduce: boolean | null = null,
+              reduction: Reduction = "mean") {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.mseLoss(target, this.reduction);
@@ -2744,7 +2748,11 @@ export class MSELoss {
 }
 
 export class L1Loss {
-  constructor(readonly reduction: Reduction = "mean") {}
+  readonly reduction: Reduction;
+  constructor(sizeAverage: boolean | null = null, reduce: boolean | null = null,
+              reduction: Reduction = "mean") {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.l1Loss(target, this.reduction);
@@ -2758,7 +2766,11 @@ export class L1Loss {
 }
 
 export class SmoothL1Loss {
-  constructor(readonly reduction: Reduction = "mean", readonly beta = 1.0) {}
+  readonly reduction: Reduction;
+  constructor(sizeAverage: boolean | null = null, reduce: boolean | null = null,
+              reduction: Reduction = "mean", readonly beta = 1.0) {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.smoothL1Loss(target, this.beta, this.reduction);
@@ -2769,6 +2781,41 @@ export class SmoothL1Loss {
   }
 
   describe(): string { return "SmoothL1Loss()"; }
+}
+
+/**
+ * torch's deprecated `sizeAverage`/`reduce`, folded into a `reduction`.
+ *
+ * They were absent here, and absent is not neutral: every argument after them sat one
+ * or two seats early, so the same positional call meant different things on the two
+ * sides.
+ *
+ *     new nn.L1Loss("sum")   borch.ts → reduction = "sum"
+ *                            the core → sizeAverage = "sum", which is truthy, so the
+ *                                       legacy path folds it to the *mean*
+ *
+ * **The pair beats `reduction` when either is given**, which is the opposite of what
+ * a reader expects from a deprecated argument and is what torch does: `reduce=false`
+ * gives `none`, else `sizeAverage=false` gives `sum`, else `mean`, with `null`
+ * reading as `true` on both. Written the expected way round, a caller passing all
+ * three gets an answer torch does not produce.
+ *
+ * The message is torch's own wording so that a caller who hits it can search for the
+ * same sentence in torch's issues.
+ */
+export function legacyReduction<R extends string>(
+  sizeAverage: boolean | null,
+  reduce: boolean | null,
+  reduction: R,
+): R {
+  if (sizeAverage === null && reduce === null) return reduction;
+  const got = (reduce === false ? "none"
+    : sizeAverage === false ? "sum"
+    : "mean") as R;
+  console.warn(
+    `size_average and reduce args will be deprecated, `
+    + `please use reduction='${got}' instead.`);
+  return got;
 }
 
 /**
@@ -2799,8 +2846,11 @@ function refuseWeight(layer: string, what: string, weight: unknown): void {
  * same place.
  */
 export class BCELoss {
-  constructor(weight?: Tensor, readonly reduction: Reduction = "mean") {
+  readonly reduction: Reduction;
+  constructor(weight?: Tensor, sizeAverage: boolean | null = null,
+              reduce: boolean | null = null, reduction: Reduction = "mean") {
     refuseWeight("BCELoss", "weight", weight);
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
@@ -2815,13 +2865,17 @@ export class BCELoss {
 }
 
 export class BCEWithLogitsLoss {
+  readonly reduction: Reduction;
   constructor(
     weight?: Tensor,
-    readonly reduction: Reduction = "mean",
+    sizeAverage: boolean | null = null,
+    reduce: boolean | null = null,
+    reduction: Reduction = "mean",
     posWeight?: Tensor,
   ) {
     refuseWeight("BCEWithLogitsLoss", "weight", weight);
     refuseWeight("BCEWithLogitsLoss", "posWeight", posWeight);
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
@@ -2836,12 +2890,16 @@ export class BCEWithLogitsLoss {
 }
 
 export class NLLLoss {
+  readonly reduction: Reduction;
   constructor(
     weight: Tensor | undefined = undefined,
+    sizeAverage: boolean | null = null,
     readonly ignoreIndex = -100,
-    readonly reduction: Reduction = "mean",
+    reduce: boolean | null = null,
+    reduction: Reduction = "mean",
   ) {
     refuseWeight("NLLLoss", "weight", weight);
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
@@ -2881,10 +2939,15 @@ export class HuberLoss {
 }
 
 export class KLDivLoss {
+  readonly reduction: Reduction | "batchmean";
   constructor(
-    readonly reduction: Reduction | "batchmean" = "mean",
+    sizeAverage: boolean | null = null,
+    reduce: boolean | null = null,
+    reduction: Reduction | "batchmean" = "mean",
     readonly logTarget = false,
-  ) {}
+  ) {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.klDiv(target, this.reduction, this.logTarget);
@@ -2898,10 +2961,14 @@ export class KLDivLoss {
 }
 
 export class PoissonNLLLoss {
+  readonly reduction: Reduction;
   constructor(
-    readonly logInput = true, readonly full = false, readonly eps = 1e-8,
-    readonly reduction: Reduction = "mean",
-  ) {}
+    readonly logInput = true, readonly full = false,
+    sizeAverage: boolean | null = null, readonly eps = 1e-8,
+    reduce: boolean | null = null, reduction: Reduction = "mean",
+  ) {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.poissonNllLoss(target, this.logInput, this.full, this.eps,
@@ -2933,7 +3000,10 @@ export class GaussianNLLLoss {
 }
 
 export class MarginRankingLoss {
-  constructor(readonly margin = 0.0, readonly reduction: Reduction = "mean") {
+  readonly reduction: Reduction;
+  constructor(readonly margin = 0.0, sizeAverage: boolean | null = null,
+              reduce: boolean | null = null, reduction: Reduction = "mean") {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x1: Tensor, x2: Tensor, target: Tensor): Tensor {
@@ -2948,7 +3018,10 @@ export class MarginRankingLoss {
 }
 
 export class CosineEmbeddingLoss {
-  constructor(readonly margin = 0.0, readonly reduction: Reduction = "mean") {
+  readonly reduction: Reduction;
+  constructor(readonly margin = 0.0, sizeAverage: boolean | null = null,
+              reduce: boolean | null = null, reduction: Reduction = "mean") {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x1: Tensor, x2: Tensor, target: Tensor): Tensor {
@@ -2963,7 +3036,10 @@ export class CosineEmbeddingLoss {
 }
 
 export class HingeEmbeddingLoss {
-  constructor(readonly margin = 1.0, readonly reduction: Reduction = "mean") {
+  readonly reduction: Reduction;
+  constructor(readonly margin = 1.0, sizeAverage: boolean | null = null,
+              reduce: boolean | null = null, reduction: Reduction = "mean") {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
@@ -2978,7 +3054,11 @@ export class HingeEmbeddingLoss {
 }
 
 export class SoftMarginLoss {
-  constructor(readonly reduction: Reduction = "mean") {}
+  readonly reduction: Reduction;
+  constructor(sizeAverage: boolean | null = null, reduce: boolean | null = null,
+              reduction: Reduction = "mean") {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.softMarginLoss(target, this.reduction);
@@ -2992,10 +3072,14 @@ export class SoftMarginLoss {
 }
 
 export class TripletMarginLoss {
+  readonly reduction: Reduction;
   constructor(
     readonly margin = 1.0, readonly p = 2.0, readonly eps = 1e-6,
-    readonly swap = false, readonly reduction: Reduction = "mean",
-  ) {}
+    readonly swap = false, sizeAverage: boolean | null = null,
+    reduce: boolean | null = null, reduction: Reduction = "mean",
+  ) {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(anchor: Tensor, positive: Tensor, negative: Tensor): Tensor {
     return anchor.tripletMarginLoss(positive, negative, this.margin, this.p,
@@ -3045,10 +3129,15 @@ export class MultiLabelSoftMarginLoss {
    * `new MultiLabelSoftMarginLoss('sum')` set the reduction here and the class
    * weights in torch, and neither side raised.
    */
+  readonly reduction: Reduction;
   constructor(
     readonly weight?: Tensor,
-    readonly reduction: Reduction = "mean",
-  ) {}
+    sizeAverage: boolean | null = null,
+    reduce: boolean | null = null,
+    reduction: Reduction = "mean",
+  ) {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.multilabelSoftMarginLoss(target, this.weight, this.reduction);
@@ -3062,10 +3151,14 @@ export class MultiLabelSoftMarginLoss {
 }
 
 export class MultiMarginLoss {
+  readonly reduction: Reduction;
   constructor(
     readonly p = 1, readonly margin = 1.0, readonly weight: Tensor | null = null,
-    readonly reduction: Reduction = "mean",
-  ) {}
+    sizeAverage: boolean | null = null, reduce: boolean | null = null,
+    reduction: Reduction = "mean",
+  ) {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.multiMarginLoss(target, this.p, this.margin, this.weight,
@@ -3080,7 +3173,11 @@ export class MultiMarginLoss {
 }
 
 export class MultiLabelMarginLoss {
-  constructor(readonly reduction: Reduction = "mean") {}
+  readonly reduction: Reduction;
+  constructor(sizeAverage: boolean | null = null, reduce: boolean | null = null,
+              reduction: Reduction = "mean") {
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.multilabelMarginLoss(target, this.reduction);
@@ -4171,13 +4268,23 @@ export class MultiheadAttention extends Module {
  * touched side.
  */
 export class CrossEntropyLoss {
+  /**
+   * **`sizeAverage` and `reduce` are not adjacent here.** torch puts `ignoreIndex`
+   * between them, and a rule that inserts the pair side by side would be right about
+   * twelve of these classes and wrong about this one, `NLLLoss` and `PoissonNLLLoss`.
+   * The order comes from torch, one class at a time.
+   */
+  readonly reduction: Reduction;
   constructor(
     weight: Tensor | undefined = undefined,
+    sizeAverage: boolean | null = null,
     readonly ignoreIndex = -100,
-    readonly reduction: Reduction = "mean",
+    reduce: boolean | null = null,
+    reduction: Reduction = "mean",
     readonly labelSmoothing = 0.0,
   ) {
     refuseWeight("CrossEntropyLoss", "weight", weight);
+    this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(logits: Tensor, target: Tensor): Tensor {

@@ -4,7 +4,7 @@
  "korean": {
   "done": 685,
   "stale": 0,
-  "missing": 144
+  "missing": 146
  },
  "modules": [
   {
@@ -9814,7 +9814,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction)",
+       "signature": "constructor(sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -9847,7 +9847,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction)",
+       "signature": "constructor(sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -9874,18 +9874,18 @@
      "doc": "",
      "members": [
       {
-       "name": "reduction",
-       "signature": "readonly reduction: Reduction",
-       "doc": ""
-      },
-      {
        "name": "beta",
        "signature": "readonly beta: number",
        "doc": ""
       },
       {
+       "name": "reduction",
+       "signature": "readonly reduction: Reduction",
+       "doc": ""
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction, beta?: number)",
+       "signature": "constructor(sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, beta?: number)",
        "doc": ""
       },
       {
@@ -9906,6 +9906,14 @@
      ]
     },
     {
+     "kind": "function",
+     "name": "legacyReduction",
+     "signature": "export declare function legacyReduction<R extends string>(sizeAverage: boolean | null, reduce: boolean | null, reduction: R): R",
+     "doc": "torch's deprecated `sizeAverage`/`reduce`, folded into a `reduction`.\n\nThey were absent here, and absent is not neutral: every argument after them sat one\nor two seats early, so the same positional call meant different things on the two\nsides.\n\n    new nn.L1Loss(\"sum\")   borch.ts → reduction = \"sum\"\n                           the core → sizeAverage = \"sum\", which is truthy, so the\n                                      legacy path folds it to the *mean*\n\n**The pair beats `reduction` when either is given**, which is the opposite of what\na reader expects from a deprecated argument and is what torch does: `reduce=false`\ngives `none`, else `sizeAverage=false` gives `sum`, else `mean`, with `null`\nreading as `true` on both. Written the expected way round, a caller passing all\nthree gets an answer torch does not produce.\n\nThe message is torch's own wording so that a caller who hits it can search for the\nsame sentence in torch's issues.",
+     "members": [],
+     "torch": "legacy_reduction"
+    },
+    {
      "kind": "class",
      "name": "BCELoss",
      "signature": "export declare class BCELoss",
@@ -9918,7 +9926,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(weight?: Tensor, reduction?: Reduction)",
+       "signature": "constructor(weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -9951,7 +9959,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(weight?: Tensor, reduction?: Reduction, posWeight?: Tensor)",
+       "signature": "constructor(weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, posWeight?: Tensor)",
        "doc": ""
       },
       {
@@ -9990,7 +9998,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(weight?: Tensor | undefined, ignoreIndex?: number, reduction?: Reduction)",
+       "signature": "constructor(weight?: Tensor | undefined, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10055,19 +10063,19 @@
      "doc": "",
      "members": [
       {
-       "name": "reduction",
-       "signature": "readonly reduction: Reduction | \"batchmean\"",
-       "doc": ""
-      },
-      {
        "name": "logTarget",
        "signature": "readonly logTarget: boolean",
        "doc": "",
        "torch": "log_target"
       },
       {
+       "name": "reduction",
+       "signature": "readonly reduction: Reduction | \"batchmean\"",
+       "doc": ""
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction | \"batchmean\", logTarget?: boolean)",
+       "signature": "constructor(sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction | \"batchmean\", logTarget?: boolean)",
        "doc": ""
       },
       {
@@ -10116,7 +10124,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(logInput?: boolean, full?: boolean, eps?: number, reduction?: Reduction)",
+       "signature": "constructor(logInput?: boolean, full?: boolean, sizeAverage?: boolean | null, eps?: number, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10197,7 +10205,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(margin?: number, reduction?: Reduction)",
+       "signature": "constructor(margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10235,7 +10243,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(margin?: number, reduction?: Reduction)",
+       "signature": "constructor(margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10273,7 +10281,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(margin?: number, reduction?: Reduction)",
+       "signature": "constructor(margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10306,7 +10314,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction)",
+       "signature": "constructor(sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10359,7 +10367,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(margin?: number, p?: number, eps?: number, swap?: boolean, reduction?: Reduction)",
+       "signature": "constructor(margin?: number, p?: number, eps?: number, swap?: boolean, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10444,12 +10452,12 @@
       {
        "name": "reduction",
        "signature": "readonly reduction: Reduction",
-       "doc": ""
+       "doc": "**`weight` first, because that is torch's order.** This took `reduction`\nalone until the core grew a real signature, and then the two axes disagreed:\n`new MultiLabelSoftMarginLoss('sum')` set the reduction here and the class\nweights in torch, and neither side raised."
       },
       {
        "name": "constructor",
-       "signature": "constructor(weight?: Tensor | undefined, reduction?: Reduction)",
-       "doc": "**`weight` first, because that is torch's order.** This took `reduction`\nalone until the core grew a real signature, and then the two axes disagreed:\n`new MultiLabelSoftMarginLoss('sum')` set the reduction here and the class\nweights in torch, and neither side raised."
+       "signature": "constructor(weight?: Tensor | undefined, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
+       "doc": ""
       },
       {
        "name": "forward",
@@ -10496,7 +10504,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(p?: number, margin?: number, weight?: Tensor | null, reduction?: Reduction)",
+       "signature": "constructor(p?: number, margin?: number, weight?: Tensor | null, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10529,7 +10537,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction)",
+       "signature": "constructor(sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -11238,19 +11246,19 @@
        "torch": "ignore_index"
       },
       {
-       "name": "reduction",
-       "signature": "readonly reduction: Reduction",
-       "doc": ""
-      },
-      {
        "name": "labelSmoothing",
        "signature": "readonly labelSmoothing: number",
        "doc": "",
        "torch": "label_smoothing"
       },
       {
+       "name": "reduction",
+       "signature": "readonly reduction: Reduction",
+       "doc": "**`sizeAverage` and `reduce` are not adjacent here.** torch puts `ignoreIndex`\nbetween them, and a rule that inserts the pair side by side would be right about\ntwelve of these classes and wrong about this one, `NLLLoss` and `PoissonNLLLoss`.\nThe order comes from torch, one class at a time."
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(weight?: Tensor | undefined, ignoreIndex?: number, reduction?: Reduction, labelSmoothing?: number)",
+       "signature": "constructor(weight?: Tensor | undefined, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction, labelSmoothing?: number)",
        "doc": ""
       },
       {
@@ -11508,7 +11516,7 @@
      ]
     }
    ],
-   "count": 740,
+   "count": 741,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -16459,5 +16467,5 @@
    "count": 9
   }
  ],
- "total": 2169
+ "total": 2170
 }

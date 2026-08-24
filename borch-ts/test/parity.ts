@@ -692,18 +692,20 @@ export async function report(): Promise<Report> {
   const ly = () => Tensor.from([1, 0, -1, 0.5], [2, 2]);
   const label = () => Tensor.from([1, 0], [2], { dtype: "int64" as DType });
   const lossLayers: [string, (r: "none" | "sum") => Tensor][] = [
-    ["MSELoss", (r) => new nn.MSELoss(r).call(lx(), ly())],
-    ["L1Loss", (r) => new nn.L1Loss(r).call(lx(), ly())],
-    ["SmoothL1Loss", (r) => new nn.SmoothL1Loss(r).call(lx(), ly())],
-    // These three take torch's argument list now — `weight` first, and for the two
-    // that have it `ignoreIndex` before the reduction. Written positionally they
-    // would set a class weight to `"sum"`, which is why `tsc` names each one.
-    ["BCEWithLogitsLoss", (r) => new nn.BCEWithLogitsLoss(undefined, r).call(
+    ["MSELoss", (r) => new nn.MSELoss(null, null, r).call(lx(), ly())],
+    ["L1Loss", (r) => new nn.L1Loss(null, null, r).call(lx(), ly())],
+    ["SmoothL1Loss", (r) => new nn.SmoothL1Loss(null, null, r).call(lx(), ly())],
+    // These three take torch's argument list now — `weight` first, then the deprecated
+    // `sizeAverage`, and for the two that have it `ignoreIndex` *between* the pair.
+    // Written positionally they would set a class weight to `"sum"`, which is why
+    // `tsc` names each one.
+    ["BCEWithLogitsLoss", (r) => new nn.BCEWithLogitsLoss(undefined, null, null, r).call(
       lx(), Tensor.from([1, 0, 1, 0], [2, 2]))],
-    ["NLLLoss", (r) => new nn.NLLLoss(undefined, -100, r).call(
+    ["NLLLoss", (r) => new nn.NLLLoss(undefined, null, -100, null, r).call(
       Tensor.from([-1.6, -0.7, -0.5, -1.2], [2, 2]), label())],
     ["CrossEntropyLoss",
-      (r) => new nn.CrossEntropyLoss(undefined, -100, r).call(lx(), label())],
+      (r) => new nn.CrossEntropyLoss(undefined, null, -100, null, r).call(
+        lx(), label())],
   ];
   for (const [name, call] of lossLayers) {
     // `none` is before the fold, so it has many elements, and `sum` is a scalar. **The
@@ -749,13 +751,20 @@ export async function report(): Promise<Report> {
     `known ${absent.length}/${KNOWN_ABSENT.size}` +
     (surprise.length ? ` · **newly gone**: ${surprise.join(", ")}` : ""));
 
-  // **`SmoothL1Loss`'s first argument differs from the core's.** The core is
-  // `(beta, reduction)` and this is `(reduction, beta)`. torch itself takes both by
-  // keyword only, so this cannot be called parting from torch — but **the sisters have
-  // parted**, and somebody transcribing the same code catches on the first argument.
-  // Written here so it is not forgotten the next time this is tidied.
-  want("SmoothL1Loss takes reduction first",
-    new nn.SmoothL1Loss("none").call(lx(), ly()).size > 1);
+  // **This used to assert `SmoothL1Loss` takes the reduction first, and torch does
+  // not.** The note under it said the two sisters had parted while torch took both by
+  // keyword only — true of `beta` against `reduction`, and it stopped being the whole
+  // list the moment `sizeAverage` and `reduce` went in ahead of them on both sides.
+  // A check written to pin a difference between the two libraries kept passing after
+  // the difference was gone, because what it actually asserted was that the first seat
+  // is not `beta`.
+  //
+  // What torch takes is `(sizeAverage, reduce, reduction, beta)`, and the pair beats
+  // the reduction: `sizeAverage = false` gives a sum whatever the third seat says.
+  // Asserting the fold is asserting the order, since nothing else could produce it.
+  want("SmoothL1Loss takes torch's four in torch's order",
+    new nn.SmoothL1Loss(null, null, "none").call(lx(), ly()).size > 1
+    && new nn.SmoothL1Loss(false, null, "none").call(lx(), ly()).size === 1);
 
   // ── linalg: a namespace over methods that already carry the arithmetic ──
   //

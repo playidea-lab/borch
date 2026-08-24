@@ -6943,6 +6943,25 @@ def loss_cases(inp=None):
 
     cases.append((LOSS_PREFIX + "grad::cosine_embedding", cosine_grad))
 
+    # ── torch's deprecated pair, which is not ignored ──
+    #
+    # `size_average` and `reduce` are deprecated in torch and **they still beat
+    # `reduction`**, which is the opposite of what deprecation suggests and is the
+    # whole reason they are worth freezing. The last case is the one that reads
+    # wrongly at a glance: all three given, and the answer is the *mean*.
+    #
+    # The positional case is why the seats matter at all. `L1Loss("sum")` puts the
+    # string in `size_average`, which is truthy, so torch folds to the mean — the
+    # same call meant a sum here until the two seats went in.
+    for _name, _kw in (("가장자리::size_average=False", {"size_average": False}),
+                       ("가장자리::reduce=False", {"reduce": False}),
+                       ("가장자리::셋 다", {"size_average": True, "reduce": True,
+                                          "reduction": "sum"})):
+        cases.append((LOSS_PREFIX + _name,
+                      lambda L, k=_kw: L.nn.L1Loss(**k)(L.tensor(a), L.tensor(b))))
+    cases.append((LOSS_PREFIX + "가장자리::L1Loss('sum') 위치",
+                  lambda L: L.nn.L1Loss("sum")(L.tensor(a), L.tensor(b))))
+
     # ── the way it folds is part of the loss ──
     #
     # **The most-used losses were not taking `reduction`.** A `.mean()` was nailed into the body,
