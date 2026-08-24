@@ -8433,11 +8433,12 @@ def vision_cases(inp=None):
             return T.CenterCrop(size)(_as_tensor(L, T.ToTensor()(img_f)))
         return T.ToTensor()(T.CenterCrop(size)(img_f))
 
-    def crop(L, size, padding):
+    def crop(L, size, padding, padding_mode="constant"):
         # The size is set so that there is **only one** place to crop. That makes it deterministic
         # regardless of the draw.
         T = _vision(L)
-        out = T.RandomCrop(size, padding=padding)(_pil_position(L, img_u8))
+        out = T.RandomCrop(size, padding=padding, padding_mode=padding_mode)(
+            _pil_position(L, img_u8))
         return _as_tensor(L, out)
 
     cases = [
@@ -8454,6 +8455,17 @@ def vision_cases(inp=None):
         # Pad and then size it exactly and there is one place to crop — the padding itself is
         # what gets compared.
         (VISION_PREFIX + "Crop(패딩1)", lambda L: crop(L, (7, 6), 1)),
+        # **`padding_mode` had no case at all**, and until this commit borch.ts had no
+        # parameter for it either: `RandomCrop` there took `(size, padding, fill)` and
+        # padded with a constant whatever was asked. The three non-constant modes are the
+        # ones a reader would notice — an edge repeated, mirrored, or mirrored including
+        # the edge — and each is a different picture at the border.
+        #
+        # The same size as the case above, so there is still one place to crop and the
+        # draw stays out of it.
+        (VISION_PREFIX + "Crop(패딩1, edge)", lambda L: crop(L, (7, 6), 1, "edge")),
+        (VISION_PREFIX + "Crop(패딩1, reflect)", lambda L: crop(L, (7, 6), 1, "reflect")),
+        (VISION_PREFIX + "Crop(패딩1, symmetric)", lambda L: crop(L, (7, 6), 1, "symmetric")),
         # Resizing. **Both shrinking and enlarging are looked at** — antialiasing works only when
         # shrinking, so with enlarging cases alone that rule is never engaged.
         (VISION_PREFIX + "Resize(줄임·겹선형)", lambda L: resize(L, (4, 3), "bilinear")),

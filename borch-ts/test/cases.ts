@@ -1490,6 +1490,16 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     () => asTensor(new vision.RandomCrop([5, 4], 0).apply(u8()) as vision.Image));
   out.set("vision::Crop(패딩1)",
     () => asTensor(new vision.RandomCrop([7, 6], 1).apply(u8()) as vision.Image));
+  // The three non-constant padding modes, which this class could not take until its
+  // argument list was corrected — it had `(size, padding, fill)` and padded with a
+  // constant whatever was asked. Same size as above, so one place to crop and the draw
+  // stays out of it.
+  out.set("vision::Crop(패딩1, edge)",
+    () => asTensor(new vision.RandomCrop([7, 6], 1, false, 0, "edge").apply(u8()) as vision.Image));
+  out.set("vision::Crop(패딩1, reflect)",
+    () => asTensor(new vision.RandomCrop([7, 6], 1, false, 0, "reflect").apply(u8()) as vision.Image));
+  out.set("vision::Crop(패딩1, symmetric)",
+    () => asTensor(new vision.RandomCrop([7, 6], 1, false, 0, "symmetric").apply(u8()) as vision.Image));
 
   // Resizing. **Done on a float image** — with uint8, where `ToTensor` divides by 255
   // diverges from the Python version by ordering (that side takes a tensor and divides

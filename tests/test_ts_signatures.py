@@ -203,20 +203,28 @@ SHIFTED = {
     "optim.lr_scheduler": 0,
     "linalg": 0,
     "utils.data": 0,
-    # **`transforms` is 1, and it is the row this namespace was added for.**
-    # torchvision:  `RandomCrop(size, padding, pad_if_needed, fill, padding_mode)`
-    # borch.ts:     `RandomCrop(size, padding, fill)`
+    # **`transforms` was 1 and is 0**, and the row it was added for is worth keeping.
     #
-    # `fill` sits at position three where torch has `pad_if_needed`, so
+    #     torchvision  RandomCrop(size, padding, pad_if_needed, fill, padding_mode)
+    #     borch.ts     RandomCrop(size, padding, fill)
+    #
+    # `fill` sat at position three where torch has `pad_if_needed`, so
     # `new RandomCrop(32, 4, true)` — the line somebody transcribing torch writes —
-    # compiles, runs, and pads with `true` instead of padding when it is needed. The
-    # same shape as `std(correction)` above: a positional call that is accepted and
-    # means something else.
+    # compiled, ran, and padded with `true` instead of padding when it was needed. The
+    # Python side had already been corrected and its docstring named this exact pair;
+    # borch.ts was left behind because until the previous commit **nothing compared the
+    # two**. The golden could not see it either: it asks `RandomCrop((3,2), padding=4)`
+    # by keyword, so the third position was never occupied on either side.
     #
-    # Nothing was watching. `ts_axis.py` left `transforms` out because the golden's
-    # `vision::` cases hold it, and the golden asks `RandomCrop((3,2), padding=4)` by
-    # keyword, so the third position was never occupied on either side.
-    "transforms": 1,
+    # Fixed by taking torchvision's list whole. The padding was already one class over —
+    # `Pad` does all four modes and a per-side width — while `RandomCrop` used a private
+    # `padded()` that knew a constant fill and one symmetric width. That helper is gone.
+    #
+    # `padding_mode` now has cases on both sides, at a size with one place to crop so the
+    # draw stays out of it. `pad_if_needed` has none and cannot: padding a shortfall of
+    # two makes the picture four wider, which is torchvision's arithmetic, so the crop
+    # never lands in exactly one place and the draw would decide the answer.
+    "transforms": 0,
     "transforms.functional": 0,
 }
 
