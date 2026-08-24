@@ -311,7 +311,22 @@ UNALIGNED = {
     # they did not. **The instrument read a mismatch as a match**, which is the one
     # direction a checker must not fail in. Fixed, the two rows appeared as `renamed`
     # and borch.ts now spells it `_randomSamples`.
-    "nn": 20,
+    #
+    # **20 → 11, and four of the nine came out of here holding a defect.** Once the
+    # `bias` flag took torch's spelling, `GroupNorm` and the three `LazyBatchNorm`s
+    # stopped being unalignable and landed in `shifted` — torch puts `bias` *behind*
+    # `device` and `dtype` and makes it keyword-only, so no torch call reaches it by
+    # position, while here a fifth positional argument did. Both calls succeed and
+    # mean different things.
+    #
+    # They hold the two seats and refuse now, which is the trade the core made
+    # seventeen times for the same two names, and `tsc` named the two case bodies
+    # that had been passing the flag into what became `device`. **Clearing a vague
+    # classification showed a specific defect beneath it** — the third time today.
+    #
+    # **What refills this line:** a name on one side with no counterpart on the other
+    # at any position.
+    "nn": 11,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -678,7 +693,16 @@ SHORTER = {
     #
     # A number going *up* here is the work, not a regression. `unaligned` hides; this
     # bucket says exactly what is missing (`device`/`dtype`, mostly).
-    "nn": 35,
+    #
+    # **35 → 40.** Ten layers spelled torch's `bias` flag `useBias` or `hasBias`, and
+    # the comment beside them said the reason was not shadowing a `bias` field.
+    # **In TypeScript there is nothing to shadow** — `this.bias` is unambiguous, and
+    # renaming all thirty-one occurrences compiles unchanged. A reason that holds in
+    # another language is not a reason here.
+    #
+    # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
+    # is most of what these forty rows are short of.
+    "nn": 40,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too

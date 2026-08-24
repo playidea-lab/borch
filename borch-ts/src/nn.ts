@@ -714,7 +714,7 @@ export class ConvND extends Module {
     spatial: number,
     private readonly stride = 1,
     private readonly padding = 0,
-    useBias = true,
+    bias = true,
     private readonly dilation = 1,
     private readonly groups = 1,
     private readonly paddingMode: PadMode | "zeros" = "zeros",
@@ -733,7 +733,7 @@ export class ConvND extends Module {
     // a grouped convolution starts too small — torch divides here too.
     const bound = 1 / Math.sqrt(Math.max(1, fanIn(shape)));
     this.weight = uniform(shape, bound);
-    this.bias = useBias ? uniform([outChannels], bound) : null;
+    this.bias = bias ? uniform([outChannels], bound) : null;
     this.claim(this.weight);
     if (this.bias) this.claim(this.bias);
   }
@@ -1071,6 +1071,28 @@ export class PReLU extends Module {
 }
 
 /**
+ * torch's `device` and `dtype`, **held so that what comes after them lands right.**
+ *
+ * borch.ts runs on one device in one precision, so these two are nothing here — and
+ * leaving them out is free only while they are last. In `GroupNorm` and the three
+ * `LazyBatchNorm`s torch puts `bias` *behind* them, keyword-only, so a fifth
+ * positional argument reaches `device` in torch and reached `bias` here. That is a
+ * shift rather than a short tail: both calls succeed and mean different things.
+ *
+ * Refusing at torch's own position is the trade the core made seventeen times for
+ * the same two names. Where nothing follows them the seats stay out, and the row is
+ * `shorter`, which is safe.
+ */
+function refuseDeviceDtype(layer: string, device: unknown, dtype: unknown): void {
+  for (const [what, got] of [["device", device], ["dtype", dtype]] as const) {
+    if (got !== undefined && got !== null) {
+      throw new Error(
+        `${layer}(${what}=…) is not in the browser subset — one device, one precision.`);
+    }
+  }
+}
+
+/**
  * Normalises with the channels bundled into groups. **Used instead of
  * BatchNorm when the batch is small.**
  *
@@ -1099,11 +1121,14 @@ export class GroupNorm extends Module {
     numChannels: number,
     private readonly eps = 1e-5,
     affine = true,
-    useBias = true,
+    device?: null,
+    dtype?: null,
+    bias = true,
   ) {
     super();
+    refuseDeviceDtype("GroupNorm", device, dtype);
     this.weight = affine ? Tensor.owned([numChannels], 1) : null;
-    this.bias = affine && useBias ? Tensor.owned([numChannels], 0) : null;
+    this.bias = affine && bias ? Tensor.owned([numChannels], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
   }
 
@@ -1145,7 +1170,7 @@ export class InstanceNormND extends Module {
     _momentum = 0.1,
     affine = false,
     trackRunningStats = false,
-    useBias = true,
+    bias = true,
   ) {
     super();
     if (trackRunningStats) {
@@ -1159,7 +1184,7 @@ export class InstanceNormND extends Module {
         "InstanceNorm with trackRunningStats=true is not here yet.");
     }
     this.weight = affine ? Tensor.owned([numFeatures], 1) : null;
-    this.bias = affine && useBias ? Tensor.owned([numFeatures], 0) : null;
+    this.bias = affine && bias ? Tensor.owned([numFeatures], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
   }
 
@@ -1787,7 +1812,7 @@ export class LayerNorm extends Module {
 
   constructor(normalizedShape: number | readonly number[],
               private readonly eps = 1e-5,
-              elementwiseAffine = true, useBias = true) {
+              elementwiseAffine = true, bias = true) {
     super();
     const shape = typeof normalizedShape === "number"
       ? [normalizedShape] : [...normalizedShape];
@@ -1796,7 +1821,7 @@ export class LayerNorm extends Module {
     if (elementwiseAffine) {
       this.weight = Tensor.owned(shape, 1);
       this.claim(this.weight);
-      if (useBias) {
+      if (bias) {
         this.bias = Tensor.owned(shape, 0);
         this.claim(this.bias);
       }
@@ -1868,14 +1893,14 @@ export class RNNCellBase extends Module {
   readonly biasHh: Tensor | null;
 
   constructor(readonly inputSize: number, readonly hidden: number,
-              gates: number, readonly hasBias = true) {
+              gates: number, readonly bias = true) {
     super();
     const rows = hidden * gates;
     const bound = 1 / Math.sqrt(Math.max(1, hidden));
     this.weightIh = uniform([rows, inputSize], bound);
     this.weightHh = uniform([rows, hidden], bound);
-    this.biasIh = hasBias ? uniform([rows], bound) : null;
-    this.biasHh = hasBias ? uniform([rows], bound) : null;
+    this.biasIh = bias ? uniform([rows], bound) : null;
+    this.biasHh = bias ? uniform([rows], bound) : null;
     this.claim(this.weightIh, this.weightHh);
     if (this.biasIh && this.biasHh) this.claim(this.biasIh, this.biasHh);
   }
@@ -1909,9 +1934,9 @@ export class RNNCellBase extends Module {
 }
 
 export class RNNCell extends RNNCellBase {
-  constructor(inputSize: number, hidden: number, hasBias = true,
+  constructor(inputSize: number, hidden: number, bias = true,
               readonly nonlinearity: "tanh" | "relu" = "tanh") {
-    super(inputSize, hidden, 1, hasBias);
+    super(inputSize, hidden, 1, bias);
   }
 
   step(x: Tensor, hx: Tensor | null = null): Tensor {
@@ -1923,15 +1948,15 @@ export class RNNCell extends RNNCellBase {
 
   override describe(): string {
     let parts = `${this.inputSize}, ${this.hidden}`;
-    if (!this.hasBias) parts += ", bias=False";
+    if (!this.bias) parts += ", bias=False";
     if (this.nonlinearity !== "tanh") parts += `, nonlinearity=${this.nonlinearity}`;
     return `RNNCell(${parts})`;
   }
 }
 
 export class GRUCell extends RNNCellBase {
-  constructor(inputSize: number, hidden: number, hasBias = true) {
-    super(inputSize, hidden, 3, hasBias);
+  constructor(inputSize: number, hidden: number, bias = true) {
+    super(inputSize, hidden, 3, bias);
   }
 
   step(x: Tensor, hx: Tensor | null = null): Tensor {
@@ -1949,7 +1974,7 @@ export class GRUCell extends RNNCellBase {
 
   override describe(): string {
     return `GRUCell(${this.inputSize}, ${this.hidden}` +
-      `${this.hasBias ? "" : ", bias=False"})`;
+      `${this.bias ? "" : ", bias=False"})`;
   }
 }
 
@@ -1958,8 +1983,8 @@ export class GRUCell extends RNNCellBase {
  * loses the memory cell.
  */
 export class LSTMCell extends RNNCellBase {
-  constructor(inputSize: number, hidden: number, hasBias = true) {
-    super(inputSize, hidden, 4, hasBias);
+  constructor(inputSize: number, hidden: number, bias = true) {
+    super(inputSize, hidden, 4, bias);
   }
 
   step(x: Tensor, hx: readonly [Tensor, Tensor] | null = null):
@@ -1979,7 +2004,7 @@ export class LSTMCell extends RNNCellBase {
 
   override describe(): string {
     return `LSTMCell(${this.inputSize}, ${this.hidden}` +
-      `${this.hasBias ? "" : ", bias=False"})`;
+      `${this.bias ? "" : ", bias=False"})`;
   }
 }
 
@@ -2032,11 +2057,11 @@ export class Bilinear extends Module {
    * pointed at `nn` as well as at `optim`.
    */
   constructor(readonly in1Features: number, readonly in2Features: number,
-              readonly outFeatures: number, useBias = true) {
+              readonly outFeatures: number, bias = true) {
     super();
     const bound = 1 / Math.sqrt(Math.max(1, in1Features));
     this.weight = uniform([outFeatures, in1Features, in2Features], bound);
-    this.bias = useBias ? uniform([outFeatures], bound) : null;
+    this.bias = bias ? uniform([outFeatures], bound) : null;
     this.claim(...(this.bias ? [this.weight, this.bias] : [this.weight]));
   }
 
@@ -2498,10 +2523,10 @@ export class LazyConvTranspose3d extends LazyConvBase {
 class LazyNormBase extends LazyModule {
   constructor(kind: "batch" | "instance", spatial: number, eps = 1e-5,
               momentum = 0.1, affine = true, trackRunningStats = true,
-              useBias = true) {
+              bias = true) {
     super(`Lazy${kind === "batch" ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
       (c) => (kind === "batch"
-        ? new BatchNormND(c, eps, momentum, affine, trackRunningStats, useBias)
+        ? new BatchNormND(c, eps, momentum, affine, trackRunningStats, bias)
         : new InstanceNormND(c, eps)),
       channels);
   }
@@ -2509,20 +2534,26 @@ class LazyNormBase extends LazyModule {
 
 export class LazyBatchNorm1d extends LazyNormBase {
   constructor(eps?: number, momentum?: number, affine?: boolean,
-              trackRunningStats?: boolean, useBias?: boolean) {
-    super("batch", 1, eps, momentum, affine, trackRunningStats, useBias);
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyBatchNorm1d", device, dtype);
+    super("batch", 1, eps, momentum, affine, trackRunningStats, bias);
   }
 }
 export class LazyBatchNorm2d extends LazyNormBase {
   constructor(eps?: number, momentum?: number, affine?: boolean,
-              trackRunningStats?: boolean, useBias?: boolean) {
-    super("batch", 2, eps, momentum, affine, trackRunningStats, useBias);
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyBatchNorm2d", device, dtype);
+    super("batch", 2, eps, momentum, affine, trackRunningStats, bias);
   }
 }
 export class LazyBatchNorm3d extends LazyNormBase {
   constructor(eps?: number, momentum?: number, affine?: boolean,
-              trackRunningStats?: boolean, useBias?: boolean) {
-    super("batch", 3, eps, momentum, affine, trackRunningStats, useBias);
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyBatchNorm3d", device, dtype);
+    super("batch", 3, eps, momentum, affine, trackRunningStats, bias);
   }
 }
 export class LazyInstanceNorm1d extends LazyNormBase {
@@ -3834,14 +3865,14 @@ export class BatchNormND extends Module {
    */
   private trackedBase: Tensor | null = null;
 
-  /** See `GroupNorm` on `affine` and `useBias`. */
+  /** See `GroupNorm` on `affine` and `bias`. */
   constructor(
     readonly channels: number,
     private readonly eps = 1e-5,
     private readonly momentum = 0.1,
     affine = true,
     trackRunningStats = true,
-    useBias = true,
+    bias = true,
   ) {
     super();
     if (!trackRunningStats) {
@@ -3851,7 +3882,7 @@ export class BatchNormND extends Module {
         "BatchNorm with trackRunningStats=false is not here yet.");
     }
     this.weight = affine ? Tensor.owned([channels], 1) : null;
-    this.bias = affine && useBias ? Tensor.owned([channels], 0) : null;
+    this.bias = affine && bias ? Tensor.owned([channels], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
     this.runningMean = Tensor.owned([channels], 0);
     this.runningVar = Tensor.owned([channels], 1);

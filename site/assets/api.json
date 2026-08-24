@@ -7492,7 +7492,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernel: number, spatial: number, stride?: number, padding?: number, useBias?: boolean, dilation?: number, groups?: number, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(inChannels: number, outChannels: number, kernel: number, spatial: number, stride?: number, padding?: number, bias?: boolean, dilation?: number, groups?: number, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       },
       {
@@ -8002,7 +8002,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(numGroups: number, numChannels: number, eps?: number, affine?: boolean, useBias?: boolean)",
+       "signature": "constructor(numGroups: number, numChannels: number, eps?: number, affine?: boolean, device?: null, dtype?: null, bias?: boolean)",
        "doc": "**`affine` and `bias`, which this took neither of.** torch has both, and they\nare two different halves of the same idea: `affine=false` is the layer with no\nlearnable scale or shift at all, and `bias=false` keeps the scale and drops the\nshift. Without them the `stateDict` carried two keys torch's did not, so a\ncheckpoint written by a torch `GroupNorm(2, 4, affine=False)` could not be read\nhere in strict mode.\n\nThe signature axis had this counted across thirteen layers before anybody wrote\nit — the three `BatchNorm`s, the three `InstanceNorm`s, this, and the six lazy\nvariants. A counted absence is what makes the work happen."
       },
       {
@@ -8037,7 +8037,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(numFeatures: number, eps?: number, _momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
+       "signature": "constructor(numFeatures: number, eps?: number, _momentum?: number, affine?: boolean, trackRunningStats?: boolean, bias?: boolean)",
        "doc": "torch's list, in torch's seats. **`affine` defaults to false here and true\non `BatchNorm`** — that is torch, and flipping it swaps which layers carry\nparameters, so the `state_dict` keys part wholesale."
       },
       {
@@ -8643,7 +8643,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(normalizedShape: number | readonly number[], eps?: number, elementwiseAffine?: boolean, useBias?: boolean)",
+       "signature": "constructor(normalizedShape: number | readonly number[], eps?: number, elementwiseAffine?: boolean, bias?: boolean)",
        "doc": ""
       },
       {
@@ -8697,10 +8697,9 @@
        "doc": ""
       },
       {
-       "name": "hasBias",
-       "signature": "readonly hasBias: boolean",
-       "doc": "",
-       "torch": "has_bias"
+       "name": "bias",
+       "signature": "readonly bias: boolean",
+       "doc": ""
       },
       {
        "name": "weightIh",
@@ -8728,7 +8727,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, gates: number, hasBias?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, gates: number, bias?: boolean)",
        "doc": ""
       },
       {
@@ -8775,7 +8774,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, hasBias?: boolean, nonlinearity?: \"tanh\" | \"relu\")",
+       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean, nonlinearity?: \"tanh\" | \"relu\")",
        "doc": ""
       },
       {
@@ -8803,7 +8802,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, hasBias?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean)",
        "doc": ""
       },
       {
@@ -8831,7 +8830,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, hasBias?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean)",
        "doc": ""
       },
       {
@@ -8980,7 +8979,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(in1Features: number, in2Features: number, outFeatures: number, useBias?: boolean)",
+       "signature": "constructor(in1Features: number, in2Features: number, outFeatures: number, bias?: boolean)",
        "doc": "**`bias` was accepted by the binding and had nowhere to go.** This constructor\ntook three numbers and always built a bias, so `Bilinear(a, b, c, bias=False)`\ngot one anyway — no error, a parameter the caller asked not to have, and a\ngradient flowing into it every step. Found by the argument check once it was\npointed at `nn` as well as at `optim`."
       },
       {
@@ -9583,7 +9582,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
+       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, device?: null, dtype?: null, bias?: boolean)",
        "doc": ""
       }
      ]
@@ -9596,7 +9595,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
+       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, device?: null, dtype?: null, bias?: boolean)",
        "doc": ""
       }
      ]
@@ -9609,7 +9608,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
+       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, device?: null, dtype?: null, bias?: boolean)",
        "doc": ""
       }
      ]
@@ -10993,8 +10992,8 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(channels: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
-       "doc": "See `GroupNorm` on `affine` and `useBias`."
+       "signature": "constructor(channels: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, bias?: boolean)",
+       "doc": "See `GroupNorm` on `affine` and `bias`."
       },
       {
        "name": "ownParameters",

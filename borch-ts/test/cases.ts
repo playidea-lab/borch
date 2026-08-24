@@ -3730,15 +3730,20 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
   // The parameter names are asked as well as the values, because that is the half a
   // value case cannot see: the arithmetic is right either way, and what goes wrong
   // is a `stateDict` carrying a key torch's does not.
-  for (const [flag, affine, useBias] of
+  // **`null, null` is torch's `device` and `dtype`, not padding.** `GroupNorm` puts
+  // `bias` behind them — keyword-only over there, so no torch call reaches it by
+  // position — and these lines used to pass the flag straight into what is now the
+  // `device` seat. `tsc` named both the moment the seats went in.
+  for (const [flag, affine, bias] of
     [["affine=False", false, true], ["bias=False", true, false]] as const) {
     out.set(`norm::nn.GroupNorm(${flag})`,
-      () => new nn.GroupNorm(3, 3, 1e-5, affine, useBias).call(inp.get("img")));
+      () => new nn.GroupNorm(3, 3, 1e-5, affine, null, null, bias)
+        .call(inp.get("img")));
     out.set(`norm::nn.GroupNorm(${flag})/파라미터 이름`,
-      () => Object.keys(new nn.GroupNorm(3, 3, 1e-5, affine, useBias)
+      () => Object.keys(new nn.GroupNorm(3, 3, 1e-5, affine, null, null, bias)
         .namedParameters()).join(" "));
     out.set(`norm::nn.BatchNorm2d(${flag})/파라미터 이름`,
-      () => Object.keys(new nn.BatchNormND(3, 1e-5, 0.1, affine, true, useBias)
+      () => Object.keys(new nn.BatchNormND(3, 1e-5, 0.1, affine, true, bias)
         .namedParameters()).join(" "));
   }
 
