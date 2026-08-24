@@ -67,6 +67,24 @@ PAGES = [
     "/site/ko/tutorials/09-autoencoder.html",
     "/site/tutorials/10-least-squares.html",
     "/site/ko/tutorials/10-least-squares.html",
+    "/site/learn/01-tensors.html",
+    "/site/ko/learn/01-tensors.html",
+    "/site/learn/02-autograd.html",
+    "/site/ko/learn/02-autograd.html",
+    "/site/learn/03-modules.html",
+    "/site/ko/learn/03-modules.html",
+    "/site/learn/04-training.html",
+    "/site/ko/learn/04-training.html",
+    "/site/learn/05-cnn.html",
+    "/site/ko/learn/05-cnn.html",
+    "/site/learn/07-data.html",
+    "/site/ko/learn/07-data.html",
+    "/site/tutorials/02-from-scratch.html",
+    "/site/ko/tutorials/02-from-scratch.html",
+    "/site/tutorials/06-char-rnn.html",
+    "/site/ko/tutorials/06-char-rnn.html",
+    "/site/python.html",
+    "/site/ko/python.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page
@@ -178,12 +196,22 @@ def say_coverage():
 # this check measures (does a renamed name blow up). That page's `load` is the same single
 # line, and the four above watch it.
 
-# **What tutorials 7 to 10 cost.** They need no dataset and every block is small, yet a
-# software adapter still spends about a minute and a half on each page — measured, the
-# eight of them in roughly thirteen minutes, against seconds apiece on a real GPU. They
-# are pressed rather than declined because that price is paid by a person who typed the
-# command, not by a push. Tutorial 9 (the autoencoder, 600 convolution steps) is the slow
-# one of the four, and it is the first to move to `DECLINED` if this run stops being run.
+# **What the list costs.** It went from twelve pages to thirty-eight, which is every page
+# on the site that carries a JS block bar the four above. Measured headed on a real
+# adapter, twenty of them took about four minutes; a software adapter is roughly a minute
+# and a half per page, so the whole list is eight minutes against fifty. The price is paid
+# by a person who typed the command rather than by a push, which is the trade that makes
+# the long list affordable.
+#
+# **The twenty that were added had never been pressed once**, and pressing them was worth
+# it for what it settled rather than for what it found: eighteen came back green, and the
+# two that did not were this file's own word net firing on a page that works — the two
+# `08-debugging` pages, which `WORD_NET_EXEMPT` above now waives rather than declines.
+# The rename that broke `10-vit` had touched exactly one page, which nobody could say
+# before, because two thirds of the site was outside the run.
+#
+# Tutorial 9 (the autoencoder, 600 convolution steps) is the slowest single page, and the
+# first that should move to `DECLINED` if this run ever stops being run.
 
 # **Structure first.** The page catches an exception and writes it to the screen
 # (`runnable.js`'s `write(describeError(err), "err")`), so a line that threw arrives
