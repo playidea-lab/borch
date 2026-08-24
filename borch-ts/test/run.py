@@ -733,17 +733,18 @@ def main(argv):
         print(f"it could not run: {report['error']}", file=sys.stderr)
         return 1
 
-    # **Say which device it ran on, first.** The device does not change the values, but
-    # left unsaid, whoever measures performance mistakes a headless software adapter for a
-    # real GPU — which is what happened in this repository.
+    # **Say which device it ran on, and say it beside the score.** It used to be printed
+    # here, nineteen lines above `passed N / failed M`, with the failing cases in between
+    # — and a whole session of runs went by on `google / swiftshader` with nobody
+    # reading it, because whoever wants the number tails the last three lines.
+    #
+    # The same repair was made one file over for the *library* name, and its note says
+    # why in a sentence that fits this exactly: **the name goes on the line that carries
+    # the number, not in the header, because the header is not where somebody looking
+    # for a score reads.** The adapter was in the identical position and was not moved,
+    # because that fix was about `lib` rather than about the line a person reads. **A fix
+    # aimed at one symptom leaves the same class one variable over.**
     adapter = report.get("adapter", "(unknown)")
-    print(f"adapter: {adapter}")
-    # **It does not block here.** The golden asks about values and the device does not
-    # change them, so passing on a CPU is a real pass. It is written down because what that
-    # pass proves is narrower — 845/845 really did come back from a Linux GPU server and
-    # was nearly read as "confirmed on another vendor" when the adapter was
-    # `google / swiftshader`.
-    warn_if_software(adapter, "the values")
     gap = report["total"] - report["registered"]
     print(f"{report['registered']} of the golden's {report['total']} are written in TS "
           f"— {gap} have not been asked yet.")
@@ -756,7 +757,12 @@ def main(argv):
         print(f"  ? the name is not in the golden: {name}")
     for f in report["failed"]:
         print(f"  ✘ {f['name']} — {f['why']}")
-    print(f"passed {report['passed']} / failed {len(report['failed'])}")
+    print(f"passed {report['passed']} / failed {len(report['failed'])}  [{adapter}]")
+    # **It does not block.** The golden asks about values and the device does not change
+    # them, so a pass on a CPU is a real pass — refusing to run at all on the one machine
+    # there is trades a real check for no check. What must not stand is the word `passed`
+    # with nothing beside it, and now it cannot.
+    warn_if_software(adapter, "the values")
 
     # **What was never asked is a failure too** — where no reason is written down or the
     # numbers do not reconcile. One line of count cannot show the golden growing while the

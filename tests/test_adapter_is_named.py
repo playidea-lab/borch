@@ -119,3 +119,37 @@ def test_the_note_is_actually_on_the_line_that_carries_the_score():
         + "\n  ".join(score) + "\n\n"
         "  Moving it to its own print passes every other assertion in this file and\n"
         "  undoes the only thing they were written for.")
+
+
+# ── the same repair, one runner over ────────────────────────────────────────
+#
+# **This file was written about `tests/browser/run.py` and the defect lives in two
+# runners.** `borch-ts/test/run.py` had the adapter nineteen lines above its score,
+# with the failing cases in between — the identical arrangement, found only because a
+# second session went looking after reading about the first.
+#
+# That is the shape the commit above names: *a fix aimed at one symptom leaves the
+# same class one variable over.* A check aimed at one runner does the same, so this
+# one is aimed at the position rather than at the file.
+
+TS_RUNNER = ROOT / "borch-ts" / "test" / "run.py"
+
+
+@pytest.mark.skipif(not TS_RUNNER.exists(), reason="no borch-ts/test/run.py")
+def test_the_ts_runner_names_the_adapter_beside_its_score():
+    """borch.ts's runner prints `passed N / failed M`. The adapter belongs on it.
+
+    **It is asked by reading the source rather than by calling a function**, because
+    this runner has no `_adapter_note` to call — it interpolates the adapter directly.
+    Asking for a particular helper would be asking about how, and what has to be true
+    is where.
+    """
+    src = TS_RUNNER.read_text(encoding="utf-8")
+    score = [ln for ln in src.splitlines()
+             if "print(" in ln and "passed " in ln and "failed" in ln]
+    assert score, "the line printing the score was not found — this check is blind"
+    assert any("adapter" in ln for ln in score), (
+        "the adapter is not on borch.ts's score line:\n  " + "\n  ".join(score) + "\n\n"
+        "  Printing it earlier passes nothing here on purpose: whoever wants the count\n"
+        "  reads the last lines, and a whole session of runs went by on\n"
+        "  `google / swiftshader` with the warning on screen every time.")
