@@ -363,6 +363,15 @@ RENAMES = {
     "in_channels": "inC",        # convolution, beside `outC`
     "out_channels": "outC",
     "hidden_size": "hidden",     # the recurrent layers
+    # **The core cannot spell this one.** torch's `uniform_` and `random_` take a
+    # parameter literally named `from`, which is a Python keyword, so the core writes
+    # `from_` and no other spelling is available to it. borch.ts writes `from`, which
+    # is torch's own — measured: `x.uniform_(from=0., to=1.)` is accepted and
+    # `from_=` is a `TypeError`.
+    #
+    # It is here rather than fixed because there is nothing to fix: the two rows were
+    # a fact about Python's grammar being read as a divergence between two libraries.
+    "from_": "from",             # `uniform_` and `random_`
 }
 
 

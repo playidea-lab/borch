@@ -242,7 +242,16 @@ UNALIGNED = {
     # **first** seat is the one that costs most: every keyword call written against
     # torch misses it, and the row reads as a spelling while behaving as an absence.
     # 5 → 4. `isclose` left for `shorter`; see the note there.
-    "Tensor": 4,
+    # **4 → 2, and neither of the two that left was a divergence.** `random_` and
+    # `uniform_` take a parameter torch spells `from` — measured: `x.uniform_(from=0.,
+    # to=1.)` is accepted and `from_=` is a `TypeError`. The core writes `from_`
+    # because `from` is a Python keyword and no other spelling is open to it, and
+    # borch.ts writes torch's. **A fact about Python's grammar was being counted as
+    # two libraries disagreeing**, so it is an attested fold in `RENAMES` rather than
+    # a change to either side.
+    #
+    # The two left are `stft` and `istft`, which really do stop at `nFft`.
+    "Tensor": 2,
     # `SmoothL1Loss` left this table when a peer fixed it: the core took
     # `(beta, reduction)` and borch.ts `(reduction, beta)`. **borch.ts was right** —
     # torch's live arguments are `(reduction, beta)`, with the deprecated
@@ -326,7 +335,17 @@ UNALIGNED = {
     #
     # **What refills this line:** a name on one side with no counterpart on the other
     # at any position.
-    "nn": 11,
+    #
+    # **11 → 10, and the one that left was another shift in hiding.** `RNNCellBase`
+    # took `(inputSize, hidden, gates, bias)` where torch takes `(input_size,
+    # hidden_size, bias, num_chunks)`, so `new RNNCellBase(4, 8, false)` set the gate
+    # count to `false` here and the bias flag in torch — both build a layer and only
+    # the shapes differ. Calling the third parameter `gates` is what kept the lists
+    # from lining up at all, so the row said nothing; renaming it to `numChunks` made
+    # the order visible and the order was the defect. **Twice now a rename has been
+    # the thing that exposed a shift**, which is the argument for doing the cheap
+    # renames rather than leaving them as cosmetic.
+    "nn": 10,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -345,7 +364,9 @@ UNALIGNED = {
     # tail of a fix rather than a new gap: `nn.Embedding` and `F.embedding` were two
     # neighbours disagreeing about the same five arguments, and closing that on the
     # core side opens this until borch.ts follows.
-    "nn.functional": 2,
+    # 2 → 1. `F.embedding`'s first parameter was `idx`; torch says `input`, and with
+    # the name matching the row is a prefix of torch's seven rather than unalignable.
+    "nn.functional": 1,
     # 7 → 1 → 7. It went down when `maximize` landed on both sides at the same
     # length, and back up when the core took torch's **whole** optimizer surface —
     # `amsgrad`, `centered`, `momentum`, `decoupled_weight_decay` and the four
@@ -603,7 +624,10 @@ SHORTER = {
     # the two axes disagree about which side is odd** — against torch's prose the core
     # reads long, against borch.ts it reads right and borch.ts short. Only a call
     # settles it, and the call says torch takes it.
-    "Tensor": 18,
+    #
+    # 18 → 20. `random_` and `uniform_` arrived from `unaligned` once `from_` was
+    # folded onto torch's `from`; what they are short of is `generator`.
+    "Tensor": 20,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and
@@ -702,8 +726,13 @@ SHORTER = {
     #
     # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
     # is most of what these forty rows are short of.
-    "nn": 40,
-    "nn.functional": 0,
+    #
+    # 40 → 41. `RNNCellBase` arrived from `unaligned` — see the note there.
+    "nn": 41,
+    # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
+    # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
+    # next door does have.
+    "nn.functional": 1,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
     # many raises there, where the same gap in `shifted` would have meant a value

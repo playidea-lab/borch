@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 146
+  "missing": 147
  },
  "modules": [
   {
@@ -8727,8 +8727,8 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, gates: number, bias?: boolean)",
-       "doc": ""
+       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean, numChunks?: number)",
+       "doc": "**`bias` sits third, as it does in torch, and `numChunks` behind it.** The two\nwere the other way round — `(inputSize, hidden, gates, bias)` — so a positional\n`new RNNCellBase(4, 8, false)` set the *gate count* to `false` here and the bias\nflag in torch. Both build a layer; only the shapes differ.\n\nIt was invisible while the third parameter was called `gates`: the lists could\nnot be lined up at all, so the row sat in the axis's `unaligned` bucket, which\nreports nothing beneath it. Renaming it to torch's `numChunks` is what made the\norder visible, and the order is the part that mattered."
       },
       {
        "name": "ownParameters",
@@ -10928,7 +10928,7 @@
     {
      "kind": "function",
      "name": "embedding",
-     "signature": "export declare function embedding(idx: Tensor, weight: Tensor): Tensor",
+     "signature": "export declare function embedding(input: Tensor, weight: Tensor): Tensor",
      "doc": "Selects rows from a table by index. Where `F.embedding(indices, table)`\ngoes.\n\n**It is the definition itself** — the same thing `indexSelect` does, and\nthat side already knows the gradient. An index appearing several times\naccumulates into that row several times. This is **naming something that\nexists**, not imitating something that does not, so there is no place for\nthe values to diverge.\n\nAnd yet this name was missing for a long time. The binding held the same\nthree lines in Python and the golden cases went through that side, so it\nwas a name absent only for those writing TypeScript — the place\n`tests/test_binding_fills_in.py` points at.\n\n**There is no `nn.Embedding` layer yet.** None of the three has it and\nthe golden cases do not ask. It would be a place that wraps this function\nand holds the weights rather than a new computation, so writing down that\nit is absent is better than putting the name there alone.",
      "members": [],
      "doc_ko": "표에서 번호대로 행을 고른다. `F.embedding(번호, 표)` 자리다.\n\n**정의 그대로다** — `indexSelect` 가 하는 일과 같고 기울기도 그쪽이 이미 안다.\n같은 번호가 여러 번 나오면 그 행으로 여러 번 더해진다. 없는 것을 흉내 내는 것이\n아니라 **있는 것에 이름을 붙이는 것**이므로 값이 갈릴 자리가 없다.\n\n그런데도 이 이름이 오래 없었다. 결속이 같은 세 줄을 파이썬에 갖고 있었고 골든이\n그쪽을 지나서, TypeScript 로 쓰는 쪽에만 없는 이름이었다 —\n`tests/test_binding_fills_in.py` 가 가리킨 자리다.\n\n**`nn.Embedding` 층은 아직 없다.** 셋 어디에도 없고 골든도 안 묻는다. 그것은 이\n함수를 감싸고 가중치를 들고 있는 자리이지 새 계산이 아니므로, 여기 없다는 것을\n적어 두는 편이 이름만 놓는 것보다 낫다."

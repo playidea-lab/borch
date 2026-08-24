@@ -1892,10 +1892,21 @@ export class RNNCellBase extends Module {
   readonly biasIh: Tensor | null;
   readonly biasHh: Tensor | null;
 
+  /**
+   * **`bias` sits third, as it does in torch, and `numChunks` behind it.** The two
+   * were the other way round — `(inputSize, hidden, gates, bias)` — so a positional
+   * `new RNNCellBase(4, 8, false)` set the *gate count* to `false` here and the bias
+   * flag in torch. Both build a layer; only the shapes differ.
+   *
+   * It was invisible while the third parameter was called `gates`: the lists could
+   * not be lined up at all, so the row sat in the axis's `unaligned` bucket, which
+   * reports nothing beneath it. Renaming it to torch's `numChunks` is what made the
+   * order visible, and the order is the part that mattered.
+   */
   constructor(readonly inputSize: number, readonly hidden: number,
-              gates: number, readonly bias = true) {
+              readonly bias = true, numChunks = 1) {
     super();
-    const rows = hidden * gates;
+    const rows = hidden * numChunks;
     const bound = 1 / Math.sqrt(Math.max(1, hidden));
     this.weightIh = uniform([rows, inputSize], bound);
     this.weightHh = uniform([rows, hidden], bound);
@@ -1936,7 +1947,7 @@ export class RNNCellBase extends Module {
 export class RNNCell extends RNNCellBase {
   constructor(inputSize: number, hidden: number, bias = true,
               readonly nonlinearity: "tanh" | "relu" = "tanh") {
-    super(inputSize, hidden, 1, bias);
+    super(inputSize, hidden, bias, 1);
   }
 
   step(x: Tensor, hx: Tensor | null = null): Tensor {
@@ -1956,7 +1967,7 @@ export class RNNCell extends RNNCellBase {
 
 export class GRUCell extends RNNCellBase {
   constructor(inputSize: number, hidden: number, bias = true) {
-    super(inputSize, hidden, 3, bias);
+    super(inputSize, hidden, bias, 3);
   }
 
   step(x: Tensor, hx: Tensor | null = null): Tensor {
@@ -1984,7 +1995,7 @@ export class GRUCell extends RNNCellBase {
  */
 export class LSTMCell extends RNNCellBase {
   constructor(inputSize: number, hidden: number, bias = true) {
-    super(inputSize, hidden, 4, bias);
+    super(inputSize, hidden, bias, 4);
   }
 
   step(x: Tensor, hx: readonly [Tensor, Tensor] | null = null):
@@ -3624,10 +3635,10 @@ export function batchNorm(
  * and holds the weights rather than a new computation, so writing down that
  * it is absent is better than putting the name there alone.
  */
-export function embedding(idx: Tensor, weight: Tensor): Tensor {
+export function embedding(input: Tensor, weight: Tensor): Tensor {
   const dim = weight.shape[1] ?? 1;
-  const picked = weight.indexSelect(0, idx.reshape([idx.size]));
-  return picked.reshape([...idx.shape, dim]);
+  const picked = weight.indexSelect(0, input.reshape([input.size]));
+  return picked.reshape([...input.shape, dim]);
 }
 
 /**
