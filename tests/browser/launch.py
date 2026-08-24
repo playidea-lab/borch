@@ -199,6 +199,34 @@ def _headed(asked):
     the display* — and then one `ps` sorted by CPU named the process and the duration.
     **The cheapest question was asked last.**
 
+    ## And the display was not the wall either
+
+    All of the above shares one assumption: that a working screen is what is missing. It
+    is not. Late in the same session, headless Chrome — which needs no display at all —
+    **stopped starting on that machine too.** `--headless=new --dump-dom about:blank`, a
+    one-second job, produced zero bytes in forty-seven seconds, spawned no child
+    processes (no zygote, no GPU process), and ignored `SIGTERM`. No process sat in `D`
+    state, so it was not stuck inside the driver; it was waiting on something, very
+    early. Two sessions hit it independently, through Playwright and through the binary
+    directly.
+
+    **The same invocation returned `google / swiftshader` in under a second that
+    morning.** So this is not a property of the machine that was always there and finally
+    got noticed — the machine degraded over the twelve-day `Xorg` crash-loop, during the
+    hours it was being measured.
+
+    That retires the plan this section was building toward. `Xvfb` would supply a screen,
+    and a screen is not what is missing; nothing installable fixes a browser that cannot
+    reach its own first child process. What that machine needs is physical: one of its
+    two cards reads `rev ff` on the PCI bus — every configuration read returning `0xff`,
+    the signature of a device that has fallen off — and that does not come back from a
+    reboot.
+
+    **Kept here rather than dropped**, because "we could not measure NVIDIA" and "we
+    could not measure NVIDIA *because the only machine available was failing*" are
+    different sentences, and the second one is the one that stops somebody spending
+    another day on it.
+
     So `headed=True` still means yes, and `False` now means *no preference*. Saying no
     takes `--headless` or `BORCH_HEADLESS=1`, and it is worth having: a machine with no
     display cannot open a window, and there the choice is a real one rather than a
