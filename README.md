@@ -1240,6 +1240,25 @@ convolutions) — asking about something that is not there is a wrong answer rat
 than a check. Real torch cannot be put into a browser, so the expected values are
 pinned natively and carried in.
 
+**On which adapter, because that is half of what a browser run proves.** WGSL goes
+through a different compiler per vendor, so a pass says *these values are right* and
+*this vendor produces them* — two claims, and the second one names a machine. The
+runners print the adapter on the line that carries the score:
+
+```
+borch_webgpu: agreeing 3433/3433  [borch.ts — apple / metal-3]
+passed 2901 / failed 0            [apple / metal-3]
+```
+
+A window is what you get by default. Headless quietly hands back Chrome's software
+rasteriser, and for two days every browser golden here ran on it — the same 3433
+cases, passing, proving the values and nothing about the GPU. `--headless` still
+exists and now has to be asked for; when it is used the score line says
+`[google / swiftshader]` and adds that the GPU path is unproved.
+
+NVIDIA has not been measured since these kernels were written. Metal passing is one
+vendor, not two.
+
 ```bash
 uv run --with numpy --with torch python tests/golden.py dump   # stage 1: pin them
 uv run --with numpy python tests/golden.py check               # stage 2: compare

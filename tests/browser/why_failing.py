@@ -60,6 +60,10 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--lib", default="borch_webgpu")
     ap.add_argument("--headed", action="store_true")
+    # The other runners read `--headless` straight out of `sys.argv` in
+    # `launch._headed`; argparse would refuse it here before that ever runs.
+    ap.add_argument("--headless", action="store_true",
+                    help="no window, and therefore a software adapter")
     ap.add_argument("--samples", type=int, default=0,
                     help="how many example lines to show per reason")
     args = ap.parse_args(argv)

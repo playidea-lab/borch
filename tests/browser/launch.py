@@ -16,6 +16,16 @@ Chrome installed. Using what is there beats downloading one more browser, and ab
 it in front of the command is enough. That headless does not work is this repository's
 repeated lesson (a software rasteriser comes out quietly, without exception), and it is why
 the runners print the adapter first.
+
+**And that lesson was written here while the default did the opposite.** Headless was the
+default for every runner, so the paragraph above described the trap and the code set it.
+Measured on one machine, the same 3433 binding cases:
+
+    headless    [borch.ts — google / swiftshader]    3433/3433
+    --headed    [borch.ts — apple / metal-3]         3433/3433
+
+Nothing was missing from the machine. The window is the default now — see `_headed` — and
+`--headless` is how a CPU run is asked for on purpose.
 """
 
 import os
@@ -106,11 +116,59 @@ def browser(playwright, headed=False, flags=FLAGS):
         got.close()
 
 
+def _headed(asked):
+    """**A real adapter is the default now, and the caller cannot fall back by accident.**
+
+    This used to be `headless=not headed` with `headed=False` as the default, and the
+    docstring said what that cost in one line: *without `headed` a software adapter
+    comes out.* True the whole time, and it was written where the browser is opened
+    rather than where the result is read.
+
+    What it cost: **every browser golden run in two days, across three
+    implementations and two sessions, came off SwiftShader.** Twenty-odd runs,
+    including newly written WGSL kernels whose whole risk is integer division and
+    boundary handling — the two things vendor compilers part on. The warning printed
+    every time, at the top, and the number is at the bottom.
+
+    Flipping the default alone would not have done it. All fifteen runners spell it
+    `headed="--headed" in argv`, which passes **False explicitly** when the flag is
+    absent, so a new default would have been overridden fifteen times. The decision
+    has to be made here, at the one door — which is what this module is for; it exists
+    because five runners were each launching with different arguments.
+
+    So `headed=True` still means yes, and `False` now means *no preference*. Saying no
+    takes `--headless` or `BORCH_HEADLESS=1`, and it is worth having: a machine with no
+    display cannot open a window, and there the choice is a real one rather than a
+    silent downgrade.
+    """
+    if asked:
+        return True
+    if os.environ.get("BORCH_HEADLESS"):
+        return False
+    return "--headless" not in sys.argv
+
+
 def _open(playwright, headed=False, flags=FLAGS):
-    """Without `headed` a software adapter comes out — the caller has to print the adapter."""
+    """Opens headed unless told otherwise — see `_headed`."""
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
-    return playwright.chromium.launch(
-        headless=not headed,
-        channel=channel,
-        args=list(flags),
-    )
+    want = _headed(headed)
+    try:
+        return playwright.chromium.launch(
+            headless=not want,
+            channel=channel,
+            args=list(flags),
+        )
+    except Exception as exc:                                    # noqa: BLE001
+        if not want:
+            raise
+        # **Failing loudly here is the point.** A machine with no display cannot open
+        # a window, and the old behaviour was to quietly hand back a CPU rasteriser
+        # and let the run report a pass. Saying which flag turns that back on is not
+        # the same as turning it on.
+        raise RuntimeError(
+            f"could not open a browser window ({type(exc).__name__}: {exc}).\n"
+            "  A window is now the default, because headless quietly gives a software\n"
+            "  adapter and the golden then proves the values and not the GPU path.\n"
+            "  On a machine with a display, give `DISPLAY=:1` (Linux) or run locally.\n"
+            "  To measure on the CPU on purpose, say so: `--headless`, or "
+            "`BORCH_HEADLESS=1`.") from exc

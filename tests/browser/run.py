@@ -159,8 +159,17 @@ def main():
                     help="the library to compare. **No default** — see the module "
                          "docstring: the old one measured the layer that is always "
                          "green, under a name that read as the binding")
+    # **A window is the default now**, so this flag is kept only because fifteen
+    # runners and a dozen documents spell it. See `launch._headed`.
     ap.add_argument("--headed", action="store_true",
-                    help="opens a window. **WebGPU does not come up headless** (measured — it falls back to WebGL)")
+                    help="opens a window — now the default, kept because it is written everywhere")
+    # **The door needs an escape or it is not a door.** Making a window the default
+    # without this left no way to say *measure on the CPU on purpose*, and the first
+    # run of it stopped with `unrecognized arguments: --headless` — argparse refusing
+    # the one flag the new failure message tells the reader to use.
+    ap.add_argument("--headless", action="store_true",
+                    help="no window, and therefore a software adapter: the values are proved "
+                         "and the GPU path is not")
     ap.add_argument("--probe", help="Python to run inside the browser after the comparison. For debugging")
     ap.add_argument("--bench", action="store_true",
                     help="measures a real training step with ResNet-18 (tests/browser/bench.py)")
