@@ -110,6 +110,49 @@ def run(lib, headed, probe=None):
     return result, probed
 
 
+# Adapter names that mean **the GPU was never reached.** SwiftShader is Chrome's
+# software rasteriser and llvmpipe is Mesa's; both answer WebGPU calls correctly and
+# neither proves a shader compiled anywhere real.
+_SOFTWARE = ("swiftshader", "llvmpipe", "lavapipe", "software")
+
+
+def _adapter_note(result):
+    """What ran the shaders, **on the line that carries the score.**
+
+    `runner.html` has read the adapter into `GOLDEN_RESULT.backend` all along and this
+    file never printed it. So every binding run in this repository has reported a
+    number with no word about what produced it, and today both sessions holding this
+    codebase found out — from the *other* runner's output — that every browser golden
+    they had run was on SwiftShader.
+
+    **The comment twelve lines down already names this mistake.** The library's own
+    name used to sit on the header rather than on the score line, and somebody read
+    `agreeing 3255/3255` and reported the binding clear. The fix then was to move the
+    word onto the line with the number. The adapter was in the identical position and
+    was not moved, because that repair was made about `lib` rather than about *the
+    line a person reads.*
+
+    Printing it elsewhere is not enough either, which is the borch.ts runner's
+    evidence: it prints the adapter at the top of every run, both sessions read that
+    output twenty times over, and nobody saw it. Distance from the number is what
+    makes a true line invisible.
+
+    **This does not stop the run.** A green on SwiftShader still proves the values,
+    and refusing to run at all on the only machine available would trade a real check
+    for none. What it must not do is let the word *agreeing* stand unqualified.
+    """
+    backend = result.get("backend") or ""
+    if not backend or "no browser GPU" in backend:
+        return ""                                   # the core is numpy; no shaders ran
+    low = backend.lower()
+    if any(mark in low for mark in _SOFTWARE):
+        return (f"  [{backend}]\n"
+                "  **A software adapter.** The values are proved; that the same values "
+                "come off a real\n  GPU is not — WGSL goes through a different compiler "
+                "per vendor.")
+    return f"  [{backend}]"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lib", required=True, choices=("borch", "borch_webgpu"),
@@ -187,7 +230,7 @@ def main():
     # job for nobody.
     lib = result.get("lib", args.lib)
     print(f"browser golden comparison ({lib}) — {total} cases")
-    print(f"  {lib}: agreeing {total - len(bad)}/{total}")
+    print(f"  {lib}: agreeing {total - len(bad)}/{total}{_adapter_note(result)}")
     # **A validation error does not arrive as an exception.** If even one happened, the green
     # above is that much less trustworthy — an invalid command buffer quietly does nothing while
     # the wall clock keeps running.
