@@ -329,10 +329,28 @@ def _camel(name):
     dropped the count by twelve. `torch_gap.py` says a rule that misses in our favour
     is worse than no rule, and this one missed in our favour by exactly the six
     in-place forms nobody had written.
+
+    **A leading underscore is kept too, and it was not.** The paragraph above was
+    written about the other end of the string and applied to one end only:
+    `_weight` split to `["", "weight"]`, the empty head vanished, and the name came
+    out `Weight` → `weight`. So the core's `_random_samples` folded onto borch.ts's
+    `randomSamples` and `FractionalMaxPool2d` and `3d` reported **`agree` against
+    parameter lists they did not match**.
+
+    That is the one direction an instrument must not fail in. A row wrongly saying
+    *these differ* costs an hour; a row wrongly saying *these agree* costs nothing
+    until it costs a user. Four parameters are in the class — `_weight`, `_freeze`,
+    `_random_samples`, `_stacklevel` — and torch marks all four private on purpose.
+
+    `test_fold_is_lossless.py` holds the rule rather than the row: the fold has to
+    keep every letter, keep the underscores at both ends, and never put two names on
+    one string. The last of those is the half no single comparison can show.
     """
+    leading = "_" * (len(name) - len(name.lstrip("_")))
     trailing = "_" if name.endswith("_") else ""
-    head, *rest = name.rstrip("_").split("_")
-    return head + "".join(p[:1].upper() + p[1:] for p in rest) + trailing
+    head, *rest = name.strip("_").split("_")
+    return (leading + head
+            + "".join(p[:1].upper() + p[1:] for p in rest) + trailing)
 
 
 def _folds_onto(name, lowered):

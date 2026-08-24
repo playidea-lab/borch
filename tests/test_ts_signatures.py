@@ -462,7 +462,25 @@ RENAMED = {
     # `upscaleFactor`/`downscaleFactor`, `sizes` → `unflattenedSize`. All of it on
     # borch.ts's side, none of it a behaviour change, and `PixelShuffle`'s `describe`
     # now prints a name its constructor answers to.
-    "nn": 0,    # Bilinear arrived from `unaligned`: borch.ts spells the flag
+    # **0 → 2, and the two were here all along — the instrument was hiding them.**
+    # `ts_axis._camel` ate a *leading* underscore, so the core's `_random_samples`
+    # folded onto borch.ts's `randomSamples` and `FractionalMaxPool2d` and `3d`
+    # reported `agree` against parameter lists they did not match.
+    #
+    # **A count going up because the instrument stopped lying is not a regression**,
+    # and this bucket cannot tell that from two sides drifting apart — the same thing
+    # the `nn` note in `unaligned` says about a name becoming comparable, one level
+    # worse, because here the rows were being counted as *agreements*.
+    #
+    # `test_fold_is_lossless.py` now holds the rule the fold has to obey; it caught
+    # these two and two more names in the same class (`_weight`, `_freeze`,
+    # `_stacklevel`) that happen to have no counterpart to collide with yet.
+    #
+    # **What closes this line:** borch.ts spelling the parameter `_randomSamples`.
+    # The peer session holding that library has it in hand; when it lands this goes
+    # back to 0 and the paragraph above stays, because the reason it was ever 0 by
+    # accident is the part worth keeping.
+    "nn": 2,    # Bilinear arrived from `unaligned`: borch.ts spells the flag
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     # 1 → 2. `scaled_dot_product_attention` arrived from `shifted`: same
