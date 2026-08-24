@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 685,
+  "done": 686,
   "stale": 0,
   "missing": 146
  },
@@ -605,7 +605,7 @@
       },
       {
        "name": "mm",
-       "signature": "mm(other: Tensor): Tensor",
+       "signature": "mm(mat2: Tensor): Tensor",
        "doc": "Two-dimensional only. Batched matrix multiply is T1 — a missing feature\nbeats a wrong answer.",
        "section": {
         "ko": "Matrix products",
@@ -1015,7 +1015,7 @@
       },
       {
        "name": "swapaxes",
-       "signature": "swapaxes(a: number, b: number): Tensor",
+       "signature": "swapaxes(axis0: number, axis1: number): Tensor",
        "doc": "Swaps two axes. The same as `swapdims` — torch carries both names.",
        "section": {
         "ko": "Shape",
@@ -1108,14 +1108,15 @@
        "doc_ko": "미끄러지는 창. 걸음이 창 크기보다 작으면 창끼리 겹친다.\n\n**겹치면 역방향에서 쌓인다** — 길이 5 를 `unfold(0, 3, 1)` 로 펴면 기울기가\n`[1,2,3,2,1]` 이다. 안 더하면 전부 1 이 되고, 값 검사만으로는 안 걸린다."
       },
       {
-       "name": "split",
-       "signature": "split(dim: number, parts: number): Tensor[]",
-       "doc": "Divides one axis into equally sized pieces. Each piece is a new tensor.",
+       "name": "splitParts",
+       "signature": "splitParts(dim: number, parts: number): Tensor[]",
+       "doc": "Divides one axis into a **given number of** equally sized pieces.\n\n**This used to be called `split`, which is torch's name for the other one.**\ntorch's `split(split_size, dim)` says how big each piece is; this says how many\npieces there are, which is what torch calls `chunk` — and the arguments were in\nthe opposite order besides. A TypeScript caller writing `x.split(2, 0)` from\nmemory of torch got *axis 2, into 0 pieces*.\n\nNothing had diverged, because the binding routes torch's `split` to `splitSize`\nwith a note saying why, and every golden case goes through the binding. **A name\nthat means something else is invisible to a value comparison** — it is only ever\nmet by somebody writing against this library directly.\n\nIt is not `chunk`, which rounds up and takes a short last piece; this one\nrequires the axis to divide exactly, and `hsplit`/`vsplit`/`dsplit` want that.",
+       "torch": "split_parts",
        "section": {
         "ko": "Shape",
         "en": "Shape"
        },
-       "doc_ko": "축 하나를 같은 크기 조각으로 나눈다. 조각마다 새 텐서다."
+       "doc_ko": "축 하나를 **주어진 개수의** 같은 크기 조각으로 나눈다.\n\n**이건 원래 `split` 이라는 이름이었고, 그 이름은 torch 에서 다른 것을 가리킨다.**\ntorch 의 `split(split_size, dim)` 은 조각 하나의 크기를 말하고 이것은 조각의\n개수를 말한다 — torch 가 `chunk` 라고 부르는 쪽이다. 게다가 인자 순서도\n반대였다. torch 를 기억하고 `x.split(2, 0)` 이라고 쓴 TypeScript 호출자는\n*축 2 를 0 조각으로* 를 받았다.\n\n갈린 값은 없었다. 바인딩이 torch 의 `split` 을 `splitSize` 로 사유와 함께\n돌리고 있고 골든 케이스는 전부 바인딩을 지나기 때문이다. **다른 것을 뜻하는\n이름은 값 대조에 안 보인다** — 이 라이브러리를 직접 쓰는 사람만 만난다.\n\n`chunk` 와는 다르다. 그쪽은 올림해서 마지막 조각이 짧고, 이것은 축이 정확히\n나누어떨어지기를 요구한다. `hsplit`/`vsplit`/`dsplit` 이 그것을 원한다."
       },
       {
        "name": "tensorSplit",
@@ -1130,7 +1131,7 @@
       },
       {
        "name": "splitWithSizes",
-       "signature": "splitWithSizes(sizes: readonly number[], dim?: number): Tensor[]",
+       "signature": "splitWithSizes(splitSizes: readonly number[], dim?: number): Tensor[]",
        "doc": "Splits by **a list of piece sizes.** `tensorSplit` takes the\n**positions** to cut at.",
        "torch": "split_with_sizes",
        "section": {
@@ -1159,7 +1160,7 @@
       },
       {
        "name": "movedim",
-       "signature": "movedim(src: number, dst: number): Tensor",
+       "signature": "movedim(source: number, destination: number): Tensor",
        "doc": "Moves an axis to a chosen position. Unlike `swapaxes`, it preserves the\norder of the rest.",
        "section": {
         "ko": "Shape",
@@ -1189,7 +1190,7 @@
       },
       {
        "name": "roll",
-       "signature": "roll(shift: number, dim?: number): Tensor",
+       "signature": "roll(shifts: number, dims?: number): Tensor",
        "doc": "Shifts one axis. **What falls off the end comes back at the front.**\n\nIt is `out[i] = in[(i - shift) mod n]`, so it is the rule table's `mod`\nwith a shift laid on top.",
        "section": {
         "ko": "Shape",
@@ -1208,19 +1209,29 @@
        "doc_ko": "`repeat` 과 같은 일이되 torch 가 이름을 둘 다 갖는다."
       },
       {
+       "name": "split",
+       "signature": "split(splitSize: number, dim?: number): Tensor[]",
+       "doc": "`torch.Tensor.split`. **The size of each piece**, not how many — the last one is\nshort when the axis does not divide. `splitSize` is the same thing with the two\narguments the other way round, and it stays because the binding and this file\nboth call it that.",
+       "section": {
+        "ko": "Shape",
+        "en": "Shape"
+       },
+       "doc_ko": "`torch.Tensor.split`. **한 조각의 크기**이지 개수가 아니다 — 축이 나누어떨어지지\n않으면 마지막 조각이 짧다. `splitSize` 는 인자 순서만 반대인 같은 것이고,\n바인딩과 이 파일이 그 이름으로 부르고 있어 남긴다."
+      },
+      {
        "name": "splitSize",
        "signature": "splitSize(dim: number, size: number): Tensor[]",
-       "doc": "Divides one axis by size. `split` takes the piece **size**, `chunk` the\npiece **count**.",
+       "doc": "Divides one axis by size, with the axis first. `split` is the same thing in\ntorch's argument order; `chunk` takes the piece **count** instead.",
        "torch": "split_size",
        "section": {
         "ko": "Shape",
         "en": "Shape"
        },
-       "doc_ko": "축 하나를 크기로 나눈다. `split` 은 조각 **크기**, `chunk` 는 조각 **수**다."
+       "doc_ko": "축 하나를 크기로 나눈다. 축이 먼저 온다. `split` 은 torch 의 인자 순서로 된\n같은 것이고, `chunk` 는 대신 조각 **개수**를 받는다."
       },
       {
        "name": "chunk",
-       "signature": "chunk(parts: number, dim?: number): Tensor[]",
+       "signature": "chunk(chunks: number, dim?: number): Tensor[]",
        "doc": "",
        "section": {
         "ko": "Shape",
@@ -1397,7 +1408,7 @@
       },
       {
        "name": "matrixPower",
-       "signature": "matrixPower(k: number): Tensor",
+       "signature": "matrixPower(n: number): Tensor",
        "doc": "An integer power. For now it repeats the multiplication — for small\nexponents only.",
        "torch": "matrix_power",
        "section": {
@@ -1408,7 +1419,7 @@
       },
       {
        "name": "where",
-       "signature": "where(cond: Tensor, other: Tensor): Tensor",
+       "signature": "where(condition: Tensor, other: Tensor): Tensor",
        "doc": "This side or that, per position of the condition. torch's method form\nis `x.where(cond, other)`.",
        "section": {
         "ko": "Shape",
@@ -1438,7 +1449,7 @@
       },
       {
        "name": "dot",
-       "signature": "dot(other: Tensor): Tensor",
+       "signature": "dot(tensor: Tensor): Tensor",
        "doc": "The inner product of two vectors.",
        "section": {
         "ko": "Shape",
@@ -1448,7 +1459,7 @@
       },
       {
        "name": "outer",
-       "signature": "outer(other: Tensor): Tensor",
+       "signature": "outer(vec2: Tensor): Tensor",
        "doc": "The outer product of two vectors. It falls out of broadcasting — no new\nkernel needed.",
        "section": {
         "ko": "Shape",
@@ -1458,7 +1469,7 @@
       },
       {
        "name": "clamp",
-       "signature": "clamp(low: number, high: number): Tensor",
+       "signature": "clamp(min: number, max: number): Tensor",
        "doc": "Cuts above and below.\n\n**It must not be laid on top of `maximum` and `minimum`.** Those two\nsplit the gradient in half at a tie (torch does), while `clamp` passes\nit whole at the boundary. Laid on top, the gradient halved exactly\nwhere `x` sat on the boundary.",
        "section": {
         "ko": "Shape",
@@ -2221,7 +2232,7 @@
       },
       {
        "name": "bmm",
-       "signature": "bmm(other: Tensor): Tensor",
+       "signature": "bmm(mat2: Tensor): Tensor",
        "doc": "Batched matrix multiply. `(B, N, K) × (B, K, M)`.\n\nIt unpacks the batch, repeats `mm`, and stacks — a separate batched\nkernel would mean fixing two copies alongside `mm`. When batches grow\nlarge, that is the place to stand a kernel up.",
        "section": {
         "ko": "Losses and distances",
@@ -2364,7 +2375,7 @@
       },
       {
        "name": "fmod",
-       "signature": "fmod(divisor: number): Tensor",
+       "signature": "fmod(other: number): Tensor",
        "doc": "The remainder. **torch's `fmod` follows the sign of the dividend** —\nunlike Python's `%`.\n\nGradient flows to the dividend as 1. The divisor side is a staircase,\nso nothing flows.",
        "section": {
         "ko": "The addmm family",
@@ -2374,7 +2385,7 @@
       },
       {
        "name": "remainder",
-       "signature": "remainder(divisor: Tensor | number): Tensor",
+       "signature": "remainder(other: Tensor | number): Tensor",
        "doc": "The remainder — **with a different sign from `fmod`.**\n\ntorch's `remainder` (and Python's and torch's `%`) follows the sign of\n**the divisor** while `fmod` follows the dividend. The remainder of\n`-7` divided by `3` is 2 on this side and -1 on that. Both being called\n\"the remainder\" is the trap, and JavaScript's `%` is the `fmod` one, so\nusing it directly diverges quietly on negative inputs only.\n\nThe whole difference is truncation (`trunc`) versus flooring (`floor`).",
        "section": {
         "ko": "The addmm family",
@@ -2384,7 +2395,7 @@
       },
       {
        "name": "clampMin",
-       "signature": "clampMin(low: number): Tensor",
+       "signature": "clampMin(min: number): Tensor",
        "doc": "Cuts from below only. torch's `clamp(min=…)`.",
        "torch": "clamp_min",
        "section": {
@@ -2395,7 +2406,7 @@
       },
       {
        "name": "clampMax",
-       "signature": "clampMax(high: number): Tensor",
+       "signature": "clampMax(max: number): Tensor",
        "doc": "Cuts from above only. torch's `clamp(max=…)`.",
        "torch": "clamp_max",
        "section": {
@@ -3224,7 +3235,7 @@
       },
       {
        "name": "pow_",
-       "signature": "pow_(k: number): Tensor",
+       "signature": "pow_(exponent: number): Tensor",
        "doc": "",
        "section": {
         "ko": "In-place operations",
@@ -3262,7 +3273,7 @@
       },
       {
        "name": "requiresGrad_",
-       "signature": "requiresGrad_(flag?: boolean): Tensor",
+       "signature": "requiresGrad_(requiresGrad?: boolean): Tensor",
        "doc": "Raises the gradient flag and **returns itself**, which torch does so it\ncan be chained (`x.requires_grad_().sum()`).",
        "torch": "requires_grad_",
        "section": {
@@ -3282,7 +3293,7 @@
       },
       {
        "name": "clamp_",
-       "signature": "clamp_(low: number, high: number): Tensor",
+       "signature": "clamp_(min: number, max: number): Tensor",
        "doc": "",
        "section": {
         "ko": "In-place operations",
@@ -3291,7 +3302,7 @@
       },
       {
        "name": "clip_",
-       "signature": "clip_(low: number, high: number): Tensor",
+       "signature": "clip_(min: number, max: number): Tensor",
        "doc": "The same as `clamp_` — torch carries both names.",
        "section": {
         "ko": "In-place operations",
@@ -3527,7 +3538,7 @@
       },
       {
        "name": "newFull",
-       "signature": "newFull(shape: readonly number[], value: number, dtype?: DType | null, device?: string | null, requiresGrad?: boolean, layout?: string | null, pinMemory?: boolean): Tensor",
+       "signature": "newFull(size: readonly number[], fillValue: number, dtype?: DType | null, device?: string | null, requiresGrad?: boolean, layout?: string | null, pinMemory?: boolean): Tensor",
        "doc": "`shape` filled with `value`, in this tensor's dtype.",
        "torch": "new_full",
        "section": {
@@ -3915,7 +3926,7 @@
       },
       {
        "name": "moveaxis",
-       "signature": "moveaxis(src: number, dst: number): Tensor",
+       "signature": "moveaxis(source: number, destination: number): Tensor",
        "doc": "Moves an axis. The same as `movedim`, and torch offers both.",
        "section": {
         "ko": "The same six under torch's short names",
@@ -5302,7 +5313,7 @@
       },
       {
        "name": "ger",
-       "signature": "ger(other: Tensor): Tensor",
+       "signature": "ger(vec2: Tensor): Tensor",
        "doc": "The old name for the outer product. The same as `outer`.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -7069,7 +7080,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 738,
+   "count": 739,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -16467,5 +16478,5 @@
    "count": 9
   }
  ],
- "total": 2170
+ "total": 2171
 }

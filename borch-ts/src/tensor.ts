@@ -1618,17 +1618,17 @@ export class Tensor implements Node<Tensor> {
    * Two-dimensional only. Batched matrix multiply is T1 — a missing feature
    * beats a wrong answer.
    */
-  mm(other: Tensor): Tensor {
-    if (this.shape.length !== 2 || other.shape.length !== 2) {
+  mm(mat2: Tensor): Tensor {
+    if (this.shape.length !== 2 || mat2.shape.length !== 2) {
       throw new Error(
-        `mm is 2-D by 2-D: [${this.shape}] x [${other.shape}]. ` +
+        `mm is 2-D by 2-D: [${this.shape}] x [${mat2.shape}]. ` +
           "Batching is not here yet.",
       );
     }
     const M = this.shape[0] ?? 0;
     const K = this.shape[1] ?? 0;
-    const K2 = other.shape[0] ?? 0;
-    const N = other.shape[1] ?? 0;
+    const K2 = mat2.shape[0] ?? 0;
+    const N = mat2.shape[1] ?? 0;
     if (K !== K2) {
       throw new RuntimeError(
         `mat1 and mat2 ${TORCH.matmulShape} ` +
@@ -1646,9 +1646,9 @@ export class Tensor implements Node<Tensor> {
     // One-sided complex comes here as well — the real side's imaginary part is 0 so two
     // of the products vanish, and specialising that is a job for after measuring.
     // Correct comes first.
-    if (this.isComplex() || other.isComplex()) {
+    if (this.isComplex() || mat2.isComplex()) {
       const a = this.isComplex() ? this : this.asComplexRe();
-      const b = other.isComplex() ? other : other.asComplexRe();
+      const b = mat2.isComplex() ? mat2 : mat2.asComplexRe();
       const [ar, ai] = [a.real(), a.imag()];
       const [br, bi] = [b.real(), b.imag()];
       return Tensor.complex(
@@ -1658,16 +1658,16 @@ export class Tensor implements Node<Tensor> {
     const out = dev().alloc(M * N);
     dev().run(
       dev().pipeline(`mm:${M}:${K}:${N}`, () => matmul(M, K, N)),
-      [this.buffer, other.buffer, out],
+      [this.buffer, mat2.buffer, out],
       [Math.ceil(N / 64), Math.ceil(M / 64), 1],
     );
     return Tensor.make(
       out,
       [M, N],
-      [this, other],
+      [this, mat2],
       (g) => [
-        this.requiresGrad ? g.mm(other.transpose()) : null,
-        other.requiresGrad ? this.transpose().mm(g) : null,
+        this.requiresGrad ? g.mm(mat2.transpose()) : null,
+        mat2.requiresGrad ? this.transpose().mm(g) : null,
       ],
       "MmBackward0",
     );
@@ -2473,10 +2473,10 @@ export class Tensor implements Node<Tensor> {
   /**
    * Swaps two axes. The same as `swapdims` — torch carries both names.
    */
-  swapaxes(a: number, b: number): Tensor {
+  swapaxes(axis0: number, axis1: number): Tensor {
     const rank = this.shape.length;
-    const i = a < 0 ? a + rank : a;
-    const j = b < 0 ? b + rank : b;
+    const i = axis0 < 0 ? axis0 + rank : axis0;
+    const j = axis1 < 0 ? axis1 + rank : axis1;
     const own = this.strides();
     const order = [...Array(rank).keys()];
     order[i] = j;
@@ -2707,9 +2707,23 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * Divides one axis into equally sized pieces. Each piece is a new tensor.
+   * Divides one axis into a **given number of** equally sized pieces.
+   *
+   * **This used to be called `split`, which is torch's name for the other one.**
+   * torch's `split(split_size, dim)` says how big each piece is; this says how many
+   * pieces there are, which is what torch calls `chunk` — and the arguments were in
+   * the opposite order besides. A TypeScript caller writing `x.split(2, 0)` from
+   * memory of torch got *axis 2, into 0 pieces*.
+   *
+   * Nothing had diverged, because the binding routes torch's `split` to `splitSize`
+   * with a note saying why, and every golden case goes through the binding. **A name
+   * that means something else is invisible to a value comparison** — it is only ever
+   * met by somebody writing against this library directly.
+   *
+   * It is not `chunk`, which rounds up and takes a short last piece; this one
+   * requires the axis to divide exactly, and `hsplit`/`vsplit`/`dsplit` want that.
    */
-  split(dim: number, parts: number): Tensor[] {
+  splitParts(dim: number, parts: number): Tensor[] {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const axisSize = this.shape[axis] ?? 0;
@@ -2763,13 +2777,13 @@ export class Tensor implements Node<Tensor> {
    * Splits by **a list of piece sizes.** `tensorSplit` takes the
    * **positions** to cut at.
    */
-  splitWithSizes(sizes: readonly number[], dim = 0): Tensor[] {
+  splitWithSizes(splitSizes: readonly number[], dim = 0): Tensor[] {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const cuts: number[] = [];
     let at = 0;
-    for (let i = 0; i < sizes.length - 1; i++) {
-      at += sizes[i]!;
+    for (let i = 0; i < splitSizes.length - 1; i++) {
+      at += splitSizes[i]!;
       cuts.push(at);
     }
     return this.splitAt(cuts, axis);
@@ -2788,21 +2802,21 @@ export class Tensor implements Node<Tensor> {
   }
 
   hsplit(parts: number): Tensor[] {
-    return this.split(1, parts);
+    return this.splitParts(1, parts);
   }
 
   vsplit(parts: number): Tensor[] {
-    return this.split(0, parts);
+    return this.splitParts(0, parts);
   }
 
   /**
    * Moves an axis to a chosen position. Unlike `swapaxes`, it preserves the
    * order of the rest.
    */
-  movedim(src: number, dst: number): Tensor {
+  movedim(source: number, destination: number): Tensor {
     const rank = this.shape.length;
-    const from = src < 0 ? src + rank : src;
-    const to = dst < 0 ? dst + rank : dst;
+    const from = source < 0 ? source + rank : source;
+    const to = destination < 0 ? destination + rank : destination;
     const order = [...Array(rank).keys()].filter((d) => d !== from);
     order.splice(to, 0, from);
     return this.permute(order);
@@ -2845,12 +2859,12 @@ export class Tensor implements Node<Tensor> {
    * It is `out[i] = in[(i - shift) mod n]`, so it is the rule table's `mod`
    * with a shift laid on top.
    */
-  roll(shift: number, dim = 0): Tensor {
+  roll(shifts: number, dims = 0): Tensor {
     const rank = this.shape.length;
-    const axis = dim < 0 ? dim + rank : dim;
+    const axis = dims < 0 ? dims + rank : dims;
     const size = this.shape[axis] ?? 1;
     const own = this.strides();
-    const bias = ((-shift % size) + size) % size;
+    const bias = ((-shifts % size) + size) % size;
     const rules: AxisRule[] = this.shape.map((s, d) => ({
       size: s,
       stride: own[d] ?? 1,
@@ -2872,6 +2886,20 @@ export class Tensor implements Node<Tensor> {
    * Divides one axis by size. `split` takes the piece **size**, `chunk` the
    * piece **count**.
    */
+  /**
+   * `torch.Tensor.split`. **The size of each piece**, not how many — the last one is
+   * short when the axis does not divide. `splitSize` is the same thing with the two
+   * arguments the other way round, and it stays because the binding and this file
+   * both call it that.
+   */
+  split(splitSize: number, dim = 0): Tensor[] {
+    return this.splitSize(dim, splitSize);
+  }
+
+  /**
+   * Divides one axis by size, with the axis first. `split` is the same thing in
+   * torch's argument order; `chunk` takes the piece **count** instead.
+   */
   splitSize(dim: number, size: number): Tensor[] {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2883,11 +2911,11 @@ export class Tensor implements Node<Tensor> {
     return out;
   }
 
-  chunk(parts: number, dim = 0): Tensor[] {
+  chunk(chunks: number, dim = 0): Tensor[] {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const axisSize = this.shape[axis] ?? 0;
-    return this.splitSize(axis, Math.ceil(axisSize / parts));
+    return this.splitSize(axis, Math.ceil(axisSize / chunks));
   }
 
   /**
@@ -3312,8 +3340,8 @@ export class Tensor implements Node<Tensor> {
    * An integer power. For now it repeats the multiplication — for small
    * exponents only.
    */
-  matrixPower(k: number): Tensor {
-    if (k < 1) throw new Error(`matrix_power supports 1 and up for now: ${k}`);
+  matrixPower(n: number): Tensor {
+    if (n < 1) throw new Error(`matrix_power supports 1 and up for now: ${n}`);
     // **Multiplications are chained** — then the backward follows by itself. Writing
     // it as a decomposition means writing the derivative afresh, which is one more place
     // to be wrong.
@@ -3323,14 +3351,16 @@ export class Tensor implements Node<Tensor> {
     const rank = this.shape.length;
     if (rank <= 2) {
       let out: Tensor = this;
-      for (let i = 1; i < k; i++) out = out.mm(this);
+      for (let i = 1; i < n; i++) out = out.mm(this);
       return out;
     }
-    const n = this.shape[rank - 1] ?? 0;
+    // The side length, called `side` because the exponent took torch's name `n` and
+    // the two used to be `k` and `n`.
+    const side = this.shape[rank - 1] ?? 0;
     const batch = this.shape.slice(0, rank - 2).reduce((a, b) => a * b, 1);
-    const flat = this.reshape([batch, n, n]);
+    const flat = this.reshape([batch, side, side]);
     let out: Tensor = flat;
-    for (let i = 1; i < k; i++) out = out.bmm(flat);
+    for (let i = 1; i < n; i++) out = out.bmm(flat);
     return out.reshape(this.shape);
   }
 
@@ -3338,12 +3368,12 @@ export class Tensor implements Node<Tensor> {
    * This side or that, per position of the condition. torch's method form
    * is `x.where(cond, other)`.
    */
-  where(cond: Tensor, other: Tensor): Tensor {
+  where(condition: Tensor, other: Tensor): Tensor {
     const n = this.size;
     const out = dev().alloc(n);
     dev().run1d(
       dev().pipeline(`wh:${n}`, () => whereKernel(n)),
-      [cond.buffer, this.buffer, other.buffer, out],
+      [condition.buffer, this.buffer, other.buffer, out],
       n,
     );
     const shape = this.shape;
@@ -3351,7 +3381,7 @@ export class Tensor implements Node<Tensor> {
       const gi = dev().alloc(n);
       dev().run1d(
         dev().pipeline(`whb:${take}:${n}`, () => whereBackward(n, take)),
-        [cond.buffer, g.buffer, gi],
+        [condition.buffer, g.buffer, gi],
         n,
       );
       return new Tensor(gi, shape);
@@ -3411,16 +3441,16 @@ export class Tensor implements Node<Tensor> {
   /**
    * The inner product of two vectors.
    */
-  dot(other: Tensor): Tensor {
-    return this.mul(other).sum();
+  dot(tensor: Tensor): Tensor {
+    return this.mul(tensor).sum();
   }
 
   /**
    * The outer product of two vectors. It falls out of broadcasting — no new
    * kernel needed.
    */
-  outer(other: Tensor): Tensor {
-    return this.reshape([this.size, 1]).mul(other.reshape([1, other.size]));
+  outer(vec2: Tensor): Tensor {
+    return this.reshape([this.size, 1]).mul(vec2.reshape([1, vec2.size]));
   }
 
   /**
@@ -3431,8 +3461,8 @@ export class Tensor implements Node<Tensor> {
    * it whole at the boundary. Laid on top, the gradient halved exactly
    * where `x` sat on the boundary.
    */
-  clamp(low: number, high: number): Tensor {
-    const lo = f32lit(low), hi = f32lit(high);
+  clamp(min: number, max: number): Tensor {
+    const lo = f32lit(min), hi = f32lit(max);
     return this.unary(unaryWith(`clamp<${lo},${hi}>`, () => ({
       fwd: `clamp(x, ${lo}, ${hi})`,
       bwd: `select(0.0, 1.0, x >= ${lo} && x <= ${hi})`,
@@ -4741,14 +4771,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * kernel would mean fixing two copies alongside `mm`. When batches grow
    * large, that is the place to stand a kernel up.
    */
-  bmm(other: Tensor): Tensor {
-    if (this.shape.length !== 3 || other.shape.length !== 3) {
-      throw new Error(`bmm is 3-D by 3-D: [${this.shape}] x [${other.shape}]`);
+  bmm(mat2: Tensor): Tensor {
+    if (this.shape.length !== 3 || mat2.shape.length !== 3) {
+      throw new Error(`bmm is 3-D by 3-D: [${this.shape}] x [${mat2.shape}]`);
     }
     const batch = this.shape[0] ?? 0;
     const parts: Tensor[] = [];
     for (let b = 0; b < batch; b++) {
-      parts.push(this.select(0, b).mm(other.select(0, b)));
+      parts.push(this.select(0, b).mm(mat2.select(0, b)));
     }
     return Tensor.stack(parts, 0);
   }
@@ -4876,8 +4906,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Gradient flows to the dividend as 1. The divisor side is a staircase,
    * so nothing flows.
    */
-  fmod(divisor: number): Tensor {
-    const d = Tensor.full([], divisor);
+  fmod(other: number): Tensor {
+    const d = Tensor.full([], other);
     const q = this.div(d).unary("trunc").detach();
     return this.sub(q.binary("mul", d));
   }
@@ -4893,11 +4923,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    *
    * The whole difference is truncation (`trunc`) versus flooring (`floor`).
    */
-  remainder(divisor: Tensor | number): Tensor {
+  remainder(other: Tensor | number): Tensor {
     // **Tensors are accepted too.** torch writes `x.remainder(y)`, and accepting only
     // a number makes that line simply not run — a name that exists but is narrower is
     // harder to find than one that is missing (`lerpFrom` was the same place).
-    const d = Tensor.asTensor(divisor);
+    const d = Tensor.asTensor(other);
     const q = this.div(d).unary("floor").detach();
     return this.sub(q.binary("mul", d));
   }
@@ -4905,8 +4935,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Cuts from below only. torch's `clamp(min=…)`.
    */
-  clampMin(low: number): Tensor {
-    const lo = f32lit(low);
+  clampMin(min: number): Tensor {
+    const lo = f32lit(min);
     return this.unary(unaryWith(`clampMin<${lo}>`, () => ({
       fwd: `max(x, ${lo})`,
       bwd: `select(0.0, 1.0, x >= ${lo})`,
@@ -4916,8 +4946,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Cuts from above only. torch's `clamp(max=…)`.
    */
-  clampMax(high: number): Tensor {
-    const hi = f32lit(high);
+  clampMax(max: number): Tensor {
+    const hi = f32lit(max);
     return this.unary(unaryWith(`clampMax<${hi}>`, () => ({
       fwd: `min(x, ${hi})`,
       bwd: `select(0.0, 1.0, x <= ${hi})`,
@@ -7089,8 +7119,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.div(Tensor.full([], other), roundingMode));
   }
 
-  pow_(k: number): Tensor {
-    return this.mutate(() => this.powScalar(k));
+  pow_(exponent: number): Tensor {
+    return this.mutate(() => this.powScalar(exponent));
   }
 
   zero_(): Tensor {
@@ -7121,8 +7151,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Raises the gradient flag and **returns itself**, which torch does so it
    * can be chained (`x.requires_grad_().sum()`).
    */
-  requiresGrad_(flag = true): Tensor {
-    this.requiresGrad = flag;
+  requiresGrad_(requiresGrad = true): Tensor {
+    this.requiresGrad = requiresGrad;
     return this;
   }
 
@@ -7130,15 +7160,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => Tensor.full(this.shape, value));
   }
 
-  clamp_(low: number, high: number): Tensor {
-    return this.mutate(() => this.clamp(low, high));
+  clamp_(min: number, max: number): Tensor {
+    return this.mutate(() => this.clamp(min, max));
   }
 
   /**
    * The same as `clamp_` — torch carries both names.
    */
-  clip_(low: number, high: number): Tensor {
-    return this.clamp_(low, high);
+  clip_(min: number, max: number): Tensor {
+    return this.clamp_(min, max);
   }
 
   /**
@@ -7290,7 +7320,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   /** Split along **axis 2**. `torch.Tensor.dsplit`. */
   dsplit(parts: number): Tensor[] {
-    return this.split(2, parts);
+    return this.splitParts(2, parts);
   }
 
   /**
@@ -7335,7 +7365,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   /** `shape` filled with `value`, in this tensor's dtype. */
   newFull(
-    shape: readonly number[], value: number, dtype: DType | null = null,
+    size: readonly number[], fillValue: number, dtype: DType | null = null,
     device: string | null = null, requiresGrad = false,
     layout: string | null = null, pinMemory = false,
   ): Tensor {
@@ -7345,7 +7375,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (device !== null) throw new Error("newFull(device) is not here — there is one device.");
     if (layout !== null) throw new Error("newFull(layout) is not here — there is one layout.");
     if (pinMemory) throw new Error("newFull(pinMemory) is not here — there is no host pinning.");
-    const out = Tensor.full([...shape], value).broadcastTo([...shape])
+    const out = Tensor.full([...size], fillValue).broadcastTo([...size])
       .to(dtype ?? this.dtype);
     out.requiresGrad = requiresGrad;
     return out;
@@ -7623,8 +7653,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Moves an axis. The same as `movedim`, and torch offers both.
    */
-  moveaxis(src: number, dst: number): Tensor {
-    return this.movedim(src, dst);
+  moveaxis(source: number, destination: number): Tensor {
+    return this.movedim(source, destination);
   }
 
   /**
@@ -9291,8 +9321,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * The old name for the outer product. The same as `outer`.
    */
-  ger(other: Tensor): Tensor {
-    return this.outer(other);
+  ger(vec2: Tensor): Tensor {
+    return this.outer(vec2);
   }
 
   /**

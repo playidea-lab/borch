@@ -378,7 +378,32 @@ RENAMED = {
     # as text left `f"{t.data.shape}"` pointing at the module-level `t` (the
     # transpose), which failed loudly. **A name that had resolved to something
     # plausible would not have.**
-    "Tensor": 26,
+    #
+    # **26 → 6, and which side to move was measured rather than assumed.** Each row's
+    # two spellings were compared against torch's own — trimming the leading `input`
+    # and trailing `out` the docstring carries for the function form, which a method
+    # does not take. Twenty-one were borch.ts alone, **none were the core alone**, so
+    # this bucket was almost entirely one library's to fix and the sentence above,
+    # written when the traffic went the other way, no longer describes it.
+    #
+    # **The docstring is not the keyword.** Four rows would have gone the wrong way on
+    # torch's prose: `tensor_split` documents `indices_or_sections` and accepts
+    # `sections`, `clamp_max`/`clamp_min` document `value` and accept `max`/`min`, and
+    # `true_divide` documents `divisor` and accepts `other`. borch.ts already had the
+    # accepted spelling in three of them — renaming to the documented one would have
+    # *created* the divergence. Every name here was checked by calling torch with it.
+    #
+    # **`split` was not a rename at all.** borch.ts's `split(dim, parts)` had torch's
+    # name with `chunk`'s meaning and the arguments reversed, while torch's `split`
+    # lived next door as `splitSize`. Nothing had ever diverged — the binding routes
+    # torch's `split` to `splitSize` with a note saying why, and every golden case
+    # goes through the binding — so **a name meaning something else was invisible to
+    # the value comparison** and visible only here. It is `splitParts` now.
+    #
+    # The six left are the core's side: it spells four of them from torch's prose
+    # (`value`, `value`, `indices_or_sections`, `divisor`) where torch answers
+    # `TypeError`, and `b`/`size` in the other two.
+    "Tensor": 6,
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.

@@ -2308,12 +2308,12 @@
     "src": "0fa330fe9b81"
   },
   "tensor/Tensor.split": {
-    "ko": "축 하나를 같은 크기 조각으로 나눈다. 조각마다 새 텐서다.",
-    "src": "ee83e41bbc6b"
+    "ko": "`torch.Tensor.split`. **한 조각의 크기**이지 개수가 아니다 — 축이 나누어떨어지지\n않으면 마지막 조각이 짧다. `splitSize` 는 인자 순서만 반대인 같은 것이고,\n바인딩과 이 파일이 그 이름으로 부르고 있어 남긴다.",
+    "src": "14b38fde59a1"
   },
   "tensor/Tensor.splitSize": {
-    "ko": "축 하나를 크기로 나눈다. `split` 은 조각 **크기**, `chunk` 는 조각 **수**다.",
-    "src": "e8ea3f6087fe"
+    "ko": "축 하나를 크기로 나눈다. 축이 먼저 온다. `split` 은 torch 의 인자 순서로 된\n같은 것이고, `chunk` 는 대신 조각 **개수**를 받는다.",
+    "src": "aab207621b3a"
   },
   "tensor/Tensor.splitWithSizes": {
     "ko": "조각 **크기 목록**으로 쪼갠다. `tensorSplit` 은 자르는 **자리**를 받는다.",
@@ -2738,5 +2738,9 @@
   "nn/RNNBase.run": {
     "ko": "출력 전체와 마지막 상태를 같이 낸다.",
     "src": "b122803b137a"
+  },
+  "tensor/Tensor.splitParts": {
+    "ko": "축 하나를 **주어진 개수의** 같은 크기 조각으로 나눈다.\n\n**이건 원래 `split` 이라는 이름이었고, 그 이름은 torch 에서 다른 것을 가리킨다.**\ntorch 의 `split(split_size, dim)` 은 조각 하나의 크기를 말하고 이것은 조각의\n개수를 말한다 — torch 가 `chunk` 라고 부르는 쪽이다. 게다가 인자 순서도\n반대였다. torch 를 기억하고 `x.split(2, 0)` 이라고 쓴 TypeScript 호출자는\n*축 2 를 0 조각으로* 를 받았다.\n\n갈린 값은 없었다. 바인딩이 torch 의 `split` 을 `splitSize` 로 사유와 함께\n돌리고 있고 골든 케이스는 전부 바인딩을 지나기 때문이다. **다른 것을 뜻하는\n이름은 값 대조에 안 보인다** — 이 라이브러리를 직접 쓰는 사람만 만난다.\n\n`chunk` 와는 다르다. 그쪽은 올림해서 마지막 조각이 짧고, 이것은 축이 정확히\n나누어떨어지기를 요구한다. `hsplit`/`vsplit`/`dsplit` 이 그것을 원한다.",
+    "src": "5199f406e5c6"
   }
 }
