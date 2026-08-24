@@ -2546,9 +2546,27 @@ class _Attention(Module):
         return (_t(out, 0, 1) if self._batch_first else out), weights
 
 
-def MultiheadAttention(embed, heads, batch_first=False):
-    return _Attention(_ts.nn.MultiheadAttention.new(embed, heads), heads,
-                      batch_first)
+def MultiheadAttention(embed_dim, num_heads, dropout=0.0, bias=True,
+                       add_bias_kv=False, add_zero_attn=False, kdim=None,
+                       vdim=None, batch_first=False):
+    """torch's nine, forwarded whole.
+
+    **This took three and borch.ts now takes nine**, so six were accepted here and
+    reached nothing — the shape JavaScript makes silent, since a surplus argument is
+    discarded without a word. Forwarding them puts the refusals in one place:
+    `add_bias_kv`, `add_zero_attn` and a `kdim`/`vdim` unlike the embedding stop in
+    borch.ts's constructor with their own names, rather than being dropped here and
+    stopping somewhere else or not at all.
+
+    `batch_first` is passed twice on purpose — borch.ts holds it for its own
+    `attend`, and `_Attention` below reads it because the computation here is
+    `multi_head_attention_forward`'s rather than that method's.
+    """
+    return _Attention(
+        _ts.nn.MultiheadAttention.new(embed_dim, num_heads, dropout, bias,
+                                      add_bias_kv, add_zero_attn, kdim, vdim,
+                                      batch_first),
+        num_heads, batch_first)
 
 
 # ── The transformer ───────────────────────────────────────────────────────

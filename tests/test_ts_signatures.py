@@ -351,6 +351,17 @@ UNALIGNED = {
     # opposite ends of the list. `MultiheadAttention` left too, on names alone
     # (`embed`/`heads` → `embedDim`/`numHeads`).
     #
+    # **7 → 6. `MultiheadAttention` took torch's eleven.** It had two, so seven were
+    # missing from the middle and each shifted what followed — `new
+    # MultiheadAttention(64, 8, 0.1)`, torch's own way of writing a dropout, reached
+    # nothing here. Three work (`dropout`, `bias`, `batchFirst`) and four stop with
+    # their own name, which is the trade this file keeps making.
+    #
+    # **`batchFirst` defaults to `false` and that flips what the class did.** It read
+    # `(batch, len, E)` unconditionally — torch's `batch_first=True` — so the default
+    # was the option torch does not take, and the TS case body was passing because it
+    # leaned on that. It says `true` now, as the Python case always did.
+    #
     # **9 → 7. `UpsamplingNearest2d` and `UpsamplingBilinear2d` grew torch's `size`**,
     # which they had no seat for at all — and with it torch's rule that exactly one of
     # `size` and `scale_factor` is given. The old constructor defaulted the scale to 2,
@@ -363,7 +374,11 @@ UNALIGNED = {
     # have laid the scale into `size`, and three TS case bodies read `(2)`. Both are
     # numbers — the row `test_binding_arguments` calls *number into a number slot*,
     # where `tsc` is silent by construction.
-    "nn": 7,
+    # 7 → 6 → 7 → 6: `MultiheadAttention` left, `RNNBase` came back for a name, and
+    # left again. The six `LazyConv*` are what remains, and they are not a divergence
+    # — the axis reads `constructor(...a: ConvArgs)` and takes the rest parameter's
+    # name, because `build_api.py` does not resolve a type alias.
+    "nn": 6,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -787,8 +802,14 @@ SHORTER = {
     # is most of what these forty rows are short of.
     #
     # 40 → 41. `RNNCellBase` arrived from `unaligned` — see the note there.
-    # 41 → 42. `MultiheadAttention` and `RNNBase` likewise.
-    "nn": 42,
+    # 41 → 42. `RNNBase` likewise — **and it came back once.** Moving `mode` to the
+    # front left it still called `kind`, which is enough to stop the lists lining up,
+    # so the row returned to `unaligned` and the note here said it had left. Order and
+    # name are two fixes; doing one is not doing the row.
+    # 42 → 43. `MultiheadAttention`, short of `device`/`dtype` and nothing else now.
+    # `RNNBase` leaving a second time adds nothing: it was already counted here, went
+    # back to `unaligned` on the name, and returned.
+    "nn": 43,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

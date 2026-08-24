@@ -1375,7 +1375,11 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
   }
 
   const attention = (mask: Tensor | null): Tensor => {
-    const m = new nn.MultiheadAttention(4, 2);
+    // **`batchFirst` is the ninth argument and it is `true` here**, as the Python
+    // case says. It read `(4, 2)` and leaned on the class defaulting to batch-first,
+    // which is the option torch does *not* default to — the same answer for the
+    // wrong reason, and only while the class disagreed with torch.
+    const m = new nn.MultiheadAttention(4, 2, 0, true, false, false, null, null, true);
     m.loadStateDict({
       in_proj_weight: inp.get("mha_in_w"), in_proj_bias: inp.get("mha_in_b"),
       "out_proj.weight": inp.get("mha_out_w"), "out_proj.bias": inp.get("mha_out_b"),

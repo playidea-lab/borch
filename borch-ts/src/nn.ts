@@ -4066,12 +4066,12 @@ export class RNNBase extends Module {
    * cannot be lined up, which puts it in the bucket that reports no detail.
    */
   constructor(
-    readonly kind: RNNKind,
+    readonly mode: RNNKind,
     inputSize: number,
     readonly hidden: number,
   ) {
     super();
-    const gates = kind === "LSTM" ? 4 : kind === "GRU" ? 3 : 1;
+    const gates = mode === "LSTM" ? 4 : mode === "GRU" ? 3 : 1;
     const rows = hidden * gates;
     // torch's recurrent nets take the bound from the hidden size — all four weights
     // use the same bound.
@@ -4107,9 +4107,9 @@ export class RNNBase extends Module {
       const xt = x.select(0, t);
       const gi = xt.linear(this.weightIh).add(this.biasIh);
       const gh = h.linear(this.weightHh).add(this.biasHh);
-      if (this.kind === "RNN") {
+      if (this.mode === "RNN") {
         h = gi.add(gh).unary("tanh");
-      } else if (this.kind === "LSTM") {
+      } else if (this.mode === "LSTM") {
         // torch's gate order is i, f, g, o. Wrong order makes the values plausibly wrong.
         const g = gi.add(gh);
         const i = slice(g, 0, H).unary("sigmoid");
@@ -4138,9 +4138,9 @@ export class RNNBase extends Module {
   }
 }
 
-/* ── The names with the kind fixed ──────────────────────────────────────
+/* ── The names with the mode fixed ──────────────────────────────────────
  *
- * `Recurrent` takes the kind **as an argument** and torch splits it out into the name.
+ * `Recurrent` takes the mode **as an argument** and torch splits it out into the name.
  * So these three fix one argument, and that is exactly the name torch uses.
  *
  * The values are already proven — the six golden cases
@@ -4288,27 +4288,73 @@ export function multiHeadAttentionForward(
 
 export class MultiheadAttention extends Module {
   readonly inWeight: Tensor;
-  readonly inBias: Tensor;
+  readonly inBias: Tensor | null;
   readonly outWeight: Tensor;
-  readonly outBias: Tensor;
+  readonly outBias: Tensor | null;
 
-  constructor(readonly embedDim: number, readonly numHeads: number) {
+  /**
+   * torch's eleven, of which three do work here and four are refused by name.
+   *
+   * **This took `(embedDim, numHeads)`, so seven arguments were missing from the
+   * middle and every one of them shifted what followed.** `new MultiheadAttention(64,
+   * 8, 0.1)` — torch's own way of writing a dropout of 0.1 — reached nothing at all
+   * here, and the core had the same list a shift earlier where `0.1` landed on
+   * `bias`. An absent feature beats a wrong answer, and **a wrong position is a wrong
+   * answer wearing the shape of a feature.**
+   *
+   * `dropout`, `bias` and `batchFirst` work. `addBiasKv`, `addZeroAttn` and a
+   * `kdim`/`vdim` unlike the embedding stop with their own name — the refusal exists
+   * a layer down in `multiHeadAttentionForward` already, and carrying the argument
+   * here is what makes it arrive with the right name attached.
+   *
+   * **`batchFirst` defaults to `false`, which flips what this class used to do.** It
+   * read `(batch, len, E)` unconditionally, which is torch's `batch_first=True`, so
+   * the default was the option torch does not take.
+   */
+  constructor(readonly embedDim: number, readonly numHeads: number,
+              readonly dropout = 0,
+              bias = true,
+              addBiasKv = false,
+              addZeroAttn = false,
+              kdim: number | null = null,
+              vdim: number | null = null,
+              readonly batchFirst = false) {
     super();
+    if (embedDim % numHeads) {
+      throw new Error(
+        `embed_dim(${embedDim}) is not divisible by num_heads(${numHeads}).`);
+    }
+    for (const [what, on] of [["addBiasKv", addBiasKv],
+                              ["addZeroAttn", addZeroAttn]] as const) {
+      if (on) throw new NotImplementedError(`MultiheadAttention(${what}=true)`);
+    }
+    // torch only takes the separate-projection path when these differ from
+    // `embedDim`; the same number is the ordinary layer and asks for nothing.
+    for (const [what, given] of [["kdim", kdim], ["vdim", vdim]] as const) {
+      if (given !== null && given !== embedDim) {
+        throw new NotImplementedError(
+          `MultiheadAttention(${what}=${given}) — a key or value width unlike the `
+          + "embedding's");
+      }
+    }
     const bound = 1 / Math.sqrt(Math.max(1, embedDim));
     this.inWeight = uniform([3 * embedDim, embedDim], bound);
     // torch's attention starts the bias at 0 — this is not a place where symmetry
     // needs breaking.
-    this.inBias = Tensor.owned([3 * embedDim], 0);
+    this.inBias = bias ? Tensor.owned([3 * embedDim], 0) : null;
     this.outWeight = uniform([embedDim, embedDim], bound);
-    this.outBias = Tensor.owned([embedDim], 0);
-    this.claim(this.inWeight, this.inBias, this.outWeight, this.outBias);
+    this.outBias = bias ? Tensor.owned([embedDim], 0) : null;
+    this.claim(...[this.inWeight, this.inBias, this.outWeight, this.outBias]
+      .filter((t): t is Tensor => t !== null));
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return {
-      in_proj_weight: this.inWeight, in_proj_bias: this.inBias,
-      "out_proj.weight": this.outWeight, "out_proj.bias": this.outBias,
+    const out: Record<string, Tensor> = {
+      in_proj_weight: this.inWeight, "out_proj.weight": this.outWeight,
     };
+    if (this.inBias) out.in_proj_bias = this.inBias;
+    if (this.outBias) out["out_proj.bias"] = this.outBias;
+    return out;
   }
 
   override forward(x: Tensor): Tensor {
@@ -4316,11 +4362,16 @@ export class MultiheadAttention extends Module {
   }
 
   attend(x: Tensor, mask: Tensor | null): Tensor {
-    const [batch = 1, len = 1] = x.shape;
+    // **`batchFirst` decides which of the first two axes is which**, and torch's
+    // default is length first. Flipped here so the body below stays one shape.
+    const src = this.batchFirst ? x : x.swapaxes(0, 1);
+    const [batch = 1, len = 1] = src.shape;
     const E = this.embedDim;
     const head = E / this.numHeads;
-    const flat = x.reshape([batch * len, E]);
-    const projected = flat.linear(this.inWeight).add(this.inBias);
+    const flat = src.reshape([batch * len, E]);
+    const inBias = this.inBias;
+    const projected = inBias ? flat.linear(this.inWeight).add(inBias)
+      : flat.linear(this.inWeight);
     const parts = [0, 1, 2].map((k) => projected.narrow(1, k * E, E));
     const scale = Tensor.full([], 1 / Math.sqrt(head));
     const outs: Tensor[] = [];
@@ -4336,13 +4387,17 @@ export class MultiheadAttention extends Module {
         const v = take(parts[2]);
         let scores = q.mm(k.transpose()).binary("mul", scale);
         if (mask) scores = scores.add(mask);
-        perHead.push(scores.softmax(1).mm(v));
+        // torch drops attention weights, not the values — and while training only.
+        perHead.push(scores.softmax(1).dropout(this.dropout, this.training).mm(v));
       }
       outs.push(Tensor.cat(perHead, 1));
     }
     const merged = Tensor.stack(outs, 0).reshape([batch * len, E]);
-    return merged.linear(this.outWeight).add(this.outBias)
-      .reshape([batch, len, E]);
+    const outBias = this.outBias;
+    const out = outBias ? merged.linear(this.outWeight).add(outBias)
+      : merged.linear(this.outWeight);
+    const shaped = out.reshape([batch, len, E]);
+    return this.batchFirst ? shaped : shaped.swapaxes(0, 1);
   }
 
   /**
