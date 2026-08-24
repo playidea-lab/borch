@@ -359,9 +359,15 @@ def _theirs(by_module, space, camel):
 # it is a real arity change and belongs in `differ`).
 RENAMES = {
     "optimizer": "opt",          # every scheduler and optimizer; nothing else is an optimizer
-    "kernel_size": "kernel",     # every pooling and convolution layer
-    "in_channels": "inC",        # convolution, beside `outC`
-    "out_channels": "outC",
+    # **`kernel_size`, `in_channels` and `out_channels` were folded here and are
+    # gone.** borch.ts spells all three torch's way now. They came out because a fold
+    # is global and a name is not: `LazyConv*` had taken torch's `outChannels` and
+    # `kernelSize`, and the folds rewrote the *core's* names into borch.ts's older
+    # spellings, so six rows that matched exactly were reported as unalignable.
+    #
+    # **A fold that is right about one row can be wrong about another**, and nothing
+    # says which — the table has no place to write "except here". Closing the
+    # difference is the only shape of fix that does not need one.
     "hidden_size": "hidden",     # the recurrent layers
     # **The core cannot spell this one.** torch's `uniform_` and `random_` take a
     # parameter literally named `from`, which is a Python keyword, so the core writes

@@ -2482,7 +2482,11 @@ class _Recurrent(Module):
         # four — already three, it is left alone.
         if h.ndim == 2:
             h = wrap(h._h.unsqueeze(0))
-        if self._m.kind == "LSTM":
+        # **`mode`, because torch calls it that** — this read `kind` until borch.ts
+        # took torch's spelling, and a property that is not there reads as
+        # `undefined`, which is not `"LSTM"`. Every recurrent case failed at once,
+        # 6/6 under one prefix, and no type said a word on either side of the bridge.
+        if self._m.mode == "LSTM":
             c = wrap(got.cell)
             if c.ndim == 2:
                 c = wrap(c._h.unsqueeze(0))

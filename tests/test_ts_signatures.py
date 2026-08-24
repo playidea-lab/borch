@@ -374,11 +374,28 @@ UNALIGNED = {
     # have laid the scale into `size`, and three TS case bodies read `(2)`. Both are
     # numbers — the row `test_binding_arguments` calls *number into a number slot*,
     # where `tsc` is silent by construction.
-    # 7 → 6 → 7 → 6: `MultiheadAttention` left, `RNNBase` came back for a name, and
-    # left again. The six `LazyConv*` are what remains, and they are not a divergence
-    # — the axis reads `constructor(...a: ConvArgs)` and takes the rest parameter's
-    # name, because `build_api.py` does not resolve a type alias.
-    "nn": 6,
+    # 7 → 6 → 7 → 6 → **0. The bucket is empty.**
+    #
+    # The last six were `LazyConv*`, and they took three separate fixes that each
+    # looked like the whole thing:
+    #
+    #   the axis read `constructor(...a: ConvArgs)` and took the rest parameter's
+    #   name, so the six were one letter wide and unalignable by construction;
+    #
+    #   with the alias resolved they were still unalignable, because **one shared
+    #   five-long tuple stood for two different lists** — torch's plain convolutions
+    #   take `(…, padding, dilation, groups, bias, padding_mode)` and the transposed
+    #   ones `(…, padding, output_padding, groups, bias, dilation, padding_mode)`,
+    #   and `bias` was sitting in the seat torch gives to `dilation`;
+    #
+    #   and with both lists written out they were *still* unalignable, because
+    #   `RENAMES` folded the core's `kernel_size` and `out_channels` into borch.ts's
+    #   older `kernel` and `outC` — rewriting the side that was right.
+    #
+    # **Two wrong verdicts in a row, each hiding the next.** Nobody predicted the
+    # second or the third; both sessions guessed this would land in `shorter` as soon
+    # as the alias was read.
+    "nn": 0,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -809,7 +826,16 @@ SHORTER = {
     # 42 → 43. `MultiheadAttention`, short of `device`/`dtype` and nothing else now.
     # `RNNBase` leaving a second time adds nothing: it was already counted here, went
     # back to `unaligned` on the name, and returned.
-    "nn": 43,
+    #
+    # **43 → 49, and `unaligned` is empty.** The six `LazyConv*` closed, and the six
+    # rows they had to pass through to get here are the finding: the axis could not
+    # read a rest parameter, then read one and found `bias` in torch's `dilation`
+    # seat, then still could not line them up because `RENAMES` was rewriting the
+    # *core's* `kernel_size` into borch.ts's older `kernel`. Three layers, one row.
+    #
+    # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
+    # is what nearly all forty-nine are short of.
+    "nn": 49,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

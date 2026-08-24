@@ -710,7 +710,7 @@ export class ConvND extends Module {
   constructor(
     inChannels: number,
     outChannels: number,
-    kernel: number,
+    kernelSize: number,
     spatial: number,
     private readonly stride = 1,
     private readonly padding = 0,
@@ -726,7 +726,7 @@ export class ConvND extends Module {
         + `the filters (${outChannels})`);
     }
     const shape = [
-      outChannels, inChannels / groups, ...new Array<number>(spatial).fill(kernel),
+      outChannels, inChannels / groups, ...new Array<number>(spatial).fill(kernelSize),
     ];
     // **The fan-in is divided by `groups`.** Each filter sees only
     // `inChannels / groups` channels, and initialised as though it saw all of them
@@ -769,26 +769,26 @@ export class ConvND extends Module {
  * feature map of the right shape.
  */
 export class Conv1d extends ConvND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+  constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
               paddingMode: PadMode | "zeros" = "zeros") {
-    super(inC, outC, kernel, 1, stride, padding, bias, dilation, groups, paddingMode);
+    super(inChannels, outChannels, kernelSize, 1, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
 
 export class Conv2d extends ConvND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+  constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
               paddingMode: PadMode | "zeros" = "zeros") {
-    super(inC, outC, kernel, 2, stride, padding, bias, dilation, groups, paddingMode);
+    super(inChannels, outChannels, kernelSize, 2, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
 
 export class Conv3d extends ConvND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+  constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
               paddingMode: PadMode | "zeros" = "zeros") {
-    super(inC, outC, kernel, 3, stride, padding, bias, dilation, groups, paddingMode);
+    super(inChannels, outChannels, kernelSize, 3, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
 
@@ -1264,9 +1264,9 @@ export class ConvTransposeND extends Module {
   readonly bias: Tensor | null;
 
   constructor(
-    inC: number,
-    outC: number,
-    kernel: number,
+    inChannels: number,
+    outChannels: number,
+    kernelSize: number,
     spatial: number,
     private readonly stride = 1,
     private readonly padding = 0,
@@ -1276,15 +1276,15 @@ export class ConvTransposeND extends Module {
     private readonly dilation = 1,
   ) {
     super();
-    if (inC % groups !== 0 || outC % groups !== 0) {
+    if (inChannels % groups !== 0 || outChannels % groups !== 0) {
       throw new RuntimeError(
-        `groups=${groups} divides neither the input channels (${inC}) nor the `
-        + `filters (${outC})`);
+        `groups=${groups} divides neither the input channels (${inChannels}) nor the `
+        + `filters (${outChannels})`);
     }
-    const bound = 1 / Math.sqrt(Math.max(1, (outC / groups) * kernel ** spatial));
+    const bound = 1 / Math.sqrt(Math.max(1, (outChannels / groups) * kernelSize ** spatial));
     this.weight = uniform(
-      [inC, outC / groups, ...new Array<number>(spatial).fill(kernel)], bound);
-    this.bias = bias ? uniform([outC], bound) : null;
+      [inChannels, outChannels / groups, ...new Array<number>(spatial).fill(kernelSize)], bound);
+    this.bias = bias ? uniform([outChannels], bound) : null;
     this.claim(...(this.bias ? [this.weight, this.bias] : [this.weight]));
   }
 
@@ -1319,27 +1319,27 @@ export class ConvTransposeND extends Module {
  * order of our own would read as agreement and land a positional call elsewhere.
  */
 export class ConvTranspose1d extends ConvTransposeND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+  constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               outputPadding = 0, groups = 1, bias = true, dilation = 1) {
-    super(inC, outC, kernel, 1, stride, padding, bias, outputPadding, groups,
+    super(inChannels, outChannels, kernelSize, 1, stride, padding, bias, outputPadding, groups,
           dilation);
   }
 }
 
 /** `torch.nn.ConvTranspose2d`. See `ConvTranspose1d` on the argument order. */
 export class ConvTranspose2d extends ConvTransposeND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+  constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               outputPadding = 0, groups = 1, bias = true, dilation = 1) {
-    super(inC, outC, kernel, 2, stride, padding, bias, outputPadding, groups,
+    super(inChannels, outChannels, kernelSize, 2, stride, padding, bias, outputPadding, groups,
           dilation);
   }
 }
 
 /** `torch.nn.ConvTranspose3d`. See `ConvTranspose1d` on the argument order. */
 export class ConvTranspose3d extends ConvTransposeND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+  constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               outputPadding = 0, groups = 1, bias = true, dilation = 1) {
-    super(inC, outC, kernel, 3, stride, padding, bias, outputPadding, groups,
+    super(inChannels, outChannels, kernelSize, 3, stride, padding, bias, outputPadding, groups,
           dilation);
   }
 }
@@ -1441,7 +1441,7 @@ export class MaxPool2d extends Module {
    * The name was here, the argument was not, and that is invisible from a name
    * count — `MaxUnpool` is what makes the positions worth asking for.
    */
-  constructor(private readonly kernel = 2,
+  constructor(private readonly kernelSize = 2,
               private readonly stride?: number,
               readonly padding = 0,
               readonly dilation = 1,
@@ -1468,12 +1468,12 @@ export class MaxPool2d extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool2d(this.kernel, this.stride);
+    return x.maxPool2d(this.kernelSize, this.stride);
   }
 
   /** The values and the positions that produced them. `MaxUnpool2d` takes both. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
-    return x.maxPoolWithIndices(this.kernel, this.stride);
+    return x.maxPoolWithIndices(this.kernelSize, this.stride);
   }
 }
 
@@ -1491,23 +1491,23 @@ export class MaxPool2d extends Module {
 
 /** `torch.nn.MaxPool1d`. */
 export class MaxPool1d extends Module {
-  constructor(private readonly kernel = 2, private readonly stride?: number) {
+  constructor(private readonly kernelSize = 2, private readonly stride?: number) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool1d(this.kernel, this.stride);
+    return x.maxPool1d(this.kernelSize, this.stride);
   }
 }
 
 /** `torch.nn.MaxPool3d`. */
 export class MaxPool3d extends Module {
-  constructor(private readonly kernel = 2, private readonly stride?: number) {
+  constructor(private readonly kernelSize = 2, private readonly stride?: number) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool3d(this.kernel, this.stride);
+    return x.maxPool3d(this.kernelSize, this.stride);
   }
 }
 
@@ -1555,7 +1555,7 @@ export class AdaptiveMaxPool3d extends AdaptiveMaxPool1d {}
  * `Sequential`.
  */
 export class MaxUnpool1d extends Module {
-  constructor(protected readonly kernel: number,
+  constructor(protected readonly kernelSize: number,
               protected readonly stride?: number,
               protected readonly padding = 0) {
     super();
@@ -1566,7 +1566,7 @@ export class MaxUnpool1d extends Module {
    *   that ran off the edge leaves an ambiguity only the caller can settle.
    */
   place(x: Tensor, indices: Tensor, outSize?: readonly number[]): Tensor {
-    return x.maxUnpool(indices, this.kernel, this.stride, this.padding, outSize);
+    return x.maxUnpool(indices, this.kernelSize, this.stride, this.padding, outSize);
   }
 
   /** **There is no one-argument form.** Reaching here means the positions were lost. */
@@ -1625,7 +1625,7 @@ export class Unflatten extends Module {
  */
 export class FractionalMaxPoolND extends Module {
   constructor(private readonly spatial: number,
-              private readonly kernel: number,
+              private readonly kernelSize: number,
               private readonly outputSize: number | readonly number[] | null = null,
               private readonly outputRatio: number | readonly number[] | null = null,
               returnIndices = false,
@@ -1663,7 +1663,7 @@ export class FractionalMaxPoolND extends Module {
     const samples: readonly (readonly number[])[] = this._randomSamples
       ?? Array.from({ length: planes }, () =>
         Array.from({ length: this.spatial }, () => uniform01()));
-    return x.fractionalMaxPool(this.kernel, this.sizesFor(x.shape), samples);
+    return x.fractionalMaxPool(this.kernelSize, this.sizesFor(x.shape), samples);
   }
 
   override forward(x: Tensor): Tensor {
@@ -1672,33 +1672,33 @@ export class FractionalMaxPoolND extends Module {
 }
 
 export class FractionalMaxPool2d extends FractionalMaxPoolND {
-  constructor(kernel: number,
+  constructor(kernelSize: number,
               outputSize: number | readonly number[] | null = null,
               outputRatio: number | readonly number[] | null = null,
               returnIndices = false,
               _randomSamples: readonly (readonly number[])[] | null = null) {
-    super(2, kernel, outputSize, outputRatio, returnIndices, _randomSamples);
+    super(2, kernelSize, outputSize, outputRatio, returnIndices, _randomSamples);
   }
 }
 
 export class FractionalMaxPool3d extends FractionalMaxPoolND {
-  constructor(kernel: number,
+  constructor(kernelSize: number,
               outputSize: number | readonly number[] | null = null,
               outputRatio: number | readonly number[] | null = null,
               returnIndices = false,
               _randomSamples: readonly (readonly number[])[] | null = null) {
-    super(3, kernel, outputSize, outputRatio, returnIndices, _randomSamples);
+    super(3, kernelSize, outputSize, outputRatio, returnIndices, _randomSamples);
   }
 }
 
 export class AvgPool2d extends Module {
-  constructor(private readonly kernel: number,
+  constructor(private readonly kernelSize: number,
               private readonly stride?: number) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.avgPool2d(this.kernel, this.stride);
+    return x.avgPool2d(this.kernelSize, this.stride);
   }
 }
 
@@ -1713,7 +1713,7 @@ export class AvgPool1d extends Module {
    * gives that argument to the 2-D and 3-D forms alone, so a seat here would be one
    * this library invented.
    */
-  constructor(private readonly kernel: number,
+  constructor(private readonly kernelSize: number,
               private readonly stride?: number,
               private readonly padding = 0,
               private readonly ceilMode = false,
@@ -1722,14 +1722,14 @@ export class AvgPool1d extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    return x.poolND("avg", this.kernel, this.stride, this.padding, this.ceilMode,
+    return x.poolND("avg", this.kernelSize, this.stride, this.padding, this.ceilMode,
                     this.countIncludePad);
   }
 }
 
 /** `torch.nn.AvgPool3d`. */
 export class AvgPool3d extends Module {
-  constructor(private readonly kernel: number,
+  constructor(private readonly kernelSize: number,
               private readonly stride?: number,
               private readonly padding = 0,
               private readonly ceilMode = false,
@@ -1739,7 +1739,7 @@ export class AvgPool3d extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    return x.poolND("avg", this.kernel, this.stride, this.padding, this.ceilMode,
+    return x.poolND("avg", this.kernelSize, this.stride, this.padding, this.ceilMode,
                     this.countIncludePad, this.divisorOverride);
   }
 }
@@ -1778,14 +1778,14 @@ export class AdaptiveAvgPool3d extends Module {
  */
 export class LPPool1d extends Module {
   constructor(private readonly normType: number,
-              private readonly kernel: number,
+              private readonly kernelSize: number,
               private readonly stride?: number,
               private readonly ceilMode = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.lpPool(this.normType, this.kernel, this.stride, this.ceilMode);
+    return x.lpPool(this.normType, this.kernelSize, this.stride, this.ceilMode);
   }
 }
 
@@ -2022,32 +2022,32 @@ export class LSTMCell extends RNNCellBase {
 // ── The remaining layers ───────────────────────────────────────────────
 
 export class Unfold extends Module {
-  constructor(readonly kernel: number, readonly dilation = 1,
+  constructor(readonly kernelSize: number, readonly dilation = 1,
               readonly padding = 0, readonly stride = 1) { super(); }
 
   override forward(x: Tensor): Tensor {
-    return x.unfoldIm2col(this.kernel, this.dilation, this.padding, this.stride);
+    return x.unfoldIm2col(this.kernelSize, this.dilation, this.padding, this.stride);
   }
 
   override describe(): string {
-    return `Unfold(kernel_size=${this.kernel}, dilation=${this.dilation}, ` +
+    return `Unfold(kernel_size=${this.kernelSize}, dilation=${this.dilation}, ` +
       `padding=${this.padding}, stride=${this.stride})`;
   }
 }
 
 export class Fold extends Module {
-  constructor(readonly outputSize: [number, number], readonly kernel: number,
+  constructor(readonly outputSize: [number, number], readonly kernelSize: number,
               readonly dilation = 1, readonly padding = 0,
               readonly stride = 1) { super(); }
 
   override forward(x: Tensor): Tensor {
-    return x.fold(this.outputSize, this.kernel, this.dilation, this.padding,
+    return x.fold(this.outputSize, this.kernelSize, this.dilation, this.padding,
       this.stride);
   }
 
   override describe(): string {
     return `Fold(output_size=(${this.outputSize.join(", ")}), ` +
-      `kernel_size=${this.kernel}, dilation=${this.dilation}, ` +
+      `kernel_size=${this.kernelSize}, dilation=${this.dilation}, ` +
       `padding=${this.padding}, stride=${this.stride})`;
   }
 }
@@ -2516,13 +2516,30 @@ export class LazyLinear extends LazyModule {
 // class makes TypeScript refuse on the grounds of `Module`'s private members. The
 // padding layers met the same wall, and three lines each is cheaper than breaking the
 // inheritance to get around it.
+/**
+ * **One base per shape, because the two lists are different lists.** They shared one
+ * before, with a `transpose` flag choosing the layer, and that is what let a single
+ * five-long tuple stand for both — the arrangement the defect lived in.
+ */
 class LazyConvBase extends LazyModule {
-  constructor(spatial: number, transpose: boolean, outC: number, kernel: number,
-              stride = 1, padding = 0, bias = true) {
-    super(`Lazy${transpose ? "ConvTranspose" : "Conv"}${spatial}d`,
-      (inC) => (transpose
-        ? new ConvTransposeND(inC, outC, kernel, spatial, stride, padding, bias)
-        : new ConvND(inC, outC, kernel, spatial, stride, padding, bias)),
+  constructor(spatial: number, outChannels: number, kernelSize: number, stride = 1,
+              padding = 0, dilation = 1, groups = 1, bias = true,
+              paddingMode: PadMode | "zeros" = "zeros") {
+    super(`LazyConv${spatial}d`,
+      (inChannels) => new ConvND(inChannels, outChannels, kernelSize, spatial, stride, padding, bias,
+                          dilation, groups, paddingMode),
+      channels);
+  }
+}
+
+class LazyConvTransposeBase extends LazyModule {
+  constructor(spatial: number, outChannels: number, kernelSize: number, stride = 1,
+              padding = 0, outputPadding = 0, groups = 1, bias = true,
+              dilation = 1, paddingMode: PadMode | "zeros" = "zeros") {
+    void paddingMode;
+    super(`LazyConvTranspose${spatial}d`,
+      (inChannels) => new ConvTransposeND(inChannels, outChannels, kernelSize, spatial, stride, padding,
+                                   bias, outputPadding, groups, dilation),
       channels);
   }
 }
@@ -2534,26 +2551,46 @@ class LazyConvBase extends LazyModule {
  * declarations said `a`, and the signature axis could not line these six up against
  * anything. Labels cost nothing and are the names torch uses.
  */
+/**
+ * **Two lists, because torch has two.** The plain convolutions read `(…, padding,
+ * dilation, groups, bias, padding_mode)` and the transposed ones
+ * `(…, padding, output_padding, groups, bias, dilation, padding_mode)` — the fifth
+ * seat is a dilation on one side and an output padding on the other, and `dilation`
+ * moves to eighth.
+ *
+ * One shared tuple held `[outChannels, kernelSize, stride, padding, bias]`, which put
+ * `bias` in the seat torch gives to `dilation` — `new LazyConv2d(16, 3, 1, 1, false)`
+ * set the bias flag here and a dilation there, and both calls succeed. It stayed
+ * invisible because the axis could not read a rest parameter's type alias at all;
+ * once it could, the row did not move to `shorter` as either session expected. **The
+ * wrong verdict was hiding a second defect, not merely a name.**
+ */
 type ConvArgs = [outChannels: number, kernelSize: number, stride?: number,
-                 padding?: number, bias?: boolean];
+                 padding?: number, dilation?: number, groups?: number,
+                 bias?: boolean, paddingMode?: PadMode | "zeros"];
+
+type ConvTransposeArgs = [outChannels: number, kernelSize: number, stride?: number,
+                          padding?: number, outputPadding?: number, groups?: number,
+                          bias?: boolean, dilation?: number,
+                          paddingMode?: PadMode | "zeros"];
 
 export class LazyConv1d extends LazyConvBase {
-  constructor(...a: ConvArgs) { super(1, false, ...a); }
+  constructor(...a: ConvArgs) { super(1, ...a); }
 }
 export class LazyConv2d extends LazyConvBase {
-  constructor(...a: ConvArgs) { super(2, false, ...a); }
+  constructor(...a: ConvArgs) { super(2, ...a); }
 }
 export class LazyConv3d extends LazyConvBase {
-  constructor(...a: ConvArgs) { super(3, false, ...a); }
+  constructor(...a: ConvArgs) { super(3, ...a); }
 }
-export class LazyConvTranspose1d extends LazyConvBase {
-  constructor(...a: ConvArgs) { super(1, true, ...a); }
+export class LazyConvTranspose1d extends LazyConvTransposeBase {
+  constructor(...a: ConvTransposeArgs) { super(1, ...a); }
 }
-export class LazyConvTranspose2d extends LazyConvBase {
-  constructor(...a: ConvArgs) { super(2, true, ...a); }
+export class LazyConvTranspose2d extends LazyConvTransposeBase {
+  constructor(...a: ConvTransposeArgs) { super(2, ...a); }
 }
-export class LazyConvTranspose3d extends LazyConvBase {
-  constructor(...a: ConvArgs) { super(3, true, ...a); }
+export class LazyConvTranspose3d extends LazyConvTransposeBase {
+  constructor(...a: ConvTransposeArgs) { super(3, ...a); }
 }
 
 /**
@@ -4549,8 +4586,12 @@ export class TransformerEncoderLayer extends Module {
     normFirst = false, bias = true,
   ) {
     super();
-    void batchFirst;
-    this.self_attn = new MultiheadAttention(dModel, nhead);
+    // **`batchFirst` was taken and thrown away** — `void batchFirst;` sat here, in the
+    // class whose own comment above is about an argument landing in the wrong seat.
+    // It reaches the attention now, as it does in the core, which is the only place
+    // the flag means anything.
+    this.self_attn = new MultiheadAttention(dModel, nhead, 0, true, false, false,
+                                            null, null, batchFirst);
     this.linear1 = new Linear(dModel, dimFeedforward, bias);
     this.linear2 = new Linear(dimFeedforward, dModel, bias);
     this.norm1 = new LayerNorm(dModel, layerNormEps);
@@ -4642,9 +4683,17 @@ export class TransformerDecoderLayer extends Module {
     normFirst = false, bias = true,
   ) {
     super();
-    void batchFirst;
-    this.self_attn = new MultiheadAttention(dModel, nhead);
-    this.multihead_attn = new MultiheadAttention(dModel, nhead);
+    // **`batchFirst` was taken and thrown away** — `void batchFirst;` sat here, in the
+    // class whose own comment above is about an argument landing in the wrong seat.
+    // It reaches the attention now, as it does in the core, which is the only place
+    // the flag means anything.
+    this.self_attn = new MultiheadAttention(dModel, nhead, 0, true, false, false,
+                                            null, null, batchFirst);
+    // The cross-attention goes through `multiHeadAttentionForward`, which takes the
+    // length first regardless — but the flag belongs on the layer either way, so the
+    // two attentions inside one decoder layer do not disagree about their input.
+    this.multihead_attn = new MultiheadAttention(dModel, nhead, 0, true, false,
+                                                 false, null, null, batchFirst);
     this.linear1 = new Linear(dModel, dimFeedforward, bias);
     this.linear2 = new Linear(dimFeedforward, dModel, bias);
     this.norm1 = new LayerNorm(dModel, layerNormEps);

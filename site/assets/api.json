@@ -7502,7 +7502,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernel: number, spatial: number, stride?: number, padding?: number, bias?: boolean, dilation?: number, groups?: number, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, spatial: number, stride?: number, padding?: number, bias?: boolean, dilation?: number, groups?: number, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       },
       {
@@ -7527,7 +7527,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -7540,7 +7540,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -7553,7 +7553,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -8133,7 +8133,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, spatial: number, stride?: number, padding?: number, bias?: boolean, outputPadding?: number, groups?: number, dilation?: number)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, spatial: number, stride?: number, padding?: number, bias?: boolean, outputPadding?: number, groups?: number, dilation?: number)",
        "doc": ""
       },
       {
@@ -8158,7 +8158,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
        "doc": ""
       }
      ],
@@ -8172,7 +8172,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
        "doc": ""
       }
      ],
@@ -8186,7 +8186,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
        "doc": ""
       }
      ],
@@ -8250,7 +8250,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(kernel?: number, stride?: number | undefined, padding?: number, dilation?: number, returnIndices?: boolean, ceilMode?: boolean)",
+       "signature": "constructor(kernelSize?: number, stride?: number | undefined, padding?: number, dilation?: number, returnIndices?: boolean, ceilMode?: boolean)",
        "doc": "**`returnIndices` was missing until the layer that consumes them arrived.**\nThe name was here, the argument was not, and that is invisible from a name\ncount — `MaxUnpool` is what makes the positions worth asking for.",
        "doc_ko": "**그것을 받아먹는 층이 생길 때까지 `returnIndices` 가 없었다.** 이름은 여기\n있었고 인자가 없었으며, 그것은 이름을 세는 것으로는 안 보인다 — 자리를 물어볼\n값어치를 만드는 것이 `MaxUnpool` 이다."
       },
@@ -8275,7 +8275,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel?: number, stride?: number | undefined)",
+       "signature": "constructor(kernelSize?: number, stride?: number | undefined)",
        "doc": ""
       },
       {
@@ -8294,7 +8294,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel?: number, stride?: number | undefined)",
+       "signature": "constructor(kernelSize?: number, stride?: number | undefined)",
        "doc": ""
       },
       {
@@ -8366,10 +8366,11 @@
      "doc": "Puts values back where `MaxPool` chose. `torch.nn.MaxUnpool1d`.\n\n**It needs two inputs, so `forward` is not the way in** — call `place()`.\nThe positions have to travel beside the values; hiding them inside the layer\nmeans using somebody else's the second time the layer is applied. torch has\nthe same shape for the same reason, and it is why this one cannot go into a\n`Sequential`.",
      "members": [
       {
-       "name": "kernel",
-       "signature": "protected readonly kernel: number",
+       "name": "kernelSize",
+       "signature": "protected readonly kernelSize: number",
        "doc": "",
-       "protected": true
+       "protected": true,
+       "torch": "kernel_size"
       },
       {
        "name": "stride",
@@ -8386,7 +8387,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, stride?: number | undefined, padding?: number)",
+       "signature": "constructor(kernelSize: number, stride?: number | undefined, padding?: number)",
        "doc": ""
       },
       {
@@ -8466,7 +8467,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(spatial: number, kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
+       "signature": "constructor(spatial: number, kernelSize: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
        "doc": ""
       },
       {
@@ -8490,7 +8491,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
+       "signature": "constructor(kernelSize: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
        "doc": ""
       }
      ]
@@ -8503,7 +8504,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
+       "signature": "constructor(kernelSize: number, outputSize?: number | readonly number[] | null, outputRatio?: number | readonly number[] | null, returnIndices?: boolean, _randomSamples?: readonly (readonly number[])[] | null)",
        "doc": ""
       }
      ]
@@ -8516,7 +8517,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, stride?: number | undefined)",
+       "signature": "constructor(kernelSize: number, stride?: number | undefined)",
        "doc": ""
       },
       {
@@ -8534,7 +8535,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, stride?: number | undefined, padding?: number, ceilMode?: boolean, countIncludePad?: boolean)",
+       "signature": "constructor(kernelSize: number, stride?: number | undefined, padding?: number, ceilMode?: boolean, countIncludePad?: boolean)",
        "doc": "**`AvgPool1d` has no `divisorOverride` and this is not an omission** — torch\ngives that argument to the 2-D and 3-D forms alone, so a seat here would be one\nthis library invented."
       },
       {
@@ -8553,7 +8554,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, stride?: number | undefined, padding?: number, ceilMode?: boolean, countIncludePad?: boolean, divisorOverride?: number | null)",
+       "signature": "constructor(kernelSize: number, stride?: number | undefined, padding?: number, ceilMode?: boolean, countIncludePad?: boolean, divisorOverride?: number | null)",
        "doc": ""
       },
       {
@@ -8610,7 +8611,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(normType: number, kernel: number, stride?: number | undefined, ceilMode?: boolean)",
+       "signature": "constructor(normType: number, kernelSize: number, stride?: number | undefined, ceilMode?: boolean)",
        "doc": ""
       },
       {
@@ -8868,9 +8869,10 @@
      "doc": "",
      "members": [
       {
-       "name": "kernel",
-       "signature": "readonly kernel: number",
-       "doc": ""
+       "name": "kernelSize",
+       "signature": "readonly kernelSize: number",
+       "doc": "",
+       "torch": "kernel_size"
       },
       {
        "name": "dilation",
@@ -8889,7 +8891,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, dilation?: number, padding?: number, stride?: number)",
+       "signature": "constructor(kernelSize: number, dilation?: number, padding?: number, stride?: number)",
        "doc": ""
       },
       {
@@ -8917,9 +8919,10 @@
        "torch": "output_size"
       },
       {
-       "name": "kernel",
-       "signature": "readonly kernel: number",
-       "doc": ""
+       "name": "kernelSize",
+       "signature": "readonly kernelSize: number",
+       "doc": "",
+       "torch": "kernel_size"
       },
       {
        "name": "dilation",
@@ -8938,7 +8941,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(outputSize: [number, number], kernel: number, dilation?: number, padding?: number, stride?: number)",
+       "signature": "constructor(outputSize: [number, number], kernelSize: number, dilation?: number, padding?: number, stride?: number)",
        "doc": ""
       },
       {
@@ -9514,7 +9517,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -9527,7 +9530,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -9540,7 +9543,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -9548,12 +9551,12 @@
     {
      "kind": "class",
      "name": "LazyConvTranspose1d",
-     "signature": "export declare class LazyConvTranspose1d extends LazyConvBase",
+     "signature": "export declare class LazyConvTranspose1d extends LazyConvTransposeBase",
      "doc": "",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -9561,12 +9564,12 @@
     {
      "kind": "class",
      "name": "LazyConvTranspose2d",
-     "signature": "export declare class LazyConvTranspose2d extends LazyConvBase",
+     "signature": "export declare class LazyConvTranspose2d extends LazyConvTransposeBase",
      "doc": "",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -9574,12 +9577,12 @@
     {
      "kind": "class",
      "name": "LazyConvTranspose3d",
-     "signature": "export declare class LazyConvTranspose3d extends LazyConvBase",
+     "signature": "export declare class LazyConvTranspose3d extends LazyConvTransposeBase",
      "doc": "",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
