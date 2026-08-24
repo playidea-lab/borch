@@ -4854,6 +4854,39 @@ def top_level_cases(inp=None):
         lambda L: f"{L.typename(L.tensor(plain))} {L.typename(3)}")
     add("살펴보기::promote_types",
         lambda L: str(L.promote_types(L.int64, L.float32)))
+    # **`result_type` sat beside this one with no case at all**, and what was public
+    # under that name was the internal numpy-dtype helper — every call shaped the way
+    # torch documents raised, and the only shape that worked is the one torch refuses.
+    # The contract was inverted end to end and nothing asked.
+    #
+    # The scalar rows are the point: a Python number is **weaker than a tensor**, so
+    # an int tensor with a Python float is `float32` and not `float64`. Asking only
+    # the tensor-pair row would pass on a copy of `promote_types`.
+    add("살펴보기::result_type(텐서,텐서)",
+        lambda L: str(L.result_type(L.tensor([1]), L.tensor([1.0]))))
+    add("살펴보기::result_type(텐서,파이썬float)",
+        lambda L: str(L.result_type(L.tensor([1]), 1.5)))
+    add("살펴보기::result_type(텐서,파이썬int)",
+        lambda L: str(L.result_type(L.tensor([1]), 2)))
+    add("살펴보기::result_type(bool텐서,파이썬int)",
+        lambda L: str(L.result_type(L.tensor([True]), 2)))
+    add("살펴보기::result_type(수,수)", lambda L: str(L.result_type(1, 2.5)))
+    # torch takes tensors here and refuses dtypes — `promote_types` is the other
+    # question. **Not `refusal_case`**: that one is for places torch manages and all
+    # three of ours decline, and here torch declines too. Both sides raise the same
+    # class, so the exception's name is a value the two can be compared on.
+    #
+    # Being lenient is diverging too. Answering a dtype pair would work here and stop
+    # on a real machine, and the exception a learner then meets names neither
+    # library.
+    def result_type_refuses_dtypes(L):
+        try:
+            L.result_type(L.int64, L.float32)
+            return "예외가 안 났다"
+        except Exception as exc:                                    # noqa: BLE001
+            return type(exc).__name__
+
+    add("살펴보기::result_type(dtype,dtype)=거절", result_type_refuses_dtypes)
     add("살펴보기::get_default_dtype", lambda L: str(L.get_default_dtype()))
     add("살펴보기::finfo",
         lambda L: (f"{L.finfo(L.float32).eps:.9g} {L.finfo(L.float32).max:.9g} "
@@ -11773,10 +11806,18 @@ def dtype_cases(inp=None):
                   lambda L: str(L.int)))
     # The constructing side. A place **the core refuses too**, so it is `we_refuse` rather than `_as_expected`.
     we_refuse("dtype=int", lambda L: L.zeros(2, dtype=L.int), group="별칭")
-    # `double` is in the core and absent on the browser side alone — the same divergence as
-    # `dtype::형바꾸기::double=브라우저는거절` above.
-    cases.append(("dtype::별칭::dtype=double=브라우저는거절",
-                  _as_expected(lambda L: L.zeros(2, dtype=L.double))))
+    # **This was `_as_expected` and it froze a silent downcast as the right answer.**
+    # That helper asks only *did it raise*, and the core did not — it handed back a
+    # `float32` where torch hands back a `float64`. Right by the question asked and
+    # wrong by the question's name, which is the shape this repository keeps finding.
+    #
+    # `.double()`, `.to(float64)` and `.type(float64)` had already been changed to
+    # refuse, in `Tensor._cast`, whose comment names this exact failure: *the request
+    # was granted in name and answered in another cell.* `dtype=` was the fourth
+    # spelling of that request and the only one still answered that way — measured
+    # across thirty-seven factories. Now all four refuse, and the core refuses too,
+    # so the verdict is `we_refuse` and not a browser-only divergence.
+    we_refuse("dtype=double", lambda L: L.zeros(2, dtype=L.double), group="별칭")
 
     # ── does a factory function **actually use** `dtype=` ──
     #
@@ -11911,9 +11952,13 @@ def dtype_cases(inp=None):
     # The only type that can be asked is float64 — asked on the default (float32) the answers agree
     # and the case asks nothing. And the browser side has no double precision, so **the three part.**
     # Instead of the value, "did each behave as its own documentation says" is asked.
-    cases.append(("dtype::공장::x.norm(dtype=float64)=브라우저는거절",
-                  _as_expected(lambda L: L.tensor(np.float32([1.0, 2.0, 3.0]))
-                               .norm(dtype=L.float64))))
+    # **And here too the core stopped succeeding**, for the reason written beside
+    # `dtype=double` above: `norm(dtype=)` converts before computing, so the dtype
+    # is named by the caller and a named request is not an accident. It answered in
+    # `float32` and said nothing.
+    we_refuse("x.norm(dtype=float64)",
+              lambda L: L.tensor(np.float32([1.0, 2.0, 3.0])).norm(dtype=L.float64),
+              group="공장")
 
     # ── `out=` — writing into a tensor made in advance ──
     #

@@ -55,12 +55,14 @@ HAND = {
 }
 
 
-def _classify(name):
+def _classify(name, module=torch, hand=None, patterns=None):
     """('single' | 'several' | 'not taken' | None). None means **could not be judged.**"""
-    fn = getattr(torch, name)
+    fn = getattr(module, name)
+    hand = HAND if hand is None else hand
+    patterns = PATTERNS if patterns is None else patterns
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        for args in ([HAND[name]] if name in HAND else PATTERNS):
+        for args in ([hand[name]] if name in hand else patterns):
             # **Fresh tensors every attempt.** `PATTERNS` holds module-level tensors
             # and the widened intake reaches torch's in-place family — `relu_`,
             # `sigmoid_`, `clamp_` — which write into what they are given. The shared
@@ -191,3 +193,112 @@ def test_this_file_leaves_the_library_as_it_found_it():
         f"  before {before}\n  after  {after}\n"
         "  Something reached by `dir(torch)` configures rather than computes — name "
         "it in `test_axis_sweep.CONFIGURES`.")
+
+
+# ── the same two questions for `linalg` ─────────────────────────────────────
+#
+# `_LINALG_TAKES_OUT` is a second table, and it exists for the same reason: the core
+# does not lean on torch, so the list of names taking `out=` is written down. The
+# comment above it in `borch/__init__.py` promises this file holds it up against
+# torch, and this is where that promise is kept.
+#
+# **It was drafted from the docstrings** — the source this file's opening paragraph
+# rejects, one screen above the line that used it, for the second time in this
+# repository. Re-measured by calling, thirty-seven of the thirty-eight were right and
+# `lstsq` was missing.
+#
+# `linalg` needs its own argument shapes: almost everything wants a square matrix, and
+# several want a factorisation that has to be produced first.
+
+_SQ = torch.eye(3) * 2 + 0.1
+_RHS = torch.randn(3, 2)
+
+_LINALG_PATTERNS = [
+    (_SQ,), (_SQ, _SQ), (_SQ, _V), (_V,), (_SQ, _RHS),
+]
+
+
+def _linalg_hand():
+    """Shapes no pattern reaches. **Built by calling torch**, because three of them
+    want a factorisation as input and one wants a keyword to be legal at all."""
+    ld, piv = torch.linalg.ldl_factor(_SQ)
+    lu, pivots = torch.linalg.lu_factor(_SQ)
+    return {
+        "cross": (_V, _V),
+        "householder_product": (torch.randn(3, 3), torch.randn(3)),
+        "ldl_solve": (ld, piv, _RHS),
+        "lu_solve": (lu, pivots, _RHS),
+        "matrix_power": (_SQ, 2),
+        "multi_dot": ([_SQ, _SQ],),
+        "solve_triangular": (torch.tril(_SQ), _RHS),
+        "tensorinv": (torch.randn(2, 2, 2, 2),),
+        "tensorsolve": (torch.randn(4, 2, 2), torch.randn(4)),
+        "vecdot": (_V, _V),
+    }
+
+
+def _linalg_classify(name):
+    got = _classify(name, torch.linalg, _linalg_hand(), _LINALG_PATTERNS)
+    if got is None and name == "solve_triangular":
+        # `upper=` has no default, so no positional shape is a legal call. Asked
+        # with it, rather than filed as unjudgeable — an unjudged name is a name
+        # the table is not held against.
+        try:
+            out = torch.empty_like(_RHS)
+            torch.linalg.solve_triangular(torch.tril(_SQ), _RHS, upper=False, out=out)
+            return "single"
+        except TypeError:
+            return "not taken"
+    return got
+
+
+def test_the_linalg_out_table_is_not_stale():
+    """A name written into `_LINALG_TAKES_OUT` has to actually take `out=` in torch."""
+    wrong = [f"{n} — the table says it takes `out=`, torch refuses it"
+             for n in sorted(borch._LINALG_TAKES_OUT)
+             if _linalg_classify(n) == "not taken"]
+    assert not wrong, (
+        "`_LINALG_TAKES_OUT` is stale:\n  " + "\n  ".join(wrong) + "\n\n"
+        "Take the name out. Being more lenient than torch is diverging too — code\n"
+        "written here stops on someone's own machine."
+    )
+
+
+def test_the_linalg_out_table_is_not_short():
+    """A `linalg` name torch takes `out=` for, which we also have, has to be in it."""
+    missing = []
+    for name in sorted(dir(torch.linalg)):
+        if name.startswith("_") or name in borch._LINALG_TAKES_OUT:
+            continue
+        if not hasattr(borch.linalg, name):
+            continue
+        if _linalg_classify(name) in ("single", "several"):
+            missing.append(name)
+    assert not missing, (
+        "these `linalg` names should take `out=` and are not in the table: "
+        + ", ".join(missing) + "\n\n"
+        "This is how `lstsq` was found. The draft came off the docstrings and that\n"
+        "name's docstring writes the signature as `lstsq(A, B, rcond=None, *,\n"
+        "driver=None)` — three of those four are names torch itself refuses."
+    )
+
+
+def test_the_linalg_sweep_actually_judges():
+    """**An unjudged name is a name the table is not held against.**
+
+    Both checks above skip anything `_linalg_classify` cannot call, which is the
+    right answer for a name no shape reaches and the wrong one for a whole table: a
+    sweep that judges nothing passes both assertions in silence. That failure has
+    already happened here — a `linalg` wrapper written as `(A, *args, **kw)` read as
+    variadic and dropped three rows into *cannot judge* on a different axis.
+
+    So the ratio is pinned. Not the count, which moves when torch adds a name.
+    """
+    judged = sum(_linalg_classify(n) is not None
+                 for n in sorted(borch._LINALG_TAKES_OUT))
+    total = len(borch._LINALG_TAKES_OUT)
+    assert judged >= total - 2, (
+        f"only {judged} of {total} names in `_LINALG_TAKES_OUT` could be called at "
+        "all.\n  The shapes above stopped reaching torch, and both checks either "
+        "side of this\n  one are passing on an empty sweep."
+    )

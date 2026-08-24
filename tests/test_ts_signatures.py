@@ -615,7 +615,21 @@ RENAMED = {
     # **Zero here does not mean the two libraries name everything alike.** 24 rows
     # were folded into `ts_signatures.RENAMES` long before this, and this bucket
     # counts what is left over that fold.
-    "Tensor": 0,
+    #
+    # 0 → 2. `lstsq` and `solve` — the two methods **torch keeps and refuses.**
+    # Their bodies raise *removed in 1.9, use `torch.linalg`*, and until now they
+    # were written `(*args, **kw)` here, which the core-against-torch axis read as
+    # *cannot judge*. Measured, torch's tombstones have a real argument list: one
+    # required positional named `other`, and `t.lstsq(b=v)` raises `TypeError:
+    # unexpected keyword argument 'b'` rather than the removal notice. The core now
+    # says `other` and matches that error byte for byte; borch.ts still says `b`.
+    #
+    # **What closes it is borch.ts renaming those two to `other`** — not a fold
+    # here. A fold would rewrite `other` into `b` for every symbol that has either,
+    # and `ts_signatures.RENAMES` has nowhere to write a per-symbol exception; the
+    # file two directories over exists because a global fold on a per-row property
+    # is how six `LazyConv` agreements were turned into six mismatches.
+    "Tensor": 2,
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.
@@ -940,7 +954,43 @@ SHORTER = {
     # 1 → 8. The seven that left `unaligned` and `renamed` — what they are short of
     # is `dim`, `keepdim` and `dtype` on the norms, and `pivot`/`left`/`adjoint` on
     # the factorisations.
-    "linalg": 8,
+    #
+    # **8 → 29, and the core is the side that moved.** `linalg` did not take `out=`
+    # at all until now: `_accepts_out` existed and was applied to `globals()`, and
+    # `linalg`'s members come off `_ops` directly, so the wrapper never reached
+    # them. Thirty-eight names now take it and **declare** it, which is what made
+    # the core longer than borch.ts on twenty-one further rows.
+    #
+    # **borch.ts has no `out=` anywhere.** Not on `linalg`, not on `Tensor`, not
+    # once in `borch-ts/src` — every `out` in that tree is a local variable. The
+    # first draft of this note said *it already declares `out` on nine `linalg`
+    # members, so the shape is settled and the rest is the same edit repeated*,
+    # which was written without measuring and was false in both halves. Measured:
+    # zero of thirty-three.
+    #
+    # So this is not twenty-one members lagging a settled shape — it is a decision
+    # borch.ts has not made. `out=` buys torch's *observable* behaviour (the
+    # destination changes, the same object comes back) and never the allocation it
+    # exists to save, which is why the core carries it; whether that is worth a
+    # parameter on every signature in a library that has none is the call of the
+    # session holding borch.ts, and 29 is the honest number until it is made.
+    #
+    # **The call was made, and it is not a cost decision.** From that session:
+    # writing into somebody else's buffer silently overwrites it when the autograd
+    # graph already references that buffer, and the defence torch puts in the way —
+    # *a leaf Variable that requires grad is being used in an in-place operation* —
+    # does not exist in borch.ts. So `out=` there is not expensive, it is **not yet
+    # safe**. **What retires this row is that defence standing**; the parameter
+    # follows it.
+    #
+    # Their sentence, kept here rather than in their file, because this is where the
+    # number lives and a reason filed apart from the number it explains is a reason
+    # nobody reaches at the moment it matters.
+    #
+    # Raised by the session holding the core, whose change moved somebody else's
+    # count: leaving the suite red is not an option and editing quietly is worse,
+    # so it is written up here and said out loud in the ledger.
+    "linalg": 29,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
     # that they exist at all.

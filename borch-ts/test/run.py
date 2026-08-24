@@ -442,16 +442,24 @@ NOT_PORTED = {
     #
     # The 39 left are **the Python surface**, and they part into three kinds:
     #
-    #   `살펴보기::` 16 — `finfo`, `iinfo`, `can_cast`, `promote_types`, `typename`.
-    #                     Looking into a dtype as a value, which has nowhere to sit over
-    #                     there, where a dtype is a string.
+    #   `살펴보기::` 22 — `finfo`, `iinfo`, `can_cast`, `promote_types`, `result_type`,
+    #                     `typename`. Looking into a dtype as a value, which has nowhere
+    #                     to sit over there, where a dtype is a string.
     #   `device::` 9    — `torch.device` is an **object** with `.type` and `.index`.
     #                     `t.device` over there is a string, and `device()`, which hands
     #                     back the adapter, is an entirely different function.
     #   the other 14    — `resize_as_` (it swaps the handle out) · `inference_mode` (a with
     #                     statement) · round-tripping the random state · top-level
     #                     signatures taking an integer enum.
-    "top::": (39, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
+    # 39 → 45. Six `result_type` cases, added by the session holding the core because
+    # **that name had no case at all** and what was public under it was the internal
+    # numpy-dtype helper — torch takes tensors there and refuses dtypes, and this took
+    # dtypes and refused tensors. Inverted end to end with nothing asking.
+    #
+    # They land here for the reason already written above rather than a new one: five of
+    # the six hand back a dtype as a value, and over there a dtype is a string. The sixth
+    # is a refusal whose whole content is which of two functions you called.
+    "top::": (45, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
     # `spot::` was gone — 47 cases, all ported — then back with two, and gone again.
     #
     # The two were `unique(dim=)`, and the reason written here said it is a different

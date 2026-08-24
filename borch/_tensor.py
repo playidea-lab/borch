@@ -7,7 +7,8 @@ import numpy as _np
 from ._base import (
     Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _float_in, _like_torch,
     _needs_float,
-    _no_complex128, _np, _refuses_bool, _tensor_repr, _unsupported,
+    _no_complex128, _np, _refuses_bool, _requested_dtype, _tensor_repr,
+    _unsupported,
     device as _device, dtype, float32,
 )
 
@@ -1586,14 +1587,41 @@ _METHOD_FROM_MODULE = (
 
 
 def _deprecated_by_torch(name, instead):
-    def method(self, *args, **kw):
-        del self, args, kw
+    """A name torch keeps and refuses. **It still has an argument list.**
+
+    `t.lstsq(v)` and `t.solve(a)` raise in real torch, and `t.lstsq(b=v)` raises
+    something else — `TypeError: unexpected keyword argument 'b'`. Measured on both:
+    one required positional named `other`, every other spelling rejected before the
+    removal notice is reached. Written `(*args, **kw)` the notice arrived for calls
+    torch stops earlier and with a different error, which is a divergence a learner
+    meets as *the message is wrong* rather than as *the method is gone*.
+    """
+    def method(self, other):
+        del self, other
         raise RuntimeError(_like_torch(
             f"`{name}` was removed in torch 1.9 — use `{instead}`.",
             f"This function was deprecated since version 1.9 and is now removed. "
             f"Please use the `torch.linalg.{instead}` function instead."))
 
     method.__name__ = name
+    # Without this the `TypeError` for a wrong keyword names
+    # `_deprecated_by_torch.<locals>.method`, where torch names `Tensor.lstsq`.
+    method.__qualname__ = f"Tensor.{name}"
+    # **This forwards to nothing, and `_link_wrapped` cannot tell.** That pass in
+    # `borch/__init__.py` links a `Tensor` method to the `_ops` function of the same
+    # name whenever the method is a closure — the premise being *a closure named
+    # `lstsq` on `Tensor` is a thin wrapper around `_ops.lstsq`*. A tombstone is a
+    # closure with the right name and no such body, so it was linked, and every
+    # reader of `inspect.signature` was told this method takes what the free
+    # function takes.
+    #
+    # It read correctly by luck: `_ops.lstsq` was `(input, b)`, one argument after
+    # the receiver, and torch's removed method is documented `(other)` — so the axis
+    # filed it as *the same list, one name apart*. Giving the free function its real
+    # `rcond` and `driver` is what made the borrowed signature visible.
+    #
+    # A name that only raises has no argument list, so the flag says so.
+    method._forwards_nothing = True
     return method
 
 
@@ -1955,7 +1983,7 @@ def _new_like(name, fill):
     def method(self, *size, dtype=None, requires_grad=False):
         shape = tuple(size[0]) if len(size) == 1 and isinstance(size[0], (tuple, list)) \
             else tuple(int(s) for s in size)
-        want = (dtype.np if isinstance(dtype, globals()["dtype"]) else
+        want = (_requested_dtype(dtype).np if isinstance(dtype, globals()["dtype"]) else
                 (dtype if dtype is not None else self.data.dtype))
         return Tensor(fill(shape, want), requires_grad)
 
@@ -1999,7 +2027,7 @@ def _new_seats(name, device, layout, pin_memory):
 def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=False,
               layout=None, pin_memory=False):
     _new_seats("new_full", device, layout, pin_memory)
-    want = (dtype.np if isinstance(dtype, globals()["dtype"]) else
+    want = (_requested_dtype(dtype).np if isinstance(dtype, globals()["dtype"]) else
             (dtype if dtype is not None else self.data.dtype))
     return Tensor(_np.full(tuple(size), fill_value, dtype=want), requires_grad)
 
@@ -2007,7 +2035,7 @@ def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=Fal
 def _new_tensor(self, data, dtype=None, device=None, requires_grad=False,
                 layout=None, pin_memory=False):
     _new_seats("new_tensor", device, layout, pin_memory)
-    want = (dtype.np if isinstance(dtype, globals()["dtype"]) else
+    want = (_requested_dtype(dtype).np if isinstance(dtype, globals()["dtype"]) else
             (dtype if dtype is not None else self.data.dtype))
     return Tensor(_np.array(data, dtype=want, copy=True), requires_grad)
 

@@ -390,7 +390,23 @@ UNALIGNED = {
     # both, so the top-level definitions keep `input` and `linalg` has three
     # wrappers. Third time in a day — `Tensor.split`/`torch.split` and
     # `Tensor.softmax`/`F.softmax` were the others.
-    "linalg": 2,
+    #
+    # **2 → 0, and the sentence above is what kept it at 2.** *"…differ only by
+    # torch's `out=`, which this library does not carry here"* is a picture, not a
+    # decision: it says what the difference is and nothing about whether the
+    # difference was chosen. A picture cannot go stale, so it never asks to be
+    # re-read, and this one was passed over three times.
+    #
+    # Asked once, it turned out to be **half true.** `_accepts_out` had existed all
+    # along and was applied to `globals()`, and `linalg`'s members are bound from
+    # `_ops` directly, so the wrapper never reached them. A mechanical gap wearing
+    # a reason's clothes. `borch/__init__.py` now carries `_LINALG_TAKES_OUT` and
+    # `tests/test_out_names.py` holds it against torch.
+    #
+    # The second half was that the wrapper declared `__wrapped__` and not
+    # `__signature__` — so `out=` worked and no reader could see it. Both closed,
+    # and **zero here is the end state**, not a number waiting to be lowered again.
+    "linalg": 0,
     # 1 → 0. `DataLoader` had seven of torch's seventeen names **and two of them
     # in the wrong seats** — `collate_fn` is torch's seventh and `drop_last` its
     # ninth, where here they were sixth and seventh. `DataLoader(ds, 4, False,
@@ -557,7 +573,11 @@ SHORTER = {
     # **A row arriving in `shorter` from `unaligned` is the axis working**: the vague
     # bucket said *these lists cannot be lined up* and this one says *torch has a
     # tail we do not*, which is a thing somebody can act on.
-    "linalg": 2,
+    #
+    # **2 → 0.** Somebody acted on it: `linalg` takes `out=` and declares it. See
+    # the `unaligned` note above for why the sentence sat unacted-on for three
+    # readings — it described the gap and never said the gap was chosen.
+    "linalg": 0,
     "utils.data": 0,
 }
 

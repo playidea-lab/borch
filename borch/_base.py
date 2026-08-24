@@ -218,7 +218,8 @@ def _resolve(data, dt):
     `complex128`, and there is no such thing here.
     """
     if dt is not None:
-        return dt.np
+        # A dtype named by the caller — see `_requested_dtype`.
+        return _requested_dtype(dt).np
     arr = _np.asarray(data)
     if arr.dtype.kind == "c":
         return _np.complex64
@@ -227,6 +228,38 @@ def _resolve(data, dt):
     if arr.dtype.kind in "iu":
         return _np.int64
     return _np.float32
+
+
+def _requested_dtype(dt, where="dtype=float64"):
+    """A dtype the caller **named**. Double precision stops here.
+
+    `Tensor.__init__` narrows `float64` to `float32` and that is deliberate — it is
+    the throat every promotion passes through, and numpy raises `int64 + float32` to
+    double behind our back. Narrowing what arrives by accident is how the library
+    holds its first design decision.
+
+    **A named request is not an accident.** `.double()`, `.to(float64)` and
+    `.type(float64)` all refuse, in `Tensor._cast`, whose comment draws the line
+    this function is the other half of: *the request was granted in name and
+    answered in another cell.* `tensor(x, dtype=float64)` was the fourth spelling
+    of the same request and the only one still answered that way — measured across
+    thirty-seven factories, every one of which took the argument and handed back
+    `float32`.
+
+    Three doors that raise and one that quietly gives you something else is worse
+    than four that raise, because the quiet one teaches that the dtype was honoured.
+
+    **The binding never had this hole, and the reason names the core's.** Over there
+    `float64` is an `_AbsentDtype` — a name that exists and stops the moment it is
+    used — so every spelling refuses without anything being written. Here the name
+    cannot be that, because it has a **second job**: naming what numpy hands over
+    during promotion, which is also why `complex128` is a real dtype object. The gate
+    could not go on the name, so it goes on the request, and one library needing a
+    function where the other needs nothing is the whole difference.
+    """
+    if dt is not None and _np.dtype(dt.np if isinstance(dt, dtype) else dt) == _np.float64:
+        _unsupported(f"float64 (`{where}`)")
+    return dt
 
 
 def _no_complex128(what="This operation"):

@@ -35,6 +35,7 @@ places is off by 2.6%.
 """
 
 
+import inspect as _inspect
 import math as _math
 
 import numpy as _np
@@ -55,7 +56,6 @@ from ._base import (
 from ._tensor import (
     Tensor, _CATEGORY, _DEFAULT_BY_CATEGORY, _DataDescriptor, _GradMode, _MinMax, _RANK,
     _category, _grad_mode, _no_bool_subtract, _promote, _scalar_category, _unbroadcast,
-    result_type,
 )
 from ._ops import _out                                   # noqa: E402
 from ._ops import (
@@ -130,6 +130,7 @@ from ._ops import (
     # Introspection.
     can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
+    result_type,
     set_default_dtype, typename,
     # Bitwise operations and integer maths. On `bool` they become logical
     # operations — torch looks at the dtype.
@@ -458,6 +459,11 @@ def _link_wrapped():
         _m = getattr(_T, _n, None)
         if getattr(_m, "__wrapped__", None) is not None:
             continue
+        if getattr(_m, "_forwards_nothing", False):
+            # A tombstone — the name exists because torch keeps it and raises.
+            # Linking it to the live `_ops` function of the same name lends it an
+            # argument list it does not have; see `_deprecated_by_torch`.
+            continue
         _target = getattr(_o, _n, None)
         if callable(_m) and callable(_target) and "<locals>" in getattr(
                 _m, "__qualname__", "") and getattr(_m, "__name__", None) == _n:
@@ -552,6 +558,45 @@ def _accepts_out(fn, name):
     # whatever the table grew to cover, which is the one direction a coverage check
     # cannot report on itself.
     call.__wrapped__ = fn
+    # **And `__wrapped__` alone under-reports: it says the list without `out`.**
+    # That is what the wrapped function takes, not what this one takes, and the
+    # difference is exactly the argument this wrapper exists to add. Four rows on
+    # the core-against-torch axis sat frozen under *"torch declares an `out=` and
+    # this does not"* — read three times and true each time, because the sentence
+    # is about the **declaration** and nobody re-asked once `out=` began working.
+    #
+    # `linalg` is the only namespace that axis compares where the gap shows; the
+    # same understatement covers all 229 top-level names in the table above and is
+    # simply not looked at there. So it is repaired where it lives.
+    #
+    # (The docstring says a hundred and seventy-two, which was the count the day it
+    # was written. Left alone — a past number changed to the current one stops being
+    # a record of anything.)
+    #
+    # `__signature__` wins over `__wrapped__` in `inspect`, and it is **built from**
+    # the wrapped list rather than replacing it — `narrow(input, dim, start, length,
+    # *, out=None)`, the whole thing, not `(*args, **kwargs)`.
+    try:
+        _sig = _inspect.signature(fn)
+    except (TypeError, ValueError):
+        return call
+    # **No builtins here.** This module binds `any`, `all`, `type`, `range`, `sum`,
+    # `min`, `max` and `abs` as torch functions, so inside it those names are the
+    # tensor operations. `any(p.name == "out" for p in _params)` reached
+    # `borch.any`, which tried to make a tensor out of a generator — a `TypeError`
+    # about `float()` that names neither `any` nor this function. `type` had cost
+    # the same half hour one screen down, and the loop below is what both fixes
+    # look like.
+    _params = list(_sig.parameters.values())
+    _at = len(_params)
+    for _i, _param in enumerate(_params):
+        if _param.name == "out":
+            return call
+        if _param.kind is _inspect.Parameter.VAR_KEYWORD and _at == len(_params):
+            _at = _i
+    _params.insert(_at, _inspect.Parameter(
+        "out", _inspect.Parameter.KEYWORD_ONLY, default=None))
+    call.__signature__ = _sig.replace(parameters=_params)
     return call
 
 
@@ -559,6 +604,61 @@ for _name in _TAKES_OUT | _TAKES_OUT_TUPLE:
     _fn = globals().get(_name)
     if _fn is not None:
         globals()[_name] = _accepts_out(_fn, _name)
+del _name
+
+
+# **The same wrapping, reaching `linalg`, which it did not.**
+#
+# The loop above walks this module's `globals()`. `linalg` is a namespace object whose
+# members are bound from `_ops` directly, so none of them passed through it —
+# `borch.qr(x, out=…)` was taken and `borch.linalg.qr(x, out=…)` was a `TypeError`,
+# for the same function.
+#
+# **It was described and never decided.** Four frozen rows on the core↔torch axis
+# ended with *"torch declares an `out=` and this does not"*, which is a true sentence
+# that says nothing about whether the absence was chosen. Read three times and passed
+# over three times, because a description has no retirement condition — it cannot go
+# stale, so it never asks to be re-read. The peer session holding borch.ts named that
+# shape today after `optim`'s seven sat under one for a day.
+#
+# Followed through, the sentence was **half true**: the machinery exists and simply
+# did not reach here. What it buys is torch's *observable* `out=` — the destination
+# changes and the same object comes back — and not the allocation it exists to save,
+# which `_out`'s docstring has said all along.
+#
+# **The list is written down and not read off torch.** The first version walked
+# `torch.linalg.__doc__` at import time, which makes the library's own surface depend
+# on whether real torch happens to be installed: `out=` accepted on a development
+# machine and refused in the browser, where this module *is* torch. Two libraries
+# under one name, decided by the environment — the exact silent divergence this
+# repository exists to hunt, and it was one edit from being shipped.
+#
+# So it is a table, and `tests/test_out_names.py` holds it against torch. That is the
+# same shape as `_TAKES_OUT` above and the reason it is a table too.
+#
+# **The first draft of this list came from the docstrings**, and the file that now
+# holds it opens by rejecting the docstrings for deciding exactly this — with the
+# receipt: twenty-four names lost that way once already. Re-measured by calling, the
+# thirty-seven were right and `lstsq` was missing, which is the direction that costs
+# a reader: torch takes `out=` there and this refused it.
+_LINALG_TAKES_OUT = frozenset("""
+    cholesky cholesky_ex cond cross det eig eigh eigvals eigvalsh
+    householder_product inv inv_ex ldl_factor ldl_factor_ex ldl_solve lstsq lu
+    lu_factor lu_factor_ex lu_solve matmul matrix_norm matrix_power matrix_rank
+    multi_dot norm pinv qr slogdet solve solve_ex solve_triangular svd svdvals
+    tensorinv tensorsolve vecdot vector_norm
+""".split())
+
+for _name in _LINALG_TAKES_OUT:
+    # **No `isinstance(_fn, type)` guard here, and the first version had one.**
+    # `type` is not the builtin in this module — `torch.type` is a real name and this
+    # package exports it — so the guard raised `arg 2 must be a type`. Every entry
+    # above is a function and none is a class, so the guard was doing nothing but
+    # being wrong. A name meaning something else, in the file that spent the day on
+    # exactly that.
+    _fn = getattr(linalg, _name, None)
+    if _fn is not None and callable(_fn):
+        setattr(linalg, _name, _accepts_out(_fn, f"linalg.{_name}"))
 del _name
 
 

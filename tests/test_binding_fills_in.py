@@ -58,9 +58,19 @@ PYTHON_SIDE = """
 as_tensor can_cast dense_dim from_numpy get_default_dtype get_device
 get_rng_state initial_seed is_distributed is_grad_enabled
 is_inference is_inference_mode_enabled is_storage numpy promote_types
-set_rng_state share_memory_ sparse_dim to_dense tolist typename
+result_type set_rng_state share_memory_ sparse_dim to_dense tolist typename
 asarray resize_as_ storage_offset values
 """.split()
+# `result_type` joins `can_cast` and `promote_types`, and it is the same reason
+# rather than a new one: all three answer *what dtype comes out*, and a dtype over
+# there is one of four string literals in a union type. There is nothing to look
+# into — `"float32"` has no `.is_floating_point`, and the union is what stops
+# `"float64"` from being spelled at all.
+#
+# It arrived here because the core's public `result_type` was the internal
+# numpy-dtype helper, so nothing had ever called this name through the bridge. When
+# six golden cases finally did, they came back *borch.ts does not have `resultType`*
+# — the bridge forwarding a name neither side had.
 # `is_contiguous` and `type` were here as "Python type names" and "looking into
 # storage". **Neither was.** `is_contiguous` is a question about the layout and the
 # answer on this side is always true, because `strides()` is computed from the shape

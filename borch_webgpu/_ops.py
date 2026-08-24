@@ -1049,6 +1049,72 @@ def can_cast(from_type, to_type):
     return a <= b
 
 
+# The dtype a category settles on. `bool + bool` stays bool; a Python `int` above
+# a bool tensor rises to `int64`, not to some wider integer, because there is one
+# width per category here.
+_DEFAULT_OF_CATEGORY = {0: "bool", 1: "int64", 2: "float32", 3: "complex64"}
+
+
+def _scalar_category(value):
+    # **`complex` is a function in this module**, a thousand lines below — torch's
+    # `complex(real, imag)`, which builds a tensor. So `isinstance(value, complex)`
+    # asked whether `1.5` is an instance of a function and stopped with
+    # `isinstance() arg 2 must be a type`, a message naming neither this function nor
+    # the shadowing. Two golden cases caught it (`result_type(t, 1.5)` and
+    # `result_type(1, 2.5)`); the other four never reached the line.
+    #
+    # Fourth shadowed builtin in a day, after `type` and `any` in the core's
+    # `__init__` and `max` here. `bool` was already written `builtins.bool` when this
+    # went in and the three beside it were not — the hazard was known at one line and
+    # not at the next. All four are spelled out now: only `complex` is actually taken
+    # today, and which ones are taken is not a fact this function should depend on.
+    if isinstance(value, builtins.bool):
+        return 0
+    if isinstance(value, builtins.int):
+        return 1
+    if isinstance(value, builtins.complex):
+        return 3
+    return 2
+
+
+def result_type(tensor, other):
+    """The dtype two **operands** would produce. torch takes tensors here, not dtypes.
+
+    `promote_types` above is the dtype-to-dtype question and torch keeps both; this
+    one had no implementation on this side at all, because the core's public
+    `result_type` was the internal numpy-dtype helper and nothing ever called it
+    through the bridge. Six golden cases arrived with the core's repair and every one
+    of them landed here as *borch.ts does not have `resultType`* — the bridge
+    forwarding a name neither side had.
+
+    **A Python number is weaker than a tensor.** At or below the tensor's category it
+    takes the tensor's dtype, and only above it does it rise to that category's
+    default — which is why an int tensor with a Python float is `float32`. That is
+    the rule the arithmetic already follows; written as a second table it would drift
+    from it, which is what the note beside `can_cast` records happening once already.
+    """
+    if isinstance(tensor, _DType) or isinstance(other, _DType):
+        raise TypeError(
+            "result_type() received an invalid combination of arguments — it takes "
+            "tensors or numbers, not dtypes. `promote_types(a, b)` is the one that "
+            "takes two dtypes.")
+
+    def dtype_of(x):
+        return _dtype_name(x.dtype)
+
+    a, b = isinstance(tensor, Tensor), isinstance(other, Tensor)
+    if a and b:
+        return promote_types(_DType(dtype_of(tensor)), _DType(dtype_of(other)))
+    if a or b:
+        t, scalar = (tensor, other) if a else (other, tensor)
+        tcat = _CATEGORY_OF.get(dtype_of(t), 2)
+        scat = _scalar_category(scalar)
+        return _DType(dtype_of(t) if scat <= tcat
+                      else _DEFAULT_OF_CATEGORY[scat])
+    return _DType(_DEFAULT_OF_CATEGORY[builtins.max(_scalar_category(tensor),
+                                                    _scalar_category(other))])
+
+
 def _out(result, out, name="op"):
     """torch's `out=` convention. **The core's rules and the core's wording.**
 
@@ -1060,7 +1126,17 @@ def _out(result, out, name="op"):
         return result
     if isinstance(out, (tuple, list)):
         parts = [_out(r, o, name) for r, o in zip(tuple(result), out)]
-        return type(result)(*parts) if hasattr(result, "_fields") else tuple(parts)
+        # **`hasattr(result, "_fields")` is a namedtuple's question, and the
+        # results carrying names here are not namedtuples.** `_named` builds a
+        # class with `__slots__`, so the test came back false for every one of
+        # them and `qr(A, out=(Q, R))` handed back a plain tuple — right values,
+        # no `.Q`. That is the exact failure `_named` was written to end, let
+        # back in through the one path that rebuilds the container.
+        #
+        # Asking about the container instead: anything that is not literally a
+        # `tuple`/`list` gets rebuilt as itself.
+        return (tuple(parts) if type(result) in (tuple, list)
+                else type(result)(*parts))
     if result.requires_grad or out.requires_grad:
         raise RuntimeError(
             f"{name}(): functions with out=... arguments don't support automatic "

@@ -161,6 +161,7 @@ from ._ops import (                                      # noqa: E402,F401
     # Introspection.
     can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
+    result_type,
     set_default_dtype, typename,
 )
 from ._ops import (                                      # noqa: E402,F401

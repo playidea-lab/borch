@@ -9,14 +9,22 @@ import warnings as _warnings
 import numpy as _np
 
 from ._tensor import (
-    Tensor, _MinMax, _grad_mode, _unbroadcast, result_type,
+    # **Imported under a different name on purpose.** Defining the public
+    # `result_type` below shadowed this one at module scope, and the seven
+    # `floor_divide` rows on the dtype axis started raising `TypeError:
+    # Cannot interpret 'torch.float32' as a data type` — the third name in
+    # this package shadowed by a torch-shaped one today, after `any` and
+    # `type`. The two functions ask different questions and now say so.
+    Tensor, _MinMax, _grad_mode, _unbroadcast,
+    result_type as _dtype_result_type,
 )
 from ._base import (
     _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _arith_in, _float_in, _like_torch,
     _math,
     _needs_float,
     _np, _refuses_bool,
-    _refuses_nonfloat_kernel, _resolve, _unsupported, Size, device as _device,
+    _refuses_nonfloat_kernel, _requested_dtype, _resolve, _unsupported, Size,
+    device as _device,
     dtype,
 )
 # **Imported under different names.** A name like `float32` at this file's module
@@ -73,7 +81,7 @@ def as_tensor(data, dtype=None):
     if isinstance(data, Tensor) and dtype is None:
         return data
     if isinstance(data, Tensor):
-        return Tensor(data.data.astype(dtype.np))
+        return Tensor(data.data.astype(_requested_dtype(dtype).np))
     return tensor(data, dtype)
 
 
@@ -108,7 +116,10 @@ def _made(arr, dt=None, requires_grad=False):
     """
     arr = _np.asarray(arr)
     if dt is not None:
-        arr = arr.astype(_np_of(dt))
+        # The fourteen factories gathered here are the other place a caller
+        # **names** a dtype, so double precision refuses here as it does in
+        # `tensor()`. See `_base._requested_dtype`.
+        arr = arr.astype(_np_of(_requested_dtype(dt)))
     return Tensor(arr, requires_grad)
 
 
@@ -161,7 +172,7 @@ def arange(*args, dtype=None, requires_grad=False):
     # **This is the one place that does not fix a default dtype** — numpy
     # choosing from the arguments is what torch does (integers alone give int64,
     # one float anywhere gives a float). Left to `_made` that rule breaks.
-    return _made(_np.arange(*args, dtype=(dtype.np if dtype else None)),
+    return _made(_np.arange(*args, dtype=(_requested_dtype(dtype).np if dtype else None)),
                  requires_grad=requires_grad)
 
 
@@ -305,7 +316,17 @@ def _out(result, out, name="op"):
     # `out=(a, b)`.
     if isinstance(out, (tuple, list)):
         parts = [_out(r, o, name) for r, o in zip(tuple(result), out)]
-        return type(result)(*parts) if hasattr(result, "_fields") else tuple(parts)
+        # **`hasattr(result, "_fields")` is a namedtuple's question, and the
+        # results carrying names here are not namedtuples.** `_named` builds a
+        # class with `__slots__`, so the test came back false for every one of
+        # them and `qr(A, out=(Q, R))` handed back a plain tuple — right values,
+        # no `.Q`. That is the exact failure `_named` was written to end, let
+        # back in through the one path that rebuilds the container.
+        #
+        # Asking about the container instead: anything that is not literally a
+        # `tuple`/`list` gets rebuilt as itself.
+        return (tuple(parts) if type(result) in (tuple, list)
+                else type(result)(*parts))
     if result.requires_grad or out.requires_grad:
         raise RuntimeError(
             f"{name}(): functions with out=... arguments don't support automatic "
@@ -2663,7 +2684,7 @@ def div(input, other, rounding_mode=None):
     else:
         raise RuntimeError(
             f"rounding_mode is one of None, 'floor', 'trunc': {rounding_mode!r}")
-    kind = result_type(left.data.dtype, _np.asarray(
+    kind = _dtype_result_type(left.data.dtype, _np.asarray(
         right.data if isinstance(right, Tensor) else right).dtype)
     return out if _np.dtype(kind).kind == "f" else out.type(kind)
 
@@ -4343,7 +4364,7 @@ def norm(input, p=2, dim=None, keepdim=False, dtype=None):  # noqa: A002
     # a float32 asked with `dtype=float64` answers in float64). Converted after
     # computing the precision has already been cut and the value differs.
     if dtype is not None:
-        input = _wrap(input.data.astype(_np_of(dtype)))
+        input = _wrap(input.data.astype(_np_of(_requested_dtype(dtype))))
     _needs_float(
         input.data,
         "A norm exists over the reals only — a square root does not fit in an "
@@ -6640,6 +6661,52 @@ def typename(x):
 _PROMOTE_ORDER = ("bool", "int64", "float32", "float64")
 
 
+def result_type(tensor, other):
+    """The dtype two **operands** would produce. torch takes tensors here, not dtypes.
+
+    **The name that was public was the internal helper.** `_tensor.result_type`
+    takes two numpy dtypes and hands back a numpy dtype, and `borch/__init__.py`
+    re-exported it under torch's name — so every call shaped the way torch
+    documents raised, and the one shape that worked (two dtypes) is the shape
+    torch refuses. The contract was inverted end to end, and **no golden case
+    mentioned the name**, which is why it sat.
+
+    `promote_types` one function down is the dtype-to-dtype question and has
+    torch's contract already; the two are easy to mistake for each other and
+    torch keeps both for that reason.
+
+    **The scalar rule is `_promote`'s, not a second table.** A Python number is
+    weaker than a tensor: at or below the tensor's category it takes the tensor's
+    dtype, and only above it does it rise to that category's default — which is
+    why an int tensor with a Python float is `float32` and not `float64`. That is
+    the rule the arithmetic already uses, and the comment beside `promote_types`
+    records what happened the last time this question got a table of its own:
+    `float32 + complex64` came out `float32` and no value comparison saw it.
+    """
+    from ._tensor import _DEFAULT_BY_CATEGORY, _promote, _scalar_category  # noqa: PLC0415, E501
+
+    # **A dtype pair is `promote_types`'s question and torch refuses it here.**
+    # Answering it anyway is the lenient direction, and lenient is diverging too:
+    # `result_type(int64, float32)` would work in the browser and stop on a real
+    # machine, which is the one failure a learner cannot debug from the error.
+    if isinstance(tensor, dtype) or isinstance(other, dtype):
+        raise TypeError(
+            "result_type() received an invalid combination of arguments — it takes "
+            "tensors or numbers, not dtypes. `promote_types(a, b)` is the one that "
+            "takes two dtypes.")
+    a, b = isinstance(tensor, Tensor), isinstance(other, Tensor)
+    if a and b:
+        return _NP_TO_DTYPE[_dtype_result_type(tensor.data.dtype, other.data.dtype)]
+    if a:
+        return _NP_TO_DTYPE[_np.dtype(_promote(tensor.data, other))]
+    if b:
+        return _NP_TO_DTYPE[_np.dtype(_promote(other.data, tensor))]
+    # Two Python numbers. torch answers this — `result_type(1, 2.5)` is float32 —
+    # and the weak-scalar rule reduces to the wider of the two categories.
+    return _NP_TO_DTYPE[_np.dtype(_DEFAULT_BY_CATEGORY[
+        max(_scalar_category(tensor), _scalar_category(other))])]
+
+
 def promote_types(type1, type2):
     """The dtype that can hold both.
 
@@ -6650,9 +6717,7 @@ def promote_types(type1, type2):
     not catch it, because whoever calls this function asks about the dtype
     alone.
     """
-    from ._tensor import result_type                       # noqa: PLC0415
-
-    return _NP_TO_DTYPE[result_type(_np_of(type1), _np_of(type2))]
+    return _NP_TO_DTYPE[_dtype_result_type(_np_of(type1), _np_of(type2))]
 
 
 def can_cast(from_type, to_type):
@@ -6996,12 +7061,12 @@ def solve(A, b):  # noqa: N803
     """Solve `A x = b`. More accurate and faster than building the inverse and
     multiplying.
 
-    When `b` has one axis fewer than `A` it is read as **A batch of vectors.** The
+    When `b` has one axis fewer than `A` it is read as **a batch of vectors.** The
     outer product in the backward hangs on that distinction.
 
     **A place that must not be left to numpy.** numpy 2.0 changed the rule and now
-    reads A batch of vectors only when `b` is 1-D — given `A(3,2,2)` and `b(3,2)`
-    it reads A matrix and throws about mismatched dimensions. torch keeps the old
+    reads a batch of vectors only when `b` is 1-D — given `A(3,2,2)` and `b(3,2)`
+    it reads a matrix and throws about mismatched dimensions. torch keeps the old
     rule. So the axis is stood up here.
     """
     A = _mat(A, "solve")
@@ -7404,18 +7469,72 @@ def eigvals(input):  # noqa: A002
     return eig(input).eigenvalues
 
 
-def lstsq(input, b):  # noqa: A002
+# The four LAPACK least-squares routines torch will name. Measured from the
+# message torch raises on anything else.
+_LSTSQ_DRIVERS = ("gels", "gelsy", "gelsd", "gelss")
+
+
+def lstsq(input, b, rcond=None, *, driver=None):  # noqa: A002
     """The least-squares solution. **Values alone.**
 
     It has to be asked through `.solution` — torch gives the residuals, the rank
-    and the singular values alongside the solution. Handing back input bare tensor
-    makes torch code stop at `.solution`, and that becomes input place where "the
+    and the singular values alongside the solution. Handing back a bare tensor
+    makes torch code stop at `.solution`, and that becomes a place where "the
     value is right and it does not work".
+
+    **`input`/`b`, not `A`/`B`.** torch's own docstring writes the signature as
+    `lstsq(A, B, rcond=None, *, driver=None)` and the overload underneath refuses
+    both names — `A=`/`B=` raise *missing 2 required positional argument: "input",
+    "b"*. Measured, not read. `tests/torch_signatures_core.py` keeps the four this
+    axis has caught in `TORCH_DOC_IS_WRONG`, and this one is not among them: that
+    axis reads `linalg` off the docstring on both sides, so a disagreement between
+    torch's prose and torch's own overload is the one thing it cannot see.
+
+    The measurement nearly cost a rename in the wrong direction: the sweep that
+    compares parameter names against torch reported this row as the one divergence
+    in `linalg`, and the divergence was **in the reference.** Renaming to match it
+    would have turned the only agreement into a mismatch.
+
+    **`driver` decides what comes back, so it could not be swallowed.** The first
+    version of this took the argument and ignored it, on the reasoning that numpy
+    exposes one path and every driver gives the same solution. The solution, yes —
+    but not the other three fields, and torch was measured rather than assumed:
+
+        driver          residuals   rank     singular_values
+        gels            numpy's     empty    empty
+        gelsy (default) empty       scalar   empty
+        gelsd, gelss    numpy's     scalar   numpy's
+
+    Accepting a knob and dropping it is the shape this repository keeps naming —
+    *the value is right and it does not work* — except one turn worse, because
+    nothing raises. `lstsq(A, B, driver="gelsd").singular_values` would have come
+    back the right numbers by accident and `driver="gelsy"` the wrong ones.
+
+    **The default was already wrong here.** Passing numpy's four fields straight
+    through matches `gelsd`, and torch's CPU default is `gelsy` — so `residuals`
+    and `singular_values` were arriving filled where torch hands back empty
+    tensors. Reading the table fixed a divergence that predates the argument.
+
+    `rcond` sets the cutoff below which a singular value counts as zero, which is
+    numpy's own `rcond` and is what moves `rank`. Under `gels` there is no rank
+    estimate to move.
     """
+    if driver is not None and driver not in _LSTSQ_DRIVERS:
+        raise RuntimeError(
+            "torch.linalg.lstsq: parameter `driver` should be one of "
+            "(gels, gelsy, gelsd, gelss)")
+    driver = driver or "gelsy"
     input, bt = _mat(input, "lstsq", square=False), _wrap(b)
     if input.data.ndim != 2:
         _unsupported("lstsq (batched)")
-    sol, res, rank, sv = _np.linalg.lstsq(input.data, bt.data, rcond=None)
+    sol, res, rank, sv = _np.linalg.lstsq(input.data, bt.data, rcond=rcond)
+    empty_f = _np.zeros(0, dtype=sol.dtype)
+    if driver == "gelsy":
+        res = empty_f
+    if driver == "gels":
+        rank = _np.zeros(0, dtype=_np.int64)
+    if driver in ("gels", "gelsy"):
+        sv = empty_f
     return _Lstsq(Tensor(_np.ascontiguousarray(sol)), Tensor(_np.asarray(res)),
                   Tensor(_np.asarray(rank, dtype=_np.int64)), Tensor(_np.asarray(sv)))
 
@@ -7425,9 +7544,9 @@ def lstsq(input, b):  # noqa: A002
 # The LU factorisation was already running underneath `det`, `inv` and `solve`.
 # It simply was not exposed.
 #
-# **The pivots count from 1.** LAPACK's convention, inherited by torch — on input 2×2
+# **The pivots count from 1.** LAPACK's convention, inherited by torch — on a 2×2
 # with no swaps `pivots` is `[1, 2]` rather than `[0, 1]`. Counting from 0 makes
-# `lu_solve` give input different answer without input sound. Matched by measurement.
+# `lu_solve` give a different answer without a sound. Matched by measurement.
 
 def _lu_pack(data):
     """Partially pivoted LU. One packed `LU` matrix and a swap table **counting
@@ -7816,7 +7935,7 @@ def solve_triangular(input, b, upper, left=True, unitriangular=False):  # noqa: 
     """Solve **knowing** the matrix is triangular. One forward and one backward
     sweep finish it.
 
-    `unitriangular` **ignores the diagonal and treats it as 1** — input branch whose
+    `unitriangular` **ignores the diagonal and treats it as 1** — a branch whose
     values change quietly when it is not honoured. `left=False` solves `X A = B`,
     so both sides are transposed and sent down the same path.
     """
@@ -7876,21 +7995,21 @@ def _expm_raw(a):
 
 
 def matrix_exp(input):  # noqa: A002
-    """The matrix exponential `e^input`. **It goes by scaling and squaring.**
+    """The matrix exponential `e^A`. **It goes by scaling and squaring.**
 
-    Taylor alone does not converge on a large matrix — the answer for `input*5` is
+    Taylor alone does not converge on a large matrix — the answer for `A*5` is
     4.8e+10, and there the growing terms overflow first. Lowering the 1-norm of
-    `input/2^s` below 0.5, running the series and then squaring `s` times gives the
-    same answer safely (`e^input = (e^{input/2^s})^{2^s}`).
+    `A/2^s` below 0.5, running the series and then squaring `s` times gives the
+    same answer safely (`e^A = (e^{A/2^s})^{2^s}`).
 
     **The gradient is obtained from the function itself.** The Fréchet derivative
-    of `e^input` carries this identity:
+    of `e^A` carries this identity:
 
         the upper-right block of expm([[Aᵀ, Ḡ], [0, Aᵀ]]) = Ā
 
     An identity rather than an approximation. So **calling the same series the
     forward used** brings the gradient with it — there is nowhere to derive and
-    write a new derivative. That is why this method was chosen. input derived formula
+    write a new derivative. That is why this method was chosen. A derived formula
     can be wrong, and wrong quietly.
     """
     x = _mat(input, "matrix_exp")
@@ -10300,7 +10419,8 @@ def asarray(obj, dtype=None, copy=None, **kw):
     if isinstance(obj, Tensor) and dtype is None and not copy:
         return obj
     if isinstance(obj, Tensor):
-        data = obj.data.astype(dtype.np) if dtype is not None else obj.data
+        data = (obj.data.astype(_requested_dtype(dtype).np)
+                if dtype is not None else obj.data)
         return Tensor(_np.array(data, copy=True) if copy else data)
     got = tensor(obj, dtype)
     return Tensor(_np.array(got.data, copy=True)) if copy else got
@@ -10318,7 +10438,7 @@ def frombuffer(buffer, dtype=_float32, count=-1, offset=0,
 
     `requires_grad=` was being swallowed by `**kw`.
     """
-    kind = dtype.np if hasattr(dtype, "np") else _np.dtype(dtype)
+    kind = _np_of(_requested_dtype(dtype))
     return _made(_np.frombuffer(buffer, dtype=kind, count=count,
                                 offset=offset).copy(), None, requires_grad)
 
