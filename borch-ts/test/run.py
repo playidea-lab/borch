@@ -647,14 +647,29 @@ NOT_PORTED = {
     # until now, which is why this table has never had one — and it is worth a line
     # because a prefix appearing here for the first time reads like an oversight.
     #
-    # Eleven, and they are one kind: `Embedding` and `EmbeddingBag` with `max_norm`,
-    # plus `padding_idx`. Four of them read the **weight table after the call**, which
-    # is the only place the difference lives — `max_norm` shortens rows in place, and
-    # an implementation that shortened a copy would return the same numbers forever.
-    # Portable: nothing here needs a network or a model, and the side that carries
-    # them will want the state cases most, since a value case cannot see this at all.
-    "misc::": (11, "아직 — Embedding/EmbeddingBag: max_norm, padding_idx, and the "
-                   "table after the call"),
+    # Eleven, and they were one kind: `Embedding` and `EmbeddingBag` with `max_norm`,
+    # plus `padding_idx`. **The row is gone** — borch.ts already did all of it
+    # (`renormRows`, and the padding row's gradient cut by splitting the table into a
+    # part the gradient flows through and a detached part), so this was the same shape
+    # as `pool::`: a case list not carried across, not a mechanism missing.
+    #
+    # Its prediction is the part worth keeping. Four of the eleven read the **weight
+    # table after the call**, because that is the only place the difference lives —
+    # `max_norm` shortens rows in place, and an implementation that shortened a copy
+    # would return the same numbers forever.
+    #
+    # **Measured, and the first measurement was of the wrong thing.** A mutation that
+    # scaled a copy and then looked up from the *original* reddened seven cases, value
+    # cases included — but that is not the defect these were written for, it is a
+    # cruder one. Scaling a copy and looking up from **that copy** is the real shape:
+    # `Embedding`'s value case stays green and only the table cases move. Two more,
+    # each landing where its name says: leaving `paddingIdx`'s gradient uncut reddens
+    # `grad::Embedding(padding_idx)` and nothing else, and ignoring `normType` reddens
+    # the two `norm_type=1` rows and nothing else.
+    #
+    # Worth writing down because the claim was in this comment before the run was: it
+    # said the copy mutation "reddens exactly those four", and the number was seven.
+    # A prediction in the same sentence position as a measurement reads as one.
     "dataset::": (19, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
     "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
                  "settings where the draw stops"),

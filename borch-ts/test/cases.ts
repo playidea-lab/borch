@@ -3310,6 +3310,76 @@ function addMisc(out: Map<string, Case>): void {
     return layer.callOffsets(Tensor.from([0, 1, 2, 3], [4]), [0, 2]);
   });
 
+  // ── `maxNorm`, and the case that has to look at the table ──
+  //
+  // **`maxNorm` shortens rows in the table itself, and every other instrument here
+  // compares what a call returns.** A call that also changes the thing it was called on
+  // is invisible to all of them.
+  //
+  // And calling twice does not reveal it. Re-normalising a row already short enough is
+  // a no-op, so an implementation that normalised a **copy** would return these same
+  // numbers forever — the divergence lives in `weight` and nowhere else, until
+  // something trains on it. That is why the second row of each pair reads the table
+  // after the call rather than the output.
+  const bagRenorm = (what: "out" | "weight", normType = 2): Tensor => {
+    const layer = new nn.EmbeddingBag(5, 3, 1.0, normType, false, "sum");
+    layer.loadStateDict({ weight: Tensor.from(table, [5, 3]) });
+    const out2 = layer.call(bags());
+    return what === "weight" ? layer.weight : out2;
+  };
+  out.set("misc::층::EmbeddingBag(max_norm)", () => bagRenorm("out"));
+  out.set("misc::층::EmbeddingBag(max_norm)/표가 줄었다", () => bagRenorm("weight"));
+  // **Only the rows that were looked up shrink.** Row 4 is never asked for and keeps
+  // its own length — an implementation that normalised the whole table agrees on every
+  // output and differs only here.
+  out.set("misc::층::EmbeddingBag(max_norm)/색인 안 된 행", () => {
+    const layer = new nn.EmbeddingBag(5, 3, 1.0, 2, false, "sum");
+    layer.loadStateDict({ weight: Tensor.from(table, [5, 3]) });
+    layer.call(Tensor.from([0, 1], [1, 2]));
+    return layer.weight;
+  });
+  // `normType=1` measures a row differently, so a different amount comes off. Left at
+  // the default this argument is unasked, and an implementation ignoring it passes both
+  // rows above.
+  out.set("misc::층::EmbeddingBag(max_norm, norm_type=1)", () => bagRenorm("weight", 1));
+
+  // ── Embedding: the same two arguments, on the layer next door ──
+  const emb = (what: "out" | "weight", paddingIdx: number | null = null,
+               maxNorm: number | null = null, normType = 2): Tensor => {
+    const layer = new nn.Embedding(4, 3, paddingIdx, maxNorm, normType);
+    layer.loadStateDict({ weight: Tensor.from(table.slice(0, 12), [4, 3]) });
+    const out2 = layer.call(Tensor.from([0, 1, 2], [3]));
+    return what === "weight" ? layer.weight : out2;
+  };
+  out.set("misc::층::Embedding(padding_idx)", () => emb("out", 1));
+  out.set("misc::층::Embedding(max_norm)", () => emb("out", null, 1.0));
+  out.set("misc::층::Embedding(max_norm)/표가 줄었다", () => emb("weight", null, 1.0));
+  out.set("misc::층::Embedding(max_norm, norm_type=1)/표",
+    () => emb("weight", null, 1.0, 1));
+  out.set("misc::repr::Embedding(전부)",
+    async () => new nn.Embedding(4, 3, 1, 2.0).describe());
+
+  // **The padding row learns nothing.** Left in, a pad token drifts toward whatever the
+  // loss wants and the mask stops meaning "ignore this" — while the forward stays
+  // right, so an implementation that masks the *output* instead passes every value case
+  // above and fails only here.
+  out.set("misc::grad::Embedding(padding_idx)", () => {
+    const layer = new nn.Embedding(4, 3, 1);
+    layer.loadStateDict({ weight: Tensor.from(table.slice(0, 12), [4, 3]) });
+    layer.call(Tensor.from([0, 1, 2, 1], [4])).sum().backward();
+    return gradOf(layer.weight, "Embedding(padding_idx)");
+  });
+
+  // A **fresh** table zeroes the padding row and a **given** one does not. torch draws
+  // the line at the same place, and both halves are asked because either alone reads as
+  // a rule about padding rather than about who supplied the weights.
+  out.set("misc::층::Embedding(padding_idx)/새 표와 준 표", async () => {
+    const fresh = new nn.Embedding(4, 3, 2).weight;
+    const given = new nn.Embedding(4, 3, 2, null, 2, false, false,
+      Tensor.from(table.slice(0, 12), [4, 3])).weight;
+    return Tensor.cat([fresh.select(0, 2), given.select(0, 2)], 0);
+  });
+
   for (const [name, make] of [
     ["Bilinear", () => new nn.Bilinear(3, 4, 2)],
     ["LocalResponseNorm", () => new nn.LocalResponseNorm(2)],
