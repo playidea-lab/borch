@@ -1159,17 +1159,28 @@ somebody else's reader.
 
 ### Where it runs
 
-WebGPU is required. **Without it, it refuses rather than falling back.** The TF.js
-version that stood here dropped quietly to WebGL when it could not get WebGPU, and
-because of that, performance figures **measured on a CPU software path** were read
-as the GPU's for a while. Not running beats quietly getting slower.
+WebGPU is required. **With no WebGPU at all it refuses rather than falling back to
+something else.** The TF.js version that stood here dropped quietly to WebGL when it
+could not get WebGPU, and performance figures **measured on a CPU software path** were
+read as the GPU's for a while. Not running beats quietly getting slower.
 
-Measurements are taken under `--headed` only. A headless browser gives a software
-rasteriser (SwiftShader) that **throws no exception and simply produces strange
-numbers.** So the runner prints the adapter first, and the benchmark and the
-accuracy run refuse outright on a software adapter.
+**That is about a different backend, not about a slow device**, and the two used to sit
+in one sentence here. WebGPU's own software adapter is still WebGPU — same API, same
+kernels — so it is attached like any other and always has been. Asking for it on
+purpose is [the section below](#running-it-on-the-cpu-on-purpose).
+
+Measurements are taken under `--headed` only, because a headless browser hands back
+that software adapter and **throws no exception.** What is wrong there is the clock and
+not the answer: the whole borch.ts golden passes `3079 / 0` on `google / swiftshader`,
+measured. So the runner prints the adapter first, and the benchmark and the accuracy
+run — the two that report a duration — refuse outright on it.
 
 ### Running the browser checks, per platform
+
+This is for running the **checks** — the golden, the benchmarks, the device suite. A
+reader who only wants the pages to work in their own browser wants
+[`site/setup.html`](site/setup.html) instead, which covers the same walls from the
+other side and also carries what has been measured on a phone.
 
 **Ask the machine before reading any of this.** The operating system is a guess at
 which of the cases below applies; the adapter is the answer, and one command gives it
