@@ -27,5 +27,13 @@ jobs:
       # expected values would prove nothing, which is what those cases are worth.
       # Without it, dump counts those 14 as failures and stops, and this job was red on
       # every push from the moment transforms arrived.
+      #
+      # **`scipy` is here for the opposite failure — one that was green.** The whole of
+      # `tests/test_svhn.py` opens with `importorskip("scipy.io")`, so without the
+      # package its **19 tests skip as one line** and the run still says passed. Among
+      # them is the six-shape check of the `.mat` reader against `scipy.io`, which the
+      # README describes as done and which had therefore **never run anywhere** — not
+      # in CI and not on the machine it was written on. A skipped check reads like a
+      # passing one at a glance, which is the more expensive of the two directions.
       - name: compare the values
-        run: uv run --with pytest --with numpy --with torch --with torchvision --quiet pytest tests/ -q
+        run: uv run --with pytest --with numpy --with torch --with torchvision --with scipy --quiet pytest tests/ -q

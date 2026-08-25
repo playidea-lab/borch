@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "uv run --with pytest --with numpy --with torch --with torchvision --quiet pytest tests/ -q",
+    "test": "uv run --with pytest --with numpy --with torch --with torchvision --with scipy --quiet pytest tests/ -q",
     "build:ts": "tsc -p borch-ts/tsconfig.json",
     "docs:api": "python3 site/build_api.py",
     "site": "python3 site/build_api.py && python3 site/serve.py",

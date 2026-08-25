@@ -26,7 +26,14 @@ license = { text = "Apache-2.0" }
 # report both stopped without it while the list said torch alone was enough. An
 # undeclared dependency is the same failure as a namespace off the list: it works on
 # the machine that happens to have it.
-dev = ["pytest", "torch", "torchvision"]
+#
+# **`scipy` is a test authority and never a library one.** `tests/test_svhn.py` checks
+# the `.mat` reader against `scipy.io` — having written the reader so the library needs
+# no such package is the whole point, and checking it against the package that defines
+# the format is how that reader earns the right to exist. It was undeclared for the same
+# reason `torchvision` was, and cost more: an undeclared package that a file
+# `importorskip`s does not fail, it **skips 19 tests and reports passed.**
+dev = ["pytest", "torch", "torchvision", "scipy"]
 
 [build-system]
 requires = ["hatchling"]
@@ -39,6 +46,26 @@ build-backend = "hatchling.build"
 # `borchvision` goes in too. Left out, somebody installing from the wheel has **no
 # module at all** — the kind that works from the repository and not from the install,
 # which nobody watches and only a user meets.
+#
+# **And it is still one file at 5,624 lines, which is past the threshold the paragraph
+# above sets. That is a decision and not an oversight, so here is the reason.**
+#
+# The two are not loaded the same way. `borch` is a package and the playground fetches
+# it **module by module** from a hardcoded list in `site/assets/runner.js` — the list
+# exists, so `tests/test_site.py` can compare it against the directory and cry when the
+# two part. `borchvision.py` is fetched in **one request** beside that loop, because one
+# file needs no list.
+#
+# Splitting it buys readability and pays for it in the loading path: a second hardcoded
+# list, a directory to create in Pyodide's filesystem, and N requests where a partial
+# failure leaves a **half-imported package** rather than an absent module. The check that
+# would catch a name dropped from that list is the one that already exists for `borch`,
+# so it is writable — but the cost is paid on every playground load and the benefit is
+# paid to whoever next reads the file.
+#
+# So it stays one file **until the loading path stops being the reason** — if the
+# playground ever ships the wheel instead of fetching sources, this paragraph is spent
+# and the split is simply overdue.
 # `borch_webgpu` is not here. It is browser-only, and the borch.ts underneath it is
 # loaded by the page as an ES module (`borch` on npm).
 packages = ["borch"]
