@@ -1656,6 +1656,62 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
   out.set("v2f::get_num_channels", () => String(v2f.getNumChannels(f())));
 
   // Four of v1's, reached through the v2 spelling.
+  // ── `v2::` — the classes, for the names that need no v1 field access ──
+  //
+  // **The repr is the larger half of that block and it is not cosmetic.** A tutorial's
+  // `print(transform)` is how a reader checks that the thing they built is the thing
+  // they meant, and on the Python side these came out wrong four times before they came
+  // out right — every one found by comparing rather than by reading.
+  //
+  // Two rules do most of the work. A field of a kind v2 does not print **disappears
+  // from the line** rather than printing as `None`, which is why `ToDtype` shows only
+  // `scale` and not the dtype that is its main argument. And Python's float carries its
+  // decimal point, so `mean=0.0` and not `mean=0`.
+  for (const [name, make] of [
+    ["Identity", () => new v2f.Identity()],
+    ["RGB", () => new v2f.RGB()],
+    ["ToImage", () => new v2f.ToImage()],
+    ["ToPureTensor", () => new v2f.ToPureTensor()],
+    ["ToDtype", () => new v2f.ToDtype("float32", true)],
+    ["GaussianNoise", () => new v2f.GaussianNoise()],
+    ["GaussianNoise(three arguments)", () => new v2f.GaussianNoise(0.1, 0.5, false)],
+    ["RandomChannelPermutation", () => new v2f.RandomChannelPermutation()],
+  ] as const) {
+    out.set(`v2::repr ${name}`, async () => make().describe());
+  }
+
+  const v2set = (name: string, make: () => vision.Image): void => {
+    out.set(`v2::${name}`, () => asTensor(make()));
+  };
+  v2set("Identity", () => new v2f.Identity().apply(f()) as vision.Image);
+  v2set("ToPureTensor", () => new v2f.ToPureTensor().apply(f()) as vision.Image);
+  // `RGB` on a colour picture is the identity; on a grey one it is the case.
+  v2set("RGB(three channels)", () => new v2f.RGB().apply(f()) as vision.Image);
+  v2set("RGB(one channel)", () => new v2f.RGB().apply(grey()) as vision.Image);
+  v2set("ToDtype(scaling)",
+    () => new v2f.ToDtype("float32", true).apply(u8()) as vision.Image);
+  v2set("ToDtype(not scaling)",
+    () => new v2f.ToDtype("float32").apply(u8()) as vision.Image);
+  // `sigma=0` leaves the mean, which is what makes the clip case a clip case rather
+  // than a noise case.
+  v2set("GaussianNoise(sigma=0)",
+    () => new v2f.GaussianNoise(0.0, 0.0).apply(f()) as vision.Image);
+  v2set("GaussianNoise(clipping)",
+    () => new v2f.GaussianNoise(5.0, 0.0, true).apply(f()) as vision.Image);
+  v2set("GaussianNoise(not clipping)",
+    () => new v2f.GaussianNoise(5.0, 0.0, false).apply(f()) as vision.Image);
+  // **`ToImage` is asked of an (H,W,C) byte picture on both sides** — it is the
+  // transform whose whole job is moving those axes, so handing it a picture already
+  // moved would ask it to do nothing and call that agreement. It hands back a tensor
+  // rather than a picture, so these two do not go through `v2set`.
+  out.set("v2::ToImage", () => new v2f.ToImage().apply(u8()) as Tensor);
+  // **The pair, as well as each half.** This is what v2 tells you to write instead of
+  // `ToTensor`, and the composition is the thing that has to agree — each half being
+  // right is not the same claim.
+  out.set("v2::ToImage then ToDtype", () =>
+    new v2f.ToDtype("float32", true)
+      .apply(new v2f.ToImage().apply(u8())) as Tensor);
+
   set("resize(inherited)", () => v2f.resize(f(), [3, 2]));
   // The only one of the four that takes a tensor rather than a picture, so it does not
   // go through `set`. One mean and one std against three channels: torchvision

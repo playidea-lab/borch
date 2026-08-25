@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 172
+  "missing": 182
  },
  "modules": [
   {
@@ -14263,6 +14263,22 @@
      "doc_ko": "채널마다 `(x - mean) / std`. CPU 에서 배치째 — 텐서를 만들기 전에 끝낸다."
     },
     {
+     "kind": "function",
+     "name": "pyFloat",
+     "signature": "export declare function pyFloat(v: number): string",
+     "doc": "Python's float repr: an integer still carries its decimal point (`1.0`, not\n`1`). JS drops it, and `repr` is read as a specification here.",
+     "members": [],
+     "torch": "py_float"
+    },
+    {
+     "kind": "function",
+     "name": "pyBool",
+     "signature": "export declare function pyBool(v: boolean): string",
+     "doc": "Python's `True` / `False`. Exported for the same reason as `pyFloat`.",
+     "members": [],
+     "torch": "py_bool"
+    },
+    {
      "kind": "class",
      "name": "LinearTransformation",
      "signature": "export declare class LinearTransformation implements Transform",
@@ -15072,7 +15088,7 @@
      ]
     }
    ],
-   "count": 199,
+   "count": 201,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -15154,9 +15170,145 @@
      "signature": "export declare function elastic(img: Image, displacement: ArrayLike<number>, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null): Image",
      "doc": "v2's name for the warp. **`fill` defaults to `null` and not to `0`.**\n\nWritten as `0` it paints the outside of the warp black, and on a picture whose edges\nbarely move that reads as the warp working — a defect visible only at the border of\nan image that mostly did not move. The Python side had it as `0` first and comparing\nis what caught it.\n\n**The displacement is a flat array and not a tensor**, which is where this parts from\ntorchvision's spelling. Reading a tensor here means `await`, and `elasticTransform`\nnext door is synchronous — one async name in a file of synchronous ones is a worse\nmismatch than this one, since it changes how every caller writes the line.",
      "members": []
+    },
+    {
+     "kind": "class",
+     "name": "Identity",
+     "signature": "export declare class Identity implements Transform",
+     "doc": "Does nothing, and **that is a transform** — it is what a policy draws when it draws\nno operation, and what a `Compose` holds when a branch is switched off.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ToPureTensor",
+     "signature": "export declare class ToPureTensor implements Transform",
+     "doc": "Strips the tv_tensor wrappers off a sample. **Here there are none**, so it is the\nidentity — kept because a pipeline copied from torchvision ends with it and should\nnot stop, and named rather than aliased to `Identity` because the two mean different\nthings the day tv_tensors arrive.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RGB",
+     "signature": "export declare class RGB implements Transform",
+     "doc": "One channel to three. A three-channel picture passes through, which is what makes it\nsafe to put in front of a model that needs three.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ToImage",
+     "signature": "export declare class ToImage implements Transform",
+     "doc": "`(H, W, C)` to a `(C, H, W)` tensor — **and it does not divide by 255.**\n\nThat is the whole reason v2 split `ToTensor` in two. `ToTensor` both moved the axes\nand scaled, so a float image was scaled a second time by anyone who did not know;\nhere the moving is one transform and the scaling is `ToDtype(scale: true)`, and each\nsays which it does.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ToDtype",
+     "signature": "export declare class ToDtype implements Transform",
+     "doc": "Cast, and **optionally scale on the way.**\n\n`scale: true` is the half of the old `ToTensor` that divided; without it this only\nchanges the dtype, which is why the flag is not a default. **The dtype does not\nappear in the repr** — it is not one of the kinds v2's filter keeps, so a line that\nlooks like it forgot to print its main argument is printing exactly what torchvision\nprints.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(dtype?: unknown, scale?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": "**It takes a tensor as well as a picture**, because the pair v2 tells you to write\ninstead of `ToTensor` is `Compose([ToImage(), ToDtype(float32, scale=true)])` — and\n`ToImage` hands back a tensor. A version that only took pictures would refuse the\none composition this class exists for."
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "GaussianNoise",
+     "signature": "export declare class GaussianNoise implements Transform",
+     "doc": "Add normal noise. **Float pictures only** — torchvision has an integer path that\nworks in int16 and clamps, and a byte picture with sigma in units of `[0, 1]` is a\ndifferent question, so it is refused rather than answered differently.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(mean?: number, sigma?: number, clip?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomChannelPermutation",
+     "signature": "export declare class RandomChannelPermutation implements Transform",
+     "doc": "Shuffle the channels. **Every ordering including the original** — it is a draw over\npermutations, not a guarantee of change.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 9
+   "count": 32
   },
   {
    "name": "fft",
@@ -16738,5 +16890,5 @@
    "count": 9
   }
  ],
- "total": 2203
+ "total": 2228
 }

@@ -18,6 +18,7 @@
  * gets a picture that is transposed and entirely plausible.
  */
 
+import { Tensor } from "./tensor.js";
 import {
   adjustHue,
   elasticTransform,
@@ -27,8 +28,12 @@ import {
   type Image,
   image,
   normalize,
+  pyBool,
+  pyFloat,
   resize,
   rotate,
+  type Subject,
+  type Transform,
   vflip,
 } from "./vision.js";
 
@@ -157,4 +162,169 @@ export function elastic(
   fill: number | readonly number[] | null = null,
 ): Image {
   return elasticTransform(img, displacement, interpolation, fill);
+}
+
+// ── The transform classes v2 adds ────────────────────────────────────────────
+//
+// **v2's printing rule, and it is most of what separates the two namespaces.** Each
+// class declares the fields it shows, in the order its constructor assigns them, and a
+// field left unset **disappears from the line** rather than printing as `None` —
+// torchvision filters by type and `None` is not among the kinds it keeps.
+//
+// The fields are declared rather than read off the object because the behaviour comes
+// from v1, whose attributes have their own names and their own order. Declaring keeps
+// one implementation of the arithmetic and one statement of the surface.
+
+/** One shown field, already rendered the way Python would print it. */
+type Field = readonly [string, string];
+
+function v2Repr(name: string, fields: readonly Field[] = []): string {
+  return `${name}(${fields.map(([k, v]) => `${k}=${v}`).join(", ")})`;
+}
+
+/**
+ * Does nothing, and **that is a transform** — it is what a policy draws when it draws
+ * no operation, and what a `Compose` holds when a branch is switched off.
+ */
+export class Identity implements Transform {
+  apply(x: Subject): Subject {
+    return x;
+  }
+
+  describe(): string {
+    return v2Repr("Identity");
+  }
+}
+
+/**
+ * Strips the tv_tensor wrappers off a sample. **Here there are none**, so it is the
+ * identity — kept because a pipeline copied from torchvision ends with it and should
+ * not stop, and named rather than aliased to `Identity` because the two mean different
+ * things the day tv_tensors arrive.
+ */
+export class ToPureTensor implements Transform {
+  apply(x: Subject): Subject {
+    return x;
+  }
+
+  describe(): string {
+    return v2Repr("ToPureTensor");
+  }
+}
+
+/**
+ * One channel to three. A three-channel picture passes through, which is what makes it
+ * safe to put in front of a model that needs three.
+ */
+export class RGB implements Transform {
+  apply(x: Subject): Subject {
+    return grayscaleToRgb(x as Image);
+  }
+
+  describe(): string {
+    return v2Repr("RGB");
+  }
+}
+
+/**
+ * `(H, W, C)` to a `(C, H, W)` tensor — **and it does not divide by 255.**
+ *
+ * That is the whole reason v2 split `ToTensor` in two. `ToTensor` both moved the axes
+ * and scaled, so a float image was scaled a second time by anyone who did not know;
+ * here the moving is one transform and the scaling is `ToDtype(scale: true)`, and each
+ * says which it does.
+ */
+export class ToImage implements Transform {
+  apply(x: Subject): Subject {
+    const img = x as Image;
+    const { data, height: h, width: w, channels: c } = img;
+    const out = new Float32Array(c * h * w);
+    for (let k = 0; k < c; k++) {
+      for (let i = 0; i < h; i++) {
+        for (let j = 0; j < w; j++) out[(k * h + i) * w + j] = data[(i * w + j) * c + k] ?? 0;
+      }
+    }
+    return Tensor.from(out, [c, h, w]);
+  }
+
+  describe(): string {
+    return v2Repr("ToImage");
+  }
+}
+
+/**
+ * Cast, and **optionally scale on the way.**
+ *
+ * `scale: true` is the half of the old `ToTensor` that divided; without it this only
+ * changes the dtype, which is why the flag is not a default. **The dtype does not
+ * appear in the repr** — it is not one of the kinds v2's filter keeps, so a line that
+ * looks like it forgot to print its main argument is printing exactly what torchvision
+ * prints.
+ */
+export class ToDtype implements Transform {
+  constructor(private readonly dtype: unknown = "float32",
+              private readonly scale = false) {}
+
+  /**
+   * **It takes a tensor as well as a picture**, because the pair v2 tells you to write
+   * instead of `ToTensor` is `Compose([ToImage(), ToDtype(float32, scale=true)])` — and
+   * `ToImage` hands back a tensor. A version that only took pictures would refuse the
+   * one composition this class exists for.
+   */
+  apply(x: Subject): Subject {
+    if (x instanceof Tensor) {
+      return this.scale ? x.div(Tensor.full([], 255)) : x;
+    }
+    return toDtype(x as Image, this.dtype, this.scale);
+  }
+
+  describe(): string {
+    return v2Repr("ToDtype", [["scale", pyBool(this.scale)]]);
+  }
+}
+
+/**
+ * Add normal noise. **Float pictures only** — torchvision has an integer path that
+ * works in int16 and clamps, and a byte picture with sigma in units of `[0, 1]` is a
+ * different question, so it is refused rather than answered differently.
+ */
+export class GaussianNoise implements Transform {
+  constructor(private readonly mean = 0.0, private readonly sigma = 0.1,
+              private readonly clip = true) {
+    if (sigma < 0) {
+      throw new Error(`sigma shouldn't be negative. Got ${pyFloat(sigma)}`);
+    }
+  }
+
+  apply(x: Subject): Subject {
+    return gaussianNoise(x as Image, this.mean, this.sigma, this.clip);
+  }
+
+  describe(): string {
+    return v2Repr("GaussianNoise", [
+      ["mean", pyFloat(this.mean)],
+      ["sigma", pyFloat(this.sigma)],
+      ["clip", pyBool(this.clip)],
+    ]);
+  }
+}
+
+/**
+ * Shuffle the channels. **Every ordering including the original** — it is a draw over
+ * permutations, not a guarantee of change.
+ */
+export class RandomChannelPermutation implements Transform {
+  apply(x: Subject): Subject {
+    const img = x as Image;
+    const order = [...Array(img.channels).keys()];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j] as number, order[i] as number];
+    }
+    return permuteChannels(img, order);
+  }
+
+  describe(): string {
+    return v2Repr("RandomChannelPermutation");
+  }
 }

@@ -680,8 +680,16 @@ NOT_PORTED = {
     # said the copy mutation "reddens exactly those four", and the number was seven.
     # A prediction in the same sentence position as a measurement reads as one.
     "dataset::": (19, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
-    "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
-                 "settings where the draw stops"),
+    # 71 → 52. **The nineteen that needed no v1 field access went first** — the seven
+    # classes v2 adds outright (`Identity`, `ToPureTensor`, `RGB`, `ToImage`, `ToDtype`,
+    # `GaussianNoise`, `RandomChannelPermutation`), their eight reprs and eleven values.
+    #
+    # The fifty-two left are the **twins**: v1's behaviour under v2's printed surface.
+    # They are not harder arithmetic — they are the same arithmetic — but every one has
+    # to read fields the v1 class keeps `private`, so carrying them across opens
+    # thirty-six constructors rather than writing thirty-six bodies. That is the shape
+    # of the remaining work and it is why the split fell here.
+    "v2::": (52, "아직 — the repr of the fifty-two v1 twins under v2's printed surface"),
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),
     # 3 → 7 → 6. Four `DataLoader` rows went in with this reason:
     #

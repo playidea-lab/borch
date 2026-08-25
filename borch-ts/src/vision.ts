@@ -1007,8 +1007,13 @@ export function normalizeBatch(
  * Python's float repr: an integer still carries its decimal point (`1.0`, not
  * `1`). JS drops it, and `repr` is read as a specification here.
  */
-function pyFloat(v: number): string {
+export function pyFloat(v: number): string {
   return Number.isInteger(v) ? `${v}.0` : String(v);
+}
+
+/** Python's `True` / `False`. Exported for the same reason as `pyFloat`. */
+export function pyBool(v: boolean): string {
+  return v ? "True" : "False";
 }
 
 function floatTuple(values: readonly number[]): string {
