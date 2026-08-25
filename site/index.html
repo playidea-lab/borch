@@ -183,9 +183,11 @@
       <div class="tile">
         <h3>When WebGPU is missing</h3>
         <p class="small">
-          <strong>It refuses instead of falling back.</strong> The TF.js version that used to live here silently
-          dropped to WebGL when it could not get WebGPU — and for a while we read numbers measured on a CPU path
-          as if they were GPU numbers. Better not to run than to quietly go slow.
+          <strong>No WebGPU, no run.</strong> `init()` stops rather than reaching for another API — the TF.js
+          version that used to live here dropped quietly to WebGL, and its numbers were read as a GPU's for a
+          while. <strong>A software WebGPU adapter is a different thing</strong>: same API, same kernels, and the
+          values are right — the golden passes on it. Only the clock is the CPU's, and the badge names whichever
+          one you were given. <a href="setup.html">What your platform asks for →</a>
         </p>
       </div>
     </div>
@@ -233,7 +235,7 @@
     <div class="grid c2" style="margin-top:2rem">
       <a class="tile" href="learn/" style="text-decoration:none">
         <span class="icon">◆</span>
-        <h3>Learn — eight lessons</h3>
+        <h3>Learn — ten lessons</h3>
         <p class="small">Tensors → autograd → modules → training → convolution → saving.
           Every code block executes in the page, and you can edit it first.</p>
       </a>
@@ -359,7 +361,7 @@ for step in range(201):
         <tr><td>Model catalogue (<code>bimm</code>)</td><td><span class="state soon">partial</span></td>
             <td><code>createModel(library, name, args)</code> builds; not published to npm yet</td></tr>
         <tr><td>Learn (interactive tutorials)</td><td><span class="state now">here</span></td>
-            <td>Ten lessons and six tutorials, every code block running in the page — tensors through ResNet and a Vision Transformer</td></tr>
+            <td>Ten lessons and ten tutorials, every code block running in the page — tensors through ResNet and a Vision Transformer</td></tr>
         <tr><td>Hub (<code>borch-hub</code>)</td><td><span class="state soon">partial</span></td>
             <td>Manifest, hash check, environment report. Weights do load in a browser — measured, <code>access-control-allow-origin: *</code> on a 44.7MB safetensors. Not published to npm yet</td></tr>
         <tr><td>Without WebGPU — Python mode on wasm</td><td><span class="state now">here</span></td>

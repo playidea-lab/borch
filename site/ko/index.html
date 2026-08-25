@@ -178,8 +178,11 @@
       <div class="tile">
         <h3>WebGPU 가 없으면</h3>
         <p class="small">
-          <strong>폴백하지 않고 거절한다.</strong> 여기 있던 TF.js 판은 WebGPU 를 못 얻으면 WebGL 로 조용히
-          내려갔고, 그 때문에 한동안 CPU 경로에서 잰 수를 GPU 의 것으로 읽었다. 조용히 느려지느니 안 도는 편이 낫다.
+          <strong>WebGPU 가 없으면 안 돈다.</strong> `init()` 은 다른 API 로 손을 뻗는 대신 멈춘다 — 여기 있던
+          TF.js 판은 WebGL 로 조용히 내려갔고 그 수가 한동안 GPU 의 것으로 읽혔다.
+          <strong>WebGPU 의 소프트웨어 어댑터는 그것과 다르다</strong>: 같은 API, 같은 커널, 값도 맞는다 —
+          골든이 거기서도 통과한다. CPU 의 것은 시계뿐이고, 배지가 무엇을 받았는지 이름으로 말한다.
+          <a href="setup.html">내 플랫폼은 무엇을 요구하나 →</a>
         </p>
       </div>
     </div>
@@ -227,7 +230,7 @@
     <div class="grid c2" style="margin-top:2rem">
       <a class="tile" href="learn/" style="text-decoration:none">
         <span class="icon">◆</span>
-        <h3>배우기 — 여덟 강</h3>
+        <h3>배우기 — 열 강</h3>
         <p class="small">텐서 → autograd → 모듈 → 학습 → 합성곱 → 저장 → 데이터 → 디버깅.
           모든 코드 블록이
           그 페이지에서 돌고, 돌리기 전에 고칠 수 있다.</p>

@@ -435,6 +435,100 @@ def test_the_software_adapter_rule_says_the_same_thing_in_every_copy():
         "  not the others means one of them is wrong about a GPU and neither says so.")
 
 
+# ── where the site counts its own pages ───────────────────────────────
+#
+# **The count is written in words and the pages are on disk, and nothing was comparing
+# them.** Six places said `eight lessons` or `여덟 강` while `site/learn/` held ten, and
+# one file disagreed with itself: `learn/index.html` carried `Ten lessons` in its heading
+# and `Six lessons` in the meta description a hundred lines above it, so the page told a
+# reader one number and a search engine another.
+#
+# It is the same shape as the stale golden count `tests/test_docs.py` was built for, and
+# the same shape as the vendor sentence that outlived its measurement: **a number that no
+# longer has to agree with anything.** Adding a lesson is the moment it goes wrong, and
+# adding a lesson is exactly when nobody is reading the landing page.
+#
+# Words rather than digits, because that is how this site writes them.
+_EN_NUMBER = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20,
+}
+_KO_NUMBER = {
+    "하나": 1, "둘": 2, "셋": 3, "넷": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8,
+    "아홉": 9, "열": 10, "열하나": 11, "열둘": 12, "열셋": 13, "열넷": 14, "열다섯": 15,
+    "열여섯": 16, "열일곱": 17, "열여덟": 18, "열아홉": 19, "스물": 20,
+}
+
+# (regex, which directory the number is claiming, the word table)
+_COUNT_CLAIMS = (
+    (re.compile(r"([A-Za-z]+)\s+lessons"), "learn", _EN_NUMBER),
+    (re.compile(r"([A-Za-z]+)\s+(?:tutorials|projects)"), "tutorials", _EN_NUMBER),
+    (re.compile(r"([가-힣]+)\s*강[\s,.·<]"), "learn", _KO_NUMBER),
+    (re.compile(r"프로젝트\s+([가-힣]+)"), "tutorials", _KO_NUMBER),
+)
+
+
+# **Where a count lives, and where a similar-looking phrase does not.** A count of the
+# site's own pages is a *label* — it sits in a title, a heading, a meta description or a
+# table cell. In a paragraph it is prose, and prose says things like *"Two lessons, one
+# page"* on `tutorials/03-curve-fitting.html`, which means two things learned and not two
+# pages on disk. Reading paragraphs too made this check fail on that sentence, which is
+# how a check earns the reputation that gets it switched off.
+_LABEL = re.compile(
+    r"<title>(.*?)</title>"
+    r"|<meta[^>]*content=\"([^\"]*)\""
+    r"|<h[123][^>]*>(.*?)</h[123]>"
+    r"|<td[^>]*>(.*?)</td>", re.S)
+
+
+def _labels(text):
+    """Every label on the page, with the offset it starts at — for the line number."""
+    for m in _LABEL.finditer(text):
+        for group in m.groups():
+            if group:
+                yield m.start(), group
+
+
+def _pages_in(directory):
+    """The lessons or projects themselves — the index is the shelf, not a book on it."""
+    return len([p for p in (SITE / directory).glob("*.html") if p.name != "index.html"])
+
+
+def test_the_site_counts_the_pages_it_links_to():
+    """Every `N lessons` and `N projects` on the site has to be the N that is on disk.
+
+    Only pages are read, not the READMEs: what is checked here is what a visitor is told.
+    A word that is not a number (`those lessons`, `four ways`) is not a claim and is
+    skipped — the tables above decide what counts as one.
+    """
+    truth = {"learn": _pages_in("learn"), "tutorials": _pages_in("tutorials")}
+    assert truth["learn"] and truth["tutorials"], f"no pages found to count: {truth}"
+
+    wrong, seen = [], 0
+    for page in _pages():
+        text = page.read_text(encoding="utf-8")
+        for at, label in _labels(text):
+            for pattern, which, table in _COUNT_CLAIMS:
+                for hit in pattern.finditer(label):
+                    said = table.get(hit.group(1).lower())
+                    if said is None:
+                        continue                   # not a number — not a claim
+                    seen += 1
+                    if said != truth[which]:
+                        line = text[:at].count("\n") + 1
+                        wrong.append(f"{page.relative_to(ROOT)}:{line}  "
+                                     f"{hit.group(0).strip()!r} — there are {truth[which]}")
+
+    assert seen > 4, (
+        f"only {seen} count claims were recognised — the site writes them differently now "
+        "and this check is reading past them, which is the silent half of this failure.")
+    assert not wrong, (
+        "the site claims a number of pages it does not have:\n  " + "\n  ".join(wrong) +
+        f"\n\non disk: {truth['learn']} lessons, {truth['tutorials']} projects")
+
+
 def test_site_has_no_broken_relative_links():
     """Every relative path a page points at has to exist.
 
