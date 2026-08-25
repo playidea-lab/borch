@@ -174,6 +174,42 @@ def test_site_examples_name_only_real_modules():
             "  add them to PACKAGES in site/assets/runner.js — left out, the browser "
             "blows up with an ImportError.")
 
+def test_the_site_deploys_every_root_file_the_runner_fetches():
+    """A `.py` at the repository root that `runner.js` fetches has to be **deployed.**
+
+    The check above this one covers `PACKAGES`, and `borchvision.py` is not in it: it is
+    not a package, it is one file fetched by name beside the loop. So it fell outside the
+    only rule there was, which is this repository's most-repeated shape — what is off the
+    list has no rule.
+
+    The consequence was real rather than theoretical. Deployment copies that file in one
+    line of `pages.yml`, and **deleting that line breaks nothing anybody can see until a
+    reader types `import borchvision` in the playground.** The fetch swallowed its own
+    404 until today; now it raises, which turns a silent absence into a loud one — and a
+    loud failure in the browser is still a failure found by a user. This looks first.
+
+    It reads both sides out of their files rather than naming `borchvision.py` here. A
+    second file fetched the same way tomorrow is then covered on the day it is written,
+    which is exactly what did not happen the first time.
+    """
+    runner = (ROOT / "site" / "assets" / "runner.js").read_text(encoding="utf-8")
+    fetched = set(re.findall(r"fetch\(`\$\{repo\}([A-Za-z_]\w*\.py)`\)", runner))
+    assert fetched, ("no root-level `.py` fetch found in runner.js — if that loading step "
+                     "moved, this check has to follow it rather than quietly pass")
+
+    missing = sorted(name for name in fetched if not (ROOT / name).exists())
+    assert not missing, (f"runner.js fetches files the repository does not have: {missing}")
+
+    deploy = (ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
+    copied = [line for line in deploy.splitlines() if line.strip().startswith("cp ")]
+    undeployed = sorted(name for name in fetched
+                        if not any(name in line for line in copied))
+    assert not undeployed, (
+        f"the runner fetches {undeployed} and the deployed site never receives them.\n"
+        "  add them to the `cp` line in .github/workflows/pages.yml — left out, the "
+        "playground stops on a 404 the moment somebody imports them.")
+
+
 # ── where sizes are claimed ───────────────────────────────────────────
 #
 # **`KB` is a number too.** `test_docs.py` holds the golden count and the package line

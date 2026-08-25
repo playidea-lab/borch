@@ -331,10 +331,22 @@ export async function loadPython(say = () => {}) {
       })());
     }
   }
-  // The transforms that stand where torchvision would. No example uses them yet, but the binding may import them.
+  // The transforms that stand where torchvision would.
+  //
+  // **This swallowed its own failure while the loop three lines up refused to.** That
+  // loop carries the reason — `fetch` does not throw on a 404, so an unchecked response
+  // writes an error page's HTML into a `.py` — and this call, in the same function,
+  // wrote nothing at all and carried on. The visible result was a playground that came
+  // up fine and answered `ModuleNotFoundError: borchvision` on the reader's own import,
+  // a long way from the missing file.
+  //
+  // It was written when nothing imported these transforms. The README's entry example
+  // is one of them now, so the file is load-bearing and its absence is an error rather
+  // than a shrug. Same check as the modules, and the same message.
   jobs.push((async () => {
     const res = await fetch(`${repo}borchvision.py`);
-    if (res.ok) py.FS.writeFile("/work/borchvision.py", await res.text());
+    if (!res.ok) throw new Error(t("load.moduleFailed", "borchvision.py", res.status));
+    py.FS.writeFile("/work/borchvision.py", await res.text());
   })());
   await Promise.all(jobs);
 
