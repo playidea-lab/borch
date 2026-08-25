@@ -19,6 +19,8 @@
  */
 
 import { Tensor } from "./tensor.js";
+import type { DType } from "./dtype.js";
+import { RuntimeError } from "./errors.js";
 import {
   adjustHue,
   elasticTransform,
@@ -94,16 +96,16 @@ export function grayscaleToRgb(img: Image): Image {
  * goes. The two readings differ for every permutation that is not its own inverse, and
  * both produce a plausible picture.
  */
-export function permuteChannels(img: Image, order: readonly number[]): Image {
-  if (order.length !== img.channels) {
+export function permuteChannels(img: Image, permutation: readonly number[]): Image {
+  if (permutation.length !== img.channels) {
     throw new Error(
-      `permute_channels wants ${img.channels} positions, got ${order.length}.`,
+      `permute_channels wants ${img.channels} positions, got ${permutation.length}.`,
     );
   }
   const out = new Float64Array(img.data.length);
   for (let i = 0; i < img.height * img.width; i++) {
     for (let c = 0; c < img.channels; c++) {
-      out[i * img.channels + c] = img.data[i * img.channels + (order[c] ?? 0)] ?? 0;
+      out[i * img.channels + c] = img.data[i * img.channels + (permutation[c] ?? 0)] ?? 0;
     }
   }
   return image(out, img.height, img.width, img.channels, img.isByte);
@@ -118,7 +120,16 @@ export function permuteChannels(img: Image, order: readonly number[]): Image {
  * measure pixels — and picking the wrong one gives values off by 255× that are
  * perfectly well-formed.
  */
-export function toDtype(img: Image, _dtype: unknown = "float32", scale = false): Image {
+export function toDtype(img: Image, dtype: DType = "float32", scale = false): Image {
+  // **The argument is torch's `dtype` and it is read rather than ignored.** There is
+  // one float type in this subset, so any other request cannot be honoured — and a
+  // parameter named after torch's that silently accepts anything is worse than one
+  // that is missing, because the caller's `"float64"` looks like it worked.
+  if (dtype !== "float32") {
+    throw new RuntimeError(
+      `to_dtype takes float32 here — got ${JSON.stringify(dtype)}.\n` +
+      "  Storage is float32 in this subset, so there is nothing else to cast into.");
+  }
   const divide = scale && img.isByte;
   const out = new Float64Array(img.data.length);
   for (let i = 0; i < out.length; i++) out[i] = (img.data[i] ?? 0) / (divide ? 255 : 1);
@@ -268,7 +279,7 @@ export class ToImage implements Transform {
  * prints.
  */
 export class ToDtype implements Transform {
-  constructor(private readonly dtype: unknown = "float32",
+  constructor(private readonly dtype: DType = "float32",
               private readonly scale = false) {}
 
   /**

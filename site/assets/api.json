@@ -4,7 +4,7 @@
  "korean": {
   "done": 687,
   "stale": 0,
-  "missing": 224
+  "missing": 237
  },
  "modules": [
   {
@@ -15184,7 +15184,7 @@
     {
      "kind": "function",
      "name": "permuteChannels",
-     "signature": "export declare function permuteChannels(img: Image, order: readonly number[]): Image",
+     "signature": "export declare function permuteChannels(img: Image, permutation: readonly number[]): Image",
      "doc": "Channels reordered. `[2, 0, 1]` moves the third to the front.\n\n**The list is where each output channel reads from**, not where each input channel\ngoes. The two readings differ for every permutation that is not its own inverse, and\nboth produce a plausible picture.",
      "members": [],
      "torch": "permute_channels"
@@ -15192,7 +15192,7 @@
     {
      "kind": "function",
      "name": "toDtype",
-     "signature": "export declare function toDtype(img: Image, _dtype?: unknown, scale?: boolean): Image",
+     "signature": "export declare function toDtype(img: Image, dtype?: DType, scale?: boolean): Image",
      "doc": "To a float image, **scaling or not**, and the flag is the whole question.\n\nWith `scale`, a byte image's 0–255 becomes 0–1 the way `ToTensor` does it. Without,\nthe numbers are carried across unchanged and a 255 stays a 255. Both are ordinary\nrequests — the first for a network, the second for anything that still means to\nmeasure pixels — and picking the wrong one gives values off by 255× that are\nperfectly well-formed.",
      "members": [],
      "torch": "to_dtype"
@@ -15292,7 +15292,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(dtype?: unknown, scale?: boolean)",
+       "signature": "constructor(dtype?: DType, scale?: boolean)",
        "doc": ""
       },
       {
@@ -15350,6 +15350,112 @@
     }
    ],
    "count": 32
+  },
+  {
+   "name": "ops",
+   "title": "ops",
+   "blurb": {
+    "ko": "박스 기하 — IoU·NMS. `torchvision.ops` 자리.",
+    "en": "Box geometry — IoU and NMS. Where `torchvision.ops` would be."
+   },
+   "doc": "`torchvision.ops` — **box geometry, and only that.**\n\nEleven of torchvision's thirty-nine. The other twenty-eight want a detector's\nfeature maps or its predictions, and there is no detector here; these eleven want\nnothing but four numbers a box. That makes every one of them **deterministic**,\nwhich is unusual for the vision side — there is no distribution half to this file.\n\n## Why the arithmetic happens on the CPU\n\nBoxes come in tens, not millions, and every function here either sorts, iterates\nuntil a set stops shrinking, or reads a mask's extent — shapes a kernel is bad at\nand a loop is good at. So each entry reads its tensors back once and returns a new\none, the same shape `linalg` takes for `det` and `qr`. Being `async` is the price of\na readback in WebGPU and it is charged once per call rather than per box.\n\n## Two conventions that are easy to get backwards\n\n**`(N, 4)` against `(M, 4)` gives `N x M`**, not a paired list of length `N`. Every\nbox is measured against every box, because that is what a detector needs. An\nimplementation that pairs them off returns `min(N, M)` numbers that all look\nplausible.\n\n**A size is `(height, width)`** while a box is `(x, y, x, y)`. The two orders are\nopposite and torchvision keeps both, so `clipBoxesToImage` is the one place where\nreading the tuple in box order silently clips against the wrong edge.",
+   "symbols": [
+    {
+     "kind": "type",
+     "name": "BoxFormat",
+     "signature": "export type BoxFormat = \"xyxy\" | \"xywh\" | \"cxcywh\"",
+     "doc": "The three spellings of a box.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "boxConvert",
+     "signature": "export declare function boxConvert(boxes: Tensor, inFmt: string, outFmt: string): Promise<Tensor>",
+     "doc": "Between the three spellings.\n\n**The identity is a copy and not the same tensor** — torchvision returns a new one\neven when the formats match, and a caller who writes into the result must not reach\nthe caller's boxes.",
+     "members": [],
+     "torch": "box_convert"
+    },
+    {
+     "kind": "function",
+     "name": "boxArea",
+     "signature": "export declare function boxArea(boxes: Tensor, fmt?: string): Promise<Tensor>",
+     "doc": "Width times height.\n\n**A box with `x2 < x1` gets a negative area** rather than zero. torchvision does not\nclamp here, and clamping would hide a box built the wrong way round — which is the\none thing an area is good for catching.",
+     "members": [],
+     "torch": "box_area"
+    },
+    {
+     "kind": "function",
+     "name": "boxIou",
+     "signature": "export declare function boxIou(boxes1: Tensor, boxes2: Tensor, fmt?: string): Promise<Tensor>",
+     "doc": "**An `N x M` matrix, not a paired list.** Every box against every box, which is what\na detector needs and what surprises everyone the first time.",
+     "members": [],
+     "torch": "box_iou"
+    },
+    {
+     "kind": "function",
+     "name": "generalizedBoxIou",
+     "signature": "export declare function generalizedBoxIou(boxes1: Tensor, boxes2: Tensor): Promise<Tensor>",
+     "doc": "IoU, **minus what the smallest enclosing box wastes.**\n\nTwo boxes that do not touch have an IoU of 0 however far apart they are; this one\nkeeps falling, towards -1. That is the whole reason a loss can be built on it and\nnot on plain IoU — a gradient that is flat everywhere it matters teaches nothing.",
+     "members": [],
+     "torch": "generalized_box_iou"
+    },
+    {
+     "kind": "function",
+     "name": "distanceBoxIou",
+     "signature": "export declare function distanceBoxIou(boxes1: Tensor, boxes2: Tensor, eps?: number): Promise<Tensor>",
+     "doc": "IoU penalised by **how far apart the centres are**, as a fraction of the enclosing\nbox's squared diagonal.",
+     "members": [],
+     "torch": "distance_box_iou"
+    },
+    {
+     "kind": "function",
+     "name": "completeBoxIou",
+     "signature": "export declare function completeBoxIou(boxes1: Tensor, boxes2: Tensor, eps?: number): Promise<Tensor>",
+     "doc": "`distanceBoxIou` and **one more term for the aspect ratio** — two boxes sharing a\ncentre and an area but not a shape score lower here, and identically under the\ndistance one.",
+     "members": [],
+     "torch": "complete_box_iou"
+    },
+    {
+     "kind": "function",
+     "name": "clipBoxesToImage",
+     "signature": "export declare function clipBoxesToImage(boxes: Tensor, size: readonly [number, number]): Promise<Tensor>",
+     "doc": "Push every corner back inside a picture of `size`.\n\n**`size` is `(height, width)`** — the opposite order to a box's own `(x, y)`, and\ntorchvision's own convention. Reading it in box order clips x against the height and\ngives boxes that are wrong without being obviously wrong.",
+     "members": [],
+     "torch": "clip_boxes_to_image"
+    },
+    {
+     "kind": "function",
+     "name": "removeSmallBoxes",
+     "signature": "export declare function removeSmallBoxes(boxes: Tensor, minSize: number): Promise<Tensor>",
+     "doc": "**Indices, not boxes.**\n\nEvery filter in this file returns positions rather than survivors, because the\ncaller almost always holds scores and labels that have to be cut at the same places.",
+     "members": [],
+     "torch": "remove_small_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "masksToBoxes",
+     "signature": "export declare function masksToBoxes(masks: Tensor): Promise<Tensor>",
+     "doc": "The tightest box around each mask, from a `(N, H, W)` stack.\n\n**An empty plane gives all zeros** rather than an error. That is torchvision's\nbehaviour and it is the one that lets a batch with one blank mask still stack —\nraising here would make a single empty annotation kill a whole batch.",
+     "members": [],
+     "torch": "masks_to_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "nms",
+     "signature": "export declare function nms(boxes: Tensor, scores: Tensor, iouThreshold: number): Promise<Tensor>",
+     "doc": "Non-maximum suppression: keep the best-scoring box, discard everything overlapping\nit too much, repeat.\n\n**`> iouThreshold` and not `>=`.** At a threshold of 0, two boxes that merely touch —\nzero overlap — both survive. That is the boundary anybody testing this reaches for\nfirst, and the two spellings differ there and nowhere else.\n\nTies in the score are **not decided here, and torchvision does not decide them\neither** — its own documentation says the winner is not guaranteed to match between\nCPU and GPU. So a case built on tied scores is a case with no answer, and the sort\nbelow is stable only so that repeated runs here agree with each other.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "batchedNms",
+     "signature": "export declare function batchedNms(boxes: Tensor, scores: Tensor, idxs: Tensor, iouThreshold: number): Promise<Tensor>",
+     "doc": "NMS **per class**, done by moving each class's boxes somewhere the others cannot\nreach.\n\nThe offset trick is torchvision's and it is worth reading twice: every box is shifted\nby its class index times more than the largest coordinate present, so boxes of\ndifferent classes can no longer overlap at all and **one pass does the lot**. It\ncosts a single addition where the obvious implementation costs a loop over classes.",
+     "members": [],
+     "torch": "batched_nms"
+    }
+   ],
+   "count": 12
   },
   {
    "name": "datasets",
@@ -17869,5 +17975,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2383
+ "total": 2395
 }

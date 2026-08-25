@@ -103,6 +103,17 @@ MODULES = [
     # re-exports these, and a re-export does not appear in its own declaration file —
     # so thirty-six classes were invisible to this reference while every check on it
     # stayed green.
+    #
+    # `ops` was the same failure a second time and it lasted longer, because nothing
+    # about it looked wrong: `ops.ts` exists, its eleven functions have golden cases,
+    # and those cases pass. What they measure is the **value**. The name and the
+    # argument list are measured by `ts_axis.py` and `ts_signatures.py`, and both of
+    # those read this generator's output — so a module off this list is off both axes,
+    # and asking them about `ops` answered "borch.ts does not have `nms`" about a file
+    # that has it. Measured: eleven names, all eleven reported absent.
+    ("ops", "ops",
+     {"ko": "박스 기하 — IoU·NMS. `torchvision.ops` 자리.",
+      "en": "Box geometry — IoU and NMS. Where `torchvision.ops` would be."}),
     ("datasets", "datasets",
      {"ko": "데이터셋 **디코더**. `torchvision.datasets` 의 형식 절반 — 주소 절반"
             "(내려받기·캐시·체크섬)은 여기 없다. 조용히 틀리는 쪽은 형식이다.",

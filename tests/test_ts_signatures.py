@@ -226,6 +226,13 @@ SHIFTED = {
     # never lands in exactly one place and the draw would decide the answer.
     "transforms": 0,
     "transforms.functional": 0,
+    # The four that were off this list as well as the name axis. **Nothing is shifted
+    # in any of them** — `ops` reports eleven `agree` and nothing else, which is what a
+    # namespace looks like when torch's own parameter names were copied down.
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
 }
 
 # **238 pairs cannot be compared at all, and that is the largest number here.**
@@ -519,6 +526,10 @@ UNALIGNED = {
     # per parameter.
 # 2 → 0. See the note in `RENAMED` below.
     "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
 }
 
 # Same arity, names differ. **Pinned, because this bucket was called harmless and
@@ -783,6 +794,21 @@ RENAMED = {
     # torchvision does not have got torchvision's parameter name while the real one
     # kept `x`. `startswith` is not a name check.
     "transforms.functional": 0,
+    "ops": 0,
+    # **Three, and they come from the twins inheriting rather than delegating.** A
+    # `private readonly size` cannot sit beside the parent's, so the constructors carry
+    # `v2Size`, `v2Fill`, `v2Transforms` and 182 more — and three of those reach a
+    # signature this axis can read. It is fixable and not a language limit: taking the
+    # parameter without a modifier and storing it under one name of its own keeps
+    # torch's spelling in the seat. Left for its own change, because it touches every
+    # twin in the file and this one is about the namespaces being measured at all.
+    "transforms.v2": 3,
+    # 2 → 0. `permute_channels` took `order` where torch takes `permutation`, and
+    # `to_dtype` took `_dtype` — underscored because it was never read. It is read now:
+    # there is one float type in this subset, so any other request is refused rather
+    # than accepted and dropped, which is what a parameter named after torch's owes.
+    "transforms.v2.functional": 0,
+    "datasets": 0,
 }
 
 # borch.ts takes a **prefix** of torch's arguments. Not a shift and not silent — one
@@ -1067,6 +1093,13 @@ SHORTER = {
     # torchvision's `inplace`, which writes into the caller's tensor and has nothing
     # to write into here.
     "transforms.functional": 2,
+    "ops": 0,
+    # Three: `Compose`, `RandomApply` and `ElasticTransform` take fewer arguments than
+    # torch's v2 does. A short tail refuses extra arguments rather than mis-seating
+    # them.
+    "transforms.v2": 3,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
 }
 
 # **Names torch reaches through the tensor and borch.ts only through the module.**
@@ -1118,6 +1151,10 @@ FREE_FUNCTION = {
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
 }
 
 # **The bucket that means *two spellings exist and neither was compared*.**
@@ -1146,6 +1183,10 @@ TWO_DECLARATIONS = {
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
 }
 
 
