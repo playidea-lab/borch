@@ -109,6 +109,27 @@
       <code>passed 2901 / failed 0 [nvidia / blackwell]</code> — the golden agreeing on a
       second vendor for the first time in this project.
     </p>
+    <p>
+      <strong>And there is a documented route, which is not the one above.</strong> The
+      WebGPU working group's
+      <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status">implementation
+      status</a> lists Linux as behind a flag and names four:
+    </p>
+    <pre class="small" style="overflow-x:auto"><code>--enable-unsafe-webgpu --ozone-platform=x11 --use-angle=vulkan \
+  --enable-features=Vulkan,VulkanFromANGLE</code></pre>
+    <p>
+      <strong>The two lists overlap in one entry.</strong> Ours was arrived at by trying
+      things on one machine and it is what the measurement above was taken with; theirs is
+      written down by the people who implement it and has not been run here. Both can be
+      true — they are different ways to get past the same refusal — and a reader whose card
+      does not come up with the pair above should try the four before concluding anything
+      about their hardware.
+    </p>
+    <p class="small">
+      It is worth saying plainly that this page found its two flags the long way. The
+      documented list was a page away the whole time and neither session here looked at it
+      for a day.
+    </p>
 
     <h2>Linux with an AMD or Intel card</h2>
     <p>
@@ -125,6 +146,18 @@
       the ladder, not the outcome. If you have a Windows machine with a GPU, opening the
       <a href="playground.html">playground</a> and reading the badge settles it in thirty
       seconds, and the answer is welcome.
+    </p>
+    <p>
+      <strong>What the implementers say, which is not a measurement.</strong> The same
+      <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status">implementation
+      status</a> page lists Windows on x86 and x64 as enabled by default since Chrome 113,
+      and Windows on ARM64 as still behind <code>#enable-unsafe-webgpu</code> — so "Windows
+      works" is two answers depending on which Windows. That is what is written down by the
+      people who ship it, and it is why nobody here expects this cell to need flags on an
+      ordinary desktop. It stays marked <em>not measured</em> until someone opens the page
+      on one, because a page that says <em>we read that it works</em> and a page that says
+      <em>we saw it work</em> are different pages, and this repository spent two days
+      learning which one it wants to be.
     </p>
 
     <h2>Phones and tablets</h2>
