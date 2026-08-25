@@ -190,6 +190,21 @@
     </div>
 
     <div class="note-box">
+      <strong>What a browser asks of you before it will run this — measured, per platform.</strong><br>
+      <strong>macOS:</strong> nothing. The adapter comes back <code>apple / metal-3</code> and Run works. ·
+      <strong>Linux with an NVIDIA card:</strong> two switches. Chrome keeps a blocklist and refuses
+      before it asks the driver, so with neither flag there is <em>no adapter at all</em>, and with
+      <code>#enable-unsafe-webgpu</code> alone the adapter is <code>google / swiftshader</code> —
+      which is the CPU wearing a GPU's name. Add <code>#ignore-gpu-blocklist</code> and it is
+      <code>nvidia / blackwell</code>. (Measured on Ubuntu 24.04, RTX 5080, driver 580.159.04.) ·
+      <strong>Windows:</strong> <em>not measured.</em> Chrome uses D3D12 there rather than the Vulkan
+      path above, so nothing measured here says anything about it, and a guess would be the shape of
+      claim this repository spent a day removing.<br>
+      The badge on this page carries the adapter's own name for the same reason: a run on
+      SwiftShader agrees with the golden and prints the CPU's speeds.
+    </div>
+
+    <div class="note-box">
       <strong>Five places it differs from torch — you meet all of them in the first ten lines.</strong><br>
       <code>await init()</code> comes first (acquiring the adapter is async) ·
       reading a value is <code>await t.item()</code> (forward and backward are synchronous) ·

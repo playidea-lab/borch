@@ -27,6 +27,26 @@ const STRINGS = {
   "device.noFallback": {
     en: "borch does not fall back — better not to run than to quietly go slow.",
     ko: "borch 는 폴백하지 않는다 — 조용히 느려지느니 안 도는 편이 낫다." },
+  // **The message said "a driver blocklist" and stopped there.** That guess was right on
+  // the machine this was written for, and it still cost a day, because naming a cause is
+  // not naming a next step. Measured on Ubuntu 24.04 with an RTX 5080 (driver
+  // 580.159.04): with neither flag there is no adapter at all; with the first alone the
+  // adapter is SwiftShader, which is the CPU; with both it is `nvidia / blackwell`.
+  "device.linuxFlags": {
+    en: "On Linux with an NVIDIA card, Chrome refuses before it asks the driver. "
+      + "Open chrome://flags, turn on #enable-unsafe-webgpu and #ignore-gpu-blocklist, "
+      + "and relaunch — a window already open keeps the old settings.",
+    ko: "리눅스에 NVIDIA 카드면, 크롬이 드라이버에 묻기 전에 먼저 거절한다. "
+      + "chrome://flags 에서 #enable-unsafe-webgpu 와 #ignore-gpu-blocklist 를 켜고 "
+      + "다시 띄워라 — 이미 떠 있는 창은 옛 설정을 그대로 쓴다." },
+  // **A software adapter is the failure that looks like a success.** It runs, it agrees
+  // with the golden, and every number it prints is a CPU's. The same four names the
+  // runners refuse on (`tests/browser/launch.py`).
+  "device.software": {
+    en: "That adapter is a CPU rasteriser, not a GPU. It will run and it will agree with "
+      + "the golden — and every speed it prints is the CPU's.",
+    ko: "저 어댑터는 GPU 가 아니라 CPU 래스터라이저다. 돌기도 하고 골든과 값도 맞는다 — "
+      + "다만 여기서 나오는 속도는 전부 CPU 의 것이다." },
 
   "run.done": {
     en: "done — {0} ms", ko: "끝 — {0} ms" },

@@ -291,16 +291,26 @@ window.addEventListener("resize", scheduleDraw);
 
 /* ── the device ─────────────────────────────────────────────────────── */
 
+
+/** Is this adapter a CPU? The four names `tests/browser/launch.py` refuses on — one rule,
+ *  two places, and the day they disagree is the day one of them lies about a number. */
+const SOFTWARE = /swiftshader|llvmpipe|lavapipe|software/i;
+
+/** Linux, where Chrome's blocklist is what stands between the page and the driver. */
+const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+
 (async function showDevice() {
   try {
     const p = await probeDevice();
     if (p.ok) {
-      badge.className = "badge on";
+      badge.className = SOFTWARE.test(p.adapter) ? "badge off" : "badge on";
       badgeText.textContent = p.adapter;
+      if (SOFTWARE.test(p.adapter)) say(t("device.software"), "err");
     } else {
       badge.className = "badge off";
       badgeText.textContent = t(p.why === "no-api" ? "device.noApi" : "device.noAdapter");
       say(p.message, "err");
+      if (p.why === "no-adapter" && ON_LINUX) say(t("device.linuxFlags"), "note");
       say(t("device.noFallback"), "note");
     }
   } catch (err) {
