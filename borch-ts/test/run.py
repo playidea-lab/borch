@@ -499,24 +499,25 @@ NOT_PORTED = {
     # place that was merely never asked is not the same as a place that is wrong, and
     # asking is what separates the two.**
     "fname::": (28, "별칭 — `F`'s in-place variants. The method side asks them already"),
-    # `bit::` used to be here — 24 cases, "alias — the method names of the bit
-    # operations". **The point was that those names were not over there**, and the reason
-    # called them aliases. They went in and all were ported, so the row is gone.
+    # **20 → 0, and with it the last `아직` outside `dataset::`.** The row read
+    # *14 values — CTCLoss, FractionalMaxPool and the adaptive softmax stand as names
+    # and only the cases never came*, and that was exactly the state: every class was
+    # already here, so nineteen of the twenty are case bodies.
     #
-    # Porting them parted `bitwise_not(bool)`: a kernel comment had written down that "on
-    # bool this is logical negation and the binding does the parting" — which leaves the
-    # TypeScript side receiving `-2`. **Not a missing answer but a wrong one.** The parting
-    # moved over there.
-    # **It was not "mostly `repr`".** Laid out with `--show unpool`, six of the twenty-two
-    # are `repr` and the other fourteen ask values, gradients and shapes. And those names
-    # are **already in** borch.ts — `CTCLoss`, `FractionalMaxPool` and
-    # `AdaptiveLogSoftmaxWithLoss` all stand as classes and only the cases never came.
+    # **Two of the twenty went red first, and one of them was a real hole.** `ctcLoss`
+    # took the padded target form and only that; torch takes a flat one too — every
+    # sample's labels end to end, with `targetLengths` saying where each stops, which
+    # is how a batch of unequal targets actually arrives. The case named `1차원 표적`
+    # is that form, and refusing it made a line torch accepts stop on a type. The other
+    # was the case's own input: the Python side divides the counted grid by 8 before
+    # the p-norm, and at the raw values the answer is dominated by the largest cell —
+    # a max pool with extra steps.
     #
-    # A reason frozen into one line hides the kinds parting inside it. This row showed that
-    # for the sixth time, which is why the counts are written out by kind.
-    "unpool::": (20, "**아직**(14 values — CTCLoss, FractionalMaxPool and the adaptive "
-                 "softmax stand as names and only the cases never came) · the 6 repr "
-                 "cases are Python's own lettering"),
+    # The twentieth needed a `describe`. `MaxUnpool2d` and `MaxUnpool3d` are empty
+    # subclasses of `MaxUnpool1d`, so they inherit whatever it prints — and torch
+    # prints one tuple entry per axis, `(2,)` against `(2, 2)` against `(2, 2, 2)`.
+    # Three frozen strings for what looks like one line of code is the reason all
+    # three ranks are asked.
     # `linalg::` used to be here — 17 cases. Sixteen had simply never been asked, and one
     # (`ldl_factor_ex`) could not be asked because the binding was standing three of its
     # slots up by hand.

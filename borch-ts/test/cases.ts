@@ -3002,6 +3002,31 @@ function addUnpool(out: Map<string, Case>): void {
     out.set(`unpool::값::${name}`, () => run().values);
   }
 
+  // **One computation under two names.** `returnIndices` and the `*WithIndices`
+  // spelling reach the same kernel, and a library carrying both has two places for
+  // one answer to come from.
+  out.set("unpool::이름이 둘인 같은 계산", () => {
+    const a = F.maxPool2dWithIndices(plane(), 2);
+    const b = plane().maxPoolWithIndices(2);
+    const c = F.adaptiveMaxPool2dWithIndices(plane(), 2);
+    return Tensor.cat([
+      a.values.reshape([-1]), b.values.reshape([-1]), c.values.reshape([-1]),
+      a.indices.reshape([-1]).to("float32"), b.indices.reshape([-1]).to("float32"),
+    ]);
+  });
+
+  // **The three ranks print the same arguments differently** — `(2,)`, `(2, 2)`,
+  // `(2, 2, 2)` — because torch prints one entry per axis. Frozen for all three
+  // because two of them are empty subclasses of the first and inherit whatever it
+  // does.
+  for (const rank of [1, 2, 3] as const) {
+    out.set(`unpool::층::repr::MaxUnpool${rank}d`, () => {
+      const layer = rank === 1 ? new nn.MaxUnpool1d(2)
+        : rank === 2 ? new nn.MaxUnpool2d(2) : new nn.MaxUnpool3d(2);
+      return layer.describe();
+    });
+  }
+
   // The path with indices on and the path with them off have to give **the same value.**
   // There are two kernels, so they can diverge.
   out.set("unpool::자리를 켜도 값은 같다",
@@ -3149,6 +3174,32 @@ function addUnpool(out: Map<string, Case>): void {
     () => fracRefuses([3, 3], [0.5, 0.5]));
   out.set("unpool::층::FractionalMaxPool2d(둘 다 없으면)",
     () => fracRefuses(null, null));
+  // The `*_with_indices` spelling of the same call, as with max pooling above.
+  out.set("unpool::분수::이름이 둘인 같은 계산",
+    () => F.fractionalMaxPool2dWithIndices(frac(), 2, [3, 3], [[0.0, 0.75]]).values);
+  // **Without samples it is random, so the value cannot be asked — the shape and the
+  // range are.** Whichever slot wins, its value is inside its own window and the
+  // window is inside the input, so this holds whatever the draw does.
+  out.set("unpool::분수::표본 없이(모양과 범위)", async () => {
+    const out2 = new nn.FractionalMaxPool2d(2, [3, 3]).call(frac());
+    const values = Array.from(await out2.toArray());
+    const inside = values.filter((v) => v >= 0 && v <= 48).length;
+    return `(${out2.shape.join(", ")}) 안에 있는 것=${inside}`;
+  });
+  // **The repr is empty** — torch's `extra_repr` produces nothing for these two.
+  out.set("unpool::층::repr::FractionalMaxPool2d",
+    () => new nn.FractionalMaxPool2d(2, [3, 3]).describe());
+  out.set("unpool::층::repr::FractionalMaxPool3d",
+    () => new nn.FractionalMaxPool3d(2, [3, 3, 3]).describe());
+  // `LPPool3d` is `LPPool1d`'s subclass here as the other ranks are, so the case is
+  // about the rank reaching the kernel rather than about the norm.
+  //
+  // **The input is the counted grid divided by 8**, as its two `F.` neighbours on the
+  // Python side are. At the raw values a p=2 norm over a 2³ window is large enough
+  // that the answer is dominated by the largest cell, and the case would be reading a
+  // max pool with extra steps.
+  out.set("unpool::층::LPPool3d",
+    () => new nn.LPPool3d(2, 2).call(grid([1, 1, 4, 4, 4]).div(Tensor.from([8]))));
 
   // ── CTC ───────────────────────────────────────────────────────────────
   //
@@ -3179,12 +3230,41 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("unpool::ctc::zero_infinity",
     () => nn.ctcLoss(lp(), tooLong, [2, 2], [6, 6], 0, "none", true));
 
+  // **The flat target form**, which torch takes beside the padded one: every sample's
+  // labels end to end, with `targetLengths` saying where each stops. Here `[1, 2, 3]`
+  // with lengths 2 and 1 is `[1, 2]` and `[3]` — the same two samples the padded cases
+  // above use, arriving the way a batch of unequal targets actually arrives.
+  out.set("unpool::ctc::1차원 표적",
+    () => nn.ctcLoss(lp(), [1, 2, 3], inLen, tgtLen, 0, "none"));
+
   out.set("unpool::ctc::grad(로짓까지)", () => {
     const x = logits();
     x.requiresGrad = true;
     nn.ctcLoss(x.logSoftmax(2), tgt, inLen, tgtLen, 0, "sum").backward();
     return gradOf(x, "ctcLoss");
   });
+
+  // **Where `logProbs` is the leaf directly.** torch produces something here that is
+  // not the true derivative — a finite difference gives `-γ` and torch gives
+  // `exp(logProbs) - γ`. The case above passes through `logSoftmax`, which makes the
+  // two the same answer and hides the difference. Only this one sees it.
+  out.set("unpool::ctc::grad(log_probs 까지)", () => {
+    const x = logits().logSoftmax(2);
+    x.requiresGrad = true;
+    nn.ctcLoss(x, tgt, inLen, tgtLen, 0, "sum").backward();
+    return gradOf(x, "ctcLoss(log_probs)");
+  });
+
+  // The layer form, and its printing. **`CTCLoss()` prints its name and nothing
+  // else** whatever it was given — torch's `extra_repr` is empty here, so the two
+  // repr cases are the same string on purpose.
+  out.set("unpool::층::CTCLoss",
+    () => new nn.CTCLoss().forward(lp(), tgt, inLen, tgtLen));
+  out.set("unpool::층::CTCLoss(blank=3, sum)",
+    () => new nn.CTCLoss(3, "sum").forward(lp(), [[1, 2], [0, 0]], inLen, tgtLen));
+  out.set("unpool::층::repr::CTCLoss", () => new nn.CTCLoss().describe());
+  out.set("unpool::층::repr::CTCLoss(인자 있음)",
+    () => new nn.CTCLoss(2, "sum", true).describe());
 
   // ── AdaptiveLogSoftmaxWithLoss ────────────────────────────────────────
   //
@@ -3221,6 +3301,38 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("unpool::적응형softmax::loss",
     () => asm().run(asmX(), asmY()).loss);
   out.set("unpool::적응형softmax::predict", () => asm().predict(asmX()));
+  // `output` has to equal picking the correct slot out of `logProb`. torch selects
+  // only the clusters it needs and produces it more cheaply, and if the two paths
+  // part, only the training goes slightly out of step — so they are tied by value.
+  out.set("unpool::적응형softmax::output 은 고른 것과 같다", () => {
+    const model = asm();
+    const x = asmX();
+    const picked = model.logProb(x).gather(1, asmY().reshape([-1, 1]));
+    return model.run(x, asmY()).output.sub(picked.reshape([-1]));
+  });
+  out.set("unpool::적응형softmax::grad", () => {
+    const x = asmX();
+    x.requiresGrad = true;
+    asm().run(x, asmY()).loss.backward();
+    return gradOf(x, "AdaptiveLogSoftmaxWithLoss");
+  });
+
+  // **At the default `divValue` of 4 a tail dimension can fall to 0.** torch builds
+  // an empty layer there and moves on, and not blocking it is the imitation — the
+  // core once stopped dividing by √0. Frozen as the keys and their shapes, because
+  // that is where an empty layer shows.
+  const asmShapes = (divValue = 4.0, headBias = false) => async () => {
+    const sd = new nn.AdaptiveLogSoftmaxWithLoss(4, 12, [3, 7], divValue, headBias)
+      .stateDict();
+    return Object.keys(sd).sort()
+      .map((k) => `${k}(${(sd[k] as Tensor).shape.join(", ")}${
+        (sd[k] as Tensor).shape.length === 1 ? "," : ""})`)
+      .join(" ");
+  };
+  out.set("unpool::적응형softmax::기본값의 모양", asmShapes());
+  out.set("unpool::적응형softmax::div_value=2 의 모양", asmShapes(2.0));
+  out.set("unpool::적응형softmax::head_bias 의 열쇠", asmShapes(4.0, true));
+
   out.set("unpool::층::repr::AdaptiveLogSoftmaxWithLoss",
     async () => asm().describe());
 

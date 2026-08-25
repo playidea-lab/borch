@@ -1581,10 +1581,31 @@ export class AdaptiveMaxPool3d extends AdaptiveMaxPool1d {}
  * `Sequential`.
  */
 export class MaxUnpool1d extends Module {
+  /** How many axes the printed tuples carry — 1, 2 or 3. */
+  protected readonly rank: number = 1;
+
   constructor(protected readonly kernelSize: number,
               protected readonly stride?: number,
               protected readonly padding = 0) {
     super();
+  }
+
+  /**
+   * **torch prints these as tuples, one entry per axis**, so the same arguments
+   * print differently in the three ranks: `(2,)`, `(2, 2)`, `(2, 2, 2)`. The
+   * trailing comma on a one-tuple is Python's and not a typo.
+   *
+   * `stride` unset prints as the kernel rather than as `None` — torch fills it in
+   * at construction, so the printed line is what the layer will actually use.
+   */
+  override describe(): string {
+    const tuple = (v: number): string => {
+      const parts = Array.from({ length: this.rank }, () => String(v));
+      return this.rank === 1 ? `(${parts[0]},)` : `(${parts.join(", ")})`;
+    };
+    return `${this.constructor.name}(kernel_size=${tuple(this.kernelSize)}, ` +
+      `stride=${tuple(this.stride ?? this.kernelSize)}, ` +
+      `padding=${tuple(this.padding)})`;
   }
 
   /**
@@ -1604,10 +1625,14 @@ export class MaxUnpool1d extends Module {
 }
 
 /** `torch.nn.MaxUnpool2d`. */
-export class MaxUnpool2d extends MaxUnpool1d {}
+export class MaxUnpool2d extends MaxUnpool1d {
+  protected override readonly rank = 2;
+}
 
 /** `torch.nn.MaxUnpool3d`. */
-export class MaxUnpool3d extends MaxUnpool1d {}
+export class MaxUnpool3d extends MaxUnpool1d {
+  protected override readonly rank = 3;
+}
 
 /**
  * Flattens, keeping only the batch axis.
@@ -2809,17 +2834,38 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
  */
 export function ctcLoss(
   logProbs: Tensor,
-  targets: readonly (readonly number[])[],
+  targets: readonly (readonly number[])[] | readonly number[],
   inputLengths: readonly number[],
   targetLengths: readonly number[],
   blank = 0,
   reduction: Reduction = "mean",
   zeroInfinity = false,
 ): Tensor {
+  // **torch takes the targets two ways and this took one.** Padded, `(N, S)`, one row
+  // per sample; or flat, every sample's labels laid end to end with `targetLengths`
+  // saying where each one stops. The flat form is what a batch of unequal targets
+  // arrives as, and refusing it here made a line torch accepts stop on a type.
+  //
+  // Split rather than handled twice: the flat form becomes rows and the rest of the
+  // function sees one shape. A second body under a branch is where the two forms come
+  // to disagree.
+  const rows: readonly (readonly number[])[] = (
+    targets.length > 0 && typeof targets[0] === "number"
+      ? (() => {
+        const flat = targets as readonly number[];
+        const out: number[][] = [];
+        let at = 0;
+        for (const n of targetLengths) {
+          out.push([...flat.slice(at, at + n)]);
+          at += n;
+        }
+        return out;
+      })()
+      : targets as readonly (readonly number[])[]);
   const parts: Tensor[] = [];
   const divisors: number[] = [];
-  for (let i = 0; i < targets.length; i++) {
-    const labels = (targets[i] ?? []).slice(0, targetLengths[i] ?? 0);
+  for (let i = 0; i < rows.length; i++) {
+    const labels = (rows[i] ?? []).slice(0, targetLengths[i] ?? 0);
     const nTime = inputLengths[i] ?? 0;
     // Each repeated character that touches its neighbour costs one more blank. Shorter
     // than that and there is no alignment at all, so the probability is 0 and the loss
@@ -2850,9 +2896,12 @@ export class CTCLoss {
     readonly zeroInfinity = false,
   ) {}
 
+  // **Both target forms, as the function takes them.** Widening one and not the other
+  // would make the same argument work under one name and stop under the other, which
+  // is worse than not taking it at all: the reader learns the library takes it.
   forward(
     logProbs: Tensor,
-    targets: readonly (readonly number[])[],
+    targets: readonly (readonly number[])[] | readonly number[],
     inputLengths: readonly number[],
     targetLengths: readonly number[],
   ): Tensor {
@@ -2862,7 +2911,7 @@ export class CTCLoss {
 
   call(
     logProbs: Tensor,
-    targets: readonly (readonly number[])[],
+    targets: readonly (readonly number[])[] | readonly number[],
     inputLengths: readonly number[],
     targetLengths: readonly number[],
   ): Tensor {
