@@ -12533,8 +12533,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, momentum?: number, dampening?: number, weightDecay?: number, nesterov?: boolean, opts?: { maximize?: boolean; })",
-       "doc": "torch's order — `dampening` third and `nesterov` sixth, with `maximize`\nkeyword-only behind them as torch has it.\n\n**This read `(params, lr, momentum, weightDecay)`**, so `new SGD(p, 0.1, 0.9,\n1e-4)` — the line a torch tutorial writes — set the dampening to the weight\ndecay and left the decay at zero. Two different things, both plausible small\nnumbers, and the run trains and trains slightly wrong."
+       "signature": "constructor(params: ParamsArg, lr?: number, momentum?: number, dampening?: number, weightDecay?: number, nesterov?: boolean, opts?: { maximize?: boolean; })",
+       "doc": "torch's order — `dampening` third and `nesterov` sixth, with `maximize`\nkeyword-only behind them as torch has it.\n\n**This read `(params, lr, momentum, weightDecay)`**, so `new SGD(p, 0.1, 0.9,\n1e-4)` — the line a torch tutorial writes — set the dampening to the weight\ndecay and left the decay at zero. Two different things, both plausible small\nnumbers, and the run trains and trains slightly wrong.\n\n**`lr` has torch's default and used to be required.** `new SGD(params)` is the\nline a first tutorial writes, and it stopped here on an argument count — the one\noptimizer most likely to be built with nothing but its parameters. The number is\ntorch's `1e-3` rather than a rounder one: the Python side had `0.01` for a while,\nwhich is ten times too large and is the kind of divergence a case cannot catch by\n*using* the value, because every case names its own rate."
       },
       {
        "name": "update",
