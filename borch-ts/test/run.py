@@ -712,8 +712,14 @@ NOT_PORTED = {
     # Carrying a pickle parser across would be building a reader for a format that side
     # does not encounter, and its own risk — a silent mis-parse of a nested numpy
     # `__reduce__` — is the shape this repository spends its time removing.
-    "dataset::": (3, "파이썬 — CIFAR's batches are pickles, and the browser side reaches "
-                     "CIFAR through a JPEG sprite instead"),
+    # 3 → 5. **`ImageFolder` arrived on the Python side and cannot arrive here**, and
+    # it is the clearest case in this whole table: the class walks a directory and
+    # calls a loader on each path, and a page has no directories to walk. Everything
+    # else under `dataset::` is a format that could in principle cross; this is a
+    # filesystem, which is not a format at all.
+    "dataset::": (5, "파이썬 — CIFAR's batches are pickles and the browser side reaches "
+                     "CIFAR through a JPEG sprite instead; `ImageFolder` walks a "
+                     "directory, and a page has none"),
     # `v2::` **was** a row here — 71, then 52, then gone. The nineteen that needed no v1
     # field access went first; the fifty-two twins followed once it was clear the fields
     # did not have to be read at all. Each twin extends the v1 class and keeps its own

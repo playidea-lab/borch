@@ -665,7 +665,6 @@ SKIPPED = {
     "datasets.Food101": "as above — a codec",
     "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
     "datasets.INaturalist": "as above — a codec",
-    "datasets.ImageFolder": "a folder of pictures, and opening one needs a codec — `ImageFolder` is `DatasetFolder` with PIL's loader already chosen, and choosing it is the whole of what is missing. **`DatasetFolder` itself is here.** The sentence in this slot said it was not: it read *that one is absent for a different reason — nobody has written it*, which was true when written and stopped being true when somebody did. A row in a table of reasons is the last place anybody re-reads",
     "datasets.ImageNet": "as above — a codec",
     "datasets.Imagenette": "as above — a codec",
     "datasets.Kinetics": "as above",

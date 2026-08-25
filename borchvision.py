@@ -5142,6 +5142,77 @@ class DatasetFolder(VisionDataset):
         return sample, target
 
 
+#: The extensions `ImageFolder` walks. **torchvision's nine minus the six with a
+#: codec behind them** — `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff` and `.webp` are
+#: absent because opening one needs a decoder this library does not carry, and a
+#: folder holding them is a folder this cannot read. Naming them here rather than
+#: taking torch's list whole is what makes that visible at construction instead of
+#: on the picture that happens to be JPEG.
+IMG_EXTENSIONS = (".png", ".ppm", ".pgm")
+
+
+def _folder_loader(path):
+    """One picture from a path, **by its bytes and not by its name.**
+
+    A file called `.png` that is not one is a real thing — a download that fetched
+    an error page, an archive that renamed on extraction — and the magic number
+    settles it in two bytes. torchvision's loader dispatches on the suffix and hands
+    the rest to PIL, which sniffs the same way one layer down.
+
+    The refusal names the codec it met rather than saying "unsupported", because
+    JPEG is the answer somebody will actually be holding.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return _png_read(data)
+    if data[:2] in (b"P5", b"P6"):
+        return _ppm_read(data)
+    if data[:2] == b"\xff\xd8":
+        raise ValueError(
+            f"{path} is JPEG, and there is no JPEG decoder here.\n"
+            "  PNG and PPM are read directly; a JPEG needs a discrete cosine "
+            "transform, Huffman tables and a progressive mode, which is a codec "
+            "rather than a container.")
+    raise ValueError(
+        f"{path} is not a PNG or a PPM — it begins {data[:4]!r}.\n"
+        f"  ImageFolder here reads {', '.join(IMG_EXTENSIONS)}.")
+
+
+class ImageFolder(DatasetFolder):
+    """`DatasetFolder` with the loader chosen. **That choice was the whole of what
+    was missing**, and it used to be the whole of what was refused.
+
+    The gap table said of this name *its pictures need a codec — the same answer PIL
+    gets*, which was one true sentence about a class that reads no format itself.
+    `DatasetFolder` walks directories and calls a function; the codec lives in the
+    function, and this library has two of them. So what is here opens **PNG and PPM**
+    and refuses the rest by name.
+
+    That is narrower than torchvision's, which opens nine extensions through PIL, and
+    the narrowness is stated rather than hidden: `IMG_EXTENSIONS` above is the list,
+    a file outside it is not walked, and a file inside it that turns out to be JPEG
+    stops with a sentence naming JPEG. **A folder of PNGs gives the same answer as
+    torchvision's** — compared class for class, index for index, and pixel for pixel.
+
+    **And it is narrower than "PNG" too.** `_png_read` refuses Adam7 interlacing,
+    where the rows arrive in seven passes; a reader that ignored the flag would hand
+    back a picture built from the first pass — recognisable, wrong and silent. So a
+    folder holding one stops on that file rather than on the format, which is the
+    honest place for it to stop and is measured rather than assumed: PIL will not
+    write an interlaced PNG, so the fixture that proves it sets the IHDR flag by hand.
+    """
+
+    def __init__(self, root, transform=None, target_transform=None,
+                 loader=_folder_loader, is_valid_file=None):
+        super().__init__(root, loader,
+                         None if is_valid_file is not None else IMG_EXTENSIONS,
+                         transform=transform, target_transform=target_transform,
+                         is_valid_file=is_valid_file)
+        #: torchvision keeps this alias and code in the wild reads it.
+        self.imgs = self.samples
+
+
 class EMNIST(MNIST):
     """The whole NIST Special Database 19 in MNIST's format — **letters as well as
     digits, and six ways of carving it up.**
@@ -5543,7 +5614,7 @@ _sys.modules["borchvision.transforms.functional"] = functional
 datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
-              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder",
+              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
 

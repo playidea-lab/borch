@@ -297,7 +297,9 @@ FROZEN = {
     # address and a format; the address needs hosts that send a CORS header and
     # torchvision's do not, so what crossed is the decoders. Written per name because a
     # table that grouped them would hide the day one becomes possible.
-    "datasets": 18,
+    # 18 → 19. `ImageFolder` arrived on the Python side, and it is the clearest of
+    # the nineteen: it walks a directory, and a page has none.
+    "datasets": 19,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the
