@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 162
+  "missing": 172
  },
  "modules": [
   {
@@ -15070,6 +15070,89 @@
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
+   "name": "vision_v2",
+   "title": "vision_v2",
+   "blurb": {
+    "ko": "v2 의 함수형 변환. `torchvision.transforms.v2.functional` 자리 — 새 이름 아홉과, 나머지는 v1 을 그대로 내보낸다.",
+    "en": "v2's functional transforms. Where `torchvision.transforms.v2.functional` would be — nine new names, and the rest bound straight through to v1."
+   },
+   "doc": "`torchvision.transforms.v2.functional` — **nine new names, and the rest re-exported.**\n\nv2 is torchvision's current recommended surface and it is v1 with a different front.\nMeasured before any of this was written: on a plain image v2's transforms give what\nv1's give, to the last bit. So the arithmetic is not written twice — everything here\nthat v1 already had is a **re-export and not a copy**, which is the one property this\nfile has to keep and the one a value comparison cannot see on its own. The golden\nasks four of v1's through the v2 spelling for exactly that reason: if one ever grows\na body of its own, those four stop matching v1's frozen answers.\n\n## The pair that answers backwards from its neighbour\n\n`getSize` answers `[height, width]`. `getImageSize`, one namespace over, answers\n`[width, height]`. v2 reversed it deliberately and torchvision deprecated the old\none rather than changing it, so the two live side by side giving opposite answers.\nBoth are here, next to each other, because a reader who reaches for the wrong one\ngets a picture that is transposed and entirely plausible.",
+   "symbols": [
+    {
+     "kind": "const",
+     "name": "horizontalFlip",
+     "signature": "export declare const horizontalFlip: typeof hflip",
+     "doc": "v2's name for `hflip`.",
+     "members": [],
+     "torch": "horizontal_flip"
+    },
+    {
+     "kind": "const",
+     "name": "verticalFlip",
+     "signature": "export declare const verticalFlip: typeof vflip",
+     "doc": "v2's name for `vflip`.",
+     "members": [],
+     "torch": "vertical_flip"
+    },
+    {
+     "kind": "const",
+     "name": "getNumChannels",
+     "signature": "export declare const getNumChannels: typeof getImageNumChannels",
+     "doc": "v2's name for `getImageNumChannels`.",
+     "members": [],
+     "torch": "get_num_channels"
+    },
+    {
+     "kind": "function",
+     "name": "getSize",
+     "signature": "export declare function getSize(img: Image): [number, number]",
+     "doc": "`[height, width]` — **the opposite order to `getImageSize`**, which is one namespace\naway and answers `[width, height]`.",
+     "members": [],
+     "torch": "get_size"
+    },
+    {
+     "kind": "function",
+     "name": "grayscaleToRgb",
+     "signature": "export declare function grayscaleToRgb(img: Image): Image",
+     "doc": "One channel becomes three.\n\n**Three channels pass through rather than raising**, so a pipeline mixing grey and\ncolour needs no branch. A version that stacked regardless would answer nine, which is\na shape error three calls later rather than here.",
+     "members": [],
+     "torch": "grayscale_to_rgb"
+    },
+    {
+     "kind": "function",
+     "name": "permuteChannels",
+     "signature": "export declare function permuteChannels(img: Image, order: readonly number[]): Image",
+     "doc": "Channels reordered. `[2, 0, 1]` moves the third to the front.\n\n**The list is where each output channel reads from**, not where each input channel\ngoes. The two readings differ for every permutation that is not its own inverse, and\nboth produce a plausible picture.",
+     "members": [],
+     "torch": "permute_channels"
+    },
+    {
+     "kind": "function",
+     "name": "toDtype",
+     "signature": "export declare function toDtype(img: Image, _dtype?: unknown, scale?: boolean): Image",
+     "doc": "To a float image, **scaling or not**, and the flag is the whole question.\n\nWith `scale`, a byte image's 0–255 becomes 0–1 the way `ToTensor` does it. Without,\nthe numbers are carried across unchanged and a 255 stays a 255. Both are ordinary\nrequests — the first for a network, the second for anything that still means to\nmeasure pixels — and picking the wrong one gives values off by 255× that are\nperfectly well-formed.",
+     "members": [],
+     "torch": "to_dtype"
+    },
+    {
+     "kind": "function",
+     "name": "gaussianNoise",
+     "signature": "export declare function gaussianNoise(img: Image, mean?: number, sigma?: number, clip?: boolean): Image",
+     "doc": "Gaussian noise added to a float image.\n\n**`clip` is applied after the addition**, to `[0, 1]`. With `sigma` at zero this is\n`x + mean`, which is what makes it askable at all — every other setting draws, and a\ndrawn value has no frozen answer.",
+     "members": [],
+     "torch": "gaussian_noise"
+    },
+    {
+     "kind": "function",
+     "name": "elastic",
+     "signature": "export declare function elastic(img: Image, displacement: ArrayLike<number>, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null): Image",
+     "doc": "v2's name for the warp. **`fill` defaults to `null` and not to `0`.**\n\nWritten as `0` it paints the outside of the warp black, and on a picture whose edges\nbarely move that reads as the warp working — a defect visible only at the border of\nan image that mostly did not move. The Python side had it as `0` first and comparing\nis what caught it.\n\n**The displacement is a flat array and not a tensor**, which is where this parts from\ntorchvision's spelling. Reading a tensor here means `await`, and `elasticTransform`\nnext door is synchronous — one async name in a file of synchronous ones is a worse\nmismatch than this one, since it changes how every caller writes the line.",
+     "members": []
+    }
+   ],
+   "count": 9
+  },
+  {
    "name": "fft",
    "title": "fft",
    "blurb": {
@@ -16649,5 +16732,5 @@
    "count": 9
   }
  ],
- "total": 2193
+ "total": 2202
 }

@@ -93,6 +93,12 @@ MODULES = [
     ("vision", "vision",
      {"ko": "이미지 변환. `torchvision.transforms` 자리.",
       "en": "Image transforms. Where `torchvision.transforms` would be."}),
+    ("vision_v2", "vision_v2",
+     {"ko": "v2 의 함수형 변환. `torchvision.transforms.v2.functional` 자리 — "
+            "새 이름 아홉과, 나머지는 v1 을 그대로 내보낸다.",
+      "en": "v2's functional transforms. Where "
+            "`torchvision.transforms.v2.functional` would be — nine new names, and "
+            "the rest bound straight through to v1."}),
     ("fft", "fft",
      {"ko": "푸리에 변환. `torch.fft` 자리.",
       "en": "Fourier transforms. Where `torch.fft` would be."}),

@@ -631,11 +631,18 @@ NOT_PORTED = {
     # touches a network, so they port like any other value case; what does not port
     # is the rest of `datasets`, which on that side is a `fetch` and an OPFS cache
     # and has no case in this table at all.
-    # Seventeen. Nine are the names v2 adds that need no tv_tensors, and the other
-    # eight ask v1's functions **through the v2 spelling** — those are the ones that
-    # catch a re-export quietly becoming a second implementation, which is a thing that
-    # can happen on either side.
-    "v2f::": (17, "아직 — v2.functional: the nine v2 adds, and eight of v1's re-exports"),
+    # `v2f::` **was** a row here — *the nine v2 adds, and eight of v1's re-exports*.
+    # `borch-ts/src/vision_v2.ts` exists now and all seventeen passed first time. The
+    # eight were bound rather than wrapped, because a wrapper is a body and a body is
+    # the thing those eight cases exist to prove is absent.
+    #
+    # One of the seventeen had to be paid for differently. `elastic`'s displacement is
+    # built on the Python side with numpy's `default_rng(7)`, and PCG64 has no
+    # counterpart in TS — **a field from a different generator is a different input**,
+    # and two answers to two different questions do not compare. So the forty numbers
+    # are transcribed into the case table. That is the second fixture in this repository
+    # written out rather than drawn, and both times for the same reason: the alternative
+    # was a green run that had compared nothing.
     # **The first `misc::` row.** Every case with that prefix had been carried across
     # until now, which is why this table has never had one — and it is worth a line
     # because a prefix appearing here for the first time reads like an oversight.

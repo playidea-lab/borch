@@ -184,6 +184,11 @@ export * as linalg from "./linalg.js";
 export * as nn from "./nn.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";
+// The place `torchvision.transforms.v2.functional` occupies. It is a separate module
+// rather than a member of `vision` because it **imports** from it — nine new names and
+// the rest bound straight through, so a cycle would be the price of nesting a namespace
+// that is, on purpose, mostly the one it would nest inside.
+export * as visionV2 from "./vision_v2.js";
 
 // **`stft` and `istft` are top level** — torch puts them at `torch.stft`. The same
 // functions are visible inside the `fft` namespace as well, and the form textbook code
