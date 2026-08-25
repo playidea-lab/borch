@@ -1169,6 +1169,72 @@ rasteriser (SwiftShader) that **throws no exception and simply produces strange
 numbers.** So the runner prints the adapter first, and the benchmark and the
 accuracy run refuse outright on a software adapter.
 
+### Running the browser checks, per platform
+
+**Ask the machine before reading any of this.** The operating system is a guess at
+which of the cases below applies; the adapter is the answer, and one command gives it
+in a few seconds without running a golden:
+
+```bash
+npm run device:ts        # adapter: apple / metal-3
+```
+
+Every runner prints the same thing on the line that carries its score:
+
+```
+[apple / metal-3]            a GPU. Nothing below is needed.
+[nvidia / …]                 a GPU.
+[google / swiftshader]       the CPU. The values are still evidence; the GPU path is not.
+No WebGPU adapter …          Chrome refused before the driver was asked. See Linux, wall 3.
+```
+
+**macOS — nothing.** `--headed` is the default and Metal comes up on its own.
+
+```bash
+npm run golden:ts        # 3079 cases; `npm run` lists the rest
+```
+
+**Linux — three walls, and each one is silent.** All three were met on one machine
+in one day, and none of them raises anything that names itself.
+
+*1. The account cannot open the GPU.* Symptom: no adapter at all. Check whether the
+user running the browser can reach the device node, and remember that group
+membership is not the only way in — a `+` on the node means an ACL, which can grant
+it where the group list says no.
+
+```bash
+ls -l /dev/dri/            # the `+` is an ACL, and `by-path/` says which card is which
+getfacl /dev/dri/renderD128
+id                         # `render` and `video` are the groups
+sudo usermod -aG render,video "$USER"   # then log out and back in — a service
+                                        # inherits the groups of the session it started in
+```
+
+*2. There is no window.* Symptom: the browser starts and nothing happens, with
+nothing printed. A desktop machine is fine; a server needs a display of its own.
+
+```bash
+sudo apt install -y xvfb
+Xvfb :99 -screen 0 1280x1024x24 &
+DISPLAY=:99 npm run device:ts     # then golden:ts, once the adapter reads right
+```
+
+*3. Chrome refuses to look.* Symptom: `No WebGPU adapter could be obtained`, while
+`vulkaninfo --summary` on that same machine lists the card. **Two tools, one machine,
+two answers** — `vulkaninfo` asks the driver and Chrome asks its own blocklist first,
+and Linux with the proprietary NVIDIA driver is on that list. `--ignore-gpu-blocklist`
+is in `FLAGS` in `tests/browser/launch.py`, so this is handled; it is written down
+because the symptom reads as a hardware problem and is not one.
+
+`BORCH_CHROME_CHANNEL=chrome` uses the distribution's own Chrome instead of the one
+Playwright downloads — worth having when the machine has one and not the other.
+
+**Windows — not measured.** Nothing in this repository has ever run there: no CI job,
+no recorded run, no comment. The library is a browser library and there is no reason
+to expect it to fail, but *no reason to expect* is not a measurement, and writing
+steps here would be inventing them. If you run it, the adapter line is the whole
+report worth sending.
+
 ### How much it does
 
 **The golden matches on every case on Apple Metal**, and borch.ts's share of it
@@ -1322,8 +1388,14 @@ Python alone, the next implementation grows without verification.
 **The case bodies are not in it.** `lambda L: L.amax(...)` does not become another
 language mechanically. The receiving side writes a case of the same name in its own
 language and matches its answer here — the expensive half (the numbers) crosses and
-the cheap half (one call) is rewritten. borch.ts does exactly that and passes 1779
+the cheap half (one call) is rewritten. borch.ts does exactly that and passes 3079
 cases.
+
+> That number read **1779** until it was noticed by eye. It was true when written and
+> nothing in the repository reaches it — `test_the_readme_counts_the_typescript_bodies_correctly`
+> matches a different sentence, so the count next to it stayed current while this one
+> aged. The same shape as the vendor claim two sections up, at a smaller scale: a fact
+> that stopped being one, in a place no check looks.
 
 **When a name does not match, the runner counts it.** It did not for a while, and
 during that time, holding seven names not in the golden while leaving seven of the
