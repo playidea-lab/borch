@@ -1251,6 +1251,20 @@ because the symptom reads as a hardware problem and is not one.
 `BORCH_CHROME_CHANNEL=chrome` uses the distribution's own Chrome instead of the one
 Playwright downloads — worth having when the machine has one and not the other.
 
+**If none of that works, there is a second list and it is not this one.** The WebGPU
+working group's implementation status gives Linux as:
+
+```
+--enable-unsafe-webgpu --ozone-platform=x11 --use-angle=vulkan \
+  --enable-features=Vulkan,VulkanFromANGLE
+```
+
+It shares exactly one entry with what `launch.py` carries. **Both can be true** — that
+list is documented and this one is measured, on one machine, with a score line behind
+it. Which one a given machine needs has not been compared, so if the measured pair does
+nothing for you, the documented four are the next thing to try and the adapter line is
+the report worth sending back.
+
 ### Running it on the CPU, on purpose
 
 If the GPU will not come up, the answer is not *use the Python one*. There are two

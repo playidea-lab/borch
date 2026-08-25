@@ -46,8 +46,19 @@ import sys
 # proprietary NVIDIA driver is on that list. So the flag is not a workaround for this
 # repository's code — it is how you ask Chrome to go and look.
 #
-# They went in as a pair and **which of the two is decisive was not separated**. The run
-# that produced `passed 2901 / failed 0  [nvidia / blackwell]` had both.
+# They went in as a pair and **the pair has since been separated**:
+# `--ignore-gpu-blocklist` alone finds the adapter, so
+# `--disable-gpu-driver-bug-workarounds` is not doing the work. It is still carried,
+# because the run that produced `passed 2901 / failed 0  [nvidia / blackwell]` had both
+# and **the number the documents quote and the flags this file ships have to be the same
+# configuration.** Dropping it first would make them two.
+#
+# **These four are not the WebGPU working group's four.** Its implementation status
+# gives Linux as `--enable-unsafe-webgpu --ozone-platform=x11 --use-angle=vulkan
+# --enable-features=Vulkan,VulkanFromANGLE`, which shares one entry with this list. Both
+# can be true — that list is documented and this one is measured, on one machine, with a
+# score line behind it. Running the documented four on that machine is the measurement
+# that would let this list shrink or change, and it has not been made.
 FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan",
          "--ignore-gpu-blocklist", "--disable-gpu-driver-bug-workarounds"]
 
@@ -179,12 +190,36 @@ def _headed(asked):
 
     An earlier draft of this paragraph added *forcing `--use-angle=vulkan` there gives
     no adapter at all rather than a real one, which is the same fact from the other
-    side.* **The observation is real; the conclusion drawn from it was not.** ANGLE
-    translates GL and WebGL, and WebGPU does not go through it — Dawn talks to Vulkan
-    directly. Losing the adapter under that flag therefore says something about GPU
-    process startup and nothing about whether Vulkan can reach the card. A peer session
-    caught it while the commit was still unpushed. What is removed is the conclusion,
-    not the measurement, and re-measuring without that flag is still owed.
+    side.* **The conclusion does not follow from that one observation** — losing an
+    adapter under a flag does not establish that Vulkan cannot reach the card — so it
+    was removed, and removing it was right.
+
+    **The reason given for removing it was wrong, and that is worth more than the
+    sentence was.** It read: *ANGLE translates GL and WebGL, and WebGPU does not go
+    through it — Dawn talks to Vulkan directly.* The WebGPU working group's own
+    implementation status lists Linux as behind a flag and gives the incantation:
+
+        --enable-unsafe-webgpu --ozone-platform=x11 --use-angle=vulkan
+        --enable-features=Vulkan,VulkanFromANGLE
+
+    `--use-angle=vulkan` is in it, and there is a feature named `VulkanFromANGLE`. On
+    Linux, ANGLE is **on** WebGPU's documented path rather than beside it. So the flag
+    that got waved away was a documented one.
+
+    **And what was actually run was not that path.** The probe passed
+    `--use-gl=angle --use-angle=vulkan --enable-features=Vulkan` — ANGLE's Vulkan
+    backend without `VulkanFromANGLE` and without the ozone platform. Half an
+    incantation is its own configuration, and "no adapter" under it is a fact about that
+    half rather than about ANGLE.
+
+    Two people reached the same wrong reason from opposite directions and neither
+    checked it: one wrote it into a commit, the other had asserted it first. The page
+    that settles it is public and took one fetch. **A correction can be right about what
+    to delete and wrong about why**, and only the second half was load-bearing for
+    anything else.
+
+    Still owed, and now more precisely: the documented four on that machine, against the
+    two this file carries.
 
     Keeping them apart matters because they have different fixes. The first is a flag
     away. The second is not: it wants a display.
