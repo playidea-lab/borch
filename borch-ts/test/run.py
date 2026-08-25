@@ -693,7 +693,19 @@ NOT_PORTED = {
     # Worth writing down because the claim was in this comment before the run was: it
     # said the copy mutation "reddens exactly those four", and the number was seven.
     # A prediction in the same sentence position as a measurement reads as one.
-    "dataset::": (19, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
+    # 19 → 3. Sixteen went across into `borch-ts/src/datasets.ts` — IDX (including the
+    # int32 two-axis table QMNIST's labels have), STL10, a `.npy` reader for
+    # MovingMNIST, and FER2013's CSV in both of its layouts.
+    #
+    # **The three left are CIFAR, and the reason is Python's, not a difficulty.** Its
+    # batches ship as **pickles**, and a pickle is Python's own serialization rather
+    # than a data format. Checked rather than assumed: `site/assets/datasets.js` reaches
+    # CIFAR through a **JPEG sprite**, so nothing on the browser side ever meets one.
+    # Carrying a pickle parser across would be building a reader for a format that side
+    # does not encounter, and its own risk — a silent mis-parse of a nested numpy
+    # `__reduce__` — is the shape this repository spends its time removing.
+    "dataset::": (3, "파이썬 — CIFAR's batches are pickles, and the browser side reaches "
+                     "CIFAR through a JPEG sprite instead"),
     # `v2::` **was** a row here — 71, then 52, then gone. The nineteen that needed no v1
     # field access went first; the fifty-two twins followed once it was clear the fields
     # did not have to be read at all. Each twin extends the v1 class and keeps its own

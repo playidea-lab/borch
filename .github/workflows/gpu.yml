@@ -72,6 +72,12 @@
 # Linux with the proprietary driver is on it. The runner's own error message guessed
 # *"a driver blocklist"* from the beginning and nobody took it literally.
 #
+# `--ignore-gpu-blocklist` and `--disable-gpu-driver-bug-workarounds` went in together
+# and the pair has since been separated: **the first alone finds the adapter.** The
+# 2901 was run with both, so the flag the repository carries and the number the
+# documents quote are not yet a matched pair — which is exactly the shape this comment
+# exists to record, at a smaller scale.
+#
 # So the paragraph above is history now rather than a live warning, and it stays for the
 # reason it always did: 845 is still findable, and the next person who finds it needs
 # the adapter beside it.

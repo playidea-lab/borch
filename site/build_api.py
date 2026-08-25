@@ -103,6 +103,12 @@ MODULES = [
     # re-exports these, and a re-export does not appear in its own declaration file —
     # so thirty-six classes were invisible to this reference while every check on it
     # stayed green.
+    ("datasets", "datasets",
+     {"ko": "데이터셋 **디코더**. `torchvision.datasets` 의 형식 절반 — 주소 절반"
+            "(내려받기·캐시·체크섬)은 여기 없다. 조용히 틀리는 쪽은 형식이다.",
+      "en": "The dataset **decoders**. The format half of `torchvision.datasets` — "
+            "the address half (fetching, caching, checksums) is not here. The format "
+            "is the half that goes wrong quietly."}),
     ("vision_v2_twins", "vision_v2_twins",
      {"ko": "v2 의 변환 클래스. `torchvision.transforms.v2` 자리 — v1 의 계산에 "
             "v2 의 출력 표면을 씌운 것이고, 다른 것은 print 되는 내용뿐이다.",

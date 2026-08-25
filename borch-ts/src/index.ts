@@ -189,6 +189,10 @@ export * as vision from "./vision.js";
 // the rest bound straight through, so a cycle would be the price of nesting a namespace
 // that is, on purpose, mostly the one it would nest inside.
 export * as visionV2 from "./vision_v2.js";
+// The place `torchvision.datasets` occupies — **the format half of it and not the
+// address half.** Fetching, caching and checksums belong wherever the network is; a
+// decoder takes bytes and is the part that goes wrong quietly.
+export * as datasets from "./datasets.js";
 
 // **`stft` and `istft` are top level** — torch puts them at `torch.stft`. The same
 // functions are visible inside the `fft` namespace as well, and the form textbook code

@@ -767,8 +767,8 @@ The core covers 3386 cases, and the 53 *it* does not see are this side's alone
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 3063 cases. **The remaining 376 are two
-things**: 357 deliberately not carried across, and 19 owed. The binding
+borch.ts itself has written TS bodies for 3079 cases. **The remaining 360 are two
+things**: 360 deliberately not carried across, and 0 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the declined ask about a Python
@@ -1210,8 +1210,11 @@ the card as GPU0 with Vulkan 1.4.312.
 its own blocklist first, and Linux with the proprietary NVIDIA driver is on it. The
 error message's own first guess was *"a driver blocklist"* and nobody had taken it
 literally. `--ignore-gpu-blocklist` and `--disable-gpu-driver-bug-workarounds` went in
-together and **which of the two is decisive was not separated** — that is a minute's
-measurement on that machine, and until it is made no line here says which.
+together, and **which of the two is decisive has since been separated**:
+`--ignore-gpu-blocklist` alone finds the adapter. The count above was run with both,
+so the two are not yet a matched pair — the flag the repository carries and the number
+the documents quote have to be measured under the same conditions, which is the shape
+this page spent the day removing.
 
 The 4090 is still unmeasured and for its own reasons: one card reads `rev ff` on the
 PCI bus, and late in the same day headless Chrome stopped starting there at all.
@@ -1287,7 +1290,7 @@ runners print the adapter on the line that carries the score:
 
 ```
 borch_webgpu: agreeing 3434/3434  [borch.ts — apple / metal-3]
-passed 3063 / failed 0            [apple / metal-3]
+passed 3079 / failed 0            [apple / metal-3]
 ```
 
 A window is what you get by default. Headless quietly hands back Chrome's software

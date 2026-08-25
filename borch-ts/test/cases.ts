@@ -33,6 +33,7 @@ import * as optim from "../src/optim.js";
 import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
 import * as v2f from "../src/vision_v2.js";
+import * as datasets from "../src/datasets.js";
 import * as ops from "../src/ops.js";
 import * as data from "../src/data.js";
 import * as F from "../src/functional.js";
@@ -551,6 +552,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addRecent(out);
   addVision(out, inputs);
   addV2Functional(out, inputs);
+  addDatasets(out);
   addOps(out);
   addSeq(out, inputs);
   addEdge(out);
@@ -1618,6 +1620,148 @@ const ELASTIC_SHIFT = new Float32Array([
  * implementation, which is exactly what these catch, because they are held against v1's
  * own frozen answers.
  */
+/**
+ * `dataset::` — **the decoders, asked without a network.**
+ *
+ * A dataset is an address and a format. The address half cannot be a golden case: a
+ * case that downloads is a case that fails on a train, and freezing MNIST's answer
+ * means shipping MNIST. The format half is the part that goes wrong quietly, and the
+ * bytes for it are **built here** so that both sides read the same file.
+ */
+function addDatasets(out: Map<string, Case>): void {
+  /**
+   * An IDX file. **The header is the case**: two zero bytes, a type code, the number of
+   * axes, then one big-endian length each.
+   */
+  const idx = (kind: number, shape: readonly number[],
+               payload: Uint8Array): Uint8Array => {
+    const head = new Uint8Array(4 + shape.length * 4);
+    head[2] = kind;
+    head[3] = shape.length;
+    const view = new DataView(head.buffer);
+    shape.forEach((n, i) => view.setUint32(4 + i * 4, n, false));
+    return new Uint8Array([...head, ...payload]);
+  };
+  /** Big-endian int32 values, which is what a QMNIST label table holds. */
+  const be32 = (values: readonly number[]): Uint8Array => {
+    const bytes = new Uint8Array(values.length * 4);
+    const view = new DataView(bytes.buffer);
+    values.forEach((v, i) => view.setInt32(i * 4, v, false));
+    return bytes;
+  };
+
+  // Pictures: two 3×4 frames of bytes counting up, so a transposed or mis-strided read
+  // lands somewhere visibly different.
+  const pixels = new Uint8Array(Array.from({ length: 24 }, (_, i) => i));
+  // Labels: ten of them, including 0 and 255 — the ends are where a signed read shows.
+  const labels = new Uint8Array([0, 1, 2, 9, 200, 255, 3, 4, 5, 6]);
+
+  out.set("dataset::IDX images",
+    () => datasets.readIdxImages(idx(8, [2, 3, 4], pixels)));
+  out.set("dataset::IDX labels",
+    () => datasets.readIdxLabels(idx(8, [10], labels)));
+  out.set("dataset::IDX images(one frame)",
+    () => datasets.readIdxImages(idx(8, [1, 4, 6], pixels)));
+  // **A header that promises more than the file carries.** Both sides refuse, and what
+  // is frozen is that they refuse the same way — torch's words are `shape '[12]' is
+  // invalid for input of size 10`, which is the phrase this searches for.
+  out.set("dataset::IDX labels(short by two)=거절", async () => {
+    try {
+      datasets.readIdxLabels(idx(8, [12], labels));
+    } catch (err) {
+      const said = err instanceof Error ? err.message : String(err);
+      return `거절|문구=${said.includes("invalid for input of size 10") ? "True" : "False"}`;
+    }
+    return "예외가 안 났다";
+  });
+
+  // Eight columns, three rows, and **values past what a byte holds** — 279260 is a real
+  // QMNIST field. Read as bytes it becomes something else entirely, and read
+  // little-endian it becomes something else again.
+  const qmnist = [7, 4, 2578, 69, 37, 279260, 0, 0,
+    2, 4, 2359, 55, 32, 253328, 0, 0,
+    1, 4, 2530, 80, 31, 273542, 0, 0];
+  out.set("dataset::IDX int32 table(QMNIST labels)",
+    () => datasets.readIdxTensor(idx(12, [3, 8], be32(qmnist))));
+  // A negative, because int32 is signed and the reader must not widen it wrong.
+  out.set("dataset::IDX int32 table(negative)",
+    () => datasets.readIdxTensor(
+      idx(12, [2, 2], be32([-1, 2147483647, -2147483648, 0]))));
+
+  // Two 4×4×3 pictures rather than 96×96 — the arrangement is the question and the size
+  // is not. Values count up, so a transposed read lands somewhere visible.
+  const stlPixels = new Uint8Array(Array.from({ length: 96 }, (_, i) => i));
+  out.set("dataset::STL10 bytes(pictures)",
+    () => datasets.readStl10Images(stlPixels));
+  // **The same bytes without the swap**, frozen beside the one above so the difference
+  // is a value in this table rather than a claim about one — the two agree on shape and
+  // on every summary statistic.
+  out.set("dataset::STL10 bytes(no transpose)",
+    () => datasets.readStl10Images(stlPixels, 4, false));
+  out.set("dataset::STL10 bytes(labels, 1-based)",
+    () => datasets.readStl10Labels(new Uint8Array([1, 10, 5, 3])));
+
+  // **`.data` holds `(N,C,H,W)` and an item is `(H,W,C)`.** They disagree on purpose:
+  // torchvision transposes at that line because its other datasets hold HWC and this
+  // one does not. The case exists because the door was wrong while the store was right.
+  out.set("dataset::STL10 item(H,W,C)", () => {
+    const raw = new Uint8Array(Array.from({ length: 2 * 3 * 96 * 96 }, (_, i) => i % 251));
+    const pictures = datasets.readStl10Images(raw, 96);
+    const target = datasets.readStl10Labels(new Uint8Array([1, 10]));
+    // Item 1, moved to (H, W, C), with its label after it.
+    const item = pictures.select(0, 1).permute([1, 2, 0]);
+    return Tensor.cat([item.reshape([96 * 96 * 3]), target.select(0, 1).reshape([1])], 0);
+  });
+
+  /** A `.npy` holding `(frames, clips, H, W)` of bytes counting up. */
+  const npy = (shape: readonly number[]): Uint8Array => {
+    const header = `{'descr': '|u1', 'fortran_order': False, 'shape': (${
+      shape.join(", ")},), }`;
+    const padded = header + " ".repeat((64 - (10 + header.length + 1) % 64) % 64) + "\n";
+    const n = shape.reduce((a, b) => a * b, 1);
+    const out2 = new Uint8Array(10 + padded.length + n);
+    out2.set([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 1, 0], 0);
+    new DataView(out2.buffer).setUint16(8, padded.length, true);
+    for (let i = 0; i < padded.length; i++) out2[10 + i] = padded.charCodeAt(i);
+    for (let i = 0; i < n; i++) out2[10 + padded.length + i] = i;
+    return out2;
+  };
+  const clip = () => npy([6, 2, 4, 4]);
+  out.set("dataset::MovingMNIST(whole)", () => datasets.readMovingMnist(clip(), null, 3));
+  out.set("dataset::MovingMNIST(train)",
+    () => datasets.readMovingMnist(clip(), "train", 3));
+  out.set("dataset::MovingMNIST(test)",
+    () => datasets.readMovingMnist(clip(), "test", 3));
+
+  /**
+   * FER2013's CSV, in both of its layouts. **The ICML one puts a leading space in the
+   * column names**, and a reader written against the other file finds out with a
+   * missing column rather than a wrong number.
+   */
+  const fer = (icml: boolean): string => {
+    const space = icml ? " " : "";
+    const rows = [`emotion,${space}pixels,${space}Usage`];
+    const usages: readonly [number, string][] = [
+      [3, "Training"], [0, "Training"], [6, "PublicTest"], [2, "PrivateTest"]];
+    usages.forEach(([emotion, usage], i) => {
+      const cells = Array.from({ length: 48 * 48 }, (_, k) => (i * 13 + k) % 256);
+      rows.push(`${emotion},${cells.join(" ")},${usage}`);
+    });
+    return `${rows.join("\n")}\n`;
+  };
+  const ferTensor = (icml: boolean, split: "train" | "test") => () => {
+    const rows = datasets.readFer2013(fer(icml), split);
+    const flat: number[] = [];
+    for (const row of rows) flat.push(...row.pixels, row.emotion);
+    return Tensor.from(flat, [rows.length, 48 * 48 + 1]);
+  };
+  out.set("dataset::FER2013(train)", ferTensor(false, "train"));
+  // **`Usage` decides, and test is two values** — `PublicTest` and `PrivateTest` both
+  // land there. A reader matching only the first returns half the set and no error.
+  out.set("dataset::FER2013(test, two usages)", ferTensor(false, "test"));
+  out.set("dataset::FER2013(icml, spaced headers)", ferTensor(true, "train"));
+}
+
 function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
   const pic = (name: string, isByte: boolean): vision.Image => {
     const shape = inp.shapeOf(name);

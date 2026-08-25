@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 205
+  "missing": 218
  },
  "modules": [
   {
@@ -15352,6 +15352,144 @@
    "count": 32
   },
   {
+   "name": "datasets",
+   "title": "datasets",
+   "blurb": {
+    "ko": "데이터셋 **디코더**. `torchvision.datasets` 의 형식 절반 — 주소 절반(내려받기·캐시·체크섬)은 여기 없다. 조용히 틀리는 쪽은 형식이다.",
+    "en": "The dataset **decoders**. The format half of `torchvision.datasets` — the address half (fetching, caching, checksums) is not here. The format is the half that goes wrong quietly."
+   },
+   "doc": "The dataset **decoders**, and only those.\n\nA dataset is two things: an address and a format. The address half is not here —\nfetching, caching and checksums belong to whatever is holding the network, and none\nof it can be frozen in a comparison anyway, because a case that downloads is a case\nthat fails on a train.\n\nThe format half is the part that goes wrong **quietly**, and every function in this\nfile is one of those. Each one is a conversion that leaves a dataset which still\ntrains when it is reversed:\n\n- STL10 is stored **column-major** and its labels start at **1**. Skip the transpose\n  and every picture comes out rotated — still a picture, still trains.\n- MovingMNIST's split cuts the **frames** and not the clips, so a reader that cuts\n  clips instead produces the right rank and half the count.\n- FER2013's pixels are a string of integers in a cell, and one of its two layouts\n  puts **a leading space in the column names**.\n- CIFAR's batch is planar — 1024 red, then 1024 green, then 1024 blue — and a\n  channel-swapped CIFAR trains to a perfectly plausible number.\n\nSo they take bytes and give tensors, with nothing else in the way.",
+   "symbols": [
+    {
+     "kind": "interface",
+     "name": "IdxFile",
+     "signature": "export interface IdxFile",
+     "doc": "An IDX file's header and its numbers, unpacked.\n\n**The field is `numbers` and not `values` on purpose.** Called `values` it collided\nwith `Tensor.values` — torch's sparse-tensor method — and the name axis, which counts\ndeclared names and cannot tell an interface property from a method, reported that\nborch.ts had grown one. A name this library does not implement was being claimed by a\nfield on a plain object.",
+     "members": [
+      {
+       "name": "shape",
+       "signature": "readonly shape: readonly number[]",
+       "doc": ""
+      },
+      {
+       "name": "numbers",
+       "signature": "readonly numbers: Float64Array",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "readIdx",
+     "signature": "export declare function readIdx(bytes: Uint8Array): IdxFile",
+     "doc": "The header is **two zero bytes, a type code, and the number of axes**, then one\nbig-endian length per axis. Sixteen bytes for a file that is otherwise eleven\nmegabytes, which is why the golden builds one here rather than downloading MNIST.",
+     "members": [],
+     "torch": "read_idx"
+    },
+    {
+     "kind": "function",
+     "name": "readIdxTensor",
+     "signature": "export declare function readIdxTensor(bytes: Uint8Array): Tensor",
+     "doc": "An IDX file as a tensor, whatever its rank.",
+     "members": [],
+     "torch": "read_idx_tensor"
+    },
+    {
+     "kind": "function",
+     "name": "readIdxImages",
+     "signature": "export declare function readIdxImages(bytes: Uint8Array): Tensor",
+     "doc": "MNIST's images — an IDX of rank three.",
+     "members": [],
+     "torch": "read_idx_images"
+    },
+    {
+     "kind": "function",
+     "name": "readIdxLabels",
+     "signature": "export declare function readIdxLabels(bytes: Uint8Array): Tensor",
+     "doc": "MNIST's labels — an IDX of rank one.",
+     "members": [],
+     "torch": "read_idx_labels"
+    },
+    {
+     "kind": "function",
+     "name": "readStl10Images",
+     "signature": "export declare function readStl10Images(bytes: Uint8Array, side?: number, transpose?: boolean): Tensor",
+     "doc": "STL10's pictures, `(N, 3, H, W)`.\n\n**Stored column-major**, so the last two axes are swapped on the way out. Skipping\nthat gives every picture rotated a quarter turn — the shape is right, every summary\nstatistic is right, and the model trains. The golden freezes the un-swapped read\nbeside the swapped one so the difference is a value in the table rather than a claim\nabout one.",
+     "members": [],
+     "torch": "read_stl10_images"
+    },
+    {
+     "kind": "function",
+     "name": "readStl10Labels",
+     "signature": "export declare function readStl10Labels(bytes: Uint8Array): Tensor",
+     "doc": "STL10's labels. **They start at 1 on disk**, and a model does not say so.",
+     "members": [],
+     "torch": "read_stl10_labels"
+    },
+    {
+     "kind": "interface",
+     "name": "NpyFile",
+     "signature": "export interface NpyFile",
+     "doc": "A `.npy` file's header and its numbers.",
+     "members": [
+      {
+       "name": "shape",
+       "signature": "readonly shape: readonly number[]",
+       "doc": ""
+      },
+      {
+       "name": "numbers",
+       "signature": "readonly numbers: Float64Array",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "readNpy",
+     "signature": "export declare function readNpy(bytes: Uint8Array): NpyFile",
+     "doc": "numpy's own container: a magic string, a version, then **an ASCII dict** giving the\ndtype, the order and the shape, and the raw block after it.\n\nOnly what MovingMNIST ships is read — little-endian, C order, one of the plain\nnumeric dtypes. Fortran order is refused rather than read as C, because reading it as\nC transposes the array and gives something that is still an array.",
+     "members": [],
+     "torch": "read_npy"
+    },
+    {
+     "kind": "function",
+     "name": "readMovingMnist",
+     "signature": "export declare function readMovingMnist(bytes: Uint8Array, split?: \"train\" | \"test\" | null, ratio?: number): Tensor",
+     "doc": "MovingMNIST, from the `.npy` it ships as.\n\nThe file is `(frames, clips, H, W)` and what comes out is `(clips, frames, 1, H, W)`\n— the axes swap and a channel appears.\n\n**The split cuts the frames, not the clips**, so both halves keep every clip. A\nreader that cut the clips instead produces the right rank and half the count, which\nis a dataset that loads, trains, and is half missing.",
+     "members": [],
+     "torch": "read_moving_mnist"
+    },
+    {
+     "kind": "interface",
+     "name": "Fer2013Row",
+     "signature": "export interface Fer2013Row",
+     "doc": "One row: the 48×48 picture flattened, and the emotion.",
+     "members": [
+      {
+       "name": "pixels",
+       "signature": "readonly pixels: readonly number[]",
+       "doc": ""
+      },
+      {
+       "name": "emotion",
+       "signature": "readonly emotion: number",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "readFer2013",
+     "signature": "export declare function readFer2013(text: string, split?: \"train\" | \"test\"): Fer2013Row[]",
+     "doc": "FER2013's CSV, which is **two CSVs with the same name**.\n\nThe `fer2013.csv` layout has an `emotion,pixels,Usage` header; the `icml_face_data.csv`\nlayout writes the same three names with **a leading space** on the second and third,\nand a reader written against the other file finds out with a missing column rather\nthan a wrong number. Both are read here by trimming, which is what makes the two one\nfunction.\n\n**`Usage` decides the split and `test` is two values**, `PublicTest` and\n`PrivateTest`. A reader matching only the first returns half the set and no error.",
+     "members": [],
+     "torch": "read_fer2013"
+    }
+   ],
+   "count": 18
+  },
+  {
    "name": "vision_v2_twins",
    "title": "vision_v2_twins",
    "blurb": {
@@ -17722,5 +17860,5 @@
    "count": 9
   }
  ],
- "total": 2364
+ "total": 2382
 }
