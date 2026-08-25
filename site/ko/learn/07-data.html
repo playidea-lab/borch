@@ -136,8 +136,9 @@
 
     <h2>이미지</h2>
     <p>
-      <code>vision</code> 이 <code>torchvision.transforms</code> 자리이고 변환만 있다 —
-      사전학습 가중치는 여기 없고 앞으로도 없다. <code>Normalize</code> 는 채널별
+      <code>vision</code> 이 <code>torchvision</code> 자리다. 변환은 그 위에 펼쳐져 있고,
+      박스 기하 — IoU·NMS — 는 <code>torchvision.ops</code> 가 있는 자리인
+      <code>vision.ops</code> 아래 있다. 사전학습 가중치는 여기 없고 앞으로도 없다. <code>Normalize</code> 는 채널별
       평균과 표준편차를 받고, <code>Compose</code> 가 순서대로 잇는다.
     </p>
     <div class="runnable" data-lang="js">

@@ -548,6 +548,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addNumeric(out, inputs);
   addRecent(out);
   addVision(out, inputs);
+  addOps(out);
   addSeq(out, inputs);
   addEdge(out);
   addComplex(out);
@@ -1992,6 +1993,88 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   for (const [name, build] of reprs) {
     out.set(`vision::repr::${name}`, () => build().describe());
   }
+}
+
+/**
+ * `torchvision.ops` — box geometry, and only that.
+ *
+ * **The one block in the vision half with no distribution to it.** Every other
+ * transform draws, so the golden pins the draw at 0 or 1 and asks about what is
+ * left; these eleven functions take four numbers a box and answer, so all
+ * sixteen cases are the value itself.
+ *
+ * The boxes are written out rather than drawn, and the arrangement is the case.
+ * **Overlaps have to be arranged** — random boxes in a large enough field mostly
+ * miss each other, and an IoU table of zeros passes against an implementation
+ * computing the wrong thing. The values are `tests/cases.py`'s, carried across
+ * verbatim: writing different ones here would stop the comparison being one.
+ */
+function addOps(out: Map<string, Case>): void {
+  // Three that overlap in different amounts, one far away, and **a duplicate** —
+  // the duplicate is what makes `nms` at a low threshold have something to do.
+  const boxes = [[0, 0, 10, 10], [1, 1, 11, 11], [5, 5, 15, 15],
+                 [30, 30, 40, 40], [0, 0, 10, 10]];
+  const others = [[2, 2, 8, 8], [12, 0, 22, 10], [30, 31, 41, 39]];
+  const scores = [0.9, 0.75, 0.6, 0.95, 0.5];
+  const labels = [0, 0, 1, 1, 0];
+  // A mask with one blank plane — **the blank is the case**: torchvision answers
+  // zeros rather than raising, and that is what lets a batch with one still stack.
+  const masks = [0, 1, 2].map(() =>
+    Array.from({ length: 6 }, () => new Array<number>(8).fill(0)));
+  for (let y = 1; y < 4; y++) for (let x = 2; x < 6; x++) (masks[0] as number[][])[y]![x] = 1;
+  for (let y = 0; y < 2; y++) (masks[1] as number[][])[y]![0] = 1;
+
+  /** A row of numbers, or a table of them, as the tensor the golden holds. */
+  const asTensor = (v: number[] | number[][]): Tensor => {
+    if (!v.length || typeof v[0] === "number") {
+      return Tensor.from(v as number[], [v.length]);
+    }
+    const table = v as number[][];
+    const width = (table[0] as number[]).length;
+    return Tensor.from(table.flat(), [table.length, width]);
+  };
+
+  out.set("ops::box_area", () => asTensor(vision.ops.boxArea(boxes)));
+  // The same boxes read three ways. **`fmt` is a claim about four numbers that
+  // look identical either way**, so a wrong one is a wrong answer with nothing
+  // raised — and the round trip is what pins the pair of conversions together.
+  out.set("ops::box_convert(xyxy to xywh)",
+    () => asTensor(vision.ops.boxConvert(boxes, "xyxy", "xywh")));
+  out.set("ops::box_convert(xyxy to cxcywh)",
+    () => asTensor(vision.ops.boxConvert(boxes, "xyxy", "cxcywh")));
+  out.set("ops::box_convert(cxcywh back to xyxy)",
+    () => asTensor(vision.ops.boxConvert(
+      vision.ops.boxConvert(boxes, "xyxy", "cxcywh"), "cxcywh", "xyxy")));
+  out.set("ops::box_area(cxcywh)",
+    () => asTensor(vision.ops.boxArea(
+      vision.ops.boxConvert(boxes, "xyxy", "cxcywh"), "cxcywh")));
+  // **N by M and not a paired list.** Five boxes against three gives fifteen
+  // numbers, and an implementation that pairs them off returns three.
+  out.set("ops::box_iou", () => asTensor(vision.ops.boxIou(boxes, others)));
+  // The three penalised IoUs. They agree with plain IoU wherever the boxes
+  // overlap and part where they do not, which is why `others` has one box that
+  // misses everything.
+  out.set("ops::generalized_box_iou",
+    () => asTensor(vision.ops.generalizedBoxIou(boxes, others)));
+  out.set("ops::distance_box_iou",
+    () => asTensor(vision.ops.distanceBoxIou(boxes, others)));
+  out.set("ops::complete_box_iou",
+    () => asTensor(vision.ops.completeBoxIou(boxes, others)));
+  out.set("ops::clip_boxes_to_image",
+    () => asTensor(vision.ops.clipBoxesToImage(boxes, [20, 25])));
+  out.set("ops::remove_small_boxes",
+    () => asTensor(vision.ops.removeSmallBoxes(boxes, 10.5)));
+  // **`> threshold` and not `>=`.** At zero, boxes that merely touch both
+  // survive; the duplicate does not. Both ends are asked.
+  out.set("ops::nms(nothing may overlap)", () => asTensor(vision.ops.nms(boxes, scores, 0.0)));
+  out.set("ops::nms(half)", () => asTensor(vision.ops.nms(boxes, scores, 0.5)));
+  out.set("ops::nms(everything survives)", () => asTensor(vision.ops.nms(boxes, scores, 1.0)));
+  // Per class, by moving each class out of the others' reach. With the labels
+  // here the duplicate is in the same class as the box it duplicates, so the
+  // offset trick has something to prove.
+  out.set("ops::batched_nms",
+    () => asTensor(vision.ops.batchedNms(boxes, scores, labels, 0.5)));
+  out.set("ops::masks_to_boxes", () => asTensor(vision.ops.masksToBoxes(masks)));
 }
 
 /** The step count the golden uses. Keeping it small is deliberate — run longer and what

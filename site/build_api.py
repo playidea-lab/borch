@@ -93,6 +93,13 @@ MODULES = [
     ("vision", "vision",
      {"ko": "이미지 변환. `torchvision.transforms` 자리.",
       "en": "Image transforms. Where `torchvision.transforms` would be."}),
+    # **`torchvision.ops` 는 `transforms` 옆이지 그 아래가 아니다.** `vision` 안에 이름을
+    # 펼치면 `vision.nms` 가 되는데, 그것은 torchvision 에 없는 자리다. 그래서 별도
+    # 모듈이고, 여기 적히지 않으면 레퍼런스에도 이름 색인에도 안 들어간다 — 위 `index`·
+    # `functional` 주석이 말하는 그 구멍이 세 번째로 생길 자리였다.
+    ("ops", "vision.ops",
+     {"ko": "박스 기하 — IoU·NMS. `torchvision.ops` 자리.",
+      "en": "Box geometry — IoU and NMS. Where `torchvision.ops` would be."}),
     ("fft", "fft",
      {"ko": "푸리에 변환. `torch.fft` 자리.",
       "en": "Fourier transforms. Where `torch.fft` would be."}),
@@ -393,9 +400,27 @@ def parse(path):
                 block.append(lines[j])
             skip_to = j
             nxt = lines[j + 1].strip() if j + 1 < len(lines) else ""
-            # A comment at the head of the file, ahead of imports or re-exports, is the module description.
+            # A comment at the head of the file, ahead of imports or re-exports, is the
+            # module description.
+            #
+            # **The next line was allowed to be an import and nothing else, and that
+            # made the module description depend on an accident.** A declaration file
+            # keeps an import only when a type it names survives into a signature;
+            # `ops.ts` imports `RuntimeError` to throw it, which is a body and not a
+            # type, so `ops.d.ts` opens with the head comment and then a declaration —
+            # and the description was silently filed as the first symbol's `pending`
+            # and then thrown away when that symbol turned out to have its own. Seven
+            # modules were in that state at once (`dtype`, `errors`, `random`,
+            # `autograd`, `device`, `indexing` and the new `ops`): a written module
+            # description in the source, an empty one in the reference, and no check
+            # crying — measured, not guessed.
+            #
+            # The added clause is **a doc comment starting on the next line**, which is
+            # what tells the two apart. A head comment followed by another `/**` cannot
+            # be that symbol's description, because the symbol already has one.
             if (not symbols and not module_doc and depth == 0
-                    and (nxt.startswith("import") or nxt.startswith("export {"))):
+                    and (nxt.startswith("import") or nxt.startswith("export {")
+                         or nxt.startswith("/**"))):
                 module_doc = _doc(block)
                 pending = []
             else:

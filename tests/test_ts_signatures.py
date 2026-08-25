@@ -226,6 +226,10 @@ SHIFTED = {
     # never lands in exactly one place and the draw would decide the answer.
     "transforms": 0,
     "transforms.functional": 0,
+    # `ops` 는 네 통에서 모두 0 이고 열한 이름이 전부 `agree` 다. torchvision 의
+    # 인자 이름을 그대로 받아 적었기 때문인데, 그렇게 되는 이유가 있다 — 이 열한
+    # 개는 이미지도 텐서도 아니라 상자 넷뿐이라 옮길 때 고를 것이 없었다.
+    "ops": 0,
 }
 
 # **238 pairs cannot be compared at all, and that is the largest number here.**
@@ -490,6 +494,7 @@ UNALIGNED = {
     "linalg": 0,
     "utils.data": 0,
     "transforms": 0,
+    "ops": 0,
     # Two, and both are the picture argument: torchvision's functional takes `img`
     # first and `vision.ts` names it `img` too, but the pair after it differs in
     # `erase` and `resized_crop`, which take a box torchvision spells out one number
@@ -723,6 +728,7 @@ RENAMED = {
     # before a peer's `_camel` fix. The count moved on its own and the row had to say
     # why, which is the whole reason these numbers carry sentences.
     "transforms": 3,
+    "ops": 0,
     # `center_crop(img, output_size)` → `(img, size)` and `to_tensor(pic)` → `(img)`.
     # The second is torchvision's own oddity: `pic` appears in that one function and
     # `img` in the rest of the namespace.
@@ -947,6 +953,8 @@ SHORTER = {
     # on this side, and a tail that is short only refuses extra arguments.
     "transforms": 1,
     "transforms.functional": 0,
+    # `eps` 와 `fmt` 의 기본값까지 받아 적었으니 꼬리도 짧지 않다.
+    "ops": 0,
 }
 
 

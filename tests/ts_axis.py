@@ -100,6 +100,10 @@ SPACES = frozenset({
     "Tensor", "nn", "nn.functional",
     "optim", "optim.lr_scheduler", "linalg", "utils.data",
     "transforms", "transforms.functional",
+    # `ops` 는 `ops.ts` 가 생긴 날 함께 들어왔다. 위 문단이 `transforms` 에 대해 말한
+    # 실패 — 골든이 물으니 여기서는 안 묻는다 — 를 되풀이하지 않으려면, 이름 축은
+    # 골든이 무엇을 묻든 상관없이 열한 이름을 따로 세어야 한다.
+    "ops",
 })
 
 

@@ -283,6 +283,11 @@ FROZEN = {
     # `"bilinear" | "nearest"`, so the compiler refuses a wrong mode before the call.
     "transforms": 1,
     "transforms.functional": 1,
+    # **Zero on the day the row was added.** `ops.ts` carries all eleven of
+    # `borchvision.ops`, which is the whole namespace the Python side has, so the
+    # row starts settled rather than as work to do. It is here anyway: a row that
+    # only appears once it is non-zero is a row nobody notices going non-zero.
+    "ops": 0,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the
@@ -308,6 +313,8 @@ REFUSALS = {
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
+    # The core refuses nothing in `ops` — eleven functions and no stub among them.
+    "ops": 0,
 }
 
 

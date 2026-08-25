@@ -1,5 +1,13 @@
 /**
- * Transforms shaped like `torchvision.transforms`.
+ * `torchvision`'s place — the transforms flattened at the top, and `ops` beside
+ * them.
+ *
+ * `vision.Compose` is `torchvision.transforms.Compose`: the transforms sit at
+ * the top of this namespace rather than under a `transforms` of their own,
+ * because for a long time they were all there was. **`ops` could not join them
+ * there.** `torchvision.ops` is a top-level namespace beside `transforms` and
+ * not under it, so a flattened `vision.nms` would be a name torchvision has not
+ * got. It is `vision.ops.nms`, and its body is in `ops.ts`.
  *
  * ## Why this is inside a tensor library
  *
@@ -20,6 +28,12 @@
 
 import { RuntimeError } from "./errors.js";
 import { Tensor } from "./tensor.js";
+
+// Box geometry — `torchvision.ops`, reached as `vision.ops`. It is a separate file
+// rather than more names below because none of it touches an image: eleven functions
+// over four numbers a box, and this file is already past the length at which "one file,
+// so it reads" stops being true.
+export * as ops from "./ops.js";
 
 /**
  * An image laid out as `(H, W, C)`. The values are uint8 or float.

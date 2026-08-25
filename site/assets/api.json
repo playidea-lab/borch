@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 686,
+  "done": 700,
   "stale": 0,
-  "missing": 154
+  "missing": 161
  },
  "modules": [
   {
@@ -13740,7 +13740,7 @@
     "ko": "이미지 변환. `torchvision.transforms` 자리.",
     "en": "Image transforms. Where `torchvision.transforms` would be."
    },
-   "doc": "Transforms shaped like `torchvision.transforms`.\n\n## Why this is inside a tensor library\n\nRunning training requires a place where images become tensors, and there\nare things that go quietly wrong at that place — the comment on\n`ToTensor` below is one of them. It uses **the same rules** as the\nrepository's Python side (`borchvision.py`). If the rules diverge, the\nsame data becomes different values per library, and that is caught only\nby comparing values.\n\n## An image is an array, not a tensor\n\n`RandomHorizontalFlip` and `RandomCrop` take an `(H, W, C)` array. What\narrives here in torchvision is a PIL image, and having no PIL, an array\nstands in its place. Making a tensor per image makes one GPU buffer per\nimage, which looks like it works right up until it collapses on memory.",
+   "doc": "`torchvision`'s place — the transforms flattened at the top, and `ops` beside\nthem.\n\n`vision.Compose` is `torchvision.transforms.Compose`: the transforms sit at\nthe top of this namespace rather than under a `transforms` of their own,\nbecause for a long time they were all there was. **`ops` could not join them\nthere.** `torchvision.ops` is a top-level namespace beside `transforms` and\nnot under it, so a flattened `vision.nms` would be a name torchvision has not\ngot. It is `vision.ops.nms`, and its body is in `ops.ts`.\n\n## Why this is inside a tensor library\n\nRunning training requires a place where images become tensors, and there\nare things that go quietly wrong at that place — the comment on\n`ToTensor` below is one of them. It uses **the same rules** as the\nrepository's Python side (`borchvision.py`). If the rules diverge, the\nsame data becomes different values per library, and that is caught only\nby comparing values.\n\n## An image is an array, not a tensor\n\n`RandomHorizontalFlip` and `RandomCrop` take an `(H, W, C)` array. What\narrives here in torchvision is a PIL image, and having no PIL, an array\nstands in its place. Making a tensor per image makes one GPU buffer per\nimage, which looks like it works right up until it collapses on memory.",
    "symbols": [
     {
      "kind": "interface",
@@ -15012,7 +15012,140 @@
     }
    ],
    "count": 199,
-   "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
+   "doc_ko": "`torchvision` 의 자리 — 변환은 위에 펼쳐져 있고, `ops` 가 그 옆에 있다.\n\n`vision.Compose` 가 `torchvision.transforms.Compose` 다. 변환들은 자기 이름의\n`transforms` 아래가 아니라 이 이름 공간 맨 위에 놓여 있는데, 오랫동안 그것이\n전부였기 때문이다. **`ops` 는 거기 함께 놓일 수 없다.** `torchvision.ops` 는\n`transforms` 아래가 아니라 그 옆의 최상위 이름 공간이라, 펼쳐 놓은 `vision.nms` 는\ntorchvision 에 없는 이름이 된다. 그래서 `vision.ops.nms` 이고, 몸통은 `ops.ts` 에 있다.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
+  },
+  {
+   "name": "ops",
+   "title": "vision.ops",
+   "blurb": {
+    "ko": "박스 기하 — IoU·NMS. `torchvision.ops` 자리.",
+    "en": "Box geometry — IoU and NMS. Where `torchvision.ops` would be."
+   },
+   "doc": "Box geometry shaped like `torchvision.ops`.\n\n## Eleven of thirty-nine, and which eleven\n\nThe other twenty-eight are `nn.Module` layers and functions that need a\nmodel's feature maps or its predictions, and there is no detector in this\ncatalogue. These eleven need **nothing but four numbers a box.** So unlike\nalmost everything in `vision.ts` they draw nothing, which is why the golden\ncan hold every one of them — there is no distribution half to this file.\n\nThe same eleven are in the repository's Python side (`borchvision.ops`) and\nboth are held against the same frozen answers. If the two ever part, the\nsame boxes give different geometry per library, and that is caught only by\ncomparing values.\n\n## Why this is a namespace and not more names in `vision`\n\n`vision.ts` carries `torchvision.transforms` with its names flattened to the\ntop, because transforms were all there was. **`ops` cannot join them there.**\n`torchvision.ops` is a top-level namespace beside `transforms`, not under it,\nso a flattened `vision.nms` would be a name torchvision does not have — and\ninventing a place the imitated library has not got is the one move this\nproject cannot make. It is reached as `vision.ops.nms`, which is\n`torchvision.ops.nms` with the library's own name in front.\n\n## Boxes are arrays, not tensors\n\ntorchvision takes and returns tensors here. This side takes `(N, 4)` numbers\nand hands numbers back, for the reason `vision.ts` gives about images and one\nmore. A box is four numbers: one GPU buffer per box list buys nothing and\ncosts a round trip. And **reading a tensor back is asynchronous here**, so a\ntensor-taking `boxIou` would have to be `await`ed — an `await` in front of a\nquestion about rectangles that torch does not make you write.\n\n```ts\nimport { vision } from \"borch\";\nconst keep = vision.ops.nms(boxes, scores, 0.5);\n```",
+   "symbols": [
+    {
+     "kind": "type",
+     "name": "Box",
+     "signature": "export type Box = readonly number[]",
+     "doc": "One box. The four numbers mean different things per format — see `BoxFormat`.",
+     "members": []
+    },
+    {
+     "kind": "type",
+     "name": "Boxes",
+     "signature": "export type Boxes = readonly Box[]",
+     "doc": "`(N, 4)`.",
+     "members": []
+    },
+    {
+     "kind": "type",
+     "name": "BoxFormat",
+     "signature": "export type BoxFormat = \"xyxy\" | \"xywh\" | \"cxcywh\"",
+     "doc": "How to read a box's four numbers.\n\n**The three are indistinguishable by inspection** — four numbers either way —\nso a wrong format is a wrong answer that raises nothing. It is an argument\nrather than a guess for exactly that reason.\n\n- `xyxy` two corners · `xywh` a corner and a size · `cxcywh` a centre and a size",
+     "members": [],
+     "doc_ko": "상자의 숫자 넷을 어떻게 읽을 것인가.\n\n**셋은 눈으로 구별되지 않는다** — 어느 쪽이든 숫자 넷이라 — 형식을 잘못 주면 아무것도\nraise 하지 않는 틀린 답이 된다. 짐작이 아니라 인자인 이유가 정확히 그것이다.\n\n- `xyxy` 두 모서리 · `xywh` 모서리와 크기 · `cxcywh` 중심과 크기"
+    },
+    {
+     "kind": "function",
+     "name": "boxConvert",
+     "signature": "export declare function boxConvert(boxes: Boxes, inFmt: string, outFmt: string): number[][]",
+     "doc": "Between the three spellings of a box.\n\n**The identity is a copy and not the same array** — torchvision returns a new\ntensor even when the formats match, and a caller who writes into the result\nshould not reach the caller's boxes.",
+     "members": [],
+     "torch": "box_convert",
+     "doc_ko": "상자의 세 가지 표기 사이.\n\n**항등은 복사이지 같은 배열이 아니다** — torchvision 은 형식이 같아도 새 텐서를\n돌려주고, 결과에 값을 써 넣는 호출자가 호출자의 상자에 닿아서는 안 된다."
+    },
+    {
+     "kind": "function",
+     "name": "boxArea",
+     "signature": "export declare function boxArea(boxes: Boxes, fmt?: string): number[]",
+     "doc": "Width times height.\n\n**A box with `x2 < x1` gets a negative area** rather than zero — torchvision\ndoes not clamp here, and clamping would hide a box built the wrong way round.",
+     "members": [],
+     "torch": "box_area",
+     "doc_ko": "가로 곱하기 세로.\n\n**`x2 < x1` 인 상자는 0 이 아니라 음수 넓이를 받는다** — torchvision 은 여기서\n자르지 않고, 자르면 거꾸로 만들어진 상자가 가려진다."
+    },
+    {
+     "kind": "function",
+     "name": "boxIou",
+     "signature": "export declare function boxIou(boxes1: Boxes, boxes2: Boxes, fmt?: string): number[][]",
+     "doc": "**An `N x M` matrix, not a paired list.** Every box against every box, which\nis what a detector needs and what surprises everyone the first time.",
+     "members": [],
+     "torch": "box_iou",
+     "doc_ko": "**짝지은 목록이 아니라 `N x M` 행렬이다.** 모든 상자를 모든 상자에 대고 재며,\n탐지기가 필요로 하는 것이자 누구나 처음에 놀라는 자리다."
+    },
+    {
+     "kind": "function",
+     "name": "generalizedBoxIou",
+     "signature": "export declare function generalizedBoxIou(boxes1: Boxes, boxes2: Boxes): number[][]",
+     "doc": "IoU, **minus what the smallest enclosing box wastes.** Two boxes that do not\ntouch have an IoU of 0 whatever the distance between them; this one keeps\nfalling to -1, which is why a loss can be built on it and not on IoU.",
+     "members": [],
+     "torch": "generalized_box_iou",
+     "doc_ko": "IoU 에서 **가장 작은 둘러싸는 상자가 버리는 만큼을 뺀 값.** 닿지 않는 두 상자는\n거리가 얼마든 IoU 가 0 이지만, 이것은 -1 까지 계속 떨어진다 — 손실을 IoU 위에는 못\n세우고 이것 위에는 세우는 이유다."
+    },
+    {
+     "kind": "function",
+     "name": "distanceBoxIou",
+     "signature": "export declare function distanceBoxIou(boxes1: Boxes, boxes2: Boxes, eps?: number): number[][]",
+     "doc": "IoU penalised by **how far apart the centres are**, as a fraction of the\nenclosing box's diagonal.",
+     "members": [],
+     "torch": "distance_box_iou",
+     "doc_ko": "**중심이 얼마나 떨어져 있는지로** 벌점을 준 IoU. 둘러싸는 상자의 대각선에 대한\n비율로 잰다."
+    },
+    {
+     "kind": "function",
+     "name": "completeBoxIou",
+     "signature": "export declare function completeBoxIou(boxes1: Boxes, boxes2: Boxes, eps?: number): number[][]",
+     "doc": "`distanceBoxIou` and **one more term for the aspect ratio** — two boxes with\nthe same centre and area but different shapes score lower here and\nidentically under the distance one.",
+     "members": [],
+     "torch": "complete_box_iou",
+     "doc_ko": "`distanceBoxIou` 에 **가로세로 비 항이 하나 더** 붙은 것 — 중심과 넓이가 같고 모양만\n다른 두 상자는 여기서 더 낮은 점수를 받고, 거리 쪽에서는 똑같은 점수를 받는다."
+    },
+    {
+     "kind": "function",
+     "name": "clipBoxesToImage",
+     "signature": "export declare function clipBoxesToImage(boxes: Boxes, size: readonly number[]): number[][]",
+     "doc": "Push every corner back inside a picture of `size`, which is **(height,\nwidth)** — the opposite order to a box's own `(x, y)`, and torchvision's own\nconvention.",
+     "members": [],
+     "torch": "clip_boxes_to_image",
+     "doc_ko": "모든 모서리를 `size` 크기의 그림 안으로 되민다. `size` 는 **(높이, 너비)** 로,\n상자 자신의 `(x, y)` 와 반대 순서이며 torchvision 자신의 관례다."
+    },
+    {
+     "kind": "function",
+     "name": "removeSmallBoxes",
+     "signature": "export declare function removeSmallBoxes(boxes: Boxes, minSize: number): number[]",
+     "doc": "**Indices, not boxes.** Every one of these that filters returns the positions\nrather than the survivors, because the caller almost always has scores and\nlabels to filter by the same positions.",
+     "members": [],
+     "torch": "remove_small_boxes",
+     "doc_ko": "**상자가 아니라 번호다.** 거르는 함수는 살아남은 것이 아니라 그 자리를 돌려주는데,\n호출자에게는 같은 자리로 걸러야 할 점수와 라벨이 거의 항상 함께 있기 때문이다."
+    },
+    {
+     "kind": "function",
+     "name": "masksToBoxes",
+     "signature": "export declare function masksToBoxes(masks: readonly (readonly number[][])[]): number[][]",
+     "doc": "The tightest box around each mask, which is `(N, H, W)`.\n\n**An empty mask gives all zeros** rather than an error — torchvision's\nbehaviour, and the one that lets a batch with a blank mask in it still stack.",
+     "members": [],
+     "torch": "masks_to_boxes",
+     "doc_ko": "마스크마다 가장 빡빡한 상자. 마스크는 `(N, H, W)` 다.\n\n**빈 마스크는 오류가 아니라 전부 0 을 준다** — torchvision 의 동작이고, 빈 마스크가\n섞인 배치도 그대로 쌓이게 하는 쪽이다."
+    },
+    {
+     "kind": "function",
+     "name": "nms",
+     "signature": "export declare function nms(boxes: Boxes, scores: readonly number[], iouThreshold: number): number[]",
+     "doc": "Non-maximum suppression: keep the best-scoring box, throw away everything\nthat overlaps it too much, repeat.\n\n**`> iouThreshold` and not `>=`.** At a threshold of 0 two boxes that merely\ntouch — zero overlap — both survive, and that is the boundary anybody testing\nthis reaches for first.\n\nTies in the score are **not decided here and torchvision does not decide them\neither**; its own documentation says the choice is not guaranteed to match\nbetween CPU and GPU. So a case built on tied scores is a case with no answer.",
+     "members": [],
+     "doc_ko": "비최대 억제: 점수가 가장 높은 상자를 남기고, 그것과 너무 겹치는 것을 버리고, 반복한다.\n\n**`>= iouThreshold` 가 아니라 `> iouThreshold` 다.** 문턱이 0 이면 맞닿기만 한 두 상자는\n— 겹침이 0 이므로 — 둘 다 살아남고, 이것을 시험하는 사람이 가장 먼저 손대는 경계다.\n\n점수가 같을 때 누가 남는지는 **여기서 정하지 않고 torchvision 도 정하지 않는다.**\n그쪽 문서가 CPU 와 GPU 사이에 일치를 보장하지 않는다고 적어 두었다. 그러니 동점 위에\n세운 케이스는 답이 없는 케이스다."
+    },
+    {
+     "kind": "function",
+     "name": "batchedNms",
+     "signature": "export declare function batchedNms(boxes: Boxes, scores: readonly number[], idxs: readonly number[], iouThreshold: number): number[]",
+     "doc": "NMS **per class**, done by moving each class's boxes somewhere the others\ncannot reach.\n\nThe offset trick is torchvision's and it is worth reading twice: every box is\nshifted by its class index times more than the largest coordinate, so boxes\nof different classes can no longer overlap and a single pass of `nms` does\nthe lot.",
+     "members": [],
+     "torch": "batched_nms",
+     "doc_ko": "**클래스별** NMS. 각 클래스의 상자를 다른 클래스가 닿지 못하는 곳으로 옮겨서 한다.\n\n자리 옮기기 수법은 torchvision 의 것이고 두 번 읽을 값이 있다: 모든 상자를 자기 클래스\n번호 곱하기 가장 큰 좌표보다 큰 값만큼 민다. 그러면 다른 클래스의 상자끼리는 더 이상\n겹칠 수 없고, `nms` 한 번이 전부를 처리한다."
+    }
+   ],
+   "count": 14,
+   "doc_ko": "`torchvision.ops` 모양의 상자 기하.\n\n## 서른아홉 중 열하나, 그리고 어느 열하나인가\n\n나머지 스물여덟은 `nn.Module` 층이거나 모델의 특징맵·예측을 필요로 하는 함수들이고,\n이 카탈로그에는 탐지기가 없다. 이 열하나는 **상자 하나에 숫자 넷이면 된다.** 그래서\n`vision.ts` 의 거의 모든 것과 달리 아무것도 뽑지 않고, 골든이 열하나를 전부 붙들 수\n있는 이유가 그것이다 — 이 파일에는 분포로 확인할 절반이 없다.\n\n같은 열하나가 저장소의 파이썬 판(`borchvision.ops`)에 있고 둘 다 같은 언 답에 대고\n잰다. 둘이 갈리면 같은 상자가 라이브러리마다 다른 기하가 되고, 그것은 값 대조로만\n잡힌다.\n\n## 왜 이름 공간이고 `vision` 의 이름이 아닌가\n\n`vision.ts` 는 `torchvision.transforms` 를 이름째 위로 펼쳐 담는다. 변환이 전부였기\n때문인데, **`ops` 는 거기 함께 놓일 수 없다.** `torchvision.ops` 는 `transforms`\n아래가 아니라 그 옆의 최상위 이름 공간이라, 펼쳐 놓은 `vision.nms` 는 torchvision 에\n없는 이름이 된다 — 흉내 내는 라이브러리에 없는 자리를 만드는 것이 이 프로젝트가 할 수\n없는 단 하나의 수다. `vision.ops.nms` 로 닿고, 그것은 앞에 라이브러리 이름만 바꾼\n`torchvision.ops.nms` 다.\n\n## 상자는 배열이지 텐서가 아니다\n\ntorchvision 은 여기서 텐서를 받고 텐서를 준다. 이쪽은 `(N, 4)` 숫자를 받아 숫자를\n돌려주는데, `vision.ts` 가 이미지에 대해 말하는 이유에 하나가 더 붙는다. 상자는 숫자\n넷이다 — 상자 목록마다 GPU 버퍼를 하나 만들면 얻는 것 없이 왕복만 든다. 그리고\n**이쪽에서 텐서를 도로 읽는 일은 비동기라**, 텐서를 받는 `boxIou` 는 `await` 를 달아야\n한다. torch 에서는 직사각형에 대한 질문 앞에 쓸 일이 없는 `await` 다."
   },
   {
    "name": "fft",
@@ -15667,7 +15800,7 @@
     "ko": "대괄호 자리 — `x[1:3]` 에 해당하는 것.",
     "en": "The bracket position — what `x[1:3]` would be."
    },
-   "doc": "",
+   "doc": "The place brackets occupy — the syntax for copying `x[...]` across.\n\n## Why it is needed\n\nBrackets appear everywhere in torch code and **JavaScript cannot overload `[]`.** So\nhere each line becomes a different method — `select`, `narrow`, `indexSelect`, `gather`,\n`maskedSelect`… fifteen of them. Every value is right, and whoever is copying **has to\nchoose \"which method is this\" line by line.** Whether `x[1:3]` is `narrow` or `select`,\nand whether the arguments are `(dim, start, length)` or `(dim, start, end)`.\n\n`at()` narrows those fifteen branches into one door. It removes nothing — it **opens one\nmore door**, and the existing methods stay.\n\n## Why a slice is a function\n\nWhether `x.at([1, 3])` means \"axis 0 at 1, axis 1 at 3\" or \"slice 1:3\" **cannot be told\nfrom an array alone.** Python's syntax separates them (`x[1, 3]` against `x[1:3]`) and\nhere both are arrays.\n\nSo the slice becomes a named thing. Python's `x[1:3]` also resolves to\n`x[slice(1, 3)]`, so **it uses the same name** — not something new to learn but the name\nthat was there all along.\n\n```ts\nx.at(0)                     // x[0]\nx.at([null, 1])             // x[:, 1]        null is Python's `:`\nx.at(slice(1, 3))           // x[1:3]\nx.at([0, slice(1, 3)])      // x[0, 1:3]\nx.at(slice(null, null, 2))  // x[::2]\nx.at([[0, 2]])              // x[[0, 2]]      two brackets — the same shape as numpy\n```\n\n**The outermost array is always the list of axes.** Selecting by an index list wraps one\nlayer more — the same shape as the place numpy's `x[0, 1]` and `x[[0, 1]]` diverge.",
    "symbols": [
     {
      "kind": "interface",
@@ -15767,7 +15900,7 @@
     "ko": "어댑터를 잡고 상태를 묻는 자리.",
     "en": "Acquiring the adapter, and asking it what it is doing."
    },
-   "doc": "",
+   "doc": "The WebGPU device, its buffers and the pipeline cache.\n\n## Why the pipeline cache lives here\n\nBaking the shape into the shader is this library's premise (see `kernels.ts`). That\nmakes one operation several shaders as the shapes differ, and compiling on every pass\nthrough a layer makes a fast kernel meaningless. So **shape signature → pipeline**\nenters as a data structure. It is not an optimisation but the price of keeping the\nspeed the baking bought.\n\n## The limits arrive quietly\n\nPast a buffer size or a dispatch limit, WebGPU **does not throw; it does not do it.**\nThe bench stepped on this twice — 240,000 GFLOPS above 128MB, and \"144%\" above 65,535\ndispatches. Both are numbers that would have been believed if the values had not been\nlooked at, so here the limits are **measured in advance and exceeding one throws.**",
    "symbols": [
     {
      "kind": "type",
@@ -16057,7 +16190,7 @@
     "ko": "난수의 씨앗.",
     "en": "Seeding the random draws."
    },
-   "doc": "",
+   "doc": "One generator. **Layer initialisation and the tensor factories draw from one stream.**\n\nWhat is here used to be trapped inside `nn.ts`. That left nowhere to build\n`Tensor.randn` — `tensor.ts` calling `nn.ts` would be a cycle — and so no way to port\nthe first line of a torch example, `torch.randn(...)`. This file calls nothing, so both\nsides can call it.\n\n**One seed has to reset everything.** torch's `manual_seed` does, and the first two\nplaces somebody expecting that looks are layer initialisation and dropout. So this file\nalso holds the slot (`onSeed`) where anything with state to reset registers itself.\n\n**It does not produce torch's numbers.** It cannot, and it must not pretend to. The\ngolden does not ask about initial values and always plants the weights, so there is\nnothing here to diverge.",
    "symbols": [
     {
      "kind": "function",
@@ -16112,7 +16245,7 @@
     "ko": "기울기 스위치.",
     "en": "The gradient switch."
    },
-   "doc": "",
+   "doc": "The automatic differentiation tape.\n\n**The same shape** as the core (`borch`) and the sister library (`borch_webgpu`). With\nall three alike, a fix made in one place moves easily to the others, and this project\nhas seen that pay off several times — the sister library's `roll` and `masked_select`\nhaving right values and a severed graph was found by looking at the same place in the\ncore.\n\nThe graph data structure does not know about tensors. Left as `T`, it imports no\n`tensor.ts`, and so the tape can be tested on its own.",
    "symbols": [
     {
      "kind": "interface",
@@ -16393,7 +16526,7 @@
     "ko": "예외 종류. torch 와 같은 이름을 쓴다.",
     "en": "Exception types, under the names torch uses."
    },
-   "doc": "",
+   "doc": "Exceptions shaped like torch's.\n\n## Why the names are imitated\n\nSomebody using this library used torch before. What they do when stuck is search for the\nerror text verbatim, and what comes back is torch's documentation and its questions.\nWith only our wording that search does not work — the answer already exists in the world\nand cannot be reached.\n\nSo **the text torch produces under the same condition goes in verbatim** and our\nexplanation follows it. The front half is for searching and the back half is this\nplace's own circumstance.\n\n## How far the imitation goes\n\nOnly where there is a corresponding failure in torch. Failures that are ours alone (WGSL\ncompilation, dispatch limits, a feature that does not exist yet) are written in our own\nwords — inventing a torch message that does not exist does not make the search work, it\nsends it somewhere else.",
    "symbols": [
     {
      "kind": "class",
@@ -16453,15 +16586,15 @@
     "ko": "자료형.",
     "en": "Data types."
    },
-   "doc": "",
+   "doc": "dtypes and the promotion rules.\n\n## Storage is float32, and only that\n\n`int64` is a **label**. WGSL has no 64-bit integer, so there is no way to\nactually hold one, and holding it in a 32-bit integer makes it `int32`,\nnot `int64`. So the values sit in float32 and the dtype is carried\nseparately — the sister project made the same choice, though its reason\n(TF.js's cast was broken) differs from this one, which is that the means\nof representation simply does not exist.\n\n**The price, written down**: integers above 2²⁴ are not exact in float32.\nThe ranges used for indices and counts are far below that, but a large\ninteger stored here drifts quietly.\n\n## Why the split is by category\n\ntorch has categories — `bool < integer < float` — and only promotes\n**within** them. Inheriting numpy's rules would make `float32 + int64` a\nfloat64, and then a learner learns the wrong rule. There is one width per\ncategory here, so the rule comes out shorter still.",
    "symbols": [
     {
      "kind": "type",
      "name": "DType",
      "signature": "export type DType = \"float32\" | \"int64\" | \"bool\" | \"complex64\"",
-     "doc": "dtypes and the promotion rules.\n\n## Storage is float32, and only that\n\n`int64` is a **label**. WGSL has no 64-bit integer, so there is no way to\nactually hold one, and holding it in a 32-bit integer makes it `int32`,\nnot `int64`. So the values sit in float32 and the dtype is carried\nseparately — the sister project made the same choice, though its reason\n(TF.js's cast was broken) differs from this one, which is that the means\nof representation simply does not exist.\n\n**The price, written down**: integers above 2²⁴ are not exact in float32.\nThe ranges used for indices and counts are far below that, but a large\ninteger stored here drifts quietly.\n\n## Why the split is by category\n\ntorch has categories — `bool < integer < float` — and only promotes\n**within** them. Inheriting numpy's rules would make `float32 + int64` a\nfloat64, and then a learner learns the wrong rule. There is one width per\ncategory here, so the rule comes out shorter still.",
+     "doc": "The four this subset stores. **A string where torch has an object.**\n\n`torch.float32` is a value you can pass around and ask questions of; here the same\nposition is a string literal, so the compiler refuses `\"float64\"` at the call rather\nthan at run time. What is given up is `x.dtype === torch.float32` as an identity\ncheck — it is `x.dtype === \"float32\"`, which reads the same and compares differently.\n\nThe absent ones are not an oversight and the module comment above says why: storage\nis float32, so the rest of torch's dtypes have nothing to be stored in.",
      "members": [],
-     "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
+     "doc_ko": "이 부분집합이 담는 넷. **torch 가 객체를 두는 자리에 문자열이 있다.**\n\n`torch.float32` 는 들고 다니며 물어볼 수 있는 값이지만, 여기서 같은 자리는 문자열\n리터럴이라 `\"float64\"` 를 컴파일러가 호출 자리에서 거절한다. 잃는 것은\n`x.dtype === torch.float32` 라는 동일성 검사다 — 여기서는 `x.dtype === \"float32\"` 이고,\n읽기는 같은데 비교하는 것이 다르다.\n\n없는 것들은 빠뜨린 게 아니고 위의 모듈 설명이 이유를 말한다: 저장이 float32 하나라\ntorch 의 나머지 dtype 은 담길 자리가 없다."
     },
     {
      "kind": "function",
@@ -16531,8 +16664,9 @@
      "torch": "rank_of"
     }
    ],
-   "count": 9
+   "count": 9,
+   "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2177
+ "total": 2191
 }

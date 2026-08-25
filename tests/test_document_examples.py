@@ -126,6 +126,42 @@ def test_the_readme_autograd_example_prints_what_its_comment_claims():
         f"README.md:{line} — the example claims it prints {said!r} and it prints {got!r}")
 
 
+def test_the_readme_vision_example_prints_the_shape_it_claims():
+    """The `borchvision` entry block — **it was two imports and nothing ran them.**
+
+    The paragraph above it in the README says the first ten lines of an introductory
+    PyTorch tutorial are torchvision, and that is what this library's vision half
+    exists for. What stood under that sentence was `import borchvision as torchvision`
+    and one more import, which prove the module exists and nothing else: an import
+    resolves whatever `ToTensor` then does with the axes.
+
+    So the block is a pipeline now, and the value it claims is the shape. `(H, W, C)`
+    in and `(C, H, W)` out is the single fact a reader copying these lines is relying
+    on, and it is torchvision's convention rather than an obvious one — an
+    implementation that skipped the transposition would still hand back a tensor of
+    the right size in the wrong order.
+    """
+    blocks = [(line, body) for line, body in _python_blocks()
+              if "borchvision" in body and "print(" in body]
+    assert len(blocks) == 1, (
+        f"expected one runnable borchvision example, found {len(blocks)} — the entry "
+        "block under \"torchvision — `transforms` only\" is the one meant here")
+    line, body = blocks[0]
+
+    claimed = [NOTE.search(raw) for raw in body.splitlines() if raw.startswith("print(")]
+    assert claimed and claimed[0], (
+        f"README.md:{line} — the print no longer carries the value it claims. Put the "
+        "expected shape back as a trailing comment.")
+    said = claimed[0].group(0).split("#", 1)[1].strip()
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exec(compile(body, str(README), "exec"), {})                # noqa: S102
+    got = buffer.getvalue().strip()
+    assert got == said, (
+        f"README.md:{line} — the example claims it prints {said!r} and it prints {got!r}")
+
+
 # ── the same message, quoted in a second document ─────────────────────
 #
 # ROADMAP.md records what the matmul message looked like when it was Korean, and then

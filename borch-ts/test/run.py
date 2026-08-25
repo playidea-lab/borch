@@ -581,17 +581,13 @@ NOT_PORTED = {
     # as text plus RandAugment(num_ops=0), the one configuration of any of them that
     # does not draw. Without being told that boundary, an hour goes into hunting for
     # an AugMix value case that does not exist and concluding something was missed.
-    # `ops::` is a new prefix. The eleven box-geometry functions of `borchvision.ops`
-    # arrived on the Python side and borch.ts has no such namespace yet.
-    #
-    # **The marker is `아직` and not `없음`.** That borch.ts has no `nms` is true, but
-    # these eleven touch no weights and no feature map — **pure arithmetic**, so
-    # carrying them across needs no model. There is a value to carry and it has not
-    # been carried. The other twenty-eight of torchvision's `ops` (RoI, FPN, detection
-    # losses) do need a detector, and they are absent from the Python side too, so they
-    # are not part of the debt this row records.
-    "ops::": (16, "아직 — the eleven box-geometry functions. Pure arithmetic, so "
-                  "carrying them across needs no model"),
+    # **`ops::` was here and is not — 16 → 0, ported rather than reasoned away.** The row
+    # said `아직`, that the eleven box-geometry functions touch no weights and no feature
+    # map so carrying them across needs no model. That was the whole prediction and it
+    # held: `ops.ts` is plain arithmetic over four numbers a box, and all sixteen cases
+    # went green against answers frozen from real torchvision. A backlog row that comes
+    # off by being done is what this table is for — the reason it carried is what made
+    # the work findable.
     # 52 of the 71 are **repr strings**. v2 computes what v1 computes and differs only
     # in what it prints, and that difference is the whole reason these names are not a
     # re-export — so the strings are frozen as strings. The other 19 are values at the
