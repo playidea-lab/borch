@@ -96,9 +96,13 @@ def warn_if_software(adapter, what):
     every runner's output and is written down here rather than made, because the split between
     this and `refuse_if_software` is deliberate and a person should choose whether to widen it.
     """
+    # The two callers pass a noun phrase — `the values`, `lifetime rules` — so the
+    # sentence is built around one. It read *that {what} is right is proved* and came
+    # out as "that the values is right", which is the ordinary cost of interpolating a
+    # phrase into a slot shaped for a clause.
     if is_software(adapter):
-        print(f"  (Software adapter — that {what} is right is proved, but this run does not\n"
-              "   prove that the GPU path runs.)")
+        print(f"  (Software adapter — {what} being right is proved, but this run does\n"
+              "   not prove that the GPU path runs.)")
 
 
 import contextlib

@@ -105,7 +105,7 @@ export type { Scope } from "./tensor.js";
 
 import { Tensor as TensorClass } from "./tensor.js";
 
-export { Device, isAvailable, probe } from "./device.js";
+export { Device, isAvailable, isSoftwareAdapter, probe } from "./device.js";
 export type { Availability, DeviceKind, InitOptions } from "./device.js";
 // The place `torch.manual_seed` occupies — layer initialisation, dropout and
 // `Tensor.randn` all hang on one seed. `nn.manualSeed` gives the same thing (the old name

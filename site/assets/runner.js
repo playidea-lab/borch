@@ -39,7 +39,9 @@ export async function loadBorch() {
 export async function probeDevice() {
   const borch = await loadBorch();
   const result = await borch.probe();
-  if (result.ok) return { ok: true, adapter: result.adapter };
+  // `software` travels with the name. Callers used to test the name themselves against
+  // their own copy of the list; the library judges it now, in one place.
+  if (result.ok) return { ok: true, adapter: result.adapter, software: result.software };
   return { ok: false, why: result.why, message: result.message };
 }
 

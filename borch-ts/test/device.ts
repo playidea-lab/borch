@@ -81,6 +81,18 @@ export async function report(): Promise<Report> {
     fallback.ok || fallback.why === "no-adapter",
     fallback.ok ? fallback.adapter : fallback.why);
 
+  // **`software` is the field a caller acts on, and the name is trivia.**
+  // Knowing that `swiftshader`, `llvmpipe` and `lavapipe` mean the CPU is knowledge
+  // this library has and its callers should not need — three files were each keeping
+  // their own copy of that list before it moved here.
+  want("probe() says whether the adapter is software — a GPU is not",
+    first.ok && first.software === false, first.ok ? String(first.software) : "");
+  want("probe() says so when the software adapter was asked for",
+    !fallback.ok || fallback.software === true,
+    fallback.ok ? `${fallback.adapter} → software=${fallback.software}` : fallback.why);
+  want("and the two answers differ, so the field is reading the adapter",
+    !fallback.ok || first.ok && first.software !== fallback.software);
+
   // Called in the form the README writes down — code in a document rots unless it runs.
   await init({ powerPreference: "high-performance" });
   want("currentDevice() is webgpu after init", currentDevice() === "webgpu");

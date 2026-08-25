@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 218
+  "missing": 219
  },
  "modules": [
   {
@@ -17120,18 +17120,26 @@
       {
        "name": "forceFallbackAdapter",
        "signature": "forceFallbackAdapter?: boolean",
-       "doc": "Forces the software adapter. Used to exercise the fallback path itself.",
+       "doc": "Asks for the **software** adapter — Chrome's SwiftShader — rather than a GPU.\n\n## This is the device axis, and it is not the Python one\n\nThere are two axes here and they get confused because one of them is usually\nempty:\n\n|            | CPU                  | GPU              |\n|------------|----------------------|------------------|\n| Python     | `borch` (numpy)      | `borch_webgpu`   |\n| TypeScript | **this**             | `borch-ts`       |\n\nSending someone to `borch` when their GPU will not come up is answering a\n**device** question with a **language** one: their TypeScript does not run there.\nThis flag fills the cell, and SwiftShader is what makes it cheap — it is WebGPU's\nown CPU implementation, so the API, the kernels and the code are the same and only\nthe device changes.\n\n## What it does not change\n\n**Nothing was ever refused.** `init()` has always attached to whatever adapter came\nback, software included — every SwiftShader golden run in this repository is proof\nof that, and there are a lot of them. So this is not permission; it is a way to\n**ask on purpose**, and to know from `probe().software` that you got it.\n\nThe rule that matters is not *do not run on the CPU*. It is **a number measured\nthere must not be read as a GPU's**, and that is kept where it belongs: the\nbenchmark and accuracy runners refuse outright, the site's badge goes dark and says\nso, and every score line prints the adapter.",
        "optional": true,
        "torch": "force_fallback_adapter",
-       "doc_ko": "소프트웨어 어댑터를 강제한다. 폴백 경로 자체를 시험할 때 쓴다."
+       "doc_ko": "GPU 대신 **소프트웨어** 어댑터(크롬의 SwiftShader)를 달라고 한다.\n\n## 이건 장치 축이지 파이썬 축이 아니다\n\n축이 둘인데 한 칸이 비어 있어서 자꾸 섞인다.\n\n|            | CPU                  | GPU              |\n|------------|----------------------|------------------|\n| 파이썬      | `borch` (numpy)      | `borch_webgpu`   |\n| TypeScript | **여기**             | `borch-ts`       |\n\nGPU 가 안 뜬다고 `borch` 로 보내는 것은 **장치** 질문에 **언어**로 답하는 것이다 — 그 사람의 TypeScript 는 거기서 안 돈다. 이 플래그가 그 칸을 메우고, SwiftShader 가 그걸 싸게 만든다: WebGPU 자신의 CPU 구현이라 API 도 커널도 코드도 그대로이고 장치만 바뀐다.\n\n## 안 바뀌는 것\n\n**거절한 적이 없다.** `init()` 은 언제나 돌아온 어댑터에 붙었고 소프트웨어도 포함이었다 — 이 저장소의 SwiftShader 골든 실행 전부가 그 증거이고, 그게 아주 많다. 그러니 이건 허가가 아니라 **일부러 물어보는 방법**이고, `probe().software` 로 받았는지 아는 방법이다.\n\n중요한 규칙은 *CPU 에서 돌리지 말라* 가 아니다. **거기서 잰 수가 GPU 의 수로 읽히면 안 된다**이고, 그건 있어야 할 자리에 지켜져 있다 — 벤치와 정확도 러너는 아예 거절하고, 사이트 배지는 꺼지면서 그렇다고 말하고, 모든 점수 줄이 어댑터를 찍는다."
       }
      ],
      "doc_ko": "어댑터를 어떻게 고를 것인가. torch 의 `CUDA_VISIBLE_DEVICES` 자리다."
     },
     {
+     "kind": "function",
+     "name": "isSoftwareAdapter",
+     "signature": "export declare function isSoftwareAdapter(adapter: string): boolean",
+     "doc": "Whether an adapter name is a CPU implementation.\n\nTakes the name rather than the adapter, because that is what survives: `probe()`\nhands back a string, a score line carries a string, and a log read a week later is a\nstring.",
+     "members": [],
+     "torch": "is_software_adapter"
+    },
+    {
      "kind": "type",
      "name": "Availability",
-     "signature": "export type Availability = { ok: true; adapter: string; } | { ok: false; why: \"no-api\" | \"no-adapter\"; message: string; }",
+     "signature": "export type Availability = { ok: true; adapter: string; software: boolean; } | { ok: false; why: \"no-api\" | \"no-adapter\"; message: string; }",
      "doc": "Whether WebGPU can be used. **It answers with a value, not an\nexception.**\n\n`why` is what makes it worth having — `no-api` (the browser is too old,\nor this is not a secure context) and `no-adapter` (driver blocklist,\nvirtual machine, headless with no GPU) leave the user with entirely\ndifferent things to do, and folding them into one exception erases that\nsplit.",
      "members": [],
      "doc_ko": "WebGPU 를 쓸 수 있는가. **예외가 아니라 값으로 답한다.**\n\n`why` 가 값어치다 — `no-api`(브라우저가 낡았거나 안전한 문맥이 아니다)와\n`no-adapter`(드라이버 차단 목록·가상 머신·GPU 없는 헤드리스)는 쓰는 사람이 할 수\n있는 일이 전혀 다른데, 예외 하나로 뭉치면 그 갈림이 사라진다."
@@ -17374,7 +17382,7 @@
      ]
     }
    ],
-   "count": 40
+   "count": 41
   },
   {
    "name": "random",
@@ -17860,5 +17868,5 @@
    "count": 9
   }
  ],
- "total": 2382
+ "total": 2383
 }

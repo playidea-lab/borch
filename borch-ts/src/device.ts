@@ -46,9 +46,65 @@ export interface InitOptions {
    */
   powerPreference?: GPUPowerPreference;
   /**
-   * Forces the software adapter. Used to exercise the fallback path itself.
+   * Asks for the **software** adapter — Chrome's SwiftShader — rather than a GPU.
+   *
+   * ## This is the device axis, and it is not the Python one
+   *
+   * There are two axes here and they get confused because one of them is usually
+   * empty:
+   *
+   * |            | CPU                  | GPU              |
+   * |------------|----------------------|------------------|
+   * | Python     | `borch` (numpy)      | `borch_webgpu`   |
+   * | TypeScript | **this**             | `borch-ts`       |
+   *
+   * Sending someone to `borch` when their GPU will not come up is answering a
+   * **device** question with a **language** one: their TypeScript does not run there.
+   * This flag fills the cell, and SwiftShader is what makes it cheap — it is WebGPU's
+   * own CPU implementation, so the API, the kernels and the code are the same and only
+   * the device changes.
+   *
+   * ## What it does not change
+   *
+   * **Nothing was ever refused.** `init()` has always attached to whatever adapter came
+   * back, software included — every SwiftShader golden run in this repository is proof
+   * of that, and there are a lot of them. So this is not permission; it is a way to
+   * **ask on purpose**, and to know from `probe().software` that you got it.
+   *
+   * The rule that matters is not *do not run on the CPU*. It is **a number measured
+   * there must not be read as a GPU's**, and that is kept where it belongs: the
+   * benchmark and accuracy runners refuse outright, the site's badge goes dark and says
+   * so, and every score line prints the adapter.
    */
   forceFallbackAdapter?: boolean;
+}
+
+/**
+ * The adapter names that mean **this is the CPU**.
+ *
+ * WebGPU does not report whether an adapter is software — the only signal is the name,
+ * so the list is a list of names. `swiftshader` is Chrome's, `llvmpipe` and `lavapipe`
+ * are Mesa's, and `software` catches what spells itself out.
+ *
+ * **It lives here so there is one copy of it that JavaScript can reach.** The judgement
+ * had three homes — this library's callers, `site/assets/home.js` and
+ * `site/assets/playground.js` — and three copies of a four-name list is the shape that
+ * drifts, quietly, in whichever direction nobody reports. The site imports this now.
+ * One copy remains outside, in `tests/browser/launch.py`, because Python cannot import
+ * it; `test_the_software_adapter_rule_says_the_same_thing_in_every_copy` holds the two
+ * together.
+ */
+const SOFTWARE = /swiftshader|llvmpipe|lavapipe|software/i;
+
+/**
+ * Whether an adapter name is a CPU implementation.
+ *
+ * Takes the name rather than the adapter, because that is what survives: `probe()`
+ * hands back a string, a score line carries a string, and a log read a week later is a
+ * string.
+ */
+export function isSoftwareAdapter(adapter: string): boolean {
+  return SOFTWARE.test(adapter);
 }
 
 /**
@@ -62,7 +118,7 @@ export interface InitOptions {
  * split.
  */
 export type Availability =
-  | { ok: true; adapter: string }
+  | { ok: true; adapter: string; software: boolean }
   | { ok: false; why: "no-api" | "no-adapter"; message: string };
 
 // **Naming the version is not enough.** Somebody received this message on Safari 18.6,
@@ -113,7 +169,12 @@ export async function probe(options: InitOptions = {}): Promise<Availability> {
   if (!("gpu" in navigator)) return { ok: false, why: "no-api", message: NO_API };
   const adapter = await askAdapter(options);
   if (!adapter) return { ok: false, why: "no-adapter", message: NO_ADAPTER };
-  return { ok: true, adapter: describe(adapter) };
+  const name = describe(adapter);
+  // **`ok` and `software` are two answers, not one.** Folding them together is the
+  // mistake this repository spent a day undoing at a larger scale: a software run is a
+  // real run whose values are real, and calling it "not ok" would refuse work that
+  // works. What it is not is a GPU's number, and that is what this field says.
+  return { ok: true, adapter: name, software: isSoftwareAdapter(name) };
 }
 
 /**

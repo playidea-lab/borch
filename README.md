@@ -1229,6 +1229,44 @@ because the symptom reads as a hardware problem and is not one.
 `BORCH_CHROME_CHANNEL=chrome` uses the distribution's own Chrome instead of the one
 Playwright downloads — worth having when the machine has one and not the other.
 
+### Running it on the CPU, on purpose
+
+If the GPU will not come up, the answer is not *use the Python one*. There are two
+axes here and only one of them is about devices:
+
+|            | CPU                | GPU              |
+|------------|--------------------|------------------|
+| Python     | `borch` (numpy)    | `borch_webgpu`   |
+| TypeScript | **this**           | `borch-ts`       |
+
+Sending someone to `borch` is answering a **device** question with a **language** one —
+their TypeScript does not run there. What fills the cell is Chrome's SwiftShader, which
+is WebGPU's own CPU implementation: same API, same kernels, same code, and only the
+device changes.
+
+```js
+await init({ forceFallbackAdapter: true });   // ask for the CPU on purpose
+const { software } = await probe();           // and know that you got it
+```
+
+**Nothing was ever refused.** `init()` has always attached to whatever adapter came
+back, software included — every SwiftShader run in this repository is proof of that,
+and there are a great many. So this is not permission being granted; it is a way to ask
+deliberately and to be told, rather than having to know that `swiftshader`, `llvmpipe`
+and `lavapipe` are the names that mean the CPU.
+
+**The values are the same.** Measured on this tree: the whole borch.ts golden under
+`--headless`, which is how this machine reaches SwiftShader —
+
+```
+passed 3079 / failed 0   [google / swiftshader]
+```
+
+What differs is the clock, and the rule that matters is not *do not run on the CPU* but
+**a number measured there must not be read as a GPU's**. That is kept where it belongs:
+the benchmark and accuracy runners refuse outright, the site's badge goes dark and says
+why, and every score line prints the adapter.
+
 **Windows — not measured.** Nothing in this repository has ever run there: no CI job,
 no recorded run, no comment. The library is a browser library and there is no reason
 to expect it to fail, but *no reason to expect* is not a measurement, and writing

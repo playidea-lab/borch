@@ -385,36 +385,35 @@ def _pages():
     return sorted(SITE.rglob("*.html"))
 
 
-# **Which adapter names mean "this is the CPU" is written down in three places**, and
-# they cannot be merged: one is Python that decides whether a benchmark is void, and two
-# are JavaScript that decides whether a badge on a published page lights up. No import
-# crosses that boundary.
+# **Which adapter names mean "this is the CPU" had three homes and now has two.**
 #
-# So what is held here is that they say the same thing. The day one of them learns a
-# fourth name and the others do not, the page tells a visitor their run was a GPU's
-# while the repository knows it was not — or the reverse, which is worse, because a
-# visitor who is told their real GPU is software goes away.
+# `home.js` and `playground.js` each carried their own copy. Both are JavaScript and
+# both already load `borch-ts/dist`, so the rule moved into the library — `probe()`
+# carries `software` beside the adapter name and the pages read it. Two copies gone,
+# and the two that remain are on opposite sides of a language boundary no import
+# crosses.
 _SOFTWARE_RULE = {
     "tests/browser/launch.py": re.compile(r'_SOFTWARE\s*=\s*re\.compile\(r"([^"]+)"'),
-    "site/assets/home.js": re.compile(r"const SOFTWARE\s*=\s*/([^/]+)/"),
-    "site/assets/playground.js": re.compile(r"const SOFTWARE\s*=\s*/([^/]+)/"),
+    "borch-ts/src/device.ts": re.compile(r"const SOFTWARE\s*=\s*/([^/]+)/"),
 }
 
 
 def test_the_software_adapter_rule_says_the_same_thing_in_every_copy():
-    """**Three copies of one judgement, and nothing but this compares them.**
+    """**Two copies of one judgement, and nothing but this compares them.**
 
     `refuse_if_software` in `launch.py` decides that a benchmark measured on this
-    adapter is void. `home.js` and `playground.js` decide that the badge on a published
-    page says the visitor is on a CPU. Same list, three files, two languages.
+    adapter is void. `isSoftwareAdapter` in `device.ts` decides what `probe()` reports
+    and therefore what a published page tells a visitor about their own machine. Same
+    list, two files, two languages.
 
     The list is short and looks stable, which is exactly why it drifts: a name gets
-    added where the symptom was met and not in the other two, and neither side raises
-    anything. This repository has spent its time on that shape — a rule with two homes,
-    diverging quietly — and here it has three.
+    added where the symptom was met and not in the other, and neither side raises
+    anything.
 
-    Merging them is not available; a `.js` cannot import a Python regex. Saying so
-    loudly is.
+    Merging them is not available — a Python test harness cannot import a TypeScript
+    module. Saying so loudly is. **Two of the three copies were merged rather than
+    checked**, which is the better fix wherever it is reachable, and it was reachable
+    for exactly the pair that shared a language.
     """
     found = {}
     for rel, pattern in _SOFTWARE_RULE.items():

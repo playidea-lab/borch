@@ -40,9 +40,15 @@ function sayLink(text, href) {
 }
 
 
-/** Is this adapter a CPU? The four names `tests/browser/launch.py` refuses on — one rule,
- *  two places, and the day they disagree is the day one of them lies about a number. */
-const SOFTWARE = /swiftshader|llvmpipe|lavapipe|software/i;
+/**
+ * Is this adapter a CPU? **The library answers now.**
+ *
+ * This file kept its own copy of the four names, and so did `playground.js`, and
+ * `tests/browser/launch.py` has a third. Three copies of one judgement, in the shape
+ * that drifts — and the direction nobody reports is a visitor with a real GPU being
+ * told it is software. `probe()` carries `software` with the name, so the rule lives
+ * once in `borch-ts/src/device.ts` and this reads it.
+ */
 
 /** Linux, where Chrome's blocklist is what stands between the page and the driver. */
 const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
@@ -51,13 +57,13 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
   try {
     const p = await probeDevice();
     if (p.ok) {
-      badge.className = SOFTWARE.test(p.adapter) ? "badge off" : "badge on";
+      badge.className = p.software ? "badge off" : "badge on";
       badgeText.textContent = p.adapter;
       // **One screen, one sentence.** Saying both — "that adapter is a CPU" and "Run
       // executes on this tab's GPU" — is the confusion this site exists to refuse, and it
       // was here for a day: the warning was added above the ready line without the ready
       // line being asked whether it was still true.
-      if (SOFTWARE.test(p.adapter)) {
+      if (p.software) {
         say(t("device.software"), "err");
         sayLink(t("device.setupSay"), t("device.setupHref"));
       } else {

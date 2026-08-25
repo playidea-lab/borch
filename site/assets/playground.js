@@ -306,9 +306,11 @@ window.addEventListener("resize", scheduleDraw);
 /* ── the device ─────────────────────────────────────────────────────── */
 
 
-/** Is this adapter a CPU? The four names `tests/browser/launch.py` refuses on — one rule,
- *  two places, and the day they disagree is the day one of them lies about a number. */
-const SOFTWARE = /swiftshader|llvmpipe|lavapipe|software/i;
+/**
+ * Is this adapter a CPU? **The library answers now** — `probe()` carries `software`
+ * beside the name, so the four-name rule lives once in `borch-ts/src/device.ts` rather
+ * than here, in `home.js`, and in `tests/browser/launch.py`.
+ */
 
 /** Linux, where Chrome's blocklist is what stands between the page and the driver. */
 const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
@@ -317,9 +319,9 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
   try {
     const p = await probeDevice();
     if (p.ok) {
-      badge.className = SOFTWARE.test(p.adapter) ? "badge off" : "badge on";
+      badge.className = p.software ? "badge off" : "badge on";
       badgeText.textContent = p.adapter;
-      if (SOFTWARE.test(p.adapter)) {
+      if (p.software) {
         say(t("device.software"), "err");
         sayLink(t("device.setupSay"), t("device.setupHref"));
       }
