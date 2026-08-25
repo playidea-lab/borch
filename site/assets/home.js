@@ -53,11 +53,16 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
     if (p.ok) {
       badge.className = SOFTWARE.test(p.adapter) ? "badge off" : "badge on";
       badgeText.textContent = p.adapter;
+      // **One screen, one sentence.** Saying both — "that adapter is a CPU" and "Run
+      // executes on this tab's GPU" — is the confusion this site exists to refuse, and it
+      // was here for a day: the warning was added above the ready line without the ready
+      // line being asked whether it was still true.
       if (SOFTWARE.test(p.adapter)) {
         say(t("device.software"), "err");
         sayLink(t("device.setupSay"), t("device.setupHref"));
+      } else {
+        say(t("device.ready"), "note");
       }
-      say(t("device.ready"), "note");
     } else {
       badge.className = "badge off";
       badgeText.textContent = t(p.why === "no-api" ? "device.noApi" : "device.noAdapter");
