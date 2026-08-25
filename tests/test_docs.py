@@ -29,6 +29,8 @@ goes over it. There is an English edition, so the `N golden cases` form is caugh
 import pathlib
 import re
 
+import pytest
+
 import cases as cases_mod
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -264,29 +266,7 @@ SUITE_CLAIM = re.compile(
     r"\*\*[^*]*?\*\*\s*(\d{2,5})\s+cases in that file,\s*(\d{2,5})\s+in the suite", re.S)
 
 
-def _collected(path):
-    """How many cases pytest collects under `path`, asked of pytest itself.
-
-    **In a subprocess**, because collecting the suite from inside the suite is a
-    different question with a different answer — the session already running would count
-    itself. `test_api_reference_is_not_stale` runs the generator the same way and for the
-    same reason.
-    """
-    import subprocess                                                 # noqa: PLC0415
-    import sys                                                        # noqa: PLC0415
-
-    got = subprocess.run(
-        [sys.executable, "-m", "pytest", str(path), "-q", "--collect-only",
-         "-p", "no:cacheprovider"],
-        cwd=ROOT, capture_output=True, text=True)
-    found = re.search(r"(\d+)\s+tests? collected", got.stdout)
-    assert found, (
-        "pytest did not report a collection count, so this check has nothing to compare.\n"
-        f"  it said:\n{got.stdout[-600:]}\n{got.stderr[-300:]}")
-    return int(found.group(1))
-
-
-def test_the_readme_does_not_name_a_stale_case_count():
+def test_the_readme_does_not_name_a_stale_case_count(request):
     """**The two pytest counts in the README, against what pytest collects now.**
 
     They read *180 cases in that file, 93% code coverage* for long enough that both had
@@ -304,6 +284,24 @@ def test_the_readme_does_not_name_a_stale_case_count():
     that moves by a point is not the failure this is for. The two case counts move by
     one every time somebody adds a test, which is exactly when a reader should be made
     to look.
+
+    ## It counts this run rather than starting another
+
+    The first version shelled out to `pytest --collect-only`, and that carried an
+    assumption it had no business making: **that the child interpreter can import what
+    the parent can.** It cannot always — under a `uv run --with torch` the packages live
+    in an overlay `sys.executable` alone does not reproduce, and the child then stops on
+    `test_diff.py`'s `import torch` with the whole collection interrupted. The check did
+    the right thing with that (it refused to compare a number it could not measure) and
+    the number was never the problem. A session hit exactly this.
+
+    So the subprocess is gone. pytest has already collected everything before the first
+    test runs, and `session.items` is that collection — the same number, from the run
+    already happening, with no second environment to get wrong.
+
+    **The cost is that it can only speak for a whole run**, since `-k` and `-m` filter
+    what is collected. Asked during a filtered one it skips and says so; CI always runs
+    the suite whole, which is where this has to hold.
     """
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     claim = SUITE_CLAIM.search(text)
@@ -313,9 +311,18 @@ def test_the_readme_does_not_name_a_stale_case_count():
         "  cannot find its subject must not pass quietly, which is how the sentence it\n"
         "  guards gets to be wrong for weeks.")
     said_file, said_suite = int(claim.group(1)), int(claim.group(2))
-    got_file = _collected(ROOT / "tests" / "test_diff.py")
-    got_suite = _collected(ROOT / "tests")
+
+    option = request.config.option
+    narrowed = getattr(option, "keyword", "") or getattr(option, "markexpr", "")
+    args = [pathlib.Path(a).resolve() for a in request.config.args]
+    whole = args == [(ROOT / "tests").resolve()]
+    if narrowed or not whole:
+        pytest.skip("counts a whole run — this one was narrowed by -k/-m or by path")
+
+    items = request.session.items
+    got_suite = len(items)
+    got_file = sum(1 for i in items if i.path.name == "test_diff.py")
     assert (said_file, said_suite) == (got_file, got_suite), (
         f"the README says {said_file} cases in test_diff.py and {said_suite} in the "
-        f"suite; pytest collects {got_file} and {got_suite}.\n"
+        f"suite; this run collected {got_file} and {got_suite}.\n"
         "  Adding a test is meant to bring you here. Update the sentence.")
