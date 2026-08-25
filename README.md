@@ -778,8 +778,8 @@ The core covers 3386 cases, and the 53 *it* does not see are this side's alone
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 3079 cases. **The remaining 360 are two
-things**: 360 deliberately not carried across, and 0 owed. The binding
+borch.ts itself has written TS bodies for 3081 cases. **The remaining 358 are two
+things**: 358 deliberately not carried across, and 0 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the declined ask about a Python

@@ -4660,6 +4660,11 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
       (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0.9)],
     ["NAdam(decoupled_weight_decay)",
       (ps) => new optim.NAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, 4e-3, true)],
+    // **A default is the one value a case cannot check by using it**, because every
+    // row above names its own rate. So this one names none: `new SGD(params)` is the
+    // line a first tutorial writes, and until `lr` had torch's default it stopped
+    // here on an argument count.
+    ["SGD(the default rate)", (ps) => new optim.SGD(ps)],
   ];
   for (const [name, make] of kinds) {
     out.set(`opt::${name}/0.weight`, () => {

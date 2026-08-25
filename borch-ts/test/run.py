@@ -336,10 +336,18 @@ NOT_PORTED = {
     # weight decay in every one of its optimizers, so it is not eleven decisions), and
     # `amsgrad`, `centered` and `momentum` are one extra buffer each in the Adam and
     # RMSprop shaders, with `decoupled_weight_decay` moving NAdam's decay onto the
-    # weight. The two that remain are `SGD(the default rate)` — `없음`, not `아직`,
-    # because borch.ts's `SGD` requires `lr` and has no default to disagree about.
-    "opt::": (2, "없음 — borch.ts's SGD requires `lr`, so it has no default rate to "
-                 "ask about. The other twelve were asked once borch.ts had them"),
+    # weight.
+    #
+    # **2 → 0, and the last row marked `없음` is gone.** It said borch.ts's `SGD`
+    # requires `lr` and so has no default to disagree about — true, and the wrong way
+    # round: torch's `SGD` has a default, so `new SGD(params)` is a line torch takes
+    # and this stopped on an argument count. The one optimizer a first tutorial builds
+    # with nothing but its parameters.
+    #
+    # The number is torch's `1e-3` and not a rounder one. The Python side carried
+    # `0.01` for a while — ten times too large — and **a default is the one value a
+    # case cannot check by using it**, because every other row names its own rate.
+    # That is why this case names none.
     # 158 → 86. **One reason was covering eight groups.** `아직` means a backlog, and
     # what was actually backed up was `자리만::` 63 and `묻는것::` 9 alone — both pure
     # properties of the other side, asking `t.dtype` and nothing else, and both should have

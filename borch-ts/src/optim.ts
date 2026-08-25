@@ -340,10 +340,17 @@ export class SGD extends Optimizer {
    * 1e-4)` — the line a torch tutorial writes — set the dampening to the weight
    * decay and left the decay at zero. Two different things, both plausible small
    * numbers, and the run trains and trains slightly wrong.
+   *
+   * **`lr` has torch's default and used to be required.** `new SGD(params)` is the
+   * line a first tutorial writes, and it stopped here on an argument count — the one
+   * optimizer most likely to be built with nothing but its parameters. The number is
+   * torch's `1e-3` rather than a rounder one: the Python side had `0.01` for a while,
+   * which is ten times too large and is the kind of divergence a case cannot catch by
+   * *using* the value, because every case names its own rate.
    */
   constructor(
     params: ParamsArg,
-    lr: number,
+    lr = 1e-3,
     private readonly momentum = 0,
     private readonly dampening = 0,
     private readonly weightDecay = 0,
