@@ -6322,7 +6322,19 @@ def misc_cases(inp=None):
     def emb_padding_grad(L):
         """**The padding row learns nothing.** Left in, a pad token drifts toward
         whatever the loss wants and the mask stops meaning "ignore this" — while the
-        forward stays right, so nothing else here would see it."""
+        forward stays right, so nothing else here would see it.
+
+        Measured, by cutting the gradient block out of borch.ts: this case reddens and
+        the four value cases above stay green. That is the separation the docstring
+        claims, confirmed rather than asserted.
+
+        **The sentence next door was wrong and is corrected in `nn.ts`.** It said an
+        implementation masking the *output* instead would pass every value case and
+        fail only here. It does not — torch hands back the padding row's real values,
+        so masking the output changes the answer and `층::Embedding(padding_idx)`
+        catches it. Two different defects, each caught by a different case, and the
+        comment had them as one.
+        """
         layer = L.nn.Embedding(4, 3, padding_idx=1)
         layer.load_state_dict({"weight": L.tensor(table[:4])})
         layer(L.tensor(np.array([0, 1, 2, 1], dtype=np.int64))).sum().backward()

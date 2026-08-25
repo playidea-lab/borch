@@ -2290,10 +2290,17 @@ export class Embedding extends Module {
    *   same side effect on a parameter that `embeddingBag` has, through the same
    *   `renormRows`, not a second copy of the rule.
    * - **`paddingIdx` stops that row learning.** The forward is untouched — torch
-   *   returns the padding row's values like any other — so an implementation that
-   *   masks the output instead passes every value case and fails only on the
-   *   gradient. Done here by splitting the table into a part the gradient flows
-   *   through and a detached part, which needs no new autograd machinery.
+   *   returns the padding row's values like any other — so a version that leaves the
+   *   gradient flowing passes every value case and fails only on the gradient one.
+   *   Done here by splitting the table into a part the gradient flows through and a
+   *   detached part, which needs no new autograd machinery.
+   *
+   *   **This used to say "an implementation that masks the output instead" passes
+   *   every value case.** It does not: torch hands the padding row's real values
+   *   back, so masking the output changes the answer and the *value* case catches it.
+   *   Measured both ways — cut the gradient block and only the gradient case reddens;
+   *   mask the output and only the forward case reddens. Two defects, two cases, and
+   *   the sentence had merged them into one.
    *
    * And one line that is about **who supplied the weights** rather than about
    * padding: a fresh table has its padding row zeroed and a given one does not.
@@ -4150,8 +4157,27 @@ export class RNNBase extends Module {
     readonly mode: RNNKind,
     inputSize: number,
     readonly hidden: number,
+    numLayers = 1,
+    bias = true,
+    readonly batchFirst = false,
   ) {
     super();
+    // **The seats between `hidden` and `batchFirst` exist so that `batchFirst` sits
+    // where torch has it.** Left out, a line copied from torch positionally puts
+    // `numLayers` into `batchFirst` and the net silently reads its axes the wrong way
+    // round — which is the defect `EmbeddingBag`'s `mode` comment, forty lines up,
+    // records having actually shipped.
+    //
+    // Accepted and refused rather than accepted and ignored. This base is one layer
+    // and always biased; taking the argument and dropping it is the shape the `**kw`
+    // sweep spent a day removing.
+    if (numLayers !== 1) {
+      throw new NotImplementedError(
+        `RNNBase(numLayers=${numLayers}) — this side stacks one layer`);
+    }
+    if (!bias) {
+      throw new NotImplementedError("RNNBase(bias=false) is not carried across");
+    }
     const gates = mode === "LSTM" ? 4 : mode === "GRU" ? 3 : 1;
     const rows = hidden * gates;
     // torch's recurrent nets take the bound from the hidden size — all four weights
@@ -4179,13 +4205,29 @@ export class RNNBase extends Module {
    * Produces the full output and the final state together.
    */
   run(x: Tensor): { output: Tensor; hidden: Tensor; cell: Tensor } {
-    const [steps = 0, batch = 0] = x.shape;
+    // **`batchFirst` is a turn on the way in and a turn on the way out**, and nothing
+    // else — the loop is time-first either way. Turning only on the way in gives an
+    // answer of the right rank carrying the wrong layout, and `(2, 5, 4)` where the
+    // answer is `(5, 2, 4)` cannot even be subtracted, which is what the golden's case
+    // relies on.
+    //
+    // `hidden` and `cell` are **not** turned. torch leaves those `(layers, batch, H)`
+    // whatever `batch_first` says, and turning them here would be the tidier-looking
+    // choice that diverges.
+    //
+    // **Nothing in the golden checks that.** The three `batch_first` cases compare
+    // `output` alone, and the last-state cases run with the flag off — so a version
+    // that turned `hidden` only when `batchFirst` is set would pass every case here.
+    // Read off torch's documented shape rather than measured, and said so, because a
+    // sentence that sounds measured is the thing this file keeps having to correct.
+    const src = this.batchFirst ? x.swapaxes(0, 1) : x;
+    const [steps = 0, batch = 0] = src.shape;
     const H = this.hidden;
     let h = Tensor.zeros([batch, H]);
     let c = Tensor.zeros([batch, H]);
     const outs: Tensor[] = [];
     for (let t = 0; t < steps; t++) {
-      const xt = x.select(0, t);
+      const xt = src.select(0, t);
       const gi = xt.linear(this.weightIh).add(this.biasIh);
       const gh = h.linear(this.weightHh).add(this.biasHh);
       if (this.mode === "RNN") {
@@ -4211,8 +4253,9 @@ export class RNNBase extends Module {
       }
       outs.push(h);
     }
+    const stacked = Tensor.stack(outs, 0);
     return {
-      output: Tensor.stack(outs, 0),
+      output: this.batchFirst ? stacked.swapaxes(0, 1) : stacked,
       hidden: h.reshape([1, batch, H]),
       cell: c.reshape([1, batch, H]),
     };
@@ -4229,11 +4272,21 @@ export class RNNBase extends Module {
  * was the name rather than the computation, and **a recurrent-network textbook opens
  * with `nn.LSTM(...)`**, so it stopped people on the first line.
  *
- * **It does not take all of torch's arguments.** That side also takes `numLayers`,
- * `batchFirst`, bidirectional and inter-layer dropout, while the base here is one layer,
- * time-first. Accepting an argument and not using it is a lie, so **it is not accepted
- * at all** — the core holds the same line the same way at `InstanceNorm`'s
+ * **It still does not take all of torch's arguments** — `bidirectional`, `dropout` and
+ * `projSize` are absent, and the base here is one layer. Accepting an argument and not
+ * using it is a lie, which is the line the core holds the same way at `InstanceNorm`'s
  * `track_running_stats`.
+ *
+ * **`batchFirst` used to be absent under that same rule, and that was one step too
+ * far.** It is not an argument this side cannot honour — it is a turn on the way in and
+ * a turn on the way out — so leaving it out was refusing to do something possible. And
+ * leaving it out is not neutral: `numLayers` and `bias` sit between it and `hidden` in
+ * torch, so a line copied positionally lands `numLayers` in `batchFirst` and the net
+ * reads its axes the wrong way round without saying so.
+ *
+ * So the three seats are here, at torch's indices, with the two that cannot be honoured
+ * **refused rather than ignored**. `RNN` carries a fourth, `nonlinearity`, which is why
+ * its `batchFirst` is at a different index from `LSTM`'s.
  */
 
 /**
@@ -4244,27 +4297,42 @@ export class RNNBase extends Module {
 export const Recurrent = RNNBase;
 export type Recurrent = RNNBase;
 
-/** `torch.nn.RNN` — one layer, time-first. */
+/**
+ * `torch.nn.RNN` — one layer.
+ *
+ * **`nonlinearity` sits fourth and `batchFirst` sixth, which is torch's order and not
+ * `LSTM`'s.** This is the one of the three that takes an extra argument, so the same
+ * flag lives at a different index here than next door; writing all three alike would
+ * put `batchFirst` one seat early on exactly this class.
+ */
 export class RNN extends RNNBase {
-  constructor(inputSize: number, hidden: number) {
-    super("RNN", inputSize, hidden);
+  constructor(inputSize: number, hidden: number, numLayers = 1,
+              nonlinearity: "tanh" | "relu" = "tanh", bias = true,
+              batchFirst = false) {
+    if (nonlinearity !== "tanh") {
+      throw new NotImplementedError(
+        `RNN(nonlinearity=${nonlinearity}) — this side computes tanh`);
+    }
+    super("RNN", inputSize, hidden, numLayers, bias, batchFirst);
   }
 }
 
 /**
- * `torch.nn.LSTM` — one layer, time-first. It carries two states, so `cell`
- * comes back alongside `hidden`.
+ * `torch.nn.LSTM` — one layer. It carries two states, so `cell` comes back alongside
+ * `hidden`.
  */
 export class LSTM extends RNNBase {
-  constructor(inputSize: number, hidden: number) {
-    super("LSTM", inputSize, hidden);
+  constructor(inputSize: number, hidden: number, numLayers = 1, bias = true,
+              batchFirst = false) {
+    super("LSTM", inputSize, hidden, numLayers, bias, batchFirst);
   }
 }
 
-/** `torch.nn.GRU` — one layer, time-first. */
+/** `torch.nn.GRU` — one layer. */
 export class GRU extends RNNBase {
-  constructor(inputSize: number, hidden: number) {
-    super("GRU", inputSize, hidden);
+  constructor(inputSize: number, hidden: number, numLayers = 1, bias = true,
+              batchFirst = false) {
+    super("GRU", inputSize, hidden, numLayers, bias, batchFirst);
   }
 }
 

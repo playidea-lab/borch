@@ -9250,7 +9250,7 @@
       {
        "name": "constructor",
        "signature": "constructor(numEmbeddings: number, embeddingDim: number, paddingIdx?: number | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, sparse?: boolean, _weight?: Tensor | null, _freeze?: boolean)",
-       "doc": "torch's nine, of which two do real work here.\n\n**The comment on `embedding()` said this layer was absent from all three and\nthat the golden did not ask for it.** That was true when it was written. The\ncore then took torch's nine arguments, seven cases were added, and this side\nwas not touched — so the binding answered `module 'borch_webgpu._nn' has no\nattribute 'Embedding'` seven times and the sentence explaining the absence was\nthe reason nobody looked.\n\nTwo arguments do real work and each has a case that fails without it:\n\n- **`maxNorm` shortens the rows that were looked up, in the table itself.** The\n  same side effect on a parameter that `embeddingBag` has, through the same\n  `renormRows`, not a second copy of the rule.\n- **`paddingIdx` stops that row learning.** The forward is untouched — torch\n  returns the padding row's values like any other — so an implementation that\n  masks the output instead passes every value case and fails only on the\n  gradient. Done here by splitting the table into a part the gradient flows\n  through and a detached part, which needs no new autograd machinery.\n\nAnd one line that is about **who supplied the weights** rather than about\npadding: a fresh table has its padding row zeroed and a given one does not.\ntorch draws it in the same place, and both halves are asked because either\nalone reads as a rule about padding."
+       "doc": "torch's nine, of which two do real work here.\n\n**The comment on `embedding()` said this layer was absent from all three and\nthat the golden did not ask for it.** That was true when it was written. The\ncore then took torch's nine arguments, seven cases were added, and this side\nwas not touched — so the binding answered `module 'borch_webgpu._nn' has no\nattribute 'Embedding'` seven times and the sentence explaining the absence was\nthe reason nobody looked.\n\nTwo arguments do real work and each has a case that fails without it:\n\n- **`maxNorm` shortens the rows that were looked up, in the table itself.** The\n  same side effect on a parameter that `embeddingBag` has, through the same\n  `renormRows`, not a second copy of the rule.\n- **`paddingIdx` stops that row learning.** The forward is untouched — torch\n  returns the padding row's values like any other — so a version that leaves the\n  gradient flowing passes every value case and fails only on the gradient one.\n  Done here by splitting the table into a part the gradient flows through and a\n  detached part, which needs no new autograd machinery.\n\n  **This used to say \"an implementation that masks the output instead\" passes\n  every value case.** It does not: torch hands the padding row's real values\n  back, so masking the output changes the answer and the *value* case catches it.\n  Measured both ways — cut the gradient block and only the gradient case reddens;\n  mask the output and only the forward case reddens. Two defects, two cases, and\n  the sentence had merged them into one.\n\nAnd one line that is about **who supplied the weights** rather than about\npadding: a fresh table has its padding row zeroed and a given one does not.\ntorch draws it in the same place, and both halves are asked because either\nalone reads as a rule about padding."
       },
       {
        "name": "ownParameters",
@@ -11137,6 +11137,12 @@
        "doc": ""
       },
       {
+       "name": "batchFirst",
+       "signature": "readonly batchFirst: boolean",
+       "doc": "",
+       "torch": "batch_first"
+      },
+      {
        "name": "weightIh",
        "signature": "readonly weightIh: Tensor",
        "doc": "",
@@ -11162,7 +11168,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(mode: RNNKind, inputSize: number, hidden: number)",
+       "signature": "constructor(mode: RNNKind, inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean)",
        "doc": "**`mode` comes first, as it does in torch.** It used to come last, so\n`new RNNBase(10, 20, \"LSTM\")` here was `RNNBase(\"LSTM\", 10, 20)` there — and the\nrow said nothing, because a name torch has at one end and we have at the other\ncannot be lined up, which puts it in the bucket that reports no detail."
       },
       {
@@ -11195,43 +11201,43 @@
      "kind": "class",
      "name": "RNN",
      "signature": "export declare class RNN extends RNNBase",
-     "doc": "`torch.nn.RNN` — one layer, time-first.",
+     "doc": "`torch.nn.RNN` — one layer.\n\n**`nonlinearity` sits fourth and `batchFirst` sixth, which is torch's order and not\n`LSTM`'s.** This is the one of the three that takes an extra argument, so the same\nflag lives at a different index here than next door; writing all three alike would\nput `batchFirst` one seat early on exactly this class.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, nonlinearity?: \"tanh\" | \"relu\", bias?: boolean, batchFirst?: boolean)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.RNN` — 한 층, 시간 우선."
+     "doc_ko": "`torch.nn.RNN` — 한 층.\n\n**`nonlinearity` 가 넷째, `batchFirst` 가 여섯째** — torch 의 순서이지 `LSTM` 의 순서가 아니다. 셋 중 이것만 인자가 하나 더 있어서 같은 플래그가 옆집과 다른 자리에 산다. 셋을 똑같이 쓰면 바로 이 클래스에서 `batchFirst` 가 한 칸 앞으로 간다."
     },
     {
      "kind": "class",
      "name": "LSTM",
      "signature": "export declare class LSTM extends RNNBase",
-     "doc": "`torch.nn.LSTM` — one layer, time-first. It carries two states, so `cell`\ncomes back alongside `hidden`.",
+     "doc": "`torch.nn.LSTM` — one layer. It carries two states, so `cell` comes back alongside\n`hidden`.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.LSTM` — 한 층, 시간 우선. 상태를 둘 들고 있어서 `hidden` 과 함께\n`cell` 도 나온다."
+     "doc_ko": "`torch.nn.LSTM` — 한 층. 상태를 둘 나르므로 `cell` 이 `hidden` 과 함께 돌아온다."
     },
     {
      "kind": "class",
      "name": "GRU",
      "signature": "export declare class GRU extends RNNBase",
-     "doc": "`torch.nn.GRU` — one layer, time-first.",
+     "doc": "`torch.nn.GRU` — one layer.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.GRU` — 한 층, 시간 우선."
+     "doc_ko": "`torch.nn.GRU` — 한 층."
     },
     {
      "kind": "function",
@@ -11614,7 +11620,7 @@
      ]
     }
    ],
-   "count": 745,
+   "count": 746,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -16732,5 +16738,5 @@
    "count": 9
   }
  ],
- "total": 2202
+ "total": 2203
 }

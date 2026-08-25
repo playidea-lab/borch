@@ -767,8 +767,8 @@ The core covers 3386 cases, and the 53 *it* does not see are this side's alone
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2969 cases. **The remaining 470 are two
-things**: 357 deliberately not carried across, and 113 owed. The binding
+borch.ts itself has written TS bodies for 2972 cases. **The remaining 467 are two
+things**: 357 deliberately not carried across, and 110 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the declined ask about a Python
@@ -1267,7 +1267,7 @@ runners print the adapter on the line that carries the score:
 
 ```
 borch_webgpu: agreeing 3434/3434  [borch.ts — apple / metal-3]
-passed 2969 / failed 0            [apple / metal-3]
+passed 2972 / failed 0            [apple / metal-3]
 ```
 
 A window is what you get by default. Headless quietly hands back Chrome's software

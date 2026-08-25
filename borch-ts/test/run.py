@@ -446,11 +446,20 @@ NOT_PORTED = {
     # the argument" was never evidence that passing it did anything, and this row was
     # the ordinary kind of owed: a case list not carried across, not an argument that
     # does nothing.
-    # **borch.ts's `RNNBase` takes three arguments** — `(mode, inputSize, hidden)` —
-    # so there is no `batchFirst` to write a TS body against. The binding honours the
-    # flag itself, by turning the input on the way in, which is why the case exists at
-    # all: it was being taken and thrown away there until the `**kw` sweep.
-    "seq::": (3, "아직 — borch.ts's RNNBase has no batchFirst seat"),
+    # `seq::` **was** a row here: *borch.ts's RNNBase has no batchFirst seat*. True when
+    # written, and the sentence beside it explained the absence as a rule — accepting an
+    # argument and not using it is a lie, so it was not accepted at all.
+    #
+    # **The rule was right and it was applied one step too far.** `batchFirst` is not
+    # something this side cannot honour; it is a turn on the way in and a turn on the
+    # way out. Leaving it out was declining to do something possible, and it was not
+    # neutral either: `numLayers` and `bias` sit between it and `hidden` in torch, so a
+    # line copied positionally landed `numLayers` in `batchFirst`. That is the defect
+    # `EmbeddingBag`'s `mode` comment records having actually shipped.
+    #
+    # So the three seats went in at torch's indices, with the two that cannot be
+    # honoured **refused rather than ignored** — which is the rule the row was appealing
+    # to, applied to the two arguments it actually covers.
     # 47 → 50. The **kinds** of `finfo` and `iinfo`, and the no-argument default dtype. A
     # Python-side matter — neither name is in borch.ts.
     # 50 → 39. **The reason was explaining only eleven of them.** "top-level in-place

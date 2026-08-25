@@ -1383,11 +1383,38 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
     });
     return m;
   };
+  // `batchFirst` at torch's index — sixth on `RNN`, which carries `nonlinearity`, and
+  // fifth on the other two. Writing all three alike would put it one seat early on
+  // exactly one of them.
+  const buildTurned = (kind: nn.RNNKind): nn.Recurrent => {
+    const m = kind === "RNN"
+      ? new nn.RNN(3, 4, 1, "tanh", true, true)
+      : new KINDS[kind](3, 4, 1, true, true);
+    const low = kind.toLowerCase();
+    m.loadStateDict({
+      weight_ih_l0: inp.get(`${low}_wih`), weight_hh_l0: inp.get(`${low}_whh`),
+      bias_ih_l0: inp.get(`${low}_bih`), bias_hh_l0: inp.get(`${low}_bhh`),
+    });
+    return m;
+  };
   for (const kind of ["RNN", "LSTM", "GRU"] as const) {
     out.set(`seq::${kind}/출력`, () => build(kind).run(inp.get("seq_x")).output);
     // LSTM alone has two states, so the golden takes the hidden one.
     out.set(`seq::${kind}/마지막상태`,
       () => build(kind).run(inp.get("seq_x")).hidden);
+    // **The flag is honoured exactly when feeding `(batch, length, …)` gives back what
+    // `(length, batch, …)` gave, turned.** A layer ignoring it reads `seq_x`'s `(5, 2)`
+    // as length 5 batch 2 either way and hands back a differently shaped answer — the
+    // two cannot even be subtracted, which is where the teeth are.
+    //
+    // That needs **both axes not 1 and different from each other**. `[1, 6, 8]` read
+    // the wrong way round still comes back `[1, 6, 8]` after the turn, so the shapes
+    // round-trip and nothing separates. 5×2 satisfies the condition.
+    out.set(`seq::${kind}/batch_first 는 같은 답을 돌려놓는다`, () => {
+      const turned = buildTurned(kind)
+        .run(inp.get("seq_x").swapaxes(0, 1)).output.swapaxes(0, 1);
+      return turned.sub(build(kind).run(inp.get("seq_x")).output).abs().amax();
+    });
   }
 
   const attention = (mask: Tensor | null): Tensor => {
