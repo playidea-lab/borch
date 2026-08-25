@@ -213,6 +213,20 @@ function say(text, kind = "") {
   consoleOut.scrollTop = consoleOut.scrollHeight;
 }
 
+/** The same line, with a way out of it. `textContent` everywhere else keeps user output
+ *  from becoming markup; this one place builds the anchor itself rather than parsing a
+ *  string, so that stays true. */
+function sayLink(text, href) {
+  const line = document.createElement("div");
+  line.className = "note";
+  const a = document.createElement("a");
+  a.href = href;
+  a.textContent = text;
+  line.append(a);
+  consoleOut.append(line);
+  consoleOut.scrollTop = consoleOut.scrollHeight;
+}
+
 function clearConsole() { consoleOut.textContent = ""; }
 
 /* ── the loss plot ──────────────────────────────────────────────────── */
@@ -305,13 +319,17 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
     if (p.ok) {
       badge.className = SOFTWARE.test(p.adapter) ? "badge off" : "badge on";
       badgeText.textContent = p.adapter;
-      if (SOFTWARE.test(p.adapter)) say(t("device.software"), "err");
+      if (SOFTWARE.test(p.adapter)) {
+        say(t("device.software"), "err");
+        sayLink(t("device.setupSay"), t("device.setupHref"));
+      }
     } else {
       badge.className = "badge off";
       badgeText.textContent = t(p.why === "no-api" ? "device.noApi" : "device.noAdapter");
       say(p.message, "err");
       if (p.why === "no-adapter" && ON_LINUX) say(t("device.linuxFlags"), "note");
       say(t("device.noFallback"), "note");
+      sayLink(t("device.setupSay"), t("device.setupHref"));
     }
   } catch (err) {
     badge.className = "badge off";
