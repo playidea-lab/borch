@@ -385,6 +385,57 @@ def _pages():
     return sorted(SITE.rglob("*.html"))
 
 
+# **Which adapter names mean "this is the CPU" is written down in three places**, and
+# they cannot be merged: one is Python that decides whether a benchmark is void, and two
+# are JavaScript that decides whether a badge on a published page lights up. No import
+# crosses that boundary.
+#
+# So what is held here is that they say the same thing. The day one of them learns a
+# fourth name and the others do not, the page tells a visitor their run was a GPU's
+# while the repository knows it was not — or the reverse, which is worse, because a
+# visitor who is told their real GPU is software goes away.
+_SOFTWARE_RULE = {
+    "tests/browser/launch.py": re.compile(r'_SOFTWARE\s*=\s*re\.compile\(r"([^"]+)"'),
+    "site/assets/home.js": re.compile(r"const SOFTWARE\s*=\s*/([^/]+)/"),
+    "site/assets/playground.js": re.compile(r"const SOFTWARE\s*=\s*/([^/]+)/"),
+}
+
+
+def test_the_software_adapter_rule_says_the_same_thing_in_every_copy():
+    """**Three copies of one judgement, and nothing but this compares them.**
+
+    `refuse_if_software` in `launch.py` decides that a benchmark measured on this
+    adapter is void. `home.js` and `playground.js` decide that the badge on a published
+    page says the visitor is on a CPU. Same list, three files, two languages.
+
+    The list is short and looks stable, which is exactly why it drifts: a name gets
+    added where the symptom was met and not in the other two, and neither side raises
+    anything. This repository has spent its time on that shape — a rule with two homes,
+    diverging quietly — and here it has three.
+
+    Merging them is not available; a `.js` cannot import a Python regex. Saying so
+    loudly is.
+    """
+    found = {}
+    for rel, pattern in _SOFTWARE_RULE.items():
+        path = ROOT / rel
+        if not path.exists():
+            continue
+        got = pattern.search(path.read_text(encoding="utf-8"))
+        assert got, (
+            f"{rel} no longer spells the software-adapter list where this looks for it.\n"
+            "  Either it moved or it is gone. Both matter: the judgement is the same one\n"
+            "  in three places, and this is the only thing that compares them.")
+        found[rel] = frozenset(got.group(1).split("|"))
+    assert len(set(found.values())) == 1, (
+        "the software-adapter list has diverged:\n  "
+        + "\n  ".join(f"{rel}  {' '.join(sorted(names))}"
+                      for rel, names in found.items()) + "\n\n"
+        "  One decides whether a measurement is void; the other two decide what a\n"
+        "  published page tells a visitor about their own machine. A name in one and\n"
+        "  not the others means one of them is wrong about a GPU and neither says so.")
+
+
 def test_site_has_no_broken_relative_links():
     """Every relative path a page points at has to exist.
 
