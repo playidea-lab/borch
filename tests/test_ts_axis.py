@@ -283,6 +283,21 @@ FROZEN = {
     # `"bilinear" | "nearest"`, so the compiler refuses a wrong mode before the call.
     "transforms": 1,
     "transforms.functional": 1,
+    # **The four that were off this list until now, and one of them could not have been
+    # on it.** `ops` was absent from `site/build_api.py`'s sweep as well, so the index
+    # this axis reads carried none of its eleven names — asking here would have
+    # answered "borch.ts does not have `nms`" about a file that has it. With the module
+    # listed, the row is 0.
+    "ops": 0,
+    # `InterpolationMode` in each, which is a type on this side rather than a missing
+    # name — the same reason the two rows above carry.
+    "transforms.v2": 1,
+    "transforms.v2.functional": 1,
+    # **Eighteen, and they are one decision rather than eighteen.** A dataset is an
+    # address and a format; the address needs hosts that send a CORS header and
+    # torchvision's do not, so what crossed is the decoders. Written per name because a
+    # table that grouped them would hide the day one becomes possible.
+    "datasets": 18,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the
@@ -308,6 +323,10 @@ REFUSALS = {
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
 }
 
 

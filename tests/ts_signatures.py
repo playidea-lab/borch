@@ -258,6 +258,14 @@ MODULES = {
     # both rows.
     "transforms": frozenset({"vision"}),
     "transforms.functional": frozenset({"vision"}),
+    # The four that were off this list as well as the name axis. Each maps to the one
+    # module that answers for it — narrow on purpose, because the paragraph above is
+    # about exactly this: a leaf name answered by another namespace's declaration
+    # manufactures a finding rather than losing precision.
+    "ops": frozenset({"ops"}),
+    "transforms.v2": frozenset({"vision_v2_twins"}),
+    "transforms.v2.functional": frozenset({"vision_v2"}),
+    "datasets": frozenset({"datasets"}),
 }
 
 

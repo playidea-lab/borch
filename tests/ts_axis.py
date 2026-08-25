@@ -100,6 +100,13 @@ SPACES = frozenset({
     "Tensor", "nn", "nn.functional",
     "optim", "optim.lr_scheduler", "linalg", "utils.data",
     "transforms", "transforms.functional",
+    # **These four were off the list, and off the list has no rule.** Their values are
+    # measured — the golden asks every one of them — and the value is not what this
+    # axis is for: a name that torch has and borch.ts spells differently, or does not
+    # have at all, is invisible to a comparison of numbers. `ops` was the sharp case,
+    # because it was off the *generator's* list too, so this axis could not have seen
+    # it even if it had been named here.
+    "ops", "transforms.v2", "transforms.v2.functional", "datasets",
 })
 
 
@@ -300,7 +307,28 @@ DELIBERATE: dict[str, str] = {
     **{f"{ns}::InterpolationMode":
        'not a name here: `vision.ts` takes `"bilinear" | "nearest"` as a type, so the '
        "compiler refuses a wrong mode before the call runs"
-       for ns in ("transforms", "transforms.functional")},
+       for ns in ("transforms", "transforms.functional",
+                  "transforms.v2", "transforms.v2.functional")},
+    # **`datasets` is a decoder here and a catalogue there, and the difference is the
+    # half that cannot cross.** A dataset is an address and a format. The address —
+    # fetching, caching, checksums — needs hosts that send a CORS header, and
+    # torchvision's own do not (`cs.toronto.edu` and `ossci-datasets.s3.amazonaws.com`,
+    # measured), so a `MNIST` class here would be a constructor whose `download=True`
+    # raises. What crossed is the format, which is the half that goes wrong quietly:
+    # `datasets.ts` reads IDX, STL10's bytes, `.npy` and FER2013's CSV, and the golden
+    # holds those decoders against real torchvision.
+    #
+    # So these eighteen are not eighteen decisions. They are one, taken once, and the
+    # row is written per name because a table that groups them would hide the day one
+    # of them becomes possible — a `FakeData` needs no network at all.
+    **{f"datasets::{n}":
+       "the class is the address half — fetching, caching and checksums — and "
+       "torchvision's hosts send no CORS header. The format half is in `datasets.ts` "
+       "and the golden holds it"
+       for n in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST",
+                 "EMNIST", "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS",
+                 "STL10", "SVHN", "Omniglot", "GTSRB", "FER2013", "MovingMNIST",
+                 "DatasetFolder")},
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not
