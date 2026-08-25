@@ -203,7 +203,7 @@ nobody knows until the golden catches it.
 ## How it is guaranteed
 
 `tests/test_diff.py` **puts the same operation into real torch and into borch and
-compares the numbers.** 162 cases in that file, 1209 in the suite, **92% code
+compares the numbers.** 162 cases in that file, over 1200 in the suite, **92% code
 coverage.**
 
 ```bash
@@ -219,6 +219,16 @@ uv run --with pytest --with numpy --with torch --with torchvision --with scipy \
 >
 > The numbers beside it had drifted too: 180 and 93% were 162 and 92% when measured.
 > Nothing watches this paragraph, which is why all four were wrong together.
+>
+> **And the suite total is a count of this command, not of this repository.** A missing
+> `importorskip` dependency does not turn its file into skips — it removes those cases
+> from the collection entirely, so the total drops. The nineteen above are exactly that:
+> run without `scipy` and the suite collects 1189 where this command collects 1208. The
+> file count does not move, because `test_diff.py` needs only what every run has.
+>
+> So the total is written as a floor. It is the reader's scale, not a fingerprint, and
+> as a floor it goes stale only when the suite **shrinks** — which is the direction
+> worth stopping for.
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side

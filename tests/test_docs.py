@@ -26,6 +26,7 @@ It is **the same shape of failure** this repository has had three times, so the 
 goes over it. There is an English edition, so the `N golden cases` form is caught too.
 """
 
+import importlib.util
 import pathlib
 import re
 
@@ -263,7 +264,14 @@ def test_the_documents_still_make_the_claims_this_file_checks():
 # `test_diff.py` holds, and the suite's total. Both are **counts of this very run**, and
 # nothing was watching either.
 SUITE_CLAIM = re.compile(
-    r"\*\*[^*]*?\*\*\s*(\d{2,5})\s+cases in that file,\s*(\d{2,5})\s+in the suite", re.S)
+    r"\*\*[^*]*?\*\*\s*(\d{2,5})\s+cases in that file,\s*over\s+(\d{2,5})\s+in the suite",
+    re.S)
+
+# What the README's command installs. The suite total is a count of *this* set, because
+# a missing `importorskip` dependency does not skip its file — it takes those cases out
+# of the collection. Named here so the check can say which one is absent instead of
+# reporting a number as wrong.
+DOCUMENTED = ("numpy", "torch", "torchvision", "scipy")
 
 
 def test_the_readme_does_not_name_a_stale_case_count(request):
@@ -302,6 +310,39 @@ def test_the_readme_does_not_name_a_stale_case_count(request):
     **The cost is that it can only speak for a whole run**, since `-k` and `-m` filter
     what is collected. Asked during a filtered one it skips and says so; CI always runs
     the suite whole, which is where this has to hold.
+
+    ## The suite total was not a property of the repository
+
+    This held both counts to the exact collected number, and it went red on `main` in
+    another session's hands: *the README says 1208 in the suite; this run collected
+    1189.* Nobody had removed nineteen tests. That session's shell had no `scipy`, and
+    `test_svhn.py` opens with an `importorskip` — **which does not turn its file into
+    skips, it takes those nineteen out of the collection entirely.** Two environments,
+    two totals, one repository.
+
+    So the number this compared was a property of the installed packages, and holding a
+    number like that to equality means the check is **wrong wherever the reader's setup
+    differs from the author's** — the precise failure it exists to prevent, pointed the
+    other way. The README's own warning two lines below already said `scipy` hid
+    nineteen checks; the check walked into the trap its own paragraph described.
+
+    Both halves are fixed here, and they are separate fixes:
+
+    **The environment is named.** Absent one of `DOCUMENTED`, the collection is a
+    different collection, and this says so and skips rather than reporting a number as
+    stale. That skip names the missing package, so it is a thing to install rather than
+    a check quietly switched off.
+
+    **The total is a floor.** Held to equality, every test anyone adds anywhere reddens
+    one sentence in the README — and lands that on whoever wrote the sentence rather
+    than whoever added the test. A reader takes scale from this number, not identity;
+    1204 and 1208 tell them the same thing. As a floor it goes red when the suite
+    **shrinks**, and tests disappearing is worth stopping for in a way tests arriving
+    is not.
+
+    **`test_diff.py` stays exact.** It is what the sentence is about, it moves rarely,
+    and it is the count that was actually found wrong. It also needs only what every
+    run has, so no dependency moves it.
     """
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     claim = SUITE_CLAIM.search(text)
@@ -310,7 +351,13 @@ def test_the_readme_does_not_name_a_stale_case_count(request):
         "  Fix the pattern, or drop this check if the claim went away — a check that\n"
         "  cannot find its subject must not pass quietly, which is how the sentence it\n"
         "  guards gets to be wrong for weeks.")
-    said_file, said_suite = int(claim.group(1)), int(claim.group(2))
+    said_file, said_floor = int(claim.group(1)), int(claim.group(2))
+
+    missing = [m for m in DOCUMENTED if importlib.util.find_spec(m) is None]
+    if missing:
+        pytest.skip(
+            f"counts the collection the README's command produces; {', '.join(missing)} "
+            "is not installed here, so this run collects fewer files than that one")
 
     option = request.config.option
     narrowed = getattr(option, "keyword", "") or getattr(option, "markexpr", "")
@@ -322,7 +369,14 @@ def test_the_readme_does_not_name_a_stale_case_count(request):
     items = request.session.items
     got_suite = len(items)
     got_file = sum(1 for i in items if i.path.name == "test_diff.py")
-    assert (said_file, said_suite) == (got_file, got_suite), (
-        f"the README says {said_file} cases in test_diff.py and {said_suite} in the "
-        f"suite; this run collected {got_file} and {got_suite}.\n"
-        "  Adding a test is meant to bring you here. Update the sentence.")
+    assert said_file == got_file, (
+        f"the README says {said_file} cases in test_diff.py; this run collected "
+        f"{got_file}.\n"
+        "  That file is what the sentence is about. Update the sentence.")
+    assert got_suite > said_floor, (
+        f"the README says over {said_floor} cases in the suite; this run collected "
+        f"{got_suite}.\n"
+        "  The floor is written to catch the suite **shrinking**, so before lowering it,\n"
+        "  find out what stopped being collected — an `importorskip` at the top of a\n"
+        "  file removes its cases rather than skipping them, and that reads exactly\n"
+        "  like tests having been deleted.")
