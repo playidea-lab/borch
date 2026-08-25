@@ -541,98 +541,19 @@ NOT_PORTED = {
     # names, `right` (a boolean) and `side` (a word), and stops when the two disagree.
     # borch.ts knows `right` alone, so there is no partner to disagree with.
     "index::": (2, "파이썬 — reconciling `side` with `right`. TS knows only one"),
-    # 4 → 10. Six "resume training" cases arrived. **Those already tread on borch.ts** —
-    # the binding's optimizers and schedulers call the ones over there as they are, so
-    # those six running under `--lib borch_webgpu` are measuring borch.ts's `StepLR` and
-    # its state-bank round trip, and `serialize` on the TS side pins the same thing again
-    # in bytes. Four were still `LBFGS`.
-    # 10 → 14. Four `save`/`load` round trips arrived. **On the TS side `serialize`
-    # already asks it in bytes** — it round-trips the same codec and goes as far as
-    # checking whether others (numpy, Python `borch`) can read it. Asking it once more
-    # through the golden is Python's `torch.save(path)` surface, and borch.ts handles bytes
-    # alone (files are the page's business), so there is nowhere to ask it.
-    # 14 → 17. Three LBFGS cases arrived — the existing three **never trod on the
-    # quasi-Newton part at all.** The closure fed the gradient in as a constant, so `y = 0`
-    # and `ys = 0` and nothing accumulated in the history. The name was LBFGS and what was
-    # measured was the first iteration's gradient descent, and nothing else.
+    # **11 → 0.** The row said the side that carries them "will want the state cases
+    # most, since a value case cannot see this at all", and that is what they turned
+    # out to be: four of the eleven read `layer.weight` **after** the call.
     #
-    # **The reason it is not in borch.ts is not "nobody built it".** This algorithm's
-    # control flow depends on values (`ys > 1e-10`, the convergence test) and every read
-    # over there is asynchronous — a number on the GPU cannot be looked at from inside a
-    # synchronous `step()`. The binding manages because it has `run_sync`. Putting it in
-    # would mean `async step(closure)`, and then it would be **the one asynchronous
-    # optimizer** over there.
-    # `opt::` has **no line left at all.** The three reasons written down were each wrong
-    # in turn — "LBFGS cannot be used from a synchronous step" (true, and the conclusion
-    # was wrong: make `step` asynchronous), "resuming training treads on the binding"
-    # (simply untrue), "save/load takes a flat tensor table only" (true then; it carries a
-    # tree now).
-    # `vision::` was not in the list, so its cases were left **with no reason** and the
-    # runner refused them (after `fda5540`). Written as one line saying `아직`, the kinds
-    # parting inside it are invisible, so the counts are written out — the same reason this
-    # file splits by prefix, one level further in.
+    # `max_norm` shortens the looked-up rows in the table itself, so every instrument
+    # that compares what a call returns is blind to it — and calling twice does not
+    # help, because re-normalising an already-short row is a no-op. An implementation
+    # normalising a copy returns the same numbers forever. `padding_idx` is the mirror
+    # image: the forward is untouched (torch returns the padding row like any other),
+    # so only the gradient case sees an implementation that masks the output instead.
     #
-    # **42 → 38 is what that split did.** Written out, the 42 was "38 backlog + 4 holes".
-    # The four holes were conversions the other side **already had**, with arguments too
-    # narrow to match (`Resize`'s `max_size`, two of `describe()`'s four slots,
-    # `RandomCrop`'s `padding` default), and `ae60832` mended them so all four answered.
-    # Written as a single number, those four would have counted as backlog and nobody would
-    # have touched them.
-    #
-    # **The `vision::` row is gone: it reached 0 and this table's own rule is that a
-    # row with nothing left must be deleted.**
-    #
-    # It went 57 → 19 → 50 → 40 → 9 → 3 → 0, which is not a number failing to fall.
-    # 94 cases were carried across while the Python side kept freezing more, and one
-    # figure cannot show a debt being paid and taken on at the same time — so while
-    # the row existed it carried both. That is the same reason this table splits by
-    # prefix at all, one level further in.
-    #
-    # **The policy layer was narrow on the Python side too**, and that was said
-    # rather than discovered. AutoAugment, RandAugment, TrivialAugmentWide and AugMix
-    # all draw on every call, so what could be frozen was the three learned tables
-    # as text plus RandAugment(num_ops=0), the one configuration of any of them that
-    # does not draw. Without being told that boundary, an hour goes into hunting for
-    # an AugMix value case that does not exist and concluding something was missed.
-    # **`ops::` was here and is not — 16 → 0, ported rather than reasoned away.** The row
-    # said `아직`, that the eleven box-geometry functions touch no weights and no feature
-    # map so carrying them across needs no model. That was the whole prediction and it
-    # held: `ops.ts` is plain arithmetic over four numbers a box, and all sixteen cases
-    # went green against answers frozen from real torchvision. A backlog row that comes
-    # off by being done is what this table is for — the reason it carried is what made
-    # the work findable.
-    # 52 of the 71 are **repr strings**. v2 computes what v1 computes and differs only
-    # in what it prints, and that difference is the whole reason these names are not a
-    # re-export — so the strings are frozen as strings. The other 19 are values at the
-    # settings where the draw has nothing to draw. Portable, both halves: the arithmetic
-    # is v1's, already here, and a repr is a string comparison on either side.
-    # Six, and all six are **decoders on bytes built in the case table** — an IDX
-    # header and a CIFAR batch, written out rather than downloaded. Nothing here
-    # touches a network, so they port like any other value case; what does not port
-    # is the rest of `datasets`, which on that side is a `fetch` and an OPFS cache
-    # and has no case in this table at all.
-    # **`v2f::` was here at 17 and is not — ported.** Nine were the names v2 adds that
-    # need no tv_tensors and the other eight asked v1's functions through the v2
-    # spelling; the second group is what catches a re-export quietly becoming a second
-    # implementation, and it is why `v2f.ts` re-exports rather than rewrites.
-    #
-    # One of the seventeen could not come across as written. `elastic`'s displacement
-    # field is drawn from numpy's generator seeded at 7, and that stream does not exist
-    # here — so the forty numbers are **written out in `cases.ts`**, the way the `math::`
-    # arrays already are. A field rebuilt from a different generator would have made the
-    # comparison a comparison of two different questions.
-    # **The first `misc::` row.** Every case with that prefix had been carried across
-    # until now, which is why this table has never had one — and it is worth a line
-    # because a prefix appearing here for the first time reads like an oversight.
-    #
-    # Eleven, and they are one kind: `Embedding` and `EmbeddingBag` with `max_norm`,
-    # plus `padding_idx`. Four of them read the **weight table after the call**, which
-    # is the only place the difference lives — `max_norm` shortens rows in place, and
-    # an implementation that shortened a copy would return the same numbers forever.
-    # Portable: nothing here needs a network or a model, and the side that carries
-    # them will want the state cases most, since a value case cannot see this at all.
-    "misc::": (11, "아직 — Embedding/EmbeddingBag: max_norm, padding_idx, and the "
-                   "table after the call"),
+    # Nothing was added to the library. Both arguments were already seats on both
+    # layers, in torch's own positions.
     # **19 → 13, and the six that came off are the ones that are a *format*.** The IDX
     # reader is in `datasets.ts` now: a sixteen-byte header, big-endian always, and a
     # short file refused with torch's own sentence so the phrase stays searchable

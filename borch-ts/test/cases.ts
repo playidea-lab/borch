@@ -3543,6 +3543,92 @@ function addMisc(out: Map<string, Case>): void {
     return layer.callOffsets(Tensor.from([0, 1, 2, 3], [4]), [0, 2]);
   });
 
+  // ── `maxNorm` shortens the table **in place**, and no case had looked at the table ──
+  //
+  // Every other instrument here compares what a call returns; a call that also changes
+  // the thing it was called on is invisible to all of them. And the invisibility does
+  // not go away by calling twice — re-normalising a row that is already short enough is
+  // a no-op, so an implementation that normalised a *copy* would return the same
+  // numbers forever. The divergence lives in `weight` and nowhere else, until
+  // something trains on it.
+  const bagNorm = (maxNorm: number, normType = 2): nn.EmbeddingBag => {
+    const layer = new nn.EmbeddingBag(5, 3, maxNorm, normType, false, "sum");
+    layer.loadStateDict({ weight: Tensor.from(table, [5, 3]) });
+    return layer;
+  };
+  out.set("misc::층::EmbeddingBag(max_norm)", () => bagNorm(1.0).call(bags()));
+  // The table **after** the call. This is the case the block above is about.
+  out.set("misc::층::EmbeddingBag(max_norm)/표가 줄었다", () => {
+    const layer = bagNorm(1.0);
+    layer.call(bags());
+    return layer.weight;
+  });
+  // **Only the indexed rows are shrunk.** Row 4 is never asked for and keeps its own
+  // size — a version that normalised the whole table would agree on every output and
+  // differ only here.
+  out.set("misc::층::EmbeddingBag(max_norm)/색인 안 된 행", () => {
+    const layer = bagNorm(1.0);
+    layer.call(Tensor.from([0, 1], [1, 2]));
+    return layer.weight;
+  });
+  // `normType=1` measures the row differently, so a different amount comes off. Left
+  // at the default this argument is unasked and an implementation that ignores it
+  // passes the two cases above.
+  //
+  // **It answers the table and not the output**, unlike its two neighbours, and its
+  // name does not say so — the mark those two carry is missing here. Written to
+  // return the output this case went red on the element count, which is the cheap way
+  // to find out; had the two shapes agreed it would have compared the wrong thing
+  // quietly.
+  out.set("misc::층::EmbeddingBag(max_norm, norm_type=1)", () => {
+    const layer = bagNorm(1.0, 1);
+    layer.call(bags());
+    return layer.weight;
+  });
+
+  // ── Embedding: the same two arguments, and the one that is about the gradient ──
+  const emb = (paddingIdx: number | null, maxNorm: number | null,
+               normType = 2): nn.Embedding => {
+    const layer = new nn.Embedding(4, 3, paddingIdx, maxNorm, normType);
+    layer.loadStateDict({ weight: Tensor.from(table.slice(0, 12), [4, 3]) });
+    return layer;
+  };
+  const lookup = () => Tensor.from([0, 1, 2], [3], { dtype: "int64" });
+  out.set("misc::층::Embedding(padding_idx)", () => emb(1, null).call(lookup()));
+  out.set("misc::층::Embedding(max_norm)", () => emb(null, 1.0).call(lookup()));
+  out.set("misc::층::Embedding(max_norm)/표가 줄었다", () => {
+    const layer = emb(null, 1.0);
+    layer.call(lookup());
+    return layer.weight;
+  });
+  out.set("misc::층::Embedding(max_norm, norm_type=1)/표", () => {
+    const layer = emb(null, 1.0, 1);
+    layer.call(lookup());
+    return layer.weight;
+  });
+  out.set("misc::repr::Embedding(전부)",
+    () => new nn.Embedding(4, 3, 1, 2.0).describe());
+
+  // **The padding row learns nothing.** Left in, a pad token drifts toward whatever
+  // the loss wants and the mask stops meaning "ignore this" — while the forward stays
+  // right, so nothing else here would see it.
+  out.set("misc::grad::Embedding(padding_idx)", () => {
+    const layer = emb(1, null);
+    layer.call(Tensor.from([0, 1, 2, 1], [4], { dtype: "int64" })).sum().backward();
+    return gradOf(layer.weight, "Embedding(padding_idx)");
+  });
+  // A **fresh** table zeroes the padding row and a **given** one does not. torch draws
+  // the line at the same place, and both halves are asked because either alone reads
+  // as a rule about padding rather than about who supplied the weights.
+  out.set("misc::층::Embedding(padding_idx)/새 표와 준 표", async () => {
+    const fresh = new nn.Embedding(4, 3, 2).weight;
+    const given = new nn.Embedding(4, 3, 2, null, 2, false, false,
+                                   Tensor.from(table.slice(0, 12), [4, 3])).weight;
+    const [a, b] = await Promise.all([fresh.toArray(), given.toArray()]);
+    // Row 2 of each, laid end to end — the padding row is the only one asked about.
+    return Tensor.from([...Array.from(a).slice(6, 9), ...Array.from(b).slice(6, 9)]);
+  });
+
   for (const [name, make] of [
     ["Bilinear", () => new nn.Bilinear(3, 4, 2)],
     ["LocalResponseNorm", () => new nn.LocalResponseNorm(2)],
