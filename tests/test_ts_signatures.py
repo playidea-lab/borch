@@ -527,10 +527,11 @@ UNALIGNED = {
 # 2 → 0. See the note in `RENAMED` below.
     "transforms.functional": 0,
     "ops": 0,
-    # One: `Normalize(mean, std, inplace)` against `(v2Mean, v2Std)` — short *and*
-    # renamed at once, which is why it lands here rather than in either bucket. The
-    # `inplace` seat is the missing one; there is no in-place path on this side.
-    "transforms.v2": 1,
+    # 1 → 0. `Normalize` was short of `inplace` and renamed at once, which is why it
+    # landed here rather than in either bucket. It has the seat now: the flag is taken
+    # and not acted on — there is no in-place path here — and printed from what was
+    # passed rather than as the constant `"False"` the repr used to carry.
+    "transforms.v2": 0,
     "transforms.v2.functional": 0,
     "datasets": 0,
 }
@@ -798,20 +799,19 @@ RENAMED = {
     # kept `x`. `startswith` is not a name check.
     "transforms.functional": 0,
     "ops": 0,
-    # **3 → 32, and the jump is the measurement working rather than a regression.**
-    # The Python twins are built from a table and their `__init__` forwards, so
-    # `inspect.signature` answered `(*args, **kwargs)` for all thirty-eight and this
-    # axis could compare almost nothing — 35 of them sat in `unread`. With the
-    # signature carried across from v1, the axis reads them, and what it reads is that
-    # thirty-two carry `v2`-prefixed parameter names.
+    # **3 → 32 → 0**, and every step of that was the instrument rather than the code
+    # getting worse. The Python twins are built from a table and their `__init__`
+    # forwards, so `inspect.signature` answered `(*args, **kwargs)` for all thirty-eight
+    # and 35 of them sat in `unread`; carrying v1's signature across let the axis read
+    # them, and what it read was thirty-two `v2`-prefixed parameter names.
     #
-    # They come from the twins inheriting rather than delegating: a
-    # `private readonly size` cannot sit beside the parent's, so the constructors carry
-    # `v2Size`, `v2Fill`, `v2Transforms` and 182 more. It is fixable and not a language
-    # limit — opening the parent's field to `protected` lets the child drop its own
-    # declaration entirely — but it touches every twin in the file, so it is its own
-    # change. **This number is the to-do list for it.**
-    "transforms.v2": 32,
+    # They came from the twins inheriting rather than delegating: a
+    # `private readonly size` cannot sit beside the parent's. Opening the parent's field
+    # to `protected` lets the child drop its own declaration entirely, which is what was
+    # done — 246 identifiers, and the compiler pointed at every one of them. Four were
+    # abbreviations rather than prefixes (`kernel` for `kernelSize`, `bins` for
+    # `numMagnitudeBins`) and took torch's name too.
+    "transforms.v2": 0,
     # 2 → 0. `permute_channels` took `order` where torch takes `permutation`, and
     # `to_dtype` took `_dtype` — underscored because it was never read. It is read now:
     # there is one float type in this subset, so any other request is refused rather
@@ -1103,10 +1103,13 @@ SHORTER = {
     # to write into here.
     "transforms.functional": 2,
     "ops": 0,
-    # Three: `Compose`, `RandomApply` and `ElasticTransform` take fewer arguments than
-    # torch's v2 does. A short tail refuses extra arguments rather than mis-seating
-    # them.
-    "transforms.v2": 3,
+    # 3 → 0. The three were `RandomResize`, `RandomShortestSize` and `ScaleJitter`,
+    # each short of `antialias`. They take it now and **refuse `false`** rather than
+    # accepting and dropping it: there is one resampling filter here and it
+    # antialiases, so `false` is a request that cannot be honoured, and an argument
+    # taken and ignored is the shape that trains slightly wrong in silence. v1's
+    # `Resize` refuses it in the same words.
+    "transforms.v2": 0,
     "transforms.v2.functional": 0,
     "datasets": 0,
 }

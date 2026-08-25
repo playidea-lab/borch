@@ -4,7 +4,7 @@
  "korean": {
   "done": 687,
   "stale": 0,
-  "missing": 237
+  "missing": 236
  },
  "modules": [
   {
@@ -13903,6 +13903,12 @@
      "doc": "Transforms in sequence. `repr` is several lines with the inside indented,\nso that shape is matched too.",
      "members": [
       {
+       "name": "transforms",
+       "signature": "protected readonly transforms: readonly Transform[]",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(transforms: readonly Transform[])",
        "doc": ""
@@ -13950,6 +13956,12 @@
      "doc": "Applies the whole list, or none of it, with probability `p`.\n\n**All of them or none** — not each with its own draw. One draw decides the\nlot, which is what makes it different from putting a `p` on each transform.",
      "members": [
       {
+       "name": "p",
+       "signature": "protected readonly p: number",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(transforms: readonly Transform[], p?: number)",
        "doc": ""
@@ -13972,6 +13984,12 @@
      "signature": "export declare class RandomChoice extends RandomTransforms",
      "doc": "Draws **one** of the list and applies it. `p` weights the draw.",
      "members": [
+      {
+       "name": "p",
+       "signature": "protected readonly p: readonly number[] | null",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(transforms: readonly Transform[], p?: readonly number[] | null)",
@@ -14033,6 +14051,18 @@
      "doc": "`(x - mean) / std`, per channel.",
      "members": [
       {
+       "name": "mean",
+       "signature": "protected readonly mean: readonly number[]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "std",
+       "signature": "protected readonly std: readonly number[]",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(mean: readonly number[], std: readonly number[])",
        "doc": ""
@@ -14065,6 +14095,12 @@
      "doc": "Flips left to right. Takes an `(H, W, C)` array.",
      "members": [
       {
+       "name": "p",
+       "signature": "protected readonly p: number",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(p?: number)",
        "doc": ""
@@ -14088,6 +14124,12 @@
      "signature": "export declare class RandomVerticalFlip implements Transform",
      "doc": "Flips top to bottom. `RandomHorizontalFlip`'s place, on the other axis.\n\n**The default is 0.5 here as well, and that is worth saying out loud.** A\nvertical flip is wrong for most photographs — an upside-down cat is not a cat\nthe model will meet — so this is the one transform whose default is usually\nnot what is wanted. torchvision keeps 0.5 anyway, and so does this.",
      "members": [
+      {
+       "name": "p",
+       "signature": "protected readonly p: number",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(p?: number)",
@@ -14119,6 +14161,25 @@
      "doc": "Pads the four sides. **The order is left, top, right, bottom** — which is\nnot numpy's order, and not the order the two-element form reads as.\n\n`paddingMode` is `constant` (the default, filled with `fill`), `edge`,\n`reflect` or `symmetric` — the same four numpy has, with the same meanings.",
      "members": [
       {
+       "name": "padding",
+       "signature": "protected readonly padding: number | readonly number[]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "paddingMode",
+       "signature": "protected readonly paddingMode: PaddingMode",
+       "doc": "",
+       "protected": true,
+       "torch": "padding_mode"
+      },
+      {
        "name": "constructor",
        "signature": "constructor(padding: number | readonly number[], fill?: number | readonly number[], paddingMode?: PaddingMode)",
        "doc": ""
@@ -14141,6 +14202,13 @@
      "signature": "export declare class Grayscale implements Transform",
      "doc": "`torchvision.transforms.Grayscale`. Three channels to one.\n\n`numOutputChannels=3` gives it back as three equal ones — which is what a\npre-trained three-channel model needs.",
      "members": [
+      {
+       "name": "numOutputChannels",
+       "signature": "protected readonly numOutputChannels: number",
+       "doc": "",
+       "protected": true,
+       "torch": "num_output_channels"
+      },
       {
        "name": "constructor",
        "signature": "constructor(numOutputChannels?: number)",
@@ -14165,6 +14233,12 @@
      "doc": "Grayscale with probability `p`. **The channel count does not change** — a\nthree-channel image comes back as three equal channels, so the batch that\nfollows still stacks.",
      "members": [
       {
+       "name": "p",
+       "signature": "protected readonly p: number",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(p?: number)",
        "doc": ""
@@ -14187,6 +14261,38 @@
      "signature": "export declare class RandomCrop implements Transform",
      "doc": "Pads the edges, then crops at random.",
      "members": [
+      {
+       "name": "padding",
+       "signature": "protected readonly padding: number | readonly number[] | null",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "padIfNeeded",
+       "signature": "protected readonly padIfNeeded: boolean",
+       "doc": "",
+       "protected": true,
+       "torch": "pad_if_needed"
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "paddingMode",
+       "signature": "protected readonly paddingMode: PaddingMode",
+       "doc": "",
+       "protected": true,
+       "torch": "padding_mode"
+      },
+      {
+       "name": "size",
+       "signature": "protected readonly size: [number, number]",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(size: number | readonly [number, number], padding?: number | readonly number[] | null, padIfNeeded?: boolean, fill?: number | readonly number[], paddingMode?: PaddingMode)",
@@ -14217,6 +14323,18 @@
      "signature": "export declare class Resize implements Transform",
      "doc": "Changes the size. **It takes an array and returns an array** — not a\ntensor. Making a tensor per image makes one GPU buffer per image (the\nsame reason as `RandomCrop`).\n\nGiven a single number for `size`, it fits **the short side** to that\nvalue and keeps the ratio.",
      "members": [
+      {
+       "name": "size",
+       "signature": "protected readonly size: number | readonly [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean)",
@@ -14333,6 +14451,24 @@
      "doc": "Crop a random area of a random shape, then resize it to `size`. **The\nImageNet recipe**, and the reason a tutorial's accuracy moves when it is left\nout.\n\n`scale` is the fraction of the area to keep and `ratio` the width-to-height\nrange. Ten draws are made, and if none of them fits inside the picture it\nfalls back to a centre crop — torchvision does exactly that, fallback\nincluded, because without it the draw can fail on a thin picture and there is\nnothing to return.",
      "members": [
       {
+       "name": "scale",
+       "signature": "protected readonly scale: readonly [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "ratio",
+       "signature": "protected readonly ratio: readonly [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(size: number | readonly [number, number], scale?: readonly [number, number], ratio?: readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
        "doc": ""
@@ -14361,6 +14497,36 @@
      "signature": "export declare class RandomErasing implements Transform",
      "doc": "Blank out a random rectangle of a **tensor** — this one runs after\n`ToTensor`, unlike every other transform in this file.\n\nThat is torchvision's position for it and not a choice made here: the erased\nvalue is `0` on a normalised image, which means the channel mean, and that\nonly has a meaning once the picture is numbers rather than pixels.",
      "members": [
+      {
+       "name": "p",
+       "signature": "protected readonly p: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "scale",
+       "signature": "protected readonly scale: readonly [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "ratio",
+       "signature": "protected readonly ratio: readonly [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "value",
+       "signature": "protected readonly value: number | readonly number[] | \"random\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "inplace",
+       "signature": "protected readonly inplace: boolean",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(p?: number, scale?: readonly [number, number], ratio?: readonly [number, number], value?: number | readonly number[] | \"random\", inplace?: boolean)",
@@ -14413,6 +14579,13 @@
      "signature": "export declare class TenCrop implements Transform",
      "doc": "`FiveCrop`, and then five more from the flipped picture. Ten out of one.\n\n`verticalFlip` flips top to bottom instead of left to right.",
      "members": [
+      {
+       "name": "verticalFlip",
+       "signature": "protected readonly verticalFlip: boolean",
+       "doc": "",
+       "protected": true,
+       "torch": "vertical_flip"
+      },
       {
        "name": "constructor",
        "signature": "constructor(size: number | readonly [number, number], verticalFlip?: boolean)",
@@ -14476,6 +14649,30 @@
      "signature": "export declare class ColorJitter implements Transform",
      "doc": "Brightness, contrast, saturation and hue, each drawn from a range — **and the\nfour applied in a drawn order.**\n\nThe order is part of the draw and not a detail: brightness then contrast is\nnot contrast then brightness, because contrast measures the picture's mean and\nbrightness has already moved it.\n\nA single number `b` means the range `[1-b, 1+b]` (hue is centred on 0\ninstead). A range that comes out as exactly the identity is **turned off\nrather than applied** — torchvision stores nothing there, which is why the\nrepr shows `None` for anything left at its default.",
      "members": [
+      {
+       "name": "brightness",
+       "signature": "protected readonly brightness: Span",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "contrast",
+       "signature": "protected readonly contrast: Span",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "saturation",
+       "signature": "protected readonly saturation: Span",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "hue",
+       "signature": "protected readonly hue: Span",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(brightness?: number | readonly [number, number], contrast?: number | readonly [number, number], saturation?: number | readonly [number, number], hue?: number | readonly [number, number])",
@@ -14747,6 +14944,12 @@
      "doc": "",
      "members": [
       {
+       "name": "bits",
+       "signature": "protected readonly bits: number",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(bits: number, p?: number)",
        "doc": ""
@@ -14771,6 +14974,12 @@
      "doc": "",
      "members": [
       {
+       "name": "threshold",
+       "signature": "protected readonly threshold: number",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(threshold: number, p?: number)",
        "doc": ""
@@ -14794,6 +15003,13 @@
      "signature": "export declare class RandomAdjustSharpness extends RandomPixelOp",
      "doc": "",
      "members": [
+      {
+       "name": "sharpnessFactor",
+       "signature": "protected readonly sharpnessFactor: number",
+       "doc": "",
+       "protected": true,
+       "torch": "sharpness_factor"
+      },
       {
        "name": "constructor",
        "signature": "constructor(sharpnessFactor: number, p?: number)",
@@ -14833,6 +15049,30 @@
      "doc": "A turn drawn from `degrees`.\n\n**The fill is spelled per channel before the call**, because torchvision does\nthat in its `forward` and not in `rotate` — a single number there becomes one\nper channel, and passing it through undone gives a different picture on a\nthree-channel image.",
      "members": [
       {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "expand",
+       "signature": "protected readonly expand: boolean",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[] | null",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "degrees",
+       "signature": "protected readonly degrees: [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(degrees: number | readonly number[], interpolation?: \"bilinear\" | \"nearest\", expand?: boolean, center?: readonly [number, number] | null, fill?: number | readonly number[] | null)",
        "doc": ""
@@ -14861,6 +15101,30 @@
      "signature": "export declare class RandomAffine implements Transform",
      "doc": "A rotation, a shift, a scaling and a shear, each drawn from its own range and\n**applied in one resampling.**\n\n`translate` is a *fraction* of the picture's width and height rather than a\nnumber of pixels, so the same transform means the same thing on any size.",
      "members": [
+      {
+       "name": "scale",
+       "signature": "protected readonly scale: readonly [number, number] | null",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "degrees",
+       "signature": "protected readonly degrees: [number, number]",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(degrees: number | readonly number[], translate?: readonly [number, number] | null, scale?: readonly [number, number] | null, shear?: number | readonly number[] | null, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[], center?: readonly [number, number] | null)",
@@ -14914,6 +15178,19 @@
      "doc": "Blur by a Gaussian whose width is **drawn from a range each call.**\n\nThe kernel size is fixed and the sigma is the draw, which is the opposite way\nround from most of these — a bigger kernel costs time, so torchvision fixes\nthe cost and varies the effect inside it.",
      "members": [
       {
+       "name": "kernelSize",
+       "signature": "protected readonly kernelSize: [number, number]",
+       "doc": "",
+       "protected": true,
+       "torch": "kernel_size"
+      },
+      {
+       "name": "sigma",
+       "signature": "protected readonly sigma: [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(kernelSize: number | readonly number[], sigma?: number | readonly [number, number])",
        "doc": ""
@@ -14943,6 +15220,31 @@
      "doc": "Tilt the picture, with probability `p`. `distortionScale` is how far the\ncorners may move, as a fraction of half the picture.",
      "members": [
       {
+       "name": "distortionScale",
+       "signature": "protected readonly distortionScale: number",
+       "doc": "",
+       "protected": true,
+       "torch": "distortion_scale"
+      },
+      {
+       "name": "p",
+       "signature": "protected readonly p: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[]",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(distortionScale?: number, p?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[])",
        "doc": ""
@@ -14971,6 +15273,30 @@
      "signature": "export declare class ElasticTransform implements Transform",
      "doc": "Push every pixel a little way along a **smooth random field** — the warp that\nmakes handwriting look handwritten differently.\n\n`alpha` is how far pixels move and `sigma` how smoothly: a small sigma with a\nlarge alpha is noise rather than a warp, which is why both go through the same\nblur.",
      "members": [
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "alpha",
+       "signature": "protected readonly alpha: [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "sigma",
+       "signature": "protected readonly sigma: [number, number]",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number[]",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(alpha?: number | readonly number[], sigma?: number | readonly number[], interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[])",
@@ -15038,6 +15364,24 @@
      "doc": "The **learned** one: twenty-five pairs of operations found by a search, each\nwith its own probability and strength, one pair drawn per call.\n\nNothing about the table is derivable — it is the output of the search, which is\nwhy it is written out rather than computed, and why the three datasets are\nthree tables.",
      "members": [
       {
+       "name": "policy",
+       "signature": "protected readonly policy: AutoAugmentPolicyName",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[] | null",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "policies",
        "signature": "readonly policies: readonly (readonly [PolicyStep, PolicyStep])[]",
        "doc": "The learned table for this policy. **A list**, as torchvision hands back."
@@ -15066,6 +15410,38 @@
      "doc": "The **uniform** one: `numOps` operations drawn evenly, all at the same fixed\nstrength.\n\nIts point is that the search was unnecessary — one strength dial and a count do\nas well as the learned table, which is why `magnitude` is a number you tune\nrather than a distribution.",
      "members": [
       {
+       "name": "numOps",
+       "signature": "protected readonly numOps: number",
+       "doc": "",
+       "protected": true,
+       "torch": "num_ops"
+      },
+      {
+       "name": "magnitude",
+       "signature": "protected readonly magnitude: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "numMagnitudeBins",
+       "signature": "protected readonly numMagnitudeBins: number",
+       "doc": "",
+       "protected": true,
+       "torch": "num_magnitude_bins"
+      },
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[] | null",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(numOps?: number, magnitude?: number, numMagnitudeBins?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
        "doc": ""
@@ -15088,6 +15464,25 @@
      "signature": "export declare class TrivialAugmentWide implements Transform",
      "doc": "The one with **no dials at all**: one operation, drawn evenly, at a strength\nalso drawn evenly from a wide ladder.\n\nThat is the paper's claim — tuning the strength was never worth it — so there\nis no magnitude argument to pass. The ladder is much wider than\n`RandAugment`'s to make up for drawing it.",
      "members": [
+      {
+       "name": "numMagnitudeBins",
+       "signature": "protected readonly numMagnitudeBins: number",
+       "doc": "",
+       "protected": true,
+       "torch": "num_magnitude_bins"
+      },
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[] | null",
+       "doc": "",
+       "protected": true
+      },
       {
        "name": "constructor",
        "signature": "constructor(numMagnitudeBins?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
@@ -15112,6 +15507,51 @@
      "doc": "The **blended** one: several independent chains of operations, mixed back into\nthe original by weights drawn from a Dirichlet.\n\nThat is what makes it different in kind from the other three — they replace the\npicture and this one **averages several versions of it with the original**, so\nthe result stays close to the input however hard the chains hit.",
      "members": [
       {
+       "name": "severity",
+       "signature": "protected readonly severity: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "mixtureWidth",
+       "signature": "protected readonly mixtureWidth: number",
+       "doc": "",
+       "protected": true,
+       "torch": "mixture_width"
+      },
+      {
+       "name": "chainDepth",
+       "signature": "protected readonly chainDepth: number",
+       "doc": "",
+       "protected": true,
+       "torch": "chain_depth"
+      },
+      {
+       "name": "alpha",
+       "signature": "protected readonly alpha: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "allOps",
+       "signature": "protected readonly allOps: boolean",
+       "doc": "",
+       "protected": true,
+       "torch": "all_ops"
+      },
+      {
+       "name": "interpolation",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "fill",
+       "signature": "protected readonly fill: number | readonly number[] | null",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
        "signature": "constructor(severity?: number, mixtureWidth?: number, chainDepth?: number, alpha?: number, allOps?: boolean, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
        "doc": ""
@@ -15129,7 +15569,7 @@
      ]
     }
    ],
-   "count": 203,
+   "count": 274,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -15602,7 +16042,7 @@
     "ko": "v2 의 변환 클래스. `torchvision.transforms.v2` 자리 — v1 의 계산에 v2 의 출력 표면을 씌운 것이고, 다른 것은 print 되는 내용뿐이다.",
     "en": "v2's transform classes. Where `torchvision.transforms.v2` would be — v1's arithmetic under v2's printed surface, and what differs between the two namespaces is only what they print."
    },
-   "doc": "`transforms.v2` — **v1's behaviour under v2's printed surface.**\n\nv2's transforms take the same arguments and compute the same numbers as v1's. What\ndiffers is what they print, and that difference is the whole reason these names are\nnot re-exports. So each class here **extends the v1 one and overrides `describe`**,\nand nothing recomputes.\n\n## Why every twin keeps its own copy of the arguments\n\nThe obvious design reads the fields back off the v1 object. It is wrong twice.\n\nThe v1 classes hold their state under their own names, in their own order, and\nnormalised their own way — `ElasticTransform` turns `fill` into a list in the\nconstructor while v2 prints the number as it was given, so `0` recovered is `0.0`\nprinted and the two do not match. The Python side hit exactly that and solved it the\nsame way: keep the argument.\n\nAnd the fields are `private` there. Opening thirty-six constructors to read them\nwould widen the published surface of `vision.ts` for the benefit of this file alone.\n\n## Two rules of v2's repr, both torchvision's and neither tidy\n\n**A field of a kind v2 does not print disappears from the line**, rather than\nprinting as `None`. `ColorJitter` is the clearest case: it stores `null` for a factor\nnobody asked for, so the default one prints its own name and nothing else.\n\n**The order is the constructor's assignment order, not a tidier one.** The three\npolicy transforms put `interpolation` *first*, where every other class here has it\nafter the arguments that decide the picture.",
+   "doc": "`transforms.v2` — **v1's behaviour under v2's printed surface.**\n\nv2's transforms take the same arguments and compute the same numbers as v1's. What\ndiffers is what they print, and that difference is the whole reason these names are\nnot re-exports. So each class here **extends the v1 one and overrides `describe`**,\nand nothing recomputes.\n\n## Why every twin keeps its own copy of the arguments\n\nThe obvious design reads the fields back off the v1 object. It is wrong twice.\n\nThe v1 classes hold their state under their own names, in their own order, and\nnormalised their own way — `ElasticTransform` turns `fill` into a list in the\nconstructor while v2 prints the number as it was given, so `0` recovered is `0.0`\nprinted and the two do not match. The Python side hit exactly that and solved it the\nsame way: keep the argument.\n\nAnd the fields are `private` there. Opening thirty-six constructors to read them\nwould widen the published surface of `vision.ts` for the benefit of this file alone.\n\n## Two rules of v2's repr, both torchvision's and neither tidy\n\n**A field of a kind v2 does not print disappears from the line**, rather than\nprinting as `None`. `ColorJitter` is the clearest case: it stores `null` for a sharpnessFactor\nnobody asked for, so the default one prints its own name and nothing else.\n\n**The order is the constructor's assignment order, not a tidier one.** The three\npolicy transforms put `interpolation` *first*, where every other class here has it\nafter the arguments that decide the picture.",
    "symbols": [
     {
      "kind": "class",
@@ -15612,7 +16052,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Size: number | readonly [number, number], v2Interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean)",
+       "signature": "constructor(size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean)",
        "doc": ""
       },
       {
@@ -15630,7 +16070,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Size: number | readonly [number, number])",
+       "signature": "constructor(size: number | readonly [number, number])",
        "doc": ""
       },
       {
@@ -15648,7 +16088,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Size: number | readonly [number, number], padding?: number | readonly number[] | null, v2PadIfNeeded?: boolean, v2Fill?: number | readonly number[], v2PaddingMode?: PaddingMode)",
+       "signature": "constructor(size: number | readonly [number, number], padding?: number | readonly number[] | null, padIfNeeded?: boolean, fill?: number | readonly number[], paddingMode?: PaddingMode)",
        "doc": ""
       },
       {
@@ -15666,7 +16106,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Size: number | readonly [number, number], v2Scale?: readonly [number, number], v2Ratio?: readonly [number, number], v2Interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
+       "signature": "constructor(size: number | readonly [number, number], scale?: readonly [number, number], ratio?: readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
        "doc": ""
       },
       {
@@ -15684,7 +16124,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Size: number | readonly [number, number])",
+       "signature": "constructor(size: number | readonly [number, number])",
        "doc": ""
       },
       {
@@ -15702,7 +16142,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Size: number | readonly [number, number], v2VerticalFlip?: boolean)",
+       "signature": "constructor(size: number | readonly [number, number], verticalFlip?: boolean)",
        "doc": ""
       },
       {
@@ -15720,7 +16160,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Padding: number | readonly number[], v2Fill?: number | readonly number[], v2PaddingMode?: PaddingMode)",
+       "signature": "constructor(padding: number | readonly number[], fill?: number | readonly number[], paddingMode?: PaddingMode)",
        "doc": ""
       },
       {
@@ -15738,7 +16178,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2P?: number)",
+       "signature": "constructor(p?: number)",
        "doc": ""
       },
       {
@@ -15756,7 +16196,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2P?: number)",
+       "signature": "constructor(p?: number)",
        "doc": ""
       },
       {
@@ -15774,7 +16214,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Channels?: number)",
+       "signature": "constructor(numOutputChannels?: number)",
        "doc": ""
       },
       {
@@ -15792,7 +16232,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2P?: number)",
+       "signature": "constructor(p?: number)",
        "doc": ""
       },
       {
@@ -15810,7 +16250,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Mean: readonly number[], v2Std: readonly number[])",
+       "signature": "constructor(mean: readonly number[], std: readonly number[], inplace?: boolean)",
        "doc": ""
       },
       {
@@ -15828,7 +16268,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2P?: number, v2Scale?: readonly [number, number], v2Ratio?: readonly [number, number], v2Value?: number | readonly number[] | \"random\", v2Inplace?: boolean)",
+       "signature": "constructor(p?: number, scale?: readonly [number, number], ratio?: readonly [number, number], value?: number | readonly number[] | \"random\", inplace?: boolean)",
        "doc": ""
       },
       {
@@ -15842,11 +16282,11 @@
      "kind": "class",
      "name": "ColorJitter",
      "signature": "export declare class ColorJitter extends V1ColorJitter",
-     "doc": "**The clearest case of the type filter doing the work.** It stores `null` for a factor\nnobody asked for, and `null` is not a kind v2 prints — so `ColorJitter()` prints its\nown name and nothing else.",
+     "doc": "**The clearest case of the type filter doing the work.** It stores `null` for a sharpnessFactor\nnobody asked for, and `null` is not a kind v2 prints — so `ColorJitter()` prints its\nown name and nothing else.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Brightness?: number | readonly [number, number] | null, v2Contrast?: number | readonly [number, number] | null, v2Saturation?: number | readonly [number, number] | null, v2Hue?: number | readonly [number, number] | null)",
+       "signature": "constructor(brightness?: number | readonly [number, number] | null, contrast?: number | readonly [number, number] | null, saturation?: number | readonly [number, number] | null, hue?: number | readonly [number, number] | null)",
        "doc": ""
       },
       {
@@ -15864,7 +16304,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2P?: number)",
+       "signature": "constructor(p?: number)",
        "doc": ""
       },
       {
@@ -15882,7 +16322,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2P?: number)",
+       "signature": "constructor(p?: number)",
        "doc": ""
       },
       {
@@ -15900,7 +16340,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2P?: number)",
+       "signature": "constructor(p?: number)",
        "doc": ""
       },
       {
@@ -15918,7 +16358,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Bits: number, v2P?: number)",
+       "signature": "constructor(bits: number, p?: number)",
        "doc": ""
       },
       {
@@ -15936,7 +16376,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Threshold: number, v2P?: number)",
+       "signature": "constructor(threshold: number, p?: number)",
        "doc": ""
       },
       {
@@ -15954,7 +16394,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Factor: number, v2P?: number)",
+       "signature": "constructor(sharpnessFactor: number, p?: number)",
        "doc": ""
       },
       {
@@ -15972,7 +16412,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Degrees: number | readonly [number, number], v2Interpolation?: \"bilinear\" | \"nearest\", v2Expand?: boolean, center?: readonly [number, number] | null, v2Fill?: number | readonly number[] | null)",
+       "signature": "constructor(degrees: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", expand?: boolean, center?: readonly [number, number] | null, fill?: number | readonly number[] | null)",
        "doc": ""
       },
       {
@@ -15990,7 +16430,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Degrees: number | readonly [number, number], translate?: readonly [number, number] | null, scale?: readonly [number, number] | null, shear?: number | readonly number[] | null, v2Interpolation?: \"bilinear\" | \"nearest\", v2Fill?: number | readonly number[], center?: readonly [number, number] | null)",
+       "signature": "constructor(degrees: number | readonly [number, number], translate?: readonly [number, number] | null, scale?: readonly [number, number] | null, shear?: number | readonly number[] | null, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[], center?: readonly [number, number] | null)",
        "doc": ""
       },
       {
@@ -16008,7 +16448,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Distortion?: number, v2P?: number, v2Interpolation?: \"bilinear\" | \"nearest\", v2Fill?: number | readonly number[])",
+       "signature": "constructor(distortionScale?: number, p?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[])",
        "doc": ""
       },
       {
@@ -16026,7 +16466,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Alpha?: number | readonly number[], v2Sigma?: number | readonly number[], v2Interpolation?: \"bilinear\" | \"nearest\", v2Fill?: number | readonly number[])",
+       "signature": "constructor(alpha?: number | readonly number[], sigma?: number | readonly number[], interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[])",
        "doc": ""
       },
       {
@@ -16044,7 +16484,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Kernel: number | readonly number[], v2Sigma?: number | readonly [number, number])",
+       "signature": "constructor(kernelSize: number | readonly number[], sigma?: number | readonly [number, number])",
        "doc": ""
       },
       {
@@ -16062,7 +16502,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Policy?: AutoAugmentPolicyName, v2Interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "signature": "constructor(policy?: AutoAugmentPolicyName, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
        "doc": ""
       },
       {
@@ -16080,7 +16520,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2NumOps?: number, v2Magnitude?: number, v2Bins?: number, v2Interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "signature": "constructor(numOps?: number, magnitude?: number, numMagnitudeBins?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
        "doc": ""
       },
       {
@@ -16098,7 +16538,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Bins?: number, v2Interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "signature": "constructor(numMagnitudeBins?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
        "doc": ""
       },
       {
@@ -16116,7 +16556,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Severity?: number, v2Width?: number, v2Depth?: number, v2Alpha?: number, v2AllOps?: boolean, v2Interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "signature": "constructor(severity?: number, mixtureWidth?: number, chainDepth?: number, alpha?: number, allOps?: boolean, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
        "doc": ""
       },
       {
@@ -16160,7 +16600,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Transforms: readonly Transform[])",
+       "signature": "constructor(transforms: readonly Transform[])",
        "doc": ""
       },
       {
@@ -16178,7 +16618,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Transforms: readonly Transform[], v2P?: readonly number[] | null)",
+       "signature": "constructor(transforms: readonly Transform[], p?: readonly number[] | null)",
        "doc": ""
       },
       {
@@ -16196,7 +16636,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Transforms: readonly Transform[])",
+       "signature": "constructor(transforms: readonly Transform[])",
        "doc": ""
       },
       {
@@ -16214,7 +16654,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(v2Transforms: readonly Transform[], p?: number)",
+       "signature": "constructor(transforms: readonly Transform[], p?: number)",
        "doc": ""
       },
       {
@@ -16246,11 +16686,11 @@
      "kind": "class",
      "name": "RandomResize",
      "signature": "export declare class RandomResize implements Transform",
-     "doc": "Resize the short side to a number drawn from `[minSize, maxSize)`. **A range of sizes\nrather than one**, which is what multi-scale training wants.",
+     "doc": "",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(minSize: number, maxSize: number, interpolation?: \"bilinear\" | \"nearest\")",
+       "signature": "constructor(minSize: number, maxSize: number, interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
        "doc": ""
       },
       {
@@ -16273,7 +16713,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(minSize: number | readonly number[], maxSize?: number | null, interpolation?: \"bilinear\" | \"nearest\")",
+       "signature": "constructor(minSize: number | readonly number[], maxSize?: number | null, interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
        "doc": ""
       },
       {
@@ -16315,11 +16755,11 @@
      "kind": "class",
      "name": "ScaleJitter",
      "signature": "export declare class ScaleJitter implements Transform",
-     "doc": "Resize toward `targetSize` by a **drawn factor** — the large-scale jitter of the\ndetection recipes, where the same picture is seen at a tenth and at twice its size\nacross an epoch.",
+     "doc": "Resize toward `targetSize` by a **drawn sharpnessFactor** — the large-scale jitter of the\ndetection recipes, where the same picture is seen at a tenth and at twice its size\nacross an epoch.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(targetSize: readonly [number, number], scaleRange?: readonly [number, number], interpolation?: \"bilinear\" | \"nearest\")",
+       "signature": "constructor(targetSize: readonly [number, number], scaleRange?: readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
        "doc": ""
       },
       {
@@ -17975,5 +18415,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2395
+ "total": 2466
 }
