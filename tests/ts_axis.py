@@ -328,7 +328,7 @@ DELIBERATE: dict[str, str] = {
        for n in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST",
                  "EMNIST", "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS",
                  "STL10", "SVHN", "Omniglot", "GTSRB", "FER2013", "MovingMNIST",
-                 "DatasetFolder")},
+                 "DatasetFolder", "ImageFolder")},
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not

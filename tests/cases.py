@@ -13113,4 +13113,67 @@ def dataset_last_three_cases(inp=None):
         # written against the other file finds out with `KeyError: 'pixels'`.
         (prefix + "FER2013(icml, spaced headers)", fer("icml", "train")),
     ]
+
+    def image_folder(what):
+        """`ImageFolder` on a folder written here, against torchvision's own.
+
+        **This is the one dataset in the table whose refusal came off without a line
+        of decoding being written.** `DatasetFolder` walks directories and calls a
+        function; the codec was never in the class, only in the default that class
+        was given. So the whole of what was missing was choosing a loader, and this
+        library has two — PNG and PPM.
+
+        Both formats are in the fixture, because walking one and not the other is a
+        difference the classes and the labels cannot show. The sizes differ per class
+        so that a transposed read lands somewhere visible, and one folder holds two
+        pictures while another holds one — a reader that sorted by file rather than
+        by directory gives the same count and different labels.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            # **The fixture is written with PIL and read without it.** torchvision's
+            # own `ImageFolder` opens through PIL, so the package is already required
+            # for this side of the comparison — writing the files with it keeps the
+            # bytes torchvision would meet rather than bytes this repository invented.
+            from PIL import Image as _PIL
+            root = tempfile.mkdtemp()
+            try:
+                for name, count in (("cat", 2), ("dog", 2), ("emu", 1)):
+                    os.makedirs(os.path.join(root, name))
+                    for k in range(count):
+                        block = (np.arange(4 * 5 * 3).reshape(4, 5, 3)
+                                 + len(name) * 11 + k * 3) % 251
+                        _PIL.fromarray(block.astype(np.uint8)).save(
+                            os.path.join(root, name, f"{k}.png"))
+                # A PPM beside the PNGs, in the folder that has only one picture.
+                block = (np.arange(3 * 3 * 3).reshape(3, 3, 3) * 7) % 200
+                _PIL.fromarray(block.astype(np.uint8)).save(
+                    os.path.join(root, "emu", "p.ppm"))
+
+                if _is_real_torch(L):
+                    from torchvision.datasets import ImageFolder as real
+                    loaded = real(root)
+                else:
+                    loaded = _vision_datasets(L).ImageFolder(root)
+                pictures = [np.asarray(loaded[i][0]) for i in range(len(loaded))]
+                labels = [loaded[i][1] for i in range(len(loaded))]
+                if what == "labels":
+                    out = np.asarray(labels + [len(loaded)]
+                                     + [loaded.class_to_idx[c] for c in loaded.classes])
+                else:
+                    out = np.concatenate([p.reshape(-1) for p in pictures])
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    cases += [
+        (prefix + "ImageFolder(pictures)", image_folder("pictures")),
+        # **The classes are the sorted directory names**, and the index a class gets
+        # depends on its name and nothing else — so this freezes the mapping beside
+        # the labels, because renaming a folder renumbers a trained model's classes.
+        (prefix + "ImageFolder(labels and classes)", image_folder("labels")),
+    ]
     return cases
