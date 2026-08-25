@@ -33,7 +33,23 @@ import re
 import sys
 
 # Turns WebGPU on and makes Linux use Vulkan. macOS is on Metal, so the second is ignored.
-FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan"]
+#
+# **The last two are what finally got a second vendor measured**, and they were needed
+# because Chrome refuses before the driver is ever asked. On an RTX 5080 (Ubuntu 24.04,
+# driver 580.159.04) with a window on Xvfb and every permission in place,
+# `requestAdapter()` returned null and the runner said *"No WebGPU adapter could be
+# obtained"* — while `vulkaninfo --summary` on that same machine listed the card as GPU0
+# with Vulkan 1.4.312.
+#
+# **Two tools, one machine, two answers**, and the difference is where each one looks:
+# `vulkaninfo` asks the driver, Chrome asks its own blocklist first. Linux plus the
+# proprietary NVIDIA driver is on that list. So the flag is not a workaround for this
+# repository's code — it is how you ask Chrome to go and look.
+#
+# They went in as a pair and **which of the two is decisive was not separated**. The run
+# that produced `passed 2901 / failed 0  [nvidia / blackwell]` had both.
+FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan",
+         "--ignore-gpu-blocklist", "--disable-gpu-driver-bug-workarounds"]
 
 # Implementations that run on the CPU. Chrome has SwiftShader; Linux Mesa has lavapipe (llvmpipe).
 _SOFTWARE = re.compile(r"swiftshader|llvmpipe|lavapipe|software", re.I)
