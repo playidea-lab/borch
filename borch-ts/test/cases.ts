@@ -5084,6 +5084,40 @@ function addPool(out: Map<string, Case>, inp: Inputs): void {
       () => inp.get(key).adaptivePool("max", size));
   }
 
+  // **The three divisor rules, and the gradient that divides by the same three.**
+  // `count_include_pad`, `divisor_override` and `ceil_mode` each change what a window
+  // is divided by, and none of the seven plain cases above reaches the backward — a
+  // cell in a short edge window was divided by fewer cells going forward, so it has
+  // to receive proportionally more coming back. Written with the kernel volume
+  // everywhere the forward is right and the gradient is quietly wrong at every edge:
+  // the shape is right, the total is not, and no forward comparison can see it.
+  //
+  // **`AvgPool3d`'s ceiling case uses 3 and not 2** because the volume is 4³. Written
+  // as a 2 it divides evenly, `ceilMode` changes nothing, and the case freezes an
+  // answer its neighbour already froze.
+  const avgPools: readonly (readonly [string, () => nn.Module, string])[] = [
+    ["nn.AvgPool1d(테두리 채움)", () => new nn.AvgPool1d(2, 2, 1), "nd_seq"],
+    ["nn.AvgPool1d(가장자리 빼기)", () => new nn.AvgPool1d(2, 2, 1, false, false), "nd_seq"],
+    ["nn.AvgPool3d(나눗수 지정)", () => new nn.AvgPool3d(2, 1, 0, false, true, 4), "nd_vol"],
+    ["nn.AvgPool3d(올림)", () => new nn.AvgPool3d(3, 3, 0, true), "nd_vol"],
+  ];
+  for (const [name, build, key] of avgPools) {
+    out.set(`pool::${name}`, () => build().call(inp.get(key)));
+    out.set(`pool::grad::${name}`, () => {
+      const x = inp.get(key, true);
+      seeded(build().call(x)).backward();
+      return gradOf(x, name);
+    });
+  }
+  // The three whose forward is asked and whose backward is not — the Python side asks
+  // one case per divisor rule and these three share a rule with one above.
+  out.set("pool::nn.AvgPool3d(테두리 채움)",
+    () => new nn.AvgPool3d(2, 2, 1).call(inp.get("nd_vol")));
+  out.set("pool::nn.LPPool1d(올림)",
+    () => new nn.LPPool1d(2, 3, 3, true).call(inp.get("nd_seq")));
+  out.set("pool::nn.LPPool2d(올림)",
+    () => new nn.LPPool2d(2, 3, 3, true).call(inp.get("img")));
+
   add("F.lp_pool1d(p=2)", (x) => x.lpPool(2, 2), "nd_seq");
   add("F.lp_pool2d(p=2)", (x) => x.lpPool(2, 2), "img");
   add("F.lp_pool2d(p=1)", (x) => x.lpPool(1, 2), "img");

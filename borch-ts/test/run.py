@@ -435,13 +435,17 @@ NOT_PORTED = {
     # took it and dropped it. The four cases are the core's own.
     "pad::": (4, "파이썬 — JS keeps no arity, so a surplus argument is not received "
                  "rather than refused"),
-    # **borch.ts answers these; nobody has written the TS bodies.** The seven cases
-    # went in with the kernel work that made them answerable — `PoolNDShape` grew a
-    # padding, a `countIncludePad` and a `divisorOverride`, and `poolOut` grew the
-    # ceiling — so this row is the ordinary kind of owed, a case list not carried
-    # across, and not an argument that does nothing.
-    "pool::": (11, "아직 — the arguments work in borch.ts; only the TS case bodies "
-                  "are unwritten"),
+    # **11 → 0, and the row said why before anyone looked.** It read *the arguments
+    # work in borch.ts; only the TS case bodies are unwritten*, and that was exactly
+    # true: `ceilMode`, `countIncludePad` and `divisorOverride` were already seats on
+    # the layers, so what landed here is eleven case bodies and no library change.
+    #
+    # Four of them are gradients, and they are the half worth having. Each of the
+    # three divisor rules changes what a window is divided by, and the backward
+    # divides by the same thing — a cell in a short edge window took fewer cells going
+    # forward and has to receive proportionally more coming back. Written with the
+    # kernel volume everywhere the forward is right and the gradient is wrong at every
+    # edge, with the right shape and the wrong total, which no forward case can see.
     # 47 → 50. The **kinds** of `finfo` and `iinfo`, and the no-argument default dtype. A
     # Python-side matter — neither name is in borch.ts.
     # 50 → 39. **The reason was explaining only eleven of them.** "top-level in-place
