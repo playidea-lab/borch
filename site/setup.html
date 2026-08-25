@@ -127,7 +127,27 @@
       seconds, and the answer is welcome.
     </p>
 
-    <h2>Why borch refuses instead of quietly going slow</h2>
+    <h2>Phones and tablets</h2>
+    <p>
+      <strong>iOS runs it.</strong> Measured on an iPhone 13 mini: the badge came back with
+      an Apple adapter and the code actually ran — not merely an adapter obtained, but
+      output on the screen, which on a phone is the part worth checking separately. The
+      iOS version was not written down, so it is not claimed here.
+    </p>
+    <p>
+      That one measurement says more than a desktop one would: <strong>every browser on iOS
+      uses WebKit</strong>, so there is no second engine to test. Safari and the browsers
+      that look like other browsers are the same engine underneath.
+    </p>
+    <p>
+      <strong>Android: not measured.</strong> The iOS result does not carry over and it is
+      worth being explicit about why — a different engine, different GPU vendors (Adreno,
+      Mali, Xclipse rather than Apple's), and different drivers under each. Every phone has
+      a GPU; whether the browser hands it over is the same question this whole page is
+      about, and nobody here has asked an Android device yet.
+    </p>
+
+    <h2>Why the adapter's name is on the badge</h2>
     <p>
       An earlier version of this project fell back to WebGL when it could not get WebGPU,
       and for a while its own authors read numbers measured on a CPU path as if they were
@@ -139,14 +159,38 @@
     <p>
       So the rule is not "never run on a CPU" — it is <strong>a number measured on a CPU
       must never be readable as a GPU's</strong>. That is why the adapter name is on the
-      badge, why the badge goes dark on a software adapter, and why <code>init()</code>
-      stops rather than accepting one silently.
+      badge and why the badge goes dark on a software adapter.
+    </p>
+    <p>
+      <strong>This page said something false here for a day, and it is worth leaving the
+      correction visible.</strong> It claimed <code>init()</code> stops rather than
+      accepting a software adapter silently. It never did: <code>borch-ts/src</code> had no
+      such check, and every golden run that ever passed on SwiftShader is the evidence. The
+      badge is the thing that tells you; the library takes what the browser gives it.
+    </p>
+
+    <h2>Asking for the CPU on purpose</h2>
+    <p>
+      Since the browser decides which adapter you get, there is a way to ask it for the
+      software one deliberately — useful when you want to see the CPU path, or check that
+      your code does not depend on a particular device:
+    </p>
+    <pre class="small" style="overflow-x:auto"><code>await init({ forceFallbackAdapter: true });
+const { software } = await probe();   // and know which one you got</code></pre>
+    <p>
+      <strong>It is a real run, not a degraded one.</strong> Measured today, the whole golden
+      passes on both: <code>3079 / 0</code> on <code>google / swiftshader</code> and
+      <code>3079 / 0</code> on <code>apple / metal-3</code> — same code, same values,
+      different device. What a software run is not is a source of speeds.
     </p>
 
     <h2>If you cannot get a GPU at all</h2>
     <p>
-      Then borch.ts has nothing to offer you, and it says so instead of pretending. There
-      is no CPU backend for the TypeScript surface: it is WebGPU or nothing.
+      Two different situations hide under that sentence, and they have different answers.
+      <strong>If the browser offers a software adapter</strong>, you are covered by the
+      section above — SwiftShader is still WebGPU, the code runs, and only the speeds are
+      not a GPU's. <strong>If it offers nothing at all</strong>, borch.ts has nothing to
+      give you and says so instead of pretending: there is no path that goes around WebGPU.
     </p>
     <p>
       The <a href="python.html">Python surface</a> is a different implementation — the core
