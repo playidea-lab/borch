@@ -469,6 +469,85 @@ def test_the_software_adapter_rule_says_the_same_thing_in_every_copy():
         "  not the others means one of them is wrong about a GPU and neither says so.")
 
 
+def _bench():
+    """`borch-ts/test/bench.py`, loaded as a module.
+
+    It needs **both** directories on the path for the load — `import run` is
+    `borch-ts/test/run.py` and `from launch import` is `tests/browser/launch.py` — and
+    neither may stay there afterwards, for the reason `_runner` gives.
+
+    Nothing here starts a browser: `playwright` is imported inside `main`, so the module
+    loads on stdlib alone and this check runs everywhere the suite does.
+    """
+    import importlib.util                                            # noqa: PLC0415
+
+    added = [str(ROOT / "borch-ts" / "test"), str(ROOT / "tests" / "browser")]
+    sys.path[:0] = added
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "bt_ts_bench", ROOT / "borch-ts" / "test" / "bench.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        for here in added:
+            if here in sys.path:
+                sys.path.remove(here)
+    return mod
+
+
+def test_the_bench_conditions_line_names_the_machine_and_nobody_else():
+    """**That line is written to be pasted into a public README.**
+
+    The bench table's three columns were measured *side by side on the same machine* and
+    that machine is recorded nowhere — two sessions went looking and neither found it, so
+    the milliseconds now stand only as ratios. `bench.py` prints a `measured on:` line to
+    stop that recurring: the adapter and the host, under every number it lets stand.
+
+    Which makes it a line that travels **outward**. `platform.node()` is one keystroke
+    from `platform.machine()` and returns the hostname; `platform.uname()` reads like the
+    obvious upgrade and contains it. Either one publishes the operator's machine name into
+    a document that is on the public web, and a README cannot be un-pushed.
+
+    So this asks the function what it actually returns and looks for the two values that
+    must never be in it. A source pattern would not do — it would have to guess every
+    spelling of the mistake, and it is the **output** that gets pasted.
+
+    It does not check the adapter is present: `refuse_if_software` already decides what
+    counts as a measurable device, and a second opinion on that here would drift from it.
+    """
+    import getpass                                                   # noqa: PLC0415
+    import platform                                                  # noqa: PLC0415
+
+    line = _bench().conditions("NVIDIA GeForce RTX 5080")
+    assert isinstance(line, str) and line, "conditions() returned nothing to paste"
+
+    # Short values are skipped rather than matched: a two-character login name would hit
+    # inside `arm64` and this would fail on a machine that is doing nothing wrong.
+    private = {"hostname": platform.node(), "user": _quietly(getpass.getuser)}
+    leaked = {what: v for what, v in private.items() if len(v or "") > 3 and v in line}
+    assert not leaked, (
+        f"the bench's `measured on:` line carries {', '.join(leaked)} — "
+        f"{' '.join(leaked.values())}\n"
+        f"  got: {line}\n"
+        "  That line exists to be pasted into README.md, which is on the public web and\n"
+        "  cannot be un-pushed. The machine is the point; the operator is not. Use\n"
+        "  platform.system() and platform.machine() — not node(), not uname().")
+
+
+def _quietly(fn):
+    """The value, or empty where the environment has none to give.
+
+    `getpass.getuser()` raises rather than returning a blank when every one of the
+    variables it consults is unset and there is no password-database entry — which is a
+    container, and containers are where this suite runs. **A check that errors on the
+    machine it was meant to protect is not protecting it.**
+    """
+    try:
+        return fn()
+    except Exception:
+        return ""
+
+
 # ── where the site counts its own pages ───────────────────────────────
 #
 # **The count is written in words and the pages are on disk, and nothing was comparing

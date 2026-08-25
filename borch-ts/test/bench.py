@@ -7,6 +7,7 @@ It measures the same thing as `tests/browser/run.py --bench` without going throu
 Pyodide — borch.ts is JS a browser simply reads.
 """
 
+import platform
 import sys
 
 import run as runner
@@ -14,6 +15,33 @@ from launch import browser as browser_of, refuse_if_software
 
 PAGE = "/borch-ts/test/bench.html"
 TIMEOUT_MS = 1_800_000
+
+
+def conditions(adapter):
+    """The line that has to travel with the number.
+
+    **A time without its machine can be quoted but not contested.** The README's bench
+    table says its three columns were measured *side by side on the same machine*, and
+    that machine is written down nowhere — two sessions went looking for it separately
+    and neither found it. The numbers survive only as ratios now, and no fourth column
+    can ever be added to that table honestly.
+
+    Nothing was lost by carelessness. The runner **had** the adapter in hand, used it to
+    decide whether to refuse, and then printed the time alone — so what got copied into
+    the document was the half that cannot be reproduced from.
+
+    ## The host as well as the adapter
+
+    The adapter is the GPU and the time is not only the GPU's: the training loop crosses
+    into JS between steps. Two lines is the whole cost of not having this argument later.
+
+    ## What is deliberately not in it
+
+    Not the hostname, not the user. This line exists to be pasted into a **public**
+    README, and `platform.system()` with `platform.machine()` says everything needed to
+    re-run it while naming nobody.
+    """
+    return f"{adapter} / {platform.system()} {platform.machine()}"
 
 
 def main(argv):
@@ -50,6 +78,11 @@ def main(argv):
     # against a GPU rather than a comparison of libraries.
     if refuse_if_software(result.get("adapter"), "ms/step and the epoch time"):
         return 1
+    # Printed **after** the refusal, so a line that says "measured on" only ever appears
+    # under a number that was allowed to stand.
+    print(f"\n  measured on: {conditions(result.get('adapter'))}"
+          "\n  (carry this with the number — a time whose machine is unrecorded can be"
+          "\n   quoted but not contested, and this table already has one such row.)")
     return 0
 
 

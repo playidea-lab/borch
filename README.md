@@ -1376,6 +1376,16 @@ loss and the backward pass.
 measured side by side on the same machine and the same benchmark, and the left
 column no longer exists.
 
+> **Which machine is not recorded anywhere, and two sessions searched for it
+> separately before this note was written.** *Side by side* is the part that survives:
+> the three columns share whatever it was, so the **ratios** are evidence and the
+> absolute milliseconds are not. No fourth column can honestly be added to this table.
+>
+> The runner had the adapter in hand the whole time — it used it to decide whether to
+> refuse a software number — and then printed the time without it. It now prints a
+> `measured on:` line under every number it lets stand, so the next row arrives with
+> its conditions attached rather than needing them reconstructed later.
+
 | CIFAR ResNet-18, batch 64 | the TF.js version (now gone) | **borch.ts** | **borch_webgpu** |
 |---|---|---|---|
 | ms/step | 154.9 | **118.5** | 123.4 |
