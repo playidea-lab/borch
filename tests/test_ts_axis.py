@@ -294,7 +294,9 @@ FROZEN = {
     # has a name anywhere, and 49 of v2's 52 are names v1 already has. What it cannot
     # see is that those 49 print v1's text rather than v2's, which is the larger half
     # of the work and is counted by the runner's ledger instead.
-    "transforms.v2": 3,
+    # 3 → 1. `MixUp` and `CutMix` arrived with the repr layer; what is left is
+    # `InterpolationMode`, which is a type on this side rather than a missing name.
+    "transforms.v2": 1,
     # One: the same `InterpolationMode`. The nine v2 adds are in `v2f.ts`.
     "transforms.v2.functional": 1,
 }

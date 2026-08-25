@@ -42,27 +42,23 @@ import { RuntimeError } from "./errors.js";
 import { Tensor } from "./tensor.js";
 import type { DType } from "./dtype.js";
 import {
-  asImage, nextFloat, nextInt, nextNormal, nextPermutation, pyFloat,
+  asImage, checkSpan, nextBeta, nextFloat, nextInt, nextNormal, nextPermutation,
+  pairOf, pyFloat, setupAngle, spanText, type Span,
 } from "./_vision_util.js";
 import {
-  adjustBrightness, adjustContrast, adjustHue, adjustSaturation,
-  image, Pad, Resize,
-  type Image, type Subject, type Transform,
+  adjustBrightness, adjustContrast, adjustHue, adjustSaturation, image,
+  type AutoAugmentPolicyName, type Image, type PaddingMode, type Subject,
+  type Transform,
 } from "./vision.js";
+// **The v1 classes arrive under a namespace and not by name.** Every twin below is
+// called what its v1 original is called, so a named import would be shadowed by the
+// class it is meant to wrap — silently, since both are constructible.
+import * as v1 from "./vision.js";
 
-// The composition names are v1's, re-exported. **A re-export is safe in the cycle
-// where a subclass is not**: nothing reads the binding while the modules are still
-// evaluating. Their printing is v1's too until the repr layer lands, which is the
-// one place this file is knowingly incomplete rather than deliberately narrow.
-export { Compose, Lambda, RandomApply } from "./vision.js";
-
-// **The v1 names, re-exported rather than twinned — for now.** v2 prints these
-// differently and computes them identically, so what is missing is the printing and
-// not the arithmetic. Re-exporting says that plainly; a twin whose `describe` still
-// answered v1's text would say it in a way nothing could measure. Three are here
-// because the golden asks their values through the v2 spelling — the rest arrive with
-// the repr layer.
-export { CenterCrop, Pad, Resize } from "./vision.js";
+// `AutoAugmentPolicy` and `InterpolationMode`'s place are v1's — v2 re-exports the
+// same objects rather than making second ones, because two enums equal by value and
+// not by identity is the kind of difference that bites once and takes an hour.
+export { AutoAugmentPolicy } from "./vision.js";
 
 // `v2.functional`, in its own file for the reason `functional.ts` is in one: it is a
 // namespace of its own on the other side, and a name that lives only inside another
@@ -332,7 +328,7 @@ export class RandomResize implements Transform {
   apply(x: Subject): Subject {
     const img = asImage(x, "RandomResize");
     const size = this.minSize + nextInt(this.maxSize - this.minSize);
-    return new Resize(size, this.interpolation).apply(img);
+    return new v1.Resize(size, this.interpolation).apply(img);
   }
 
   describe(): string {
@@ -367,8 +363,8 @@ export class RandomShortestSize implements Transform {
     if (this.maxSize !== null) {
       ratio = Math.min(ratio, this.maxSize / Math.max(img.height, img.width));
     }
-    return new Resize([Math.trunc(img.height * ratio), Math.trunc(img.width * ratio)],
-                      this.interpolation).apply(img);
+    return new v1.Resize([Math.trunc(img.height * ratio), Math.trunc(img.width * ratio)],
+                         this.interpolation).apply(img);
   }
 
   describe(): string {
@@ -405,8 +401,8 @@ export class RandomZoomOut implements Transform {
     const canvasH = Math.trunc(img.height * ratio);
     const left = Math.trunc((canvasW - img.width) * nextFloat());
     const top = Math.trunc((canvasH - img.height) * nextFloat());
-    return new Pad([left, top, canvasW - (left + img.width), canvasH - (top + img.height)],
-                   this.fill).apply(img);
+    return new v1.Pad([left, top, canvasW - (left + img.width),
+                       canvasH - (top + img.height)], this.fill).apply(img);
   }
 
   describe(): string {
@@ -434,8 +430,8 @@ export class ScaleJitter implements Transform {
       + nextFloat() * (this.scaleRange[1] - this.scaleRange[0]);
     const ratio = Math.min(this.targetSize[1] / img.height,
                            this.targetSize[0] / img.width) * scale;
-    return new Resize([Math.trunc(img.height * ratio), Math.trunc(img.width * ratio)],
-                      this.interpolation).apply(img);
+    return new v1.Resize([Math.trunc(img.height * ratio), Math.trunc(img.width * ratio)],
+                         this.interpolation).apply(img);
   }
 
   describe(): string {
@@ -443,5 +439,961 @@ export class ScaleJitter implements Transform {
       `scale_range=${floatPair(this.scaleRange)}, ` +
       `interpolation=${this.interpolation}, ` +
       `antialias=${this.antialias ? "True" : "False"})`;
+  }
+}
+
+// ── The thirty-eight twins ────────────────────────────────────────────────
+//
+// **What differs between the two namespaces is what each class stores, under what
+// name and in what order** — v2 does not hand-write these strings either. Its
+// `Transform.extra_repr` walks the instance, keeps whatever is a bool, number,
+// string, tuple, list or enum, and joins them; `None` is not among the kinds it
+// keeps, which is why `ColorJitter(0.5)` prints one field and v1's prints four.
+//
+// So each twin below **declares its printed fields** rather than reading them off
+// the v1 object. Two reasons, and the second is the one that matters. TypeScript
+// cannot read another class's private state at all — but even where it could,
+// twelve of these agree with v1's line today by coincidence, and inheriting a
+// coincidence is how a printed surface changes without anyone deciding to.
+//
+// The values are the **normalised** ones where v2 prints those: `RandomRotation(30)`
+// says `degrees=[-30.0, 30.0]`, `ColorJitter(0.5)` says `brightness=(0.5, 1.5)`.
+// Those normalisations are in `_vision_util.ts` so that the twin and the original
+// call the same code — normalising twice is how two files come to disagree about
+// what `0` means.
+
+/** Python prints these capitalised, and the golden holds the string. */
+function bool2(v: boolean): string {
+  return v ? "True" : "False";
+}
+
+/** `[a, b]` — v2 keeps as a list several things v1 keeps as a tuple. */
+function listOf(values: readonly number[], asFloat = false): string {
+  return `[${values.map((v) => (asFloat ? pyFloat(v) : String(v))).join(", ")}]`;
+}
+
+/** A size argument as v2 stores it: one number is a one-element list. */
+function sizeList(size: number | readonly number[]): string {
+  return listOf(typeof size === "number" ? [size] : [...size]);
+}
+
+/** `fill` prints as it was given — a number stays a number, a sequence is a list. */
+function fillText(fill: number | readonly number[] | null): string {
+  if (fill === null) return "None";
+  return typeof fill === "number" ? String(fill) : listOf(fill);
+}
+
+export class Resize implements Transform {
+  private readonly inner: v1.Resize;
+
+  constructor(
+    private readonly size: number | readonly [number, number],
+    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    maxSize: number | null = null,
+    private readonly antialias = true,
+  ) {
+    this.inner = new v1.Resize(size, interpolation, maxSize, antialias);
+  }
+
+  apply(x: Image | Tensor): Image {
+    return this.inner.apply(x);
+  }
+
+  // **`max_size` is stored and not printed**, which is v2's list and not an
+  // oversight — v1 prints it and that is one of the 21 lines that differ.
+  describe(): string {
+    return `Resize(size=${sizeList(this.size)}, ` +
+      `interpolation=${this.interpolation}, antialias=${bool2(this.antialias)})`;
+  }
+}
+
+export class CenterCrop implements Transform {
+  private readonly inner: v1.CenterCrop;
+
+  constructor(private readonly size: number | readonly [number, number]) {
+    this.inner = new v1.CenterCrop(size);
+  }
+
+  apply(x: Image | Tensor): Image {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `CenterCrop(size=${pair(pairOf(this.size))})`;
+  }
+}
+
+export class RandomCrop implements Transform {
+  private readonly inner: v1.RandomCrop;
+
+  constructor(
+    private readonly size: number | readonly [number, number],
+    padding: number | readonly number[] | null = null,
+    private readonly padIfNeeded = false,
+    private readonly fill: number | readonly number[] = 0,
+    private readonly paddingMode: PaddingMode = "constant",
+  ) {
+    this.inner = new v1.RandomCrop(size, padding, padIfNeeded, fill, paddingMode);
+  }
+
+  apply(x: Image | Tensor): Image {
+    return this.inner.apply(x);
+  }
+
+  // `padding` is stored and not printed — v2 keeps it under a private name.
+  describe(): string {
+    return `RandomCrop(size=${pair(pairOf(this.size))}, ` +
+      `pad_if_needed=${bool2(this.padIfNeeded)}, fill=${fillText(this.fill)}, ` +
+      `padding_mode=${this.paddingMode})`;
+  }
+}
+
+export class RandomResizedCrop implements Transform {
+  private readonly inner: v1.RandomResizedCrop;
+
+  constructor(
+    private readonly size: number | readonly [number, number],
+    private readonly scale: readonly [number, number] = [0.08, 1.0],
+    private readonly ratio: readonly [number, number] = [3 / 4, 4 / 3],
+    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    private readonly antialias = true,
+  ) {
+    this.inner = new v1.RandomResizedCrop(size, scale, ratio, interpolation, antialias);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomResizedCrop(size=${pair(pairOf(this.size))}, ` +
+      `scale=${floatPair(this.scale)}, ratio=${pair(this.ratio)}, ` +
+      `interpolation=${this.interpolation}, antialias=${bool2(this.antialias)})`;
+  }
+}
+
+export class FiveCrop implements Transform {
+  private readonly inner: v1.FiveCrop;
+
+  constructor(private readonly size: number | readonly [number, number]) {
+    this.inner = new v1.FiveCrop(size);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `FiveCrop(size=${pair(pairOf(this.size))})`;
+  }
+}
+
+export class TenCrop implements Transform {
+  private readonly inner: v1.TenCrop;
+
+  constructor(
+    private readonly size: number | readonly [number, number],
+    private readonly verticalFlip = false,
+  ) {
+    this.inner = new v1.TenCrop(size, verticalFlip);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `TenCrop(size=${pair(pairOf(this.size))}, ` +
+      `vertical_flip=${bool2(this.verticalFlip)})`;
+  }
+}
+
+export class Pad implements Transform {
+  private readonly inner: v1.Pad;
+
+  constructor(
+    private readonly padding: number | readonly number[],
+    private readonly fill: number | readonly number[] = 0,
+    private readonly paddingMode: PaddingMode = "constant",
+  ) {
+    this.inner = new v1.Pad(padding, fill, paddingMode);
+  }
+
+  apply(x: Image | Tensor): Image {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `Pad(padding=${fillText(this.padding)}, fill=${fillText(this.fill)}, ` +
+      `padding_mode=${this.paddingMode})`;
+  }
+}
+
+export class RandomHorizontalFlip implements Transform {
+  private readonly inner: v1.RandomHorizontalFlip;
+
+  constructor(private readonly p = 0.5) {
+    this.inner = new v1.RandomHorizontalFlip(p);
+  }
+
+  apply(x: Image | Tensor): Image {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomHorizontalFlip(p=${this.p})`;
+  }
+}
+
+export class RandomVerticalFlip implements Transform {
+  private readonly inner: v1.RandomVerticalFlip;
+
+  constructor(private readonly p = 0.5) {
+    this.inner = new v1.RandomVerticalFlip(p);
+  }
+
+  apply(x: Image | Tensor): Image {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomVerticalFlip(p=${this.p})`;
+  }
+}
+
+export class Grayscale implements Transform {
+  private readonly inner: v1.Grayscale;
+
+  constructor(private readonly numOutputChannels = 1) {
+    this.inner = new v1.Grayscale(numOutputChannels);
+  }
+
+  apply(x: Image | Tensor): Image {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `Grayscale(num_output_channels=${this.numOutputChannels})`;
+  }
+}
+
+export class RandomGrayscale implements Transform {
+  private readonly inner: v1.RandomGrayscale;
+
+  constructor(private readonly p = 0.1) {
+    this.inner = new v1.RandomGrayscale(p);
+  }
+
+  apply(x: Image | Tensor): Image {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomGrayscale(p=${this.p})`;
+  }
+}
+
+export class Normalize implements Transform {
+  private readonly inner: v1.Normalize;
+
+  // **`inplace` is taken and not acted on.** There is no in-place path on this side;
+  // v2 stores the flag and prints it, so a pipeline copied from torchvision keeps its
+  // argument list and its printed line rather than losing one of them.
+  constructor(
+    private readonly mean: readonly number[],
+    private readonly std: readonly number[],
+    private readonly inplace = false,
+  ) {
+    this.inner = new v1.Normalize(mean, std);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x as never);
+  }
+
+  describe(): string {
+    return `Normalize(mean=${listOf(this.mean)}, std=${listOf(this.std)}, ` +
+      `inplace=${bool2(this.inplace)})`;
+  }
+}
+
+export class RandomErasing implements Transform {
+  private readonly inner: v1.RandomErasing;
+
+  constructor(
+    private readonly p = 0.5,
+    private readonly scale: readonly [number, number] = [0.02, 0.33],
+    private readonly ratio: readonly [number, number] = [0.3, 3.3],
+    private readonly value: number | readonly number[] | "random" = 0,
+    private readonly inplace = false,
+  ) {
+    this.inner = new v1.RandomErasing(p, scale, ratio, value, inplace);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  // **`value=0` prints as `[0.0]`.** v2 stores the fill as a list of floats whatever
+  // came in, and `"random"` stays the string it was.
+  describe(): string {
+    const value = typeof this.value === "string" ? this.value
+      : listOf(typeof this.value === "number" ? [this.value] : this.value, true);
+    return `RandomErasing(p=${this.p}, scale=${pair(this.scale)}, ` +
+      `ratio=${pair(this.ratio)}, value=${value}, inplace=${bool2(this.inplace)})`;
+  }
+}
+
+export class ColorJitter implements Transform {
+  private readonly inner: v1.ColorJitter;
+  private readonly spans: readonly (readonly [string, Span])[];
+
+  constructor(
+    brightness?: number | readonly [number, number],
+    contrast?: number | readonly [number, number],
+    saturation?: number | readonly [number, number],
+    hue?: number | readonly [number, number],
+  ) {
+    this.inner = new v1.ColorJitter(brightness, contrast, saturation, hue);
+    this.spans = [
+      ["brightness", checkSpan(brightness, "brightness", 1, 0, Infinity, true)],
+      ["contrast", checkSpan(contrast, "contrast", 1, 0, Infinity, true)],
+      ["saturation", checkSpan(saturation, "saturation", 1, 0, Infinity, true)],
+      ["hue", checkSpan(hue, "hue", 0, -0.5, 0.5, false)],
+    ];
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  // **The clearest case of v2's type filter doing the work.** A factor nobody asked
+  // for is `None`, and `None` is not a kind v2 prints — so the default constructor
+  // prints its own name and nothing else, where v1 prints four `None`s.
+  describe(): string {
+    const parts = this.spans
+      .filter(([, span]) => span !== null)
+      .map(([name, span]) => `${name}=${spanText(span)}`);
+    return `ColorJitter(${parts.join(", ")})`;
+  }
+}
+
+export class RandomInvert implements Transform {
+  private readonly inner: v1.RandomInvert;
+
+  constructor(private readonly p = 0.5) {
+    this.inner = new v1.RandomInvert(p);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomInvert(p=${this.p})`;
+  }
+}
+
+export class RandomAutocontrast implements Transform {
+  private readonly inner: v1.RandomAutocontrast;
+
+  constructor(private readonly p = 0.5) {
+    this.inner = new v1.RandomAutocontrast(p);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomAutocontrast(p=${this.p})`;
+  }
+}
+
+export class RandomEqualize implements Transform {
+  private readonly inner: v1.RandomEqualize;
+
+  constructor(private readonly p = 0.5) {
+    this.inner = new v1.RandomEqualize(p);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomEqualize(p=${this.p})`;
+  }
+}
+
+// **`p` comes first in the printed line and second in the call.** That is v2's
+// assignment order, not a tidier one, and the three below share it.
+export class RandomPosterize implements Transform {
+  private readonly inner: v1.RandomPosterize;
+
+  constructor(private readonly bits: number, private readonly p = 0.5) {
+    this.inner = new v1.RandomPosterize(bits, p);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomPosterize(p=${this.p}, bits=${this.bits})`;
+  }
+}
+
+export class RandomSolarize implements Transform {
+  private readonly inner: v1.RandomSolarize;
+
+  constructor(private readonly threshold: number, private readonly p = 0.5) {
+    this.inner = new v1.RandomSolarize(threshold, p);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomSolarize(p=${this.p}, threshold=${this.threshold})`;
+  }
+}
+
+export class RandomAdjustSharpness implements Transform {
+  private readonly inner: v1.RandomAdjustSharpness;
+
+  constructor(private readonly sharpnessFactor: number, private readonly p = 0.5) {
+    this.inner = new v1.RandomAdjustSharpness(sharpnessFactor, p);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomAdjustSharpness(p=${this.p}, ` +
+      `sharpness_factor=${this.sharpnessFactor})`;
+  }
+}
+
+export class RandomRotation implements Transform {
+  private readonly inner: v1.RandomRotation;
+  private readonly degrees: [number, number];
+
+  constructor(
+    degrees: number | readonly number[],
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    private readonly expand = false,
+    center: readonly [number, number] | null = null,
+    private readonly fill: number | readonly number[] | null = 0,
+  ) {
+    this.inner = new v1.RandomRotation(degrees, interpolation, expand, center, fill);
+    this.degrees = setupAngle(degrees, "degrees");
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomRotation(degrees=${listOf(this.degrees, true)}, ` +
+      `interpolation=${this.interpolation}, expand=${bool2(this.expand)}, ` +
+      `fill=${fillText(this.fill)})`;
+  }
+}
+
+export class RandomAffine implements Transform {
+  private readonly inner: v1.RandomAffine;
+  private readonly degrees: [number, number];
+
+  constructor(
+    degrees: number | readonly number[],
+    translate: readonly [number, number] | null = null,
+    scale: readonly [number, number] | null = null,
+    shear: number | readonly number[] | null = null,
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    private readonly fill: number | readonly number[] = 0,
+    center: readonly [number, number] | null = null,
+  ) {
+    this.inner = new v1.RandomAffine(degrees, translate, scale, shear, interpolation,
+                                     fill, center);
+    this.degrees = setupAngle(degrees, "degrees");
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  // `translate`, `scale` and `shear` are stored and left out: unset they are `None`,
+  // and `None` is not a kind v2 prints.
+  describe(): string {
+    return `RandomAffine(degrees=${listOf(this.degrees, true)}, ` +
+      `interpolation=${this.interpolation}, fill=${fillText(this.fill)})`;
+  }
+}
+
+export class RandomPerspective implements Transform {
+  private readonly inner: v1.RandomPerspective;
+
+  constructor(
+    private readonly distortionScale = 0.5,
+    private readonly p = 0.5,
+    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    private readonly fill: number | readonly number[] = 0,
+  ) {
+    this.inner = new v1.RandomPerspective(distortionScale, p, interpolation, fill);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomPerspective(p=${this.p}, ` +
+      `distortion_scale=${this.distortionScale}, ` +
+      `interpolation=${this.interpolation}, fill=${fillText(this.fill)})`;
+  }
+}
+
+export class ElasticTransform implements Transform {
+  private readonly inner: v1.ElasticTransform;
+  private readonly alphaPair: [number, number];
+  private readonly sigmaPair: [number, number];
+
+  // **The printed `fill` cannot be read back off the object.** v1 normalises it to a
+  // list in its constructor and v2 prints the number as it was given, so the argument
+  // is kept rather than recovered — recovering it would turn `0` into `[0.0]`.
+  constructor(
+    alpha: number | readonly number[] = 50,
+    sigma: number | readonly number[] = 5,
+    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    private readonly fill: number | readonly number[] = 0,
+  ) {
+    this.inner = new v1.ElasticTransform(alpha, sigma, interpolation, fill);
+    this.alphaPair = typeof alpha === "number" ? [alpha, alpha] : [alpha[0] ?? 0, alpha[1] ?? 0];
+    this.sigmaPair = typeof sigma === "number" ? [sigma, sigma] : [sigma[0] ?? 0, sigma[1] ?? 0];
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `ElasticTransform(alpha=${listOf(this.alphaPair, true)}, ` +
+      `sigma=${listOf(this.sigmaPair, true)}, interpolation=${this.interpolation}, ` +
+      `fill=${fillText(this.fill)})`;
+  }
+}
+
+export class GaussianBlur implements Transform {
+  private readonly inner: v1.GaussianBlur;
+  private readonly kernel: [number, number];
+  private readonly sigmaPair: [number, number];
+
+  constructor(
+    kernelSize: number | readonly number[],
+    sigma: number | readonly [number, number] = [0.1, 2.0],
+  ) {
+    this.inner = new v1.GaussianBlur(kernelSize, sigma);
+    this.kernel = typeof kernelSize === "number" ? [kernelSize, kernelSize]
+      : [kernelSize[0] ?? 0, kernelSize[1] ?? 0];
+    this.sigmaPair = typeof sigma === "number" ? [sigma, sigma]
+      : [sigma[0] ?? 0, sigma[1] ?? 0];
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    // **`sigma` is a float pair and `kernel_size` is an int pair**, so one carries a
+    // decimal point and the other does not — `[0.1, 2.0]` beside `(3, 3)`. torchvision
+    // stores the sigma through `float()` whatever came in.
+    return `GaussianBlur(kernel_size=${pair(this.kernel)}, ` +
+      `sigma=${listOf(this.sigmaPair, true)})`;
+  }
+}
+
+// **The policies put `interpolation` first**, where every other class here has it
+// after the arguments that decide the picture. That is v2's assignment order.
+export class AutoAugment implements Transform {
+  private readonly inner: v1.AutoAugment;
+
+  constructor(
+    private readonly policy: AutoAugmentPolicyName = "imagenet",
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    fill: number | readonly number[] | null = null,
+  ) {
+    this.inner = new v1.AutoAugment(policy, interpolation, fill);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  // The policy prints as the enum member and not as its value — `IMAGENET`, not
+  // `imagenet`, because Python's enum repr is what the golden froze.
+  describe(): string {
+    return `AutoAugment(interpolation=${this.interpolation}, ` +
+      `policy=AutoAugmentPolicy.${this.policy.toUpperCase()})`;
+  }
+}
+
+export class RandAugment implements Transform {
+  private readonly inner: v1.RandAugment;
+
+  constructor(
+    private readonly numOps = 2,
+    private readonly magnitude = 9,
+    private readonly numMagnitudeBins = 31,
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    fill: number | readonly number[] | null = null,
+  ) {
+    this.inner = new v1.RandAugment(numOps, magnitude, numMagnitudeBins,
+                                    interpolation, fill);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandAugment(interpolation=${this.interpolation}, ` +
+      `num_ops=${this.numOps}, magnitude=${this.magnitude}, ` +
+      `num_magnitude_bins=${this.numMagnitudeBins})`;
+  }
+}
+
+export class TrivialAugmentWide implements Transform {
+  private readonly inner: v1.TrivialAugmentWide;
+
+  constructor(
+    private readonly numMagnitudeBins = 31,
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    fill: number | readonly number[] | null = null,
+  ) {
+    this.inner = new v1.TrivialAugmentWide(numMagnitudeBins, interpolation, fill);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `TrivialAugmentWide(interpolation=${this.interpolation}, ` +
+      `num_magnitude_bins=${this.numMagnitudeBins})`;
+  }
+}
+
+export class AugMix implements Transform {
+  private readonly inner: v1.AugMix;
+
+  constructor(
+    private readonly severity = 3,
+    private readonly mixtureWidth = 3,
+    private readonly chainDepth = -1,
+    private readonly alpha = 1.0,
+    private readonly allOps = true,
+    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    fill: number | readonly number[] | null = null,
+  ) {
+    this.inner = new v1.AugMix(severity, mixtureWidth, chainDepth, alpha, allOps,
+                               interpolation, fill);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `AugMix(interpolation=${this.interpolation}, severity=${this.severity}, ` +
+      `mixture_width=${this.mixtureWidth}, chain_depth=${this.chainDepth}, ` +
+      `alpha=${pyFloat(this.alpha)}, all_ops=${bool2(this.allOps)})`;
+  }
+}
+
+export class LinearTransformation implements Transform {
+  private readonly inner: v1.LinearTransformation;
+
+  constructor(matrix: readonly (readonly number[])[], mean: readonly number[]) {
+    this.inner = new v1.LinearTransformation(matrix, mean);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x as never);
+  }
+
+  // **It prints nothing at all**, and neither does `ToTensor` below. Their state is
+  // arrays, and an array of arrays is not a kind v2's rule keeps — easy to mistake
+  // for an unfinished repr, which is why it says so here.
+  describe(): string {
+    return "LinearTransformation()";
+  }
+}
+
+export class ToTensor implements Transform {
+  private readonly inner = new v1.ToTensor();
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return "ToTensor()";
+  }
+}
+
+// ── The containers, which print torch's `nn.Module` way ───────────────────
+
+/**
+ * torch's `nn.Module` printing, which is what v2's containers inherit.
+ *
+ * **One transform prints inline and two print over several lines**, and the indent
+ * is not the same in the two cases — four spaces inline, six once it breaks, because
+ * torch indents each line of `extra_repr` by two more when it wraps. Measured rather
+ * than derived; it is the kind of thing nobody would guess and everybody would get
+ * almost right.
+ */
+function moduleRepr(name: string, lines: readonly string[]): string {
+  const body = lines.map((line) => `    ${line}`).join("\n");
+  if (!body.includes("\n")) return `${name}(${body})`;
+  const inner = body.split("\n").map((line) => `  ${line}`).join("\n");
+  return `${name}(\n${inner}\n)`;
+}
+
+export class Compose implements Transform {
+  private readonly inner: v1.Compose;
+
+  constructor(private readonly transforms: readonly Transform[]) {
+    this.inner = new v1.Compose(transforms);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return moduleRepr("Compose", this.transforms.map((t) => t.describe()));
+  }
+}
+
+export class RandomApply implements Transform {
+  private readonly inner: v1.RandomApply;
+
+  constructor(private readonly transforms: readonly Transform[], p = 0.5) {
+    this.inner = new v1.RandomApply(transforms, p);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  // **`p` is stored and not printed**, unlike v1's — torch's module repr shows only
+  // what `extra_repr` returns, and v2 leaves the probability out of it.
+  describe(): string {
+    return moduleRepr("RandomApply", this.transforms.map((t) => t.describe()));
+  }
+}
+
+export class RandomOrder implements Transform {
+  private readonly inner: v1.RandomOrder;
+
+  constructor(private readonly transforms: readonly Transform[]) {
+    this.inner = new v1.RandomOrder(transforms);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomOrder(transforms=[${
+      this.transforms.map((t) => t.describe()).join(", ")}])`;
+  }
+}
+
+export class RandomChoice implements Transform {
+  private readonly inner: v1.RandomChoice;
+  private readonly weights: readonly number[];
+
+  constructor(private readonly transforms: readonly Transform[],
+              weights: readonly number[] | null = null) {
+    this.inner = new v1.RandomChoice(transforms, weights);
+    // **v2 fills `p` in.** v1 leaves it unset; v2 builds the uniform distribution and
+    // stores it, so two transforms given no probabilities print `p=[0.5, 0.5]`.
+    this.weights = weights ?? transforms.map(() => 1 / transforms.length);
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `RandomChoice(transforms=[${
+      this.transforms.map((t) => t.describe()).join(", ")}], ` +
+      `p=${listOf(this.weights)})`;
+  }
+}
+
+/**
+ * v2's `Lambda` takes **the types it applies to** as well as the function — the one
+ * place in this namespace where the constructor differs and not just the printing.
+ *
+ * Given tv_tensors it would run only on the kinds named; there is one kind here, so
+ * the argument is kept and printed rather than acted on. Taking it and dropping it
+ * silently would read as support.
+ */
+export class Lambda implements Transform {
+  private readonly inner: v1.Lambda;
+  private readonly types: readonly string[];
+
+  constructor(private readonly fn: (x: Subject) => Subject,
+              ...types: readonly string[]) {
+    this.inner = new v1.Lambda(fn);
+    this.types = types.length ? types : ["object"];
+  }
+
+  apply(x: Subject): Subject {
+    return this.inner.apply(x);
+  }
+
+  describe(): string {
+    return `Lambda(${this.fn.name}, types=[${
+      this.types.map((t) => `'${t}'`).join(", ")}])`;
+  }
+}
+
+// ── MixUp and CutMix: a batch, and labels that move with it ───────────────
+//
+// **The only two transforms in v2 whose input is a training pair rather than a
+// picture.** Everything above takes `(H,W,C)` and gives `(H,W,C)` back; these take
+// a batch with a label per row and give both back changed, because mixing two
+// pictures without mixing their labels teaches the wrong thing.
+//
+// The pairing is **row `i` with row `i-1`** — a roll by one, not a random partner.
+// torchvision says outright that this is an implementation detail and that the
+// batch is expected to be shuffled already; kept the same here, because a recipe
+// that shuffles for torchvision's sake would otherwise be silently unnecessary.
+//
+// `labels_getter` is **not taken.** In torchvision it exists to find the labels
+// inside a nested sample — a dict, a tuple of tv_tensors — and there are none here,
+// so the labels arrive as the second argument and nothing has to go looking. Taking
+// the argument and ignoring it would read as support.
+
+/** A batch of pictures, and a label per row: indices or one row of probabilities. */
+export type Batch = readonly Image[];
+export type Labels = readonly number[] | readonly (readonly number[])[];
+
+/** What both share: the two checks torchvision makes, and the label blend. */
+abstract class MixBase {
+  constructor(readonly alpha: number = 1.0,
+              readonly numClasses: number | null = null) {}
+
+  /** **A wrong batch here is a silent mis-train**, since every shape involved is
+   *  plausible — so the shapes are checked in torchvision's own words. */
+  protected read(images: Batch, labels: Labels): readonly number[][] {
+    const rows = labels as readonly (number | readonly number[])[];
+    const twoD = rows.length > 0 && Array.isArray(rows[0]);
+    if (!twoD && this.numClasses === null) {
+      throw new RuntimeError(
+        "num_classes must be passed if the labels are index-based (1D)");
+    }
+    if (images.length !== rows.length) {
+      throw new RuntimeError(
+        "The batch size of the image or video does not match the batch size " +
+        `of the labels: ${images.length} != ${rows.length}.`);
+    }
+    if (twoD) return rows.map((r) => [...(r as readonly number[])]);
+    // One-hot first if they came in as indices.
+    return rows.map((r) => {
+      const hot = new Array<number>(this.numClasses as number).fill(0);
+      hot[Math.trunc(r as number)] = 1;
+      return hot;
+    });
+  }
+
+  /** **`lam` weights the row itself and `1-lam` its partner** — the way round that
+   *  matters, and the way round torchvision has it. */
+  protected mixLabels(labels: readonly number[][], lam: number): number[][] {
+    return labels.map((row, i) => {
+      const partner = labels[(i - 1 + labels.length) % labels.length] as number[];
+      return row.map((v, k) => (partner[k] as number) * (1 - lam) + v * lam);
+    });
+  }
+
+  protected partnerOf(images: Batch, i: number): Image {
+    return images[(i - 1 + images.length) % images.length] as Image;
+  }
+}
+
+/**
+ * Blend each picture with the one before it, and their labels by the same weight.
+ *
+ * <https://arxiv.org/abs/1710.09412>. The whole transform is one weighted average,
+ * which is what makes it worth having: no crop, no resample, nothing to get subtly
+ * wrong, and it still moves a classifier's calibration.
+ */
+export class MixUp extends MixBase {
+  apply(images: Batch, labels: Labels): [Image[], number[][]] {
+    const hot = this.read(images, labels);
+    const lam = nextBeta(this.alpha);
+    const mixed = images.map((img, i) => {
+      const partner = this.partnerOf(images, i);
+      const out = img.data.map((v, k) => (partner.data[k] as number) * (1 - lam) + v * lam);
+      return image(out, img.height, img.width, img.channels, img.isByte);
+    });
+    return [mixed, this.mixLabels(hot, lam)];
+  }
+
+  describe(): string {
+    return `MixUp(alpha=${pyFloat(this.alpha)}, num_classes=${this.numClasses})`;
+  }
+}
+
+/**
+ * Paste a rectangle of the previous picture into this one, and mix the labels by
+ * **the area actually pasted** rather than by the weight that was drawn.
+ *
+ * <https://arxiv.org/abs/1905.04899>. That adjustment is the part worth pointing at:
+ * the box is centred on a random point and clipped at the edges, so a box near a
+ * corner loses half its area, and a label mixed by the drawn weight would then claim
+ * more of the other class than the picture contains.
+ */
+export class CutMix extends MixBase {
+  apply(images: Batch, labels: Labels): [Image[], number[][]] {
+    const hot = this.read(images, labels);
+    const lam = nextBeta(this.alpha);
+    const first = images[0] as Image;
+    const h = first.height;
+    const w = first.width;
+    const centreX = nextInt(w);
+    const centreY = nextInt(h);
+    const half = 0.5 * Math.sqrt(1 - lam);
+    const halfW = Math.trunc(half * w);
+    const halfH = Math.trunc(half * h);
+    const x1 = Math.max(centreX - halfW, 0);
+    const y1 = Math.max(centreY - halfH, 0);
+    const x2 = Math.min(centreX + halfW, w);
+    const y2 = Math.min(centreY + halfH, h);
+    const pasted = images.map((img, i) => {
+      const partner = this.partnerOf(images, i);
+      const out = Float64Array.from(img.data);
+      for (let y = y1; y < y2; y++) {
+        for (let x = x1; x < x2; x++) {
+          for (let c = 0; c < img.channels; c++) {
+            const at = (y * img.width + x) * img.channels + c;
+            out[at] = partner.data[at] as number;
+          }
+        }
+      }
+      return image(out, img.height, img.width, img.channels, img.isByte);
+    });
+    const byArea = 1 - ((x2 - x1) * (y2 - y1)) / (w * h);
+    return [pasted, this.mixLabels(hot, byArea)];
+  }
+
+  describe(): string {
+    return `CutMix(alpha=${pyFloat(this.alpha)}, num_classes=${this.numClasses})`;
   }
 }

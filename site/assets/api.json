@@ -4,7 +4,7 @@
  "korean": {
   "done": 702,
   "stale": 0,
-  "missing": 184
+  "missing": 188
  },
  "modules": [
   {
@@ -15406,9 +15406,886 @@
        "doc": ""
       }
      ]
+    },
+    {
+     "kind": "class",
+     "name": "Resize",
+     "signature": "export declare class Resize implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "CenterCrop",
+     "signature": "export declare class CenterCrop implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomCrop",
+     "signature": "export declare class RandomCrop implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number], padding?: number | readonly number[] | null, padIfNeeded?: boolean, fill?: number | readonly number[], paddingMode?: PaddingMode)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomResizedCrop",
+     "signature": "export declare class RandomResizedCrop implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number], scale?: readonly [number, number], ratio?: readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "FiveCrop",
+     "signature": "export declare class FiveCrop implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TenCrop",
+     "signature": "export declare class TenCrop implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number], verticalFlip?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Pad",
+     "signature": "export declare class Pad implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(padding: number | readonly number[], fill?: number | readonly number[], paddingMode?: PaddingMode)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomHorizontalFlip",
+     "signature": "export declare class RandomHorizontalFlip implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomVerticalFlip",
+     "signature": "export declare class RandomVerticalFlip implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Grayscale",
+     "signature": "export declare class Grayscale implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(numOutputChannels?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomGrayscale",
+     "signature": "export declare class RandomGrayscale implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Normalize",
+     "signature": "export declare class Normalize implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(mean: readonly number[], std: readonly number[], inplace?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomErasing",
+     "signature": "export declare class RandomErasing implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number, scale?: readonly [number, number], ratio?: readonly [number, number], value?: number | readonly number[] | \"random\", inplace?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ColorJitter",
+     "signature": "export declare class ColorJitter implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(brightness?: number | readonly [number, number], contrast?: number | readonly [number, number], saturation?: number | readonly [number, number], hue?: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomInvert",
+     "signature": "export declare class RandomInvert implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAutocontrast",
+     "signature": "export declare class RandomAutocontrast implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomEqualize",
+     "signature": "export declare class RandomEqualize implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomPosterize",
+     "signature": "export declare class RandomPosterize implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(bits: number, p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomSolarize",
+     "signature": "export declare class RandomSolarize implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(threshold: number, p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAdjustSharpness",
+     "signature": "export declare class RandomAdjustSharpness implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(sharpnessFactor: number, p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomRotation",
+     "signature": "export declare class RandomRotation implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(degrees: number | readonly number[], interpolation?: \"bilinear\" | \"nearest\", expand?: boolean, center?: readonly [number, number] | null, fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAffine",
+     "signature": "export declare class RandomAffine implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(degrees: number | readonly number[], translate?: readonly [number, number] | null, scale?: readonly [number, number] | null, shear?: number | readonly number[] | null, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[], center?: readonly [number, number] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomPerspective",
+     "signature": "export declare class RandomPerspective implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(distortionScale?: number, p?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ElasticTransform",
+     "signature": "export declare class ElasticTransform implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(alpha?: number | readonly number[], sigma?: number | readonly number[], interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "GaussianBlur",
+     "signature": "export declare class GaussianBlur implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(kernelSize: number | readonly number[], sigma?: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "AutoAugment",
+     "signature": "export declare class AutoAugment implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(policy?: AutoAugmentPolicyName, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandAugment",
+     "signature": "export declare class RandAugment implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(numOps?: number, magnitude?: number, numMagnitudeBins?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TrivialAugmentWide",
+     "signature": "export declare class TrivialAugmentWide implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(numMagnitudeBins?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "AugMix",
+     "signature": "export declare class AugMix implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(severity?: number, mixtureWidth?: number, chainDepth?: number, alpha?: number, allOps?: boolean, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "LinearTransformation",
+     "signature": "export declare class LinearTransformation implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(matrix: readonly (readonly number[])[], mean: readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ToTensor",
+     "signature": "export declare class ToTensor implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Compose",
+     "signature": "export declare class Compose implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(transforms: readonly Transform[])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomApply",
+     "signature": "export declare class RandomApply implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(transforms: readonly Transform[], p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomOrder",
+     "signature": "export declare class RandomOrder implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(transforms: readonly Transform[])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomChoice",
+     "signature": "export declare class RandomChoice implements Transform",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(transforms: readonly Transform[], weights?: readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Lambda",
+     "signature": "export declare class Lambda implements Transform",
+     "doc": "v2's `Lambda` takes **the types it applies to** as well as the function — the one\nplace in this namespace where the constructor differs and not just the printing.\n\nGiven tv_tensors it would run only on the kinds named; there is one kind here, so\nthe argument is kept and printed rather than acted on. Taking it and dropping it\nsilently would read as support.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(fn: (x: Subject) => Subject, ...types: readonly string[])",
+       "doc": "",
+       "section": {
+        "ko": "MixUp and CutMix: a batch, and labels that move with it",
+        "en": "MixUp and CutMix: a batch, and labels that move with it"
+       }
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "type",
+     "name": "Batch",
+     "signature": "export type Batch = readonly Image[]",
+     "doc": "A batch of pictures, and a label per row: indices or one row of probabilities.",
+     "members": []
+    },
+    {
+     "kind": "type",
+     "name": "Labels",
+     "signature": "export type Labels = readonly number[] | readonly (readonly number[])[]",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "class",
+     "name": "MixUp",
+     "signature": "export declare class MixUp extends MixBase",
+     "doc": "Blend each picture with the one before it, and their labels by the same weight.\n\n<https://arxiv.org/abs/1710.09412>. The whole transform is one weighted average,\nwhich is what makes it worth having: no crop, no resample, nothing to get subtly\nwrong, and it still moves a classifier's calibration.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(images: Batch, labels: Labels): [Image[], number[][]]",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "CutMix",
+     "signature": "export declare class CutMix extends MixBase",
+     "doc": "Paste a rectangle of the previous picture into this one, and mix the labels by\n**the area actually pasted** rather than by the weight that was drawn.\n\n<https://arxiv.org/abs/1905.04899>. That adjustment is the part worth pointing at:\nthe box is centred on a random point and clipped at the edges, so a box near a\ncorner loses half its area, and a label mixed by the drawn weight would then claim\nmore of the other class than the picture contains.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(images: Batch, labels: Labels): [Image[], number[][]]",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 43,
+   "count": 194,
    "doc_ko": "`torchvision.transforms.v2` — torchvision 이 지금 권하는 API.\n\n## v2 가 바꾼 것과 바꾸지 않은 것\n\n**바꾼 것은 변환이 무엇을 찍는가이지 무엇을 계산하는가가 아니다.** 비교 가능한\n이름들에 대고 재보면 값은 어디서나 일치하고, repr 은 33 개 중 21 개가 다르다.\n`Resize(5)` 는 크기를 `[5]` 로 들고 있고, `ColorJitter` 는 지정 안 된 인자를 찍지 않고\n버린다. 그래서 v1 이 이미 가진 이름들에 대해 이 파일이 할 일은 인쇄다.\n\n그 위에 v2 는 v1 이 아예 답할 수 없는 것들을 더하고, 이 파일이 먼저 자란 곳이\n그쪽이다: `Identity`·`RGB`·`ToImage`·`ToDtype`·`ToPureTensor`·`GaussianNoise`·\n`RandomChannelPermutation`·`RandomPhotometricDistort`·`RandomResize`·\n`RandomShortestSize`·`RandomZoomOut`·`ScaleJitter`.\n\n## 공유하는 것들이 상속이 아니라 위임인 까닭\n\n파이썬 판은 v1 을 상속하고 repr 만 덮어쓴다. 그쪽이 짧은 표기이고 **건너올 때\n살아남지 못한다.** `vision.ts` 가 이 이름 공간을 `vision.v2` 로 내놓으려면 두 모듈이\n서로를 import 하는데, 순환 안에서 클래스 본문의 `extends Resize` 는 상대 모듈이 아직\n평가를 마치기 전에 `Resize` 를 읽는다 — temporal dead zone 이고, 틀린 값이 아니라\nimport 시점의 크래시다. 위임은 그 읽기를 호출 시점으로 옮긴다.\n\n상속이 사 주던 것은 그대로 산다: v1 객체가 곧 구현이므로, v2 이름이 자기 몸통을\n몰래 기르면 짝도 함께 움직이지 않는 한 어긋난다. 골든이 정확히 그것을 묻는다 —\n`v2::Resize(inherited)` 는 v2 표기를 **v1 자신의 언 답**에 대고 잰다.\n\n## 여기 없는 것\n\ntv_tensor 절반 — 그림 옆에 함께 실려 다니는 상자·마스크·키포인트·비디오, 그리고\n그 타입으로 갈라 보내는 디스패치. 탐지기가 있어야 값을 하는데 이 카탈로그에는 없다."
   },
   {
@@ -17024,5 +17901,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2244
+ "total": 2395
 }

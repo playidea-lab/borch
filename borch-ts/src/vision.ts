@@ -29,7 +29,8 @@
 import { RuntimeError } from "./errors.js";
 import { Tensor } from "./tensor.js";
 import {
-  asImage, nextFloat, nextInt, nextNormal, pyFloat, seed as seedRng,
+  asImage, checkSpan, nextFloat, nextInt, nextNormal, pairOf, pyFloat,
+  seed as seedRng, setupAngle, spanText, type Span,
 } from "./_vision_util.js";
 
 // Box geometry — `torchvision.ops`, reached as `vision.ops`. It is a separate file
@@ -1310,9 +1311,6 @@ export class RandomErasing implements Transform {
 }
 
 /** `(h, w)` from either a number or a pair. */
-function pairOf(size: number | readonly [number, number]): [number, number] {
-  return typeof size === "number" ? [size, size] : [size[0], size[1]];
-}
 
 /** The rectangle at `(top, left)`, `th` by `tw`. */
 function cropAt(img: Image, top: number, left: number, th: number, tw: number): Image {
@@ -1619,49 +1617,6 @@ export function adjustGamma(img: Image, gamma: number, gain = 1): Image {
   return fromFloat01(out, img);
 }
 
-/** `null` means it is not used, and that prints as `None`. */
-type Span = readonly [number, number] | null;
-
-function checkSpan(
-  value: number | readonly [number, number] | undefined,
-  name: string,
-  center: number,
-  lo: number,
-  hi: number,
-  clipFirstOnZero: boolean,
-): Span {
-  let pair: [number, number];
-  if (value === undefined) {
-    pair = [center, center];
-  } else if (typeof value === "number") {
-    if (value < 0) {
-      throw new RuntimeError(
-        `${name} as a single number must be non-negative — got ${value}.\n` +
-        `(torch: If ${name} is a single number, it must be non negative.)`);
-    }
-    pair = [center - value, center + value];
-    if (clipFirstOnZero) pair[0] = Math.max(pair[0], 0);
-  } else if (Array.isArray(value) && value.length === 2) {
-    pair = [Number(value[0]), Number(value[1])];
-  } else {
-    throw new RuntimeError(
-      `${name} is a single number or a pair — got ${JSON.stringify(value)}.\n` +
-      `(torch: ${name} should be a single number or a list/tuple with length 2.)`);
-  }
-  if (!(lo <= pair[0] && pair[0] <= pair[1] && pair[1] <= hi)) {
-    throw new RuntimeError(
-      `${name} values should be between (${lo}, ${hi}), but got [${pair[0]}, ${pair[1]}].\n` +
-      `(torch: ${name} values should be between (${lo}, ${hi}), but got [${pair[0]}, ${pair[1]}].)`);
-  }
-  // **The identity is stored as `None` rather than as a range that does nothing.**
-  // Applied anyway it costs one blend, and on a byte picture one rounding — "no jitter"
-  // and "a jitter of exactly 1" are different things.
-  return pair[0] === pair[1] && pair[0] === center ? null : [pair[0], pair[1]];
-}
-
-function spanText(s: Span): string {
-  return s === null ? "None" : `(${s[0]}, ${s[1]})`;
-}
 
 /**
  * Brightness, contrast, saturation and hue, each drawn from a range — **and the
@@ -2428,22 +2383,6 @@ function fillList(fill: number | readonly number[] | null): readonly number[] | 
 
 
 /** A number `d` means `[-d, d]`; a pair is taken as it is. */
-function setupAngle(x: number | readonly number[], name: string): [number, number] {
-  if (typeof x === "number") {
-    if (x < 0) {
-      throw new RuntimeError(
-        `${name} as a single number must be positive — got ${x}.\n` +
-        `(torch: If ${name} is a single number, it must be positive.)`);
-    }
-    return [-x, x];
-  }
-  if (x.length !== 2) {
-    throw new RuntimeError(
-      `${name} is a single number or a pair — got ${x.length} numbers.\n` +
-      `(torch: ${name} should be a sequence of length 2.)`);
-  }
-  return [x[0] ?? 0, x[1] ?? 0];
-}
 
 /** Python's list spelling — `[-30.0, 30.0]`, which is how `repr` prints these. */
 function floatList(v: readonly number[]): string {

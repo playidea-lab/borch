@@ -120,3 +120,113 @@ export function asImage(x: Subject, who: string): Image {
 export function pyFloat(v: number): string {
   return Number.isInteger(v) ? `${v}.0` : String(v);
 }
+
+
+// ── The argument normalisations, shared because **both namespaces print them** ──
+//
+// v2's transforms delegate their behaviour to v1's and declare their own printed
+// fields, and several of those fields are the *normalised* value rather than the one
+// the caller passed: `ColorJitter(0.5)` prints `brightness=(0.5, 1.5)` and
+// `RandomRotation(30)` prints `degrees=[-30.0, 30.0]`. A v1 object keeps those
+// privately, so a twin can either read them — which TypeScript will not allow — or
+// normalise again. Normalising again in a second place is how the two come to
+// disagree about what `0` means, so the normalisation lives here and both call it.
+
+/** `null` means it is not used, and that prints as `None`. */
+export type Span = readonly [number, number] | null;
+
+export function checkSpan(
+  value: number | readonly [number, number] | undefined,
+  name: string,
+  center: number,
+  lo: number,
+  hi: number,
+  clipFirstOnZero: boolean,
+): Span {
+  let pair: [number, number];
+  if (value === undefined) {
+    pair = [center, center];
+  } else if (typeof value === "number") {
+    if (value < 0) {
+      throw new RuntimeError(
+        `${name} as a single number must be non-negative — got ${value}.\n` +
+        `(torch: If ${name} is a single number, it must be non negative.)`);
+    }
+    pair = [center - value, center + value];
+    if (clipFirstOnZero) pair[0] = Math.max(pair[0], 0);
+  } else if (Array.isArray(value) && value.length === 2) {
+    pair = [Number(value[0]), Number(value[1])];
+  } else {
+    throw new RuntimeError(
+      `${name} is a single number or a pair — got ${JSON.stringify(value)}.\n` +
+      `(torch: ${name} should be a single number or a list/tuple with length 2.)`);
+  }
+  if (!(lo <= pair[0] && pair[0] <= pair[1] && pair[1] <= hi)) {
+    throw new RuntimeError(
+      `${name} values should be between (${lo}, ${hi}), but got [${pair[0]}, ${pair[1]}].\n` +
+      `(torch: ${name} values should be between (${lo}, ${hi}), but got [${pair[0]}, ${pair[1]}].)`);
+  }
+  // **The identity is stored as `None` rather than as a range that does nothing.**
+  // Applied anyway it costs one blend, and on a byte picture one rounding — "no jitter"
+  // and "a jitter of exactly 1" are different things.
+  return pair[0] === pair[1] && pair[0] === center ? null : [pair[0], pair[1]];
+}
+
+export function spanText(s: Span): string {
+  return s === null ? "None" : `(${s[0]}, ${s[1]})`;
+}
+
+export function setupAngle(x: number | readonly number[], name: string): [number, number] {
+  if (typeof x === "number") {
+    if (x < 0) {
+      throw new RuntimeError(
+        `${name} as a single number must be positive — got ${x}.\n` +
+        `(torch: If ${name} is a single number, it must be positive.)`);
+    }
+    return [-x, x];
+  }
+  if (x.length !== 2) {
+    throw new RuntimeError(
+      `${name} is a single number or a pair — got ${x.length} numbers.\n` +
+      `(torch: ${name} should be a sequence of length 2.)`);
+  }
+  return [x[0] ?? 0, x[1] ?? 0];
+}
+
+export function pairOf(size: number | readonly [number, number]): [number, number] {
+  return typeof size === "number" ? [size, size] : [size[0], size[1]];
+}
+
+/**
+ * One draw from Gamma(shape, 1) — Marsaglia–Tsang, off the same stream.
+ *
+ * **Below shape 1 it is the shape-plus-one draw scaled down**, which is the
+ * standard boost and not an approximation: the rejection step's bound only holds
+ * for `d = shape - 1/3 > 0`, so a shape under 1 has to be lifted and corrected.
+ */
+function nextGamma(shape: number): number {
+  if (shape < 1) return nextGamma(shape + 1) * Math.pow(nextFloat(), 1 / shape);
+  const d = shape - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+  for (;;) {
+    const x = nextNormal();
+    const v = (1 + c * x) ** 3;
+    if (v <= 0) continue;
+    const u = Math.max(nextFloat(), Number.MIN_VALUE);
+    if (Math.log(u) < 0.5 * x * x + d - d * v + d * Math.log(v)) return d * v;
+  }
+}
+
+/**
+ * One draw from Beta(alpha, alpha) — the blend weight `MixUp` and `CutMix` use.
+ *
+ * Two Gammas over their sum. **The symmetric case is the only one needed**, and
+ * torchvision draws it the same way; what neither side can promise is the same
+ * number, since the streams differ — which is why the golden holds these two
+ * transforms' reprs and no value case.
+ */
+export function nextBeta(alpha: number): number {
+  const x = nextGamma(alpha);
+  const y = nextGamma(alpha);
+  return x + y === 0 ? 0.5 : x / (x + y);
+}

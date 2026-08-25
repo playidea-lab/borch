@@ -313,16 +313,12 @@ DELIBERATE: dict[str, str] = {
        "compiler refuses a wrong mode before the call runs"
        for ns in ("transforms", "transforms.functional",
                   "transforms.v2", "transforms.v2.functional")},
-    # **The two v2 transforms that take a batch and a label rather than a picture.**
-    # Everything else in that namespace is `(H,W,C)` in and `(H,W,C)` out; these are
-    # `(N,H,W,C)` with a label per row, and they draw their blend from a Beta — which
-    # is a sampler `_vision_util.ts` does not have and nothing else there needs. The
-    # golden holds their reprs and no value case, so porting them is real work with no
-    # frozen answer waiting to check it, which is why they are behind the rest.
-    **{f"transforms.v2::{n}":
-       "owed — takes a batch and labels rather than a picture, and draws from a Beta "
-       "that nothing else in vision needs. Only its repr is frozen"
-       for n in ("MixUp", "CutMix")},
+    # **`MixUp` and `CutMix` were here and are not.** The reason read *owed — takes a
+    # batch and labels rather than a picture, and draws from a Beta that nothing else
+    # in vision needs*, which was true and was a cost rather than an impossibility:
+    # the Beta is two Gammas over their sum, and `nextBeta` is twenty lines in
+    # `_vision_util.ts`. A reason that names a cost is the kind that comes off by
+    # somebody paying it.
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not

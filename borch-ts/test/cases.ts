@@ -2164,6 +2164,86 @@ function addV2(out: Map<string, Case>, inp: Inputs): void {
     () => asTensor(new v2.RandomShortestSize(4, 40).apply(f())));
   out.set("v2::ScaleJitter(one factor)",
     () => asTensor(new v2.ScaleJitter([8, 8], [1.0, 1.0]).apply(f())));
+
+  // ── the fifty-two printed lines ──────────────────────────────────────
+  //
+  // **This is the larger half of v2 and it is frozen as text.** v2 computes what v1
+  // computes and prints something else, so `print(transform)` is the whole of the
+  // difference on a plain picture — and it is how a tutorial's reader checks that
+  // the thing they built is the thing they meant.
+  //
+  // The arguments are chosen to make each line **say something**: a
+  // default-everything constructor prints the same text no matter what the
+  // constructor did with what it was given.
+  const reprs: readonly (readonly [string, () => { describe(): string }])[] = [
+    ["Resize", () => new v2.Resize([4, 3])],
+    ["Resize(one number)", () => new v2.Resize(5)],
+    ["CenterCrop", () => new v2.CenterCrop(4)],
+    ["RandomCrop", () => new v2.RandomCrop(4)],
+    ["RandomResizedCrop", () => new v2.RandomResizedCrop(4)],
+    ["FiveCrop", () => new v2.FiveCrop(3)],
+    ["TenCrop", () => new v2.TenCrop(3)],
+    ["Pad", () => new v2.Pad(2)],
+    ["RandomHorizontalFlip", () => new v2.RandomHorizontalFlip()],
+    ["RandomVerticalFlip", () => new v2.RandomVerticalFlip()],
+    ["Grayscale", () => new v2.Grayscale(3)],
+    ["RandomGrayscale", () => new v2.RandomGrayscale()],
+    ["Normalize", () => new v2.Normalize([0.5], [0.5])],
+    ["RandomErasing", () => new v2.RandomErasing()],
+    // **The clearest case of v2's type filter doing the work** — three unset factors
+    // are `None`, and `None` is not a kind v2 prints, so v1's line carries four
+    // fields and this one carries one.
+    ["ColorJitter", () => new v2.ColorJitter(0.5)],
+    ["ColorJitter(all four)", () => new v2.ColorJitter(0.5, 0.3, 0.2, 0.1)],
+    ["RandomInvert", () => new v2.RandomInvert()],
+    ["RandomPosterize", () => new v2.RandomPosterize(4)],
+    ["RandomSolarize", () => new v2.RandomSolarize(0.5)],
+    ["RandomAutocontrast", () => new v2.RandomAutocontrast()],
+    ["RandomEqualize", () => new v2.RandomEqualize()],
+    ["RandomAdjustSharpness", () => new v2.RandomAdjustSharpness(2)],
+    ["RandomRotation", () => new v2.RandomRotation(30)],
+    ["RandomAffine", () => new v2.RandomAffine(30)],
+    ["RandomPerspective", () => new v2.RandomPerspective()],
+    ["ElasticTransform", () => new v2.ElasticTransform()],
+    ["GaussianBlur", () => new v2.GaussianBlur(3)],
+    ["AutoAugment", () => new v2.AutoAugment()],
+    ["RandAugment", () => new v2.RandAugment()],
+    ["TrivialAugmentWide", () => new v2.TrivialAugmentWide()],
+    ["AugMix", () => new v2.AugMix()],
+    ["RandomOrder", () => new v2.RandomOrder([new v2.Identity(), new v2.RGB()])],
+    ["RandomChoice", () => new v2.RandomChoice([new v2.Identity(), new v2.RGB()])],
+    // One child and two children print differently — torch's module repr puts one on
+    // the same line and breaks two across lines, at two different indents. Both
+    // spellings are asked because the second cannot be derived from the first.
+    ["Compose(one)", () => new v2.Compose([new v2.Identity()])],
+    ["Compose(two)", () => new v2.Compose([new v2.Identity(), new v2.RGB()])],
+    ["RandomApply", () => new v2.RandomApply([new v2.Identity()], 0.3)],
+    ["Lambda", () => new v2.Lambda(_v2_named, "int", "float")],
+    ["Identity", () => new v2.Identity()],
+    ["RGB", () => new v2.RGB()],
+    ["ToImage", () => new v2.ToImage()],
+    ["ToPureTensor", () => new v2.ToPureTensor()],
+    ["ToDtype", () => new v2.ToDtype("float32", true)],
+    ["GaussianNoise", () => new v2.GaussianNoise()],
+    ["GaussianNoise(three arguments)", () => new v2.GaussianNoise(0.1, 0.5, false)],
+    ["RandomChannelPermutation", () => new v2.RandomChannelPermutation()],
+    ["RandomPhotometricDistort", () => new v2.RandomPhotometricDistort()],
+    ["RandomResize", () => new v2.RandomResize(8, 16)],
+    ["RandomShortestSize", () => new v2.RandomShortestSize(8, 20)],
+    ["RandomZoomOut", () => new v2.RandomZoomOut()],
+    ["ScaleJitter", () => new v2.ScaleJitter([8, 8])],
+    ["MixUp", () => new v2.MixUp(1.0, 4)],
+    ["CutMix", () => new v2.CutMix(0.5, 3)],
+  ];
+  for (const [name, build] of reprs) {
+    out.set(`v2::repr ${name}`, () => build().describe());
+  }
+}
+
+/** `Lambda` prints the function's name, so it has to have one — an arrow assigned to
+ *  a `const` would print that const's name here and `<lambda>` on the Python side. */
+function _v2_named(x: vision.Subject): vision.Subject {
+  return x;
 }
 
 /**

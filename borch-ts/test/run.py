@@ -621,6 +621,19 @@ NOT_PORTED = {
     "misc::": (11, "아직 — Embedding/EmbeddingBag: max_norm, padding_idx, and the "
                    "table after the call"),
     "dataset::": (19, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
+    # **71 → 52 → 0.** The values landed first and the printing followed, which is the
+    # order the two halves could be done in: v2's arithmetic is v1's, so the twins had
+    # to exist before there was anything to print.
+    #
+    # The 52 reprs are written out one class at a time rather than built from a table
+    # the way the Python side builds them. **A TypeScript class made at run time has no
+    # declaration** — it would be invisible to the API reference and to both measuring
+    # axes, so the table that saves 38 repetitions there costs 38 invisible names here.
+    #
+    # 49 of the 50 that could be checked without a browser matched on the first run.
+    # The one that did not was `GaussianBlur`: `sigma` is a float pair and
+    # `kernel_size` an int pair, so one carries a decimal point and the other does not.
+    # That is the kind of thing only a comparison finds.
     # **71 → 52, and the half that came off is the half that could not be faked.**
     # The nineteen values are here now: twelve names v1 has no answer for at all
     # (`Identity`, `RGB`, `ToImage`, `ToDtype`, `GaussianNoise`, `RandomZoomOut`,
@@ -635,8 +648,6 @@ NOT_PORTED = {
     # twinned one by one on this side — TypeScript cannot build them from a table the
     # way the Python side does, because a class made at run time has no declaration and
     # would be invisible to the reference and to both measuring axes.
-    "v2::": (52, "아직 — the repr of fifty-two v2 names. The values landed with "
-                 "`v2.ts`; printing is what a twin is for"),
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),
     # 3 → 7 → 6. Four `DataLoader` rows went in with this reason:
     #
