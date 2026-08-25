@@ -28,8 +28,9 @@ name in the same sentence**, anywhere a reader reads.
 
 ## What a green run does not say
 
-- **Not that NVIDIA works or does not.** It says the documents do not claim it was
-  measured when the only run cited is on record as a CPU.
+- **Not that NVIDIA works or does not.** It says the documents do not credit *this run*
+  to a vendor. NVIDIA has since been measured on its own — `passed 2901 / failed 0
+  [nvidia / blackwell]` — and that changes nothing here, because the 845 is still not it.
 - **Not that other vendor claims are true.** A vendor named with no measurement behind
   it is out of this check's reach — this holds the one that actually happened.
 """
@@ -109,59 +110,46 @@ def test_no_live_document_credits_that_run_to_a_vendor(rel):
         "  Say the adapter, or do not cite the run.")
 
 
-def test_the_three_documents_agree_that_it_was_never_measured():
-    """**One value, three files, and today it was three different values.**
-
-    Within an hour this afternoon the README said *across two vendors*, the English
-    landing said *NVIDIA matched too*, and the Korean landing said *두 벤더에서 골든이
-    전건 같다*. Three statements of one measurement, all published, none agreeing —
-    and each was corrected separately, which is how they came apart in the first place.
-
-    The checks above hold each file against `launch.py`. This one holds them against
-    **each other**, which is a different failure: every file can individually avoid
-    crediting the run and still leave a reader who opens two of them with two answers.
-
-    Asked as *does each say it was not measured*, not as *do they use the same words* —
-    the two landing pages are in different languages, and `test_site.py` already keeps
-    a wording contract where wording is what matters. Here it is the claim.
-
-    **The denial has to name the vendor, and the first version did not require that.**
-    Searching the README for *has not been measured* matched a paragraph five hundred
-    lines up about a benchmark that had not been re-measured — so deleting the NVIDIA
-    sentence left this passing on the strength of an unrelated one. Measured by removing
-    it: the check stayed green. Two sentences that say the same words about different
-    subjects, and only one of them is the claim.
-    """
-    denial = re.compile(
-        r"(NVIDIA|엔비디아)[^.。\n]{0,120}"
-        r"(has (never|not) been measured|측정된 적이 없다|재본 적이 없다)"
-        r"|(has (never|not) been measured|측정된 적이 없다|재본 적이 없다)"
-        r"[^.。\n]{0,120}(NVIDIA|엔비디아)", re.I)
-    said = {}
-    for rel in LIVE:
-        path = ROOT / rel
-        if not path.exists():
-            continue
-        # Line by line: across a whole file the vendor and the denial can be paragraphs
-        # apart and still fall inside one match.
-        said[rel] = any(denial.search(line)
-                        for line in path.read_text(encoding="utf-8").splitlines())
-    missing = sorted(rel for rel, ok in said.items() if not ok)
-    assert said and not missing, (
-        "these do not say NVIDIA was never measured: " + ", ".join(missing) + "\n\n"
-        "  Every live document has to carry the same answer. A reader who opens two of\n"
-        "  them and finds two answers learns that neither is load-bearing — and that is\n"
-        "  what today looked like from outside: three files, three claims, one\n"
-        "  measurement that never happened.")
+# ── Two checks used to stand here, and a real run retired them ───────────────
+#
+#     passed 2901 / failed 0   [nvidia / blackwell]
+#
+# An RTX 5080 on Ubuntu 24.04 under Xvfb. `test_the_three_documents_agree_that_it_was_
+# never_measured` required all three live documents to say NVIDIA had never been
+# measured, and `test_no_live_document_says_two_vendors` refused any document that
+# counted two. Both are gone, deleted by somebody holding the run that replaced them,
+# which is the condition the second one's own message named.
+#
+# ## What their retirement showed about how they worked
+#
+# The expectation was that they would **go red** when the run happened. They did not.
+# They stayed green, because they asked the documents to carry a denial and the
+# documents still carried it — a check enforcing a claim that has become false is not
+# an alarm, it is **an obstacle to the correction.** It goes red only after somebody
+# has already fixed the thing it was guarding.
+#
+# That is not a defect in these two; it is what a check of this shape is. It holds a
+# sentence in place, and holding is the right job right up to the moment the sentence
+# stops being true, at which point nothing in the repository can tell. The retirement
+# condition had to be written in prose, and a person had to come back and read it.
+#
+# The check below is a different shape and stays. It does not hold a claim in place —
+# it holds **one run's number to one run's adapter**, and that pairing is a fact about
+# 2026-08-15 which no later measurement can change.
 
 
 @pytest.mark.parametrize("rel", LIVE)
-def test_no_live_document_says_two_vendors(rel):
+def test_no_live_document_says_two_vendors_on_the_strength_of_that_run(rel):
     """**The claim in its shortest form**, which is how it was actually written.
 
     The README did not name SwiftShader and then contradict itself; it said *across two
     vendors* and moved on. A count of vendors is the same assertion with the evidence
     left out, and it needs no number beside it to be wrong.
+
+    **There are two vendors now**, so the count alone is no longer the error — the error
+    is a count of two resting on the 845, which is what this asks. A line may say two
+    vendors; it may not say two vendors in the same breath as that run without naming
+    what the run was.
     """
     path = ROOT / rel
     if not path.exists():
@@ -169,12 +157,10 @@ def test_no_live_document_says_two_vendors(rel):
     claim = re.compile(r"(two|both)\s+vendors?|두 벤더", re.I)
     bad = [f"{rel}:{i}  {line.strip()[:96]}"
            for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-           if claim.search(line) and "one vendor" not in line.lower()]
+           if claim.search(line) and SWIFTSHADER_RUN in line and not TELLING.search(line)]
     assert not bad, (
-        "a document claims two vendors:\n  " + "\n  ".join(bad) + "\n\n"
-        "  No run on an NVIDIA WebGPU adapter exists in this repository. The 845 was\n"
-        "  SwiftShader; one 4090 has a card off the PCI bus and never opened a\n"
-        "  browser; the 5080 has no login session, so headless gave SwiftShader again\n"
-        "  and headed could not start.\n\n"
-        "  When one does exist, this check is what needs deleting — deliberately, by\n"
-        "  somebody holding the run that replaces it.")
+        "a document counts two vendors beside the run that was a CPU:\n  "
+        + "\n  ".join(bad) + "\n\n"
+        "  The second vendor is real now — `passed 2901 / failed 0 [nvidia / blackwell]`,\n"
+        "  an RTX 5080 under Xvfb. The 845 is still not it. Cite the run that happened,\n"
+        "  or say what the 845 was.")

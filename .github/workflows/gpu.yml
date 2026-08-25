@@ -52,10 +52,29 @@
 # So the number stays here with what it was. Deleting it would leave the next person to
 # find 845 somewhere else and write this paragraph again — which is what happened today.
 #
-# `tests/test_vendor_claims.py` now compares the live documents against `launch.py`.
-# This file is not among them: it is a workflow rather than something a reader meets,
-# and putting it in the list would have the check police the comment that explains the
-# check. The guard here is the paragraph, and its retirement condition is a real run.
+# `tests/test_vendor_claims.py` compares the live documents against `launch.py`. This
+# file is not among them: it is a workflow rather than something a reader meets, and
+# putting it in the list would have the check police the comment that explains the
+# check. The guard here is the paragraph, and its retirement condition was a real run.
+#
+# ## The real run happened
+#
+#     passed 2901 / failed 0   [nvidia / blackwell]
+#
+# An RTX 5080 on Ubuntu 24.04, driver 580.159.04, with a window on Xvfb. That is
+# borch.ts's written share of the table at the time of the run — not the whole of it,
+# and the whole has grown since.
+#
+# Three walls stood in front of it and the last was Chrome. With a window and every
+# permission in place, `requestAdapter()` still returned null while `vulkaninfo` on that
+# same machine listed the card as GPU0 with Vulkan 1.4.312 — **two tools, one machine,
+# two answers.** `vulkaninfo` asks the driver; Chrome asks its own blocklist first, and
+# Linux with the proprietary driver is on it. The runner's own error message guessed
+# *"a driver blocklist"* from the beginning and nobody took it literally.
+#
+# So the paragraph above is history now rather than a live warning, and it stays for the
+# reason it always did: 845 is still findable, and the next person who finds it needs
+# the adapter beside it.
 #
 # When there is a reason to attach a runner, this trigger comes back. Attaching it is
 # a person's job.

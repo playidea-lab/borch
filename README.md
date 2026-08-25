@@ -698,7 +698,7 @@ random, so it cannot be measured".
 
 It does not go through Python. **It does not go through TF.js either** — the
 kernels are written directly in WGSL. **Zero** runtime dependencies, and it is
-an ES module a browser simply reads (316KB gzipped, 1152KB before compression).
+an ES module a browser simply reads (333KB gzipped, 1216KB before compression).
 
 ```bash
 npm install borch-ts
@@ -1171,11 +1171,21 @@ accuracy run refuse outright on a software adapter.
 
 ### How much it does
 
-**The golden matches on every case on Apple Metal**, and on **one vendor only** —
-this paragraph said two until today, and the second one was never measured.
+**The golden matches on every case on Apple Metal**, and borch.ts's share of it
+matches on **NVIDIA** as well:
 
-The claim rested on one run: 845/845 on an RTX 4090 box, on SwiftShader.
-`tests/browser/launch.py` has recorded that since the day it happened:
+```
+passed 2901 / failed 0   [nvidia / blackwell]
+```
+
+An RTX 5080 on Ubuntu 24.04, driver 580.159.04, with a window on Xvfb. That count
+is borch.ts's written share at the time of the run and not the whole table; the
+figure above this section is today's and has grown since.
+
+**This paragraph claimed two vendors for months on a run that was SwiftShader**,
+and it is worth keeping why. The claim rested on 845/845 from a box whose adapter
+was the CPU, and `tests/browser/launch.py` has recorded that since the day it
+happened:
 
 > Running the golden cases headless on a Linux GPU server gave 845/845 while the
 > adapter was `google / swiftshader` — the pass was real and the claim "confirmed
@@ -1190,11 +1200,21 @@ Three things around it were true and checkable — 845 was the table's size then
 not today's 3438, and that machine really has been unavailable since. A single false
 claim ringed by three verifiable ones is one a reader confirms their way past.
 
-So: **no run on an NVIDIA WebGPU adapter exists in this repository.** Not the 845
-(SwiftShader), not today's attempts — one 4090 has a card off the PCI bus and never
-opened a browser, and the 5080 has no login session, so headless gave SwiftShader
-again and headed could not start. What is not measured is not written down as though
-it had been, and that rule now applies to the sentence that stated the rule.
+**What it took, once someone went and looked.** Three walls, and the last one was
+Chrome. The worker's user could not open the GPU node (`render` and `video`); there
+was no window (Xvfb); and then, with a window and every permission in place,
+`requestAdapter()` still returned null while `vulkaninfo` on that same machine listed
+the card as GPU0 with Vulkan 1.4.312.
+
+**Two tools, one machine, two answers.** `vulkaninfo` asks the driver; Chrome asks
+its own blocklist first, and Linux with the proprietary NVIDIA driver is on it. The
+error message's own first guess was *"a driver blocklist"* and nobody had taken it
+literally. `--ignore-gpu-blocklist` and `--disable-gpu-driver-bug-workarounds` went in
+together and **which of the two is decisive was not separated** — that is a minute's
+measurement on that machine, and until it is made no line here says which.
+
+The 4090 is still unmeasured and for its own reasons: one card reads `rev ff` on the
+PCI bus, and late in the same day headless Chrome stopped starting there at all.
 
 The benchmark's ResNet-18 was confirmed to match real torch on the forward pass, the
 loss and the backward pass.
@@ -1276,9 +1296,14 @@ cases, passing, proving the values and nothing about the GPU. `--headless` still
 exists and now has to be asked for; when it is used the score line says
 `[google / swiftshader]` and adds that the GPU path is unproved.
 
-NVIDIA has never been measured. This line said *not since these kernels were written*,
-which reads as though it had been measured before them — and the run that would have
-been is the 845 on SwiftShader. Metal passing is one vendor, not two.
+**NVIDIA is measured** — `passed 2901 / failed 0  [nvidia / blackwell]`, an RTX 5080
+on Ubuntu 24.04 under Xvfb. That is borch.ts's written share at the time of that run,
+not the whole table.
+
+This line has said three different things. It said *not since these kernels were
+written*, which reads as though it had been measured before them; then it said *never*,
+which was true; now it names a run. The one it never got to say is the one it implied
+for months — that the 845 on `google / swiftshader` was a GPU's.
 
 ```bash
 uv run --with numpy --with torch python tests/golden.py dump   # stage 1: pin them
