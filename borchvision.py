@@ -78,6 +78,7 @@ import csv as _csv
 import enum as _enum
 import gzip as _gzip
 import hashlib as _hashlib
+import inspect as _inspect
 import io as _io
 import math as _math
 import os as _os
@@ -3092,6 +3093,17 @@ def _v2_twin(base, fields):
 
     The name is set on the class because `repr` reads `type(self).__name__`, and a
     twin called `_V2Resize` would print itself under a name torchvision does not have.
+
+    **And the signature is set for the same kind of reason.** `__init__` here takes
+    `*args, **kwargs` because it forwards, so `inspect.signature(v2.Resize)` answered
+    `(*args, **kwargs)` for all thirty-eight — that is what `help()` prints, what an
+    editor completes from, and what `tests/ts_signatures.py` reads to compare against
+    borch.ts. The arguments *are* v1's; nothing had said so anywhere a tool could see.
+
+    A forwarding `__init__` is exactly the shape `__signature__` exists for. Copying
+    v1's is honest rather than a claim: the call `Twin.__init__` makes is
+    `base.__init__(*args, **kwargs)`, so a call v1 accepts is a call this accepts, and
+    one it refuses this refuses in the same place with the same message.
     """
     class Twin(_V2Repr, base):
         def __init__(self, *args, **kwargs):
@@ -3102,6 +3114,13 @@ def _v2_twin(base, fields):
     Twin.__qualname__ = base.__name__
     Twin.__doc__ = (f"`transforms.v2.{base.__name__}` — {base.__name__}'s behaviour "
                     "with v2's printed surface.")
+    try:
+        Twin.__init__.__signature__ = _inspect.signature(base.__init__)
+    except (TypeError, ValueError):
+        # A base whose own `__init__` cannot be read leaves the twin as it was. Better
+        # an unreadable signature than a wrong one — this is the direction an
+        # instrument must not fail in.
+        pass
     return Twin
 
 

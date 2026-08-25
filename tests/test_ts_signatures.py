@@ -527,7 +527,10 @@ UNALIGNED = {
 # 2 → 0. See the note in `RENAMED` below.
     "transforms.functional": 0,
     "ops": 0,
-    "transforms.v2": 0,
+    # One: `Normalize(mean, std, inplace)` against `(v2Mean, v2Std)` — short *and*
+    # renamed at once, which is why it lands here rather than in either bucket. The
+    # `inplace` seat is the missing one; there is no in-place path on this side.
+    "transforms.v2": 1,
     "transforms.v2.functional": 0,
     "datasets": 0,
 }
@@ -795,14 +798,20 @@ RENAMED = {
     # kept `x`. `startswith` is not a name check.
     "transforms.functional": 0,
     "ops": 0,
-    # **Three, and they come from the twins inheriting rather than delegating.** A
+    # **3 → 32, and the jump is the measurement working rather than a regression.**
+    # The Python twins are built from a table and their `__init__` forwards, so
+    # `inspect.signature` answered `(*args, **kwargs)` for all thirty-eight and this
+    # axis could compare almost nothing — 35 of them sat in `unread`. With the
+    # signature carried across from v1, the axis reads them, and what it reads is that
+    # thirty-two carry `v2`-prefixed parameter names.
+    #
+    # They come from the twins inheriting rather than delegating: a
     # `private readonly size` cannot sit beside the parent's, so the constructors carry
-    # `v2Size`, `v2Fill`, `v2Transforms` and 182 more — and three of those reach a
-    # signature this axis can read. It is fixable and not a language limit: taking the
-    # parameter without a modifier and storing it under one name of its own keeps
-    # torch's spelling in the seat. Left for its own change, because it touches every
-    # twin in the file and this one is about the namespaces being measured at all.
-    "transforms.v2": 3,
+    # `v2Size`, `v2Fill`, `v2Transforms` and 182 more. It is fixable and not a language
+    # limit — opening the parent's field to `protected` lets the child drop its own
+    # declaration entirely — but it touches every twin in the file, so it is its own
+    # change. **This number is the to-do list for it.**
+    "transforms.v2": 32,
     # 2 → 0. `permute_channels` took `order` where torch takes `permutation`, and
     # `to_dtype` took `_dtype` — underscored because it was never read. It is read now:
     # there is one float type in this subset, so any other request is refused rather
