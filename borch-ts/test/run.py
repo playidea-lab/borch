@@ -304,8 +304,17 @@ NOT_PORTED = {
     # written" rather than "the mechanism is missing". A reason that names a difficulty
     # the library does not actually have is the shape this repository keeps finding —
     # it reads like a decision and outlives the fact it was built on.
-    "act::": (12, "아직 — the TS cases were not written. `copyFrom` is the write-back "
-                  "and borch.ts already has it; the binding honours the flag with it"),
+    # **12 → 0, and the row's own diagnosis was right.** It said the cause was "the TS
+    # cases were not written" rather than "the mechanism is missing", and named
+    # `copyFrom` as the write-back that was already there. Both halves held: the six
+    # activations took an `inplace` seat in torch's own position, `copyFrom` moved the
+    # answer back over the input, and a leaf that requires grad refuses with torch's
+    # sentence because `mutate` already refused it.
+    #
+    # The identity half is what the flag is actually for. `ReLU(inplace=True)` and
+    # `ReLU()` compute the same numbers, so a version writing into a fresh tensor
+    # passes every value comparison — which is why the golden asks `layer(x) is x`
+    # beside each value.
     "fft::": (4, "파이썬 — the gradient helper is what makes the leaf"),
     # **`opt::` has a row again, and its own comment above says the last three reasons
     # written here were each wrong in turn.** So this one names exactly what cannot

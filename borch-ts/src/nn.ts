@@ -792,9 +792,29 @@ export class Conv3d extends ConvND {
   }
 }
 
+/**
+ * **`inplace` writes the answer back over the input and hands the input back.**
+ *
+ * The value is the same either way, so the only observable is identity — a version
+ * that computes the right numbers into a new tensor passes every value comparison
+ * and fails the one thing the flag is for. `copyFrom` is the write-back: it moves
+ * values into the existing buffer without swapping the tensor, which is what the
+ * optimizer's handle depends on elsewhere and what `inplace` means here.
+ *
+ * A leaf that requires grad refuses, with torch's own sentence — the same refusal
+ * torch raises, from the same situation.
+ */
+function writeBack(x: Tensor, out: Tensor, inplace: boolean): Tensor {
+  return inplace ? x.copyFrom(out) : out;
+}
+
 export class ReLU extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("relu");
+    return writeBack(x, x.unary("relu"), this.inplace);
   }
 }
 
@@ -835,8 +855,12 @@ export class ReLU6 extends Module {
 }
 
 export class SELU extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("selu");
+    return writeBack(x, x.unary("selu"), this.inplace);
   }
 }
 
@@ -853,12 +877,12 @@ export class Tanhshrink extends Module {
 }
 
 export class CELU extends Module {
-  constructor(private readonly alpha = 1.0) {
+  constructor(private readonly alpha = 1.0, private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.celu(this.alpha);
+    return writeBack(x, x.celu(this.alpha), this.inplace);
   }
 }
 
@@ -883,12 +907,13 @@ export class Softshrink extends Module {
 }
 
 export class Hardtanh extends Module {
-  constructor(private readonly minVal = -1.0, private readonly maxVal = 1.0) {
+  constructor(private readonly minVal = -1.0, private readonly maxVal = 1.0,
+              private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.hardtanh(this.minVal, this.maxVal);
+    return writeBack(x, x.hardtanh(this.minVal, this.maxVal), this.inplace);
   }
 }
 
@@ -972,12 +997,13 @@ export class Identity extends Module {
 }
 
 export class LeakyReLU extends Module {
-  constructor(private readonly negativeSlope = 0.01) {
+  constructor(private readonly negativeSlope = 0.01,
+              private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.leakyRelu(this.negativeSlope);
+    return writeBack(x, x.leakyRelu(this.negativeSlope), this.inplace);
   }
 }
 
@@ -986,12 +1012,12 @@ export class LeakyReLU extends Module {
  * be told apart from the argument-free entry in the table.**
  */
 export class ELU extends Module {
-  constructor(private readonly alpha = 1.0) {
+  constructor(private readonly alpha = 1.0, private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.elu(this.alpha);
+    return writeBack(x, x.elu(this.alpha), this.inplace);
   }
 }
 

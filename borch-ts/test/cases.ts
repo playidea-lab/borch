@@ -2819,6 +2819,27 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
   out.set("act::nn.LeakyReLU", () => new nn.LeakyReLU().call(inp.get("kinks")));
   out.set("act::nn.LeakyReLU(기울기)",
     () => new nn.LeakyReLU(0.2).call(inp.get("kinks")));
+  // **`inplace` writes over the input and hands the input back**, so it is asked twice:
+  // once for the value and once for the identity. A version that computes the right
+  // numbers into a new tensor passes the value comparison and fails what the flag is
+  // for — and the argument is given by **position**, because the seat is what a
+  // positional call sees.
+  const inplaceActs: readonly (readonly [string, () => nn.Module])[] = [
+    ["ReLU", () => new nn.ReLU(true)],
+    ["LeakyReLU", () => new nn.LeakyReLU(0.2, true)],
+    ["ELU", () => new nn.ELU(0.5, true)],
+    ["CELU", () => new nn.CELU(0.5, true)],
+    ["SELU", () => new nn.SELU(true)],
+    ["Hardtanh", () => new nn.Hardtanh(-0.5, 0.5, true)],
+  ];
+  for (const [name, build] of inplaceActs) {
+    out.set(`act::nn.${name}(inplace)`, () => build().call(inp.get("kinks")));
+    // The identity, frozen as the word Python's `str(bool)` gives.
+    out.set(`act::nn.${name}(inplace)/같은 객체`, () => {
+      const x = Tensor.from([-1.0, 2.0]);
+      return build().call(x) === x ? "True" : "False";
+    });
+  }
   out.set("act::nn.Identity", () => new nn.Identity().call(inp.get("kinks")));
   // torch's `Identity` swallows any argument. JavaScript simply discards extra arguments
   // so this side does it by itself, and **what happens by itself is asked about anyway** —

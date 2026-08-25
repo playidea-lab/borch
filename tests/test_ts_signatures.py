@@ -904,7 +904,14 @@ SHORTER = {
     #
     # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
     # is what nearly all forty-nine are short of.
-    "nn": 49,
+    #
+    # **49 → 46.** Three of them were not short of a `device` seat at all: `ReLU`,
+    # `SELU` and `Hardtanh` were short of `inplace`, which is a flag with a behaviour
+    # behind it rather than a seat to fill. It is there now, in torch's own position,
+    # and the three left this bucket by being finished. `Hardtanh` stays short by two
+    # — torch's deprecated `min_value`/`max_value` aliases, which it warns about
+    # itself, and a tail that is short only refuses extra arguments.
+    "nn": 46,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.
