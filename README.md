@@ -203,7 +203,7 @@ nobody knows until the golden catches it.
 ## How it is guaranteed
 
 `tests/test_diff.py` **puts the same operation into real torch and into borch and
-compares the numbers.** 162 cases in that file, 1208 in the suite, **92% code
+compares the numbers.** 162 cases in that file, 1209 in the suite, **92% code
 coverage.**
 
 ```bash

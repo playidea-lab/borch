@@ -43,6 +43,23 @@ build-backend = "hatchling.build"
 # `borchvision` goes in too. Left out, somebody installing from the wheel has **no
 # module at all** — the kind that works from the repository and not from the install,
 # which nobody watches and only a user meets.
+#
+# **And it is still one file at 5,624 lines, which is past the threshold the paragraph
+# above sets. That is a decision and not an oversight, so here is the reason.**
+#
+# The two are not loaded the same way. `borch` is a package and the playground fetches
+# it **module by module** from a hardcoded list in `site/assets/runner.js` — the list
+# exists, so `tests/test_site.py` can compare it against the directory and cry when the
+# two part. `borchvision.py` is fetched in **one request** beside that loop, because one
+# file needs no list.
+#
+# Splitting it buys readability and pays for it in the loading path: a second hardcoded
+# list, a directory to create in Pyodide's filesystem, and N requests where a partial
+# failure leaves a **half-imported package** rather than an absent module.
+#
+# So it stays one file **until the loading path stops being the reason** — if the
+# playground ever ships the wheel instead of fetching sources, this paragraph is spent
+# and the split is simply overdue.
 # `borch_webgpu` is not here. It is browser-only, and the borch.ts underneath it is
 # loaded by the page as an ES module (`borch` on npm).
 packages = ["borch"]
