@@ -184,6 +184,21 @@
     </div>
 
     <div class="note-box">
+      <strong>브라우저가 이걸 돌리기 전에 요구하는 것 — 플랫폼별 실측.</strong><br>
+      <strong>macOS:</strong> 없다. 어댑터가 <code>apple / metal-3</code> 으로 오고 Run 이 돈다. ·
+      <strong>NVIDIA 카드를 단 리눅스:</strong> 스위치 둘. 크롬이 차단 목록을 들고 있어서 드라이버에
+      묻기 전에 먼저 거절한다. 그래서 둘 다 없으면 <em>어댑터가 아예 없고</em>,
+      <code>#enable-unsafe-webgpu</code> 만 켜면 어댑터가 <code>google / swiftshader</code> 다 —
+      GPU 의 이름을 쓴 CPU 다. <code>#ignore-gpu-blocklist</code> 까지 켜야
+      <code>nvidia / blackwell</code> 이 된다. (Ubuntu 24.04, RTX 5080, 드라이버 580.159.04 에서 측정.) ·
+      <strong>윈도우:</strong> <em>안 쟀다.</em> 거기 크롬은 위의 Vulkan 경로가 아니라 D3D12 를 쓰므로,
+      여기서 잰 것은 그쪽에 대해 아무 말도 하지 않는다. 짐작으로 적으면 이 저장소가 하루를 들여
+      걷어낸 그 모양이 된다.<br>
+      이 페이지의 배지가 어댑터 이름을 그대로 다는 이유도 같다 — SwiftShader 위의 실행은 골든과
+      값이 맞고, 찍히는 속도는 CPU 의 것이다.
+    </div>
+
+    <div class="note-box">
       <strong>torch 와 갈리는 다섯 자리 — 첫 열 줄에서 전부 만난다.</strong><br>
       <code>await init()</code> 이 먼저다(어댑터를 잡는 것이 비동기다) ·
       값을 읽는 것이 <code>await t.item()</code> 이다(순방향·역방향은 동기다) ·
