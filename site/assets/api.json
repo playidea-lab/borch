@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 702,
+  "done": 703,
   "stale": 0,
-  "missing": 188
+  "missing": 192
  },
  "modules": [
   {
@@ -16381,6 +16381,61 @@
    "doc_ko": "`torchvision.transforms.v2.functional`.\n\n## 이름 165 개, 그중 114 개는 한 연산을 다섯 번 센 것\n\n`affine_image`·`affine_mask`·`affine_bounding_boxes`·`affine_keypoints`·`affine_video`\n는 v2 의 디스패치 커널이다: 무엇이 왔는지의 타입이 어느 것을 돌릴지 정하고, 그 타입\n체계가 이 프로젝트가 사양하는 v2 의 절반이다. 남는 것은 51 개이고 그중 34 개는 v1 이\n이미 가지고 있다.\n\n그래서 **이 파일의 대부분은 재수출이고**, 적어 놓은 것은 tv_tensor 가 필요 없는 v2 의\n아홉 개다. 얇은 것은 일부러다. `hflip` 을 `horizontalFlip` 이라는 이름으로 한 번 더\n구현하면 한 가지 일의 구현이 둘이고, 아무도 안 보는 쪽이 어긋난다.\n\n## 반대를 답하는 한 쌍\n\n`getSize` 는 `[height, width]` 를 주고 v1 의 `getImageSize` 는 `[width, height]` 를\n준다. 뒤집은 것은 v2 의 의도된 정정이라, 두 이름이 한 이름 공간 떨어져 반대를 답한다 —\n잘못 고르면 전치된, 그런데도 그럴듯한 그림을 얻는다. 골든이 둘을 나란히 얼려 두는\n이유가 그것이다."
   },
   {
+   "name": "datasets",
+   "title": "vision.datasets",
+   "blurb": {
+    "ko": "데이터셋 형식을 읽는 자리. 주소가 아니라 포맷만 온다.",
+    "en": "Where a dataset's format is read. The format crosses; the address does not."
+   },
+   "doc": "`torchvision.datasets` — **the decoders, and only those.**\n\n## A dataset is an address and a format, and only one of them can cross\n\nThe address half does not come to the browser: torchvision's own hosts send no\nCORS header (`cs.toronto.edu` and `ossci-datasets.s3.amazonaws.com`, measured),\nand the sites that do are somebody else's mirror. The Python side works around\nthat with `download=True` over a mirror list; here the page already has its own\nfetch-and-cache path in `borch_webgpu` and the tutorials use it.\n\nThe **format** half is the part that goes wrong quietly, and it is what this\nfile carries. An IDX header is sixteen bytes and a wrong read of it gives a\ndataset that still trains — transposed, or off by a row, or with every label\nshifted. That is the kind of defect a frozen comparison catches and nothing\nelse does.\n\n## Bytes in, not a path\n\ntorchvision's readers take a filename. There are no paths here, so these take\nthe bytes — which is what the caller has after a `fetch`, and what the Python\nside's own `_read_idx` takes one layer under its public reader.\n\n## What is not here, and why each one is not\n\n- **CIFAR's batches** — a batch is a *Python pickle* with a numpy array inside\n  it. Reading one here means an opcode interpreter plus numpy's own\n  reconstruction protocol, which is the opposite end of \"no dependency we could\n  not have written in an afternoon\". The tutorials read CIFAR from plain binary\n  instead, which is the same pictures without the format.\n- **`FER2013` and the folder datasets** — their readers take a *directory*.\n  There is no filesystem in a page, so what would be ported is not a decoder\n  but a filesystem.",
+   "symbols": [
+    {
+     "kind": "interface",
+     "name": "IdxArray",
+     "signature": "export interface IdxArray",
+     "doc": "An array with its shape, which is what an IDX file holds.\n\n**The field is `data` and not `values`, and that is not a taste.** The name axis\nasks whether borch.ts has a name *anywhere*, so an interface member called\n`values` answers yes to a question about `Tensor.values` — the sparse-tensor\naccessor the core carries only in order to refuse it. Named `values` this\ninterface silently turned a refusal into a feature in two separate measures;\n`data` is a name `Image` already has, so it adds nothing to answer with.",
+     "members": [
+      {
+       "name": "shape",
+       "signature": "readonly shape: readonly number[]",
+       "doc": ""
+      },
+      {
+       "name": "data",
+       "signature": "readonly data: Float64Array",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "readIdx",
+     "signature": "export declare function readIdx(data: Uint8Array): IdxArray",
+     "doc": "IDX bytes to an array.\n\nThe header is four bytes — two zero, then the type, then the number of axes —\nand then one big-endian 32-bit length per axis.\n\n**The lengths are not trusted to match the payload.** torchvision passes\n`strict=False` from both its readers, so a file carrying more than the header\npromises is truncated and one carrying less refuses. Both behaviours are kept,\nbecause a divergence in what a malformed file does is the kind that shows up on\nthe day one arrives.",
+     "members": [],
+     "torch": "read_idx"
+    },
+    {
+     "kind": "function",
+     "name": "readImageFile",
+     "signature": "export declare function readImageFile(data: Uint8Array): IdxArray",
+     "doc": "The three-axis half, checked. The messages are torchvision's.",
+     "members": [],
+     "torch": "read_image_file"
+    },
+    {
+     "kind": "function",
+     "name": "readLabelFile",
+     "signature": "export declare function readLabelFile(data: Uint8Array): IdxArray",
+     "doc": "The one-axis half. **Widened to int64**, as torchvision's `.long()` does — the\nlabels are bytes on disk and an index everywhere else.\n\nThere is no int64 storage here, so the widening is a statement about what the\nvalues mean rather than about how they are held; the numbers are the same either\nway, and a label read as signed would turn 200 into -56.",
+     "members": [],
+     "torch": "read_label_file"
+    }
+   ],
+   "count": 6,
+   "doc_ko": "`torchvision.datasets` — **디코더, 그리고 그것뿐.**\n\n## 데이터셋은 주소와 형식이고, 건너올 수 있는 것은 하나뿐이다\n\n주소 쪽은 브라우저에 오지 않는다: torchvision 자신의 호스트가 CORS 헤더를 안 보내고\n(`cs.toronto.edu` 와 `ossci-datasets.s3.amazonaws.com`, 실측), 보내는 곳은 남의\n미러다. 파이썬 판은 미러 목록을 둔 `download=True` 로 그것을 돌아가고, 여기서는\n페이지가 이미 `borch_webgpu` 에 자기 fetch·캐시 경로를 갖고 있으며 튜토리얼이 그것을\n쓴다.\n\n**형식** 쪽이 조용히 틀리는 부분이고, 이 파일이 나르는 것이 그것이다. IDX 헤더는\n16 바이트이고 잘못 읽으면 여전히 학습되는 데이터셋이 나온다 — 전치됐거나, 한 행씩\n밀렸거나, 라벨이 전부 하나씩 옮겨진 채로. 언 비교만이 잡는 종류의 결함이다.\n\n## 경로가 아니라 바이트를 받는다\n\ntorchvision 의 리더는 파일 이름을 받는다. 여기에는 경로가 없으니 바이트를 받는데,\n그것이 `fetch` 뒤에 호출자가 손에 쥔 것이고 파이썬 판의 `_read_idx` 가 공개 리더 한 겹\n아래에서 받는 것이기도 하다.\n\n## 여기 없는 것과, 각각의 이유\n\n- **CIFAR 의 배치** — 배치는 numpy 배열이 들어 있는 *파이썬 pickle* 이다. 여기서\n  읽으려면 opcode 해석기에 numpy 의 재구성 프로토콜까지 필요한데, 그것은 \"오후에\n  못 썼을 의존성은 안 쓴다\"의 반대편이다. 튜토리얼은 CIFAR 을 평범한 바이너리로\n  읽는다 — 형식만 뺀 같은 그림이다.\n- **`FER2013` 과 폴더 데이터셋** — 그 리더는 *디렉터리* 를 받는다. 페이지에는\n  파일시스템이 없으므로, 옮길 대상이 디코더가 아니라 파일시스템이다."
+  },
+  {
    "name": "fft",
    "title": "fft",
    "blurb": {
@@ -17901,5 +17956,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2395
+ "total": 2401
 }

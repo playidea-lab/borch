@@ -107,6 +107,10 @@ MODULES = [
     ("v2f", "vision.v2.functional",
      {"ko": "v2 의 함수 형태. 대부분 v1 재수출이고, 새것은 아홉이다.",
       "en": "v2's functional spellings. Mostly v1 re-exported; nine are new."}),
+    ("datasets", "vision.datasets",
+     {"ko": "데이터셋 형식을 읽는 자리. 주소가 아니라 포맷만 온다.",
+      "en": "Where a dataset's format is read. The format crosses; the address "
+            "does not."}),
     ("fft", "fft",
      {"ko": "푸리에 변환. `torch.fft` 자리.",
       "en": "Fourier transforms. Where `torch.fft` would be."}),

@@ -620,7 +620,28 @@ NOT_PORTED = {
     # them will want the state cases most, since a value case cannot see this at all.
     "misc::": (11, "아직 — Embedding/EmbeddingBag: max_norm, padding_idx, and the "
                    "table after the call"),
-    "dataset::": (19, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
+    # **19 → 13, and the six that came off are the ones that are a *format*.** The IDX
+    # reader is in `datasets.ts` now: a sixteen-byte header, big-endian always, and a
+    # short file refused with torch's own sentence so the phrase stays searchable
+    # across the two libraries.
+    #
+    # The thirteen that stay are three different walls and it is worth keeping them
+    # apart rather than under one number.
+    #
+    # - **CIFAR's three** are a *Python pickle* with a numpy array inside it. Reading
+    #   one here needs an opcode interpreter plus numpy's reconstruction protocol,
+    #   which is the far side of "no dependency we could not have written in an
+    #   afternoon". The tutorials read CIFAR from plain binary instead — the same
+    #   pictures without the format.
+    # - **`FER2013`'s three** call a reader that takes a *directory*. There is no
+    #   filesystem in a page, so what would be ported is not a decoder.
+    # - **STL10's four and MovingMNIST's three** are the odd group: their case bodies
+    #   compute in numpy on both sides rather than calling either library, so porting
+    #   them writes the same arithmetic a third time and compares it to itself. They
+    #   are worth having on the Python side, where they pin a transpose and a split
+    #   that a real dataset would otherwise hide; here they would pin nothing.
+    "dataset::": (13, "아직 — CIFAR's pickle, FER2013's directory, and the seven whose "
+                      "case bodies are numpy on both sides rather than a library call"),
     # **71 → 52 → 0.** The values landed first and the printing followed, which is the
     # order the two halves could be done in: v2's arithmetic is v1's, so the twins had
     # to exist before there was anything to print.

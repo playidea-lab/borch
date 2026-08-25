@@ -34,6 +34,7 @@ import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
 import * as v2 from "../src/v2.js";
 import * as v2f from "../src/v2f.js";
+import * as datasets from "../src/datasets.js";
 import * as data from "../src/data.js";
 import * as F from "../src/functional.js";
 import { LinAlgError } from "../src/errors.js";
@@ -553,6 +554,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addOps(out);
   addV2(out, inputs);
   addV2Functional(out, inputs);
+  addDatasets(out);
   addSeq(out, inputs);
   addEdge(out);
   addComplex(out);
@@ -2244,6 +2246,80 @@ function addV2(out: Map<string, Case>, inp: Inputs): void {
  *  a `const` would print that const's name here and `<lambda>` on the Python side. */
 function _v2_named(x: vision.Subject): vision.Subject {
   return x;
+}
+
+/**
+ * `datasets` — **the IDX decoder, which is the half of a dataset that can cross.**
+ *
+ * A dataset is an address and a format. The address cannot come to a page (the hosts
+ * send no CORS header) and the format can, and the format is the half that goes wrong
+ * quietly: a header misread gives a dataset that still trains, transposed or with
+ * every label shifted.
+ *
+ * The bytes are built here rather than downloaded, which is what lets the decoder be
+ * compared at all — eleven megabytes of MNIST cannot go in a golden dump for a header
+ * that is sixteen bytes long.
+ */
+function addDatasets(out: Map<string, Case>): void {
+  /** An IDX file: two zero bytes, the type code, the axis count, then a big-endian
+   *  length per axis. **The header is the case.** */
+  const idx = (kind: number, shape: readonly number[],
+               payload: readonly number[]): Uint8Array => {
+    const head = [0, 0, kind, shape.length];
+    for (const n of shape) head.push((n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255);
+    return Uint8Array.from([...head, ...payload]);
+  };
+  /** The same, for a two-axis int32 table — the shape QMNIST's labels have. */
+  const idx32 = (rows: number, columns: number,
+                 values: readonly number[]): Uint8Array => {
+    const body: number[] = [];
+    for (const v of values) {
+      const u = v >>> 0;
+      body.push((u >>> 24) & 255, (u >>> 16) & 255, (u >>> 8) & 255, u & 255);
+    }
+    const head = [0, 0, 12, 2];
+    for (const n of [rows, columns]) {
+      head.push((n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255);
+    }
+    return Uint8Array.from([...head, ...body]);
+  };
+  const asTensor = (a: datasets.IdxArray): Tensor => Tensor.from(a.data, [...a.shape]);
+
+  // Pictures counting up, so a transposed or mis-strided read lands somewhere
+  // visibly different. Labels including 0 and 255 — the ends are where a signed
+  // read shows.
+  const pixels = Array.from({ length: 24 }, (_, i) => i);
+  const labels = [0, 1, 2, 9, 200, 255, 3, 4, 5, 6];
+
+  out.set("dataset::IDX images",
+    () => asTensor(datasets.readImageFile(idx(8, [2, 3, 4], pixels))));
+  out.set("dataset::IDX labels",
+    () => asTensor(datasets.readLabelFile(idx(8, [10], labels))));
+  out.set("dataset::IDX images(one frame)",
+    () => asTensor(datasets.readImageFile(idx(8, [1, 4, 6], pixels))));
+
+  // **A header that promises more than the file carries.** What is frozen is that
+  // both sides refuse the same way, so the phrase is compared and not just the throw.
+  out.set("dataset::IDX labels(short by two)=거절", () => {
+    try {
+      datasets.readLabelFile(idx(8, [12], labels));
+    } catch (err) {
+      const said = err instanceof Error ? err.message : String(err);
+      return `거절|문구=${said.includes("invalid for input of size 10") ? "True" : "False"}`;
+    }
+    return "통과|문구=False";
+  });
+
+  // Eight columns, three rows, and **values past what a byte holds** — 279260 is a
+  // real QMNIST field. Read as bytes it becomes something else entirely, and read
+  // little-endian it becomes something else again.
+  out.set("dataset::IDX int32 table(QMNIST labels)", () => asTensor(datasets.readIdx(
+    idx32(3, 8, [7, 4, 2578, 69, 37, 279260, 0, 0,
+                 2, 4, 2359, 55, 32, 253328, 0, 0,
+                 1, 4, 2530, 80, 31, 273542, 0, 0]))));
+  // A negative, because int32 is signed and the reader must not widen it wrong.
+  out.set("dataset::IDX int32 table(negative)", () => asTensor(datasets.readIdx(
+    idx32(2, 2, [-1, 2147483647, -2147483648, 0]))));
 }
 
 /**

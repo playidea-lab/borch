@@ -45,6 +45,11 @@ export * as ops from "./ops.js";
 // these classes and may not extend them, which is written out at the top of `v2.ts`.
 export * as v2 from "./v2.js";
 
+// `torchvision.datasets`, reached as `vision.datasets`. **The decoders alone** — an
+// address cannot cross to a page and a format can, which is written out at the top of
+// `datasets.ts`.
+export * as datasets from "./datasets.js";
+
 /**
  * An image laid out as `(H, W, C)`. The values are uint8 or float.
  */
