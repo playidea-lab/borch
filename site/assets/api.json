@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 686,
+  "done": 687,
   "stale": 0,
-  "missing": 219
+  "missing": 224
  },
  "modules": [
   {
@@ -16993,7 +16993,7 @@
     "ko": "대괄호 자리 — `x[1:3]` 에 해당하는 것.",
     "en": "The bracket position — what `x[1:3]` would be."
    },
-   "doc": "",
+   "doc": "The place brackets occupy — the syntax for copying `x[...]` across.\n\n## Why it is needed\n\nBrackets appear everywhere in torch code and **JavaScript cannot overload `[]`.** So\nhere each line becomes a different method — `select`, `narrow`, `indexSelect`, `gather`,\n`maskedSelect`… fifteen of them. Every value is right, and whoever is copying **has to\nchoose \"which method is this\" line by line.** Whether `x[1:3]` is `narrow` or `select`,\nand whether the arguments are `(dim, start, length)` or `(dim, start, end)`.\n\n`at()` narrows those fifteen branches into one door. It removes nothing — it **opens one\nmore door**, and the existing methods stay.\n\n## Why a slice is a function\n\nWhether `x.at([1, 3])` means \"axis 0 at 1, axis 1 at 3\" or \"slice 1:3\" **cannot be told\nfrom an array alone.** Python's syntax separates them (`x[1, 3]` against `x[1:3]`) and\nhere both are arrays.\n\nSo the slice becomes a named thing. Python's `x[1:3]` also resolves to\n`x[slice(1, 3)]`, so **it uses the same name** — not something new to learn but the name\nthat was there all along.\n\n```ts\nx.at(0)                     // x[0]\nx.at([null, 1])             // x[:, 1]        null is Python's `:`\nx.at(slice(1, 3))           // x[1:3]\nx.at([0, slice(1, 3)])      // x[0, 1:3]\nx.at(slice(null, null, 2))  // x[::2]\nx.at([[0, 2]])              // x[[0, 2]]      two brackets — the same shape as numpy\n```\n\n**The outermost array is always the list of axes.** Selecting by an index list wraps one\nlayer more — the same shape as the place numpy's `x[0, 1]` and `x[[0, 1]]` diverge.",
    "symbols": [
     {
      "kind": "interface",
@@ -17093,7 +17093,7 @@
     "ko": "어댑터를 잡고 상태를 묻는 자리.",
     "en": "Acquiring the adapter, and asking it what it is doing."
    },
-   "doc": "",
+   "doc": "The WebGPU device, its buffers and the pipeline cache.\n\n## Why the pipeline cache lives here\n\nBaking the shape into the shader is this library's premise (see `kernels.ts`). That\nmakes one operation several shaders as the shapes differ, and compiling on every pass\nthrough a layer makes a fast kernel meaningless. So **shape signature → pipeline**\nenters as a data structure. It is not an optimisation but the price of keeping the\nspeed the baking bought.\n\n## The limits arrive quietly\n\nPast a buffer size or a dispatch limit, WebGPU **does not throw; it does not do it.**\nThe bench stepped on this twice — 240,000 GFLOPS above 128MB, and \"144%\" above 65,535\ndispatches. Both are numbers that would have been believed if the values had not been\nlooked at, so here the limits are **measured in advance and exceeding one throws.**",
    "symbols": [
     {
      "kind": "type",
@@ -17391,7 +17391,7 @@
     "ko": "난수의 씨앗.",
     "en": "Seeding the random draws."
    },
-   "doc": "",
+   "doc": "One generator. **Layer initialisation and the tensor factories draw from one stream.**\n\nWhat is here used to be trapped inside `nn.ts`. That left nowhere to build\n`Tensor.randn` — `tensor.ts` calling `nn.ts` would be a cycle — and so no way to port\nthe first line of a torch example, `torch.randn(...)`. This file calls nothing, so both\nsides can call it.\n\n**One seed has to reset everything.** torch's `manual_seed` does, and the first two\nplaces somebody expecting that looks are layer initialisation and dropout. So this file\nalso holds the slot (`onSeed`) where anything with state to reset registers itself.\n\n**It does not produce torch's numbers.** It cannot, and it must not pretend to. The\ngolden does not ask about initial values and always plants the weights, so there is\nnothing here to diverge.",
    "symbols": [
     {
      "kind": "function",
@@ -17446,7 +17446,7 @@
     "ko": "기울기 스위치.",
     "en": "The gradient switch."
    },
-   "doc": "",
+   "doc": "The automatic differentiation tape.\n\n**The same shape** as the core (`borch`) and the sister library (`borch_webgpu`). With\nall three alike, a fix made in one place moves easily to the others, and this project\nhas seen that pay off several times — the sister library's `roll` and `masked_select`\nhaving right values and a severed graph was found by looking at the same place in the\ncore.\n\nThe graph data structure does not know about tensors. Left as `T`, it imports no\n`tensor.ts`, and so the tape can be tested on its own.",
    "symbols": [
     {
      "kind": "interface",
@@ -17727,7 +17727,7 @@
     "ko": "예외 종류. torch 와 같은 이름을 쓴다.",
     "en": "Exception types, under the names torch uses."
    },
-   "doc": "",
+   "doc": "Exceptions shaped like torch's.\n\n## Why the names are imitated\n\nSomebody using this library used torch before. What they do when stuck is search for the\nerror text verbatim, and what comes back is torch's documentation and its questions.\nWith only our wording that search does not work — the answer already exists in the world\nand cannot be reached.\n\nSo **the text torch produces under the same condition goes in verbatim** and our\nexplanation follows it. The front half is for searching and the back half is this\nplace's own circumstance.\n\n## How far the imitation goes\n\nOnly where there is a corresponding failure in torch. Failures that are ours alone (WGSL\ncompilation, dispatch limits, a feature that does not exist yet) are written in our own\nwords — inventing a torch message that does not exist does not make the search work, it\nsends it somewhere else.",
    "symbols": [
     {
      "kind": "class",
@@ -17787,15 +17787,15 @@
     "ko": "자료형.",
     "en": "Data types."
    },
-   "doc": "",
+   "doc": "dtypes and the promotion rules.\n\n## Storage is float32, and only that\n\n`int64` is a **label**. WGSL has no 64-bit integer, so there is no way to\nactually hold one, and holding it in a 32-bit integer makes it `int32`,\nnot `int64`. So the values sit in float32 and the dtype is carried\nseparately — the sister project made the same choice, though its reason\n(TF.js's cast was broken) differs from this one, which is that the means\nof representation simply does not exist.\n\n**The price, written down**: integers above 2²⁴ are not exact in float32.\nThe ranges used for indices and counts are far below that, but a large\ninteger stored here drifts quietly.\n\n## Why the split is by category\n\ntorch has categories — `bool < integer < float` — and only promotes\n**within** them. Inheriting numpy's rules would make `float32 + int64` a\nfloat64, and then a learner learns the wrong rule. There is one width per\ncategory here, so the rule comes out shorter still.",
    "symbols": [
     {
      "kind": "type",
      "name": "DType",
      "signature": "export type DType = \"float32\" | \"int64\" | \"bool\" | \"complex64\"",
-     "doc": "dtypes and the promotion rules.\n\n## Storage is float32, and only that\n\n`int64` is a **label**. WGSL has no 64-bit integer, so there is no way to\nactually hold one, and holding it in a 32-bit integer makes it `int32`,\nnot `int64`. So the values sit in float32 and the dtype is carried\nseparately — the sister project made the same choice, though its reason\n(TF.js's cast was broken) differs from this one, which is that the means\nof representation simply does not exist.\n\n**The price, written down**: integers above 2²⁴ are not exact in float32.\nThe ranges used for indices and counts are far below that, but a large\ninteger stored here drifts quietly.\n\n## Why the split is by category\n\ntorch has categories — `bool < integer < float` — and only promotes\n**within** them. Inheriting numpy's rules would make `float32 + int64` a\nfloat64, and then a learner learns the wrong rule. There is one width per\ncategory here, so the rule comes out shorter still.",
+     "doc": "The four this subset stores. **A string where torch has an object.**\n\n`torch.float32` is a value you can pass around and ask questions of; here the same\nposition is a string literal, so the compiler refuses `\"float64\"` at the call rather\nthan at run time. What is given up is `x.dtype === torch.float32` as an identity\ncheck — it is `x.dtype === \"float32\"`, which reads the same and compares differently.\n\nThe absent ones are not an oversight and the module comment above says why: storage\nis float32, so the rest of torch's dtypes have nothing to be stored in.",
      "members": [],
-     "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
+     "doc_ko": "이 부분집합이 담는 넷. **torch 가 객체를 두는 자리에 문자열이 있다.**\n\n`torch.float32` 는 들고 다니며 물어볼 수 있는 값이지만, 여기서 같은 자리는 문자열\n리터럴이라 `\"float64\"` 를 컴파일러가 호출 자리에서 거절한다. 잃는 것은\n`x.dtype === torch.float32` 라는 동일성 검사다 — 여기서는 `x.dtype === \"float32\"` 이고,\n읽기는 같은데 비교하는 것이 다르다.\n\n없는 것들은 빠뜨린 게 아니고 위의 모듈 설명이 이유를 말한다: 저장이 float32 하나라\ntorch 의 나머지 dtype 은 담길 자리가 없다."
     },
     {
      "kind": "function",
@@ -17865,7 +17865,8 @@
      "torch": "rank_of"
     }
    ],
-   "count": 9
+   "count": 9,
+   "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
  "total": 2383
