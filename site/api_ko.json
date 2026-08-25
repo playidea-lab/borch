@@ -2798,5 +2798,13 @@
  "dtype/DType": {
   "ko": "이 부분집합이 담는 넷. **torch 가 객체를 두는 자리에 문자열이 있다.**\n\n`torch.float32` 는 들고 다니며 물어볼 수 있는 값이지만, 여기서 같은 자리는 문자열\n리터럴이라 `\"float64\"` 를 컴파일러가 호출 자리에서 거절한다. 잃는 것은\n`x.dtype === torch.float32` 라는 동일성 검사다 — 여기서는 `x.dtype === \"float32\"` 이고,\n읽기는 같은데 비교하는 것이 다르다.\n\n없는 것들은 빠뜨린 게 아니고 위의 모듈 설명이 이유를 말한다: 저장이 float32 하나라\ntorch 의 나머지 dtype 은 담길 자리가 없다.",
   "src": "0762c4adb0b3"
+ },
+ "v2/": {
+  "ko": "`torchvision.transforms.v2` — torchvision 이 지금 권하는 API.\n\n## v2 가 바꾼 것과 바꾸지 않은 것\n\n**바꾼 것은 변환이 무엇을 찍는가이지 무엇을 계산하는가가 아니다.** 비교 가능한\n이름들에 대고 재보면 값은 어디서나 일치하고, repr 은 33 개 중 21 개가 다르다.\n`Resize(5)` 는 크기를 `[5]` 로 들고 있고, `ColorJitter` 는 지정 안 된 인자를 찍지 않고\n버린다. 그래서 v1 이 이미 가진 이름들에 대해 이 파일이 할 일은 인쇄다.\n\n그 위에 v2 는 v1 이 아예 답할 수 없는 것들을 더하고, 이 파일이 먼저 자란 곳이\n그쪽이다: `Identity`·`RGB`·`ToImage`·`ToDtype`·`ToPureTensor`·`GaussianNoise`·\n`RandomChannelPermutation`·`RandomPhotometricDistort`·`RandomResize`·\n`RandomShortestSize`·`RandomZoomOut`·`ScaleJitter`.\n\n## 공유하는 것들이 상속이 아니라 위임인 까닭\n\n파이썬 판은 v1 을 상속하고 repr 만 덮어쓴다. 그쪽이 짧은 표기이고 **건너올 때\n살아남지 못한다.** `vision.ts` 가 이 이름 공간을 `vision.v2` 로 내놓으려면 두 모듈이\n서로를 import 하는데, 순환 안에서 클래스 본문의 `extends Resize` 는 상대 모듈이 아직\n평가를 마치기 전에 `Resize` 를 읽는다 — temporal dead zone 이고, 틀린 값이 아니라\nimport 시점의 크래시다. 위임은 그 읽기를 호출 시점으로 옮긴다.\n\n상속이 사 주던 것은 그대로 산다: v1 객체가 곧 구현이므로, v2 이름이 자기 몸통을\n몰래 기르면 짝도 함께 움직이지 않는 한 어긋난다. 골든이 정확히 그것을 묻는다 —\n`v2::Resize(inherited)` 는 v2 표기를 **v1 자신의 언 답**에 대고 잰다.\n\n## 여기 없는 것\n\ntv_tensor 절반 — 그림 옆에 함께 실려 다니는 상자·마스크·키포인트·비디오, 그리고\n그 타입으로 갈라 보내는 디스패치. 탐지기가 있어야 값을 하는데 이 카탈로그에는 없다.",
+  "src": "23cf09e3b250"
+ },
+ "v2f/": {
+  "ko": "`torchvision.transforms.v2.functional`.\n\n## 이름 165 개, 그중 114 개는 한 연산을 다섯 번 센 것\n\n`affine_image`·`affine_mask`·`affine_bounding_boxes`·`affine_keypoints`·`affine_video`\n는 v2 의 디스패치 커널이다: 무엇이 왔는지의 타입이 어느 것을 돌릴지 정하고, 그 타입\n체계가 이 프로젝트가 사양하는 v2 의 절반이다. 남는 것은 51 개이고 그중 34 개는 v1 이\n이미 가지고 있다.\n\n그래서 **이 파일의 대부분은 재수출이고**, 적어 놓은 것은 tv_tensor 가 필요 없는 v2 의\n아홉 개다. 얇은 것은 일부러다. `hflip` 을 `horizontalFlip` 이라는 이름으로 한 번 더\n구현하면 한 가지 일의 구현이 둘이고, 아무도 안 보는 쪽이 어긋난다.\n\n## 반대를 답하는 한 쌍\n\n`getSize` 는 `[height, width]` 를 주고 v1 의 `getImageSize` 는 `[width, height]` 를\n준다. 뒤집은 것은 v2 의 의도된 정정이라, 두 이름이 한 이름 공간 떨어져 반대를 답한다 —\n잘못 고르면 전치된, 그런데도 그럴듯한 그림을 얻는다. 골든이 둘을 나란히 얼려 두는\n이유가 그것이다.",
+  "src": "61ecae433e95"
  }
 }

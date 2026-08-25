@@ -230,6 +230,8 @@ SHIFTED = {
     # 인자 이름을 그대로 받아 적었기 때문인데, 그렇게 되는 이유가 있다 — 이 열한
     # 개는 이미지도 텐서도 아니라 상자 넷뿐이라 옮길 때 고를 것이 없었다.
     "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
 }
 
 # **238 pairs cannot be compared at all, and that is the largest number here.**
@@ -495,6 +497,8 @@ UNALIGNED = {
     "utils.data": 0,
     "transforms": 0,
     "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
     # Two, and both are the picture argument: torchvision's functional takes `img`
     # first and `vision.ts` names it `img` too, but the pair after it differs in
     # `erase` and `resized_crop`, which take a box torchvision spells out one number
@@ -729,6 +733,8 @@ RENAMED = {
     # why, which is the whole reason these numbers carry sentences.
     "transforms": 3,
     "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
     # `center_crop(img, output_size)` → `(img, size)` and `to_tensor(pic)` → `(img)`.
     # The second is torchvision's own oddity: `pic` appears in that one function and
     # `img` in the rest of the namespace.
@@ -955,6 +961,12 @@ SHORTER = {
     "transforms.functional": 0,
     # `eps` 와 `fmt` 의 기본값까지 받아 적었으니 꼬리도 짧지 않다.
     "ops": 0,
+    # v2 쪽 0 은 조금 다른 종류다. 파이썬 판의 v2 트윈은 표에서 만들어져 인자 목록이
+    # `*args, **kwargs` 로 읽히는 것이 다섯 있고, 그것들은 `agree` 도 `shorter` 도
+    # 아니라 **못 읽음**으로 빠진다 — 여기 0 은 "읽힌 것 중 짧은 것이 없다"는 뜻이지
+    # "전부 읽었다"가 아니다.
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
 }
 
 

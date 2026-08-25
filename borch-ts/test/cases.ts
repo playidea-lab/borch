@@ -32,6 +32,8 @@ import { igamma, igammac, polygamma } from "../src/special.js";
 import * as optim from "../src/optim.js";
 import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
+import * as v2 from "../src/v2.js";
+import * as v2f from "../src/v2f.js";
 import * as data from "../src/data.js";
 import * as F from "../src/functional.js";
 import { LinAlgError } from "../src/errors.js";
@@ -549,6 +551,8 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addRecent(out);
   addVision(out, inputs);
   addOps(out);
+  addV2(out, inputs);
+  addV2Functional(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
   addComplex(out);
@@ -2075,6 +2079,188 @@ function addOps(out: Map<string, Case>): void {
   out.set("ops::batched_nms",
     () => asTensor(vision.ops.batchedNms(boxes, scores, labels, 0.5)));
   out.set("ops::masks_to_boxes", () => asTensor(vision.ops.masksToBoxes(masks)));
+}
+
+/**
+ * `transforms.v2` — **the names v1 has no answer for, and three that prove the
+ * shared ones are shared.**
+ *
+ * v2 computes what v1 computes and prints something else. The printing is the
+ * larger half and it is not here yet; what is here is the arithmetic v2 adds,
+ * which v1 cannot be asked for at all.
+ *
+ * The three `(inherited)` cases are the other side of that sentence. They run
+ * `Resize`, `CenterCrop` and `Pad` through the v2 spelling and hold them against
+ * **v1's own frozen answers** — so a v2 name that quietly grew a body of its own
+ * stops matching, which is exactly what a delegating twin must never do.
+ *
+ * Everything that draws is pinned where it does not draw: `sigma=0` leaves the
+ * mean, `p=0` takes the untouched branch, and a one-wide range is a draw with
+ * nothing to draw. That is the same rule the `vision::` block follows, for the
+ * same reason — torch's generator is not available here.
+ */
+function addV2(out: Map<string, Case>, inp: Inputs): void {
+  const pic = (name: string, isByte: boolean): vision.Image => {
+    const shape = inp.shapeOf(name);
+    const [h = 1, w = 1, c = 1] = shape;
+    return vision.image(inp.raw(name), h, w, shape.length === 2 ? 1 : c, isByte);
+  };
+  const f = () => pic("vis_f", false);
+  const u8 = () => pic("vis_u8", true);
+  /** The float picture's first channel alone — `RGB` has nothing to do otherwise. */
+  const gray = (): vision.Image => {
+    const img = f();
+    const one = new Float64Array(img.height * img.width);
+    for (let i = 0; i < one.length; i++) one[i] = img.data[i * img.channels] as number;
+    return vision.image(one, img.height, img.width, 1, false);
+  };
+  const asTensor = (x: vision.Subject): Tensor => {
+    if (x instanceof Tensor) return x;
+    const img = x as vision.Image;
+    return Tensor.from(img.data, [img.height, img.width, img.channels]);
+  };
+
+  // The three that are v1's arithmetic reached through a v2 name.
+  out.set("v2::Resize(inherited)", () => asTensor(new v2.Resize([4, 3]).apply(f())));
+  out.set("v2::CenterCrop(inherited)", () => asTensor(new v2.CenterCrop(4).apply(f())));
+  out.set("v2::Pad(inherited)", () => asTensor(new v2.Pad(2).apply(f())));
+
+  out.set("v2::Identity", () => asTensor(new v2.Identity().apply(f())));
+  out.set("v2::ToPureTensor", () => asTensor(new v2.ToPureTensor().apply(f())));
+  // `RGB` on a colour picture is the identity; on a grey one it is the case.
+  out.set("v2::RGB(three channels)", () => asTensor(new v2.RGB().apply(f())));
+  out.set("v2::RGB(one channel)", () => asTensor(new v2.RGB().apply(gray())));
+
+  // `ToImage` moves the axes and **does not scale**; `ToDtype(scale=true)` is the
+  // other half. The pair is what v2 tells you to write instead of `ToTensor`, so the
+  // pair is asked as well as each part. These two answer `(C,H,W)` and are not put
+  // through `asTensor` — the axes are the case.
+  out.set("v2::ToImage", () => new v2.ToImage().apply(u8()));
+  out.set("v2::ToDtype(scaling)",
+    () => asTensor(new v2.ToDtype("float32", true).apply(u8())));
+  out.set("v2::ToDtype(not scaling)",
+    () => asTensor(new v2.ToDtype("float32").apply(u8())));
+  out.set("v2::ToImage then ToDtype", () =>
+    new v2.Compose([new v2.ToImage(), new v2.ToDtype("float32", true)])
+      .apply(u8()) as Tensor);
+
+  // Six that draw, pinned where they do not. `sigma=0` leaves the mean, which is what
+  // makes the clip case a clip case rather than a noise case.
+  out.set("v2::GaussianNoise(sigma=0)",
+    () => asTensor(new v2.GaussianNoise(0.0, 0.0).apply(f())));
+  out.set("v2::GaussianNoise(clipping)",
+    () => asTensor(new v2.GaussianNoise(5.0, 0.0, true).apply(f())));
+  out.set("v2::GaussianNoise(not clipping)",
+    () => asTensor(new v2.GaussianNoise(5.0, 0.0, false).apply(f())));
+  out.set("v2::RandomZoomOut(p=0)",
+    () => asTensor(new v2.RandomZoomOut(0, [1.0, 4.0], 0.0).apply(f())));
+  out.set("v2::RandomPhotometricDistort(p=0)",
+    () => asTensor(new v2.RandomPhotometricDistort(
+      [0.875, 1.125], [0.5, 1.5], [0.5, 1.5], [-0.05, 0.05], 0.0).apply(f())));
+  // A one-wide range has one answer, so the draw is a draw with nothing to draw.
+  out.set("v2::RandomResize(one size)",
+    () => asTensor(new v2.RandomResize(4, 5).apply(f())));
+  out.set("v2::RandomShortestSize(one size)",
+    () => asTensor(new v2.RandomShortestSize(4, 40).apply(f())));
+  out.set("v2::ScaleJitter(one factor)",
+    () => asTensor(new v2.ScaleJitter([8, 8], [1.0, 1.0]).apply(f())));
+}
+
+/**
+ * `transforms.v2.functional` — **nine adds and four re-exports asked through the
+ * v2 spelling.**
+ *
+ * The four are the ones that catch a re-export quietly becoming a second
+ * implementation. `resize`, `normalize`, `rotate` and `adjustHue` are v1's
+ * functions reached by their v2 names, held against v1's own frozen answers, so a
+ * body written twice under two names shows up the moment the two part.
+ *
+ * **The two that answer a size are frozen as text**, side by side. `getSize` gives
+ * `[height, width]` and `getImageSize` gives `[width, height]` — a reader taking
+ * the wrong one gets a transposed picture that is still plausible, and `[5, 4]`
+ * compares equal to nothing but itself.
+ */
+function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
+  const pic = (name: string, isByte: boolean): vision.Image => {
+    const shape = inp.shapeOf(name);
+    const [h = 1, w = 1, c = 1] = shape;
+    return vision.image(inp.raw(name), h, w, shape.length === 2 ? 1 : c, isByte);
+  };
+  const f = () => pic("vis_f", false);
+  const u8 = () => pic("vis_u8", true);
+  const grey = (): vision.Image => {
+    const img = f();
+    const one = new Float64Array(img.height * img.width);
+    for (let i = 0; i < one.length; i++) one[i] = img.data[i * img.channels] as number;
+    return vision.image(one, img.height, img.width, 1, false);
+  };
+  const asTensor = (x: vision.Subject): Tensor => {
+    if (x instanceof Tensor) return x;
+    const img = x as vision.Image;
+    return Tensor.from(img.data, [img.height, img.width, img.channels]);
+  };
+
+  // **The field is written out rather than computed.** `tests/cases.py` draws it from
+  // numpy's generator seeded at 7, and that stream cannot be reproduced here — the
+  // same reason the `math::` arrays are copied across rather than rebuilt. Values
+  // that drifted apart would stop the comparison being a comparison, so they are the
+  // float32 numbers that side actually passes, digit for digit.
+  const shift = Float64Array.from([
+    0.025019101798534393, 0.07944276183843613, 0.055137135088443756,
+    -0.054958563297986984, -0.03996674343943596, 0.07471068948507309,
+    -0.0989469438791275, 0.06424569338560104, 0.059413887560367584,
+    -0.006413005292415619, -0.03939351439476013, -0.044314879924058914,
+    -0.04902608320116997, -0.010984733700752258, 0.0009096488356590271,
+    0.010699473321437836, 0.09910006076097488, 0.05853237956762314, 0.02443584054708481,
+    0.09779203683137894, -0.05693826079368591, -0.06795759499073029, 0.0225079208612442,
+    -0.09121160209178925, -0.09286394715309143, 0.0029777660965919495,
+    -0.006758794188499451, 0.08343356102705002, 0.025845251977443695,
+    0.0028235316276550293, -0.000625312328338623, -0.05049701780080795,
+    -0.09764119982719421, -0.061519574373960495, 0.03840642422437668,
+    -0.05987865850329399, -0.026092737913131714, -0.09925315529108047,
+    0.06600954383611679, -0.069107785820961
+  ]);
+
+  out.set("v2f::horizontal_flip", () => asTensor(v2f.horizontalFlip(f())));
+  out.set("v2f::vertical_flip", () => asTensor(v2f.verticalFlip(f())));
+  out.set("v2f::grayscale_to_rgb(one channel)",
+    () => asTensor(v2f.grayscaleToRgb(grey())));
+  // Three channels **pass through** rather than raising, so a mixed pipeline needs no
+  // branch in front of it.
+  out.set("v2f::grayscale_to_rgb(three channels)",
+    () => asTensor(v2f.grayscaleToRgb(f())));
+  out.set("v2f::permute_channels",
+    () => asTensor(v2f.permuteChannels(f(), [2, 0, 1])));
+  out.set("v2f::to_dtype(scaling)",
+    () => asTensor(v2f.toDtype(u8(), "float32", true)));
+  out.set("v2f::to_dtype(not scaling)", () => asTensor(v2f.toDtype(u8(), "float32")));
+  out.set("v2f::gaussian_noise(sigma=0)",
+    () => asTensor(v2f.gaussianNoise(f(), 0.0, 0.0)));
+  out.set("v2f::gaussian_noise(clipping)",
+    () => asTensor(v2f.gaussianNoise(f(), 5.0, 0.0, true)));
+  out.set("v2f::elastic", () => asTensor(v2f.elastic(f(), shift)));
+
+  // The two that answer a size, and the one that answers a count. Python's `str` of a
+  // list is what the golden holds, so the brackets and the comma-space are the case.
+  out.set("v2f::get_size(height first)", () => `[${v2f.getSize(f()).join(", ")}]`);
+  out.set("v2f::get_image_size(width first)",
+    () => `[${vision.getImageSize(f()).join(", ")}]`);
+  out.set("v2f::get_num_channels", () => String(v2f.getNumChannels(f())));
+
+  // Four of v1's, reached through the v2 spelling.
+  out.set("v2f::resize(inherited)", () => asTensor(v2f.resize(f(), [3, 2])));
+  // **The picture goes in as `(H,W,C)` and not through `ToTensor`.** `normalize` is
+  // the one re-export here that takes a tensor, and a single-number mean broadcasts as
+  // `[1,1,1]` — so the arithmetic is elementwise and the axes it is handed are the axes
+  // it gives back. Sending it through `ToTensor` would answer `(C,H,W)`, the same
+  // numbers in an order the frozen answer does not have.
+  out.set("v2f::normalize(inherited)", () => {
+    const img = f();
+    return v2f.normalize(Tensor.from(img.data, [img.height, img.width, img.channels]),
+                         [0.5], [0.25]);
+  });
+  out.set("v2f::rotate(inherited)", () => asTensor(v2f.rotate(f(), 30.0)));
+  out.set("v2f::adjust_hue(inherited)", () => asTensor(v2f.adjustHue(f(), 0.2)));
 }
 
 /** The step count the golden uses. Keeping it small is deliberate — run longer and what

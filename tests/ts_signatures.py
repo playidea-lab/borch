@@ -261,6 +261,8 @@ MODULES = {
     # `ops` 는 한 파일에 혼자 산다. `vision` 을 함께 매핑하면 `pad`·`normalize` 처럼
     # 잎 이름이 겹치는 자리가 다시 생기는데, 이 파일이 존재하는 이유가 그것이다.
     "ops": frozenset({"ops"}),
+    "transforms.v2": frozenset({"v2"}),
+    "transforms.v2.functional": frozenset({"v2f"}),
 }
 
 

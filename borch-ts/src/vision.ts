@@ -28,12 +28,21 @@
 
 import { RuntimeError } from "./errors.js";
 import { Tensor } from "./tensor.js";
+import {
+  asImage, nextFloat, nextInt, nextNormal, pyFloat, seed as seedRng,
+} from "./_vision_util.js";
 
 // Box geometry — `torchvision.ops`, reached as `vision.ops`. It is a separate file
 // rather than more names below because none of it touches an image: eleven functions
 // over four numbers a box, and this file is already past the length at which "one file,
 // so it reads" stops being true.
 export * as ops from "./ops.js";
+
+// `torchvision.transforms.v2`, reached as `vision.v2`. **The two files import each
+// other**: v2 delegates to the transforms below, and this line is what puts it at the
+// name torchvision gives it. The cycle is safe in one direction only — v2 may call
+// these classes and may not extend them, which is written out at the top of `v2.ts`.
+export * as v2 from "./v2.js";
 
 /**
  * An image laid out as `(H, W, C)`. The values are uint8 or float.
@@ -300,30 +309,18 @@ function tuple(values: readonly number[]): string {
 }
 
 /**
- * The generator for transforms that draw.
+ * Seeds the generator the transforms draw from.
  *
  * **The golden does not compare draws** — it pins the probability at 0 or 1, or leaves
  * only one place to crop, and asks about the deterministic part alone. So the generator
- * here does not have to match torch's, and must not pretend to.
+ * does not have to match torch's, and must not pretend to.
+ *
+ * **One door and one stream.** The state moved to `_vision_rng.ts` when `v2.ts` started
+ * drawing from it: two files cannot share a module-private variable, and giving v2 a
+ * generator of its own would make a seeded pipeline rewind in halves.
  */
-const rng = { state: 12345 };
-
 export function manualSeed(seed: number): void {
-  rng.state = seed >>> 0;
-}
-
-function nextFloat(): number {
-  // xorshift32. Not a place that measures a distribution — only that drawing runs.
-  let x = rng.state || 1;
-  x ^= x << 13; x >>>= 0;
-  x ^= x >> 17;
-  x ^= x << 5; x >>>= 0;
-  rng.state = x;
-  return x / 0x100000000;
-}
-
-function nextInt(bound: number): number {
-  return bound <= 1 ? 0 : Math.floor(nextFloat() * bound);
+  seedRng(seed);
 }
 
 /**
@@ -1018,12 +1015,10 @@ export function normalizeBatch(
  * can act on.
  */
 /**
+ * (`pyFloat` moved to `_vision_util.ts` — `v2.ts` prints the same way.)
  * Python's float repr: an integer still carries its decimal point (`1.0`, not
  * `1`). JS drops it, and `repr` is read as a specification here.
  */
-function pyFloat(v: number): string {
-  return Number.isInteger(v) ? `${v}.0` : String(v);
-}
 
 function floatTuple(values: readonly number[]): string {
   return `(${values.map(pyFloat).join(", ")})`;
@@ -1285,11 +1280,10 @@ export class RandomErasing implements Transform {
       // hand the picture back untouched (p=0, and ten draws that all miss), and
       // the distribution test that does look at the draw is on the Python side.
       // Box–Muller off the same generator the rest of the file draws from — the
-      // stream cannot match numpy's, and matching it was never possible.
-      for (let i = 0; i < out.length; i++) {
-        const u = Math.max(nextFloat(), Number.MIN_VALUE);
-        out[i] = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * nextFloat());
-      }
+      // stream cannot match numpy's, and matching it was never possible. The two
+      // lines that were written out here are `nextNormal` now, which is where the
+      // floor under `log(0)` is explained.
+      for (let i = 0; i < out.length; i++) out[i] = nextNormal();
       return out;
     }
     if (typeof this.value === "number") return out.fill(this.value);
@@ -1398,26 +1392,6 @@ export class TenCrop implements Transform {
       `vertical_flip=${this.verticalFlip ? "True" : "False"})`;
   }
 }
-
-function isSeveral(x: Subject): x is readonly Image[] {
-  return Array.isArray(x);
-}
-
-function asImage(x: Subject, who: string): Image {
-  if (isSeveral(x)) {
-    throw new RuntimeError(
-      `${who} takes one picture — it received ${x.length} of them.\n` +
-      "FiveCrop and TenCrop hand back several; take them apart with a Lambda first.");
-  }
-  if (x instanceof Tensor) {
-    throw new Error(
-      `${who} takes an (H,W,C) array — got a tensor.\n` +
-        "Move ToTensor later in the pipeline: a tensor per image is a GPU buffer per image.",
-    );
-  }
-  return x;
-}
-
 
 // ── Photometric: the arithmetic torchvision does **on the tensor path** ────
 //

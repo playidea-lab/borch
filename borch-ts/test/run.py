@@ -598,11 +598,16 @@ NOT_PORTED = {
     # touches a network, so they port like any other value case; what does not port
     # is the rest of `datasets`, which on that side is a `fetch` and an OPFS cache
     # and has no case in this table at all.
-    # Seventeen. Nine are the names v2 adds that need no tv_tensors, and the other
-    # eight ask v1's functions **through the v2 spelling** — those are the ones that
-    # catch a re-export quietly becoming a second implementation, which is a thing that
-    # can happen on either side.
-    "v2f::": (17, "아직 — v2.functional: the nine v2 adds, and eight of v1's re-exports"),
+    # **`v2f::` was here at 17 and is not — ported.** Nine were the names v2 adds that
+    # need no tv_tensors and the other eight asked v1's functions through the v2
+    # spelling; the second group is what catches a re-export quietly becoming a second
+    # implementation, and it is why `v2f.ts` re-exports rather than rewrites.
+    #
+    # One of the seventeen could not come across as written. `elastic`'s displacement
+    # field is drawn from numpy's generator seeded at 7, and that stream does not exist
+    # here — so the forty numbers are **written out in `cases.ts`**, the way the `math::`
+    # arrays already are. A field rebuilt from a different generator would have made the
+    # comparison a comparison of two different questions.
     # **The first `misc::` row.** Every case with that prefix had been carried across
     # until now, which is why this table has never had one — and it is worth a line
     # because a prefix appearing here for the first time reads like an oversight.
@@ -616,8 +621,22 @@ NOT_PORTED = {
     "misc::": (11, "아직 — Embedding/EmbeddingBag: max_norm, padding_idx, and the "
                    "table after the call"),
     "dataset::": (19, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
-    "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
-                 "settings where the draw stops"),
+    # **71 → 52, and the half that came off is the half that could not be faked.**
+    # The nineteen values are here now: twelve names v1 has no answer for at all
+    # (`Identity`, `RGB`, `ToImage`, `ToDtype`, `GaussianNoise`, `RandomZoomOut`,
+    # `RandomPhotometricDistort`, `RandomResize`, `RandomShortestSize`, `ScaleJitter`
+    # and the two composition spellings), and three that run v1's arithmetic through a
+    # v2 name and are held against **v1's own frozen answers** — which is what stops a
+    # delegating twin from quietly growing a body of its own.
+    #
+    # What is left is the printing, and it is the larger half on purpose. v2 changed
+    # what its transforms print and not what they compute, so fifty-two reprs are the
+    # difference between the two namespaces on a plain picture. They need the v1 names
+    # twinned one by one on this side — TypeScript cannot build them from a table the
+    # way the Python side does, because a class made at run time has no declaration and
+    # would be invisible to the reference and to both measuring axes.
+    "v2::": (52, "아직 — the repr of fifty-two v2 names. The values landed with "
+                 "`v2.ts`; printing is what a twin is for"),
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),
     # 3 → 7 → 6. Four `DataLoader` rows went in with this reason:
     #

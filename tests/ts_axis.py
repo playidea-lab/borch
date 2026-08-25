@@ -104,6 +104,13 @@ SPACES = frozenset({
     # 실패 — 골든이 물으니 여기서는 안 묻는다 — 를 되풀이하지 않으려면, 이름 축은
     # 골든이 무엇을 묻든 상관없이 열한 이름을 따로 세어야 한다.
     "ops",
+    # v2 의 두 줄도 같은 날 들어왔다. **이 축은 borch.ts 의 이름 전체에 대고 묻는다**는
+    # 점이 여기서 크게 작동한다 — v2 의 52 개 중 49 개는 v1 이 이미 가진 이름이라
+    # 이름만으로는 결손이 아니고, 진짜로 없는 셋(MixUp·CutMix·InterpolationMode)만
+    # 남는다. 그러니 이 행이 세는 것은 "v2 를 얼마나 옮겼는가"가 아니라 "v2 에만 있는
+    # 이름 중 없는 것"이고, 그 구분을 여기 적어 두지 않으면 다음 사람이 이 0 을
+    # repr 52 개까지 끝났다는 뜻으로 읽는다. 그쪽은 러너 원장이 센다.
+    "transforms.v2", "transforms.v2.functional",
 })
 
 
@@ -304,7 +311,18 @@ DELIBERATE: dict[str, str] = {
     **{f"{ns}::InterpolationMode":
        'not a name here: `vision.ts` takes `"bilinear" | "nearest"` as a type, so the '
        "compiler refuses a wrong mode before the call runs"
-       for ns in ("transforms", "transforms.functional")},
+       for ns in ("transforms", "transforms.functional",
+                  "transforms.v2", "transforms.v2.functional")},
+    # **The two v2 transforms that take a batch and a label rather than a picture.**
+    # Everything else in that namespace is `(H,W,C)` in and `(H,W,C)` out; these are
+    # `(N,H,W,C)` with a label per row, and they draw their blend from a Beta — which
+    # is a sampler `_vision_util.ts` does not have and nothing else there needs. The
+    # golden holds their reprs and no value case, so porting them is real work with no
+    # frozen answer waiting to check it, which is why they are behind the rest.
+    **{f"transforms.v2::{n}":
+       "owed — takes a batch and labels rather than a picture, and draws from a Beta "
+       "that nothing else in vision needs. Only its repr is frozen"
+       for n in ("MixUp", "CutMix")},
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not

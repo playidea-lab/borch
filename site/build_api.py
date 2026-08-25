@@ -100,6 +100,13 @@ MODULES = [
     ("ops", "vision.ops",
      {"ko": "박스 기하 — IoU·NMS. `torchvision.ops` 자리.",
       "en": "Box geometry — IoU and NMS. Where `torchvision.ops` would be."}),
+    ("v2", "vision.v2",
+     {"ko": "torchvision 이 지금 권하는 변환 API. `torchvision.transforms.v2` 자리.",
+      "en": "The transforms API torchvision now recommends. Where "
+            "`torchvision.transforms.v2` would be."}),
+    ("v2f", "vision.v2.functional",
+     {"ko": "v2 의 함수 형태. 대부분 v1 재수출이고, 새것은 아홉이다.",
+      "en": "v2's functional spellings. Mostly v1 re-exported; nine are new."}),
     ("fft", "fft",
      {"ko": "푸리에 변환. `torch.fft` 자리.",
       "en": "Fourier transforms. Where `torch.fft` would be."}),

@@ -288,6 +288,15 @@ FROZEN = {
     # row starts settled rather than as work to do. It is here anyway: a row that
     # only appears once it is non-zero is a row nobody notices going non-zero.
     "ops": 0,
+    # Three, and all three carry a reason: `InterpolationMode` is a type on this side,
+    # and `MixUp` and `CutMix` take a batch with labels and draw from a Beta. **The
+    # number is small for a reason worth knowing** — this axis asks whether borch.ts
+    # has a name anywhere, and 49 of v2's 52 are names v1 already has. What it cannot
+    # see is that those 49 print v1's text rather than v2's, which is the larger half
+    # of the work and is counted by the runner's ledger instead.
+    "transforms.v2": 3,
+    # One: the same `InterpolationMode`. The nine v2 adds are in `v2f.ts`.
+    "transforms.v2.functional": 1,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the
@@ -315,6 +324,8 @@ REFUSALS = {
     "transforms.functional": 0,
     # The core refuses nothing in `ops` — eleven functions and no stub among them.
     "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
 }
 
 

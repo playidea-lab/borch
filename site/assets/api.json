@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 700,
+  "done": 702,
   "stale": 0,
-  "missing": 161
+  "missing": 184
  },
  "modules": [
   {
@@ -13968,7 +13968,7 @@
      "kind": "function",
      "name": "manualSeed",
      "signature": "export declare function manualSeed(seed: number): void",
-     "doc": "",
+     "doc": "Seeds the generator the transforms draw from.\n\n**The golden does not compare draws** — it pins the probability at 0 or 1, or leaves\nonly one place to crop, and asks about the deterministic part alone. So the generator\ndoes not have to match torch's, and must not pretend to.\n\n**One door and one stream.** The state moved to `_vision_rng.ts` when `v2.ts` started\ndrawing from it: two files cannot share a module-private variable, and giving v2 a\ngenerator of its own would make a seeded pipeline rewind in halves.",
      "members": [],
      "torch": "manual_seed"
     },
@@ -15146,6 +15146,362 @@
    ],
    "count": 14,
    "doc_ko": "`torchvision.ops` 모양의 상자 기하.\n\n## 서른아홉 중 열하나, 그리고 어느 열하나인가\n\n나머지 스물여덟은 `nn.Module` 층이거나 모델의 특징맵·예측을 필요로 하는 함수들이고,\n이 카탈로그에는 탐지기가 없다. 이 열하나는 **상자 하나에 숫자 넷이면 된다.** 그래서\n`vision.ts` 의 거의 모든 것과 달리 아무것도 뽑지 않고, 골든이 열하나를 전부 붙들 수\n있는 이유가 그것이다 — 이 파일에는 분포로 확인할 절반이 없다.\n\n같은 열하나가 저장소의 파이썬 판(`borchvision.ops`)에 있고 둘 다 같은 언 답에 대고\n잰다. 둘이 갈리면 같은 상자가 라이브러리마다 다른 기하가 되고, 그것은 값 대조로만\n잡힌다.\n\n## 왜 이름 공간이고 `vision` 의 이름이 아닌가\n\n`vision.ts` 는 `torchvision.transforms` 를 이름째 위로 펼쳐 담는다. 변환이 전부였기\n때문인데, **`ops` 는 거기 함께 놓일 수 없다.** `torchvision.ops` 는 `transforms`\n아래가 아니라 그 옆의 최상위 이름 공간이라, 펼쳐 놓은 `vision.nms` 는 torchvision 에\n없는 이름이 된다 — 흉내 내는 라이브러리에 없는 자리를 만드는 것이 이 프로젝트가 할 수\n없는 단 하나의 수다. `vision.ops.nms` 로 닿고, 그것은 앞에 라이브러리 이름만 바꾼\n`torchvision.ops.nms` 다.\n\n## 상자는 배열이지 텐서가 아니다\n\ntorchvision 은 여기서 텐서를 받고 텐서를 준다. 이쪽은 `(N, 4)` 숫자를 받아 숫자를\n돌려주는데, `vision.ts` 가 이미지에 대해 말하는 이유에 하나가 더 붙는다. 상자는 숫자\n넷이다 — 상자 목록마다 GPU 버퍼를 하나 만들면 얻는 것 없이 왕복만 든다. 그리고\n**이쪽에서 텐서를 도로 읽는 일은 비동기라**, 텐서를 받는 `boxIou` 는 `await` 를 달아야\n한다. torch 에서는 직사각형에 대한 질문 앞에 쓸 일이 없는 `await` 다."
+  },
+  {
+   "name": "v2",
+   "title": "vision.v2",
+   "blurb": {
+    "ko": "torchvision 이 지금 권하는 변환 API. `torchvision.transforms.v2` 자리.",
+    "en": "The transforms API torchvision now recommends. Where `torchvision.transforms.v2` would be."
+   },
+   "doc": "`torchvision.transforms.v2` — torchvision's current recommended API.\n\n## What v2 changes, and what it does not\n\n**It changed what its transforms print, not what they compute.** Measured\nacross the comparable names, the values agree everywhere; the reprs differ in\n21 of 33. `Resize(5)` keeps its size as `[5]`, `ColorJitter` drops the\narguments left unset rather than printing them. So the names v1 already has\nare the v1 arithmetic reached through a v2 spelling, and this file's job for\nthose is the printing.\n\nOn top of them v2 adds a set that v1 has no answer for at all, and those are\nwhat this file first grew: `Identity`, `RGB`, `ToImage`, `ToDtype`,\n`ToPureTensor`, `GaussianNoise`, `RandomChannelPermutation`,\n`RandomPhotometricDistort`, `RandomResize`, `RandomShortestSize`,\n`RandomZoomOut` and `ScaleJitter`.\n\n## Why the shared ones delegate rather than inherit\n\nThe Python side subclasses v1 and overrides the repr. That is the shorter\nspelling and **it does not survive the crossing.** `vision.ts` has to name\nthis namespace to expose it as `vision.v2`, so the two modules import each\nother, and in a cycle a class body running `extends Resize` reads `Resize`\nbefore its own module has finished evaluating — a temporal dead zone, which is\na crash at import rather than a wrong value. Delegation moves that read to\ncall time, when both modules are up.\n\nWhat inheritance was buying is still bought: the v1 object *is* the\nimplementation, so a v2 name cannot drift from its v1 twin without the twin\nmoving too. The golden asks exactly that — `v2::Resize(inherited)` holds the\nv2 spelling against v1's own frozen answer.\n\n## What is not here\n\nThe tv_tensor half — boxes, masks, keypoints and video travelling beside the\npicture, and the dispatch that routes on their type. It pays off with a\ndetector and there is none in this catalogue.",
+   "symbols": [
+    {
+     "kind": "class",
+     "name": "Identity",
+     "signature": "export declare class Identity implements Transform",
+     "doc": "Does nothing, and **that is a transform** — it is what a policy draws when it\n draws no operation, and what a `Compose` holds when a branch is switched off.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ToPureTensor",
+     "signature": "export declare class ToPureTensor implements Transform",
+     "doc": "Strips the tv_tensor wrappers off a sample. **Here there are none**, so it is\nthe identity — kept because a pipeline copied from torchvision ends with it and\nshould not stop, and named rather than aliased to `Identity` because the two\nmean different things the day tv_tensors arrive.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RGB",
+     "signature": "export declare class RGB implements Transform",
+     "doc": "One channel to three. **A three-channel picture passes through**, which is what\nmakes it safe to put in front of a model that needs three.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ToImage",
+     "signature": "export declare class ToImage implements Transform",
+     "doc": "`(H,W,C)` to a `(C,H,W)` tensor — **and it does not divide by 255.**\n\nThat is the whole reason v2 split `ToTensor` in two. `ToTensor` both moved the\naxes and scaled, so a float image was scaled a second time by anyone who did\nnot know; here the moving is one transform and the scaling is\n`ToDtype(scale=true)`, and each says which it does.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ToDtype",
+     "signature": "export declare class ToDtype implements Transform",
+     "doc": "Cast, and **optionally scale on the way** — the half of `ToTensor` that v2\nsplit out.\n\n`scale` defaults to `false` as it does there, and that is the trap:\n`new ToDtype(\"float32\").apply(bytes)` gives 0..255 floats and looks like it\nworked.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(dtype: DType, scale?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "GaussianNoise",
+     "signature": "export declare class GaussianNoise implements Transform",
+     "doc": "Add normal noise. **Float pictures only** — torchvision has an integer path\nthat works in int16 and clamps, and a uint8 picture with sigma in units of\n[0,1] is a different question, so it is refused here rather than answered\ndifferently.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(mean?: number, sigma?: number, clip?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomChannelPermutation",
+     "signature": "export declare class RandomChannelPermutation implements Transform",
+     "doc": "Reorder the channels at random. **Every ordering including the original** — it\n is a draw over permutations, not a guarantee of change.",
+     "members": [
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomPhotometricDistort",
+     "signature": "export declare class RandomPhotometricDistort implements Transform",
+     "doc": "The SSD recipe: each of four adjustments applied with probability `p`, **the\ncontrast either before or after the other two**, and then maybe a channel\nshuffle.\n\nThe contrast's position is itself a coin flip, which reads as a detail and is\nnot: contrast measures the picture's mean, so doing it first and doing it last\nare different pictures.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(brightness?: readonly [number, number], contrast?: readonly [number, number], saturation?: readonly [number, number], hue?: readonly [number, number], p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomResize",
+     "signature": "export declare class RandomResize implements Transform",
+     "doc": "Resize the short side to a number drawn from `[minSize, maxSize)`. **A range of\nsizes rather than one**, which is what multi-scale training wants.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(minSize: number, maxSize: number, interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomShortestSize",
+     "signature": "export declare class RandomShortestSize implements Transform",
+     "doc": "The short side to one of `minSize`, **with the long side capped** by `maxSize`\n— so a very wide picture is scaled by whichever of the two constraints binds\nfirst, rather than by the short side alone.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(minSize: number | readonly number[], maxSize?: number | null, interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomZoomOut",
+     "signature": "export declare class RandomZoomOut implements Transform",
+     "doc": "Put the picture on a **larger canvas**, somewhere random on it, with the rest\nfilled. The picture shrinks relative to the frame without being resampled —\nwhich is why detection recipes reach for it rather than for a scale-down.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(fill?: number | readonly number[], sideRange?: readonly [number, number], p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ScaleJitter",
+     "signature": "export declare class ScaleJitter implements Transform",
+     "doc": "Resize toward `targetSize` by a **drawn factor** — the large-scale jitter of\nthe detection recipes, where the same picture is seen at a tenth and at twice\nits size across an epoch.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(targetSize: readonly [number, number], scaleRange?: readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    }
+   ],
+   "count": 43,
+   "doc_ko": "`torchvision.transforms.v2` — torchvision 이 지금 권하는 API.\n\n## v2 가 바꾼 것과 바꾸지 않은 것\n\n**바꾼 것은 변환이 무엇을 찍는가이지 무엇을 계산하는가가 아니다.** 비교 가능한\n이름들에 대고 재보면 값은 어디서나 일치하고, repr 은 33 개 중 21 개가 다르다.\n`Resize(5)` 는 크기를 `[5]` 로 들고 있고, `ColorJitter` 는 지정 안 된 인자를 찍지 않고\n버린다. 그래서 v1 이 이미 가진 이름들에 대해 이 파일이 할 일은 인쇄다.\n\n그 위에 v2 는 v1 이 아예 답할 수 없는 것들을 더하고, 이 파일이 먼저 자란 곳이\n그쪽이다: `Identity`·`RGB`·`ToImage`·`ToDtype`·`ToPureTensor`·`GaussianNoise`·\n`RandomChannelPermutation`·`RandomPhotometricDistort`·`RandomResize`·\n`RandomShortestSize`·`RandomZoomOut`·`ScaleJitter`.\n\n## 공유하는 것들이 상속이 아니라 위임인 까닭\n\n파이썬 판은 v1 을 상속하고 repr 만 덮어쓴다. 그쪽이 짧은 표기이고 **건너올 때\n살아남지 못한다.** `vision.ts` 가 이 이름 공간을 `vision.v2` 로 내놓으려면 두 모듈이\n서로를 import 하는데, 순환 안에서 클래스 본문의 `extends Resize` 는 상대 모듈이 아직\n평가를 마치기 전에 `Resize` 를 읽는다 — temporal dead zone 이고, 틀린 값이 아니라\nimport 시점의 크래시다. 위임은 그 읽기를 호출 시점으로 옮긴다.\n\n상속이 사 주던 것은 그대로 산다: v1 객체가 곧 구현이므로, v2 이름이 자기 몸통을\n몰래 기르면 짝도 함께 움직이지 않는 한 어긋난다. 골든이 정확히 그것을 묻는다 —\n`v2::Resize(inherited)` 는 v2 표기를 **v1 자신의 언 답**에 대고 잰다.\n\n## 여기 없는 것\n\ntv_tensor 절반 — 그림 옆에 함께 실려 다니는 상자·마스크·키포인트·비디오, 그리고\n그 타입으로 갈라 보내는 디스패치. 탐지기가 있어야 값을 하는데 이 카탈로그에는 없다."
+  },
+  {
+   "name": "v2f",
+   "title": "vision.v2.functional",
+   "blurb": {
+    "ko": "v2 의 함수 형태. 대부분 v1 재수출이고, 새것은 아홉이다.",
+    "en": "v2's functional spellings. Mostly v1 re-exported; nine are new."
+   },
+   "doc": "`torchvision.transforms.v2.functional`.\n\n## 165 names, and 114 of them are one operation counted five times\n\n`affine_image`, `affine_mask`, `affine_bounding_boxes`, `affine_keypoints` and\n`affine_video` are v2's dispatch kernels: the type of what arrives decides\nwhich runs, and that type system is the half of v2 this project declines. What\nis left is 51 names, 34 of which v1 already has.\n\nSo **most of this file is a re-export**, and what is written out is the nine\nv2 adds that need no tv_tensors. They are thin on purpose. A second body for\n`hflip` under the name `horizontalFlip` is two implementations of one thing,\nand the one nobody is looking at is the one that drifts.\n\n## The pair that answers opposite things\n\n`getSize` gives `[height, width]` and v1's `getImageSize` gives\n`[width, height]`. Reversing it was one of v2's deliberate corrections, so the\ntwo names sit one namespace apart giving opposite answers — and taking the\nwrong one gives a transposed picture that is still plausible. Both are frozen\nside by side in the golden for exactly that reason.",
+   "symbols": [
+    {
+     "kind": "function",
+     "name": "horizontalFlip",
+     "signature": "export declare function horizontalFlip(img: Image): Image",
+     "doc": "v2's spelling of `hflip`. **The same function, not a copy of it.**",
+     "members": [],
+     "torch": "horizontal_flip"
+    },
+    {
+     "kind": "function",
+     "name": "verticalFlip",
+     "signature": "export declare function verticalFlip(img: Image): Image",
+     "doc": "v2's spelling of `vflip`.",
+     "members": [],
+     "torch": "vertical_flip"
+    },
+    {
+     "kind": "function",
+     "name": "elastic",
+     "signature": "export declare function elastic(img: Image, displacement: ArrayLike<number>, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null): Image",
+     "doc": "v2's spelling of `elasticTransform`.\n\n`fill` defaults to `null` and not `0`. Writing the zero looks harmless and is\nnot: `null` leaves the outside of the warp untouched and `0` paints it black,\nso on a picture whose edges barely move the difference is a thin dark rim that\nreads as the warp working.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "getSize",
+     "signature": "export declare function getSize(img: Image): [number, number]",
+     "doc": "`[height, width]` — **a list, and in that order.** v1's `getImageSize` is the\n other way round; this is the place to say which is which.",
+     "members": [],
+     "torch": "get_size"
+    },
+    {
+     "kind": "function",
+     "name": "getNumChannels",
+     "signature": "export declare function getNumChannels(img: Image): number",
+     "doc": "v2's spelling of `getImageNumChannels`.",
+     "members": [],
+     "torch": "get_num_channels"
+    },
+    {
+     "kind": "function",
+     "name": "grayscaleToRgb",
+     "signature": "export declare function grayscaleToRgb(img: Image): Image",
+     "doc": "One channel to three. **Three channels pass through untouched** — torchvision\n returns the input rather than raising, so a pipeline can carry mixed pictures\n without a branch.",
+     "members": [],
+     "torch": "grayscale_to_rgb"
+    },
+    {
+     "kind": "function",
+     "name": "permuteChannels",
+     "signature": "export declare function permuteChannels(img: Image, permutation: readonly number[]): Image",
+     "doc": "Reorder the channels. The list is **positions to take from**, so `[2, 0, 1]`\nputs the old third channel first — the same direction as indexing, and the\nopposite of \"where each channel goes\".",
+     "members": [],
+     "torch": "permute_channels"
+    },
+    {
+     "kind": "function",
+     "name": "randomPermuteChannels",
+     "signature": "export declare function randomPermuteChannels(img: Image): Image",
+     "doc": "A permutation drawn from the shared stream — `RandomChannelPermutation` as a\n function, kept here so the class and the function cannot disagree.",
+     "members": [],
+     "torch": "random_permute_channels"
+    },
+    {
+     "kind": "function",
+     "name": "toDtype",
+     "signature": "export declare function toDtype(img: Subject, dtype?: DType, scale?: boolean): Subject",
+     "doc": "Cast, and **optionally scale on the way** — the half of `ToTensor` that v2\nsplit out, as a function. `scale` is `false` by default here as it is there,\nwhich is the trap: `toDtype(bytes, \"float32\")` gives 0..255 floats and looks\nlike it worked.",
+     "members": [],
+     "torch": "to_dtype"
+    },
+    {
+     "kind": "function",
+     "name": "gaussianNoise",
+     "signature": "export declare function gaussianNoise(img: Subject, mean?: number, sigma?: number, clip?: boolean): Image",
+     "doc": "Add normal noise. Float pictures only, for the reason `GaussianNoise` gives.",
+     "members": [],
+     "torch": "gaussian_noise"
+    }
+   ],
+   "count": 10,
+   "doc_ko": "`torchvision.transforms.v2.functional`.\n\n## 이름 165 개, 그중 114 개는 한 연산을 다섯 번 센 것\n\n`affine_image`·`affine_mask`·`affine_bounding_boxes`·`affine_keypoints`·`affine_video`\n는 v2 의 디스패치 커널이다: 무엇이 왔는지의 타입이 어느 것을 돌릴지 정하고, 그 타입\n체계가 이 프로젝트가 사양하는 v2 의 절반이다. 남는 것은 51 개이고 그중 34 개는 v1 이\n이미 가지고 있다.\n\n그래서 **이 파일의 대부분은 재수출이고**, 적어 놓은 것은 tv_tensor 가 필요 없는 v2 의\n아홉 개다. 얇은 것은 일부러다. `hflip` 을 `horizontalFlip` 이라는 이름으로 한 번 더\n구현하면 한 가지 일의 구현이 둘이고, 아무도 안 보는 쪽이 어긋난다.\n\n## 반대를 답하는 한 쌍\n\n`getSize` 는 `[height, width]` 를 주고 v1 의 `getImageSize` 는 `[width, height]` 를\n준다. 뒤집은 것은 v2 의 의도된 정정이라, 두 이름이 한 이름 공간 떨어져 반대를 답한다 —\n잘못 고르면 전치된, 그런데도 그럴듯한 그림을 얻는다. 골든이 둘을 나란히 얼려 두는\n이유가 그것이다."
   },
   {
    "name": "fft",
@@ -16668,5 +17024,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2191
+ "total": 2244
 }
