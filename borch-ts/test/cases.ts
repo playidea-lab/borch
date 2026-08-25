@@ -1578,6 +1578,20 @@ function addOps(out: Map<string, Case>): void {
  * questions is not a comparison. So it is transcribed, which is the same choice the box
  * fixtures in `addOps` make for a different reason.
  */
+/**
+ * `Lambda`'s repr prints the function's name, so it has to have one — and **it has to
+ * be the same name on both sides.**
+ *
+ * The golden froze `Lambda(_v2_named, …)` from the Python case's helper, so this one is
+ * named to match rather than named well. That coupling is real and worth seeing: a case
+ * comparing a repr is comparing a *string*, and a string can contain an identifier from
+ * the other language's source.
+ */
+// eslint-disable-next-line @typescript-eslint/naming-convention
+function _v2_named(x: vision.Subject): vision.Subject {
+  return x;
+}
+
 const ELASTIC_SHIFT = new Float32Array([
   0.025019101798534393, 0.07944276183843613, 0.055137135088443756,
   -0.054958563297986984, -0.03996674343943596, 0.07471068948507309,
@@ -1655,8 +1669,11 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
     () => `[${vision.getImageSize(f()).join(", ")}]`);
   out.set("v2f::get_num_channels", () => String(v2f.getNumChannels(f())));
 
-  // Four of v1's, reached through the v2 spelling.
-  // ── `v2::` — the classes, for the names that need no v1 field access ──
+  const v2set = (name: string, make: () => vision.Image): void => {
+    out.set(`v2::${name}`, () => asTensor(make()));
+  };
+
+  // ── `v2::` — the transform classes ──
   //
   // **The repr is the larger half of that block and it is not cosmetic.** A tutorial's
   // `print(transform)` is how a reader checks that the thing they built is the thing
@@ -1667,6 +1684,9 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
   // from the line** rather than printing as `None`, which is why `ToDtype` shows only
   // `scale` and not the dtype that is its main argument. And Python's float carries its
   // decimal point, so `mean=0.0` and not `mean=0`.
+  // The arguments are chosen to make the repr **say something** — a default-everything
+  // constructor prints the same text no matter what the constructor did with what it
+  // was given.
   for (const [name, make] of [
     ["Identity", () => new v2f.Identity()],
     ["RGB", () => new v2f.RGB()],
@@ -1676,13 +1696,76 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
     ["GaussianNoise", () => new v2f.GaussianNoise()],
     ["GaussianNoise(three arguments)", () => new v2f.GaussianNoise(0.1, 0.5, false)],
     ["RandomChannelPermutation", () => new v2f.RandomChannelPermutation()],
+    // The twins.
+    ["Resize", () => new v2f.Resize([4, 3])],
+    ["Resize(one number)", () => new v2f.Resize(5)],
+    ["CenterCrop", () => new v2f.CenterCrop(4)],
+    ["RandomCrop", () => new v2f.RandomCrop(4)],
+    ["RandomResizedCrop", () => new v2f.RandomResizedCrop(4)],
+    ["FiveCrop", () => new v2f.FiveCrop(3)],
+    ["TenCrop", () => new v2f.TenCrop(3)],
+    ["Pad", () => new v2f.Pad(2)],
+    ["RandomHorizontalFlip", () => new v2f.RandomHorizontalFlip()],
+    ["RandomVerticalFlip", () => new v2f.RandomVerticalFlip()],
+    ["Grayscale", () => new v2f.Grayscale(3)],
+    ["RandomGrayscale", () => new v2f.RandomGrayscale()],
+    ["Normalize", () => new v2f.Normalize([0.5], [0.5])],
+    ["RandomErasing", () => new v2f.RandomErasing()],
+    ["ColorJitter", () => new v2f.ColorJitter(0.5)],
+    ["ColorJitter(all four)", () => new v2f.ColorJitter(0.5, 0.3, 0.2, 0.1)],
+    ["RandomInvert", () => new v2f.RandomInvert()],
+    ["RandomPosterize", () => new v2f.RandomPosterize(4)],
+    ["RandomSolarize", () => new v2f.RandomSolarize(0.5)],
+    ["RandomAutocontrast", () => new v2f.RandomAutocontrast()],
+    ["RandomEqualize", () => new v2f.RandomEqualize()],
+    ["RandomAdjustSharpness", () => new v2f.RandomAdjustSharpness(2)],
+    ["RandomRotation", () => new v2f.RandomRotation(30)],
+    ["RandomAffine", () => new v2f.RandomAffine(30)],
+    ["RandomPerspective", () => new v2f.RandomPerspective()],
+    ["ElasticTransform", () => new v2f.ElasticTransform()],
+    ["GaussianBlur", () => new v2f.GaussianBlur(3)],
+    ["AutoAugment", () => new v2f.AutoAugment()],
+    ["RandAugment", () => new v2f.RandAugment()],
+    ["TrivialAugmentWide", () => new v2f.TrivialAugmentWide()],
+    ["AugMix", () => new v2f.AugMix()],
+    ["RandomOrder", () => new v2f.RandomOrder([new v2f.Identity(), new v2f.RGB()])],
+    ["RandomChoice", () => new v2f.RandomChoice([new v2f.Identity(), new v2f.RGB()])],
+    // **One child and two children print differently** — torch's `nn.Module` puts one
+    // on the same line and breaks two across lines. Both spellings are asked.
+    ["Compose(one)", () => new v2f.Compose([new v2f.Identity()])],
+    ["Compose(two)", () => new v2f.Compose([new v2f.Identity(), new v2f.RGB()])],
+    ["RandomApply", () => new v2f.RandomApply([new v2f.Identity()], 0.3)],
+    ["Lambda", () => new v2f.Lambda(_v2_named, "int", "float")],
+    ["RandomPhotometricDistort", () => new v2f.RandomPhotometricDistort()],
+    ["RandomResize", () => new v2f.RandomResize(8, 16)],
+    ["RandomShortestSize", () => new v2f.RandomShortestSize(8, 20)],
+    ["RandomZoomOut", () => new v2f.RandomZoomOut()],
+    ["ScaleJitter", () => new v2f.ScaleJitter([8, 8])],
+    ["MixUp", () => new v2f.MixUp(1.0, 4)],
+    ["CutMix", () => new v2f.CutMix(0.5, 3)],
   ] as const) {
     out.set(`v2::repr ${name}`, async () => make().describe());
   }
 
-  const v2set = (name: string, make: () => vision.Image): void => {
-    out.set(`v2::${name}`, () => asTensor(make()));
-  };
+  // The three that are v1's arithmetic reached through a v2 name. If a twin ever grows
+  // a body of its own these stop matching v1's own cases.
+  v2set("Resize(inherited)", () => new v2f.Resize([4, 3]).apply(f()) as vision.Image);
+  v2set("CenterCrop(inherited)", () => new v2f.CenterCrop(4).apply(f()) as vision.Image);
+  v2set("Pad(inherited)", () => new v2f.Pad(2).apply(f()) as vision.Image);
+  // Three that draw, pinned where they do not draw. A one-wide range has one answer, so
+  // the draw is a draw with nothing to draw.
+  v2set("RandomZoomOut(p=0)",
+    () => new v2f.RandomZoomOut(0, [1.0, 4.0], 0.0).apply(f()) as vision.Image);
+  v2set("RandomPhotometricDistort(p=0)",
+    () => new v2f.RandomPhotometricDistort([0.875, 1.125], [0.5, 1.5], [0.5, 1.5],
+      [-0.05, 0.05], 0.0).apply(f()) as vision.Image);
+  v2set("RandomResize(one size)",
+    () => new v2f.RandomResize(4, 5).apply(f()) as vision.Image);
+  v2set("RandomShortestSize(one size)",
+    () => new v2f.RandomShortestSize(4, 40).apply(f()) as vision.Image);
+  v2set("ScaleJitter(one factor)",
+    () => new v2f.ScaleJitter([8, 8], [1.0, 1.0]).apply(f()) as vision.Image);
+
   v2set("Identity", () => new v2f.Identity().apply(f()) as vision.Image);
   v2set("ToPureTensor", () => new v2f.ToPureTensor().apply(f()) as vision.Image);
   // `RGB` on a colour picture is the identity; on a grey one it is the case.

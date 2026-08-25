@@ -680,16 +680,21 @@ NOT_PORTED = {
     # said the copy mutation "reddens exactly those four", and the number was seven.
     # A prediction in the same sentence position as a measurement reads as one.
     "dataset::": (19, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
-    # 71 → 52. **The nineteen that needed no v1 field access went first** — the seven
-    # classes v2 adds outright (`Identity`, `ToPureTensor`, `RGB`, `ToImage`, `ToDtype`,
-    # `GaussianNoise`, `RandomChannelPermutation`), their eight reprs and eleven values.
+    # `v2::` **was** a row here — 71, then 52, then gone. The nineteen that needed no v1
+    # field access went first; the fifty-two twins followed once it was clear the fields
+    # did not have to be read at all. Each twin extends the v1 class and keeps its own
+    # copy of the arguments, so `vision.ts` did not have to open thirty-six
+    # constructors for this file's benefit.
     #
-    # The fifty-two left are the **twins**: v1's behaviour under v2's printed surface.
-    # They are not harder arithmetic — they are the same arithmetic — but every one has
-    # to read fields the v1 class keeps `private`, so carrying them across opens
-    # thirty-six constructors rather than writing thirty-six bodies. That is the shape
-    # of the remaining work and it is why the split fell here.
-    "v2::": (52, "아직 — the repr of the fifty-two v1 twins under v2's printed surface"),
+    # **Thirty-one of the fifty-two reprs were right on the first run and twenty-one
+    # were not**, and what the wrong ones were wrong about is the useful record: v2
+    # prints `interpolation` as the plain value where v1 prints the enum; `Resize` shows
+    # its size as a list while every crop shows the expanded pair as a tuple;
+    # `ColorJitter` clamps three of its four spans at zero and not the fourth;
+    # `RandomAdjustSharpness` prints its factor as given while the `p` beside it carries
+    # a decimal point; and `ElasticTransform` recovers two fields from the v1 object
+    # while keeping the third as the argument. Not one of those is derivable — every one
+    # came back from the golden.
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),
     # 3 → 7 → 6. Four `DataLoader` rows went in with this reason:
     #

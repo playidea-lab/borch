@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 182
+  "missing": 203
  },
  "modules": [
   {
@@ -14984,6 +14984,22 @@
      "members": []
     },
     {
+     "kind": "function",
+     "name": "policyName",
+     "signature": "export declare function policyName(v: AutoAugmentPolicyName): string",
+     "doc": "`AutoAugmentPolicy.IMAGENET`, which is how Python prints an enum member.",
+     "members": [],
+     "torch": "policy_name"
+    },
+    {
+     "kind": "function",
+     "name": "modeName",
+     "signature": "export declare function modeName(v: \"bilinear\" | \"nearest\"): string",
+     "doc": "`InterpolationMode.NEAREST` — three of the four print the enum, not the value.",
+     "members": [],
+     "torch": "mode_name"
+    },
+    {
      "kind": "type",
      "name": "PolicyStep",
      "signature": "export type PolicyStep = readonly [string, number, number | null]",
@@ -15088,7 +15104,7 @@
      ]
     }
    ],
-   "count": 201,
+   "count": 203,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -15309,6 +15325,797 @@
     }
    ],
    "count": 32
+  },
+  {
+   "name": "vision_v2_twins",
+   "title": "vision_v2_twins",
+   "blurb": {
+    "ko": "v2 의 변환 클래스. `torchvision.transforms.v2` 자리 — v1 의 계산에 v2 의 출력 표면을 씌운 것이고, 다른 것은 print 되는 내용뿐이다.",
+    "en": "v2's transform classes. Where `torchvision.transforms.v2` would be — v1's arithmetic under v2's printed surface, and what differs between the two namespaces is only what they print."
+   },
+   "doc": "`transforms.v2` — **v1's behaviour under v2's printed surface.**\n\nv2's transforms take the same arguments and compute the same numbers as v1's. What\ndiffers is what they print, and that difference is the whole reason these names are\nnot re-exports. So each class here **extends the v1 one and overrides `describe`**,\nand nothing recomputes.\n\n## Why every twin keeps its own copy of the arguments\n\nThe obvious design reads the fields back off the v1 object. It is wrong twice.\n\nThe v1 classes hold their state under their own names, in their own order, and\nnormalised their own way — `ElasticTransform` turns `fill` into a list in the\nconstructor while v2 prints the number as it was given, so `0` recovered is `0.0`\nprinted and the two do not match. The Python side hit exactly that and solved it the\nsame way: keep the argument.\n\nAnd the fields are `private` there. Opening thirty-six constructors to read them\nwould widen the published surface of `vision.ts` for the benefit of this file alone.\n\n## Two rules of v2's repr, both torchvision's and neither tidy\n\n**A field of a kind v2 does not print disappears from the line**, rather than\nprinting as `None`. `ColorJitter` is the clearest case: it stores `null` for a factor\nnobody asked for, so the default one prints its own name and nothing else.\n\n**The order is the constructor's assignment order, not a tidier one.** The three\npolicy transforms put `interpolation` *first*, where every other class here has it\nafter the arguments that decide the picture.",
+   "symbols": [
+    {
+     "kind": "class",
+     "name": "Resize",
+     "signature": "export declare class Resize extends V1Resize",
+     "doc": "*`Resize(5)` prints `size=[5]`** — one number is a list here and nowhere else.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Size: number | readonly [number, number], v2Interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "CenterCrop",
+     "signature": "export declare class CenterCrop extends V1CenterCrop",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Size: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomCrop",
+     "signature": "export declare class RandomCrop extends V1RandomCrop",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Size: number | readonly [number, number], padding?: number | readonly number[] | null, v2PadIfNeeded?: boolean, v2Fill?: number | readonly number[], v2PaddingMode?: PaddingMode)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomResizedCrop",
+     "signature": "export declare class RandomResizedCrop extends V1RandomResizedCrop",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Size: number | readonly [number, number], v2Scale?: readonly [number, number], v2Ratio?: readonly [number, number], v2Interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "FiveCrop",
+     "signature": "export declare class FiveCrop extends V1FiveCrop",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Size: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TenCrop",
+     "signature": "export declare class TenCrop extends V1TenCrop",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Size: number | readonly [number, number], v2VerticalFlip?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Pad",
+     "signature": "export declare class Pad extends V1Pad",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Padding: number | readonly number[], v2Fill?: number | readonly number[], v2PaddingMode?: PaddingMode)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomHorizontalFlip",
+     "signature": "export declare class RandomHorizontalFlip extends V1RandomHorizontalFlip",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomVerticalFlip",
+     "signature": "export declare class RandomVerticalFlip extends V1RandomVerticalFlip",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Grayscale",
+     "signature": "export declare class Grayscale extends V1Grayscale",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Channels?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomGrayscale",
+     "signature": "export declare class RandomGrayscale extends V1RandomGrayscale",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Normalize",
+     "signature": "export declare class Normalize extends V1Normalize",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Mean: readonly number[], v2Std: readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomErasing",
+     "signature": "export declare class RandomErasing extends V1RandomErasing",
+     "doc": "*`value` becomes a list of floats** unless it is the string `\"random\"`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2P?: number, v2Scale?: readonly [number, number], v2Ratio?: readonly [number, number], v2Value?: number | readonly number[] | \"random\", v2Inplace?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ColorJitter",
+     "signature": "export declare class ColorJitter extends V1ColorJitter",
+     "doc": "**The clearest case of the type filter doing the work.** It stores `null` for a factor\nnobody asked for, and `null` is not a kind v2 prints — so `ColorJitter()` prints its\nown name and nothing else.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Brightness?: number | readonly [number, number] | null, v2Contrast?: number | readonly [number, number] | null, v2Saturation?: number | readonly [number, number] | null, v2Hue?: number | readonly [number, number] | null)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomInvert",
+     "signature": "export declare class RandomInvert extends V1RandomInvert",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAutocontrast",
+     "signature": "export declare class RandomAutocontrast extends V1RandomAutocontrast",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomEqualize",
+     "signature": "export declare class RandomEqualize extends V1RandomEqualize",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomPosterize",
+     "signature": "export declare class RandomPosterize extends V1RandomPosterize",
+     "doc": "*`p` prints first**, though the constructor takes `bits` first.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Bits: number, v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomSolarize",
+     "signature": "export declare class RandomSolarize extends V1RandomSolarize",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Threshold: number, v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAdjustSharpness",
+     "signature": "export declare class RandomAdjustSharpness extends V1RandomAdjustSharpness",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Factor: number, v2P?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomRotation",
+     "signature": "export declare class RandomRotation extends V1RandomRotation",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Degrees: number | readonly [number, number], v2Interpolation?: \"bilinear\" | \"nearest\", v2Expand?: boolean, center?: readonly [number, number] | null, v2Fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAffine",
+     "signature": "export declare class RandomAffine extends V1RandomAffine",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Degrees: number | readonly [number, number], translate?: readonly [number, number] | null, scale?: readonly [number, number] | null, shear?: number | readonly number[] | null, v2Interpolation?: \"bilinear\" | \"nearest\", v2Fill?: number | readonly number[], center?: readonly [number, number] | null)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomPerspective",
+     "signature": "export declare class RandomPerspective extends V1RandomPerspective",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Distortion?: number, v2P?: number, v2Interpolation?: \"bilinear\" | \"nearest\", v2Fill?: number | readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ElasticTransform",
+     "signature": "export declare class ElasticTransform extends V1ElasticTransform",
+     "doc": "**The one whose printed `fill` cannot be read back off the object.** v1 normalises it\nto a list in the constructor and v2 prints the number as it was given, so the twin\nkeeps the argument — recovering it would turn `0` into `[0.0]`, and the two print\ndifferently.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Alpha?: number | readonly number[], v2Sigma?: number | readonly number[], v2Interpolation?: \"bilinear\" | \"nearest\", v2Fill?: number | readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "GaussianBlur",
+     "signature": "export declare class GaussianBlur extends V1GaussianBlur",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Kernel: number | readonly number[], v2Sigma?: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "AutoAugment",
+     "signature": "export declare class AutoAugment extends V1AutoAugment",
+     "doc": "**The policies put `interpolation` first**, where every other class here has it after\nthe arguments that decide the picture. That is v2's assignment order, not a tidier\none.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Policy?: AutoAugmentPolicyName, v2Interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandAugment",
+     "signature": "export declare class RandAugment extends V1RandAugment",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2NumOps?: number, v2Magnitude?: number, v2Bins?: number, v2Interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TrivialAugmentWide",
+     "signature": "export declare class TrivialAugmentWide extends V1TrivialAugmentWide",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Bins?: number, v2Interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "AugMix",
+     "signature": "export declare class AugMix extends V1AugMix",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Severity?: number, v2Width?: number, v2Depth?: number, v2Alpha?: number, v2AllOps?: boolean, v2Interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "LinearTransformation",
+     "signature": "export declare class LinearTransformation extends V1LinearTransformation",
+     "doc": "**These two print nothing at all.** Their state is arrays and functions, and neither\nis a kind v2's rule keeps — so the name and empty brackets is the whole of it, which\nis easy to mistake for an unfinished repr.",
+     "members": [
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ToTensor",
+     "signature": "export declare class ToTensor extends V1ToTensor",
+     "doc": "",
+     "members": [
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomOrder",
+     "signature": "export declare class RandomOrder extends V1RandomOrder",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Transforms: readonly Transform[])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomChoice",
+     "signature": "export declare class RandomChoice extends V1RandomChoice",
+     "doc": "**v2 fills `p` in.** v1 leaves it null; v2 builds the uniform distribution and stores\nit, so two transforms given no probabilities print `p=[0.5, 0.5]`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Transforms: readonly Transform[], v2P?: readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Compose",
+     "signature": "export declare class Compose extends V1Compose",
+     "doc": "v2's `Compose`. Same behaviour, torch's module printing.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Transforms: readonly Transform[])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomApply",
+     "signature": "export declare class RandomApply extends V1RandomApply",
+     "doc": "v2's `RandomApply`. **`p` is not printed**, unlike v1's — it is stored and left out,\nwhich is torch's module repr showing only what `extra_repr` returns.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(v2Transforms: readonly Transform[], p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Lambda",
+     "signature": "export declare class Lambda extends V1Lambda",
+     "doc": "v2's `Lambda` takes **the types it applies to** as well as the function — the one\nplace in this namespace where the constructor differs, not just the printing. Given\ntv_tensors it would run only on the kinds named; here there is one kind, so the\nargument is kept and recorded rather than acted on.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(fn: (x: Subject) => Subject, ...types: readonly string[])",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomResize",
+     "signature": "export declare class RandomResize implements Transform",
+     "doc": "Resize the short side to a number drawn from `[minSize, maxSize)`. **A range of sizes\nrather than one**, which is what multi-scale training wants.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(minSize: number, maxSize: number, interpolation?: \"bilinear\" | \"nearest\")",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomShortestSize",
+     "signature": "export declare class RandomShortestSize implements Transform",
+     "doc": "The short side to one of `minSize`, **with the long side capped** by `maxSize` — so a\nvery wide picture is scaled by whichever of the two constraints binds first, rather\nthan by the short side alone.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(minSize: number | readonly number[], maxSize?: number | null, interpolation?: \"bilinear\" | \"nearest\")",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomZoomOut",
+     "signature": "export declare class RandomZoomOut implements Transform",
+     "doc": "Put the picture on a **larger canvas**, somewhere random on it, with the rest filled.\nThe picture shrinks relative to the frame without being resampled — which is why\ndetection recipes reach for it rather than for a scale-down.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(fill?: number | readonly number[], sideRange?: readonly [number, number], p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ScaleJitter",
+     "signature": "export declare class ScaleJitter implements Transform",
+     "doc": "Resize toward `targetSize` by a **drawn factor** — the large-scale jitter of the\ndetection recipes, where the same picture is seen at a tenth and at twice its size\nacross an epoch.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(targetSize: readonly [number, number], scaleRange?: readonly [number, number], interpolation?: \"bilinear\" | \"nearest\")",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "MixUp",
+     "signature": "export declare class MixUp extends MixBase",
+     "doc": "Blend each picture with the one before it, and their labels by the same weight.",
+     "members": [
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "CutMix",
+     "signature": "export declare class CutMix extends MixBase",
+     "doc": "Paste a rectangle of the previous picture into this one, and mix the labels by **the\narea actually pasted** rather than by the weight that was drawn.",
+     "members": [
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomPhotometricDistort",
+     "signature": "export declare class RandomPhotometricDistort implements Transform",
+     "doc": "The SSD recipe: each of four adjustments applied with probability `p`, **the contrast\neither before or after the other two**, and then maybe a channel shuffle.\n\nThe contrast's position is itself a coin flip, which reads as a detail and is not:\ncontrast measures the picture's mean, so doing it first and doing it last are\ndifferent pictures.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(brightness?: readonly [number, number], contrast?: readonly [number, number], saturation?: readonly [number, number], hue?: readonly [number, number], p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    }
+   ],
+   "count": 130
   },
   {
    "name": "fft",
@@ -16890,5 +17697,5 @@
    "count": 9
   }
  ],
- "total": 2228
+ "total": 2360
 }

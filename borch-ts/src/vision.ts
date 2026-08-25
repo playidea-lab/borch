@@ -3028,14 +3028,14 @@ export type AutoAugmentPolicyName =
   (typeof AutoAugmentPolicy)[keyof typeof AutoAugmentPolicy];
 
 /** `AutoAugmentPolicy.IMAGENET`, which is how Python prints an enum member. */
-function policyName(v: AutoAugmentPolicyName): string {
+export function policyName(v: AutoAugmentPolicyName): string {
   const key = Object.keys(AutoAugmentPolicy).find(
     (k) => AutoAugmentPolicy[k as keyof typeof AutoAugmentPolicy] === v);
   return `AutoAugmentPolicy.${key ?? v}`;
 }
 
 /** `InterpolationMode.NEAREST` — three of the four print the enum, not the value. */
-function modeName(v: "bilinear" | "nearest"): string {
+export function modeName(v: "bilinear" | "nearest"): string {
   return `InterpolationMode.${v.toUpperCase()}`;
 }
 

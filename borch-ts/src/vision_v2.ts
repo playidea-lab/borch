@@ -37,6 +37,12 @@ import {
   vflip,
 } from "./vision.js";
 
+// **The thirty-six twins live next door**, in `vision_v2_twins.ts`, and are re-exported
+// here so that `v2` is one namespace to a caller. They are split off because they are a
+// different kind of thing — v1's behaviour under v2's printed surface, where everything
+// in this file is either new or a straight binding.
+export * from "./vision_v2_twins.js";
+
 // ── v1's names, reached through v2's spelling ────────────────────────────────
 //
 // Bound rather than wrapped. A wrapper is a body, and a body is the thing these are

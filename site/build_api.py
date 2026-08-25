@@ -99,6 +99,16 @@ MODULES = [
       "en": "v2's functional transforms. Where "
             "`torchvision.transforms.v2.functional` would be — nine new names, and "
             "the rest bound straight through to v1."}),
+    # **A module that is not listed here is not stale, it is unseen.** `vision_v2`
+    # re-exports these, and a re-export does not appear in its own declaration file —
+    # so thirty-six classes were invisible to this reference while every check on it
+    # stayed green.
+    ("vision_v2_twins", "vision_v2_twins",
+     {"ko": "v2 의 변환 클래스. `torchvision.transforms.v2` 자리 — v1 의 계산에 "
+            "v2 의 출력 표면을 씌운 것이고, 다른 것은 print 되는 내용뿐이다.",
+      "en": "v2's transform classes. Where `torchvision.transforms.v2` would be — "
+            "v1's arithmetic under v2's printed surface, and what differs between "
+            "the two namespaces is only what they print."}),
     ("fft", "fft",
      {"ko": "푸리에 변환. `torch.fft` 자리.",
       "en": "Fourier transforms. Where `torch.fft` would be."}),
