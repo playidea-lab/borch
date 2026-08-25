@@ -415,9 +415,33 @@ def parse(path):
                 block.append(lines[j])
             skip_to = j
             nxt = lines[j + 1].strip() if j + 1 < len(lines) else ""
-            # A comment at the head of the file, ahead of imports or re-exports, is the module description.
+            # A comment at the head of the file, ahead of imports or re-exports, is the
+            # module description.
+            #
+            # **The next line was allowed to be an import and nothing else, and that
+            # made the module description depend on an accident.** A declaration file
+            # keeps an import only when a type it names survives into a signature, so a
+            # module whose imports are all values — thrown errors, called helpers —
+            # opens with the head comment and then a declaration. The description was
+            # then filed as the first symbol's `pending` and thrown away when that
+            # symbol turned out to have its own.
+            #
+            # Six modules were in that state at once: `indexing`, `device`, `random`,
+            # `autograd`, `errors` and `dtype`. Each has a written description in its
+            # source and an empty one in the reference, and nothing cried — measured,
+            # not guessed.
+            #
+            # The added clause is **a doc comment starting on the next line**, which is
+            # what tells the two apart. A head comment followed by another `/**` cannot
+            # be that symbol's description, because the symbol already has one.
+            #
+            # `dtype` stays empty after this and that is the honest end of the rule: its
+            # head comment is followed by an undocumented `export type DType`, so a
+            # machine cannot tell a module description from that symbol's. Widening the
+            # clause to any declaration would steal a symbol's own doc elsewhere.
             if (not symbols and not module_doc and depth == 0
-                    and (nxt.startswith("import") or nxt.startswith("export {"))):
+                    and (nxt.startswith("import") or nxt.startswith("export {")
+                         or nxt.startswith("/**"))):
                 module_doc = _doc(block)
                 pending = []
             else:

@@ -24,6 +24,17 @@
 
 import { RuntimeError } from "./errors.js";
 
+/**
+ * The four this subset stores. **A string where torch has an object.**
+ *
+ * `torch.float32` is a value you can pass around and ask questions of; here the same
+ * position is a string literal, so the compiler refuses `"float64"` at the call rather
+ * than at run time. What is given up is `x.dtype === torch.float32` as an identity
+ * check — it is `x.dtype === "float32"`, which reads the same and compares differently.
+ *
+ * The absent ones are not an oversight and the module comment above says why: storage
+ * is float32, so the rest of torch's dtypes have nothing to be stored in.
+ */
 export type DType = "float32" | "int64" | "bool" | "complex64";
 
 /** Lower is further down. Promotion only ever goes upward. */
