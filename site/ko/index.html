@@ -187,23 +187,11 @@
       </div>
     </div>
 
-    <div class="note-box">
-      <strong>브라우저가 이걸 돌리기 전에 요구하는 것 — 플랫폼별 실측.</strong><br>
-      <strong>macOS:</strong> 없다. 어댑터가 <code>apple / metal-3</code> 으로 오고 Run 이 돈다. ·
-      <strong>NVIDIA 카드를 단 리눅스:</strong> 스위치 둘. 크롬이 차단 목록을 들고 있어서 드라이버에
-      묻기 전에 먼저 거절한다. 그래서 둘 다 없으면 <em>어댑터가 아예 없고</em>,
-      <code>#enable-unsafe-webgpu</code> 만 켜면 어댑터가 <code>google / swiftshader</code> 다 —
-      GPU 의 이름을 쓴 CPU 다. <code>#ignore-gpu-blocklist</code> 까지 켜야
-      <code>nvidia / blackwell</code> 이 된다. (Ubuntu 24.04, RTX 5080, 드라이버 580.159.04 에서 측정.) ·
-      <strong>윈도우:</strong> <em>안 쟀다.</em> 거기 크롬은 위의 Vulkan 경로가 아니라 D3D12 를 쓰므로,
-      여기서 잰 것은 그쪽에 대해 아무 말도 하지 않는다. 짐작으로 적으면 이 저장소가 하루를 들여
-      걷어낸 그 모양이 된다. ·
-      <strong>iOS:</strong> 돈다 — iPhone 13 mini 에서 측정. iOS 의 모든 브라우저가 WebKit 이라
-      시험할 두 번째 엔진이 없다. ·
-      <strong>안드로이드:</strong> <em>안 쟀다</em> — 엔진도 GPU 벤더도 드라이버도 다르다.<br>
-      이 페이지의 배지가 어댑터 이름을 그대로 다는 이유도 같다 — SwiftShader 위의 실행은 골든과
-      값이 맞고, 찍히는 속도는 CPU 의 것이다.
-    </div>
+    <p class="small muted" style="margin-top:1.2rem">
+      <strong>내 플랫폼이 무엇을 요구하나</strong> — macOS 와 iOS 는 아무것도, NVIDIA 카드를 단 리눅스는 크롬
+      스위치 둘, 그리고 아직 <em>안 쟀다</em> 인 칸이 둘. 측정값과 각 경우에 무엇을 하는지는
+      <a href="setup.html">여기</a>에 있다.
+    </p>
 
     <div class="note-box">
       <strong>torch 와 갈리는 다섯 자리 — 첫 열 줄에서 전부 만난다.</strong><br>
@@ -386,6 +374,12 @@ for step in range(201):
       </tbody>
     </table>
     </div>
+    <p class="small muted">
+      <strong>기계 하나이고, 그 기계가 여기 안 적혀 있다.</strong> 세 열을 서로 비교할 수 있는 것은 같은 상자에서
+      서로 맞대어 쟀기 때문이고 — 남의 수와는 비교할 수 없다. 어느 상자였는지 이 페이지가 말하지 않기 때문이다.
+      정확성은 이제 두 벤더에서 쟀고 속도는 기계 하나다. 이 줄이 그 이름을 댈 수 있게 될 때까지, 이 열들은
+      속도가 아니라 <strong>비율</strong>로 읽어야 한다.
+    </p>
     <p class="small muted" style="margin-top:.8rem">
       오른쪽 둘은 <strong>같은 커널</strong>이다 — 차이 4.9ms 가 파이썬(Pyodide)을 한 번 지나는 값이다.
       직접 쓴 WGSL 이 같은 벤치에서 TF.js 판보다 빨랐고 랭크 한계도 없어서 그쪽을 걷어냈다.

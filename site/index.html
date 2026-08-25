@@ -192,23 +192,11 @@
       </div>
     </div>
 
-    <div class="note-box">
-      <strong>What a browser asks of you before it will run this — measured, per platform.</strong><br>
-      <strong>macOS:</strong> nothing. The adapter comes back <code>apple / metal-3</code> and Run works. ·
-      <strong>Linux with an NVIDIA card:</strong> two switches. Chrome keeps a blocklist and refuses
-      before it asks the driver, so with neither flag there is <em>no adapter at all</em>, and with
-      <code>#enable-unsafe-webgpu</code> alone the adapter is <code>google / swiftshader</code> —
-      which is the CPU wearing a GPU's name. Add <code>#ignore-gpu-blocklist</code> and it is
-      <code>nvidia / blackwell</code>. (Measured on Ubuntu 24.04, RTX 5080, driver 580.159.04.) ·
-      <strong>Windows:</strong> <em>not measured.</em> Chrome uses D3D12 there rather than the Vulkan
-      path above, so nothing measured here says anything about it, and a guess would be the shape of
-      claim this repository spent a day removing. ·
-      <strong>iOS:</strong> runs — measured on an iPhone 13 mini, and since every browser on iOS is
-      WebKit there is no second engine to try. ·
-      <strong>Android:</strong> <em>not measured</em> — another engine, other GPU vendors, other drivers.<br>
-      The badge on this page carries the adapter's own name for the same reason: a run on
-      SwiftShader agrees with the golden and prints the CPU's speeds.
-    </div>
+    <p class="small muted" style="margin-top:1.2rem">
+      <strong>What your platform asks for before this will run</strong> — nothing on macOS and iOS, two Chrome
+      switches on Linux with an NVIDIA card, and two cells still marked <em>not measured</em>. The page that
+      carries the measurements, and what to do in each case, is <a href="setup.html">here</a>.
+    </p>
 
     <div class="note-box">
       <strong>Five places it differs from torch — you meet all of them in the first ten lines.</strong><br>
@@ -392,6 +380,12 @@ for step in range(201):
       </tbody>
     </table>
     </div>
+    <p class="small muted">
+      <strong>One machine, and it is not written down here.</strong> The three columns can be compared with each
+      other because they were timed against each other on the same box — they cannot be compared with anyone
+      else's, because nothing on this page says which box it was. Correctness is measured on two vendors now;
+      speed is one machine, so until this line can name it, read the columns as a ratio rather than a speed.
+    </p>
     <p class="small muted" style="margin-top:.8rem">
       The two right-hand columns are <strong>the same kernels</strong> — the 4.9ms gap is the cost of passing
       through Python (Pyodide) once. The hand-written WGSL beat the TF.js version on the same bench and had no
