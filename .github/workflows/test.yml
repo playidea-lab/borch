@@ -27,5 +27,12 @@ jobs:
       # expected values would prove nothing, which is what those cases are worth.
       # Without it, dump counts those 14 as failures and stops, and this job was red on
       # every push from the moment transforms arrived.
+      #
+      # **And `scipy` has to be here for the same kind of reason, one step further in.**
+      # `tests/test_svhn.py` checks a hand-written `.mat` reader — a hundred lines of
+      # `struct` and `zlib` — against `scipy.io`, which is the authority it exists so as
+      # not to depend on. Without scipy the file `importorskip`s and **all nineteen of
+      # its checks vanish into a single `s`**, which is what happened: the reader had
+      # never been run here at all. It is a test dependency and never a library one.
       - name: compare the values
-        run: uv run --with pytest --with numpy --with torch --with torchvision --quiet pytest tests/ -q
+        run: uv run --with pytest --with numpy --with torch --with torchvision --with scipy --quiet pytest tests/ -q

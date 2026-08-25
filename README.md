@@ -203,11 +203,22 @@ nobody knows until the golden catches it.
 ## How it is guaranteed
 
 `tests/test_diff.py` **puts the same operation into real torch and into borch and
-compares the numbers.** 180 pytest cases, **93% code coverage.**
+compares the numbers.** 162 cases in that file, 1205 in the suite, **92% code
+coverage.**
 
 ```bash
-uv run --with pytest --with numpy --with torch pytest tests/
+uv run --with pytest --with numpy --with torch --with torchvision --with scipy \
+  pytest tests/
 ```
+
+> **This command had drifted, and drift here is silent by construction.** It was
+> missing `torchvision` and `scipy`, both of which the suite `importorskip`s — so
+> running it as written turned whole files into a single `s` and the line at the
+> bottom still said everything passed. `scipy` alone was hiding nineteen checks on a
+> hand-written `.mat` reader that had, on this command, never run at all.
+>
+> The numbers beside it had drifted too: 180 and 93% were 162 and 92% when measured.
+> Nothing watches this paragraph, which is why all four were wrong together.
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side

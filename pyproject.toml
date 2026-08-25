@@ -26,7 +26,11 @@ license = { text = "Apache-2.0" }
 # report both stopped without it while the list said torch alone was enough. An
 # undeclared dependency is the same failure as a namespace off the list: it works on
 # the machine that happens to have it.
-dev = ["pytest", "torch", "torchvision"]
+# **`scipy` is the same lesson one step further in.** It is what `tests/test_svhn.py`
+# holds a hand-written `.mat` reader against, and left off the list the file skipped
+# entirely — nineteen checks reported as one `s`. "It works on the machine that happens
+# to have it" understates that case: nothing worked, because nothing ran.
+dev = ["pytest", "torch", "torchvision", "scipy"]
 
 [build-system]
 requires = ["hatchling"]
