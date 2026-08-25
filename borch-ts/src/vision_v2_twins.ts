@@ -22,7 +22,7 @@
  * ## Two rules of v2's repr, both torchvision's and neither tidy
  *
  * **A field of a kind v2 does not print disappears from the line**, rather than
- * printing as `None`. `ColorJitter` is the clearest case: it stores `null` for a factor
+ * printing as `None`. `ColorJitter` is the clearest case: it stores `null` for a sharpnessFactor
  * nobody asked for, so the default one prints its own name and nothing else.
  *
  * **The order is the constructor's assignment order, not a tidier one.** The three
@@ -30,6 +30,7 @@
  * after the arguments that decide the picture.
  */
 
+import { RuntimeError } from "./errors.js";
 import {
   AugMix as V1AugMix,
   AutoAugment as V1AutoAugment,
@@ -155,205 +156,211 @@ function moduleRepr(name: string, lines: readonly string[]): string {
 
 /** **`Resize(5)` prints `size=[5]`** — one number is a list here and nowhere else. */
 export class Resize extends V1Resize {
-  constructor(private readonly v2Size: number | readonly [number, number],
-              private readonly v2Interpolation: "bilinear" | "nearest" = "bilinear",
+  constructor(size: number | readonly [number, number],
+              interpolation: "bilinear" | "nearest" = "bilinear",
               maxSize: number | null = null, antialias = true) {
-    super(v2Size, v2Interpolation, maxSize, antialias);
+    super(size, interpolation, maxSize, antialias);
   }
 
   override describe(): string {
     return repr("Resize", [
-      ["size", sizeList(this.v2Size)],
-      ["interpolation", this.v2Interpolation],
+      ["size", sizeList(this.size)],
+      ["interpolation", this.interpolation],
       ["antialias", "True"],
     ]);
   }
 }
 
 export class CenterCrop extends V1CenterCrop {
-  constructor(private readonly v2Size: number | readonly [number, number]) {
-    super(v2Size);
+  constructor(private readonly size: number | readonly [number, number]) {
+    super(size);
   }
 
   override describe(): string {
-    return repr("CenterCrop", [["size", cropSize(this.v2Size)]]);
+    return repr("CenterCrop", [["size", cropSize(this.size)]]);
   }
 }
 
 export class RandomCrop extends V1RandomCrop {
-  constructor(private readonly v2Size: number | readonly [number, number],
+  constructor(size: number | readonly [number, number],
               padding: number | readonly number[] | null = null,
-              private readonly v2PadIfNeeded = false,
-              private readonly v2Fill: number | readonly number[] = 0,
-              private readonly v2PaddingMode: PaddingMode = "constant") {
-    super(v2Size, padding, v2PadIfNeeded, v2Fill, v2PaddingMode);
+              padIfNeeded = false,
+              fill: number | readonly number[] = 0,
+              paddingMode: PaddingMode = "constant") {
+    super(size, padding, padIfNeeded, fill, paddingMode);
   }
 
   override describe(): string {
     return repr("RandomCrop", [
-      ["size", cropSize(this.v2Size)],
-      ["pad_if_needed", pyBool(this.v2PadIfNeeded)],
-      ["fill", fillOf(this.v2Fill)],
-      ["padding_mode", this.v2PaddingMode],
+      ["size", cropSize(this.size)],
+      ["pad_if_needed", pyBool(this.padIfNeeded)],
+      ["fill", fillOf(this.fill)],
+      ["padding_mode", this.paddingMode],
     ]);
   }
 }
 
 export class RandomResizedCrop extends V1RandomResizedCrop {
-  constructor(private readonly v2Size: number | readonly [number, number],
-              private readonly v2Scale: readonly [number, number] = [0.08, 1.0],
-              private readonly v2Ratio: readonly [number, number] = [3 / 4, 4 / 3],
-              private readonly v2Interpolation: "bilinear" | "nearest" = "bilinear",
+  constructor(private readonly size: number | readonly [number, number],
+              scale: readonly [number, number] = [0.08, 1.0],
+              ratio: readonly [number, number] = [3 / 4, 4 / 3],
+              interpolation: "bilinear" | "nearest" = "bilinear",
               antialias = true) {
-    super(v2Size, v2Scale, v2Ratio, v2Interpolation, antialias);
+    super(size, scale, ratio, interpolation, antialias);
   }
 
   override describe(): string {
     return repr("RandomResizedCrop", [
-      ["size", cropSize(this.v2Size)],
-      ["scale", pyTuple(this.v2Scale)],
-      ["ratio", pyTuple(this.v2Ratio)],
-      ["interpolation", this.v2Interpolation],
+      ["size", cropSize(this.size)],
+      ["scale", pyTuple(this.scale)],
+      ["ratio", pyTuple(this.ratio)],
+      ["interpolation", this.interpolation],
       ["antialias", "True"],
     ]);
   }
 }
 
 export class FiveCrop extends V1FiveCrop {
-  constructor(private readonly v2Size: number | readonly [number, number]) {
-    super(v2Size);
+  constructor(private readonly size: number | readonly [number, number]) {
+    super(size);
   }
 
   override describe(): string {
-    return repr("FiveCrop", [["size", cropSize(this.v2Size)]]);
+    return repr("FiveCrop", [["size", cropSize(this.size)]]);
   }
 }
 
 export class TenCrop extends V1TenCrop {
-  constructor(private readonly v2Size: number | readonly [number, number],
-              private readonly v2VerticalFlip = false) {
-    super(v2Size, v2VerticalFlip);
+  constructor(private readonly size: number | readonly [number, number],
+              verticalFlip = false) {
+    super(size, verticalFlip);
   }
 
   override describe(): string {
     return repr("TenCrop", [
-      ["size", cropSize(this.v2Size)],
-      ["vertical_flip", pyBool(this.v2VerticalFlip)],
+      ["size", cropSize(this.size)],
+      ["vertical_flip", pyBool(this.verticalFlip)],
     ]);
   }
 }
 
 export class Pad extends V1Pad {
-  constructor(private readonly v2Padding: number | readonly number[],
-              private readonly v2Fill: number | readonly number[] = 0,
-              private readonly v2PaddingMode: PaddingMode = "constant") {
-    super(v2Padding, v2Fill, v2PaddingMode);
+  constructor(padding: number | readonly number[],
+              fill: number | readonly number[] = 0,
+              paddingMode: PaddingMode = "constant") {
+    super(padding, fill, paddingMode);
   }
 
   override describe(): string {
     return repr("Pad", [
-      ["padding", listed(this.v2Padding)],
-      ["fill", fillOf(this.v2Fill)],
-      ["padding_mode", this.v2PaddingMode],
+      ["padding", listed(this.padding)],
+      ["fill", fillOf(this.fill)],
+      ["padding_mode", this.paddingMode],
     ]);
   }
 }
 
 export class RandomHorizontalFlip extends V1RandomHorizontalFlip {
-  constructor(private readonly v2P = 0.5) {
-    super(v2P);
+  constructor(p = 0.5) {
+    super(p);
   }
 
   override describe(): string {
-    return repr("RandomHorizontalFlip", [["p", pyFloat(this.v2P)]]);
+    return repr("RandomHorizontalFlip", [["p", pyFloat(this.p)]]);
   }
 }
 
 export class RandomVerticalFlip extends V1RandomVerticalFlip {
-  constructor(private readonly v2P = 0.5) {
-    super(v2P);
+  constructor(p = 0.5) {
+    super(p);
   }
 
   override describe(): string {
-    return repr("RandomVerticalFlip", [["p", pyFloat(this.v2P)]]);
+    return repr("RandomVerticalFlip", [["p", pyFloat(this.p)]]);
   }
 }
 
 export class Grayscale extends V1Grayscale {
-  constructor(private readonly v2Channels = 1) {
-    super(v2Channels);
+  constructor(numOutputChannels = 1) {
+    super(numOutputChannels);
   }
 
   override describe(): string {
-    return repr("Grayscale", [["num_output_channels", String(this.v2Channels)]]);
+    return repr("Grayscale", [["num_output_channels", String(this.numOutputChannels)]]);
   }
 }
 
 export class RandomGrayscale extends V1RandomGrayscale {
-  constructor(private readonly v2P = 0.1) {
-    super(v2P);
+  constructor(p = 0.1) {
+    super(p);
   }
 
   override describe(): string {
-    return repr("RandomGrayscale", [["p", pyFloat(this.v2P)]]);
+    return repr("RandomGrayscale", [["p", pyFloat(this.p)]]);
   }
 }
 
 export class Normalize extends V1Normalize {
-  constructor(private readonly v2Mean: readonly number[],
-              private readonly v2Std: readonly number[]) {
-    super(v2Mean, v2Std);
+  // **`inplace` is taken and not acted on.** There is no in-place path here, and torch
+  // has the seat — so a pipeline copied across keeps its argument list rather than
+  // stopping on an argument count, and v2 prints the flag it was given.
+  constructor(mean: readonly number[],
+              std: readonly number[],
+              private readonly inplace = false) {
+    super(mean, std);
   }
 
   override describe(): string {
     return repr("Normalize", [
-      ["mean", listedFloat(this.v2Mean)],
-      ["std", listedFloat(this.v2Std)],
-      ["inplace", "False"],
+      ["mean", listedFloat(this.mean)],
+      ["std", listedFloat(this.std)],
+      // Printed from the flag rather than as a constant — the line was `"False"`
+      // whatever was passed, which is a repr that cannot be wrong and cannot be right.
+      ["inplace", pyBool(this.inplace)],
     ]);
   }
 }
 
 /** **`value` becomes a list of floats** unless it is the string `"random"`. */
 export class RandomErasing extends V1RandomErasing {
-  constructor(private readonly v2P = 0.5,
-              private readonly v2Scale: readonly [number, number] = [0.02, 0.33],
-              private readonly v2Ratio: readonly [number, number] = [0.3, 3.3],
-              private readonly v2Value: number | readonly number[] | "random" = 0,
-              private readonly v2Inplace = false) {
-    super(v2P, v2Scale, v2Ratio, v2Value, v2Inplace);
+  constructor(p = 0.5,
+              scale: readonly [number, number] = [0.02, 0.33],
+              ratio: readonly [number, number] = [0.3, 3.3],
+              value: number | readonly number[] | "random" = 0,
+              inplace = false) {
+    super(p, scale, ratio, value, inplace);
   }
 
   override describe(): string {
-    const value = typeof this.v2Value === "string"
-      ? this.v2Value
-      : `[${(typeof this.v2Value === "number" ? [this.v2Value] : [...this.v2Value])
+    const value = typeof this.value === "string"
+      ? this.value
+      : `[${(typeof this.value === "number" ? [this.value] : [...this.value])
         .map(pyFloat).join(", ")}]`;
     return repr("RandomErasing", [
-      ["p", pyFloat(this.v2P)],
-      ["scale", pyTuple(this.v2Scale)],
-      ["ratio", pyTuple(this.v2Ratio)],
+      ["p", pyFloat(this.p)],
+      ["scale", pyTuple(this.scale)],
+      ["ratio", pyTuple(this.ratio)],
       ["value", value],
-      ["inplace", pyBool(this.v2Inplace)],
+      ["inplace", pyBool(this.inplace)],
     ]);
   }
 }
 
 /**
- * **The clearest case of the type filter doing the work.** It stores `null` for a factor
+ * **The clearest case of the type filter doing the work.** It stores `null` for a sharpnessFactor
  * nobody asked for, and `null` is not a kind v2 prints — so `ColorJitter()` prints its
  * own name and nothing else.
  */
 export class ColorJitter extends V1ColorJitter {
-  constructor(private readonly v2Brightness: number | readonly [number, number] | null = null,
-              private readonly v2Contrast: number | readonly [number, number] | null = null,
-              private readonly v2Saturation: number | readonly [number, number] | null = null,
-              private readonly v2Hue: number | readonly [number, number] | null = null) {
-    super(v2Brightness ?? 0, v2Contrast ?? 0, v2Saturation ?? 0, v2Hue ?? 0);
+  constructor(brightness: number | readonly [number, number] | null = null,
+              contrast: number | readonly [number, number] | null = null,
+              saturation: number | readonly [number, number] | null = null,
+              hue: number | readonly [number, number] | null = null) {
+    super(brightness ?? 0, contrast ?? 0, saturation ?? 0, hue ?? 0);
   }
 
   override describe(): string {
-    // v1 turns each factor into a span; v2 prints the span it built, so the pair is
+    // v1 turns each sharpnessFactor into a span; v2 prints the span it built, so the pair is
     // recomputed here rather than recovered — the same rule, applied to the argument.
     // **The clamp at zero is not applied to `hue`.** The other three are multiplicative
     // and cannot go below zero; hue is an offset and its span is symmetric about zero,
@@ -367,141 +374,141 @@ export class ColorJitter extends V1ColorJitter {
       return pyTuple([clamp ? Math.max(0, low) : low, centre + v]);
     };
     return repr("ColorJitter", [
-      ["brightness", span(this.v2Brightness)],
-      ["contrast", span(this.v2Contrast)],
-      ["saturation", span(this.v2Saturation)],
-      ["hue", span(this.v2Hue, 0, false)],
+      ["brightness", span(this.brightness)],
+      ["contrast", span(this.contrast)],
+      ["saturation", span(this.saturation)],
+      ["hue", span(this.hue, 0, false)],
     ]);
   }
 }
 
 export class RandomInvert extends V1RandomInvert {
-  constructor(private readonly v2P = 0.5) {
-    super(v2P);
+  constructor(p = 0.5) {
+    super(p);
   }
 
   override describe(): string {
-    return repr("RandomInvert", [["p", pyFloat(this.v2P)]]);
+    return repr("RandomInvert", [["p", pyFloat(this.p)]]);
   }
 }
 
 export class RandomAutocontrast extends V1RandomAutocontrast {
-  constructor(private readonly v2P = 0.5) {
-    super(v2P);
+  constructor(p = 0.5) {
+    super(p);
   }
 
   override describe(): string {
-    return repr("RandomAutocontrast", [["p", pyFloat(this.v2P)]]);
+    return repr("RandomAutocontrast", [["p", pyFloat(this.p)]]);
   }
 }
 
 export class RandomEqualize extends V1RandomEqualize {
-  constructor(private readonly v2P = 0.5) {
-    super(v2P);
+  constructor(p = 0.5) {
+    super(p);
   }
 
   override describe(): string {
-    return repr("RandomEqualize", [["p", pyFloat(this.v2P)]]);
+    return repr("RandomEqualize", [["p", pyFloat(this.p)]]);
   }
 }
 
 /** **`p` prints first**, though the constructor takes `bits` first. */
 export class RandomPosterize extends V1RandomPosterize {
-  constructor(private readonly v2Bits: number, private readonly v2P = 0.5) {
-    super(v2Bits, v2P);
+  constructor(bits: number, p = 0.5) {
+    super(bits, p);
   }
 
   override describe(): string {
     return repr("RandomPosterize", [
-      ["p", pyFloat(this.v2P)],
-      ["bits", String(this.v2Bits)],
+      ["p", pyFloat(this.p)],
+      ["bits", String(this.bits)],
     ]);
   }
 }
 
 export class RandomSolarize extends V1RandomSolarize {
-  constructor(private readonly v2Threshold: number, private readonly v2P = 0.5) {
-    super(v2Threshold, v2P);
+  constructor(threshold: number, p = 0.5) {
+    super(threshold, p);
   }
 
   override describe(): string {
     return repr("RandomSolarize", [
-      ["p", pyFloat(this.v2P)],
-      ["threshold", pyFloat(this.v2Threshold)],
+      ["p", pyFloat(this.p)],
+      ["threshold", pyFloat(this.threshold)],
     ]);
   }
 }
 
 export class RandomAdjustSharpness extends V1RandomAdjustSharpness {
-  constructor(private readonly v2Factor: number, private readonly v2P = 0.5) {
-    super(v2Factor, v2P);
+  constructor(sharpnessFactor: number, p = 0.5) {
+    super(sharpnessFactor, p);
   }
 
   override describe(): string {
     return repr("RandomAdjustSharpness", [
-      ["p", pyFloat(this.v2P)],
+      ["p", pyFloat(this.p)],
       // **Printed as it was given**, so an integer stays an integer: `2` and not `2.0`.
       // The `p` beside it does carry its decimal point, which is what makes the pair
       // worth looking at rather than guessing.
-      ["sharpness_factor", String(this.v2Factor)],
+      ["sharpness_factor", String(this.sharpnessFactor)],
     ]);
   }
 }
 
 export class RandomRotation extends V1RandomRotation {
-  constructor(private readonly v2Degrees: number | readonly [number, number],
-              private readonly v2Interpolation: "bilinear" | "nearest" = "nearest",
-              private readonly v2Expand = false,
+  constructor(degrees: number | readonly [number, number],
+              interpolation: "bilinear" | "nearest" = "nearest",
+              expand = false,
               center: readonly [number, number] | null = null,
-              private readonly v2Fill: number | readonly number[] | null = 0) {
-    super(v2Degrees, v2Interpolation, v2Expand, center, v2Fill);
+              fill: number | readonly number[] | null = 0) {
+    super(degrees, interpolation, expand, center, fill);
   }
 
   override describe(): string {
     return repr("RandomRotation", [
-      ["degrees", listedFloat(typeof this.v2Degrees === "number"
-        ? [-this.v2Degrees, this.v2Degrees] : [...this.v2Degrees])],
-      ["interpolation", this.v2Interpolation],
-      ["expand", pyBool(this.v2Expand)],
-      ["fill", fillOf(this.v2Fill)],
+      ["degrees", listedFloat(typeof this.degrees === "number"
+        ? [-this.degrees, this.degrees] : [...this.degrees])],
+      ["interpolation", this.interpolation],
+      ["expand", pyBool(this.expand)],
+      ["fill", fillOf(this.fill)],
     ]);
   }
 }
 
 export class RandomAffine extends V1RandomAffine {
-  constructor(private readonly v2Degrees: number | readonly [number, number],
+  constructor(degrees: number | readonly [number, number],
               translate: readonly [number, number] | null = null,
               scale: readonly [number, number] | null = null,
               shear: number | readonly number[] | null = null,
-              private readonly v2Interpolation: "bilinear" | "nearest" = "nearest",
-              private readonly v2Fill: number | readonly number[] = 0,
+              interpolation: "bilinear" | "nearest" = "nearest",
+              fill: number | readonly number[] = 0,
               center: readonly [number, number] | null = null) {
-    super(v2Degrees, translate, scale, shear, v2Interpolation, v2Fill, center);
+    super(degrees, translate, scale, shear, interpolation, fill, center);
   }
 
   override describe(): string {
     return repr("RandomAffine", [
-      ["degrees", listedFloat(typeof this.v2Degrees === "number"
-        ? [-this.v2Degrees, this.v2Degrees] : [...this.v2Degrees])],
-      ["interpolation", this.v2Interpolation],
-      ["fill", fillOf(this.v2Fill)],
+      ["degrees", listedFloat(typeof this.degrees === "number"
+        ? [-this.degrees, this.degrees] : [...this.degrees])],
+      ["interpolation", this.interpolation],
+      ["fill", fillOf(this.fill)],
     ]);
   }
 }
 
 export class RandomPerspective extends V1RandomPerspective {
-  constructor(private readonly v2Distortion = 0.5, private readonly v2P = 0.5,
-              private readonly v2Interpolation: "bilinear" | "nearest" = "bilinear",
-              private readonly v2Fill: number | readonly number[] = 0) {
-    super(v2Distortion, v2P, v2Interpolation, v2Fill);
+  constructor(distortionScale = 0.5, p = 0.5,
+              interpolation: "bilinear" | "nearest" = "bilinear",
+              fill: number | readonly number[] = 0) {
+    super(distortionScale, p, interpolation, fill);
   }
 
   override describe(): string {
     return repr("RandomPerspective", [
-      ["p", pyFloat(this.v2P)],
-      ["distortion_scale", pyFloat(this.v2Distortion)],
-      ["interpolation", this.v2Interpolation],
-      ["fill", fillOf(this.v2Fill)],
+      ["p", pyFloat(this.p)],
+      ["distortion_scale", pyFloat(this.distortionScale)],
+      ["interpolation", this.interpolation],
+      ["fill", fillOf(this.fill)],
     ]);
   }
 }
@@ -513,11 +520,21 @@ export class RandomPerspective extends V1RandomPerspective {
  * differently.
  */
 export class ElasticTransform extends V1ElasticTransform {
-  constructor(private readonly v2Alpha: number | readonly number[] = 50.0,
-              private readonly v2Sigma: number | readonly number[] = 5.0,
-              private readonly v2Interpolation: "bilinear" | "nearest" = "bilinear",
-              private readonly v2Fill: number | readonly number[] = 0) {
-    super(v2Alpha, v2Sigma, v2Interpolation, v2Fill);
+  /**
+   * **The one field the parent cannot supply.** v1 normalises `fill` to a list in its
+   * constructor and v2 prints the number as it was given, so reading the parent's turns
+   * `0` into `[0]` — the difference between the frozen line and a plausible one. The
+   * parameter keeps torch's name; only the stored copy is renamed, because a field
+   * called `fill` cannot sit beside the parent's.
+   */
+  private readonly givenFill: number | readonly number[];
+
+  constructor(alpha: number | readonly number[] = 50.0,
+              sigma: number | readonly number[] = 5.0,
+              interpolation: "bilinear" | "nearest" = "bilinear",
+              fill: number | readonly number[] = 0) {
+    super(alpha, sigma, interpolation, fill);
+    this.givenFill = fill;
   }
 
   override describe(): string {
@@ -528,26 +545,26 @@ export class ElasticTransform extends V1ElasticTransform {
     const pair = (v: number | readonly number[]): string =>
       listedFloat(typeof v === "number" ? [v, v] : [...v]);
     return repr("ElasticTransform", [
-      ["alpha", pair(this.v2Alpha)],
-      ["sigma", pair(this.v2Sigma)],
-      ["interpolation", this.v2Interpolation],
-      ["fill", fillOf(this.v2Fill)],
+      ["alpha", pair(this.alpha)],
+      ["sigma", pair(this.sigma)],
+      ["interpolation", this.interpolation],
+      ["fill", fillOf(this.givenFill)],
     ]);
   }
 }
 
 export class GaussianBlur extends V1GaussianBlur {
-  constructor(private readonly v2Kernel: number | readonly number[],
-              private readonly v2Sigma: number | readonly [number, number] = [0.1, 2.0]) {
-    super(v2Kernel, v2Sigma);
+  constructor(kernelSize: number | readonly number[],
+              sigma: number | readonly [number, number] = [0.1, 2.0]) {
+    super(kernelSize, sigma);
   }
 
   override describe(): string {
-    const kernel = typeof this.v2Kernel === "number"
-      ? [this.v2Kernel, this.v2Kernel] : [...this.v2Kernel];
+    const kernelSize = typeof this.kernelSize === "number"
+      ? [this.kernelSize, this.kernelSize] : [...this.kernelSize];
     return repr("GaussianBlur", [
-      ["kernel_size", `(${kernel.join(", ")})`],
-      ["sigma", listedFloat(this.v2Sigma)],
+      ["kernel_size", `(${kernelSize.join(", ")})`],
+      ["sigma", listedFloat(this.sigma)],
     ]);
   }
 }
@@ -558,70 +575,70 @@ export class GaussianBlur extends V1GaussianBlur {
  * one.
  */
 export class AutoAugment extends V1AutoAugment {
-  constructor(private readonly v2Policy: AutoAugmentPolicyName = AutoAugmentPolicy.IMAGENET,
-              private readonly v2Interpolation: "bilinear" | "nearest" = "nearest",
+  constructor(policy: AutoAugmentPolicyName = AutoAugmentPolicy.IMAGENET,
+              interpolation: "bilinear" | "nearest" = "nearest",
               fill: number | readonly number[] | null = null) {
-    super(v2Policy, v2Interpolation, fill);
+    super(policy, interpolation, fill);
   }
 
   override describe(): string {
     return repr("AutoAugment", [
-      ["interpolation", this.v2Interpolation],
-      ["policy", policyName(this.v2Policy)],
+      ["interpolation", this.interpolation],
+      ["policy", policyName(this.policy)],
     ]);
   }
 }
 
 export class RandAugment extends V1RandAugment {
-  constructor(private readonly v2NumOps = 2, private readonly v2Magnitude = 9,
-              private readonly v2Bins = 31,
-              private readonly v2Interpolation: "bilinear" | "nearest" = "nearest",
+  constructor(numOps = 2, magnitude = 9,
+              numMagnitudeBins = 31,
+              interpolation: "bilinear" | "nearest" = "nearest",
               fill: number | readonly number[] | null = null) {
-    super(v2NumOps, v2Magnitude, v2Bins, v2Interpolation, fill);
+    super(numOps, magnitude, numMagnitudeBins, interpolation, fill);
   }
 
   override describe(): string {
     return repr("RandAugment", [
-      ["interpolation", this.v2Interpolation],
-      ["num_ops", String(this.v2NumOps)],
-      ["magnitude", String(this.v2Magnitude)],
-      ["num_magnitude_bins", String(this.v2Bins)],
+      ["interpolation", this.interpolation],
+      ["num_ops", String(this.numOps)],
+      ["magnitude", String(this.magnitude)],
+      ["num_magnitude_bins", String(this.numMagnitudeBins)],
     ]);
   }
 }
 
 export class TrivialAugmentWide extends V1TrivialAugmentWide {
-  constructor(private readonly v2Bins = 31,
-              private readonly v2Interpolation: "bilinear" | "nearest" = "nearest",
+  constructor(numMagnitudeBins = 31,
+              interpolation: "bilinear" | "nearest" = "nearest",
               fill: number | readonly number[] | null = null) {
-    super(v2Bins, v2Interpolation, fill);
+    super(numMagnitudeBins, interpolation, fill);
   }
 
   override describe(): string {
     return repr("TrivialAugmentWide", [
-      ["interpolation", this.v2Interpolation],
-      ["num_magnitude_bins", String(this.v2Bins)],
+      ["interpolation", this.interpolation],
+      ["num_magnitude_bins", String(this.numMagnitudeBins)],
     ]);
   }
 }
 
 export class AugMix extends V1AugMix {
-  constructor(private readonly v2Severity = 3, private readonly v2Width = 3,
-              private readonly v2Depth = -1, private readonly v2Alpha = 1.0,
-              private readonly v2AllOps = true,
-              private readonly v2Interpolation: "bilinear" | "nearest" = "bilinear",
+  constructor(severity = 3, mixtureWidth = 3,
+              chainDepth = -1, alpha = 1.0,
+              allOps = true,
+              interpolation: "bilinear" | "nearest" = "bilinear",
               fill: number | readonly number[] | null = null) {
-    super(v2Severity, v2Width, v2Depth, v2Alpha, v2AllOps, v2Interpolation, fill);
+    super(severity, mixtureWidth, chainDepth, alpha, allOps, interpolation, fill);
   }
 
   override describe(): string {
     return repr("AugMix", [
-      ["interpolation", this.v2Interpolation],
-      ["severity", String(this.v2Severity)],
-      ["mixture_width", String(this.v2Width)],
-      ["chain_depth", String(this.v2Depth)],
-      ["alpha", pyFloat(this.v2Alpha)],
-      ["all_ops", pyBool(this.v2AllOps)],
+      ["interpolation", this.interpolation],
+      ["severity", String(this.severity)],
+      ["mixture_width", String(this.mixtureWidth)],
+      ["chain_depth", String(this.chainDepth)],
+      ["alpha", pyFloat(this.alpha)],
+      ["all_ops", pyBool(this.allOps)],
     ]);
   }
 }
@@ -644,13 +661,13 @@ export class ToTensor extends V1ToTensor {
 }
 
 export class RandomOrder extends V1RandomOrder {
-  constructor(private readonly v2Transforms: readonly Transform[]) {
-    super(v2Transforms);
+  constructor(transforms: readonly Transform[]) {
+    super(transforms);
   }
 
   override describe(): string {
     return repr("RandomOrder", [
-      ["transforms", `[${this.v2Transforms.map((t) => t.describe()).join(", ")}]`],
+      ["transforms", `[${this.transforms.map((t) => t.describe()).join(", ")}]`],
     ]);
   }
 }
@@ -660,15 +677,15 @@ export class RandomOrder extends V1RandomOrder {
  * it, so two transforms given no probabilities print `p=[0.5, 0.5]`.
  */
 export class RandomChoice extends V1RandomChoice {
-  constructor(private readonly v2Transforms: readonly Transform[],
-              private readonly v2P: readonly number[] | null = null) {
-    super(v2Transforms, v2P);
+  constructor(transforms: readonly Transform[],
+              p: readonly number[] | null = null) {
+    super(transforms, p);
   }
 
   override describe(): string {
-    const p = this.v2P ?? this.v2Transforms.map(() => 1 / this.v2Transforms.length);
+    const p = this.p ?? this.transforms.map(() => 1 / this.transforms.length);
     return repr("RandomChoice", [
-      ["transforms", `[${this.v2Transforms.map((t) => t.describe()).join(", ")}]`],
+      ["transforms", `[${this.transforms.map((t) => t.describe()).join(", ")}]`],
       ["p", `[${p.map(pyFloat).join(", ")}]`],
     ]);
   }
@@ -676,12 +693,12 @@ export class RandomChoice extends V1RandomChoice {
 
 /** v2's `Compose`. Same behaviour, torch's module printing. */
 export class Compose extends V1Compose {
-  constructor(private readonly v2Transforms: readonly Transform[]) {
-    super(v2Transforms);
+  constructor(transforms: readonly Transform[]) {
+    super(transforms);
   }
 
   override describe(): string {
-    return moduleRepr("Compose", this.v2Transforms.map((t) => t.describe()));
+    return moduleRepr("Compose", this.transforms.map((t) => t.describe()));
   }
 }
 
@@ -690,12 +707,12 @@ export class Compose extends V1Compose {
  * which is torch's module repr showing only what `extra_repr` returns.
  */
 export class RandomApply extends V1RandomApply {
-  constructor(private readonly v2Transforms: readonly Transform[], p = 0.5) {
-    super(v2Transforms, p);
+  constructor(transforms: readonly Transform[], p = 0.5) {
+    super(transforms, p);
   }
 
   override describe(): string {
-    return moduleRepr("RandomApply", this.v2Transforms.map((t) => t.describe()));
+    return moduleRepr("RandomApply", this.transforms.map((t) => t.describe()));
   }
 }
 
@@ -724,9 +741,34 @@ export class Lambda extends V1Lambda {
  * Resize the short side to a number drawn from `[minSize, maxSize)`. **A range of sizes
  * rather than one**, which is what multi-scale training wants.
  */
+/**
+ * **`antialias=false` is refused rather than accepted and ignored.**
+ *
+ * There is one resampling filter here and it antialiases, so `false` is a request
+ * this cannot honour — and an argument taken and dropped is the shape that trains
+ * slightly wrong in silence. v1's `Resize` refuses it in the same words for the same
+ * reason; these three take the seat because torch has it, not because they can do
+ * anything with it.
+ */
+function requireAntialias(antialias: boolean, who: string): void {
+  if (!antialias) {
+    throw new RuntimeError(
+      `${who} antialiases — there is one filter here and it cannot be turned off.\n` +
+      "  Taking the argument and dropping it would hand back the other image without " +
+      "saying so.");
+  }
+}
+
 export class RandomResize implements Transform {
+  // **`antialias` is taken and refused rather than dropped.** v1's `Resize` has one
+  // filter and it antialiases, so `false` would be a request this cannot honour — and
+  // an argument accepted and ignored is the shape that trains slightly wrong in
+  // silence. torch has the seat, so it is here and it answers.
   constructor(private readonly minSize: number, private readonly maxSize: number,
-              private readonly interpolation: "bilinear" | "nearest" = "bilinear") {}
+              private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+              antialias = true) {
+    requireAntialias(antialias, "RandomResize");
+  }
 
   apply(x: Subject): Subject {
     const size = this.minSize
@@ -754,7 +796,9 @@ export class RandomShortestSize implements Transform {
 
   constructor(minSize: number | readonly number[],
               private readonly maxSize: number | null = null,
-              private readonly interpolation: "bilinear" | "nearest" = "bilinear") {
+              private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+              antialias = true) {
+    requireAntialias(antialias, "RandomShortestSize");
     this.sizes = typeof minSize === "number" ? [minSize] : [...minSize];
   }
 
@@ -816,14 +860,17 @@ export class RandomZoomOut implements Transform {
 }
 
 /**
- * Resize toward `targetSize` by a **drawn factor** — the large-scale jitter of the
+ * Resize toward `targetSize` by a **drawn sharpnessFactor** — the large-scale jitter of the
  * detection recipes, where the same picture is seen at a tenth and at twice its size
  * across an epoch.
  */
 export class ScaleJitter implements Transform {
   constructor(private readonly targetSize: readonly [number, number],
               private readonly scaleRange: readonly [number, number] = [0.1, 2.0],
-              private readonly interpolation: "bilinear" | "nearest" = "bilinear") {}
+              private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+              antialias = true) {
+    requireAntialias(antialias, "ScaleJitter");
+  }
 
   apply(x: Subject): Subject {
     const img = x as Image;

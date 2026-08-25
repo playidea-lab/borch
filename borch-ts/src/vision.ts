@@ -65,7 +65,7 @@ export interface Transform {
  * so that shape is matched too.
  */
 export class Compose implements Transform {
-  constructor(private readonly transforms: readonly Transform[]) {}
+  constructor(protected readonly transforms: readonly Transform[]) {}
 
   apply(x: Subject): Subject {
     let cur = x;
@@ -141,7 +141,7 @@ abstract class RandomTransforms implements Transform {
  * lot, which is what makes it different from putting a `p` on each transform.
  */
 export class RandomApply extends RandomTransforms {
-  constructor(transforms: readonly Transform[], private readonly p = 0.5) {
+  constructor(transforms: readonly Transform[], protected readonly p = 0.5) {
     super("RandomApply", transforms);
   }
 
@@ -161,7 +161,7 @@ export class RandomApply extends RandomTransforms {
 export class RandomChoice extends RandomTransforms {
   constructor(
     transforms: readonly Transform[],
-    private readonly p: readonly number[] | null = null,
+    protected readonly p: readonly number[] | null = null,
   ) {
     super("RandomChoice", transforms);
   }
@@ -260,8 +260,8 @@ export class ToTensor implements Transform {
  */
 export class Normalize implements Transform {
   constructor(
-    private readonly mean: readonly number[],
-    private readonly std: readonly number[],
+    protected readonly mean: readonly number[],
+    protected readonly std: readonly number[],
   ) {}
 
   apply(x: Image | Tensor): Tensor {
@@ -336,7 +336,7 @@ function flipped(img: Image, vertical: boolean): Image {
  * Flips left to right. Takes an `(H, W, C)` array.
  */
 export class RandomHorizontalFlip implements Transform {
-  constructor(private readonly p = 0.5) {}
+  constructor(protected readonly p = 0.5) {}
 
   apply(x: Image | Tensor): Image {
     const img = asImage(x, "RandomHorizontalFlip");
@@ -358,7 +358,7 @@ export class RandomHorizontalFlip implements Transform {
  * not what is wanted. torchvision keeps 0.5 anyway, and so does this.
  */
 export class RandomVerticalFlip implements Transform {
-  constructor(private readonly p = 0.5) {}
+  constructor(protected readonly p = 0.5) {}
 
   apply(x: Image | Tensor): Image {
     const img = asImage(x, "RandomVerticalFlip");
@@ -426,9 +426,9 @@ function sourceIndex(i: number, n: number, mode: PaddingMode): number {
  */
 export class Pad implements Transform {
   constructor(
-    private readonly padding: number | readonly number[],
-    private readonly fill: number | readonly number[] = 0,
-    private readonly paddingMode: PaddingMode = "constant",
+    protected readonly padding: number | readonly number[],
+    protected readonly fill: number | readonly number[] = 0,
+    protected readonly paddingMode: PaddingMode = "constant",
   ) {
     if (!PADDING_MODES.includes(paddingMode)) {
       throw new RuntimeError(
@@ -564,7 +564,7 @@ function toGray(img: Image, outChannels: number, who: string): Image {
  * pre-trained three-channel model needs.
  */
 export class Grayscale implements Transform {
-  constructor(private readonly numOutputChannels = 1) {}
+  constructor(protected readonly numOutputChannels = 1) {}
 
   apply(x: Image | Tensor): Image {
     return toGray(asImage(x, "Grayscale"), this.numOutputChannels, "Grayscale");
@@ -581,7 +581,7 @@ export class Grayscale implements Transform {
  * follows still stacks.
  */
 export class RandomGrayscale implements Transform {
-  constructor(private readonly p = 0.1) {}
+  constructor(protected readonly p = 0.1) {}
 
   apply(x: Image | Tensor): Image {
     const img = asImage(x, "RandomGrayscale");
@@ -598,7 +598,7 @@ export class RandomGrayscale implements Transform {
  * Pads the edges, then crops at random.
  */
 export class RandomCrop implements Transform {
-  private readonly size: [number, number];
+  protected readonly size: [number, number];
 
   /**
    * **The argument list is torchvision's, and it was not.** This took
@@ -624,10 +624,10 @@ export class RandomCrop implements Transform {
    */
   constructor(
     size: number | readonly [number, number],
-    private readonly padding: number | readonly number[] | null = null,
-    private readonly padIfNeeded = false,
-    private readonly fill: number | readonly number[] = 0,
-    private readonly paddingMode: PaddingMode = "constant",
+    protected readonly padding: number | readonly number[] | null = null,
+    protected readonly padIfNeeded = false,
+    protected readonly fill: number | readonly number[] = 0,
+    protected readonly paddingMode: PaddingMode = "constant",
   ) {
     this.size = typeof size === "number" ? [size, size] : [size[0], size[1]];
   }
@@ -813,8 +813,8 @@ export class Resize implements Transform {
    *   hand back the other image without saying so.
    */
   constructor(
-    private readonly size: number | readonly [number, number],
-    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    protected readonly size: number | readonly [number, number],
+    protected readonly interpolation: "bilinear" | "nearest" = "bilinear",
     private readonly maxSize: number | null = null,
     antialias = true,
   ) {
@@ -1127,9 +1127,9 @@ export class RandomResizedCrop implements Transform {
 
   constructor(
     size: number | readonly [number, number],
-    private readonly scale: readonly [number, number] = [0.08, 1.0],
-    private readonly ratio: readonly [number, number] = [3 / 4, 4 / 3],
-    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    protected readonly scale: readonly [number, number] = [0.08, 1.0],
+    protected readonly ratio: readonly [number, number] = [3 / 4, 4 / 3],
+    protected readonly interpolation: "bilinear" | "nearest" = "bilinear",
     private readonly antialias = true,
   ) {
     [this.th, this.tw] = pairOf(size);
@@ -1191,11 +1191,11 @@ export class RandomResizedCrop implements Transform {
  */
 export class RandomErasing implements Transform {
   constructor(
-    private readonly p = 0.5,
-    private readonly scale: readonly [number, number] = [0.02, 0.33],
-    private readonly ratio: readonly [number, number] = [0.3, 3.3],
-    private readonly value: number | readonly number[] | "random" = 0,
-    private readonly inplace = false,
+    protected readonly p = 0.5,
+    protected readonly scale: readonly [number, number] = [0.02, 0.33],
+    protected readonly ratio: readonly [number, number] = [0.3, 3.3],
+    protected readonly value: number | readonly number[] | "random" = 0,
+    protected readonly inplace = false,
   ) {
     if (scale[0] < 0 || scale[1] > 1) {
       throw new RuntimeError(
@@ -1376,7 +1376,7 @@ export class TenCrop implements Transform {
 
   constructor(
     size: number | readonly [number, number],
-    private readonly verticalFlip = false,
+    protected readonly verticalFlip = false,
   ) {
     [this.th, this.tw] = pairOf(size);
   }
@@ -1698,10 +1698,10 @@ function spanText(s: Span): string {
  * repr shows `None` for anything left at its default.
  */
 export class ColorJitter implements Transform {
-  private readonly brightness: Span;
-  private readonly contrast: Span;
-  private readonly saturation: Span;
-  private readonly hue: Span;
+  protected readonly brightness: Span;
+  protected readonly contrast: Span;
+  protected readonly saturation: Span;
+  protected readonly hue: Span;
 
   constructor(
     brightness?: number | readonly [number, number],
@@ -2159,7 +2159,7 @@ export class RandomEqualize extends RandomPixelOp {
 }
 
 export class RandomPosterize extends RandomPixelOp {
-  constructor(private readonly bits: number, p = 0.5) { super("RandomPosterize", p); }
+  constructor(protected readonly bits: number, p = 0.5) { super("RandomPosterize", p); }
   protected run(img: Image): Image { return posterize(img, this.bits); }
   // **There is no space after the comma.** That is torchvision's own notation rather
   // than something dropped in transcription — three of these six print that way and the
@@ -2168,7 +2168,7 @@ export class RandomPosterize extends RandomPixelOp {
 }
 
 export class RandomSolarize extends RandomPixelOp {
-  constructor(private readonly threshold: number, p = 0.5) { super("RandomSolarize", p); }
+  constructor(protected readonly threshold: number, p = 0.5) { super("RandomSolarize", p); }
   protected run(img: Image): Image { return solarize(img, this.threshold); }
   override describe(): string {
     return `RandomSolarize(threshold=${this.threshold},p=${this.p})`;
@@ -2176,7 +2176,7 @@ export class RandomSolarize extends RandomPixelOp {
 }
 
 export class RandomAdjustSharpness extends RandomPixelOp {
-  constructor(private readonly sharpnessFactor: number, p = 0.5) {
+  constructor(protected readonly sharpnessFactor: number, p = 0.5) {
     super("RandomAdjustSharpness", p);
   }
   protected run(img: Image): Image { return adjustSharpness(img, this.sharpnessFactor); }
@@ -2485,14 +2485,14 @@ function floatList(v: readonly number[]): string {
  * three-channel image.
  */
 export class RandomRotation implements Transform {
-  private readonly degrees: [number, number];
+  protected readonly degrees: [number, number];
 
   constructor(
     degrees: number | readonly number[],
-    private readonly interpolation: "bilinear" | "nearest" = "nearest",
-    private readonly expand = false,
+    protected readonly interpolation: "bilinear" | "nearest" = "nearest",
+    protected readonly expand = false,
     private readonly center: readonly [number, number] | null = null,
-    private readonly fill: number | readonly number[] | null = 0,
+    protected readonly fill: number | readonly number[] | null = 0,
   ) {
     this.degrees = setupAngle(degrees, "degrees");
   }
@@ -2534,16 +2534,16 @@ export class RandomRotation implements Transform {
  * number of pixels, so the same transform means the same thing on any size.
  */
 export class RandomAffine implements Transform {
-  private readonly degrees: [number, number];
+  protected readonly degrees: [number, number];
   private readonly shearRange: [number, number] | null;
 
   constructor(
     degrees: number | readonly number[],
     private readonly translate: readonly [number, number] | null = null,
-    private readonly scale: readonly [number, number] | null = null,
+    protected readonly scale: readonly [number, number] | null = null,
     shear: number | readonly number[] | null = null,
-    private readonly interpolation: "bilinear" | "nearest" = "nearest",
-    private readonly fill: number | readonly number[] = 0,
+    protected readonly interpolation: "bilinear" | "nearest" = "nearest",
+    protected readonly fill: number | readonly number[] = 0,
     private readonly center: readonly [number, number] | null = null,
   ) {
     this.degrees = setupAngle(degrees, "degrees");
@@ -2834,8 +2834,8 @@ export function elasticTransform(
  * the cost and varies the effect inside it.
  */
 export class GaussianBlur implements Transform {
-  private readonly kernelSize: [number, number];
-  private readonly sigma: [number, number];
+  protected readonly kernelSize: [number, number];
+  protected readonly sigma: [number, number];
 
   constructor(kernelSize: number | readonly number[],
               sigma: number | readonly [number, number] = [0.1, 2.0]) {
@@ -2891,10 +2891,10 @@ export class GaussianBlur implements Transform {
  */
 export class RandomPerspective implements Transform {
   constructor(
-    private readonly distortionScale = 0.5,
-    private readonly p = 0.5,
-    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
-    private readonly fill: number | readonly number[] = 0,
+    protected readonly distortionScale = 0.5,
+    protected readonly p = 0.5,
+    protected readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    protected readonly fill: number | readonly number[] = 0,
   ) {}
 
   /**
@@ -2944,14 +2944,14 @@ export class RandomPerspective implements Transform {
  * blur.
  */
 export class ElasticTransform implements Transform {
-  private readonly alpha: [number, number];
-  private readonly sigma: [number, number];
-  private readonly fill: number[];
+  protected readonly alpha: [number, number];
+  protected readonly sigma: [number, number];
+  protected readonly fill: number[];
 
   constructor(
     alpha: number | readonly number[] = 50,
     sigma: number | readonly number[] = 5,
-    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    protected readonly interpolation: "bilinear" | "nearest" = "bilinear",
     fill: number | readonly number[] = 0,
   ) {
     this.alpha = typeof alpha === "number" ? [alpha, alpha] : [alpha[0] ?? 0, alpha[1] ?? 0];
@@ -3156,9 +3156,9 @@ export class AutoAugment implements Transform {
   readonly policies: readonly (readonly [PolicyStep, PolicyStep])[];
 
   constructor(
-    private readonly policy: AutoAugmentPolicyName = AutoAugmentPolicy.IMAGENET,
-    private readonly interpolation: "bilinear" | "nearest" = "nearest",
-    private readonly fill: number | readonly number[] | null = null,
+    protected readonly policy: AutoAugmentPolicyName = AutoAugmentPolicy.IMAGENET,
+    protected readonly interpolation: "bilinear" | "nearest" = "nearest",
+    protected readonly fill: number | readonly number[] | null = null,
   ) {
     const table = POLICIES[policy];
     if (table === undefined) {
@@ -3193,11 +3193,11 @@ export class AutoAugment implements Transform {
  */
 export class RandAugment implements Transform {
   constructor(
-    private readonly numOps = 2,
-    private readonly magnitude = 9,
-    private readonly numMagnitudeBins = 31,
-    private readonly interpolation: "bilinear" | "nearest" = "nearest",
-    private readonly fill: number | readonly number[] | null = null,
+    protected readonly numOps = 2,
+    protected readonly magnitude = 9,
+    protected readonly numMagnitudeBins = 31,
+    protected readonly interpolation: "bilinear" | "nearest" = "nearest",
+    protected readonly fill: number | readonly number[] | null = null,
   ) {}
 
   apply(x: Subject): Image {
@@ -3229,9 +3229,9 @@ export class RandAugment implements Transform {
  */
 export class TrivialAugmentWide implements Transform {
   constructor(
-    private readonly numMagnitudeBins = 31,
-    private readonly interpolation: "bilinear" | "nearest" = "nearest",
-    private readonly fill: number | readonly number[] | null = null,
+    protected readonly numMagnitudeBins = 31,
+    protected readonly interpolation: "bilinear" | "nearest" = "nearest",
+    protected readonly fill: number | readonly number[] | null = null,
   ) {}
 
   apply(_x: Subject): Image {
@@ -3257,13 +3257,13 @@ export class AugMix implements Transform {
   private static readonly PARAMETER_MAX = 10;
 
   constructor(
-    private readonly severity = 3,
-    private readonly mixtureWidth = 3,
-    private readonly chainDepth = -1,
-    private readonly alpha = 1.0,
-    private readonly allOps = true,
-    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
-    private readonly fill: number | readonly number[] | null = null,
+    protected readonly severity = 3,
+    protected readonly mixtureWidth = 3,
+    protected readonly chainDepth = -1,
+    protected readonly alpha = 1.0,
+    protected readonly allOps = true,
+    protected readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    protected readonly fill: number | readonly number[] | null = null,
   ) {
     if (!(severity >= 1 && severity <= AugMix.PARAMETER_MAX)) {
       throw new RuntimeError(
