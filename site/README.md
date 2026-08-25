@@ -20,7 +20,7 @@ Korean is below that, at `/ko/`.
 | Place | What it does |
 |---|---|
 | `index.html` | The landing page. The hero's demo really runs |
-| `learn/` | Eight lessons (concepts). **Every code block runs where it stands** |
+| `learn/` | Ten lessons (concepts). **Every code block runs where it stands** |
 | `tutorials/` | Ten projects. Things that finish if you follow them |
 | `api/` | The API reference. The list comes from `assets/api.json` |
 | `playground.html` | A large editor · a loss curve · GPU instrumentation |
