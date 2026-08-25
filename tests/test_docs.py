@@ -255,3 +255,67 @@ def test_the_documents_still_make_the_claims_this_file_checks():
         "\n\nFewer means a pattern went blind — the phrasing moved and the "
         "pattern has to move with it. More means a new claim, which is fine: "
         "update the number here, having looked at what was added.")
+
+
+# The README says how many pytest cases there are, in two places at once — the file
+# `test_diff.py` holds, and the suite's total. Both are **counts of this very run**, and
+# nothing was watching either.
+SUITE_CLAIM = re.compile(
+    r"\*\*[^*]*?\*\*\s*(\d{2,5})\s+cases in that file,\s*(\d{2,5})\s+in the suite", re.S)
+
+
+def _collected(path):
+    """How many cases pytest collects under `path`, asked of pytest itself.
+
+    **In a subprocess**, because collecting the suite from inside the suite is a
+    different question with a different answer — the session already running would count
+    itself. `test_api_reference_is_not_stale` runs the generator the same way and for the
+    same reason.
+    """
+    import subprocess                                                 # noqa: PLC0415
+    import sys                                                        # noqa: PLC0415
+
+    got = subprocess.run(
+        [sys.executable, "-m", "pytest", str(path), "-q", "--collect-only",
+         "-p", "no:cacheprovider"],
+        cwd=ROOT, capture_output=True, text=True)
+    found = re.search(r"(\d+)\s+tests? collected", got.stdout)
+    assert found, (
+        "pytest did not report a collection count, so this check has nothing to compare.\n"
+        f"  it said:\n{got.stdout[-600:]}\n{got.stderr[-300:]}")
+    return int(found.group(1))
+
+
+def test_the_readme_does_not_name_a_stale_case_count():
+    """**The two pytest counts in the README, against what pytest collects now.**
+
+    They read *180 cases in that file, 93% code coverage* for long enough that both had
+    drifted: 162 and 92% when someone finally ran it. They sat beside a command that had
+    also drifted — missing `torchvision` and `scipy`, so running it as written turned
+    whole files into skips and still printed a pass.
+
+    Four wrong things in one paragraph, and the reason is the same for all four:
+    **nothing read it.** The golden counts two sections up have had a check since the day
+    one of them went stale; these did not, because they are counts of the test suite
+    rather than of the library and no instrument was pointed inward.
+
+    Coverage is deliberately not held here. Measuring it needs `pytest-cov` and a full
+    instrumented run, which is a real cost on every check of every commit, and a number
+    that moves by a point is not the failure this is for. The two case counts move by
+    one every time somebody adds a test, which is exactly when a reader should be made
+    to look.
+    """
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    claim = SUITE_CLAIM.search(text)
+    assert claim, (
+        "the README no longer states the pytest counts in the shape this reads.\n"
+        "  Fix the pattern, or drop this check if the claim went away — a check that\n"
+        "  cannot find its subject must not pass quietly, which is how the sentence it\n"
+        "  guards gets to be wrong for weeks.")
+    said_file, said_suite = int(claim.group(1)), int(claim.group(2))
+    got_file = _collected(ROOT / "tests" / "test_diff.py")
+    got_suite = _collected(ROOT / "tests")
+    assert (said_file, said_suite) == (got_file, got_suite), (
+        f"the README says {said_file} cases in test_diff.py and {said_suite} in the "
+        f"suite; pytest collects {got_file} and {got_suite}.\n"
+        "  Adding a test is meant to bring you here. Update the sentence.")
