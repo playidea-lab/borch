@@ -168,6 +168,33 @@ def test_no_exempt_row_still_disagrees(name):
             f"Take it out of OWED.\n  The reason written there was: {OWED[name]}")
 
 
+def test_an_exemption_cannot_exist_without_being_run():
+    """**The exemption is written in two tables, and only one of them is iterated.**
+
+    `test_no_exempt_row_still_disagrees` parametrises over `OWED` and reaches into
+    `OWED_CASES` for the call. A name in `OWED` alone raises `KeyError`, which is loud
+    and fine. **A name in `OWED_CASES` alone is never run at all** — no parameter is
+    generated for it, so nothing reports it, and it does not even show up as the skip an
+    empty table produces.
+
+    That is the failure this whole file is built against, one level up: the eviction
+    check is what stops an exemption becoming permanent, and an exemption it cannot see
+    is exempt from eviction too. Not stale — **unseen**, which reads as nothing at all
+    rather than as something out of date.
+
+    Both tables are empty today, so this guards a hole that is latent. It is written now
+    because the moment it stops being latent is the moment somebody is adding an
+    exemption, and that is the worst moment to be relying on them to notice.
+    """
+    assert set(OWED) == set(OWED_CASES), (
+        "the two exemption tables disagree.\n"
+        f"  reason but no call: {sorted(set(OWED) - set(OWED_CASES))}\n"
+        f"  call but no reason: {sorted(set(OWED_CASES) - set(OWED))}\n"
+        "  A row needs both. With only a reason the eviction check raises KeyError;\n"
+        "  with only a call it is never parametrised, so it is exempt from the check\n"
+        "  that exists to take exemptions away.")
+
+
 def test_every_case_asks_torch_something_it_refuses():
     """**Two failures to raise compare equal.** A case that neither library refuses
     would pass this file while measuring nothing at all — the same shape as two
