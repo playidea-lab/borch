@@ -3156,6 +3156,112 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("unpool::층::repr::AdaptiveLogSoftmaxWithLoss",
     async () => asm().describe());
 
+  // **`output` has to equal picking the correct slot out of `log_prob`.** torch selects
+  // only the clusters it needs and produces it more cheaply; if the two paths part, only
+  // the training goes slightly out of step and nothing else here would notice. They are
+  // tied together by value.
+  out.set("unpool::적응형softmax::output 은 고른 것과 같다", () => {
+    const model = asm();
+    const x = asmX();
+    const picked = model.logProb(x).gather(1, asmY().reshape([6, 1]));
+    return model.run(x, asmY()).output.sub(picked.reshape([6]));
+  });
+
+  out.set("unpool::적응형softmax::grad", () => {
+    const x = asmX();
+    x.requiresGrad = true;
+    asm().run(x, asmY()).loss.backward();
+    return gradOf(x, "AdaptiveLogSoftmaxWithLoss");
+  });
+
+  // **At the default `div_value=4.0` a tail dimension can fall to 0.** torch builds an
+  // empty layer there and moves on, so not blocking it is the imitation — the core once
+  // stopped on dividing by √0. Frozen as the state-dict's shapes, because that is where
+  // the difference lives and no value case reaches it.
+  const asmShapes = (divValue?: number, headBias?: boolean): string => {
+    const model = new nn.AdaptiveLogSoftmaxWithLoss(4, 12, [3, 7], divValue, headBias);
+    const sd = model.stateDict();
+    // **Python's one-element tuple carries a trailing comma** — `head.bias` is `(5,)`
+    // and not `(5)`. It shows up on exactly one row of one of these three cases, which
+    // is the kind of thing a hand-written expectation gets right by accident or not at
+    // all.
+    const shape = (t: Tensor) =>
+      t.shape.length === 1 ? `(${t.shape[0]},)` : `(${t.shape.join(", ")})`;
+    return Object.keys(sd).sort()
+      .map((k) => `${k}${shape(sd[k] as Tensor)}`).join(" ");
+  };
+  out.set("unpool::적응형softmax::기본값의 모양", async () => asmShapes());
+  out.set("unpool::적응형softmax::div_value=2 의 모양", async () => asmShapes(2.0));
+  out.set("unpool::적응형softmax::head_bias 의 열쇠",
+    async () => asmShapes(undefined, true));
+
+  // The targets arrive as `(N, S)` and also as a concatenated 1-D — torch takes both.
+  out.set("unpool::ctc::1차원 표적",
+    () => nn.ctcLoss(lp(), [1, 2, 3], inLen, tgtLen, 0, "none"));
+
+  // **Where `log_probs` is made a leaf directly.** torch produces something here that is
+  // not the true derivative — a finite difference gives `-γ` and torch gives
+  // `exp(log_probs) - γ`. The case above passes through `logSoftmax`, which makes the two
+  // the same answer and **hides that difference**; only this one sees it.
+  out.set("unpool::ctc::grad(log_probs 까지)", () => {
+    const x = logits().logSoftmax(2).detach();
+    x.requiresGrad = true;
+    nn.ctcLoss(x, tgt, inLen, tgtLen, 0, "sum").backward();
+    return gradOf(x, "ctcLoss(log_probs)");
+  });
+
+  out.set("unpool::층::CTCLoss",
+    () => new nn.CTCLoss().forward(lp(), tgt, inLen, tgtLen));
+  out.set("unpool::층::CTCLoss(blank=3, sum)",
+    () => new nn.CTCLoss(3, "sum").forward(lp(), [[1, 2], [0, 0]], inLen, tgtLen));
+  out.set("unpool::층::repr::CTCLoss", async () => new nn.CTCLoss().describe());
+  out.set("unpool::층::repr::CTCLoss(인자 있음)",
+    async () => new nn.CTCLoss(2, "sum", true).describe());
+
+  // **The `repr` is empty** — torch's `extra_repr` produces nothing for these two, which
+  // reads as an unfinished implementation and is the answer.
+  out.set("unpool::층::repr::FractionalMaxPool2d",
+    async () => new nn.FractionalMaxPool2d(2, [3, 3]).describe());
+  out.set("unpool::층::repr::FractionalMaxPool3d",
+    async () => new nn.FractionalMaxPool3d(2, [3, 3, 3]).describe());
+  for (const dim of [1, 2, 3] as const) {
+    out.set(`unpool::층::repr::MaxUnpool${dim}d`,
+      async () => new nn[`MaxUnpool${dim}d`](2).describe());
+  }
+
+  // **A 4³ volume divided by 8**, which is the Python case's `small`. Written as 2³ the
+  // pooling has one window and the answer is one number — a shape that agrees with
+  // nothing and is easy to mistake for a working case until the count is compared.
+  out.set("unpool::층::LPPool3d",
+    () => new nn.LPPool3d(2, 2).call(grid([1, 1, 4, 4, 4]).div(Tensor.full([], 8))));
+
+  // **One computation under three names.** `returnIndices=True`, `*_with_indices`, and
+  // the adaptive form's own `_with_indices` — one arrangement on the Python side, three
+  // spellings, and this concatenates all of their answers so that a spelling wired to a
+  // different function shows up as a different number rather than a missing name.
+  out.set("unpool::이름이 둘인 같은 계산", () => {
+    const a = plane().maxPoolWithIndices(2);
+    const c = plane().adaptiveMaxPoolWithIndices(2);
+    const flat = (t: Tensor) => t.reshape([t.size]);
+    return Tensor.cat([
+      flat(a.values), flat(a.values), flat(c.values),
+      flat(a.indices).to("float32"), flat(a.indices).to("float32"),
+    ], 0);
+  });
+
+  out.set("unpool::분수::이름이 둘인 같은 계산",
+    () => frac().fractionalMaxPool(2, [3, 3], [[0.0, 0.75]]).values);
+
+  // **Without samples it is random — the value cannot be asked, so the shape and range
+  // are.** Whichever slot wins, its value is inside its own window and the window is
+  // inside the input, so this holds regardless of the draw.
+  out.set("unpool::분수::표본 없이(모양과 범위)", async () => {
+    const got = new nn.FractionalMaxPool2d(2, [3, 3]).call(frac());
+    const inside = await got.ge(Tensor.full([], 0)).to("float32")
+      .mul(got.le(Tensor.full([], 48)).to("float32")).sum().item();
+    return `(${got.shape.join(", ")}) 안에 있는 것=${inside}`;
+  });
+
   // ── `max` and `min`'s three faces ─────────────────────────────────────
   //
   // torch produces something different per argument: a single overall maximum, a

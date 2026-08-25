@@ -4,7 +4,7 @@
  "korean": {
   "done": 686,
   "stale": 0,
-  "missing": 203
+  "missing": 205
  },
  "modules": [
   {
@@ -8461,6 +8461,17 @@
        "signature": "forward(_x: Tensor): Tensor",
        "doc": "*There is no one-argument form.** Reaching here means the positions were lost.",
        "doc_ko": "**인자 하나짜리 꼴은 없다.** 여기 왔다면 자리를 잃어버린 것이다."
+      },
+      {
+       "name": "rank",
+       "signature": "protected rank(): number",
+       "doc": "How many axes this one pools over — 1, 2 or 3. `describe` prints that many.",
+       "protected": true
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "torch prints the three arguments **spread across the rank** — `MaxUnpool2d(2)` is\n`kernel_size=(2, 2), stride=(2, 2), padding=(0, 0)`, and a `stride` left unset\nprints the kernel rather than `None`.\n\n**One axis carries a trailing comma**: `MaxUnpool1d(2)` prints `(2,)`, which is\nPython's one-element tuple and not a typo."
       }
      ],
      "doc_ko": "`MaxPool` 이 고른 자리에 값을 도로 놓는다. `torch.nn.MaxUnpool1d`.\n\n**입력이 둘이라 `forward` 가 들어가는 문이 아니다** — `place()` 를 부른다.\n자리는 값과 나란히 흘러야 하고, 층 안에 숨기면 같은 층을 두 번째로 쓸 때 남의\n자리를 쓴다. torch 도 같은 이유로 같은 모양이고, 그래서 이 층만 `Sequential` 에\n못 들어간다."
@@ -8470,7 +8481,14 @@
      "name": "MaxUnpool2d",
      "signature": "export declare class MaxUnpool2d extends MaxUnpool1d",
      "doc": "`torch.nn.MaxUnpool2d`.",
-     "members": [],
+     "members": [
+      {
+       "name": "rank",
+       "signature": "protected rank(): number",
+       "doc": "",
+       "protected": true
+      }
+     ],
      "doc_ko": "`torch.nn.MaxUnpool2d`."
     },
     {
@@ -8478,7 +8496,14 @@
      "name": "MaxUnpool3d",
      "signature": "export declare class MaxUnpool3d extends MaxUnpool1d",
      "doc": "`torch.nn.MaxUnpool3d`.",
-     "members": [],
+     "members": [
+      {
+       "name": "rank",
+       "signature": "protected rank(): number",
+       "doc": "",
+       "protected": true
+      }
+     ],
      "doc_ko": "`torch.nn.MaxUnpool3d`."
     },
     {
@@ -9829,7 +9854,7 @@
     {
      "kind": "function",
      "name": "ctcLoss",
-     "signature": "export declare function ctcLoss(logProbs: Tensor, targets: readonly (readonly number[])[], inputLengths: readonly number[], targetLengths: readonly number[], blank?: number, reduction?: Reduction, zeroInfinity?: boolean): Tensor",
+     "signature": "export declare function ctcLoss(logProbs: Tensor, targets: readonly (readonly number[])[] | readonly number[], inputLengths: readonly number[], targetLengths: readonly number[], blank?: number, reduction?: Reduction, zeroInfinity?: boolean): Tensor",
      "doc": "A loss that joins audio to text **without aligning positions.**\n\n`logProbs` is `(T, N, C)` — **time first.** Each sample has its own\nlength and that is the point of this loss, so it receives two sets of\nlengths alongside.\n\n## It adds one term whose value is zero and whose gradient is not\n\nThe gradient torch flows into `logProbs` is not the true derivative —\nfinite differences give `-γ` while torch produces `exp(logProbs) - γ`\n(measured: `tests/probe_ctc3.py`). At the place it is used there is a\n`logSoftmax` in front, which makes the two the same answer (it is a fixed\npoint of that backward), but with `logProbs` as a leaf directly the\nnumbers diverge. Matched — with **why it is matched** written down.",
      "members": [],
      "tags": [
@@ -11620,7 +11645,7 @@
      ]
     }
    ],
-   "count": 746,
+   "count": 750,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -17697,5 +17722,5 @@
    "count": 9
   }
  ],
- "total": 2360
+ "total": 2364
 }

@@ -536,9 +536,23 @@ NOT_PORTED = {
     #
     # A reason frozen into one line hides the kinds parting inside it. This row showed that
     # for the sixth time, which is why the counts are written out by kind.
-    "unpool::": (20, "**아직**(14 values — CTCLoss, FractionalMaxPool and the adaptive "
-                 "softmax stand as names and only the cases never came) · the 6 repr "
-                 "cases are Python's own lettering"),
+    #
+    # **The row is gone and the correction it carried was the useful half.** "Mostly
+    # `repr`" was wrong: six of the twenty were, and the other fourteen asked values,
+    # gradients and shapes — which is what made this a case list rather than a hole, and
+    # the classes really were all standing already.
+    #
+    # Fifteen of the twenty were right on the first run. The five that were not are worth
+    # keeping because none is derivable: `MaxUnpool` prints its three arguments **spread
+    # across the rank** and a `stride` left unset prints the kernel rather than `None`;
+    # Python's one-element tuple carries a trailing comma, which showed up on one row of
+    # one state-dict case (`head.bias(5,)`); and `LPPool3d`'s fixture is a 4³ volume, where
+    # a 2³ gives a single window and an answer that agrees with nothing.
+    #
+    # One thing did move in the library: `ctcLoss` now takes the targets **flat as well as
+    # padded**, cut by `targetLengths`. torch takes both, the flat form is what a real
+    # loader produces, and a caller handing it over got the padded reading — comparing the
+    # wrong letters and still getting a number.
     # `linalg::` used to be here — 17 cases. Sixteen had simply never been asked, and one
     # (`ldl_factor_ex`) could not be asked because the binding was standing three of its
     # slots up by hand.

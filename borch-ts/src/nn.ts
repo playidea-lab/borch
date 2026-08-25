@@ -1619,13 +1619,44 @@ export class MaxUnpool1d extends Module {
       "MaxUnpool needs the positions MaxPool chose — call place(x, indices), " +
       "not forward(x). It cannot sit in a Sequential for that reason.");
   }
+
+  /** How many axes this one pools over — 1, 2 or 3. `describe` prints that many. */
+  protected rank(): number {
+    return 1;
+  }
+
+  /**
+   * torch prints the three arguments **spread across the rank** — `MaxUnpool2d(2)` is
+   * `kernel_size=(2, 2), stride=(2, 2), padding=(0, 0)`, and a `stride` left unset
+   * prints the kernel rather than `None`.
+   *
+   * **One axis carries a trailing comma**: `MaxUnpool1d(2)` prints `(2,)`, which is
+   * Python's one-element tuple and not a typo.
+   */
+  override describe(): string {
+    const spread = (v: number): string => {
+      const parts = Array.from({ length: this.rank() }, () => String(v));
+      return parts.length === 1 ? `(${parts[0]},)` : `(${parts.join(", ")})`;
+    };
+    return `${this.constructor.name}(kernel_size=${spread(this.kernelSize)}, ` +
+      `stride=${spread(this.stride ?? this.kernelSize)}, ` +
+      `padding=${spread(this.padding)})`;
+  }
 }
 
 /** `torch.nn.MaxUnpool2d`. */
-export class MaxUnpool2d extends MaxUnpool1d {}
+export class MaxUnpool2d extends MaxUnpool1d {
+  protected override rank(): number {
+    return 2;
+  }
+}
 
 /** `torch.nn.MaxUnpool3d`. */
-export class MaxUnpool3d extends MaxUnpool1d {}
+export class MaxUnpool3d extends MaxUnpool1d {
+  protected override rank(): number {
+    return 3;
+  }
+}
 
 /**
  * Flattens, keeping only the batch axis.
@@ -2814,6 +2845,26 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
 }
 
 /**
+ * One flat run of labels cut into rows by `lengths`.
+ *
+ * **It sits above the doc comment it belongs to, not below.** Slipped in between
+ * `ctcLoss` and its own description, it inherits that description — and the check that
+ * holds the Korean translations against their English sources reported `nn/ctcLoss` as
+ * a name that had been renamed or deleted, which is what a doc comment silently
+ * changing owner looks like from outside.
+ */
+function cutByLengths(flat: readonly number[],
+                      lengths: readonly number[]): readonly number[][] {
+  const rows: number[][] = [];
+  let at = 0;
+  for (const n of lengths) {
+    rows.push([...flat.slice(at, at + n)]);
+    at += n;
+  }
+  return rows;
+}
+
+/**
  * A loss that joins audio to text **without aligning positions.**
  *
  * `logProbs` is `(T, N, C)` — **time first.** Each sample has its own
@@ -2834,17 +2885,25 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
  */
 export function ctcLoss(
   logProbs: Tensor,
-  targets: readonly (readonly number[])[],
+  targets: readonly (readonly number[])[] | readonly number[],
   inputLengths: readonly number[],
   targetLengths: readonly number[],
   blank = 0,
   reduction: Reduction = "mean",
   zeroInfinity = false,
 ): Tensor {
+  // **torch takes the targets two ways** — a padded `(N, S)` table, and one flat run cut
+  // by `targetLengths`. The second is what a real loader produces, since padding a batch
+  // to its longest label is work nobody does for a loss that already takes the lengths.
+  // A caller who hands over the flat form and gets the padded reading back is comparing
+  // the wrong letters and still gets a number.
+  const rows: readonly (readonly number[])[] = typeof targets[0] === "number"
+    ? cutByLengths(targets as readonly number[], targetLengths)
+    : targets as readonly (readonly number[])[];
   const parts: Tensor[] = [];
   const divisors: number[] = [];
-  for (let i = 0; i < targets.length; i++) {
-    const labels = (targets[i] ?? []).slice(0, targetLengths[i] ?? 0);
+  for (let i = 0; i < rows.length; i++) {
+    const labels = (rows[i] ?? []).slice(0, targetLengths[i] ?? 0);
     const nTime = inputLengths[i] ?? 0;
     // Each repeated character that touches its neighbour costs one more blank. Shorter
     // than that and there is no alignment at all, so the probability is 0 and the loss
