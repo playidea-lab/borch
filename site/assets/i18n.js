@@ -32,6 +32,12 @@ const STRINGS = {
   // not naming a next step. Measured on Ubuntu 24.04 with an RTX 5080 (driver
   // 580.159.04): with neither flag there is no adapter at all; with the first alone the
   // adapter is SwiftShader, which is the CPU; with both it is `nvidia / blackwell`.
+  // Where the flags, the ladder and the reason live. Relative from the page that says it,
+  // which is why it is a key rather than a literal — `ko/` needs its own.
+  "device.setupHref": {
+    en: "setup.html", ko: "setup.html" },
+  "device.setupSay": {
+    en: "What each platform asks for, measured →", ko: "플랫폼마다 무엇이 필요한지, 실측 →" },
   "device.linuxFlags": {
     en: "On Linux with an NVIDIA card, Chrome refuses before it asks the driver. "
       + "Open chrome://flags, turn on #enable-unsafe-webgpu and #ignore-gpu-blocklist, "

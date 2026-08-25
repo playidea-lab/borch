@@ -1,0 +1,159 @@
+<!doctype html>
+<!--
+  탭에 GPU 가 없을 때 무엇을 하는가.
+
+  방문자가 만나는 오류 — "No WebGPU adapter could be obtained — a driver blocklist, a
+  virtual machine, or a headless environment with no GPU" — 는 원인 후보 셋을 대고 다음
+  단계는 안 댄다. 원인을 대는 것과 다음 단계를 대는 것은 다르다: 그 메시지는 아래 기계에서
+  원인을 맞혔고 그래도 하루가 들었다.
+
+  여기 적힌 줄은 전부 실측이고 기계 이름을 같이 적었다. 안 잰 것은 안 쟀다고 적혀 있다.
+  영어판은 `../setup.html` 이고 둘은 같이 고친다.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>이 탭의 GPU — borch</title>
+<meta name="description" content="borch 가 돌기 전에 브라우저가 요구하는 것 — 플랫폼별 실측, 그리고 GPU 를 못 얻었을 때 borch 가 하는 일.">
+<link rel="alternate" hreflang="en" href="../setup.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="이 탭의 GPU — borch">
+<meta property="og:description" content="borch 가 돌기 전에 브라우저가 요구하는 것 — 플랫폼별 실측.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/setup.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">배우기</a>
+      <a href="tutorials/">튜토리얼</a>
+      <a href="api/">API</a>
+      <a href="python.html">파이썬</a>
+      <a href="setup.html" class="on" aria-current="page">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../setup.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">잰 것만</p>
+    <h1>이 탭의 GPU</h1>
+    <p class="lead">
+      borch 는 WebGPU 위에서 돈다. 즉 브라우저가 내주는 GPU 위에서 돈다. 브라우저가 안 내줄
+      때가 있다. 이 페이지는 그때 무엇을 하는지를 플랫폼별로 적고 — GPU 를 끝내 못 얻었을 때
+      borch 가 무엇을 하는지도 적는다.
+    </p>
+
+    <h2>먼저 배지를 읽는다</h2>
+    <p>코드를 돌리는 모든 페이지가 어댑터 이름을 그대로 단다. 그 배지가 진단의 전부다:</p>
+    <ul>
+      <li><strong><code>apple / metal-3</code> 이나 <code>nvidia / blackwell</code> 같은 이름</strong>
+        — 진짜 GPU 다. 이 페이지는 당신과 상관없다.</li>
+      <li><strong><code>google / swiftshader</code>, 또는 <code>llvmpipe</code>·<code>lavapipe</code>
+        가 들어간 이름</strong> — GPU 의 인터페이스를 쓴 CPU 다. 돌기도 하고 골든과 값도 맞는데,
+        찍히는 속도는 전부 CPU 의 것이다.</li>
+      <li><strong>어댑터 없음</strong> — 드라이버에 묻기도 전에 브라우저가 거절했다. 이 페이지의
+        나머지가 그 이야기다.</li>
+    </ul>
+
+    <h2>macOS</h2>
+    <p>
+      할 일이 없다. Apple M4 Max 에서 측정 — 어댑터가 <code>apple / metal-3</code> 으로 오고,
+      플래그도 설치도 설정도 없이 Run 이 돈다. 이 사이트에서 <code>apple / metal-3</code> 이라
+      적힌 수는 전부 그렇게 잰 것이다.
+    </p>
+
+    <h2>NVIDIA 카드를 단 리눅스</h2>
+    <p>
+      <strong>스위치 둘, 그리고 가운데 상태가 위험하다.</strong> 크롬은 차단 목록을 들고 있고
+      드라이버에 묻기 <em>전에</em> 그것을 먼저 본다. 그래서 멀쩡한 카드가 거절당한다.
+      Ubuntu 24.04, RTX 5080, 드라이버 580.159.04 에서 측정:
+    </p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>크롬</th><th>어댑터</th><th>뜻</th></tr></thead>
+      <tbody>
+        <tr><td>둘 다 없음</td><td>없음</td><td>borch 가 돌기를 거절한다</td></tr>
+        <tr><td><code>#enable-unsafe-webgpu</code> 만</td><td><code>google / swiftshader</code></td>
+            <td><strong>CPU</strong> — 돌긴 하고, 그 속도는 GPU 의 것이 아니다</td></tr>
+        <tr><td>둘 다</td><td><code>nvidia / blackwell</code></td><td>카드</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>
+      그러니 <code>chrome://flags</code> 를 열어 <strong>#enable-unsafe-webgpu</strong> 와
+      <strong>#ignore-gpu-blocklist</strong> 를 켜고 다시 띄운다. <strong>이미 떠 있는 창은 옛
+      설정을 그대로 쓴다</strong> — 여기서 그거 하나에 한 시간을 썼다. 그래도 안 먹으면 터미널에서
+      새 프로필로 띄운다:
+    </p>
+    <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
+  --enable-unsafe-webgpu --ignore-gpu-blocklist</code></pre>
+    <p class="small">
+      같은 기계에서 그 플래그로 Playwright 를 통해 돌린 결과가
+      <code>passed 2901 / failed 0 [nvidia / blackwell]</code> 였다 — 이 프로젝트에서 골든이
+      두 번째 벤더에서 맞은 첫 기록이다.
+    </p>
+
+    <h2>AMD·Intel 카드를 단 리눅스</h2>
+    <p>
+      <strong>안 쟀다.</strong> 위 차단 목록은 NVIDIA-리눅스 항목이라 같은 스위치 둘을 먼저 시도할
+      만하지만, 그 카드들에서는 아무것도 돌려보지 않았다. 짐작으로 적으면 이 저장소가 쓰는 쪽이
+      아니라 걷어내는 쪽의 문장이 된다.
+    </p>
+
+    <h2>윈도우</h2>
+    <p>
+      <strong>안 쟀다.</strong> 윈도우의 크롬은 위에서 잰 Vulkan 경로가 아니라 D3D12 를 쓴다.
+      그래서 이 페이지의 무엇도 그쪽으로 옮겨가지 않는다 — 플래그도, 사다리도, 결과도.
+      GPU 달린 윈도우 기계가 있으면 <a href="playground.html">플레이그라운드</a>를 열어 배지를
+      읽는 것으로 30초에 끝나고, 그 답은 환영이다.
+    </p>
+
+    <h2>borch 는 왜 조용히 느려지는 대신 거절하는가</h2>
+    <p>
+      이 프로젝트의 예전 판은 WebGPU 를 못 잡으면 WebGL 로 떨어졌고, 한동안 그 저자들이 CPU
+      경로에서 잰 수를 GPU 의 수로 읽었다. 다른 모양으로 또 일어났다 — 845 건을 전부 통과한
+      골든 실행이 *"두 번째 벤더에서 확인"* 으로 기록됐는데, 어댑터는 내내
+      <code>google / swiftshader</code> 였다. 그 문장은 제대로 측정될 때까지 문서 셋에 살아
+      있었다.
+    </p>
+    <p>
+      그러니 규칙은 "CPU 에서는 절대 안 돈다" 가 아니라 <strong>"CPU 에서 잰 수가 GPU 의 수로
+      읽히면 안 된다"</strong> 이다. 배지에 어댑터 이름이 있는 이유, 소프트웨어 어댑터에서 배지가
+      꺼지는 이유, <code>init()</code> 이 그것을 조용히 받아들이는 대신 멈추는 이유가 전부 그것이다.
+    </p>
+
+    <h2>GPU 를 끝내 못 얻으면</h2>
+    <p>
+      그러면 borch.ts 가 당신에게 줄 것이 없고, 없는 척하는 대신 그렇다고 말한다. TypeScript
+      쪽에는 CPU 백엔드가 없다 — WebGPU 아니면 아무것도 아니다.
+    </p>
+    <p>
+      <a href="python.html">파이썬 쪽</a>은 다른 구현이다. 코어가 numpy 라 어댑터 없이 돈다
+      (<code>navigator.gpu</code> 를 지운 브라우저에서 측정: loss 17.2945 → 0.000001). 그것이
+      있다는 걸 아는 건 값어치가 있지만, 무엇인지는 분명히 해야 한다 — <strong>그건 GPU 에서
+      CPU 로 바꾸는 스위치가 아니라 언어를 바꾸는 일이다.</strong> 같은 TypeScript 코드가 거기서
+      도는 것이 아니다.
+    </p>
+
+    <div class="pager">
+      <a href="./">← 첫 화면</a>
+      <a href="playground.html" style="text-align:right">내 것 확인<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

@@ -25,6 +25,20 @@ function say(text, kind = "") {
   outEl.scrollTop = outEl.scrollHeight;
 }
 
+/** The same line, with a way out of it. `textContent` everywhere else keeps user output
+ *  from becoming markup; this one place builds the anchor itself rather than parsing a
+ *  string, so that stays true. */
+function sayLink(text, href) {
+  const line = document.createElement("div");
+  line.className = "note";
+  const a = document.createElement("a");
+  a.href = href;
+  a.textContent = text;
+  line.append(a);
+  outEl.append(line);
+  outEl.scrollTop = outEl.scrollHeight;
+}
+
 
 /** Is this adapter a CPU? The four names `tests/browser/launch.py` refuses on — one rule,
  *  two places, and the day they disagree is the day one of them lies about a number. */
@@ -39,7 +53,10 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
     if (p.ok) {
       badge.className = SOFTWARE.test(p.adapter) ? "badge off" : "badge on";
       badgeText.textContent = p.adapter;
-      if (SOFTWARE.test(p.adapter)) say(t("device.software"), "err");
+      if (SOFTWARE.test(p.adapter)) {
+        say(t("device.software"), "err");
+        sayLink(t("device.setupSay"), t("device.setupHref"));
+      }
       say(t("device.ready"), "note");
     } else {
       badge.className = "badge off";
@@ -47,6 +64,7 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
       say(p.message, "err");
       if (p.why === "no-adapter" && ON_LINUX) say(t("device.linuxFlags"), "note");
       say(t("device.noFallback"), "note");
+      sayLink(t("device.setupSay"), t("device.setupHref"));
       runBtn.disabled = true;
     }
   } catch (err) {

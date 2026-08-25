@@ -1,0 +1,167 @@
+<!doctype html>
+<!--
+  What to do when the tab has no GPU.
+
+  This page exists because the error a visitor meets — "No WebGPU adapter could be
+  obtained — a driver blocklist, a virtual machine, or a headless environment with no
+  GPU" — names three possible causes and no next step. Naming a cause is not naming a
+  next step: that message was right about the cause on the machine below and it still
+  cost a day.
+
+  Every row here was measured, and the machine is named. Where nothing was measured it
+  says so. The Korean edition is `ko/setup.html`; both are edited together.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The GPU in this tab — borch</title>
+<meta name="description" content="What a browser asks of you before borch will run — per platform, measured, and what borch does when it cannot have a GPU.">
+<link rel="alternate" hreflang="ko" href="ko/setup.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="The GPU in this tab — borch">
+<meta property="og:description" content="What a browser asks of you before borch will run — per platform, measured.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/setup.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <a href="api/">API</a>
+      <a href="python.html">Python</a>
+      <a href="setup.html" class="on" aria-current="page">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/setup.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">Only what was measured</p>
+    <h1>The GPU in this tab</h1>
+    <p class="lead">
+      borch runs on WebGPU, which means it runs on whatever GPU the browser is willing to
+      hand over. Sometimes the browser is not willing. This page is what to do about it,
+      per platform — and what borch does when there is no GPU to be had.
+    </p>
+
+    <h2>First, read the badge</h2>
+    <p>
+      Every page that runs code carries the adapter's own name. That badge is the whole
+      diagnosis:
+    </p>
+    <ul>
+      <li><strong>A name like <code>apple / metal-3</code> or <code>nvidia / blackwell</code></strong>
+        — a real GPU. Nothing on this page applies to you.</li>
+      <li><strong><code>google / swiftshader</code>, or anything with <code>llvmpipe</code> or
+        <code>lavapipe</code> in it</strong> — that is a CPU wearing a GPU's interface. It
+        runs, it agrees with the golden, and every speed it prints is the CPU's.</li>
+      <li><strong>No adapter at all</strong> — the browser refused before the driver was
+        asked. That is the case the rest of this page is about.</li>
+    </ul>
+
+    <h2>macOS</h2>
+    <p>
+      Nothing to do. Measured on an Apple M4 Max: the adapter comes back
+      <code>apple / metal-3</code> and Run works with no flags, no install, no settings.
+      Every number on this site that says <code>apple / metal-3</code> was taken that way.
+    </p>
+
+    <h2>Linux with an NVIDIA card</h2>
+    <p>
+      <strong>Two switches, and the middle state is the dangerous one.</strong> Chrome keeps
+      a blocklist and consults it <em>before</em> asking the driver, so a perfectly working
+      card is refused. Measured on Ubuntu 24.04, RTX 5080, driver 580.159.04:
+    </p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Chrome</th><th>Adapter</th><th>What it means</th></tr></thead>
+      <tbody>
+        <tr><td>neither switch</td><td>none</td><td>borch refuses to run</td></tr>
+        <tr><td><code>#enable-unsafe-webgpu</code> only</td><td><code>google / swiftshader</code></td>
+            <td><strong>the CPU</strong> — it runs and the speeds are not a GPU's</td></tr>
+        <tr><td>both</td><td><code>nvidia / blackwell</code></td><td>the card</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>
+      So open <code>chrome://flags</code>, turn on <strong>#enable-unsafe-webgpu</strong> and
+      <strong>#ignore-gpu-blocklist</strong>, and relaunch. <strong>A window that is already
+      open keeps the old settings</strong> — that one cost an hour here. If it still will
+      not take, start the browser fresh from a terminal:
+    </p>
+    <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
+  --enable-unsafe-webgpu --ignore-gpu-blocklist</code></pre>
+    <p class="small">
+      On the same machine, the same run through Playwright with those flags gave
+      <code>passed 2901 / failed 0 [nvidia / blackwell]</code> — the golden agreeing on a
+      second vendor for the first time in this project.
+    </p>
+
+    <h2>Linux with an AMD or Intel card</h2>
+    <p>
+      <strong>Not measured.</strong> The blocklist above is an NVIDIA-and-Linux entry, so
+      the same two switches are the first thing to try, but nothing here has run on those
+      cards and a guess would be the kind of claim this repository removes rather than
+      writes.
+    </p>
+
+    <h2>Windows</h2>
+    <p>
+      <strong>Not measured.</strong> Chrome uses D3D12 on Windows rather than the Vulkan
+      path measured above, so nothing on this page carries over to it — not the flags, not
+      the ladder, not the outcome. If you have a Windows machine with a GPU, opening the
+      <a href="playground.html">playground</a> and reading the badge settles it in thirty
+      seconds, and the answer is welcome.
+    </p>
+
+    <h2>Why borch refuses instead of quietly going slow</h2>
+    <p>
+      An earlier version of this project fell back to WebGL when it could not get WebGPU,
+      and for a while its own authors read numbers measured on a CPU path as if they were
+      a GPU's. It happened again in a different form: a golden run passing 845 of 845 was
+      recorded as "confirmed on a second vendor" when the adapter had been
+      <code>google / swiftshader</code> the whole time. That sentence lived in three
+      documents until it was measured properly.
+    </p>
+    <p>
+      So the rule is not "never run on a CPU" — it is <strong>a number measured on a CPU
+      must never be readable as a GPU's</strong>. That is why the adapter name is on the
+      badge, why the badge goes dark on a software adapter, and why <code>init()</code>
+      stops rather than accepting one silently.
+    </p>
+
+    <h2>If you cannot get a GPU at all</h2>
+    <p>
+      Then borch.ts has nothing to offer you, and it says so instead of pretending. There
+      is no CPU backend for the TypeScript surface: it is WebGPU or nothing.
+    </p>
+    <p>
+      The <a href="python.html">Python surface</a> is a different implementation — the core
+      is numpy, and it runs with no adapter at all (measured in a browser with
+      <code>navigator.gpu</code> removed: loss 17.2945 → 0.000001). It is worth knowing
+      that it exists, but be clear about what it is: <strong>that is a change of language,
+      not a switch from GPU to CPU.</strong> The same TypeScript code will not run there.
+    </p>
+
+    <div class="pager">
+      <a href="./">← Home</a>
+      <a href="playground.html" style="text-align:right">Check yours<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>
