@@ -3,6 +3,14 @@
   "version": "0.2.0",
   "description": "A PyTorch-shaped tensor library running on WebGPU in the browser — no dependencies",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/playidea-lab/borch.git"
+  },
+  "homepage": "https://playidea-lab.github.io/borch/",
+  "bugs": {
+    "url": "https://github.com/playidea-lab/borch/issues"
+  },
   "type": "module",
   "exports": {
     ".": {
