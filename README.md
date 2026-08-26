@@ -1273,14 +1273,13 @@ and Linux with the proprietary NVIDIA driver is on that list. `--ignore-gpu-bloc
 is in `FLAGS` in `tests/browser/launch.py`, so this is handled **on some cards**; it is
 written down because the symptom reads as a hardware problem and is not one.
 
-> **On some cards, and that turned out to matter.** Measured on a second machine, an
-> RTX 4090 on driver 550: `--ignore-gpu-blocklist` gets SwiftShader there and nothing
-> more, where the same flag reaches the card on a 5080. The list below is what reached
-> the 4090 — so if the adapter still reads `swiftshader` after the flags this repository
-> ships, that is the next thing to run rather than a sign the card is broken.
+> **Two cards want different flags, and `FLAGS` carries both.** Measured on an RTX 4090
+> (driver 550): `--ignore-gpu-blocklist` on its own gets SwiftShader there, where on a
+> 5080 that same flag reaches the card. What opens the 4090 is `--enable-features=Vulkan`
+> — also in `FLAGS`, which is why the shipped list runs on both.
 >
-> Headless and a real X session gave the same answer on both machines, so it is the
-> flags and not the harness.
+> Headless and a real X session gave the same answer on both machines, so it is the flags
+> and not the harness.
 
 `BORCH_CHROME_CHANNEL=chrome` uses the distribution's own Chrome instead of the one
 Playwright downloads — worth having when the machine has one and not the other.
@@ -1293,30 +1292,33 @@ working group's implementation status gives Linux as:
   --enable-features=Vulkan,VulkanFromANGLE
 ```
 
-It shares exactly one entry with what `launch.py` carries. **Both are true, and which
-one a machine needs depends on the card:**
+It shares exactly one entry with what `launch.py` carries — and that one entry,
+`--enable-features=Vulkan`, turns out to be the part that matters:
 
 | flags | RTX 5080 / 580 | RTX 4090 / 550 |
 |---|---|---|
 | none | none | none |
 | `--enable-unsafe-webgpu` | swiftshader | swiftshader |
 | ` + --ignore-gpu-blocklist` | **blackwell** | swiftshader |
-| ` + --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE` | not measured | **lovelace** |
+| ` + --enable-features=Vulkan`  (= `FLAGS`) | **blackwell** | **lovelace** |
+| `--enable-unsafe-webgpu --enable-features=Vulkan` | not measured | **lovelace** |
 
-Two narrowings came out of that run: `--ozone-platform=x11` is **not** needed, and
-`--use-angle=vulkan` on its own returns no adapter at all — it has to travel with
-`--enable-features`.
+**The two cards need different flags and the shipped list carries both.** A 5080 wants
+the blocklist override and a 4090 is unmoved by it; a 4090 wants Vulkan. Neither middle
+rung opens both, which is what the four-flag list is for.
 
-**`launch.py` still ships the first pair**, because no single measured list covers both
-cards and the score line this page quotes came from that pair. Combining them would be a
-fifth configuration nobody has run. The Lovelace set is recorded in `launch.py` as
-`LOVELACE` beside it.
+Two narrowings came with it: `--ozone-platform=x11` is **not** needed, and
+`--use-angle=vulkan` on its own returns no adapter — ANGLE without Vulkan breaks what
+Vulkan alone fixes.
 
-> **The ANGLE flag was argued out of this repository once, on the wrong grounds** — that
-> ANGLE translates GL and WebGL and WebGPU does not go through it. That was retracted
-> after reading the working group's page, which lists `VulkanFromANGLE` on Linux's own
-> path; the measurement above now says the same thing from the other end, and on the
-> 4090 it is the only thing that works.
+> **ANGLE does nothing here, and this page said otherwise for one commit.** The
+> documented four reach the 4090 *because Vulkan is inside them*, not because of ANGLE.
+> Dropping the ANGLE flags from `FLAGS` was right, and it has now been retracted twice —
+> once on bad reasoning, and once on a measurement that had quietly left
+> `--enable-features=Vulkan` out of the rung it drew its conclusion about.
+
+What is still unmeasured is the 5080 on `--enable-features=Vulkan` alone, which is what
+would let this list shrink.
 
 ### Running it on the CPU, on purpose
 
@@ -1409,10 +1411,10 @@ run with both, so the two are not yet a matched pair — the flag the repository
 and the number the documents quote have to be measured under the same conditions, which
 is the shape this page spent the day removing.
 
-**The 4090 has since been measured, and it does not agree with this card.**
-`--ignore-gpu-blocklist` gets SwiftShader there; what reaches the card is the working
-group's `--use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE`. The ladder is in
-the setup section above.
+**The 4090 has since been measured, and the two cards do not agree about which flag
+does the work.** `--ignore-gpu-blocklist` alone gets SwiftShader there;
+`--enable-features=Vulkan` is what reaches it, and is unnecessary on the 5080. The
+shipped list carries both, so it opens both. The ladder is in the setup section above.
 
 > **It was written off as needing physical repair, and a reboot fixed it.** The card
 > read `rev ff` on the PCI bus and headless Chrome had stopped starting; after a restart

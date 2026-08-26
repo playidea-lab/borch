@@ -57,47 +57,49 @@ import sys
 # gives Linux as `--enable-unsafe-webgpu --ozone-platform=x11 --use-angle=vulkan
 # --enable-features=Vulkan,VulkanFromANGLE`, which shares one entry with this list.
 #
-# **That measurement has now been made, and this list does not generalise.** The
-# paragraph above ended "it has not been made" for as long as there was one card; a
-# second one was reached and the ladder split:
+# **That measurement has now been made, on a second card, and this list holds.**
 #
-#     flags                                          5080 / 580     4090 / 550
-#     none                                           none           none
-#     --enable-unsafe-webgpu                         swiftshader    swiftshader
-#       + --ignore-gpu-blocklist                     blackwell      swiftshader
-#       + --use-angle=vulkan
-#         --enable-features=Vulkan,VulkanFromANGLE   not measured   lovelace
+#     flags                                       5080 / 580    4090 / 550
+#     none                                        none          none
+#     --enable-unsafe-webgpu                      swiftshader   swiftshader
+#       + --ignore-gpu-blocklist                  blackwell     swiftshader
+#       + --enable-features=Vulkan   (= FLAGS)    blackwell     lovelace
+#     --enable-unsafe-webgpu --enable-features=Vulkan
+#                                                 not measured  lovelace
 #
-# So `--ignore-gpu-blocklist` — the flag this list is built on — **does nothing on
-# Lovelace**, and the documented incantation is what reaches it. Headless and a real X
-# session agreed, so it is the flags rather than the harness. Narrowed further:
-# `--ozone-platform=x11` is not needed, and `--use-angle=vulkan` on its own returns no
-# adapter at all — it has to travel with `--enable-features`.
+# **The two cards want different flags and this list carries both.** A 5080 needs the
+# blocklist override; a 4090 needs `--enable-features=Vulkan` and is unmoved by the
+# blocklist. Neither middle rung is enough alone, which is why the four-flag list opens
+# both.
 #
-# **The flag this repository argued itself out of is the one that works there.** It was
-# removed once on the grounds that ANGLE translates GL and WebGL and WebGPU does not go
-# through it; that reasoning was retracted after reading the working group's page, and
-# the measurement now says the same thing from the other end.
+# ## This comment said the opposite for one commit
 #
-# **The list is not changed here, because no single measured list covers both.** Adding
-# the ANGLE pair to these four would be a fifth configuration nobody has run, and the
-# one thing this file must not do is ship flags whose score line came from a different
-# set. What a Lovelace card needs is written down, in `LOVELACE`, so the next person
-# reaches for a measurement rather than a guess.
+# It read *this list does not generalise*, drawn from a ladder whose third rung was
+# `--enable-unsafe-webgpu --ignore-gpu-blocklist` — **not `FLAGS`.** `FLAGS` carries
+# `--enable-features=Vulkan`, that flag is the carrier on Lovelace, and it was absent
+# from the rung the conclusion was drawn about. Re-run with the shipped list verbatim,
+# the 4090 reports `nvidia / lovelace`.
+#
+# **The shipped list was four lines below the table being compared to it**, and the two
+# were never put side by side. Fifth time in this repository that two lists nobody
+# compared produced a confident wrong sentence, and the first time it happened inside
+# the file that carries one of them.
+#
+# ## ANGLE does nothing here, in either direction
+#
+# The documented incantation reaches the 4090, and so does `--enable-features=Vulkan`
+# alone: it worked **because Vulkan is inside it**, not because of ANGLE.
+# `--use-angle=vulkan` on its own returns no adapter — ANGLE without Vulkan breaks what
+# Vulkan alone fixes. `--ozone-platform=x11` is not needed either.
+#
+# So dropping the ANGLE flags from this list was right, and both later retractions of
+# that were premature — including the one that briefly put a `LOVELACE` constant here
+# for a card that never needed it.
+#
+# Still unmeasured: the 5080 on `--enable-features=Vulkan` alone, which is what would
+# let this list shrink.
 FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan",
          "--ignore-gpu-blocklist", "--disable-gpu-driver-bug-workarounds"]
-
-# What reached the 4090. **Not the default and not wired to anything**, for the reason
-# above: it is the measured set for a card `FLAGS` does not reach, written where the
-# next person will look rather than left in a chat log.
-#
-# Falling back to it automatically when `FLAGS` finds no adapter is the obvious next
-# move and is deliberately not made here — it would be a code path this machine cannot
-# run, since macOS needs no flags at all and returns an adapter either way. **Shipping
-# an unmeasured retry to fix an unmeasured claim is how the first version of this
-# comment went wrong.** It belongs to whoever has the two cards in front of them.
-LOVELACE = ["--enable-unsafe-webgpu", "--use-angle=vulkan",
-            "--enable-features=Vulkan,VulkanFromANGLE"]
 
 # Implementations that run on the CPU. Chrome has SwiftShader; Linux Mesa has lavapipe (llvmpipe).
 _SOFTWARE = re.compile(r"swiftshader|llvmpipe|lavapipe|software", re.I)
@@ -255,8 +257,18 @@ def _headed(asked):
     to delete and wrong about why**, and only the second half was load-bearing for
     anything else.
 
-    Still owed, and now more precisely: the documented four on that machine, against the
-    two this file carries.
+    **That has since been run, and it is Vulkan doing the work, not ANGLE.** The
+    documented four reach a 4090 — and so does `--enable-unsafe-webgpu
+    --enable-features=Vulkan` with no ANGLE in it at all. The incantation works because
+    Vulkan is inside it. `--use-angle=vulkan` alone still returns no adapter, which now
+    reads as ANGLE without Vulkan breaking what Vulkan alone fixes, rather than as
+    anything about half an incantation.
+
+    So the original deletion was right **and so was its stated reason's conclusion**,
+    arrived at from a premise that was wrong: ANGLE really is on the documented path and
+    really does nothing here. Two retractions of that deletion have now been made and
+    both were premature. What survives is the narrower sentence this paragraph opened
+    with — one observation does not establish a mechanism — applied three times over.
 
     Keeping them apart matters because they have different fixes. The first is a flag
     away. The second is not: it wants a display.
