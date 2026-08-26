@@ -4,7 +4,7 @@
  "korean": {
   "done": 688,
   "stale": 0,
-  "missing": 237
+  "missing": 253
  },
  "modules": [
   {
@@ -7579,6 +7579,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "torch's `_ConvNd.extra_repr`, and **it prints the sizes as tuples** —\n`kernel_size=(3, 3)` — because torch stores them that way. This library stores\none number and spreads it for the printing alone; changing what is stored would\nreach into every forward pass for the sake of a string.\n\n**Several arguments print only when they are not the default.** A convolution\nwith no padding does not say `padding=(0, 0)`; one with padding does. Printing\nthem always is the same characters for a different layer, and reads as correct."
       }
      ],
      "doc_ko": "차원 수에 상관없는 합성곱 층. `spatial` 이 공간 축의 수다.\n\n`Conv1d`·`Conv2d`·`Conv3d` 가 그 수만 다르다 — 클래스를 셋 세우면 그중 하나만\n고치는 날이 온다."
@@ -7998,6 +8003,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
       }
      ],
      "doc_ko": "**`approximate` 는 받는 척이 아니다** — `\"tanh\"` 는 다른 식이고 값이 다르다.\n\n최대차가 1e-4 언저리라 이 프로젝트의 허용 오차 언저리이고, 그래서 \"거의 같으니\n하나로 둔다\" 가 통할 뻔한 자리다. 골든이 둘을 따로 묻는다."
@@ -8017,6 +8027,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
       }
      ]
     },
@@ -8034,6 +8049,11 @@
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
        "doc": ""
       }
      ]
@@ -8064,6 +8084,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "*The count comes from the weight**, because that is where it landed — the\nargument was not kept and the tensor is the same number."
       }
      ],
      "doc_ko": "음수 쪽 기울기를 **학습한다.** 이 부류에서 유일하게 파라미터가 있다.\n\n`weight` 라는 이름이 `stateDict` 열쇠가 되므로 torch 와 같아야 한다."
@@ -8099,6 +8124,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "torch's `GroupNorm.extra_repr`. **`bias` is not `affine`** — torch prints both,\nbecause `affine=True, bias=False` is a scale with no shift and the two words\ntogether are the only way to see it."
       }
      ],
      "doc_ko": "채널을 그룹으로 묶어 정규화. **배치가 작을 때 BatchNorm 대신 쓴다.**\n\nBatchNorm 은 배치 통계를 쓰므로 배치가 1~2 면 통계가 못 미덥다. 이쪽은 표본 하나\n안에서 묶으므로 배치 크기와 무관하다."
@@ -8121,7 +8151,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(numFeatures: number, eps?: number, _momentum?: number, affine?: boolean, trackRunningStats?: boolean, bias?: boolean)",
+       "signature": "constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, bias?: boolean)",
        "doc": "torch's list, in torch's seats. **`affine` defaults to false here and true\non `BatchNorm`** — that is torch, and flipping it swaps which layers carry\nparameters, so the `state_dict` keys part wholesale."
       },
       {
@@ -8134,6 +8164,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "The same wording as `BatchNormND`. **The two defaults are opposite** — a batch\nnorm is affine and tracks, an instance norm is neither — so the string is where\nthe difference shows without reading a constructor."
       }
      ],
      "doc_ko": "표본마다·채널마다 따로. **기본이 파라미터 없음이다** — torch 가 그렇다.\n\n`BatchNorm` 과 반대라 헷갈리는 자리이고, 기본을 뒤집으면 `stateDict` 열쇠가\n통째로 갈린다."
@@ -8220,6 +8255,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "As `ConvND`, plus `output_padding` — which prints only when it is set."
       }
      ],
      "doc_ko": "전치 합성곱. **가중치가 `(입력, 출력, …)` 이다** — `ConvND` 와 뒤집혀 있다.\n\n정사각 커널이면 뒤집어 놓아도 모양이 맞아서 값으로만 갈린다. `stateDict` 열쇠는\n`weight`·`bias` 로 같으므로, 모양만 보고 넣으면 조용히 틀린다."
@@ -8338,6 +8378,11 @@
        "signature": "pick(x: Tensor): { values: Tensor; indices: Tensor; }",
        "doc": "The values and the positions that produced them. `MaxUnpool2d` takes both.",
        "doc_ko": "값과 그 값을 낸 자리. `MaxUnpool2d` 가 둘 다 받는다."
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "As `MaxPool1d`, and this one really holds the other three — they are refused\nabove unless left at their defaults, so what prints is what the layer does."
       }
      ]
     },
@@ -8356,6 +8401,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "torch's `_MaxPoolNd.extra_repr`. **A stride left unset prints the kernel**, which\nis the step the layer actually takes — `stride=None` would be the argument rather\nthan the behaviour."
       }
      ],
      "doc_ko": "`torch.nn.MaxPool1d`."
@@ -8375,6 +8425,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "As `MaxPool1d`."
       }
      ],
      "doc_ko": "`torch.nn.MaxPool3d`."
@@ -8413,6 +8468,11 @@
        "signature": "pick(x: Tensor): { values: Tensor; indices: Tensor; }",
        "doc": "The values and the positions that produced them.",
        "doc_ko": "값과 그 값을 낸 자리."
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "Shared with the 2-D and 3-D names below, which subclass this one."
       }
      ],
      "doc_ko": "적응형 최대 풀링. **`returnIndices` 를 받는다 — 평균 쪽에는 없는 인자다.**\n그리고 그 인자가 돌아오는 것을 바꾼다.\n\n밑동의 `adaptiveMaxPoolWithIndices` 는 언제나 둘 다 주므로 층이 골라야 한다.\n인자를 받아 놓고 그대로 짝을 돌려주면 받아 놓고 버린 것이 되고, 부르는 쪽은 그\n차이를 엉뚱한 자리의 모양 오류로 만난다.\n\n`forward` 는 값만 주는 쪽이라 `Sequential` 에 들어간다. 자리가 필요하면 `pick()`\n을 부른다 — 그것을 받아먹는 층이 `MaxUnpool` 이다."
@@ -8554,6 +8614,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
       }
      ],
      "doc_ko": "`Flatten` 의 반대. 축 하나를 여러 축으로 편다."
@@ -8623,6 +8688,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "torch's `_AvgPoolNd.extra_repr` — three arguments and no `ceil_mode`."
       }
      ]
     },
@@ -8641,6 +8711,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "*The one-dimensional average pool prints one-tuples** where its 2-D and 3-D\nsiblings print bare numbers. That is torch's own inconsistency between the three,\nand it is copied rather than tidied."
       }
      ],
      "doc_ko": "`torch.nn.AvgPool1d`. **`poolND` 로 간다** — `avgPool2d` 는 2 차원 전용 커널이고,\n이쪽은 남는 축 수가 달라서 같은 자리로 못 들어간다."
@@ -8660,6 +8735,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "As `AvgPool2d`."
       }
      ],
      "doc_ko": "`torch.nn.AvgPool3d`."
@@ -8678,6 +8758,11 @@
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
        "doc": ""
       }
      ],
@@ -8698,6 +8783,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
       }
      ],
      "doc_ko": "`torch.nn.AdaptiveAvgPool3d`. 출력 크기를 받는다."
@@ -8717,6 +8807,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "torch's `_LPPoolNd.extra_repr`. Two things here:\n\n**The stride prints as `None`** and not as the kernel — the power pool is the one\nplace torch leaves it unfilled, and copying the neighbours' rule would be a\nplausible string for a different layer.\n\n**`norm_type` prints what it was given**, and JavaScript cannot tell `2` from\n`2.0`. torch preserves the type it received, so `LPPool1d(2)` says `2` there and\n`LPPool1d(2.0)` says `2.0`; this side has one number and has to pick. It picks the\ninteger spelling, which is what every caller passes and what the frozen strings\nhold — the other choice would be wrong for the common call and right for the rare\none."
       }
      ],
      "doc_ko": "p-노름 풀링. **첫 인자가 `normType` 이다** — 커널이 아니다(torch 가 그렇다)."
@@ -8766,6 +8861,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "torch's `LayerNorm.extra_repr`. The shape prints as a Python list."
       }
      ],
      "doc_ko": "뒤쪽 축들을 평균 0, 분산 1 로. **`normalizedShape` 가 접는 축의 개수를 정한다.**\n\n축 하나짜리(`new LayerNorm(4)`)로만 재면 \"마지막 축을 접는다\" 와 답이 같아서\n이 규칙이 안 보인다. `[3, 4]` 를 주면 뒤 두 축을 **한 덩어리로** 접는다.\n\n기본이 파라미터 있음이다 — `InstanceNorm` 과 반대라 헷갈리는 자리이고, 기본을\n뒤집으면 `stateDict` 열쇠가 통째로 갈린다."
@@ -8785,6 +8885,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "*Whichever of the two was given**, not both — a layer built with a size prints\nits size and one built with a factor prints its factor. Printing the other shows\n`None` beside a number that is set."
       }
      ],
      "doc_ko": "확대. **첫 자리는 `size` 다** — torch 가 그렇다.\n\n배율을 첫 자리에 두면 `new Upsample(2)` 가 늘리는 것과 \"출력을 2 로\" 사이에서\n갈리고, 모양이 그럴듯해 값으로만 걸린다."
@@ -11130,6 +11235,11 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "torch's `_BatchNorm.extra_repr`, shared by the instance norms next door."
       }
      ]
     },
@@ -11664,7 +11774,7 @@
      ]
     }
    ],
-   "count": 753,
+   "count": 775,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -18434,5 +18544,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2469
+ "total": 2491
 }

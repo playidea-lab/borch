@@ -168,7 +168,11 @@ CEILINGS = {
     # 3356 → 3369. `dataset::IDX labels(short by two)=거절` 하나와 그 답 문자열
     # `거절|문구=`. 케이스 이름이자 **답 자체**라 — 양쪽이 같은 글자를 내놔야 대조가
     # 된다. 번역 대상이 아니라 비교 대상이다.
-    "borch-ts/test": 3369,
+    # 3369 → 3370. **One character**, and it is a case name rather than prose: the
+    # forty layer reprs ported to this side are written with one template literal
+    # instead of forty `out.set` lines, so the shared prefix `unpool::층::repr::`
+    # carries a single 층. Written out longhand it would have been forty of them.
+    "borch-ts/test": 3370,
 }
 
 
