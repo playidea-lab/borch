@@ -540,14 +540,6 @@ SKIPPED = {
     # are offered. **Written with the namespace attached** — as bare names they would
     # swallow `F`'s identically named ones, and `F.kl_div` we built while `F.ctc_loss` is a
     # real gap.
-    "torch.binary_cross_entropy_with_logits":
-        "the top-level one is the raw ATen op — its default reduction is none and its argument is an integer",
-    "torch.cosine_embedding_loss": "the top-level one is the raw ATen op — its signature differs from F's",
-    "torch.hinge_embedding_loss": "the top-level one is the raw ATen op — its signature differs from F's",
-    "torch.kl_div": "the top-level one is the raw ATen op — its signature differs from F's",
-    "torch.margin_ranking_loss": "the top-level one is the raw ATen op — its signature differs from F's",
-    "torch.poisson_nll_loss": "the top-level one is the raw ATen op — it has no defaults at all",
-    "torch.triplet_margin_loss": "the top-level one is the raw ATen op — its signature differs from F's",
 
     # Not settled yet.
     "LinearCrossEntropyLoss": "newly arrived in torch — looked at once it settles",

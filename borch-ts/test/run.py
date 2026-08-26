@@ -257,6 +257,21 @@ def run(headed=False, verbose=False):
 # head of a reason string and `test_site.py` reads `아직` to split the remainder into
 # backlog and never. They move when those checks move, and not before.
 NOT_PORTED = {
+    # **The seven losses torch keeps at top level as well as under `F`.** They were
+    # declined as *the raw ATen op — its signature differs from F's*, which was about
+    # why the name looks redundant rather than about what was missing; the arithmetic
+    # was `F`'s and already there.
+    #
+    # borch.ts has the `F` side of all seven. What it does not have is a **top level**
+    # to put a second name on: over there `F` is the namespace and there is no `torch.`
+    # beside it, so `borch.klDiv` would be a name this side invented rather than one
+    # torch has. The integer reduction is the same — `F`'s takes the word, and a second
+    # spelling that takes a number is a Python-side fact about two bindings of one
+    # library.
+    "loss::": (18, "파이썬 — torch keeps these seven at top level as well as "
+                         "under `F`, with an integer reduction and a different default. "
+                         "borch.ts has one namespace, so there is no second place to "
+                         "put them"),
     # **`unpool::` came back at 46 and is down to 6.** The Python side printed
     # twenty-nine of sixty-four layers differently from torch and nothing was watching;
     # this side had the same hole for the same reason, and forty of the strings now

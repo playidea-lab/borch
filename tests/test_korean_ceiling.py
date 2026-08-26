@@ -172,7 +172,11 @@ CEILINGS = {
     # forty layer reprs ported to this side are written with one template literal
     # instead of forty `out.set` lines, so the shared prefix `unpool::층::repr::`
     # carries a single 층. Written out longhand it would have been forty of them.
-    "borch-ts/test": 3370,
+    # 3370 → 3373. **Three characters**, and they are the ledger's own vocabulary: the
+    # seven top-level losses get a row, and a row's reason has to open with one of
+    # `아직` / `없음` / `별칭` / `파이썬` for `test_site.py` to split the remainder. This
+    # one is 파이썬.
+    "borch-ts/test": 3373,
 }
 
 

@@ -7190,6 +7190,66 @@ def loss_cases(inp=None):
                 return "멈췄다" if b in str(exc) else f"다른 문구 <{exc}>"
             return "안 던졌다"
         add(f"reduction::거절::{bad}", refuses)
+
+    # ── the seven that are also at top level, and are not the same function ──────
+    #
+    # `torch.kl_div` and `F.kl_div` are two different things. The gap table declined the
+    # top-level seven as *the raw ATen op — its signature differs from F's*, which is
+    # true and is about why the name looks redundant rather than about what is missing:
+    # the arithmetic is `F`'s and was already here.
+    #
+    # Three measured differences, each asked below:
+    #
+    # - **the reduction is an integer**, `0` none / `1` mean / `2` sum, where `F` takes
+    #   the word;
+    # - **it defaults to none**, where every `F` loss defaults to mean — so
+    #   `torch.kl_div(a, b)` gives a table and `F.kl_div(a, b)` gives a number;
+    # - **`poisson_nll_loss` has no defaults at all.**
+    #
+    # And a fourth that is about torch rather than about this library: **the declared
+    # schema says `reduction=1` and the binding defaults to `0`.** `aten::kl_div(...,
+    # int reduction=1)` is mean; `torch.kl_div(a, b)` returns a table. The behaviour is
+    # the authority, and the first case here is the one that pins it.
+    def _top(name, args, **kwargs):
+        def run(L):
+            given = [L.tensor(np.ascontiguousarray(one))
+                     if isinstance(one, np.ndarray) else one for one in args]
+            return getattr(L, name)(*given, **kwargs)
+        return run
+
+    _logp = np.log(np.exp(x) / np.exp(x).sum(-1, keepdims=True)).astype(np.float32)
+    _prob = (np.exp(y) / np.exp(y).sum(-1, keepdims=True)).astype(np.float32)
+    _binary = (y > 0).astype(np.float32)
+    _pm = np.where(y > 0, 1.0, -1.0).astype(np.float32)
+
+    for _tag, _r in (("기본=none", None), ("reduction=0", 0), ("reduction=1", 1),
+                     ("reduction=2", 2)):
+        _tail = [] if _r is None else [_r]
+        add(f"aten::kl_div({_tag})", _top("kl_div", [_logp, _prob] + _tail))
+        add(f"aten::bce_with_logits({_tag})",
+            _top("binary_cross_entropy_with_logits",
+                 [x, _binary, None, None] + _tail if _r is not None
+                 else [x, _binary]))
+    # **`log_target` is keyword-only**, as the schema has it.
+    add("aten::kl_div(log_target)",
+        _top("kl_div", [_logp, np.log(_prob).astype(np.float32), 1], log_target=True))
+    add("aten::cosine_embedding_loss", _top("cosine_embedding_loss", [a, b, sign]))
+    add("aten::cosine_embedding_loss(margin, sum)",
+        _top("cosine_embedding_loss", [a, b, sign, 0.5, 2]))
+    add("aten::hinge_embedding_loss", _top("hinge_embedding_loss", [x, _pm]))
+    add("aten::hinge_embedding_loss(margin, mean)",
+        _top("hinge_embedding_loss", [x, _pm, 2.0, 1]))
+    add("aten::margin_ranking_loss",
+        _top("margin_ranking_loss", [x[:, 0], y[:, 0], sign]))
+    # **Six required arguments** — a caller cannot reach this one with two.
+    add("aten::poisson_nll_loss(log_input)",
+        _top("poisson_nll_loss", [np.abs(x), _binary, True, False, 1e-8, 1]))
+    add("aten::poisson_nll_loss(full, none)",
+        _top("poisson_nll_loss", [np.abs(x), _binary, False, True, 1e-8, 0]))
+    add("aten::triplet_margin_loss", _top("triplet_margin_loss", [anc, pos, neg]))
+    add("aten::triplet_margin_loss(swap, sum)",
+        _top("triplet_margin_loss", [anc, pos, neg, 2.0, 1.0, 1e-5, True, 2]))
+
     return cases
 
 

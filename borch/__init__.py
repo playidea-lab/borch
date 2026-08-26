@@ -35,6 +35,7 @@ places is off by 2.6%.
 """
 
 
+import builtins as _builtins
 import inspect as _inspect
 import math as _math
 
@@ -347,6 +348,99 @@ for _name in ("conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
               "celu", "selu", "prelu", "hardshrink", "threshold",
               "avg_pool1d", "adaptive_avg_pool1d", "adaptive_max_pool1d"):
     globals()[_name] = getattr(nn.functional, _name)
+
+
+# ── the seven losses that are **not** the same function at top level ────────
+#
+# These were declined, and the reason read *the top-level one is the raw ATen op — its
+# signature differs from F's.* Every word true, and none of it about what is missing:
+# `F.kl_div` is here, so what was absent is a name and a set of defaults.
+#
+# **They really are different functions**, which is why they are not in the loop above:
+#
+# - the reduction is an **integer** — `0` none, `1` mean, `2` sum — where `F` takes the
+#   word. Passing `"mean"` to the ATen op is a `TypeError` in torch, so accepting the
+#   word here would be a wider door than the one being copied.
+# - it **defaults to none**, where every `F` loss defaults to mean. A caller who reads
+#   `torch.kl_div(a, b)` as `F.kl_div(a, b)` gets a table where they expected a number,
+#   which is loud — and a caller who sums it afterwards gets a different number
+#   quietly, since `mean` divides.
+# - `poisson_nll_loss` has **no defaults at all**: all six arguments are required.
+#   The others have theirs, and the two facts are measured rather than assumed.
+#
+# **The declared schema disagrees with the binding**, which is the part worth writing
+# down: `aten::kl_div(..., int reduction=1)` says mean, and `torch.kl_div(a, b)` returns
+# a table. The behaviour is the authority here, so `0` is what these take.
+_REDUCTIONS = ("none", "mean", "sum")
+
+
+def _aten_reduction(value):
+    """The integer the ATen ops take, as the word `F` takes.
+
+    **Not a lookup with a default** — an out-of-range integer is an error rather than
+    the nearest legal one, because the three values are an enum and a fourth means the
+    caller believes something untrue about it.
+    """
+    # **`int` in this module is torch's dtype**, not the builtin — the alias loop above
+    # binds `int`, `float` and `bool` as dtypes because torch has them under those
+    # names. So `isinstance(value, int)` here asks whether a number is a dtype and
+    # raises `TypeError: isinstance() arg 2 must be a type`. Measured, not guessed: it
+    # is the first thing this function did.
+    if (not isinstance(value, _builtins.int) or isinstance(value, _builtins.bool)
+            or not 0 <= value <= 2):
+        raise ValueError(_like_torch(
+            f"reduction has to be 0, 1 or 2, but got {value!r}.",
+            "reduction is expected to be an int in [0, 2]"))
+    return _REDUCTIONS[value]
+
+
+def binary_cross_entropy_with_logits(self, target, weight=None, pos_weight=None,
+                                     reduction=0):
+    """`F.binary_cross_entropy_with_logits` with ATen's argument order and defaults."""
+    return nn.functional.binary_cross_entropy_with_logits(
+        self, target, weight=weight, pos_weight=pos_weight,
+        reduction=_aten_reduction(reduction))
+
+
+def cosine_embedding_loss(input1, input2, target, margin=0.0, reduction=0):
+    """As above. **`margin` defaults to 0 here and in `F`** — the two agree on that one
+    and disagree on the reduction, which is why neither can be assumed from the other."""
+    return nn.functional.cosine_embedding_loss(
+        input1, input2, target, margin=margin, reduction=_aten_reduction(reduction))
+
+
+def hinge_embedding_loss(self, target, margin=1.0, reduction=0):
+    return nn.functional.hinge_embedding_loss(
+        self, target, margin=margin, reduction=_aten_reduction(reduction))
+
+
+def kl_div(self, target, reduction=0, *, log_target=False):
+    """**`log_target` is keyword-only**, as in the schema. `F.kl_div` takes it
+    positionally after two deprecated arguments, so a caller moving between the two has
+    to name it either way."""
+    return nn.functional.kl_div(self, target, reduction=_aten_reduction(reduction),
+                                log_target=log_target)
+
+
+def margin_ranking_loss(input1, input2, target, margin=0.0, reduction=0):
+    return nn.functional.margin_ranking_loss(
+        input1, input2, target, margin=margin, reduction=_aten_reduction(reduction))
+
+
+def poisson_nll_loss(input, target, log_input, full, eps, reduction):
+    """**Six required arguments and no defaults.** `F.poisson_nll_loss` gives all four
+    of the trailing ones a value; this gives none, which is the schema and is what makes
+    it the odd one of the seven — a caller cannot reach it with two arguments at all."""
+    return nn.functional.poisson_nll_loss(
+        input, target, log_input=log_input, full=full, eps=eps,
+        reduction=_aten_reduction(reduction))
+
+
+def triplet_margin_loss(anchor, positive, negative, margin=1.0, p=2.0, eps=1e-6,
+                        swap=False, reduction=0):
+    return nn.functional.triplet_margin_loss(
+        anchor, positive, negative, margin=margin, p=p, eps=eps, swap=swap,
+        reduction=_aten_reduction(reduction))
 
 
 # ── methods exposed **as module functions too.** Exactly the opposite
