@@ -364,9 +364,18 @@ def test_kitti_targets_match_torchvisions_including_the_types(kitti_root):
     ours = V.datasets.Kitti(str(kitti_root))
     theirs = T.Kitti(str(kitti_root))
     assert len(ours) == len(theirs)
-    for i in range(len(ours)):
-        assert ours[i][1] == theirs[i][1]
-        for box in ours[i][1]:
+
+    # **torchvision walks `image_2` with `os.listdir` and does not sort it**, so its
+    # item order is the disk's — sorted on one filesystem, hashed on another. The
+    # comparison is therefore by path and not by position; sorting here is the better
+    # rule and a different one, and this test is about the targets rather than about
+    # whose order wins.
+    mine = dict(zip(ours.images, (ours[i][1] for i in range(len(ours)))))
+    yours = dict(zip(theirs.images, (theirs[i][1] for i in range(len(theirs)))))
+    assert sorted(mine) == sorted(yours)
+    for path, target in mine.items():
+        assert target == yours[path]
+        for box in target:
             assert isinstance(box["occluded"], int) and not isinstance(
                 box["occluded"], bool)
             assert isinstance(box["type"], str)
