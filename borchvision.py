@@ -3916,12 +3916,25 @@ def _mat_matrix(body):
 # **two open PNG and no JPEG** and one opens PPM. So the sentence was carrying fifteen
 # rows that are genuinely blocked and three that were not, and nobody had asked which.
 
-def _png_read(data):
+def _png_read(data, keep_depth=False):
     """One PNG as `uint8` — `(h, w)` for grey, `(h, w, 3)` or `(h, w, 4)` for colour.
 
     Interlaced files are refused by name: Adam7 reorders the whole image into seven
     passes, and a reader that ignored the flag would return a picture built from the
     first pass alone — recognisable, wrong, and silent.
+
+    ## Sixteen bits
+
+    **PIL keeps them for grey and drops them for colour**, and this follows PIL because
+    `_folder_loader` stands in its place. A sixteen-bit grey PNG comes back `uint16`;
+    a sixteen-bit colour one comes back `uint8`, with the low byte gone, which is what
+    PIL hands over and what a viewer shows.
+
+    `keep_depth=True` asks for the samples at their own depth whatever the channel
+    count — what `torchvision.io.decode_png` does. **The two are not a preference.**
+    KITTI stores its flow as sixteen-bit colour and reads it as `(x - 2**15) / 64`;
+    on the eight-bit answer that arithmetic still runs and still returns a flow field
+    of the right shape, pointing somewhere else.
     """
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("not a PNG — the eight-byte signature does not match")
@@ -3953,10 +3966,12 @@ def _png_read(data):
 
     channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colour]
     raw = _zlib.decompress(b"".join(idat))
-    return _png_rows(raw, width, height, depth, channels, colour, palette, alpha)
+    return _png_rows(raw, width, height, depth, channels, colour, palette, alpha,
+                     keep_depth)
 
 
-def _png_rows(raw, width, height, depth, channels, colour, palette, alpha):
+def _png_rows(raw, width, height, depth, channels, colour, palette, alpha,
+              keep_depth=False):
     """Undo the per-row filters and lay the samples out.
 
     **Every filter refers to the row above**, so this cannot be vectorised over rows —
@@ -4001,8 +4016,12 @@ def _png_rows(raw, width, height, depth, channels, colour, palette, alpha):
         samples = out.reshape(height, width, channels)
     elif depth == 16:
         pairs = out.reshape(height, -1, 2).astype(_np.uint16)
-        wide = (pairs[..., 0] << 8) | pairs[..., 1]
-        samples = (wide >> 8).astype(_np.uint8).reshape(height, width, channels)
+        wide = ((pairs[..., 0] << 8) | pairs[..., 1]).reshape(height, width, channels)
+        # **Grey keeps its sixteen bits and colour does not** — PIL's split, not one
+        # chosen here, and the disparity maps depend on the grey half: KITTI's are
+        # sixteen-bit grey divided by 256, so a reader that scaled them down first
+        # would be off by that factor with every number still looking like a distance.
+        samples = wide if (keep_depth or channels == 1) else (wide >> 8).astype(_np.uint8)
     else:
         # **Sub-byte depths are packed high bit first**, and a row is padded to a whole
         # byte. Omniglot's strokes are 1-bit, so this is the path its pictures take.

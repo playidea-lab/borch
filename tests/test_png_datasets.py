@@ -243,3 +243,65 @@ def test_gtsrbs_test_labels_come_from_the_csv(gtsrb_root):
 def test_an_unknown_gtsrb_split_is_refused(gtsrb_root):
     with pytest.raises(ValueError, match="split"):
         V.datasets.GTSRB(str(gtsrb_root), split="validation")
+
+
+def _write_16bit_png(path, arr):
+    """PIL cannot **save** sixteen-bit colour, so the fixture is written by hand.
+
+    That is not a detour: the files this exists for — KITTI's flow and disparity —
+    were written by something that is not PIL either.
+    """
+    import struct
+    import zlib
+    height, width = arr.shape[:2]
+    channels = 1 if arr.ndim == 2 else arr.shape[2]
+    rows = arr.reshape(height, width * channels)
+    raw = b"".join(b"\x00" + rows[y].astype(">u2").tobytes() for y in range(height))
+
+    def chunk(kind, body):
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body)))
+
+    header = struct.pack(">IIBBBBB", width, height, 16,
+                         {1: 0, 3: 2, 4: 6}[channels], 0, 0, 0)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+@pytest.mark.parametrize("channels", [1, 3, 4])
+def test_sixteen_bit_png_follows_pil_by_default(channels, tmp_path):
+    """**PIL keeps sixteen bits for grey and drops them for colour**, and the reader
+    stands in PIL's place, so it does the same — including the part that looks like a
+    bug in PIL. The grey half is what `Kitti2012Stereo` divides by 256.
+    """
+    shape = (5, 7) if channels == 1 else (5, 7, channels)
+    arr = (np.arange(int(np.prod(shape))).reshape(shape) * 4021 % 65535).astype(np.uint16)
+    path = tmp_path / "wide.png"
+    _write_16bit_png(path, arr)
+
+    want = np.asarray(Image.open(path))
+    got = V._png_read(path.read_bytes())
+    assert got.dtype == want.dtype, (
+        f"{got.dtype} where PIL gives {want.dtype} — for grey that factor of 256 "
+        "reaches the disparity maps and every number still looks like a distance")
+    assert np.array_equal(got, want)
+
+
+@pytest.mark.parametrize("channels", [1, 3, 4])
+def test_keep_depth_gives_what_decode_png_gives(channels, tmp_path):
+    """The other contract. KITTI's flow is sixteen-bit **colour** and is read as
+    `(x - 2**15) / 64`; on PIL's eight-bit answer that arithmetic still runs and still
+    returns a flow field of the right shape, pointing somewhere else.
+    """
+    from torchvision.io import decode_png, read_file
+    shape = (5, 7) if channels == 1 else (5, 7, channels)
+    arr = (np.arange(int(np.prod(shape))).reshape(shape) * 4021 % 65535).astype(np.uint16)
+    path = tmp_path / "wide.png"
+    _write_16bit_png(path, arr)
+
+    want = decode_png(read_file(str(path))).numpy().transpose(1, 2, 0)
+    if want.shape[2] == 1:
+        want = want[:, :, 0]
+    got = V._png_read(path.read_bytes(), keep_depth=True)
+    assert got.dtype == np.uint16 and np.array_equal(got, want)
+    assert np.array_equal(got, arr), "the samples are not the ones that were written"
