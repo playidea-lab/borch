@@ -384,3 +384,65 @@ def test_kitti_targets_match_torchvisions_including_the_types(kitti_root):
 def test_kitti_without_the_tree_says_so(tmp_path):
     with pytest.raises(RuntimeError, match="Dataset not found"):
         V.datasets.Kitti(str(tmp_path))
+
+
+def test_sun397_cuts_three_characters_off_the_class_and_keeps_the_nesting(tmp_path):
+    """Two things that each give 397 classes with the right count and wrong names.
+
+    `ClassName.txt` reads `/a/abbey` and the class is `abbey`, so three characters come
+    off the front. And the label comes from the path **minus its first part**: a scene
+    at `a/apartment_building/outdoor` is `apartment_building/outdoor`, not `outdoor`,
+    so a reader taking the parent directory alone folds every nested scene into its
+    last component.
+
+    Compared against torchvision as sets, because `SUN397` finds its pictures by
+    walking and the walk is the disk's order.
+    """
+    base = tmp_path / "SUN397"
+    base.mkdir()
+    (base / "ClassName.txt").write_text("/a/abbey\n/a/apartment_building/outdoor\n")
+    for parts in (("a", "abbey", "sun_aaa.jpg"),
+                  ("a", "apartment_building", "outdoor", "sun_bbb.jpg")):
+        path = base.joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(np.full((3, 4, 3), len(parts) * 20, np.uint8)).save(
+            path, format="PNG")
+
+    ours = V.datasets.SUN397(str(tmp_path))
+    theirs = T.SUN397(str(tmp_path))
+    assert ours.classes == theirs.classes == ["abbey", "apartment_building/outdoor"]
+    assert ours.class_to_idx == theirs.class_to_idx
+    assert (sorted(map(str, ours._image_files))
+            == sorted(map(str, theirs._image_files)))
+    assert (sorted(zip(map(str, ours._image_files), ours._labels))
+            == sorted(zip(map(str, theirs._image_files), theirs._labels)))
+
+
+def test_sun397_without_the_class_list_says_so(tmp_path):
+    with pytest.raises(RuntimeError, match="Dataset not found"):
+        V.datasets.SUN397(str(tmp_path))
+
+
+@pytest.mark.parametrize("partition", [0, 11, 1.0])
+def test_a_dtd_partition_outside_one_to_ten_is_refused(partition, tmp_path):
+    """The partition is an index into ten shufflings, and there is no eleventh."""
+    with pytest.raises(ValueError, match="partition"):
+        V.datasets.DTD(str(tmp_path), partition=partition)
+
+
+def test_an_aircraft_class_name_with_a_space_stays_one_class(tmp_path):
+    """`Boeing 737-700` is one class. A reader splitting on every space raises here
+    rather than mislabelling, which is the good kind of wrong — but it has to be the
+    label file's split that is limited, not the caller's care."""
+    data = tmp_path / "fgvc-aircraft-2013b" / "data"
+    (data / "images").mkdir(parents=True)
+    (data / "variants.txt").write_text("Boeing 737-700\nA340-300\n")
+    (data / "images_variant_trainval.txt").write_text(
+        "0000001 Boeing 737-700\n0000002 A340-300\n")
+    for i in (1, 2):
+        Image.fromarray(np.full((3, 4, 3), i * 30, np.uint8)).save(
+            data / "images" / f"{i:07d}.jpg", format="PNG")
+
+    ours = V.datasets.FGVCAircraft(str(tmp_path))
+    assert ours.classes == ["Boeing 737-700", "A340-300"]
+    assert ours._labels == [0, 1]

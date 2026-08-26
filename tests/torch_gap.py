@@ -644,6 +644,14 @@ SKIPPED = {
     # is the dependency this library does without — the same answer PIL gets in
     # `transforms`, arriving from the other side.
     #
+    # **And the sentence hides a second thing**, which is what let six more in: most of
+    # these classes read no format at all. `Country211`, `EuroSAT`, `DTD`, `Food101`,
+    # `SUN397` and `FGVCAircraft` walk a listing, parse some text and call
+    # `self.loader` — and `loader` is **torchvision's own parameter**, not an escape
+    # hatch invented here, which is the same argument that let `ImageFolder` in.
+    # Sixteen of the rows that said *a codec* take it; the line is measured rather than
+    # drawn. The ten still below that do take it are 아직 — the writing, not a wall.
+    #
     # **`as above — a codec` has been wrong four times**, each time about a dataset
     # that reads no JPEG at all: `SVHN` (a `.mat`), `Omniglot` and `GTSRB` (PNG and
     # PPM), the whole stereo and flow family, and then `Kitti` and `PhotoTour` — PNG in
@@ -666,30 +674,24 @@ SKIPPED = {
     "datasets.Cityscapes": "its pictures are PNG and `_png_read` handles those now — the wall left is the dataset rather than the format: thirty splits crossed with five target types, polygon annotations in JSON, and a 60GB archive behind a login. **The codec was never the expensive half of this one**, which the old row (`as above — a codec`) could not say because it pointed at a sentence about JPEG",
     "datasets.CocoCaptions": "as above — a codec",
     "datasets.CocoDetection": "as above — a codec",
-    "datasets.Country211": "JPEG, **fetched and checked** rather than inherited: the first pictures in `country211.tgz` begin `ff d8`",
-    "datasets.DTD": "as above — a codec",
-    "datasets.EuroSAT": "as above — a codec",
-    "datasets.FGVCAircraft": "as above — a codec",
-    "datasets.Flickr30k": "as above — a codec",
-    "datasets.Flickr8k": "as above — a codec",
+    "datasets.Flickr30k": "아직 — a walk plus a loader, and `loader=` is torchvision's own parameter here. Six of these went in beside it; what is missing from this one is the writing, not a wall. Its captions are an HTML token file",
+    "datasets.Flickr8k": "as above — its captions are a token file with an index suffix",
     "datasets.Flowers102": "its pictures are JPEG, which is the codec wall. Its labels are a `.mat` and that half is no longer a reason — `_mat_read` in borchvision handles those now, which is what let `SVHN` in. This row used to read *as `SVHN` for the labels*, and pointed at a refusal that has since been lifted",
-    "datasets.Food101": "as above — a codec",
     "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
-    "datasets.INaturalist": "as above — a codec",
+    "datasets.INaturalist": "as above — three release years with different directory schemes",
     "datasets.ImageNet": "as above — a codec",
-    "datasets.Imagenette": "as above — JPEG, fetched and checked; `imagenette2.tgz` holds `.JPEG` files that begin `ff d8`",
+    "datasets.Imagenette": "JPEG, **fetched and checked** rather than inherited — `imagenette2.tgz` holds `.JPEG` files that begin `ff d8`. Unlike the six that went in beside it this one is 아직 rather than declined: it is a walk plus a loader like they are, and only the writing is missing",
     "datasets.Kinetics": "as above",
-    "datasets.LFWPairs": "as above — a codec",
-    "datasets.LFWPeople": "as above — a codec",
+    "datasets.LFWPairs": "as above — pair files across three image sets",
+    "datasets.LFWPeople": "as above",
     "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",
     "datasets.LSUNClass": "as above",
     "datasets.OxfordIIITPet": "as above — a codec",
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
-    "datasets.Places365": "as above — a codec",
+    "datasets.Places365": "as above — a devkit tar and small/large variants",
     "datasets.SBDataset": "its pictures are JPEG, which is the codec wall. Its `.mat` annotations are not — `_mat_read` handles those, and this row named them as a second reason when there was only ever one",
-    "datasets.SBU": "as above — a codec",
-    "datasets.SUN397": "as above — a codec",
-    "datasets.StanfordCars": "as above — a codec",
+    "datasets.SBU": "as above — two text lists that must stay aligned",
+    "datasets.StanfordCars": "아직, **and one thing genuinely missing**: its annotations are a `.mat` holding a struct array, and `_mat_read` reads numeric arrays only — measured, it returns no keys for one. That is a reader to extend rather than a codec to write",
     "datasets.UCF101": "as above",
     "datasets.VOCDetection": "as above — a codec",
     "datasets.VOCSegmentation": "as above — a codec",
