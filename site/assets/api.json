@@ -14331,13 +14331,13 @@
       },
       {
        "name": "interpolation",
-       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\"",
+       "signature": "protected readonly interpolation: \"bilinear\" | \"nearest\" | \"bicubic\"",
        "doc": "",
        "protected": true
       },
       {
        "name": "constructor",
-       "signature": "constructor(size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean)",
+       "signature": "constructor(size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\" | \"bicubic\", maxSize?: number | null, antialias?: boolean)",
        "doc": "",
        "tags": [
         {
@@ -14740,14 +14740,14 @@
     {
      "kind": "function",
      "name": "resize",
-     "signature": "export declare function resize(img: Image, size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean): Image",
+     "signature": "export declare function resize(img: Image, size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\" | \"bicubic\", maxSize?: number | null, antialias?: boolean): Image",
      "doc": "",
      "members": []
     },
     {
      "kind": "function",
      "name": "resizedCrop",
-     "signature": "export declare function resizedCrop(img: Image, top: number, left: number, height: number, width: number, size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean): Image",
+     "signature": "export declare function resizedCrop(img: Image, top: number, left: number, height: number, width: number, size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\" | \"bicubic\", antialias?: boolean): Image",
      "doc": "Crop, then resize what was cropped. `RandomResizedCrop` without the draw.",
      "members": [],
      "torch": "resized_crop"
