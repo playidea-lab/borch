@@ -257,6 +257,17 @@ def run(headed=False, verbose=False):
 # head of a reason string and `test_site.py` reads `아직` to split the remainder into
 # backlog and never. They move when those checks move, and not before.
 NOT_PORTED = {
+    # **`unpool::` was emptied once and is back at 46, all of them `repr`.** The Python
+    # side printed twenty-nine of sixty-four layers differently from torch and nothing
+    # was watching; these are the strings that now watch it.
+    #
+    # Whether borch.ts prints the same is **unmeasured** — it has its own layer classes
+    # and its own reprs, and the sweep that found the Python hole has not been run over
+    # there. That is why this row is owed rather than declined: it is a hole nobody has
+    # looked in, not one that was looked in and turned down.
+    "unpool::": (46, "아직 — the layer reprs. borch.ts has the classes; whether its "
+                     "strings match torch is unmeasured, which is what was true of the "
+                     "Python side until this row existed"),
     # **`ops::` was a row here once, at 11, and was emptied by porting all of them.**
     # It is back at 8 for a different reason: the eleven were box geometry on plain
     # arrays and these eight are `nn.Module` layers whose weights have to be written
