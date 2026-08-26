@@ -432,6 +432,32 @@ _SOFTWARE_RULE = {
 }
 
 
+# **The ladder is written down twice** — once in the README and once on the setup page in
+# two languages — and both say which rung is the list `tests/browser/launch.py` ships.
+# Two readers of the same rule is how the rule drifts, which is the defect this very
+# check exists to catch, so the reading happens once here.
+_LADDER_FLAG = re.compile(r"--[a-z0-9-]+(?:=[A-Za-z0-9,._-]+)?")
+
+
+def _marked_rung(rows):
+    """The accumulated flag set at the row that claims to be `FLAGS`, or None.
+
+    **The rungs accumulate**: a cell starting with `+` means everything above it too, so
+    the claim on the marked row is about the running set and not about that cell alone.
+    `rows` is (cell text, is it marked) in table order.
+    """
+    running = []
+    for cell, marked in rows:
+        flags = _LADDER_FLAG.findall(cell)
+        if not flags:
+            running = []
+            continue
+        running = (running + flags) if cell.lstrip("`| ").startswith("+") else list(flags)
+        if marked:
+            return list(running)
+    return None
+
+
 def test_the_ladder_row_that_says_it_is_FLAGS_is_FLAGS():
     """**A row labelled `(= FLAGS)` has to be `FLAGS`.**
 
@@ -461,22 +487,11 @@ def test_the_ladder_row_that_says_it_is_FLAGS_is_FLAGS():
     launch = _load_module("bt_launch", ROOT / "tests" / "browser" / "launch.py")
     lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
 
-    marked, running, found = None, [], False
-    for line in lines:
-        if not line.startswith("|"):
-            running, found = [], found
-            continue
-        cell = line.split("|")[1].strip()
-        flags = re.findall(r"--[\w-]+(?:=[\w,]+)?", cell)
-        if not flags:
-            running = []
-            continue
-        running = (running + flags) if cell.lstrip("` ").startswith("+") else list(flags)
-        if "= `FLAGS`" in line or "(= FLAGS)" in line:
-            marked, found = list(running), True
-            break
+    marked = _marked_rung(
+        (line.split("|")[1].strip(), "= `FLAGS`" in line or "(= FLAGS)" in line)
+        for line in lines if line.startswith("|"))
 
-    assert found, (
+    assert marked is not None, (
         "no rung in the README's flag ladder is marked as the shipped list.\n"
         "  Either the table went away or the mark did. The mark is the only thing tying\n"
         "  a measured row to the flags this repository actually sends, so losing it\n"
@@ -1345,3 +1360,54 @@ def test_the_ledger_and_the_measured_remainder_are_the_same_number():
         f"the ledger's rows add to {declined + owed} and the case tables leave "
         f"{measured} unasked ({got['golden']} golden − {got['written']} written).\n"
         "  a prefix is counted twice, missing, or carrying a stale frozen number.")
+
+
+# The setup page's Linux ladder carries a row that says it is the flag list the test
+# runner sends. **Saying so is not checking it.** The row was written twice from memory
+# and was wrong both times: once missing `--enable-features=Vulkan`, which made a list
+# that opens both cards read as failing on one and put a retraction on the live site for
+# an afternoon; then, in the correction, missing
+# `--disable-gpu-driver-bug-workarounds` — inside the very label added to stop the first
+# mistake. The page and `tests/browser/launch.py` are two lists nobody put side by side.
+LADDER_LABEL = re.compile(r"this row is the runner's flags|이 행이 러너의 목록이다")
+
+
+def _ladder_rows(page):
+    """The first cell of each row of the Linux table, in order."""
+    body = page[page.index("<tbody>", page.index("RTX 5080")):]
+    body = body[:body.index("</tbody>")]
+    for row in re.findall(r"<tr>(.*?)</tr>", body, re.S):
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+        if cells:
+            yield cells[0]
+
+
+@pytest.mark.parametrize("name", ["setup.html", "ko/setup.html"])
+def test_the_setup_pages_marked_rung_is_the_runners_flags(name):
+    """The same claim as the README's, on the page a stranger actually reads.
+
+    **The README's version of this row was wrong twice in two commits**, and the setup
+    page carried the same table with the same omission — a copy-and-paste command line
+    built from three flags where the runner sends four. The page is the more expensive
+    of the two to get wrong: the README is read by whoever works on this repository, and
+    the page is read by somebody whose card will not come up.
+
+    A row can fail four ways and each has happened or nearly has: the label falls off,
+    the row loses a flag, the row gains one the runner does not send, or the row is
+    deleted and the claim slips into prose where nothing reads it.
+    """
+    launch = _load_module("bt_launch", ROOT / "tests" / "browser" / "launch.py")
+    page = (ROOT / "site" / name).read_text(encoding="utf-8")
+
+    marked = _marked_rung(
+        (re.sub(r"<[^>]+>", " ", cell).replace("&nbsp;", " "), bool(LADDER_LABEL.search(cell)))
+        for cell in _ladder_rows(page))
+
+    assert marked is not None, (
+        f"site/{name} has no ladder row marked as the runner's flags.\n"
+        "  the claim has to sit on a row a test can read, not in a sentence beside it.")
+    assert sorted(marked) == sorted(launch.FLAGS), (
+        f"site/{name}'s marked rung and tests/browser/launch.py disagree.\n"
+        f"  only on the page : {sorted(set(marked) - set(launch.FLAGS))}\n"
+        f"  only in FLAGS    : {sorted(set(launch.FLAGS) - set(marked))}\n"
+        "  the page tells a stranger which flags to paste; it has to be this list.")

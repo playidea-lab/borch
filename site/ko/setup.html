@@ -94,7 +94,7 @@
         <tr><td>&nbsp;&nbsp;+ <code>--ignore-gpu-blocklist</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><code>google / swiftshader</code></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
+        <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan --disable-gpu-driver-bug-workarounds</code><br><span class="small">이 행이 러너의 목록이다</span></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
         <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
@@ -108,10 +108,11 @@
       <strong>두 카드를 여는 스위치가 서로 다르다.</strong> 5080 은 차단 목록을 무시해야
       하고, 4090 에서는 그 플래그가 아무 일도 하지 않고
       <code>--enable-features=Vulkan</code> 이 카드에 닿는다 — 차단목록 플래그 없이
-      그것만으로. 둘 다 들고 다니면 한 줄로 둘 다 덮는다:
+      그것만으로. 둘 다 들고 다니면 한 줄로 둘 다 덮는다. <strong>이 넷이 테스트 러너가 보내는 것과 정확히 같다.</strong> 종이 위에서는 셋으로도 충분하지만 넷을 붙여넣으라고 하는 이유가 그것이다 &mdash; 두 카드에서 실제로 돌린 조합이 이쪽이다:
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
-  --enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist</code></pre>
+  --enable-unsafe-webgpu --enable-features=Vulkan \
+  --ignore-gpu-blocklist --disable-gpu-driver-bug-workarounds</code></pre>
     <p>
       <code>chrome://flags</code> 에서는 <strong>#enable-unsafe-webgpu</strong>,
       <strong>#enable-vulkan</strong>, <strong>#ignore-gpu-blocklist</strong> 다.
