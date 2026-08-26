@@ -183,7 +183,11 @@ CEILINGS = {
     # `(두 행)` / `(빈 행)` for the two that give `multilabel_margin` a second row.
     # The names have to be the same string on both sides — the golden is keyed by
     # them — so the Python side's name is what this side must write.
-    "borch-ts/test": 3387,
+    # 3387 → 3398. Eleven, and case names again: `where` asked with a mask narrower
+    # than the values, and with a branch narrower than the mask. Every `where` case
+    # before them handed all three the same shape, which is the one arrangement that
+    # cannot tell broadcasting from three buffers read at the same offset.
+    "borch-ts/test": 3398,
 }
 
 

@@ -9233,6 +9233,23 @@ function addMethod(out: Map<string, Case>): void {
     // **The one place whose argument order is reversed from the function's** — the method
     // is `x.where(condition, other)`.
     ["where", () => vec().where(Tensor.from(M_MASK, [4]), other())],
+    // **The three broadcast against each other.** Every `where` above hands all
+    // three the same shape, which is the one arrangement that cannot tell a
+    // broadcasting `where` from one that walks three buffers at the same offset —
+    // and the second is what this was.
+    ["where(마스크가 좁다)", () => {
+      const wide = Tensor.from(
+        Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]);
+      const thin = Tensor.from(
+        Array.from({ length: 8 }, (_, i) => (i % 3 > 0 ? 1 : 0)), [2, 1, 4]);
+      return wide.where(thin, Tensor.zeros([2, 3, 4]));
+    }],
+    ["where(가지가 좁다)", () => {
+      const wide = Tensor.from(
+        Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]);
+      const narrow = Tensor.from([0, 1, 2, 3], [4]);
+      return narrow.where(wide.binary("gt", Tensor.full([], 5)), wide);
+    }],
     ["gather", () => mat().gather(1, Tensor.from([0, 2, 1, 0, 2, 1], [3, 2]))],
     ["argsort", () => vec().argsort(0)],
     ["sort", () => vec().sort(0).values],

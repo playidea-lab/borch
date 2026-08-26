@@ -1008,6 +1008,9 @@ class Tensor:
     def __getitem__(self, key):
         """`x[0]`, `x[1:3]`, `x[:, 1]`. The most common thing torch code does."""
         keys = key if isinstance(key, tuple) else (key,)
+        kinds = [isinstance(k, (Tensor, list, tuple)) for k in keys]
+        if sum(kinds) > 1 and all(kinds):
+            return self._gather_at(keys)
         out, axis = self, 0
         for k in keys:
             if isinstance(k, slice):
@@ -1040,6 +1043,42 @@ class Tensor:
                         f"with size {n}")
                 out = wrap(out._h.select(axis, at))
         return out
+
+    @staticmethod
+    def _flat_count(sizes):
+        total = 1
+        for one in sizes:
+            total *= one
+        return total
+
+    def _gather_at(self, keys):
+        """**Several index tensors at once**, which is a different operation from
+        several one at a time.
+
+        torch broadcasts the index tensors against each other and reads **one element
+        per position of the broadcast shape**. Applied one axis after another with
+        `indexSelect`, each axis instead grows to that index's element count and the
+        result is their product: `picture[b, c, y, x]` with the six-dimensional
+        indices `roi_align` builds came back `[1, 2, 16, 16]` where torch gives
+        `[1, 2, 2, 2, 8, 8]`. **Twenty-one golden cases**, all of them the samplers
+        under `roi_align`, `ps_roi_align` and `deform_conv2d`.
+
+        The positions are turned into one offset — the row-major sum `((i₀·n₁ + i₁)·n₂
+        + i₂)…` — and read from a flattened view, so the broadcasting is the ordinary
+        arithmetic kind and there is no second rule to keep in step. Whatever axes the
+        keys do not cover stay behind the offset and come back as they were.
+        """
+        shape = [int(one) for one in self.shape]
+        lead, rest = shape[:len(keys)], shape[len(keys):]
+        offset = None
+        for size, k in zip(lead, keys):
+            idx = k if isinstance(k, Tensor) else tensor(list(k), int64_name())
+            offset = idx if offset is None else offset * size + idx
+        flat = wrap(self._h.reshape(_js_list(
+            [self._flat_count(lead), *rest] if rest else [self._flat_count(lead)])))
+        picked = wrap(flat._h.indexSelect(0, offset.reshape(-1).long()._h))
+        return wrap(picked._h.reshape(_js_list(
+            [int(one) for one in offset.shape] + rest)))
 
     def __iter__(self):
         for i in range(len(self)):

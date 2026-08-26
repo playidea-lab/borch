@@ -3393,6 +3393,22 @@ export class Tensor implements Node<Tensor> {
    * is `x.where(cond, other)`.
    */
   where(condition: Tensor, other: Tensor): Tensor {
+    // **The three broadcast against each other**, as torch's `where` does and as
+    // every binary operation on this class already does. Without it the kernel runs
+    // over *this* tensor's element count and reads the other two buffers at the same
+    // positions, so a mask that is right but shorter — `[1,1,H,W,K,K]` against
+    // `[N,C,H,W,K,K]`, which is what a per-position mask over channels looks like —
+    // selects by whatever happened to sit at that offset. The shape came out right
+    // and the values did not, which is the quietest way for this to be wrong:
+    // twenty-one golden cases under `roi_align` and the samplers beside it.
+    const wide = broadcastShapes(broadcastShapes(this.shape, other.shape),
+                                 condition.shape);
+    const fits = (s: readonly number[]): boolean =>
+      s.length === wide.length && s.every((d, i) => d === wide[i]);
+    if (!fits(this.shape) || !fits(other.shape) || !fits(condition.shape)) {
+      return this.broadcastTo(wide)
+        .where(condition.broadcastTo(wide), other.broadcastTo(wide));
+    }
     const n = this.size;
     const out = dev().alloc(n);
     dev().run1d(

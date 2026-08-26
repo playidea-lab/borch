@@ -11471,6 +11471,26 @@ def method_cases(inp=None):
     # `where` — **the only place whose argument order is reversed from the function's.**
     cases.append((METHOD_PREFIX + "where",
                   lambda L: L.tensor(vec).where(L.tensor(mask), L.tensor(other))))
+    # **The three broadcast against each other**, and every `where` case above hands
+    # all three the same shape — which is the one arrangement that cannot tell a
+    # broadcasting `where` from one that walks three buffers at the same offset. The
+    # second is what borch.ts had: right shape, values taken from wherever the shorter
+    # buffer happened to reach. It surfaced through `roi_align`, four layers away,
+    # where a mask is per position and the values are per channel.
+    _wide = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    _thin = (np.arange(2 * 1 * 4) % 3 > 0).reshape(2, 1, 4)
+    cases.append((METHOD_PREFIX + "where(마스크가 좁다)",
+                  lambda L: L.where(L.tensor(np.ascontiguousarray(_thin)),
+                                    L.tensor(np.ascontiguousarray(_wide)),
+                                    L.zeros_like(L.tensor(
+                                        np.ascontiguousarray(_wide))))))
+    # And the other way: the mask is the wide one and a branch is the narrow one.
+    cases.append((METHOD_PREFIX + "where(가지가 좁다)",
+                  lambda L: L.where(
+                      L.tensor(np.ascontiguousarray(_wide)) > 5.0,
+                      L.tensor(np.ascontiguousarray(
+                          np.arange(4, dtype=np.float32))),
+                      L.tensor(np.ascontiguousarray(_wide)))))
     # The ones returning a boolean. **A predicate** is frozen rather than a value.
     cases.append((METHOD_PREFIX + "equal",
                   lambda L: str(bool(L.tensor(vec).equal(L.tensor(vec))))))
