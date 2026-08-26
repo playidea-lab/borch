@@ -244,13 +244,51 @@ def _lay_out(order, args, kw):
     return laid
 
 
-def _loss(js_name, order):
-    """Move torch's arguments into **borch.ts's positional order.**"""
+def _loss(js_name, order, torch_order=None, refuse=None):
+    """Read torch's call, then write **borch.ts's positional order.**
+
+    **One table was doing both jobs and could not.** `order` named the incoming
+    arguments *and* fixed the outgoing positions, so anything torch has and
+    borch.ts does not — the deprecated `size_average`/`reduce` pair, a `weight`
+    the subset refuses — had nowhere to be named. Left out of the table, those
+    seats close up and **every later argument moves forward**:
+
+        F.huber_loss(x, t, "sum")   torch: reduction="sum"
+                                    here:  delta="sum"      — before this
+
+    which is not an error anywhere. `delta` is only ever compared against an
+    absolute difference, and a string compares false, so the answer came back as
+    the mean of the L2 branch with no warning. Twelve of the fourteen entries
+    below had drifted this way; `gaussian_nll_loss`, the one with no deprecated
+    pair, is the control that agreed all along — which is the same control the
+    core names in its own note, written before this file was measured.
+
+    So `torch_order` names what arrives and `order` names where it goes. When
+    they are the same, one is enough.
+    """
+    names = order if torch_order is None else torch_order
+
     def call(x, *args, **kw):
-        return guarded(getattr(handle(x), js_name), *_lay_out(order, args, kw))
+        got = dict(zip(names, args))
+        got.update(kw)
+        if refuse is not None:
+            who, *why = refuse if isinstance(refuse, tuple) else (refuse,)
+            _no_class_weights(who, got.get("weight"), got.get("pos_weight"), *why)
+        if "reduction" in names:
+            folded = _legacy_reduction(got.pop("size_average", None),
+                                       got.pop("reduce", None),
+                                       got.get("reduction"))
+            if folded is not None:
+                got["reduction"] = folded
+        return guarded(getattr(handle(x), js_name), *_lay_out(order, (), got))
 
     call.__name__ = js_name
     return call
+
+
+# The deprecated pair, at the seat torch keeps it in. Named once; the entries
+# below splice it where it belongs.
+_DEPRECATED = ("size_average", "reduce")
 
 
 _LOSSES = {
@@ -258,46 +296,93 @@ _LOSSES = {
     # and borch.ts both grew it in the same hour; this file did not, and only
     # `tests/browser/run.py --lib borch_webgpu` says so — the core's suite and the
     # borch.ts golden were both green while the binding could not run the case.
-    "binary_cross_entropy": ("bce", ("target", "reduction")),
-    "huber_loss": ("huberLoss", ("target", "delta", "reduction")),
-    "kl_div": ("klDiv", ("target", "reduction", "log_target")),
-    "poisson_nll_loss": ("poissonNllLoss",
-                         ("target", "log_input", "full", "eps", "reduction")),
-    "gaussian_nll_loss": ("gaussianNllLoss",
-                          ("target", "var", "full", "eps", "reduction")),
-    "margin_ranking_loss": ("marginRankingLoss",
-                            ("input2", "target", "margin", "reduction")),
-    "cosine_embedding_loss": ("cosineEmbeddingLoss",
-                              ("input2", "target", "margin", "reduction")),
-    "hinge_embedding_loss": ("hingeEmbeddingLoss",
-                             ("target", "margin", "reduction")),
-    "soft_margin_loss": ("softMarginLoss", ("target", "reduction")),
-    "triplet_margin_loss": ("tripletMarginLoss",
-                            ("positive", "negative", "margin", "p", "eps",
-                             "swap", "reduction")),
-    "multilabel_soft_margin_loss": ("multilabelSoftMarginLoss",
-                                    ("target", "reduction")),
-    "multi_margin_loss": ("multiMarginLoss",
-                          ("target", "p", "margin", "weight", "reduction")),
-    "multilabel_margin_loss": ("multilabelMarginLoss", ("target", "reduction")),
-    "pairwise_distance": ("pairwiseDistance", ("x2", "p", "eps", "keepdim")),
-    "pdist": ("pdist", ("p",)),
+    #
+    # Its logits form was then left behind **from that same note**: the sentence
+    # above was written, the one name it named was added, and the pair beside it
+    # was not looked at. Four golden cases said so for as long as they existed.
+    "binary_cross_entropy": _loss(
+        "bce", ("target", "reduction"),
+        ("target", "weight", *_DEPRECATED, "reduction"),
+        "BCELoss"),
+    "binary_cross_entropy_with_logits": _loss(
+        "bceWithLogits", ("target", "reduction"),
+        # **`pos_weight` is last, after `reduction`** — the only loss torch puts
+        # it there, and the core's layer carries the same note.
+        ("target", "weight", *_DEPRECATED, "reduction", "pos_weight"),
+        "BCEWithLogitsLoss"),
+    # **torch's third seat is `reduction`, not `delta`.** It is the newest of
+    # these and never carried the deprecated pair, so nothing shifted and the
+    # order is simply torch's own — which the table had backwards.
+    "huber_loss": _loss(
+        "huberLoss", ("target", "delta", "reduction"),
+        ("target", "reduction", "delta", "weight"),
+        ("huber_loss", "torch's `mean` divides by the sum of the weights, so "
+                       "accepting it unused would change the loss")),
+    "kl_div": _loss(
+        "klDiv", ("target", "reduction", "log_target"),
+        ("target", *_DEPRECATED, "reduction", "log_target")),
+    # **The pair is split here** — `size_average` before `eps` and `reduce`
+    # after it. Assuming the two are always adjacent is what a single table
+    # cannot say.
+    "poisson_nll_loss": _loss(
+        "poissonNllLoss", ("target", "log_input", "full", "eps", "reduction"),
+        ("target", "log_input", "full", "size_average", "eps", "reduce",
+         "reduction")),
+    # No deprecated pair, so what arrives is what goes out. **This is the
+    # control**: it agreed before this change and after it.
+    "gaussian_nll_loss": _loss(
+        "gaussianNllLoss", ("target", "var", "full", "eps", "reduction")),
+    "margin_ranking_loss": _loss(
+        "marginRankingLoss", ("input2", "target", "margin", "reduction"),
+        ("input2", "target", "margin", *_DEPRECATED, "reduction")),
+    "cosine_embedding_loss": _loss(
+        "cosineEmbeddingLoss", ("input2", "target", "margin", "reduction"),
+        ("input2", "target", "margin", *_DEPRECATED, "reduction")),
+    "hinge_embedding_loss": _loss(
+        "hingeEmbeddingLoss", ("target", "margin", "reduction"),
+        ("target", "margin", *_DEPRECATED, "reduction")),
+    "soft_margin_loss": _loss(
+        "softMarginLoss", ("target", "reduction"),
+        ("target", *_DEPRECATED, "reduction")),
+    "triplet_margin_loss": _loss(
+        "tripletMarginLoss",
+        ("positive", "negative", "margin", "p", "eps", "swap", "reduction"),
+        ("positive", "negative", "margin", "p", "eps", "swap", *_DEPRECATED,
+         "reduction")),
+    # **borch.ts takes a `weight` here and the table had no seat for it**, so a
+    # `reduction` given by position landed in it — a string where a tensor
+    # belongs. The core answers with the weight applied (0.7314 against 0.3962
+    # on the same input), so this was the one refusal-shaped hole that was not a
+    # refusal: the subset has the feature and only this layer could not reach it.
+    "multilabel_soft_margin_loss": _loss(
+        "multilabelSoftMarginLoss", ("target", "weight", "reduction"),
+        ("target", "weight", *_DEPRECATED, "reduction")),
+    "multi_margin_loss": _loss(
+        "multiMarginLoss", ("target", "p", "margin", "weight", "reduction"),
+        ("target", "p", "margin", "weight", *_DEPRECATED, "reduction")),
+    "multilabel_margin_loss": _loss(
+        "multilabelMarginLoss", ("target", "reduction"),
+        ("target", *_DEPRECATED, "reduction")),
+    "pairwise_distance": _loss("pairwiseDistance", ("x2", "p", "eps", "keepdim")),
+    "pdist": _loss("pdist", ("p",)),
     # Repositioning. Only the names differ.
     # Window unrolling and the rest. **`F.unfold` is im2col** — a different thing
     # from `Tensor.unfold`.
-    "unfold": ("unfoldIm2col", ("kernel_size", "dilation", "padding", "stride")),
-    "fold": ("fold", ("output_size", "kernel_size", "dilation", "padding",
-                      "stride")),
-    "local_response_norm": ("localResponseNorm", ("size", "alpha", "beta", "k")),
-    "rrelu": ("rrelu", ("lower", "upper", "training")),
-    "pixel_shuffle": ("pixelShuffle", ("upscale_factor",)),
-    "pixel_unshuffle": ("pixelUnshuffle", ("downscale_factor",)),
-    "channel_shuffle": ("channelShuffle", ("groups",)),
+    "unfold": _loss("unfoldIm2col",
+                    ("kernel_size", "dilation", "padding", "stride")),
+    "fold": _loss("fold", ("output_size", "kernel_size", "dilation", "padding",
+                           "stride")),
+    "local_response_norm": _loss("localResponseNorm",
+                                 ("size", "alpha", "beta", "k")),
+    "rrelu": _loss("rrelu", ("lower", "upper", "training")),
+    "pixel_shuffle": _loss("pixelShuffle", ("upscale_factor",)),
+    "pixel_unshuffle": _loss("pixelUnshuffle", ("downscale_factor",)),
+    "channel_shuffle": _loss("channelShuffle", ("groups",)),
     # **The ones that drop whole channels.** Over there it is one name,
     # `featureDropout`, and it does not check the rank — only `dropout1d` checks
     # it, so that check is attached separately below.
-    "dropout2d": ("featureDropout", ("p", "training")),
-    "dropout3d": ("featureDropout", ("p", "training")),
+    "dropout2d": _loss("featureDropout", ("p", "training")),
+    "dropout3d": _loss("featureDropout", ("p", "training")),
 }
 
 
@@ -656,6 +741,13 @@ _HAND_WRITTEN = {
     "avg_pool1d": _pool_fn("avg", False),
     "avg_pool3d": _pool_fn("avg", False),
     "adaptive_avg_pool1d": _pool_fn("avg", True),
+    # **The two-dimensional one was the gap in the middle.** 1-D and 3-D
+    # were both written down and 2-D — the one the tutorials use — reached
+    # the general rule instead, which asks the tensor for
+    # `adaptiveAvgPool2d`. borch.ts has `adaptiveAvgPool` (1-D) and
+    # `adaptivePool(kind, size)`, so the call raised `AttributeError` and no
+    # golden case asked it.
+    "adaptive_avg_pool2d": _pool_fn("avg", True),
     "adaptive_avg_pool3d": _pool_fn("avg", True),
     "adaptive_max_pool1d": _pool_fn("max", True),
     "adaptive_max_pool2d": _pool_fn("max", True),
@@ -692,7 +784,7 @@ _HAND_WRITTEN = {
     "conv_transpose1d": _conv_transpose,
     "conv_transpose2d": _conv_transpose,
     "conv_transpose3d": _conv_transpose,
-    **{name: _loss(js, order) for name, (js, order) in _LOSSES.items()},
+    **_LOSSES,
 }
 
 
@@ -2405,7 +2497,7 @@ def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None):
 #
 # The failure mode is worth more than the fix: a stale reason is worse than no reason,
 # because no reason invites a check. This one survived every sweep of the file.
-def _no_class_weights(who, weight, pos_weight):
+def _no_class_weights(who, weight, pos_weight, why="class weights"):
     """**`weight` and `pos_weight` are not here.** Accepted and unused, the loss
     quietly becomes a different one.
 
@@ -2420,7 +2512,7 @@ def _no_class_weights(who, weight, pos_weight):
     from borch._base import _unsupported
 
     if weight is not None:
-        _unsupported(f"{who}(weight=…) — class weights")
+        _unsupported(f"{who}(weight=…) — {why}")
     if pos_weight is not None:
         _unsupported(f"{who}(pos_weight=…)")
 
@@ -2440,9 +2532,18 @@ def _legacy_reduction(size_average, reduce, reduction):
     """
     if size_average is None and reduce is None:
         return reduction
-    return ("none" if reduce is False
-            else "sum" if size_average is False
-            else "mean")
+    got = ("none" if reduce is False
+           else "sum" if size_average is False
+           else "mean")
+    # torch's own wording, so a caller who meets it can search for the same
+    # sentence in torch's issues. It was absent here while the core and torch
+    # both warned — the fold was right and the *telling* was missing, which is
+    # how a deprecated argument stays in a codebase forever.
+    _warnings.warn(
+        f"size_average and reduce args will be deprecated, "
+        f"please use reduction='{got}' instead.",
+        UserWarning, stacklevel=3)
+    return got
 
 
 def L1Loss(size_average=None, reduce=None, reduction="mean"):

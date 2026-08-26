@@ -6046,7 +6046,7 @@ def multilabel_margin_loss(input, target, size_average=None, reduce=None,
     reduction = _legacy_reduction(size_average, reduce, reduction)
     x, t = _wrap(input), _wrap(target)
     rows, classes = x.data.shape
-    total = None
+    each = []
     for r in range(rows):
         labels = []
         for v in t.data[r]:
@@ -6054,12 +6054,24 @@ def multilabel_margin_loss(input, target, size_average=None, reduce=None,
                 break
             labels.append(int(v))
         others = [c for c in range(classes) if c not in labels]
+        row = None
         for i in labels:
             for j in others:
                 term = relu(1 - (x[r, i] - x[r, j]))
-                total = term if total is None else total + term
-    out = (total if total is not None else Tensor(_np.zeros((), dtype=x.data.dtype)))
-    return _reduce(out.reshape(1) / classes, reduction)
+                row = term if row is None else row + term
+        each.append(Tensor(_np.zeros((), dtype=x.data.dtype)) if row is None
+                    else row)
+    # **One number per row, not one number.** This ran the two loops into a single
+    # accumulator and reshaped it to `(1,)`, so `reduction="none"` handed back the
+    # batch's *sum* under the name of the per-row losses and `mean` divided it by
+    # one. Only `sum` agreed with torch, and it agreed by accident.
+    #
+    # The case that stood here had **a single row**, where a collapsed batch and a
+    # kept one are the same array. It was written for the −1 convention and it
+    # measured that; nothing above it asked for a second row until a positional
+    # `reduction` case needed one.
+    out = stack(each) / classes
+    return _reduce(out, reduction)
 
 
 # ------------------------------------------------------------ unfolding windows

@@ -4522,7 +4522,7 @@ function addLoss(out: Map<string, Case>): void {
   // **torch's deprecated pair, and it beats `reduction`.** The last two read wrongly
   // at a glance and are the point: all three given folds to the *mean*, and the
   // positional string lands on `sizeAverage`, which is truthy, so it folds there too.
-  // Nothing else in this file runs `legacyReduction`.
+  // The `자리::` group below runs the same fold under `F`.
   const legacy: [string, () => Tensor][] = [
     ["size_average=False", () => new nn.L1Loss(false).call(a(), b())],
     ["reduce=False", () => new nn.L1Loss(null, false).call(a(), b())],
@@ -4533,6 +4533,54 @@ function addLoss(out: Map<string, Case>): void {
       () => new nn.L1Loss("sum" as unknown as boolean).call(a(), b())],
   ];
   for (const [name, fn] of legacy) out.set(`loss::가장자리::${name}`, fn);
+
+  // **The same pair, under `F` rather than on a layer.** Everything in `value`
+  // above gives `reduction` by name, and a keyword survives a signature whose
+  // seats are wrong — a position does not. `F`'s exports were short of torch's
+  // list by exactly these two seats, so torch's own line was a type error here
+  // and, on the Python binding reading the same table, a value silently at the
+  // default: `F.soft_margin_loss(a, b, "sum")` set `size_average`, which is
+  // neither null nor false, so the fold answered `mean`.
+  const seats: [string, (r: "none" | "sum" | "mean") => Tensor][] = [
+    ["soft_margin", (r) => F.softMarginLoss(x(), sgn(), null, null, r)],
+    ["hinge_embedding",
+      (r) => F.hingeEmbeddingLoss(x(), sgn(), 1.0, null, null, r)],
+    ["multilabel_margin", (r) => F.multilabelMarginLoss(
+      mm(), Tensor.from([2, -1, -1, 0, -1, -1], [2, 3]), null, null, r)],
+    ["kl_div", (r) => F.klDiv(logp(), tgtp(), null, null, r)],
+    // torch's third seat here **is** `reduction` — this one is newer and never
+    // carried the pair, so nothing steps over anything and it agreed all along.
+    // It is asked beside the others as the control.
+    ["huber", (r) => F.huberLoss(x(), y(), r)],
+  ];
+  for (const [name, fn] of seats) {
+    for (const r of ["none", "sum", "mean"] as const) {
+      out.set(`loss::자리::${name}(${r})`, () => fn(r));
+    }
+  }
+  // `multilabelSoftMarginLoss` takes a **`weight` in the third seat** on both
+  // sides, so this is the one place in the group where the seat is filled rather
+  // than stepped over.
+  out.set("loss::자리::multilabel_soft_margin(weight)",
+    () => F.multilabelSoftMarginLoss(
+      Tensor.from([0.5, -1, 2], [1, 3]), Tensor.from([1, 0, 1], [1, 3]),
+      Tensor.from([1, 2, 3], [3])));
+  out.set("loss::자리::multilabel_soft_margin(weight, none)",
+    () => F.multilabelSoftMarginLoss(
+      Tensor.from([0.5, -1, 2], [1, 3]), Tensor.from([1, 0, 1], [1, 3]),
+      Tensor.from([1, 2, 3], [3]), null, null, "none"));
+  // **One row could not tell a kept batch from a collapsed one.** The single
+  // `multilabel_margin` case above has one row, and the core meanwhile summed the
+  // whole batch into one number — `none` handed back the sum and `mean` divided it
+  // by one. This side kept the rows the whole time and had nobody to disagree with.
+  out.set("loss::multilabel_margin(두 행, none)",
+    () => F.multilabelMarginLoss(
+      mm(), Tensor.from([2, -1, -1, 0, -1, -1], [2, 3]), null, null, "none"));
+  // A row whose target starts at −1 has **no labels at all**: its loss is zero and
+  // the rows around it must not shift up to fill the seat.
+  out.set("loss::multilabel_margin(빈 행)",
+    () => F.multilabelMarginLoss(
+      mm(), Tensor.from([-1, -1, -1, 0, 1, -1], [2, 3]), null, null, "none"));
 
   const layers: [string, () => Tensor][] = [
     // `delta` moved behind `reduction` to match torch. The Python case passes

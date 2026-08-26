@@ -8,7 +8,7 @@ underneath.
 It used to belong to the TF.js implementation. That one was **5,307 lines**,
 because TF.js supplies 104 primitive operations and nothing else, so the
 autograd tape, `nn.Module` and the optimisers all had to be rebuilt in Python.
-This one is **8,769 lines** — borch.ts already has all of it, so Python's job
+This one is **9,249 lines** — borch.ts already has all of it, so Python's job
 is swapping names across.
 
 `_data.py` is nearly identical in both. It came over unchanged, sits on numpy

@@ -178,7 +178,12 @@ CEILINGS = {
     # one is 파이썬.
     # 3373 → 3375. Two more, and the same kind: v2's tv_tensor dispatch gets a row and
     # its reason opens with 없음.
-    "borch-ts/test": 3375,
+    # 3375 → 3387. Twelve, and all of them **case names**, which is the allowed kind:
+    # `자리::` for the group asking torch's argument seats positionally, and
+    # `(두 행)` / `(빈 행)` for the two that give `multilabel_margin` a second row.
+    # The names have to be the same string on both sides — the golden is keyed by
+    # them — so the Python side's name is what this side must write.
+    "borch-ts/test": 3387,
 }
 
 

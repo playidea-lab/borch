@@ -6879,6 +6879,57 @@ def loss_cases(inp=None):
         lambda L: F(L).soft_margin_loss(L.tensor(x), L.tensor(np.sign(y)),
                                         reduction="none"))
 
+    # ── 자리로 주는 reduction ──
+    #
+    # **Every loss case above gives `reduction` by keyword, and that is why none
+    # of them measured the argument order.** A keyword survives a table that has
+    # the seats wrong; a position does not. The binding read torch's call with a
+    # table that left out the deprecated `size_average`/`reduce` pair, so every
+    # seat after it moved forward and `F.soft_margin_loss(a, b, "sum")` set
+    # `size_average` — where a string is neither `None` nor `False`, so the fold
+    # reads it as the mean and the answer comes back at the default with no
+    # warning anywhere.
+    #
+    # torch keeps the pair for compatibility and these are the seats it really
+    # has. `huber_loss` is the newest and never carried the pair, so its third
+    # seat is `reduction` itself — which is what makes it worth asking beside
+    # the others rather than instead of them.
+    _sgn = np.sign(y)
+    for _tag, _fn in (
+            ("soft_margin", lambda L, r: F(L).soft_margin_loss(
+                L.tensor(x), L.tensor(_sgn), None, None, r)),
+            ("hinge_embedding", lambda L, r: F(L).hinge_embedding_loss(
+                L.tensor(x), L.tensor(_sgn), 1.0, None, None, r)),
+            ("multilabel_margin", lambda L, r: F(L).multilabel_margin_loss(
+                L.tensor(_LOSS_MM), L.tensor(np.array([[2, -1, -1], [0, -1, -1]],
+                                                      dtype=np.int64)),
+                None, None, r)),
+            ("kl_div", lambda L, r: F(L).kl_div(
+                F(L).log_softmax(L.tensor(x), dim=1),
+                F(L).softmax(L.tensor(y), dim=1), None, None, r)),
+            # The third seat here **is** `reduction` — no pair to step over.
+            ("huber", lambda L, r: F(L).huber_loss(
+                L.tensor(x), L.tensor(y), r)),
+    ):
+        for _r in ("none", "sum", "mean"):
+            add(f"자리::{_tag}({_r})", lambda L, f=_fn, r=_r: f(L, r))
+
+    # `multilabel_soft_margin_loss` takes a **`weight` in the third seat**, and
+    # borch.ts takes one too — so this is the one place in the group where the
+    # seat is filled rather than refused, and giving `reduction` by position
+    # would put a string into it.
+    add("자리::multilabel_soft_margin(weight)",
+        lambda L: F(L).multilabel_soft_margin_loss(
+            L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
+            L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32)),
+            L.tensor(np.array([1.0, 2.0, 3.0], dtype=np.float32))))
+    add("자리::multilabel_soft_margin(weight, none)",
+        lambda L: F(L).multilabel_soft_margin_loss(
+            L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
+            L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32)),
+            L.tensor(np.array([1.0, 2.0, 3.0], dtype=np.float32)),
+            None, None, "none"))
+
     # ── triplet ──
     triplets = (("기본", {}), ("margin=2", {"margin": 2.0}), ("p=1", {"p": 1}),
                 ("swap", {"swap": True}))
@@ -6922,6 +6973,24 @@ def loss_cases(inp=None):
         lambda L: F(L).multilabel_margin_loss(
             L.tensor(np.array([[0.1, 0.2, 0.4, 0.8]], dtype=np.float32)),
             L.tensor(np.array([[3, 0, -1, 1]], dtype=np.int64))))
+    # **One row could not tell a kept batch from a collapsed one.** The case above
+    # was written for the −1 convention and measured it; the core meanwhile summed
+    # the whole batch into one number, so `reduction="none"` handed back the sum
+    # and `mean` divided it by one. With a single row those are the same array,
+    # and all three implementations were green — borch.ts kept the rows the whole
+    # time and had no one to disagree with.
+    add("multilabel_margin(두 행, none)",
+        lambda L: F(L).multilabel_margin_loss(
+            L.tensor(_LOSS_MM),
+            L.tensor(np.array([[2, -1, -1], [0, -1, -1]], dtype=np.int64)),
+            reduction="none"))
+    # A row whose target starts at −1 has **no labels at all**, so its loss is
+    # zero and the rows around it must not shift up to fill the seat.
+    add("multilabel_margin(빈 행)",
+        lambda L: F(L).multilabel_margin_loss(
+            L.tensor(_LOSS_MM),
+            L.tensor(np.array([[-1, -1, -1], [0, 1, -1]], dtype=np.int64)),
+            reduction="none"))
 
     # ── distances ──
     add("pairwise_distance",
