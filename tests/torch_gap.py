@@ -481,7 +481,12 @@ SKIPPED = {
     # export, but the names do not match there.
     "Sym*": "symbolic sizes — for graph capture, and they do not sit on wasm",
     "sym_*": "symbolic sizes — as above",
-    "cond": "a control-flow capture op — it is for export",
+    # **Namespaced, because `linalg.cond` is a different function and we built it.** Bare,
+    # this reason reached the condition number — which works, returns 14.93 on a 2×2, and
+    # was being explained to any reader of this table as *a control-flow capture op*.
+    # `_look`'s docstring records `Optimizer` and `*Tensor` doing this before; the fix is
+    # the same one, applied a third time.
+    "torch.cond": "a control-flow capture op — it is for export",
     "while_loop": "a control-flow capture op — it is for export",
     "vmap": "functorch's auto-batching — outside the curriculum",
 
@@ -1004,6 +1009,28 @@ def _leaf_match(pattern, name):
     return False
 
 
+# **Built anyway, inside a namespace that was declined whole.**
+#
+# `DELIBERATE` matches by prefix, and that prefix does real work: taking it away costs
+# twenty-two absent names their reason (`quantize_per_tensor`, the six `sparse_*_tensor`
+# constructors). So the rule stays and the exceptions are written here.
+#
+# `Tensor.sparse_dim()` returns 0 on a dense tensor, which is torch's own answer, and it
+# does not refuse — it was covered by `"sparse": outside the curriculum` while being
+# inside it.
+#
+# **This table needs no eviction check of its own.** Remove a name from the library and
+# it becomes absent with no reason attached, which is the one thing the main report
+# already fails on. It cannot rot in the direction the others could.
+DESPITE = {
+    "Tensor.sparse_dim",
+    # torch has no top-level `sparse_dim` — only the method. This one is ours alone, so
+    # it is never a gap; it reaches the tables through `test_gap.py`, which sweeps
+    # everything we declare rather than only what torch also has.
+    "torch.sparse_dim",
+}
+
+
 def _why(space, name):
     """Why it is all right for this to be absent. None where there is no reason — **and that
     is exactly what wants reviewing.**
@@ -1017,6 +1044,8 @@ def _why(space, name):
     `kl_div` we built, and `ctc_loss` there is still a real gap.
     """
     full = f"{space}.{name}"
+    if full in DESPITE:
+        return None
     for key, reason in DELIBERATE.items():
         if full.startswith(key) or name.startswith(key):
             return ("namespace", reason)

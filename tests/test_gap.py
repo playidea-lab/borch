@@ -238,35 +238,86 @@ def test_skipped_does_not_claim_what_we_actually_do():
 
     A name that could not be called is **not judged.** Pretending to know what is unknown is
     where this table starts lying again.
+
+    ## It was blind in two places, and each let one through
+
+    **The probe was a vector, and a refusal ended the search.** Two things, and the first
+    diagnosis stopped at one of them: adding a matrix to the argument list was written,
+    measured, and **changed nothing**. `linalg.cond` raises `BorchError: cond (fewer than
+    2 dimensions)` for the vector, `verdict` took the first `BorchError` as final, and the
+    matrix after it was never tried. So the real defect was the assumption underneath —
+    *our refusals stop with `BorchError` regardless of the arguments* — which `cond`
+    disproves by returning 14.93 on a 2×2. Both are fixed, and the row is keyed
+    `torch.cond` so its reason stops reaching a different function.
+
+    **`DELIBERATE` was not consulted.** This read `SKIPPED` alone, and a namespace
+    declined whole hands out reasons by prefix — `"sparse"` covered `Tensor.sparse_dim`,
+    which returns 0 on a dense tensor exactly as torch does. Reached through the
+    classifier now, so all three tables are asked with one question.
+
+    Both were found by writing a second, parallel checker, which then had to be thrown
+    away: **two checks answering the same question drift**, and this file already says so
+    about `_names_still_match`. What the throwaway was worth was the two blind spots, and
+    those belong here.
     """
     import numpy as np
 
     import borch
     from borch import BorchError
+    # `DESPITE` is read here too. Without it this and `_why` would disagree about the
+    # same name — one table, two answers, which is the shape every fix in this file has
+    # been about.
+    from torch_gap import DELIBERATE, DESPITE
 
     probe = borch.tensor(np.array([1.0, 2.0], dtype=np.float32))
+    # **A matrix as well as a vector.** Every square-matrix name — `cond`, and the
+    # decompositions beside it — is unreachable with a vector alone, and unreachable
+    # reads as *unjudged*, which is silence rather than a pass.
+    square = borch.tensor(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
 
     def verdict(fn):
-        """`True` = it runs · `False` = it refuses · `None` = it could not be called."""
-        seen_type_error = False
-        for args in ((), (probe,), (probe, probe)):
+        """`True` = it runs · `False` = it refuses · `None` = it could not be called.
+
+        **A refusal does not end the search.** This used to return `False` on the first
+        `BorchError`, resting on the sentence above — *our refusals stop with `BorchError`
+        regardless of the arguments*. That is not true of all of them. `linalg.cond`
+        raises `BorchError: cond (fewer than 2 dimensions)` for a vector and returns
+        14.93 for a matrix: the refusal is about **the argument**, not about the name.
+
+        Reading the first one as final is why adding a matrix to the list changed
+        nothing — the vector came first and closed the question before the matrix was
+        tried. So every shape is tried, and one that runs outweighs one that refused.
+        """
+        refused = seen_type_error = False
+        for args in ((), (probe,), (square,), (probe, probe), (square, square)):
             try:
                 fn(*args)
             except BorchError:
-                return False
+                refused = True
             except TypeError:
                 seen_type_error = True
             except Exception:                                   # noqa: BLE001
                 continue
             else:
                 return True
+        if refused:
+            return False
         return None if seen_type_error else None
 
     alive = []
     for space, _theirs, ours in _spaces():
         for name in _public(ours):
             full = f"{space}.{name}"
+            if full in DESPITE:
+                continue
             reason = _look(SKIPPED, name, full)
+            if not reason:
+                # A namespace declined whole gives its reason out by prefix, and those
+                # names are as able to go stale as the hand-written ones.
+                for key, why in DELIBERATE.items():
+                    if full.startswith(key) or name.startswith(key):
+                        reason = why
+                        break
             if not reason:
                 continue
             got = getattr(ours, name, None)
