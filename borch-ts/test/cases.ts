@@ -7224,7 +7224,32 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
     });
   }
 
-  out.set("ndim::torch.matmul", () => flat().mm(flat().transpose()));
+  // **Whether matmul batches and broadcasts.** Every matmul case in this
+  // table used to be 2-D, where `matmul` and `mm` are the same function, so
+  // this side answered all of them with `mm` and **the absence of a batched
+  // path never showed.**
+  //
+  // The values are the same numbers written again from `tests/cases.py`.
+  // Divergent values stop the comparison from being a comparison.
+  const m3a = () => Tensor.from([0.0, 0.0333333351, 0.0666666701, 0.1000000015, 0.1333333403, 0.1666666716, 0.200000003, 0.2333333343, 0.2666666806, 0.3000000119, 0.3333333433, 0.3666666746, 0.400000006, 0.4333333373, 0.4666666687, 0.5, 0.5333333611, 0.5666666627, 0.6000000238, 0.6333333254, 0.6666666865, 0.6999999881, 0.7333333492, 0.7666666508, 0.8000000119, 0.8333333135, 0.8666666746, 0.8999999762, 0.9333333373, 0.9666666389], [5, 2, 3]);
+  const m3b = () => Tensor.from([0.0, 0.0166666675, 0.0333333351, 0.0500000007, 0.0666666701, 0.0833333358, 0.1000000015, 0.1166666672, 0.1333333403, 0.150000006, 0.1666666716, 0.1833333373, 0.200000003, 0.2166666687, 0.2333333343, 0.25, 0.2666666806, 0.2833333313, 0.3000000119, 0.3166666627, 0.3333333433, 0.349999994, 0.3666666746, 0.3833333254, 0.400000006, 0.4166666567, 0.4333333373, 0.4499999881, 0.4666666687, 0.4833333194, 0.5, 0.5166666508, 0.5333333611, 0.5500000119, 0.5666666627, 0.5833333135, 0.6000000238, 0.6166666746, 0.6333333254, 0.6499999762, 0.6666666865, 0.6833333373, 0.6999999881, 0.7166666389, 0.7333333492, 0.75, 0.7666666508, 0.7833333611, 0.8000000119, 0.8166666627, 0.8333333135, 0.8500000238, 0.8666666746, 0.8833333254, 0.8999999762, 0.9166666865, 0.9333333373, 0.9499999881, 0.9666666389, 0.9833333492], [5, 3, 4]);
+  const m2t = () => Tensor.from([0.0, 0.0833333358, 0.1666666716, 0.25, 0.3333333433, 0.4166666567, 0.5, 0.5833333135, 0.6666666865, 0.75, 0.8333333135, 0.9166666865], [3, 4]);
+  const v3t = () => Tensor.from([0.0, 0.3333333433, 0.6666666865], [3]);
+  const v4t = () => Tensor.from([0.0, 0.25, 0.5, 0.75], [4]);
+  const m4a = () => Tensor.from([0.0, 0.0833333358, 0.1666666716, 0.25, 0.3333333433, 0.4166666567, 0.5, 0.5833333135, 0.6666666865, 0.75, 0.8333333135, 0.9166666865], [2, 1, 2, 3]);
+  const m4b = () => Tensor.from([0.0, 0.020833334, 0.0416666679, 0.0625, 0.0833333358, 0.1041666642, 0.125, 0.1458333284, 0.1666666716, 0.1875, 0.2083333284, 0.2291666716, 0.25, 0.2708333433, 0.2916666567, 0.3125, 0.3333333433, 0.3541666567, 0.375, 0.3958333433, 0.4166666567, 0.4375, 0.4583333433, 0.4791666567, 0.5, 0.5208333135, 0.5416666865, 0.5625, 0.5833333135, 0.6041666865, 0.625, 0.6458333135, 0.6666666865, 0.6875, 0.7083333135, 0.7291666865, 0.75, 0.7708333135, 0.7916666865, 0.8125, 0.8333333135, 0.8541666865, 0.875, 0.8958333135, 0.9166666865, 0.9375, 0.9583333135, 0.9791666865], [1, 4, 3, 4]);
+
+  out.set("matmul::3d@3d", () => m3a().matmul(m3b()));
+  out.set("matmul::3d@2d", () => m3a().matmul(m2t()));
+  out.set("matmul::2d@3d", () => m2t().transpose().matmul(m3b()));
+  // The borrowed axis comes back out: [3] @ [5,3,4] is [5,4], not [5,1,4].
+  out.set("matmul::1d@3d", () => v3t().matmul(m3b()));
+  out.set("matmul::3d@1d", () => m3b().matmul(v4t()));
+  out.set("matmul::4d_broadcast", () => m4a().matmul(m4b()));
+  // The place bimm's ViT had to work around — a Linear taking a 3-D input.
+  out.set("matmul::linear_3d", () => m3a().linear(m2t().transpose()));
+
+  out.set("ndim::torch.matmul", () => flat().matmul(flat().transpose()));
   out.set("ndim::torch.reshape", () => flat().reshape([4, 2]));
   out.set("ndim::torch.unsqueeze", () => flat().unsqueeze(1));
   out.set("ndim::torch.masked_fill", () => flat().maskedFill(mask(), -1.0));
@@ -7824,7 +7849,7 @@ function addLinalgNames(out: Map<string, Case>): void {
   const gen = () => Tensor.from([4, 1, 2, 0, 3, -1, 1, 0, 2], [3, 3]);
 
   const value: [string, () => Promise<Tensor>][] = [
-    ["name2::matmul", async () => mat().mm(mat())],
+    ["name2::matmul", async () => mat().matmul(mat())],
     ["name2::vecdot", async () => mat().vecdot(mat())],
     ["name2::cross", async () => Tensor.from([1, 2, 3], [3])
       .cross(Tensor.from([4, 5, 6], [3]))],
@@ -8388,7 +8413,7 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
     // through the case rather than the implementation.
     ["maximum", (a, b) => a.binary("maximum", b), () => [x1(true), asLeaf(x1().neg())]],
     ["minimum", (a, b) => a.binary("minimum", b), () => [x1(true), asLeaf(x1().neg())]],
-    ["matmul", (a, b) => a.mm(b), () => [x2(true), asLeaf(x2().transpose())]],
+    ["matmul", (a, b) => a.matmul(b), () => [x2(true), asLeaf(x2().transpose())]],
     // **The prediction and the target are given differently.** Equal, every gradient is 0
     // and an implementation with a flipped sign, or one that never divided by the count,
     // passes.

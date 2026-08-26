@@ -1627,8 +1627,98 @@ export class Tensor implements Node<Tensor> {
   // ── Matrix products ───────────────────────────────────────────────────
 
   /**
-   * Two-dimensional only. Batched matrix multiply is T1 — a missing feature
-   * beats a wrong answer.
+   * torch's `matmul`, which is what `@` maps to. Five cases, and they are
+   * not variations of one rule — **each was measured against torch rather
+   * than reasoned about**, because the 1-D ones do not follow from the
+   * others:
+   *
+   * | this | other | result | what happens |
+   * |------|-------|--------|--------------|
+   * | 1-D  | 1-D   | scalar | inner product |
+   * | 2-D  | 2-D   | 2-D    | plain `mm` |
+   * | 1-D  | n-D   | drops one | a 1 is prepended, then removed after |
+   * | n-D  | 1-D   | drops one | a 1 is appended, then removed after |
+   * | n-D  | m-D   | broadcast | leading dims broadcast, last two multiply |
+   *
+   * The prepended and appended 1s are **removed from the result**, which is
+   * why `[3] x [5,3,4]` gives `[5,4]` and not `[5,1,4]`. That asymmetry is
+   * the part worth checking against torch before trusting any of it.
+   *
+   * ## Why this is built out of `bmm` rather than a new kernel
+   *
+   * `bmm` is `mm` per batch element and `mm` owns its backward, so the
+   * expression written here *is* the graph — the same reasoning `mm` gives
+   * for splitting a complex product into four real ones. A batched kernel
+   * would be faster and is a separate job; being able to run a transformer
+   * at all comes first.
+   */
+  matmul(o: Tensor): Tensor {
+    const other = o;
+    const a = this.shape.length;
+    const b = other.shape.length;
+    if (a === 0 || b === 0) {
+      throw new RuntimeError(
+        `both arguments to matmul need to be at least 1-D, ` +
+          `but they are ${a}-D and ${b}-D`,
+      );
+    }
+    if (a === 1 && b === 1) return this.dot(other);
+    if (a === 2 && b === 2) return this.mm(other);
+    // A 1-D side becomes 2-D for the duration and the axis it borrowed is
+    // taken back at the end. `left`/`right` say which one to take back.
+    if (a === 1) return other.mmBatched(this.unsqueeze(0), true).squeeze(-2);
+    if (b === 1) return this.mmBatched(other.unsqueeze(1), false).squeeze(-1);
+    return this.mmBatched(other, false);
+  }
+
+  /**
+   * The n-D by n-D case of {@link matmul}: broadcast everything but the last
+   * two axes, fold what is left into one batch axis, and hand it to `bmm`.
+   *
+   * `flipped` marks that the caller swapped the operands to reuse this path
+   * (`1-D x n-D` is the only one that does), so the product is taken the
+   * other way round.
+   */
+  private mmBatched(other: Tensor, flipped: boolean): Tensor {
+    const left = flipped ? other : this;
+    const right = flipped ? this : other;
+    const ls = left.shape;
+    const rs = right.shape;
+    const M = ls[ls.length - 2] ?? 0;
+    const K = ls[ls.length - 1] ?? 0;
+    const K2 = rs[rs.length - 2] ?? 0;
+    const N = rs[rs.length - 1] ?? 0;
+    if (K !== K2) {
+      throw new RuntimeError(
+        `mat1 and mat2 ${TORCH.matmulShape} ` +
+          `(${M}x${K} and ${K2}x${N})`,
+      );
+    }
+    // The batch axes broadcast against each other exactly as elementwise
+    // operations do, so the rule is not reinvented here.
+    const lb = ls.slice(0, -2);
+    const rb = rs.slice(0, -2);
+    const rank = Math.max(lb.length, rb.length);
+    const batch: number[] = [];
+    for (let i = 0; i < rank; i++) {
+      const x = lb[lb.length - rank + i] ?? 1;
+      const y = rb[rb.length - rank + i] ?? 1;
+      if (x !== y && x !== 1 && y !== 1) {
+        throw new RuntimeError(
+          `${TORCH.matmulShape}: batch dimensions [${lb}] and [${rb}] ` +
+            "do not broadcast",
+        );
+      }
+      batch.push(Math.max(x, y));
+    }
+    const total = batch.reduce((n, d) => n * d, 1);
+    const l3 = left.broadcastTo([...batch, M, K]).reshape([total, M, K]);
+    const r3 = right.broadcastTo([...batch, K, N]).reshape([total, K, N]);
+    return l3.bmm(r3).reshape([...batch, M, N]);
+  }
+
+  /**
+   * Two-dimensional only — {@link matmul} is the one that batches.
    */
   mm(mat2: Tensor): Tensor {
     if (this.shape.length !== 2 || mat2.shape.length !== 2) {
@@ -4480,9 +4570,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   /**
    * `x @ Wᵀ`. torch's `F.linear` takes the weight as (out, in).
+   *
+   * **Any number of leading dimensions**, as torch has. It used to be `mm`,
+   * which meant 2-D only, and every model carrying `[batch, tokens, dim]`
+   * had to fold the token axis into the batch itself before calling a
+   * `Linear` — bimm's ViT shipped a `tokenwise()` helper to do exactly that.
+   * `matmul` broadcasts, so the fold is no longer the caller's problem.
    */
   linear(weight: Tensor): Tensor {
-    return this.mm(weight.transpose());
+    return this.matmul(weight.transpose());
   }
 
   smoothL1Loss(target: Tensor, beta = 1.0,
