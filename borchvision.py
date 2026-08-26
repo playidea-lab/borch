@@ -5215,6 +5215,103 @@ class ImageFolder(DatasetFolder):
 
 
 
+
+class RenderedSST2(DatasetFolder):
+    """Sentences from SST-2 **rendered as pictures**, for reading text off an image.
+
+    <https://github.com/openai/CLIP/blob/main/data/rendered-sst2.md>
+
+    ## Why this one was refused and is not
+
+    The gap table put it under *a codec*. It is `png` — the extension is written into
+    torchvision's own constructor as `make_dataset(..., extensions=("png",))`, so the
+    answer sat in the source the whole time and nobody read it. That is the fourth
+    refusal here to have covered something nobody had looked at.
+
+    ## What it is
+
+    A folder per class under a folder per split, which is `DatasetFolder` with the
+    walk already described — so this subclasses it rather than repeating the walk.
+    Two things are fixed rather than discovered, and both are torchvision's:
+
+    - **The classes are declared and not sorted out of the directory.** `negative` is
+      0 and `positive` is 1, which is the sorted order anyway; declaring it means a
+      stray folder appearing on disk cannot renumber a trained model.
+    - **`val` lives in a folder called `valid`.** A reader that used the split name
+      finds nothing and reports an empty dataset rather than a missing directory.
+    """
+
+    _URL = "https://openaipublic.azureedge.net/clip/data/rendered-sst2.tgz"
+    _MD5 = "2384d08e9dcfa4bd55b324e610496ee5"
+    _SPLIT_TO_FOLDER = {"train": "train", "val": "valid", "test": "test"}
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False, loader=None):
+        if split not in self._SPLIT_TO_FOLDER:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, val, test}.")
+        self._split = split
+        self._given_root = root
+        self._base_folder = _os.path.join(root, "rendered-sst2")
+        self._folder = _os.path.join(self._base_folder,
+                                     self._SPLIT_TO_FOLDER[split])
+        if download:
+            self.download()
+        if not self._check_exists():
+            raise RuntimeError("Dataset not found. You can use download=True to "
+                               "download it")
+        super().__init__(self._folder, _folder_loader if loader is None else loader,
+                         (".png",), transform=transform,
+                         target_transform=target_transform)
+        # **The root printed is the one that was passed.** `DatasetFolder` was handed
+        # the split's folder so its walk starts in the right place, and `repr` shows
+        # the root — printing the deeper path would show a reader a directory they
+        # never named.
+        self.root = root
+        self.classes = ["negative", "positive"]
+        self.class_to_idx = {"negative": 0, "positive": 1}
+
+    def _check_exists(self):
+        return all(_os.path.isdir(_os.path.join(self._folder, name))
+                   for name in ("negative", "positive"))
+
+    def download(self):
+        """The archive is a `.tgz` of some tens of megabytes, fetched and hashed the
+        way the others here are."""
+        if self._check_exists():
+            return
+        _os.makedirs(self._given_root, exist_ok=True)
+        archive = _os.path.join(self._given_root, "rendered-sst2.tgz")
+        if _os.path.isfile(archive) and _md5_of_file(archive) != self._MD5:
+            _os.unlink(archive)
+        if not _os.path.isfile(archive):
+            _fetch_to(self._URL, archive, self._MD5)
+        root = _os.path.abspath(self._given_root)
+        with _tarfile.open(archive, mode="r:gz") as tar:
+            for member in tar:
+                if not member.isfile():
+                    continue
+                target = _os.path.join(root, *member.name.split("/"))
+                # **A tar can carry `../` in a member's name**, and joining it blind
+                # writes outside the directory the caller named. Members that leave
+                # the root are skipped rather than trusted.
+                if not _os.path.abspath(target).startswith(root + _os.sep):
+                    continue
+                _os.makedirs(_os.path.dirname(target), exist_ok=True)
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                with open(target, "wb") as handle:
+                    while True:
+                        block = extracted.read(1 << 20)
+                        if not block:
+                            break
+                        handle.write(block)
+
+    def extra_repr(self):
+        return f"split={self._split}"
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -5718,7 +5815,7 @@ _sys.modules["borchvision.transforms.functional"] = functional
 datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
-              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification",
+              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification", "RenderedSST2",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
 

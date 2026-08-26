@@ -13229,6 +13229,58 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
         return run
 
+    def sst2(split):
+        """`RenderedSST2` against torchvision's own, on a folder written here.
+
+        **Its refusal read *as above — a codec* and the extension was in torchvision's
+        constructor**: `make_dataset(..., extensions=("png",))`. Nobody had read it.
+
+        The split asked is `val`, because that is the one with a trap: the folder is
+        called `valid`, and a reader using the split name finds nothing and reports an
+        empty dataset rather than a missing directory. The counts per class differ so
+        that a reader pairing labels by position rather than by folder shows up.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            from PIL import Image as _PIL
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "rendered-sst2")
+                for folder, counts in (("train", (2, 1)), ("valid", (1, 1)),
+                                       ("test", (1, 2))):
+                    for name, n in zip(("negative", "positive"), counts):
+                        d = os.path.join(base, folder, name)
+                        os.makedirs(d)
+                        for k in range(n):
+                            block = (np.arange(3 * 4 * 3).reshape(3, 4, 3)
+                                     + k * 5 + len(name)) % 251
+                            _PIL.fromarray(block.astype(np.uint8)).save(
+                                os.path.join(d, f"{k}.png"))
+                if _is_real_torch(L):
+                    from torchvision.datasets import RenderedSST2 as real
+                    loaded = real(root, split=split)
+                else:
+                    loaded = _vision_datasets(L).RenderedSST2(root, split=split)
+                pictures = [np.asarray(loaded[i][0]) for i in range(len(loaded))]
+                labels = [loaded[i][1] for i in range(len(loaded))]
+                out = np.concatenate(
+                    [np.concatenate([p.reshape(-1) for p in pictures]),
+                     np.asarray(labels),
+                     [len(loaded), loaded.class_to_idx["negative"],
+                      loaded.class_to_idx["positive"]]])
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    cases += [
+        # **`val` reads a folder called `valid`.**
+        (prefix + "RenderedSST2(val, the folder is `valid`)", sst2("val")),
+        (prefix + "RenderedSST2(train)", sst2("train")),
+    ]
+
     cases += [
         (prefix + "CLEVR(train, labels by filename)", clevr("train", "labels")),
         (prefix + "CLEVR(train, pictures)", clevr("train", "pictures")),
