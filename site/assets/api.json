@@ -4,7 +4,7 @@
  "korean": {
   "done": 688,
   "stale": 0,
-  "missing": 282
+  "missing": 286
  },
  "modules": [
   {
@@ -16541,9 +16541,41 @@
      "doc": "The point groups worth keeping, as `[keypoints, mask]`.\n\n**The unit is the group, not the point.** These arrive as `(N, K, 2)` — `N` skeletons\nof `K` points each — and a group survives only if **every** one of its points is\ninside the canvas. Filtering point by point is the obvious reading and returns half a\npose with the joints renumbered.",
      "members": [],
      "torch": "sanitize_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "roiAlign",
+     "signature": "export declare function roiAlign(input: Tensor, boxes: Tensor, outputSize: number | readonly number[], spatialScale?: number, samplingRatio?: number, aligned?: boolean): Promise<Tensor>",
+     "doc": "Crop each box out of the feature map at a fixed size, **without rounding it.**\n\nThat is the whole difference from `roiPool` below and what the paper is named for: a\nbox's edges land between pixels, and rounding them to the grid moves the crop by up to\nhalf a cell.\n\n- **`spatialScale` is how much smaller the map is than the image.** A stride-16\n  backbone wants `1/16`; left at 1 this samples the top-left sixteenth of everything.\n- **`samplingRatio = -1` means as many samples as the bin is wide**, computed per box.\n- **`aligned` shifts by half a pixel** and stops clamping the box to a minimum size of\n  one. It is the correction to the original implementation and it moves every output;\n  `false` is the default because that is what the released weights were trained with.",
+     "members": [],
+     "torch": "roi_align"
+    },
+    {
+     "kind": "function",
+     "name": "roiPool",
+     "signature": "export declare function roiPool(input: Tensor, boxes: Tensor, outputSize: number | readonly number[], spatialScale?: number): Promise<Tensor>",
+     "doc": "The **maximum** in each bin, with the box rounded to the grid.\n\nFaster R-CNN's pooling, and the thing `roiAlign` was written to replace.\n\n**An empty bin answers zero rather than negative infinity.** A box small enough that a\nbin covers no cell at all is real — a distant object on a stride-32 map — and a\nmaximum over nothing has no value to give.\n\n**The rounding is C's, halves away from zero**, where JavaScript's `Math.round` sends\n`-0.5` to `-0` and `0.5` to `1`. At `spatialScale = 1` nothing ever lands on a half;\nat `0.5` every odd coordinate does.",
+     "members": [],
+     "torch": "roi_pool"
+    },
+    {
+     "kind": "function",
+     "name": "psRoiAlign",
+     "signature": "export declare function psRoiAlign(input: Tensor, boxes: Tensor, outputSize: number, spatialScale?: number, samplingRatio?: number): Promise<Tensor>",
+     "doc": "`roiAlign`, **but each bin reads its own bank of channels.**\n\nR-FCN's pooling: the convolutions before it produce a map that already knows *where*\nin the object each channel is looking, so the position is in the channel index.\n\n**The output channel is the slow axis and the bin is the fast one** —\n`c * ph * pw + (i * pw + j)`. The other order gives an output of exactly the right\nshape built from the wrong channels.\n\n**It has no `aligned` flag and the correction is on.** `roiAlign` grew a flag and\ndefaults it to `false`; this always subtracts the half pixel and never clamps the box\nto a minimum size. The absent argument is not the absent behaviour.",
+     "members": [],
+     "torch": "ps_roi_align"
+    },
+    {
+     "kind": "function",
+     "name": "psRoiPool",
+     "signature": "export declare function psRoiPool(input: Tensor, boxes: Tensor, outputSize: number, spatialScale?: number): Promise<Tensor>",
+     "doc": "`roiPool`'s grid with `psRoiAlign`'s channel banks — and **an average, not a maximum.**\n\nThat is the one thing here that reads like a typo and is not: a maximum over a\nposition-sensitive bank would pick the single most confident position and throw away\nthe vote, which is the opposite of what the bank is for.\n\n**Two things differ from `roiPool`** and both only show on a box that runs off the\nmap: the rounding takes the start inside it, and the clip is to the last index rather\nthan to the size.",
+     "members": [],
+     "torch": "ps_roi_pool"
     }
    ],
-   "count": 41
+   "count": 45
   },
   {
    "name": "datasets",
@@ -19063,5 +19095,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2556
+ "total": 2560
 }

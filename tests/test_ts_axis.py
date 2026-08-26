@@ -316,7 +316,13 @@ FROZEN = {
     # needs anything borch.ts lacks, and all of it is a second implementation rather
     # than an export. The sampler is the piece to carry first — eight of the names are
     # a wrapper around it.
-    "ops": 24,
+    #
+    # 24 → 20. **The first time this row has gone down.** `roiAlign`, `roiPool`,
+    # `psRoiAlign` and `psRoiPool` are written on the browser side now — in JavaScript
+    # numbers, as the rest of `ops.ts` is, so the values cross and the gradient does
+    # not. The four module classes that wrap them are still on this side alone, which is
+    # what keeps the number at twenty rather than sixteen.
+    "ops": 20,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     "transforms.v2": 1,

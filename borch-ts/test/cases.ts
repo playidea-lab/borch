@@ -1530,6 +1530,64 @@ function addOps(out: Map<string, Case>): void {
     [-1, 2, 0, 0.5, -3, 8, -40, 40, -0.25], [3, 3]);
   const hits = () => Tensor.from([0, 1, 1, 1, 0, 0, 1, 0, 1], [3, 3]);
 
+  // ── sampling a feature map at coordinates that are not integers ────────────
+  //
+  // **The boxes are arranged here too, and three of the five are why.** One fits, one
+  // hangs off the top-left, one off the bottom-right, one is smaller than a cell, and
+  // one is in the second image of the batch. Written with the inside ones alone this
+  // whole block passes against a reader that clamps a sample to the edge instead of
+  // zeroing it — which is what torchvision's *own Python reference* does, and what the
+  // first version of the Python side did.
+  const featureMap = () => {
+    const values: number[] = [];
+    for (let i = 0; i < 2 * 3 * 7 * 9; i++) values.push(((i % 17) * 0.3));
+    return Tensor.from(values, [2, 3, 7, 9]);
+  };
+  const rois = () => Tensor.from(
+    [0, 1, 1, 6, 5, 0, -3, -2, 4, 3, 0, 6, 4, 20, 20, 0, 2, 2, 2.4, 2.4,
+     1, 0, 0, 8, 6], [5, 5]);
+  // Eight channels so that `pooled = 2` leaves two out — the position-sensitive pair
+  // needs `out * ph * pw`, and one output channel would hide the channel ordering.
+  const psMap = () => {
+    const values: number[] = [];
+    for (let i = 0; i < 1 * 8 * 7 * 9; i++) values.push(((i % 13) * 0.4));
+    return Tensor.from(values, [1, 8, 7, 9]);
+  };
+  const psRois = () => Tensor.from(
+    [0, 1, 1, 6, 5, 0, -3, -2, 4, 3, 0, 6, 4, 20, 20, 0, 2, 2, 2.4, 2.4], [4, 5]);
+
+  // **`aligned` moves every value**, so both settings are asked.
+  // **The Python cases flatten before freezing**, so these do too — what is compared is
+  // the values in order, and the shape is asked on that side.
+  const flat = (make: () => Promise<Tensor>) =>
+    async () => (await make()).reshape([-1]);
+
+  out.set("ops::roi_align(aligned=False)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2])));
+  out.set("ops::roi_align(aligned=True)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2], 1, -1, true)));
+  out.set("ops::roi_align(sampling_ratio=2)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2], 1, 2)));
+  out.set("ops::roi_align(sampling_ratio=1)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2], 1, 1)));
+  out.set("ops::roi_align(spatial_scale=0.5)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2], 0.5)));
+  out.set("ops::roi_align(output_size=1)",
+    flat(() => ops.roiAlign(featureMap(), rois(), 1)));
+  // **The rounding is C's, not JavaScript's.** `Math.round(-0.5)` is `-0` where C gives
+  // `-1`, and `spatial_scale = 0.5` puts every odd coordinate on a half.
+  out.set("ops::roi_pool", flat(() => ops.roiPool(featureMap(), rois(), [3, 2])));
+  out.set("ops::roi_pool(spatial_scale=0.5, halves)",
+    flat(() => ops.roiPool(featureMap(), rois(), [3, 2], 0.5)));
+  // **The output channel is the slow axis and the bin is the fast one.**
+  out.set("ops::ps_roi_align", flat(() => ops.psRoiAlign(psMap(), psRois(), 2)));
+  out.set("ops::ps_roi_align(sampling_ratio=2)",
+    flat(() => ops.psRoiAlign(psMap(), psRois(), 2, 1, 2)));
+  // **An average, not a maximum** — the one thing here that reads like a typo.
+  out.set("ops::ps_roi_pool", flat(() => ops.psRoiPool(psMap(), psRois(), 2)));
+  out.set("ops::ps_roi_pool(spatial_scale=0.5)",
+    flat(() => ops.psRoiPool(psMap(), psRois(), 2, 0.5)));
+
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look
   // identical either way**, so a wrong one is a wrong answer with nothing raised — and
