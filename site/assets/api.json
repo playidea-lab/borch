@@ -4,7 +4,7 @@
  "korean": {
   "done": 688,
   "stale": 0,
-  "missing": 307
+  "missing": 308
  },
  "modules": [
   {
@@ -8681,8 +8681,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernelSize: number, stride?: number | undefined)",
-       "doc": ""
+       "signature": "constructor(kernelSize: number, stride?: number | undefined, padding?: number, ceilMode?: boolean, countIncludePad?: boolean, divisorOverride?: number | null)",
+       "doc": "**It took two of torch's six while its siblings took five.** `AvgPool1d` and\n`AvgPool3d` both go through `poolND`, which has taken `padding`, `ceilMode` and\n`countIncludePad` from the start; only this one called `avgPool2d`, a kernel with\ntwo arguments — so `new AvgPool2d(2, 2, 1)` was a type error where torch pads.\n`poolND` is general over the number of spatial axes, which is why the 1-D form\nuses it, so the middle size needed nothing new.\n\n`divisorOverride` is torch's for the 2-D and 3-D forms, and this is a 2-D one."
       },
       {
        "name": "forward",

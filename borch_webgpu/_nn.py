@@ -1141,10 +1141,24 @@ class _Wrap:
     nothing to inherit from `Module` anyway.
     """
 
-    __slots__ = ("_fn",)
+    __slots__ = ("_fn", "_shown")
 
-    def __init__(self, fn):
+    def __init__(self, fn, shown=None):
+        """`shown` is **how it prints**, and there is nowhere else it can come from.
+
+        These are the layers borch.ts has no class for, so `describe` has nobody to
+        ask — and without a name the golden read
+        `<borch_webgpu._nn._Wrap object at 0x…>` where torch prints
+        `Flatten(start_dim=1, end_dim=-1)`. Given as the finished string rather than
+        as fields, because there is no rule shared with anything: each of these is one
+        line of torch's `extra_repr` and copying the fields would only put the same
+        line further away.
+        """
         self._fn = fn
+        self._shown = shown
+
+    def __repr__(self):
+        return self._shown or f"{type(self).__name__}()"
 
     def forward(self, *args):
         return self(*args)
@@ -2136,7 +2150,8 @@ def FractionalMaxPool3d(*args, **kw):
 
 def Flatten(start_dim=1, end_dim=-1):
     from ._ops import flatten
-    return _Wrap(lambda x: flatten(x, start_dim, end_dim))
+    return _Wrap(lambda x: flatten(x, start_dim, end_dim),
+                 f"Flatten(start_dim={start_dim}, end_dim={end_dim})")
 
 
 def Identity(*args, **kw):
@@ -2151,12 +2166,21 @@ def Identity(*args, **kw):
     return _layer("Identity")
 
 
-def _pool_layer(kind, adaptive):
+def _pool_layer(kind, adaptive, shown=None):
     def make(size, stride=None, return_indices=False):
         n = size[0] if isinstance(size, (list, tuple)) else size
         fn = _pool_fn(kind, adaptive)
-        return _Wrap(lambda x: fn(x, n, stride, return_indices=return_indices))
+        return _Wrap(lambda x: fn(x, n, stride, return_indices=return_indices),
+                     None if shown is None
+                     else f"{shown}(output_size={_size_repr(size)})")
     return make
+
+
+def _size_repr(size):
+    """torch's `_AdaptiveAvgPoolNd.extra_repr` prints **the argument as given** — a
+    number stays a number and a pair stays a pair, because the two are different
+    layers and printing `(1, 1)` for `1` hides which one was built."""
+    return repr(tuple(size)) if isinstance(size, (list, tuple)) else repr(size)
 
 
 def _adaptive_layer(name, indices):
@@ -2180,7 +2204,7 @@ def _adaptive_layer(name, indices):
     return make
 
 
-AdaptiveAvgPool2d = _pool_layer("avg", True)
+AdaptiveAvgPool2d = _pool_layer("avg", True, "AdaptiveAvgPool2d")
 AdaptiveAvgPool1d = _adaptive_layer("AdaptiveAvgPool1d", False)
 AdaptiveAvgPool3d = _adaptive_layer("AdaptiveAvgPool3d", False)
 AdaptiveMaxPool1d = _adaptive_layer("AdaptiveMaxPool1d", True)
@@ -2222,8 +2246,12 @@ LPPool2d = _lp_pool_layer("LPPool2d")
 LPPool3d = _lp_pool_layer("LPPool3d")
 
 
-def AvgPool2d(k=2, stride=None):
-    return _layer("AvgPool2d", k, stride)
+def AvgPool2d(kernel_size=2, stride=None, padding=0, ceil_mode=False,
+              count_include_pad=True, divisor_override=None):
+    """torch's list, as `AvgPool1d` and `AvgPool3d` above. It took two of six here
+    because the layer over there took two."""
+    return _layer("AvgPool2d", kernel_size, stride, padding, ceil_mode,
+                  count_include_pad, divisor_override)
 
 
 # ── eight now call borch.ts's layers directly ───────────────────────────────

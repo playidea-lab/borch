@@ -298,10 +298,15 @@ NOT_PORTED = {
     # `AvgPool2d` takes no padding; `Flatten` takes no arguments at all. Each is a
     # question this side cannot be asked yet, which the name and signature axes already
     # count — writing the case would only move the refusal.
-    "unpool::": (6, "없음 — four ask about arguments borch.ts does not take "
-                    "(MaxPool2d's padding/dilation/ceilMode, AvgPool2d's padding, "
-                    "Flatten's two) and two about `AdaptiveAvgPool2d`, which is not a "
-                    "name over there"),
+    "unpool::": (5, "없음 — three ask about arguments borch.ts does not take "
+                        "(MaxPool2d's padding, dilation and ceilMode — refused there "
+                        "because the maximum's backward reads the input at each "
+                        "window and a padded position has none — and Flatten's two) "
+                        "and two about `AdaptiveAvgPool2d`, which is not a name over "
+                        "there. **AvgPool2d's padding left this row**: it was here on "
+                        "the ground that the layer took a kernel and a stride, and "
+                        "its 1-D and 3-D siblings had gone through `poolND` — which "
+                        "takes the other four — the whole time"),
     # **`ops::` was a row here once, at 11, and was emptied by porting all of them.**
     # It is back at 8 for a different reason: the eleven were box geometry on plain
     # arrays and these eight are `nn.Module` layers whose weights have to be written

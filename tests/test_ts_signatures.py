@@ -1022,9 +1022,13 @@ SHORTER = {
     # torch itself tells you not to use, so it is short on purpose — the count going
     # down by three rather than four is the record of that.
     #
+    # **46 → 45.** `AvgPool2d` took a kernel and a stride where torch takes six, and
+    # its 1-D and 3-D siblings had gone through `poolND` — which has all four of the
+    # others — the whole time. It was short for no reason anybody had written down.
+    #
     # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
-    # is what nearly all forty-six are short of.
-    "nn": 46,
+    # is what nearly all forty-five are short of.
+    "nn": 45,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

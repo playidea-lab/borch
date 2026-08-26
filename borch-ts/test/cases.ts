@@ -3689,6 +3689,10 @@ function addUnpool(out: Map<string, Case>): void {
     ["MaxPool3d", () => new nn.MaxPool3d(2)],
     ["AvgPool1d", () => new nn.AvgPool1d(2)],
     ["AvgPool2d", () => new nn.AvgPool2d(2)],
+    // **Its padding was the row this side carried as declined**, on the ground that
+    // the layer took a kernel and a stride and nothing else. Its 1-D and 3-D siblings
+    // went through `poolND`, which has taken the other four all along.
+    ["AvgPool2d(stride, padding)", () => new nn.AvgPool2d(3, 2, 1)],
     ["AvgPool3d", () => new nn.AvgPool3d(2)],
     ["LPPool1d", () => new nn.LPPool1d(2, 2)],
     ["LPPool2d(stride, ceil)", () => new nn.LPPool2d(3, 2, 2, true)],

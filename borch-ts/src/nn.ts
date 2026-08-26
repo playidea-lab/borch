@@ -2016,19 +2016,34 @@ export class FractionalMaxPool3d extends FractionalMaxPoolND {
 }
 
 export class AvgPool2d extends Module {
+  /**
+   * **It took two of torch's six while its siblings took five.** `AvgPool1d` and
+   * `AvgPool3d` both go through `poolND`, which has taken `padding`, `ceilMode` and
+   * `countIncludePad` from the start; only this one called `avgPool2d`, a kernel with
+   * two arguments — so `new AvgPool2d(2, 2, 1)` was a type error where torch pads.
+   * `poolND` is general over the number of spatial axes, which is why the 1-D form
+   * uses it, so the middle size needed nothing new.
+   *
+   * `divisorOverride` is torch's for the 2-D and 3-D forms, and this is a 2-D one.
+   */
   constructor(private readonly kernelSize: number,
-              private readonly stride?: number) {
+              private readonly stride?: number,
+              private readonly padding = 0,
+              private readonly ceilMode = false,
+              private readonly countIncludePad = true,
+              private readonly divisorOverride: number | null = null) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.avgPool2d(this.kernelSize, this.stride);
+    return x.poolND("avg", this.kernelSize, this.stride, this.padding, this.ceilMode,
+                    this.countIncludePad, this.divisorOverride);
   }
 
   /** torch's `_AvgPoolNd.extra_repr` — three arguments and no `ceil_mode`. */
   override describe(): string {
     return `AvgPool2d(kernel_size=${this.kernelSize}, `
-      + `stride=${this.stride ?? this.kernelSize}, padding=0)`;
+      + `stride=${this.stride ?? this.kernelSize}, padding=${this.padding})`;
   }
 }
 
