@@ -863,6 +863,7 @@ class Module:
 
     def __init__(self, module=None):
         object.__setattr__(self, "_m", module)
+        object.__setattr__(self, "training", True)
 
     # ── the layers a subclass attached as attributes ──────────────────────
 
@@ -1084,6 +1085,12 @@ class Module:
         self._m.loadStateDict(obj, strict)
 
     def train(self, mode=True):
+        # **torch keeps the flag on the module and code reads it.** It was only
+        # forwarded, so `self.training` inside a subclass's `forward` — which is how
+        # every dropout in torchvision decides whether to drop — stopped with
+        # `AttributeError: training`, and `__getattr__` had already forwarded the
+        # name to a borch.ts layer that has no such field.
+        object.__setattr__(self, "training", bool(mode))
         if self._m is None:
             for _, m in self._children():
                 if hasattr(m, "train"):
@@ -1094,6 +1101,18 @@ class Module:
 
     def eval(self):
         return self.train(False)
+
+    def modules(self):
+        """**Self first, then everything below**, as torch's does. Depth first and in
+        the order the children were attached, because callers walk it to initialise
+        weights and the order decides which draw each layer gets."""
+        yield self
+        for _, m in self._children():
+            inner = getattr(m, "modules", None)
+            if inner is None:
+                yield m
+                continue
+            yield from inner()
 
     def __getattr__(self, name):
         """Forward what the layer holds, such as `bn.weight`.
@@ -1254,12 +1273,24 @@ class Sequential:
             self.layers[i].load_state_dict(sub, strict)
 
     def train(self, mode=True):
+        self.training = bool(mode)
         for m in self.layers:
             m.train(mode)
         return self
 
     def eval(self):
         return self.train(False)
+
+    def modules(self):
+        """As `Module.modules` — **a container that does not walk stops the walk**,
+        and every block in `ops` is one of these."""
+        yield self
+        for m in self.layers:
+            inner = getattr(m, "modules", None)
+            if inner is None:
+                yield m
+                continue
+            yield from inner()
 
 
 def _params_of(m):
@@ -1362,6 +1393,17 @@ class _Holder:
 
     def eval(self):
         return self.train(False)
+
+    def modules(self):
+        """As `Module.modules` — `ModuleList` is what `FeaturePyramidNetwork` keeps
+        its blocks in, so a walk that stops here reaches none of them."""
+        yield self
+        for _, m in self._entries():
+            inner = getattr(m, "modules", None)
+            if inner is None:
+                yield m
+                continue
+            yield from inner()
 
 
 def _ordered(mapping):
@@ -1622,28 +1664,36 @@ def AdaptiveLogSoftmaxWithLoss(in_features, n_classes, cutoffs, div_value=4.0,
 # layers, in the same file, forty lines away. **Two call sites for one thing and only
 # one of them in mind** — the golden's `ndim::nn.Conv1d` and both `train::CNN` rows
 # have been red since, under an error naming neither convolutions nor arguments.
-def _conv(js_name, cin, cout, k, stride, padding, dilation, groups, bias,
-          padding_mode):
-    return _layer(js_name, cin, cout, k, stride, padding, int(dilation), int(groups),
-                  bool(bias), padding_mode)
+class _ConvND(Module):
+    """**A class, because `isinstance` is a question torchvision asks.**
+
+    These were three functions returning a plain `Module`, which answers every call
+    made of an instance and none made of the name. `FeaturePyramidNetwork` initialises
+    its convolutions with `isinstance(module, nn.Conv2d)` — torchvision's own line —
+    and a function in the second seat is `TypeError: isinstance() arg 2 must be a
+    type`. The same shape as `nn.Sequential` being a function, one file over.
+
+    borch.ts has `Conv1d`, `Conv2d` and `Conv3d` as classes over there, so the name of
+    this one picks which to stand up.
+    """
+
+    def __init__(self, cin, cout, k, stride=1, padding=0, dilation=1, groups=1,
+                 bias=True, padding_mode="zeros"):
+        super().__init__(getattr(_ts.nn, type(self).__name__).new(
+            cin, cout, k, stride, padding, int(dilation), int(groups), bool(bias),
+            padding_mode))
 
 
-def Conv1d(cin, cout, k, stride=1, padding=0, dilation=1, groups=1, bias=True,
-           padding_mode="zeros"):
-    return _conv("Conv1d", cin, cout, k, stride, padding, dilation, groups, bias,
-                 padding_mode)
+class Conv1d(_ConvND):
+    pass
 
 
-def Conv2d(cin, cout, k, stride=1, padding=0, dilation=1, groups=1, bias=True,
-           padding_mode="zeros"):
-    return _conv("Conv2d", cin, cout, k, stride, padding, dilation, groups, bias,
-                 padding_mode)
+class Conv2d(_ConvND):
+    pass
 
 
-def Conv3d(cin, cout, k, stride=1, padding=0, dilation=1, groups=1, bias=True,
-           padding_mode="zeros"):
-    return _conv("Conv3d", cin, cout, k, stride, padding, dilation, groups, bias,
-                 padding_mode)
+class Conv3d(_ConvND):
+    pass
 
 
 # ── one step of a recurrence ────────────────────────────────────────────
