@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 687,
+  "done": 688,
   "stale": 0,
-  "missing": 236
+  "missing": 237
  },
  "modules": [
   {
@@ -7148,6 +7148,25 @@
    "doc": "Layers — the minimal skeleton of `nn.Module`.\n\n## What it is for\n\nUnit comparison looks at one operation at a time. Some things diverge\nonly once modules, losses and optimizers are wired together, and every\ndefect this repository caught in an integrated scenario came from exactly\nthere. So building layers is not a convenience — it is **seeing a place\nthat could not be seen.**\n\n## The name is the contract\n\nA `state_dict` key is built from **the position index and the name**, as\nin `0.weight`. The golden cases put weights in by that name and take\nresults out by that name, so a divergent name means divergent wiring, not\ndivergent values.",
    "symbols": [
     {
+     "kind": "interface",
+     "name": "LoadReport",
+     "signature": "export interface LoadReport",
+     "doc": "What a `loadStateDict` found — the keys the layer asked for and did not get,\nand the keys it was given and does not have.\n\ntorch calls the same pair `missing_keys` and `unexpected_keys`. The names are\nkept close because the person reading a failure here has usually just read one\nthere.",
+     "members": [
+      {
+       "name": "missing",
+       "signature": "readonly missing: readonly string[]",
+       "doc": ""
+      },
+      {
+       "name": "unexpected",
+       "signature": "readonly unexpected: readonly string[]",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`loadStateDict` 가 발견한 것 — 층이 부르는데 못 받은 열쇠와, 받았는데 층에\n없는 열쇠.\n\ntorch 는 같은 짝을 `missing_keys`·`unexpected_keys` 라고 부른다. 이름을 가깝게\n둔 것은, 여기서 실패를 읽는 사람이 보통 저기서 한 번 읽고 온 사람이기 때문이다."
+    },
+    {
      "kind": "class",
      "name": "Module",
      "signature": "export declare abstract class Module",
@@ -7216,10 +7235,10 @@
       },
       {
        "name": "loadStateDict",
-       "signature": "loadStateDict(values: Readonly<Record<string, Tensor>>, strict?: boolean): void",
-       "doc": "Puts weights in from outside.\n\n**It moves values only; it does not swap the tensor.** Swapping makes\nit a different tensor from the one the optimizer holds, and then\ntraining runs while the parameters do not move.",
+       "signature": "loadStateDict(values: Readonly<Record<string, Tensor>>, strict?: boolean): LoadReport",
+       "doc": "Puts weights in from outside.\n\n**It moves values only; it does not swap the tensor.** Swapping makes\nit a different tensor from the one the optimizer holds, and then\ntraining runs while the parameters do not move.\n\n## `strict` weighs both directions\n\nIt used to weigh one. The loop walked **the values it was given** and\ncomplained about names it did not recognise, and nothing ever asked which\nof its own keys went unfilled. A checkpoint missing a weight loaded without\na word and that layer kept its initialisation — no exception, the model\nstands, the numbers are plausible and wrong.\n\nMeasured downstream: a cargo of 314 tensors with `conv_stem.weight` taken\nout loaded strictly and reported 313 in. torch reports `missing_keys` and\n`unexpected_keys` both, and this now does the same.\n\nThe report comes back either way. `strict` decides whether a difference\nstops the load or is left for the caller to weigh — a partial load is a\nreal thing to want (fine-tuning a head, warm-starting a trunk), and it\nshould be **asked for** rather than arrived at by accident.",
        "torch": "load_state_dict",
-       "doc_ko": "밖에서 가중치를 넣는다.\n\n**값만 옮기고 텐서를 바꿔치지 않는다.** 바꿔치면 옵티마이저가 들고 있던 것과\n다른 텐서가 되어, 학습이 도는데 파라미터가 안 움직이는 상태가 된다."
+       "doc_ko": "밖에서 가중치를 넣는다.\n\n**값만 옮기고 텐서를 바꿔치지 않는다.** 바꿔치면 옵티마이저가 들고 있던 것과\n다른 텐서가 되어, 학습이 도는데 파라미터가 안 움직이는 상태가 된다.\n\n## `strict` 는 양쪽을 잰다\n\n전에는 한쪽만 쟀다. **받은 값**만 훑으면서 모르는 이름에만 항의했고, 자기 열쇠\n중 무엇이 안 채워졌는지는 아무도 묻지 않았다. 가중치가 빠진 체크포인트가 말 없이\n실리고 그 층은 초기화 값을 그대로 썼다 — 예외는 안 나고, 모델은 서고, 수는\n그럴듯하면서 틀린다.\n\n실측: 텐서 314 개짜리 화물에서 `conv_stem.weight` 를 빼고 strict 로 실었더니\n313 개가 들어갔다고 보고하며 통과했다. torch 는 `missing_keys` 와\n`unexpected_keys` 를 둘 다 보고하고, 이제 이쪽도 같다.\n\n보고서는 어느 쪽이든 돌아온다. `strict` 는 차이가 로드를 멈출지, 부르는 쪽이\n저울질하도록 넘겨질지를 정한다 — 부분 로드는 진짜로 원할 수 있는 일이고(헤드만\n갈아 끼우기, 몸통만 데워 시작하기), 그건 **요청해서** 얻어야지 사고로 도달할\n자리가 아니다."
       },
       {
        "name": "stateDict",
@@ -11103,8 +11122,8 @@
       },
       {
        "name": "loadStateDict",
-       "signature": "loadStateDict(values: Readonly<Record<string, Tensor>>, strict?: boolean): void",
-       "doc": "",
+       "signature": "loadStateDict(values: Readonly<Record<string, Tensor>>, strict?: boolean): LoadReport",
+       "doc": "**The three this layer handles never reach the base.**\n\nThat matters now that `strict` weighs missing keys: the base builds its list\nfrom `namedBuffers()`, which holds all three, and it is handed `rest`, which\nholds none of them. Left to judge on its own it would call every load of\nthis layer incompatible. So the base is asked not to judge, and what it\nreports is corrected by what was handled here before the verdict.",
        "torch": "load_state_dict"
       },
       {
@@ -11645,7 +11664,7 @@
      ]
     }
    ],
-   "count": 750,
+   "count": 753,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -18415,5 +18434,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2466
+ "total": 2469
 }

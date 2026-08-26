@@ -96,6 +96,48 @@ function fanIn(shape: readonly number[]): number {
 }
 
 /**
+ * What a `loadStateDict` found — the keys the layer asked for and did not get,
+ * and the keys it was given and does not have.
+ *
+ * torch calls the same pair `missing_keys` and `unexpected_keys`. The names are
+ * kept close because the person reading a failure here has usually just read one
+ * there.
+ */
+export interface LoadReport {
+  readonly missing: readonly string[];
+  readonly unexpected: readonly string[];
+}
+
+/**
+ * Stops a strict load that did not line up, saying **both sides** of the
+ * difference.
+ *
+ * A list is cut at eight. A model with one wrong prefix reports every key it
+ * has, and a screen of names buries the one line that says which prefix.
+ */
+function refuseIncompatible(
+  missing: readonly string[],
+  unexpected: readonly string[],
+): void {
+  if (missing.length === 0 && unexpected.length === 0) return;
+  const show = (names: readonly string[]): string =>
+    names.length > 8
+      ? `${names.slice(0, 8).join(", ")} … and ${names.length - 8} more`
+      : names.join(", ");
+  const lines = ["load_state_dict: the checkpoint does not match the model"];
+  if (missing.length > 0) {
+    lines.push(`  the model asks for ${missing.length} key(s) the checkpoint`
+      + ` does not have: ${show(missing)}`);
+  }
+  if (unexpected.length > 0) {
+    lines.push(`  the checkpoint has ${unexpected.length} key(s) the model does`
+      + ` not: ${show(unexpected)}`);
+  }
+  lines.push("  pass strict=false to load what lines up and weigh the rest yourself");
+  throw new Error(lines.join("\n"));
+}
+
+/**
  * One layer. It passes values through and hands out its parameters with
  * their names.
  */
@@ -278,21 +320,47 @@ export abstract class Module {
    * **It moves values only; it does not swap the tensor.** Swapping makes
    * it a different tensor from the one the optimizer holds, and then
    * training runs while the parameters do not move.
+   *
+   * ## `strict` weighs both directions
+   *
+   * It used to weigh one. The loop walked **the values it was given** and
+   * complained about names it did not recognise, and nothing ever asked which
+   * of its own keys went unfilled. A checkpoint missing a weight loaded without
+   * a word and that layer kept its initialisation — no exception, the model
+   * stands, the numbers are plausible and wrong.
+   *
+   * Measured downstream: a cargo of 314 tensors with `conv_stem.weight` taken
+   * out loaded strictly and reported 313 in. torch reports `missing_keys` and
+   * `unexpected_keys` both, and this now does the same.
+   *
+   * The report comes back either way. `strict` decides whether a difference
+   * stops the load or is left for the caller to weigh — a partial load is a
+   * real thing to want (fine-tuning a head, warm-starting a trunk), and it
+   * should be **asked for** rather than arrived at by accident.
    */
-  loadStateDict(values: Readonly<Record<string, Tensor>>, strict = true): void {
+  loadStateDict(
+    values: Readonly<Record<string, Tensor>>,
+    strict = true,
+  ): LoadReport {
     // **Buffers are accepted too.** When what goes out differs from what comes in, a
     // file cannot be read back by the thing that wrote it — `stateDict()` sends the
     // buffers out while this looked at `namedParameters()` alone, so strict mode raised
     // "unknown name". Saving and restoring have to look at **the same list**.
     const own = { ...this.namedParameters(), ...this.namedBuffers() };
+    const unexpected: string[] = [];
+    const filled = new Set<string>();
     for (const [name, src] of Object.entries(values)) {
       const dst = own[name];
       if (!dst) {
-        if (strict) throw new Error(`load_state_dict: unexpected key '${name}'`);
+        unexpected.push(name);
         continue;
       }
       noGrad(() => dst.copyFrom(src));
+      filled.add(name);
     }
+    const missing = Object.keys(own).filter((name) => !filled.has(name));
+    if (strict) refuseIncompatible(missing, unexpected);
+    return { missing, unexpected };
   }
 
   stateDict(): Record<string, Tensor> {
@@ -4118,15 +4186,29 @@ export class BatchNormND extends Module {
     };
   }
 
+  /**
+   * **The three this layer handles never reach the base.**
+   *
+   * That matters now that `strict` weighs missing keys: the base builds its list
+   * from `namedBuffers()`, which holds all three, and it is handed `rest`, which
+   * holds none of them. Left to judge on its own it would call every load of
+   * this layer incompatible. So the base is asked not to judge, and what it
+   * reports is corrected by what was handled here before the verdict.
+   */
   override loadStateDict(
     values: Readonly<Record<string, Tensor>>,
     strict = true,
-  ): void {
+  ): LoadReport {
     const rest: Record<string, Tensor> = {};
+    const handled: string[] = [];
     for (const [name, src] of Object.entries(values)) {
-      if (name === "running_mean") noGrad(() => this.runningMean.copyFrom(src));
-      else if (name === "running_var") noGrad(() => this.runningVar.copyFrom(src));
-      else if (name === "num_batches_tracked") {
+      if (name === "running_mean") {
+        noGrad(() => this.runningMean.copyFrom(src));
+        handled.push(name);
+      } else if (name === "running_var") {
+        noGrad(() => this.runningVar.copyFrom(src));
+        handled.push(name);
+      } else if (name === "num_batches_tracked") {
         // The given tensor is not captured as it is — when the scope closes that
         // buffer is recycled.
         const base = Tensor.owned([], 0);
@@ -4134,10 +4216,14 @@ export class BatchNormND extends Module {
         keepAlive(base);
         this.trackedBase = base;
         this.numBatchesTracked = 0;
+        handled.push(name);
       }
       else rest[name] = src;
     }
-    super.loadStateDict(rest, strict);
+    const report = super.loadStateDict(rest, false);
+    const missing = report.missing.filter((name) => !handled.includes(name));
+    if (strict) refuseIncompatible(missing, report.unexpected);
+    return { missing, unexpected: report.unexpected };
   }
 
   override forward(x: Tensor): Tensor {
