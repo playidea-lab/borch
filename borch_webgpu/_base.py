@@ -742,13 +742,13 @@ class Tensor:
                 # **An in-place name, so it writes back.** Returning only the
                 # value leaves `x.bernoulli_(0)` without changing `x`, and that
                 # is not an in-place operation.
-                self._refuse_inplace_on_leaf(name)
-                return lambda *a, **k: self._write_back(exact(self, *a, **k))
+                return self._when_run(name,
+                    lambda *a, **k: self._write_back(exact(self, *a, **k)))
             fn = _EXTREME[bare] if bare in _EXTREME else getattr(_ops, bare)
             if not inplace:
                 return lambda *a, **k: fn(self, *a, **k)
-            self._refuse_inplace_on_leaf(name)
-            return lambda *a, **k: self._write_back(fn(self, *a, **k))
+            return self._when_run(name,
+                lambda *a, **k: self._write_back(fn(self, *a, **k)))
 
         # **A leaf with gradients on cannot be edited in place.** torch throws
         # there and the golden froze it — let it through and a backward pass
@@ -760,8 +760,15 @@ class Tensor:
         # **`detach_` is the exception.** It leaves the values alone and only
         # cuts the graph, so no backward pass can read a moved value — torch
         # allows it on a leaf as well.
-        if inplace and bare != "detach":
-            self._refuse_inplace_on_leaf(name)
+        #
+        # **It is refused when it runs, not when the name is looked up.** Raised
+        # here, `hasattr(p, "copy_")` on a parameter *raises* — `hasattr` catches
+        # `AttributeError` and nothing else, so a `RuntimeError` about an in-place
+        # operation comes out of a question about whether a name exists, before any
+        # `with no_grad()` the caller was about to enter. That is what `_fill` in
+        # the case table does, and **ten golden cases stopped there** while the very
+        # next line would have made the write legal.
+        guarded_inplace = inplace and bare != "detach"
 
         js_name = camel(name)
 
@@ -773,13 +780,16 @@ class Tensor:
         # `_inplace`. Two copies of the expression diverge eventually, and the
         # values stay plausible enough that nobody sees it.
         if inplace and getattr(self._h, js_name, None) is None:
-            return lambda *a, **k: self._write_back(
-                getattr(self, bare)(*a, **k))
+            return self._when_run(name, lambda *a, **k: self._write_back(
+                getattr(self, bare)(*a, **k)), guarded_inplace)
 
         if name in _BINARY_ONLY:
             # borch.ts derives methods from the table for unary only. Binary
             # goes through `binary(name, other)`.
-            return lambda other, *_: guarded(self._h.binary, js_name, handle(other))
+            return self._when_run(
+                name,
+                lambda other, *_: guarded(self._h.binary, js_name, handle(other)),
+                guarded_inplace)
         got = getattr(self._h, js_name, None)
         if got is None:
             # **The opening clause matches torch's.** It used to say only that
@@ -809,7 +819,25 @@ class Tensor:
             return self if inplace else out
 
         call.__name__ = name
-        return call
+        return self._when_run(name, call, guarded_inplace)
+
+    def _when_run(self, name, call, guard=True):
+        """The refusal moved from the lookup to the call.
+
+        `x.copy_` is a question about a name and `x.copy_(...)` is the operation.
+        Refusing at the first means `hasattr` — and anything that asks whether a
+        tensor can do something before deciding how — stops with a `RuntimeError`
+        that no caller expected there.
+        """
+        if not guard:
+            return call
+
+        def go(*args, **kw):
+            self._refuse_inplace_on_leaf(name)
+            return call(*args, **kw)
+
+        go.__name__ = name
+        return go
 
     def _refuse_inplace_on_leaf(self, _name):
         """**A leaf with gradients on cannot be edited in place.** torch throws

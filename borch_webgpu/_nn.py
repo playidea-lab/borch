@@ -882,7 +882,7 @@ class Module:
             # Those classes exist because "a bare list is invisible", and
             # omitting them here makes the container itself invisible, which
             # lands back in the same place.
-            if isinstance(value, (Module, _Wrap, _Sequential, _Holder, Tensor)):
+            if isinstance(value, (Module, _Wrap, Sequential, _Holder, Tensor)):
                 got.append((key, value))
         return got
 
@@ -1171,7 +1171,7 @@ class _Wrap:
         return self
 
 
-class _Sequential:
+class Sequential:
     """**Chained on the Python side.**
 
     Handing it to borch.ts's `Sequential` would require a JavaScript object per
@@ -1182,12 +1182,23 @@ class _Sequential:
 
     The naming rule matches borch.ts's — a positional number in front, as in
     `0.weight`, and the golden loads and reads weights by those names.
+
+    **It is a class, and it was a function.** `def Sequential(*layers)` returning one
+    of these answers every call made of an *instance* and none of the ones made of the
+    *name*: `class ConvNormActivation(nn.Sequential)` — which is how torchvision builds
+    every block it ships — calls the function where a metaclass belongs and stops with
+    *function() argument 'code' must be code, not str*. **Twenty-seven golden cases**,
+    every one of them a block whose layers all worked.
+
+    No `__slots__`, because a subclass sets its own attributes: `ConvNormActivation`
+    keeps `out_channels` on itself, as torchvision's does.
     """
 
-    __slots__ = ("layers",)
-
-    def __init__(self, layers):
-        self.layers = layers
+    def __init__(self, *layers):
+        flat = []
+        for one in layers:
+            flat.extend(one if isinstance(one, (list, tuple)) else [one])
+        self.layers = flat
 
     def __call__(self, x):
         for m in self.layers:
@@ -1547,11 +1558,6 @@ def ParameterDict(params=None):
     return _ParameterDict(params)
 
 
-def Sequential(*layers):
-    flat = []
-    for l in layers:
-        flat.extend(l if isinstance(l, (list, tuple)) else [l])
-    return _Sequential(flat)
 
 
 def Linear(inf, outf, bias=True):
