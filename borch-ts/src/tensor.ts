@@ -1651,9 +1651,14 @@ export class Tensor implements Node<Tensor> {
    * for splitting a complex product into four real ones. A batched kernel
    * would be faster and is a separate job; being able to run a transformer
    * at all comes first.
+   *
+   * **The seat is `other`, and torch's own documentation says otherwise.**
+   * `torch.Tensor.matmul.__doc__` opens with `matmul(tensor2) -> Tensor`, but calling
+   * it with that keyword raises and `other=` is what works. Two sessions read the doc
+   * and landed on `tensor2` separately, one of them after trying it and reverting;
+   * neither had called it with a keyword. The name a caller can write is the name.
    */
-  matmul(o: Tensor): Tensor {
-    const other = o;
+  matmul(other: Tensor): Tensor {
     const a = this.shape.length;
     const b = other.shape.length;
     if (a === 0 || b === 0) {
