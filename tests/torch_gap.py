@@ -674,7 +674,6 @@ SKIPPED = {
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
     "datasets.PhotoTour": "as above — a codec",
     "datasets.Places365": "as above — a codec",
-    "datasets.RenderedSST2": "as above — a codec",
     "datasets.SBDataset": "its pictures are JPEG, which is the codec wall. Its `.mat` annotations are not — `_mat_read` handles those, and this row named them as a second reason when there was only ever one",
     "datasets.SBU": "as above — a codec",
     "datasets.SUN397": "as above — a codec",

@@ -297,10 +297,11 @@ FROZEN = {
     # address and a format; the address needs hosts that send a CORS header and
     # torchvision's do not, so what crossed is the decoders. Written per name because a
     # table that grouped them would hide the day one becomes possible.
-    # 18 → 19 → 20. `ImageFolder` and `CLEVRClassification` arrived on the Python
-    # side, and both are the clearest kind of absence here: one walks a directory and
-    # the other reads a 19GB archive off disk, and a page has neither.
-    "datasets": 20,
+    # 18 → 21 over one session. `ImageFolder`, `CLEVRClassification` and
+    # `RenderedSST2` arrived on the Python side, and all three are the clearest kind
+    # of absence here: they walk directories and read archives off disk, and a page
+    # has neither.
+    "datasets": 21,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the
