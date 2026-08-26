@@ -1652,7 +1652,8 @@ export class Tensor implements Node<Tensor> {
    * would be faster and is a separate job; being able to run a transformer
    * at all comes first.
    */
-  matmul(other: Tensor): Tensor {
+  matmul(o: Tensor): Tensor {
+    const other = o;
     const a = this.shape.length;
     const b = other.shape.length;
     if (a === 0 || b === 0) {
