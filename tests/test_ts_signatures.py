@@ -1034,17 +1034,37 @@ SHORTER = {
     # would be the more sensible behaviour and the wrong port — code written against
     # torch may read `x` after the call, and torch guarantees it survives.
     #
-    # **What retires this line is not what this comment used to say.** It said `device`
-    # and `dtype` were "what nearly all forty-six are short of". Measured: those two
-    # accounted for 66 of 231 missing arguments and **no row was short of only them**,
-    # so growing those two seats would have retired zero rows. The sentence was written
-    # from the most frequent name rather than from the rows, and a count of names cannot
-    # see that a row needs three other things as well.
+    # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
+    # is what 24 of these 38 are short of and nothing else.
     #
-    # What is actually left is `kernel_size` (15), `out_channels` (12) and
-    # `padding_mode` (12) — the convolution family taking its sizes differently — plus
-    # the `in_features`/`hidden_size` pairs. `device`/`dtype` come with those, never
-    # instead of them.
+    # That sentence was here, was replaced with its opposite, and is back. The
+    # replacement claimed those two "accounted for 66 of 231 missing arguments" with
+    # "no row short of only them", and it came from a throwaway probe that folded
+    # names with
+    #
+    #     S._camel(a) if hasattr(S, "_camel") else a
+    #
+    # `_camel` lives in `ts_axis`, not here, so `hasattr` was False and the fold was a
+    # no-op on every call. Core `in_channels` was then compared against borch.ts's
+    # `inChannels` and counted as missing, along with every other multi-word argument
+    # — which inflated the denominator from 102 to 231 and buried the 24 single-cause
+    # rows under names that were never absent. Folded the way the axis folds
+    # (`ts_axis._camel(RENAMES.get(p, p))`, then `_fold_initial`), the original
+    # sentence is right.
+    #
+    # `device`/`dtype` were immune to the bug because they are one word each, so the
+    # 66 was stable across both measurements and looked like confirmation. **A number
+    # that survives a broken instrument is not thereby checked.**
+    #
+    # The fourteen rows that need something else too:
+    #   AvgPool2d, MaxPool1d, MaxPool3d      padding, ceilMode, dilation, returnIndices
+    #   ConvTranspose1d/2d/3d                paddingMode
+    #   LazyInstanceNorm1d/2d/3d             momentum, affine, trackRunningStats, bias
+    #   LazyLinear                           bias
+    #   RMSNorm                              eps, elementwiseAffine
+    #   RNNBase                              dropout, bidirectional, projSize
+    #   Upsample                             recomputeScaleFactor
+    #   Hardtanh                             minValue, maxValue — deliberate, see above
     "nn": 38,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
@@ -1277,6 +1297,44 @@ def _rows():
         pytest.skip(_stale())
     import ts_signatures
     return ts_signatures.compare()
+
+
+def test_the_name_fold_is_reachable_from_where_it_is_used():
+    """**`_camel` is imported, not local, and a probe that guesses wrong reads clean.**
+
+    `ts_signatures` folds core names with `ts_axis._camel(...)`. A throwaway measurement
+    written against this module reached for it as `S._camel` behind a `hasattr` guard,
+    found nothing, and silently compared `in_channels` against `inChannels` for every
+    row — so every multi-word argument looked absent. The numbers that came out were
+    plausible, contradicted a true sentence in the table above, and got that sentence
+    replaced with its opposite before anyone noticed.
+
+    What makes it worth a test rather than a comment: the failure is **silent and
+    plausible**. A fold that does nothing produces more findings, not fewer, and more
+    findings read as a better instrument. `device` and `dtype` came through it unharmed
+    because they are single words, so the one number that could be cross-checked
+    agreed — a number that survives a broken instrument is not thereby checked.
+
+    So this pins that the fold is where the axis expects and that it actually folds.
+    """
+    import ts_axis
+    import ts_signatures
+
+    assert hasattr(ts_axis, "_camel"), (
+        "ts_axis._camel is gone — every caller that folds core names into borch.ts "
+        "spelling goes through it, and a caller that cannot find it does not fail, "
+        "it stops folding")
+    assert not hasattr(ts_signatures, "_camel"), (
+        "ts_signatures grew its own `_camel`. Two folds means two answers; keep the "
+        "one in ts_axis and import it")
+
+    for snake, camel in (("in_channels", "inChannels"),
+                         ("padding_mode", "paddingMode"),
+                         ("track_running_stats", "trackRunningStats"),
+                         ("device", "device")):
+        assert ts_axis._camel(snake) == camel, (
+            f"the fold does not fold: {snake!r} -> {ts_axis._camel(snake)!r}, "
+            f"expected {camel!r}")
 
 
 def test_the_signature_axis_has_not_widened():
