@@ -352,14 +352,18 @@ def test_a_namespaced_wildcard_stays_inside_its_namespace():
     matcher again and `to_pil_image` starts answering with the dispatch sentence, which
     is the shape that has to stay impossible.
 
-    **The example moved from `affine_image` to `affine_mask`**, because the `*_image` row
-    is gone: those kernels are bound in `borchvision.py` as the same objects as their
-    dispatchers, so they are present and no longer want a reason at all. The mask row is
-    the same wildcard shape making the same claim about a type this library does not
-    have, so what is being pinned here is unchanged.
+    **The example has moved twice, and `*_video` is where it stops.** It read
+    `affine_image` until those kernels were bound as their own dispatchers, then
+    `affine_mask` until the mask kernels were built too. Both rows were retired by being
+    *implemented*, which is the good way for a row to leave and a poor way to keep an
+    example.
+
+    `*_video` is the last namespaced wildcard here and the one least likely to move: it
+    is declined because there is no video anywhere in this project, which is a fact about
+    the project rather than a gap waiting to be filled.
     """
-    kernel = _why("transforms.v2.functional", "affine_mask")
-    assert kernel and "as above" in kernel[1], (
+    kernel = _why("transforms.v2.functional", "affine_video")
+    assert kernel and "video" in kernel[1], (
         "the namespaced wildcard stopped matching inside its own namespace")
 
     for space, name in (("transforms.functional", "to_pil_image"),

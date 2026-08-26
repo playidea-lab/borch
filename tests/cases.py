@@ -13427,7 +13427,132 @@ def v2_functional_cases(inp=None):
         arr = np.round(np.asarray(_as_numpy(values), dtype=np.float64), 4)
         return str(np.where(arr == 0, 0.0, arr).tolist())
 
-    box_cases = []
+    # A mask with two planes, in a canvas that is not square. **A label map, not a
+    # picture**: the values are class indices, so anything but nearest sampling averages
+    # 3 and 5 into 4 and produces a mask that is smooth and wrong wherever two regions
+    # meet. The third class is there so that averaging would be visible at all — with
+    # 0/1 alone a bilinear resample rounds back to the same answer half the time.
+    labels = (np.arange(2 * 24 * 32, dtype=np.int64).reshape(2, 24, 32) % 3
+              ).astype(np.uint8)
+    # Keypoints as `(N, K, 2)` — three groups of two. **The last group has a point
+    # outside the canvas**, which is what makes `sanitize` drop a whole group rather
+    # than a point, and what makes the flips produce a negative coordinate.
+    points = np.array([[[0.0, 0.0], [1.0, 2.0]],
+                       [[5.0, 5.0], [31.0, 23.0]],
+                       [[10.0, 10.0], [33.0, 26.0]]], dtype=np.float32)
+
+    def on_mask(call):
+        """A mask through a kernel, as **shape then a flat list of values.**
+
+        **The dtype is part of the answer** — masks are labels, and widening `uint8`
+        would make `== 3` start failing on values that are exactly equal on
+        torchvision's side.
+
+        The values are flattened rather than printed as `.tolist()`'s nesting. Nesting
+        is presentation, and the two sides reached it differently — borch.ts's box
+        formatter chunks four to a row, which is right for boxes and meaningless for a
+        `(2, 24, 32)` mask. Flat plus the shape says the same thing and says it the same
+        way on both sides.
+        """
+        def run(L):
+            F = _vision_v2_functional(L)
+            given = L.tensor(np.ascontiguousarray(labels)) if _is_real_torch(L) else labels
+            got = np.asarray(_as_numpy(call(F, given)))
+            return f"{_flattext(got, whole=True)} {got.dtype}"
+        return run
+
+    def _flattext(values, whole=False):
+        """`[shape] [values]` — **flat, and the same flat on both sides.**
+
+        The nested spelling `.tolist()` produces is presentation, and the two libraries
+        reached it differently: borch.ts's box formatter chunks four to a row, which is
+        right for `(N, 4)` boxes, wrong for a `(2, 24, 32)` mask and wrong again for
+        `(N, K, 2)` keypoints. Eighteen cases failed on that and **not one of them was a
+        wrong number.**
+
+        So the shape is stated and the values are flat. Nothing about the answer is lost
+        — a shape plus a flat list is the array — and there is only one way to write it.
+        """
+        arr = np.asarray(values)
+        if whole:
+            body = [int(v) for v in arr.reshape(-1)]
+        else:
+            rounded = np.round(arr.astype(np.float64).reshape(-1), 4)
+            body = np.where(rounded == 0, 0.0, rounded).tolist()
+        return f"{list(arr.shape)} {body}"
+
+    def on_points(call):
+        def run(L):
+            F = _vision_v2_functional(L)
+            given = L.tensor(np.ascontiguousarray(points)) if _is_real_torch(L) else points
+            got = call(F, given)
+            if isinstance(got, tuple):
+                second = got[1]
+                tail = (_flattext(_as_numpy(second), whole=True)
+                        if hasattr(second, "tolist") or hasattr(second, "shape")
+                        else " ".join(str(int(v)) for v in second))
+                return f"{_flattext(_as_numpy(got[0]))} {tail}"
+            return _flattext(_as_numpy(got))
+        return run
+
+    mask_cases = [
+        (V2F_PREFIX + "horizontal_flip_mask",
+         on_mask(lambda F, m: F.horizontal_flip_mask(m))),
+        (V2F_PREFIX + "vertical_flip_mask",
+         on_mask(lambda F, m: F.vertical_flip_mask(m))),
+        (V2F_PREFIX + "crop_mask(inside)",
+         on_mask(lambda F, m: F.crop_mask(m, top=1, left=2, height=12, width=14))),
+        # **A crop that starts outside the picture.** torchvision pads there with zero
+        # rather than raising, and a detection pipeline does this constantly.
+        (V2F_PREFIX + "crop_mask(off the corner)",
+         on_mask(lambda F, m: F.crop_mask(m, top=-3, left=-4, height=10, width=10))),
+        (V2F_PREFIX + "center_crop_mask(odd)",
+         on_mask(lambda F, m: F.center_crop_mask(m, output_size=[11, 13]))),
+        (V2F_PREFIX + "pad_mask(four sides, fill=7)",
+         on_mask(lambda F, m: F.pad_mask(m, padding=[1, 2, 3, 4], fill=7))),
+        # The ratio 24→12 is exact and 32→15 is not, so the second one is where a
+        # `nearest` and a `nearest-exact` part company.
+        (V2F_PREFIX + "resize_mask(pair)",
+         on_mask(lambda F, m: F.resize_mask(m, size=[12, 15]))),
+        (V2F_PREFIX + "resize_mask(short edge)",
+         on_mask(lambda F, m: F.resize_mask(m, size=[9]))),
+        (V2F_PREFIX + "resized_crop_mask",
+         on_mask(lambda F, m: F.resized_crop_mask(m, top=1, left=2, height=12,
+                                                  width=14, size=[6, 8]))),
+    ]
+
+    point_cases = [
+        # **`(width - 1) - x` and not `width - x`** — a box edge lives on `[0, width]`
+        # and a point is a pixel index on `[0, width - 1]`. The box way is off by one
+        # everywhere, which is a skeleton one column from where it belongs.
+        (V2F_PREFIX + "horizontal_flip_keypoints",
+         on_points(lambda F, k: F.horizontal_flip_keypoints(k, canvas_size=(24, 32)))),
+        (V2F_PREFIX + "vertical_flip_keypoints",
+         on_points(lambda F, k: F.vertical_flip_keypoints(k, canvas_size=(24, 32)))),
+        (V2F_PREFIX + "crop_keypoints",
+         on_points(lambda F, k: F.crop_keypoints(k, top=1, left=2, height=12, width=14))),
+        (V2F_PREFIX + "center_crop_keypoints(odd)",
+         on_points(lambda F, k: F.center_crop_keypoints(
+             k, canvas_size=(24, 32), output_size=[11, 13]))),
+        (V2F_PREFIX + "pad_keypoints(four sides)",
+         on_points(lambda F, k: F.pad_keypoints(k, canvas_size=(24, 32),
+                                                padding=[1, 2, 3, 4]))),
+        (V2F_PREFIX + "resize_keypoints(pair)",
+         on_points(lambda F, k: F.resize_keypoints(k, size=[12, 16],
+                                                   canvas_size=(24, 32)))),
+        (V2F_PREFIX + "resized_crop_keypoints",
+         on_points(lambda F, k: F.resized_crop_keypoints(
+             k, top=1, left=2, height=12, width=14, size=[6, 8]))),
+        # The clamp stops at `width - 1`, one short of where the box clamp stops.
+        (V2F_PREFIX + "clamp_keypoints",
+         on_points(lambda F, k: F.clamp_keypoints(k, canvas_size=(24, 32)))),
+        # **The unit is the group.** Three groups of two points; the third has a point
+        # outside, so the whole group goes and the mask is three long rather than six.
+        (V2F_PREFIX + "sanitize_keypoints",
+         on_points(lambda F, k: F.sanitize_keypoints(k, canvas_size=(24, 32)))),
+    ]
+
+    box_cases = mask_cases + point_cases
     for _fmt in ("xyxy", "xywh", "cxcywh"):
         box_cases += [
             (V2F_PREFIX + f"horizontal_flip_bounding_boxes({_fmt})",
