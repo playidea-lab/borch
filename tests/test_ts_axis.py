@@ -294,7 +294,12 @@ FROZEN = {
     # rather than failing.** They are `nn.Module` subclasses built against whichever
     # backend is attached, and the browser side composes its layers by hand; carrying
     # them over is writing them again in TS, not exporting a name.
-    "ops": 6,
+    #
+    # 6 → 12. The six structured dropouts joined the five layers and the base they
+    # share. **Unlike the layers these are plain functions over a tensor**, so carrying
+    # them across is writing them again rather than solving anything — and their random
+    # half would need the two sides to share a generator, not an answer.
+    "ops": 12,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     "transforms.v2": 1,
