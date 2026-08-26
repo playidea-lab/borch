@@ -693,7 +693,12 @@ SKIPPED = {
     "datasets.Places365": "as above — the devkit tar is md5'd",
     "datasets.SBU": "as above, and `download=True` is its default",
     "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
-    "datasets.INaturalist": "as above — three release years with different directory schemes",
+    # **This row said `as above` and the row above it had moved.** Reordering this
+    # table put `INaturalist` under the video sentence, where it does not belong —
+    # the same inheritance the codec chain kept doing, created here by tidying.
+    # It stands alone now, and it is 아직: no md5 gate (measured), a walk plus a
+    # loader, and three release years whose directory schemes differ.
+    "datasets.INaturalist": "아직 — a walk plus a loader with no md5 gate, so it can be checked against torchvision's own. Its three release years name their directories differently and `version` chooses between them",
     "datasets.ImageNet": "as above — a codec",
     "datasets.Kinetics": "as above",
     "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",
@@ -701,7 +706,6 @@ SKIPPED = {
     "datasets.OxfordIIITPet": "as above — a codec",
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
     "datasets.SBDataset": "its pictures are JPEG, which is the codec wall. Its `.mat` annotations are not — `_mat_read` handles those, and this row named them as a second reason when there was only ever one",
-    "datasets.StanfordCars": "아직, **and one thing genuinely missing**: its annotations are a `.mat` holding a struct array, and `_mat_read` reads numeric arrays only — measured, it returns no keys for one. That is a reader to extend rather than a codec to write",
     "datasets.UCF101": "as above",
     "datasets.VOCDetection": "as above — a codec",
     "datasets.VOCSegmentation": "as above — a codec",
