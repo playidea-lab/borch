@@ -646,9 +646,6 @@ SKIPPED = {
     #
     # Eight names are **absent with no reason on purpose**; see this file's docstring.
 
-    "datasets.CLEVRClassification": "its pictures are JPEG or PNG and numpy decodes neither. "
-                            "Adding a codec is the dependency this library does "
-                            "without — the same answer PIL gets",
     "datasets.Caltech101": "as above — a codec",
     "datasets.Caltech256": "as above — a codec",
     "datasets.CelebA": "as above — a codec",

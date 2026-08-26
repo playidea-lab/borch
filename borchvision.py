@@ -80,6 +80,7 @@ import gzip as _gzip
 import hashlib as _hashlib
 import inspect as _inspect
 import io as _io
+import json as _json
 import math as _math
 import os as _os
 import pickle as _pickle
@@ -5213,6 +5214,109 @@ class ImageFolder(DatasetFolder):
         self.imgs = self.samples
 
 
+
+class CLEVRClassification(VisionDataset):
+    """CLEVR, **counted**: the label is how many objects are in the scene.
+
+    <https://cs.stanford.edu/people/jcjohns/clevr/>
+
+    ## Why this one is here and its neighbours are not
+
+    The gap table said of this name *its pictures are JPEG or PNG and numpy decodes
+    neither*. Half of that was true when it was written and the other half stopped
+    being true when `_png_read` landed — and which half applied was never checked,
+    because checking meant a 19GB download.
+
+    **It did not.** A zip keeps its file list at the end, and the host serves ranges:
+    70KB out of 19,021,600,724 reads the central directory, and every one of the
+    100,015 entries is a `.png`, a `.json` or a `.txt`. So there was no codec wall
+    here at all — the sentence that stood in this slot for months was about a file
+    format nobody had looked at.
+
+    ## What the label is
+
+    `scenes/CLEVR_{split}_scenes.json` holds one entry per picture with its objects
+    listed; the label is `len(objects)`. **`test` has no scenes file**, so its labels
+    are `None` — torchvision does the same, and a reader that returned 0 there would
+    train on a class that does not exist.
+
+    The pictures are matched to scenes **by filename and not by position**. The
+    directory listing is sorted and the JSON is not, so pairing them by index gives
+    every picture the wrong count while every shape stays right.
+    """
+
+    _URL = "https://dl.fbaipublicfiles.com/clevr/CLEVR_v1.0.zip"
+    _MD5 = "b11922020e72d0cd9154779b2d3d07d2"
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False, loader=None):
+        if split not in ("train", "val", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, val, test}.")
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self._split = split
+        self.loader = _folder_loader if loader is None else loader
+        self._base_folder = _os.path.join(self.root, "clevr")
+        self._data_folder = _os.path.join(self._base_folder, "CLEVR_v1.0")
+        if download:
+            self.download()
+        if not self._check_exists():
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+
+        folder = _os.path.join(self._data_folder, "images", self._split)
+        self._image_files = sorted(
+            _os.path.join(folder, name) for name in _os.listdir(folder)
+            if not name.startswith("."))
+        if self._split != "test":
+            scenes = _os.path.join(self._data_folder, "scenes",
+                                   f"CLEVR_{self._split}_scenes.json")
+            with open(scenes) as handle:
+                content = _json.load(handle)
+            counts = {scene["image_filename"]: len(scene["objects"])
+                      for scene in content["scenes"]}
+            self._labels = [counts[_os.path.basename(p)] for p in self._image_files]
+        else:
+            self._labels = [None] * len(self._image_files)
+
+    def _check_exists(self):
+        return _os.path.isdir(self._data_folder)
+
+    def download(self):
+        """**The archive is 19GB and this refuses to fetch it silently.**
+
+        Every other `download()` here streams tens or hundreds of megabytes; this one
+        is two orders of magnitude larger, and a `download=True` typed once by
+        somebody following a tutorial should not start it without saying so. The URL
+        and the checksum are named so the fetch can be made deliberately.
+        """
+        if self._check_exists():
+            return
+        raise RuntimeError(
+            f"CLEVR is {19021600724 / 1e9:.0f}GB and is not fetched automatically.\n"
+            f"  {self._URL}\n"
+            f"  md5 {self._MD5}\n"
+            f"  Unpack it so that {self._data_folder} exists, then construct without "
+            "download=True.")
+
+    def __len__(self):
+        return len(self._image_files)
+
+    def __getitem__(self, index):
+        picture = self.loader(self._image_files[index])
+        target = self._labels[index]
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        # **`split=train`, not `Split: train`.** Every other dataset here prints the
+        # capitalised form and this one does not — torchvision writes this line per
+        # class and CLEVR's was written by a different hand. Copied rather than
+        # tidied: the printed line is what a reader compares.
+        return f"split={self._split}"
+
+
 class EMNIST(MNIST):
     """The whole NIST Special Database 19 in MNIST's format — **letters as well as
     digits, and six ways of carving it up.**
@@ -5614,7 +5718,7 @@ _sys.modules["borchvision.transforms.functional"] = functional
 datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
-              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder",
+              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
 
