@@ -1411,3 +1411,42 @@ def test_the_setup_pages_marked_rung_is_the_runners_flags(name):
         f"  only on the page : {sorted(set(marked) - set(launch.FLAGS))}\n"
         f"  only in FLAGS    : {sorted(set(launch.FLAGS) - set(marked))}\n"
         "  the page tells a stranger which flags to paste; it has to be this list.")
+
+
+# **The vision page counts names it does not own.** `site/assets/api.json` is generated
+# from the built declarations, so every one of those numbers moves whenever the library
+# grows — `ops` went from eleven names to seventeen the day before this page was written,
+# and a sentence naming eleven would have survived that with nothing to contradict it.
+#
+# So the page marks each number where it makes the claim and this reads them. Prose is
+# not searched: a page that says "seventeen" in a paragraph is describing, and a page
+# that says `data-count="ops"` is asserting.
+_COUNT_SPAN = re.compile(r'<span data-count="([a-z_0-9]+)">(\d+)</span>')
+_VISION_MODULES = ("vision", "vision_v2", "vision_v2_twins", "ops", "datasets")
+
+
+@pytest.mark.parametrize("name", ["vision.html", "ko/vision.html"])
+def test_the_vision_page_counts_agree_with_the_generated_reference(name):
+    """Every marked number against `api.json`, including the two derived totals."""
+    api = json.loads(API.read_text(encoding="utf-8"))
+    counts = {m["name"]: m["count"] for m in api["modules"]}
+    truth = {n: counts[n] for n in _VISION_MODULES}
+    truth["_total"] = api["total"]
+    truth["_vision_total"] = sum(counts[n] for n in _VISION_MODULES)
+
+    page = (ROOT / "site" / name).read_text(encoding="utf-8")
+    claimed = {k: int(v) for k, v in _COUNT_SPAN.findall(page)}
+
+    assert claimed, (
+        f"site/{name} marks no counts at all.\n"
+        "  the numbers have to stay inside data-count spans, where this can read them.")
+    missing = sorted(set(truth) - set(claimed))
+    assert not missing, (
+        f"site/{name} stopped claiming: {missing}\n"
+        "  a count that leaves the page leaves nothing behind to go stale — but it also\n"
+        "  leaves the reader without it. Put it back or drop it from _VISION_MODULES.")
+    wrong = {k: (claimed[k], truth[k]) for k in truth if claimed.get(k) != truth[k]}
+    assert not wrong, (
+        f"site/{name} and site/assets/api.json disagree (page, reference):\n  " +
+        "\n  ".join(f"{k}: {p} vs {t}" for k, (p, t) in sorted(wrong.items())) +
+        "\n  regenerate with `npm run docs:api` and update the page, in that order.")
