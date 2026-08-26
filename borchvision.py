@@ -7242,6 +7242,167 @@ class StanfordCars(VisionDataset):
         return image, target
 
 
+
+_CATEGORIES_2021 = ("kingdom", "phylum", "class", "order", "family", "genus")
+
+
+class INaturalist(VisionDataset):
+    """iNaturalist, **and three releases that do not agree on anything.**
+
+    <https://github.com/visipedia/inat_comp>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*, and there is no annotation file here at all:
+    **the taxonomy is in the directory names**, and the class walks them. `loader` is
+    torchvision's own parameter, and it is the only place a format is read.
+
+    ## What `version` actually chooses
+
+    Not a split — **a different scheme for what a directory means**, and all three
+    build the same `index` at the end, so getting it wrong gives a dataset that loads:
+
+    - **2021** names each directory `00000_Animalia_Chordata_…_Trichodes_apiarius`:
+      eight underscore-separated pieces, of which six are the ranks. The leading number
+      must equal the directory's own position, checked rather than trusted — a missing
+      category shifts every later label by one and nothing else changes.
+    - **2018 and 2019** nest supercategory over a **numeric** subdirectory, and that
+      number is the category id. The directories are sparse, so the list is grown to
+      fit and a gap in it is an error: a missing id read as absent rather than as
+      "renumber the rest" is the difference between a refusal and a silent shift.
+    - **2017** has the same nesting with **non-numeric** subdirectories, so the id is
+      the position instead. One version reading the other's rule either raises on a
+      name that is not a number, or renumbers everything.
+
+    `target_type` may be a list, and then the target is a tuple in that order.
+    `full` is the category id itself; the named ranks index into per-rank tables built
+    while walking, so two species in one genus share a genus id and not a category one.
+    """
+
+    _VERSIONS = ("2017", "2018", "2019", "2021_train", "2021_train_mini", "2021_valid")
+    _PIECES_2021 = 8
+    _RANKS_2021 = 6
+
+    def __init__(self, root, version="2021_train", target_type="full", transform=None,
+                 target_transform=None, download=False, loader=None):
+        if version not in self._VERSIONS:
+            raise ValueError(f"Unknown value '{version}' for argument version. Valid "
+                             "values are {" + ", ".join(self._VERSIONS) + "}.")
+        self.version = version
+        super().__init__(_os.path.join(root, version), transform=transform,
+                         target_transform=target_transform)
+        if download:
+            raise ValueError(
+                "INaturalist(download=True) is not implemented here.\n"
+                "  The archives run to hundreds of gigabytes; the reader above takes "
+                "the extracted tree.")
+        if not (_os.path.exists(self.root) and _os.listdir(self.root)):
+            raise RuntimeError(
+                "Dataset not found or corrupted. You can use download=True to "
+                "download it")
+
+        self.all_categories = []
+        self.categories_index = {}
+        self.categories_map = []
+        if not isinstance(target_type, list):
+            target_type = [target_type]
+        if self.version[:4] == "2021":
+            allowed = ("full",) + _CATEGORIES_2021
+            self._init_2021()
+        else:
+            allowed = ("full", "super")
+            self._init_pre2021()
+        for one in target_type:
+            if one not in allowed:
+                raise ValueError(
+                    f"Unknown value '{one}' for argument target_type. Valid values "
+                    "are {" + ", ".join(allowed) + "}.")
+        self.target_type = list(target_type)
+
+        self.index = []
+        for position, name in enumerate(self.all_categories):
+            for filename in sorted(_os.listdir(_os.path.join(self.root, name))):
+                self.index.append((position, filename))
+        self.loader = _folder_loader if loader is None else loader
+
+    def _init_2021(self):
+        self.all_categories = sorted(_os.listdir(self.root))
+        self.categories_index = {rank: {} for rank in _CATEGORIES_2021}
+        for position, name in enumerate(self.all_categories):
+            pieces = name.split("_")
+            if len(pieces) != self._PIECES_2021:
+                raise RuntimeError(
+                    f"Unexpected category name {name}, wrong number of pieces")
+            if pieces[0] != f"{position:05d}":
+                raise RuntimeError(
+                    f"Unexpected category id {pieces[0]}, expecting {position:05d}")
+            row = {}
+            for rank, value in zip(_CATEGORIES_2021,
+                                   pieces[1:1 + self._RANKS_2021]):
+                table = self.categories_index[rank]
+                row[rank] = table.setdefault(value, len(table))
+            self.categories_map.append(row)
+
+    def _init_pre2021(self):
+        self.categories_index = {"super": {}}
+        running = 0
+        for above, supercategory in enumerate(sorted(_os.listdir(self.root))):
+            self.categories_index["super"][supercategory] = above
+            folder = _os.path.join(self.root, supercategory)
+            for name in sorted(_os.listdir(folder)):
+                if self.version == "2017":
+                    where = running
+                    running += 1
+                else:
+                    try:
+                        where = int(name)
+                    except ValueError:
+                        raise RuntimeError(
+                            f"Unexpected non-numeric dir name: {name}")
+                if where >= len(self.categories_map):
+                    grow = where - len(self.categories_map) + 1
+                    self.categories_map.extend([{}] * grow)
+                    self.all_categories.extend([""] * grow)
+                if self.categories_map[where]:
+                    raise RuntimeError(f"Duplicate category {name}")
+                self.categories_map[where] = {"super": above}
+                self.all_categories[where] = _os.path.join(supercategory, name)
+        for where, row in enumerate(self.categories_map):
+            if not row:
+                raise RuntimeError(f"Missing category {where}")
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, index):
+        category, filename = self.index[index]
+        image = self.loader(_os.path.join(
+            self.root, self.all_categories[category], filename))
+        target = [category if one == "full" else self.categories_map[category][one]
+                  for one in self.target_type]
+        target = tuple(target) if len(target) > 1 else target[0]
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+    def category_name(self, category_type, category_id):
+        """The name behind an id. **`full` indexes a list and the ranks search a
+        table**, because the rank tables are built name-to-id while walking and nothing
+        reverses them — which is fine at the sizes involved and worth saying, since a
+        caller reading this as a lookup would expect it to be cheap."""
+        if category_type == "full":
+            return self.all_categories[category_id]
+        if category_type not in self.categories_index:
+            raise ValueError(f"Invalid category type '{category_type}'")
+        for name, where in self.categories_index[category_type].items():
+            if where == category_id:
+                return name
+        raise ValueError(
+            f"Invalid category id {category_id} for {category_type}")
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -7750,7 +7911,7 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "CarlaStereo", "ETH3DStereo", "SceneFlowStereo", "FlyingThings3D",
               "Middlebury2014Stereo", "Kitti", "PhotoTour",
               "Country211", "EuroSAT", "DTD", "Food101", "SUN397", "FGVCAircraft",
-              "Imagenette", "Flickr8k", "Flickr30k", "StanfordCars",
+              "Imagenette", "Flickr8k", "Flickr30k", "StanfordCars", "INaturalist",
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
