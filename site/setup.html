@@ -81,54 +81,69 @@
 
     <h2>Linux with an NVIDIA card</h2>
     <p>
-      <strong>Two switches, and the middle state is the dangerous one.</strong> Chrome keeps
-      a blocklist and consults it <em>before</em> asking the driver, so a perfectly working
-      card is refused. Measured on Ubuntu 24.04, RTX 5080, driver 580.159.04:
+      <strong>Two cards here, and they did not agree.</strong> Chrome keeps a blocklist and
+      consults it <em>before</em> asking the driver, so a working card is refused; the flags
+      below are all ways past that refusal. <strong>Which one works differed by card</strong>,
+      so the table has two result columns and you should read across:
     </p>
     <div style="overflow-x:auto">
     <table>
-      <thead><tr><th>Chrome</th><th>Adapter</th><th>What it means</th></tr></thead>
+      <thead><tr><th>Chrome started with</th>
+        <th>RTX 5080<br><span class="small">driver 580.159.04</span></th>
+        <th>RTX 4090<br><span class="small">driver 550.144.03</span></th></tr></thead>
       <tbody>
-        <tr><td>neither switch</td><td>none</td><td>borch refuses to run</td></tr>
-        <tr><td><code>#enable-unsafe-webgpu</code> only</td><td><code>google / swiftshader</code></td>
-            <td><strong>the CPU</strong> — it runs and the speeds are not a GPU's</td></tr>
-        <tr><td>both</td><td><code>nvidia / blackwell</code></td><td>the card</td></tr>
+        <tr><td>nothing</td><td>none</td><td>none</td></tr>
+        <tr><td><code>--enable-unsafe-webgpu</code></td>
+            <td><code>google / swiftshader</code></td>
+            <td><code>google / swiftshader</code></td></tr>
+        <tr><td>&nbsp;&nbsp;+ <code>--ignore-gpu-blocklist</code></td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td><code>google / swiftshader</code></td></tr>
+        <tr><td>&nbsp;&nbsp;+ <code>--use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE</code></td>
+            <td>not measured</td>
+            <td><strong><code>nvidia / lovelace</code></strong></td></tr>
       </tbody>
     </table>
     </div>
     <p>
-      So open <code>chrome://flags</code>, turn on <strong>#enable-unsafe-webgpu</strong> and
-      <strong>#ignore-gpu-blocklist</strong>, and relaunch. <strong>A window that is already
-      open keeps the old settings</strong> — that one cost an hour here. If it still will
-      not take, start the browser fresh from a terminal:
+      <strong>Neither pair is the answer on its own.</strong> The blocklist switch that
+      carries the 5080 does nothing at all on the 4090, and the ANGLE pair that carries the
+      4090 was not what the 5080 was measured with. So use all of them — they do not
+      conflict, and this is the line to paste:
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
-  --enable-unsafe-webgpu --ignore-gpu-blocklist</code></pre>
+  --enable-unsafe-webgpu --ignore-gpu-blocklist \
+  --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE</code></pre>
+    <p>
+      The same switches exist in <code>chrome://flags</code> as
+      <strong>#enable-unsafe-webgpu</strong>, <strong>#ignore-gpu-blocklist</strong>,
+      <strong>#enable-vulkan</strong> and <strong>Choose ANGLE graphics backend →
+      Vulkan</strong>, and a relaunch is required; <strong>a window that is already open
+      keeps the old settings</strong>, which cost an hour here. Only the command line above
+      was measured.
+    </p>
     <p class="small">
-      On the same machine, the same run through Playwright with those flags gave
+      Two narrowings, so nobody has to repeat them. <code>--ozone-platform=x11</code> is in
+      the documented list and the 4090 reached <code>nvidia / lovelace</code> without it.
+      And <code>--use-angle=vulkan</code> <em>alone</em> gives no adapter at all — worse than
+      the CPU it replaces. It needs <code>--enable-features=Vulkan,VulkanFromANGLE</code>
+      beside it or not at all.
+    </p>
+    <p class="small">
+      On the 5080, the same run through Playwright with the blocklist flag gave
       <code>passed 2901 / failed 0 [nvidia / blackwell]</code> — the golden agreeing on a
-      second vendor for the first time in this project.
+      second vendor for the first time in this project. The 4090 numbers above are single
+      adapter probes, not a golden run.
     </p>
     <p>
-      <strong>And there is a documented route, which is not the one above.</strong> The
-      WebGPU working group's
+      <strong>The ANGLE pair is not something this page worked out.</strong> It comes from
+      the WebGPU working group's
       <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status">implementation
-      status</a> lists Linux as behind a flag and names four:
-    </p>
-    <pre class="small" style="overflow-x:auto"><code>--enable-unsafe-webgpu --ozone-platform=x11 --use-angle=vulkan \
-  --enable-features=Vulkan,VulkanFromANGLE</code></pre>
-    <p>
-      <strong>The two lists overlap in one entry.</strong> Ours was arrived at by trying
-      things on one machine and it is what the measurement above was taken with; theirs is
-      written down by the people who implement it and has not been run here. Both can be
-      true — they are different ways to get past the same refusal — and a reader whose card
-      does not come up with the pair above should try the four before concluding anything
-      about their hardware.
-    </p>
-    <p class="small">
-      It is worth saying plainly that this page found its two flags the long way. The
-      documented list was a page away the whole time and neither session here looked at it
-      for a day.
+      status</a>, which has listed it the whole time. This page spent a day arriving at
+      <code>--ignore-gpu-blocklist</code> instead, published it as <em>the</em> route, and
+      then measured a second card that route does not open. <strong>One session here had
+      even talked the other out of <code>--use-angle=vulkan</code></strong> — the flag that
+      turned out to carry the 4090.
     </p>
 
     <h2>Linux with an AMD or Intel card</h2>
