@@ -98,7 +98,7 @@
         <tr><td>&nbsp;&nbsp;+ <code>--ignore-gpu-blocklist</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><code>google / swiftshader</code></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
+        <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan --disable-gpu-driver-bug-workarounds</code><br><span class="small">this row is the runner's flags</span></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
         <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
@@ -112,10 +112,11 @@
       <strong>The two cards are opened by different switches.</strong> The 5080 needs the
       blocklist ignored; on the 4090 that flag does nothing and
       <code>--enable-features=Vulkan</code> is what reaches the card — on its own, without
-      the blocklist flag at all. Carry both and one line covers both:
+      the blocklist flag at all. Carry both and one line covers both. <strong>These four are exactly what the test runner sends</strong>, which is why they are the four to paste rather than the three that would also be enough on paper &mdash; this is the set that was run on both cards:
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
-  --enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist</code></pre>
+  --enable-unsafe-webgpu --enable-features=Vulkan \
+  --ignore-gpu-blocklist --disable-gpu-driver-bug-workarounds</code></pre>
     <p>
       In <code>chrome://flags</code> those are <strong>#enable-unsafe-webgpu</strong>,
       <strong>#enable-vulkan</strong> and <strong>#ignore-gpu-blocklist</strong>. Relaunch
