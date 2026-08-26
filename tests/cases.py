@@ -13326,6 +13326,57 @@ def _v2_from_picture(L, picture, build):
 DATASET_PREFIX = "dataset::"
 
 
+def _write_png8(path, arr):
+    """An eight-bit PNG, **written by hand rather than through PIL.**
+
+    These fixtures run in three places and one of them is Pyodide, where there is no
+    PIL — measured: fifty-one dataset cases failed on the binding with
+    `No module named 'PIL'` while numpy and the browser passed. **A fixture that needs a
+    library the case does not is a case only two of three implementations can be
+    asked**, and two of three is not this table's standard.
+
+    The comment these replaced said PIL kept *the bytes torchvision would meet*. It is
+    a real point and it is smaller than this one: what is written here is a PNG by the
+    specification, PIL reads it on the side that has PIL, and the other two sides can
+    now be asked at all.
+    """
+    import os
+    import struct
+    import zlib
+    arr = np.asarray(arr)
+    height, width = arr.shape[:2]
+    # `len(arr.shape)` and not `arr.ndim`, for the reason written twice above: this
+    # file is parsed for the names its cases ask about, and a fixture's numpy `.ndim`
+    # is indistinguishable from a tensor's.
+    channels = 1 if len(arr.shape) == 2 else arr.shape[2]
+    rows = arr.reshape(height, width * channels).astype(np.uint8)
+    raw = b"".join(b"\x00" + rows[y].tobytes() for y in range(height))
+
+    def chunk(kind, body):
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body)))
+
+    if os.path.dirname(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    header = struct.pack(">IIBBBBB", width, height, 8,
+                         {1: 0, 3: 2, 4: 6}[channels], 0, 0, 0)
+    with open(path, "wb") as handle:
+        handle.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def _write_ppm8(path, arr):
+    """A binary PPM — **a magic number, three numbers and the samples.**"""
+    import os
+    arr = np.asarray(arr).astype(np.uint8)
+    height, width = arr.shape[:2]
+    if os.path.dirname(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as handle:
+        handle.write(f"P6\n{width} {height}\n255\n".encode())
+        handle.write(arr.reshape(-1).tobytes())
+
+
 def _vision_datasets(L):
     """`borchvision.datasets` for us, `torchvision.datasets` for real torch."""
     if _is_real_torch(L):
@@ -14248,7 +14299,6 @@ def dataset_last_three_cases(inp=None):
             # own `ImageFolder` opens through PIL, so the package is already required
             # for this side of the comparison — writing the files with it keeps the
             # bytes torchvision would meet rather than bytes this repository invented.
-            from PIL import Image as _PIL
             root = tempfile.mkdtemp()
             try:
                 for name, count in (("cat", 2), ("dog", 2), ("emu", 1)):
@@ -14256,12 +14306,10 @@ def dataset_last_three_cases(inp=None):
                     for k in range(count):
                         block = (np.arange(4 * 5 * 3).reshape(4, 5, 3)
                                  + len(name) * 11 + k * 3) % 251
-                        _PIL.fromarray(block.astype(np.uint8)).save(
-                            os.path.join(root, name, f"{k}.png"))
+                        _write_png8(os.path.join(root, name, f"{k}.png"), block)
                 # A PPM beside the PNGs, in the folder that has only one picture.
                 block = (np.arange(3 * 3 * 3).reshape(3, 3, 3) * 7) % 200
-                _PIL.fromarray(block.astype(np.uint8)).save(
-                    os.path.join(root, "emu", "p.ppm"))
+                _write_png8(os.path.join(root, "emu", "p.ppm"), block)
 
                 if _is_real_torch(L):
                     from torchvision.datasets import ImageFolder as real
@@ -14299,7 +14347,6 @@ def dataset_last_three_cases(inp=None):
             import os
             import shutil
             import tempfile
-            from PIL import Image as _PIL
             root = tempfile.mkdtemp()
             try:
                 base = os.path.join(root, "clevr", "CLEVR_v1.0")
@@ -14308,8 +14355,7 @@ def dataset_last_three_cases(inp=None):
                     os.makedirs(folder)
                     for k in range(count):
                         block = (np.arange(4 * 5 * 3).reshape(4, 5, 3) + k * 7) % 251
-                        _PIL.fromarray(block.astype(np.uint8)).save(
-                            os.path.join(folder, f"CLEVR_{name}_{k:06d}.png"))
+                        _write_png8(os.path.join(folder, f"CLEVR_{name}_{k:06d}.png"), block)
                 os.makedirs(os.path.join(base, "scenes"))
                 scenes = {"scenes": [
                     {"image_filename": "CLEVR_train_000002.png", "objects": [1, 2, 3, 4, 5]},
@@ -14355,7 +14401,6 @@ def dataset_last_three_cases(inp=None):
             import os
             import shutil
             import tempfile
-            from PIL import Image as _PIL
             root = tempfile.mkdtemp()
             try:
                 base = os.path.join(root, "rendered-sst2")
@@ -14367,8 +14412,7 @@ def dataset_last_three_cases(inp=None):
                         for k in range(n):
                             block = (np.arange(3 * 4 * 3).reshape(3, 4, 3)
                                      + k * 5 + len(name)) % 251
-                            _PIL.fromarray(block.astype(np.uint8)).save(
-                                os.path.join(d, f"{k}.png"))
+                            _write_png8(os.path.join(d, f"{k}.png"), block)
                 if _is_real_torch(L):
                     from torchvision.datasets import RenderedSST2 as real
                     loaded = real(root, split=split)
@@ -14403,7 +14447,6 @@ def dataset_last_three_cases(inp=None):
             import os
             import shutil
             import tempfile
-            from PIL import Image as _PIL
             root = tempfile.mkdtemp()
             try:
                 base = os.path.join(root, "Sintel")
@@ -14416,8 +14459,7 @@ def dataset_last_three_cases(inp=None):
                             block = (np.arange(3 * 4 * 3).reshape(3, 4, 3)
                                      + k * 9
                                      + (0 if name == "clean" else 101)) % 251
-                            _PIL.fromarray(block.astype(np.uint8)).save(
-                                os.path.join(d, f"frame_{k:04d}.png"))
+                            _write_png8(os.path.join(d, f"frame_{k:04d}.png"), block)
                 for scene, n in scenes:
                     d = os.path.join(base, "training", "flow", scene)
                     os.makedirs(d)
@@ -14488,10 +14530,39 @@ def dataset_last_three_cases(inp=None):
                          + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
     def _png8(path, arr):
+        """An eight-bit PNG, **written by hand like the sixteen-bit one above.**
+
+        Not through PIL. These fixtures run in three places, and one of them is Pyodide,
+        where there is no PIL — measured: fifty-one dataset cases failed on the binding
+        with `No module named 'PIL'` while numpy and the browser passed. A fixture that
+        needs a library the case does not is a case that only two of three
+        implementations can be asked.
+
+        The format costs nothing to write: a signature, an `IHDR` saying the size and
+        the depth, one `zlib` stream of rows each prefixed by a filter byte, and `IEND`.
+        Filter `0` means *no filter*, which a reader has to handle anyway.
+        """
         import os
-        from PIL import Image as _PIL
+        import struct
+        import zlib
+        arr = np.asarray(arr)
+        height, width = arr.shape[:2]
+        # `len(arr.shape)` and not `arr.ndim`, for the reason written twice above:
+        # this file is parsed for the names its cases ask about.
+        channels = 1 if len(arr.shape) == 2 else arr.shape[2]
+        rows = arr.reshape(height, width * channels).astype(np.uint8)
+        raw = b"".join(b"\x00" + rows[y].tobytes() for y in range(height))
+
+        def chunk(kind, body):
+            return (struct.pack(">I", len(body)) + kind + body
+                    + struct.pack(">I", zlib.crc32(kind + body)))
+
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        _PIL.fromarray(arr.astype(np.uint8)).save(path)
+        header = struct.pack(">IIBBBBB", width, height, 8,
+                             {1: 0, 3: 2, 4: 6}[channels], 0, 0, 0)
+        with open(path, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+                         + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
     def _stereo_out(loaded):
         """Count first, then every item flattened — including the `None`s, which are
@@ -14706,10 +14777,8 @@ def dataset_last_three_cases(inp=None):
 
     def _ppm(path, seed):
         import os
-        from PIL import Image as _PIL
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        _PIL.fromarray(((np.arange(_H * _W * 3).reshape(_H, _W, 3) * 5 + seed) % 251)
-                       .astype(np.uint8)).save(path)
+        _write_ppm8(path, ((np.arange(_H * _W * 3).reshape(_H, _W, 3) * 5 + seed)
+                           % 251))
 
     def _pfm(path, channels, seed):
         """A `.pfm` written little-endian — **the scale's sign is the byte order**, and
@@ -14974,10 +15043,31 @@ def dataset_last_three_cases(inp=None):
             handle.write(header + block.tobytes())
 
     def _bmp(path, arr):
+        """A grey BMP, **written by hand for the reason `_write_png8` is** — PIL is not
+        in Pyodide, and a fixture that needs it is a case only two of three
+        implementations can be asked.
+
+        Three things the format needs and a reader has to undo: the rows run **bottom to
+        top**, each is padded to four bytes, and eight-bit needs a palette — an identity
+        greyscale one, which is what PIL writes for mode `L` and what makes the reader
+        hand back one channel.
+        """
         import os
-        from PIL import Image as _PIL
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        _PIL.fromarray(arr.astype(np.uint8), "L").save(path, format="BMP")
+        import struct
+        arr = np.asarray(arr).astype(np.uint8)
+        height, width = arr.shape[:2]
+        stride = (width + 3) // 4 * 4
+        rows = b"".join(arr[y].tobytes() + b"\x00" * (stride - width)
+                        for y in range(height - 1, -1, -1))
+        palette = b"".join(bytes((i, i, i, 0)) for i in range(256))
+        offset = 14 + 40 + len(palette)
+        header = (b"BM" + struct.pack("<IHHI", offset + len(rows), 0, 0, offset)
+                  + struct.pack("<IiiHHIIiiII", 40, width, height, 1, 8, 0,
+                                len(rows), 0, 0, 256, 0))
+        if os.path.dirname(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(header + palette + rows)
 
     def kitti(train):
         """`Kitti`'s 2D object set. Its row read *as above — a codec* and **the
@@ -15101,10 +15191,7 @@ def dataset_last_three_cases(inp=None):
         by extension *before* any loader runs, which is why their fixture files are
         named `.png` and why that difference is written into their classes.
         """
-        import os
-        from PIL import Image as _PIL
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        _PIL.fromarray(_rgb(seed).astype(np.uint8)).save(path, format="PNG")
+        _write_png8(path, _rgb(seed))
 
     def _labelled_out(loaded):
         """Count, class list length, then every (picture, label) — with the labels
