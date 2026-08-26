@@ -1227,6 +1227,41 @@ export async function report(): Promise<Report> {
     const soft = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1, draw).toArray();
     const again = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1, draw).toArray();
     want("gumbelSoftmax is a function of the draw, not of the call", same(soft, again));
+
+  // ── the functional BCE pair takes torch's whole list ──────────────────
+  //
+  // Both took three of torch's seven, so **`reduction` sat in `weight`'s seat**: a
+  // caller writing torch's line, or the binding unrolling it positionally, put a
+  // tensor where a string belongs. Their layers next door have taken all seven and
+  // refused two since they were written; only the functional forms were short.
+  {
+    const logits = Tensor.from([0.5, -1.0, 2.0], [3]);
+    const targets = Tensor.from([1, 0, 1], [3]);
+    // Position six is `reduction`, and it has to arrive there rather than at `weight`.
+    const summed = await F.binaryCrossEntropyWithLogits(
+      logits, targets, undefined, null, null, "sum").item();
+    const meaned = await F.binaryCrossEntropyWithLogits(
+      logits, targets, undefined, null, null, "mean").item();
+    want("reduction arrives at the sixth seat, not the third",
+      near(summed, meaned * 3, 1e-6), `${summed} against ${meaned} × 3`);
+    // `sizeAverage=false` is torch's old spelling of `sum`, folded the same way the
+    // layers fold it.
+    const legacy = await F.binaryCrossEntropyWithLogits(
+      logits, targets, undefined, false).item();
+    want("and sizeAverage=false still means sum", near(legacy, summed, 1e-6),
+      `${legacy} against ${summed}`);
+    let refused = false;
+    try {
+      F.binaryCrossEntropyWithLogits(logits, targets, Tensor.from([1, 1, 1], [3]));
+    } catch { refused = true; }
+    want("a class weight is refused rather than ignored", refused);
+    let refusedPos = false;
+    try {
+      F.binaryCrossEntropyWithLogits(
+        logits, targets, undefined, null, null, "mean", Tensor.from([1], [1]));
+    } catch { refusedPos = true; }
+    want("and so is posWeight, at torch's seventh seat", refusedPos);
+  }
     // **This asked the wrong question and passed.** It read
     // `nn.gumbelSoftmax.length === 1` — that the parameter is *absent* — which is not
     // what "eps must not matter" means, and is not what torch does: torch keeps `eps`

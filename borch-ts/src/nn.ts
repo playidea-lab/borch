@@ -3380,7 +3380,7 @@ export function legacyReduction<R extends string>(
  * `new CrossEntropyLoss(classWeights)` set the *reduction* to a tensor until the core
  * grew torch's order and the two sides came apart.
  */
-function refuseWeight(layer: string, what: string, weight: unknown): void {
+export function refuseWeight(layer: string, what: string, weight: unknown): void {
   if (weight !== undefined && weight !== null) {
     throw new Error(
       `${layer}(${what}=…) is not in the browser subset. Use real PyTorch on your ` +
