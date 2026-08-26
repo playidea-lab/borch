@@ -81,10 +81,9 @@
 
     <h2>Linux with an NVIDIA card</h2>
     <p>
-      <strong>Two cards here, and they did not agree.</strong> Chrome keeps a blocklist and
-      consults it <em>before</em> asking the driver, so a working card is refused; the flags
-      below are all ways past that refusal. <strong>Which one works differed by card</strong>,
-      so the table has two result columns and you should read across:
+      <strong>Two cards here, and they needed different flags — but one list holds both.</strong>
+      Chrome keeps a blocklist and consults it <em>before</em> asking the driver, so a
+      working card is refused. Read across:
     </p>
     <div style="overflow-x:auto">
     <table>
@@ -99,51 +98,53 @@
         <tr><td>&nbsp;&nbsp;+ <code>--ignore-gpu-blocklist</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><code>google / swiftshader</code></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE</code></td>
+        <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td><strong><code>nvidia / lovelace</code></strong></td></tr>
+        <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
+                <span class="small">nothing else</span></td>
             <td>not measured</td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
       </tbody>
     </table>
     </div>
     <p>
-      <strong>Neither pair is the answer on its own.</strong> The blocklist switch that
-      carries the 5080 does nothing at all on the 4090, and the ANGLE pair that carries the
-      4090 was not what the 5080 was measured with. So use all of them — they do not
-      conflict, and this is the line to paste:
+      <strong>The two cards are opened by different switches.</strong> The 5080 needs the
+      blocklist ignored; on the 4090 that flag does nothing and
+      <code>--enable-features=Vulkan</code> is what reaches the card — on its own, without
+      the blocklist flag at all. Carry both and one line covers both:
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
-  --enable-unsafe-webgpu --ignore-gpu-blocklist \
-  --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE</code></pre>
+  --enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist</code></pre>
     <p>
-      The same switches exist in <code>chrome://flags</code> as
-      <strong>#enable-unsafe-webgpu</strong>, <strong>#ignore-gpu-blocklist</strong>,
-      <strong>#enable-vulkan</strong> and <strong>Choose ANGLE graphics backend →
-      Vulkan</strong>, and a relaunch is required; <strong>a window that is already open
-      keeps the old settings</strong>, which cost an hour here. Only the command line above
-      was measured.
+      In <code>chrome://flags</code> those are <strong>#enable-unsafe-webgpu</strong>,
+      <strong>#enable-vulkan</strong> and <strong>#ignore-gpu-blocklist</strong>. Relaunch
+      after changing them — <strong>a window that is already open keeps the old
+      settings</strong>, which cost an hour here.
     </p>
     <p class="small">
-      Two narrowings, so nobody has to repeat them. <code>--ozone-platform=x11</code> is in
-      the documented list and the 4090 reached <code>nvidia / lovelace</code> without it.
-      And <code>--use-angle=vulkan</code> <em>alone</em> gives no adapter at all — worse than
-      the CPU it replaces. It needs <code>--enable-features=Vulkan,VulkanFromANGLE</code>
-      beside it or not at all.
-    </p>
-    <p class="small">
-      On the 5080, the same run through Playwright with the blocklist flag gave
-      <code>passed 2901 / failed 0 [nvidia / blackwell]</code> — the golden agreeing on a
-      second vendor for the first time in this project. The 4090 numbers above are single
-      adapter probes, not a golden run.
-    </p>
-    <p>
-      <strong>The ANGLE pair is not something this page worked out.</strong> It comes from
-      the WebGPU working group's
+      The WebGPU working group's
       <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status">implementation
-      status</a>, which has listed it the whole time. This page spent a day arriving at
-      <code>--ignore-gpu-blocklist</code> instead, published it as <em>the</em> route, and
-      then measured a second card that route does not open. <strong>One session here had
-      even talked the other out of <code>--use-angle=vulkan</code></strong> — the flag that
-      turned out to carry the 4090.
+      status</a> gives a different set for Linux — <code>--ozone-platform=x11
+      --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE</code> — and it also
+      reaches <code>nvidia / lovelace</code>. It works because it contains
+      <code>--enable-features=Vulkan</code>: <code>--use-angle=vulkan</code> on its own
+      returns no adapter at all, and <code>--ozone-platform=x11</code> was not needed.
+    </p>
+    <p class="small">
+      On the 5080, the same run through Playwright gave
+      <code>passed 2901 / failed 0 [nvidia / blackwell]</code> — the golden agreeing on a
+      second vendor for the first time in this project. The 4090 entries are single adapter
+      probes, not a golden run.
+    </p>
+    <p>
+      <strong>An earlier version of this table said the opposite</strong>, and the mistake
+      is worth leaving visible: the row tested here as <em>the runner's flags</em> was
+      missing <code>--enable-features=Vulkan</code>, which the runner has always sent. So a
+      list that does reach both cards was measured as failing on one, and this page
+      published that for an afternoon. <strong>The flags a page tests have to be the flags
+      it ships</strong>, character for character — reading them off from memory is how a
+      correct list gets retracted.
     </p>
 
     <h2>Linux with an AMD or Intel card</h2>

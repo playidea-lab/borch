@@ -77,10 +77,9 @@
 
     <h2>NVIDIA 카드를 단 리눅스</h2>
     <p>
-      <strong>여기 카드가 둘인데, 둘이 서로 다른 답을 냈다.</strong> 크롬은 차단 목록을
-      들고 있고 드라이버에 <em>묻기 전에</em> 그 목록을 본다. 그래서 멀쩡한 카드가 거절된다.
-      아래 플래그들은 전부 그 거절을 지나가는 방법이고, <strong>어느 것이 통하는지가
-      카드마다 달랐다.</strong> 결과 칸이 둘인 이유이니 가로로 읽을 것:
+      <strong>여기 카드가 둘인데 서로 다른 플래그를 필요로 했다 — 다만 목록 하나가 둘 다
+      담는다.</strong> 크롬은 차단 목록을 들고 있고 드라이버에 <em>묻기 전에</em> 그것을
+      본다. 그래서 멀쩡한 카드가 거절된다. 가로로 읽을 것:
     </p>
     <div style="overflow-x:auto">
     <table>
@@ -95,48 +94,53 @@
         <tr><td>&nbsp;&nbsp;+ <code>--ignore-gpu-blocklist</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><code>google / swiftshader</code></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE</code></td>
+        <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td><strong><code>nvidia / lovelace</code></strong></td></tr>
+        <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
+                <span class="small">다른 것 없이</span></td>
             <td>안 쟀다</td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
       </tbody>
     </table>
     </div>
     <p>
-      <strong>둘 중 어느 쌍도 그것만으로는 답이 아니다.</strong> 5080 을 살린 차단목록
-      스위치는 4090 에서 아무 일도 하지 않고, 4090 을 살린 ANGLE 쌍은 5080 에서 재본
-      적이 없다. 그러니 전부 켜라 — 서로 충돌하지 않는다. 붙여넣을 줄은 이것이다:
+      <strong>두 카드를 여는 스위치가 서로 다르다.</strong> 5080 은 차단 목록을 무시해야
+      하고, 4090 에서는 그 플래그가 아무 일도 하지 않고
+      <code>--enable-features=Vulkan</code> 이 카드에 닿는다 — 차단목록 플래그 없이
+      그것만으로. 둘 다 들고 다니면 한 줄로 둘 다 덮는다:
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
-  --enable-unsafe-webgpu --ignore-gpu-blocklist \
-  --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE</code></pre>
+  --enable-unsafe-webgpu --enable-features=Vulkan --ignore-gpu-blocklist</code></pre>
     <p>
-      같은 스위치가 <code>chrome://flags</code> 에도 있다 —
-      <strong>#enable-unsafe-webgpu</strong>, <strong>#ignore-gpu-blocklist</strong>,
-      <strong>#enable-vulkan</strong>, 그리고 <strong>Choose ANGLE graphics backend →
-      Vulkan</strong>. 바꾼 뒤 재시작해야 하고, <strong>이미 열려 있던 창은 예전 설정을
-      그대로 쓴다</strong> — 여기서 한 시간을 썼다. 다만 측정한 것은 위의 명령줄 쪽이다.
+      <code>chrome://flags</code> 에서는 <strong>#enable-unsafe-webgpu</strong>,
+      <strong>#enable-vulkan</strong>, <strong>#ignore-gpu-blocklist</strong> 다.
+      바꾼 뒤 다시 띄워야 한다 — <strong>이미 열려 있던 창은 예전 설정을 그대로 쓴다.</strong>
+      여기서 한 시간을 썼다.
     </p>
     <p class="small">
-      두 가지를 좁혀뒀으니 누구도 다시 하지 않아도 된다. <code>--ozone-platform=x11</code>
-      은 문서화된 목록에 있지만 4090 은 그것 없이도 <code>nvidia / lovelace</code> 까지
-      갔다. 그리고 <code>--use-angle=vulkan</code> <em>단독</em>은 어댑터를 아예 못 준다 —
-      그것이 대체하려던 CPU 보다도 못하다. <code>--enable-features=Vulkan,VulkanFromANGLE</code>
-      을 옆에 두든가, 아니면 아예 쓰지 말 것.
+      WebGPU 워킹그룹의
+      <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status">구현 현황</a>은
+      리눅스에 다른 조합을 준다 — <code>--ozone-platform=x11 --use-angle=vulkan
+      --enable-features=Vulkan,VulkanFromANGLE</code> — 그리고 그것도
+      <code>nvidia / lovelace</code> 에 닿는다. 통하는 이유는 안에
+      <code>--enable-features=Vulkan</code> 이 있어서다.
+      <code>--use-angle=vulkan</code> 단독은 어댑터를 아예 못 주고,
+      <code>--ozone-platform=x11</code> 은 필요 없었다.
     </p>
     <p class="small">
-      5080 에서는 차단목록 플래그를 준 채로 같은 실행을 Playwright 로 돌려
-      <code>passed 2901 / failed 0 [nvidia / blackwell]</code> 가 나왔다 — 이 프로젝트에서
-      골든이 두 번째 벤더에 동의한 첫 사례다. 위의 4090 값들은 어댑터를 한 번씩 물어본
-      것이지 골든 실행이 아니다.
+      5080 에서는 같은 실행을 Playwright 로 돌려
+      <code>passed 2901 / failed 0 [nvidia / blackwell]</code> 이 나왔다 — 이 프로젝트에서
+      골든이 두 번째 벤더에 동의한 첫 사례다. 4090 값들은 어댑터를 한 번씩 물어본 것이지
+      골든 실행이 아니다.
     </p>
     <p>
-      <strong>ANGLE 쌍은 이 페이지가 알아낸 것이 아니다.</strong> WebGPU 워킹그룹의
-      <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status">구현 현황</a>에
-      내내 적혀 있던 것이다. 이 페이지는 그 대신 하루를 들여
-      <code>--ignore-gpu-blocklist</code> 에 도달했고, 그것을 <em>그</em> 경로로 발행했고,
-      그 다음에 그 경로가 열지 못하는 두 번째 카드를 쟀다. <strong>심지어 여기 한 세션이
-      다른 세션을 <code>--use-angle=vulkan</code> 에서 말렸었다</strong> — 4090 을 살린
-      것으로 밝혀진 그 플래그에서.
+      <strong>이 표의 이전 판은 정반대를 말했고</strong>, 그 실수는 보이게 두는 편이 낫다.
+      여기서 <em>러너의 플래그</em>라며 잰 줄에 <code>--enable-features=Vulkan</code> 이
+      빠져 있었다. 러너는 그것을 늘 보내고 있었는데. 그래서 **두 카드에 다 닿는 목록이
+      한쪽에서 실패한 것으로 측정됐고**, 이 페이지가 그것을 반나절 발행했다.
+      <strong>페이지가 재는 플래그는 페이지가 배포하는 플래그와 글자까지 같아야 한다</strong> —
+      기억으로 옮겨적는 것이 맞는 목록을 철회시키는 방식이다.
     </p>
 
     <h2>AMD·Intel 카드를 단 리눅스</h2>
