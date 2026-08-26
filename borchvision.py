@@ -79,6 +79,7 @@ import enum as _enum
 import glob as _glob
 import gzip as _gzip
 import hashlib as _hashlib
+import html.parser as _html
 import inspect as _inspect
 import io as _io
 import json as _json
@@ -6845,6 +6846,226 @@ class FGVCAircraft(VisionDataset):
         return image, label
 
 
+
+class Imagenette(VisionDataset):
+    """Ten ImageNet classes that are **easy to tell apart on purpose.**
+
+    <https://github.com/fastai/imagenette>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*, and its pictures are JPEG — fetched and checked
+    before this was written. That is still not what the class does: it walks
+    directories named by WordNet id, maps each to a class name, and calls
+    `self.loader`. `loader` is torchvision's own parameter here.
+
+    ## The class name is a tuple, and `class_to_idx` is not its inverse
+
+    Each WordNet id carries **every** name for the thing — `n03425413` is a gas pump, a
+    gasoline pump, a petrol pump and an island dispenser — so `classes` is a list of
+    tuples and `class_to_idx` has more keys than there are classes, four of them
+    pointing at that one index. A reader that took the first name of each would build
+    a dictionary that looks right and cannot look up three names in four.
+
+    The label comes from the **sorted WordNet ids**, not from the class names, which is
+    a different order: `n01440764` is tench and sorts first, while `cassette player`
+    would.
+    """
+
+    _SPLITS = ("train", "val")
+    _SIZES = {"full": "imagenette2", "320px": "imagenette2-320",
+              "160px": "imagenette2-160"}
+    _WNID_TO_CLASS = {
+        "n01440764": ("tench", "Tinca tinca"),
+        "n02102040": ("English springer", "English springer spaniel"),
+        "n02979186": ("cassette player",),
+        "n03000684": ("chain saw", "chainsaw"),
+        "n03028079": ("church", "church building"),
+        "n03394916": ("French horn", "horn"),
+        "n03417042": ("garbage truck", "dustcart"),
+        "n03425413": ("gas pump", "gasoline pump", "petrol pump", "island dispenser"),
+        "n03445777": ("golf ball",),
+        "n03888257": ("parachute", "chute"),
+    }
+    _EXTENSION = ".jpeg"
+
+    def __init__(self, root, split="train", size="full", download=False,
+                 transform=None, target_transform=None, loader=None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        if split not in self._SPLITS:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, val}.")
+        if size not in self._SIZES:
+            raise ValueError(f"Unknown value '{size}' for argument size. Valid "
+                             "values are {full, 320px, 160px}.")
+        if download:
+            raise ValueError(
+                "Imagenette(download=True) is not implemented here.\n"
+                "  The reader above takes the extracted tree.")
+        self._split = split
+        self._size = size
+        self._size_root = _os.path.join(self.root, self._SIZES[size])
+        self._image_root = _os.path.join(self._size_root, split)
+        if not _os.path.exists(self._size_root):
+            raise RuntimeError(
+                "Dataset not found. You can use download=True to download it.")
+        self.loader = _folder_loader if loader is None else loader
+
+        self.wnids = sorted(name for name in _os.listdir(self._image_root)
+                            if _os.path.isdir(_os.path.join(self._image_root, name)))
+        self.wnid_to_idx = {wnid: i for i, wnid in enumerate(self.wnids)}
+        self.classes = [self._WNID_TO_CLASS[wnid] for wnid in self.wnids]
+        self.class_to_idx = {name: index
+                             for wnid, index in self.wnid_to_idx.items()
+                             for name in self._WNID_TO_CLASS[wnid]}
+        self._samples = []
+        for wnid in self.wnids:
+            folder = _os.path.join(self._image_root, wnid)
+            for name in sorted(_os.listdir(folder)):
+                if name.lower().endswith(self._EXTENSION):
+                    self._samples.append((_os.path.join(folder, name),
+                                          self.wnid_to_idx[wnid]))
+
+    def __len__(self):
+        return len(self._samples)
+
+    def __getitem__(self, index):
+        path, label = self._samples[index]
+        image = self.loader(path)
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+        return image, label
+
+
+class _Flickr8kParser(_html.HTMLParser):
+    """The captions arrive as **an HTML page**, and this walks it.
+
+    Not a document format anybody chose — the Flickr8k release ships its annotations as
+    a table of links and list items, and torchvision reads it with the standard
+    library's parser. So does this.
+
+    **The link text names a directory and the file is found by glob**, because the page
+    refers to an image whose extension it does not give. `Image Not Found` is a real
+    row in that table and clears the current image rather than raising: the captions
+    that follow it belong to nothing and are dropped.
+    """
+
+    def __init__(self, root):
+        super().__init__()
+        self.root = root
+        self.annotations = {}
+        self.in_table = False
+        self.current_tag = None
+        self.current_img = None
+
+    def handle_starttag(self, tag, attrs):
+        self.current_tag = tag
+        if tag == "table":
+            self.in_table = True
+
+    def handle_endtag(self, tag):
+        self.current_tag = None
+        if tag == "table":
+            self.in_table = False
+
+    def handle_data(self, data):
+        if not self.in_table:
+            return
+        if data == "Image Not Found":
+            self.current_img = None
+        elif self.current_tag == "a":
+            found = _glob.glob(_os.path.join(self.root, data.split("/")[-2] + "_*.jpg"))
+            self.current_img = found[0]
+            self.annotations[self.current_img] = []
+        elif self.current_tag == "li" and self.current_img:
+            self.annotations[self.current_img].append(data.strip())
+
+
+class Flickr8k(VisionDataset):
+    """Eight thousand photographs, **five captions each.**
+
+    <http://hockenmaier.cs.illinois.edu/8k-pictures.html>
+
+    Its row read *as above — a codec*. What the class reads is an **HTML page** of
+    captions, walked with the standard library's parser; the pictures go to
+    `self.loader`, which is torchvision's own parameter.
+
+    **The item's id is a path, not a name.** `ids` is the sorted list of the file paths
+    the parser resolved, so `__getitem__` opens the key itself rather than joining
+    anything to `root`. That is unlike `Flickr30k` next door, which stores names and
+    joins — two classes for one dataset shape, differing in the one place it matters.
+    """
+
+    def __init__(self, root, ann_file, transform=None, target_transform=None,
+                 loader=None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self.ann_file = _os.path.expanduser(ann_file)
+        parser = _Flickr8kParser(self.root)
+        with open(self.ann_file) as handle:
+            parser.feed(handle.read())
+        self.annotations = parser.annotations
+        self.ids = sorted(self.annotations.keys())
+        self.loader = _folder_loader if loader is None else loader
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, index):
+        name = self.ids[index]
+        image = self.loader(name)
+        if self.transform is not None:
+            image = self.transform(image)
+        target = self.annotations[name]
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+
+class Flickr30k(VisionDataset):
+    """Thirty thousand photographs and their captions.
+
+    <http://web.engr.illinois.edu/~bplumme2/Flickr30kEntities/>
+
+    As `Flickr8k`, with a plainer annotation file: one line of `id#n<TAB>caption`.
+
+    **The last two characters of the id are cut off**, because `1000092795.jpg#4` names
+    the fifth caption of one photograph and the photograph is `1000092795.jpg`. A
+    reader that split on `#` instead would agree on this dataset and disagree on any
+    file whose caption index reached ten — the slice is what torchvision does, and it
+    is written here because it is the kind of thing that looks like a mistake.
+    """
+
+    _INDEX_SUFFIX = 2
+
+    def __init__(self, root, ann_file, transform=None, target_transform=None,
+                 loader=None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self.ann_file = _os.path.expanduser(ann_file)
+        self.annotations = {}
+        with open(self.ann_file) as handle:
+            for line in handle:
+                name, caption = line.strip().split("\t")
+                self.annotations.setdefault(
+                    name[:-self._INDEX_SUFFIX], []).append(caption)
+        self.ids = sorted(self.annotations.keys())
+        self.loader = _folder_loader if loader is None else loader
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, index):
+        name = self.ids[index]
+        image = self.loader(_os.path.join(self.root, name))
+        if self.transform is not None:
+            image = self.transform(image)
+        target = self.annotations[name]
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -7353,6 +7574,7 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "CarlaStereo", "ETH3DStereo", "SceneFlowStereo", "FlyingThings3D",
               "Middlebury2014Stereo", "Kitti", "PhotoTour",
               "Country211", "EuroSAT", "DTD", "Food101", "SUN397", "FGVCAircraft",
+              "Imagenette", "Flickr8k", "Flickr30k",
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
