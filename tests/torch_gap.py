@@ -693,12 +693,6 @@ SKIPPED = {
     "datasets.Places365": "as above — the devkit tar is md5'd",
     "datasets.SBU": "as above, and `download=True` is its default",
     "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
-    # **This row said `as above` and the row above it had moved.** Reordering this
-    # table put `INaturalist` under the video sentence, where it does not belong —
-    # the same inheritance the codec chain kept doing, created here by tidying.
-    # It stands alone now, and it is 아직: no md5 gate (measured), a walk plus a
-    # loader, and three release years whose directory schemes differ.
-    "datasets.INaturalist": "아직 — a walk plus a loader with no md5 gate, so it can be checked against torchvision's own. Its three release years name their directories differently and `version` chooses between them",
     "datasets.ImageNet": "as above — a codec",
     "datasets.Kinetics": "as above",
     "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",

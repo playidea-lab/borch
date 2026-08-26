@@ -14251,6 +14251,74 @@ def dataset_last_three_cases(inp=None):
             return out if text else L.tensor(np.ascontiguousarray(out))
         return run
 
+    _INAT_2021 = (
+        "00000_Animalia_Chordata_Aves_Passeriformes_Corvidae_Corvus_corax",
+        "00001_Animalia_Chordata_Aves_Passeriformes_Corvidae_Corvus_corone",
+        "00002_Animalia_Arthropoda_Insecta_Coleoptera_Cleridae_Trichodes_apiarius")
+
+    def inaturalist(version, target_type):
+        """`INaturalist`. **`version` is not a split — it is a different scheme for
+        what a directory means**, and all three build the same index at the end, so
+        getting it wrong gives a dataset that loads.
+
+        - **2021** names each directory in eight underscore-separated pieces, six of
+          them ranks, and the leading number must equal the directory's own position.
+        - **2018 and 2019** nest a supercategory over a *numeric* subdirectory whose
+          number is the category id, and the ids are sparse: the fixture's are 0, 2 and
+          1 across two supercategories, so a reader that numbered by position gets
+          different labels and the same count.
+        - **2017** has the same nesting with non-numeric names, so the id *is* the
+          position. One version reading the other's rule either raises on a name that
+          is not a number or renumbers everything.
+
+        The 2021 fixture puts **two species in one genus**, so `full` and `genus` are
+        different numbers for the same picture — a reader that returned the category id
+        for a rank agrees on the first two items and not the third.
+
+        The items are compared as a set: `all_categories` is walked with `os.listdir`
+        on both sides for the pre-2021 versions.
+        """
+        import os
+        def build(root):
+            if version == "2021_train":
+                for k, name in enumerate(_INAT_2021):
+                    for i in range(2):
+                        _pic(os.path.join(root, version, name, f"{i}.png"), k * 3 + i)
+            elif version == "2017":
+                for above, subs in (("Aves", ("Corvus", "Turdus")),
+                                    ("Insecta", ("Trichodes",))):
+                    for sub in subs:
+                        _pic(os.path.join(root, version, above, sub, "a.png"),
+                             len(sub))
+            else:
+                for above, subs in (("Aves", ("0", "2")), ("Insecta", ("1",))):
+                    for sub in subs:
+                        _pic(os.path.join(root, version, above, sub, "a.png"),
+                             int(sub) + 5)
+        def run(L):
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                build(root)
+                loaded = _made(L, "INaturalist")(root, version=version,
+                                                 target_type=target_type)
+                items = []
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    numbers = list(target) if isinstance(target, tuple) else [target]
+                    items.append(np.concatenate([
+                        np.asarray(picture).reshape(-1).astype(np.float32),
+                        np.asarray(numbers, dtype=np.float32)]))
+                items.sort(key=lambda item: item.tobytes())
+                out = np.concatenate(
+                    [np.asarray([len(loaded), len(loaded.all_categories)],
+                                dtype=np.float32)] + items)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
     cases += [
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
@@ -14320,6 +14388,17 @@ def dataset_last_three_cases(inp=None):
          flickr("Flickr8k", False)),
         (prefix + "Flickr8k(captions, the orphan dropped)=문자열",
          flickr("Flickr8k", True)),
+        # **`version` is a directory scheme, not a split**, and the three disagree.
+        (prefix + "INaturalist(2021, full)", inaturalist("2021_train", "full")),
+        # **Two species in one genus**, so the rank and the category are different ids.
+        (prefix + "INaturalist(2021, full+genus+phylum)",
+         inaturalist("2021_train", ["full", "genus", "phylum"])),
+        # **Sparse numeric ids**: 0, 2, 1 across two supercategories.
+        (prefix + "INaturalist(2018, the id is the directory's name)",
+         inaturalist("2018", ["full", "super"])),
+        # **Non-numeric names**, so the id is the position instead.
+        (prefix + "INaturalist(2017, the id is the position)",
+         inaturalist("2017", "full")),
     ]
 
     cases += [

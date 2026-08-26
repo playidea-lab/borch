@@ -446,3 +446,94 @@ def test_an_aircraft_class_name_with_a_space_stays_one_class(tmp_path):
     ours = V.datasets.FGVCAircraft(str(tmp_path))
     assert ours.classes == ["Boeing 737-700", "A340-300"]
     assert ours._labels == [0, 1]
+
+
+def _inat_tree(root, version, layout):
+    for parts in layout:
+        path = root.joinpath(version, *parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(np.full((3, 4, 3), len(parts) * 30, np.uint8)).save(
+            path, format="PNG")
+
+
+_INAT_NAME = "{:05d}_Animalia_Chordata_Aves_Passeriformes_Corvidae_Corvus_corax"
+
+
+def test_inaturalist_2021_refuses_a_category_whose_number_is_not_its_place(tmp_path):
+    """**The leading number must equal the directory's own position**, and checking it
+    is the whole of what stands between a missing category and a silently shifted
+    label. The golden case cannot show this — removing a validation check changes
+    nothing on a valid tree, which is what a validation check is — so it is a refusal
+    test and it is compared against torchvision's refusal, not just any error.
+    """
+    for number in (0, 2):                          # 1 is missing
+        _inat_tree(tmp_path, "2021_train", [(_INAT_NAME.format(number), "a.png")])
+    with pytest.raises(RuntimeError, match="Unexpected category id"):
+        V.datasets.INaturalist(str(tmp_path), version="2021_train")
+    with pytest.raises(RuntimeError, match="Unexpected category id"):
+        T.INaturalist(str(tmp_path), version="2021_train")
+
+
+def test_inaturalist_2021_refuses_a_name_with_the_wrong_number_of_pieces(tmp_path):
+    _inat_tree(tmp_path, "2021_train", [("00000_Animalia_Chordata", "a.png")])
+    for library in (V.datasets, T):
+        with pytest.raises(RuntimeError, match="wrong number of pieces"):
+            library.INaturalist(str(tmp_path), version="2021_train")
+
+
+def test_inaturalist_2018_refuses_a_gap_in_the_numeric_ids(tmp_path):
+    """**The ids are sparse and the list is grown to fit**, so a gap is an absence
+    rather than a reason to renumber. Renumbering would shift every later label and
+    return a dataset of the right size."""
+    _inat_tree(tmp_path, "2018", [("Aves", "0", "a.png"), ("Aves", "2", "a.png")])
+    for library in (V.datasets, T):
+        with pytest.raises(RuntimeError, match="Missing category"):
+            library.INaturalist(str(tmp_path), version="2018")
+
+
+def test_inaturalist_2018_refuses_the_same_id_twice(tmp_path):
+    _inat_tree(tmp_path, "2018", [("Aves", "0", "a.png"), ("Insecta", "0", "a.png")])
+    for library in (V.datasets, T):
+        with pytest.raises(RuntimeError, match="Duplicate category"):
+            library.INaturalist(str(tmp_path), version="2018")
+
+
+def test_inaturalist_2019_refuses_a_name_that_is_not_a_number(tmp_path):
+    """2017's rule read by 2019: the id is the directory's name, and `Corvus` is not
+    one. The other direction — 2017 read by 2018's rule — renumbers instead of
+    raising, which is why the two versions are separate cases in the golden."""
+    _inat_tree(tmp_path, "2019", [("Aves", "Corvus", "a.png")])
+    for library in (V.datasets, T):
+        with pytest.raises(RuntimeError, match="non-numeric dir name"):
+            library.INaturalist(str(tmp_path), version="2019")
+
+
+def test_an_unknown_inaturalist_version_or_target_is_refused(tmp_path):
+    """**The version is checked first, the tree second, the target third** — the same
+    order torchvision uses, which is why the 2017 tree has to exist for the last
+    assertion to be about `target_type` at all. Written the other way this test passed
+    on a missing directory and proved nothing.
+    """
+    _inat_tree(tmp_path, "2021_train", [(_INAT_NAME.format(0), "a.png")])
+    _inat_tree(tmp_path, "2017", [("Aves", "Corvus", "a.png")])
+    with pytest.raises(ValueError, match="version"):
+        V.datasets.INaturalist(str(tmp_path), version="2020")
+    with pytest.raises(ValueError, match="target_type"):
+        V.datasets.INaturalist(str(tmp_path), version="2021_train",
+                               target_type="super")
+    with pytest.raises(ValueError, match="target_type"):
+        V.datasets.INaturalist(str(tmp_path), version="2017", target_type="genus")
+
+
+def test_inaturalist_category_name_reverses_both_kinds(tmp_path):
+    """`full` indexes a list and a rank searches a table — the tables are built
+    name-to-id while walking and nothing reverses them."""
+    _inat_tree(tmp_path, "2021_train", [(_INAT_NAME.format(0), "a.png")])
+    ours = V.datasets.INaturalist(str(tmp_path), version="2021_train")
+    theirs = T.INaturalist(str(tmp_path), version="2021_train")
+    assert ours.category_name("full", 0) == theirs.category_name("full", 0)
+    assert ours.category_name("genus", 0) == theirs.category_name("genus", 0) == "Corvus"
+    with pytest.raises(ValueError, match="Invalid category type"):
+        ours.category_name("species", 0)
+    with pytest.raises(ValueError, match="Invalid category id"):
+        ours.category_name("genus", 9)
