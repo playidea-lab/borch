@@ -1555,7 +1555,19 @@ uv run --with numpy --with torch python tests/conformance.py
 
 ## Licence
 
-Apache-2.0 · PI Lab
+Apache-2.0 · Copyright 2026 PLAYIDEALAB Inc.
+
+**The code is Apache-2.0; the weights are not the code.** Anything published
+through `borch-hub` carries its own terms — the pretrained ones are converted
+from timm and are trained on ImageNet, whose own terms are research use. Each
+manifest states both, and the two are not the same statement:
+
+```json
+"license": { "weights": "Apache-2.0", "data": "ImageNet-1k (research use)" }
+```
+
+Reading "Apache-2.0" on this repository and concluding the weights may be used
+commercially is the mistake this paragraph exists to prevent.
 
 numpy (BSD-3-Clause) is the only dependency. It is a pure-Python wheel and ships
 nothing else bundled with it.
