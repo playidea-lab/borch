@@ -8403,3 +8403,54 @@ for _name in ("adjust_brightness", "adjust_contrast", "adjust_gamma", "adjust_hu
               "gaussian_noise"):
     setattr(v2_functional, _name, globals()[_name])
 v2_functional.InterpolationMode = InterpolationMode
+
+# **`<op>_image` is the same function, and here it is the same object.**
+#
+# v2 routes by the type of what arrives: `resize(inpt, …)` looks at `inpt` and calls
+# `resize_image`, `resize_mask`, `resize_bounding_boxes`. This was declined whole as *a
+# dispatch kernel — the image body is the public name one namespace over*, and that is a
+# true description of why the pair exists in torchvision. It is not a reason to be
+# missing here. **Every tensor in this library is a plain one**, so the dispatcher's
+# only branch is the image branch, and the two names name one function.
+#
+# Measured before it was written, against real torchvision: 36 of the 38 `*_image`
+# kernels take **the same parameter names in the same order** as their dispatcher, and
+# the values are bit-identical on a plain tensor. So this binds the object rather than
+# wrapping it — a wrapper is a second body under a second name, which is the thing the
+# comment above already refuses for v1.
+#
+# **The three that are not here are not oversights.** `jpeg_image` needs a codec;
+# `to_image` and `to_pil_image` have no dispatcher of that name to be an alias of.
+#
+# `test_gap.py` compares each pair with `is`, so these cannot drift into two bodies.
+_V2_IMAGE_KERNELS = (
+    "adjust_brightness", "adjust_contrast", "adjust_gamma", "adjust_hue",
+    "adjust_saturation", "adjust_sharpness", "affine", "autocontrast", "center_crop",
+    "crop", "elastic", "equalize", "erase", "five_crop", "gaussian_blur",
+    "gaussian_noise", "get_dimensions", "get_num_channels", "get_size",
+    "grayscale_to_rgb", "horizontal_flip", "invert", "normalize", "pad",
+    "permute_channels", "perspective", "posterize", "resize", "resized_crop",
+    "rgb_to_grayscale", "rotate", "solarize", "ten_crop", "to_dtype", "vertical_flip",
+)
+for _name in _V2_IMAGE_KERNELS:
+    setattr(v2_functional, _name + "_image", getattr(v2_functional, _name))
+
+
+def to_image(inpt):
+    """`(H,W,C)` to a `(C,H,W)` tensor — **and it does not divide by 255.**
+
+    The function form of `ToImage`, and it *is* that class's body rather than a second
+    copy: the class was here and the function was declined, which put the library in the
+    position of shipping the transform and refusing the one-line call that does the same
+    thing.
+
+    **torchvision returns a `tv_tensors.Image` and this returns a plain tensor**, which
+    is the same compromise `ToImage` already makes here and is said in both places. That
+    type is the half of v2 declined in this library — every tensor here is a plain one,
+    which is exactly why the `*_image` kernels above can be aliases at all. The values
+    and the shape are torchvision's; only the class around them differs.
+    """
+    return _V2ToImage()(inpt)
+
+
+v2_functional.to_image = to_image

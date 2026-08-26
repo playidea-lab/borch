@@ -22,19 +22,41 @@ import { Tensor } from "./tensor.js";
 import type { DType } from "./dtype.js";
 import { RuntimeError } from "./errors.js";
 import {
+  adjustBrightness,
+  adjustContrast,
+  adjustGamma,
   adjustHue,
+  adjustSaturation,
+  adjustSharpness,
+  affine,
+  autocontrast,
+  centerCrop,
+  crop,
   elasticTransform,
+  equalize,
+  erase,
+  fiveCrop,
+  gaussianBlur,
+  getDimensions,
   getImageNumChannels,
   getImageSize,
   hflip,
   type Image,
   image,
+  invert,
   normalize,
+  pad,
+  perspective,
+  posterize,
   pyBool,
   pyFloat,
   resize,
+  resizedCrop,
+  rgbToGrayscale,
   rotate,
+  solarize,
   type Subject,
+  tenCrop,
   type Transform,
   vflip,
 } from "./vision.js";
@@ -344,4 +366,79 @@ export class RandomChannelPermutation implements Transform {
   describe(): string {
     return v2Repr("RandomChannelPermutation");
   }
+}
+
+// ── v2's `<op>Image` kernels ──────────────────────────────────────────────────
+//
+// **The same function, bound under v2's kernel name.**
+//
+// v2 routes by the type of what arrives: `resize(inpt)` looks at `inpt` and picks
+// `resizeImage`, `resizeMask`, `resizeBoundingBoxes`. Those were declined whole as *a
+// dispatch kernel — the image body is the public name one namespace over*, which is a
+// true description of why torchvision has the pair and is not a reason to be missing
+// here. **Every tensor in this library is a plain one**, so the dispatcher has exactly
+// one branch and the two names name one function.
+//
+// Measured against real torchvision before any of this was written: 36 of the 38
+// `*_image` kernels take the same parameter names in the same order as their
+// dispatcher, and the values are bit-identical on a plain tensor.
+//
+// Bound, not wrapped — for the reason given at the top of this section. A wrapper is a
+// second body, and a second body is what drifts.
+//
+// The core binds the same 35 in `borchvision.py`; `tests/ts_axis.py` is what keeps the
+// two lists from parting.
+export const adjustBrightnessImage = adjustBrightness;
+export const adjustContrastImage = adjustContrast;
+export const adjustGammaImage = adjustGamma;
+export const adjustHueImage = adjustHue;
+export const adjustSaturationImage = adjustSaturation;
+export const adjustSharpnessImage = adjustSharpness;
+export const affineImage = affine;
+export const autocontrastImage = autocontrast;
+export const centerCropImage = centerCrop;
+export const cropImage = crop;
+export const equalizeImage = equalize;
+export const eraseImage = erase;
+export const fiveCropImage = fiveCrop;
+export const gaussianBlurImage = gaussianBlur;
+export const getDimensionsImage = getDimensions;
+export const invertImage = invert;
+export const normalizeImage = normalize;
+export const padImage = pad;
+export const perspectiveImage = perspective;
+export const posterizeImage = posterize;
+export const resizeImage = resize;
+export const resizedCropImage = resizedCrop;
+export const rgbToGrayscaleImage = rgbToGrayscale;
+export const rotateImage = rotate;
+export const solarizeImage = solarize;
+export const tenCropImage = tenCrop;
+export const verticalFlipImage = vflip;
+export const horizontalFlipImage = hflip;
+export const elasticImage = elastic;
+export const gaussianNoiseImage = gaussianNoise;
+export const getNumChannelsImage = getNumChannels;
+export const getSizeImage = getSize;
+export const grayscaleToRgbImage = grayscaleToRgb;
+export const permuteChannelsImage = permuteChannels;
+export const toDtypeImage = toDtype;
+
+/**
+ * `(H,W,C)` to a `(C,H,W)` tensor — **and it does not divide by 255.**
+ *
+ * The function form of `ToImage`, and it *is* that class's body rather than a second
+ * copy. The class was here and the function was not, which left the library shipping the
+ * transform and missing the one-line call that does the same thing.
+ *
+ * **torchvision returns a `tv_tensors.Image` and this returns a plain tensor**, which is
+ * the same compromise `ToImage` already makes and is said in both places. That type is
+ * the half of v2 declined here — every tensor in this library is a plain one, which is
+ * exactly why the `*Image` kernels above can be aliases at all.
+ */
+export function toImage(inpt: Subject): Subject {
+  // **`inpt` and not `x`** — torchvision's own parameter name, and `tests/ts_signatures.py`
+  // compares them. It is an odd name to type; the axis exists so that odd names on
+  // torch's side stay odd here rather than being tidied into a second spelling.
+  return new ToImage().apply(inpt);
 }

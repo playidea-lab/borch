@@ -738,9 +738,23 @@ SKIPPED = {
     # a paragraph rather than counted — and a namespace off the list is a namespace
     # nobody counts, which is how `transforms` stayed invisible for the whole life of
     # this library. The paragraph is gone; the number is here.
-    "transforms.v2.functional.*_image": "a dispatch kernel — v2 routes by the type of "
-                                        "what arrives, and the image body is the "
-                                        "public name one namespace over",
+    # **The `*_image` row is gone, and it was the wrong half of the sentence.**
+    #
+    # *The image body is the public name one namespace over* was true and was the reason
+    # to **have** these, not to decline them: v2 routes by type, every tensor in this
+    # library is a plain one, so the dispatcher's only branch is the image branch and
+    # the two names name one function. Measured against real torchvision before the
+    # change — 36 of the 38 kernels take the same parameter names in the same order as
+    # their dispatcher, and the values are bit-identical on a plain tensor.
+    #
+    # 34 of them are bound in `borchvision.py` as **the same object**, not a wrapper, so
+    # they cannot drift into two bodies. That took this namespace from 43 of 165 to 78.
+    # Three are still absent and keep their own rows below: `jpeg_image` wants a codec,
+    # and `to_image`/`to_pil_image` have no dispatcher of that name to alias.
+    #
+    # The four rows that remain are the tv_tensor half, which is a different claim: those
+    # kernels take a type this library does not have, rather than a plain tensor under a
+    # second name.
     "transforms.v2.functional.*_video": "as above, and there is no video in this "
                                         "project",
     "transforms.v2.functional.*_mask": "as above, for segmentation masks — a tv_tensor "
@@ -755,6 +769,10 @@ SKIPPED = {
                                                     "subset — as in v1",
     "transforms.v2.functional.pil_to_tensor": "it takes a PIL image and nothing here "
                                               "makes one — as in v1",
+    # The two the `*_image` row was covering that are not aliases of anything.
+    "transforms.v2.functional.jpeg_image": "it encodes and decodes JPEG — as `jpeg`, and "
+                                           "numpy has no codec",
+    "transforms.v2.functional.to_pil_image": "there is no PIL here — as in v1",
     "transforms.v2.functional.jpeg": "it encodes and decodes JPEG. numpy has no codec",
     "transforms.v2.functional.uniform_temporal_subsample": "video",
     "transforms.v2.functional.get_num_frames": "video — it answers how many frames a "

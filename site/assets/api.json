@@ -4,7 +4,7 @@
  "korean": {
   "done": 688,
   "stale": 0,
-  "missing": 257
+  "missing": 258
  },
  "modules": [
   {
@@ -15916,9 +15916,297 @@
        "doc": ""
       }
      ]
+    },
+    {
+     "kind": "const",
+     "name": "adjustBrightnessImage",
+     "signature": "export declare const adjustBrightnessImage: typeof adjustBrightness",
+     "doc": "",
+     "members": [],
+     "torch": "adjust_brightness_image"
+    },
+    {
+     "kind": "const",
+     "name": "adjustContrastImage",
+     "signature": "export declare const adjustContrastImage: typeof adjustContrast",
+     "doc": "",
+     "members": [],
+     "torch": "adjust_contrast_image"
+    },
+    {
+     "kind": "const",
+     "name": "adjustGammaImage",
+     "signature": "export declare const adjustGammaImage: typeof adjustGamma",
+     "doc": "",
+     "members": [],
+     "torch": "adjust_gamma_image"
+    },
+    {
+     "kind": "const",
+     "name": "adjustHueImage",
+     "signature": "export declare const adjustHueImage: typeof adjustHue",
+     "doc": "",
+     "members": [],
+     "torch": "adjust_hue_image"
+    },
+    {
+     "kind": "const",
+     "name": "adjustSaturationImage",
+     "signature": "export declare const adjustSaturationImage: typeof adjustSaturation",
+     "doc": "",
+     "members": [],
+     "torch": "adjust_saturation_image"
+    },
+    {
+     "kind": "const",
+     "name": "adjustSharpnessImage",
+     "signature": "export declare const adjustSharpnessImage: typeof adjustSharpness",
+     "doc": "",
+     "members": [],
+     "torch": "adjust_sharpness_image"
+    },
+    {
+     "kind": "const",
+     "name": "affineImage",
+     "signature": "export declare const affineImage: typeof affine",
+     "doc": "",
+     "members": [],
+     "torch": "affine_image"
+    },
+    {
+     "kind": "const",
+     "name": "autocontrastImage",
+     "signature": "export declare const autocontrastImage: typeof autocontrast",
+     "doc": "",
+     "members": [],
+     "torch": "autocontrast_image"
+    },
+    {
+     "kind": "const",
+     "name": "centerCropImage",
+     "signature": "export declare const centerCropImage: typeof centerCrop",
+     "doc": "",
+     "members": [],
+     "torch": "center_crop_image"
+    },
+    {
+     "kind": "const",
+     "name": "cropImage",
+     "signature": "export declare const cropImage: typeof crop",
+     "doc": "",
+     "members": [],
+     "torch": "crop_image"
+    },
+    {
+     "kind": "const",
+     "name": "equalizeImage",
+     "signature": "export declare const equalizeImage: typeof equalize",
+     "doc": "",
+     "members": [],
+     "torch": "equalize_image"
+    },
+    {
+     "kind": "const",
+     "name": "eraseImage",
+     "signature": "export declare const eraseImage: typeof erase",
+     "doc": "",
+     "members": [],
+     "torch": "erase_image"
+    },
+    {
+     "kind": "const",
+     "name": "fiveCropImage",
+     "signature": "export declare const fiveCropImage: typeof fiveCrop",
+     "doc": "",
+     "members": [],
+     "torch": "five_crop_image"
+    },
+    {
+     "kind": "const",
+     "name": "gaussianBlurImage",
+     "signature": "export declare const gaussianBlurImage: typeof gaussianBlur",
+     "doc": "",
+     "members": [],
+     "torch": "gaussian_blur_image"
+    },
+    {
+     "kind": "const",
+     "name": "getDimensionsImage",
+     "signature": "export declare const getDimensionsImage: typeof getDimensions",
+     "doc": "",
+     "members": [],
+     "torch": "get_dimensions_image"
+    },
+    {
+     "kind": "const",
+     "name": "invertImage",
+     "signature": "export declare const invertImage: typeof invert",
+     "doc": "",
+     "members": [],
+     "torch": "invert_image"
+    },
+    {
+     "kind": "const",
+     "name": "normalizeImage",
+     "signature": "export declare const normalizeImage: typeof normalize",
+     "doc": "",
+     "members": [],
+     "torch": "normalize_image"
+    },
+    {
+     "kind": "const",
+     "name": "padImage",
+     "signature": "export declare const padImage: typeof pad",
+     "doc": "",
+     "members": [],
+     "torch": "pad_image"
+    },
+    {
+     "kind": "const",
+     "name": "perspectiveImage",
+     "signature": "export declare const perspectiveImage: typeof perspective",
+     "doc": "",
+     "members": [],
+     "torch": "perspective_image"
+    },
+    {
+     "kind": "const",
+     "name": "posterizeImage",
+     "signature": "export declare const posterizeImage: typeof posterize",
+     "doc": "",
+     "members": [],
+     "torch": "posterize_image"
+    },
+    {
+     "kind": "const",
+     "name": "resizeImage",
+     "signature": "export declare const resizeImage: typeof resize",
+     "doc": "",
+     "members": [],
+     "torch": "resize_image"
+    },
+    {
+     "kind": "const",
+     "name": "resizedCropImage",
+     "signature": "export declare const resizedCropImage: typeof resizedCrop",
+     "doc": "",
+     "members": [],
+     "torch": "resized_crop_image"
+    },
+    {
+     "kind": "const",
+     "name": "rgbToGrayscaleImage",
+     "signature": "export declare const rgbToGrayscaleImage: typeof rgbToGrayscale",
+     "doc": "",
+     "members": [],
+     "torch": "rgb_to_grayscale_image"
+    },
+    {
+     "kind": "const",
+     "name": "rotateImage",
+     "signature": "export declare const rotateImage: typeof rotate",
+     "doc": "",
+     "members": [],
+     "torch": "rotate_image"
+    },
+    {
+     "kind": "const",
+     "name": "solarizeImage",
+     "signature": "export declare const solarizeImage: typeof solarize",
+     "doc": "",
+     "members": [],
+     "torch": "solarize_image"
+    },
+    {
+     "kind": "const",
+     "name": "tenCropImage",
+     "signature": "export declare const tenCropImage: typeof tenCrop",
+     "doc": "",
+     "members": [],
+     "torch": "ten_crop_image"
+    },
+    {
+     "kind": "const",
+     "name": "verticalFlipImage",
+     "signature": "export declare const verticalFlipImage: typeof vflip",
+     "doc": "",
+     "members": [],
+     "torch": "vertical_flip_image"
+    },
+    {
+     "kind": "const",
+     "name": "horizontalFlipImage",
+     "signature": "export declare const horizontalFlipImage: typeof hflip",
+     "doc": "",
+     "members": [],
+     "torch": "horizontal_flip_image"
+    },
+    {
+     "kind": "const",
+     "name": "elasticImage",
+     "signature": "export declare const elasticImage: typeof elastic",
+     "doc": "",
+     "members": [],
+     "torch": "elastic_image"
+    },
+    {
+     "kind": "const",
+     "name": "gaussianNoiseImage",
+     "signature": "export declare const gaussianNoiseImage: typeof gaussianNoise",
+     "doc": "",
+     "members": [],
+     "torch": "gaussian_noise_image"
+    },
+    {
+     "kind": "const",
+     "name": "getNumChannelsImage",
+     "signature": "export declare const getNumChannelsImage: typeof getImageNumChannels",
+     "doc": "",
+     "members": [],
+     "torch": "get_num_channels_image"
+    },
+    {
+     "kind": "const",
+     "name": "getSizeImage",
+     "signature": "export declare const getSizeImage: typeof getSize",
+     "doc": "",
+     "members": [],
+     "torch": "get_size_image"
+    },
+    {
+     "kind": "const",
+     "name": "grayscaleToRgbImage",
+     "signature": "export declare const grayscaleToRgbImage: typeof grayscaleToRgb",
+     "doc": "",
+     "members": [],
+     "torch": "grayscale_to_rgb_image"
+    },
+    {
+     "kind": "const",
+     "name": "permuteChannelsImage",
+     "signature": "export declare const permuteChannelsImage: typeof permuteChannels",
+     "doc": "",
+     "members": [],
+     "torch": "permute_channels_image"
+    },
+    {
+     "kind": "const",
+     "name": "toDtypeImage",
+     "signature": "export declare const toDtypeImage: typeof toDtype",
+     "doc": "",
+     "members": [],
+     "torch": "to_dtype_image"
+    },
+    {
+     "kind": "function",
+     "name": "toImage",
+     "signature": "export declare function toImage(inpt: Subject): Subject",
+     "doc": "`(H,W,C)` to a `(C,H,W)` tensor — **and it does not divide by 255.**\n\nThe function form of `ToImage`, and it *is* that class's body rather than a second\ncopy. The class was here and the function was not, which left the library shipping the\ntransform and missing the one-line call that does the same thing.\n\n**torchvision returns a `tv_tensors.Image` and this returns a plain tensor**, which is\nthe same compromise `ToImage` already makes and is said in both places. That type is\nthe half of v2 declined here — every tensor in this library is a plain one, which is\nexactly why the `*Image` kernels above can be aliases at all.",
+     "members": [],
+     "torch": "to_image"
     }
    ],
-   "count": 32
+   "count": 68
   },
   {
    "name": "ops",
@@ -18583,5 +18871,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2496
+ "total": 2532
 }

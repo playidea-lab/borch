@@ -351,9 +351,15 @@ def test_a_namespaced_wildcard_stays_inside_its_namespace():
     So the namespace is part of the key now, and this pins the containment. Flatten the
     matcher again and `to_pil_image` starts answering with the dispatch sentence, which
     is the shape that has to stay impossible.
+
+    **The example moved from `affine_image` to `affine_mask`**, because the `*_image` row
+    is gone: those kernels are bound in `borchvision.py` as the same objects as their
+    dispatchers, so they are present and no longer want a reason at all. The mask row is
+    the same wildcard shape making the same claim about a type this library does not
+    have, so what is being pinned here is unchanged.
     """
-    kernel = _why("transforms.v2.functional", "affine_image")
-    assert kernel and "dispatch kernel" in kernel[1], (
+    kernel = _why("transforms.v2.functional", "affine_mask")
+    assert kernel and "as above" in kernel[1], (
         "the namespaced wildcard stopped matching inside its own namespace")
 
     for space, name in (("transforms.functional", "to_pil_image"),
@@ -390,6 +396,19 @@ def test_the_kernel_rows_cover_every_kernel_and_nothing_else():
     natural set. `test_no_table_entry_matches_nothing` said so before this check ran,
     which is the second time today that guessing at a family has cost more than
     measuring it.
+
+    ## A kernel can also be covered by **being there**
+
+    The `*_image` row is gone: 35 of those kernels are bound in `borchvision.py` as the
+    same objects as their dispatchers, because every tensor here is a plain one and the
+    dispatcher's only branch is the image branch. So the question this asks had to widen
+    from *does every kernel have a reason* to **is every kernel accounted for** — a
+    reason or a body, and a body is the better answer.
+
+    Written the narrow way it failed on 35 names that had just been implemented, which
+    is a check reporting work as a defect. The three `*_image` kernels that are neither
+    aliased nor absent-for-a-shared-reason keep their own rows: `jpeg_image` wants a
+    codec, `to_image` and `to_pil_image` have no dispatcher of that name.
     """
     suffixes = ("_image", "_video", "_mask", "_bounding_boxes", "_keypoints")
     names = _api(torchvision.transforms.v2.functional, "transforms.v2.functional")
@@ -398,8 +417,13 @@ def test_the_kernel_rows_cover_every_kernel_and_nothing_else():
         f"torchvision now has {len(kernels)} dispatch kernels rather than 114 — the "
         "rows below may no longer say what they say. Re-read them, then move the "
         "number.")
-    unexplained = [n for n in kernels if not _why("transforms.v2.functional", n)]
-    assert not unexplained, f"kernels with no reason: {unexplained[:8]}"
+    ours = _public(borchvision.transforms.v2.functional)
+    unexplained = [n for n in kernels
+                   if n not in ours and not _why("transforms.v2.functional", n)]
+    assert not unexplained, (
+        f"kernels neither built nor given a reason: {unexplained[:8]}\n"
+        "  Each dispatch kernel needs one of the two. Being present counts — that is\n"
+        "  what the aliases in `borchvision.py` are.")
 
 
 def test_the_not_api_bin_has_not_grown():
