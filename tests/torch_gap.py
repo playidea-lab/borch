@@ -701,7 +701,6 @@ SKIPPED = {
     "datasets.KittiFlow": "as above",
     "datasets.Middlebury2014Stereo": "as above",
     "datasets.SceneFlowStereo": "as above",
-    "datasets.Sintel": "as above",
     "datasets.SintelStereo": "as above",
 
     # `transforms.v2.functional`. **114 of its 165 names are one operation counted
