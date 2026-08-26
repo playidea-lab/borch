@@ -1195,13 +1195,20 @@ export async function report(): Promise<Report> {
     // all have stayed green, because the argument was visibly used.
     const logits = Tensor.from([0, 0.5, 1, 1.5, 2, 2.5], [2, 3]);
     const draw = Tensor.from([0.1, 0.5, 0.9, 0.2, 0.7, 0.4], [2, 3]);
-    const soft = await nn.gumbelSoftmax(logits, 1, false, -1, draw).toArray();
-    const again = await nn.gumbelSoftmax(logits, 1, false, -1, draw).toArray();
+    const soft = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1, draw).toArray();
+    const again = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1, draw).toArray();
     want("gumbelSoftmax is a function of the draw, not of the call", same(soft, again));
-    // The warning is the Python side's, so the golden asks for that; here it is enough
-    // that nothing in the signature between `hard` and `dim` takes a floor any more.
-    want("and takes no eps to be told about", nn.gumbelSoftmax.length === 1,
-      `it declares ${nn.gumbelSoftmax.length} required parameters`);
+    // **This asked the wrong question and passed.** It read
+    // `nn.gumbelSoftmax.length === 1` — that the parameter is *absent* — which is not
+    // what "eps must not matter" means, and is not what torch does: torch keeps `eps`
+    // in the list and ignores it. Removing it here moved `dim` into its position, so a
+    // caller writing torch's own line bound `dim = 1e-10` in this implementation and
+    // `eps` in the other two. `ts_signatures.py` reported it as `renamed`.
+    //
+    // The property is now asked directly: a different `eps` must not move the answer.
+    const loud = await nn.gumbelSoftmax(logits, 1, false, 0.1, -1, draw).toArray();
+    want("and a caller's eps does not move the answer", same(soft, loud),
+      "eps is torch's deprecated parameter — accepted, ignored, warned about");
   }
   {
     // Dropout is random, so what can be asked is the two ends: `p = 0` and

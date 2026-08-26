@@ -28,8 +28,14 @@ this goes red, where the frozen counts below would merely have improved.
 - **Not that types or defaults agree.** Stated in the measurement's docstring too,
   and repeated because this is the file somebody reads when deciding whether an axis
   is covered.
-- **Not that `shorter` is safe.** It means borch.ts takes a prefix of what torch
-  takes, so nothing silently shifts — the missing tail is still a missing feature.
+- **Not that `shorter` is safe.** It means one list is a prefix of the other, so
+  nothing silently shifts — the missing tail is still a missing feature. And the
+  surplus is not refused either: **JavaScript discards extra arguments without a
+  word**, which is `test_binding_arguments.py`'s whole subject.
+- **`shorter` counts `longer` too.** The column is one fact — a common prefix — and
+  the two directions differ only in which side carries the tail. borch.ts running
+  longer is usually its own extra (`gumbelSoftmax`'s `noise`), which a torch-shaped
+  call never reaches.
 """
 
 import pathlib
@@ -730,11 +736,21 @@ RENAMED = {
     # wrong way round**, since the caller reads the parameter and only this function
     # reads the local. The local yielded.
     #
-    # The one left is `gumbel_softmax`, and it is not a spelling: borch.ts has no
-    # `eps` because torch's does nothing (`deprecated and has no effect`), and a
-    # `noise` seat exists so a caller can supply the draw. Both are written down
-    # where they are.
-    "nn.functional": 1,
+    # **1 → 0.** That one was `gumbel_softmax`, and the note here said it was not a
+    # spelling: borch.ts had no `eps` because torch's does nothing (`deprecated and
+    # has no effect`), and a `noise` seat existed so a caller could supply the draw.
+    #
+    # Every word of that was true and it was still a defect. **Dropping the parameter
+    # moved `dim` into its seat**, so `gumbelSoftmax(x, 1, false, 1e-10, -1)` — torch's
+    # own line — bound `dim = 1e-10` and `noise = -1`, in the one implementation of
+    # this library that had rearranged the list. The core and the binding both take
+    # `eps` and both warn about it. borch.ts takes it now too, ignores it, and warns;
+    # `noise` moved to the end, where a torch-shaped call never reaches it.
+    #
+    # This row is the reason the axis exists — it is the tool's own docstring example
+    # of what a name count cannot see, and it sat here for as long as the reason
+    # written beside it sounded right.
+    "nn.functional": 0,
     # 7 → 1: the six went back to `unaligned` when the core took torch's whole
     # optimizer surface and borch.ts stayed where it was. See the note there.
     "optim": 1,
@@ -1012,7 +1028,12 @@ SHORTER = {
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.
-    "nn.functional": 1,
+    #
+    # **1 → 2, and the second one runs the other way.** `gumbel_softmax` took `eps`
+    # back (see `RENAMED`) and keeps its own `noise` after torch's five, so borch.ts
+    # is now *longer* — which this column also counts, being one fact about a common
+    # prefix rather than two. A torch-shaped call never reaches that last seat.
+    "nn.functional": 2,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
     # many raises there, where the same gap in `shifted` would have meant a value

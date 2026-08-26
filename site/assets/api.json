@@ -11162,7 +11162,7 @@
     {
      "kind": "function",
      "name": "gumbelSoftmax",
-     "signature": "export declare function gumbelSoftmax(logits: Tensor, tau?: number, hard?: boolean, dim?: number, noise?: Tensor | null): Tensor",
+     "signature": "export declare function gumbelSoftmax(logits: Tensor, tau?: number, hard?: boolean, eps?: number, dim?: number, noise?: Tensor | null): Tensor",
      "doc": "Picks one at random **while letting derivatives through.**\n\nDrawing one category is not differentiable, so Gumbel noise is added and\n`softmax` smooths it. The smaller `tau`, the more it concentrates on one\nside.\n\nWith `hard=true` the answer is 0/1 but **the gradient is the smooth\none's** — the common `hard - soft.detach() + soft` trick, where the value\nis hard and the derivative is soft. Keeping those two apart is what this\nfunction means.",
      "members": [],
      "tags": [
