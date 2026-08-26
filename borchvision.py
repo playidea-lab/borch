@@ -3122,6 +3122,115 @@ def remove_small_boxes(boxes, min_size):
 
 
 
+# ── ops: the structured dropouts ─────────────────────────────────────────────────
+#
+# **These six were declined for being a backbone's.** *Structured dropout for
+# convolutional backbones*, *it drops whole residual blocks — it needs blocks*: true of
+# what they are for, and neither about whether they can exist. Each takes a feature map
+# and a probability.
+#
+# It is the third pass over the same table. The one-line reason went first, then the
+# per-kind reasons that replaced it, and then the sentence that replaced *those* —
+# *what is left below needs something that is not here* — which was written in the
+# commit that took the layers and is wrong here too. **An over-wide sentence removed by
+# writing a narrower over-wide sentence** is the failure this file exists to catch,
+# and it has now happened three times in a row while catching it.
+
+def stochastic_depth(input, p, mode, training=True):
+    """Whole residual branches dropped at random.
+
+    <https://arxiv.org/abs/1603.09382>
+
+    **`mode` decides what a coin is tossed for**: `batch` drops the branch for the whole
+    batch at once, `row` drops it per example. The two differ only in the shape of the
+    noise, and getting it wrong gives a network that trains at a different effective
+    depth — nothing raises and the curve moves.
+
+    **The survivors are divided by the survival rate**, so the expected value is
+    unchanged and evaluation needs no rescaling. Dropping without it makes every layer
+    quieter than the next one expects.
+    """
+    if p < 0.0 or p > 1.0:
+        raise ValueError(f"drop probability has to be between 0 and 1, but got {p}")
+    if mode not in ["batch", "row"]:
+        raise ValueError(f"mode has to be either 'batch' or 'row', but got {mode}")
+    if not training or p == 0.0:
+        return input
+    L = _backend()
+    survival = 1.0 - p
+    shape = ([input.shape[0]] + [1] * (input.ndim - 1) if mode == "row"
+             else [1] * input.ndim)
+    noise = L.empty(shape, dtype=input.dtype).bernoulli_(survival)
+    if survival > 0.0:
+        noise = noise / survival
+    return input * noise
+
+
+def _drop_block(input, p, block_size, inplace, eps, training, spatial):
+    """DropBlock in `spatial` dimensions — **contiguous regions, not single pixels.**
+
+    <https://arxiv.org/abs/1810.12890>
+
+    Dropping pixels one at a time does little to a convolutional map, because the
+    neighbours carry the same information. So a seed is drawn per position and then
+    **grown to a block by a max pool**, which is the whole trick: the pool spreads each
+    surviving one over its window, and one minus that is the mask.
+
+    Two numbers here each give a mask that looks plausible:
+
+    - **The seeds are drawn on a smaller grid**, `H - block + 1` on each axis, because a
+      seed near the edge would grow a block that hangs off it. Drawing on the full grid
+      drops more than `p` asks for, and only at the edges.
+    - **`gamma` is not `p`.** It is `p` scaled by how many positions a block covers and
+      how many seeds there are to draw, so that the fraction actually dropped comes out
+      at `p`. Using `p` directly drops roughly `block ** spatial` times too much.
+
+    What is kept is then divided by the fraction kept, as in dropout.
+    """
+    if p < 0.0 or p > 1.0:
+        raise ValueError(f"drop probability has to be between 0 and 1, but got {p}.")
+    if input.ndim != spatial + 2:
+        raise ValueError(f"input should be {spatial + 2} dimensional. Got "
+                         f"{input.ndim} dimensions.")
+    if not training or p == 0.0:
+        return input
+    L = _backend()
+    sizes = list(input.shape)[2:]
+    block_size = min(block_size, *sizes)
+    if block_size % 2 == 0:
+        raise ValueError(f"block size should be odd. Got {block_size} which is even.")
+    seeds = [one - block_size + 1 for one in sizes]
+    total = 1
+    for one in sizes:
+        total *= one
+    positions = 1
+    for one in seeds:
+        positions *= one
+    gamma = (p * total) / ((block_size ** spatial) * positions)
+    noise = L.empty([input.shape[0], input.shape[1]] + seeds,
+                    dtype=input.dtype).bernoulli_(gamma)
+    noise = L.nn.functional.pad(noise, [block_size // 2] * (spatial * 2), value=0)
+    pool = (L.nn.functional.max_pool2d if spatial == 2
+            else L.nn.functional.max_pool3d)
+    noise = pool(noise, stride=(1,) * spatial,
+                 kernel_size=(block_size,) * spatial, padding=block_size // 2)
+    noise = 1 - noise
+    scale = noise.numel() / (eps + noise.sum())
+    if inplace:
+        return input.mul_(noise).mul_(scale)
+    return input * noise * scale
+
+
+def drop_block2d(input, p, block_size, inplace=False, eps=1e-06, training=True):
+    """`_drop_block` over height and width."""
+    return _drop_block(input, p, block_size, inplace, eps, training, 2)
+
+
+def drop_block3d(input, p, block_size, inplace=False, eps=1e-06, training=True):
+    """`_drop_block` over depth, height and width."""
+    return _drop_block(input, p, block_size, inplace, eps, training, 3)
+
+
 # ── ops: the layers, and a sentence that was about use rather than need ──────────
 #
 # **Twenty-eight names here were declined for what they are *for*.** The reasons read
@@ -3317,7 +3426,58 @@ def _ops_layers(L):
         def __repr__(self):
             return f"{type(self).__name__}({self.weight.shape[0]}, eps={self.eps})"
 
+    class DropBlock2d(nn.Module):
+        """`drop_block2d` as a module. **The repr does not print `eps`**, which
+        torchvision's does not either — it is a guard against dividing by zero rather
+        than a setting, and printing it would invite somebody to tune it."""
+
+        def __init__(self, p, block_size, inplace=False, eps=1e-06):
+            super().__init__()
+            self.p = p
+            self.block_size = block_size
+            self.inplace = inplace
+            self.eps = eps
+
+        def forward(self, input):
+            return drop_block2d(input, self.p, self.block_size, self.inplace,
+                                self.eps, self.training)
+
+        def __repr__(self):
+            return (f"{type(self).__name__}(p={self.p}, "
+                    f"block_size={self.block_size}, inplace={self.inplace})")
+
+    class DropBlock3d(DropBlock2d):
+        """As `DropBlock2d`, over three spatial axes. **It subclasses the 2-D one and
+        the repr comes with it** — printing the class's own name, which is why that
+        line reads `type(self).__name__` rather than the literal."""
+
+        def forward(self, input):
+            return drop_block3d(input, self.p, self.block_size, self.inplace,
+                                self.eps, self.training)
+
+    class StochasticDepth(nn.Module):
+        """`stochastic_depth` as a module.
+
+        **The mode prints unquoted** — `mode=row`, not `mode='row'` — which is
+        torchvision's own repr and not this file's usual rule. It is copied because the
+        string is the answer, and a tidier one would differ from the library being
+        matched.
+        """
+
+        def __init__(self, p, mode):
+            super().__init__()
+            self.p = p
+            self.mode = mode
+
+        def forward(self, input):
+            return stochastic_depth(input, self.p, self.mode, self.training)
+
+        def __repr__(self):
+            return f"{type(self).__name__}(p={self.p}, mode={self.mode})"
+
     made = {"ConvNormActivation": ConvNormActivation,
+            "DropBlock2d": DropBlock2d, "DropBlock3d": DropBlock3d,
+            "StochasticDepth": StochasticDepth,
             "Conv2dNormActivation": Conv2dNormActivation,
             "SqueezeExcitation": SqueezeExcitation, "MLP": MLP,
             "Permute": Permute, "FrozenBatchNorm2d": FrozenBatchNorm2d}
@@ -8325,7 +8485,8 @@ for _name in ("batched_nms", "box_area", "box_convert", "box_iou",
               "clip_boxes_to_image", "complete_box_iou", "complete_box_iou_loss",
               "distance_box_iou", "distance_box_iou_loss", "generalized_box_iou",
               "generalized_box_iou_loss", "masks_to_boxes", "nms",
-              "remove_small_boxes", "sigmoid_focal_loss"):
+              "remove_small_boxes", "sigmoid_focal_loss",
+              "stochastic_depth", "drop_block2d", "drop_block3d"):
     setattr(ops, _name, globals()[_name])
 
 # The layer classes are built against whichever backend is attached **when they are

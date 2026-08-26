@@ -280,9 +280,11 @@ NOT_PORTED = {
     # from the same numbers on both sides. borch.ts has the layers; what is missing is
     # the harness that fills a module's parameters and buffers by name, which the
     # Python cases grew for this and the TS runner has never needed.
-    "ops::": (8, "아직 — the five layer classes. borch.ts has the pieces; the TS case "
-                 "bodies need a way to write a module's parameters and buffers by "
-                 "name, which nothing over there does yet"),
+    "ops::": (16, "아직 — the five layer classes and the six structured dropouts. The "
+                  "layer cases need a way to write a module's parameters and buffers by "
+                  "name, which nothing over there does yet; the dropouts need only the "
+                  "writing, and their random half would need a shared generator rather "
+                  "than a shared answer"),
     # 104 → 103. What `dtype::없는이름::` was asking about moved to `narrow_copy` and
     # `unsafe_chunk` — torch actually answers the earlier one, so it was no absent name.
     # 103 → 111 → 147 → 156 → 157. Whether the dtype aliases and the factories really

@@ -12625,6 +12625,51 @@ def ops_cases(inp=None):
          _layer_values(lambda L: _ops_of(L).Permute([0, 2, 3, 1]), (2, 3, 4, 5))),
     ]
 
+    # ── the structured dropouts ─────────────────────────────────────────────────
+    #
+    # **These six were declined for being a backbone's** — *structured dropout for
+    # convolutional backbones*, *it drops whole residual blocks — it needs blocks*.
+    # True of what they are for, and neither about whether they can exist.
+    #
+    # **Only the deterministic half can live here.** The two libraries draw from
+    # different generators, so what is frozen is the settings where a dropout is the
+    # identity; what they distribute is checked in `tests/test_ops_dropouts.py`, which
+    # is also where the finding lives that torchvision does not drop `p` either.
+
+    def _passthrough(name, shape, **kwargs):
+        def run(L):
+            x = ((np.arange(int(np.prod(shape)), dtype=np.float32) * 0.017)
+                 % 1.7 - 0.8).reshape(shape)
+            out = getattr(_ops_of(L), name)(
+                L.tensor(np.ascontiguousarray(x)), **kwargs)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(out, dtype=np.float32).reshape(-1)))
+        return run
+
+    cases += [
+        (OPS_PREFIX + "stochastic_depth(training=False)",
+         _passthrough("stochastic_depth", (2, 3, 4, 5), p=0.5, mode="row",
+                      training=False)),
+        (OPS_PREFIX + "stochastic_depth(p=0)",
+         _passthrough("stochastic_depth", (2, 3, 4, 5), p=0.0, mode="batch")),
+        (OPS_PREFIX + "drop_block2d(training=False)",
+         _passthrough("drop_block2d", (2, 3, 5, 5), p=0.3, block_size=3,
+                      training=False)),
+        (OPS_PREFIX + "drop_block3d(training=False)",
+         _passthrough("drop_block3d", (2, 3, 5, 5, 5), p=0.3, block_size=3,
+                      training=False)),
+        (OPS_PREFIX + "DropBlock2d(eval)",
+         _layer_values(lambda L: _ops_of(L).DropBlock2d(0.3, 3), (2, 3, 5, 5))),
+        (OPS_PREFIX + "DropBlock2d(0.3, 3)=repr",
+         lambda L: repr(_ops_of(L).DropBlock2d(0.3, 3))),
+        (OPS_PREFIX + "DropBlock3d(0.2, 5, inplace)=repr",
+         lambda L: repr(_ops_of(L).DropBlock3d(0.2, 5, True))),
+        # **The mode prints unquoted** — torchvision's own repr, copied rather than
+        # tidied, because the string is the answer.
+        (OPS_PREFIX + "StochasticDepth(0.5, row)=repr",
+         lambda L: repr(_ops_of(L).StochasticDepth(0.5, "row"))),
+    ]
+
     return cases
 
 

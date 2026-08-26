@@ -786,17 +786,31 @@ SKIPPED = {
     # is a pool and two 1×1 convolutions; `Permute` is a method. All of it was in the
     # core, so all five are in.
     #
-    # What is left below **needs something that is not here**, and each row now says
-    # what: a feature map that only a model produces, or a primitive the core declines.
+    # **And the sentence that replaced them was the same sentence again.** It read
+    # *what is left below needs something that is not here*, written in the commit that
+    # took the layers, and the six dropouts under it needed nothing: a feature map and a
+    # probability. That is the third pass over one table — the one-line reason, then the
+    # per-kind reasons that replaced it, then the sentence that replaced those — and
+    # each time the replacement was narrower and still too wide.
+    #
+    # So this one is written to be checkable rather than to sound careful. **Every row
+    # below names a specific thing that is absent**, and two of them are the same thing:
+    #
+    #   - `Conv3dNormActivation` needs 3-D convolution, which the core declines.
+    #   - The eleven `RoI` and deformable names need **bilinear sampling at arbitrary
+    #     coordinates**, which is real arithmetic nobody has written here yet.
+    #
+    # The second is 아직 and not a wall — `roi_align` takes a tensor and a list of
+    # boxes, like everything else that turned out to be writable. It is left because it
+    # is a day's work, not because it needs a model.
     "ops.Conv3dNormActivation": "**3-D convolution is declined in the core** — the 2-D "
                                 "one is written now, and this is the ingredient it "
                                 "would need",
-    "ops.DeformConv2d": "deformable convolution — a detector's, and there is no "
-                        "detector in the catalogue",
+    "ops.DeformConv2d": "아직 — as `RoIAlign`, and the offsets make the sampling harder rather than different",
     "ops.deform_conv2d": "as above",
-    "ops.FeaturePyramidNetwork": "the detector's neck. Nothing feeds it here",
+    "ops.FeaturePyramidNetwork": "아직 — a handful of 1x1 and 3x3 convolutions over a dict of tensors. **Nothing here is missing**; the row said nothing feeds it, which is about a catalogue rather than a library",
     "ops.MultiScaleRoIAlign": "as above",
-    "ops.RoIAlign": "it crops from a feature map. A feature map comes from a model",
+    "ops.RoIAlign": "아직 — bilinear sampling at arbitrary coordinates, which is not written here yet. It takes a tensor and a list of boxes; *a feature map comes from a model* was true of where the tensor came from and not of what the function needs",
     "ops.RoIPool": "as above",
     "ops.PSRoIAlign": "as above",
     "ops.PSRoIPool": "as above",
@@ -804,12 +818,6 @@ SKIPPED = {
     "ops.roi_pool": "as above",
     "ops.ps_roi_align": "as above",
     "ops.ps_roi_pool": "as above",
-    "ops.DropBlock2d": "structured dropout for convolutional backbones",
-    "ops.DropBlock3d": "as above",
-    "ops.drop_block2d": "as above",
-    "ops.drop_block3d": "as above",
-    "ops.StochasticDepth": "it drops whole residual blocks — it needs blocks",
-    "ops.stochastic_depth": "as above",
     # **The four losses were here and are built.** The row read *a detection loss — it
     # takes a model's predictions*, and every word of that is true and none of it was a
     # reason. A prediction arriving as an argument is a tensor; the loss never meets the
