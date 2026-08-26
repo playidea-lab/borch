@@ -3380,7 +3380,7 @@ export function legacyReduction<R extends string>(
  * `new CrossEntropyLoss(classWeights)` set the *reduction* to a tensor until the core
  * grew torch's order and the two sides came apart.
  */
-function refuseWeight(layer: string, what: string, weight: unknown): void {
+export function refuseWeight(layer: string, what: string, weight: unknown): void {
   if (weight !== undefined && weight !== null) {
     throw new Error(
       `${layer}(${what}=…) is not in the browser subset. Use real PyTorch on your ` +
@@ -4306,9 +4306,30 @@ export function gumbelSoftmax(
   logits: Tensor,
   tau = 1.0,
   hard = false,
+  eps = 1e-10,
   dim = -1,
   noise: Tensor | null = null,
 ): Tensor {
+  // **`eps` is accepted, ignored, and warned about — which is exactly what torch does.**
+  //
+  // It was removed from this signature once, on the reasoning below: torch deprecated it
+  // when its noise moved to an exponential draw needing no floor, so honouring a
+  // caller's value would make this the one place the two libraries disagree on the same
+  // call. All of that is still true and none of it argued for **dropping the
+  // parameter**.
+  //
+  // Dropping it moved `dim` into `eps`'s position. A caller writing torch's own line —
+  // `gumbelSoftmax(x, 1, false, 1e-10, -1)` — then bound `dim = 1e-10` and `noise = -1`,
+  // silently, in the one implementation of this library that had rearranged the list.
+  // The core and the binding both take `eps` and both warn; borch.ts was the odd one of
+  // three, and `ts_signatures.py` is the axis that says so — it reported this as
+  // `renamed`, its own docstring's example of the failure a name count cannot see.
+  //
+  // **An argument torch itself ignores is not a defect; a signature that shifts under
+  // the caller is.**
+  if (eps !== 1e-10) {
+    console.warn("`eps` parameter is deprecated and has no effect.");
+  }
   const axis = dim < 0 ? dim + logits.shape.length : dim;
   // Gumbel noise — `-log(-log(u))`. Built from a single uniform draw.
   //
@@ -4325,13 +4346,13 @@ export function gumbelSoftmax(
   // same call — while passing every structural check, because the argument would have
   // been visibly used.
   //
-  // **A dropped argument is a defect; an argument torch itself ignores is not.** The
-  // silence was the real fault, and it is fixed one level up, where `_gumbel_softmax`
-  // raises torch's warning rather than saying nothing.
-  const eps = 1e-10;
+  // **The floor in the draw is this function's own and is not the caller's `eps`.**
+  // It keeps `log(0)` out of a uniform draw that can return exactly 0; the parameter
+  // above is torch's dead one and never reaches here.
+  const floor = 1e-10;
   const g = noise ?? Tensor.uniform(logits.shape)
-    .binary("add", Tensor.full([], eps)).log().neg()
-    .binary("add", Tensor.full([], eps)).log().neg();
+    .binary("add", Tensor.full([], floor)).log().neg()
+    .binary("add", Tensor.full([], floor)).log().neg();
   const soft = logits.add(g).div(Tensor.full([], tau)).softmax(axis);
   if (!hard) return soft;
   const picked = soft.max(axis);

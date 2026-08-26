@@ -447,11 +447,11 @@ class _Sched:
 # `StepLR(o, step_size=2, gamma=0.5)`. The JavaScript side takes positions only,
 # so they are unrolled here.
 _SCHED_ARGS = {
-    "StepLR": ("step_size", "gamma"),
-    "MultiStepLR": ("milestones", "gamma"),
-    "ExponentialLR": ("gamma",),
-    "CosineAnnealingLR": ("T_max", "eta_min"),
-    "LambdaLR": ("lr_lambda",),
+    "StepLR": ("step_size", "gamma", "last_epoch"),
+    "MultiStepLR": ("milestones", "gamma", "last_epoch"),
+    "ExponentialLR": ("gamma", "last_epoch"),
+    "CosineAnnealingLR": ("T_max", "eta_min", "last_epoch"),
+    "LambdaLR": ("lr_lambda", "last_epoch"),
     # **The comment here used to read "borch.ts has no `mode`", and it was true when it
     # was written.** `mode` was then added to borch.ts as torch's second argument, and
     # this row was not touched — so every name below shifted one seat left. `factor=0.5`
@@ -469,11 +469,11 @@ _SCHED_ARGS = {
     # every row against `borch-ts/src/optim.ts` directly; a sentence cannot.
     "ReduceLROnPlateau": ("mode", "factor", "patience", "threshold",
                           "threshold_mode", "cooldown", "min_lr", "eps"),
-    "ConstantLR": ("factor", "total_iters"),
-    "LinearLR": ("start_factor", "end_factor", "total_iters"),
-    "PolynomialLR": ("total_iters", "power"),
-    "MultiplicativeLR": ("lr_lambda",),
-    "CosineAnnealingWarmRestarts": ("T_0", "T_mult", "eta_min"),
+    "ConstantLR": ("factor", "total_iters", "last_epoch"),
+    "LinearLR": ("start_factor", "end_factor", "total_iters", "last_epoch"),
+    "PolynomialLR": ("total_iters", "power", "last_epoch"),
+    "MultiplicativeLR": ("lr_lambda", "last_epoch"),
+    "CosineAnnealingWarmRestarts": ("T_0", "T_mult", "eta_min", "last_epoch"),
     # **This table describes another module's parameter order**, which is the one kind
     # of entry that stays plausible after it goes wrong — it is data, not a call, so
     # nothing type-checks it and nothing raises. `OneCycleLR` grew from six names to
@@ -482,7 +482,12 @@ _SCHED_ARGS = {
     # no error anywhere.
     "OneCycleLR": ("max_lr", "total_steps", "epochs", "steps_per_epoch", "pct_start",
                    "anneal_strategy", "cycle_momentum", "base_momentum",
-                   "max_momentum", "div_factor", "final_div_factor", "three_phase"),
+                   "max_momentum", "div_factor", "final_div_factor", "three_phase",
+                   "last_epoch"),
+    # **No `last_epoch` here and that is not an oversight.** torch's list continues
+    # `scale_fn, scale_mode, cycle_momentum, base_momentum, max_momentum, last_epoch`,
+    # and borch.ts stops at `gamma`. Appending it would put it in `scale_fn`'s seat over
+    # there — the shape this table's own comments have been wrong about twice.
     "CyclicLR": ("base_lr", "max_lr", "step_size_up", "step_size_down", "mode",
                  "gamma"),
 }

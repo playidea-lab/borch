@@ -575,12 +575,19 @@ def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
     no floor. What torch also does, and this did not, is **say so**. A caller
     writing `eps=1e-5` was getting silence from a library that had quietly decided
     to ignore them; now they get the same warning torch gives.
+
+    **`eps` now travels to borch.ts rather than being dropped here.** It had been
+    left out of that signature entirely, which put `dim` in its seat: this call read
+    `gumbelSoftmax(logits, tau, hard, int(dim), None)`, and the fourth argument
+    landed on a parameter named `dim` by luck rather than by agreement. Once borch.ts
+    took `eps` back, that luck ran out and `test_binding_arguments.py` said so in the
+    same run — `dim` belongs at position 4 and the call has None.
     """
     if float(eps) != 1e-10:
         _warnings.warn("`eps` parameter is deprecated and has no effect.",
                        stacklevel=2)
     return wrap(_ts.nn.gumbelSoftmax(handle(logits), float(tau), bool(hard),
-                                     int(dim), None))
+                                     float(eps), int(dim), None))
 
 
 def _functional_inplace(name):

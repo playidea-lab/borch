@@ -276,6 +276,35 @@ export async function report(): Promise<Report> {
       && near(sched.paramGroups[1]!.lr, 0.1, 1e-9),
     `${sched.paramGroups[0]!.lr} / ${sched.paramGroups[1]!.lr}`);
 
+  // ── `lastEpoch` is where the schedule picks up ────────────────────────
+  //
+  // Every one of these took torch's arguments **but its last**, so a caller resuming
+  // from a checkpoint had nowhere to say which epoch they were resuming at.
+  //
+  // **It is not a fast-forward.** Measured against torch: `last_epoch = 3` on a fresh
+  // optimizer and three fresh `step()`s give different answers for six of the nine
+  // schedulers asked, because most read the *current* rate rather than recomputing
+  // from the base. It assumes the optimizer already carries the rate it had then —
+  // which is what a checkpoint restores. So what is asked here is the arithmetic:
+  // the epoch applied is `lastEpoch + 1`, and stepping continues from there.
+  {
+    const o = new optim.SGD([{ params: [mk()], lr: 1.0 }], 1.0);
+    const fresh = new optim.StepLR(o, 2, 0.1).start();
+    want("a fresh scheduler starts at epoch 0", fresh.lastEpoch === 0,
+      `lastEpoch is ${fresh.lastEpoch}`);
+
+    const o2 = new optim.SGD([{ params: [mk()], lr: 1.0 }], 1.0);
+    const resumed = new optim.StepLR(o2, 2, 0.1, 3).start();
+    want("a resumed one starts at lastEpoch + 1", resumed.lastEpoch === 4,
+      `lastEpoch is ${resumed.lastEpoch}`);
+    // Epoch 4 is a multiple of the step size, so the rate is cut once on arrival.
+    want("and applies that epoch rather than epoch 0",
+      near(o2.paramGroups[0]!.lr, 0.1, 1e-9), `${o2.paramGroups[0]!.lr}`);
+    resumed.step();
+    want("and carries on from there", resumed.lastEpoch === 5,
+      `lastEpoch is ${resumed.lastEpoch}`);
+  }
+
   // ── What is mended in place has to own its buffer ─────────────────────
   // The `addParamGroup` check above caught this. `Tensor.zeros([1])` returns a **global
   // constant** cached by value, and optimizers and running statistics write into it.
@@ -1195,13 +1224,55 @@ export async function report(): Promise<Report> {
     // all have stayed green, because the argument was visibly used.
     const logits = Tensor.from([0, 0.5, 1, 1.5, 2, 2.5], [2, 3]);
     const draw = Tensor.from([0.1, 0.5, 0.9, 0.2, 0.7, 0.4], [2, 3]);
-    const soft = await nn.gumbelSoftmax(logits, 1, false, -1, draw).toArray();
-    const again = await nn.gumbelSoftmax(logits, 1, false, -1, draw).toArray();
+    const soft = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1, draw).toArray();
+    const again = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1, draw).toArray();
     want("gumbelSoftmax is a function of the draw, not of the call", same(soft, again));
-    // The warning is the Python side's, so the golden asks for that; here it is enough
-    // that nothing in the signature between `hard` and `dim` takes a floor any more.
-    want("and takes no eps to be told about", nn.gumbelSoftmax.length === 1,
-      `it declares ${nn.gumbelSoftmax.length} required parameters`);
+
+  // ── the functional BCE pair takes torch's whole list ──────────────────
+  //
+  // Both took three of torch's seven, so **`reduction` sat in `weight`'s seat**: a
+  // caller writing torch's line, or the binding unrolling it positionally, put a
+  // tensor where a string belongs. Their layers next door have taken all seven and
+  // refused two since they were written; only the functional forms were short.
+  {
+    const logits = Tensor.from([0.5, -1.0, 2.0], [3]);
+    const targets = Tensor.from([1, 0, 1], [3]);
+    // Position six is `reduction`, and it has to arrive there rather than at `weight`.
+    const summed = await F.binaryCrossEntropyWithLogits(
+      logits, targets, undefined, null, null, "sum").item();
+    const meaned = await F.binaryCrossEntropyWithLogits(
+      logits, targets, undefined, null, null, "mean").item();
+    want("reduction arrives at the sixth seat, not the third",
+      near(summed, meaned * 3, 1e-6), `${summed} against ${meaned} × 3`);
+    // `sizeAverage=false` is torch's old spelling of `sum`, folded the same way the
+    // layers fold it.
+    const legacy = await F.binaryCrossEntropyWithLogits(
+      logits, targets, undefined, false).item();
+    want("and sizeAverage=false still means sum", near(legacy, summed, 1e-6),
+      `${legacy} against ${summed}`);
+    let refused = false;
+    try {
+      F.binaryCrossEntropyWithLogits(logits, targets, Tensor.from([1, 1, 1], [3]));
+    } catch { refused = true; }
+    want("a class weight is refused rather than ignored", refused);
+    let refusedPos = false;
+    try {
+      F.binaryCrossEntropyWithLogits(
+        logits, targets, undefined, null, null, "mean", Tensor.from([1], [1]));
+    } catch { refusedPos = true; }
+    want("and so is posWeight, at torch's seventh seat", refusedPos);
+  }
+    // **This asked the wrong question and passed.** It read
+    // `nn.gumbelSoftmax.length === 1` — that the parameter is *absent* — which is not
+    // what "eps must not matter" means, and is not what torch does: torch keeps `eps`
+    // in the list and ignores it. Removing it here moved `dim` into its position, so a
+    // caller writing torch's own line bound `dim = 1e-10` in this implementation and
+    // `eps` in the other two. `ts_signatures.py` reported it as `renamed`.
+    //
+    // The property is now asked directly: a different `eps` must not move the answer.
+    const loud = await nn.gumbelSoftmax(logits, 1, false, 0.1, -1, draw).toArray();
+    want("and a caller's eps does not move the answer", same(soft, loud),
+      "eps is torch's deprecated parameter — accepted, ignored, warned about");
   }
   {
     // Dropout is random, so what can be asked is the two ends: `p = 0` and

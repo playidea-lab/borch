@@ -708,8 +708,15 @@ def main(argv):
           f"**메서드가 없고 자유 함수만 {freefn}건** · 못 읽음 {unreadable}건.")
     print("밀림은 이름으로 밀린 것이 보이는 자리다. 못 맞춤과 이름만 다름은 "
           "이름으로 가를 수 없어 사람이 읽어야 하는 자리다 —")
-    print("  `gumbel_softmax` 는 길이가 같은데 셋째 자리가 한쪽은 eps 이고 한쪽은 dim 이었다.")
-    print("짧은 것 하나만이 안전하다: 인자를 더 넘기면 raise 한다.")
+    print("  `Optimizer` 는 둘째 자리가 torch 에선 defaults 사전이고 borch.ts 에선 "
+          "defaultLr 숫자다.")
+    # **이 칸은 `shorter` 와 `longer` 를 함께 센다** — 한쪽 목록이 다른 쪽의 앞부분인
+    # 경우 전부다. 꼬리가 어느 쪽에 붙었는지만 다르다.
+    print("이 칸은 한쪽이 다른 쪽의 앞부분인 경우다 — 자리는 안 밀린다. "
+          "다만 그것이 안전하다는 뜻은 아니다:")
+    print("  없는 꼬리는 없는 기능이고, **JavaScript 는 남는 인자를 말없이 버린다** "
+          "— raise 하지 않는다.")
+    print("  그 침묵을 잡는 것이 tests/test_binding_arguments.py 다.")
     return 0
 
 

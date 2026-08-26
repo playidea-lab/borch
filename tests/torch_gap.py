@@ -736,14 +736,9 @@ SKIPPED = {
     # different answer. Sampling a label map any other way averages class 3 and class 5
     # into class 4.
     #
-    # The four left are the corner warps, which want the same arithmetic the box warps
-    # do, plus `get_size_mask` — which torchvision itself cannot run on a plain tensor
-    # (it raises `AttributeError: 'list' object has no attribute 'shape'`).
-    "transforms.v2.functional.affine_mask": "the warp — the same arithmetic the box and "
-                                            "keypoint warps want. Not written yet",
-    "transforms.v2.functional.rotate_mask": "as above",
-    "transforms.v2.functional.perspective_mask": "as above",
-    "transforms.v2.functional.elastic_mask": "as above",
+    # **The warps went in too**, so only `get_size_mask` is left — and torchvision
+    # itself cannot run that one on a plain tensor (it raises `AttributeError: 'list'
+    # object has no attribute 'shape'`).
     "transforms.v2.functional.get_size_mask": "torchvision's own body raises on a plain "
                                               "tensor here — it reaches for a shape on "
                                               "what the tv_tensor would have carried",
@@ -762,12 +757,6 @@ SKIPPED = {
     # (`soft`/`hard`/`none`/`auto`), and only `soft` is reproduced here; `get_size` reads
     # the canvas out of the tv_tensor itself, so on a plain tensor there is nothing for
     # it to read.
-    "transforms.v2.functional.affine_bounding_boxes": "the corner warp — four corners "
-                                                      "moved, then the axis-aligned box "
-                                                      "around them. Not written yet",
-    "transforms.v2.functional.rotate_bounding_boxes": "as above",
-    "transforms.v2.functional.perspective_bounding_boxes": "as above",
-    "transforms.v2.functional.elastic_bounding_boxes": "as above",
     "transforms.v2.functional.clamp_bounding_boxes": "its whole subject is the "
                                                      "`clamping_mode` taxonomy, and the "
                                                      "crop family here reproduces `soft` "
@@ -782,11 +771,6 @@ SKIPPED = {
     # index on `[0, width - 1]`, so the flips mirror about `width - 1` and the clamp
     # stops one short. Written the box way every one of them is off by a single pixel —
     # a skeleton that is still a skeleton, one column from where it belongs.
-    "transforms.v2.functional.affine_keypoints": "the warp — as for boxes and masks. Not "
-                                                 "written yet",
-    "transforms.v2.functional.rotate_keypoints": "as above",
-    "transforms.v2.functional.perspective_keypoints": "as above",
-    "transforms.v2.functional.elastic_keypoints": "as above",
     "transforms.v2.functional.get_size_keypoints": "it reads the canvas out of the "
                                                    "tv_tensor — as `get_size_bounding_"
                                                    "boxes`",

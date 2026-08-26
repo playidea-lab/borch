@@ -25,6 +25,16 @@
  */
 
 import { type Reduction, Tensor } from "./tensor.js";
+// **This is a cycle, and it is the deliberate kind.** `nn.ts` imports this module at
+// its foot to bind the delegated names; these two travel the other way so that the
+// functional losses refuse `weight` in the same words their layers do, rather than
+// carrying a second copy of the message.
+//
+// Both are **function declarations**, so they are hoisted and are only ever called at
+// call time — never while either module is still initialising, which is the case a
+// cycle actually breaks. The alternative was a third module for six lines, and a module
+// that is not in `site/build_api.py`'s list is a module nobody counts.
+import { legacyReduction, refuseWeight } from "./nn.js";
 
 export function alphaDropout(input: Tensor, p = 0.5, training = false, perChannel = false): Tensor {
   return input.alphaDropout(p, training, perChannel);
@@ -465,21 +475,49 @@ export function fractionalMaxPool3dWithIndices(
 /**
  * `F.binary_cross_entropy_with_logits`. The method has been here as `bceWithLogits`
  * — this is torch's name for it.
+ *
+ * **torch's whole list, and it took three of seven.** `reduction` sat in `weight`'s
+ * seat, so a caller writing torch's own line — or the binding unrolling it
+ * positionally — put a tensor where a string belongs. The layer next door,
+ * `BCEWithLogitsLoss`, has taken all seven and refused two of them for as long as it
+ * has existed; only the functional form was short.
+ *
+ * `weight` and `posWeight` are **refused rather than ignored**, which is what the
+ * layer does and what this repository's rule says: an argument accepted and unused is
+ * worse than one that is absent, because the caller cannot tell.
  */
 export function binaryCrossEntropyWithLogits(
-  input: Tensor, target: Tensor, reduction: Reduction = "mean",
+  input: Tensor,
+  target: Tensor,
+  weight?: Tensor,
+  sizeAverage: boolean | null = null,
+  reduce: boolean | null = null,
+  reduction: Reduction = "mean",
+  posWeight?: Tensor,
 ): Tensor {
-  return input.bceWithLogits(target, reduction);
+  refuseWeight("binary_cross_entropy_with_logits", "weight", weight);
+  refuseWeight("binary_cross_entropy_with_logits", "pos_weight", posWeight);
+  return input.bceWithLogits(target, legacyReduction(sizeAverage, reduce, reduction));
 }
 
 /**
  * `F.binary_cross_entropy` — over probabilities. See `Tensor.bce` on why the
  * clamp is on the log's output rather than an epsilon on the probability.
+ *
+ * **No `posWeight`.** That argument belongs to the logits form alone, and offering it
+ * here would be an argument torch does not have — the core says the same at the same
+ * place.
  */
 export function binaryCrossEntropy(
-  input: Tensor, target: Tensor, reduction: Reduction = "mean",
+  input: Tensor,
+  target: Tensor,
+  weight?: Tensor,
+  sizeAverage: boolean | null = null,
+  reduce: boolean | null = null,
+  reduction: Reduction = "mean",
 ): Tensor {
-  return input.bce(target, reduction);
+  refuseWeight("binary_cross_entropy", "weight", weight);
+  return input.bce(target, legacyReduction(sizeAverage, reduce, reduction));
 }
 
 // ── The adaptive family ───────────────────────────────────────────────────

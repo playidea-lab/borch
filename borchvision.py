@@ -3477,6 +3477,340 @@ def clamp_keypoints(keypoints, canvas_size):
     return _points_out(out, was_tensor)
 
 
+# ── v2's corner warps ────────────────────────────────────────────────────────
+#
+# `affine`, `rotate`, `perspective` and `elastic`, for boxes, masks and keypoints —
+# twelve names, and three quite different jobs behind them.
+#
+# **A mask is the image kernel with `nearest`**, measured for all four: `affine_mask`
+# equals `affine_image(interpolation=NEAREST)` to the last value, and so do the other
+# three. Nothing new is computed for them; only the layout moves, since a mask is
+# `(..., H, W)` and this file's image functions take `(H, W, C)`.
+#
+# **A keypoint is the transform applied to the point.** **A box is the transform applied
+# to its four corners, and then the axis-aligned box around them** — which is why a
+# rotated box grows: the hull of a tilted rectangle is bigger than the rectangle.
+#
+# ## The return shapes are not uniform and were measured one at a time
+#
+#     affine        boxes: bare      keypoints: (points, canvas)
+#     rotate        boxes: (boxes, canvas)      keypoints: (points, canvas)
+#     perspective   boxes: bare      keypoints: bare
+#     elastic       boxes: bare      keypoints: bare
+#
+# `affine` returning a pair for keypoints and a bare tensor for boxes is torchvision's,
+# and it is reproduced rather than tidied. A probe that normalised tuples away hid this
+# once already in this file's history.
+#
+# ## Boxes clamp and keypoints do not
+#
+# Measured: `affine_bounding_boxes` with `translate=[3, -2]` gives `y1 = 0` where the
+# arithmetic gives `-2`; `affine_keypoints` at the same angle answers `-6.392` and keeps
+# it. A box that half-leaves the picture is still a region of the picture; a keypoint
+# that leaves it is outside, and saying so is the only way `sanitize_keypoints` can mean
+# anything.
+
+
+def _forward_affine(center, angle, translate, scale, shear, w, h):
+    """The 2x3 that moves a **point**, from the one that moves a grid.
+
+    `_inverse_affine_matrix` answers what image resampling needs: output positions mapped
+    back to input ones. A corner travels the other way, so its 2x2 is inverted here —
+    arithmetic rather than a second formula, because two formulas for one transform is
+    how they come to disagree.
+
+    ## The centre is absolute here and an offset there
+
+    `_center_offset` exists because **an image grid is already centred**: torch's grid
+    runs `[-1, 1]` from the middle, so a centre arrives as a displacement from it and the
+    default is `[0, 0]`. A **point** lives in pixel space, where the origin is the corner
+    and the default centre is `[w/2, h/2]`.
+
+    Reusing the grid convention for points was the first version and it is off by exactly
+    one centring: measured, its answer for the default centre equalled torchvision's
+    answer for `center=[0, 0]`, all the way through — a rotation about the corner where
+    a rotation about the middle was asked for. Both conventions are correct and they are
+    correct about different spaces.
+
+    `translate` is applied **after** the linear part rather than inside it, which is what
+    torchvision does and what makes `translate=[3, -2]` at angle 0 move a box by exactly
+    three and two.
+    """
+    m = _inverse_affine_matrix([0.0, 0.0], angle, [0.0, 0.0], scale, _shear_pair(shear))
+    a, b, _, d, e, _ = m
+    det = a * e - b * d
+    if abs(det) < 1e-12:
+        raise ValueError(
+            "this affine collapses the picture to a line, so a point cannot be carried "
+            "back through it.\n(torch: singular affine matrix)")
+    fwd = (e / det, -b / det, -d / det, a / det)
+    cx, cy = ([w * 0.5, h * 0.5] if center is None else [float(v) for v in center])
+    tx, ty = (float(t) for t in translate)
+    return fwd, (cx, cy), (tx, ty)
+
+
+def _apply_affine(points, prepared):
+    (a, b, d, e), (cx, cy), (tx, ty) = prepared
+    x = points[..., 0] - cx
+    y = points[..., 1] - cy
+    return _np.stack((a * x + b * y + cx + tx, d * x + e * y + cy + ty), axis=-1)
+
+
+def _apply_perspective(points, coeffs):
+    a, b, c, d, e, f, g, h = coeffs
+    x, y = points[..., 0], points[..., 1]
+    denom = g * x + h * y + 1.0
+    return _np.stack(((a * x + b * y + c) / denom, (d * x + e * y + f) / denom), axis=-1)
+
+
+def _corners(xyxy):
+    """A box's four corners as `(..., 4, 2)`, in the order a hull does not care about."""
+    x1, y1, x2, y2 = xyxy[..., 0], xyxy[..., 1], xyxy[..., 2], xyxy[..., 3]
+    return _np.stack((_np.stack((x1, y1), axis=-1), _np.stack((x2, y1), axis=-1),
+                      _np.stack((x2, y2), axis=-1), _np.stack((x1, y2), axis=-1)),
+                     axis=-2)
+
+
+def _hull(points):
+    """The axis-aligned box around each group of corners."""
+    return _np.stack((points[..., 0].min(axis=-1), points[..., 1].min(axis=-1),
+                      points[..., 0].max(axis=-1), points[..., 1].max(axis=-1)), axis=-1)
+
+
+def _warp_boxes(bounding_boxes, format, canvas, move, where):  # noqa: A002
+    """Corners through `move`, then the hull, then clipped to `canvas`."""
+    xyxy, was_tensor = _boxes_as_xyxy(bounding_boxes, format, where)
+    moved = _hull(move(_corners(xyxy)))
+    return _xyxy_back(_clamp_to(moved, canvas[0], canvas[1]), format, was_tensor)
+
+
+def _mask_through(mask, call):
+    """A mask through an image warp. **The layout moves and nothing else does.**
+
+    A mask is `(..., H, W)` and this file's image functions are `(H, W, C)`, so the
+    leading axes are folded into channels for the call and unfolded after. The dtype
+    survives the round trip because a mask is labels.
+    """
+    arr, was_tensor = _mask_in(mask)
+    lead, h, w = arr.shape[:-2], arr.shape[-2], arr.shape[-1]
+    planes = int(_np.prod(lead)) if lead else 1
+    hwc = arr.reshape(planes, h, w).transpose(1, 2, 0)
+    out = _np.asarray(call(hwc))
+    back = out.transpose(2, 0, 1).reshape(lead + out.shape[:2])
+    return _mask_out(back.astype(arr.dtype), was_tensor)
+
+
+def affine_mask(mask, angle, translate, scale, shear, fill=None, center=None):
+    """`affine` on a label map — **nearest, and nearest is not a default here.**"""
+    return _mask_through(mask, lambda img: affine(
+        img, angle, translate, scale, shear, interpolation="nearest", fill=fill,
+        center=center))
+
+
+def rotate_mask(mask, angle, expand=False, center=None, fill=None):
+    """`rotate` on a label map."""
+    return _mask_through(mask, lambda img: rotate(
+        img, angle, interpolation="nearest", expand=expand, center=center, fill=fill))
+
+
+def perspective_mask(mask, startpoints, endpoints, fill=None, coefficients=None):
+    """`perspective` on a label map."""
+    del coefficients          # solved from the corners here, as `perspective` does
+    return _mask_through(mask, lambda img: perspective(
+        img, startpoints, endpoints, interpolation="nearest", fill=fill))
+
+
+def elastic_mask(mask, displacement, fill=None):
+    """`elastic` on a label map."""
+    return _mask_through(mask, lambda img: elastic_transform(
+        img, displacement, interpolation="nearest", fill=fill))
+
+
+def affine_keypoints(keypoints, canvas_size, angle, translate, scale, shear,
+                     center=None):
+    """Points through an affine, as **`(keypoints, canvas_size)`.** Not clamped."""
+    height, width = _canvas(canvas_size, "affine_keypoints")
+    m = _forward_affine(center, angle, translate, scale, shear, width, height)
+    arr, was_tensor = _points_in(keypoints)
+    return _points_out(_apply_affine(arr, m), was_tensor), (int(height), int(width))
+
+
+def affine_bounding_boxes(bounding_boxes, format, canvas_size, angle,  # noqa: A002
+                          translate, scale, shear, center=None):
+    """Box corners through an affine, then the axis-aligned box around them.
+
+    **A rotated box grows**, and that is the transform being honest rather than a defect:
+    the smallest upright rectangle containing a tilted one is larger than it. Repeated
+    rotation therefore inflates a box, which is why detection pipelines rotate once.
+    """
+    height, width = _canvas(canvas_size, "affine_bounding_boxes")
+    m = _forward_affine(center, angle, translate, scale, shear, width, height)
+    return _warp_boxes(bounding_boxes, format, (height, width),
+                       lambda pts: _apply_affine(pts, m), "affine_bounding_boxes")
+
+
+def _expanded(angle, center, width, height):
+    """`(new_h, new_w)` for `expand=True`, **and this is not the image's answer.**
+
+    torchvision's coordinate path and its image path disagree about the expanded size,
+    and they disagree because they hand `_compute_affine_output_size` different matrices:
+    the image path passes a centre **offset** (`[0, 0]` by default, since a grid is
+    already centred) and this path passes the **absolute** centre `[w/2, h/2]`. Same
+    function, different translation column, different answer.
+
+    Measured across four canvases and six angles: they agree on 0, 90 and a few others
+    and part on most, in both directions — a 24x32 at 30 degrees is 38 rows to the image
+    and 37 to the boxes; at -47 it is 40 to the image and 41 to the boxes. Boxes and
+    keypoints agree with each other throughout.
+
+    So this is not the same call `rotate` makes for a picture, and it cannot be: a mask
+    rotated with `expand` comes out the image's size and a box in that same call comes
+    out clipped to this one. **Both are reproduced rather than reconciled** — the point
+    of this library is to answer what torch answers.
+    """
+    center_abs = ([width * 0.5, height * 0.5] if center is None
+                  else [float(v) for v in center])
+    matrix = _inverse_affine_matrix(center_abs, -angle, [0.0, 0.0], 1.0, [0.0, 0.0])
+    ow, oh = _affine_output_size(matrix, int(width), int(height))
+    return int(oh), int(ow)
+
+
+def _recentred(move, width, height):
+    """`move`, then shifted so the turned picture's own corner sits at the origin.
+
+    **The shift is the minimum of the transformed canvas corners**, not half the growth
+    in each direction. Half the growth was the first version and it is wrong by a
+    fraction of a pixel whenever the picture is not square about its centre — measured,
+    0.14 in x and 0.61 in y on a 24x32 at 30 degrees, which is small enough to read as a
+    rounding difference and is not one.
+    """
+    frame = _np.asarray([[0.0, 0.0], [0.0, height], [width, height], [width, 0.0]])
+    shift = move(frame).min(axis=0)
+    return lambda pts: move(pts) - shift
+
+
+def _rotation_move(angle, center, width, height, expand):
+    """**`rotate` and `affine` disagree about which way is positive**, and the negation
+    is what makes them agree from outside — the same negation `rotate` does for images,
+    said again here rather than inherited, because these two do not share a body."""
+    prepared = _forward_affine(center, -angle, [0.0, 0.0], 1.0, [0.0, 0.0], width, height)
+
+    def move(pts):
+        return _apply_affine(pts, prepared)
+    return _recentred(move, width, height) if expand else move
+
+
+def rotate_keypoints(keypoints, canvas_size, angle, expand=False, center=None):
+    """Points turned about the centre, as **`(keypoints, canvas_size)`.**"""
+    height, width = _canvas(canvas_size, "rotate_keypoints")
+    new_h, new_w = (_expanded(angle, center, width, height) if expand
+                    else (int(height), int(width)))
+    move = _rotation_move(angle, center, width, height, expand)
+    arr, was_tensor = _points_in(keypoints)
+    return _points_out(move(arr), was_tensor), (new_h, new_w)
+
+
+def rotate_bounding_boxes(bounding_boxes, format, canvas_size, angle,  # noqa: A002
+                          expand=False, center=None):
+    """Box corners turned about the centre, as **`(boxes, canvas_size)`.**
+
+    `expand` grows the canvas to hold the whole turned picture, and the boxes are then
+    clipped to **that** canvas rather than the original one.
+    """
+    height, width = _canvas(canvas_size, "rotate_bounding_boxes")
+    new_h, new_w = (_expanded(angle, center, width, height) if expand
+                    else (int(height), int(width)))
+    move = _rotation_move(angle, center, width, height, expand)
+    out = _warp_boxes(bounding_boxes, format, (new_h, new_w), move,
+                      "rotate_bounding_boxes")
+    return out, (new_h, new_w)
+
+
+def _forward_perspective(startpoints, endpoints, coefficients):
+    """**The arguments go in the other order than for an image.**
+
+    `_perspective_coefficients` solves the map an image needs — output positions back to
+    input ones, so `endpoints` to `startpoints`. A corner travels the other way, and
+    swapping the two lists is the whole difference.
+    """
+    if coefficients is not None:
+        return list(coefficients)
+    return _perspective_coefficients(endpoints, startpoints)
+
+
+def perspective_keypoints(keypoints, canvas_size, startpoints, endpoints,
+                          coefficients=None):
+    """Points through a projective map. Not clamped, and not a pair."""
+    _canvas(canvas_size, "perspective_keypoints")
+    coeffs = _forward_perspective(startpoints, endpoints, coefficients)
+    arr, was_tensor = _points_in(keypoints)
+    return _points_out(_apply_perspective(arr, coeffs), was_tensor)
+
+
+def perspective_bounding_boxes(bounding_boxes, format, canvas_size,  # noqa: A002
+                               startpoints, endpoints, coefficients=None):
+    """Box corners through a projective map, then the hull."""
+    height, width = _canvas(canvas_size, "perspective_bounding_boxes")
+    coeffs = _forward_perspective(startpoints, endpoints, coefficients)
+    return _warp_boxes(bounding_boxes, format, (height, width),
+                       lambda pts: _apply_perspective(pts, coeffs),
+                       "perspective_bounding_boxes")
+
+
+def _elastic_move(displacement, width, height):
+    """The field, read at each point's own pixel — **and the point snaps to that pixel.**
+
+    Three things here, and two of them were measured rather than guessed.
+
+    **The field is in normalised coordinates**, `[-1, 1]` across the picture, so `0.1` is
+    `0.1 * width / 2` pixels. And it is **subtracted**: the field says where a destination
+    pixel reads *from*, so a feature at `p` ends up at `p` minus what the field holds.
+
+    **The point is floored to a whole pixel and clamped to the canvas, and the
+    displacement is then applied to that pixel rather than to the original.** The
+    fractional part is discarded. Measured with a field whose every entry names its own
+    coordinate: `(10.4, 5.6)` and `(10.6, 5.4)` come back **identical**, which they
+    cannot if the fraction survives; and `(33, 26)` on a 24x32 canvas comes back
+    identical to `(31, 23)`, which it cannot if only the lookup index is clamped.
+
+    The obvious implementation — round the index, keep the point — agrees on every point
+    that is inside the picture and on a whole pixel. The golden's box table has corners
+    at `(32, 24)` and its keypoints one at `(33, 26)` for that reason; without them this
+    reads as correct.
+    """
+    field = _np.asarray(displacement if isinstance(displacement, _np.ndarray)
+                        else _to_numpy(displacement), dtype=_np.float64)
+    field = field.reshape(field.shape[-3], field.shape[-2], 2)
+
+    def move(points):
+        cols = _np.clip(_np.floor(points[..., 0]).astype(_np.int64), 0,
+                        field.shape[1] - 1)
+        rows = _np.clip(_np.floor(points[..., 1]).astype(_np.int64), 0,
+                        field.shape[0] - 1)
+        picked = field[rows, cols]
+        snapped = _np.stack((cols.astype(_np.float64), rows.astype(_np.float64)),
+                            axis=-1)
+        return snapped - _np.stack((picked[..., 0] * width / 2.0,
+                                    picked[..., 1] * height / 2.0), axis=-1)
+    return move
+
+
+def elastic_keypoints(keypoints, canvas_size, displacement):
+    """Points moved by a displacement field. Not clamped, and not a pair."""
+    height, width = _canvas(canvas_size, "elastic_keypoints")
+    arr, was_tensor = _points_in(keypoints)
+    return _points_out(_elastic_move(displacement, width, height)(arr), was_tensor)
+
+
+def elastic_bounding_boxes(bounding_boxes, format, canvas_size,  # noqa: A002
+                           displacement):
+    """Box corners moved by a displacement field, then the hull."""
+    height, width = _canvas(canvas_size, "elastic_bounding_boxes")
+    return _warp_boxes(bounding_boxes, format, (height, width),
+                       _elastic_move(displacement, width, height),
+                       "elastic_bounding_boxes")
+
+
 def _reduce(values, reduction):
     """`none`, `mean` or `sum`, as every loss in torch takes.
 
@@ -10820,7 +11154,12 @@ for _name in ("horizontal_flip_bounding_boxes", "vertical_flip_bounding_boxes",
               "horizontal_flip_keypoints", "vertical_flip_keypoints",
               "crop_keypoints", "resize_keypoints", "clamp_keypoints",
               "center_crop_keypoints", "pad_keypoints", "resized_crop_keypoints",
-              "sanitize_keypoints"):
+              "sanitize_keypoints",
+              "affine_mask", "rotate_mask", "perspective_mask", "elastic_mask",
+              "affine_keypoints", "rotate_keypoints", "perspective_keypoints",
+              "elastic_keypoints",
+              "affine_bounding_boxes", "rotate_bounding_boxes",
+              "perspective_bounding_boxes", "elastic_bounding_boxes"):
     setattr(v2_functional, _name, globals()[_name])
 
 
