@@ -717,9 +717,9 @@ NOT_PORTED = {
     # calls a loader on each path, and a page has no directories to walk. Everything
     # else under `dataset::` is a format that could in principle cross; this is a
     # filesystem, which is not a format at all.
-    "dataset::": (29, "파이썬 — CIFAR's batches are pickles and the browser side "
+    "dataset::": (32, "파이썬 — CIFAR's batches are pickles and the browser side "
                       "reaches CIFAR through a JPEG sprite instead; `ImageFolder`, "
-                      "CLEVR, RenderedSST2 and the thirteen stereo and flow sets "
+                      "CLEVR, RenderedSST2 and the twelve stereo and flow sets "
                       "walk directories and read archives off disk, and a page has "
                       "neither"),
     # `v2::` **was** a row here — 71, then 52, then gone. The nineteen that needed no v1

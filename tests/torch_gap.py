@@ -696,15 +696,12 @@ SKIPPED = {
                             "of this family went in — the disparity fields turned out "
                             "to be PNG, `.flo` or `.pfm`, none of which needs a codec",
     "datasets.FallingThingsStereo": "as above — JPEG",
-    # The five 아직 rows that stood here for one session are gone — the walking was
-    # the work and the work was done. What is left of this family is one name, and its
-    # remainder is not a format either.
-    "datasets.Middlebury2014Stereo": "아직 — PNG and `.pfm`, both read here, and the "
-                                       "rest of the family went in on them. What is "
-                                       "left is a **calibration file per scene** to "
-                                       "parse and three archive layouts to choose "
-                                       "between, which is a dataset's paperwork rather "
-                                       "than a wall",
+    # Every 아직 row that stood here is gone, including the one written this same
+    # session claiming Middlebury needed *a calibration file per scene to parse*. That
+    # sentence was written without opening one: `calib.txt` is in every scene directory
+    # and torchvision never reads it — `calibration` is a directory suffix. **Twelve of
+    # the fourteen went in and the codec count rose by none.** What remains is JPEG,
+    # above, and it is the same JPEG as everywhere else.
 
     # `transforms.v2.functional`. **114 of its 165 names are one operation counted
     # five times**, and this is the row that says so — the first namespaced wildcard

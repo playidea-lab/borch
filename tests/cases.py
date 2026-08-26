@@ -13799,6 +13799,69 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(out))
         return run
 
+    def middlebury(split, calibration):
+        """`Middlebury2014Stereo` — the last of the fourteen that was not JPEG.
+
+        Its row read *a calibration file per scene to parse*, **written without opening
+        one.** `calib.txt` sits in every scene directory and is never read: the
+        `calibration` argument is a **directory suffix**, `-perfect` or `-imperfect`,
+        chosen before the glob. The fixture writes a `calib.txt` anyway, so a reader
+        that started parsing it would have something to be wrong about.
+
+        **The `.pfm` stores unmatched pixels as `inf`**, and one is written here.
+        Leaving it turns any average into `inf`; zeroing it without the mask says the
+        pixel is touching the camera rather than unknown. Both readings survive a shape
+        check, so the mask is in the answer.
+
+        `use_ambient_views` is left off: it picks at random among three exposures of
+        the right frame, and a case that turned it on would compare two draws from two
+        libraries' random modules.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "Middlebury2014")
+                if split == "train":
+                    for scene in ("Adirondack", "Piano"):
+                        for k, name in enumerate(("perfect", "imperfect")):
+                            folder = os.path.join(base, "train", f"{scene}-{name}")
+                            _png8(os.path.join(folder, "im0.png"), _rgb(k))
+                            _png8(os.path.join(folder, "im1.png"), _rgb(k + 5))
+                            _pfm_inf(os.path.join(folder, "disp0.pfm"), k)
+                            _pfm(os.path.join(folder, "disp1.pfm"), 1, k + 2)
+                            with open(os.path.join(folder, "calib.txt"), "w") as fh:
+                                fh.write("cam0=[1 0 0]\n")
+                else:
+                    for scene in ("Plants", "Hoops"):
+                        folder = os.path.join(base, "test", scene)
+                        _png8(os.path.join(folder, "im0.png"), _rgb(1))
+                        _png8(os.path.join(folder, "im1.png"), _rgb(2))
+                if _is_real_torch(L):
+                    from torchvision.datasets import Middlebury2014Stereo as real
+                    loaded = real(root, split=split, calibration=calibration)
+                else:
+                    loaded = _vision_datasets(L).Middlebury2014Stereo(
+                        root, split=split, calibration=calibration)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def _pfm_inf(path, seed):
+        """A `.pfm` with one **infinite** sample — what Middlebury writes where the two
+        cameras never matched."""
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        block = ((np.arange(_H * _W).reshape(_H, _W, 1) + seed) * 0.5 - 3).astype("<f4")
+        block[0, 0, 0] = np.inf
+        header = b"Pf\n" + f"{_W} {_H}\n".encode() + b"-1.0\n"
+        with open(path, "wb") as handle:
+            handle.write(header + block.tobytes())
+
     cases += [
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
@@ -13832,6 +13895,13 @@ def dataset_last_three_cases(inp=None):
         # **Pairs by position, split by a text file.**
         (prefix + "FlyingChairs(train, pairs by position)", flying_chairs("train")),
         (prefix + "FlyingChairs(val, the file cuts it)", flying_chairs("val")),
+        # **`calibration` is a directory suffix**, and the infinite disparity is real.
+        (prefix + "Middlebury2014Stereo(perfect, inf zeroed and masked)",
+         middlebury("train", "perfect")),
+        (prefix + "Middlebury2014Stereo(both calibrations)",
+         middlebury("train", "both")),
+        (prefix + "Middlebury2014Stereo(test, no calibration)",
+         middlebury("test", None)),
     ]
 
     cases += [

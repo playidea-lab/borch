@@ -85,6 +85,7 @@ import json as _json
 import math as _math
 import os as _os
 import pickle as _pickle
+import random as _random
 import string as _string
 import struct as _struct
 import sys as _sys
@@ -6129,6 +6130,132 @@ class FlyingChairs(VisionDataset):
         return first, second, flow
 
 
+
+class Middlebury2014Stereo(_StereoMatchingDataset):
+    """Middlebury's 2014 set — **thirty-eight named scenes, and a suffix.**
+
+    <https://vision.middlebury.edu/stereo/data/scenes2014/>
+
+    ## Why it was refused and is not
+
+    Its row was the last of the stereo family, and it read *a calibration file per
+    scene to parse*. **That was written without opening one.** `calib.txt` sits in
+    every scene directory and torchvision never reads it: `calibration` is a
+    **directory suffix** — `-perfect` or `-imperfect` — chosen before the glob and
+    never opened after. The dataset is PNG and `.pfm`, both read here, and what was
+    called a parser is a string.
+
+    ## What is actually here
+
+    - **The split is a list of names**, not a directory. `train`, `additional` and
+      `test` are thirty-eight scene names written into the class, and a root that
+      holds the directory but none of the names is an error rather than an empty
+      dataset — which is the difference between a wrong path and a wrong download.
+    - **`test` has no calibration and the others require one.** Passing either the
+      wrong way is refused, because the suffix decides which directories exist and a
+      silent default would find nothing and say nothing.
+    - **Infinite disparities are zeroed and the mask is what remains.** The `.pfm`
+      stores unmatched pixels as `inf`; leaving them turns any average into `inf` and
+      any subtraction into `nan`, and zeroing them without the mask marks them as
+      *touching the camera* instead of *unknown*.
+    - **`use_ambient_views` picks at random** among `im1.png`, `im1E.png` and
+      `im1L.png` — different exposures of the same right frame. It is off by default,
+      and the golden case leaves it off: a case that turned it on would be comparing
+      two draws from two libraries' random modules.
+    """
+
+    _has_built_in_disparity_mask = True
+
+    splits = {
+        "train": ["Adirondack", "Jadeplant", "Motorcycle", "Piano", "Pipes",
+                  "Playroom", "Playtable", "Recycle", "Shelves", "Vintage"],
+        "additional": ["Backpack", "Bicycle1", "Cable", "Classroom1", "Couch",
+                       "Flowers", "Mask", "Shopvac", "Sticks", "Storage", "Sword1",
+                       "Sword2", "Umbrella"],
+        "test": ["Plants", "Classroom2E", "Classroom2", "Australia", "DjembeL",
+                 "CrusadeP", "Crusade", "Hoops", "Bicycle2", "Staircase", "Newkuba",
+                 "AustraliaP", "Djembe", "Livingroom", "Computer"],
+    }
+
+    _SUFFIXES = {None: [""], "perfect": ["-perfect"], "imperfect": ["-imperfect"],
+                 "both": ["-perfect", "-imperfect"]}
+    _AMBIENT_VIEWS = ["im1E.png", "im1L.png"]
+
+    def __init__(self, root, split="train", calibration="perfect",
+                 use_ambient_views=False, transforms=None, download=False):
+        if split not in self.splits:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test, additional}.")
+        super().__init__(root, transforms)
+        self.split = split
+        if calibration:
+            if calibration not in self._SUFFIXES:
+                raise ValueError(f"Unknown value '{calibration}' for argument "
+                                 "calibration. Valid values are {perfect, imperfect, "
+                                 "both, None}.")
+            if split == "test":
+                raise ValueError("Split 'test' has only no calibration settings, "
+                                 "please set `calibration=None`.")
+        elif split != "test":
+            raise ValueError(
+                f"Split '{split}' has calibration settings, however None was provided "
+                f"as an argument.\nSetting calibration to 'perfect' for split "
+                f"'{split}'. Available calibration settings are: 'perfect', "
+                "'imperfect', 'both'.")
+        if download:
+            raise ValueError(
+                "Middlebury2014Stereo(download=True) is not implemented here.\n"
+                "  It is one zip per scene per calibration — seventy-six requests to "
+                "vision.middlebury.edu for the two splits that have them — and the "
+                "reader above takes the extracted tree.")
+
+        base = _os.path.join(self.root, "Middlebury2014")
+        if not _os.path.exists(_os.path.join(base, split)):
+            raise FileNotFoundError(
+                f"The {split} directory was not found in the provided root directory")
+        wanted = self.splits[split]
+        if not any(scene.startswith(name)
+                   for scene in _os.listdir(_os.path.join(base, split))
+                   for name in wanted):
+            raise FileNotFoundError(
+                f"Provided root folder does not contain any scenes from the {split} "
+                "split.")
+
+        for suffix in self._SUFFIXES[calibration]:
+            pattern = "*" + suffix
+            self._images += self._scan_pairs(
+                _os.path.join(base, split, pattern, "im0.png"),
+                _os.path.join(base, split, pattern, "im1.png"))
+            if split == "test":
+                self._disparities = [(None, None) for _ in self._images]
+            else:
+                self._disparities += self._scan_pairs(
+                    _os.path.join(base, split, pattern, "disp0.pfm"),
+                    _os.path.join(base, split, pattern, "disp1.pfm"))
+        self.use_ambient_views = use_ambient_views
+
+    def _read_img(self, path):
+        """The right frame, or one of its other exposures when asked for.
+
+        **The choice is random**, which is why it is off by default: two calls give two
+        right pictures against the same left one, and that is the point — it is an
+        augmentation written into the reader.
+        """
+        if _os.path.basename(path) == "im1.png" and self.use_ambient_views:
+            folder = _os.path.dirname(path)
+            choices = [_os.path.join(folder, name) for name in self._AMBIENT_VIEWS]
+            choices = [one for one in choices if _os.path.exists(one)] + [path]
+            path = _random.choice(choices)
+        return super()._read_img(path)
+
+    def _read_disparity(self, path):
+        if path is None:
+            return None, None
+        one = _np.abs(_read_pfm_file(path))
+        one[one == _np.inf] = 0
+        return one, (one > 0).squeeze(0)
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -6635,6 +6762,7 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification", "Sintel", "RenderedSST2", "KittiFlow", "HD1K",
               "Kitti2012Stereo", "Kitti2015Stereo", "InStereo2k", "SintelStereo",
               "CarlaStereo", "ETH3DStereo", "SceneFlowStereo", "FlyingThings3D",
+              "Middlebury2014Stereo",
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
