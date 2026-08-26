@@ -1518,6 +1518,17 @@ function addOps(out: Map<string, Case>): void {
   const others = () => Tensor.from([2, 2, 8, 8, 12, 0, 22, 10, 30, 31, 41, 39], [3, 4]);
   const scores = () => Tensor.from([0.9, 0.75, 0.6, 0.95, 0.5]);
   const labels = () => Tensor.from([0, 0, 1, 1, 0]);
+  // Pairs for the losses, chosen so the aspect-ratio term is **not** zero. The flat box
+  // against the tall one of equal area is the pair that separates the complete loss from
+  // the distance loss; the last pair is identical to itself, the one input for which
+  // every one of these must return exactly 0.
+  const shapes = () => Tensor.from(
+    [0, 0, 10, 10, 5, 5, 15, 15, 0, 0, 20, 4, 0, 0, 4, 20, 1, 1, 3, 3], [5, 4]);
+  const targets = () => Tensor.from(
+    [1, 1, 11, 11, 20, 20, 30, 30, 0, 0, 4, 20, 0, 0, 20, 4, 1, 1, 3, 3], [5, 4]);
+  const logits = () => Tensor.from(
+    [-1, 2, 0, 0.5, -3, 8, -40, 40, -0.25], [3, 3]);
+  const hits = () => Tensor.from([0, 1, 1, 1, 0, 0, 1, 0, 1], [3, 3]);
 
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look
@@ -1539,6 +1550,35 @@ function addOps(out: Map<string, Case>): void {
   out.set("ops::generalized_box_iou", () => ops.generalizedBoxIou(boxes(), others()));
   out.set("ops::distance_box_iou", () => ops.distanceBoxIou(boxes(), others()));
   out.set("ops::complete_box_iou", () => ops.completeBoxIou(boxes(), others()));
+  // **The losses are paired, where the IoUs above are N by M.** Five boxes against five,
+  // one answer each — an implementation that reached for the matrix and took its diagonal
+  // would agree here and compute `N²` to keep `N`, so the shape is the case as much as
+  // the values are. (Written that way here first, and corrected before it shipped.)
+  //
+  // `shapes` is deliberately not `boxes`: those pairs have matched aspect ratios, and
+  // `completeBoxIouLoss`'s extra term is exactly zero whenever they do. On these it
+  // differs from the distance loss by 0.217.
+  out.set("ops::generalized_box_iou_loss",
+    () => ops.generalizedBoxIouLoss(shapes(), targets()));
+  out.set("ops::distance_box_iou_loss", () => ops.distanceBoxIouLoss(shapes(), targets()));
+  out.set("ops::complete_box_iou_loss", () => ops.completeBoxIouLoss(shapes(), targets()));
+  out.set("ops::generalized_box_iou_loss(mean)",
+    () => ops.generalizedBoxIouLoss(shapes(), targets(), "mean"));
+  out.set("ops::complete_box_iou_loss(sum)",
+    () => ops.completeBoxIouLoss(shapes(), targets(), "sum"));
+  // Focal loss takes **logits**, so the values run either side of zero and one pair sits
+  // at ±40 — past where a plain sigmoid or a plain `log(1 + exp(-x))` stops being finite
+  // while the loss is not.
+  out.set("ops::sigmoid_focal_loss", () => ops.sigmoidFocalLoss(logits(), hits()));
+  // **`alpha = -1` is a switch, not a weight** — it turns the class balancing off.
+  out.set("ops::sigmoid_focal_loss(alpha off)",
+    () => ops.sigmoidFocalLoss(logits(), hits(), -1));
+  // `gamma = 0` removes the focusing term, leaving the weighted cross-entropy this whole
+  // loss is a modulation of.
+  out.set("ops::sigmoid_focal_loss(gamma 0)",
+    () => ops.sigmoidFocalLoss(logits(), hits(), 0.25, 0));
+  out.set("ops::sigmoid_focal_loss(mean)",
+    () => ops.sigmoidFocalLoss(logits(), hits(), 0.25, 2, "mean"));
   out.set("ops::clip_boxes_to_image", () => ops.clipBoxesToImage(boxes(), [20, 25]));
   out.set("ops::remove_small_boxes", () => ops.removeSmallBoxes(boxes(), 10.5));
   // **`> threshold` and not `>=`.** At zero, boxes that merely touch both survive; the

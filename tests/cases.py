@@ -12381,6 +12381,26 @@ def ops_cases(inp=None):
                         [12.0, 0.0, 22.0, 10.0],
                         [30.0, 31.0, 41.0, 39.0]], dtype=np.float32)
     _scores = np.array([0.9, 0.75, 0.6, 0.95, 0.5], dtype=np.float32)
+    # Pairs for the losses, **chosen so the aspect-ratio term is not zero**. The flat
+    # box against the tall one of equal area is the pair that separates the complete
+    # loss from the distance loss; the last pair is identical to itself, which is the
+    # only input for which every one of these losses must return exactly 0.
+    _shapes = np.array([[0.0, 0.0, 10.0, 10.0],
+                        [5.0, 5.0, 15.0, 15.0],
+                        [0.0, 0.0, 20.0, 4.0],
+                        [0.0, 0.0, 4.0, 20.0],
+                        [1.0, 1.0, 3.0, 3.0]], dtype=np.float32)
+    _targets = np.array([[1.0, 1.0, 11.0, 11.0],
+                         [20.0, 20.0, 30.0, 30.0],
+                         [0.0, 0.0, 4.0, 20.0],
+                         [0.0, 0.0, 20.0, 4.0],
+                         [1.0, 1.0, 3.0, 3.0]], dtype=np.float32)
+    # Logits, not probabilities. ±40 is past where a naive sigmoid or a naive
+    # `log(1 + exp(-x))` stops being finite in float32.
+    _logits = np.array([[-1.0, 2.0, 0.0], [0.5, -3.0, 8.0], [-40.0, 40.0, -0.25]],
+                       dtype=np.float32)
+    _hits = np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]],
+                     dtype=np.float32)
     _labels = np.array([0, 0, 1, 1, 0], dtype=np.int64)
     # A mask with one blank plane — **the blank is the case**: torchvision answers
     # zeros rather than raising, and that is what lets a batch with one still stack.
@@ -12396,8 +12416,25 @@ def ops_cases(inp=None):
             O = _vision_ops(L)
             to = ((lambda a: L.tensor(np.ascontiguousarray(a))) if _is_real_torch(L)
                   else (lambda a: a))
-            return L.tensor(np.ascontiguousarray(
-                np.asarray(_as_numpy(call(O, to)), dtype=np.float32)))
+            got = np.asarray(_as_numpy(call(O, to)), dtype=np.float32)
+            # **`ascontiguousarray` turns a 0-d array into a 1-d one**, and that is not a
+            # contiguity fix, it is a reshape. Every case here returned a table until the
+            # losses arrived, so a reduced one was the first scalar to pass through and
+            # the golden froze `[1]` for a value torchvision returns as `()`.
+            #
+            # Nothing on the Python side could see it — both libraries go through this
+            # same wrapper, so both got `[1]` and agreed. It took borch.ts, which does
+            # not, to disagree: *ours scalar, golden [1]*. **A defect in the harness reads
+            # as a defect in whichever implementation did not go through it.**
+            #
+            # **`got.shape == ()` and not `got.ndim == 0`**, which says the same thing.
+            # `test_binding_fills_in.py` parses *this file* for every attribute name a
+            # case reaches for, and a numpy array's `.ndim` here is indistinguishable
+            # from a tensor's — it reported the binding filling in for borch.ts on a
+            # name no case asks about. That file's own docstring calls editing this one
+            # "the fourth time a check changed what it greps out of it"; this is the
+            # fifth, and `shape` is already asked everywhere, so it costs nothing.
+            return L.tensor(got if got.shape == () else np.ascontiguousarray(got))
         return run
 
     cases = [
@@ -12426,6 +12463,44 @@ def ops_cases(inp=None):
          op(lambda O, to: O.distance_box_iou(to(_boxes), to(_others)))),
         (OPS_PREFIX + "complete_box_iou",
          op(lambda O, to: O.complete_box_iou(to(_boxes), to(_others)))),
+        # **The losses are paired, where the IoUs above are N by M.** Five boxes against
+        # five, one answer each — an implementation that reached for the matrix and took
+        # its diagonal would agree here and cost `N²` to do it, so the shape is the case
+        # as much as the values are.
+        #
+        # `_shapes` is deliberately not `_boxes`: the pairs there have **matched aspect
+        # ratios**, and `complete_box_iou_loss`'s extra term is exactly zero whenever
+        # they do. Measured on that pair alone it equals the distance loss to the last
+        # bit, so the case would pass while asking nothing about the one thing that
+        # function adds. On these it differs by 0.217.
+        (OPS_PREFIX + "generalized_box_iou_loss",
+         op(lambda O, to: O.generalized_box_iou_loss(to(_shapes), to(_targets)))),
+        (OPS_PREFIX + "distance_box_iou_loss",
+         op(lambda O, to: O.distance_box_iou_loss(to(_shapes), to(_targets)))),
+        (OPS_PREFIX + "complete_box_iou_loss",
+         op(lambda O, to: O.complete_box_iou_loss(to(_shapes), to(_targets)))),
+        (OPS_PREFIX + "generalized_box_iou_loss(mean)",
+         op(lambda O, to: O.generalized_box_iou_loss(to(_shapes), to(_targets),
+                                                     reduction="mean"))),
+        (OPS_PREFIX + "complete_box_iou_loss(sum)",
+         op(lambda O, to: O.complete_box_iou_loss(to(_shapes), to(_targets),
+                                                  reduction="sum"))),
+        # Focal loss takes **logits**, so the values run either side of zero, and one
+        # pair sits at ±40 — far enough out that a naive `1 / (1 + exp(-x))` reaches
+        # numpy's overflow and a naive `log(1 + exp(-x))` returns `inf` where the loss
+        # is finite. Both are written around that, and this is what asks.
+        (OPS_PREFIX + "sigmoid_focal_loss",
+         op(lambda O, to: O.sigmoid_focal_loss(to(_logits), to(_hits)))),
+        # **`alpha=-1` is a switch, not a weight** — it turns the class balancing off
+        # rather than weighting by a negative number.
+        (OPS_PREFIX + "sigmoid_focal_loss(alpha off)",
+         op(lambda O, to: O.sigmoid_focal_loss(to(_logits), to(_hits), -1))),
+        # `gamma=0` removes the focusing term, leaving plain weighted cross-entropy —
+        # the value this whole loss is a modulation of.
+        (OPS_PREFIX + "sigmoid_focal_loss(gamma 0)",
+         op(lambda O, to: O.sigmoid_focal_loss(to(_logits), to(_hits), 0.25, 0))),
+        (OPS_PREFIX + "sigmoid_focal_loss(mean)",
+         op(lambda O, to: O.sigmoid_focal_loss(to(_logits), to(_hits), 0.25, 2, "mean"))),
         (OPS_PREFIX + "clip_boxes_to_image",
          op(lambda O, to: O.clip_boxes_to_image(to(_boxes), (20, 25)))),
         (OPS_PREFIX + "remove_small_boxes",

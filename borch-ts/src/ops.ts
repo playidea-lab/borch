@@ -244,6 +244,178 @@ export async function completeBoxIou(
   });
 }
 
+export type Reduction = "none" | "mean" | "sum";
+
+/**
+ * `none`, `mean` or `sum`, as every loss in torch takes.
+ *
+ * **An unknown name is refused rather than quietly meaning `none`.** A typo that means
+ * "no reduction" hands back a vector where a scalar was wanted, and the shape error then
+ * surfaces somewhere else entirely, with nothing pointing here.
+ */
+function reduce(values: number[], reduction: string): Tensor {
+  if (reduction === "none") return Tensor.from(values, [values.length]);
+  const total = values.reduce((s, v) => s + v, 0);
+  if (reduction === "sum") return Tensor.from([total], []);
+  if (reduction === "mean") {
+    return Tensor.from([values.length ? total / values.length : 0], []);
+  }
+  throw new Error(
+    `${reduction} is not a valid value for reduction — it is one of none, mean, sum.`,
+  );
+}
+
+/**
+ * The two box sets, **matched one to one.**
+ *
+ * The IoU functions above answer *every box against every box*, because that is what a
+ * detector's assignment step needs. **A loss is the other question**: these arrive
+ * already paired, one prediction against its own target, and the answer is one number
+ * per pair rather than a matrix.
+ *
+ * Taking the diagonal of the matrix gives the same numbers and computes `N²` of them to
+ * keep `N`, which on a real batch is the entire cost of the loss.
+ */
+async function paired(
+  boxes1: Tensor,
+  boxes2: Tensor,
+): Promise<{ a: number[][]; b: number[][] }> {
+  const a = await rows(boxes1);
+  const b = await rows(boxes2);
+  if (a.length !== b.length) {
+    throw new Error(
+      `the two box sets must be the same length to be paired — got ${a.length} and ${b.length}.`,
+    );
+  }
+  return { a, b };
+}
+
+/** Intersection and union of **one** pair — the `N` of them, not the `N x M`. */
+function pairInterUnion(ra: number[], rb: number[]): { inter: number; union: number } {
+  const areaOf = (r: number[]) =>
+    ((r[2] ?? 0) - (r[0] ?? 0)) * ((r[3] ?? 0) - (r[1] ?? 0));
+  const w = Math.max(Math.min(ra[2] ?? 0, rb[2] ?? 0) - Math.max(ra[0] ?? 0, rb[0] ?? 0), 0);
+  const h = Math.max(Math.min(ra[3] ?? 0, rb[3] ?? 0) - Math.max(ra[1] ?? 0, rb[1] ?? 0), 0);
+  const inter = w * h;
+  return { inter, union: areaOf(ra) + areaOf(rb) - inter };
+}
+
+/** `1 - giou`, pair by pair. */
+export async function generalizedBoxIouLoss(
+  boxes1: Tensor,
+  boxes2: Tensor,
+  reduction: string = "none",
+  eps = 1e-7,
+): Promise<Tensor> {
+  const { a, b } = await paired(boxes1, boxes2);
+  return reduce(
+    a.map((ra, i) => {
+      const { inter, union } = pairInterUnion(ra, b[i]!);
+      const iou = inter / (union + eps);
+      const { area } = enclosing(ra, b[i]!);
+      return 1 - (iou - (area - union) / (area + eps));
+    }),
+    reduction,
+  );
+}
+
+/** `1 - diou` — IoU penalised by how far apart the centres are. */
+export async function distanceBoxIouLoss(
+  boxes1: Tensor,
+  boxes2: Tensor,
+  reduction: string = "none",
+  eps = 1e-7,
+): Promise<Tensor> {
+  const { a, b } = await paired(boxes1, boxes2);
+  return reduce(
+    a.map((ra, i) => {
+      const { inter, union } = pairInterUnion(ra, b[i]!);
+      const { diagonal } = enclosing(ra, b[i]!);
+      return 1 - (inter / (union + eps) - centreGap(ra, b[i]!) / (diagonal + eps));
+    }),
+    reduction,
+  );
+}
+
+/**
+ * `1 - ciou` — the distance term and **one more for the aspect ratio.**
+ *
+ * Two boxes sharing a centre and an area but not a shape score the same under the
+ * distance loss and differently here. The golden case was chosen so the two disagree:
+ * with matched aspect ratios this extra term is exactly zero, and a case like that
+ * passes while asking nothing about the one thing this function adds.
+ */
+export async function completeBoxIouLoss(
+  boxes1: Tensor,
+  boxes2: Tensor,
+  reduction: string = "none",
+  eps = 1e-7,
+): Promise<Tensor> {
+  const { a, b } = await paired(boxes1, boxes2);
+  const FOUR_OVER_PI_SQ = 4 / (Math.PI * Math.PI);
+  return reduce(
+    a.map((ra, i) => {
+      const rb = b[i]!;
+      const { inter, union } = pairInterUnion(ra, rb);
+      const iou = inter / (union + eps);
+      const { diagonal } = enclosing(ra, rb);
+      const ratio = (r: number[]) =>
+        Math.atan(((r[2] ?? 0) - (r[0] ?? 0)) / ((r[3] ?? 0) - (r[1] ?? 0) + eps));
+      const v = FOUR_OVER_PI_SQ * (ratio(rb) - ratio(ra)) ** 2;
+      const alpha = v / (1 - iou + v + eps);
+      return 1 - (iou - (centreGap(ra, rb) / (diagonal + eps) + alpha * v));
+    }),
+    reduction,
+  );
+}
+
+/**
+ * Cross-entropy with **the easy examples turned down.**
+ *
+ * A detector looks at tens of thousands of boxes and almost all of them are plainly
+ * background. Summed with equal weight that majority drowns out the few that are hard,
+ * so each term is scaled by `(1 - p_t) ** gamma` — near zero once the model is already
+ * confident and right.
+ *
+ * `alpha` is the separate, older fix for the same imbalance: one weight for the positive
+ * class and `1 - alpha` for the negative. **`alpha = -1` turns it off**, which is
+ * torchvision's own switch rather than a value.
+ *
+ * The inputs are **logits**, not probabilities. Something already through a sigmoid
+ * gives a number rather than an error, which is why it is said here.
+ *
+ * Both halves are written around `Math.exp` overflowing: the plain sigmoid and a plain
+ * `log(1 + exp(-x))` both stop being finite around ±710, where the loss itself is not.
+ */
+export async function sigmoidFocalLoss(
+  inputs: Tensor,
+  targets: Tensor,
+  alpha = 0.25,
+  gamma = 2,
+  reduction: string = "none",
+): Promise<Tensor> {
+  const x = Array.from(await inputs.toArray());
+  const y = Array.from(await targets.toArray());
+  if (x.length !== y.length) {
+    throw new Error(
+      `inputs and targets must hold the same number of values — got ${x.length} and ${y.length}.`,
+    );
+  }
+  const out = x.map((v, i) => {
+    const t = y[i] ?? 0;
+    const z = Math.exp(-Math.abs(v));
+    const p = v >= 0 ? 1 / (1 + z) : z / (1 + z);
+    const ce = Math.max(v, 0) - v * t + Math.log1p(z);
+    const pt = p * t + (1 - p) * (1 - t);
+    const loss = ce * (1 - pt) ** gamma;
+    return alpha >= 0 ? (alpha * t + (1 - alpha) * (1 - t)) * loss : loss;
+  });
+  if (reduction === "none") {
+    return Tensor.from(out, inputs.shape as number[]);
+  }
+  return reduce(out, reduction);
+}
+
 /**
  * Push every corner back inside a picture of `size`.
  *

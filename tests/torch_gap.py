@@ -810,13 +810,22 @@ SKIPPED = {
     "ops.drop_block3d": "as above",
     "ops.StochasticDepth": "it drops whole residual blocks — it needs blocks",
     "ops.stochastic_depth": "as above",
-    # The losses need predictions, which need a model.
-    "ops.sigmoid_focal_loss": "a detection loss — it takes a model's predictions",
-    "ops.complete_box_iou_loss": "as above",
-    "ops.distance_box_iou_loss": "as above",
-    "ops.generalized_box_iou_loss": "as above. **The IoU itself is here** — what is "
-                                    "absent is the loss around it, which is where the "
-                                    "predictions come in",
+    # **The four losses were here and are built.** The row read *a detection loss — it
+    # takes a model's predictions*, and every word of that is true and none of it was a
+    # reason. A prediction arriving as an argument is a tensor; the loss never meets the
+    # model that made it. `generalized_box_iou_loss` went further and wrote *the IoU
+    # itself is here — what is absent is the loss around it*, which is the sentence
+    # naming its own three-line remainder.
+    #
+    # Fifth time this shape has been caught in this file (FER2013, SBDataset, Flowers102,
+    # Cityscapes were the others): **a true sentence about one thing, used as a reason
+    # about another.** Here it was *these belong to detection* standing in for *these
+    # cannot be built or checked*.
+    #
+    # `SqueezeExcitation`, `MLP` and `Permute` left in the same rebase, from the other
+    # side, for their own reasons. Four rows and three rows deleted each other's context
+    # and git could not tell that both deletions were wanted — worth knowing that a
+    # conflict in this table means two people agreed rather than disagreed.
 }
 
 # **How big the `NOT_API` bin is allowed to be, per namespace.**

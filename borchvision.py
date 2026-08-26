@@ -2946,6 +2946,160 @@ def complete_box_iou(boxes1, boxes2, eps=1e-7):
     return _boxes_out(diou - alpha * v, was_tensor, _np.float32)
 
 
+def _reduce(values, reduction):
+    """`none`, `mean` or `sum`, as every loss in torch takes.
+
+    **An unknown name is refused rather than treated as `none`.** A typo silently
+    meaning "no reduction" gives back a vector where a scalar was wanted, and the
+    shape error then surfaces somewhere else entirely.
+    """
+    if reduction == "none":
+        return values
+    if reduction == "mean":
+        return values.mean() if values.size else values.sum() * 0.0
+    if reduction == "sum":
+        return values.sum()
+    raise ValueError(
+        f"{reduction} is not a valid value for reduction — it is one of none, mean, sum.\n"
+        f"(torch: Invalid Value for arg 'reduction': '{reduction}')")
+
+
+def _pairwise(boxes1, boxes2):
+    """The two box sets as numpy, **matched one to one.**
+
+    The IoU functions above answer *every box against every box* because that is what a
+    detector's assignment step needs. **A loss is the other question**: these arrive
+    already paired, one prediction against its own target, and the answer is one number
+    per pair rather than a matrix.
+
+    Taking the diagonal of the matrix would give the same numbers and compute `N²` of
+    them to keep `N`, which on a real batch is the whole cost of the loss.
+    """
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    if a.shape != b.shape:
+        raise ValueError(
+            f"the two box sets must be the same shape to be paired — got {a.shape} "
+            f"and {b.shape}.\n(torch: The size of tensor a must match the size of "
+            "tensor b)")
+    return a, b, was_tensor
+
+
+def _pair_inter_union(a, b):
+    lt = _np.maximum(a[..., :2], b[..., :2])
+    rb = _np.minimum(a[..., 2:], b[..., 2:])
+    wh = _np.clip(rb - lt, 0.0, None)
+    inter = wh[..., 0] * wh[..., 1]
+    area_a = (a[..., 2] - a[..., 0]) * (a[..., 3] - a[..., 1])
+    area_b = (b[..., 2] - b[..., 0]) * (b[..., 3] - b[..., 1])
+    return inter, area_a + area_b - inter
+
+
+def _enclosing(a, b):
+    """Width and height of the smallest box containing both — the term every one of
+    these losses adds on top of plain IoU."""
+    lt = _np.minimum(a[..., :2], b[..., :2])
+    rb = _np.maximum(a[..., 2:], b[..., 2:])
+    wh = _np.clip(rb - lt, 0.0, None)
+    return wh[..., 0], wh[..., 1]
+
+
+def generalized_box_iou_loss(boxes1, boxes2, reduction="none", eps=1e-7):
+    """`1 - giou`, **pair by pair.**
+
+    Plain IoU is 0 for any two boxes that do not touch, however far apart they are, so
+    it has no gradient to follow back. Subtracting what the enclosing box wastes keeps
+    the value falling all the way to -1, and that is the whole reason a loss is built on
+    this one.
+    """
+    a, b, was_tensor = _pairwise(boxes1, boxes2)
+    inter, union = _pair_inter_union(a, b)
+    iou = inter / (union + eps)
+    w, h = _enclosing(a, b)
+    area = w * h
+    loss = 1 - (iou - (area - union) / (area + eps))
+    return _boxes_out(_reduce(loss, reduction), was_tensor, _np.float32)
+
+
+def distance_box_iou_loss(boxes1, boxes2, reduction="none", eps=1e-7):
+    """`1 - diou` — IoU penalised by how far apart the centres are, as a fraction of
+    the enclosing box's diagonal."""
+    a, b, was_tensor = _pairwise(boxes1, boxes2)
+    inter, union = _pair_inter_union(a, b)
+    iou = inter / (union + eps)
+    w, h = _enclosing(a, b)
+    diagonal = w ** 2 + h ** 2
+    centres = (((a[..., 0] + a[..., 2]) - (b[..., 0] + b[..., 2])) / 2) ** 2 + \
+              (((a[..., 1] + a[..., 3]) - (b[..., 1] + b[..., 3])) / 2) ** 2
+    return _boxes_out(_reduce(1 - (iou - centres / (diagonal + eps)), reduction),
+                      was_tensor, _np.float32)
+
+
+def complete_box_iou_loss(boxes1, boxes2, reduction="none", eps=1e-7):
+    """`1 - ciou` — the distance term and **one more for the aspect ratio.**
+
+    Two boxes sharing a centre and an area but not a shape score the same under the
+    distance loss and differently here. The golden case for this one was chosen so that
+    the two disagree: with matched aspect ratios the extra term is exactly zero and a
+    case like that would pass while measuring nothing this function does.
+    """
+    a, b, was_tensor = _pairwise(boxes1, boxes2)
+    inter, union = _pair_inter_union(a, b)
+    iou = inter / (union + eps)
+    w, h = _enclosing(a, b)
+    diagonal = w ** 2 + h ** 2
+    centres = (((a[..., 0] + a[..., 2]) - (b[..., 0] + b[..., 2])) / 2) ** 2 + \
+              (((a[..., 1] + a[..., 3]) - (b[..., 1] + b[..., 3])) / 2) ** 2
+    w_a, h_a = a[..., 2] - a[..., 0], a[..., 3] - a[..., 1]
+    w_b, h_b = b[..., 2] - b[..., 0], b[..., 3] - b[..., 1]
+    v = (4 / (_np.pi ** 2)) * (_np.arctan(w_b / (h_b + eps))
+                               - _np.arctan(w_a / (h_a + eps))) ** 2
+    alpha = v / (1 - iou + v + eps)
+    loss = 1 - (iou - (centres / (diagonal + eps) + alpha * v))
+    return _boxes_out(_reduce(loss, reduction), was_tensor, _np.float32)
+
+
+def sigmoid_focal_loss(inputs, targets, alpha=0.25, gamma=2, reduction="none"):
+    """Cross-entropy with **the easy examples turned down.**
+
+    A detector looks at tens of thousands of boxes and almost all of them are plainly
+    background. Summed with equal weight, that majority drowns out the few that are
+    hard, so each term is scaled by `(1 - p_t) ** gamma` — near zero once the model is
+    already confident and right.
+
+    `alpha` is the separate, older fix for the same imbalance: one weight for the
+    positive class and `1 - alpha` for the negative. **`alpha=-1` turns it off**, which
+    is torchvision's own switch rather than a value.
+
+    The inputs are logits, not probabilities. Passing something already through a
+    sigmoid gives a number rather than an error, which is why it is said here.
+    """
+    x = _to_numpy(inputs) if not isinstance(inputs, _np.ndarray) else inputs
+    y = _to_numpy(targets) if not isinstance(targets, _np.ndarray) else targets
+    was_tensor = not isinstance(inputs, _np.ndarray)
+    x = x.astype(_np.float64)
+    y = y.astype(_np.float64)
+    # **Both of these are written around `exp` overflowing, and it overflows at ±710.**
+    #
+    # The plain sigmoid `1 / (1 + exp(-x))` gives the right answer for a logit of -800 —
+    # `exp(800)` is `inf` and the quotient is 0 — but it gets there through a numpy
+    # overflow warning, and a library people are reading to learn from should not print
+    # one while being correct. Taking `exp` of the negative half only keeps every
+    # intermediate inside the range.
+    #
+    # `log1p(exp(-|x|))` is the same care for the cross-entropy: `log(1 + exp(-x))`
+    # returns `inf` at -800 where the loss is finite. torch's own binary cross-entropy is
+    # written this way, and measured against it here ±800 gives 200 and 600 on both sides.
+    z = _np.exp(-_np.abs(x))
+    p = _np.where(x >= 0, 1.0 / (1.0 + z), z / (1.0 + z))
+    ce = _np.clip(x, 0, None) - x * y + _np.log1p(z)
+    p_t = p * y + (1 - p) * (1 - y)
+    loss = ce * ((1 - p_t) ** gamma)
+    if alpha >= 0:
+        loss = (alpha * y + (1 - alpha) * (1 - y)) * loss
+    return _boxes_out(_reduce(loss, reduction), was_tensor, _np.float32)
+
+
 def clip_boxes_to_image(boxes, size):
     """Push every corner back inside a picture of `size`, which is **(height, width)**
     — the opposite order to a box's own `(x, y)`, and torchvision's own convention."""
@@ -8168,8 +8322,10 @@ for _name in ("InterpolationMode", "adjust_brightness", "adjust_contrast",
     setattr(functional, _name, globals()[_name])
 
 for _name in ("batched_nms", "box_area", "box_convert", "box_iou",
-              "clip_boxes_to_image", "complete_box_iou", "distance_box_iou",
-              "generalized_box_iou", "masks_to_boxes", "nms", "remove_small_boxes"):
+              "clip_boxes_to_image", "complete_box_iou", "complete_box_iou_loss",
+              "distance_box_iou", "distance_box_iou_loss", "generalized_box_iou",
+              "generalized_box_iou_loss", "masks_to_boxes", "nms",
+              "remove_small_boxes", "sigmoid_focal_loss"):
     setattr(ops, _name, globals()[_name])
 
 # The layer classes are built against whichever backend is attached **when they are

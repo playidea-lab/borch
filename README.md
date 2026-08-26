@@ -232,9 +232,17 @@ uv run --with pytest --with numpy --with torch --with torchvision --with scipy \
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **3544 golden cases pass**, and that is a surface check rather than a
-> line check. The two numbers are not written down as though they were the same
-> thing.
+> is that **the binding passes 3548 golden cases**, and that is a surface check
+> rather than a line check. The two numbers are not written down as though they were
+> the same thing.
+>
+> **Which side the number belongs to is now said out loud.** It gave a count for
+> "that side" without naming one, and three different counts are in play — the whole
+> table, what the core sees, what the binding sees. An unnamed side is what let the
+> wrong one of the three sit in the sentence below for as long as it did. (The figure
+> it carried is deliberately not repeated here: `test_docs.py` says a sentence about
+> *then* should be written without the number, and a historical one in a `golden N`
+> position is a stale count the moment the pattern learns to see it.)
 
 What this check caught on its first run: PyTorch's `BatchNorm2d` **uses two
 different variances inside one forward pass** — the biased one (ddof=0) for the
@@ -772,9 +780,9 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **3544 golden cases** — every one in the table but five. Those five are
+It passes **3548 golden cases** — every one in the table but five. Those five are
 the core's alone: complex eigenvalues, and there is no complex dtype on this side.
-The core covers 3491 cases, and the 53 *it* does not see are this side's alone
+The core covers 3500 cases, and the 53 *it* does not see are this side's alone
 (1-D and 3-D convolutions, ranks 7 and 8), which it refuses on purpose.
 
 > That sentence read "nothing in the table is skipped on this side alone" until
@@ -782,13 +790,20 @@ The core covers 3491 cases, and the 53 *it* does not see are this side's alone
 > unwatched because `test_docs.py` accepts any of the three counts and the number
 > beside it happened to be one of them — a check on the number does not read the
 > sentence, which is the same lesson that check's own docstring records.
+>
+> **And it happened again in the same paragraph, to the number itself.** This read
+> the whole table's count in the sentence about the binding, and it passed the check
+> because that figure was one of the three allowed. It was caught only when nine
+> cases moved every number at once and the one written here stopped being any of
+> them. *The whole table minus five* is the arithmetic the sentence has claimed, and
+> now performs.
 
 > That number said 2930 until this translation. The phrasing around it was
 > `보는데` rather than `본다`, so `test_docs.py`'s pattern never matched it and the
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 3121 cases. **The remaining 423 are two
+borch.ts itself has written TS bodies for 3130 cases. **The remaining 423 are two
 things**: 415 deliberately not carried across, and 8 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
@@ -1436,8 +1451,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3544 golden cases** compare all three implementations against **the same
-expected values.** The core covers 3491 cases, leaving out the 53 that are
+And **3553 golden cases** compare all three implementations against **the same
+expected values.** The core covers 3500 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are
