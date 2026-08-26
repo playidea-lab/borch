@@ -815,8 +815,11 @@ SKIPPED = {
     # below names a specific thing that is absent**, and two of them are the same thing:
     #
     #   - `Conv3dNormActivation` needs 3-D convolution, which the core declines.
-    #   - The eleven `RoI` and deformable names need **bilinear sampling at arbitrary
-    #     coordinates**, which is real arithmetic nobody has written here yet.
+    #   - The three left of the eleven `RoI` and deformable names need **bilinear
+    #     sampling at arbitrary coordinates**. It is written now — eight of the eleven
+    #     went in on it — and the three that remain are what sits on top: a pyramid of
+    #     convolutions, a scale-picking wrapper, and a convolution whose sampling
+    #     coordinates are themselves learned.
     #
     # The second is 아직 and not a wall — `roi_align` takes a tensor and a list of
     # boxes, like everything else that turned out to be writable. It is left because it
@@ -828,14 +831,6 @@ SKIPPED = {
     "ops.deform_conv2d": "as above",
     "ops.FeaturePyramidNetwork": "아직 — a handful of 1x1 and 3x3 convolutions over a dict of tensors. **Nothing here is missing**; the row said nothing feeds it, which is about a catalogue rather than a library",
     "ops.MultiScaleRoIAlign": "as above",
-    "ops.RoIAlign": "아직 — bilinear sampling at arbitrary coordinates, which is not written here yet. It takes a tensor and a list of boxes; *a feature map comes from a model* was true of where the tensor came from and not of what the function needs",
-    "ops.RoIPool": "as above",
-    "ops.PSRoIAlign": "as above",
-    "ops.PSRoIPool": "as above",
-    "ops.roi_align": "as above",
-    "ops.roi_pool": "as above",
-    "ops.ps_roi_align": "as above",
-    "ops.ps_roi_pool": "as above",
     # **The four losses were here and are built.** The row read *a detection loss — it
     # takes a model's predictions*, and every word of that is true and none of it was a
     # reason. A prediction arriving as an argument is a tensor; the loss never meets the

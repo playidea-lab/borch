@@ -3122,6 +3122,428 @@ def remove_small_boxes(boxes, min_size):
 
 
 
+# ── ops: sampling a feature map at coordinates that are not integers ─────────────
+#
+# **Eleven names waited on one piece of arithmetic.** Their rows read *it crops from a
+# feature map. A feature map comes from a model* — which is true of where the tensor
+# came from and not of what the function needs, the sixth time this table has been
+# caught saying that. What they actually need is bilinear sampling at fractional
+# coordinates, and that is written here once.
+#
+# **It is written in the backend's own operations rather than in numpy**, unlike the box
+# geometry above it. Those take four numbers a box and hand back four numbers; these sit
+# inside a network, so a gradient has to flow back through them to the feature map. The
+# indexing below is `L`'s, which means autograd sees it.
+
+
+def _roi_boxes(boxes, L):
+    """`(k, 5)` — a batch index and four coordinates — from either form torchvision
+    takes.
+
+    **A list of `(l, 4)` tensors is one per image**, and the position in the list is the
+    batch index. Concatenating them without writing that index down loses which picture
+    each box belongs to, and every box then samples image zero — which is an answer of
+    the right shape for a batch of one.
+    """
+    if isinstance(boxes, (list, tuple)):
+        rows = []
+        for index, one in enumerate(boxes):
+            one = one if _is_tensor(one) else L.tensor(_np.asarray(one, _np.float32))
+            if one.shape[1] != 4:
+                raise ValueError("The shape of the tensor in the boxes list is not "
+                                 "correct as List[Tensor[L, 4]]")
+            rows.append(L.cat([L.full_like(one[:, :1], float(index)), one], dim=1))
+        return L.cat(rows, dim=0) if rows else L.zeros((0, 5))
+    boxes = boxes if _is_tensor(boxes) else L.tensor(_np.asarray(boxes, _np.float32))
+    if boxes.shape[1] != 5:
+        raise ValueError("The boxes tensor shape is not correct as Tensor[K, 5]")
+    return boxes
+
+
+def _is_tensor(value):
+    return not isinstance(value, (_np.ndarray, list, tuple))
+
+
+def _bilinear_sample(picture, batch_index, y, x):
+    """The four neighbours of each `(y, x)`, weighted by how near they are.
+
+    `picture` is `(n, c, h, w)`, `y` is `(k, ph, iy)` and `x` is `(k, pw, ix)`; what
+    comes back is `(k, c, ph, pw, iy, ix)` — every sample of every bin of every box.
+
+    Three things here each return a picture rather than an error:
+
+    - **A sample outside the map contributes zero, and is still counted.** Not the
+      clamped edge value — the kernel's guard is `y < -1 or y > height`, and the
+      divisor does not shrink. torchvision's own Python reference *does* clamp instead,
+      which is the trap: written from that reference, a box hanging off the left edge
+      comes back with the edge column smeared across it, and the numbers are the right
+      size. Measured against the compiled op, a half-outside box was exactly twice
+      torchvision's answer — one real sample and one zero, averaged over two.
+    - **A coordinate below zero is then clamped, not wrapped.** A negative index in
+      Python reads from the far edge, so the sample would come from the opposite side
+      of the image and be a number.
+    - **The last row and column have no neighbour above them**, so `y_high` is held at
+      `h - 1` and `y` is snapped there with it. Left alone, `y_low + 1` reads past the
+      end; snapped without also moving `y`, the weights are computed against a
+      neighbour that is not the one being read.
+    - **The weights are an outer product**, `hy * hx` and the rest — the two axes are
+      independent, and multiplying the wrong pair transposes the interpolation.
+    """
+    L = _backend()
+    _, channels, height, width = picture.shape
+    inside_y = (y >= -1.0) & (y <= height)
+    inside_x = (x >= -1.0) & (x <= width)
+    y = y.clamp(min=0)
+    x = x.clamp(min=0)
+    y_low = y.floor()
+    x_low = x.floor()
+    y_high = L.where(y_low >= height - 1, L.full_like(y_low, height - 1.0), y_low + 1)
+    y_low = L.where(y_low >= height - 1, L.full_like(y_low, height - 1.0), y_low)
+    y = L.where(y_low >= height - 1, y_low, y)
+    x_high = L.where(x_low >= width - 1, L.full_like(x_low, width - 1.0), x_low + 1)
+    x_low = L.where(x_low >= width - 1, L.full_like(x_low, width - 1.0), x_low)
+    x = L.where(x_low >= width - 1, x_low, x)
+
+    low_y, high_y = y - y_low, 1.0 - (y - y_low)
+    low_x, high_x = x - x_low, 1.0 - (x - x_low)
+
+    rows = L.arange(channels).long()
+
+    def at(row, column):
+        return picture[
+            batch_index[:, None, None, None, None, None],
+            rows[None, :, None, None, None, None],
+            row.long()[:, None, :, None, :, None],
+            column.long()[:, None, None, :, None, :]]
+
+    def outer(down, across):
+        return (down[:, None, :, None, :, None]
+                * across[:, None, None, :, None, :])
+
+    value = (outer(high_y, high_x) * at(y_low, x_low)
+             + outer(high_y, low_x) * at(y_low, x_high)
+             + outer(low_y, high_x) * at(y_high, x_low)
+             + outer(low_y, low_x) * at(y_high, x_high))
+    keep = (inside_y[:, None, :, None, :, None]
+            & inside_x[:, None, None, :, None, :])
+    return L.where(keep, value, L.zeros_like(value))
+
+
+def roi_align(input, boxes, output_size, spatial_scale=1.0, sampling_ratio=-1,
+              aligned=False):
+    """Crop each box out of the feature map at a fixed size, **without rounding it.**
+
+    <https://arxiv.org/abs/1703.06870>
+
+    That is the whole difference from `roi_pool` next door, and it is what the paper is
+    named for: a box's edges land between pixels, and rounding them to the grid moves
+    the crop by up to half a cell — which is nothing on a classification map and is the
+    difference between a mask that lines up and one that does not.
+
+    Three arguments each change the answer quietly:
+
+    - **`spatial_scale` is how much smaller the map is than the image.** The boxes are
+      in image coordinates and the map is not; a stride-16 backbone wants `1/16`.
+      Leaving it at 1 samples the top-left sixteenth of everything.
+    - **`sampling_ratio=-1` means "as many samples as the bin is wide"**, computed per
+      box, rather than a fixed number. A fixed one over-samples small boxes and
+      under-samples large ones, and every value is still a plausible average.
+    - **`aligned=True` shifts by half a pixel** and stops clamping the box to a minimum
+      size of one. It is the correction to the original implementation and it moves
+      every output; the default is `False` because that is what the released weights
+      were trained with.
+    """
+    L = _backend()
+    height, width = int(input.shape[2]), int(input.shape[3])
+    rois = _roi_boxes(boxes, L)
+    pooled_h, pooled_w = _pair(output_size, "output_size")
+    batch_index = rois[:, 0].long()
+
+    offset = 0.5 if aligned else 0.0
+    start_h = rois[:, 2] * spatial_scale - offset
+    start_w = rois[:, 1] * spatial_scale - offset
+    roi_h = rois[:, 4] * spatial_scale - offset - start_h
+    roi_w = rois[:, 3] * spatial_scale - offset - start_w
+    if not aligned:
+        roi_h = roi_h.clamp(min=1.0)
+        roi_w = roi_w.clamp(min=1.0)
+    bin_h, bin_w = roi_h / pooled_h, roi_w / pooled_w
+
+    if sampling_ratio > 0:
+        grid_h = grid_w = float(sampling_ratio)
+        count = max(sampling_ratio * sampling_ratio, 1)
+        steps_y = L.arange(sampling_ratio).float()
+        steps_x = L.arange(sampling_ratio).float()
+        mask_y = mask_x = None
+    else:
+        # **The number of samples depends on the box**, so every box is given room for
+        # the largest possible grid and the surplus is masked out. That is torchvision's
+        # own way round it: the alternative is a loop over boxes, and the mask is what
+        # keeps this one expression.
+        grid_h, grid_w = (roi_h / pooled_h).ceil(), (roi_w / pooled_w).ceil()
+        count = (grid_h * grid_w).clamp(min=1)
+        steps_y = L.arange(height).float()
+        steps_x = L.arange(width).float()
+        mask_y = steps_y[None, :] < grid_h[:, None]
+        mask_x = steps_x[None, :] < grid_w[:, None]
+
+    def spread(one):
+        return one[:, None, None]
+
+    y = (spread(start_h) + L.arange(pooled_h).float()[None, :, None] * spread(bin_h)
+         + (steps_y[None, None, :] + 0.5) * spread(bin_h / grid_h))
+    x = (spread(start_w) + L.arange(pooled_w).float()[None, :, None] * spread(bin_w)
+         + (steps_x[None, None, :] + 0.5) * spread(bin_w / grid_w))
+
+    value = _bilinear_sample(input, batch_index, y, x)
+    if mask_y is not None:
+        zero = L.zeros_like(value)
+        value = L.where(mask_y[:, None, None, None, :, None], value, zero)
+        value = L.where(mask_x[:, None, None, None, None, :], value, zero)
+    out = value.sum(-1).sum(-1)
+    if sampling_ratio > 0:
+        return out / count
+    return out / count[:, None, None, None]
+
+
+def roi_pool(input, boxes, output_size, spatial_scale=1.0):
+    """The **maximum** in each bin, with the box rounded to the grid.
+
+    <https://arxiv.org/abs/1504.08083>
+
+    Faster R-CNN's pooling, and the thing `roi_align` was written to replace: the box's
+    edges are rounded and so are the bin boundaries, which moves the crop by up to a
+    cell twice over.
+
+    **An empty bin answers zero rather than negative infinity.** A box small enough that
+    a bin covers no cell at all is real — that is what happens to a distant object on a
+    stride-32 map — and a maximum over nothing has no value to give. Zero is
+    torchvision's answer and it is what lets the batch stack.
+    """
+    L = _backend()
+    rois = _roi_boxes(boxes, L)
+    pooled_h, pooled_w = _pair(output_size, "output_size")
+    height, width = int(input.shape[2]), int(input.shape[3])
+    out = []
+    for index in range(int(rois.shape[0])):
+        row = rois[index]
+        which = int(_as_number(row[0]))
+        # **Rounded, and rounded again per bin** — `round` and not `floor`, which is
+        # what the kernel does and what makes a box at `x.5` land one cell to the right.
+        #
+        # And **not Python's `round`**, which goes to the nearest even: `round(0.5)` is
+        # 0 there and 1 in C. A `spatial_scale` of 0.5 puts every odd coordinate on a
+        # half, so half the boxes of a stride-2 map land one cell left of torchvision's
+        # — measured, and invisible at `spatial_scale=1` where nothing is ever on a half.
+        left = _c_round(float(_as_number(row[1])) * spatial_scale)
+        top = _c_round(float(_as_number(row[2])) * spatial_scale)
+        right = _c_round(float(_as_number(row[3])) * spatial_scale)
+        bottom = _c_round(float(_as_number(row[4])) * spatial_scale)
+        box_h = max(bottom - top + 1, 1)
+        box_w = max(right - left + 1, 1)
+        cells = []
+        for ph in range(pooled_h):
+            row_cells = []
+            for pw in range(pooled_w):
+                y0 = min(max(top + int(_math.floor(ph * box_h / pooled_h)), 0), height)
+                y1 = min(max(top + int(_math.ceil((ph + 1) * box_h / pooled_h)), 0),
+                         height)
+                x0 = min(max(left + int(_math.floor(pw * box_w / pooled_w)), 0), width)
+                x1 = min(max(left + int(_math.ceil((pw + 1) * box_w / pooled_w)), 0),
+                         width)
+                if y1 <= y0 or x1 <= x0:
+                    row_cells.append(L.zeros_like(input[which, :, 0, 0]))
+                else:
+                    row_cells.append(
+                        input[which, :, y0:y1, x0:x1].reshape(
+                            int(input.shape[1]), -1).max(dim=1).values)
+            cells.append(L.stack(row_cells, dim=1))
+        out.append(L.stack(cells, dim=1))
+    if not out:
+        return L.zeros((0, int(input.shape[1]), pooled_h, pooled_w))
+    return L.stack(out, dim=0)
+
+
+def _ps_channels(input, pooled_h, pooled_w):
+    """How many channels come out, and the refusal when it does not divide.
+
+    **The channel axis is the position.** A position-sensitive map carries one bank of
+    channels per bin — `pooled_h * pooled_w` banks — and bin `(i, j)` reads only from
+    bank `i * pooled_w + j`. So the input has `out * ph * pw` channels and the output
+    has `out`, and a map whose channels do not divide is not this kind of map at all.
+    """
+    channels = int(input.shape[1])
+    banks = pooled_h * pooled_w
+    if channels % banks != 0:
+        raise ValueError("input channels must be a multiple of pooling height * "
+                         "pooling width")
+    return channels // banks
+
+
+def ps_roi_align(input, boxes, output_size, spatial_scale=1.0, sampling_ratio=-1):
+    """`roi_align`, **but each bin reads its own bank of channels.**
+
+    <https://arxiv.org/abs/1605.06409>
+
+    R-FCN's pooling. The idea is that the convolutions before it produce a map that
+    already knows *where* in the object each channel is looking, so the pooling does not
+    have to be followed by a fully connected layer to recover position — bin `(i, j)`
+    takes bank `i * pooled_w + j` and the position is in the channel index.
+
+    **It has no `aligned` flag, and the correction is on.** `roi_align` grew a flag and
+    defaults it to `False`; this one always subtracts the half pixel and never clamps
+    the box to a minimum size of one. So the absent argument does not mean the absent
+    behaviour — written the other way round, from *no flag, so no correction*, every
+    value is out by half a cell and looks like a plausible pooling. That sentence was
+    written here before it was measured, and measuring is what changed it.
+    """
+    L = _backend()
+    rois = _roi_boxes(boxes, L)
+    pooled_h, pooled_w = _pair(output_size, "output_size")
+    out_channels = _ps_channels(input, pooled_h, pooled_w)
+    height, width = int(input.shape[2]), int(input.shape[3])
+    batch_index = rois[:, 0].long()
+
+    start_h = rois[:, 2] * spatial_scale - 0.5
+    start_w = rois[:, 1] * spatial_scale - 0.5
+    roi_h = rois[:, 4] * spatial_scale - 0.5 - start_h
+    roi_w = rois[:, 3] * spatial_scale - 0.5 - start_w
+    bin_h, bin_w = roi_h / pooled_h, roi_w / pooled_w
+
+    if sampling_ratio > 0:
+        grid_h = grid_w = float(sampling_ratio)
+        steps_y = steps_x = L.arange(sampling_ratio).float()
+        mask_y = mask_x = None
+        count = float(max(sampling_ratio * sampling_ratio, 1))
+    else:
+        grid_h, grid_w = bin_h.ceil(), bin_w.ceil()
+        count = (grid_h * grid_w).clamp(min=1)
+        steps_y, steps_x = L.arange(height).float(), L.arange(width).float()
+        mask_y = steps_y[None, :] < grid_h[:, None]
+        mask_x = steps_x[None, :] < grid_w[:, None]
+
+    def spread(one):
+        return one[:, None, None]
+
+    y = (spread(start_h) + L.arange(pooled_h).float()[None, :, None] * spread(bin_h)
+         + (steps_y[None, None, :] + 0.5) * spread(bin_h / grid_h))
+    x = (spread(start_w) + L.arange(pooled_w).float()[None, :, None] * spread(bin_w)
+         + (steps_x[None, None, :] + 0.5) * spread(bin_w / grid_w))
+
+    value = _bilinear_sample(input, batch_index, y, x)   # (k, c, ph, pw, iy, ix)
+    if mask_y is not None:
+        zero = L.zeros_like(value)
+        value = L.where(mask_y[:, None, None, None, :, None], value, zero)
+        value = L.where(mask_x[:, None, None, None, None, :], value, zero)
+    pooled = value.sum(-1).sum(-1)
+    pooled = pooled / (count if sampling_ratio > 0 else count[:, None, None, None])
+    return _ps_pick(pooled, out_channels, pooled_h, pooled_w, L)
+
+
+def _ps_pick(pooled, out_channels, pooled_h, pooled_w, L):
+    """`(k, c, ph, pw)` down to `(k, out, ph, pw)` by taking each bin's own bank.
+
+    **The output channel is the slow axis and the bin is the fast one**:
+    `c * pooled_h * pooled_w + (i * pooled_w + j)`. The other order — banks of
+    `out_channels` — gives an output of exactly the right shape built from the wrong
+    channels, which trains and is not R-FCN, and it is what this function did until it
+    was compared. The comment describing the trap was written above the code that fell
+    into it.
+    """
+    banks = pooled_h * pooled_w
+    rows = []
+    for i in range(pooled_h):
+        columns = []
+        for j in range(pooled_w):
+            picked = [pooled[:, c * banks + i * pooled_w + j, i, j]
+                      for c in range(out_channels)]
+            columns.append(L.stack(picked, dim=1))
+        rows.append(L.stack(columns, dim=2))
+    return L.stack(rows, dim=2)
+
+
+def ps_roi_pool(input, boxes, output_size, spatial_scale=1.0):
+    """`roi_pool`'s grid with `ps_roi_align`'s channel banks — and **an average, not a
+    maximum.**
+
+    <https://arxiv.org/abs/1605.06409>
+
+    That is the one thing here that reads like a typo and is not: `roi_pool` next door
+    takes the largest value in each bin and this takes the mean. A maximum over a
+    position-sensitive bank would pick the single most confident position and throw away
+    the vote, which is the opposite of what the bank is for.
+    """
+    L = _backend()
+    rois = _roi_boxes(boxes, L)
+    pooled_h, pooled_w = _pair(output_size, "output_size")
+    out_channels = _ps_channels(input, pooled_h, pooled_w)
+    height, width = int(input.shape[2]), int(input.shape[3])
+    out = []
+    for index in range(int(rois.shape[0])):
+        row = rois[index]
+        which = int(_as_number(row[0]))
+        left = _c_round(float(_as_number(row[1])) * spatial_scale)
+        top = _c_round(float(_as_number(row[2])) * spatial_scale)
+        right = _c_round(float(_as_number(row[3])) * spatial_scale)
+        bottom = _c_round(float(_as_number(row[4])) * spatial_scale)
+        box_h = max(bottom - top, 0.1)
+        box_w = max(right - left, 0.1)
+        cells = []
+        for ph in range(pooled_h):
+            row_cells = []
+            for pw in range(pooled_w):
+                # **Two things here differ from `roi_pool` next door**, and both only
+                # show on a box that runs off the map:
+                #
+                # - the rounding takes the **start inside it** — `floor(ph * bin +
+                #   start)` rather than `start + floor(ph * bin)`. On a fractional start
+                #   the two disagree by a cell.
+                # - the clip is to **`height - 1`**, not `height`. `roi_pool` clips to
+                #   the size and this clips to the last index, so a bin reaching the
+                #   bottom edge covers one row fewer.
+                #
+                # Written from the neighbour, a box hanging off the bottom-right comes
+                # back with numbers that are averages of the right kind over the wrong
+                # window — measured against torchvision, 2.31 where it says 1.90.
+                y0 = min(max(int(_math.floor(ph * box_h / pooled_h + top)), 0),
+                         height - 1)
+                y1 = min(max(int(_math.ceil((ph + 1) * box_h / pooled_h + top)), 0),
+                         height - 1)
+                x0 = min(max(int(_math.floor(pw * box_w / pooled_w + left)), 0),
+                         width - 1)
+                x1 = min(max(int(_math.ceil((pw + 1) * box_w / pooled_w + left)), 0),
+                         width - 1)
+                # As `_ps_pick` — **the output channel is the slow axis**, so the
+                # channels for one bin are `pooled_h * pooled_w` apart rather than
+                # adjacent.
+                banks = pooled_h * pooled_w
+                which_c = [c * banks + ph * pooled_w + pw for c in range(out_channels)]
+                if y1 <= y0 or x1 <= x0:
+                    row_cells.append(L.zeros_like(input[which, :out_channels, 0, 0]))
+                else:
+                    row_cells.append(L.stack(
+                        [input[which, c, y0:y1, x0:x1].reshape(-1).mean()
+                         for c in which_c], dim=0))
+            cells.append(L.stack(row_cells, dim=1))
+        out.append(L.stack(cells, dim=1))
+    if not out:
+        return L.zeros((0, out_channels, pooled_h, pooled_w))
+    return L.stack(out, dim=0)
+
+def _c_round(value):
+    """C's `round` — to the nearest, halves away from zero.
+
+    Python's rounds halves to the nearest **even**, so `round(0.5)` is 0 here and 1 in
+    the kernel this is matching. It only shows where a coordinate lands exactly on a
+    half, which `spatial_scale=1` never does and `0.5` does for every odd number.
+    """
+    return int(_math.copysign(_math.floor(abs(value) + 0.5), value))
+
+
+def _as_number(value):
+    """One element of a tensor as a Python number, whichever backend it came from."""
+    return float(_np.asarray(value.numpy() if hasattr(value, "numpy") else value))
+
 # ── ops: the structured dropouts ─────────────────────────────────────────────────
 #
 # **These six were declined for being a backbone's.** *Structured dropout for
@@ -3475,7 +3897,78 @@ def _ops_layers(L):
         def __repr__(self):
             return f"{type(self).__name__}(p={self.p}, mode={self.mode})"
 
+    class RoIAlign(nn.Module):
+        """`roi_align` as a module. See it for what the four arguments do."""
+
+        def __init__(self, output_size, spatial_scale, sampling_ratio, aligned=False):
+            super().__init__()
+            self.output_size = output_size
+            self.spatial_scale = spatial_scale
+            self.sampling_ratio = sampling_ratio
+            self.aligned = aligned
+
+        def forward(self, input, rois):
+            return roi_align(input, rois, self.output_size, self.spatial_scale,
+                             self.sampling_ratio, self.aligned)
+
+        def __repr__(self):
+            return (f"{type(self).__name__}(output_size={self.output_size}"
+                    f", spatial_scale={self.spatial_scale}"
+                    f", sampling_ratio={self.sampling_ratio}"
+                    f", aligned={self.aligned})")
+
+    class RoIPool(nn.Module):
+        """`roi_pool` as a module."""
+
+        def __init__(self, output_size, spatial_scale):
+            super().__init__()
+            self.output_size = output_size
+            self.spatial_scale = spatial_scale
+
+        def forward(self, input, rois):
+            return roi_pool(input, rois, self.output_size, self.spatial_scale)
+
+        def __repr__(self):
+            return (f"{type(self).__name__}(output_size={self.output_size}, "
+                    f"spatial_scale={self.spatial_scale})")
+
+    class PSRoIAlign(nn.Module):
+        """`ps_roi_align` as a module. **No `aligned` argument**, and the correction is
+        on regardless — see the function."""
+
+        def __init__(self, output_size, spatial_scale, sampling_ratio):
+            super().__init__()
+            self.output_size = output_size
+            self.spatial_scale = spatial_scale
+            self.sampling_ratio = sampling_ratio
+
+        def forward(self, input, rois):
+            return ps_roi_align(input, rois, self.output_size, self.spatial_scale,
+                                self.sampling_ratio)
+
+        def __repr__(self):
+            return (f"{type(self).__name__}(output_size={self.output_size}"
+                    f", spatial_scale={self.spatial_scale}"
+                    f", sampling_ratio={self.sampling_ratio})")
+
+    class PSRoIPool(nn.Module):
+        """`ps_roi_pool` as a module."""
+
+        def __init__(self, output_size, spatial_scale):
+            super().__init__()
+            self.output_size = output_size
+            self.spatial_scale = spatial_scale
+
+        def forward(self, input, rois):
+            return ps_roi_pool(input, rois, self.output_size, self.spatial_scale)
+
+        def __repr__(self):
+            return (f"{type(self).__name__}(output_size={self.output_size}, "
+                    f"spatial_scale={self.spatial_scale})")
+
     made = {"ConvNormActivation": ConvNormActivation,
+            "RoIAlign": RoIAlign, "RoIPool": RoIPool,
+            "PSRoIAlign": PSRoIAlign, "PSRoIPool": PSRoIPool,
             "DropBlock2d": DropBlock2d, "DropBlock3d": DropBlock3d,
             "StochasticDepth": StochasticDepth,
             "Conv2dNormActivation": Conv2dNormActivation,
@@ -8486,7 +8979,8 @@ for _name in ("batched_nms", "box_area", "box_convert", "box_iou",
               "distance_box_iou", "distance_box_iou_loss", "generalized_box_iou",
               "generalized_box_iou_loss", "masks_to_boxes", "nms",
               "remove_small_boxes", "sigmoid_focal_loss",
-              "stochastic_depth", "drop_block2d", "drop_block3d"):
+              "stochastic_depth", "drop_block2d", "drop_block3d",
+              "roi_align", "roi_pool", "ps_roi_align", "ps_roi_pool"):
     setattr(ops, _name, globals()[_name])
 
 # The layer classes are built against whichever backend is attached **when they are

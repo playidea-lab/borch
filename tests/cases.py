@@ -12670,6 +12670,101 @@ def ops_cases(inp=None):
          lambda L: repr(_ops_of(L).StochasticDepth(0.5, "row"))),
     ]
 
+    # ── sampling a feature map at coordinates that are not integers ─────────────
+    #
+    # **Eleven names waited on one piece of arithmetic**, and their rows said *a feature
+    # map comes from a model* — true of where the tensor came from, not of what the
+    # function needs. Eight of the eleven are here; the other three sit on top of these
+    # and are still to write.
+    #
+    # The boxes are arranged, and three of the five are the cases the boundary rules
+    # turn on: **one that fits, one hanging off the top-left, one off the bottom-right,
+    # one smaller than a cell, and one in the second image of the batch.**
+    #
+    # Written without the outside ones, this table passes against a reader that clamps
+    # samples to the edge instead of zeroing them — which is what torchvision's *own
+    # Python reference* does, and what the first version of `_bilinear_sample` did. The
+    # half-outside box was exactly twice torchvision's answer.
+    _roi_x = ((np.arange(2 * 3 * 7 * 9, dtype=np.float32).reshape(2, 3, 7, 9) % 17)
+              * 0.3)
+    _rois = np.array([[0.0, 1.0, 1.0, 6.0, 5.0],
+                      [0.0, -3.0, -2.0, 4.0, 3.0],
+                      [0.0, 6.0, 4.0, 20.0, 20.0],
+                      [0.0, 2.0, 2.0, 2.4, 2.4],
+                      [1.0, 0.0, 0.0, 8.0, 6.0]], dtype=np.float32)
+    # Eight channels so that `pooled=2` leaves two out — the position-sensitive pair
+    # needs `out * ph * pw`, and `out=1` would hide the channel ordering entirely.
+    _ps_x = ((np.arange(1 * 8 * 7 * 9, dtype=np.float32).reshape(1, 8, 7, 9) % 13)
+             * 0.4)
+    _ps_rois = _rois[_rois[:, 0] == 0]
+
+    def _roi_case(name, picture, boxes, size, **kwargs):
+        def run(L):
+            out = getattr(_ops_of(L), name)(
+                L.tensor(np.ascontiguousarray(picture)),
+                L.tensor(np.ascontiguousarray(boxes)), size, **kwargs)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
+        return run
+
+    def _roi_module(name, args, kwargs, picture, boxes):
+        def run(L):
+            out = getattr(_ops_of(L), name)(*args, **kwargs)(
+                L.tensor(np.ascontiguousarray(picture)),
+                L.tensor(np.ascontiguousarray(boxes)))
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
+        return run
+
+    cases += [
+        # **`aligned` moves every value**, so both settings are asked. The default is
+        # `False` because that is what the released weights were trained with.
+        (OPS_PREFIX + "roi_align(aligned=False)",
+         _roi_case("roi_align", _roi_x, _rois, (3, 2))),
+        (OPS_PREFIX + "roi_align(aligned=True)",
+         _roi_case("roi_align", _roi_x, _rois, (3, 2), aligned=True)),
+        # **`sampling_ratio=-1` is per box** — as many samples as the bin is wide —
+        # while a fixed one over-samples the small boxes and under-samples the large.
+        (OPS_PREFIX + "roi_align(sampling_ratio=2)",
+         _roi_case("roi_align", _roi_x, _rois, (3, 2), sampling_ratio=2)),
+        (OPS_PREFIX + "roi_align(sampling_ratio=1)",
+         _roi_case("roi_align", _roi_x, _rois, (3, 2), sampling_ratio=1)),
+        # **`spatial_scale` is how much smaller the map is than the image.**
+        (OPS_PREFIX + "roi_align(spatial_scale=0.5)",
+         _roi_case("roi_align", _roi_x, _rois, (3, 2), spatial_scale=0.5)),
+        (OPS_PREFIX + "roi_align(output_size=1)",
+         _roi_case("roi_align", _roi_x, _rois, 1)),
+        # **The rounding is C's, not Python's.** `spatial_scale=0.5` puts every odd
+        # coordinate on a half, where Python rounds to even and C rounds away from zero.
+        (OPS_PREFIX + "roi_pool", _roi_case("roi_pool", _roi_x, _rois, (3, 2))),
+        (OPS_PREFIX + "roi_pool(spatial_scale=0.5, halves)",
+         _roi_case("roi_pool", _roi_x, _rois, (3, 2), spatial_scale=0.5)),
+        # **The output channel is the slow axis and the bin is the fast one.** The other
+        # order gives the right shape from the wrong channels.
+        (OPS_PREFIX + "ps_roi_align", _roi_case("ps_roi_align", _ps_x, _ps_rois, 2)),
+        (OPS_PREFIX + "ps_roi_align(sampling_ratio=2)",
+         _roi_case("ps_roi_align", _ps_x, _ps_rois, 2, sampling_ratio=2)),
+        # **An average, not a maximum** — the one thing here that reads like a typo.
+        (OPS_PREFIX + "ps_roi_pool", _roi_case("ps_roi_pool", _ps_x, _ps_rois, 2)),
+        (OPS_PREFIX + "ps_roi_pool(spatial_scale=0.5)",
+         _roi_case("ps_roi_pool", _ps_x, _ps_rois, 2, spatial_scale=0.5)),
+        (OPS_PREFIX + "RoIAlign(aligned)",
+         _roi_module("RoIAlign", (2, 1.0, 2), {"aligned": True}, _roi_x, _rois)),
+        (OPS_PREFIX + "RoIAlign(2, 1.0, 2, aligned)=repr",
+         lambda L: repr(_ops_of(L).RoIAlign(2, 1.0, 2, aligned=True))),
+        (OPS_PREFIX + "RoIPool", _roi_module("RoIPool", (2, 1.0), {}, _roi_x, _rois)),
+        (OPS_PREFIX + "RoIPool(2, 0.5)=repr",
+         lambda L: repr(_ops_of(L).RoIPool(2, 0.5))),
+        (OPS_PREFIX + "PSRoIAlign",
+         _roi_module("PSRoIAlign", (2, 1.0, 2), {}, _ps_x, _ps_rois)),
+        (OPS_PREFIX + "PSRoIAlign(2, 1.0, 2)=repr",
+         lambda L: repr(_ops_of(L).PSRoIAlign(2, 1.0, 2))),
+        (OPS_PREFIX + "PSRoIPool",
+         _roi_module("PSRoIPool", (2, 1.0), {}, _ps_x, _ps_rois)),
+        (OPS_PREFIX + "PSRoIPool(2, 1.0)=repr",
+         lambda L: repr(_ops_of(L).PSRoIPool(2, 1.0))),
+    ]
+
     return cases
 
 

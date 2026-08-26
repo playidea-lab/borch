@@ -299,7 +299,13 @@ FROZEN = {
     # share. **Unlike the layers these are plain functions over a tensor**, so carrying
     # them across is writing them again rather than solving anything — and their random
     # half would need the two sides to share a generator, not an answer.
-    "ops": 12,
+    #
+    # 12 → 20. The eight `RoI` names joined the layers and the dropouts. **The pieces
+    # are there on the browser side** — bilinear sampling is what `resize` already does
+    # — but the coordinates come from boxes rather than from a scale, so carrying these
+    # across is writing the sampler again against a different index, not exporting a
+    # name.
+    "ops": 20,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     "transforms.v2": 1,
