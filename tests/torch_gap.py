@@ -674,23 +674,28 @@ SKIPPED = {
     "datasets.Cityscapes": "its pictures are PNG and `_png_read` handles those now — the wall left is the dataset rather than the format: thirty splits crossed with five target types, polygon annotations in JSON, and a 60GB archive behind a login. **The codec was never the expensive half of this one**, which the old row (`as above — a codec`) could not say because it pointed at a sentence about JPEG",
     "datasets.CocoCaptions": "as above — a codec",
     "datasets.CocoDetection": "as above — a codec",
-    "datasets.Flickr30k": "아직 — a walk plus a loader, and `loader=` is torchvision's own parameter here. Six of these went in beside it; what is missing from this one is the writing, not a wall. Its captions are an HTML token file",
-    "datasets.Flickr8k": "as above — its captions are a token file with an index suffix",
-    "datasets.Flowers102": "its pictures are JPEG, which is the codec wall. Its labels are a `.mat` and that half is no longer a reason — `_mat_read` in borchvision handles those now, which is what let `SVHN` in. This row used to read *as `SVHN` for the labels*, and pointed at a refusal that has since been lifted",
+    # **A new kind of wall, and it is not a codec.** These four gate on the *md5 of the
+    # real archive* before they read anything: `check_integrity` on a `.tgz` or on the
+    # annotation files themselves. A fixture cannot pass that check, so torchvision's
+    # own reader refuses the tree this repository would compare against — and every
+    # dataset here is compared against torchvision's own or it is not written. The
+    # class is a walk plus a loader like the ones that went in; what is missing is a
+    # way to check it, which is a different sentence and is why these are declined
+    # rather than 아직.
+    "datasets.Flowers102": "its labels are a plain numeric `.mat` and `_mat_read` reads those — but `_check_integrity` md5s the real `imagelabels.mat` and `setid.mat` before reading, so no fixture reaches torchvision's own answer to compare against",
+    "datasets.LFWPeople": "as above — `_LFW._check_integrity` md5s both the archive and the annotation file",
+    "datasets.LFWPairs": "as above — the same base class, the same two md5s",
+    "datasets.Places365": "as above — the devkit tar is md5'd",
+    "datasets.SBU": "as above, and `download=True` is its default",
     "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
     "datasets.INaturalist": "as above — three release years with different directory schemes",
     "datasets.ImageNet": "as above — a codec",
-    "datasets.Imagenette": "JPEG, **fetched and checked** rather than inherited — `imagenette2.tgz` holds `.JPEG` files that begin `ff d8`. Unlike the six that went in beside it this one is 아직 rather than declined: it is a walk plus a loader like they are, and only the writing is missing",
     "datasets.Kinetics": "as above",
-    "datasets.LFWPairs": "as above — pair files across three image sets",
-    "datasets.LFWPeople": "as above",
     "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",
     "datasets.LSUNClass": "as above",
     "datasets.OxfordIIITPet": "as above — a codec",
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
-    "datasets.Places365": "as above — a devkit tar and small/large variants",
     "datasets.SBDataset": "its pictures are JPEG, which is the codec wall. Its `.mat` annotations are not — `_mat_read` handles those, and this row named them as a second reason when there was only ever one",
-    "datasets.SBU": "as above — two text lists that must stay aligned",
     "datasets.StanfordCars": "아직, **and one thing genuinely missing**: its annotations are a `.mat` holding a struct array, and `_mat_read` reads numeric arrays only — measured, it returns no keys for one. That is a reader to extend rather than a codec to write",
     "datasets.UCF101": "as above",
     "datasets.VOCDetection": "as above — a codec",

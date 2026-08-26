@@ -14142,6 +14142,115 @@ def dataset_last_three_cases(inp=None):
         return _folder_case(build, lambda L, root: _made(L, "FGVCAircraft")(
             root, annotation_level=level))
 
+    def imagenette(split):
+        """`Imagenette`. **The label comes from the sorted WordNet ids, not the class
+        names** — and the two orders disagree. The fixture uses `n03425413` (gas pump)
+        and `n01440764` (tench), written in that order and sorting the other way, so a
+        reader that numbered by class name swaps every label.
+
+        `class_to_idx` also has **more keys than there are classes**: a WordNet id
+        carries every name for the thing, and `n03425413` carries four. The answer
+        carries that count, because a reader taking one name each builds a dictionary
+        that looks right and cannot look up three names in four.
+        """
+        import os
+        def build(root):
+            for name in ("train", "val"):
+                for k, wnid in enumerate(("n03425413", "n01440764")):
+                    for i in range(2):
+                        _pic(os.path.join(root, "imagenette2", name, wnid,
+                                          f"{wnid}_{i}.JPEG"), k * 5 + i
+                             + (0 if name == "train" else 23))
+        def make(L, root):
+            return _made(L, "Imagenette")(root, split=split)
+        def run(L):
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                build(root)
+                loaded = make(L, root)
+                out = np.concatenate([
+                    _labelled_out(loaded),
+                    np.asarray([len(loaded.class_to_idx), len(loaded.wnids)],
+                               dtype=np.float32)])
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def _captioned_out(loaded):
+        """Pictures and captions. The captions are **joined into the string half** of
+        the answer, because a caption list that came back in the wrong order or with
+        an orphan in it is the thing these two datasets can get wrong."""
+        parts = [np.asarray([len(loaded)], dtype=np.float32)]
+        for i in range(len(loaded)):
+            picture, _captions = loaded[i]
+            parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+        return np.concatenate(parts)
+
+    def _flickr_text(loaded):
+        rows = []
+        for i in range(len(loaded)):
+            _picture, captions = loaded[i]
+            rows.append("|".join(captions))
+        return " / ".join(rows)
+
+    def _flickr30k_tree(root):
+        import os
+        folder = os.path.join(root, "pictures")
+        os.makedirs(folder, exist_ok=True)
+        for name in ("1000092795.jpg", "10002456.jpg"):
+            _pic(os.path.join(folder, name), len(name))
+        listing = os.path.join(root, "results.token")
+        with open(listing, "w") as fh:
+            for name in ("1000092795.jpg", "10002456.jpg"):
+                for k in range(2):
+                    fh.write(f"{name}#{k}\tcaption {k} for {name}\n")
+        return folder, listing
+
+    def _flickr8k_tree(root):
+        import os
+        folder = os.path.join(root, "pictures")
+        os.makedirs(folder, exist_ok=True)
+        for stem in ("1000268201", "1001773457"):
+            _pic(os.path.join(folder, f"{stem}_693b7e1f16.jpg"), len(stem))
+        listing = os.path.join(root, "captions.html")
+        with open(listing, "w") as fh:
+            fh.write("<html><body><table>")
+            for stem in ("1000268201", "1001773457"):
+                fh.write(f"<tr><td><a href='x'>http://host/{stem}/img.jpg</a>"
+                         f"<ul><li>a caption for {stem}</li><li>another</li>"
+                         "</ul></td></tr>")
+            # **`Image Not Found` is a real row** in that table, and the captions after
+            # it belong to nothing. A reader that did not clear the current picture
+            # would hang them on the previous one.
+            fh.write("<tr><td>Image Not Found<ul><li>orphan</li></ul></td></tr>")
+            fh.write("</table></body></html>")
+        return folder, listing
+
+    def flickr(which, text):
+        """`Flickr8k` and `Flickr30k` — one dataset shape, two annotation files.
+
+        30k is one line of `id#n<TAB>caption` and **the last two characters of the id
+        come off**: `1000092795.jpg#4` is the fifth caption of `1000092795.jpg`. 8k is
+        an **HTML page**, walked with the standard library's parser, whose link text
+        names a directory and whose picture is found by glob.
+        """
+        def run(L):
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                folder, listing = (_flickr8k_tree(root) if which == "Flickr8k"
+                                   else _flickr30k_tree(root))
+                loaded = _made(L, which)(folder, listing)
+                out = _flickr_text(loaded) if text else _captioned_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return out if text else L.tensor(np.ascontiguousarray(out))
+        return run
+
     cases += [
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
@@ -14201,6 +14310,16 @@ def dataset_last_three_cases(inp=None):
         # **The level chooses two files at once**, and a class name has a space in it.
         (prefix + "FGVCAircraft(variant)", fgvc("variant")),
         (prefix + "FGVCAircraft(manufacturer)", fgvc("manufacturer")),
+        # **The label is the sorted WordNet id, and a class is a tuple of names.**
+        (prefix + "Imagenette(train, sorted wnids)", imagenette("train")),
+        (prefix + "Imagenette(val)", imagenette("val")),
+        # **`id#n` loses two characters**, and `Image Not Found` is a real row.
+        (prefix + "Flickr30k(pictures)", flickr("Flickr30k", False)),
+        (prefix + "Flickr30k(captions)=문자열", flickr("Flickr30k", True)),
+        (prefix + "Flickr8k(pictures through an HTML table)",
+         flickr("Flickr8k", False)),
+        (prefix + "Flickr8k(captions, the orphan dropped)=문자열",
+         flickr("Flickr8k", True)),
     ]
 
     cases += [
