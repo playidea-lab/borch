@@ -5312,6 +5312,149 @@ class RenderedSST2(DatasetFolder):
         return f"split={self._split}"
 
 
+
+# --- optical flow: two containers that were counted as codecs -----------------
+#
+# The gap table said of the stereo and flow datasets *a codec and then another
+# format*. The first half is about the pictures and was measured — most of them are
+# PNG, which is read here. **The second half was never opened.**
+#
+# `.flo` is a magic number, two little-endian integers and a block of float32.
+# `.pfm` is a text header, a size, a scale whose sign carries the endianness, and a
+# block of float — a PPM with floats in it, which is what the name says. Neither is a
+# codec; both are the kind of container `_mat_read` already stands as precedent for,
+# and each is under twenty lines of `struct` and `numpy`.
+
+
+def _read_flo(data):
+    """Middlebury `.flo` — **little endian, always**, and the magic says so.
+
+    The four bytes are `PIEH`, which is `1e10` read as a float and is how the format
+    announces the byte order it was written in. A reader that took the machine's order
+    gets a flow field that is the right shape and points the wrong way.
+    """
+    if data[:4] != b"PIEH":
+        raise ValueError("Magic number incorrect. Invalid .flo file")
+    width = int.from_bytes(data[4:8], "little")
+    height = int.from_bytes(data[8:12], "little")
+    flat = _np.frombuffer(data, dtype="<f4", offset=12, count=2 * width * height)
+    return flat.reshape(height, width, 2).transpose(2, 0, 1)
+
+
+def _read_pfm(data, slice_channels=2):
+    """`.pfm` — a PPM with floats. **The scale's sign is the endianness** and the rows
+    arrive bottom-up.
+
+    Three things in that sentence each produce a plausible wrong answer on their own:
+    reading big-endian where the file said little gives numbers that are enormous
+    rather than absurd, keeping the sign of the scale gives every value negated, and
+    skipping the flip gives an image that is upside down and still an image.
+
+    `PF` is three channels and `Pf` is one; `slice_channels` takes the leading ones,
+    because a disparity map is a flow field's first channel and torchvision reads both
+    through here.
+    """
+    at = 0
+
+    def line():
+        nonlocal at
+        end = data.index(b"\n", at)
+        got = data[at:end].rstrip()
+        at = end + 1
+        return got
+
+    header = line()
+    if header not in (b"PF", b"Pf"):
+        raise ValueError("Invalid PFM file")
+    fields = line().split()
+    width, height = int(fields[0]), int(fields[1])
+    scale = float(line())
+    endian = "<" if scale < 0 else ">"
+    channels = 3 if header == b"PF" else 1
+    flat = _np.frombuffer(data, dtype=endian + "f4", offset=at,
+                          count=width * height * channels)
+    out = flat.reshape(height, width, channels).transpose(2, 0, 1)
+    out = _np.flip(out, axis=1)
+    return _np.ascontiguousarray(out[:slice_channels])
+
+
+
+class Sintel(VisionDataset):
+    """Optical flow on the Sintel film. **A pair of frames in, the motion between
+    them out.**
+
+    <http://sintel.is.tue.mpg.de/>
+
+    ## Why it was refused and is not
+
+    Its row read *a codec and then another format*. The pictures are PNG — read here —
+    and the other format is `.flo`, which turned out to be a magic number, two
+    integers and a block of floats. One sentence, two walls, and only one of them
+    was ever there.
+
+    ## What the item is
+
+    `(frame, next frame, flow)` on `train` and `(frame, next frame, None)` on `test`,
+    because the test split ships no flow. Two things about the pairing are worth
+    stating, and each gives a dataset that trains:
+
+    - **The pairs are consecutive within a scene**, so a scene of `n` frames yields
+      `n - 1` items and the last frame is a second frame only. Pairing across the
+      scene boundary would put the end of one shot against the start of another and
+      ask the model to explain a cut.
+    - **`pass_name` is which rendering**, not which split. `clean` and `final` are
+      the same motion through different shading, and `both` is the two concatenated —
+      so the flow list is walked once per pass, and a reader that walked it once for
+      `both` runs out of flows halfway.
+    """
+
+    def __init__(self, root, split="train", pass_name="clean", transforms=None,
+                 loader=None):
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        if pass_name not in ("clean", "final", "both"):
+            raise ValueError(f"Unknown value '{pass_name}' for argument pass_name. "
+                             "Valid values are {clean, final, both}.")
+        super().__init__(root)
+        self.transforms = transforms
+        self.loader = _folder_loader if loader is None else loader
+        self._split = split
+        self._image_list = []
+        self._flow_list = []
+
+        base = _os.path.join(self.root, "Sintel")
+        flow_root = _os.path.join(base, "training", "flow")
+        split_dir = "training" if split == "train" else split
+        for name in (("clean", "final") if pass_name == "both" else (pass_name,)):
+            image_root = _os.path.join(base, split_dir, name)
+            for scene in sorted(_os.listdir(image_root)):
+                frames = sorted(
+                    _os.path.join(image_root, scene, f)
+                    for f in _os.listdir(_os.path.join(image_root, scene))
+                    if f.endswith(".png"))
+                self._image_list += [[frames[i], frames[i + 1]]
+                                     for i in range(len(frames) - 1)]
+                if split == "train":
+                    folder = _os.path.join(flow_root, scene)
+                    self._flow_list += sorted(
+                        _os.path.join(folder, f) for f in _os.listdir(folder)
+                        if f.endswith(".flo"))
+
+    def __len__(self):
+        return len(self._image_list)
+
+    def __getitem__(self, index):
+        first = self.loader(self._image_list[index][0])
+        second = self.loader(self._image_list[index][1])
+        flow = None
+        if self._flow_list:
+            with open(self._flow_list[index], "rb") as handle:
+                flow = _read_flo(handle.read())
+        if self.transforms is not None:
+            first, second, flow, _ = self.transforms(first, second, flow, None)
+        return first, second, flow
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -5815,7 +5958,7 @@ _sys.modules["borchvision.transforms.functional"] = functional
 datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
-              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification", "RenderedSST2",
+              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification", "Sintel", "RenderedSST2",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
 

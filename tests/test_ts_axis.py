@@ -301,7 +301,7 @@ FROZEN = {
     # `RenderedSST2` arrived on the Python side, and all three are the clearest kind
     # of absence here: they walk directories and read archives off disk, and a page
     # has neither.
-    "datasets": 21,
+    "datasets": 22,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the

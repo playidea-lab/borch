@@ -13275,6 +13275,71 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
         return run
 
+    def sintel(pass_name):
+        """`Sintel` against torchvision's own, on a tree written here.
+
+        **Its row read *a codec and then another format*, and only one of the two was
+        there.** The pictures are PNG, read here already; the other format is `.flo` —
+        a magic number, two little-endian integers and a block of float32, which is a
+        container rather than a codec and is fifteen lines.
+
+        The fixture has **two scenes of different lengths**, three frames and two, so
+        it yields 2 + 1 pairs per pass. A reader that paired across the scene boundary
+        would give 4 and ask the model to explain a cut; a reader that walked the flow
+        list once for `both` would run out halfway.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            from PIL import Image as _PIL
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "Sintel")
+                scenes = (("alley", 3), ("bamboo", 2))
+                for name in ("clean", "final"):
+                    for scene, n in scenes:
+                        d = os.path.join(base, "training", name, scene)
+                        os.makedirs(d)
+                        for k in range(n):
+                            block = (np.arange(3 * 4 * 3).reshape(3, 4, 3)
+                                     + k * 9 + len(name)) % 251
+                            _PIL.fromarray(block.astype(np.uint8)).save(
+                                os.path.join(d, f"frame_{k:04d}.png"))
+                for scene, n in scenes:
+                    d = os.path.join(base, "training", "flow", scene)
+                    os.makedirs(d)
+                    for k in range(n - 1):
+                        field = ((np.arange(3 * 4 * 2).reshape(3, 4, 2) + k)
+                                 * 0.25).astype("<f4")
+                        with open(os.path.join(d, f"frame_{k:04d}.flo"), "wb") as fh:
+                            fh.write(b"PIEH" + (4).to_bytes(4, "little")
+                                     + (3).to_bytes(4, "little") + field.tobytes())
+
+                if _is_real_torch(L):
+                    from torchvision.datasets import Sintel as real
+                    loaded = real(root, split="train", pass_name=pass_name)
+                else:
+                    loaded = _vision_datasets(L).Sintel(root, split="train",
+                                                        pass_name=pass_name)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    first, second, flow = loaded[i]
+                    parts += [np.asarray(first).reshape(-1),
+                              np.asarray(second).reshape(-1),
+                              np.asarray(flow).reshape(-1)]
+                out = np.concatenate([p.astype(np.float32) for p in parts])
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    cases += [
+        (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
+        # **`both` walks the flow list once per pass**, so the count doubles.
+        (prefix + "Sintel(both passes)", sintel("both")),
+    ]
+
     cases += [
         # **`val` reads a folder called `valid`.**
         (prefix + "RenderedSST2(val, the folder is `valid`)", sst2("val")),
