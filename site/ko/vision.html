@@ -51,12 +51,12 @@
     <p class="eyebrow">torchvision 의 자리</p>
     <h1>이미지, 박스, 데이터셋</h1>
     <p class="lead">
-      <strong>라이브러리의 이름 <span data-count="_total">2532</span>개 중 <span data-count="_vision_total">507</span>개가 비전 쪽이다.</strong> <code>torchvision</code>
+      <strong>라이브러리의 이름 <span data-count="_total">2578</span>개 중 <span data-count="_vision_total">547</span>개가 비전 쪽이다.</strong> <code>torchvision</code>
       모양을 하고 있고, 여기 있는 이유는 하나다 — 학습에는 이미지가 텐서가 되는 자리가 필요하고,
       그 자리가 바로 조용히 틀어지는 곳이다. 아래 각 절이 틀어지는 방식을 하나씩 이름 붙인다.
     </p>
 
-    <h2 id="transforms">transforms &mdash; 이름 <span data-count="vision">274</span>개</h2>
+    <h2 id="transforms">transforms &mdash; 이름 <span data-count="vision">278</span>개</h2>
     <p>
       <code>torchvision.transforms</code> 자리. <strong>여기서 이미지는 텐서가 아니라
       <code>(H, W, C)</code> 배열이다.</strong> torchvision 은 PIL 이미지를 받는데 브라우저에는
@@ -85,13 +85,27 @@
       나오는데 그것도 학습은 된다.</strong>
     </p>
 
-    <h2 id="ops">ops &mdash; 이름 <span data-count="ops">17</span>개</h2>
+    <h2 id="ops">ops &mdash; 이름 <span data-count="ops">53</span>개</h2>
     <p>
       박스 기하와 그 위에 세운 손실들 — <code>boxIou</code> 와 generalized·distance·complete
       변종, IoU 손실 셋, <code>sigmoidFocalLoss</code>, <code>nms</code>·<code>batchedNms</code>.
       <em>없는</em> 것은 탐지기의 특징맵이나 예측을 필요로 하는 전부다. 이 라이브러리에는 아직
       탐지기가 없고, 여기 있는 것들은 <strong>박스 하나에 숫자 넷</strong> 말고는 아무것도
       필요로 하지 않는다.
+    </p>
+    <p>
+      나머지는 <strong>같은 기하를 이미지에 딸려 오는 것들에 적용한 것</strong>이다. 그림을
+      자르면 박스가 움직이고, 돌리면 마스크와 키포인트도 함께 돌아야 한다. 그래서 변환
+      하나마다 — affine·crop·resize·resizedCrop·rotate·perspective·elastic·pad 와 뒤집기 둘 —
+      대상별 커널이 하나씩 있다: <code>rotateBoundingBoxes</code>·<code>rotateMask</code>·
+      <code>rotateKeypoints</code>. 개수는 거기서 나온다.
+    </p>
+    <p>
+      <strong>따로 있는 이유는 셋이 서로 다른 답을 내기 때문이다.</strong> 돌아간 박스는 돌아간
+      네 꼭짓점이 아니라 <strong>그것을 감싸는 똑바른 박스</strong>라서 커진다. 마스크는 이미지와
+      같은 워프를 지나되 최근접 표본을 쓴다 — 라벨을 보간하면 원래 없던 라벨이 생긴다. 화면을
+      벗어난 키포인트는 어떤 커널에서는 잘려 붙고 어떤 커널에서는 버려진다. 셋을 함수 하나에
+      맡기면 그 선택들이 안 보이게 된다.
     </p>
     <p>
       <strong>산술은 일부러 CPU 에서 한다.</strong> 박스는 수백만이 아니라 수십 개 단위로 오고,

@@ -51,13 +51,13 @@
     <p class="eyebrow">torchvision's seat</p>
     <h1>Images, boxes and datasets</h1>
     <p class="lead">
-      <strong><span data-count="_vision_total">507</span> of the library's <span data-count="_total">2532</span> names are the vision side.</strong> They are shaped
+      <strong><span data-count="_vision_total">547</span> of the library's <span data-count="_total">2578</span> names are the vision side.</strong> They are shaped
       like <code>torchvision</code> and they are here for one reason: training needs a place
       where an image becomes a tensor, and that place is where things go quietly wrong.
       Every section below names a way it does.
     </p>
 
-    <h2 id="transforms">transforms &mdash; <span data-count="vision">274</span> names</h2>
+    <h2 id="transforms">transforms &mdash; <span data-count="vision">278</span> names</h2>
     <p>
       Where <code>torchvision.transforms</code> would be. <strong>An image is an
       <code>(H, W, C)</code> array here, not a tensor.</strong> torchvision receives a PIL
@@ -87,13 +87,29 @@
       own order, and reading the wrong one gives you a transposed image that still trains.
     </p>
 
-    <h2 id="ops">ops &mdash; <span data-count="ops">17</span> names</h2>
+    <h2 id="ops">ops &mdash; <span data-count="ops">53</span> names</h2>
     <p>
       Box geometry and the losses built on it: <code>boxIou</code> and its generalized,
       distance and complete variants, the three IoU losses, <code>sigmoidFocalLoss</code>,
       <code>nms</code> and <code>batchedNms</code>. What is <em>not</em> here is everything
       that wants a detector's feature maps or its predictions &mdash; there is no detector in
       this library yet, and these take nothing but four numbers a box.
+    </p>
+    <p>
+      The rest is <strong>the same geometry applied to the things that ride along with an
+      image.</strong> Crop a picture and its boxes move; rotate it and its masks and keypoints
+      must turn with it. So each of the transforms &mdash; affine, crop, resize, resizedCrop,
+      rotate, perspective, elastic, pad and the two flips &mdash; has a kernel per target:
+      <code>rotateBoundingBoxes</code>, <code>rotateMask</code>, <code>rotateKeypoints</code>.
+      That is where the count comes from.
+    </p>
+    <p>
+      <strong>They are separate functions because they disagree.</strong> A rotated box is not
+      the rotated corners &mdash; it is the upright box around them, so it grows. A mask goes
+      through the same warp as the image but with nearest-neighbour sampling, because
+      interpolating a label invents labels that were never there. A keypoint that leaves the
+      canvas is clamped by one kernel and dropped by another. Handing all three to one
+      function would make those choices invisible.
     </p>
     <p>
       <strong>The arithmetic happens on the CPU, on purpose.</strong> Boxes come in tens, not
