@@ -13169,6 +13169,73 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
         return run
 
+    def clevr(split, what):
+        """CLEVR, against torchvision's own reader on a folder written here.
+
+        **The refusal on this name was about a format nobody had looked at.** It read
+        *its pictures are JPEG or PNG and numpy decodes neither*, and the archive is
+        19GB, so which half applied went unchecked. A zip keeps its file list at the
+        end and the host serves ranges: 70KB reads the central directory, and all
+        100,015 entries are `.png`, `.json` or `.txt`.
+
+        The fixture's scenes file is **deliberately out of order**. The pictures are
+        paired to their counts by filename, and a reader that zipped the sorted
+        listing against the JSON as it comes gives every picture the wrong label with
+        every shape still right.
+        """
+        def run(L):
+            import json as _js
+            import os
+            import shutil
+            import tempfile
+            from PIL import Image as _PIL
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "clevr", "CLEVR_v1.0")
+                for name, count in (("train", 3), ("test", 2)):
+                    folder = os.path.join(base, "images", name)
+                    os.makedirs(folder)
+                    for k in range(count):
+                        block = (np.arange(4 * 5 * 3).reshape(4, 5, 3) + k * 7) % 251
+                        _PIL.fromarray(block.astype(np.uint8)).save(
+                            os.path.join(folder, f"CLEVR_{name}_{k:06d}.png"))
+                os.makedirs(os.path.join(base, "scenes"))
+                scenes = {"scenes": [
+                    {"image_filename": "CLEVR_train_000002.png", "objects": [1, 2, 3, 4, 5]},
+                    {"image_filename": "CLEVR_train_000000.png", "objects": [1, 2]},
+                    {"image_filename": "CLEVR_train_000001.png", "objects": [1, 2, 3]},
+                ]}
+                with open(os.path.join(base, "scenes",
+                                       "CLEVR_train_scenes.json"), "w") as handle:
+                    _js.dump(scenes, handle)
+
+                if _is_real_torch(L):
+                    from torchvision.datasets import CLEVRClassification as real
+                    loaded = real(root, split=split)
+                else:
+                    loaded = _vision_datasets(L).CLEVRClassification(root, split=split)
+                pictures = [np.asarray(loaded[i][0]) for i in range(len(loaded))]
+                labels = [loaded[i][1] for i in range(len(loaded))]
+                if what == "labels":
+                    # **`test` has no scenes file and its labels are `None`.** Frozen as
+                    # -1 so the absence is a value rather than a hole; a reader that
+                    # answered 0 there would train on a class that does not exist.
+                    out = np.asarray([-1 if v is None else v for v in labels]
+                                     + [len(loaded)])
+                else:
+                    out = np.concatenate([p.reshape(-1) for p in pictures])
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    cases += [
+        (prefix + "CLEVR(train, labels by filename)", clevr("train", "labels")),
+        (prefix + "CLEVR(train, pictures)", clevr("train", "pictures")),
+        # **No scenes file for `test`**, so every label is `None`.
+        (prefix + "CLEVR(test, no labels)", clevr("test", "labels")),
+    ]
+
     cases += [
         (prefix + "ImageFolder(pictures)", image_folder("pictures")),
         # **The classes are the sorted directory names**, and the index a class gets
