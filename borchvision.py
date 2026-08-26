@@ -3695,14 +3695,24 @@ class TVTensor(_backend().Tensor):
     _METADATA = ()
 
     def __new__(cls, data, **kwargs):
+        """A tensor of `cls`, **built through the backend's own factory.**
+
+        Not by calling `Tensor.__init__` with the arguments the core's takes: the three
+        implementations do not share that signature, and the binding's raised
+        *unexpected keyword argument `requires_grad`* on thirteen golden cases while
+        numpy and the browser passed. Two of three answering is not this table's
+        standard.
+
+        So `L.tensor(...)` builds a real one and its instance state is moved onto an
+        object of this class. What that assumes is only that the state lives in
+        `__dict__`, which is true of all three.
+        """
         L = _backend()
-        if isinstance(data, L.Tensor):
-            values = data.data
-        else:
-            values = _np.asarray(data, dtype=_np.float32)
+        built = data if isinstance(data, L.Tensor) else L.tensor(
+            _np.ascontiguousarray(_np.asarray(data, dtype=_np.float32)))
         out = L.Tensor.__new__(cls)
-        L.Tensor.__init__(out, values,
-                          requires_grad=kwargs.pop("requires_grad", False))
+        _copy_tensor_state(built, out)
+        kwargs.pop("requires_grad", None)
         return out
 
     def __init__(self, *args, **kwargs):
@@ -3751,6 +3761,30 @@ class TVTensor(_backend().Tensor):
         extra = ", ".join(f"{name}={getattr(self, name)}" for name in self._METADATA)
         return f"{type(self).__name__}({inner}{', ' + extra if extra else ''})"
 
+
+def _copy_tensor_state(src, dst):
+    """One tensor's state onto another object, **whichever way the backend keeps it.**
+
+    The core keeps it in `__dict__`; **the binding keeps it in `__slots__`**, because a
+    tensor there is a handle to a GPU buffer and a per-instance dict is a real cost on
+    something meant to be lean. So there is nothing to copy *from* a base-class
+    instance's `__dict__` there — measured, thirteen golden cases said
+    *'Tensor' object has no attribute '__dict__'*.
+
+    The subclass declares no `__slots__` of its own, so it gets a dict and can hold the
+    metadata; the tensor's own fields go across by name.
+    """
+    if hasattr(src, "__dict__"):
+        dst.__dict__.update(src.__dict__)
+        return
+    seen = []
+    for kind in type(src).__mro__:
+        seen.extend(getattr(kind, "__slots__", ()))
+    for name in seen:
+        try:
+            setattr(dst, name, getattr(src, name))
+        except AttributeError:
+            pass
 
 class Image(TVTensor):
     """A picture. **No metadata at all** — the type is the whole of what it carries, and
@@ -4327,6 +4361,18 @@ def clamp_keypoints(inpt, canvas_size=None):
 # indexing below is `L`'s, which means autograd sees it.
 
 
+def _both(first, second):
+    """`first and second`, elementwise, **without `&`.**
+
+    The binding's tensor has no `__and__` — measured, not assumed: sixteen golden cases
+    went red under `borch_webgpu` with *unsupported operand type(s) for `&`* while the
+    same cases passed on numpy and in the browser. Two of the three implementations
+    answering is not this table's standard.
+
+    `logical_and` is on all three, so it is what these use.
+    """
+    return _backend().logical_and(first, second)
+
 def _roi_boxes(boxes, L):
     """`(k, 5)` — a batch index and four coordinates — from either form torchvision
     takes.
@@ -4382,8 +4428,8 @@ def _bilinear_sample(picture, batch_index, y, x):
     """
     L = _backend()
     _, channels, height, width = picture.shape
-    inside_y = (y >= -1.0) & (y <= height)
-    inside_x = (x >= -1.0) & (x <= width)
+    inside_y = _both(y >= -1.0, y <= height)
+    inside_x = _both(x >= -1.0, x <= width)
     y = y.clamp(min=0)
     x = x.clamp(min=0)
     y_low = y.floor()
@@ -4415,8 +4461,8 @@ def _bilinear_sample(picture, batch_index, y, x):
              + outer(high_y, low_x) * at(y_low, x_high)
              + outer(low_y, high_x) * at(y_high, x_low)
              + outer(low_y, low_x) * at(y_high, x_high))
-    keep = (inside_y[:, None, :, None, :, None]
-            & inside_x[:, None, None, :, None, :])
+    keep = _both(inside_y[:, None, :, None, :, None],
+                 inside_x[:, None, None, :, None, :])
     return L.where(keep, value, L.zeros_like(value))
 
 
@@ -4751,7 +4797,7 @@ def _deform_sample(picture, y, x):
     """
     L = _backend()
     _, channels, height, width = picture.shape
-    inside = (y > -1.0) & (y < height) & (x > -1.0) & (x < width)
+    inside = _both(_both(y > -1.0, y < height), _both(x > -1.0, x < width))
     y_low, x_low = y.floor(), x.floor()
     y_high, x_high = y_low + 1, x_low + 1
     ly, lx = y - y_low, x - x_low
@@ -4769,7 +4815,7 @@ def _deform_sample(picture, y, x):
         value = picture[batch, rows,
                         safe_down.long()[:, None, :, :],
                         safe_across.long()[:, None, :, :]]
-        keep = (low_ok & high_ok)[:, None, :, :]
+        keep = _both(low_ok, high_ok)[:, None, :, :]
         return L.where(keep, value, L.zeros_like(value))
 
     def weigh(down, across):
