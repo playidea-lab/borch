@@ -85,6 +85,7 @@ import json as _json
 import math as _math
 import os as _os
 import pickle as _pickle
+import random as _random
 import string as _string
 import struct as _struct
 import sys as _sys
@@ -5848,6 +5849,413 @@ class SintelStereo(_StereoMatchingDataset):
         return one, mask
 
 
+
+def _read_pfm_file(path, slice_channels=1):
+    """`_read_pfm` from a path. **The default is one channel, not two.**
+
+    A `.pfm` carries one channel or three, and how many are sliced out is what
+    distinguishes a disparity from a flow — torchvision binds this default with a
+    `functools.partial` in the stereo module and leaves the flow module on two.
+
+    **The wrong default is only visible on a three-channel file**, measured: `[:2]` of
+    one channel is one channel, so a one-channel disparity read with the flow's
+    default is unchanged. On a three-channel one it returns a `(2, h, w)` map whose
+    second channel is somebody else's, with every number in the first still right.
+    """
+    with open(path, "rb") as handle:
+        return _read_pfm(handle.read(), slice_channels)
+
+
+class CarlaStereo(_StereoMatchingDataset):
+    """Carla's high-resolution stereo, **one scene per directory.**
+
+    <https://github.com/megvii-research/CREStereo>
+
+    ## Why it was refused and is not
+
+    Its row read *a codec and then another format*. The codec is PNG, read already,
+    and the other format is `.pfm` — a text header, a size, a scale whose sign carries
+    the endianness, and floats. Twenty lines.
+
+    **The disparity is stored signed and used positive.** The sign is the direction the
+    pixel moved, which the file keeps and the dataset does not want; `abs` here is
+    torchvision's, and without it half the map is negative and still finite.
+    """
+
+    def __init__(self, root, transforms=None):
+        super().__init__(root, transforms)
+        base = _os.path.join(self.root, "carla-highres", "trainingF")
+        self._images = self._scan_pairs(_os.path.join(base, "*", "im0.png"),
+                                        _os.path.join(base, "*", "im1.png"))
+        self._disparities = self._scan_pairs(
+            _os.path.join(base, "*", "disp0GT.pfm"),
+            _os.path.join(base, "*", "disp1GT.pfm"))
+
+    def _read_disparity(self, path):
+        return _np.abs(_read_pfm_file(path)), None
+
+
+class ETH3DStereo(_StereoMatchingDataset):
+    """ETH3D's low-resolution two-view set.
+
+    <https://www.eth3d.net/datasets>
+
+    ## Why it was refused and is not
+
+    As `CarlaStereo` — PNG and `.pfm`, both read here.
+
+    **The pictures and the ground truth live in different directories**, scene by
+    scene: `two_view_training` holds the pair and `two_view_training_gt` holds the
+    disparity and its mask. Two sorted lists zipped by position, which is only right
+    because the scene directories carry the same names. The mask is a PNG sitting
+    beside the `.pfm`, and it is read as a boolean rather than compared to zero — a
+    non-zero pixel is valid here, which is the opposite of `SintelStereo`'s
+    convention and is why neither is written as "the usual way".
+    """
+
+    _has_built_in_disparity_mask = True
+
+    def __init__(self, root, split="train", transforms=None):
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        super().__init__(root, transforms)
+        base = _os.path.join(self.root, "ETH3D")
+        pictures = "two_view_training" if split == "train" else "two_view_test"
+        self._images = self._scan_pairs(
+            _os.path.join(base, pictures, "*", "im0.png"),
+            _os.path.join(base, pictures, "*", "im1.png"))
+        if split == "test":
+            self._disparities = [(None, None) for _ in self._images]
+        else:
+            self._disparities = self._scan_pairs(
+                _os.path.join(base, "two_view_training_gt", "*", "disp0GT.pfm"), None)
+
+    def _read_disparity(self, path):
+        if path is None:
+            return None, None
+        mask = _os.path.join(_os.path.dirname(path), "mask0nocc.png")
+        return (_np.abs(_read_pfm_file(path)),
+                _np.asarray(_folder_loader(mask)).astype(bool))
+
+
+class SceneFlowStereo(_StereoMatchingDataset):
+    """The Scene Flow family — `FlyingThings3D`, `Monkaa` and `Driving` behind one
+    class.
+
+    <https://lmb.informatik.uni-freiburg.de/resources/datasets/SceneFlowDatasets.en.html>
+
+    ## Why it was refused and is not
+
+    PNG and `.pfm`, both read here.
+
+    **The three variants differ only in how deep the scene directories nest** —
+    `Monkaa` is one level and the other two are three — and that is the whole of what
+    `variant` selects. A glob written for one variant finds nothing under another,
+    which is a `FileNotFoundError` rather than a wrong answer, so this one is
+    load-bearing in the quiet direction.
+    """
+
+    _PREFIX = {"Monkaa": ("*",),
+               "FlyingThings3D": ("*", "*", "*"),
+               "Driving": ("*", "*", "*")}
+
+    def __init__(self, root, variant="FlyingThings3D", pass_name="clean",
+                 transforms=None):
+        if variant not in self._PREFIX:
+            raise ValueError(f"Unknown value '{variant}' for argument variant. Valid "
+                             "values are {FlyingThings3D, Driving, Monkaa}.")
+        if pass_name not in ("clean", "final", "both"):
+            raise ValueError(f"Unknown value '{pass_name}' for argument pass_name. "
+                             "Valid values are {clean, final, both}.")
+        super().__init__(root, transforms)
+        base = _os.path.join(self.root, "SceneFlow", variant)
+        middle = self._PREFIX[variant]
+        passes = {"clean": ("frames_cleanpass",), "final": ("frames_finalpass",),
+                  "both": ("frames_cleanpass", "frames_finalpass")}[pass_name]
+        for name in passes:
+            self._images += self._scan_pairs(
+                _os.path.join(base, name, *middle, "left", "*.png"),
+                _os.path.join(base, name, *middle, "right", "*.png"))
+            self._disparities += self._scan_pairs(
+                _os.path.join(base, "disparity", *middle, "left", "*.pfm"),
+                _os.path.join(base, "disparity", *middle, "right", "*.pfm"))
+
+    def _read_disparity(self, path):
+        return _np.abs(_read_pfm_file(path)), None
+
+
+class FlyingThings3D(VisionDataset):
+    """FlyingThings3D, **as optical flow** — and the one in this family with a
+    genuinely awkward walk.
+
+    <https://lmb.informatik.uni-freiburg.de/resources/datasets/SceneFlowDatasets.en.html>
+
+    ## Why it was refused and is not
+
+    PNG frames and `.pfm` flows, both read here.
+
+    ## The three loops, and what each gets wrong on its own
+
+    `pass_name` × `camera` × direction, and **direction is the one that is not a
+    filter**. `into_future` pairs frame `i` with `i + 1` and takes flow `i`;
+    `into_past` pairs `i + 1` with `i` — the frames swapped, not the list reversed —
+    and takes flow `i + 1`. A reader that treated `into_past` as the same pairing
+    would hand back a flow pointing backwards through a pair that runs forwards, and
+    every shape would agree.
+
+    Both directions are always walked; neither is an argument. `camera="both"` and
+    `pass_name="both"` multiply the list rather than choosing within it.
+    """
+
+    def __init__(self, root, split="train", pass_name="clean", camera="left",
+                 transforms=None, loader=None):
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        if pass_name not in ("clean", "final", "both"):
+            raise ValueError(f"Unknown value '{pass_name}' for argument pass_name. "
+                             "Valid values are {clean, final, both}.")
+        if camera not in ("left", "right", "both"):
+            raise ValueError(f"Unknown value '{camera}' for argument camera. Valid "
+                             "values are {left, right, both}.")
+        super().__init__(root)
+        self.transforms = transforms
+        self.loader = _folder_loader if loader is None else loader
+        self._image_list = []
+        self._flow_list = []
+
+        upper = split.upper()
+        passes = {"clean": ("frames_cleanpass",), "final": ("frames_finalpass",),
+                  "both": ("frames_cleanpass", "frames_finalpass")}[pass_name]
+        cameras = ("left", "right") if camera == "both" else (camera,)
+        base = _os.path.join(self.root, "FlyingThings3D")
+        for name in passes:
+            for eye in cameras:
+                for direction in ("into_future", "into_past"):
+                    picture_dirs = sorted(
+                        _os.path.join(one, eye) for one in
+                        sorted(_glob.glob(_os.path.join(base, name, upper, "*", "*"))))
+                    flow_dirs = sorted(
+                        _os.path.join(one, direction, eye) for one in
+                        sorted(_glob.glob(_os.path.join(
+                            base, "optical_flow", upper, "*", "*"))))
+                    if not picture_dirs or not flow_dirs:
+                        raise FileNotFoundError(
+                            "Could not find the FlyingThings3D flow images. "
+                            "Please make sure the directory structure is correct.")
+                    for picture_dir, flow_dir in zip(picture_dirs, flow_dirs):
+                        frames = sorted(_glob.glob(_os.path.join(picture_dir, "*.png")))
+                        flows = sorted(_glob.glob(_os.path.join(flow_dir, "*.pfm")))
+                        for i in range(len(flows) - 1):
+                            if direction == "into_future":
+                                self._image_list += [[frames[i], frames[i + 1]]]
+                                self._flow_list += [flows[i]]
+                            else:
+                                self._image_list += [[frames[i + 1], frames[i]]]
+                                self._flow_list += [flows[i + 1]]
+
+    def __len__(self):
+        return len(self._image_list)
+
+    def __getitem__(self, index):
+        first = self.loader(self._image_list[index][0])
+        second = self.loader(self._image_list[index][1])
+        flow = _read_pfm_file(self._flow_list[index], 2) if self._flow_list else None
+        if self.transforms is not None:
+            first, second, flow, _ = self.transforms(first, second, flow, None)
+        return first, second, flow
+
+
+class FlyingChairs(VisionDataset):
+    """FlyingChairs — **one flat directory, and a text file that cuts it in two.**
+
+    <https://lmb.informatik.uni-freiburg.de/resources/datasets/FlyingChairs.en.html>
+
+    ## Why it was refused and is not
+
+    Its row read *a codec and then another format*, and the codec here is **PPM** —
+    the cheapest format there is, read since before the row was written. The other
+    format is `.flo`, fifteen lines.
+
+    ## Two positions, not two names
+
+    The pictures pair by **position in one sorted list**: item `i` is `images[2i]` and
+    `images[2i + 1]`. Nothing in the filenames is matched, so a directory with one
+    file missing pairs every later item with the wrong partner and loads.
+
+    `FlyingChairs_train_val.txt` is one integer per pair, `1` for train and `2` for
+    val, and it is **required** — the split is not derivable from the directory, and
+    without the file torchvision refuses rather than defaulting to all of it. So does
+    this.
+    """
+
+    _SPLIT_ID = {"train": 1, "val": 2}
+    _SPLIT_FILE = "FlyingChairs_train_val.txt"
+
+    def __init__(self, root, split="train", transforms=None, loader=None):
+        if split not in self._SPLIT_ID:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, val}.")
+        super().__init__(root)
+        self.transforms = transforms
+        self.loader = _folder_loader if loader is None else loader
+        base = _os.path.join(self.root, "FlyingChairs")
+        pictures = sorted(_glob.glob(_os.path.join(base, "data", "*.ppm")))
+        flows = sorted(_glob.glob(_os.path.join(base, "data", "*.flo")))
+        listing = _os.path.join(base, self._SPLIT_FILE)
+        if not _os.path.exists(listing):
+            raise FileNotFoundError(
+                "The FlyingChairs_train_val.txt file was not found - please download "
+                "it from the dataset page (see docstring).")
+        with open(listing) as handle:
+            wanted = [int(float(line)) for line in handle.read().split()]
+        self._image_list = []
+        self._flow_list = []
+        for i in range(len(flows)):
+            if wanted[i] == self._SPLIT_ID[split]:
+                self._flow_list += [flows[i]]
+                self._image_list += [[pictures[2 * i], pictures[2 * i + 1]]]
+
+    def __len__(self):
+        return len(self._image_list)
+
+    def __getitem__(self, index):
+        first = self.loader(self._image_list[index][0])
+        second = self.loader(self._image_list[index][1])
+        with open(self._flow_list[index], "rb") as handle:
+            flow = _read_flo(handle.read())
+        if self.transforms is not None:
+            first, second, flow, _ = self.transforms(first, second, flow, None)
+        return first, second, flow
+
+
+
+class Middlebury2014Stereo(_StereoMatchingDataset):
+    """Middlebury's 2014 set — **thirty-eight named scenes, and a suffix.**
+
+    <https://vision.middlebury.edu/stereo/data/scenes2014/>
+
+    ## Why it was refused and is not
+
+    Its row was the last of the stereo family, and it read *a calibration file per
+    scene to parse*. **That was written without opening one.** `calib.txt` sits in
+    every scene directory and torchvision never reads it: `calibration` is a
+    **directory suffix** — `-perfect` or `-imperfect` — chosen before the glob and
+    never opened after. The dataset is PNG and `.pfm`, both read here, and what was
+    called a parser is a string.
+
+    ## What is actually here
+
+    - **The split is a list of names**, not a directory. `train`, `additional` and
+      `test` are thirty-eight scene names written into the class, and a root that
+      holds the directory but none of the names is an error rather than an empty
+      dataset — which is the difference between a wrong path and a wrong download.
+    - **`test` has no calibration and the others require one.** Passing either the
+      wrong way is refused, because the suffix decides which directories exist and a
+      silent default would find nothing and say nothing.
+    - **Infinite disparities are zeroed and the mask is what remains.** The `.pfm`
+      stores unmatched pixels as `inf`; leaving them turns any average into `inf` and
+      any subtraction into `nan`, and zeroing them without the mask marks them as
+      *touching the camera* instead of *unknown*.
+    - **`use_ambient_views` picks at random** among `im1.png`, `im1E.png` and
+      `im1L.png` — different exposures of the same right frame. It is off by default,
+      and the golden case leaves it off: a case that turned it on would be comparing
+      two draws from two libraries' random modules.
+    """
+
+    _has_built_in_disparity_mask = True
+
+    splits = {
+        "train": ["Adirondack", "Jadeplant", "Motorcycle", "Piano", "Pipes",
+                  "Playroom", "Playtable", "Recycle", "Shelves", "Vintage"],
+        "additional": ["Backpack", "Bicycle1", "Cable", "Classroom1", "Couch",
+                       "Flowers", "Mask", "Shopvac", "Sticks", "Storage", "Sword1",
+                       "Sword2", "Umbrella"],
+        "test": ["Plants", "Classroom2E", "Classroom2", "Australia", "DjembeL",
+                 "CrusadeP", "Crusade", "Hoops", "Bicycle2", "Staircase", "Newkuba",
+                 "AustraliaP", "Djembe", "Livingroom", "Computer"],
+    }
+
+    _SUFFIXES = {None: [""], "perfect": ["-perfect"], "imperfect": ["-imperfect"],
+                 "both": ["-perfect", "-imperfect"]}
+    _AMBIENT_VIEWS = ["im1E.png", "im1L.png"]
+
+    def __init__(self, root, split="train", calibration="perfect",
+                 use_ambient_views=False, transforms=None, download=False):
+        if split not in self.splits:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test, additional}.")
+        super().__init__(root, transforms)
+        self.split = split
+        if calibration:
+            if calibration not in self._SUFFIXES:
+                raise ValueError(f"Unknown value '{calibration}' for argument "
+                                 "calibration. Valid values are {perfect, imperfect, "
+                                 "both, None}.")
+            if split == "test":
+                raise ValueError("Split 'test' has only no calibration settings, "
+                                 "please set `calibration=None`.")
+        elif split != "test":
+            raise ValueError(
+                f"Split '{split}' has calibration settings, however None was provided "
+                f"as an argument.\nSetting calibration to 'perfect' for split "
+                f"'{split}'. Available calibration settings are: 'perfect', "
+                "'imperfect', 'both'.")
+        if download:
+            raise ValueError(
+                "Middlebury2014Stereo(download=True) is not implemented here.\n"
+                "  It is one zip per scene per calibration — seventy-six requests to "
+                "vision.middlebury.edu for the two splits that have them — and the "
+                "reader above takes the extracted tree.")
+
+        base = _os.path.join(self.root, "Middlebury2014")
+        if not _os.path.exists(_os.path.join(base, split)):
+            raise FileNotFoundError(
+                f"The {split} directory was not found in the provided root directory")
+        wanted = self.splits[split]
+        if not any(scene.startswith(name)
+                   for scene in _os.listdir(_os.path.join(base, split))
+                   for name in wanted):
+            raise FileNotFoundError(
+                f"Provided root folder does not contain any scenes from the {split} "
+                "split.")
+
+        for suffix in self._SUFFIXES[calibration]:
+            pattern = "*" + suffix
+            self._images += self._scan_pairs(
+                _os.path.join(base, split, pattern, "im0.png"),
+                _os.path.join(base, split, pattern, "im1.png"))
+            if split == "test":
+                self._disparities = [(None, None) for _ in self._images]
+            else:
+                self._disparities += self._scan_pairs(
+                    _os.path.join(base, split, pattern, "disp0.pfm"),
+                    _os.path.join(base, split, pattern, "disp1.pfm"))
+        self.use_ambient_views = use_ambient_views
+
+    def _read_img(self, path):
+        """The right frame, or one of its other exposures when asked for.
+
+        **The choice is random**, which is why it is off by default: two calls give two
+        right pictures against the same left one, and that is the point — it is an
+        augmentation written into the reader.
+        """
+        if _os.path.basename(path) == "im1.png" and self.use_ambient_views:
+            folder = _os.path.dirname(path)
+            choices = [_os.path.join(folder, name) for name in self._AMBIENT_VIEWS]
+            choices = [one for one in choices if _os.path.exists(one)] + [path]
+            path = _random.choice(choices)
+        return super()._read_img(path)
+
+    def _read_disparity(self, path):
+        if path is None:
+            return None, None
+        one = _np.abs(_read_pfm_file(path))
+        one[one == _np.inf] = 0
+        return one, (one > 0).squeeze(0)
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -6353,6 +6761,9 @@ _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
               "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification", "Sintel", "RenderedSST2", "KittiFlow", "HD1K",
               "Kitti2012Stereo", "Kitti2015Stereo", "InStereo2k", "SintelStereo",
+              "CarlaStereo", "ETH3DStereo", "SceneFlowStereo", "FlyingThings3D",
+              "Middlebury2014Stereo",
+              "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
 

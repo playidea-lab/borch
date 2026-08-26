@@ -297,13 +297,12 @@ FROZEN = {
     # address and a format; the address needs hosts that send a CORS header and
     # torchvision's do not, so what crossed is the decoders. Written per name because a
     # table that grouped them would hide the day one becomes possible.
-    # 18 → 28 over one session. `ImageFolder`, `CLEVRClassification`,
-    # `RenderedSST2`, `Sintel`, `KittiFlow`, `HD1K`, the two KITTI stereo sets,
-    # `InStereo2k` and `SintelStereo` arrived on the Python side, and every one is the
-    # clearest kind of absence here: they walk directories and read archives off disk,
-    # and a page has neither. **The number rising is this row working**, not failing —
-    # each name here is a Python-side dataset whose reason is a filesystem.
-    "datasets": 28,
+    # 18 → 34 over one session. `ImageFolder`, `CLEVRClassification`, `RenderedSST2`
+    # and the thirteen stereo and optical-flow sets arrived on the Python side, and every
+    # one is the clearest kind of absence here: they walk directories and read archives
+    # off disk, and a page has neither. **The number rising is this row working**, not
+    # failing — each name here is a Python-side dataset whose reason is a filesystem.
+    "datasets": 34,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the

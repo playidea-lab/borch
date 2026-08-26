@@ -696,19 +696,12 @@ SKIPPED = {
                             "of this family went in — the disparity fields turned out "
                             "to be PNG, `.flo` or `.pfm`, none of which needs a codec",
     "datasets.FallingThingsStereo": "as above — JPEG",
-    # `.pfm` is read now (see `_read_pfm`), so what is left of these four is the walking
-    # rather than the format: each has its own directory convention, and `Middlebury`
-    # additionally parses a calibration file per scene. **Not a wall — a to-do**, and
-    # the difference is written here so the next reader does not take it for one.
-    "datasets.CarlaStereo": "아직 — PNG and `.pfm`, both read here. What is left is "
-                            "the directory walk, not a format",
-    "datasets.ETH3DStereo": "as above",
-    "datasets.FlyingThings3D": "as above",
-    "datasets.SceneFlowStereo": "as above",
-    "datasets.Middlebury2014Stereo": "as above, and a calibration file per scene to "
-                                       "parse on top of it",
-    "datasets.FlyingChairs": "아직 — PPM and `.flo`, both read here. What is left is "
-                               "the split file, not a format",
+    # Every 아직 row that stood here is gone, including the one written this same
+    # session claiming Middlebury needed *a calibration file per scene to parse*. That
+    # sentence was written without opening one: `calib.txt` is in every scene directory
+    # and torchvision never reads it — `calibration` is a directory suffix. **Twelve of
+    # the fourteen went in and the codec count rose by none.** What remains is JPEG,
+    # above, and it is the same JPEG as everywhere else.
 
     # `transforms.v2.functional`. **114 of its 165 names are one operation counted
     # five times**, and this is the row that says so — the first namespaced wildcard
