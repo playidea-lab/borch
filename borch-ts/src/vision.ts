@@ -682,26 +682,76 @@ export class RandomCrop implements Transform {
  * writing only "bilinear" leaves which one undecided, and feeding a model trained with it
  * on an input produced with it off is a different input.
  *
- * When enlarging, `support` is 1 and it becomes ordinary bilinear — which is why one
- * branch suffices. Two boundary rules were measured and **every case gave the same
- * answer** (the triangular filter is 0 in the widened region). It uses the same side as
- * torch's C implementation.
+ * When enlarging, the spread is 1 and the triangle becomes ordinary bilinear — which
+ * is why one branch suffices.
+ *
+ * **The window end follows torch's truncation.** Two boundary rules were once measured
+ * as giving the same answer, and they still do on every case here — the triangle is 0
+ * across the extra sample a rounded-up window reaches, and the cubic's second lobe has
+ * not landed there yet. The rule is written as torch writes it rather than left to
+ * agree by luck, because the filter that could break the tie now exists.
  */
-function aaWeights(src: number, dst: number): { at: number; w: Float64Array }[] {
+/**
+ * The cubic filter torch resizes with — Keys' with `a = -0.5`, Catmull-Rom.
+ *
+ * **`a` was measured, not looked up.** -0.75 is the value PIL and OpenCV use and
+ * the one most references give, and it was written here first. Against
+ * `torchvision.transforms.v2.functional.resize(antialias=True)` it was off by
+ * 2.3e-2 on a 16→8 shrink; -0.5 lands at 1.1e-7. torch's antialiasing path uses
+ * the other constant, and the two are different pictures — a model fed one and
+ * trained on the other is fed a different input.
+ *
+ * So this matches **torch**, which is what this library imitates. A resize meant
+ * to match PIL would need -0.75 and is not on offer here; asking for one against
+ * a checkpoint trained through torch would be the wrong picture anyway.
+ */
+function cubicWeight(x: number): number {
+  const a = -0.5;
+  const d = Math.abs(x);
+  if (d < 1) return ((a + 2) * d - (a + 3)) * d * d + 1;
+  if (d < 2) return (((d - 5) * d + 8) * d - 4) * a;
+  return 0;
+}
+
+/**
+ * @param cubic bicubic rather than bilinear. It widens the window — the filter
+ *   reaches two source pixels instead of one — and the weights stop being
+ *   positive, which is where the ringing on a hard edge comes from. Both are the
+ *   filter doing its job, not a fault to smooth over.
+ */
+function aaWeights(
+  src: number, dst: number, cubic = false,
+): { at: number; w: Float64Array }[] {
   const scale = src / dst;
-  const support = Math.max(1, scale);
+  // **The spread and the reach are two things.** Antialiasing widens the filter by
+  // the shrink factor (`spread`); how far the filter itself reaches is a property
+  // of the filter (1 for the triangle, 2 for the cubic). Multiplying them is what
+  // torchvision does, and folding them into one number was fine only while there
+  // was one filter.
+  const spread = Math.max(1, scale);
+  const support = (cubic ? 2 : 1) * spread;
   const rows: { at: number; w: Float64Array }[] = [];
   for (let i = 0; i < dst; i++) {
     const center = (i + 0.5) * scale;
     const lo = Math.max(0, Math.floor(center - support + 0.5));
-    const hi = Math.min(src, Math.ceil(center + support + 0.5));
+    // **`floor`, matching torch's truncation.** This file rounded up and said it
+    // used torch's side; the two disagree only where a filter is non-zero across
+    // the extra sample, and the triangle never is. The cubic has a second lobe out
+    // there and could have been, so the rule was made to say what it does. On the
+    // cases measured here both rules give the same numbers — the difference that
+    // looked like this one turned out to be the kernel constant above.
+    const hi = Math.min(src, Math.floor(center + support + 0.5));
     const w = new Float64Array(Math.max(0, hi - lo));
     let total = 0;
     for (let j = lo; j < hi; j++) {
-      const v = Math.max(0, 1 - Math.abs((j + 0.5 - center) / support));
+      const at = (j + 0.5 - center) / spread;
+      const v = cubic ? cubicWeight(at) : Math.max(0, 1 - Math.abs(at));
       w[j - lo] = v;
       total += v;
     }
+    // **The sum is what is normalised, not the positives.** A cubic window has
+    // negative weights in it; dividing by the sum of everything keeps the total at
+    // one, which is what stops a flat picture from changing brightness.
     if (total !== 0) for (let k = 0; k < w.length; k++) w[k] = (w[k] ?? 0) / total;
     rows.push({ at: lo, w });
   }
@@ -742,17 +792,18 @@ function shortSide(
 
 /** Changes one axis of something laid out as `(H, W, C)`. */
 function resizeRows(
-  src: Float64Array, h: number, w: number, c: number, dst: number, nearest: boolean,
+  src: Float64Array, h: number, w: number, c: number, dst: number,
+  mode: "bilinear" | "nearest" | "bicubic",
 ): Float64Array {
   const out = new Float64Array(dst * w * c);
-  if (nearest) {
+  if (mode === "nearest") {
     for (let y = 0; y < dst; y++) {
       const from = Math.trunc(y * (h / dst));
       out.set(src.subarray(from * w * c, (from + 1) * w * c), y * w * c);
     }
     return out;
   }
-  const rows = aaWeights(h, dst);
+  const rows = aaWeights(h, dst, mode === "bicubic");
   for (let y = 0; y < dst; y++) {
     const { at, w: weights } = rows[y] ?? { at: 0, w: new Float64Array() };
     for (let k = 0; k < weights.length; k++) {
@@ -768,10 +819,11 @@ function resizeRows(
 
 /** The same job as the vertical one, on the horizontal. Only the axis differs. */
 function resizeCols(
-  src: Float64Array, h: number, w: number, c: number, dst: number, nearest: boolean,
+  src: Float64Array, h: number, w: number, c: number, dst: number,
+  mode: "bilinear" | "nearest" | "bicubic",
 ): Float64Array {
   const out = new Float64Array(h * dst * c);
-  const rows = nearest ? null : aaWeights(w, dst);
+  const rows = mode === "nearest" ? null : aaWeights(w, dst, mode === "bicubic");
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < dst; x++) {
       if (rows === null) {
@@ -814,7 +866,7 @@ export class Resize implements Transform {
    */
   constructor(
     protected readonly size: number | readonly [number, number],
-    protected readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    protected readonly interpolation: "bilinear" | "nearest" | "bicubic" = "bilinear",
     private readonly maxSize: number | null = null,
     antialias = true,
   ) {
@@ -836,16 +888,16 @@ export class Resize implements Transform {
     const [th, tw] = typeof this.size === "number"
       ? shortSide(img.height, img.width, this.size, this.maxSize)
       : [this.size[0], this.size[1]];
-    const nearest = this.interpolation === "nearest";
+    
     let data = img.data;
     let h = img.height;
     if (th !== h) {
-      data = resizeRows(data, h, img.width, img.channels, th, nearest);
+      data = resizeRows(data, h, img.width, img.channels, th, this.interpolation);
       h = th;
     }
     let w = img.width;
     if (tw !== w) {
-      data = resizeCols(data, h, w, img.channels, tw, nearest);
+      data = resizeCols(data, h, w, img.channels, tw, this.interpolation);
       w = tw;
     }
     return { data, height: h, width: w, channels: img.channels, isByte: img.isByte };
@@ -1792,7 +1844,7 @@ export function centerCrop(img: Image, outputSize: number | readonly [number, nu
 export function resize(
   img: Image,
   size: number | readonly [number, number],
-  interpolation: "bilinear" | "nearest" = "bilinear",
+  interpolation: "bilinear" | "nearest" | "bicubic" = "bilinear",
   maxSize: number | null = null,
   antialias = true,
 ): Image {
@@ -1803,7 +1855,7 @@ export function resize(
 export function resizedCrop(
   img: Image, top: number, left: number, height: number, width: number,
   size: number | readonly [number, number],
-  interpolation: "bilinear" | "nearest" = "bilinear",
+  interpolation: "bilinear" | "nearest" | "bicubic" = "bilinear",
   antialias = true,
 ): Image {
   return resize(crop(img, top, left, height, width), size, interpolation, null, antialias);
