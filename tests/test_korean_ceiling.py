@@ -176,7 +176,9 @@ CEILINGS = {
     # seven top-level losses get a row, and a row's reason has to open with one of
     # `아직` / `없음` / `별칭` / `파이썬` for `test_site.py` to split the remainder. This
     # one is 파이썬.
-    "borch-ts/test": 3373,
+    # 3373 → 3375. Two more, and the same kind: v2's tv_tensor dispatch gets a row and
+    # its reason opens with 없음.
+    "borch-ts/test": 3375,
 }
 
 

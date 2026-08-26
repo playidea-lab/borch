@@ -3653,6 +3653,666 @@ def remove_small_boxes(boxes, min_size):
 
 
 
+# ── tv_tensors: the types that travel beside a picture ───────────────────────────
+#
+# **This is the half of v2 that was declined, and it was declined as one decision.**
+# Twenty names in `transforms.v2` had reasons reading *boxes travelling with the
+# picture — the point of v2's type system*, and thirteen of them were the type system
+# rather than users of it. So it is built here, and the users follow.
+#
+# **A tv_tensor is a tensor with a label on it and almost no behaviour.** Reading
+# torchvision's, the surprising part is how little survives: `img * 2` is a plain
+# `Tensor` there, not an `Image`. Measured, the whole list of operations that keep the
+# subclass is **`clone`, `detach`, `to` and `requires_grad_`** — everything else,
+# including `cpu()`, indexing and every arithmetic operator, decays. That is deliberate
+# on their side: a transform wraps the result back on purpose, so a half-transformed
+# tensor cannot go on claiming to be a box.
+#
+# It means the type system is a **dispatch key**, not a container. Which is why the
+# thirteen names on top of it are mostly one-line questions about a flattened sample.
+
+
+class BoundingBoxFormat(_enum.Enum):
+    """How four numbers describe a box. **`XYXY` is corners, `XYWH` is a corner and a
+    size, `CXCYWH` is a centre and a size** — and the three are indistinguishable by
+    looking at the numbers, which is the whole reason the label rides along."""
+
+    XYXY = "XYXY"
+    XYWH = "XYWH"
+    CXCYWH = "CXCYWH"
+
+
+class TVTensor(_backend().Tensor):
+    """The base every one of these subclasses.
+
+    **Four operations keep the subclass and the rest do not.** `clone`, `detach`, `to`
+    and `requires_grad_` come back as the same type; `+`, indexing, `reshape` and
+    `cpu()` come back as plain tensors. That is torchvision's rule, measured rather
+    than assumed, and the reason `wrap` exists: a transform puts the label back on
+    deliberately, so nothing half-transformed keeps claiming to be a box.
+    """
+
+    _METADATA = ()
+
+    def __new__(cls, data, **kwargs):
+        L = _backend()
+        if isinstance(data, L.Tensor):
+            values = data.data
+        else:
+            values = _np.asarray(data, dtype=_np.float32)
+        out = L.Tensor.__new__(cls)
+        L.Tensor.__init__(out, values,
+                          requires_grad=kwargs.pop("requires_grad", False))
+        return out
+
+    def __init__(self, *args, **kwargs):
+        """**Everything happens in `__new__`, and this exists to swallow the arguments.**
+
+        Python calls `__init__` with whatever `__new__` was called with, so
+        `BoundingBoxes(data, canvas_size=...)` would reach `Tensor.__init__` and be
+        refused for a keyword it does not take. The tensor is already built by the time
+        this runs.
+        """
+
+    def _metadata(self):
+        return {name: getattr(self, name) for name in self._METADATA}
+
+    @classmethod
+    def wrap(cls, wrappee, like, **kwargs):
+        """The label from `like` put onto `wrappee`, with any of it overridden.
+
+        **Subclasses do not each write this** — the metadata names are declared once in
+        `_METADATA` and copied by name. A subclass that grew a field and forgot to copy
+        it would produce boxes whose format silently came from nowhere.
+        """
+        out = cls.__new__(cls, wrappee)
+        for name in cls._METADATA:
+            setattr(out, name, kwargs.get(name, getattr(like, name)))
+        return out
+
+    def _same(self, values):
+        return type(self).wrap(values, self)
+
+    def clone(self):
+        return self._same(super().clone())
+
+    def detach(self):
+        return self._same(super().detach())
+
+    def to(self, *args, **kwargs):
+        return self._same(super().to(*args, **kwargs))
+
+    def requires_grad_(self, requires_grad=True):
+        super().requires_grad_(requires_grad)
+        return self
+
+    def __repr__(self):
+        inner = super().__repr__()
+        extra = ", ".join(f"{name}={getattr(self, name)}" for name in self._METADATA)
+        return f"{type(self).__name__}({inner}{', ' + extra if extra else ''})"
+
+
+class Image(TVTensor):
+    """A picture. **No metadata at all** — the type is the whole of what it carries, and
+    that is enough: a transform asks *is this the image* and the answer is the class."""
+
+
+class Video(TVTensor):
+    """A clip. As `Image`, and separate from it because a transform that resizes a
+    picture and a transform that resizes a video ask different questions about the
+    leading axes."""
+
+
+class Mask(TVTensor):
+    """A segmentation map. **Resized with nearest-neighbour and never interpolated**,
+    which is the one thing knowing it is a mask buys — a bilinear resize invents labels
+    that are the average of two classes and belong to neither."""
+
+
+class BoundingBoxes(TVTensor):
+    """Boxes, with **the format and the canvas they are drawn on.**
+
+    Both are needed and neither can be read off the numbers. The format because four
+    numbers are four numbers; the canvas because clamping a box needs to know what it is
+    being clamped to, and the picture may have been resized since.
+    """
+
+    _METADATA = ("format", "canvas_size", "clamping_mode")
+
+    def __new__(cls, data, *, format=BoundingBoxFormat.XYXY, canvas_size=None,
+                clamping_mode="soft", **kwargs):
+        out = super().__new__(cls, data, **kwargs)
+        out.format = (format if isinstance(format, BoundingBoxFormat)
+                      else BoundingBoxFormat[str(format).upper()])
+        out.canvas_size = tuple(canvas_size) if canvas_size is not None else None
+        out.clamping_mode = _check_clamping_mode(clamping_mode)
+        return out
+
+
+class KeyPoints(TVTensor):
+    """Points, with the canvas. **No format** — a keypoint is two numbers and there is
+    only one way to write them, which is why this carries one field where the boxes
+    carry three."""
+
+    _METADATA = ("canvas_size",)
+
+    def __new__(cls, data, *, canvas_size=None, **kwargs):
+        out = super().__new__(cls, data, **kwargs)
+        out.canvas_size = tuple(canvas_size) if canvas_size is not None else None
+        return out
+
+
+_CLAMPING_MODES = ("soft", "hard", None)
+
+
+def _check_clamping_mode(value):
+    """**`soft`, `hard` or `None`, and nothing else.**
+
+    `soft` clamps the corners and leaves a box that has left the picture as a sliver on
+    the edge; `hard` clamps and then drops what has no area; `None` does not clamp at
+    all. An unknown word here would be accepted and ignored, and the boxes would be
+    whichever the caller did not ask for.
+    """
+    if value not in _CLAMPING_MODES:
+        raise ValueError(
+            f"clamping_mode must be one of {_CLAMPING_MODES}, got {value!r}.")
+    return value
+
+
+def wrap(wrappee, *, like, **kwargs):
+    """`wrappee` as the same kind as `like`, carrying its label.
+
+    **This is how a transform puts the type back on.** Everything inside a transform
+    works on plain tensors — the subclass decayed at the first arithmetic — so the last
+    step is always this, and any field that changed is passed here: a resize hands over
+    a new `canvas_size`, a format conversion a new `format`.
+    """
+    kind = type(like)
+    if hasattr(kind, "wrap"):
+        return kind.wrap(wrappee, like, **kwargs)
+    return wrappee
+
+
+_RETURN_TVTENSOR = [False]
+
+
+class _ReturnType:
+    def __init__(self, restore):
+        self._restore = restore
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        _RETURN_TVTENSOR[0] = self._restore
+        return False
+
+
+def set_return_type(return_type="Tensor"):
+    """Whether arithmetic on a tv_tensor comes back as one.
+
+    **The default is `Tensor`, and that is the surprising half of the design.**
+    `img + 2` is a plain tensor; inside `with set_return_type("TVTensor")` it is an
+    `Image`. torchvision made the plain tensor the default because a subclass that
+    survived every operation would keep a stale `canvas_size` through a resize, and a
+    box that lies about its canvas is worse than one that has forgotten it is a box.
+
+    Here the flag is **stored and read but changes nothing yet**, because arithmetic on
+    this side never keeps the subclass — there is no `__torch_function__` to intercept.
+    Saying so is the point: the name exists so that code written against torchvision
+    runs, and the difference is written down rather than left to be discovered.
+    """
+    wanted = {"tensor": False, "tvtensor": True}.get(str(return_type).lower())
+    if wanted is None:
+        raise ValueError(
+            f"return_type must be 'TVTensor' or 'Tensor', got {return_type}")
+    previous = _RETURN_TVTENSOR[0]
+    _RETURN_TVTENSOR[0] = wanted
+    return _ReturnType(previous)
+
+
+def is_rotated_bounding_format(format):
+    """Whether a format describes a **rotated** box.
+
+    None of the three formats here is: rotated boxes carry five numbers or eight, and
+    this subset takes four. The name exists because code asks it before branching, and
+    the answer is `False` — which is a real answer rather than a refusal.
+    """
+    if isinstance(format, str):
+        format = BoundingBoxFormat[format.upper()]
+    return format not in (BoundingBoxFormat.XYXY, BoundingBoxFormat.XYWH,
+                          BoundingBoxFormat.CXCYWH)
+
+# ── transforms.v2: the dispatch, and the thirteen names that are it ──────────────
+#
+# **Thirteen of `v2`'s twenty absences were the type system rather than users of it.**
+# The rows read *boxes travelling with the picture — the point of v2's type system*, and
+# the point of a thing is not a reason it cannot exist. What it needed was the types
+# above, and they are eighty lines.
+#
+# What is here is the machinery every v2 transform stands on:
+#
+# - **a flatten and an unflatten**, so a transform can be handed a tensor, a tuple, a
+#   dict or a nest of them and answer in the same shape;
+# - **the question each transform asks of a flattened sample** — is this a box, is there
+#   an image here, what size is everything;
+# - **`Transform` itself**, whose whole body is that walk.
+#
+# The individual kernels — `affine_bounding_boxes` and its neighbours — are not here.
+
+
+def _tree_flatten(value):
+    """A nest into a flat list and a recipe for putting it back.
+
+    **Dicts keep their key order and tuples keep their type**, because a transform hands
+    back what it was given: a caller who passed `(image, target)` gets a tuple, and one
+    who passed `{"img": ..., "boxes": ...}` gets those keys. Flattening to a list and
+    rebuilding as a list would work for every test written with one tensor.
+    """
+    if isinstance(value, dict):
+        flat, specs = [], []
+        for key, item in value.items():
+            inner, spec = _tree_flatten(item)
+            flat.extend(inner)
+            specs.append((key, spec))
+        return flat, ("dict", specs)
+    if isinstance(value, (list, tuple)):
+        flat, specs = [], []
+        for item in value:
+            inner, spec = _tree_flatten(item)
+            flat.extend(inner)
+            specs.append(spec)
+        return flat, ("tuple" if isinstance(value, tuple) else "list", specs)
+    return [value], ("leaf", None)
+
+
+def _tree_unflatten(flat, spec):
+    """The other half. Consumes `flat` left to right, in the order `_tree_flatten` laid
+    it out — the two walk the nest the same way or the values land in other slots."""
+    kind, inner = spec
+    if kind == "leaf":
+        return flat.pop(0)
+    if kind == "dict":
+        return {key: _tree_unflatten(flat, sub) for key, sub in inner}
+    rebuilt = [_tree_unflatten(flat, sub) for sub in inner]
+    return tuple(rebuilt) if kind == "tuple" else rebuilt
+
+
+def check_type(obj, types_or_checks):
+    """Whether `obj` matches any of a mixed list of **types and predicates**.
+
+    The mixture is what makes it worth a function: `is_pure_tensor` is a predicate
+    because *a tensor that is not a tv_tensor* cannot be written as a type, and every
+    caller here wants to ask about both in one list.
+    """
+    for one in types_or_checks:
+        if isinstance(one, type):
+            if isinstance(obj, one):
+                return True
+        elif one(obj):
+            return True
+    return False
+
+
+def has_any(flat_inputs, *types_or_checks):
+    """Whether **any** item matches any of them."""
+    return any(check_type(one, types_or_checks) for one in flat_inputs)
+
+
+def has_all(flat_inputs, *types_or_checks):
+    """Whether **every** one of them is matched by some item.
+
+    Not the same question as `has_any` with the arguments reversed, and the difference
+    is the loop nesting: this asks each *check* whether anything satisfies it, and
+    `has_any` asks each *item* whether it satisfies anything.
+    """
+    for one in types_or_checks:
+        if not any(check_type(item, (one,)) for item in flat_inputs):
+            return False
+    return True
+
+
+def is_pure_tensor(obj):
+    """A tensor that is **not** one of the labelled kinds.
+
+    The distinction the whole dispatch turns on: a transform treats the first plain
+    tensor it meets as the image, and leaves the rest alone.
+    """
+    L = _backend()
+    return isinstance(obj, L.Tensor) and not isinstance(obj, TVTensor)
+
+
+def _size_of(item):
+    shape = tuple(int(one) for one in item.shape)
+    if isinstance(item, (BoundingBoxes, KeyPoints)):
+        return item.canvas_size
+    return shape[-2], shape[-1]
+
+
+def query_size(flat_inputs):
+    """The one `(H, W)` the whole sample agrees on.
+
+    **Boxes answer with their canvas, not with their own shape.** A `(4, 4)` box tensor
+    is four boxes, not a four-by-four picture — which is why this cannot be a `shape[-2:]`
+    on everything, and why `canvas_size` is carried at all.
+
+    Disagreement is an error rather than a first-one-wins, because a sample whose boxes
+    think the picture is one size and whose mask thinks it is another has already gone
+    wrong somewhere earlier.
+    """
+    L = _backend()
+    sizes = {_size_of(one) for one in flat_inputs
+             if check_type(one, (is_pure_tensor, Image, Video, Mask, BoundingBoxes,
+                                 KeyPoints))}
+    sizes.discard(None)
+    if not sizes:
+        raise TypeError("No image, video, mask, bounding box of keypoint was found in "
+                        "the sample")
+    if len(sizes) > 1:
+        raise ValueError("Found multiple HxW dimensions in the sample: "
+                         + ", ".join(str(one) for one in sorted(sizes)))
+    return sizes.pop()
+
+
+def query_chw(flat_inputs):
+    """The one `(C, H, W)` the pictures agree on.
+
+    **Only images and videos are asked** — a mask has no channels to speak of and a box
+    has none at all, so including them would make the set disagree with itself on every
+    real sample.
+    """
+    found = set()
+    for one in flat_inputs:
+        if check_type(one, (is_pure_tensor, Image, Video)):
+            shape = tuple(int(part) for part in one.shape)
+            if len(shape) < 3:
+                raise TypeError("No image or video was found in the sample")
+            found.add(shape[-3:])
+    if not found:
+        raise TypeError("No image or video was found in the sample")
+    if len(found) > 1:
+        raise ValueError("Found multiple CxHxW dimensions in the sample: "
+                         + ", ".join(str(one) for one in sorted(found)))
+    return found.pop()
+
+
+def get_bounding_boxes(flat_inputs):
+    """The sample's boxes, and **there must be exactly one lot of them.**
+
+    torchvision's own note says so: one `BoundingBoxes` per sample, holding as many
+    boxes as it likes. Two would leave every transform choosing between them silently.
+    """
+    found = [one for one in flat_inputs if isinstance(one, BoundingBoxes)]
+    if not found:
+        raise ValueError("No bounding boxes were found in the sample")
+    if len(found) > 1:
+        raise ValueError("Found multiple bounding boxes instances in the sample")
+    return found[0]
+
+
+def get_keypoints(flat_inputs):
+    """As above, for keypoints."""
+    found = [one for one in flat_inputs if isinstance(one, KeyPoints)]
+    if not found:
+        raise ValueError("No keypoints were found in the sample")
+    if len(found) > 1:
+        raise ValueError("Found multiple keypoints instances in the sample")
+    return found[0]
+
+
+def _v2_transform_base():
+    """`Transform`, built against the attached backend for the reason the `ops` layers
+    are — it subclasses `nn.Module` and `use(L)` can change which one that is."""
+    nn = _backend().nn
+
+    class Transform(nn.Module):
+        """**The base class every v2 transform inherits, and its body is the dispatch.**
+
+        A transform is handed a nest — a tensor, or `(image, target)`, or a dict — and
+        has to answer in the same shape with only the parts it owns changed. So:
+        flatten, decide per item whether it is transformed, draw the random parameters
+        **once** for the whole sample, transform, unflatten.
+
+        Two rules in that walk are what separate v2 from v1, and both are invisible on a
+        sample holding one tensor:
+
+        - **The parameters are drawn once.** A random crop has to take the same rectangle
+          out of the picture and out of the mask; drawn per item they would drift apart
+          and the pair would stop meaning anything.
+        - **Only the first plain tensor is treated as the image**, and only when no
+          `Image` or `Video` is present. A sample of `(picture, boxes_as_plain_tensor)`
+          would otherwise have its boxes brightened.
+        """
+
+        _transformed_types = (_backend().Tensor,)
+
+        def check_inputs(self, flat_inputs):
+            """Refuse a sample this transform cannot serve. Empty by default."""
+
+        def make_params(self, flat_inputs):
+            """The random draw, once per sample. Empty by default."""
+            return {}
+
+        def transform(self, inpt, params):
+            raise NotImplementedError
+
+        def forward(self, *inputs):
+            flat_inputs, spec = _tree_flatten(
+                inputs if len(inputs) > 1 else inputs[0])
+            self.check_inputs(flat_inputs)
+            wanted = self._needs_transform_list(flat_inputs)
+            params = self.make_params(
+                [one for one, needs in zip(flat_inputs, wanted) if needs])
+            out = [self.transform(one, params) if needs else one
+                   for one, needs in zip(flat_inputs, wanted)]
+            return _tree_unflatten(out, spec)
+
+        def _needs_transform_list(self, flat_inputs):
+            """Which items this transform touches.
+
+            **The plain-tensor rule lives here**, and it is a running flag rather than a
+            per-item test: the *first* plain tensor is the image, and only if the sample
+            contains no `Image` or `Video` that has already claimed the job.
+            """
+            wanted = []
+            take_plain = not has_any(flat_inputs, Image, Video)
+            for one in flat_inputs:
+                needs = True
+                if not check_type(one, self._transformed_types):
+                    needs = False
+                elif is_pure_tensor(one):
+                    if take_plain:
+                        take_plain = False
+                    else:
+                        needs = False
+                wanted.append(needs)
+            return wanted
+
+        def extra_repr(self):
+            """**The plain settings, and nothing that is a tensor.** torchvision's rule,
+            and the reason is that a transform holding a whitening matrix would print
+            the matrix."""
+            out = []
+            for name, value in vars(self).items():
+                if name.startswith("_") or name == "training":
+                    continue
+                if not isinstance(value, (bool, int, float, str, tuple, list,
+                                          _enum.Enum)):
+                    continue
+                out.append(f"{name}={value}")
+            return ", ".join(out)
+
+    class ConvertBoundingBoxFormat(Transform):
+        """Boxes from one format to another, **and the label goes with them.**
+
+        The conversion itself is `ops.box_convert`, which was here already. What this
+        adds is that the result is still a `BoundingBoxes` and its `format` now says the
+        new one — without which the next transform reads the numbers under the old rule.
+        """
+
+        _transformed_types = (BoundingBoxes,)
+
+        def __init__(self, format):
+            super().__init__()
+            self.format = format
+
+        def transform(self, inpt, params):
+            return convert_bounding_box_format(inpt, new_format=self.format)
+
+    class ClampBoundingBoxes(Transform):
+        """Corners pushed back inside the canvas.
+
+        `clamping_mode="auto"` means **take the mode off the boxes themselves** — which
+        is why `BoundingBoxes` carries one. A transform that hard-coded a mode would
+        override a choice the caller made when they built the boxes.
+        """
+
+        _transformed_types = (BoundingBoxes,)
+
+        def __init__(self, clamping_mode="auto"):
+            super().__init__()
+            self.clamping_mode = clamping_mode
+
+        def transform(self, inpt, params):
+            return clamp_bounding_boxes(inpt, clamping_mode=self.clamping_mode)
+
+    class ClampKeyPoints(Transform):
+        """As above, for points. **There is no mode** — a point is either inside or it is
+        not, and there is no sliver to keep or drop."""
+
+        _transformed_types = (KeyPoints,)
+
+        def transform(self, inpt, params):
+            return clamp_keypoints(inpt)
+
+    class SetClampingMode(Transform):
+        """Change which mode the boxes carry, **without clamping them.**
+
+        Two things in one place is why this exists separately from `ClampBoundingBoxes`:
+        the mode is a property of the boxes and applies to every later transform, and
+        setting it is not the same as applying it now.
+        """
+
+        _transformed_types = (BoundingBoxes,)
+
+        def __init__(self, clamping_mode):
+            super().__init__()
+            self.clamping_mode = _check_clamping_mode(clamping_mode)
+
+        def transform(self, inpt, params):
+            return BoundingBoxes.wrap(inpt, inpt,
+                                      clamping_mode=self.clamping_mode)
+
+    return {"Transform": Transform,
+            "ConvertBoundingBoxFormat": ConvertBoundingBoxFormat,
+            "ClampBoundingBoxes": ClampBoundingBoxes,
+            "ClampKeyPoints": ClampKeyPoints,
+            "SetClampingMode": SetClampingMode}
+
+
+_V2_BASES = {}
+
+
+def _v2_dispatch(L):
+    made = _V2_BASES.get(id(L))
+    if made is None:
+        made = _v2_transform_base()
+        _V2_BASES[id(L)] = made
+    return made
+
+
+def convert_bounding_box_format(inpt, old_format=None, new_format=None,
+                                inplace=False):
+    """Boxes between the three formats, **carrying the label across.**
+
+    On a `BoundingBoxes` the old format is read off the boxes and passing it as well is
+    refused — two sources for one fact is a place they can disagree. On a plain tensor
+    there is nothing to read, so it must be given.
+    """
+    L = _backend()
+    if new_format is None:
+        raise ValueError("new_format must be given")
+    new_format = (new_format if isinstance(new_format, BoundingBoxFormat)
+                  else BoundingBoxFormat[str(new_format).upper()])
+    if isinstance(inpt, BoundingBoxes):
+        if old_format is not None:
+            raise ValueError("For bounding box tv_tensor inputs, `old_format` must not "
+                             "be passed.")
+        old_format = inpt.format
+    elif old_format is None:
+        raise ValueError("For pure tensor inputs, `old_format` has to be passed.")
+    else:
+        old_format = (old_format if isinstance(old_format, BoundingBoxFormat)
+                      else BoundingBoxFormat[str(old_format).upper()])
+    if old_format == new_format:
+        values = inpt.clone() if hasattr(inpt, "clone") else inpt
+    else:
+        values = L.tensor(_np.ascontiguousarray(_np.asarray(
+            box_convert(_np.asarray(_to_numpy(inpt), dtype=_np.float32),
+                        old_format.value.lower(), new_format.value.lower()),
+            dtype=_np.float32)))
+    if isinstance(inpt, BoundingBoxes):
+        return BoundingBoxes.wrap(values, inpt, format=new_format)
+    return values
+
+
+def clamp_bounding_boxes(inpt, format=None, canvas_size=None, clamping_mode="auto"):
+    """Corners pushed back inside the canvas.
+
+    **`soft` and `hard` are the same thing for a box that is not rotated**, which is
+    every box here — torchvision says so in a comment and it is copied rather than
+    guessed at, because the two names suggest a difference the arithmetic does not have.
+    `None` returns the boxes unchanged.
+
+    `auto` reads the mode off the boxes, and is refused on a plain tensor: there is
+    nothing to read it from, and defaulting would pick a mode the caller did not.
+    """
+    L = _backend()
+    if clamping_mode is not None and clamping_mode not in ("soft", "hard", "auto"):
+        raise ValueError("clamping_mode must be soft, hard, auto or None, got "
+                         f"{clamping_mode}")
+    if isinstance(inpt, BoundingBoxes):
+        if format is not None or canvas_size is not None:
+            raise ValueError("For bounding box tv_tensor inputs, `format` and "
+                             "`canvas_size` must not be passed.")
+        format, canvas_size = inpt.format, inpt.canvas_size
+        if clamping_mode == "auto":
+            clamping_mode = inpt.clamping_mode
+    elif format is None or canvas_size is None or clamping_mode == "auto":
+        raise ValueError("For pure tensor inputs, `format`, `canvas_size` and "
+                         "`clamping_mode` have to be passed.")
+    if clamping_mode is None:
+        return inpt.clone() if hasattr(inpt, "clone") else inpt
+    corners = _np.asarray(_to_numpy(convert_bounding_box_format(
+        L.tensor(_np.asarray(_to_numpy(inpt), dtype=_np.float32)),
+        old_format=format, new_format=BoundingBoxFormat.XYXY)), dtype=_np.float32)
+    corners = corners.copy()
+    corners[..., 0::2] = _np.clip(corners[..., 0::2], 0, canvas_size[1])
+    corners[..., 1::2] = _np.clip(corners[..., 1::2], 0, canvas_size[0])
+    back = convert_bounding_box_format(
+        L.tensor(_np.ascontiguousarray(corners)),
+        old_format=BoundingBoxFormat.XYXY, new_format=format)
+    if isinstance(inpt, BoundingBoxes):
+        return BoundingBoxes.wrap(back, inpt)
+    return back
+
+
+def clamp_keypoints(inpt, canvas_size=None):
+    """Points pushed back inside the canvas. **No mode** — a point has no area to lose."""
+    L = _backend()
+    if isinstance(inpt, KeyPoints):
+        if canvas_size is not None:
+            raise ValueError("For keypoints tv_tensor inputs, `canvas_size` must not "
+                             "be passed.")
+        canvas_size = inpt.canvas_size
+    elif canvas_size is None:
+        raise ValueError("For pure tensor inputs, `canvas_size` has to be passed.")
+    points = _np.asarray(_to_numpy(inpt), dtype=_np.float32).copy()
+    points[..., 0] = _np.clip(points[..., 0], 0, canvas_size[1] - 1)
+    points[..., 1] = _np.clip(points[..., 1], 0, canvas_size[0] - 1)
+    out = L.tensor(_np.ascontiguousarray(points))
+    return KeyPoints.wrap(out, inpt) if isinstance(inpt, KeyPoints) else out
+
 # ── ops: sampling a feature map at coordinates that are not integers ─────────────
 #
 # **Eleven names waited on one piece of arithmetic.** Their rows read *it crops from a
@@ -9977,6 +10637,45 @@ def _ops_getattr(name):
 ops.__getattr__ = _ops_getattr
 ops.__dir__ = lambda: sorted(set(ops.__dict__) | set(_ops_layers(_backend())))
 
+# ── the tv_tensor namespace, and v2's dispatch on top of it ─────────────────
+#
+# `tv_tensors` is a namespace of its own in torchvision, so it is one here. The five
+# types plus `wrap`, `set_return_type` and the format enum; `v2` then gets the thirteen
+# names that are the dispatch, and the four transform classes are built lazily for the
+# reason the `ops` layers are — they subclass the backend's `nn.Module`.
+tv_tensors = _types.ModuleType("borchvision.tv_tensors")
+_sys.modules["borchvision.tv_tensors"] = tv_tensors
+for _name in ("TVTensor", "Image", "Video", "Mask", "BoundingBoxes", "KeyPoints",
+              "BoundingBoxFormat", "wrap", "set_return_type",
+              "is_rotated_bounding_format"):
+    setattr(tv_tensors, _name, globals()[_name])
+
+for _name in ("query_size", "query_chw", "check_type", "has_any", "has_all",
+              "get_bounding_boxes", "get_keypoints"):
+    setattr(v2, _name, globals()[_name])
+
+def _v2_getattr(_name):
+    """`Transform` and the four that inherit it, built on first access.
+
+    As `ops.__getattr__` above and for the same reason — `use(L)` can change which
+    `nn.Module` they subclass after this module is imported. **It must raise
+    `AttributeError` and not `KeyError`**: a module's `__getattr__` is asked for
+    `__file__` by ordinary machinery, and a `KeyError` escaping it comes out of whatever
+    unrelated call was walking `sys.modules`.
+    """
+    if _name.startswith("__"):
+        raise AttributeError(
+            f"module 'borchvision.transforms.v2' has no attribute {_name!r}")
+    built = _v2_dispatch(_backend())
+    if _name not in built:
+        raise AttributeError(
+            f"module 'borchvision.transforms.v2' has no attribute {_name!r}")
+    return built[_name]
+
+
+v2.__getattr__ = _v2_getattr
+v2.__dir__ = lambda: sorted(set(v2.__dict__) | set(_v2_dispatch(_backend())))
+
 for _base, _fields in _V2_TABLE:
     setattr(v2, _base.__name__, _v2_twin(_base, _fields))
 
@@ -10012,6 +10711,13 @@ v2.AutoAugmentPolicy = AutoAugmentPolicy
 # body under a second name is the one that drifts because nobody is looking at it.
 v2_functional = _types.ModuleType("borchvision.transforms.v2.functional")
 v2.functional = v2_functional
+
+# **The three that the dispatch needs and the kernels do not own.** The corner warps
+# next door belong to `v2.functional` proper; these three are the clamping taxonomy and
+# the format conversion the type system is built on, so they go up with it.
+for _name in ("convert_bounding_box_format", "clamp_bounding_boxes",
+              "clamp_keypoints"):
+    setattr(v2_functional, _name, globals()[_name])
 _sys.modules["borchvision.transforms.v2.functional"] = v2_functional
 for _name in ("adjust_brightness", "adjust_contrast", "adjust_gamma", "adjust_hue",
               "adjust_saturation", "adjust_sharpness", "affine", "autocontrast",

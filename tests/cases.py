@@ -13173,6 +13173,144 @@ def v2_cases(inp=None):
         (V2_PREFIX + "ScaleJitter(one factor)",
          on(img_f, lambda m, L: m.ScaleJitter((8, 8), (1.0, 1.0)))),
     ]
+
+    # ── the type system, and the thirteen names that are it ─────────────────────
+    #
+    # **Thirteen of `v2`'s twenty absences were the type system rather than users of
+    # it.** The rows read *boxes travelling with the picture — the point of v2's type
+    # system*, and the point of a thing is not a reason it cannot exist.
+    #
+    # The boxes below are arranged, and three of the four are why: one sits inside the
+    # canvas, one hangs off the top-left into negative coordinates, one off the
+    # bottom-right past both edges, and one is degenerate. Clamping is the whole subject
+    # here and a box that is already inside cannot show it.
+    _BOXES = np.array([[1.0, 2.0, 5.0, 8.0],
+                       [-3.0, -1.0, 4.0, 3.0],
+                       [6.0, 4.0, 20.0, 20.0],
+                       [2.0, 2.0, 2.0, 6.0]], dtype=np.float32)
+    _CANVAS = (8, 10)
+
+    def _tv(L):
+        """`tv_tensors` for each side. **Not `_vision(L).tv_tensors`** — that helper
+        hands back the `transforms` module, and the types live one level up beside it."""
+        if _is_real_torch(L):
+            import torchvision.tv_tensors as real
+            return real
+        _vision(L)
+        import sys as _sys
+        return _sys.modules["borchvision"].tv_tensors
+
+    def _boxes(L, fmt="XYXY"):
+        made = _tv(L)
+        if _is_real_torch(L):
+            return made.BoundingBoxes(L.tensor(np.ascontiguousarray(_BOXES)),
+                                      format=fmt, canvas_size=_CANVAS)
+        return made.BoundingBoxes(np.ascontiguousarray(_BOXES), format=fmt,
+                                  canvas_size=_CANVAS)
+
+    def _values(L, out):
+        return L.tensor(np.ascontiguousarray(
+            np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
+
+    def convert_case(target):
+        """**The label goes with the numbers.** A conversion that returned a plain
+        tensor would leave the next transform reading the same four numbers under the
+        old rule — which is the failure the whole type system exists to prevent, and it
+        is invisible in the values."""
+        def run(L):
+            return _values(L, _vision_v2(L).functional.convert_bounding_box_format(
+                _boxes(L), new_format=target))
+        return run
+
+    def clamp_case(mode, fmt="XYXY"):
+        """**`soft` and `hard` are the same thing for a box that is not rotated**, which
+        is every box here — torchvision says so in a comment, and both are asked so that
+        a reader who invented a difference between them fails.
+
+        `None` returns the boxes untouched, which the two boxes hanging off the canvas
+        make visible and an inside-only fixture would not.
+        """
+        def run(L):
+            given = _boxes(L, fmt)
+            if fmt != "XYXY":
+                given = _vision_v2(L).functional.convert_bounding_box_format(
+                    _boxes(L), new_format=fmt)
+            return _values(L, _vision_v2(L).functional.clamp_bounding_boxes(
+                given, clamping_mode=mode))
+        return run
+
+    def transform_case(build):
+        def run(L):
+            return _values(L, build(_vision_v2(L))(_boxes(L)))
+        return run
+
+    def query_case(what):
+        """`query_size` asks **the boxes' canvas, not their shape.** A `(4, 4)` box
+        tensor is four boxes and not a four-by-four picture, which is why this cannot be
+        `shape[-2:]` on everything — and the fixture has exactly four boxes so that a
+        reader who did it that way agrees with the picture by accident."""
+        def run(L):
+            made = _tv(L)
+            picture = (made.Image(L.tensor(np.zeros((3, 8, 10), np.float32)))
+                       if _is_real_torch(L)
+                       else made.Image(np.zeros((3, 8, 10), np.float32)))
+            flat = [picture, _boxes(L)]
+            answer = getattr(_vision_v2(L), what)(flat)
+            return L.tensor(np.asarray(answer, dtype=np.float32))
+        return run
+
+    def nest_case(kind):
+        """**The shape of the sample comes back**, and the parts this transform does not
+        own come back untouched. A dict keeps its keys and their order; a tuple stays a
+        tuple; a string in the middle passes through.
+
+        Written against one tensor, every one of those is invisible.
+        """
+        def run(L):
+            v2 = _vision_v2(L)
+            made = _tv(L)
+
+            class Double(v2.Transform):
+                _transformed_types = (made.Image,)
+
+                def transform(self, inpt, params):
+                    return inpt * 2
+
+            picture = (made.Image(L.tensor(np.ones((1, 2, 2), np.float32)))
+                       if _is_real_torch(L)
+                       else made.Image(np.ones((1, 2, 2), np.float32)))
+            sample = ({"img": picture, "boxes": _boxes(L)} if kind == "dict"
+                      else (picture, _boxes(L)))
+            out = Double()(sample)
+            picked = out["img"] if kind == "dict" else out[0]
+            boxes = out["boxes"] if kind == "dict" else out[1]
+            marker = 1.0 if isinstance(out, dict) == (kind == "dict") else 0.0
+            kept = 1.0 if type(boxes).__name__ == "BoundingBoxes" else 0.0
+            return L.tensor(np.ascontiguousarray(np.concatenate([
+                np.asarray(_as_numpy(picked), dtype=np.float32).reshape(-1),
+                np.asarray([marker, kept], dtype=np.float32)])))
+        return run
+
+    cases += [
+        (V2_PREFIX + "convert_bounding_box_format(XYWH)", convert_case("XYWH")),
+        (V2_PREFIX + "convert_bounding_box_format(CXCYWH)", convert_case("CXCYWH")),
+        (V2_PREFIX + "clamp_bounding_boxes(soft)", clamp_case("soft")),
+        (V2_PREFIX + "clamp_bounding_boxes(hard, the same for these)",
+         clamp_case("hard")),
+        (V2_PREFIX + "clamp_bounding_boxes(None, untouched)", clamp_case(None)),
+        # **The clamp goes through XYXY and comes back**, so a format that is not the
+        # corners is where a one-way conversion shows.
+        (V2_PREFIX + "clamp_bounding_boxes(XYWH)", clamp_case("soft", "XYWH")),
+        (V2_PREFIX + "clamp_bounding_boxes(CXCYWH)", clamp_case("soft", "CXCYWH")),
+        (V2_PREFIX + "ClampBoundingBoxes",
+         transform_case(lambda m: m.ClampBoundingBoxes())),
+        (V2_PREFIX + "ConvertBoundingBoxFormat(XYWH)",
+         transform_case(lambda m: m.ConvertBoundingBoxFormat("XYWH"))),
+        (V2_PREFIX + "query_size(the boxes' canvas)", query_case("query_size")),
+        (V2_PREFIX + "query_chw(images only)", query_case("query_chw")),
+        (V2_PREFIX + "Transform(a dict comes back a dict)", nest_case("dict")),
+        (V2_PREFIX + "Transform(a tuple comes back a tuple)", nest_case("tuple")),
+    ]
     return cases
 
 

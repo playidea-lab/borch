@@ -257,6 +257,19 @@ def run(headed=False, verbose=False):
 # head of a reason string and `test_site.py` reads `아직` to split the remainder into
 # backlog and never. They move when those checks move, and not before.
 NOT_PORTED = {
+    # **v2's type system.** `tv_tensors` are `torch.Tensor` subclasses that carry a
+    # label — a box's format and canvas, a mask's being a mask — and the thirteen names
+    # here are the dispatch that reads those labels off a flattened sample.
+    #
+    # borch.ts has no subclassable tensor to hang a label on: `Tensor` there is a handle
+    # to a GPU buffer, and the thing that makes a tv_tensor work on the Python side is
+    # that `isinstance` answers. Carrying this over is designing a second mechanism, not
+    # writing a second body — a tagged wrapper, or a parallel dict of metadata, and
+    # which one is a decision nobody has taken.
+    "v2::": (13, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
+                        "to a buffer and cannot be subclassed to carry a label, so this "
+                        "needs a mechanism that side does not have rather than a body "
+                        "it has not been given"),
     # **The seven losses torch keeps at top level as well as under `F`.** They were
     # declined as *the raw ATen op — its signature differs from F's*, which was about
     # why the name looks redundant rather than about what was missing; the arithmetic

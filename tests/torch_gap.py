@@ -597,18 +597,10 @@ SKIPPED = {
     #
     # Everything else absent from v2 is the to-do list and reads as one: 38 of its 72
     # names are the transforms this library already has, one namespace over.
-    "transforms.v2.ClampBoundingBoxes": "boxes travelling with the picture — the point "
-                                        "of v2's type system, and it pays off with a "
-                                        "detector, which the catalogue has none of",
-    "transforms.v2.ClampKeyPoints": "as above, for keypoints",
     "transforms.v2.SanitizeBoundingBoxes": "as above",
     "transforms.v2.SanitizeKeyPoints": "as above",
-    "transforms.v2.ConvertBoundingBoxFormat": "as above",
-    "transforms.v2.SetClampingMode": "as above",
     "transforms.v2.RandomIoUCrop": "a detection augmentation — it crops by how much of "
                                    "a box survives, so it is boxes or it is nothing",
-    "transforms.v2.get_bounding_boxes": "reads the boxes out of a v2 sample — as above",
-    "transforms.v2.get_keypoints": "as above",
     "transforms.v2.UniformTemporalSubsample": "video. There is no video anywhere in "
                                               "this project and a tutorial's first ten "
                                               "lines do not open one",
@@ -616,21 +608,6 @@ SKIPPED = {
     "transforms.v2.PILToTensor": "it takes a PIL image and nothing here makes one — "
                                  "as in v1",
     "transforms.v2.ConvertImageDtype": "uint8 has no storage in this subset — as in v1",
-    "transforms.v2.Transform": "**the base class every v2 transform inherits**, and its "
-                               "body is the tv_tensor dispatch: flatten the sample, "
-                               "decide per leaf whether this leaf gets transformed, "
-                               "reassemble. Here the transforms inherit v1's classes "
-                               "instead and take a picture, so there is no sample to "
-                               "walk. Present as a name it would be an empty class that "
-                               "subclassing gets nothing from",
-    "transforms.v2.query_size": "reads `(H, W)` out of **a sample** — a dict or tuple "
-                                "of tv_tensors where the picture has to be found first. "
-                                "On a bare array that is `.shape`, so what the function "
-                                "is for is the part that is missing",
-    "transforms.v2.query_chw": "as above, for `(C, H, W)`",
-    "transforms.v2.has_any": "asks which tv_tensor types are in a sample — as above",
-    "transforms.v2.has_all": "as above",
-    "transforms.v2.check_type": "as above",
     "transforms.v2.JPEG": "it encodes and decodes JPEG. numpy has no codec, and adding "
                           "one is the dependency this library does without — the same "
                           "answer PIL gets",
