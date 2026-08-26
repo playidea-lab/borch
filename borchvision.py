@@ -4052,6 +4052,68 @@ def _png_rows(raw, width, height, depth, channels, colour, palette, alpha,
     return _np.ascontiguousarray(samples)
 
 
+def _bmp_read(data):
+    """One uncompressed BMP — `(h, w)` for a grey palette, `(h, w, 3)` otherwise.
+
+    **The format with no compression to speak of**: a fourteen-byte file header, a
+    forty-byte information header, an optional palette, and the rows. `PhotoTour`'s
+    patch sheets are stored this way, which is what makes that dataset a walk rather
+    than a codec.
+
+    Three things here each produce a picture rather than an error, so each is done
+    where it can be seen:
+
+    - **The rows run bottom to top** unless the height is negative, which is how the
+      format says top-down. Ignoring it returns the picture upside down.
+    - **Every row is padded to four bytes.** On a width that is not a multiple of four
+      the padding shifts each row a little further than the last, and the result is a
+      sheared picture that still looks like the original.
+    - **The samples are BGR, not RGB.** Red and blue swap, which on a photograph is
+      obvious and on a greyscale patch is invisible.
+
+    Compression and the depths below eight are refused by name. `BI_RLE8` exists and
+    is not written here, because the only thing that reads BMPs in this library is a
+    dataset that does not use it.
+    """
+    if data[:2] != b"BM":
+        raise ValueError("not a BMP — the two-byte signature does not match")
+    (offset,) = _struct.unpack_from("<I", data, 10)
+    header, width, height, _planes, depth, compression = _struct.unpack_from(
+        "<IiiHHI", data, 14)
+    if compression != 0:
+        raise ValueError(
+            f"this BMP is compressed (BI_ type {compression}) and only the "
+            "uncompressed form is read here")
+    if depth not in (8, 24, 32):
+        raise ValueError(f"BMP bit depth {depth} is not one this reads")
+
+    top_down = height < 0
+    height = abs(height)
+    stride = (width * depth // 8 + 3) // 4 * 4          # rows padded to four bytes
+    rows = _np.frombuffer(data, dtype=_np.uint8, count=stride * height,
+                          offset=offset).reshape(height, stride)
+    if not top_down:
+        rows = rows[::-1]
+
+    if depth == 8:
+        samples = rows[:, :width]
+        palette = _np.frombuffer(data, dtype=_np.uint8, count=(offset - 14 - header),
+                                 offset=14 + header).reshape(-1, 4)
+        # **A grey palette is a grey picture.** PIL calls that mode `L` and hands back
+        # one channel; expanding it to three would make `PhotoTour`'s own reshape an
+        # error against code that works.
+        if _np.array_equal(palette[:, 0], palette[:, 1]) and \
+                _np.array_equal(palette[:, 1], palette[:, 2]):
+            if _np.array_equal(palette[:, 0], _np.arange(len(palette), dtype=_np.uint8)):
+                return _np.ascontiguousarray(samples)
+            return _np.ascontiguousarray(palette[samples, 0])
+        return _np.ascontiguousarray(palette[samples][:, :, 2::-1])
+
+    channels = depth // 8
+    samples = rows[:, :width * channels].reshape(height, width, channels)
+    return _np.ascontiguousarray(samples[:, :, 2::-1])   # BGR to RGB, alpha dropped
+
+
 def _ppm_read(data):
     """One binary PPM/PGM (`P5` or `P6`) as `uint8`.
 
@@ -5170,7 +5232,7 @@ class DatasetFolder(VisionDataset):
 #: folder holding them is a folder this cannot read. Naming them here rather than
 #: taking torch's list whole is what makes that visible at construction instead of
 #: on the picture that happens to be JPEG.
-IMG_EXTENSIONS = (".png", ".ppm", ".pgm")
+IMG_EXTENSIONS = (".bmp", ".png", ".ppm", ".pgm")
 
 
 def _folder_loader(path):
@@ -5190,6 +5252,8 @@ def _folder_loader(path):
         return _png_read(data)
     if data[:2] in (b"P5", b"P6"):
         return _ppm_read(data)
+    if data[:2] == b"BM":
+        return _bmp_read(data)
     if data[:2] == b"\xff\xd8":
         raise ValueError(
             f"{path} is JPEG, and there is no JPEG decoder here.\n"
@@ -6256,6 +6320,205 @@ class Middlebury2014Stereo(_StereoMatchingDataset):
         return one, (one > 0).squeeze(0)
 
 
+
+class Kitti(VisionDataset):
+    """KITTI's 2D object set — **a picture and a list of boxes.**
+
+    <http://www.cvlibs.net/datasets/kitti/eval_object.php>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*, pointing at a sentence about JPEG. **The
+    pictures are PNG.** They sit in `image_2`, the same directory name this library
+    already reads for `KittiFlow` and `Kitti2015Stereo`, and the labels are one line
+    of fifteen space-separated fields per object. Nothing here is a codec; the row was
+    a family resemblance to forty-four others that do have one.
+
+    ## The fifteen fields
+
+    They are parsed by position, and the positions are not evenly spaced: one string,
+    a float, an **int**, a float, four for the box, three for the size, three for the
+    place, one for the angle. `occluded` is a level and not a fraction, which is why
+    it alone is an `int`; reading it as a float gives a target that trains and a
+    number that means the same thing, until something groups by it.
+
+    **The directory is walked in `os.listdir` order by torchvision and sorted here.**
+    That order is the disk's — sorted on one filesystem, hashed on another — so
+    torchvision's item order changes with where the tree sits, and sorting costs
+    nothing.
+    """
+
+    image_dir_name = "image_2"
+    labels_dir_name = "label_2"
+
+    def __init__(self, root, train=True, transform=None, target_transform=None,
+                 transforms=None, download=False):
+        super().__init__(root, transform=transform,
+                         target_transform=target_transform, transforms=transforms)
+        if download:
+            raise ValueError(
+                "Kitti(download=True) is not implemented here.\n"
+                "  It is two zips from an S3 bucket, and the reader above takes the "
+                "extracted tree.")
+        self.images = []
+        self.targets = []
+        self.train = train
+        self._location = "training" if self.train else "testing"
+        base = _os.path.join(self.root, "Kitti", "raw", self._location)
+        if not _os.path.isdir(_os.path.join(base, self.image_dir_name)):
+            raise RuntimeError(
+                "Dataset not found. You may use download=True to download it.")
+        pictures = _os.path.join(base, self.image_dir_name)
+        for name in sorted(_os.listdir(pictures)):
+            self.images.append(_os.path.join(pictures, name))
+            if self.train:
+                self.targets.append(_os.path.join(
+                    base, self.labels_dir_name, f"{name.split('.')[0]}.txt"))
+
+    def __len__(self):
+        return len(self.images)
+
+    def _parse_target(self, index):
+        target = []
+        with open(self.targets[index]) as handle:
+            for line in _csv.reader(handle, delimiter=" "):
+                target.append({
+                    "type": line[0],
+                    "truncated": float(line[1]),
+                    "occluded": int(line[2]),
+                    "alpha": float(line[3]),
+                    "bbox": [float(one) for one in line[4:8]],
+                    "dimensions": [float(one) for one in line[8:11]],
+                    "location": [float(one) for one in line[11:14]],
+                    "rotation_y": float(line[14]),
+                })
+        return target
+
+    def __getitem__(self, index):
+        image = _folder_loader(self.images[index])
+        target = self._parse_target(index) if self.train else None
+        if self.transforms is not None:
+            image, target = self.transforms(image, target)
+        return image, target
+
+
+class PhotoTour(VisionDataset):
+    """Brown's patch set — **64×64 patches cut out of BMP sheets.**
+
+    <http://phototour.cs.washington.edu/patches/default.htm>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*. The pictures are **BMP**: a file header, an
+    information header, a palette and the rows, with no compression involved. It is
+    the cheapest format this library reads after PPM, and it was refused for
+    forty-four other datasets' reason.
+
+    ## Two shapes, one dataset
+
+    `train=True` gives **one patch**; `train=False` gives **two patches and whether
+    they match**. That is not a split of the same items — it is a different task off
+    the same bytes, and a reader that returned patches for both would leave the
+    matching half untestable.
+
+    ## What is not here
+
+    torchvision caches the decoded patches to a `.pt` beside the data and reads that
+    afterwards. This builds from the sheets every time. A `.pt` is `torch.save`'s
+    pickle, and writing one would mean writing a format whose reader this library has
+    deliberately never had.
+    """
+
+    image_ext = "bmp"
+    info_file = "info.txt"
+    matches_files = "m50_100000_100000_0.txt"
+    _PATCH = 64
+
+    lens = {"notredame": 468159, "yosemite": 633587, "liberty": 450092,
+            "liberty_harris": 379587, "yosemite_harris": 450912,
+            "notredame_harris": 325295}
+    means = {"notredame": 0.4854, "yosemite": 0.4844, "liberty": 0.4437,
+             "notredame_harris": 0.4854, "yosemite_harris": 0.4844,
+             "liberty_harris": 0.4437}
+    stds = {"notredame": 0.1864, "yosemite": 0.1818, "liberty": 0.2019,
+            "notredame_harris": 0.1864, "yosemite_harris": 0.1818,
+            "liberty_harris": 0.2019}
+
+    def __init__(self, root, name, train=True, transform=None, download=False):
+        super().__init__(root, transform=transform)
+        self.name = name
+        self.data_dir = _os.path.join(self.root, name)
+        self.train = train
+        self.mean = self.means[name]
+        self.std = self.stds[name]
+        if download:
+            raise ValueError(
+                "PhotoTour(download=True) is not implemented here.\n"
+                "  It is one zip per subset from a university host, and the reader "
+                "above takes the extracted directory.")
+        self.data = self._read_patches()
+        self.labels = self._read_info()
+        self.matches = self._read_matches()
+
+    def _read_patches(self):
+        """**Each sheet is a grid of patches**, read left to right and then down.
+
+        Row-major within a sheet and sheets in sorted order: the patch index is a
+        position in that traversal and nothing in a filename gives it, so a reader that
+        took the sheets in directory order would number every patch differently and
+        still return patches.
+        """
+        patches = []
+        sheets = sorted(name for name in _os.listdir(self.data_dir)
+                        if name.endswith(self.image_ext))
+        for sheet in sheets:
+            picture = _np.asarray(_folder_loader(_os.path.join(self.data_dir, sheet)))
+            height, width = picture.shape[:2]
+            for top in range(0, height, self._PATCH):
+                for left in range(0, width, self._PATCH):
+                    patches.append(picture[top:top + self._PATCH,
+                                           left:left + self._PATCH])
+        return _np.asarray(patches[:self.lens[self.name]], dtype=_np.uint8)
+
+    def _read_info(self):
+        """The 3D point each patch belongs to — **the first field only**, and the
+        second is the camera, which is not a label."""
+        with open(_os.path.join(self.data_dir, self.info_file)) as handle:
+            return _np.asarray([int(line.split()[0]) for line in handle],
+                               dtype=_np.int64)
+
+    def _read_matches(self):
+        """`(first patch, second patch, whether they are the same point)`.
+
+        **The answer is a comparison, not a column.** Each line names two patches and
+        the point each belongs to; the label is whether those two point ids agree, and
+        no field in the file holds it.
+        """
+        matches = []
+        with open(_os.path.join(self.data_dir, self.matches_files)) as handle:
+            for line in handle:
+                parts = line.split()
+                matches.append([int(parts[0]), int(parts[3]),
+                                int(parts[1] == parts[4])])
+        return _np.asarray(matches, dtype=_np.int64)
+
+    def __len__(self):
+        return len(self.data if self.train else self.matches)
+
+    def __getitem__(self, index):
+        if self.train:
+            data = self.data[index]
+            if self.transform is not None:
+                data = self.transform(data)
+            return data
+        first, second, same = self.matches[index]
+        one, two = self.data[first], self.data[second]
+        if self.transform is not None:
+            one = self.transform(one)
+            two = self.transform(two)
+        return one, two, same
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -6762,7 +7025,7 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification", "Sintel", "RenderedSST2", "KittiFlow", "HD1K",
               "Kitti2012Stereo", "Kitti2015Stereo", "InStereo2k", "SintelStereo",
               "CarlaStereo", "ETH3DStereo", "SceneFlowStereo", "FlyingThings3D",
-              "Middlebury2014Stereo",
+              "Middlebury2014Stereo", "Kitti", "PhotoTour",
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])

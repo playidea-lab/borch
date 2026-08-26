@@ -305,3 +305,82 @@ def test_keep_depth_gives_what_decode_png_gives(channels, tmp_path):
     got = V._png_read(path.read_bytes(), keep_depth=True)
     assert got.dtype == np.uint16 and np.array_equal(got, want)
     assert np.array_equal(got, arr), "the samples are not the ones that were written"
+
+
+@pytest.mark.parametrize("size", [(6, 8), (5, 7), (3, 13)])
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+def test_the_bmp_reader_agrees_with_pil(mode, size, tmp_path):
+    """**Widths that are not a multiple of four are the point.** Every BMP row is
+    padded to four bytes, and a reader that ignored it shifts each row a little
+    further than the last — a sheared picture that still looks like the original. 8
+    and 13 are both wrong-length widths; only 8 is a multiple of four.
+    """
+    height, width = size
+    rng = np.random.default_rng(4)
+    shape = (height, width) if mode == "L" else (height, width, 3)
+    img = Image.fromarray(rng.integers(0, 256, shape).astype(np.uint8), mode)
+    path = tmp_path / "sheet.bmp"
+    img.save(path, format="BMP")
+
+    want = np.asarray(Image.open(path))
+    got = V._bmp_read(path.read_bytes())
+    assert got.shape == want.shape, (
+        f"{got.shape} against PIL's {want.shape} — a grey palette is one channel")
+    assert np.array_equal(got, want), (
+        "same shape, different pixels: the rows run bottom to top, they are padded to "
+        "four bytes, and the samples are BGR. Each of those alone returns a picture.")
+
+
+def test_a_compressed_bmp_is_refused_by_name(tmp_path):
+    """`BI_RLE8` exists and is not written here, so it is refused rather than read as
+    if the bytes were raw — which would return noise shaped like a picture."""
+    path = tmp_path / "plain.bmp"
+    Image.fromarray(np.zeros((4, 4), np.uint8), "L").save(path, format="BMP")
+    raw = bytearray(path.read_bytes())
+    raw[30] = 1                                   # compression field: BI_RLE8
+    with pytest.raises(ValueError, match="compressed"):
+        V._bmp_read(bytes(raw))
+
+
+@pytest.fixture
+def kitti_root(tmp_path):
+    base = tmp_path / "Kitti" / "raw" / "training"
+    (base / "image_2").mkdir(parents=True)
+    (base / "label_2").mkdir(parents=True)
+    for i in (1, 2):
+        Image.fromarray(np.full((3, 4, 3), i * 10, np.uint8)).save(
+            base / "image_2" / f"{i:06d}.png")
+        (base / "label_2" / f"{i:06d}.txt").write_text(
+            f"Car 0.00 {i} -1.57 1.1 2.2 3.3 4.4 1.5 1.6 4.0 1.8 1.9 8.0 -1.2\n"
+            f"Pedestrian 0.5 {i % 3} 0.1 5.5 6.6 7.7 8.8 1.7 0.6 0.9 2.8 1.5 9.0 0.4\n")
+    return tmp_path
+
+
+def test_kitti_targets_match_torchvisions_including_the_types(kitti_root):
+    """The golden case carries the numbers; **the class name and `occluded`'s type are
+    what it cannot hold.** `occluded` is a level, not a fraction, and reading it as a
+    float agrees on every value and on nothing else until something groups by it.
+    """
+    ours = V.datasets.Kitti(str(kitti_root))
+    theirs = T.Kitti(str(kitti_root))
+    assert len(ours) == len(theirs)
+
+    # **torchvision walks `image_2` with `os.listdir` and does not sort it**, so its
+    # item order is the disk's — sorted on one filesystem, hashed on another. The
+    # comparison is therefore by path and not by position; sorting here is the better
+    # rule and a different one, and this test is about the targets rather than about
+    # whose order wins.
+    mine = dict(zip(ours.images, (ours[i][1] for i in range(len(ours)))))
+    yours = dict(zip(theirs.images, (theirs[i][1] for i in range(len(theirs)))))
+    assert sorted(mine) == sorted(yours)
+    for path, target in mine.items():
+        assert target == yours[path]
+        for box in target:
+            assert isinstance(box["occluded"], int) and not isinstance(
+                box["occluded"], bool)
+            assert isinstance(box["type"], str)
+
+
+def test_kitti_without_the_tree_says_so(tmp_path):
+    with pytest.raises(RuntimeError, match="Dataset not found"):
+        V.datasets.Kitti(str(tmp_path))
