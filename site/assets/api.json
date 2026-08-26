@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 302
+  "missing": 303
  },
  "modules": [
   {
@@ -7862,12 +7862,17 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(threshold: number, value: number)",
+       "signature": "constructor(threshold: number, value: number, inplace?: boolean)",
        "doc": ""
       },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
        "doc": ""
       }
      ]
@@ -8324,7 +8329,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p?: number)",
+       "signature": "constructor(p?: number, inplace?: boolean)",
        "doc": ""
       },
       {
@@ -9313,7 +9318,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(lower?: number, upper?: number)",
+       "signature": "constructor(lower?: number, upper?: number, inplace?: boolean)",
        "doc": ""
       },
       {
@@ -9324,7 +9329,7 @@
       {
        "name": "describe",
        "signature": "describe(): string",
-       "doc": ""
+       "doc": "**`inplace` appears only when it is true**, which is not how the dropout family\nbelow prints it — those show `inplace=False` always. Two conventions inside one\nfeature, and the only way to know which applies where is to call `repr` on the\nreal thing. Measured: `RReLU(lower=0.125, upper=0.3333333333333333)` against\n`RReLU(lower=0.125, upper=0.3333333333333333, inplace=True)`."
       }
      ]
     },
@@ -9617,7 +9622,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p?: number)",
+       "signature": "constructor(p?: number, inplace?: boolean)",
        "doc": ""
       }
      ]
@@ -9630,7 +9635,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p?: number)",
+       "signature": "constructor(p?: number, inplace?: boolean)",
        "doc": ""
       }
      ]
@@ -9643,7 +9648,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p?: number)",
+       "signature": "constructor(p?: number, inplace?: boolean)",
        "doc": ""
       }
      ]
@@ -9656,7 +9661,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p?: number)",
+       "signature": "constructor(p?: number, inplace?: boolean)",
        "doc": ""
       }
      ]
@@ -9669,7 +9674,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p?: number)",
+       "signature": "constructor(p?: number, inplace?: boolean)",
        "doc": ""
       }
      ]
@@ -11558,7 +11563,7 @@
     {
      "kind": "const",
      "name": "functional",
-     "signature": "export declare const functional: { affineGrid: typeof affineGrid; batchNorm: typeof batchNorm; ctcLoss: typeof ctcLoss; embedding: typeof embedding; embeddingBag: typeof embeddingBag; gridSample: typeof gridSample; gumbelSoftmax: typeof gumbelSoftmax; multiHeadAttentionForward: typeof multiHeadAttentionForward; scaledDotProductAttention: typeof scaledDotProductAttention; alphaDropout(input: Tensor, p?: number, training?: boolean, perChannel?: boolean): Tensor; avgPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; bilinear(input: Tensor, other: Tensor, weight: Tensor, bias?: Tensor | null): Tensor; celu(input: Tensor, alpha?: number): Tensor; channelShuffle(input: Tensor, groups: number): Tensor; conv1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor; cosineSimilarity(input: Tensor, other: Tensor, dim?: number, eps?: number): Tensor; crossEntropy(input: Tensor, target: Tensor): Tensor; dropout(input: Tensor, p?: number, training?: boolean): Tensor; fold(input: Tensor, outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; gaussianNllLoss(input: Tensor, target: Tensor, variance: Tensor, full?: boolean, eps?: number, reduction?: Reduction): Tensor; glu(input: Tensor, dim?: number): Tensor; groupNorm(input: Tensor, numGroups: number, eps?: number): Tensor; hardshrink(input: Tensor, lambd?: number): Tensor; hardtanh(input: Tensor, minVal?: number, maxVal?: number): Tensor; hingeEmbeddingLoss(input: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor; instanceNorm(input: Tensor, eps?: number): Tensor; klDiv(input: Tensor, target: Tensor, reduction?: Reduction | \"batchmean\", logTarget?: boolean): Tensor; l1Loss(input: Tensor, target: Tensor): Tensor; leakyRelu(input: Tensor, slope?: number): Tensor; linear(input: Tensor, weight: Tensor): Tensor; localResponseNorm(input: Tensor, size: number, alpha?: number, beta?: number, k?: number): Tensor; logSoftmax(input: Tensor, dim?: number): Tensor; marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor; maxPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; mseLoss(input: Tensor, target: Tensor): Tensor; multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, reduction?: Reduction): Tensor; multilabelMarginLoss(input: Tensor, target: Tensor, reduction?: Reduction): Tensor; multilabelSoftMarginLoss(input: Tensor, target: Tensor, weight?: Tensor, reduction?: Reduction): Tensor; nllLoss(input: Tensor, target: Tensor): Tensor; normalize(input: Tensor, dim?: number, eps?: number): Tensor; oneHot(input: Tensor, classes: number): Tensor; pairwiseDistance(input: Tensor, other: Tensor, p?: number, eps?: number, keepdim?: boolean): Tensor; pdist(input: Tensor, p?: number): Tensor; pixelShuffle(input: Tensor, upscaleFactor: number): Tensor; pixelUnshuffle(input: Tensor, downscaleFactor: number): Tensor; poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, eps?: number, reduction?: Reduction): Tensor; prelu(input: Tensor, weight: Tensor): Tensor; rrelu(input: Tensor, lower?: number, upper?: number, training?: boolean): Tensor; smoothL1Loss(input: Tensor, target: Tensor, beta?: number): Tensor; softMarginLoss(input: Tensor, target: Tensor, reduction?: Reduction): Tensor; softmax(input: Tensor, dim?: number): Tensor; softmin(input: Tensor, dim?: number): Tensor; softplus(input: Tensor, beta?: number, threshold?: number): Tensor; softshrink(input: Tensor, lambd?: number): Tensor; threshold(input: Tensor, t: number, value: number): Tensor; tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, reduction?: Reduction): Tensor; unfold(input: Tensor, kernelSize: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; huberLoss(input: Tensor, target: Tensor, reduction?: Reduction, delta?: number): Tensor; relu(input: Tensor): Tensor; relu6(input: Tensor): Tensor; sigmoid(input: Tensor): Tensor; hardsigmoid(input: Tensor): Tensor; hardswish(input: Tensor): Tensor; logsigmoid(input: Tensor): Tensor; mish(input: Tensor): Tensor; selu(input: Tensor): Tensor; softsign(input: Tensor): Tensor; tanh(input: Tensor): Tensor; tanhshrink(input: Tensor): Tensor; avgPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; avgPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; convTranspose1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; lpPool1d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool2d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool3d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; maxPool1dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool2dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool3dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxUnpool1d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool2d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool3d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; fractionalMaxPool2d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool2dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; binaryCrossEntropyWithLogits(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, posWeight?: Tensor): Tensor; binaryCrossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; adaptiveAvgPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool2dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool3dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; tripletMarginWithDistanceLoss(anchor: Tensor, positive: Tensor, negative: Tensor, distanceFunction?: ((u: Tensor, v: Tensor) => Tensor) | null, margin?: number, swap?: boolean, reduction?: Reduction): Tensor; }",
+     "signature": "export declare const functional: { affineGrid: typeof affineGrid; batchNorm: typeof batchNorm; ctcLoss: typeof ctcLoss; embedding: typeof embedding; embeddingBag: typeof embeddingBag; gridSample: typeof gridSample; gumbelSoftmax: typeof gumbelSoftmax; multiHeadAttentionForward: typeof multiHeadAttentionForward; scaledDotProductAttention: typeof scaledDotProductAttention; alphaDropout(input: Tensor, p?: number, training?: boolean, perChannel?: boolean): Tensor; avgPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; bilinear(input: Tensor, other: Tensor, weight: Tensor, bias?: Tensor | null): Tensor; celu(input: Tensor, alpha?: number): Tensor; channelShuffle(input: Tensor, groups: number): Tensor; conv1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; cosineSimilarity(input: Tensor, other: Tensor, dim?: number, eps?: number): Tensor; crossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction, labelSmoothing?: number): Tensor; dropout(input: Tensor, p?: number, training?: boolean): Tensor; fold(input: Tensor, outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; gaussianNllLoss(input: Tensor, target: Tensor, variance: Tensor, full?: boolean, eps?: number, reduction?: Reduction): Tensor; glu(input: Tensor, dim?: number): Tensor; groupNorm(input: Tensor, numGroups: number, eps?: number): Tensor; hardshrink(input: Tensor, lambd?: number): Tensor; hardtanh(input: Tensor, minVal?: number, maxVal?: number): Tensor; hingeEmbeddingLoss(input: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor; instanceNorm(input: Tensor, eps?: number): Tensor; klDiv(input: Tensor, target: Tensor, reduction?: Reduction | \"batchmean\", logTarget?: boolean): Tensor; l1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; leakyRelu(input: Tensor, slope?: number): Tensor; linear(input: Tensor, weight: Tensor): Tensor; localResponseNorm(input: Tensor, size: number, alpha?: number, beta?: number, k?: number): Tensor; logSoftmax(input: Tensor, dim?: number): Tensor; marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; maxPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; mseLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelMarginLoss(input: Tensor, target: Tensor, reduction?: Reduction): Tensor; multilabelSoftMarginLoss(input: Tensor, target: Tensor, weight?: Tensor, reduction?: Reduction): Tensor; nllLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; normalize(input: Tensor, dim?: number, eps?: number): Tensor; oneHot(input: Tensor, classes: number): Tensor; pairwiseDistance(input: Tensor, other: Tensor, p?: number, eps?: number, keepdim?: boolean): Tensor; pdist(input: Tensor, p?: number): Tensor; pixelShuffle(input: Tensor, upscaleFactor: number): Tensor; pixelUnshuffle(input: Tensor, downscaleFactor: number): Tensor; poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, sizeAverage?: boolean | null, eps?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; prelu(input: Tensor, weight: Tensor): Tensor; rrelu(input: Tensor, lower?: number, upper?: number, training?: boolean): Tensor; smoothL1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, beta?: number): Tensor; softMarginLoss(input: Tensor, target: Tensor, reduction?: Reduction): Tensor; softmax(input: Tensor, dim?: number): Tensor; softmin(input: Tensor, dim?: number): Tensor; softplus(input: Tensor, beta?: number, threshold?: number): Tensor; softshrink(input: Tensor, lambd?: number): Tensor; threshold(input: Tensor, t: number, value: number): Tensor; tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; unfold(input: Tensor, kernelSize: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; huberLoss(input: Tensor, target: Tensor, reduction?: Reduction, delta?: number): Tensor; relu(input: Tensor): Tensor; relu6(input: Tensor): Tensor; sigmoid(input: Tensor): Tensor; hardsigmoid(input: Tensor): Tensor; hardswish(input: Tensor): Tensor; logsigmoid(input: Tensor): Tensor; mish(input: Tensor): Tensor; selu(input: Tensor): Tensor; softsign(input: Tensor): Tensor; tanh(input: Tensor): Tensor; tanhshrink(input: Tensor): Tensor; avgPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; avgPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; convTranspose1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; lpPool1d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool2d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool3d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; maxPool1dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool2dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool3dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxUnpool1d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool2d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool3d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; fractionalMaxPool2d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool2dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; binaryCrossEntropyWithLogits(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, posWeight?: Tensor): Tensor; binaryCrossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; adaptiveAvgPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool2dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool3dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; tripletMarginWithDistanceLoss(anchor: Tensor, positive: Tensor, negative: Tensor, distanceFunction?: ((u: Tensor, v: Tensor) => Tensor) | null, margin?: number, swap?: boolean, reduction?: Reduction): Tensor; }",
      "doc": "",
      "members": []
     },
@@ -11792,7 +11797,7 @@
      ]
     }
    ],
-   "count": 776,
+   "count": 777,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -11866,7 +11871,7 @@
     {
      "kind": "function",
      "name": "cosineEmbeddingLoss",
-     "signature": "export declare function cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor",
+     "signature": "export declare function cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor",
      "doc": "",
      "members": [],
      "torch": "cosine_embedding_loss"
@@ -11882,7 +11887,7 @@
     {
      "kind": "function",
      "name": "crossEntropy",
-     "signature": "export declare function crossEntropy(input: Tensor, target: Tensor): Tensor",
+     "signature": "export declare function crossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction, labelSmoothing?: number): Tensor",
      "doc": "",
      "members": [],
      "torch": "cross_entropy"
@@ -11965,7 +11970,7 @@
     {
      "kind": "function",
      "name": "l1Loss",
-     "signature": "export declare function l1Loss(input: Tensor, target: Tensor): Tensor",
+     "signature": "export declare function l1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor",
      "doc": "",
      "members": [],
      "torch": "l1_loss"
@@ -12004,7 +12009,7 @@
     {
      "kind": "function",
      "name": "marginRankingLoss",
-     "signature": "export declare function marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor",
+     "signature": "export declare function marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor",
      "doc": "",
      "members": [],
      "torch": "margin_ranking_loss"
@@ -12036,7 +12041,7 @@
     {
      "kind": "function",
      "name": "mseLoss",
-     "signature": "export declare function mseLoss(input: Tensor, target: Tensor): Tensor",
+     "signature": "export declare function mseLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor",
      "doc": "",
      "members": [],
      "torch": "mse_loss"
@@ -12044,7 +12049,7 @@
     {
      "kind": "function",
      "name": "multiMarginLoss",
-     "signature": "export declare function multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, reduction?: Reduction): Tensor",
+     "signature": "export declare function multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor",
      "doc": "",
      "members": [],
      "torch": "multi_margin_loss"
@@ -12068,7 +12073,7 @@
     {
      "kind": "function",
      "name": "nllLoss",
-     "signature": "export declare function nllLoss(input: Tensor, target: Tensor): Tensor",
+     "signature": "export declare function nllLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction): Tensor",
      "doc": "",
      "members": [],
      "torch": "nll_loss"
@@ -12122,7 +12127,7 @@
     {
      "kind": "function",
      "name": "poissonNllLoss",
-     "signature": "export declare function poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, eps?: number, reduction?: Reduction): Tensor",
+     "signature": "export declare function poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, sizeAverage?: boolean | null, eps?: number, reduce?: boolean | null, reduction?: Reduction): Tensor",
      "doc": "",
      "members": [],
      "torch": "poisson_nll_loss"
@@ -12144,7 +12149,7 @@
     {
      "kind": "function",
      "name": "smoothL1Loss",
-     "signature": "export declare function smoothL1Loss(input: Tensor, target: Tensor, beta?: number): Tensor",
+     "signature": "export declare function smoothL1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, beta?: number): Tensor",
      "doc": "",
      "members": [],
      "torch": "smooth_l1_loss"
@@ -12195,7 +12200,7 @@
     {
      "kind": "function",
      "name": "tripletMarginLoss",
-     "signature": "export declare function tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, reduction?: Reduction): Tensor",
+     "signature": "export declare function tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor",
      "doc": "",
      "members": [],
      "torch": "triplet_margin_loss"

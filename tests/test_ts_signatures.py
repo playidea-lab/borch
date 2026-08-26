@@ -1022,9 +1022,30 @@ SHORTER = {
     # torch itself tells you not to use, so it is short on purpose — the count going
     # down by three rather than four is the record of that.
     #
-    # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
-    # is what nearly all forty-six are short of.
-    "nn": 46,
+    # **46 → 38.** The eight the thirteen activations passed over: `Dropout`, `1d`,
+    # `2d`, `3d`, `AlphaDropout`, `FeatureAlphaDropout`, `RReLU` and `Threshold`. The
+    # machinery was already here — `writeBack` — and the dropout family had been
+    # *printing* `inplace=False` for a seat it could not take, which is the tidiest way
+    # to look finished.
+    #
+    # Two of the eight take the seat and do not act on it, because **torch's own layers
+    # do not**: `AlphaDropout.forward` calls `F.alpha_dropout(input, p, training)` with
+    # no fourth argument while `Dropout2d` passes `self.inplace`. Honouring it here
+    # would be the more sensible behaviour and the wrong port — code written against
+    # torch may read `x` after the call, and torch guarantees it survives.
+    #
+    # **What retires this line is not what this comment used to say.** It said `device`
+    # and `dtype` were "what nearly all forty-six are short of". Measured: those two
+    # accounted for 66 of 231 missing arguments and **no row was short of only them**,
+    # so growing those two seats would have retired zero rows. The sentence was written
+    # from the most frequent name rather than from the rows, and a count of names cannot
+    # see that a row needs three other things as well.
+    #
+    # What is actually left is `kernel_size` (15), `out_channels` (12) and
+    # `padding_mode` (12) — the convolution family taking its sizes differently — plus
+    # the `in_features`/`hidden_size` pairs. `device`/`dtype` come with those, never
+    # instead of them.
+    "nn": 38,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

@@ -69,7 +69,12 @@ export function conv3d(input: Tensor, weight: Tensor, bias: Tensor | null = null
   return input.conv3d(weight, bias, stride, padding);
 }
 
-export function cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin = 0.0, reduction: Reduction = "mean"): Tensor {
+export function cosineEmbeddingLoss(
+  input: Tensor, other: Tensor, target: Tensor, margin = 0.0,
+  sizeAverage: boolean | null = null, reduce: boolean | null = null,
+  reduction: Reduction = "mean",
+): Tensor {
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
   return input.cosineEmbeddingLoss(other, target, margin, reduction);
 }
 
@@ -77,8 +82,19 @@ export function cosineSimilarity(input: Tensor, other: Tensor, dim = 1, eps = 1e
   return input.cosineSimilarity(other, dim, eps);
 }
 
-export function crossEntropy(input: Tensor, target: Tensor): Tensor {
-  return input.crossEntropy(target);
+export function crossEntropy(
+  input: Tensor, target: Tensor, weight?: Tensor,
+  sizeAverage: boolean | null = null, ignoreIndex = -100,
+  reduce: boolean | null = null, reduction: Reduction = "mean",
+  labelSmoothing = 0.0,
+): Tensor {
+  // **`ignoreIndex` sits between the pair**, which is torch's order and not a tidy one.
+  // `nn.ts` says the same about the classes: a rule that puts `sizeAverage` and
+  // `reduce` side by side is right about twelve of them and wrong about this one,
+  // `NLLLoss` and `PoissonNLLLoss`.
+  refuseWeight("cross_entropy", "weight", weight);
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
+  return input.crossEntropy(target, ignoreIndex, reduction, labelSmoothing);
 }
 
 export function dropout(input: Tensor, p = 0.5, training = true): Tensor {
@@ -122,8 +138,13 @@ export function klDiv(input: Tensor, target: Tensor, reduction: Reduction | "bat
   return input.klDiv(target, reduction, logTarget);
 }
 
-export function l1Loss(input: Tensor, target: Tensor): Tensor {
-  return input.l1Loss(target);
+export function l1Loss(
+  input: Tensor, target: Tensor, sizeAverage: boolean | null = null,
+  reduce: boolean | null = null, reduction: Reduction = "mean", weight?: Tensor,
+): Tensor {
+  refuseWeight("l1_loss", "weight", weight);
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
+  return input.l1Loss(target, reduction);
 }
 
 
@@ -143,7 +164,12 @@ export function logSoftmax(input: Tensor, dim = 0): Tensor {
   return input.logSoftmax(dim);
 }
 
-export function marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin = 0.0, reduction: Reduction = "mean"): Tensor {
+export function marginRankingLoss(
+  input: Tensor, other: Tensor, target: Tensor, margin = 0.0,
+  sizeAverage: boolean | null = null, reduce: boolean | null = null,
+  reduction: Reduction = "mean",
+): Tensor {
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
   return input.marginRankingLoss(other, target, margin, reduction);
 }
 
@@ -159,11 +185,21 @@ export function maxPool3d(input: Tensor, kernel = 2, stride?: number): Tensor {
   return input.maxPool3d(kernel, stride);
 }
 
-export function mseLoss(input: Tensor, target: Tensor): Tensor {
-  return input.mseLoss(target);
+export function mseLoss(
+  input: Tensor, target: Tensor, sizeAverage: boolean | null = null,
+  reduce: boolean | null = null, reduction: Reduction = "mean", weight?: Tensor,
+): Tensor {
+  refuseWeight("mse_loss", "weight", weight);
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
+  return input.mseLoss(target, reduction);
 }
 
-export function multiMarginLoss(input: Tensor, target: Tensor, p = 1, margin = 1.0, weight: Tensor | null = null, reduction: Reduction = "mean"): Tensor {
+export function multiMarginLoss(
+  input: Tensor, target: Tensor, p = 1, margin = 1.0,
+  weight: Tensor | null = null, sizeAverage: boolean | null = null,
+  reduce: boolean | null = null, reduction: Reduction = "mean",
+): Tensor {
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
   return input.multiMarginLoss(target, p, margin, weight, reduction);
 }
 
@@ -180,8 +216,15 @@ export function multilabelSoftMarginLoss(
   return input.multilabelSoftMarginLoss(target, weight, reduction);
 }
 
-export function nllLoss(input: Tensor, target: Tensor): Tensor {
-  return input.nllLoss(target);
+export function nllLoss(
+  input: Tensor, target: Tensor, weight?: Tensor,
+  sizeAverage: boolean | null = null, ignoreIndex = -100,
+  reduce: boolean | null = null, reduction: Reduction = "mean",
+): Tensor {
+  // `ignoreIndex` between the pair, as `crossEntropy` above and for the same reason.
+  refuseWeight("nll_loss", "weight", weight);
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
+  return input.nllLoss(target, ignoreIndex, reduction);
 }
 
 export function normalize(input: Tensor, dim = 1, eps = 1e-12): Tensor {
@@ -209,7 +252,15 @@ export function pixelUnshuffle(input: Tensor, downscaleFactor: number): Tensor {
   return input.pixelUnshuffle(downscaleFactor);
 }
 
-export function poissonNllLoss(input: Tensor, target: Tensor, logInput = true, full = false, eps = 1e-8, reduction: Reduction = "mean"): Tensor {
+export function poissonNllLoss(
+  input: Tensor, target: Tensor, logInput = true, full = false,
+  sizeAverage: boolean | null = null, eps = 1e-8, reduce: boolean | null = null,
+  reduction: Reduction = "mean",
+): Tensor {
+  // **`eps` sat in `sizeAverage`'s seat.** torch puts the pair either side of `eps`
+  // here, so appending the two would have been wrong twice over — a number was landing
+  // where a boolean goes, and `reduction` where `eps` does.
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
   return input.poissonNllLoss(target, logInput, full, eps, reduction);
 }
 
@@ -222,8 +273,16 @@ export function rrelu(input: Tensor, lower = 1 / 8, upper = 1 / 3, training = fa
   return input.rrelu(lower, upper, training);
 }
 
-export function smoothL1Loss(input: Tensor, target: Tensor, beta = 1.0): Tensor {
-  return input.smoothL1Loss(target, beta);
+export function smoothL1Loss(
+  input: Tensor, target: Tensor, sizeAverage: boolean | null = null,
+  reduce: boolean | null = null, reduction: Reduction = "mean", beta = 1.0,
+): Tensor {
+  // **`beta` sat in `sizeAverage`'s seat**, and there was no `reduction` at all — so
+  // `smoothL1Loss(x, t, "sum")` set the beta to a string, which compares false against
+  // every difference and quietly gives the `beta = 1` answer. That is the shape a peer
+  // found in the binding's `huber_loss` on the same afternoon.
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
+  return input.smoothL1Loss(target, beta, reduction);
 }
 
 export function softMarginLoss(input: Tensor, target: Tensor, reduction: Reduction = "mean"): Tensor {
@@ -250,7 +309,12 @@ export function threshold(input: Tensor, t: number, value: number): Tensor {
   return input.threshold(t, value);
 }
 
-export function tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin = 1.0, p = 2.0, eps = 1e-6, swap = false, reduction: Reduction = "mean"): Tensor {
+export function tripletMarginLoss(
+  input: Tensor, positive: Tensor, negative: Tensor, margin = 1.0, p = 2.0,
+  eps = 1e-6, swap = false, sizeAverage: boolean | null = null,
+  reduce: boolean | null = null, reduction: Reduction = "mean",
+): Tensor {
+  reduction = legacyReduction(sizeAverage, reduce, reduction);
   return input.tripletMarginLoss(positive, negative, margin, p, eps, swap, reduction);
 }
 

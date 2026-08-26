@@ -50,15 +50,43 @@ def require_fresh_dist(root=ROOT):
     `check:ts` is `--noEmit`, so it does not mend this place. Forgetting the build is what
     the structure invites, so it is better to stop when it is forgotten — **before
     anything else is suspected.**
+
+    ## An emit whose source is gone reads as staleness the build cannot fix
+
+    The age test takes the *oldest* `.js`, so one leftover drags the whole verdict down.
+    Delete a `.ts` — a scratch probe, a renamed module — and `tsc` leaves its `.js`
+    behind: it emits, it does not sweep. From then on this function fires on every run
+    and prescribes `npm run build:ts`, which rebuilds everything and **changes nothing
+    about the file that is failing.** A check that is always red is ignored exactly as
+    fast as one that is always green, and this one arrives with a remedy that cannot
+    work, so the reader concludes the check is broken rather than the tree.
+
+    Found by walking into it: a probe under `test/` was written, compiled, and removed,
+    and the next four runs all stopped here with a correct verdict and the wrong cause.
+    So the orphans are named separately — the sweep is one line, but only for someone
+    who knows that is what they are looking at.
     """
     dist = root / "borch-ts" / "dist"
     if not dist.exists():
         raise SystemExit(f"no emit: {dist}\n  first: npm run build:ts")
+    src_root = root / "borch-ts"
     newest_src = max(
-        (p.stat().st_mtime for p in (root / "borch-ts").rglob("*.ts")
+        (p.stat().st_mtime for p in src_root.rglob("*.ts")
          if "dist" not in p.parts and "node_modules" not in p.parts),
         default=0)
-    oldest_out = min((p.stat().st_mtime for p in dist.rglob("*.js")), default=0)
+
+    outs = list(dist.rglob("*.js"))
+    orphans = [p for p in outs
+               if not (src_root / p.relative_to(dist).with_suffix(".ts")).exists()]
+    if orphans:
+        listed = "\n".join(f"    {p.relative_to(root)}" for p in sorted(orphans)[:10])
+        raise SystemExit(
+            "emitted files whose source is gone — `tsc` emits but does not sweep.\n"
+            f"{listed}\n"
+            "  delete them; rebuilding will not, and they hold the age test down\n"
+            "  because it reads the *oldest* emit.")
+
+    oldest_out = min((p.stat().st_mtime for p in outs), default=0)
     if newest_src > oldest_out:
         raise SystemExit(
             "the emit is older than the source — the runner loads `borch-ts/dist`.\n"

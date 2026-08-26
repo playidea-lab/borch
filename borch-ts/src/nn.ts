@@ -1110,12 +1110,20 @@ export class Softplus extends Module {
 }
 
 export class Threshold extends Module {
-  constructor(private readonly threshold: number, private readonly value: number) {
+  constructor(private readonly threshold: number, private readonly value: number,
+              private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.threshold(this.threshold, this.value);
+    const out = x.threshold(this.threshold, this.value);
+    return this.inplace ? writeBack(x, out) : out;
+  }
+
+  // `inplace` only when true, as `RReLU` — not the dropout family's always-print.
+  override describe(): string {
+    const pair = `threshold=${pyFloat(this.threshold)}, value=${pyFloat(this.value)}`;
+    return `Threshold(${pair}${this.inplace ? ", inplace=True" : ""})`;
   }
 }
 
@@ -1613,12 +1621,13 @@ export class ConvTranspose3d extends ConvTransposeND {
  * while only inference is wrong.
  */
 export class Dropout extends Module {
-  constructor(private readonly p = 0.5) {
+  constructor(private readonly p = 0.5, private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.dropout(this.p, this.training);
+    const out = x.dropout(this.p, this.training);
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -2524,14 +2533,24 @@ export class Softmax2d extends Module {
 }
 
 export class RReLU extends Module {
-  constructor(readonly lower = 1 / 8, readonly upper = 1 / 3) { super(); }
+  constructor(readonly lower = 1 / 8, readonly upper = 1 / 3,
+              private readonly inplace = false) { super(); }
 
   override forward(x: Tensor): Tensor {
-    return x.rrelu(this.lower, this.upper, this.training);
+    const out = x.rrelu(this.lower, this.upper, this.training);
+    return this.inplace ? writeBack(x, out) : out;
   }
 
+  /**
+   * **`inplace` appears only when it is true**, which is not how the dropout family
+   * below prints it — those show `inplace=False` always. Two conventions inside one
+   * feature, and the only way to know which applies where is to call `repr` on the
+   * real thing. Measured: `RReLU(lower=0.125, upper=0.3333333333333333)` against
+   * `RReLU(lower=0.125, upper=0.3333333333333333, inplace=True)`.
+   */
   override describe(): string {
-    return `RReLU(lower=${pyFloat(this.lower)}, upper=${pyFloat(this.upper)})`;
+    const bounds = `lower=${pyFloat(this.lower)}, upper=${pyFloat(this.upper)}`;
+    return `RReLU(${bounds}${this.inplace ? ", inplace=True" : ""})`;
   }
 }
 
@@ -2808,40 +2827,71 @@ export class ChannelShuffle extends Module {
   override describe(): string { return `ChannelShuffle(groups=${this.groups})`; }
 }
 
-/** The root of the drop-by-channel family. **It prints `inplace` too** — torch does. */
+/**
+ * The root of the drop-by-channel family. **It prints `inplace` always** — torch does,
+ * unlike `RReLU` and `Threshold` above, which print it only when true.
+ *
+ * ## torch's two alpha layers accept the flag and drop it
+ *
+ * This is not a simplification on our side. Read torch's own `forward`:
+ *
+ * ```python
+ * class Dropout2d:            return F.dropout2d(input, self.p, self.training, self.inplace)
+ * class AlphaDropout:         return F.alpha_dropout(input, self.p, self.training)
+ * class FeatureAlphaDropout:  return F.feature_alpha_dropout(input, self.p, self.training)
+ * ```
+ *
+ * The functions honour `inplace`; the two alpha *layers* never hand it over. Measured
+ * on real torch across four ranks: `nn.AlphaDropout(0.5, inplace=True)(x)` returns a
+ * new tensor and leaves `x` untouched, while `F.alpha_dropout(x, inplace=True)` returns
+ * `x` itself with the buffer moved.
+ *
+ * **So `honours` is per-class, and the two that do not still take the seat.** Honouring
+ * it here would be the more sensible behaviour and the wrong port: code that works
+ * against torch may read `x` after the call, and torch guarantees it survives. Being
+ * better than the thing you are imitating is a way of being different from it.
+ */
 class FeatureDropoutBase extends Module {
   constructor(
     readonly label: string,
     readonly p = 0.5,
     private readonly alpha = false,
     private readonly perChannel = true,
+    private readonly inplace = false,
+    /** Whether torch's layer actually forwards the flag. False for the alpha pair. */
+    private readonly honours = true,
   ) { super(); }
 
   override forward(x: Tensor): Tensor {
-    return this.alpha
+    const out = this.alpha
       ? x.alphaDropout(this.p, this.training, this.perChannel)
       : x.featureDropout(this.p, this.training);
+    return this.inplace && this.honours ? writeBack(x, out) : out;
   }
 
   override describe(): string {
-    return `${this.label}(p=${this.p}, inplace=False)`;
+    return `${this.label}(p=${this.p}, inplace=${this.inplace ? "True" : "False"})`;
   }
 }
 
 export class Dropout1d extends FeatureDropoutBase {
-  constructor(p?: number) { super("Dropout1d", p); }
+  constructor(p?: number, inplace = false) { super("Dropout1d", p, false, true, inplace); }
 }
 export class Dropout2d extends FeatureDropoutBase {
-  constructor(p?: number) { super("Dropout2d", p); }
+  constructor(p?: number, inplace = false) { super("Dropout2d", p, false, true, inplace); }
 }
 export class Dropout3d extends FeatureDropoutBase {
-  constructor(p?: number) { super("Dropout3d", p); }
+  constructor(p?: number, inplace = false) { super("Dropout3d", p, false, true, inplace); }
 }
 export class AlphaDropout extends FeatureDropoutBase {
-  constructor(p?: number) { super("AlphaDropout", p, true, false); }
+  constructor(p?: number, inplace = false) {
+    super("AlphaDropout", p, true, false, inplace, false);
+  }
 }
 export class FeatureAlphaDropout extends FeatureDropoutBase {
-  constructor(p?: number) { super("FeatureAlphaDropout", p, true, true); }
+  constructor(p?: number, inplace = false) {
+    super("FeatureAlphaDropout", p, true, true, inplace, false);
+  }
 }
 
 // ── Lazy layers ────────────────────────────────────────────────────────

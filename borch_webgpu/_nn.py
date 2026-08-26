@@ -1686,7 +1686,7 @@ _MISC_ARGS = {
     "Fold": ("output_size", "kernel_size", "dilation", "padding", "stride"),
     "LocalResponseNorm": ("size", "alpha", "beta", "k"),
     "Softmax2d": (),
-    "RReLU": ("lower", "upper"),
+    "RReLU": ("lower", "upper", "inplace"),
     # **borch.ts takes `scale` and nothing else.** torch's `size=` is a different way
     # of asking and that side has no seat for it, so it is refused by name below rather
     # than dropped — an argument that raises with its own name beats one that silently
@@ -1701,10 +1701,18 @@ _MISC_ARGS = {
 
 # Accepted by the core and with nowhere to go on the other side. Refused rather than
 # ignored, and listed rather than counted.
-_MISC_REFUSED = {
-
-    ("RReLU", "inplace"): "there is no in-place activation on that side",
-}
+#
+# **This table is empty, and that is the interesting state.** Its one row said
+# `("RReLU", "inplace"): "there is no in-place activation on that side"` — true when it
+# was written and false the moment borch.ts grew `writeBack`. A refusal carries its
+# reason as prose, and prose does not notice when the world moves under it; what caught
+# this was `test_the_binding_sends_each_argument_to_the_seat_borch_ts_keeps_for_it`
+# compiling the row against the far side and finding one more seat than the table knew.
+#
+# Keep the name and the empty dict rather than deleting them: the mechanism is what
+# makes a refusal a listed decision instead of a silent drop, and the next argument that
+# genuinely has nowhere to go belongs here.
+_MISC_REFUSED = {}
 
 
 def _misc_layer(name):
