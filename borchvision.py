@@ -106,9 +106,15 @@ _lib = None
 
 def use(L):
     """Choose which library `ToTensor` builds its tensors in. Called when
-    attaching to the sister library."""
+    attaching to the sister library.
+
+    **The tv_tensor types are rebound here too.** They subclass the backend's
+    `Tensor`, so a module imported before this call holds five classes built on
+    whichever library `_backend()` reached for first.
+    """
     global _lib
     _lib = L
+    globals().update(_tv_types(L))
     return L
 
 
@@ -4016,84 +4022,185 @@ class BoundingBoxFormat(_enum.Enum):
     CXCYWH = "CXCYWH"
 
 
-class TVTensor(_backend().Tensor):
-    """The base every one of these subclasses.
+_TV_NAMES = ("TVTensor", "Image", "Video", "Mask", "BoundingBoxes", "KeyPoints")
+_TV_TYPES = {}
 
-    **Four operations keep the subclass and the rest do not.** `clone`, `detach`, `to`
-    and `requires_grad_` come back as the same type; `+`, indexing, `reshape` and
-    `cpu()` come back as plain tensors. That is torchvision's rule, measured rather
-    than assumed, and the reason `wrap` exists: a transform puts the label back on
-    deliberately, so nothing half-transformed keeps claiming to be a box.
+
+def _tv_types(L):
+    """The five tv_tensor types and their base, **built on the backend in use.**
+
+    They subclass `L.Tensor`, and which `L` that is has to be decided when the module
+    is bound rather than when it is imported. Written as plain classes, the base was
+    whichever library happened to be imported first — always the numpy core, because
+    `_backend()` falls back to it — and in the browser the boxes then carried the
+    core's `.data` descriptor while holding the binding's handle. **Thirteen golden
+    cases said `'BoundingBoxes' object has no attribute '_array'`**, four frames away
+    from anything that mentioned a backend.
+
+    Cached on the backend, as `_ops_layers` is and for the same reason: rebuilt per
+    call, `isinstance` would fail against a class the caller already holds.
     """
+    made = _TV_TYPES.get(id(L))
+    if made is not None:
+        return made
 
-    _METADATA = ()
+    class TVTensor(L.Tensor):
+        """The base every one of these subclasses.
 
-    def __new__(cls, data, **kwargs):
-        """A tensor of `cls`, **built through the backend's own factory.**
-
-        Not by calling `Tensor.__init__` with the arguments the core's takes: the three
-        implementations do not share that signature, and the binding's raised
-        *unexpected keyword argument `requires_grad`* on thirteen golden cases while
-        numpy and the browser passed. Two of three answering is not this table's
-        standard.
-
-        So `L.tensor(...)` builds a real one and its instance state is moved onto an
-        object of this class. What that assumes is only that the state lives in
-        `__dict__`, which is true of all three.
-        """
-        L = _backend()
-        built = data if isinstance(data, L.Tensor) else L.tensor(
-            _np.ascontiguousarray(_np.asarray(data, dtype=_np.float32)))
-        out = L.Tensor.__new__(cls)
-        _copy_tensor_state(built, out)
-        kwargs.pop("requires_grad", None)
-        return out
-
-    def __init__(self, *args, **kwargs):
-        """**Everything happens in `__new__`, and this exists to swallow the arguments.**
-
-        Python calls `__init__` with whatever `__new__` was called with, so
-        `BoundingBoxes(data, canvas_size=...)` would reach `Tensor.__init__` and be
-        refused for a keyword it does not take. The tensor is already built by the time
-        this runs.
+        **Four operations keep the subclass and the rest do not.** `clone`, `detach`, `to`
+        and `requires_grad_` come back as the same type; `+`, indexing, `reshape` and
+        `cpu()` come back as plain tensors. That is torchvision's rule, measured rather
+        than assumed, and the reason `wrap` exists: a transform puts the label back on
+        deliberately, so nothing half-transformed keeps claiming to be a box.
         """
 
-    def _metadata(self):
-        return {name: getattr(self, name) for name in self._METADATA}
+        _METADATA = ()
 
-    @classmethod
-    def wrap(cls, wrappee, like, **kwargs):
-        """The label from `like` put onto `wrappee`, with any of it overridden.
+        def __new__(cls, data, **kwargs):
+            """A tensor of `cls`, **built through the backend's own factory.**
 
-        **Subclasses do not each write this** — the metadata names are declared once in
-        `_METADATA` and copied by name. A subclass that grew a field and forgot to copy
-        it would produce boxes whose format silently came from nowhere.
+            Not by calling `Tensor.__init__` with the arguments the core's takes: the three
+            implementations do not share that signature, and the binding's raised
+            *unexpected keyword argument `requires_grad`* on thirteen golden cases while
+            numpy and the browser passed. Two of three answering is not this table's
+            standard.
+
+            So `L.tensor(...)` builds a real one and its instance state is moved onto an
+            object of this class. What that assumes is only that the state lives in
+            `__dict__`, which is true of all three.
+            """
+            L = _backend()
+            built = data if isinstance(data, L.Tensor) else L.tensor(
+                _np.ascontiguousarray(_np.asarray(data, dtype=_np.float32)))
+            out = L.Tensor.__new__(cls)
+            _copy_tensor_state(built, out)
+            kwargs.pop("requires_grad", None)
+            return out
+
+        def __init__(self, *args, **kwargs):
+            """**Everything happens in `__new__`, and this exists to swallow the arguments.**
+
+            Python calls `__init__` with whatever `__new__` was called with, so
+            `BoundingBoxes(data, canvas_size=...)` would reach `Tensor.__init__` and be
+            refused for a keyword it does not take. The tensor is already built by the time
+            this runs.
+            """
+
+        def _metadata(self):
+            return {name: getattr(self, name) for name in self._METADATA}
+
+        @classmethod
+        def wrap(cls, wrappee, like, **kwargs):
+            """The label from `like` put onto `wrappee`, with any of it overridden.
+
+            **Subclasses do not each write this** — the metadata names are declared once in
+            `_METADATA` and copied by name. A subclass that grew a field and forgot to copy
+            it would produce boxes whose format silently came from nowhere.
+            """
+            out = cls.__new__(cls, wrappee)
+            for name in cls._METADATA:
+                setattr(out, name, kwargs.get(name, getattr(like, name)))
+            return out
+
+        def _same(self, values):
+            return type(self).wrap(values, self)
+
+        def _base(self, name, *args, **kwargs):
+            """`super().<name>(...)`, **including the names the backend answers
+            dynamically.**
+
+            `super()` searches types. The binding forwards a name it does not have to
+            the JavaScript tensor through `__getattr__` **on the instance**, which a
+            type search never reaches — so `super().clone()` stopped with *'super'
+            object has no attribute 'clone'* there while the core, where `clone` is a
+            written method, answered. One golden case said so, and the other three
+            below happened to be written methods on both sides: the difference was in
+            which backend, not in which operation.
+            """
+            fn = getattr(L.Tensor, name, None)
+            if fn is not None:
+                return fn(self, *args, **kwargs)
+            plain = L.Tensor.__new__(L.Tensor)
+            _copy_tensor_state(self, plain)
+            return getattr(plain, name)(*args, **kwargs)
+
+        def clone(self):
+            return self._same(self._base("clone"))
+
+        def detach(self):
+            return self._same(self._base("detach"))
+
+        def to(self, *args, **kwargs):
+            return self._same(self._base("to", *args, **kwargs))
+
+        def requires_grad_(self, requires_grad=True):
+            self._base("requires_grad_", requires_grad)
+            return self
+
+        def __repr__(self):
+            inner = super().__repr__()
+            extra = ", ".join(f"{name}={getattr(self, name)}" for name in self._METADATA)
+            return f"{type(self).__name__}({inner}{', ' + extra if extra else ''})"
+
+
+    class Image(TVTensor):
+        """A picture. **No metadata at all** — the type is the whole of what it carries, and
+        that is enough: a transform asks *is this the image* and the answer is the class."""
+
+
+    class Video(TVTensor):
+        """A clip. As `Image`, and separate from it because a transform that resizes a
+        picture and a transform that resizes a video ask different questions about the
+        leading axes."""
+
+
+    class Mask(TVTensor):
+        """A segmentation map. **Resized with nearest-neighbour and never interpolated**,
+        which is the one thing knowing it is a mask buys — a bilinear resize invents labels
+        that are the average of two classes and belong to neither."""
+
+
+    class BoundingBoxes(TVTensor):
+        """Boxes, with **the format and the canvas they are drawn on.**
+
+        Both are needed and neither can be read off the numbers. The format because four
+        numbers are four numbers; the canvas because clamping a box needs to know what it is
+        being clamped to, and the picture may have been resized since.
         """
-        out = cls.__new__(cls, wrappee)
-        for name in cls._METADATA:
-            setattr(out, name, kwargs.get(name, getattr(like, name)))
-        return out
 
-    def _same(self, values):
-        return type(self).wrap(values, self)
+        _METADATA = ("format", "canvas_size", "clamping_mode")
 
-    def clone(self):
-        return self._same(super().clone())
+        def __new__(cls, data, *, format=BoundingBoxFormat.XYXY, canvas_size=None,
+                    clamping_mode="soft", **kwargs):
+            out = super().__new__(cls, data, **kwargs)
+            out.format = (format if isinstance(format, BoundingBoxFormat)
+                          else BoundingBoxFormat[str(format).upper()])
+            out.canvas_size = tuple(canvas_size) if canvas_size is not None else None
+            out.clamping_mode = _check_clamping_mode(clamping_mode)
+            return out
 
-    def detach(self):
-        return self._same(super().detach())
 
-    def to(self, *args, **kwargs):
-        return self._same(super().to(*args, **kwargs))
+    class KeyPoints(TVTensor):
+        """Points, with the canvas. **No format** — a keypoint is two numbers and there is
+        only one way to write them, which is why this carries one field where the boxes
+        carry three."""
 
-    def requires_grad_(self, requires_grad=True):
-        super().requires_grad_(requires_grad)
-        return self
+        _METADATA = ("canvas_size",)
 
-    def __repr__(self):
-        inner = super().__repr__()
-        extra = ", ".join(f"{name}={getattr(self, name)}" for name in self._METADATA)
-        return f"{type(self).__name__}({inner}{', ' + extra if extra else ''})"
+        def __new__(cls, data, *, canvas_size=None, **kwargs):
+            out = super().__new__(cls, data, **kwargs)
+            out.canvas_size = tuple(canvas_size) if canvas_size is not None else None
+            return out
+
+    made = {"TVTensor": TVTensor, "Image": Image, "Video": Video, "Mask": Mask,
+            "BoundingBoxes": BoundingBoxes, "KeyPoints": KeyPoints}
+    _TV_TYPES[id(L)] = made
+    return made
+
+
+# The names exist from import, so `from borchvision import BoundingBoxes` works
+# before anything has chosen a backend. `use(L)` rebinds them.
+globals().update(_tv_types(_backend()))
 
 
 def _copy_tensor_state(src, dst):
@@ -4107,69 +4214,23 @@ def _copy_tensor_state(src, dst):
 
     The subclass declares no `__slots__` of its own, so it gets a dict and can hold the
     metadata; the tensor's own fields go across by name.
+
+    **Both are copied, not one or the other.** Written as *dict if there is one, else
+    slots*, it read the source's shape as the backend's — true while the source was
+    always a freshly built base tensor, and false the moment a `BoundingBoxes` was the
+    source: a subclass has a dict *and* inherits the binding's `_h`, so the handle was
+    left behind. The plain tensor built from it then had no `_h`, its `__getattr__`
+    asked for `_h`, and that asks `__getattr__` again — a `RecursionError` reported
+    from a box that was only being clamped.
     """
-    if hasattr(src, "__dict__"):
-        dst.__dict__.update(src.__dict__)
-        return
-    seen = []
     for kind in type(src).__mro__:
-        seen.extend(getattr(kind, "__slots__", ()))
-    for name in seen:
-        try:
-            setattr(dst, name, getattr(src, name))
-        except AttributeError:
-            pass
-
-class Image(TVTensor):
-    """A picture. **No metadata at all** — the type is the whole of what it carries, and
-    that is enough: a transform asks *is this the image* and the answer is the class."""
-
-
-class Video(TVTensor):
-    """A clip. As `Image`, and separate from it because a transform that resizes a
-    picture and a transform that resizes a video ask different questions about the
-    leading axes."""
-
-
-class Mask(TVTensor):
-    """A segmentation map. **Resized with nearest-neighbour and never interpolated**,
-    which is the one thing knowing it is a mask buys — a bilinear resize invents labels
-    that are the average of two classes and belong to neither."""
-
-
-class BoundingBoxes(TVTensor):
-    """Boxes, with **the format and the canvas they are drawn on.**
-
-    Both are needed and neither can be read off the numbers. The format because four
-    numbers are four numbers; the canvas because clamping a box needs to know what it is
-    being clamped to, and the picture may have been resized since.
-    """
-
-    _METADATA = ("format", "canvas_size", "clamping_mode")
-
-    def __new__(cls, data, *, format=BoundingBoxFormat.XYXY, canvas_size=None,
-                clamping_mode="soft", **kwargs):
-        out = super().__new__(cls, data, **kwargs)
-        out.format = (format if isinstance(format, BoundingBoxFormat)
-                      else BoundingBoxFormat[str(format).upper()])
-        out.canvas_size = tuple(canvas_size) if canvas_size is not None else None
-        out.clamping_mode = _check_clamping_mode(clamping_mode)
-        return out
-
-
-class KeyPoints(TVTensor):
-    """Points, with the canvas. **No format** — a keypoint is two numbers and there is
-    only one way to write them, which is why this carries one field where the boxes
-    carry three."""
-
-    _METADATA = ("canvas_size",)
-
-    def __new__(cls, data, *, canvas_size=None, **kwargs):
-        out = super().__new__(cls, data, **kwargs)
-        out.canvas_size = tuple(canvas_size) if canvas_size is not None else None
-        return out
-
-
+        for name in getattr(kind, "__slots__", ()):
+            try:
+                setattr(dst, name, getattr(src, name))
+            except AttributeError:
+                pass
+    if hasattr(src, "__dict__") and hasattr(dst, "__dict__"):
+        dst.__dict__.update(src.__dict__)
 _CLAMPING_MODES = ("soft", "hard", None)
 
 
@@ -11025,10 +11086,28 @@ ops.__dir__ = lambda: sorted(set(ops.__dict__) | set(_ops_layers(_backend())))
 # reason the `ops` layers are — they subclass the backend's `nn.Module`.
 tv_tensors = _types.ModuleType("borchvision.tv_tensors")
 _sys.modules["borchvision.tv_tensors"] = tv_tensors
-for _name in ("TVTensor", "Image", "Video", "Mask", "BoundingBoxes", "KeyPoints",
-              "BoundingBoxFormat", "wrap", "set_return_type",
+for _name in ("BoundingBoxFormat", "wrap", "set_return_type",
               "is_rotated_bounding_format"):
     setattr(tv_tensors, _name, globals()[_name])
+
+
+def _tv_tensors_getattr(name):
+    """The five types and their base, **read off the module rather than copied.**
+
+    Copied in with `setattr` at import, `tv_tensors.Image` would be the class built
+    for whichever backend was bound first and `borchvision.Image` the one built for
+    the backend in use — two classes with one name, and `isinstance` false between
+    them. `AttributeError` rather than `KeyError`, for the reason written on
+    `ops.__getattr__`.
+    """
+    if name not in _TV_NAMES:
+        raise AttributeError(
+            f"module 'borchvision.tv_tensors' has no attribute {name!r}")
+    return globals()[name]
+
+
+tv_tensors.__getattr__ = _tv_tensors_getattr
+tv_tensors.__dir__ = lambda: sorted(set(tv_tensors.__dict__) | set(_TV_NAMES))
 
 for _name in ("query_size", "query_chw", "check_type", "has_any", "has_all",
               "get_bounding_boxes", "get_keypoints"):
