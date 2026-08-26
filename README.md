@@ -1300,7 +1300,7 @@ It shares exactly one entry with what `launch.py` carries — and that one entry
 | none | none | none |
 | `--enable-unsafe-webgpu` | swiftshader | swiftshader |
 | ` + --ignore-gpu-blocklist` | **blackwell** | swiftshader |
-| ` + --enable-features=Vulkan`  (= `FLAGS`) | **blackwell** | **lovelace** |
+| ` + --enable-features=Vulkan --disable-gpu-driver-bug-workarounds`  (= `FLAGS`) | **blackwell** | **lovelace** |
 | `--enable-unsafe-webgpu --enable-features=Vulkan` | not measured | **lovelace** |
 
 **The two cards need different flags and the shipped list carries both.** A 5080 wants

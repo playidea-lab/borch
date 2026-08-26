@@ -432,6 +432,65 @@ _SOFTWARE_RULE = {
 }
 
 
+def test_the_ladder_row_that_says_it_is_FLAGS_is_FLAGS():
+    """**A row labelled `(= FLAGS)` has to be `FLAGS`.**
+
+    The README carries a ladder of Chrome flag sets against what adapter each one reaches,
+    and one rung is marked as the list `tests/browser/launch.py` actually ships. That mark
+    is the whole load-bearing part: every other rung is a diagnostic step, and this one is
+    a claim about the code.
+
+    ## It is here because that exact claim was wrong twice in two commits
+
+    First: a peer measured a rung labelled `--ignore-gpu-blocklist`, the shipped list also
+    carries `--enable-features=Vulkan`, and a conclusion about *the shipped list* was drawn
+    from a run that never had the flag doing the work. The shipped list sat four lines
+    below the table in the file being edited and the two were never put side by side.
+
+    Then, in the commit that fixed it, the rung was labelled `(= FLAGS)` **and left one
+    flag short** — `--disable-gpu-driver-bug-workarounds`. The label was added as the
+    structural fix for the first mistake and immediately made the second one, which is
+    what a label costs when nothing reads it.
+
+    So this reads it. The rungs accumulate — a cell starting with `+` adds to the running
+    set — and the marked row's accumulated set is compared to `launch.FLAGS`.
+
+    Naming a thing is not comparing to it, and a comparison a person performs once is a
+    comparison that happened once.
+    """
+    launch = _load_module("bt_launch", ROOT / "tests" / "browser" / "launch.py")
+    lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+
+    marked, running, found = None, [], False
+    for line in lines:
+        if not line.startswith("|"):
+            running, found = [], found
+            continue
+        cell = line.split("|")[1].strip()
+        flags = re.findall(r"--[\w-]+(?:=[\w,]+)?", cell)
+        if not flags:
+            running = []
+            continue
+        running = (running + flags) if cell.lstrip("` ").startswith("+") else list(flags)
+        if "= `FLAGS`" in line or "(= FLAGS)" in line:
+            marked, found = list(running), True
+            break
+
+    assert found, (
+        "no rung in the README's flag ladder is marked as the shipped list.\n"
+        "  Either the table went away or the mark did. The mark is the only thing tying\n"
+        "  a measured row to the flags this repository actually sends, so losing it\n"
+        "  quietly is how a conclusion gets drawn about a list nobody ran.")
+    assert sorted(marked) == sorted(launch.FLAGS), (
+        "the README's ladder row marked as the shipped list is not the shipped list:\n"
+        f"  README: {sorted(marked)}\n"
+        f"  FLAGS : {sorted(launch.FLAGS)}\n"
+        f"  only in README: {sorted(set(marked) - set(launch.FLAGS))}\n"
+        f"  only in FLAGS : {sorted(set(launch.FLAGS) - set(marked))}\n"
+        "  A row that says it is FLAGS is a claim about the code, and every verdict on\n"
+        "  that row was measured under whatever it actually lists.")
+
+
 def test_the_software_adapter_rule_says_the_same_thing_in_every_copy():
     """**Two copies of one judgement, and nothing but this compares them.**
 

@@ -85,6 +85,19 @@ import sys
 # compared produced a confident wrong sentence, and the first time it happened inside
 # the file that carries one of them.
 #
+# **The lesson is cheaper than the one first written here.** That draft reached for *one
+# observation does not establish a mechanism*, which is the right sentence about the
+# ANGLE argument below and the wrong one about this: the observation was sound and
+# sufficient, and **what was written down was the wrong name for what had been run.** No
+# amount of extra measurement fixes a mislabelled one.
+#
+# So the fix is a label that is checked rather than a habit of measuring more. The rung
+# in the README marked `(= FLAGS)` is compared to this list by
+# `test_the_ladder_row_that_says_it_is_FLAGS_is_FLAGS`, and it earned its place
+# immediately: the label was added as the structural fix for the mistake above and **was
+# itself one flag short**, which the check found on its first run. Naming a thing is not
+# comparing to it.
+#
 # ## ANGLE does nothing here, in either direction
 #
 # The documented incantation reaches the 4090, and so does `--enable-features=Vulkan`
@@ -267,8 +280,13 @@ def _headed(asked):
     So the original deletion was right **and so was its stated reason's conclusion**,
     arrived at from a premise that was wrong: ANGLE really is on the documented path and
     really does nothing here. Two retractions of that deletion have now been made and
-    both were premature. What survives is the narrower sentence this paragraph opened
-    with — one observation does not establish a mechanism — applied three times over.
+    both were premature.
+
+    What survives is the narrower sentence this paragraph opened with — **one observation
+    does not establish a mechanism** — and it belongs here rather than to the flag-ladder
+    mistake above, which was a mislabelled measurement and a cheaper failure entirely.
+    Here it has been the correct sentence three times running, and every conclusion drawn
+    past it has been wrong.
 
     Keeping them apart matters because they have different fixes. The first is a flag
     away. The second is not: it wants a display.
