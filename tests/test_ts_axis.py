@@ -294,7 +294,13 @@ FROZEN = {
     # rather than failing.** They are `nn.Module` subclasses built against whichever
     # backend is attached, and the browser side composes its layers by hand; carrying
     # them over is writing them again in TS, not exporting a name.
-    "ops": 6,
+    #
+    # 6 → 16. The four losses, the four DropBlocks and the two StochasticDepths joined
+    # the five layers. **These ten are unlike the layers**: they are plain functions
+    # over tensors, so carrying them across is writing them again rather than solving
+    # anything — which is why the runner's row for them says the losses need only the
+    # writing while the layer cases need a harness that does not exist there yet.
+    "ops": 16,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     "transforms.v2": 1,

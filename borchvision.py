@@ -2968,6 +2968,262 @@ def remove_small_boxes(boxes, min_size):
 
 
 
+# ── ops: the losses and the structured dropouts ──────────────────────────────────
+#
+# **These ten were declined for taking a model's predictions**, which is true of
+# `cross_entropy` too and that one is here. Measured before writing them: every one
+# takes tensors and nothing else — `sigmoid_focal_loss` takes logits and labels, the
+# three box losses take two sets of four numbers, and the dropouts take a feature map
+# and a probability. The IoUs the box losses are built on were already written.
+#
+# The row above them said *what is left below needs something that is not here*, which
+# was written in the same session that took the layers and was wrong about ten of the
+# twenty-two. That sentence is the shape this repository keeps removing: **a true
+# claim about one name, extended to its neighbours without asking.**
+
+
+def _reduce(loss, reduction, empty_is_zero=False):
+    """torch's `reduction` argument, and the wording of its refusal.
+
+    **`mean` of nothing is `nan`**, so the three box losses guard it with
+    `0.0 * loss.sum()` — a zero of the right dtype and device rather than a Python
+    float, which is what keeps a jitted graph typed. `sigmoid_focal_loss` does not
+    guard it, and the difference is copied rather than smoothed: two functions in one
+    file disagreeing is torch's fact about torch.
+    """
+    if reduction == "none":
+        return loss
+    if reduction == "mean":
+        if empty_is_zero and loss.numel() == 0:
+            return 0.0 * loss.sum()
+        return loss.mean()
+    if reduction == "sum":
+        return loss.sum()
+    raise ValueError(
+        f"Invalid Value for arg 'reduction': '{reduction} \n Supported reduction "
+        "modes: 'none', 'mean', 'sum'")
+
+
+def sigmoid_focal_loss(inputs, targets, alpha=0.25, gamma=2, reduction="none"):
+    """RetinaNet's focal loss — **cross entropy with the easy examples turned down.**
+
+    <https://arxiv.org/abs/1708.02002>
+
+    `(1 - p_t) ** gamma` is the whole idea: an example the model already gets right has
+    `p_t` near one, so its loss is multiplied by nearly nothing. Dense detection has
+    thousands of easy negatives per image and they would otherwise drown the few
+    positives.
+
+    Two things here each leave a loss that trains:
+
+    - **`alpha=-1` means "no weighting", not "weight by minus one".** The check is
+      `alpha >= 0`, and torch refuses any other negative value by name. Reading it as a
+      number would multiply every term by a negative and invert the objective.
+    - **`p_t` is the probability of the *true* class**, `p` where the target is 1 and
+      `1 - p` where it is 0. Using `p` alone weights confident negatives as if they
+      were hard, which is the opposite of the point.
+    """
+    if not (0 <= alpha <= 1) and alpha != -1:
+        raise ValueError(f"Invalid alpha value: {alpha}. alpha must be in the range "
+                         "[0,1] or -1 for ignore.")
+    L = _backend()
+    probability = L.sigmoid(inputs)
+    entropy = L.nn.functional.binary_cross_entropy_with_logits(
+        inputs, targets, reduction="none")
+    true_class = probability * targets + (1 - probability) * (1 - targets)
+    loss = entropy * ((1 - true_class) ** gamma)
+    if alpha >= 0:
+        loss = (alpha * targets + (1 - alpha) * (1 - targets)) * loss
+    return _reduce(loss, reduction)
+
+
+def _loss_inter_union(boxes1, boxes2):
+    """The intersection and the union, **element by element rather than pairwise.**
+
+    `box_iou` above builds a table of every box against every box; these losses compare
+    two lists of the same length, one prediction against its own target. Reusing the
+    table here would be an `(n, n)` answer where an `(n,)` one is wanted, and the
+    diagonal of it is right — so a reader who took `box_iou(...).diagonal()` would get
+    the same numbers and quadratic work.
+    """
+    L = _backend()
+    x1, y1, x2, y2 = boxes1.unbind(dim=-1)
+    x1g, y1g, x2g, y2g = boxes2.unbind(dim=-1)
+    left = L.max(x1, x1g)
+    top = L.max(y1, y1g)
+    right = L.min(x2, x2g)
+    bottom = L.min(y2, y2g)
+    # **Boxes that miss each other have a negative width**, and the product of two
+    # negatives is a positive intersection — an overlap where there is none.
+    overlap = ((right - left) * (bottom - top)) * ((bottom > top) & (right > left))
+    union = (x2 - x1) * (y2 - y1) + (x2g - x1g) * (y2g - y1g) - overlap
+    return overlap, union
+
+
+def _diou_iou_loss(boxes1, boxes2, eps=1e-7):
+    """The distance IoU and the plain IoU it is built from.
+
+    **The penalty is the centres' distance over the enclosing box's diagonal**, both
+    squared, which is bounded by one — so the loss stays in `[0, 2]` and keeps pulling
+    two boxes together after they have stopped overlapping, which is where a plain IoU
+    loss has no gradient at all.
+    """
+    L = _backend()
+    overlap, union = _loss_inter_union(boxes1, boxes2)
+    iou = overlap / (union + eps)
+    x1, y1, x2, y2 = boxes1.unbind(dim=-1)
+    x1g, y1g, x2g, y2g = boxes2.unbind(dim=-1)
+    diagonal = ((L.max(x2, x2g) - L.min(x1, x1g)) ** 2
+                + (L.max(y2, y2g) - L.min(y1, y1g)) ** 2 + eps)
+    centres = (((x2 + x1) / 2 - (x1g + x2g) / 2) ** 2
+               + ((y2 + y1) / 2 - (y1g + y2g) / 2) ** 2)
+    return 1 - iou + centres / diagonal, iou
+
+
+def generalized_box_iou_loss(boxes1, boxes2, reduction="none", eps=1e-7):
+    """`1 - GIoU`. **The penalty is the empty part of the enclosing box.**
+
+    <https://giou.stanford.edu/>
+
+    Two boxes that do not touch have an IoU of zero however far apart they are, so a
+    plain IoU loss has nothing to say about which way to move. The area of the smallest
+    box containing both, minus their union, grows with the distance — which is a
+    gradient where there was none.
+    """
+    overlap, union = _loss_inter_union(boxes1, boxes2)
+    iou = overlap / (union + eps)
+    L = _backend()
+    x1, y1, x2, y2 = boxes1.unbind(dim=-1)
+    x1g, y1g, x2g, y2g = boxes2.unbind(dim=-1)
+    enclosing = ((L.max(x2, x2g) - L.min(x1, x1g))
+                 * (L.max(y2, y2g) - L.min(y1, y1g)))
+    return _reduce(1 - (iou - (enclosing - union) / (enclosing + eps)), reduction,
+                   empty_is_zero=True)
+
+
+def distance_box_iou_loss(boxes1, boxes2, reduction="none", eps=1e-7):
+    """`1 - IoU` plus the normalised distance between the two centres. See
+    `_diou_iou_loss`, which is where the arithmetic is."""
+    loss, _iou = _diou_iou_loss(boxes1, boxes2, eps)
+    return _reduce(loss, reduction, empty_is_zero=True)
+
+
+def complete_box_iou_loss(boxes1, boxes2, reduction="none", eps=1e-7):
+    """The distance loss, plus a term for **the two boxes being different shapes.**
+
+    `v` compares the aspect ratios through their arctangents, which bounds it, and
+    `alpha` weights it by how much the boxes already overlap — a pair that barely
+    touches is asked to move before it is asked to change shape.
+
+    **`alpha` is computed with no gradient.** It is a weight and not a term: letting it
+    carry one turns the aspect penalty into a push on the overlap as well, which is a
+    loss that still falls and a different objective from the paper's.
+    """
+    L = _backend()
+    loss, iou = _diou_iou_loss(boxes1, boxes2, eps)
+    x1, y1, x2, y2 = boxes1.unbind(dim=-1)
+    x1g, y1g, x2g, y2g = boxes2.unbind(dim=-1)
+    shape = (4 / (_math.pi ** 2)) * (
+        (L.atan((x2g - x1g) / (y2g - y1g)) - L.atan((x2 - x1) / (y2 - y1))) ** 2)
+    with L.no_grad():
+        weight = shape / (1 - iou + shape + eps)
+    return _reduce(loss + weight * shape, reduction, empty_is_zero=True)
+
+
+def stochastic_depth(input, p, mode, training=True):
+    """Whole residual branches dropped at random.
+
+    <https://arxiv.org/abs/1603.09382>
+
+    **`mode` decides what a coin is tossed for**: `batch` drops the branch for the whole
+    batch at once, `row` drops it per example. The two differ only in the shape of the
+    noise, and getting it wrong gives a network that trains at a different effective
+    depth — nothing raises and the curve moves.
+
+    **The survivors are divided by the survival rate**, so the expected value is
+    unchanged and evaluation needs no rescaling. Dropping without it makes every layer
+    quieter than the next one expects.
+    """
+    if p < 0.0 or p > 1.0:
+        raise ValueError(f"drop probability has to be between 0 and 1, but got {p}")
+    if mode not in ["batch", "row"]:
+        raise ValueError(f"mode has to be either 'batch' or 'row', but got {mode}")
+    if not training or p == 0.0:
+        return input
+    L = _backend()
+    survival = 1.0 - p
+    shape = ([input.shape[0]] + [1] * (input.ndim - 1) if mode == "row"
+             else [1] * input.ndim)
+    noise = L.empty(shape, dtype=input.dtype).bernoulli_(survival)
+    if survival > 0.0:
+        noise = noise / survival
+    return input * noise
+
+
+def _drop_block(input, p, block_size, inplace, eps, training, spatial):
+    """DropBlock in `spatial` dimensions — **contiguous regions, not single pixels.**
+
+    <https://arxiv.org/abs/1810.12890>
+
+    Dropping pixels one at a time does little to a convolutional map, because the
+    neighbours carry the same information. So a seed is drawn per position and then
+    **grown to a block by a max pool**, which is the whole trick: the pool spreads each
+    surviving one over its window, and one minus that is the mask.
+
+    Two numbers here each give a mask that looks plausible:
+
+    - **The seeds are drawn on a smaller grid**, `H - block + 1` on each axis, because a
+      seed near the edge would grow a block that hangs off it. Drawing on the full grid
+      drops more than `p` asks for, and only at the edges.
+    - **`gamma` is not `p`.** It is `p` scaled by how many positions a block covers and
+      how many seeds there are to draw, so that the fraction actually dropped comes out
+      at `p`. Using `p` directly drops roughly `block ** spatial` times too much.
+
+    What is kept is then divided by the fraction kept, as in dropout.
+    """
+    if p < 0.0 or p > 1.0:
+        raise ValueError(f"drop probability has to be between 0 and 1, but got {p}.")
+    if input.ndim != spatial + 2:
+        raise ValueError(f"input should be {spatial + 2} dimensional. Got "
+                         f"{input.ndim} dimensions.")
+    if not training or p == 0.0:
+        return input
+    L = _backend()
+    sizes = list(input.shape)[2:]
+    block_size = min(block_size, *sizes)
+    if block_size % 2 == 0:
+        raise ValueError(f"block size should be odd. Got {block_size} which is even.")
+    seeds = [one - block_size + 1 for one in sizes]
+    total = 1
+    for one in sizes:
+        total *= one
+    positions = 1
+    for one in seeds:
+        positions *= one
+    gamma = (p * total) / ((block_size ** spatial) * positions)
+    noise = L.empty([input.shape[0], input.shape[1]] + seeds,
+                    dtype=input.dtype).bernoulli_(gamma)
+    noise = L.nn.functional.pad(noise, [block_size // 2] * (spatial * 2), value=0)
+    pool = (L.nn.functional.max_pool2d if spatial == 2
+            else L.nn.functional.max_pool3d)
+    noise = pool(noise, stride=(1,) * spatial,
+                 kernel_size=(block_size,) * spatial, padding=block_size // 2)
+    noise = 1 - noise
+    scale = noise.numel() / (eps + noise.sum())
+    if inplace:
+        return input.mul_(noise).mul_(scale)
+    return input * noise * scale
+
+
+def drop_block2d(input, p, block_size, inplace=False, eps=1e-06, training=True):
+    """`_drop_block` over height and width."""
+    return _drop_block(input, p, block_size, inplace, eps, training, 2)
+
+
+def drop_block3d(input, p, block_size, inplace=False, eps=1e-06, training=True):
+    """`_drop_block` over depth, height and width."""
+    return _drop_block(input, p, block_size, inplace, eps, training, 3)
+
 # ── ops: the layers, and a sentence that was about use rather than need ──────────
 #
 # **Twenty-eight names here were declined for what they are *for*.** The reasons read
@@ -3163,7 +3419,58 @@ def _ops_layers(L):
         def __repr__(self):
             return f"{type(self).__name__}({self.weight.shape[0]}, eps={self.eps})"
 
+    class DropBlock2d(nn.Module):
+        """`drop_block2d` as a module. **The repr does not print `eps`**, which
+        torchvision's does not either — it is a guard against dividing by zero rather
+        than a setting, and printing it would invite somebody to tune it."""
+
+        def __init__(self, p, block_size, inplace=False, eps=1e-06):
+            super().__init__()
+            self.p = p
+            self.block_size = block_size
+            self.inplace = inplace
+            self.eps = eps
+
+        def forward(self, input):
+            return drop_block2d(input, self.p, self.block_size, self.inplace,
+                                self.eps, self.training)
+
+        def __repr__(self):
+            return (f"{type(self).__name__}(p={self.p}, "
+                    f"block_size={self.block_size}, inplace={self.inplace})")
+
+    class DropBlock3d(DropBlock2d):
+        """As `DropBlock2d`, over three spatial axes. **It subclasses the 2-D one and
+        the repr comes with it** — printing the class's own name, which is why that
+        line reads `type(self).__name__` rather than the literal."""
+
+        def forward(self, input):
+            return drop_block3d(input, self.p, self.block_size, self.inplace,
+                                self.eps, self.training)
+
+    class StochasticDepth(nn.Module):
+        """`stochastic_depth` as a module.
+
+        **The mode prints unquoted** — `mode=row`, not `mode='row'` — which is
+        torchvision's own repr and not this file's usual rule. It is copied because the
+        string is the answer, and a tidier one would differ from the library being
+        matched.
+        """
+
+        def __init__(self, p, mode):
+            super().__init__()
+            self.p = p
+            self.mode = mode
+
+        def forward(self, input):
+            return stochastic_depth(input, self.p, self.mode, self.training)
+
+        def __repr__(self):
+            return f"{type(self).__name__}(p={self.p}, mode={self.mode})"
+
     made = {"ConvNormActivation": ConvNormActivation,
+            "DropBlock2d": DropBlock2d, "DropBlock3d": DropBlock3d,
+            "StochasticDepth": StochasticDepth,
             "Conv2dNormActivation": Conv2dNormActivation,
             "SqueezeExcitation": SqueezeExcitation, "MLP": MLP,
             "Permute": Permute, "FrozenBatchNorm2d": FrozenBatchNorm2d}
@@ -8169,7 +8476,10 @@ for _name in ("InterpolationMode", "adjust_brightness", "adjust_contrast",
 
 for _name in ("batched_nms", "box_area", "box_convert", "box_iou",
               "clip_boxes_to_image", "complete_box_iou", "distance_box_iou",
-              "generalized_box_iou", "masks_to_boxes", "nms", "remove_small_boxes"):
+              "generalized_box_iou", "masks_to_boxes", "nms", "remove_small_boxes",
+              "sigmoid_focal_loss", "generalized_box_iou_loss",
+              "distance_box_iou_loss", "complete_box_iou_loss",
+              "stochastic_depth", "drop_block2d", "drop_block3d"):
     setattr(ops, _name, globals()[_name])
 
 # The layer classes are built against whichever backend is attached **when they are

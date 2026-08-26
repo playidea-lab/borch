@@ -12550,6 +12550,104 @@ def ops_cases(inp=None):
          _layer_values(lambda L: _ops_of(L).Permute([0, 2, 3, 1]), (2, 3, 4, 5))),
     ]
 
+    # ── the losses, and the two dropouts where they are deterministic ────────────
+    #
+    # **These ten were declined for taking a model's predictions**, which is true of
+    # `cross_entropy` too and that one is here. Measured: every one takes tensors and
+    # nothing else. The row above them said *what is left below needs something that is
+    # not here* — written in the same session that took the layers, and wrong about ten
+    # of the twenty-two.
+    #
+    # The boxes are arranged rather than drawn, and the four rows are the four cases
+    # these losses differ on: **overlapping, disjoint, identical, and the same area in
+    # a different shape.** Random boxes in a wide field mostly miss, and a table of
+    # ones passes against an implementation that computes nothing.
+    _pred = np.array([[0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 10.0, 10.0],
+                      [0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 4.0, 20.0]], dtype=np.float32)
+    _true = np.array([[1.0, 1.0, 11.0, 11.0], [30.0, 30.0, 40.0, 40.0],
+                      [0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 20.0, 4.0]], dtype=np.float32)
+    # **`_focal_labels` and not `_labels`.** The name was taken: `batched_nms` a few
+    # rows up reads a `_labels` of its own, and shadowing it turned that case's class
+    # indices into this one's one-hot targets — a broadcast error rather than a wrong
+    # answer, which is the lucky half of shadowing a name in a file this long.
+    _logits = (np.arange(12, dtype=np.float32).reshape(4, 3) - 5.5) * 0.9
+    _focal_labels = np.array([[1, 0, 0], [0, 1, 1], [1, 1, 0], [0, 0, 1]],
+                             dtype=np.float32)
+
+    def _box_loss(name, **kwargs):
+        def run(L):
+            out = getattr(_ops_of(L), name)(L.tensor(_pred), L.tensor(_true), **kwargs)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(out, dtype=np.float32).reshape(-1)))
+        return run
+
+    def _focal(**kwargs):
+        def run(L):
+            out = _ops_of(L).sigmoid_focal_loss(
+                L.tensor(_logits), L.tensor(_focal_labels), **kwargs)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(out, dtype=np.float32).reshape(-1)))
+        return run
+
+    def _passthrough(name, shape, **kwargs):
+        """A dropout asked at a setting where it does nothing — `training=False`, or
+        `p=0`. **That is the half a golden case can hold**: the random half draws from
+        two different generators and is checked by pytest for what it distributes
+        rather than for which numbers it drew."""
+        def run(L):
+            x = ((np.arange(int(np.prod(shape)), dtype=np.float32) * 0.017)
+                 % 1.7 - 0.8).reshape(shape)
+            out = getattr(_ops_of(L), name)(
+                L.tensor(np.ascontiguousarray(x)), **kwargs)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(out, dtype=np.float32).reshape(-1)))
+        return run
+
+    cases += [
+        # **`alpha=-1` means "no weighting"**, not "weight by minus one".
+        (OPS_PREFIX + "sigmoid_focal_loss", _focal()),
+        (OPS_PREFIX + "sigmoid_focal_loss(alpha=-1, no weighting)", _focal(alpha=-1)),
+        (OPS_PREFIX + "sigmoid_focal_loss(alpha, gamma, mean)",
+         _focal(alpha=0.75, gamma=3, reduction="mean")),
+        (OPS_PREFIX + "sigmoid_focal_loss(sum)", _focal(reduction="sum")),
+        # **The penalty is the empty part of the enclosing box** — which is what gives
+        # a gradient to two boxes that do not touch, where a plain IoU has none.
+        (OPS_PREFIX + "generalized_box_iou_loss", _box_loss("generalized_box_iou_loss")),
+        (OPS_PREFIX + "generalized_box_iou_loss(mean)",
+         _box_loss("generalized_box_iou_loss", reduction="mean")),
+        # **The centres' distance over the enclosing diagonal**, both squared.
+        (OPS_PREFIX + "distance_box_iou_loss", _box_loss("distance_box_iou_loss")),
+        (OPS_PREFIX + "distance_box_iou_loss(sum)",
+         _box_loss("distance_box_iou_loss", reduction="sum")),
+        # **And a term for the shapes differing**, weighted by the overlap.
+        (OPS_PREFIX + "complete_box_iou_loss", _box_loss("complete_box_iou_loss")),
+        (OPS_PREFIX + "complete_box_iou_loss(mean)",
+         _box_loss("complete_box_iou_loss", reduction="mean")),
+        # **The settings where a dropout is the identity**, which is the half two
+        # different generators can still agree on.
+        (OPS_PREFIX + "stochastic_depth(training=False)",
+         _passthrough("stochastic_depth", (2, 3, 4, 5), p=0.5, mode="row",
+                      training=False)),
+        (OPS_PREFIX + "stochastic_depth(p=0)",
+         _passthrough("stochastic_depth", (2, 3, 4, 5), p=0.0, mode="batch")),
+        (OPS_PREFIX + "drop_block2d(training=False)",
+         _passthrough("drop_block2d", (2, 3, 5, 5), p=0.3, block_size=3,
+                      training=False)),
+        (OPS_PREFIX + "drop_block3d(training=False)",
+         _passthrough("drop_block3d", (2, 3, 5, 5, 5), p=0.3, block_size=3,
+                      training=False)),
+        (OPS_PREFIX + "DropBlock2d(eval)",
+         _layer_values(lambda L: _ops_of(L).DropBlock2d(0.3, 3), (2, 3, 5, 5))),
+        (OPS_PREFIX + "DropBlock2d(0.3, 3)=repr",
+         lambda L: repr(_ops_of(L).DropBlock2d(0.3, 3))),
+        (OPS_PREFIX + "DropBlock3d(0.2, 5, inplace)=repr",
+         lambda L: repr(_ops_of(L).DropBlock3d(0.2, 5, True))),
+        # **The mode prints unquoted** — torchvision's own repr, copied rather than
+        # tidied, because the string is the answer.
+        (OPS_PREFIX + "StochasticDepth(0.5, row)=repr",
+         lambda L: repr(_ops_of(L).StochasticDepth(0.5, "row"))),
+    ]
+
     return cases
 
 

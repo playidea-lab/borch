@@ -786,8 +786,18 @@ SKIPPED = {
     # is a pool and two 1×1 convolutions; `Permute` is a method. All of it was in the
     # core, so all five are in.
     #
-    # What is left below **needs something that is not here**, and each row now says
-    # what: a feature map that only a model produces, or a primitive the core declines.
+    # **And the sentence that replaced them overreached too.** It read *what is left
+    # below needs something that is not here*, written in the same session, and it was
+    # wrong about ten of the twenty-two: the four losses take two tensors, the four
+    # DropBlocks take a feature map and a probability, and the two StochasticDepths take
+    # a tensor and a coin. `cross_entropy` also *takes a model's predictions* and is
+    # here. Removing one over-wide sentence by writing another is the failure this file
+    # is for, committed twice in a row while removing it.
+    #
+    # Measured a third time, name by name. What is left below is **twelve**, and each
+    # needs one of two things that is genuinely absent: a feature map, which only a
+    # model produces — every `RoI` name, the deformable convolution and the pyramid —
+    # or 3-D convolution, which the core declines and which one name needs.
     "ops.Conv3dNormActivation": "**3-D convolution is declined in the core** — the 2-D "
                                 "one is written now, and this is the ingredient it "
                                 "would need",
@@ -804,19 +814,7 @@ SKIPPED = {
     "ops.roi_pool": "as above",
     "ops.ps_roi_align": "as above",
     "ops.ps_roi_pool": "as above",
-    "ops.DropBlock2d": "structured dropout for convolutional backbones",
-    "ops.DropBlock3d": "as above",
-    "ops.drop_block2d": "as above",
-    "ops.drop_block3d": "as above",
-    "ops.StochasticDepth": "it drops whole residual blocks — it needs blocks",
-    "ops.stochastic_depth": "as above",
     # The losses need predictions, which need a model.
-    "ops.sigmoid_focal_loss": "a detection loss — it takes a model's predictions",
-    "ops.complete_box_iou_loss": "as above",
-    "ops.distance_box_iou_loss": "as above",
-    "ops.generalized_box_iou_loss": "as above. **The IoU itself is here** — what is "
-                                    "absent is the loss around it, which is where the "
-                                    "predictions come in",
 }
 
 # **How big the `NOT_API` bin is allowed to be, per namespace.**
