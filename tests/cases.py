@@ -13388,13 +13388,15 @@ def v2_functional_cases(inp=None):
         """
         def run(L):
             F = _vision_v2_functional(L)
+            to = ((lambda a: L.tensor(np.ascontiguousarray(a))) if _is_real_torch(L)
+                  else (lambda a: a))
             if _is_real_torch(L):
                 import torchvision.tv_tensors as _tv
                 given = L.tensor(np.ascontiguousarray(
                     _as_numpy(_vision_ops(L).box_convert(L.tensor(boxes), "xyxy", fmt))))
-                got = call(F, given, _tv.BoundingBoxFormat[fmt.upper()])
+                got = call(F, given, _tv.BoundingBoxFormat[fmt.upper()], to)
             else:
-                got = call(F, _vision_ops(L).box_convert(boxes, "xyxy", fmt), fmt)
+                got = call(F, _vision_ops(L).box_convert(boxes, "xyxy", fmt), fmt, to)
             if isinstance(got, tuple):
                 rest = " ".join(str(int(v)) for v in got[1]) if not hasattr(
                     got[1], "tolist") else str(_as_numpy(got[1]).astype(np.int64).tolist())
@@ -13424,7 +13426,11 @@ def v2_functional_cases(inp=None):
         So the widening happens **before** the rounding, and the text is then the number
         that was asked for.
         """
-        arr = np.round(np.asarray(_as_numpy(values), dtype=np.float64), 4)
+        # Through float32 and back before rounding, for the reason `_flattext` gives:
+        # torch answers in float32 and this side computes in float64, and four decimals
+        # is right on the edge where the two stop agreeing.
+        narrow = np.asarray(_as_numpy(values), dtype=np.float32).astype(np.float64)
+        arr = np.round(narrow, 3)
         return str(np.where(arr == 0, 0.0, arr).tolist())
 
     # A mask with two planes, in a canvas that is not square. **A label map, not a
@@ -13456,8 +13462,10 @@ def v2_functional_cases(inp=None):
         """
         def run(L):
             F = _vision_v2_functional(L)
-            given = L.tensor(np.ascontiguousarray(labels)) if _is_real_torch(L) else labels
-            got = np.asarray(_as_numpy(call(F, given)))
+            to = ((lambda a: L.tensor(np.ascontiguousarray(a))) if _is_real_torch(L)
+                  else (lambda a: a))
+            given = to(labels)
+            got = np.asarray(_as_numpy(call(F, given, to)))
             return f"{_flattext(got, whole=True)} {got.dtype}"
         return run
 
@@ -13477,15 +13485,37 @@ def v2_functional_cases(inp=None):
         if whole:
             body = [int(v) for v in arr.reshape(-1)]
         else:
-            rounded = np.round(arr.astype(np.float64).reshape(-1), 4)
+            # **Three decimals, and the third one is where the two sides still agree.**
+            #
+            # torch answers in float32 and this library computes in float64, so they
+            # agree to about seven significant digits. On a warped corner near 18 that
+            # is the sixth decimal, and a freeze at four decimals sits right on the
+            # edge: `18.267949…` came out `18.2679` on one side and `18.268` on the
+            # other, from values 1e-6 apart. Narrowing to float32 first does not settle
+            # it either — the two straddle a float32 boundary.
+            #
+            # So the text resolves to 1e-3, which on values running to 40 is a relative
+            # 2.5e-5: far above float32's noise and far below anything this has ever
+            # caught. **The defects these cases found were an off-by-one pixel, a
+            # doubled value and a clamp on the wrong canvas** — 0.1 and larger, every
+            # one.
+            #
+            # Rounding the float32 array directly is a different mistake and was made
+            # first: `np.round(float32, 3)` picks the nearest float32 to the decimal,
+            # and widening that back prints `4.571000099182129`. Narrow, then widen,
+            # then round.
+            wide = arr.astype(np.float32).astype(np.float64).reshape(-1)
+            rounded = np.round(wide, 3)
             body = np.where(rounded == 0, 0.0, rounded).tolist()
         return f"{list(arr.shape)} {body}"
 
     def on_points(call):
         def run(L):
             F = _vision_v2_functional(L)
-            given = L.tensor(np.ascontiguousarray(points)) if _is_real_torch(L) else points
-            got = call(F, given)
+            to = ((lambda a: L.tensor(np.ascontiguousarray(a))) if _is_real_torch(L)
+                  else (lambda a: a))
+            given = to(points)
+            got = call(F, given, to)
             if isinstance(got, tuple):
                 second = got[1]
                 tail = (_flattext(_as_numpy(second), whole=True)
@@ -13497,27 +13527,27 @@ def v2_functional_cases(inp=None):
 
     mask_cases = [
         (V2F_PREFIX + "horizontal_flip_mask",
-         on_mask(lambda F, m: F.horizontal_flip_mask(m))),
+         on_mask(lambda F, m, to: F.horizontal_flip_mask(m))),
         (V2F_PREFIX + "vertical_flip_mask",
-         on_mask(lambda F, m: F.vertical_flip_mask(m))),
+         on_mask(lambda F, m, to: F.vertical_flip_mask(m))),
         (V2F_PREFIX + "crop_mask(inside)",
-         on_mask(lambda F, m: F.crop_mask(m, top=1, left=2, height=12, width=14))),
+         on_mask(lambda F, m, to: F.crop_mask(m, top=1, left=2, height=12, width=14))),
         # **A crop that starts outside the picture.** torchvision pads there with zero
         # rather than raising, and a detection pipeline does this constantly.
         (V2F_PREFIX + "crop_mask(off the corner)",
-         on_mask(lambda F, m: F.crop_mask(m, top=-3, left=-4, height=10, width=10))),
+         on_mask(lambda F, m, to: F.crop_mask(m, top=-3, left=-4, height=10, width=10))),
         (V2F_PREFIX + "center_crop_mask(odd)",
-         on_mask(lambda F, m: F.center_crop_mask(m, output_size=[11, 13]))),
+         on_mask(lambda F, m, to: F.center_crop_mask(m, output_size=[11, 13]))),
         (V2F_PREFIX + "pad_mask(four sides, fill=7)",
-         on_mask(lambda F, m: F.pad_mask(m, padding=[1, 2, 3, 4], fill=7))),
+         on_mask(lambda F, m, to: F.pad_mask(m, padding=[1, 2, 3, 4], fill=7))),
         # The ratio 24→12 is exact and 32→15 is not, so the second one is where a
         # `nearest` and a `nearest-exact` part company.
         (V2F_PREFIX + "resize_mask(pair)",
-         on_mask(lambda F, m: F.resize_mask(m, size=[12, 15]))),
+         on_mask(lambda F, m, to: F.resize_mask(m, size=[12, 15]))),
         (V2F_PREFIX + "resize_mask(short edge)",
-         on_mask(lambda F, m: F.resize_mask(m, size=[9]))),
+         on_mask(lambda F, m, to: F.resize_mask(m, size=[9]))),
         (V2F_PREFIX + "resized_crop_mask",
-         on_mask(lambda F, m: F.resized_crop_mask(m, top=1, left=2, height=12,
+         on_mask(lambda F, m, to: F.resized_crop_mask(m, top=1, left=2, height=12,
                                                   width=14, size=[6, 8]))),
     ]
 
@@ -13526,64 +13556,164 @@ def v2_functional_cases(inp=None):
         # and a point is a pixel index on `[0, width - 1]`. The box way is off by one
         # everywhere, which is a skeleton one column from where it belongs.
         (V2F_PREFIX + "horizontal_flip_keypoints",
-         on_points(lambda F, k: F.horizontal_flip_keypoints(k, canvas_size=(24, 32)))),
+         on_points(lambda F, k, to: F.horizontal_flip_keypoints(k, canvas_size=(24, 32)))),
         (V2F_PREFIX + "vertical_flip_keypoints",
-         on_points(lambda F, k: F.vertical_flip_keypoints(k, canvas_size=(24, 32)))),
+         on_points(lambda F, k, to: F.vertical_flip_keypoints(k, canvas_size=(24, 32)))),
         (V2F_PREFIX + "crop_keypoints",
-         on_points(lambda F, k: F.crop_keypoints(k, top=1, left=2, height=12, width=14))),
+         on_points(lambda F, k, to: F.crop_keypoints(k, top=1, left=2, height=12, width=14))),
         (V2F_PREFIX + "center_crop_keypoints(odd)",
-         on_points(lambda F, k: F.center_crop_keypoints(
+         on_points(lambda F, k, to: F.center_crop_keypoints(
              k, canvas_size=(24, 32), output_size=[11, 13]))),
         (V2F_PREFIX + "pad_keypoints(four sides)",
-         on_points(lambda F, k: F.pad_keypoints(k, canvas_size=(24, 32),
+         on_points(lambda F, k, to: F.pad_keypoints(k, canvas_size=(24, 32),
                                                 padding=[1, 2, 3, 4]))),
         (V2F_PREFIX + "resize_keypoints(pair)",
-         on_points(lambda F, k: F.resize_keypoints(k, size=[12, 16],
+         on_points(lambda F, k, to: F.resize_keypoints(k, size=[12, 16],
                                                    canvas_size=(24, 32)))),
         (V2F_PREFIX + "resized_crop_keypoints",
-         on_points(lambda F, k: F.resized_crop_keypoints(
+         on_points(lambda F, k, to: F.resized_crop_keypoints(
              k, top=1, left=2, height=12, width=14, size=[6, 8]))),
         # The clamp stops at `width - 1`, one short of where the box clamp stops.
         (V2F_PREFIX + "clamp_keypoints",
-         on_points(lambda F, k: F.clamp_keypoints(k, canvas_size=(24, 32)))),
+         on_points(lambda F, k, to: F.clamp_keypoints(k, canvas_size=(24, 32)))),
         # **The unit is the group.** Three groups of two points; the third has a point
         # outside, so the whole group goes and the mask is three long rather than six.
         (V2F_PREFIX + "sanitize_keypoints",
-         on_points(lambda F, k: F.sanitize_keypoints(k, canvas_size=(24, 32)))),
+         on_points(lambda F, k, to: F.sanitize_keypoints(k, canvas_size=(24, 32)))),
     ]
 
-    box_cases = mask_cases + point_cases
+    # A displacement field for the elastic pair. **Not constant** — a constant one moves
+    # every point by the same amount, so it cannot tell "read the field at the point"
+    # from "read it anywhere", and reading it at the wrong pixel is the mistake available
+    # here.
+    # **An integer formula and not a drawn field.** borch.ts has to build the same
+    # numbers, and no seeded generator matches across two runtimes — numpy's PCG64 and
+    # anything JavaScript can write are different streams. A formula both sides evaluate
+    # is the same field by construction.
+    _idx = np.arange(24 * 32, dtype=np.int64)
+    field = np.stack((((_idx % 17) - 8) / 100.0, ((_idx % 23) - 11) / 100.0),
+                     axis=-1).reshape(1, 24, 32, 2).astype(np.float32)
+    SP = [[0, 0], [31, 0], [31, 23], [0, 23]]
+    EP = [[2, 1], [29, 2], [30, 22], [1, 21]]
+
+    warp_cases = [
+        # **A rotated box grows** — the upright hull of a tilted rectangle is larger than
+        # the rectangle. 90 degrees is in the list because it is the one angle where the
+        # hull is the box again, so it catches a transform that is right about extents
+        # and wrong about direction.
+        (V2F_PREFIX + "affine_bounding_boxes(30)",
+         on_boxes("xyxy", lambda F, b, f, to: F.affine_bounding_boxes(
+             b, format=f, canvas_size=(24, 32), angle=30.0, translate=[0, 0],
+             scale=1.0, shear=[0.0, 0.0]))),
+        (V2F_PREFIX + "affine_bounding_boxes(90)",
+         on_boxes("xyxy", lambda F, b, f, to: F.affine_bounding_boxes(
+             b, format=f, canvas_size=(24, 32), angle=90.0, translate=[0, 0],
+             scale=1.0, shear=[0.0, 0.0]))),
+        # All four knobs at once, because each alone leaves three untested and they
+        # compose in an order that is easy to get backwards.
+        (V2F_PREFIX + "affine_bounding_boxes(all four)",
+         on_boxes("xyxy", lambda F, b, f, to: F.affine_bounding_boxes(
+             b, format=f, canvas_size=(24, 32), angle=-15.0, translate=[3, -2],
+             scale=1.3, shear=[10.0, 5.0]))),
+        # **`center=[0, 0]` is the corner, not the middle.** The default centre is
+        # `[w/2, h/2]`, and an implementation that reuses the image grid's convention
+        # answers this case for the default one — which is how that bug was found.
+        (V2F_PREFIX + "affine_bounding_boxes(center at the corner)",
+         on_boxes("xyxy", lambda F, b, f, to: F.affine_bounding_boxes(
+             b, format=f, canvas_size=(24, 32), angle=30.0, translate=[0, 0],
+             scale=1.0, shear=[0.0, 0.0], center=[0, 0]))),
+        (V2F_PREFIX + "rotate_bounding_boxes(30)",
+         on_boxes("xyxy", lambda F, b, f, to: F.rotate_bounding_boxes(
+             b, format=f, canvas_size=(24, 32), angle=30.0))),
+        # **`expand` grows the canvas, and to a size the image path does not agree
+        # with.** The two hand the same size function different matrices — a centre
+        # offset against an absolute centre — so a 24x32 at 30 degrees is 38 rows to the
+        # image and 37 here. Both are torchvision's.
+        (V2F_PREFIX + "rotate_bounding_boxes(30, expand)",
+         on_boxes("xyxy", lambda F, b, f, to: F.rotate_bounding_boxes(
+             b, format=f, canvas_size=(24, 32), angle=30.0, expand=True))),
+        (V2F_PREFIX + "rotate_bounding_boxes(-47, expand)",
+         on_boxes("xyxy", lambda F, b, f, to: F.rotate_bounding_boxes(
+             b, format=f, canvas_size=(24, 32), angle=-47.0, expand=True))),
+        (V2F_PREFIX + "perspective_bounding_boxes",
+         on_boxes("xyxy", lambda F, b, f, to: F.perspective_bounding_boxes(
+             b, format=f, canvas_size=(24, 32), startpoints=SP, endpoints=EP))),
+        (V2F_PREFIX + "elastic_bounding_boxes",
+         on_boxes("xyxy", lambda F, b, f, to: F.elastic_bounding_boxes(
+             b, format=f, canvas_size=(24, 32),
+             displacement=to(field)))),
+    ]
+
+    warp_point_cases = [
+        (V2F_PREFIX + "affine_keypoints(30)",
+         on_points(lambda F, k, to: F.affine_keypoints(
+             k, canvas_size=(24, 32), angle=30.0, translate=[0, 0], scale=1.0,
+             shear=[0.0, 0.0]))),
+        (V2F_PREFIX + "affine_keypoints(all four)",
+         on_points(lambda F, k, to: F.affine_keypoints(
+             k, canvas_size=(24, 32), angle=-15.0, translate=[3, -2], scale=1.3,
+             shear=[10.0, 5.0]))),
+        (V2F_PREFIX + "rotate_keypoints(30, expand)",
+         on_points(lambda F, k, to: F.rotate_keypoints(
+             k, canvas_size=(24, 32), angle=30.0, expand=True))),
+        (V2F_PREFIX + "perspective_keypoints",
+         on_points(lambda F, k, to: F.perspective_keypoints(
+             k, canvas_size=(24, 32), startpoints=SP, endpoints=EP))),
+        (V2F_PREFIX + "elastic_keypoints",
+         on_points(lambda F, k, to: F.elastic_keypoints(
+             k, canvas_size=(24, 32), displacement=to(field)))),
+    ]
+
+    warp_mask_cases = [
+        (V2F_PREFIX + "affine_mask(30)",
+         on_mask(lambda F, m, to: F.affine_mask(m, angle=30.0, translate=[0, 0],
+                                            scale=1.0, shear=[0.0, 0.0]))),
+        (V2F_PREFIX + "affine_mask(all four)",
+         on_mask(lambda F, m, to: F.affine_mask(m, angle=-15.0, translate=[3, -2],
+                                            scale=1.3, shear=[10.0, 5.0]))),
+        (V2F_PREFIX + "rotate_mask(30)", on_mask(lambda F, m, to: F.rotate_mask(m, 30.0))),
+        # The mask's expanded canvas is the **image** path's, which is the other of the
+        # two answers — a box in the same call is clipped to a different one.
+        (V2F_PREFIX + "rotate_mask(30, expand)",
+         on_mask(lambda F, m, to: F.rotate_mask(m, 30.0, expand=True))),
+        (V2F_PREFIX + "perspective_mask",
+         on_mask(lambda F, m, to: F.perspective_mask(m, startpoints=SP, endpoints=EP))),
+        (V2F_PREFIX + "elastic_mask",
+         on_mask(lambda F, m, to: F.elastic_mask(m, displacement=to(field)))),
+    ]
+
+    box_cases = mask_cases + point_cases + warp_cases + warp_point_cases + warp_mask_cases
     for _fmt in ("xyxy", "xywh", "cxcywh"):
         box_cases += [
             (V2F_PREFIX + f"horizontal_flip_bounding_boxes({_fmt})",
-             on_boxes(_fmt, lambda F, b, f: F.horizontal_flip_bounding_boxes(
+             on_boxes(_fmt, lambda F, b, f, to: F.horizontal_flip_bounding_boxes(
                  b, format=f, canvas_size=canvas))),
             (V2F_PREFIX + f"vertical_flip_bounding_boxes({_fmt})",
-             on_boxes(_fmt, lambda F, b, f: F.vertical_flip_bounding_boxes(
+             on_boxes(_fmt, lambda F, b, f, to: F.vertical_flip_bounding_boxes(
                  b, format=f, canvas_size=canvas))),
             (V2F_PREFIX + f"crop_bounding_boxes({_fmt})",
-             on_boxes(_fmt, lambda F, b, f: F.crop_bounding_boxes(
+             on_boxes(_fmt, lambda F, b, f, to: F.crop_bounding_boxes(
                  b, format=f, top=1, left=2, height=12, width=14))),
             # **An odd output size, because an even one cannot tell the rounding apart.**
             # The offset is `round((canvas - out) / 2)` and Python's `round` breaks ties
             # to even; a floor division agrees on every even size and is off by a whole
             # pixel here. The floor version shipped until this case was written.
             (V2F_PREFIX + f"center_crop_bounding_boxes(odd, {_fmt})",
-             on_boxes(_fmt, lambda F, b, f: F.center_crop_bounding_boxes(
+             on_boxes(_fmt, lambda F, b, f, to: F.center_crop_bounding_boxes(
                  b, format=f, canvas_size=canvas, output_size=[11, 13]))),
             (V2F_PREFIX + f"pad_bounding_boxes(four sides, {_fmt})",
-             on_boxes(_fmt, lambda F, b, f: F.pad_bounding_boxes(
+             on_boxes(_fmt, lambda F, b, f, to: F.pad_bounding_boxes(
                  b, format=f, canvas_size=canvas, padding=[1, 2, 3, 4]))),
             (V2F_PREFIX + f"resize_bounding_boxes(pair, {_fmt})",
-             on_boxes(_fmt, lambda F, b, f: F.resize_bounding_boxes(
+             on_boxes(_fmt, lambda F, b, f, to: F.resize_bounding_boxes(
                  b, canvas_size=canvas, size=[12, 16], format=f))),
             # A single number keeps the aspect ratio, which a pair does not — the two
             # spellings of `size` are different functions wearing one name.
             (V2F_PREFIX + f"resize_bounding_boxes(short edge, {_fmt})",
-             on_boxes(_fmt, lambda F, b, f: F.resize_bounding_boxes(
+             on_boxes(_fmt, lambda F, b, f, to: F.resize_bounding_boxes(
                  b, canvas_size=canvas, size=[12], format=f))),
             (V2F_PREFIX + f"resized_crop_bounding_boxes({_fmt})",
-             on_boxes(_fmt, lambda F, b, f: F.resized_crop_bounding_boxes(
+             on_boxes(_fmt, lambda F, b, f, to: F.resized_crop_bounding_boxes(
                  b, format=f, top=1, left=2, height=12, width=14, size=[6, 8]))),
         ]
 

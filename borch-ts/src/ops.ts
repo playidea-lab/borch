@@ -27,6 +27,15 @@
  */
 
 import { Tensor } from "./tensor.js";
+// **The warp kernels borrow three helpers from `vision.ts`** rather than carrying a
+// second copy of the affine formula. They are exported there for this and nothing else.
+import * as vision from "./vision.js";
+import {
+  affineOutputSize,
+  inverseAffineMatrix,
+  perspectiveCoefficients,
+  shearPair,
+} from "./vision.js";
 
 /** The three spellings of a box. */
 export type BoxFormat = "xyxy" | "xywh" | "cxcywh";
@@ -1152,4 +1161,429 @@ export async function sanitizeKeypoints(
     Tensor.from(out, [kept, ...shape.slice(1)]),
     Tensor.from(keep, [groups]),
   ];
+}
+
+// ── v2's corner warps ────────────────────────────────────────────────────────
+//
+// `affine`, `rotate`, `perspective` and `elastic`, for boxes, masks and keypoints —
+// twelve names and three quite different jobs.
+//
+// **A mask is the image kernel with `nearest`**, measured for all four. **A keypoint is
+// the transform applied to the point. A box is the transform applied to its four
+// corners, then the axis-aligned box around them** — which is why a rotated box grows:
+// the hull of a tilted rectangle is larger than the rectangle.
+//
+// The return shapes are not uniform and were measured one at a time:
+//
+//     affine        boxes: bare              keypoints: [points, canvas]
+//     rotate        boxes: [boxes, canvas]   keypoints: [points, canvas]
+//     perspective   boxes: bare              keypoints: bare
+//     elastic       boxes: bare              keypoints: bare
+//
+// **Boxes clamp and keypoints do not.** A box that half-leaves the picture is still a
+// region of it; a keypoint that leaves is outside, and saying so is the only way
+// `sanitizeKeypoints` can mean anything.
+
+type Affine = {
+  readonly m: readonly [number, number, number, number];
+  readonly c: readonly [number, number];
+  readonly t: readonly [number, number];
+};
+
+/**
+ * The transform that moves a **point**, from the one that moves a grid.
+ *
+ * `inverseAffineMatrix` answers what image resampling needs — output positions mapped
+ * back to input ones — so its 2x2 is inverted here.
+ *
+ * **The centre is absolute here and an offset there.** An image grid is already centred,
+ * so torch passes a displacement from the middle and defaults it to `[0, 0]`; a point
+ * lives in pixel space, where the origin is the corner and the default centre is
+ * `[w/2, h/2]`. Using the grid convention for points is off by exactly one centring —
+ * measured, its answer for the default centre equalled torchvision's answer for
+ * `center: [0, 0]`, all the way through.
+ *
+ * `translate` is applied **after** the linear part, which is what makes
+ * `translate: [3, -2]` at angle 0 move a box by exactly three and two.
+ */
+function forwardAffine(
+  center: readonly number[] | null | undefined,
+  angle: number,
+  translate: readonly number[],
+  scale: number,
+  shear: number | readonly number[],
+  w: number,
+  h: number,
+): Affine {
+  const inv = inverseAffineMatrix([0, 0], angle, [0, 0], scale, shearPair(shear));
+  const [a = 0, b = 0, , d = 0, e = 0] = inv;
+  const det = a * e - b * d;
+  if (Math.abs(det) < 1e-12) {
+    throw new Error("this affine collapses the picture to a line.");
+  }
+  const cxy: readonly [number, number] = center === null || center === undefined
+    ? [w * 0.5, h * 0.5]
+    : [center[0] ?? 0, center[1] ?? 0];
+  return {
+    m: [e / det, -b / det, -d / det, a / det],
+    c: cxy,
+    t: [translate[0] ?? 0, translate[1] ?? 0],
+  };
+}
+
+function applyAffine(p: readonly [number, number], f: Affine): [number, number] {
+  const x = p[0] - f.c[0];
+  const y = p[1] - f.c[1];
+  return [
+    f.m[0] * x + f.m[1] * y + f.c[0] + f.t[0],
+    f.m[2] * x + f.m[3] * y + f.c[1] + f.t[1],
+  ];
+}
+
+function applyPerspective(
+  p: readonly [number, number],
+  k: readonly number[],
+): [number, number] {
+  const [a = 0, b = 0, c = 0, d = 0, e = 0, f = 0, g = 0, h = 0] = k;
+  const den = g * p[0] + h * p[1] + 1;
+  return [(a * p[0] + b * p[1] + c) / den, (d * p[0] + e * p[1] + f) / den];
+}
+
+/** Corners through `move`, then the hull of each four, then clipped to `canvas`. */
+async function warpBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvas: readonly [number, number],
+  move: (p: readonly [number, number]) => [number, number],
+): Promise<Tensor> {
+  checkFormat(format, "format");
+  const src = await rows(boundingBoxes);
+  const out: number[] = [];
+  for (const box of src) {
+    const [x1 = 0, y1 = 0, x2 = 0, y2 = 0] = toXyxy(box, format);
+    const corners: [number, number][] =
+      [move([x1, y1]), move([x2, y1]), move([x2, y2]), move([x1, y2])];
+    const xs = corners.map((p) => p[0]);
+    const ys = corners.map((p) => p[1]);
+    const hull = clampTo(
+      [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+      canvas[0], canvas[1]);
+    out.push(...fromXyxy(hull, format));
+  }
+  return Tensor.from(out, [src.length, 4]);
+}
+
+async function warpPoints(
+  keypoints: Tensor,
+  move: (p: readonly [number, number]) => [number, number],
+): Promise<Tensor> {
+  const flat = Array.from(await keypoints.toArray());
+  const out = new Array<number>(flat.length);
+  for (let i = 0; i < flat.length; i += 2) {
+    const [x, y] = move([flat[i] ?? 0, flat[i + 1] ?? 0]);
+    out[i] = x;
+    out[i + 1] = y;
+  }
+  return Tensor.from(out, keypoints.shape as number[]);
+}
+
+/** A mask through an image warp — **the layout moves and nothing else does.** */
+async function maskThrough(
+  mask: Tensor,
+  call: (img: vision.Image) => vision.Image,
+): Promise<Tensor> {
+  const flat = Array.from(await mask.toArray());
+  const [h, w] = hw(mask, "maskThrough");
+  const n = planes(mask);
+  const hwc = new Float64Array(h * w * n);
+  for (let p = 0; p < n; p++) {
+    for (let i = 0; i < h * w; i++) hwc[i * n + p] = flat[p * h * w + i] ?? 0;
+  }
+  const got = call(vision.image(hwc, h, w, n, false));
+  const out = new Array<number>(got.height * got.width * n);
+  for (let p = 0; p < n; p++) {
+    for (let i = 0; i < got.height * got.width; i++) {
+      out[p * got.height * got.width + i] = got.data[i * n + p] ?? 0;
+    }
+  }
+  const lead = (mask.shape as number[]).slice(0, -2);
+  return Tensor.from(out, [...lead, got.height, got.width]);
+}
+
+/** `affine` on a label map — nearest, and nearest is not a default here. */
+export async function affineMask(
+  mask: Tensor,
+  angle: number,
+  translate: readonly number[],
+  scale: number,
+  shear: number | readonly number[],
+  fill?: number | readonly number[],
+  center?: readonly number[] | null,
+): Promise<Tensor> {
+  return maskThrough(mask, (img) => vision.affine(
+    img, angle, translate as [number, number], scale, shear as [number, number],
+    "nearest", fill, center as [number, number] | null | undefined));
+}
+
+/** `rotate` on a label map. */
+export async function rotateMask(
+  mask: Tensor,
+  angle: number,
+  expand = false,
+  center?: readonly number[] | null,
+  fill?: number | readonly number[],
+): Promise<Tensor> {
+  return maskThrough(mask, (img) => vision.rotate(
+    img, angle, "nearest", expand, center as [number, number] | null | undefined, fill));
+}
+
+/** `perspective` on a label map. */
+export async function perspectiveMask(
+  mask: Tensor,
+  startpoints: readonly (readonly number[])[],
+  endpoints: readonly (readonly number[])[],
+  fill?: number | readonly number[],
+): Promise<Tensor> {
+  return maskThrough(mask, (img) => vision.perspective(
+    img, startpoints as [number, number][], endpoints as [number, number][],
+    "nearest", fill));
+}
+
+/** `elastic` on a label map. */
+export async function elasticMask(
+  mask: Tensor,
+  displacement: readonly number[],
+  fill?: number | readonly number[],
+): Promise<Tensor> {
+  // **No canvas argument here and one on the box and keypoint versions**, because a
+  // mask carries its own size in its shape and a box does not. torchvision's signature
+  // says the same, and matching it is what `ts_signatures.py` compares.
+  return maskThrough(mask, (img) => vision.elasticTransform(
+    img, displacement as number[], "nearest", fill));
+}
+
+/** Points through an affine, as `[keypoints, canvasSize]`. Not clamped. */
+export async function affineKeypoints(
+  keypoints: Tensor,
+  canvasSize: readonly number[],
+  angle: number,
+  translate: readonly number[],
+  scale: number,
+  shear: number | readonly number[],
+  center?: readonly number[] | null,
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "affineKeypoints");
+  const f = forwardAffine(center, angle, translate, scale, shear, width, height);
+  return [await warpPoints(keypoints, (p) => applyAffine(p, f)), [height, width]];
+}
+
+/**
+ * Box corners through an affine, then the axis-aligned box around them.
+ *
+ * **A rotated box grows**, and that is the transform being honest rather than a defect:
+ * the smallest upright rectangle containing a tilted one is larger than it. Repeated
+ * rotation therefore inflates a box, which is why detection pipelines rotate once.
+ */
+export async function affineBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvasSize: readonly number[],
+  angle: number,
+  translate: readonly number[],
+  scale: number,
+  shear: number | readonly number[],
+  center?: readonly number[] | null,
+): Promise<Tensor> {
+  const [height, width] = canvasOf(canvasSize, "affineBoundingBoxes");
+  const f = forwardAffine(center, angle, translate, scale, shear, width, height);
+  return warpBoxes(boundingBoxes, format, [height, width], (p) => applyAffine(p, f));
+}
+
+/**
+ * `[newHeight, newWidth]` for `expand`, and **this is not the image's answer.**
+ *
+ * torchvision's coordinate path and its image path disagree about the expanded size,
+ * because they hand the same size function different matrices: the image path passes a
+ * centre **offset** (`[0, 0]` by default, a grid being already centred) and this path
+ * passes the **absolute** centre. Measured across four canvases and six angles they part
+ * on most, in both directions — a 24x32 at 30 degrees is 38 rows to the image and 37 to
+ * the boxes. Both are reproduced rather than reconciled.
+ */
+function expandedCanvas(
+  angle: number,
+  center: readonly number[] | null | undefined,
+  width: number,
+  height: number,
+): [number, number] {
+  const abs: [number, number] = center === null || center === undefined
+    ? [width * 0.5, height * 0.5]
+    : [center[0] ?? 0, center[1] ?? 0];
+  const matrix = inverseAffineMatrix(abs, -angle, [0, 0], 1, [0, 0]);
+  const [ow, oh] = affineOutputSize(matrix, Math.trunc(width), Math.trunc(height));
+  return [oh, ow];
+}
+
+/**
+ * The rotation, and the shift that puts the turned picture's own corner at the origin.
+ *
+ * **The shift is the minimum of the transformed canvas corners**, not half the growth in
+ * each direction — half the growth is wrong by a fraction of a pixel whenever the
+ * picture is not square about its centre, which reads as a rounding difference and is
+ * not one.
+ */
+function rotationMove(
+  angle: number,
+  center: readonly number[] | null | undefined,
+  width: number,
+  height: number,
+  expand: boolean,
+): (p: readonly [number, number]) => [number, number] {
+  const f = forwardAffine(center, -angle, [0, 0], 1, [0, 0], width, height);
+  const turn = (p: readonly [number, number]): [number, number] => applyAffine(p, f);
+  if (!expand) return turn;
+  const frame: [number, number][] = [[0, 0], [0, height], [width, height], [width, 0]];
+  const moved = frame.map(turn);
+  const sx = Math.min(...moved.map((p) => p[0]));
+  const sy = Math.min(...moved.map((p) => p[1]));
+  return (p) => {
+    const q = turn(p);
+    return [q[0] - sx, q[1] - sy];
+  };
+}
+
+/** Points turned about the centre, as `[keypoints, canvasSize]`. */
+export async function rotateKeypoints(
+  keypoints: Tensor,
+  canvasSize: readonly number[],
+  angle: number,
+  expand = false,
+  center?: readonly number[] | null,
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "rotateKeypoints");
+  const canvas = expand ? expandedCanvas(angle, center, width, height) : [height, width];
+  const move = rotationMove(angle, center, width, height, expand);
+  return [await warpPoints(keypoints, move), canvas as [number, number]];
+}
+
+/** Box corners turned about the centre, as `[boxes, canvasSize]`. */
+export async function rotateBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvasSize: readonly number[],
+  angle: number,
+  expand = false,
+  center?: readonly number[] | null,
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "rotateBoundingBoxes");
+  const canvas = (expand ? expandedCanvas(angle, center, width, height)
+    : [height, width]) as [number, number];
+  const move = rotationMove(angle, center, width, height, expand);
+  return [await warpBoxes(boundingBoxes, format, canvas, move), canvas];
+}
+
+/**
+ * **The arguments go in the other order than for an image.**
+ *
+ * `perspectiveCoefficients` solves the map an image needs — output positions back to
+ * input ones, so endpoints to startpoints. A corner travels the other way, and swapping
+ * the two lists is the whole difference.
+ */
+function forwardPerspective(
+  startpoints: readonly (readonly number[])[],
+  endpoints: readonly (readonly number[])[],
+  coefficients?: readonly number[] | null,
+): readonly number[] {
+  if (coefficients !== null && coefficients !== undefined) return coefficients;
+  return perspectiveCoefficients(endpoints as [number, number][],
+    startpoints as [number, number][]);
+}
+
+/** Points through a projective map. Not clamped, and not a pair. */
+export async function perspectiveKeypoints(
+  keypoints: Tensor,
+  canvasSize: readonly number[],
+  startpoints: readonly (readonly number[])[],
+  endpoints: readonly (readonly number[])[],
+  coefficients?: readonly number[] | null,
+): Promise<Tensor> {
+  canvasOf(canvasSize, "perspectiveKeypoints");
+  const k = forwardPerspective(startpoints, endpoints, coefficients);
+  return warpPoints(keypoints, (p) => applyPerspective(p, k));
+}
+
+/** Box corners through a projective map, then the hull. */
+export async function perspectiveBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvasSize: readonly number[],
+  startpoints: readonly (readonly number[])[],
+  endpoints: readonly (readonly number[])[],
+  coefficients?: readonly number[] | null,
+): Promise<Tensor> {
+  const [height, width] = canvasOf(canvasSize, "perspectiveBoundingBoxes");
+  const k = forwardPerspective(startpoints, endpoints, coefficients);
+  return warpBoxes(boundingBoxes, format, [height, width],
+    (p) => applyPerspective(p, k));
+}
+
+/**
+ * The displacement field, read at each point's own pixel.
+ *
+ * **The field is in normalised coordinates**, `[-1, 1]` across the picture, so `0.1` is
+ * `0.1 * width / 2` pixels. And it is **subtracted**: the field says where a destination
+ * pixel reads *from*, so a feature at `p` ends up at `p` minus what the field holds
+ * there.
+ */
+function elasticMove(
+  displacement: readonly number[],
+  fieldH: number,
+  fieldW: number,
+  width: number,
+  height: number,
+): (p: readonly [number, number]) => [number, number] {
+  // **The point snaps to that pixel too** — floored, clamped to the canvas, and the
+  // displacement applied to the snapped point rather than the original. The fractional
+  // part is discarded. Measured against torchvision with a field whose every entry names
+  // its own coordinate: `(10.4, 5.6)` and `(10.6, 5.4)` come back identical, and
+  // `(33, 26)` on a 24x32 canvas comes back identical to `(31, 23)`.
+  //
+  // Clamping only the lookup index is the obvious reading and agrees on every point
+  // inside the picture. The core shipped that version until a case put a corner at
+  // `(32, 24)`.
+  return (p) => {
+    const col = Math.min(Math.max(Math.floor(p[0]), 0), fieldW - 1);
+    const row = Math.min(Math.max(Math.floor(p[1]), 0), fieldH - 1);
+    const at = (row * fieldW + col) * 2;
+    return [
+      col - (displacement[at] ?? 0) * width / 2,
+      row - (displacement[at + 1] ?? 0) * height / 2,
+    ];
+  };
+}
+
+/** Points moved by a displacement field. Not clamped, and not a pair. */
+export async function elasticKeypoints(
+  keypoints: Tensor,
+  canvasSize: readonly number[],
+  displacement: readonly number[],
+  fieldHeight: number,
+  fieldWidth: number,
+): Promise<Tensor> {
+  const [height, width] = canvasOf(canvasSize, "elasticKeypoints");
+  return warpPoints(keypoints,
+    elasticMove(displacement, fieldHeight, fieldWidth, width, height));
+}
+
+/** Box corners moved by a displacement field, then the hull. */
+export async function elasticBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvasSize: readonly number[],
+  displacement: readonly number[],
+  fieldHeight: number,
+  fieldWidth: number,
+): Promise<Tensor> {
+  const [height, width] = canvasOf(canvasSize, "elasticBoundingBoxes");
+  return warpBoxes(boundingBoxes, format, [height, width],
+    elasticMove(displacement, fieldHeight, fieldWidth, width, height));
 }

@@ -1839,7 +1839,7 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
     for (let i = 0; i < flat.length; i += 4) {
       rows.push("[" + flat.slice(i, i + 4)
         .map((v) => {
-          const r = Math.round((v === 0 ? 0 : v) * 1e4) / 1e4;
+          const r = Math.round((v === 0 ? 0 : v) * 1e3) / 1e3;
           return (r === 0 ? 0 : r).toString();
         })
         .map((v) => (v.includes(".") ? v : v + ".0"))
@@ -1878,7 +1878,7 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
     nums(Array.from(await t.toArray()).map((v) => Math.round(v)));
   const flatReal = async (t: Tensor): Promise<string> => {
     const body = Array.from(await t.toArray()).map((v) => {
-      const r = Math.round(v * 1e4) / 1e4;
+      const r = Math.round(v * 1e3) / 1e3;
       const z = r === 0 ? 0 : r;
       const text = z.toString();
       return text.includes(".") || text.includes("e") ? text : text + ".0";
@@ -1928,6 +1928,72 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
     const [kept, mask] = await ops.sanitizeKeypoints(pts(), [24, 32]);
     return (await flatReal(kept)) + " " + (await flatWhole(mask));
   });
+
+  // ── the corner warps ───────────────────────────────────────────────────────
+  //
+  // **A rotated box grows** — the upright hull of a tilted rectangle is larger than the
+  // rectangle. 90 degrees is asked because it is the one angle where the hull is the box
+  // again, so it catches a transform right about extents and wrong about direction.
+  //
+  // `center: [0, 0]` is asked because it is **the corner, not the middle**: the default
+  // centre is `[w/2, h/2]`, and an implementation that reuses the image grid's
+  // convention answers this case for the default one.
+  // **An integer formula and not a drawn field**, and the core builds it the same way.
+  // No seeded generator matches across two runtimes — numpy's PCG64 and anything
+  // JavaScript can write are different streams — so a formula both sides evaluate is
+  // the same field by construction rather than by hope.
+  const FIELD: number[] = (() => {
+    const v: number[] = [];
+    for (let i = 0; i < 24 * 32; i++) {
+      v.push(((i % 17) - 8) / 100, ((i % 23) - 11) / 100);
+    }
+    return v;
+  })();
+  const SP = [[0, 0], [31, 0], [31, 23], [0, 23]];
+  const EP = [[2, 1], [29, 2], [30, 22], [1, 21]];
+
+  out.set("v2f::affine_bounding_boxes(30)", async () =>
+    show(await ops.affineBoundingBoxes(boxes(), "xyxy", [24, 32], 30, [0, 0], 1, [0, 0])));
+  out.set("v2f::affine_bounding_boxes(90)", async () =>
+    show(await ops.affineBoundingBoxes(boxes(), "xyxy", [24, 32], 90, [0, 0], 1, [0, 0])));
+  out.set("v2f::affine_bounding_boxes(all four)", async () =>
+    show(await ops.affineBoundingBoxes(boxes(), "xyxy", [24, 32], -15, [3, -2], 1.3,
+      [10, 5])));
+  out.set("v2f::affine_bounding_boxes(center at the corner)", async () =>
+    show(await ops.affineBoundingBoxes(boxes(), "xyxy", [24, 32], 30, [0, 0], 1, [0, 0],
+      [0, 0])));
+  out.set("v2f::rotate_bounding_boxes(30)",
+    () => pair(ops.rotateBoundingBoxes(boxes(), "xyxy", [24, 32], 30)));
+  out.set("v2f::rotate_bounding_boxes(30, expand)",
+    () => pair(ops.rotateBoundingBoxes(boxes(), "xyxy", [24, 32], 30, true)));
+  out.set("v2f::rotate_bounding_boxes(-47, expand)",
+    () => pair(ops.rotateBoundingBoxes(boxes(), "xyxy", [24, 32], -47, true)));
+  out.set("v2f::perspective_bounding_boxes", async () =>
+    show(await ops.perspectiveBoundingBoxes(boxes(), "xyxy", [24, 32], SP, EP)));
+  out.set("v2f::elastic_bounding_boxes", async () =>
+    show(await ops.elasticBoundingBoxes(boxes(), "xyxy", [24, 32], FIELD, 24, 32)));
+
+  out.set("v2f::affine_keypoints(30)",
+    () => kpPair(ops.affineKeypoints(pts(), [24, 32], 30, [0, 0], 1, [0, 0])));
+  out.set("v2f::affine_keypoints(all four)",
+    () => kpPair(ops.affineKeypoints(pts(), [24, 32], -15, [3, -2], 1.3, [10, 5])));
+  out.set("v2f::rotate_keypoints(30, expand)",
+    () => kpPair(ops.rotateKeypoints(pts(), [24, 32], 30, true)));
+  out.set("v2f::perspective_keypoints", async () =>
+    flatReal(await ops.perspectiveKeypoints(pts(), [24, 32], SP, EP)));
+  out.set("v2f::elastic_keypoints", async () =>
+    flatReal(await ops.elasticKeypoints(pts(), [24, 32], FIELD, 24, 32)));
+
+  out.set("v2f::affine_mask(30)",
+    () => withDtype(ops.affineMask(labels(), 30, [0, 0], 1, [0, 0])));
+  out.set("v2f::affine_mask(all four)",
+    () => withDtype(ops.affineMask(labels(), -15, [3, -2], 1.3, [10, 5])));
+  out.set("v2f::rotate_mask(30)", () => withDtype(ops.rotateMask(labels(), 30)));
+  out.set("v2f::rotate_mask(30, expand)",
+    () => withDtype(ops.rotateMask(labels(), 30, true)));
+  out.set("v2f::perspective_mask",
+    () => withDtype(ops.perspectiveMask(labels(), SP, EP)));
+  out.set("v2f::elastic_mask", () => withDtype(ops.elasticMask(labels(), FIELD)));
 
   for (const fmt of ["xyxy", "xywh", "cxcywh"] as const) {
     const b = async () => ops.boxConvert(boxes(), "xyxy", fmt);

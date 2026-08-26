@@ -2371,7 +2371,16 @@ function affineGrid(matrix: readonly number[], w: number, h: number,
  * The six numbers, **inverted** — the grid maps output positions back to input
  * ones, so what goes in is the inverse of the transform being described.
  */
-function inverseAffineMatrix(center: readonly [number, number], angle: number,
+/**
+ * **Exported for the v2 warp kernels next door, and for nothing else.**
+ *
+ * `ops.ts` builds `affineBoundingBoxes` and its eleven siblings out of these, and the
+ * alternative was a second copy of the matrix formula there — which is the one thing
+ * this repository keeps catching in its own tables. The cost is that these three appear
+ * in the published API reference, where a reader will not want them; that is smaller
+ * than two bodies for one transform.
+ */
+export function inverseAffineMatrix(center: readonly [number, number], angle: number,
                              translate: readonly [number, number], scale: number,
                              shear: readonly [number, number]): number[] {
   const rad = (d: number): number => (d * Math.PI) / 180;
@@ -2402,7 +2411,7 @@ function inverseAffineMatrix(center: readonly [number, number], angle: number,
  * turn of a 5x4 picture comes out **5 tall by 6 wide**, not 4x5. Deriving it
  * from the geometry gives the wrong answer.
  */
-function affineOutputSize(matrix: readonly number[], w: number, h: number): [number, number] {
+export function affineOutputSize(matrix: readonly number[], w: number, h: number): [number, number] {
   const t = matrix.map((v) => f32(v));
   const pts: [number, number][] = [
     [f32(-0.5 * w), f32(-0.5 * h)], [f32(-0.5 * w), f32(0.5 * h)],
@@ -2435,7 +2444,7 @@ function centerOffset(center: readonly [number, number] | null,
   return [center[0] - w * 0.5, center[1] - h * 0.5];
 }
 
-function shearPair(shear: number | readonly number[]): [number, number] {
+export function shearPair(shear: number | readonly number[]): [number, number] {
   if (typeof shear === "number") return [shear, 0];
   if (shear.length === 1) return [shear[0] ?? 0, shear[0] ?? 0];
   if (shear.length !== 2) {
@@ -2763,7 +2772,7 @@ export function gaussianBlur(
  * the strength of one sweep. What is not carried is the justification — the
  * effect it describes is not present in anything this side can measure.
  */
-function perspectiveCoefficients(
+export function perspectiveCoefficients(
   startpoints: readonly (readonly [number, number])[],
   endpoints: readonly (readonly [number, number])[],
 ): number[] {

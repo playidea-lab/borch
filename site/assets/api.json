@@ -4,7 +4,7 @@
  "korean": {
   "done": 688,
   "stale": 0,
-  "missing": 282
+  "missing": 297
  },
  "modules": [
   {
@@ -15159,6 +15159,30 @@
     },
     {
      "kind": "function",
+     "name": "inverseAffineMatrix",
+     "signature": "export declare function inverseAffineMatrix(center: readonly [number, number], angle: number, translate: readonly [number, number], scale: number, shear: readonly [number, number]): number[]",
+     "doc": "**Exported for the v2 warp kernels next door, and for nothing else.**\n\n`ops.ts` builds `affineBoundingBoxes` and its eleven siblings out of these, and the\nalternative was a second copy of the matrix formula there — which is the one thing\nthis repository keeps catching in its own tables. The cost is that these three appear\nin the published API reference, where a reader will not want them; that is smaller\nthan two bodies for one transform.",
+     "members": [],
+     "torch": "inverse_affine_matrix"
+    },
+    {
+     "kind": "function",
+     "name": "affineOutputSize",
+     "signature": "export declare function affineOutputSize(matrix: readonly number[], w: number, h: number): [number, number]",
+     "doc": "How big the picture has to be to hold the whole rotated one — `expand=true`.\n\n**The truncation to 1e-4 is carried rather than justified.** torchvision's\ncomment says it avoids ceiling a corner at 1e-15 up to a whole pixel, and the\nPython side could not reproduce that: sweeping 36 picture sizes by 360 whole\ndegrees, the answer is the same with the truncation and without it, every\ntime. It is here because removing it would be a change to a ported formula on\nthe strength of one sweep, not because a case was found.\n\nWhat the sizes are is measured, and it is not the obvious thing: a quarter\nturn of a 5x4 picture comes out **5 tall by 6 wide**, not 4x5. Deriving it\nfrom the geometry gives the wrong answer.",
+     "members": [],
+     "torch": "affine_output_size"
+    },
+    {
+     "kind": "function",
+     "name": "shearPair",
+     "signature": "export declare function shearPair(shear: number | readonly number[]): [number, number]",
+     "doc": "",
+     "members": [],
+     "torch": "shear_pair"
+    },
+    {
+     "kind": "function",
      "name": "rotate",
      "signature": "export declare function rotate(img: Image, angle: number, interpolation?: \"bilinear\" | \"nearest\", expand?: boolean, center?: readonly [number, number] | null, fill?: number | readonly number[] | null): Image",
      "doc": "Turn the picture about its centre. **Counter-clockwise for a positive angle**,\nwhich is PIL's direction and the opposite of what a screen's y-axis suggests.\n\n`expand` grows the output to hold the whole rotated picture; without it the\ncorners go outside and are lost.",
@@ -15284,6 +15308,14 @@
      "doc": "Blur with a Gaussian. **The border is reflected**, not zeroed — a zero border\ndarkens the edge of every blurred picture, which looks like a vignette.\n\n`kernelSize` is one number or two, and both have to be **odd**: an even kernel\nhas no centre pixel to sit on, so the picture would shift by half a pixel.",
      "members": [],
      "torch": "gaussian_blur"
+    },
+    {
+     "kind": "function",
+     "name": "perspectiveCoefficients",
+     "signature": "export declare function perspectiveCoefficients(startpoints: readonly (readonly [number, number])[], endpoints: readonly (readonly [number, number])[]): number[]",
+     "doc": "The eight numbers, solved by least squares. **In float64 and returned as\nfloat32**, which is torchvision's own precision split.\n\n**The reason usually given for that split did not reproduce here.** The claim\nis that the solve is ill-conditioned enough that float32 moves the corners\nvisibly. Measured three ways and it does not:\n\n  golden's own corners   float32 and float64 solves agree to the bit\n                         (condition number 2318)\n  500 random corner sets zero difference in the coefficients\n  this whole solve in    all 32 grid cases still pass, 4.77e-7 worst,\n  float32                three orders inside the 1e-4 tolerance\n\nfloat64 stays because upstream does it and a ported formula is not changed on\nthe strength of one sweep. What is not carried is the justification — the\neffect it describes is not present in anything this side can measure.",
+     "members": [],
+     "torch": "perspective_coefficients"
     },
     {
      "kind": "function",
@@ -15698,7 +15730,7 @@
      ]
     }
    ],
-   "count": 274,
+   "count": 278,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -16541,9 +16573,105 @@
      "doc": "The point groups worth keeping, as `[keypoints, mask]`.\n\n**The unit is the group, not the point.** These arrive as `(N, K, 2)` — `N` skeletons\nof `K` points each — and a group survives only if **every** one of its points is\ninside the canvas. Filtering point by point is the obvious reading and returns half a\npose with the joints renumbered.",
      "members": [],
      "torch": "sanitize_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "affineMask",
+     "signature": "export declare function affineMask(mask: Tensor, angle: number, translate: readonly number[], scale: number, shear: number | readonly number[], fill?: number | readonly number[], center?: readonly number[] | null): Promise<Tensor>",
+     "doc": "`affine` on a label map — nearest, and nearest is not a default here.",
+     "members": [],
+     "torch": "affine_mask"
+    },
+    {
+     "kind": "function",
+     "name": "rotateMask",
+     "signature": "export declare function rotateMask(mask: Tensor, angle: number, expand?: boolean, center?: readonly number[] | null, fill?: number | readonly number[]): Promise<Tensor>",
+     "doc": "`rotate` on a label map.",
+     "members": [],
+     "torch": "rotate_mask"
+    },
+    {
+     "kind": "function",
+     "name": "perspectiveMask",
+     "signature": "export declare function perspectiveMask(mask: Tensor, startpoints: readonly (readonly number[])[], endpoints: readonly (readonly number[])[], fill?: number | readonly number[]): Promise<Tensor>",
+     "doc": "`perspective` on a label map.",
+     "members": [],
+     "torch": "perspective_mask"
+    },
+    {
+     "kind": "function",
+     "name": "elasticMask",
+     "signature": "export declare function elasticMask(mask: Tensor, displacement: readonly number[], fill?: number | readonly number[]): Promise<Tensor>",
+     "doc": "`elastic` on a label map.",
+     "members": [],
+     "torch": "elastic_mask"
+    },
+    {
+     "kind": "function",
+     "name": "affineKeypoints",
+     "signature": "export declare function affineKeypoints(keypoints: Tensor, canvasSize: readonly number[], angle: number, translate: readonly number[], scale: number, shear: number | readonly number[], center?: readonly number[] | null): Promise<[Tensor, [number, number]]>",
+     "doc": "Points through an affine, as `[keypoints, canvasSize]`. Not clamped.",
+     "members": [],
+     "torch": "affine_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "affineBoundingBoxes",
+     "signature": "export declare function affineBoundingBoxes(boundingBoxes: Tensor, format: string, canvasSize: readonly number[], angle: number, translate: readonly number[], scale: number, shear: number | readonly number[], center?: readonly number[] | null): Promise<Tensor>",
+     "doc": "Box corners through an affine, then the axis-aligned box around them.\n\n**A rotated box grows**, and that is the transform being honest rather than a defect:\nthe smallest upright rectangle containing a tilted one is larger than it. Repeated\nrotation therefore inflates a box, which is why detection pipelines rotate once.",
+     "members": [],
+     "torch": "affine_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "rotateKeypoints",
+     "signature": "export declare function rotateKeypoints(keypoints: Tensor, canvasSize: readonly number[], angle: number, expand?: boolean, center?: readonly number[] | null): Promise<[Tensor, [number, number]]>",
+     "doc": "Points turned about the centre, as `[keypoints, canvasSize]`.",
+     "members": [],
+     "torch": "rotate_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "rotateBoundingBoxes",
+     "signature": "export declare function rotateBoundingBoxes(boundingBoxes: Tensor, format: string, canvasSize: readonly number[], angle: number, expand?: boolean, center?: readonly number[] | null): Promise<[Tensor, [number, number]]>",
+     "doc": "Box corners turned about the centre, as `[boxes, canvasSize]`.",
+     "members": [],
+     "torch": "rotate_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "perspectiveKeypoints",
+     "signature": "export declare function perspectiveKeypoints(keypoints: Tensor, canvasSize: readonly number[], startpoints: readonly (readonly number[])[], endpoints: readonly (readonly number[])[], coefficients?: readonly number[] | null): Promise<Tensor>",
+     "doc": "Points through a projective map. Not clamped, and not a pair.",
+     "members": [],
+     "torch": "perspective_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "perspectiveBoundingBoxes",
+     "signature": "export declare function perspectiveBoundingBoxes(boundingBoxes: Tensor, format: string, canvasSize: readonly number[], startpoints: readonly (readonly number[])[], endpoints: readonly (readonly number[])[], coefficients?: readonly number[] | null): Promise<Tensor>",
+     "doc": "Box corners through a projective map, then the hull.",
+     "members": [],
+     "torch": "perspective_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "elasticKeypoints",
+     "signature": "export declare function elasticKeypoints(keypoints: Tensor, canvasSize: readonly number[], displacement: readonly number[], fieldHeight: number, fieldWidth: number): Promise<Tensor>",
+     "doc": "Points moved by a displacement field. Not clamped, and not a pair.",
+     "members": [],
+     "torch": "elastic_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "elasticBoundingBoxes",
+     "signature": "export declare function elasticBoundingBoxes(boundingBoxes: Tensor, format: string, canvasSize: readonly number[], displacement: readonly number[], fieldHeight: number, fieldWidth: number): Promise<Tensor>",
+     "doc": "Box corners moved by a displacement field, then the hull.",
+     "members": [],
+     "torch": "elastic_bounding_boxes"
     }
    ],
-   "count": 41
+   "count": 53
   },
   {
    "name": "datasets",
@@ -19063,5 +19191,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2556
+ "total": 2572
 }
