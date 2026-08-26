@@ -305,7 +305,12 @@ FROZEN = {
     # — but the coordinates come from boxes rather than from a scale, so carrying these
     # across is writing the sampler again against a different index, not exporting a
     # name.
-    "ops": 20,
+    #
+    # 20 → 22. The pyramid and the level-picker joined them. Both are modules over a
+    # dict of tensors, so **carrying them over needs the module machinery on that side
+    # first** — the same thing the five layer classes are waiting on, which is why they
+    # are one row in the runner's ledger and not two.
+    "ops": 22,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     "transforms.v2": 1,

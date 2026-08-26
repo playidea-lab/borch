@@ -74,6 +74,7 @@ at 0 or 1 are deterministic, so that is where the golden compares.
 """
 
 import bz2 as _bz2
+import collections as _collections
 import csv as _csv
 import enum as _enum
 import glob as _glob
@@ -3282,8 +3283,16 @@ def roi_align(input, boxes, output_size, spatial_scale=1.0, sampling_ratio=-1,
         # keeps this one expression.
         grid_h, grid_w = (roi_h / pooled_h).ceil(), (roi_w / pooled_w).ceil()
         count = (grid_h * grid_w).clamp(min=1)
-        steps_y = L.arange(height).float()
-        steps_x = L.arange(width).float()
+        # **Room for the largest grid any box asks for**, not for the map's size.
+        # torchvision's Python reference uses `arange(height)` and gets away with it
+        # because a box is rarely taller than the map it is read from — but
+        # `MultiScaleRoIAlign` sends a 200-pixel box to a 4×4 level, where the adaptive
+        # grid wants more samples than there are rows and the surplus is silently
+        # dropped. The compiled kernel loops to `roi_bin_grid_h` and has no such cap.
+        rows = max(height, int(_as_number(grid_h.max())) if int(grid_h.shape[0]) else 0)
+        columns = max(width, int(_as_number(grid_w.max())) if int(grid_w.shape[0]) else 0)
+        steps_y = L.arange(rows).float()
+        steps_x = L.arange(columns).float()
         mask_y = steps_y[None, :] < grid_h[:, None]
         mask_x = steps_x[None, :] < grid_w[:, None]
 
@@ -3529,6 +3538,50 @@ def ps_roi_pool(input, boxes, output_size, spatial_scale=1.0):
     if not out:
         return L.zeros((0, out_channels, pooled_h, pooled_w))
     return L.stack(out, dim=0)
+
+def _ordered(pairs):
+    """An `OrderedDict`, which is what torchvision hands back and what a caller iterates
+    in order. A plain dict keeps insertion order too, and is not the same type — a
+    detector that checks is checking for the type."""
+    return _collections.OrderedDict(pairs)
+
+
+def _kaiming_uniform(weight, gain):
+    """`nn.init.kaiming_uniform_` for the one case this file needs.
+
+    **`nn.init` is not in the core**, so the arithmetic is here: the bound is
+    `√3 · gain / √fan_in`, and `fan_in` for a convolution is the input channels times
+    the kernel's area — not the number of weights. Using the whole count divides by the
+    output channels as well and gives a bound that is too small by their square root.
+    """
+    shape = tuple(int(one) for one in weight.shape)
+    fan_in = shape[1]
+    for one in shape[2:]:
+        fan_in *= one
+    bound = _math.sqrt(3.0) * gain / _math.sqrt(fan_in)
+    L = _backend()
+    with L.no_grad():
+        weight.copy_(L.empty(shape).uniform_(-bound, bound))
+
+
+def _box_area_tensor(boxes):
+    """`box_area` without leaving the backend, because the level choice is arithmetic on
+    what comes back and `box_area` above hands over numpy."""
+    return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+
+
+def _infer_scale(feature, original_size):
+    """A map's scale as a **power of two**, read off its size against the image's.
+
+    Rounded in log space rather than taken as the ratio: a 800×800 image gives a 50×50
+    map at stride 16, and 50/800 is exactly 1/16 — but 801 gives 51, and 51/801 is not a
+    power of two at all. Rounding the exponent is what makes both answer 1/16.
+    """
+    size = [int(one) for one in feature.shape[-2:]]
+    scales = []
+    for one, whole in zip(size, original_size):
+        scales.append(2.0 ** round(_math.log2(float(one) / float(whole))))
+    return scales[0]
 
 def _c_round(value):
     """C's `round` — to the nearest, halves away from zero.
@@ -3966,7 +4019,169 @@ def _ops_layers(L):
             return (f"{type(self).__name__}(output_size={self.output_size}, "
                     f"spatial_scale={self.spatial_scale})")
 
+    class FeaturePyramidNetwork(nn.Module):
+        """A pyramid of feature maps that all carry the same number of channels.
+
+        <https://arxiv.org/abs/1612.03144>
+
+        A backbone produces maps that get smaller and deeper together — 256 channels at
+        one resolution, 2048 at a sixteenth of it. A detector wants to look at all of
+        them with one head, so each is put through a 1×1 convolution to a common width
+        and then **the coarse map is added into the fine one**, top down, so that the
+        fine map gains what only the coarse one could see.
+
+        Three things about the shape of it:
+
+        - **The maps arrive in increasing depth order**, so the last one is the
+          coarsest. Reversing them adds the fine into the coarse, which runs and learns
+          the opposite of the point.
+        - **The top-down step is nearest-neighbour interpolation to the lateral's own
+          size**, not a fixed factor of two. Feature maps are not always exactly half
+          their neighbour — an odd input makes them off by one — and a hard-coded factor
+          gives a shape error on some inputs and a silent crop on others.
+        - **There are two convolutions per level**: a 1×1 that fixes the width, and a
+          3×3 afterwards that smooths the seam the addition leaves. Dropping the second
+          leaves an aliased map that trains.
+
+        **The weights are re-initialised wider than a convolution's default.**
+        `kaiming_uniform_(a=1)` gives a bound of `√3 / √fan_in` where `Conv2d`'s own
+        default gives `1 / √fan_in` — √3 times wider. `nn.init` is not in the core, so
+        it is done here from the backend's uniform; the arithmetic is written out
+        because the two bounds differ by a constant nobody would notice in a histogram.
+        """
+
+        _KAIMING_GAIN = 1.0                      # gain at a=1, for leaky_relu
+
+        def __init__(self, in_channels_list, out_channels, extra_blocks=None,
+                     norm_layer=None):
+            super().__init__()
+            self.inner_blocks = nn.ModuleList()
+            self.layer_blocks = nn.ModuleList()
+            for in_channels in in_channels_list:
+                if in_channels == 0:
+                    raise ValueError("in_channels=0 is currently not supported")
+                self.inner_blocks.append(Conv2dNormActivation(
+                    in_channels, out_channels, kernel_size=1, padding=0,
+                    norm_layer=norm_layer, activation_layer=None))
+                self.layer_blocks.append(Conv2dNormActivation(
+                    out_channels, out_channels, kernel_size=3,
+                    norm_layer=norm_layer, activation_layer=None))
+            for module in self.modules():
+                if isinstance(module, nn.Conv2d):
+                    _kaiming_uniform(module.weight, self._KAIMING_GAIN)
+                    if module.bias is not None:
+                        with L.no_grad():
+                            module.bias.copy_(L.zeros_like(module.bias))
+            self.extra_blocks = extra_blocks
+
+        def get_result_from_inner_blocks(self, x, idx):
+            return self.inner_blocks[idx](x)
+
+        def get_result_from_layer_blocks(self, x, idx):
+            return self.layer_blocks[idx](x)
+
+        def forward(self, x):
+            names = list(x.keys())
+            maps = list(x.values())
+            last = self.get_result_from_inner_blocks(maps[-1], -1)
+            results = [self.get_result_from_layer_blocks(last, -1)]
+            for idx in range(len(maps) - 2, -1, -1):
+                lateral = self.get_result_from_inner_blocks(maps[idx], idx)
+                size = tuple(int(one) for one in lateral.shape[-2:])
+                last = lateral + L.nn.functional.interpolate(
+                    last, size=size, mode="nearest")
+                results.insert(0, self.get_result_from_layer_blocks(last, idx))
+            if self.extra_blocks is not None:
+                results, names = self.extra_blocks(results, maps, names)
+            return _ordered(zip(names, results))
+
+    class MultiScaleRoIAlign(nn.Module):
+        """`roi_align` over a pyramid, **choosing a level per box by its size.**
+
+        <https://arxiv.org/abs/1612.03144> — equation 1.
+
+        A small box wants the fine map and a large one wants the coarse: a 224-pixel box
+        goes to level 4 and the level moves by one for every doubling of the box's
+        side. `canonical_scale` and `canonical_level` are those two numbers.
+
+        **The scales are inferred once, from the first call.** Each map's scale is read
+        off as a power of two from its size against the image's, and then cached — so a
+        second call with differently sized images reuses the first call's answer. That
+        is torchvision's behaviour, cache and all, and it is copied rather than fixed:
+        a detector calls this with one image size.
+
+        **The boxes are in image coordinates, not map coordinates.** That is what
+        `spatial_scale` is for and what makes the level choice possible at all — the box
+        has one size across the whole pyramid, and only the map changes.
+        """
+
+        _CANONICAL_SCALE = 224
+        _CANONICAL_LEVEL = 4
+        _LEVEL_EPS = 1e-6
+
+        def __init__(self, featmap_names, output_size, sampling_ratio, *,
+                     canonical_scale=224, canonical_level=4):
+            super().__init__()
+            if isinstance(output_size, int):
+                output_size = (output_size, output_size)
+            self.featmap_names = featmap_names
+            self.sampling_ratio = sampling_ratio
+            self.output_size = tuple(output_size)
+            self.scales = None
+            self.map_levels = None
+            self.canonical_scale = canonical_scale
+            self.canonical_level = canonical_level
+
+        def _levels(self, boxes, k_min, k_max):
+            """Equation 1: `floor(lvl0 + log2(√area / s0))`, clamped.
+
+            **The epsilon is added inside the floor**, not outside. A box of exactly the
+            canonical size lands on an integer, and floating point puts it a hair below
+            as often as above — so without it the same box goes to two different levels
+            on two runs of the same detector.
+            """
+            areas = L.cat([_box_area_tensor(one) for one in boxes], dim=0)
+            side = areas.sqrt()
+            levels = (self.canonical_level
+                      + (side / self.canonical_scale).log2() + self._LEVEL_EPS).floor()
+            return levels.clamp(min=k_min, max=k_max).long() - k_min
+
+        def forward(self, x, boxes, image_shapes):
+            maps = [value for name, value in x.items() if name in self.featmap_names]
+            if self.scales is None:
+                if not image_shapes:
+                    raise ValueError("images list should not be empty")
+                widest = max(int(shape[0]) for shape in image_shapes)
+                tallest = max(int(shape[1]) for shape in image_shapes)
+                self.scales = [_infer_scale(one, (widest, tallest)) for one in maps]
+                self.k_min = int(-_math.log2(self.scales[0]))
+                self.k_max = int(-_math.log2(self.scales[-1]))
+                self.map_levels = True
+            rois = _roi_boxes(list(boxes), L)
+            if len(maps) == 1:
+                return roi_align(maps[0], rois, self.output_size,
+                                 spatial_scale=self.scales[0],
+                                 sampling_ratio=self.sampling_ratio)
+            levels = self._levels(boxes, self.k_min, self.k_max)
+            pieces = []
+            for index in range(int(rois.shape[0])):
+                level = int(_as_number(levels[index]))
+                pieces.append(roi_align(
+                    maps[level], rois[index:index + 1], self.output_size,
+                    spatial_scale=self.scales[level],
+                    sampling_ratio=self.sampling_ratio)[0])
+            if not pieces:
+                return L.zeros((0, int(maps[0].shape[1])) + self.output_size)
+            return L.stack(pieces, dim=0)
+
+        def __repr__(self):
+            return (f"{type(self).__name__}(featmap_names={self.featmap_names}, "
+                    f"output_size={self.output_size}, "
+                    f"sampling_ratio={self.sampling_ratio})")
+
     made = {"ConvNormActivation": ConvNormActivation,
+            "FeaturePyramidNetwork": FeaturePyramidNetwork,
+            "MultiScaleRoIAlign": MultiScaleRoIAlign,
             "RoIAlign": RoIAlign, "RoIPool": RoIPool,
             "PSRoIAlign": PSRoIAlign, "PSRoIPool": PSRoIPool,
             "DropBlock2d": DropBlock2d, "DropBlock3d": DropBlock3d,

@@ -12765,6 +12765,78 @@ def ops_cases(inp=None):
          lambda L: repr(_ops_of(L).PSRoIPool(2, 1.0))),
     ]
 
+    # ── the two that sit on the sampler ─────────────────────────────────────────
+    #
+    # **The pyramid and the level-picker.** Their rows read *the detector's neck.
+    # Nothing feeds it here* — which is about a catalogue rather than a library: a
+    # pyramid is a handful of convolutions over a dict of tensors, and it does not meet
+    # the backbone that filled the dict.
+    #
+    # The maps are **three different sizes and three different widths**, because the
+    # 1×1 convolutions exist to make the widths agree and a fixture where they already
+    # agree cannot see them do it.
+    _fpn_shapes = ((1, 4, 16, 16), (1, 6, 8, 8), (1, 8, 4, 4))
+
+    def _fpn_input(L, widths=None):
+        import collections
+        out = collections.OrderedDict()
+        for i, shape in enumerate(_fpn_shapes):
+            shape = shape if widths is None else (1, widths) + shape[2:]
+            block = ((np.arange(int(np.prod(shape))).reshape(shape) % 11)
+                     * 0.2).astype(np.float32)
+            out[f"feat{i}"] = L.tensor(np.ascontiguousarray(block))
+        return out
+
+    def fpn_case():
+        """`FeaturePyramidNetwork`, weights written rather than drawn.
+
+        **The maps arrive coarsest last** and the addition runs top down, so reversing
+        them adds the fine into the coarse — which runs, learns, and is the opposite of
+        the paper. The three sizes here are 16, 8 and 4, so a reader that took a fixed
+        factor of two instead of the lateral's own size would agree on this fixture and
+        not on an odd one; that half is a pytest.
+        """
+        def run(L):
+            model = _fill(L, _ops_of(L).FeaturePyramidNetwork([4, 6, 8], 5))
+            model.eval()
+            with L.no_grad():
+                out = model(_fpn_input(L))
+            parts = [np.asarray([len(out)], dtype=np.float32)]
+            for _name, value in out.items():
+                parts.append(np.asarray(_as_numpy(value)).reshape(-1)
+                             .astype(np.float32))
+            return L.tensor(np.ascontiguousarray(np.concatenate(parts)))
+        return run
+
+    def multiscale_case(sampling_ratio):
+        """`MultiScaleRoIAlign`. **The level comes from the box's size**, not from the
+        map: a 224-pixel box goes to level 4 and moves one level per doubling.
+
+        The three boxes here are 10, 200 and 56 pixels a side against a 64-pixel image,
+        which land on three different levels — a fixture whose boxes were all one size
+        would pass against a reader that always took the first map.
+        """
+        def run(L):
+            model = _ops_of(L).MultiScaleRoIAlign(
+                ["feat0", "feat1", "feat2"], 3, sampling_ratio)
+            boxes = np.array([[0.0, 0.0, 10.0, 10.0],
+                              [0.0, 0.0, 200.0, 200.0],
+                              [4.0, 4.0, 60.0, 60.0]], dtype=np.float32)
+            with L.no_grad():
+                out = model(_fpn_input(L, widths=5),
+                            [L.tensor(np.ascontiguousarray(boxes))], [(64, 64)])
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(out)).reshape(-1).astype(np.float32)))
+        return run
+
+    cases += [
+        (OPS_PREFIX + "FeaturePyramidNetwork(three widths, three sizes)", fpn_case()),
+        (OPS_PREFIX + "MultiScaleRoIAlign(a level per box)", multiscale_case(2)),
+        (OPS_PREFIX + "MultiScaleRoIAlign(sampling_ratio=-1)", multiscale_case(-1)),
+        (OPS_PREFIX + "MultiScaleRoIAlign(names, 3, 2)=repr",
+         lambda L: repr(_ops_of(L).MultiScaleRoIAlign(["feat0", "feat1"], 3, 2))),
+    ]
+
     return cases
 
 

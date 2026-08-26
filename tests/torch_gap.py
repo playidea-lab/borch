@@ -815,11 +815,15 @@ SKIPPED = {
     # below names a specific thing that is absent**, and two of them are the same thing:
     #
     #   - `Conv3dNormActivation` needs 3-D convolution, which the core declines.
-    #   - The three left of the eleven `RoI` and deformable names need **bilinear
-    #     sampling at arbitrary coordinates**. It is written now — eight of the eleven
-    #     went in on it — and the three that remain are what sits on top: a pyramid of
-    #     convolutions, a scale-picking wrapper, and a convolution whose sampling
-    #     coordinates are themselves learned.
+    #   - **The deformable convolution** needs the sampler too, and its coordinates are
+    #     learned rather than given — the offsets are a tensor the network produces, so
+    #     the gradient runs back through the sampling positions as well as the values.
+    #     That is the one thing here the RoI work did not already build.
+    #
+    # The pyramid and the level-picker are gone from this list: both were written on the
+    # sampler that went in with the RoI names, and neither needed anything else. Their
+    # rows read *the detector's neck. Nothing feeds it here* — a statement about the
+    # catalogue rather than about the library.
     #
     # The second is 아직 and not a wall — `roi_align` takes a tensor and a list of
     # boxes, like everything else that turned out to be writable. It is left because it
@@ -829,8 +833,6 @@ SKIPPED = {
                                 "would need",
     "ops.DeformConv2d": "아직 — as `RoIAlign`, and the offsets make the sampling harder rather than different",
     "ops.deform_conv2d": "as above",
-    "ops.FeaturePyramidNetwork": "아직 — a handful of 1x1 and 3x3 convolutions over a dict of tensors. **Nothing here is missing**; the row said nothing feeds it, which is about a catalogue rather than a library",
-    "ops.MultiScaleRoIAlign": "as above",
     # **The four losses were here and are built.** The row read *a detection loss — it
     # takes a model's predictions*, and every word of that is true and none of it was a
     # reason. A prediction arriving as an argument is a tensor; the loss never meets the
