@@ -13862,6 +13862,124 @@ def dataset_last_three_cases(inp=None):
         with open(path, "wb") as handle:
             handle.write(header + block.tobytes())
 
+    def _bmp(path, arr):
+        import os
+        from PIL import Image as _PIL
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _PIL.fromarray(arr.astype(np.uint8), "L").save(path, format="BMP")
+
+    def kitti(train):
+        """`Kitti`'s 2D object set. Its row read *as above — a codec* and **the
+        pictures are PNG**, in the same `image_2` directory this library already reads
+        for `KittiFlow`.
+
+        The label is fifteen space-separated fields parsed by position, and
+        **`occluded` is a level rather than a fraction** — the one integer among the
+        floats. The fixture gives it values that differ per item, so a reader that
+        floated it agrees on every number and on no type; the answer here carries the
+        parsed fields flattened, and a separate pytest checks the types.
+
+        `train=False` has **no labels at all** and the target is `None`, written into
+        the answer as a length so an empty list cannot pass for it.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                where = "training" if train else "testing"
+                base = os.path.join(root, "Kitti", "raw", where)
+                for i in (1, 2):
+                    _png8(os.path.join(base, "image_2", f"{i:06d}.png"), _rgb(i))
+                    if train:
+                        os.makedirs(os.path.join(base, "label_2"), exist_ok=True)
+                        with open(os.path.join(base, "label_2",
+                                               f"{i:06d}.txt"), "w") as fh:
+                            fh.write(f"Car 0.00 {i} -1.57 1.1 2.2 3.3 4.4 1.5 1.6 "
+                                     "4.0 1.8 1.9 8.0 -1.2\n")
+                            fh.write(f"Pedestrian 0.5 {i % 3} 0.1 5.5 6.6 7.7 8.8 "
+                                     "1.7 0.6 0.9 2.8 1.5 9.0 0.4\n")
+                if _is_real_torch(L):
+                    from torchvision.datasets import Kitti as real
+                    loaded = real(root, train=train)
+                else:
+                    loaded = _vision_datasets(L).Kitti(root, train=train)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                items = []
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    numbers = [np.asarray(picture).reshape(-1).astype(np.float32)]
+                    if target is None:
+                        numbers.append(np.asarray([-1.0], dtype=np.float32))
+                    else:
+                        for box in target:
+                            numbers.append(np.asarray(
+                                [box["truncated"], box["occluded"], box["alpha"],
+                                 *box["bbox"], *box["dimensions"], *box["location"],
+                                 box["rotation_y"]], dtype=np.float32))
+                    items.append(np.concatenate(numbers))
+                items.sort(key=lambda item: item.tobytes())
+                out = np.concatenate(parts + items)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def photo_tour(train):
+        """`PhotoTour`. Its row read *as above — a codec* and the sheets are **BMP** —
+        a header, a header, a palette and the rows, with no compression involved.
+
+        **Each sheet is a grid of patches**, read left to right and then down, and the
+        patch index is a position in that traversal. The fixture has two sheets of four
+        patches each with different contents, so a reader that took the sheets in
+        directory order or the patches column-first numbers them differently and still
+        returns patches.
+
+        `train=True` gives one patch and `train=False` gives **two patches and whether
+        they match** — a different task off the same bytes. The match is a
+        *comparison*: each line names two patches and the point each belongs to, and
+        no field holds the answer. The fixture's three lines are yes, no, yes.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            name = "liberty"
+            try:
+                folder = os.path.join(root, name)
+                for k in range(2):
+                    sheet = ((np.arange(128 * 128).reshape(128, 128) * 7 + k * 31)
+                             % 251)
+                    _bmp(os.path.join(folder, f"patches{k:04d}.bmp"), sheet)
+                with open(os.path.join(folder, "info.txt"), "w") as fh:
+                    for i in range(8):
+                        fh.write(f"{i // 2} 0\n")
+                with open(os.path.join(folder, "m50_100000_100000_0.txt"), "w") as fh:
+                    fh.write("0 0 0 1 0 0\n2 1 0 5 2 0\n3 1 0 4 1 0\n")
+                if _is_real_torch(L):
+                    from torchvision.datasets import PhotoTour as real
+                    loaded = real(root, name, train=train)
+                else:
+                    loaded = _vision_datasets(L).PhotoTour(root, name, train=train)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    item = loaded[i]
+                    if train:
+                        parts.append(np.asarray(item).reshape(-1).astype(np.float32))
+                    else:
+                        parts += [np.asarray(item[0]).reshape(-1).astype(np.float32),
+                                  np.asarray(item[1]).reshape(-1).astype(np.float32),
+                                  np.asarray([float(item[2])], dtype=np.float32)]
+                parts.append(np.asarray(loaded.labels, dtype=np.float32).reshape(-1))
+                parts.append(np.asarray(loaded.matches, dtype=np.float32).reshape(-1))
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
     cases += [
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
@@ -13902,6 +14020,12 @@ def dataset_last_three_cases(inp=None):
          middlebury("train", "both")),
         (prefix + "Middlebury2014Stereo(test, no calibration)",
          middlebury("test", None)),
+        # **PNG in `image_2`, and `occluded` is the one integer.**
+        (prefix + "Kitti(train, fifteen fields by position)", kitti(True)),
+        (prefix + "Kitti(test, no labels)", kitti(False)),
+        # **BMP sheets cut into a grid**, row-major, sheets sorted.
+        (prefix + "PhotoTour(train, one patch)", photo_tour(True)),
+        (prefix + "PhotoTour(test, two patches and the answer)", photo_tour(False)),
     ]
 
     cases += [

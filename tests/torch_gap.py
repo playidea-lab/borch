@@ -639,10 +639,24 @@ SKIPPED = {
                           "answer PIL gets",
 
 
-    # `datasets`. **The line is a codec, not a network.** Seven of these are built
-    # here; of the rest, most read JPEG or PNG, and numpy has no decoder for either.
-    # Adding one is the dependency this library does without — the same answer PIL
-    # gets in `transforms`, arriving from the other side.
+    # `datasets`. **The line is a codec, not a network.** Thirty-six of these are built
+    # here now; of the rest, most read JPEG, and numpy has no decoder for it. Adding one
+    # is the dependency this library does without — the same answer PIL gets in
+    # `transforms`, arriving from the other side.
+    #
+    # **`as above — a codec` has been wrong four times**, each time about a dataset
+    # that reads no JPEG at all: `SVHN` (a `.mat`), `Omniglot` and `GTSRB` (PNG and
+    # PPM), the whole stereo and flow family, and then `Kitti` and `PhotoTour` — PNG in
+    # `image_2` and BMP sheets. The sentence was true of the row it was first written
+    # under and inherited by everything below it.
+    #
+    # So two of the remaining rows were **fetched rather than assumed**: 400KB off the
+    # front of each public archive, gunzipped far enough to read the first tar headers
+    # and the first four bytes of the first picture. `Imagenette` and `Country211` are
+    # JPEG, measured. The others below are not fetched, and the method above is written
+    # down so the next person can extend it rather than repeat the inheritance. Several
+    # are behind a login or have no single public archive, which is why this stops here
+    # rather than at zero.
     #
     # Eight names are **absent with no reason on purpose**; see this file's docstring.
 
@@ -652,7 +666,7 @@ SKIPPED = {
     "datasets.Cityscapes": "its pictures are PNG and `_png_read` handles those now — the wall left is the dataset rather than the format: thirty splits crossed with five target types, polygon annotations in JSON, and a 60GB archive behind a login. **The codec was never the expensive half of this one**, which the old row (`as above — a codec`) could not say because it pointed at a sentence about JPEG",
     "datasets.CocoCaptions": "as above — a codec",
     "datasets.CocoDetection": "as above — a codec",
-    "datasets.Country211": "as above — a codec",
+    "datasets.Country211": "JPEG, **fetched and checked** rather than inherited: the first pictures in `country211.tgz` begin `ff d8`",
     "datasets.DTD": "as above — a codec",
     "datasets.EuroSAT": "as above — a codec",
     "datasets.FGVCAircraft": "as above — a codec",
@@ -663,16 +677,14 @@ SKIPPED = {
     "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
     "datasets.INaturalist": "as above — a codec",
     "datasets.ImageNet": "as above — a codec",
-    "datasets.Imagenette": "as above — a codec",
+    "datasets.Imagenette": "as above — JPEG, fetched and checked; `imagenette2.tgz` holds `.JPEG` files that begin `ff d8`",
     "datasets.Kinetics": "as above",
-    "datasets.Kitti": "as above — a codec",
     "datasets.LFWPairs": "as above — a codec",
     "datasets.LFWPeople": "as above — a codec",
     "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",
     "datasets.LSUNClass": "as above",
     "datasets.OxfordIIITPet": "as above — a codec",
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
-    "datasets.PhotoTour": "as above — a codec",
     "datasets.Places365": "as above — a codec",
     "datasets.SBDataset": "its pictures are JPEG, which is the codec wall. Its `.mat` annotations are not — `_mat_read` handles those, and this row named them as a second reason when there was only ever one",
     "datasets.SBU": "as above — a codec",
