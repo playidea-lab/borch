@@ -1823,6 +1823,55 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
     out.set(`v2f::${name}`, () => asTensor(make()));
   };
 
+  // ── the bounding-box kernels ───────────────────────────────────────────────
+  //
+  // **Frozen as text**, because five of these answer `[boxes, canvasSize]` and two
+  // answer boxes alone, and the shape is part of what is being checked. The Python side
+  // folds the sign of zero for the same reason it does here: mirroring a box whose far
+  // edge is the canvas edge gives `32 - 32`, torchvision spells that `-0.0`, and a text
+  // freeze would make two spellings of one number look like a disagreement.
+  const boxes = () => Tensor.from(
+    [0, 0, 10, 10, 5, 5, 15, 20, 2, 3, 4, 9, 28, 20, 32, 24, 30, 22, 31, 23], [5, 4]);
+  const CANVAS: [number, number] = [24, 32];
+  const show = async (t: Tensor): Promise<string> => {
+    const flat = Array.from(await t.toArray());
+    const rows: string[] = [];
+    for (let i = 0; i < flat.length; i += 4) {
+      rows.push("[" + flat.slice(i, i + 4)
+        .map((v) => {
+          const r = Math.round((v === 0 ? 0 : v) * 1e4) / 1e4;
+          return (r === 0 ? 0 : r).toString();
+        })
+        .map((v) => (v.includes(".") ? v : v + ".0"))
+        .join(", ") + "]");
+    }
+    return "[" + rows.join(", ") + "]";
+  };
+  const pair = async (r: Promise<[Tensor, [number, number]]>): Promise<string> => {
+    const [t, canvas] = await r;
+    return `${await show(t)} ${canvas[0]} ${canvas[1]}`;
+  };
+
+  for (const fmt of ["xyxy", "xywh", "cxcywh"] as const) {
+    const b = async () => ops.boxConvert(boxes(), "xyxy", fmt);
+    out.set(`v2f::horizontal_flip_bounding_boxes(${fmt})`,
+      async () => show(await ops.horizontalFlipBoundingBoxes(await b(), fmt, CANVAS)));
+    out.set(`v2f::vertical_flip_bounding_boxes(${fmt})`,
+      async () => show(await ops.verticalFlipBoundingBoxes(await b(), fmt, CANVAS)));
+    out.set(`v2f::crop_bounding_boxes(${fmt})`,
+      async () => pair(ops.cropBoundingBoxes(await b(), fmt, 1, 2, 12, 14)));
+    out.set(`v2f::center_crop_bounding_boxes(odd, ${fmt})`,
+      async () => pair(ops.centerCropBoundingBoxes(await b(), fmt, CANVAS, [11, 13])));
+    out.set(`v2f::pad_bounding_boxes(four sides, ${fmt})`,
+      async () => pair(ops.padBoundingBoxes(await b(), fmt, CANVAS, [1, 2, 3, 4])));
+    out.set(`v2f::resize_bounding_boxes(pair, ${fmt})`,
+      async () => pair(ops.resizeBoundingBoxes(await b(), CANVAS, [12, 16], undefined, fmt)));
+    out.set(`v2f::resize_bounding_boxes(short edge, ${fmt})`,
+      async () => pair(ops.resizeBoundingBoxes(await b(), CANVAS, [12], undefined, fmt)));
+    out.set(`v2f::resized_crop_bounding_boxes(${fmt})`,
+      async () => pair(ops.resizedCropBoundingBoxes(await b(), fmt, 1, 2, 12, 14, [6, 8])));
+  }
+
   set("horizontal_flip", () => v2f.horizontalFlip(f()));
   set("vertical_flip", () => v2f.verticalFlip(f()));
   set("grayscale_to_rgb(one channel)", () => v2f.grayscaleToRgb(grey()));

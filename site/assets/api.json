@@ -4,7 +4,7 @@
  "korean": {
   "done": 688,
   "stale": 0,
-  "missing": 258
+  "missing": 266
  },
  "modules": [
   {
@@ -16349,9 +16349,73 @@
      "doc": "NMS **per class**, done by moving each class's boxes somewhere the others cannot\nreach.\n\nThe offset trick is torchvision's and it is worth reading twice: every box is shifted\nby its class index times more than the largest coordinate present, so boxes of\ndifferent classes can no longer overlap at all and **one pass does the lot**. It\ncosts a single addition where the obvious implementation costs a loop over classes.",
      "members": [],
      "torch": "batched_nms"
+    },
+    {
+     "kind": "function",
+     "name": "horizontalFlipBoundingBoxes",
+     "signature": "export declare function horizontalFlipBoundingBoxes(boundingBoxes: Tensor, format: string, canvasSize: readonly number[]): Promise<Tensor>",
+     "doc": "Boxes mirrored left-to-right.",
+     "members": [],
+     "torch": "horizontal_flip_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "verticalFlipBoundingBoxes",
+     "signature": "export declare function verticalFlipBoundingBoxes(boundingBoxes: Tensor, format: string, canvasSize: readonly number[]): Promise<Tensor>",
+     "doc": "Boxes mirrored top-to-bottom.",
+     "members": [],
+     "torch": "vertical_flip_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "cropBoundingBoxes",
+     "signature": "export declare function cropBoundingBoxes(boundingBoxes: Tensor, format: string, top: number, left: number, height: number, width: number): Promise<[Tensor, [number, number]]>",
+     "doc": "Boxes moved into a crop's frame and clipped to it, as `[boxes, canvasSize]`.",
+     "members": [],
+     "torch": "crop_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "centerCropBoundingBoxes",
+     "signature": "export declare function centerCropBoundingBoxes(boundingBoxes: Tensor, format: string, canvasSize: readonly number[], outputSize: readonly number[]): Promise<[Tensor, [number, number]]>",
+     "doc": "`crop` about the middle, as `[boxes, canvasSize]`.\n\n**The offset is `round`, and torchvision's `round` breaks ties to even.** A margin of\n19 gives 10 and one of 13 gives 6, from the same rule. Written as a floor division\nthis agrees on every even output size and is off by a whole pixel on odd ones, which\nis what the golden's odd case is for — the core shipped the floor version until an\nodd size was measured.",
+     "members": [],
+     "torch": "center_crop_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "padBoundingBoxes",
+     "signature": "export declare function padBoundingBoxes(boundingBoxes: Tensor, format: string, canvasSize: readonly number[], padding: number | readonly number[]): Promise<[Tensor, [number, number]]>",
+     "doc": "Boxes shifted by a pad, as `[boxes, canvasSize]` — the canvas grew.",
+     "members": [],
+     "torch": "pad_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "resizeBoundingBoxes",
+     "signature": "export declare function resizeBoundingBoxes(boundingBoxes: Tensor, canvasSize: readonly number[], size: number | readonly number[], maxSize?: number, format?: string): Promise<[Tensor, [number, number]]>",
+     "doc": "Boxes scaled to a new canvas, as `[boxes, canvasSize]`.\n\n**`size` as a single number keeps the aspect ratio**, matching the shorter edge; as a\npair it does not. `maxSize` caps the longer edge and only bites in the first case, so\ngiving it with a pair raises rather than being ignored.",
+     "members": [],
+     "torch": "resize_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "resizedCropBoundingBoxes",
+     "signature": "export declare function resizedCropBoundingBoxes(boundingBoxes: Tensor, format: string, top: number, left: number, height: number, width: number, size: number | readonly number[]): Promise<[Tensor, [number, number]]>",
+     "doc": "`crop` then `resize`, as `[boxes, canvasSize]`.",
+     "members": [],
+     "torch": "resized_crop_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "sanitizeBoundingBoxes",
+     "signature": "export declare function sanitizeBoundingBoxes(boundingBoxes: Tensor, format?: string, canvasSize?: readonly number[], minSize?: number, minArea?: number): Promise<[Tensor, Tensor]>",
+     "doc": "The boxes worth keeping, as `[boxes, mask]` — **a boolean per row, not indices.**\n\nA mask is the shape the caller already has: labels and scores sit in parallel arrays\nand get filtered by the same one. `removeSmallBoxes` answers with indices for the same\nreason from the other side, and both spellings are torchvision's.",
+     "members": [],
+     "torch": "sanitize_bounding_boxes"
     }
    ],
-   "count": 17
+   "count": 25
   },
   {
    "name": "datasets",
@@ -18871,5 +18935,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2532
+ "total": 2540
 }
