@@ -775,11 +775,22 @@ SKIPPED = {
     # not need a model.** The old one-line reason covered all thirty-nine and
     # justified twenty-eight of them, which is why it is written out by kind now.
     #
-    # The layers first — every one of these is a piece of a detector or a backbone,
-    # and the catalogue (`bimm`) has one classifier in it.
-    "ops.Conv2dNormActivation": "a backbone's building block — it needs a model to be "
-                                "a block of",
-    "ops.Conv3dNormActivation": "as above, and 3-D convolution is declined in the core",
+    # The layers first. **The old reasons here were about what these are *for*** —
+    # *it needs a model to be a block of*, *a feature map comes from a model* — every
+    # one true and none of them about whether the thing can exist. The same shape as
+    # `as above — a codec`, which was wrong four times before anyone opened the files.
+    #
+    # Measured this time: the ingredient list. `Conv2dNormActivation` needs a
+    # convolution, a norm and an activation; `MLP` needs linear layers and dropout;
+    # `FrozenBatchNorm2d` is an affine transform over four buffers; `SqueezeExcitation`
+    # is a pool and two 1×1 convolutions; `Permute` is a method. All of it was in the
+    # core, so all five are in.
+    #
+    # What is left below **needs something that is not here**, and each row now says
+    # what: a feature map that only a model produces, or a primitive the core declines.
+    "ops.Conv3dNormActivation": "**3-D convolution is declined in the core** — the 2-D "
+                                "one is written now, and this is the ingredient it "
+                                "would need",
     "ops.DeformConv2d": "deformable convolution — a detector's, and there is no "
                         "detector in the catalogue",
     "ops.deform_conv2d": "as above",
@@ -793,19 +804,12 @@ SKIPPED = {
     "ops.roi_pool": "as above",
     "ops.ps_roi_align": "as above",
     "ops.ps_roi_pool": "as above",
-    "ops.FrozenBatchNorm2d": "batch norm with the statistics frozen — it exists for "
-                             "fine-tuning a pre-trained detector",
     "ops.DropBlock2d": "structured dropout for convolutional backbones",
     "ops.DropBlock3d": "as above",
     "ops.drop_block2d": "as above",
     "ops.drop_block3d": "as above",
     "ops.StochasticDepth": "it drops whole residual blocks — it needs blocks",
     "ops.stochastic_depth": "as above",
-    "ops.SqueezeExcitation": "a backbone's attention block — as above",
-    "ops.MLP": "a stack of linear layers with dropout. `nn.Sequential` is that, and "
-               "torchvision's version exists to be a piece of its own models",
-    "ops.Permute": "an `nn.Module` wrapper around `permute`, so that it can sit in a "
-                   "`Sequential`. The core has the function",
     # The losses need predictions, which need a model.
     "ops.sigmoid_focal_loss": "a detection loss — it takes a model's predictions",
     "ops.complete_box_iou_loss": "as above",
