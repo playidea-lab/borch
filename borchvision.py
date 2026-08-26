@@ -2967,6 +2967,217 @@ def remove_small_boxes(boxes, min_size):
     return _boxes_out(_np.nonzero(keep)[0], was_tensor, _np.int64)
 
 
+
+# ── ops: the layers, and a sentence that was about use rather than need ──────────
+#
+# **Twenty-eight names here were declined for what they are *for*.** The reasons read
+# *it needs a model to be a block of*, *a feature map comes from a model*, *it takes a
+# model's predictions* — every one true, and none of them about whether the thing can
+# exist. `Conv2dNormActivation` is a convolution, a norm and an activation in a
+# `Sequential`, and all three are in the core; `MLP` is linear layers and dropout;
+# `FrozenBatchNorm2d` is an affine transform over four buffers.
+#
+# It is the same shape as `as above — a codec`, which was wrong four times before
+# anyone opened the files: **a true sentence about one name, used as a reason for
+# every name under it.** What was measured this time is the ingredient list.
+#
+# **These are the first classes here that must subclass the backend's `nn.Module`**,
+# and `use(L)` can change which backend that is *after* import. Defined at module level
+# they would freeze onto whichever library happened to be attached first, so they are
+# built on first access and cached per backend — which is why `ops` grows a
+# `__getattr__` below rather than a list of names.
+
+_OPS_LAYERS = {}
+
+
+def _ops_layers(L):
+    """The layer classes for one backend, built once.
+
+    Rebuilding them per call would make `isinstance` fail against a class the caller
+    already holds, and two `Sequential`s that print the same would not be the same
+    type — so the cache is keyed on the backend rather than on nothing.
+    """
+    made = _OPS_LAYERS.get(id(L))
+    if made is not None:
+        return made
+    nn = L.nn
+
+    class ConvNormActivation(nn.Sequential):
+        """A convolution, a normalisation and an activation, in that order.
+
+        **`padding=None` means "keep the size"**, computed as `(k - 1) // 2 * dilation`
+        rather than left at zero — a block built with zero padding shrinks its input by
+        two per layer, which is a network that trains and a resolution that quietly
+        runs out.
+
+        **`bias=None` means "only when there is no norm"**, because a normalisation
+        immediately after a convolution subtracts the mean and the bias with it.
+        Leaving it on costs a parameter per channel that provably does nothing, and a
+        checkpoint written against torchvision's would carry a tensor this one has no
+        slot for.
+        """
+
+        def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
+                     padding=None, groups=1, norm_layer=nn.BatchNorm2d,
+                     activation_layer=nn.ReLU, dilation=1, inplace=True, bias=None,
+                     conv_layer=nn.Conv2d):
+            if padding is None:
+                if isinstance(kernel_size, int) and isinstance(dilation, int):
+                    padding = (kernel_size - 1) // 2 * dilation
+                else:
+                    width = (len(kernel_size)
+                             if isinstance(kernel_size, (tuple, list))
+                             else len(dilation))
+                    sizes = _ops_ntuple(kernel_size, width)
+                    spread = _ops_ntuple(dilation, width)
+                    padding = tuple((sizes[i] - 1) // 2 * spread[i]
+                                    for i in range(width))
+            if bias is None:
+                bias = norm_layer is None
+            layers = [conv_layer(in_channels, out_channels, kernel_size, stride,
+                                 padding, dilation=dilation, groups=groups,
+                                 bias=bias)]
+            if norm_layer is not None:
+                layers.append(norm_layer(out_channels))
+            if activation_layer is not None:
+                layers.append(activation_layer(
+                    **({} if inplace is None else {"inplace": inplace})))
+            super().__init__(*layers)
+            self.out_channels = out_channels
+
+    class Conv2dNormActivation(ConvNormActivation):
+        """`ConvNormActivation` with the convolution fixed to two dimensions.
+
+        Its 3-D twin stays declined, and **that row is the one real refusal in this
+        group**: 3-D convolution is absent from the core, which is a missing
+        ingredient rather than a missing use.
+        """
+
+        def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
+                     padding=None, groups=1, norm_layer=nn.BatchNorm2d,
+                     activation_layer=nn.ReLU, dilation=1, inplace=True, bias=None):
+            super().__init__(in_channels, out_channels, kernel_size, stride, padding,
+                             groups, norm_layer, activation_layer, dilation, inplace,
+                             bias, nn.Conv2d)
+
+    class SqueezeExcitation(nn.Module):
+        """Squeeze-and-Excitation — **the channels weight themselves.**
+
+        <https://arxiv.org/abs/1709.01507>
+
+        Pool each channel to one number, run two 1×1 convolutions over that, multiply
+        the input by the result. **The two activations are not the same one**: the
+        inner is a rectifier and the outer squashes to `(0, 1)`, because the outer's
+        output is a gain. Using the rectifier for both gives gains unbounded above —
+        the block still trains and the scale drifts.
+        """
+
+        def __init__(self, input_channels, squeeze_channels, activation=nn.ReLU,
+                     scale_activation=nn.Sigmoid):
+            super().__init__()
+            self.avgpool = nn.AdaptiveAvgPool2d(1)
+            self.fc1 = nn.Conv2d(input_channels, squeeze_channels, 1)
+            self.fc2 = nn.Conv2d(squeeze_channels, input_channels, 1)
+            self.activation = activation()
+            self.scale_activation = scale_activation()
+
+        def _scale(self, input):
+            scale = self.avgpool(input)
+            scale = self.fc1(scale)
+            scale = self.activation(scale)
+            scale = self.fc2(scale)
+            return self.scale_activation(scale)
+
+        def forward(self, input):
+            return self._scale(input) * input
+
+    class MLP(nn.Sequential):
+        """Linear layers with an activation and dropout between them.
+
+        **The last layer gets neither norm nor activation, and still gets dropout.**
+        That asymmetry is the whole of the class: written with the loop covering every
+        hidden size, the output passes through a rectifier and can never be negative —
+        a head that trains, on half the range.
+        """
+
+        def __init__(self, in_channels, hidden_channels, norm_layer=None,
+                     activation_layer=nn.ReLU, inplace=None, bias=True, dropout=0.0):
+            params = {} if inplace is None else {"inplace": inplace}
+            layers = []
+            width = in_channels
+            for size in hidden_channels[:-1]:
+                layers.append(nn.Linear(width, size, bias=bias))
+                if norm_layer is not None:
+                    layers.append(norm_layer(size))
+                layers.append(activation_layer(**params))
+                layers.append(nn.Dropout(dropout, **params))
+                width = size
+            layers.append(nn.Linear(width, hidden_channels[-1], bias=bias))
+            layers.append(nn.Dropout(dropout, **params))
+            super().__init__(*layers)
+
+    class Permute(nn.Module):
+        """`permute` as a module, so it can sit in a `Sequential`.
+
+        Its old row read *an `nn.Module` wrapper around `permute`; the core has the
+        function* — which is a reason it is easy, not a reason it is absent.
+        """
+
+        def __init__(self, dims):
+            super().__init__()
+            self.dims = dims
+
+        def forward(self, x):
+            return x.permute(*self.dims)
+
+    class FrozenBatchNorm2d(nn.Module):
+        """Batch norm with the statistics fixed — **an affine transform wearing four
+        buffers.**
+
+        All four are buffers rather than parameters, and that is the point: this exists
+        so a batch norm inside a pre-trained network stops moving when the network is
+        fine-tuned on batches too small to estimate a mean from. `weight` and `bias`
+        are buffers too, so nothing here trains.
+
+        **Epsilon is added before the reciprocal square root**, not after. The other
+        order divides by something arbitrarily small on variances near zero, and what
+        comes back is finite, enormous, and shaped exactly like an activation.
+        """
+
+        def __init__(self, num_features, eps=1e-5):
+            super().__init__()
+            self.eps = eps
+            self.register_buffer("weight", L.ones(num_features))
+            self.register_buffer("bias", L.zeros(num_features))
+            self.register_buffer("running_mean", L.zeros(num_features))
+            self.register_buffer("running_var", L.ones(num_features))
+
+        def forward(self, x):
+            weight = self.weight.reshape(1, -1, 1, 1)
+            bias = self.bias.reshape(1, -1, 1, 1)
+            variance = self.running_var.reshape(1, -1, 1, 1)
+            mean = self.running_mean.reshape(1, -1, 1, 1)
+            scale = weight * (variance + self.eps).rsqrt()
+            return x * scale + (bias - mean * scale)
+
+        def __repr__(self):
+            return f"{type(self).__name__}({self.weight.shape[0]}, eps={self.eps})"
+
+    made = {"ConvNormActivation": ConvNormActivation,
+            "Conv2dNormActivation": Conv2dNormActivation,
+            "SqueezeExcitation": SqueezeExcitation, "MLP": MLP,
+            "Permute": Permute, "FrozenBatchNorm2d": FrozenBatchNorm2d}
+    _OPS_LAYERS[id(L)] = made
+    return made
+
+
+def _ops_ntuple(value, width):
+    """A number or a sequence, as a tuple of `width` — torchvision's `_make_ntuple`."""
+    if isinstance(value, (tuple, list)):
+        return tuple(value)
+    return (value,) * width
+
+
 def masks_to_boxes(masks):
     """The tightest box around each mask. **An empty mask gives all zeros** rather
     than an error — torchvision's behaviour, and the one that lets a batch with a
@@ -7960,6 +8171,32 @@ for _name in ("batched_nms", "box_area", "box_convert", "box_iou",
               "clip_boxes_to_image", "complete_box_iou", "distance_box_iou",
               "generalized_box_iou", "masks_to_boxes", "nms", "remove_small_boxes"):
     setattr(ops, _name, globals()[_name])
+
+# The layer classes are built against whichever backend is attached **when they are
+# first asked for**, because `use(L)` can change that after this module is imported.
+
+
+def _ops_getattr(name):
+    """`ops.<Layer>`, built on demand.
+
+    **It has to raise `AttributeError` and not `KeyError`.** A module's `__getattr__`
+    is asked for `__file__`, `__path__` and `__all__` by ordinary machinery —
+    `inspect.getmodule` asks every loaded module for `__file__` — and a `KeyError`
+    escaping from here is not caught by `hasattr`, so it comes out of whatever
+    unrelated call was walking `sys.modules`. Measured: it surfaced from inside
+    `torchvision`'s own import, in a traceback naming `torch.library`, four frames from
+    anything to do with this file.
+    """
+    if name.startswith("__"):
+        raise AttributeError(f"module 'borchvision.ops' has no attribute {name!r}")
+    built = _ops_layers(_backend())
+    if name not in built:
+        raise AttributeError(f"module 'borchvision.ops' has no attribute {name!r}")
+    return built[name]
+
+
+ops.__getattr__ = _ops_getattr
+ops.__dir__ = lambda: sorted(set(ops.__dict__) | set(_ops_layers(_backend())))
 
 for _base, _fields in _V2_TABLE:
     setattr(v2, _base.__name__, _v2_twin(_base, _fields))

@@ -12381,6 +12381,94 @@ def ops_cases(inp=None):
                                         0.5))),
         (OPS_PREFIX + "masks_to_boxes", op(lambda O, to: O.masks_to_boxes(to(_masks)))),
     ]
+    def _fill(L, module):
+        """**The same numbers on both sides.** The two libraries initialise weights
+        from different generators, so a layer compared as built compares two draws;
+        every parameter and buffer is written here from one arange instead.
+
+        `running_var` is made positive because a variance is, and a negative one takes
+        `rsqrt` into `nan` — which would be a case that fails for a reason about the
+        fixture rather than about the layer.
+        """
+        seen = dict(module.named_parameters())
+        seen.update(dict(module.named_buffers()))
+        for turn, name in enumerate(sorted(seen)):
+            target = seen[name]
+            if "num_batches" in name:
+                continue
+            shape = tuple(target.shape)
+            block = ((np.arange(int(np.prod(shape)) or 1, dtype=np.float32)
+                      * 0.037 + turn * 0.11) % 1.7 - 0.6).reshape(shape)
+            if "running_var" in name:
+                # **One channel's variance is very nearly zero**, which is the only
+                # place epsilon shows. With every variance comfortably positive,
+                # `(v + eps).rsqrt()` and `v.rsqrt()` agree to five decimals and a
+                # reader that added epsilon afterwards passes — measured: that mutation
+                # survived until this line was written.
+                block = np.abs(block) + 0.5
+                block.reshape(-1)[0] = 1e-9
+            if hasattr(target, "copy_"):
+                with L.no_grad():
+                    target.copy_(L.tensor(np.ascontiguousarray(block)))
+            else:                       # a buffer, handed back as a plain array
+                np.asarray(target)[...] = block
+        return module
+
+    def _layer_values(build, shape):
+        """One layer's output, with the weights written rather than drawn."""
+        def run(L):
+            module = _fill(L, build(L))
+            module.eval()
+            x = ((np.arange(int(np.prod(shape)), dtype=np.float32) * 0.013)
+                 % 1.9 - 0.9).reshape(shape)
+            with L.no_grad():
+                out = module(L.tensor(np.ascontiguousarray(x)))
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(out).reshape(-1).astype(np.float32)))
+        return run
+
+    def _ops_of(L):
+        if _is_real_torch(L):
+            import torchvision.ops as real
+            return real
+        _vision(L)
+        import sys as _sys
+        return _sys.modules["borchvision"].ops
+
+    # **These twenty-eight were declined for what they are for**, not for what they
+    # need — *it needs a model to be a block of*, *a feature map comes from a model*.
+    # Five of them are a convolution, a norm and an activation; linear layers and
+    # dropout; an affine transform over four buffers. The ingredients were all in the
+    # core the whole time.
+    cases += [
+        # **`padding=None` keeps the size**, and zero padding is a network that trains
+        # on an input that shrinks by two per layer.
+        (OPS_PREFIX + "Conv2dNormActivation(3→4, k3)",
+         _layer_values(lambda L: _ops_of(L).Conv2dNormActivation(3, 4), (2, 3, 6, 7))),
+        # **`bias=None` means "only when there is no norm"** — with the norm dropped
+        # the convolution grows a bias, and the parameter list changes shape.
+        (OPS_PREFIX + "Conv2dNormActivation(k5, dilation 2, no norm)",
+         _layer_values(lambda L: _ops_of(L).Conv2dNormActivation(
+             3, 4, 5, dilation=2, norm_layer=None), (2, 3, 9, 9))),
+        # **The two activations are not the same one**: the outer squashes to (0, 1)
+        # because its output is a gain.
+        (OPS_PREFIX + "SqueezeExcitation(6, 2)",
+         _layer_values(lambda L: _ops_of(L).SqueezeExcitation(6, 2), (2, 6, 5, 4))),
+        # **The last layer gets no activation and still gets dropout.**
+        (OPS_PREFIX + "MLP(4 → [6, 3])",
+         _layer_values(lambda L: _ops_of(L).MLP(4, [6, 3]), (5, 4))),
+        (OPS_PREFIX + "MLP(with a norm between)",
+         _layer_values(lambda L: _ops_of(L).MLP(
+             4, [6, 3], norm_layer=L.nn.BatchNorm1d), (5, 4))),
+        # **Epsilon is added before the reciprocal square root.**
+        (OPS_PREFIX + "FrozenBatchNorm2d(3)",
+         _layer_values(lambda L: _ops_of(L).FrozenBatchNorm2d(3), (2, 3, 4, 5))),
+        (OPS_PREFIX + "FrozenBatchNorm2d(3)=repr",
+         lambda L: repr(_ops_of(L).FrozenBatchNorm2d(3))),
+        (OPS_PREFIX + "Permute([0, 2, 3, 1])",
+         _layer_values(lambda L: _ops_of(L).Permute([0, 2, 3, 1]), (2, 3, 4, 5))),
+    ]
+
     return cases
 
 

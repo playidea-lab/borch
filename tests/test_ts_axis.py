@@ -288,7 +288,13 @@ FROZEN = {
     # this axis reads carried none of its eleven names — asking here would have
     # answered "borch.ts does not have `nms`" about a file that has it. With the module
     # listed, the row is 0.
-    "ops": 0,
+    #
+    # 0 → 6. The five layer classes and the base they share arrived on the Python side
+    # and have no counterpart in `borch-ts/src/ops.ts` — **and this is the axis working
+    # rather than failing.** They are `nn.Module` subclasses built against whichever
+    # backend is attached, and the browser side composes its layers by hand; carrying
+    # them over is writing them again in TS, not exporting a name.
+    "ops": 6,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     "transforms.v2": 1,
