@@ -13303,7 +13303,8 @@ def dataset_last_three_cases(inp=None):
                         os.makedirs(d)
                         for k in range(n):
                             block = (np.arange(3 * 4 * 3).reshape(3, 4, 3)
-                                     + k * 9 + len(name)) % 251
+                                     + k * 9
+                                     + (0 if name == "clean" else 101)) % 251
                             _PIL.fromarray(block.astype(np.uint8)).save(
                                 os.path.join(d, f"frame_{k:04d}.png"))
                 for scene, n in scenes:
@@ -13322,13 +13323,25 @@ def dataset_last_three_cases(inp=None):
                 else:
                     loaded = _vision_datasets(L).Sintel(root, split="train",
                                                         pass_name=pass_name)
-                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                # **torchvision walks the scenes in `os.listdir` order** — the
+                # disk's order, not the dataset's. APFS hands back names sorted and
+                # ext4 hands them back hashed, so torchvision's own answer changes
+                # with the filesystem; borchvision sorts, and the two agree on one
+                # machine and not on the other. The items are therefore compared as a
+                # set: the count, then the items in an order neither side chose. What
+                # the fixture is for survives it — a reader that paired across the
+                # scene boundary would have four items where the answer has three,
+                # and no ordering hides a count.
+                items = []
                 for i in range(len(loaded)):
                     first, second, flow = loaded[i]
-                    parts += [np.asarray(first).reshape(-1),
-                              np.asarray(second).reshape(-1),
-                              np.asarray(flow).reshape(-1)]
-                out = np.concatenate([p.astype(np.float32) for p in parts])
+                    items.append(np.concatenate([
+                        np.asarray(first).reshape(-1).astype(np.float32),
+                        np.asarray(second).reshape(-1).astype(np.float32),
+                        np.asarray(flow).reshape(-1).astype(np.float32)]))
+                items.sort(key=lambda item: item.tobytes())
+                out = np.concatenate(
+                    [np.asarray([len(loaded)], dtype=np.float32)] + items)
             finally:
                 shutil.rmtree(root, ignore_errors=True)
             return L.tensor(np.ascontiguousarray(out))

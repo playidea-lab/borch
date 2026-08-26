@@ -5402,6 +5402,10 @@ class Sintel(VisionDataset):
       `n - 1` items and the last frame is a second frame only. Pairing across the
       scene boundary would put the end of one shot against the start of another and
       ask the model to explain a cut.
+    - **The scenes are walked in sorted order.** torchvision walks them in
+      `os.listdir` order, which is the disk's and not the dataset's — sorted on one
+      filesystem, hashed on another — so the order of its items depends on where the
+      tree sits. Sorting here costs nothing and makes the answer the same twice.
     - **`pass_name` is which rendering**, not which split. `clean` and `final` are
       the same motion through different shading, and `both` is the two concatenated —
       so the flow list is walked once per pass, and a reader that walked it once for
