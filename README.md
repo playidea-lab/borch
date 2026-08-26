@@ -1270,8 +1270,17 @@ DISPLAY=:99 npm run device:ts     # then golden:ts, once the adapter reads right
 `vulkaninfo --summary` on that same machine lists the card. **Two tools, one machine,
 two answers** — `vulkaninfo` asks the driver and Chrome asks its own blocklist first,
 and Linux with the proprietary NVIDIA driver is on that list. `--ignore-gpu-blocklist`
-is in `FLAGS` in `tests/browser/launch.py`, so this is handled; it is written down
-because the symptom reads as a hardware problem and is not one.
+is in `FLAGS` in `tests/browser/launch.py`, so this is handled **on some cards**; it is
+written down because the symptom reads as a hardware problem and is not one.
+
+> **On some cards, and that turned out to matter.** Measured on a second machine, an
+> RTX 4090 on driver 550: `--ignore-gpu-blocklist` gets SwiftShader there and nothing
+> more, where the same flag reaches the card on a 5080. The list below is what reached
+> the 4090 — so if the adapter still reads `swiftshader` after the flags this repository
+> ships, that is the next thing to run rather than a sign the card is broken.
+>
+> Headless and a real X session gave the same answer on both machines, so it is the
+> flags and not the harness.
 
 `BORCH_CHROME_CHANNEL=chrome` uses the distribution's own Chrome instead of the one
 Playwright downloads — worth having when the machine has one and not the other.
@@ -1284,11 +1293,30 @@ working group's implementation status gives Linux as:
   --enable-features=Vulkan,VulkanFromANGLE
 ```
 
-It shares exactly one entry with what `launch.py` carries. **Both can be true** — that
-list is documented and this one is measured, on one machine, with a score line behind
-it. Which one a given machine needs has not been compared, so if the measured pair does
-nothing for you, the documented four are the next thing to try and the adapter line is
-the report worth sending back.
+It shares exactly one entry with what `launch.py` carries. **Both are true, and which
+one a machine needs depends on the card:**
+
+| flags | RTX 5080 / 580 | RTX 4090 / 550 |
+|---|---|---|
+| none | none | none |
+| `--enable-unsafe-webgpu` | swiftshader | swiftshader |
+| ` + --ignore-gpu-blocklist` | **blackwell** | swiftshader |
+| ` + --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE` | not measured | **lovelace** |
+
+Two narrowings came out of that run: `--ozone-platform=x11` is **not** needed, and
+`--use-angle=vulkan` on its own returns no adapter at all — it has to travel with
+`--enable-features`.
+
+**`launch.py` still ships the first pair**, because no single measured list covers both
+cards and the score line this page quotes came from that pair. Combining them would be a
+fifth configuration nobody has run. The Lovelace set is recorded in `launch.py` as
+`LOVELACE` beside it.
+
+> **The ANGLE flag was argued out of this repository once, on the wrong grounds** — that
+> ANGLE translates GL and WebGL and WebGPU does not go through it. That was retracted
+> after reading the working group's page, which lists `VulkanFromANGLE` on Linux's own
+> path; the measurement above now says the same thing from the other end, and on the
+> 4090 it is the only thing that works.
 
 ### Running it on the CPU, on purpose
 
@@ -1376,13 +1404,21 @@ its own blocklist first, and Linux with the proprietary NVIDIA driver is on it. 
 error message's own first guess was *"a driver blocklist"* and nobody had taken it
 literally. `--ignore-gpu-blocklist` and `--disable-gpu-driver-bug-workarounds` went in
 together, and **which of the two is decisive has since been separated**:
-`--ignore-gpu-blocklist` alone finds the adapter. The count above was run with both,
-so the two are not yet a matched pair — the flag the repository carries and the number
-the documents quote have to be measured under the same conditions, which is the shape
-this page spent the day removing.
+`--ignore-gpu-blocklist` alone finds the adapter **on this card**. The count above was
+run with both, so the two are not yet a matched pair — the flag the repository carries
+and the number the documents quote have to be measured under the same conditions, which
+is the shape this page spent the day removing.
 
-The 4090 is still unmeasured and for its own reasons: one card reads `rev ff` on the
-PCI bus, and late in the same day headless Chrome stopped starting there at all.
+**The 4090 has since been measured, and it does not agree with this card.**
+`--ignore-gpu-blocklist` gets SwiftShader there; what reaches the card is the working
+group's `--use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE`. The ladder is in
+the setup section above.
+
+> **It was written off as needing physical repair, and a reboot fixed it.** The card
+> read `rev ff` on the PCI bus and headless Chrome had stopped starting; after a restart
+> it reads `rev a1` and runs. The symptom was reported correctly and the cause was
+> guessed — `rev ff` means the bus cannot talk to the device, which a wedged driver
+> produces as readily as a dead card, and only one of those two was written down.
 
 The benchmark's ResNet-18 was confirmed to match real torch on the forward pass, the
 loss and the backward pass.

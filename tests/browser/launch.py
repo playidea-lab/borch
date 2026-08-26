@@ -55,12 +55,49 @@ import sys
 #
 # **These four are not the WebGPU working group's four.** Its implementation status
 # gives Linux as `--enable-unsafe-webgpu --ozone-platform=x11 --use-angle=vulkan
-# --enable-features=Vulkan,VulkanFromANGLE`, which shares one entry with this list. Both
-# can be true — that list is documented and this one is measured, on one machine, with a
-# score line behind it. Running the documented four on that machine is the measurement
-# that would let this list shrink or change, and it has not been made.
+# --enable-features=Vulkan,VulkanFromANGLE`, which shares one entry with this list.
+#
+# **That measurement has now been made, and this list does not generalise.** The
+# paragraph above ended "it has not been made" for as long as there was one card; a
+# second one was reached and the ladder split:
+#
+#     flags                                          5080 / 580     4090 / 550
+#     none                                           none           none
+#     --enable-unsafe-webgpu                         swiftshader    swiftshader
+#       + --ignore-gpu-blocklist                     blackwell      swiftshader
+#       + --use-angle=vulkan
+#         --enable-features=Vulkan,VulkanFromANGLE   not measured   lovelace
+#
+# So `--ignore-gpu-blocklist` — the flag this list is built on — **does nothing on
+# Lovelace**, and the documented incantation is what reaches it. Headless and a real X
+# session agreed, so it is the flags rather than the harness. Narrowed further:
+# `--ozone-platform=x11` is not needed, and `--use-angle=vulkan` on its own returns no
+# adapter at all — it has to travel with `--enable-features`.
+#
+# **The flag this repository argued itself out of is the one that works there.** It was
+# removed once on the grounds that ANGLE translates GL and WebGL and WebGPU does not go
+# through it; that reasoning was retracted after reading the working group's page, and
+# the measurement now says the same thing from the other end.
+#
+# **The list is not changed here, because no single measured list covers both.** Adding
+# the ANGLE pair to these four would be a fifth configuration nobody has run, and the
+# one thing this file must not do is ship flags whose score line came from a different
+# set. What a Lovelace card needs is written down, in `LOVELACE`, so the next person
+# reaches for a measurement rather than a guess.
 FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan",
          "--ignore-gpu-blocklist", "--disable-gpu-driver-bug-workarounds"]
+
+# What reached the 4090. **Not the default and not wired to anything**, for the reason
+# above: it is the measured set for a card `FLAGS` does not reach, written where the
+# next person will look rather than left in a chat log.
+#
+# Falling back to it automatically when `FLAGS` finds no adapter is the obvious next
+# move and is deliberately not made here — it would be a code path this machine cannot
+# run, since macOS needs no flags at all and returns an adapter either way. **Shipping
+# an unmeasured retry to fix an unmeasured claim is how the first version of this
+# comment went wrong.** It belongs to whoever has the two cards in front of them.
+LOVELACE = ["--enable-unsafe-webgpu", "--use-angle=vulkan",
+            "--enable-features=Vulkan,VulkanFromANGLE"]
 
 # Implementations that run on the CPU. Chrome has SwiftShader; Linux Mesa has lavapipe (llvmpipe).
 _SOFTWARE = re.compile(r"swiftshader|llvmpipe|lavapipe|software", re.I)
