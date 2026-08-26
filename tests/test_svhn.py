@@ -191,3 +191,130 @@ def test_a_missing_file_says_what_to_do(written):
     """The message a caller meets first when `download` was left off."""
     with pytest.raises(RuntimeError, match="download=True"):
         V.datasets.SVHN(str(written / "nothing"), split="test")
+
+
+@pytest.mark.parametrize("compress", [True, False])
+def test_the_mat_reader_reads_a_struct_array(compress):
+    """**A struct array is a list of dicts**, and the values run element by element —
+    all fields of one before the next.
+
+    Reading them field by field instead transposes the whole array: with `n` elements
+    and `f` fields every value lands on the wrong element, and at `n == 1` — which is
+    most files anyone tests with — the two orders agree. So this has two elements and
+    two fields of different kinds, and each element's number and name have to arrive
+    together.
+    """
+    annotations = np.array([(np.uint16(7), "00001.jpg"), (np.uint16(2), "00002.jpg")],
+                           dtype=[("class", "O"), ("fname", "O")])
+    buf = io.BytesIO()
+    scipy_io.savemat(buf, {"annotations": annotations}, do_compression=compress)
+
+    got = V._mat_read(buf.getvalue())["annotations"]
+    assert isinstance(got, list) and len(got) == 2
+    assert [str(one["fname"]) for one in got] == ["00001.jpg", "00002.jpg"]
+    assert [int(np.asarray(one["class"]).reshape(-1)[0]) for one in got] == [7, 2]
+
+
+def test_a_struct_holding_one_element_is_a_dict():
+    """One element is a dict rather than a list of one, which is what `scipy` does with
+    `squeeze_me` and what a caller writes against."""
+    buf = io.BytesIO()
+    scipy_io.savemat(buf, {"s": np.array([(np.int32(5), "only")],
+                                         dtype=[("n", "O"), ("t", "O")])})
+    got = V._mat_read(buf.getvalue())["s"]
+    assert isinstance(got, dict)
+    assert str(got["t"]) == "only" and int(np.asarray(got["n"]).reshape(-1)[0]) == 5
+
+
+@pytest.mark.parametrize("compress", [True, False])
+def test_the_mat_reader_reads_a_cell_of_text(compress):
+    """**MATLAB stores text as code units, not bytes.** Read as bytes, a sixteen-bit
+    string comes back with a NUL between every letter — printable, wrong, and the same
+    length as the answer once something strips them. The names here are long enough
+    that a fixed-width field block cannot be split on NUL instead.
+    """
+    names = np.array(["AM General Hummer SUV 2000", "Acura RL Sedan 2012"],
+                     dtype=object)
+    buf = io.BytesIO()
+    scipy_io.savemat(buf, {"class_names": names}, do_compression=compress)
+
+    got = V._mat_read(buf.getvalue())["class_names"]
+    assert got == ["AM General Hummer SUV 2000", "Acura RL Sedan 2012"]
+
+
+@pytest.fixture
+def cars_root(tmp_path):
+    from PIL import Image
+    base = tmp_path / "stanford_cars"
+    devkit = base / "devkit"
+    devkit.mkdir(parents=True)
+    for folder in ("cars_train", "cars_test"):
+        (base / folder).mkdir()
+        for i in (1, 2):
+            Image.fromarray(np.full((3, 4, 3), i * 40, np.uint8)).save(
+                base / folder / f"{i:05d}.jpg", format="PNG")
+    annotations = np.array([(np.uint16(7), "00001.jpg"), (np.uint16(2), "00002.jpg")],
+                           dtype=[("class", "O"), ("fname", "O")])
+    scipy_io.savemat(str(devkit / "cars_train_annos.mat"),
+                     {"annotations": annotations})
+    scipy_io.savemat(str(base / "cars_test_annos_withlabels.mat"),
+                     {"annotations": annotations})
+    scipy_io.savemat(str(devkit / "cars_meta.mat"),
+                     {"class_names": np.array(["AM General Hummer", "Acura RL"] * 4,
+                                              dtype=object)})
+    return tmp_path
+
+
+@pytest.mark.parametrize("split", ["train", "test"])
+def test_stanford_cars_matches_torchvision(split, cars_root):
+    """**The class in the file starts at 1 and the label starts at 0.** Leaving the
+    subtraction gives labels running 1 to 196 against 196 names — every prediction
+    shifted by one make, and the accuracy identical.
+
+    The two splits also keep their annotations in different places: `train`'s inside
+    `devkit`, `test`'s beside it in a file whose name says `withlabels`, because the
+    devkit's own test file has none.
+    """
+    ours = V.datasets.StanfordCars(str(cars_root), split=split)
+    theirs = T.StanfordCars(str(cars_root), split=split)
+    assert ours.classes == theirs.classes
+    assert ours.class_to_idx == theirs.class_to_idx
+    assert len(ours) == len(theirs)
+    assert [one[1] for one in ours._samples] == [one[1] for one in theirs._samples]
+    assert [one[1] for one in ours._samples] == [6, 1], "the label starts at 0"
+    for i in range(len(ours)):
+        assert ours[i][1] == theirs[i][1]
+        assert np.array_equal(np.asarray(ours[i][0]), np.asarray(theirs[i][0]))
+
+
+def test_stanford_cars_download_says_the_url_is_gone(tmp_path):
+    """Refused the way torchvision refuses it, rather than by this library's usual
+    reason — the original URL is broken and no reader here changes that."""
+    with pytest.raises(ValueError, match="original URL is broken"):
+        V.datasets.StanfordCars(str(tmp_path), download=True)
+
+
+@pytest.mark.parametrize("kind,payload,want", [
+    (16, b"Acura RL", "Acura RL"),                                    # miUTF8
+    (4, "Acura RL".encode("utf-16-le"), "Acura RL"),                  # miUINT16
+    (18, "Acura RL".encode("utf-32-le"), "Acura RL"),                 # miUTF32
+])
+def test_mat_text_reads_every_code_unit_width(kind, payload, want):
+    """**Only one of these three is ever reachable through a fixture.**
+
+    Measured: `scipy.io.savemat` writes `miUTF8`, so every `.mat` written in this
+    repository takes that branch — and MATLAB itself writes `miUINT16`, the branch a
+    fixture cannot produce. Testing the reader through files alone would leave it
+    claimed and unchecked, which is how the comment above it was first written, so the
+    three widths are given to the function directly.
+    """
+    assert V._mat_text(kind, payload) == want
+
+
+def test_sixteen_bit_text_read_as_bytes_would_not_be_this():
+    """The failure the branch above prevents, stated as a value rather than a warning:
+    the same bytes taken one at a time are the answer with a NUL after every letter.
+    """
+    raw = "Acura".encode("utf-16-le")
+    assert V._mat_text(4, raw) == "Acura"
+    assert raw.decode("latin-1") == "A\x00c\x00u\x00r\x00a\x00"

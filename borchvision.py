@@ -3883,16 +3883,42 @@ def _mat_read(data):
     return out
 
 
+_MAT_CELL, _MAT_STRUCT, _MAT_CHAR = 1, 2, 4
+
+
 def _mat_matrix(body):
-    """`(name, ndarray)` for one matrix element, or `(name, None)` when it is not
-    numeric — a struct or a cell array, which SVHN does not use and this does not
-    invent an answer for."""
+    """`(name, value)` for one matrix element.
+
+    A numeric array comes back as an `ndarray`; the three other classes this reads
+    come back as the Python shape that matches what they are:
+
+    - **char** is a `str`. MATLAB stores text as an array of code units, so a reader
+      that treated it as numeric returns a list of small integers that is the right
+      length and means nothing.
+    - **a cell array** is a `list`, because that is what a cell array is — a container
+      of unrelated matrices rather than a rectangle of one dtype.
+    - **a struct array** is a `list of dicts`, one per element, and a **single dict**
+      when it holds one element. `StanfordCars` reads the first shape and
+      `StanfordCars`'s class list reads a cell of chars.
+
+    `None` for anything else, which is what the caller drops.
+    """
     _, flags, at = _mat_element(body, 0, pad=True)
     cls = flags[0] & 0xFF
     _, dims_raw, at = _mat_element(body, at, pad=True)
     dims = list(_np.frombuffer(dims_raw, dtype="<i4"))
     _, name_raw, at = _mat_element(body, at, pad=True)
     name = name_raw.decode("ascii", "replace")
+    count = int(_np.prod(dims)) if dims else 0
+
+    if cls == _MAT_CHAR:
+        kind, values, _ = _mat_element(body, at, pad=True)
+        return name, _mat_text(kind, values)
+    if cls == _MAT_CELL:
+        cells, _ = _mat_children(body, at, count)
+        return name, cells
+    if cls == _MAT_STRUCT:
+        return name, _mat_struct(body, at, count)
     if cls not in _MAT_CLASS:
         return name, None
     kind, values, _ = _mat_element(body, at, pad=True)
@@ -3904,6 +3930,70 @@ def _mat_matrix(body):
     # row-major would give an array of the right size with every element in the wrong
     # place — a shape that agrees and values that do not.
     return name, flat.reshape(dims[::-1]).transpose().astype(_MAT_CLASS[cls])
+
+
+def _mat_text(kind, values):
+    """MATLAB text as a `str`.
+
+    **The code unit width is in the tag**, not fixed, and which one you meet depends on
+    who wrote the file. Measured: `scipy.io.savemat` writes `miUTF8`, so every fixture
+    in this repository takes that branch — MATLAB itself writes `miUINT16`, which is
+    the branch no `.mat` written here would ever exercise. It is tested directly
+    instead, because decoding sixteen-bit units as bytes gives a string with a NUL
+    between every letter: printable, wrong, and the same length as the answer once
+    something strips them.
+    """
+    if kind == 16:                              # miUTF8
+        return values.decode("utf-8", "replace").rstrip("\x00")
+    if kind == 18:                              # miUTF32
+        return _np.frombuffer(values, dtype="<u4").tobytes().decode(
+            "utf-32-le", "replace").rstrip("\x00")
+    return "".join(chr(one) for one in _np.frombuffer(values, dtype="<u2")).rstrip(
+        "\x00")
+
+
+def _mat_children(body, at, count):
+    """`count` matrix elements laid end to end, and where they stop.
+
+    Cells and struct fields are both written this way — a bare run of `miMATRIX`
+    elements with nothing between them, so the count has to come from the dimensions
+    rather than from the bytes.
+    """
+    out = []
+    for _ in range(count):
+        if at + 8 > len(body):
+            break
+        kind, payload, at = _mat_element(body, at, pad=True)
+        if kind != 14:                          # miMATRIX
+            continue
+        out.append(_mat_matrix(payload)[1])
+    return out, at
+
+
+def _mat_struct(body, at, count):
+    """A struct array as a list of dicts, or one dict when it holds one element.
+
+    **The field names are a fixed-width block**, not a list of strings: one length
+    (usually 32) and then that many bytes per name, NUL-padded. Splitting the block on
+    NUL instead would give the same names on a file whose names are all shorter than
+    the width and lose every name that fills it exactly.
+
+    **The values run element by element, all fields of one before the next.** Reading
+    them field by field instead transposes the whole array: on a struct of `n` elements
+    with `f` fields every value lands on the wrong element, and on `n == 1` — which is
+    most files anyone tests with — the two orders agree.
+    """
+    _, width_raw, at = _mat_element(body, at, pad=True)
+    width = int(_np.frombuffer(width_raw, dtype="<i4")[0])
+    _, names_raw, at = _mat_element(body, at, pad=True)
+    fields = [names_raw[i:i + width].split(b"\x00")[0].decode("ascii", "replace")
+              for i in range(0, len(names_raw), width)]
+    values, _ = _mat_children(body, at, count * len(fields))
+    out = []
+    for index in range(count):
+        row = values[index * len(fields):(index + 1) * len(fields)]
+        out.append(dict(zip(fields, row)))
+    return out[0] if count == 1 else out
 
 
 # ── pictures, for the formats that are not a codec ──────────────────────────
@@ -7066,6 +7156,92 @@ class Flickr30k(VisionDataset):
         return image, target
 
 
+
+class StanfordCars(VisionDataset):
+    """Sixteen thousand photographs of cars, **labelled by make, model and year.**
+
+    <https://www.kaggle.com/datasets/jessicali9530/stanford-cars-dataset>
+
+    ## Why it was refused and is not
+
+    Its row said *a codec*, then said **not yet** with something genuinely missing:
+    the annotations are a `.mat` holding a **struct array**, and `_mat_read` read
+    numeric arrays only — measured, it returned no keys at all for one. That was a
+    reader to extend rather than a codec to write, and it is extended.
+
+    ## Two things off by one in different directions
+
+    - **The class in the file starts at 1** and the label here starts at 0, so one is
+      subtracted. Leaving it gives a dataset whose labels run 1 to 196 against a class
+      list of 196 names — every prediction shifted by one make, and the accuracy
+      identical.
+    - **The two splits keep their annotations in different places.** `train`'s is
+      inside `devkit`; `test`'s is beside it, in a file whose name says
+      `withlabels`, because the devkit's own test file has none.
+
+    `download` is refused the way torchvision refuses it — the original URL is gone —
+    rather than by this library's usual reason.
+    """
+
+    _SPLITS = ("train", "test")
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False, loader=None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        if split not in self._SPLITS:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        self._split = split
+        self._base_folder = _os.path.join(str(root), "stanford_cars")
+        devkit = _os.path.join(self._base_folder, "devkit")
+        if split == "train":
+            self._annotations_mat_path = _os.path.join(
+                devkit, "cars_train_annos.mat")
+            self._images_base_path = _os.path.join(self._base_folder, "cars_train")
+        else:
+            self._annotations_mat_path = _os.path.join(
+                self._base_folder, "cars_test_annos_withlabels.mat")
+            self._images_base_path = _os.path.join(self._base_folder, "cars_test")
+        if download:
+            self.download()
+        if not self._check_exists():
+            raise RuntimeError("Dataset not found.")
+        self.loader = _folder_loader if loader is None else loader
+
+        with open(self._annotations_mat_path, "rb") as handle:
+            annotations = _mat_read(handle.read())["annotations"]
+        if isinstance(annotations, dict):        # a file holding one car
+            annotations = [annotations]
+        self._samples = [
+            (_os.path.join(self._images_base_path, str(one["fname"])),
+             int(_np.asarray(one["class"]).reshape(-1)[0]) - 1)
+            for one in annotations]
+        with open(_os.path.join(devkit, "cars_meta.mat"), "rb") as handle:
+            self.classes = list(_mat_read(handle.read())["class_names"])
+        self.class_to_idx = {name: i for i, name in enumerate(self.classes)}
+
+    def _check_exists(self):
+        return (_os.path.isdir(_os.path.join(self._base_folder, "devkit"))
+                and _os.path.exists(self._annotations_mat_path)
+                and _os.path.isdir(self._images_base_path))
+
+    def download(self):
+        raise ValueError("The original URL is broken so the StanfordCars dataset "
+                         "cannot be downloaded anymore.")
+
+    def __len__(self):
+        return len(self._samples)
+
+    def __getitem__(self, index):
+        path, target = self._samples[index]
+        image = self.loader(path)
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -7574,7 +7750,7 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "CarlaStereo", "ETH3DStereo", "SceneFlowStereo", "FlyingThings3D",
               "Middlebury2014Stereo", "Kitti", "PhotoTour",
               "Country211", "EuroSAT", "DTD", "Food101", "SUN397", "FGVCAircraft",
-              "Imagenette", "Flickr8k", "Flickr30k",
+              "Imagenette", "Flickr8k", "Flickr30k", "StanfordCars",
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
