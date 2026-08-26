@@ -5408,6 +5408,87 @@ def unpool_cases(inp=None):
     add("적응형softmax::head_bias 의 열쇠",
         lambda L: asm_shapes(L, head_bias=True))
     add("층::repr::AdaptiveLogSoftmaxWithLoss", lambda L: repr(asm(L)))
+
+    # ── what a layer prints ──────────────────────────────────────────────────────
+    #
+    # **This table held 196 repr strings and none for `Conv2d`, `BatchNorm2d` or the
+    # pools** — the three most common layers in any first chapter. Measured when the
+    # `ops` blocks were built: of sixty-four layers at their defaults, **twenty-nine
+    # printed differently from torch**, and `_pool_repr` in the core carried a comment
+    # saying so out loud — *nothing in the golden holds a `MaxPool` repr today*.
+    #
+    # A string nothing watches drifts. These are the strings.
+    #
+    # Two of the twenty-nine were not a printing difference at all, which is the part
+    # worth keeping: **a pool built with no stride stores its kernel as the stride in
+    # torch and stored `None` here**, and **`Upsample` keeps its factor as a float**.
+    # `layer.stride` and `layer.scale_factor` are part of the surface, and comparing
+    # the string is what looked at them.
+    for _label, _build in (
+            ("Conv1d", lambda L: L.nn.Conv1d(2, 3, 5)),
+            ("Conv1d(padding, dilation, no bias)",
+             lambda L: L.nn.Conv1d(2, 3, 5, padding=1, dilation=2, bias=False)),
+            ("Conv2d", lambda L: L.nn.Conv2d(2, 3, 3)),
+            ("Conv2d(stride, padding, groups)",
+             lambda L: L.nn.Conv2d(4, 4, 3, stride=2, padding=1, groups=2)),
+            ("Conv2d(no bias, reflect)",
+             lambda L: L.nn.Conv2d(2, 3, 3, bias=False, padding_mode="reflect")),
+            ("Conv3d", lambda L: L.nn.Conv3d(2, 3, 3)),
+            ("ConvTranspose1d", lambda L: L.nn.ConvTranspose1d(2, 3, 5)),
+            ("ConvTranspose2d(output_padding)",
+             lambda L: L.nn.ConvTranspose2d(2, 3, 3, stride=2, output_padding=1)),
+            ("BatchNorm1d", lambda L: L.nn.BatchNorm1d(4)),
+            ("BatchNorm2d", lambda L: L.nn.BatchNorm2d(4)),
+            ("BatchNorm2d(affine=False)",
+             lambda L: L.nn.BatchNorm2d(4, affine=False)),
+            ("BatchNorm2d(affine, no bias)",
+             lambda L: L.nn.BatchNorm2d(4, bias=False)),
+            ("BatchNorm3d(eps, momentum)",
+             lambda L: L.nn.BatchNorm3d(4, eps=1e-3, momentum=0.2)),
+            ("InstanceNorm1d", lambda L: L.nn.InstanceNorm1d(4)),
+            ("InstanceNorm2d(affine)",
+             lambda L: L.nn.InstanceNorm2d(4, affine=True)),
+            ("GroupNorm", lambda L: L.nn.GroupNorm(2, 4)),
+            ("GroupNorm(affine=False)",
+             lambda L: L.nn.GroupNorm(2, 4, affine=False)),
+            ("LayerNorm", lambda L: L.nn.LayerNorm(4)),
+            ("LayerNorm(shape, no affine)",
+             lambda L: L.nn.LayerNorm([2, 4], elementwise_affine=False)),
+            ("MaxPool1d", lambda L: L.nn.MaxPool1d(2)),
+            ("MaxPool2d", lambda L: L.nn.MaxPool2d(2)),
+            ("MaxPool2d(stride, padding, ceil)",
+             lambda L: L.nn.MaxPool2d(3, stride=2, padding=1, ceil_mode=True)),
+            ("MaxPool3d", lambda L: L.nn.MaxPool3d(2)),
+            ("AvgPool1d", lambda L: L.nn.AvgPool1d(2)),
+            ("AvgPool2d", lambda L: L.nn.AvgPool2d(2)),
+            ("AvgPool2d(stride, padding)",
+             lambda L: L.nn.AvgPool2d(3, stride=2, padding=1)),
+            ("AvgPool3d", lambda L: L.nn.AvgPool3d(2)),
+            ("LPPool1d", lambda L: L.nn.LPPool1d(2, 2)),
+            ("LPPool2d(stride, ceil)",
+             lambda L: L.nn.LPPool2d(3, 2, stride=2, ceil_mode=True)),
+            ("AdaptiveAvgPool1d", lambda L: L.nn.AdaptiveAvgPool1d(1)),
+            ("AdaptiveAvgPool2d", lambda L: L.nn.AdaptiveAvgPool2d(1)),
+            ("AdaptiveAvgPool2d(pair)",
+             lambda L: L.nn.AdaptiveAvgPool2d((2, 3))),
+            ("AdaptiveMaxPool2d", lambda L: L.nn.AdaptiveMaxPool2d(1)),
+            ("GELU", lambda L: L.nn.GELU()),
+            ("GELU(tanh)", lambda L: L.nn.GELU(approximate="tanh")),
+            ("Softmax", lambda L: L.nn.Softmax()),
+            ("Softmax(dim=1)", lambda L: L.nn.Softmax(dim=1)),
+            ("LogSoftmax(dim=-1)", lambda L: L.nn.LogSoftmax(dim=-1)),
+            ("PReLU", lambda L: L.nn.PReLU()),
+            ("PReLU(4)", lambda L: L.nn.PReLU(4)),
+            ("Flatten", lambda L: L.nn.Flatten()),
+            ("Flatten(0, -2)", lambda L: L.nn.Flatten(0, -2)),
+            ("Unflatten", lambda L: L.nn.Unflatten(1, (2, 3))),
+            ("Upsample(scale_factor)", lambda L: L.nn.Upsample(scale_factor=2)),
+            ("Upsample(size)", lambda L: L.nn.Upsample(size=(4, 4))),
+            ("Upsample(bilinear)",
+             lambda L: L.nn.Upsample(scale_factor=2, mode="bilinear")),
+    ):
+        add("층::repr::" + _label, (lambda build: lambda L: repr(build(L)))(_build))
+
     return cases
 
 

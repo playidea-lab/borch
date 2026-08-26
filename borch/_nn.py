@@ -912,7 +912,12 @@ class MaxPool2d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
                  return_indices=False, ceil_mode=False):
         super().__init__()
-        self.kernel_size, self.stride = kernel_size, stride
+        # **torch stores the fallback rather than the `None`.** A pool built with
+        # no stride steps by its kernel, and `layer.stride` says so on torch's side
+        # while it said `None` here — a difference nothing saw until the repr was
+        # compared. The forward is unchanged: it passed `None` to a function that
+        # substitutes the same value.
+        self.kernel_size, self.stride = kernel_size, kernel_size if stride is None else stride
         self.padding, self.dilation = padding, dilation
         self.return_indices, self.ceil_mode = return_indices, ceil_mode
 
@@ -1021,6 +1026,11 @@ class LayerNorm(Module):
         self.normalized_shape = shape
         self.eps = eps
         self.elementwise_affine = elementwise_affine
+        # **The two names exist either way**, holding `None` when there is nothing to
+        # learn, which is what torch does: `LayerNorm(4, elementwise_affine=False).bias`
+        # is `None` there and was an `AttributeError` here. The repr asks the same
+        # question the caller does, so comparing the string is what found it.
+        self.weight = self.bias = None
         if elementwise_affine:
             self.weight = Parameter(_np.ones(shape, dtype=_DEFAULT_DTYPE))
             if bias:
@@ -1082,7 +1092,12 @@ class BatchNorm2d(Module):
             # this would leave training right and evaluation quietly wrong — the
             # shape `_InstanceNorm` next door already refuses for the same reason.
             _unsupported(f"{type(self).__name__} with track_running_stats=False")
+        self.num_features = num_features
         self.eps, self.momentum, self.affine = eps, momentum, affine
+        # **Kept because the repr prints it**, and the repr is compared against
+        # torch's character for character. `track_running_stats=False` is refused
+        # above, so the only value this can hold is the one that was honoured.
+        self.track_running_stats = track_running_stats
         self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
                        if affine else None)
         self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
@@ -2297,6 +2312,7 @@ class GroupNorm(Module):
         super().__init__()
         _no_device_dtype("GroupNorm", device, dtype)
         self.num_groups, self.num_channels, self.eps = num_groups, num_channels, eps
+        self.affine = affine
         self.weight = (Parameter(_np.ones(num_channels, dtype=_DEFAULT_DTYPE))
                        if affine else None)
         self.bias = (Parameter(_np.zeros(num_channels, dtype=_DEFAULT_DTYPE))
@@ -2321,6 +2337,11 @@ class _InstanceNorm(Module):
         super().__init__()
         _no_device_dtype(type(self).__name__, device, dtype)
         self.num_features, self.eps = num_features, eps
+        # As `BatchNorm2d` above — the repr prints these three and nothing else
+        # kept them. `track_running_stats=True` is refused below, so what is stored
+        # is what the layer actually does.
+        self.momentum, self.affine = momentum, affine
+        self.track_running_stats = track_running_stats
         self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
                        if affine else None)
         self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
@@ -2470,7 +2491,12 @@ class AvgPool2d(Module):
         """torch's list. Four of the six were missing, and the pair that decides the
         *divisor* is the reason it is more than plumbing — see `F.avg_pool2d`."""
         super().__init__()
-        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        # As the max pools above — **torch stores the fallback, not the `None`.**
+        # `AvgPool1d` additionally keeps all three as one-tuples, which is torch's
+        # own inconsistency between the one-dimensional pool and its siblings and
+        # is copied rather than tidied: `layer.kernel_size` is part of the surface.
+        self.kernel_size, self.stride, self.padding = (
+            kernel_size, kernel_size if stride is None else stride, padding)
         self.ceil_mode, self.count_include_pad = ceil_mode, count_include_pad
         self.divisor_override = divisor_override
 
@@ -2518,6 +2544,14 @@ class AvgPool1d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
                  count_include_pad=True):
         super().__init__()
+        # As the max pools above — **torch stores the fallback, not the `None`.**
+        # `AvgPool1d` additionally keeps all three as one-tuples, which is torch's
+        # own inconsistency between the one-dimensional pool and its siblings and
+        # is copied rather than tidied: `layer.kernel_size` is part of the surface.
+        kernel_size = (kernel_size,) if isinstance(kernel_size, int) else tuple(kernel_size)
+        stride = kernel_size if stride is None else (
+            (stride,) if isinstance(stride, int) else tuple(stride))
+        padding = (padding,) if isinstance(padding, int) else tuple(padding)
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
         self.ceil_mode, self.count_include_pad = ceil_mode, count_include_pad
 
@@ -2530,7 +2564,12 @@ class AvgPool3d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
                  count_include_pad=True, divisor_override=None):
         super().__init__()
-        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        # As the max pools above — **torch stores the fallback, not the `None`.**
+        # `AvgPool1d` additionally keeps all three as one-tuples, which is torch's
+        # own inconsistency between the one-dimensional pool and its siblings and
+        # is copied rather than tidied: `layer.kernel_size` is part of the surface.
+        self.kernel_size, self.stride, self.padding = (
+            kernel_size, kernel_size if stride is None else stride, padding)
         self.ceil_mode, self.count_include_pad = ceil_mode, count_include_pad
         self.divisor_override = divisor_override
 
@@ -2862,7 +2901,9 @@ class BatchNorm1d(Module):
         _no_device_dtype("BatchNorm1d", device, dtype)
         if not track_running_stats:
             _unsupported("BatchNorm1d with track_running_stats=False")
+        self.num_features = num_features
         self.eps, self.momentum, self.affine = eps, momentum, affine
+        self.track_running_stats = track_running_stats
         self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
                        if affine else None)
         self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
@@ -2980,7 +3021,12 @@ class MaxPool1d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
                  return_indices=False, ceil_mode=False):
         super().__init__()
-        self.kernel_size, self.stride = kernel_size, stride
+        # **torch stores the fallback rather than the `None`.** A pool built with
+        # no stride steps by its kernel, and `layer.stride` says so on torch's side
+        # while it said `None` here — a difference nothing saw until the repr was
+        # compared. The forward is unchanged: it passed `None` to a function that
+        # substitutes the same value.
+        self.kernel_size, self.stride = kernel_size, kernel_size if stride is None else stride
         self.padding, self.dilation = padding, dilation
         self.return_indices, self.ceil_mode = return_indices, ceil_mode
 
@@ -2996,7 +3042,12 @@ class MaxPool3d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
                  return_indices=False, ceil_mode=False):
         super().__init__()
-        self.kernel_size, self.stride = kernel_size, stride
+        # **torch stores the fallback rather than the `None`.** A pool built with
+        # no stride steps by its kernel, and `layer.stride` says so on torch's side
+        # while it said `None` here — a difference nothing saw until the repr was
+        # compared. The forward is unchanged: it passed `None` to a function that
+        # substitutes the same value.
+        self.kernel_size, self.stride = kernel_size, kernel_size if stride is None else stride
         self.padding, self.dilation = padding, dilation
         self.return_indices, self.ceil_mode = return_indices, ceil_mode
 
@@ -3837,7 +3888,13 @@ class Upsample(Module):
     def __init__(self, size=None, scale_factor=None, mode="nearest",
                  align_corners=None, recompute_scale_factor=None):
         super().__init__()
-        self.size, self.scale_factor = size, scale_factor
+        # **torch keeps the factor as a float**, and the repr prints it: an
+        # `Upsample(scale_factor=2)` says `2.0` there and said `2` here. The
+        # value is the same number; what differed is what `layer.scale_factor`
+        # hands back, and nothing looked until the string was compared.
+        self.size = size
+        self.scale_factor = (None if scale_factor is None
+                             else float(scale_factor))
         self.mode, self.align_corners = mode, align_corners
         self.recompute_scale_factor = recompute_scale_factor
 
@@ -4118,3 +4175,165 @@ class _Functional(_Namespace):
 nn.functional = _Functional()
 
 
+# ── what a layer prints, and why it is worth as much as what it computes ─────────
+#
+# **`print(model)` is how a reader checks that what they built is what they meant**,
+# and the golden already freezes 196 of these strings. It froze none for `Conv2d`,
+# `BatchNorm2d` or the pools — the three most common layers in any first chapter —
+# and all three printed differently from torch. Measured before this block was
+# written: of sixty-four layers built at their defaults, **twenty-nine disagreed**,
+# and `Conv1d` agreed only because its hand-written `__repr__` happened to match at
+# the arguments it was tried with; give it a padding and it diverges too.
+#
+# The reasons are torch's own `extra_repr` bodies, family by family. Two things about
+# them are easy to get subtly wrong and are done here once:
+#
+# - **The convolution prints its sizes as tuples**, `kernel_size=(3, 3)`, because
+#   torch stores them that way. This library stores integers and expands them for the
+#   printing alone — changing the stored form would reach into every forward pass for
+#   the sake of a string.
+# - **Several arguments print only when they are not the default.** A convolution with
+#   no padding does not say `padding=(0, 0)`; one with padding does. Printing them
+#   always is the same characters for a different layer and reads as correct.
+
+
+def _ntuple_repr(value, dims):
+    """A stored integer as the tuple torch would have printed."""
+    if isinstance(value, (tuple, list)):
+        return tuple(value)
+    return (value,) * dims
+
+
+def _conv_extra_repr(dims, transposed=False):
+    """torch's `_ConvNd.extra_repr`, over fields this library stores as integers."""
+    def extra_repr(self):
+        kernel = _ntuple_repr(self.kernel_size, dims)
+        stride = _ntuple_repr(self.stride, dims)
+        padding = _ntuple_repr(self.padding, dims)
+        dilation = _ntuple_repr(self.dilation, dims)
+        out = (f"{self.in_channels}, {self.out_channels}, kernel_size={kernel}, "
+               f"stride={stride}")
+        if padding != (0,) * dims:
+            out += f", padding={padding}"
+        if dilation != (1,) * dims:
+            out += f", dilation={dilation}"
+        if transposed:
+            extra = _ntuple_repr(self.output_padding, dims)
+            if extra != (0,) * dims:
+                out += f", output_padding={extra}"
+        if self.groups != 1:
+            out += f", groups={self.groups}"
+        if self.bias is None:
+            out += ", bias=False"
+        if self.padding_mode != "zeros":
+            out += f", padding_mode={self.padding_mode}"
+        return out
+    return extra_repr
+
+
+def _norm_extra_repr(self):
+    """`BatchNorm` and `InstanceNorm` — **`bias` is not `affine`.** torch prints both,
+    because `affine=True, bias=False` is a scale with no shift and the two words
+    together are the only way to see it."""
+    return (f"{self.num_features}, eps={self.eps}, momentum={self.momentum}, "
+            f"affine={self.affine}, bias={self.bias is not None}, "
+            f"track_running_stats={self.track_running_stats}")
+
+
+def _group_norm_extra_repr(self):
+    return (f"{self.num_groups}, {self.num_channels}, eps={self.eps}, "
+            f"affine={self.affine}, bias={self.bias is not None}")
+
+
+def _layer_norm_extra_repr(self):
+    return (f"{self.normalized_shape}, eps={self.eps}, "
+            f"elementwise_affine={self.elementwise_affine}, "
+            f"bias={self.bias is not None}")
+
+
+def _max_pool_extra_repr(self):
+    return (f"kernel_size={self.kernel_size}, stride={self.stride}, "
+            f"padding={self.padding}, dilation={self.dilation}, "
+            f"ceil_mode={self.ceil_mode}")
+
+
+def _avg_pool_extra_repr(self):
+    return (f"kernel_size={self.kernel_size}, stride={self.stride}, "
+            f"padding={self.padding}")
+
+
+def _lp_pool_extra_repr(self):
+    return (f"norm_type={self.norm_type}, kernel_size={self.kernel_size}, "
+            f"stride={self.stride}, ceil_mode={self.ceil_mode}")
+
+
+def _output_size_extra_repr(self):
+    return f"output_size={self.output_size}"
+
+
+def _upsample_extra_repr(self):
+    """**Whichever of the two was given**, not both. A layer built with a size prints
+    its size and a layer built with a factor prints its factor; printing the other
+    shows `None` beside a number that is set."""
+    if self.scale_factor is not None:
+        info = "scale_factor=" + repr(self.scale_factor)
+    else:
+        info = "size=" + repr(self.size)
+    return info + ", mode=" + repr(self.mode)
+
+
+def _install_extra_reprs():
+    """Attach the rules above to the classes they belong to.
+
+    **In one table rather than in thirty-five class bodies.** The families share
+    torch's wording exactly — three convolutions print the same way, six norms print
+    the same way — and a reader checking this against torch reads one block instead of
+    hunting. Every hand-written `__repr__` these replace is removed at the same time,
+    because a `__repr__` on the class wins over `Module.__repr__` and would leave the
+    new rule attached and unused.
+    """
+    for name, dims, transposed in (("Conv1d", 1, False), ("Conv2d", 2, False),
+                                   ("Conv3d", 3, False),
+                                   ("ConvTranspose1d", 1, True),
+                                   ("ConvTranspose2d", 2, True),
+                                   ("ConvTranspose3d", 3, True)):
+        cls = globals()[name]
+        cls.__dict__.get("__repr__") and delattr(cls, "__repr__")
+        cls.extra_repr = _conv_extra_repr(dims, transposed)
+
+    for name, rule in (
+            ("BatchNorm1d", _norm_extra_repr), ("BatchNorm2d", _norm_extra_repr),
+            ("BatchNorm3d", _norm_extra_repr),
+            ("InstanceNorm1d", _norm_extra_repr),
+            ("InstanceNorm2d", _norm_extra_repr),
+            ("InstanceNorm3d", _norm_extra_repr),
+            ("GroupNorm", _group_norm_extra_repr),
+            ("LayerNorm", _layer_norm_extra_repr),
+            ("MaxPool1d", _max_pool_extra_repr), ("MaxPool2d", _max_pool_extra_repr),
+            ("MaxPool3d", _max_pool_extra_repr),
+            ("AvgPool1d", _avg_pool_extra_repr), ("AvgPool2d", _avg_pool_extra_repr),
+            ("AvgPool3d", _avg_pool_extra_repr),
+            ("LPPool1d", _lp_pool_extra_repr), ("LPPool2d", _lp_pool_extra_repr),
+            ("AdaptiveAvgPool1d", _output_size_extra_repr),
+            ("AdaptiveAvgPool2d", _output_size_extra_repr),
+            ("AdaptiveAvgPool3d", _output_size_extra_repr),
+            ("AdaptiveMaxPool1d", _output_size_extra_repr),
+            ("AdaptiveMaxPool2d", _output_size_extra_repr),
+            ("AdaptiveMaxPool3d", _output_size_extra_repr),
+            ("Upsample", _upsample_extra_repr)):
+        cls = globals()[name]
+        cls.__dict__.get("__repr__") and delattr(cls, "__repr__")
+        cls.extra_repr = rule
+
+    for name, template in (("GELU", "approximate={approximate!r}"),
+                           ("Softmax", "dim={dim}"), ("LogSoftmax", "dim={dim}"),
+                           ("PReLU", "num_parameters={num_parameters}"),
+                           ("Flatten", "start_dim={start_dim}, end_dim={end_dim}"),
+                           ("Unflatten",
+                            "dim={dim}, unflattened_size={unflattened_size}")):
+        cls = globals()[name]
+        cls.__dict__.get("__repr__") and delattr(cls, "__repr__")
+        cls.extra_repr = (lambda text: lambda self: text.format(**vars(self)))(template)
+
+
+_install_extra_reprs()
