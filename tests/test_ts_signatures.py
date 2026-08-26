@@ -1060,7 +1060,20 @@ SHORTER = {
     # 11 → 12. `ChainedScheduler` took torch's `optimizer` and borch.ts has not.
     # 12 → 15. The three that left `unaligned`; what they are short of is
     # `last_epoch`, which every scheduler here lacks.
-    "optim.lr_scheduler": 15,
+    #
+    # **15 → 1.** `last_epoch` went in — fourteen of them, plus `ChainedScheduler`
+    # taking `optimizer` and refusing one that is not its schedulers'. It is where a
+    # resumed run picks the schedule up, and its absence meant a caller restoring a
+    # checkpoint had nowhere to say which epoch they were at.
+    #
+    # **The one left is `CyclicLR`, and it stays until the middle of its list does.**
+    # torch continues `scale_fn, scale_mode, cycle_momentum, base_momentum,
+    # max_momentum, last_epoch`, and borch.ts stops at `gamma`. Appending `last_epoch`
+    # was tried and put it in `scale_fn`'s seat: `SHIFTED` reported it in the same run,
+    # which is the column that matters — a missing tail is a missing feature, a shifted
+    # seat is a wrong answer. **A `shorter` is not worth closing by opening a
+    # `shifted`.**
+    "optim.lr_scheduler": 1,
     # 2 → 1. One of the two left for `unaligned` when the core took torch's `linalg`
     # names — a prefix stopped being a prefix once the words changed. See the note
     # in `RENAMED`.

@@ -1365,12 +1365,39 @@ export abstract class LRScheduler {
   private readonly bases: number[];
   readonly base: number;
 
-  constructor(protected readonly opt: Optimizer) {
+  /**
+   * Where `start()` picks up from. **`-1` means the beginning**, which is torch's own
+   * default and reads oddly until you see that the first thing to happen is an
+   * increment: the constructor advances to 0 and applies epoch 0.
+   *
+   * Any other value is a **resume**, and it assumes the optimizer is already carrying
+   * the learning rate it had at that epoch — loaded from a checkpoint beside the
+   * scheduler. It is not a fast-forward: measured against torch, `last_epoch=3` on a
+   * fresh optimizer and three fresh `step()`s give different answers for six of the
+   * nine schedulers that were asked, because most of them read the *current* rate
+   * rather than recomputing from the base. torch's own error for that case calls it
+   * "not recommended".
+   */
+  private readonly startEpoch: number;
+
+  /** The optimizer this drives — torch's `.optimizer`, and what `ChainedScheduler`
+   *  compares against. */
+  get optimizer(): Optimizer {
+    return this.opt;
+  }
+
+  constructor(protected readonly opt: Optimizer, lastEpoch = -1) {
     this.bases = opt.paramGroups.map((g) => {
       if (g.initialLr === undefined) g.initialLr = g.lr;
       return g.initialLr;
     });
     this.base = this.bases[0] ?? 0;
+    this.startEpoch = lastEpoch;
+  }
+
+  /** The epoch just applied — torch's `.last_epoch`, and 0 after a fresh build. */
+  get lastEpoch(): number {
+    return this.epoch;
   }
 
   /**
@@ -1402,8 +1429,12 @@ export abstract class LRScheduler {
    * first term without it — measured at a maximum difference of 2.0e-01.
    */
   start(): this {
-    this.epoch = 0;
-    this.apply(this.compute(0));
+    // **`startEpoch + 1`, which is the increment torch does in its constructor.** The
+    // core spells the same thing as `last_epoch = n; step()`; here the two halves are
+    // split across `constructor` and `start` for the TypeScript reason above, and the
+    // arithmetic has to survive the split.
+    this.epoch = this.startEpoch + 1;
+    this.apply(this.compute(this.epoch));
     return this;
   }
 
@@ -1479,8 +1510,8 @@ export abstract class LRScheduler {
  */
 export class StepLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly stepSize: number,
-              private readonly gamma = 0.1) {
-    super(opt);
+              private readonly gamma = 0.1, lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {
@@ -1498,8 +1529,8 @@ export class StepLR extends LRScheduler {
  */
 export class MultiStepLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly milestones: readonly number[],
-              private readonly gamma = 0.1) {
-    super(opt);
+              private readonly gamma = 0.1, lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {
@@ -1518,8 +1549,8 @@ export class MultiStepLR extends LRScheduler {
  * form overwrites what the other did.
  */
 export class ExponentialLR extends LRScheduler {
-  constructor(opt: Optimizer, private readonly gamma: number) {
-    super(opt);
+  constructor(opt: Optimizer, private readonly gamma: number, lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {
@@ -1533,8 +1564,8 @@ export class ExponentialLR extends LRScheduler {
  */
 export class ConstantLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly factor = 1 / 3,
-              private readonly totalIters = 5) {
-    super(opt);
+              private readonly totalIters = 5, lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {
@@ -1554,8 +1585,9 @@ export class ConstantLR extends LRScheduler {
  */
 export class LinearLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly startFactor = 1 / 3,
-              private readonly endFactor = 1.0, private readonly totalIters = 5) {
-    super(opt);
+              private readonly endFactor = 1.0, private readonly totalIters = 5,
+              lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {
@@ -1571,8 +1603,8 @@ export class LinearLR extends LRScheduler {
  */
 export class PolynomialLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly totalIters = 5,
-              private readonly power = 1.0) {
-    super(opt);
+              private readonly power = 1.0, lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {
@@ -1588,8 +1620,9 @@ export class PolynomialLR extends LRScheduler {
  * not the original.
  */
 export class MultiplicativeLR extends LRScheduler {
-  constructor(opt: Optimizer, private readonly lrLambda: (epoch: number) => number) {
-    super(opt);
+  constructor(opt: Optimizer, private readonly lrLambda: (epoch: number) => number,
+              lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {
@@ -1606,8 +1639,9 @@ export class CosineAnnealingWarmRestarts extends LRScheduler {
   private tCur = -1;
 
   constructor(opt: Optimizer, t0: number,
-              private readonly tMult = 1, private readonly etaMin = 0) {
-    super(opt);
+              private readonly tMult = 1, private readonly etaMin = 0,
+              lastEpoch = -1) {
+    super(opt, lastEpoch);
     this.tI = t0;
   }
 
@@ -1661,8 +1695,9 @@ export class OneCycleLR extends LRScheduler {
               maxMomentum = 0.95,
               divFactor = 25,
               finalDivFactor = 1e4,
-              threePhase = false) {
-    super(opt);
+              threePhase = false,
+              lastEpoch = -1) {
+    super(opt, lastEpoch);
     if (totalSteps === null) {
       if (epochs === null || stepsPerEpoch === null) {
         throw new Error(
@@ -1769,6 +1804,18 @@ export class CyclicLR extends LRScheduler {
     stepSizeDown: number | null = null,
     private readonly mode: "triangular" | "triangular2" | "exp_range" = "triangular",
     private readonly gamma = 1.0,
+    // **No `lastEpoch` here, and the omission is deliberate.**
+    //
+    // torch's list continues `scale_fn, scale_mode, cycle_momentum, base_momentum,
+    // max_momentum, last_epoch`, and this one stops at `gamma`. Appending `lastEpoch`
+    // — which is what the other fourteen took — puts it in **`scale_fn`'s seat**, so a
+    // caller writing torch's line hands a function to a number. `ts_signatures.py`
+    // reported it as `shifted` the moment it was added, which is the column that
+    // matters: a missing tail is a missing feature, a shifted seat is a wrong answer.
+    //
+    // The tail cannot be closed here until the middle is. `scale_fn` changes the curve
+    // and accepting it unused would be worse than its absence, so it wants writing
+    // rather than declaring.
   ) {
     super(opt);
     this.down = stepSizeDown ?? this.stepSizeUp;
@@ -1799,7 +1846,12 @@ export class SequentialLR {
     readonly opt: Optimizer,
     private readonly schedulers: LRScheduler[],
     private readonly milestones: readonly number[],
+    lastEpoch = -1,
   ) {
+    // **Its own epoch, and not passed down.** torch's `SequentialLR` takes
+    // `last_epoch` and drives the child it hands over to; the children are built by
+    // the caller and already carry their own. So this only resumes the switch point.
+    this.epoch = lastEpoch + 1;
     const first = this.schedulers[0];
     if (first) first.restart();
   }
@@ -1822,21 +1874,56 @@ export class SequentialLR {
  * Applies several **at once.** Their factors multiply.
  */
 export class ChainedScheduler {
-  constructor(private readonly schedulers: LRScheduler[]) {}
+  /**
+   * **`optimizer` sits second, where torch has it**, and is optional there too: given
+   * nothing, torch takes the first scheduler's. Passing one that is not theirs is
+   * **refused rather than believed** — `getLastLr` reads the rates off it, so a
+   * mismatched optimizer reports rates nobody set. The core says the same in the same
+   * words.
+   *
+   * An earlier draft here took the argument and did nothing with it, with a note
+   * saying the check was worth having and not written yet. That is the thing this
+   * repository refuses one file over — an argument accepted and ignored is worse than
+   * one that is absent, because the caller cannot tell.
+   */
+  readonly optimizer: Optimizer;
+
+  // **The parameter is `opt` and the field is `optimizer`**, which is what every other
+  // scheduler in this file does — the base class takes `opt` and exposes `optimizer`.
+  // Spelling the parameter `optimizer` here made `ts_signatures.py` report the row as
+  // `renamed`: its `optimizer → opt` fold is global, so it rewrites the core's name and
+  // then finds borch.ts had not been rewritten. That table's own comment says a fold
+  // right about one row can be wrong about another and there is no place to write
+  // "except here", so **closing the difference is the fix that needs no exception.**
+  constructor(private readonly schedulers: LRScheduler[],
+              opt: Optimizer | null = null) {
+    const found = this.schedulers[0]?.optimizer;
+    if (found === undefined) {
+      throw new Error("ChainedScheduler needs at least one scheduler.");
+    }
+    if (opt !== null && opt !== found) {
+      throw new Error(
+        "ChainedScheduler: the optimizer given is not the one the schedulers "
+        + "are stepping.");
+    }
+    this.optimizer = found;
+  }
 
   step(): void {
     for (const s of this.schedulers) s.step();
   }
 
+  /** **The rates, not an empty list.** It answered `[]` before, which is what a caller
+   *  reads to see what the chain did. */
   getLastLr(): number[] {
-    return [];
+    return this.optimizer.paramGroups.map((g) => g.lr);
   }
 }
 
 export class CosineAnnealingLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly tMax: number,
-              private readonly etaMin = 0) {
-    super(opt);
+              private readonly etaMin = 0, lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {
@@ -1846,8 +1933,9 @@ export class CosineAnnealingLR extends LRScheduler {
 }
 
 export class LambdaLR extends LRScheduler {
-  constructor(opt: Optimizer, private readonly lrLambda: (epoch: number) => number) {
-    super(opt);
+  constructor(opt: Optimizer, private readonly lrLambda: (epoch: number) => number,
+              lastEpoch = -1) {
+    super(opt, lastEpoch);
   }
 
   protected override compute(epoch: number): number {

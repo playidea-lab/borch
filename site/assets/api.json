@@ -4,7 +4,7 @@
  "korean": {
   "done": 688,
   "stale": 0,
-  "missing": 297
+  "missing": 301
  },
  "modules": [
   {
@@ -13152,9 +13152,20 @@
        "doc": ""
       },
       {
+       "name": "optimizer",
+       "signature": "get optimizer(): Optimizer",
+       "doc": "The optimizer this drives — torch's `.optimizer`, and what `ChainedScheduler`\n compares against."
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer)",
+       "signature": "constructor(opt: Optimizer, lastEpoch?: number)",
        "doc": ""
+      },
+      {
+       "name": "lastEpoch",
+       "signature": "get lastEpoch(): number",
+       "doc": "The epoch just applied — torch's `.last_epoch`, and 0 after a fresh build.",
+       "torch": "last_epoch"
       },
       {
        "name": "start",
@@ -13211,7 +13222,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, stepSize: number, gamma?: number)",
+       "signature": "constructor(opt: Optimizer, stepSize: number, gamma?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13231,7 +13242,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, milestones: readonly number[], gamma?: number)",
+       "signature": "constructor(opt: Optimizer, milestones: readonly number[], gamma?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13251,7 +13262,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, gamma: number)",
+       "signature": "constructor(opt: Optimizer, gamma: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13271,7 +13282,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, factor?: number, totalIters?: number)",
+       "signature": "constructor(opt: Optimizer, factor?: number, totalIters?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13291,7 +13302,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, startFactor?: number, endFactor?: number, totalIters?: number)",
+       "signature": "constructor(opt: Optimizer, startFactor?: number, endFactor?: number, totalIters?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13311,7 +13322,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, totalIters?: number, power?: number)",
+       "signature": "constructor(opt: Optimizer, totalIters?: number, power?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13331,7 +13342,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, lrLambda: (epoch: number) => number)",
+       "signature": "constructor(opt: Optimizer, lrLambda: (epoch: number) => number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13351,7 +13362,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, t0: number, tMult?: number, etaMin?: number)",
+       "signature": "constructor(opt: Optimizer, t0: number, tMult?: number, etaMin?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13371,7 +13382,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, maxLr: number, totalSteps?: number | null, epochs?: number | null, stepsPerEpoch?: number | null, pctStart?: number, annealStrategy?: \"cos\" | \"linear\", cycleMomentum?: boolean, baseMomentum?: number, maxMomentum?: number, divFactor?: number, finalDivFactor?: number, threePhase?: boolean)",
+       "signature": "constructor(opt: Optimizer, maxLr: number, totalSteps?: number | null, epochs?: number | null, stepsPerEpoch?: number | null, pctStart?: number, annealStrategy?: \"cos\" | \"linear\", cycleMomentum?: boolean, baseMomentum?: number, maxMomentum?: number, divFactor?: number, finalDivFactor?: number, threePhase?: boolean, lastEpoch?: number)",
        "doc": "**torch's argument list, in torch's order.** It used to read\n\n    (opt, maxLr, totalSteps, pctStart, divFactor, finalDivFactor)\n\nwhich agrees with torch for three arguments and then parts for eleven\nconsecutive positions. `new OneCycleLR(opt, 0.1, 200, 10, 100)` — a torch recipe's\nten epochs of a hundred steps — set `pctStart` to 10 and `divFactor` to 100.\n`pctStart` is a fraction of the cycle, so given 10 the rate climbs for the whole\nrun and never comes back down. Nothing throws, and the shape of that curve is the\nsingle thing this scheduler exists to control.\n\n`epochs`/`stepsPerEpoch` are torch's other way of saying `totalSteps`; one of the\ntwo has to be given."
       },
       {
@@ -13416,7 +13427,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, schedulers: LRScheduler[], milestones: readonly number[])",
+       "signature": "constructor(opt: Optimizer, schedulers: LRScheduler[], milestones: readonly number[], lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13440,8 +13451,13 @@
      "doc": "Applies several **at once.** Their factors multiply.",
      "members": [
       {
+       "name": "optimizer",
+       "signature": "readonly optimizer: Optimizer",
+       "doc": "**`optimizer` sits second, where torch has it**, and is optional there too: given\nnothing, torch takes the first scheduler's. Passing one that is not theirs is\n**refused rather than believed** — `getLastLr` reads the rates off it, so a\nmismatched optimizer reports rates nobody set. The core says the same in the same\nwords.\n\nAn earlier draft here took the argument and did nothing with it, with a note\nsaying the check was worth having and not written yet. That is the thing this\nrepository refuses one file over — an argument accepted and ignored is worse than\none that is absent, because the caller cannot tell."
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(schedulers: LRScheduler[])",
+       "signature": "constructor(schedulers: LRScheduler[], opt?: Optimizer | null)",
        "doc": ""
       },
       {
@@ -13452,7 +13468,7 @@
       {
        "name": "getLastLr",
        "signature": "getLastLr(): number[]",
-       "doc": "",
+       "doc": "*The rates, not an empty list.** It answered `[]` before, which is what a caller\n reads to see what the chain did.",
        "torch": "get_last_lr"
       }
      ],
@@ -13466,7 +13482,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, tMax: number, etaMin?: number)",
+       "signature": "constructor(opt: Optimizer, tMax: number, etaMin?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13485,7 +13501,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, lrLambda: (epoch: number) => number)",
+       "signature": "constructor(opt: Optimizer, lrLambda: (epoch: number) => number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13529,7 +13545,7 @@
      "doc_ko": "값이 나아지지 않으면 학습률을 줄인다.\n\n다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다."
     }
    ],
-   "count": 152,
+   "count": 155,
    "doc_ko": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다."
   },
   {
@@ -19191,5 +19207,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2572
+ "total": 2575
 }

@@ -276,6 +276,35 @@ export async function report(): Promise<Report> {
       && near(sched.paramGroups[1]!.lr, 0.1, 1e-9),
     `${sched.paramGroups[0]!.lr} / ${sched.paramGroups[1]!.lr}`);
 
+  // ── `lastEpoch` is where the schedule picks up ────────────────────────
+  //
+  // Every one of these took torch's arguments **but its last**, so a caller resuming
+  // from a checkpoint had nowhere to say which epoch they were resuming at.
+  //
+  // **It is not a fast-forward.** Measured against torch: `last_epoch = 3` on a fresh
+  // optimizer and three fresh `step()`s give different answers for six of the nine
+  // schedulers asked, because most read the *current* rate rather than recomputing
+  // from the base. It assumes the optimizer already carries the rate it had then —
+  // which is what a checkpoint restores. So what is asked here is the arithmetic:
+  // the epoch applied is `lastEpoch + 1`, and stepping continues from there.
+  {
+    const o = new optim.SGD([{ params: [mk()], lr: 1.0 }], 1.0);
+    const fresh = new optim.StepLR(o, 2, 0.1).start();
+    want("a fresh scheduler starts at epoch 0", fresh.lastEpoch === 0,
+      `lastEpoch is ${fresh.lastEpoch}`);
+
+    const o2 = new optim.SGD([{ params: [mk()], lr: 1.0 }], 1.0);
+    const resumed = new optim.StepLR(o2, 2, 0.1, 3).start();
+    want("a resumed one starts at lastEpoch + 1", resumed.lastEpoch === 4,
+      `lastEpoch is ${resumed.lastEpoch}`);
+    // Epoch 4 is a multiple of the step size, so the rate is cut once on arrival.
+    want("and applies that epoch rather than epoch 0",
+      near(o2.paramGroups[0]!.lr, 0.1, 1e-9), `${o2.paramGroups[0]!.lr}`);
+    resumed.step();
+    want("and carries on from there", resumed.lastEpoch === 5,
+      `lastEpoch is ${resumed.lastEpoch}`);
+  }
+
   // ── What is mended in place has to own its buffer ─────────────────────
   // The `addParamGroup` check above caught this. `Tensor.zeros([1])` returns a **global
   // constant** cached by value, and optimizers and running statistics write into it.
