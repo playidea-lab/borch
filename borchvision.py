@@ -3129,28 +3129,12 @@ def resize_bounding_boxes(bounding_boxes, canvas_size, size, max_size=None,
     this, because a cap that can never apply is a caller who meant something else.
     """
     height, width = _canvas(canvas_size, "resize_bounding_boxes")
-    want = [size] if isinstance(size, (int, float)) else list(size)
-    if len(want) == 1:
-        short, long_ = min(height, width), max(height, width)
-        new_short = float(want[0])
-        new_long = long_ * new_short / short
-        if max_size is not None and new_long > max_size:
-            new_short = new_short * max_size / new_long
-            new_long = float(max_size)
-        new_h, new_w = ((new_short, new_long) if height <= width
-                        else (new_long, new_short))
-        new_h, new_w = int(new_h), int(new_w)
-    elif len(want) == 2:
-        if max_size is not None:
-            raise ValueError(
-                "max_size is only used when size is a single number.\n"
-                "(torch: max_size should only be passed if size specifies the length "
-                "of the smaller edge)")
-        new_h, new_w = int(want[0]), int(want[1])
-    else:
-        raise ValueError(
-            f"size wants one or two numbers — got {len(want)}.\n"
-            "(torch: size should be an int or a 1 or 2 element tuple/list)")
+    # **One rule, read from one place.** The mask and keypoint kernels ask the same
+    # question about `size` and `max_size`, and this rule was written out inline here
+    # first — three copies of *a single number keeps the aspect ratio* is exactly the
+    # shape this repository keeps catching in its tables.
+    new_h, new_w = _resize_target(int(height), int(width), size, max_size,
+                                  "resize_bounding_boxes")
     xyxy, was_tensor = _boxes_as_xyxy(bounding_boxes, format, "resize_bounding_boxes")
     out = xyxy.copy()
     out[..., 0::2] *= new_w / width
@@ -3186,6 +3170,310 @@ def sanitize_bounding_boxes(bounding_boxes, format="xyxy", canvas_size=None,  # 
         keep = keep & inside
     kept = _xyxy_back(xyxy[keep], format, was_tensor)
     return kept, (_backend().tensor(keep) if was_tensor else keep)
+
+
+# ── v2's mask and keypoint kernels ───────────────────────────────────────────
+#
+# **Seventh time this shape has been met.** These carried *a tv_tensor type, and the
+# type system is declined in `v2`*, and both take a plain tensor: a mask is an array
+# whose last two axes are the picture, a keypoint set is `(..., K, 2)` of coordinates.
+# Called on bare tensors torchvision answers normally, exactly as the box kernels do.
+#
+# **A mask is not an image with a different name.** Every one of these is the image
+# operation with **nearest** sampling and nothing else — measured, `resize_mask` is
+# `resize_image(interpolation=NEAREST)` to the last value, and `NEAREST_EXACT` is a
+# different answer. Sampling a label map any other way averages class 3 and class 5 into
+# class 4, which is a picture that looks right and means nothing.
+
+
+def _mask_in(mask):
+    arr = mask if isinstance(mask, _np.ndarray) else _to_numpy(mask)
+    return arr, not isinstance(mask, _np.ndarray)
+
+
+def _mask_out(arr, was_tensor):
+    """**The dtype comes back as it went in.** A mask is labels, and widening `uint8`
+    to float here would make `==` comparisons against a class index start failing on
+    values that are exactly equal on torchvision's side."""
+    return _backend().tensor(arr) if was_tensor else arr
+
+
+def _nearest_axis(src_len, dst_len):
+    """Which source row each destination row reads from.
+
+    `floor(i * src / dst)`, which is torch's `nearest` and **not** its `nearest-exact`.
+    The two differ on every non-integer ratio and torchvision keeps both; masks get this
+    one, so this one is what is written.
+    """
+    return _np.minimum((_np.arange(dst_len) * src_len // dst_len).astype(_np.int64),
+                       src_len - 1)
+
+
+def horizontal_flip_mask(mask):
+    """A mask mirrored left-to-right."""
+    arr, was_tensor = _mask_in(mask)
+    return _mask_out(_np.ascontiguousarray(arr[..., ::-1]), was_tensor)
+
+
+def vertical_flip_mask(mask):
+    """A mask mirrored top-to-bottom."""
+    arr, was_tensor = _mask_in(mask)
+    return _mask_out(_np.ascontiguousarray(arr[..., ::-1, :]), was_tensor)
+
+
+def crop_mask(mask, top, left, height, width):
+    """A window out of a mask. **Outside the picture is zero rather than an error** —
+    torchvision pads there, and a crop that half-leaves the frame is ordinary in a
+    detection pipeline."""
+    arr, was_tensor = _mask_in(mask)
+    src_h, src_w = arr.shape[-2], arr.shape[-1]
+    out = _np.zeros(arr.shape[:-2] + (int(height), int(width)), dtype=arr.dtype)
+    y0, x0 = max(int(top), 0), max(int(left), 0)
+    y1 = min(int(top) + int(height), src_h)
+    x1 = min(int(left) + int(width), src_w)
+    if y1 > y0 and x1 > x0:
+        out[..., y0 - int(top):y1 - int(top), x0 - int(left):x1 - int(left)] = \
+            arr[..., y0:y1, x0:x1]
+    return _mask_out(out, was_tensor)
+
+
+def center_crop_mask(mask, output_size):
+    """`crop_mask` about the middle, **with the same `round`-to-even offset** the box
+    kernels use. Measured against torchvision on an odd output size, where a floor
+    division is off by a whole row."""
+    arr, _ = _mask_in(mask)
+    out_h, out_w = _canvas(output_size, "center_crop_mask")
+    top = int(round((arr.shape[-2] - out_h) / 2.0))
+    left = int(round((arr.shape[-1] - out_w) / 2.0))
+    return crop_mask(mask, top, left, out_h, out_w)
+
+
+def pad_mask(mask, padding, fill=0, padding_mode="constant"):
+    """A mask with a border. **`fill` is 0 by default and 0 is a class**, so padding a
+    label map writes background around it — which is what torchvision does and what a
+    segmentation loss then has to be told to ignore."""
+    arr, was_tensor = _mask_in(mask)
+    pad = [padding] * 4 if isinstance(padding, (int, float)) else list(padding)
+    if len(pad) == 2:
+        pad = [pad[0], pad[1], pad[0], pad[1]]
+    if len(pad) != 4:
+        raise ValueError(
+            f"padding wants 1, 2 or 4 numbers — got {len(pad)}.\n"
+            "(torch: Padding must be an int or a 1, 2, or 4 element tuple)")
+    if padding_mode != "constant":
+        raise ValueError(
+            f"pad_mask takes padding_mode='constant' here — got {padding_mode!r}.\n"
+            "  The other modes reflect or repeat the edge, which invents labels that "
+            "were never annotated.")
+    left, top, right, bottom = (int(v) for v in pad)
+    widths = [(0, 0)] * (arr.ndim - 2) + [(top, bottom), (left, right)]
+    return _mask_out(_np.pad(arr, widths, mode="constant", constant_values=fill),
+                     was_tensor)
+
+
+def resize_mask(mask, size, max_size=None):
+    """A mask resampled, **nearest and only nearest.**
+
+    Any other sampling averages neighbouring class indices — 3 and 5 becoming 4 — and
+    produces a label map that is smooth, plausible and wrong everywhere two regions meet.
+    """
+    arr, was_tensor = _mask_in(mask)
+    src_h, src_w = arr.shape[-2], arr.shape[-1]
+    new_h, new_w = _resize_target(src_h, src_w, size, max_size, "resize_mask")
+    rows = _nearest_axis(src_h, new_h)
+    cols = _nearest_axis(src_w, new_w)
+    return _mask_out(_np.ascontiguousarray(arr[..., rows, :][..., :, cols]), was_tensor)
+
+
+def resized_crop_mask(mask, top, left, height, width, size):
+    """`crop_mask` then `resize_mask`."""
+    return resize_mask(crop_mask(mask, top, left, height, width), size)
+
+
+def _resize_target(src_h, src_w, size, max_size, where):
+    """The `(height, width)` a `size` argument asks for.
+
+    **One number keeps the aspect ratio and a pair does not**, which is two functions
+    wearing one name, and `max_size` only bites in the first case — so passing it with a
+    pair raises rather than being quietly unused.
+    """
+    want = [size] if isinstance(size, (int, float)) else list(size)
+    if len(want) == 1:
+        short, long_ = min(src_h, src_w), max(src_h, src_w)
+        new_short = float(want[0])
+        new_long = long_ * new_short / short
+        if max_size is not None and new_long > max_size:
+            new_short = new_short * max_size / new_long
+            new_long = float(max_size)
+        new_h, new_w = ((new_short, new_long) if src_h <= src_w
+                        else (new_long, new_short))
+        return int(new_h), int(new_w)
+    if len(want) == 2:
+        if max_size is not None:
+            raise ValueError(
+                "max_size is only used when size is a single number.\n"
+                "(torch: max_size should only be passed if size specifies the length "
+                "of the smaller edge)")
+        return int(want[0]), int(want[1])
+    raise ValueError(
+        f"{where}: size wants one or two numbers — got {len(want)}.\n"
+        "(torch: size should be an int or a 1 or 2 element tuple/list)")
+
+
+def _points_in(keypoints):
+    """**Not `_boxes_in`.** That one is written for `(..., 4)` rows and these are
+    `(..., 2)`; the numbers survive either way today, and reusing it would tie a
+    keypoint's shape to a box's the first time one of them changes."""
+    if isinstance(keypoints, _np.ndarray):
+        return keypoints.astype(_np.float64), False
+    return _to_numpy(keypoints).astype(_np.float64), True
+
+
+def _points_out(arr, was_tensor):
+    return _boxes_out(arr, was_tensor, _np.float32)
+
+
+def horizontal_flip_keypoints(keypoints, canvas_size):
+    """Points mirrored left-to-right — **`(width - 1) - x`, not `width - x`.**
+
+    A box's `x2` is an exclusive edge living on `[0, width]`; a keypoint is a pixel
+    index living on `[0, width - 1]`, so the same canvas mirrors them differently. The
+    box kernels above really do use `width - x` and this really does use one less, and
+    the two sit ten lines apart.
+
+    Written the box way it is off by exactly one pixel everywhere — a skeleton that is
+    still a skeleton, drawn one column from where it belongs. Measured against
+    torchvision: on a 32-wide canvas, 0 goes to 31 and 31 goes to 0.
+
+    **And nothing is clamped afterwards.** A point at `x = 32` on that canvas comes back
+    at `-1`, because a keypoint that was outside stays outside; `clamp_keypoints` is
+    where that decision lives.
+    """
+    _, width = _canvas(canvas_size, "horizontal_flip_keypoints")
+    arr, was_tensor = _points_in(keypoints)
+    out = arr.copy()
+    out[..., 0] = (width - 1) - arr[..., 0]
+    return _points_out(out, was_tensor)
+
+
+def vertical_flip_keypoints(keypoints, canvas_size):
+    """Points mirrored top-to-bottom — `(height - 1) - y`, for the reason above."""
+    height, _ = _canvas(canvas_size, "vertical_flip_keypoints")
+    arr, was_tensor = _points_in(keypoints)
+    out = arr.copy()
+    out[..., 1] = (height - 1) - arr[..., 1]
+    return _points_out(out, was_tensor)
+
+
+def crop_keypoints(keypoints, top, left, height, width):
+    """Points moved into a crop's frame, as **`(keypoints, canvas_size)`.**
+
+    **Nothing is clipped and nothing is dropped.** A point outside the crop keeps its
+    negative coordinate, because a keypoint that left the frame is still that keypoint —
+    the caller decides whether it counts, and `sanitize_keypoints` is where that
+    decision lives.
+    """
+    arr, was_tensor = _points_in(keypoints)
+    out = arr.copy()
+    out[..., 0] -= float(left)
+    out[..., 1] -= float(top)
+    return _points_out(out, was_tensor), (int(height), int(width))
+
+
+def resize_keypoints(keypoints, size, canvas_size, max_size=None):
+    """Points scaled to a new canvas, as **`(keypoints, canvas_size)`.**"""
+    height, width = _canvas(canvas_size, "resize_keypoints")
+    new_h, new_w = _resize_target(int(height), int(width), size, max_size,
+                                  "resize_keypoints")
+    arr, was_tensor = _points_in(keypoints)
+    out = arr.copy()
+    out[..., 0] *= new_w / width
+    out[..., 1] *= new_h / height
+    return _points_out(out, was_tensor), (new_h, new_w)
+
+
+def center_crop_keypoints(inpt, canvas_size, output_size):
+    """`crop_keypoints` about the middle, as **`(keypoints, canvas_size)`.**
+
+    **The first parameter is `inpt` and its neighbours take `keypoints`.** torchvision
+    spells this one differently from the rest of the family; `tests/ts_signatures.py`
+    compares parameter names, so the odd one stays odd rather than being tidied.
+    """
+    height, width = _canvas(canvas_size, "center_crop_keypoints")
+    out_h, out_w = _canvas(output_size, "center_crop_keypoints")
+    top = int(round((height - out_h) / 2.0))
+    left = int(round((width - out_w) / 2.0))
+    return crop_keypoints(inpt, top, left, out_h, out_w)
+
+
+def pad_keypoints(keypoints, canvas_size, padding, padding_mode="constant"):
+    """Points shifted by a pad, as **`(keypoints, canvas_size)`.**"""
+    height, width = _canvas(canvas_size, "pad_keypoints")
+    pad = [padding] * 4 if isinstance(padding, (int, float)) else list(padding)
+    if len(pad) == 2:
+        pad = [pad[0], pad[1], pad[0], pad[1]]
+    if len(pad) != 4:
+        raise ValueError(
+            f"padding wants 1, 2 or 4 numbers — got {len(pad)}.\n"
+            "(torch: Padding must be an int or a 1, 2, or 4 element tuple)")
+    del padding_mode          # what fills new pixels, not where a point goes
+    left, top, right, bottom = (float(v) for v in pad)
+    arr, was_tensor = _points_in(keypoints)
+    out = arr.copy()
+    out[..., 0] += left
+    out[..., 1] += top
+    return (_points_out(out, was_tensor),
+            (int(height + top + bottom), int(width + left + right)))
+
+
+def resized_crop_keypoints(keypoints, top, left, height, width, size):
+    """`crop_keypoints` then `resize_keypoints`, as **`(keypoints, canvas_size)`.**"""
+    cropped, canvas = crop_keypoints(keypoints, top, left, height, width)
+    return resize_keypoints(cropped, size, canvas)
+
+
+def sanitize_keypoints(key_points, canvas_size=None):
+    """The point groups worth keeping, as **`(keypoints, mask)`.**
+
+    **The unit is the group, not the point.** These arrive as `(N, K, 2)` — `N`
+    skeletons of `K` points each — and a group survives only if **every** one of its
+    points is inside the canvas. The mask is one boolean per group, so `N` and not
+    `N * K`.
+
+    Filtering point by point would be the obvious reading and would return a ragged
+    thing that is no longer a skeleton: half a pose, with the joints renumbered.
+
+    `canvas_size` has a default of `None` and **is refused when it is None**, which is
+    torchvision's own behaviour on a plain tensor — the canvas normally rides on the
+    tv_tensor, and here there is nothing for it to ride on.
+    """
+    if canvas_size is None:
+        raise ValueError(
+            "canvas_size cannot be None if key_points is a pure tensor. Set it to an "
+            "appropriate value.\n"
+            "(torch: canvas_size cannot be None if key_points is a pure tensor)")
+    height, width = _canvas(canvas_size, "sanitize_keypoints")
+    arr, was_tensor = _points_in(key_points)
+    inside = ((arr[..., 0] >= 0) & (arr[..., 0] <= width)
+              & (arr[..., 1] >= 0) & (arr[..., 1] <= height))
+    keep = inside.reshape(arr.shape[0], -1).all(axis=1)
+    return (_points_out(arr[keep], was_tensor),
+            _backend().tensor(keep) if was_tensor else keep)
+
+
+def clamp_keypoints(keypoints, canvas_size):
+    """Points pushed back inside the canvas — **the last pixel is `width - 1`.**
+
+    `_clamp_to`, which the box kernels use, clips to `width`. Same canvas, different
+    last legal value, for the same reason the flips differ: an edge may sit on the
+    boundary and an index may not.
+    """
+    height, width = _canvas(canvas_size, "clamp_keypoints")
+    arr, was_tensor = _points_in(keypoints)
+    out = arr.copy()
+    out[..., 0] = _np.clip(out[..., 0], 0.0, width - 1)
+    out[..., 1] = _np.clip(out[..., 1], 0.0, height - 1)
+    return _points_out(out, was_tensor)
 
 
 def _reduce(values, reduction):
@@ -9336,7 +9624,13 @@ for _name in _V2_IMAGE_KERNELS:
 for _name in ("horizontal_flip_bounding_boxes", "vertical_flip_bounding_boxes",
               "crop_bounding_boxes", "center_crop_bounding_boxes",
               "pad_bounding_boxes", "resize_bounding_boxes",
-              "resized_crop_bounding_boxes", "sanitize_bounding_boxes"):
+              "resized_crop_bounding_boxes", "sanitize_bounding_boxes",
+              "horizontal_flip_mask", "vertical_flip_mask", "crop_mask",
+              "center_crop_mask", "pad_mask", "resize_mask", "resized_crop_mask",
+              "horizontal_flip_keypoints", "vertical_flip_keypoints",
+              "crop_keypoints", "resize_keypoints", "clamp_keypoints",
+              "center_crop_keypoints", "pad_keypoints", "resized_crop_keypoints",
+              "sanitize_keypoints"):
     setattr(v2_functional, _name, globals()[_name])
 
 

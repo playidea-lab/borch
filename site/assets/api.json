@@ -4,7 +4,7 @@
  "korean": {
   "done": 688,
   "stale": 0,
-  "missing": 266
+  "missing": 282
  },
  "modules": [
   {
@@ -16413,9 +16413,137 @@
      "doc": "The boxes worth keeping, as `[boxes, mask]` — **a boolean per row, not indices.**\n\nA mask is the shape the caller already has: labels and scores sit in parallel arrays\nand get filtered by the same one. `removeSmallBoxes` answers with indices for the same\nreason from the other side, and both spellings are torchvision's.",
      "members": [],
      "torch": "sanitize_bounding_boxes"
+    },
+    {
+     "kind": "function",
+     "name": "horizontalFlipMask",
+     "signature": "export declare function horizontalFlipMask(mask: Tensor): Promise<Tensor>",
+     "doc": "A mask mirrored left-to-right.",
+     "members": [],
+     "torch": "horizontal_flip_mask"
+    },
+    {
+     "kind": "function",
+     "name": "verticalFlipMask",
+     "signature": "export declare function verticalFlipMask(mask: Tensor): Promise<Tensor>",
+     "doc": "A mask mirrored top-to-bottom.",
+     "members": [],
+     "torch": "vertical_flip_mask"
+    },
+    {
+     "kind": "function",
+     "name": "cropMask",
+     "signature": "export declare function cropMask(mask: Tensor, top: number, left: number, height: number, width: number): Promise<Tensor>",
+     "doc": "A window out of a mask.\n\n**Outside the picture is zero rather than an error** — torchvision pads there, and a\ncrop that half-leaves the frame is ordinary in a detection pipeline.",
+     "members": [],
+     "torch": "crop_mask"
+    },
+    {
+     "kind": "function",
+     "name": "centerCropMask",
+     "signature": "export declare function centerCropMask(mask: Tensor, outputSize: readonly number[]): Promise<Tensor>",
+     "doc": "`cropMask` about the middle.\n\n**The offset is `round`, breaking ties to even**, as the box kernels do. A floor\ndivision agrees on every even output size and is off by a whole row on odd ones.",
+     "members": [],
+     "torch": "center_crop_mask"
+    },
+    {
+     "kind": "function",
+     "name": "padMask",
+     "signature": "export declare function padMask(mask: Tensor, padding: number | readonly number[], fill?: number, paddingMode?: string): Promise<Tensor>",
+     "doc": "A mask with a border.\n\n**`fill` is 0 by default and 0 is a class**, so padding a label map writes background\naround it — torchvision's behaviour, and what a segmentation loss then has to be told\nto ignore. Only `constant` is taken: reflecting or repeating an edge invents labels\nthat were never annotated.",
+     "members": [],
+     "torch": "pad_mask"
+    },
+    {
+     "kind": "function",
+     "name": "resizeMask",
+     "signature": "export declare function resizeMask(mask: Tensor, size: number | readonly number[], maxSize?: number): Promise<Tensor>",
+     "doc": "A mask resampled, **nearest and only nearest.**",
+     "members": [],
+     "torch": "resize_mask"
+    },
+    {
+     "kind": "function",
+     "name": "resizedCropMask",
+     "signature": "export declare function resizedCropMask(mask: Tensor, top: number, left: number, height: number, width: number, size: number | readonly number[]): Promise<Tensor>",
+     "doc": "`cropMask` then `resizeMask`.",
+     "members": [],
+     "torch": "resized_crop_mask"
+    },
+    {
+     "kind": "function",
+     "name": "horizontalFlipKeypoints",
+     "signature": "export declare function horizontalFlipKeypoints(keypoints: Tensor, canvasSize: readonly number[]): Promise<Tensor>",
+     "doc": "Points mirrored left-to-right — `(width - 1) - x`, **not** `width - x`.",
+     "members": [],
+     "torch": "horizontal_flip_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "verticalFlipKeypoints",
+     "signature": "export declare function verticalFlipKeypoints(keypoints: Tensor, canvasSize: readonly number[]): Promise<Tensor>",
+     "doc": "Points mirrored top-to-bottom — `(height - 1) - y`.",
+     "members": [],
+     "torch": "vertical_flip_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "cropKeypoints",
+     "signature": "export declare function cropKeypoints(keypoints: Tensor, top: number, left: number, height: number, width: number): Promise<[Tensor, [number, number]]>",
+     "doc": "Points moved into a crop's frame, as `[keypoints, canvasSize]`.\n\n**Nothing is clipped and nothing is dropped.** A point outside the crop keeps its\nnegative coordinate — it is still that keypoint, and whether it counts is\n`sanitizeKeypoints`' decision.",
+     "members": [],
+     "torch": "crop_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "centerCropKeypoints",
+     "signature": "export declare function centerCropKeypoints(inpt: Tensor, canvasSize: readonly number[], outputSize: readonly number[]): Promise<[Tensor, [number, number]]>",
+     "doc": "`cropKeypoints` about the middle, as `[keypoints, canvasSize]`.",
+     "members": [],
+     "torch": "center_crop_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "padKeypoints",
+     "signature": "export declare function padKeypoints(keypoints: Tensor, canvasSize: readonly number[], padding: number | readonly number[]): Promise<[Tensor, [number, number]]>",
+     "doc": "Points shifted by a pad, as `[keypoints, canvasSize]`.",
+     "members": [],
+     "torch": "pad_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "resizeKeypoints",
+     "signature": "export declare function resizeKeypoints(keypoints: Tensor, size: number | readonly number[], canvasSize: readonly number[], maxSize?: number): Promise<[Tensor, [number, number]]>",
+     "doc": "Points scaled to a new canvas, as `[keypoints, canvasSize]`.",
+     "members": [],
+     "torch": "resize_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "resizedCropKeypoints",
+     "signature": "export declare function resizedCropKeypoints(keypoints: Tensor, top: number, left: number, height: number, width: number, size: number | readonly number[]): Promise<[Tensor, [number, number]]>",
+     "doc": "`cropKeypoints` then `resizeKeypoints`, as `[keypoints, canvasSize]`.",
+     "members": [],
+     "torch": "resized_crop_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "clampKeypoints",
+     "signature": "export declare function clampKeypoints(keypoints: Tensor, canvasSize: readonly number[]): Promise<Tensor>",
+     "doc": "Points pushed back inside the canvas — **the last pixel is `width - 1`.**",
+     "members": [],
+     "torch": "clamp_keypoints"
+    },
+    {
+     "kind": "function",
+     "name": "sanitizeKeypoints",
+     "signature": "export declare function sanitizeKeypoints(keyPoints: Tensor, canvasSize?: readonly number[]): Promise<[Tensor, Tensor]>",
+     "doc": "The point groups worth keeping, as `[keypoints, mask]`.\n\n**The unit is the group, not the point.** These arrive as `(N, K, 2)` — `N` skeletons\nof `K` points each — and a group survives only if **every** one of its points is\ninside the canvas. Filtering point by point is the obvious reading and returns half a\npose with the joints renumbered.",
+     "members": [],
+     "torch": "sanitize_keypoints"
     }
    ],
-   "count": 25
+   "count": 41
   },
   {
    "name": "datasets",
@@ -18935,5 +19063,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2540
+ "total": 2556
 }

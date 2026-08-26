@@ -757,8 +757,27 @@ SKIPPED = {
     # second name.
     "transforms.v2.functional.*_video": "as above, and there is no video in this "
                                         "project",
-    "transforms.v2.functional.*_mask": "as above, for segmentation masks — a tv_tensor "
-                                       "type, and the type system is declined in `v2`",
+    # **The `*_mask` row is gone too, and it was the sentence the box rows borrowed.**
+    #
+    # It read *a tv_tensor type, and the type system is declined in `v2`*. A mask is an
+    # array whose last two axes are the picture; called on a bare tensor torchvision
+    # answers normally. Seven are built here — every one of them the image operation with
+    # **nearest** sampling, which is measured rather than assumed: `resize_mask` equals
+    # `resize_image(interpolation=NEAREST)` to the last value, and `NEAREST_EXACT` is a
+    # different answer. Sampling a label map any other way averages class 3 and class 5
+    # into class 4.
+    #
+    # The four left are the corner warps, which want the same arithmetic the box warps
+    # do, plus `get_size_mask` — which torchvision itself cannot run on a plain tensor
+    # (it raises `AttributeError: 'list' object has no attribute 'shape'`).
+    "transforms.v2.functional.affine_mask": "the warp — the same arithmetic the box and "
+                                            "keypoint warps want. Not written yet",
+    "transforms.v2.functional.rotate_mask": "as above",
+    "transforms.v2.functional.perspective_mask": "as above",
+    "transforms.v2.functional.elastic_mask": "as above",
+    "transforms.v2.functional.get_size_mask": "torchvision's own body raises on a plain "
+                                              "tensor here — it reaches for a shape on "
+                                              "what the tv_tensor would have carried",
     # **Not "as above" any more — that sentence was disproved for boxes.**
     #
     # The mask row says these kernels want a tv_tensor type this library declines, and
@@ -789,7 +808,19 @@ SKIPPED = {
                                                         "tv_tensor, and a plain tensor "
                                                         "carries none — the canvas is an "
                                                         "argument everywhere else here",
-    "transforms.v2.functional.*_keypoints": "as above, for keypoints",
+    # Nine keypoint kernels are built. **A keypoint is not a box shifted by four
+    # numbers**: a box's `x2` is an exclusive edge on `[0, width]` and a point is a pixel
+    # index on `[0, width - 1]`, so the flips mirror about `width - 1` and the clamp
+    # stops one short. Written the box way every one of them is off by a single pixel —
+    # a skeleton that is still a skeleton, one column from where it belongs.
+    "transforms.v2.functional.affine_keypoints": "the warp — as for boxes and masks. Not "
+                                                 "written yet",
+    "transforms.v2.functional.rotate_keypoints": "as above",
+    "transforms.v2.functional.perspective_keypoints": "as above",
+    "transforms.v2.functional.elastic_keypoints": "as above",
+    "transforms.v2.functional.get_size_keypoints": "it reads the canvas out of the "
+                                                   "tv_tensor — as `get_size_bounding_"
+                                                   "boxes`",
 
     # The eight left over are not kernels and not v1's. Each carries its own reason.
     "transforms.v2.functional.convert_bounding_box_format": "boxes travelling with the "

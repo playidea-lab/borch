@@ -1852,6 +1852,83 @@ function addV2Functional(out: Map<string, Case>, inp: Inputs): void {
     return `${await show(t)} ${canvas[0]} ${canvas[1]}`;
   };
 
+  // ── masks and keypoints ───────────────────────────────────────────────────
+  //
+  // A label map with **three** classes, not two: with 0/1 alone a bilinear resample
+  // rounds back to the right answer half the time, so nearest and not-nearest would
+  // still agree. The dtype travels in the answer because a mask is labels — widening
+  // `uint8` makes `=== 3` start failing on values that are exactly equal.
+  const labels = () => {
+    const v: number[] = [];
+    for (let i = 0; i < 2 * 24 * 32; i++) v.push(i % 3);
+    return Tensor.from(v, [2, 24, 32]);
+  };
+  // Three groups of two. **The last group has a point outside the canvas**, which is
+  // what makes sanitize drop a group rather than a point.
+  const pts = () => Tensor.from(
+    [0, 0, 1, 2, 5, 5, 31, 23, 10, 10, 33, 26], [3, 2, 2]);
+  // **`[shape] [values]`, flat, and the same flat the core writes.** The nested
+  // spelling is presentation and the two sides reached it differently — `show` chunks
+  // four to a row, which is right for `(N, 4)` boxes, wrong for a `(2, 24, 32)` mask and
+  // wrong again for `(N, K, 2)` keypoints. Eighteen cases failed on that and not one was
+  // a wrong number.
+  const nums = (v: number[]): string => "[" + v.join(", ") + "]";
+  const flatWhole = async (t: Tensor): Promise<string> =>
+    nums(t.shape as number[]) + " " +
+    nums(Array.from(await t.toArray()).map((v) => Math.round(v)));
+  const flatReal = async (t: Tensor): Promise<string> => {
+    const body = Array.from(await t.toArray()).map((v) => {
+      const r = Math.round(v * 1e4) / 1e4;
+      const z = r === 0 ? 0 : r;
+      const text = z.toString();
+      return text.includes(".") || text.includes("e") ? text : text + ".0";
+    });
+    return nums(t.shape as number[]) + " [" + body.join(", ") + "]";
+  };
+  const withDtype = async (t: Promise<Tensor>): Promise<string> =>
+    (await flatWhole(await t)) + " uint8";
+  const kpPair = async (r: Promise<[Tensor, [number, number]]>): Promise<string> => {
+    const [t, canvas] = await r;
+    return (await flatReal(t)) + " " + canvas[0] + " " + canvas[1];
+  };
+
+  out.set("v2f::horizontal_flip_mask", () => withDtype(ops.horizontalFlipMask(labels())));
+  out.set("v2f::vertical_flip_mask", () => withDtype(ops.verticalFlipMask(labels())));
+  out.set("v2f::crop_mask(inside)",
+    () => withDtype(ops.cropMask(labels(), 1, 2, 12, 14)));
+  out.set("v2f::crop_mask(off the corner)",
+    () => withDtype(ops.cropMask(labels(), -3, -4, 10, 10)));
+  out.set("v2f::center_crop_mask(odd)",
+    () => withDtype(ops.centerCropMask(labels(), [11, 13])));
+  out.set("v2f::pad_mask(four sides, fill=7)",
+    () => withDtype(ops.padMask(labels(), [1, 2, 3, 4], 7)));
+  out.set("v2f::resize_mask(pair)",
+    () => withDtype(ops.resizeMask(labels(), [12, 15])));
+  out.set("v2f::resize_mask(short edge)",
+    () => withDtype(ops.resizeMask(labels(), [9])));
+  out.set("v2f::resized_crop_mask",
+    () => withDtype(ops.resizedCropMask(labels(), 1, 2, 12, 14, [6, 8])));
+
+  out.set("v2f::horizontal_flip_keypoints",
+    async () => flatReal(await ops.horizontalFlipKeypoints(pts(), [24, 32])));
+  out.set("v2f::vertical_flip_keypoints",
+    async () => flatReal(await ops.verticalFlipKeypoints(pts(), [24, 32])));
+  out.set("v2f::crop_keypoints", () => kpPair(ops.cropKeypoints(pts(), 1, 2, 12, 14)));
+  out.set("v2f::center_crop_keypoints(odd)",
+    () => kpPair(ops.centerCropKeypoints(pts(), [24, 32], [11, 13])));
+  out.set("v2f::pad_keypoints(four sides)",
+    () => kpPair(ops.padKeypoints(pts(), [24, 32], [1, 2, 3, 4])));
+  out.set("v2f::resize_keypoints(pair)",
+    () => kpPair(ops.resizeKeypoints(pts(), [12, 16], [24, 32])));
+  out.set("v2f::resized_crop_keypoints",
+    () => kpPair(ops.resizedCropKeypoints(pts(), 1, 2, 12, 14, [6, 8])));
+  out.set("v2f::clamp_keypoints",
+    async () => flatReal(await ops.clampKeypoints(pts(), [24, 32])));
+  out.set("v2f::sanitize_keypoints", async () => {
+    const [kept, mask] = await ops.sanitizeKeypoints(pts(), [24, 32]);
+    return (await flatReal(kept)) + " " + (await flatWhole(mask));
+  });
+
   for (const fmt of ["xyxy", "xywh", "cxcywh"] as const) {
     const b = async () => ops.boxConvert(boxes(), "xyxy", fmt);
     out.set(`v2f::horizontal_flip_bounding_boxes(${fmt})`,

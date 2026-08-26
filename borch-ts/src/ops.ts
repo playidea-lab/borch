@@ -719,30 +719,11 @@ export async function resizeBoundingBoxes(
   format: string = "xyxy",
 ): Promise<[Tensor, [number, number]]> {
   const [height, width] = canvasOf(canvasSize, "resizeBoundingBoxes");
-  const want = typeof size === "number" ? [size] : [...size];
-  let newH: number;
-  let newW: number;
-  if (want.length === 1) {
-    const short = Math.min(height, width);
-    const long = Math.max(height, width);
-    let newShort = want[0]!;
-    let newLong = (long * newShort) / short;
-    if (maxSize !== undefined && newLong > maxSize) {
-      newShort = (newShort * maxSize) / newLong;
-      newLong = maxSize;
-    }
-    [newH, newW] = height <= width ? [newShort, newLong] : [newLong, newShort];
-    newH = Math.trunc(newH);
-    newW = Math.trunc(newW);
-  } else if (want.length === 2) {
-    if (maxSize !== undefined) {
-      throw new Error("maxSize is only used when size is a single number.");
-    }
-    newH = Math.trunc(want[0]!);
-    newW = Math.trunc(want[1]!);
-  } else {
-    throw new Error(`size wants one or two numbers — got ${want.length}.`);
-  }
+  // **One rule, read from one place.** The mask and keypoint kernels ask the same
+  // question about `size` and `maxSize`, and this rule was written out inline here
+  // first — three copies of *a single number keeps the aspect ratio* is exactly the
+  // shape this repository keeps catching in its tables.
+  const [newH, newW] = resizeTarget(height, width, size, maxSize, "resizeBoundingBoxes");
   const sy = newH / height;
   const sx = newW / width;
   const out = await mapBoxes(boundingBoxes, format,
@@ -796,4 +777,379 @@ export async function sanitizeBoundingBoxes(
     if (ok) out.push(...box);
   }
   return [Tensor.from(out, [out.length / 4, 4]), Tensor.from(keep, [keep.length])];
+}
+
+// ── v2's mask and keypoint kernels ───────────────────────────────────────────
+//
+// **A mask is not an image with a different name.** Every one of these is the image
+// operation with **nearest** sampling and nothing else — measured against torchvision,
+// `resizeMask` equals `resize_image(interpolation=NEAREST)` to the last value, and
+// `NEAREST_EXACT` is a different answer. Sampling a label map any other way averages
+// class 3 and class 5 into class 4: a picture that looks right and means nothing.
+//
+// A mask arrives as a flat tensor whose last two dimensions are the picture; the leading
+// dimensions are carried through untouched.
+
+function hw(t: Tensor, where: string): [number, number] {
+  const shape = t.shape as number[];
+  if (shape.length < 2) throw new Error(`${where} wants a mask of at least two dimensions.`);
+  return [shape[shape.length - 2]!, shape[shape.length - 1]!];
+}
+
+function planes(t: Tensor): number {
+  const shape = t.shape as number[];
+  return shape.slice(0, -2).reduce((a, b) => a * b, 1);
+}
+
+/** Which source row each destination row reads — `floor(i * src / dst)`, torch's `nearest`. */
+function nearestAxis(srcLen: number, dstLen: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < dstLen; i++) {
+    out.push(Math.min(Math.floor((i * srcLen) / dstLen), srcLen - 1));
+  }
+  return out;
+}
+
+/** Resamples every plane by an explicit row and column index list. */
+async function gatherMask(
+  mask: Tensor,
+  rows: number[],
+  cols: number[],
+): Promise<Tensor> {
+  const flat = Array.from(await mask.toArray());
+  const [h, w] = hw(mask, "gatherMask");
+  const n = planes(mask);
+  const out = new Array<number>(n * rows.length * cols.length);
+  let k = 0;
+  for (let p = 0; p < n; p++) {
+    for (const r of rows) {
+      for (const c of cols) out[k++] = flat[p * h * w + r * w + c] ?? 0;
+    }
+  }
+  const lead = (mask.shape as number[]).slice(0, -2);
+  return Tensor.from(out, [...lead, rows.length, cols.length]);
+}
+
+/** A mask mirrored left-to-right. */
+export async function horizontalFlipMask(mask: Tensor): Promise<Tensor> {
+  const [h, w] = hw(mask, "horizontalFlipMask");
+  const cols: number[] = [];
+  for (let c = w - 1; c >= 0; c--) cols.push(c);
+  return gatherMask(mask, nearestAxis(h, h), cols);
+}
+
+/** A mask mirrored top-to-bottom. */
+export async function verticalFlipMask(mask: Tensor): Promise<Tensor> {
+  const [h, w] = hw(mask, "verticalFlipMask");
+  const rows: number[] = [];
+  for (let r = h - 1; r >= 0; r--) rows.push(r);
+  return gatherMask(mask, rows, nearestAxis(w, w));
+}
+
+/**
+ * A window out of a mask.
+ *
+ * **Outside the picture is zero rather than an error** — torchvision pads there, and a
+ * crop that half-leaves the frame is ordinary in a detection pipeline.
+ */
+export async function cropMask(
+  mask: Tensor,
+  top: number,
+  left: number,
+  height: number,
+  width: number,
+): Promise<Tensor> {
+  const flat = Array.from(await mask.toArray());
+  const [h, w] = hw(mask, "cropMask");
+  const n = planes(mask);
+  const out = new Array<number>(n * height * width).fill(0);
+  let k = 0;
+  for (let p = 0; p < n; p++) {
+    for (let i = 0; i < height; i++) {
+      for (let j = 0; j < width; j++) {
+        const r = top + i;
+        const c = left + j;
+        out[k++] = r >= 0 && r < h && c >= 0 && c < w ? flat[p * h * w + r * w + c] ?? 0 : 0;
+      }
+    }
+  }
+  const lead = (mask.shape as number[]).slice(0, -2);
+  return Tensor.from(out, [...lead, height, width]);
+}
+
+/**
+ * `cropMask` about the middle.
+ *
+ * **The offset is `round`, breaking ties to even**, as the box kernels do. A floor
+ * division agrees on every even output size and is off by a whole row on odd ones.
+ */
+export async function centerCropMask(
+  mask: Tensor,
+  outputSize: readonly number[],
+): Promise<Tensor> {
+  const [h, w] = hw(mask, "centerCropMask");
+  const [outH, outW] = canvasOf(outputSize, "centerCropMask");
+  return cropMask(mask, roundHalfToEven((h - outH) / 2), roundHalfToEven((w - outW) / 2),
+    outH, outW);
+}
+
+/**
+ * A mask with a border.
+ *
+ * **`fill` is 0 by default and 0 is a class**, so padding a label map writes background
+ * around it — torchvision's behaviour, and what a segmentation loss then has to be told
+ * to ignore. Only `constant` is taken: reflecting or repeating an edge invents labels
+ * that were never annotated.
+ */
+export async function padMask(
+  mask: Tensor,
+  padding: number | readonly number[],
+  fill = 0,
+  paddingMode: string = "constant",
+): Promise<Tensor> {
+  if (paddingMode !== "constant") {
+    throw new Error(
+      `padMask takes paddingMode "constant" here — got ${JSON.stringify(paddingMode)}.`,
+    );
+  }
+  let pad = typeof padding === "number" ? [padding, padding, padding, padding] : [...padding];
+  if (pad.length === 2) pad = [pad[0]!, pad[1]!, pad[0]!, pad[1]!];
+  if (pad.length !== 4) throw new Error(`padding wants 1, 2 or 4 numbers — got ${pad.length}.`);
+  const [l = 0, t = 0, r = 0, b = 0] = pad;
+  const flat = Array.from(await mask.toArray());
+  const [h, w] = hw(mask, "padMask");
+  const n = planes(mask);
+  const outH = h + t + b;
+  const outW = w + l + r;
+  const out = new Array<number>(n * outH * outW).fill(fill);
+  for (let p = 0; p < n; p++) {
+    for (let i = 0; i < h; i++) {
+      for (let j = 0; j < w; j++) {
+        out[p * outH * outW + (i + t) * outW + (j + l)] = flat[p * h * w + i * w + j] ?? 0;
+      }
+    }
+  }
+  const lead = (mask.shape as number[]).slice(0, -2);
+  return Tensor.from(out, [...lead, outH, outW]);
+}
+
+/** A mask resampled, **nearest and only nearest.** */
+export async function resizeMask(
+  mask: Tensor,
+  size: number | readonly number[],
+  maxSize?: number,
+): Promise<Tensor> {
+  const [h, w] = hw(mask, "resizeMask");
+  const [newH, newW] = resizeTarget(h, w, size, maxSize, "resizeMask");
+  return gatherMask(mask, nearestAxis(h, newH), nearestAxis(w, newW));
+}
+
+/** `cropMask` then `resizeMask`. */
+export async function resizedCropMask(
+  mask: Tensor,
+  top: number,
+  left: number,
+  height: number,
+  width: number,
+  size: number | readonly number[],
+): Promise<Tensor> {
+  return resizeMask(await cropMask(mask, top, left, height, width), size);
+}
+
+/** The `(height, width)` a `size` argument asks for — one rule, used by three families. */
+function resizeTarget(
+  srcH: number,
+  srcW: number,
+  size: number | readonly number[],
+  maxSize: number | undefined,
+  where: string,
+): [number, number] {
+  const want = typeof size === "number" ? [size] : [...size];
+  if (want.length === 1) {
+    const short = Math.min(srcH, srcW);
+    const long = Math.max(srcH, srcW);
+    let newShort = want[0]!;
+    let newLong = (long * newShort) / short;
+    if (maxSize !== undefined && newLong > maxSize) {
+      newShort = (newShort * maxSize) / newLong;
+      newLong = maxSize;
+    }
+    const [a, b] = srcH <= srcW ? [newShort, newLong] : [newLong, newShort];
+    return [Math.trunc(a), Math.trunc(b)];
+  }
+  if (want.length === 2) {
+    if (maxSize !== undefined) {
+      throw new Error("maxSize is only used when size is a single number.");
+    }
+    return [Math.trunc(want[0]!), Math.trunc(want[1]!)];
+  }
+  throw new Error(`${where}: size wants one or two numbers — got ${want.length}.`);
+}
+
+// ── keypoints ────────────────────────────────────────────────────────────────
+//
+// **A keypoint is not a box with two numbers instead of four.** A box's `x2` is an
+// exclusive edge living on `[0, width]`; a point is a pixel index living on
+// `[0, width - 1]`, so the same canvas mirrors them differently and clamps them
+// differently. Written the box way every one of these is off by exactly one pixel —
+// a skeleton that is still a skeleton, drawn one column from where it belongs.
+
+async function points(t: Tensor): Promise<number[]> {
+  return Array.from(await t.toArray());
+}
+
+async function mapPoints(
+  keypoints: Tensor,
+  move: (x: number, y: number) => [number, number],
+): Promise<Tensor> {
+  const flat = await points(keypoints);
+  const out = new Array<number>(flat.length);
+  for (let i = 0; i < flat.length; i += 2) {
+    const [x, y] = move(flat[i] ?? 0, flat[i + 1] ?? 0);
+    out[i] = x;
+    out[i + 1] = y;
+  }
+  return Tensor.from(out, keypoints.shape as number[]);
+}
+
+/** Points mirrored left-to-right — `(width - 1) - x`, **not** `width - x`. */
+export async function horizontalFlipKeypoints(
+  keypoints: Tensor,
+  canvasSize: readonly number[],
+): Promise<Tensor> {
+  const [, width] = canvasOf(canvasSize, "horizontalFlipKeypoints");
+  return mapPoints(keypoints, (x, y) => [width - 1 - x, y]);
+}
+
+/** Points mirrored top-to-bottom — `(height - 1) - y`. */
+export async function verticalFlipKeypoints(
+  keypoints: Tensor,
+  canvasSize: readonly number[],
+): Promise<Tensor> {
+  const [height] = canvasOf(canvasSize, "verticalFlipKeypoints");
+  return mapPoints(keypoints, (x, y) => [x, height - 1 - y]);
+}
+
+/**
+ * Points moved into a crop's frame, as `[keypoints, canvasSize]`.
+ *
+ * **Nothing is clipped and nothing is dropped.** A point outside the crop keeps its
+ * negative coordinate — it is still that keypoint, and whether it counts is
+ * `sanitizeKeypoints`' decision.
+ */
+export async function cropKeypoints(
+  keypoints: Tensor,
+  top: number,
+  left: number,
+  height: number,
+  width: number,
+): Promise<[Tensor, [number, number]]> {
+  const out = await mapPoints(keypoints, (x, y) => [x - left, y - top]);
+  return [out, [height, width]];
+}
+
+/** `cropKeypoints` about the middle, as `[keypoints, canvasSize]`. */
+export async function centerCropKeypoints(
+  inpt: Tensor,
+  canvasSize: readonly number[],
+  outputSize: readonly number[],
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "centerCropKeypoints");
+  const [outH, outW] = canvasOf(outputSize, "centerCropKeypoints");
+  return cropKeypoints(inpt, roundHalfToEven((height - outH) / 2),
+    roundHalfToEven((width - outW) / 2), outH, outW);
+}
+
+/** Points shifted by a pad, as `[keypoints, canvasSize]`. */
+export async function padKeypoints(
+  keypoints: Tensor,
+  canvasSize: readonly number[],
+  padding: number | readonly number[],
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "padKeypoints");
+  let pad = typeof padding === "number" ? [padding, padding, padding, padding] : [...padding];
+  if (pad.length === 2) pad = [pad[0]!, pad[1]!, pad[0]!, pad[1]!];
+  if (pad.length !== 4) throw new Error(`padding wants 1, 2 or 4 numbers — got ${pad.length}.`);
+  const [l = 0, t = 0, r = 0, b = 0] = pad;
+  const out = await mapPoints(keypoints, (x, y) => [x + l, y + t]);
+  return [out, [height + t + b, width + l + r]];
+}
+
+/** Points scaled to a new canvas, as `[keypoints, canvasSize]`. */
+export async function resizeKeypoints(
+  keypoints: Tensor,
+  size: number | readonly number[],
+  canvasSize: readonly number[],
+  maxSize?: number,
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "resizeKeypoints");
+  const [newH, newW] = resizeTarget(height, width, size, maxSize, "resizeKeypoints");
+  const out = await mapPoints(keypoints, (x, y) => [(x * newW) / width, (y * newH) / height]);
+  return [out, [newH, newW]];
+}
+
+/** `cropKeypoints` then `resizeKeypoints`, as `[keypoints, canvasSize]`. */
+export async function resizedCropKeypoints(
+  keypoints: Tensor,
+  top: number,
+  left: number,
+  height: number,
+  width: number,
+  size: number | readonly number[],
+): Promise<[Tensor, [number, number]]> {
+  const [cropped, canvas] = await cropKeypoints(keypoints, top, left, height, width);
+  return resizeKeypoints(cropped, size, canvas);
+}
+
+/** Points pushed back inside the canvas — **the last pixel is `width - 1`.** */
+export async function clampKeypoints(
+  keypoints: Tensor,
+  canvasSize: readonly number[],
+): Promise<Tensor> {
+  const [height, width] = canvasOf(canvasSize, "clampKeypoints");
+  return mapPoints(keypoints, (x, y) => [
+    Math.min(Math.max(x, 0), width - 1),
+    Math.min(Math.max(y, 0), height - 1),
+  ]);
+}
+
+/**
+ * The point groups worth keeping, as `[keypoints, mask]`.
+ *
+ * **The unit is the group, not the point.** These arrive as `(N, K, 2)` — `N` skeletons
+ * of `K` points each — and a group survives only if **every** one of its points is
+ * inside the canvas. Filtering point by point is the obvious reading and returns half a
+ * pose with the joints renumbered.
+ */
+export async function sanitizeKeypoints(
+  keyPoints: Tensor,
+  canvasSize?: readonly number[],
+): Promise<[Tensor, Tensor]> {
+  if (canvasSize === undefined) {
+    throw new Error(
+      "canvasSize cannot be undefined if keyPoints is a pure tensor. Set it to an appropriate value.",
+    );
+  }
+  const [height, width] = canvasOf(canvasSize, "sanitizeKeypoints");
+  const flat = await points(keyPoints);
+  const shape = keyPoints.shape as number[];
+  const groups = shape[0] ?? 1;
+  const per = flat.length / Math.max(groups, 1);
+  const keep: number[] = [];
+  const out: number[] = [];
+  for (let g = 0; g < groups; g++) {
+    let ok = true;
+    for (let i = 0; i < per; i += 2) {
+      const x = flat[g * per + i] ?? 0;
+      const y = flat[g * per + i + 1] ?? 0;
+      if (x < 0 || x > width || y < 0 || y > height) ok = false;
+    }
+    keep.push(ok ? 1 : 0);
+    if (ok) out.push(...flat.slice(g * per, (g + 1) * per));
+  }
+  const kept = keep.reduce((a, b) => a + b, 0);
+  return [
+    Tensor.from(out, [kept, ...shape.slice(1)]),
+    Tensor.from(keep, [groups]),
+  ];
 }
