@@ -257,17 +257,23 @@ def run(headed=False, verbose=False):
 # head of a reason string and `test_site.py` reads `아직` to split the remainder into
 # backlog and never. They move when those checks move, and not before.
 NOT_PORTED = {
-    # **`unpool::` was emptied once and is back at 46, all of them `repr`.** The Python
-    # side printed twenty-nine of sixty-four layers differently from torch and nothing
-    # was watching; these are the strings that now watch it.
+    # **`unpool::` came back at 46 and is down to 6.** The Python side printed
+    # twenty-nine of sixty-four layers differently from torch and nothing was watching;
+    # this side had the same hole for the same reason, and forty of the strings now
+    # cross. The row was owed for one run, which was true: it was a hole nobody had
+    # looked in rather than one looked in and turned down.
     #
-    # Whether borch.ts prints the same is **unmeasured** — it has its own layer classes
-    # and its own reprs, and the sweep that found the Python hole has not been run over
-    # there. That is why this row is owed rather than declined: it is a hole nobody has
-    # looked in, not one that was looked in and turned down.
-    "unpool::": (46, "아직 — the layer reprs. borch.ts has the classes; whether its "
-                     "strings match torch is unmeasured, which is what was true of the "
-                     "Python side until this row existed"),
+    # What is left is a missing name and not the writing: four of the six ask about an
+    # argument borch.ts does not take and two about a name it does not have.
+    # `AdaptiveAvgPool2d` is absent there; `MaxPool2d`'s `padding`, `dilation` and
+    # `ceilMode` are held and refused until the pooling kernel implements them;
+    # `AvgPool2d` takes no padding; `Flatten` takes no arguments at all. Each is a
+    # question this side cannot be asked yet, which the name and signature axes already
+    # count — writing the case would only move the refusal.
+    "unpool::": (6, "없음 — four ask about arguments borch.ts does not take "
+                    "(MaxPool2d's padding/dilation/ceilMode, AvgPool2d's padding, "
+                    "Flatten's two) and two about `AdaptiveAvgPool2d`, which is not a "
+                    "name over there"),
     # **`ops::` was a row here once, at 11, and was emptied by porting all of them.**
     # It is back at 8 for a different reason: the eleven were box geometry on plain
     # arrays and these eight are `nn.Module` layers whose weights have to be written

@@ -776,10 +776,13 @@ export class ConvND extends Module {
   readonly bias: Tensor | null;
 
   constructor(
-    inChannels: number,
-    outChannels: number,
-    kernelSize: number,
-    spatial: number,
+    // **Kept because `describe` prints them.** They were plain arguments: the shape
+    // they build was stored and the numbers were not, so `print(model)` could say
+    // `Conv2d()` and nothing else.
+    private readonly inChannels: number,
+    private readonly outChannels: number,
+    private readonly kernelSize: number,
+    private readonly spatial: number,
     private readonly stride = 1,
     private readonly padding = 0,
     bias = true,
@@ -826,6 +829,101 @@ export class ConvND extends Module {
     return x.convND(this.weight, this.bias, this.stride, this.padding,
                     this.dilation, this.groups);
   }
+
+  /**
+   * torch's `_ConvNd.extra_repr`, and **it prints the sizes as tuples** —
+   * `kernel_size=(3, 3)` — because torch stores them that way. This library stores
+   * one number and spreads it for the printing alone; changing what is stored would
+   * reach into every forward pass for the sake of a string.
+   *
+   * **Several arguments print only when they are not the default.** A convolution
+   * with no padding does not say `padding=(0, 0)`; one with padding does. Printing
+   * them always is the same characters for a different layer, and reads as correct.
+   */
+  override describe(): string {
+    return `${this.constructor.name}(${convExtra({
+      spatial: this.spatial, inChannels: this.inChannels,
+      outChannels: this.outChannels, kernelSize: this.kernelSize,
+      stride: this.stride, padding: this.padding, dilation: this.dilation,
+      groups: this.groups, hasBias: this.bias !== null,
+      paddingMode: this.paddingMode,
+    })})`;
+  }
+}
+
+/**
+ * The shared middle of every convolution's repr.
+ *
+ * **Written once because torch writes it once.** Six classes here print by the same
+ * rule and the rule has five conditional clauses; six copies of it is six places for
+ * one of them to go missing, and the missing one would only show at an argument
+ * nobody passes in a test.
+ */
+
+/**
+ * An adaptive pool's target, printed as Python would.
+ *
+ * **One number stays one number and a pair becomes a tuple**, which is what torch's
+ * `output_size` holds — a reader who saw `(1,)` where torch says `1` would be looking
+ * at a difference that is not there.
+ */
+function describeSize(value: number | readonly number[]): string {
+  return typeof value === "number" ? `${value}` : `(${value.join(", ")})`;
+}
+
+/**
+ * A number as Python's `repr` writes it.
+ *
+ * **The two languages switch to an exponent at different sizes.** JavaScript writes
+ * `1e-5` as `0.00001` and only reaches for an exponent below `1e-7`; Python reaches
+ * for one below `1e-4` and pads the exponent to two digits. Every normalisation layer
+ * in this file prints `eps=1e-05`, so without this they all read as *nearly* right —
+ * the same number, spelled the way the other language spells it.
+ */
+function pyNumber(value: number): string {
+  if (value !== 0 && Math.abs(value) < 1e-4) {
+    const [mantissa = "0", exponent = "0"] = value.toExponential().split("e");
+    const sign = exponent.startsWith("-") ? "-" : "+";
+    const digits = exponent.replace(/^[-+]/, "").padStart(2, "0");
+    return `${mantissa}e${sign}${digits}`;
+  }
+  return `${value}`;
+}
+
+interface ConvFields {
+  spatial: number;
+  inChannels: number;
+  outChannels: number;
+  kernelSize: number;
+  stride: number;
+  padding: number;
+  dilation: number;
+  groups: number;
+  hasBias: boolean;
+  paddingMode?: string;
+  outputPadding?: number;
+}
+
+function convExtra(f: ConvFields): string {
+  // **A one-element tuple carries a trailing comma in Python** — `(5,)`, not `(5)`.
+  // The one-dimensional convolutions are the only place it shows, and without it they
+  // print something that is not a tuple at all in the language being imitated.
+  const spread = (value: number) =>
+    f.spatial === 1 ? `(${value},)`
+      : `(${new Array<number>(f.spatial).fill(value).join(", ")})`;
+  let out = `${f.inChannels}, ${f.outChannels}, `
+    + `kernel_size=${spread(f.kernelSize)}, stride=${spread(f.stride)}`;
+  if (f.padding !== 0) out += `, padding=${spread(f.padding)}`;
+  if (f.dilation !== 1) out += `, dilation=${spread(f.dilation)}`;
+  if (f.outputPadding !== undefined && f.outputPadding !== 0) {
+    out += `, output_padding=${spread(f.outputPadding)}`;
+  }
+  if (f.groups !== 1) out += `, groups=${f.groups}`;
+  if (!f.hasBias) out += ", bias=False";
+  if (f.paddingMode !== undefined && f.paddingMode !== "zeros") {
+    out += `, padding_mode=${f.paddingMode}`;
+  }
+  return out;
 }
 
 /**
@@ -1123,6 +1221,10 @@ export class GELU extends Module {
   override forward(x: Tensor): Tensor {
     return this.approximate === "tanh" ? x.geluTanh() : x.unary("gelu");
   }
+
+  override describe(): string {
+    return `GELU(approximate='${this.approximate}')`;
+  }
 }
 
 /**
@@ -1146,6 +1248,10 @@ export class Softmax extends Module {
   override forward(x: Tensor): Tensor {
     return x.softmax(this.dim ?? defaultSoftmaxDim(x.shape.length));
   }
+
+  override describe(): string {
+    return `Softmax(dim=${this.dim ?? "None"})`;
+  }
 }
 
 export class LogSoftmax extends Module {
@@ -1155,6 +1261,10 @@ export class LogSoftmax extends Module {
 
   override forward(x: Tensor): Tensor {
     return x.logSoftmax(this.dim ?? defaultSoftmaxDim(x.shape.length));
+  }
+
+  override describe(): string {
+    return `LogSoftmax(dim=${this.dim ?? "None"})`;
   }
 }
 
@@ -1179,6 +1289,12 @@ export class PReLU extends Module {
 
   override forward(x: Tensor): Tensor {
     return x.prelu(this.weight);
+  }
+
+  /** **The count comes from the weight**, because that is where it landed — the
+   * argument was not kept and the tensor is the same number. */
+  override describe(): string {
+    return `PReLU(num_parameters=${this.weight.shape[0]})`;
   }
 }
 
@@ -1230,7 +1346,7 @@ export class GroupNorm extends Module {
    */
   constructor(
     private readonly numGroups: number,
-    numChannels: number,
+    private readonly numChannels: number,
     private readonly eps = 1e-5,
     affine = true,
     device?: null,
@@ -1258,6 +1374,15 @@ export class GroupNorm extends Module {
     if (this.weight) out = out.mul(this.weight.reshape(shape));
     return this.bias ? out.add(this.bias.reshape(shape)) : out;
   }
+
+  /** torch's `GroupNorm.extra_repr`. **`bias` is not `affine`** — torch prints both,
+   * because `affine=True, bias=False` is a scale with no shift and the two words
+   * together are the only way to see it. */
+  override describe(): string {
+    return `GroupNorm(${this.numGroups}, ${this.numChannels}, eps=${pyNumber(this.eps)}, `
+      + `affine=${this.weight !== null ? "True" : "False"}, `
+      + `bias=${this.bias !== null ? "True" : "False"})`;
+  }
 }
 
 /**
@@ -1277,11 +1402,13 @@ export class InstanceNormND extends Module {
    * parameters, so the `state_dict` keys part wholesale.
    */
   constructor(
-    numFeatures: number,
+    private readonly numFeatures: number,
     private readonly eps = 1e-5,
-    _momentum = 0.1,
-    affine = false,
-    trackRunningStats = false,
+    private readonly momentum = 0.1,
+    // As `BatchNormND` — the other way round: here it is `trackRunningStats=true`
+    // that is refused, so `false` is what this layer does.
+    private readonly affine = false,
+    private readonly trackRunningStats = false,
     bias = true,
   ) {
     super();
@@ -1314,6 +1441,16 @@ export class InstanceNormND extends Module {
     if (this.weight) out = out.mul(this.weight.reshape(spread));
     if (this.bias) out = out.add(this.bias.reshape(spread));
     return out;
+  }
+
+  /** The same wording as `BatchNormND`. **The two defaults are opposite** — a batch
+   * norm is affine and tracks, an instance norm is neither — so the string is where
+   * the difference shows without reading a constructor. */
+  override describe(): string {
+    return `${this.constructor.name}(${this.numFeatures}, eps=${pyNumber(this.eps)}, `
+      + `momentum=${this.momentum}, affine=${this.affine ? "True" : "False"}, `
+      + `bias=${this.bias !== null ? "True" : "False"}, `
+      + `track_running_stats=${this.trackRunningStats ? "True" : "False"})`;
   }
 }
 
@@ -1376,10 +1513,11 @@ export class ConvTransposeND extends Module {
   readonly bias: Tensor | null;
 
   constructor(
-    inChannels: number,
-    outChannels: number,
-    kernelSize: number,
-    spatial: number,
+    // As `ConvND` above — stored so that `describe` has them.
+    private readonly inChannels: number,
+    private readonly outChannels: number,
+    private readonly kernelSize: number,
+    private readonly spatial: number,
     private readonly stride = 1,
     private readonly padding = 0,
     bias = true,
@@ -1409,6 +1547,17 @@ export class ConvTransposeND extends Module {
   override forward(x: Tensor): Tensor {
     return x.convTransposeND(this.weight, this.bias, this.stride, this.padding,
                              this.outputPadding, this.groups, this.dilation);
+  }
+
+  /** As `ConvND`, plus `output_padding` — which prints only when it is set. */
+  override describe(): string {
+    return `${this.constructor.name}(${convExtra({
+      spatial: this.spatial, inChannels: this.inChannels,
+      outChannels: this.outChannels, kernelSize: this.kernelSize,
+      stride: this.stride, padding: this.padding, dilation: this.dilation,
+      groups: this.groups, hasBias: this.bias !== null,
+      outputPadding: this.outputPadding,
+    })})`;
   }
 }
 
@@ -1587,6 +1736,14 @@ export class MaxPool2d extends Module {
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
     return x.maxPoolWithIndices(this.kernelSize, this.stride);
   }
+
+  /** As `MaxPool1d`, and this one really holds the other three — they are refused
+   * above unless left at their defaults, so what prints is what the layer does. */
+  override describe(): string {
+    return `MaxPool2d(kernel_size=${this.kernelSize}, stride=${this.stride ?? this.kernelSize}`
+      + `, padding=${this.padding}, dilation=${this.dilation}`
+      + `, ceil_mode=${this.ceilMode ? "True" : "False"})`;
+  }
 }
 
 /* ── The pairs that differ only in dimension ────────────────────────────
@@ -1610,6 +1767,14 @@ export class MaxPool1d extends Module {
   override forward(x: Tensor): Tensor {
     return x.maxPool1d(this.kernelSize, this.stride);
   }
+
+  /** torch's `_MaxPoolNd.extra_repr`. **A stride left unset prints the kernel**, which
+   * is the step the layer actually takes — `stride=None` would be the argument rather
+   * than the behaviour. */
+  override describe(): string {
+    return `MaxPool1d(kernel_size=${this.kernelSize}, stride=${this.stride ?? this.kernelSize}`
+      + ", padding=0, dilation=1, ceil_mode=False)";
+  }
 }
 
 /** `torch.nn.MaxPool3d`. */
@@ -1620,6 +1785,12 @@ export class MaxPool3d extends Module {
 
   override forward(x: Tensor): Tensor {
     return x.maxPool3d(this.kernelSize, this.stride);
+  }
+
+  /** As `MaxPool1d`. */
+  override describe(): string {
+    return `MaxPool3d(kernel_size=${this.kernelSize}, stride=${this.stride ?? this.kernelSize}`
+      + ", padding=0, dilation=1, ceil_mode=False)";
   }
 }
 
@@ -1648,6 +1819,11 @@ export class AdaptiveMaxPool1d extends Module {
   /** The values and the positions that produced them. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
     return x.adaptiveMaxPoolWithIndices(this.outputSize);
+  }
+
+  /** Shared with the 2-D and 3-D names below, which subclass this one. */
+  override describe(): string {
+    return `${this.constructor.name}(output_size=${describeSize(this.outputSize)})`;
   }
 }
 
@@ -1748,6 +1924,11 @@ export class Unflatten extends Module {
   override forward(x: Tensor): Tensor {
     return x.unflatten(this.dim, this.unflattenedSize);
   }
+
+  override describe(): string {
+    return `Unflatten(dim=${this.dim}, `
+      + `unflattened_size=(${this.unflattenedSize.join(", ")}))`;
+  }
 }
 
 /**
@@ -1843,6 +2024,12 @@ export class AvgPool2d extends Module {
   override forward(x: Tensor): Tensor {
     return x.avgPool2d(this.kernelSize, this.stride);
   }
+
+  /** torch's `_AvgPoolNd.extra_repr` — three arguments and no `ceil_mode`. */
+  override describe(): string {
+    return `AvgPool2d(kernel_size=${this.kernelSize}, `
+      + `stride=${this.stride ?? this.kernelSize}, padding=0)`;
+  }
 }
 
 /**
@@ -1868,6 +2055,14 @@ export class AvgPool1d extends Module {
     return x.poolND("avg", this.kernelSize, this.stride, this.padding, this.ceilMode,
                     this.countIncludePad);
   }
+
+  /** **The one-dimensional average pool prints one-tuples** where its 2-D and 3-D
+   * siblings print bare numbers. That is torch's own inconsistency between the three,
+   * and it is copied rather than tidied. */
+  override describe(): string {
+    return `AvgPool1d(kernel_size=(${this.kernelSize},), `
+      + `stride=(${this.stride ?? this.kernelSize},), padding=(${this.padding},))`;
+  }
 }
 
 /** `torch.nn.AvgPool3d`. */
@@ -1884,6 +2079,12 @@ export class AvgPool3d extends Module {
   override forward(x: Tensor): Tensor {
     return x.poolND("avg", this.kernelSize, this.stride, this.padding, this.ceilMode,
                     this.countIncludePad, this.divisorOverride);
+  }
+
+  /** As `AvgPool2d`. */
+  override describe(): string {
+    return `AvgPool3d(kernel_size=${this.kernelSize}, `
+      + `stride=${this.stride ?? this.kernelSize}, padding=${this.padding})`;
   }
 }
 
@@ -1902,6 +2103,10 @@ export class AdaptiveAvgPool1d extends Module {
   override forward(x: Tensor): Tensor {
     return x.adaptivePool("avg", this.outputSize);
   }
+
+  override describe(): string {
+    return `AdaptiveAvgPool1d(output_size=${describeSize(this.outputSize)})`;
+  }
 }
 
 /** `torch.nn.AdaptiveAvgPool3d`. It takes the output size. */
@@ -1912,6 +2117,10 @@ export class AdaptiveAvgPool3d extends Module {
 
   override forward(x: Tensor): Tensor {
     return x.adaptivePool("avg", this.outputSize);
+  }
+
+  override describe(): string {
+    return `AdaptiveAvgPool3d(output_size=${describeSize(this.outputSize)})`;
   }
 }
 
@@ -1929,6 +2138,24 @@ export class LPPool1d extends Module {
 
   override forward(x: Tensor): Tensor {
     return x.lpPool(this.normType, this.kernelSize, this.stride, this.ceilMode);
+  }
+
+  /** torch's `_LPPoolNd.extra_repr`. Two things here:
+   *
+   * **The stride prints as `None`** and not as the kernel — the power pool is the one
+   * place torch leaves it unfilled, and copying the neighbours' rule would be a
+   * plausible string for a different layer.
+   *
+   * **`norm_type` prints what it was given**, and JavaScript cannot tell `2` from
+   * `2.0`. torch preserves the type it received, so `LPPool1d(2)` says `2` there and
+   * `LPPool1d(2.0)` says `2.0`; this side has one number and has to pick. It picks the
+   * integer spelling, which is what every caller passes and what the frozen strings
+   * hold — the other choice would be wrong for the common call and right for the rare
+   * one. */
+  override describe(): string {
+    return `${this.constructor.name}(norm_type=${pyNumber(this.normType)}, `
+      + `kernel_size=${this.kernelSize}, stride=${this.stride ?? "None"}, `
+      + `ceil_mode=${this.ceilMode ? "True" : "False"})`;
   }
 }
 
@@ -1955,7 +2182,7 @@ export class LayerNorm extends Module {
 
   constructor(normalizedShape: number | readonly number[],
               private readonly eps = 1e-5,
-              elementwiseAffine = true, bias = true) {
+              private readonly elementwiseAffine = true, bias = true) {
     super();
     const shape = typeof normalizedShape === "number"
       ? [normalizedShape] : [...normalizedShape];
@@ -1993,6 +2220,13 @@ export class LayerNorm extends Module {
     const out = normed.mul(this.weight);
     return this.bias ? out.add(this.bias) : out;
   }
+
+  /** torch's `LayerNorm.extra_repr`. The shape prints as a Python list. */
+  override describe(): string {
+    return `LayerNorm((${this.shape.join(", ")}${this.shape.length === 1 ? "," : ""}), `
+      + `eps=${pyNumber(this.eps)}, elementwise_affine=${this.elementwiseAffine ? "True" : "False"}, `
+      + `bias=${this.bias !== null ? "True" : "False"})`;
+  }
 }
 
 /**
@@ -2016,6 +2250,16 @@ export class Upsample extends Module {
     }
     return x.interpolate(this.size, this.scaleFactor, this.mode,
                          this.alignCorners ?? false);
+  }
+
+  /** **Whichever of the two was given**, not both — a layer built with a size prints
+   * its size and one built with a factor prints its factor. Printing the other shows
+   * `None` beside a number that is set. */
+  override describe(): string {
+    const head = this.scaleFactor !== null
+      ? `scale_factor=${pyFloat(this.scaleFactor)}`
+      : `size=${describeSize(this.size ?? 0)}`;
+    return `Upsample(${head}, mode='${this.mode}')`;
   }
 }
 
@@ -4133,8 +4377,11 @@ export class BatchNormND extends Module {
     readonly channels: number,
     private readonly eps = 1e-5,
     private readonly momentum = 0.1,
-    affine = true,
-    trackRunningStats = true,
+    // **Kept because `describe` prints them.** `trackRunningStats=false` is refused
+    // below, so the only value it can hold is the one that was honoured — printing it
+    // is a statement about the layer rather than about the argument.
+    private readonly affine = true,
+    private readonly trackRunningStats = true,
     bias = true,
   ) {
     super();
@@ -4233,6 +4480,14 @@ export class BatchNormND extends Module {
     // running statistics — so training is fine and evaluation alone is wrong.
     return batchNorm(x, this.runningMean, this.runningVar, this.weight,
       this.bias, this.training, this.momentum, this.eps);
+  }
+
+  /** torch's `_BatchNorm.extra_repr`, shared by the instance norms next door. */
+  override describe(): string {
+    return `${this.constructor.name}(${this.channels}, eps=${pyNumber(this.eps)}, `
+      + `momentum=${this.momentum}, affine=${this.affine ? "True" : "False"}, `
+      + `bias=${this.bias !== null ? "True" : "False"}, `
+      + `track_running_stats=${this.trackRunningStats ? "True" : "False"})`;
   }
 }
 

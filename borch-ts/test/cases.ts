@@ -3358,6 +3358,67 @@ function addUnpool(out: Map<string, Case>): void {
     () => new nn.CTCLoss().forward(lp(), tgt, inLen, tgtLen));
   out.set("unpool::층::CTCLoss(blank=3, sum)",
     () => new nn.CTCLoss(3, "sum").forward(lp(), [[1, 2], [0, 0]], inLen, tgtLen));
+  // ── what a layer prints ──────────────────────────────────────────────────────
+  //
+  // **The Python side printed twenty-nine of sixty-four layers differently from
+  // torch** and nothing was watching; this side had the same hole and the same
+  // reason, which was that nobody had looked. These are the strings.
+  //
+  // Four of the rows on that side were not a printing difference at all — a pool with
+  // no stride, `AvgPool1d`'s one-tuples, `Upsample`'s float, `LayerNorm`'s absent
+  // `bias`. Here the fields are private, so what is compared is only the string; the
+  // stride still prints the kernel it steps by rather than the argument it was given.
+  for (const [label, build] of [
+    ["Conv1d", () => new nn.Conv1d(2, 3, 5)],
+    ["Conv1d(padding, dilation, no bias)",
+      () => new nn.Conv1d(2, 3, 5, 1, 1, 2, 1, false)],
+    ["Conv2d", () => new nn.Conv2d(2, 3, 3)],
+    ["Conv2d(stride, padding, groups)",
+      () => new nn.Conv2d(4, 4, 3, 2, 1, 1, 2)],
+    ["Conv2d(no bias, reflect)",
+      () => new nn.Conv2d(2, 3, 3, 1, 0, 1, 1, false, "reflect")],
+    ["Conv3d", () => new nn.Conv3d(2, 3, 3)],
+    ["ConvTranspose1d", () => new nn.ConvTranspose1d(2, 3, 5)],
+    ["ConvTranspose2d(output_padding)",
+      () => new nn.ConvTranspose2d(2, 3, 3, 2, 0, 1)],
+    ["BatchNorm1d", () => new nn.BatchNorm1d(4)],
+    ["BatchNorm2d", () => new nn.BatchNorm2d(4)],
+    ["BatchNorm2d(affine=False)", () => new nn.BatchNorm2d(4, 1e-5, 0.1, false)],
+    ["BatchNorm2d(affine, no bias)",
+      () => new nn.BatchNorm2d(4, 1e-5, 0.1, true, true, false)],
+    ["BatchNorm3d(eps, momentum)", () => new nn.BatchNorm3d(4, 1e-3, 0.2)],
+    ["InstanceNorm1d", () => new nn.InstanceNorm1d(4)],
+    ["InstanceNorm2d(affine)", () => new nn.InstanceNorm2d(4, 1e-5, 0.1, true)],
+    ["GroupNorm", () => new nn.GroupNorm(2, 4)],
+    ["GroupNorm(affine=False)",
+      () => new nn.GroupNorm(2, 4, 1e-5, false)],
+    ["LayerNorm", () => new nn.LayerNorm(4)],
+    ["LayerNorm(shape, no affine)", () => new nn.LayerNorm([2, 4], 1e-5, false)],
+    ["MaxPool1d", () => new nn.MaxPool1d(2)],
+    ["MaxPool2d", () => new nn.MaxPool2d(2)],
+    ["MaxPool3d", () => new nn.MaxPool3d(2)],
+    ["AvgPool1d", () => new nn.AvgPool1d(2)],
+    ["AvgPool2d", () => new nn.AvgPool2d(2)],
+    ["AvgPool3d", () => new nn.AvgPool3d(2)],
+    ["LPPool1d", () => new nn.LPPool1d(2, 2)],
+    ["LPPool2d(stride, ceil)", () => new nn.LPPool2d(3, 2, 2, true)],
+    ["AdaptiveAvgPool1d", () => new nn.AdaptiveAvgPool1d(1)],
+    ["AdaptiveMaxPool2d", () => new nn.AdaptiveMaxPool2d(1)],
+    ["GELU", () => new nn.GELU()],
+    ["GELU(tanh)", () => new nn.GELU("tanh")],
+    ["Softmax", () => new nn.Softmax()],
+    ["Softmax(dim=1)", () => new nn.Softmax(1)],
+    ["LogSoftmax(dim=-1)", () => new nn.LogSoftmax(-1)],
+    ["PReLU", () => new nn.PReLU()],
+    ["PReLU(4)", () => new nn.PReLU(4)],
+    ["Unflatten", () => new nn.Unflatten(1, [2, 3])],
+    ["Upsample(scale_factor)", () => new nn.Upsample(null, 2)],
+    ["Upsample(size)", () => new nn.Upsample([4, 4])],
+    ["Upsample(bilinear)", () => new nn.Upsample(null, 2, "bilinear")],
+  ] as const) {
+    out.set(`unpool::층::repr::${label}`, async () => build().describe());
+  }
+
   out.set("unpool::층::repr::CTCLoss", async () => new nn.CTCLoss().describe());
   out.set("unpool::층::repr::CTCLoss(인자 있음)",
     async () => new nn.CTCLoss(2, "sum", true).describe());
