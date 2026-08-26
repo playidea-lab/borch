@@ -13347,10 +13347,268 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(out))
         return run
 
+    def _png16(path, arr):
+        """PIL cannot **save** sixteen-bit colour, so KITTI's flow is written by hand.
+
+        Neither can it read it — it narrows to eight, and `(x - 2**15) / 64` on the
+        narrowed samples still returns a flow field of the right shape.
+        """
+        import os
+        import struct
+        import zlib
+        height, width = arr.shape[:2]
+        # `len(arr.shape)` and not `arr.ndim` for the reason written at the
+        # `_stereo_out` neighbour above: this file is parsed for the names its
+        # cases ask about, and a fixture's numpy `.ndim` is indistinguishable
+        # from a tensor's.
+        channels = 1 if len(arr.shape) == 2 else arr.shape[2]
+        rows = arr.reshape(height, width * channels)
+        raw = b"".join(b"\x00" + rows[y].astype(">u2").tobytes() for y in range(height))
+
+        def chunk(kind, body):
+            return (struct.pack(">I", len(body)) + kind + body
+                    + struct.pack(">I", zlib.crc32(kind + body)))
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        header = struct.pack(">IIBBBBB", width, height, 16,
+                             {1: 0, 3: 2, 4: 6}[channels], 0, 0, 0)
+        with open(path, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+                         + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    def _png8(path, arr):
+        import os
+        from PIL import Image as _PIL
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _PIL.fromarray(arr.astype(np.uint8)).save(path)
+
+    def _stereo_out(loaded):
+        """Count first, then every item flattened — including the `None`s, which are
+        written as a length so that a split that should have no disparity cannot pass
+        by handing back an array of zeros."""
+        parts = [np.asarray([len(loaded)], dtype=np.float32)]
+        for i in range(len(loaded)):
+            for piece in loaded[i]:
+                if piece is None:
+                    parts.append(np.asarray([-1.0], dtype=np.float32))
+                else:
+                    parts.append(np.asarray(piece).reshape(-1).astype(np.float32))
+        return np.concatenate(parts)
+
+    _H, _W = 3, 4
+
+    def _rgb(seed):
+        return ((np.arange(_H * _W * 3).reshape(_H, _W, 3) * 7 + seed) % 251)
+
+    def kitti_flow(split):
+        """`KittiFlow` against torchvision's own.
+
+        **The frames pair by suffix, not by order**: `*_10.png` is every first frame
+        and `*_11.png` every second. The fixture has two scenes, so a reader that
+        walked the directory in order would pair scene 1's second frame with scene 2's
+        first — four files in one sorted list, three pairs, and every one of them
+        loads.
+
+        The flow is a **sixteen-bit colour PNG**, two channels of `x * 64 + 2**15` and
+        a validity flag in the third. On PIL's eight-bit answer that arithmetic still
+        runs; the numbers here are chosen so it would not agree.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "KittiFlow", split + "ing")
+                for i in (1, 2):
+                    _png8(os.path.join(base, "image_2", f"{i:06d}_10.png"), _rgb(i))
+                    _png8(os.path.join(base, "image_2", f"{i:06d}_11.png"), _rgb(i + 50))
+                    field = np.zeros((_H, _W, 3), np.uint16)
+                    ramp = np.arange(_H * _W).reshape(_H, _W)
+                    field[:, :, 0] = (ramp * 64 + 2 ** 15 + i) % 65535
+                    field[:, :, 1] = (2 ** 15 - ramp * 640) % 65535
+                    field[:, :, 2] = ramp % 2
+                    _png16(os.path.join(base, "flow_occ", f"{i:06d}_10.png"), field)
+                if _is_real_torch(L):
+                    from torchvision.datasets import KittiFlow as real
+                    loaded = real(root, split=split)
+                else:
+                    loaded = _vision_datasets(L).KittiFlow(root, split=split)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def hd1k():
+        """`HD1K`. **Each sequence stops one frame short**, and that is the whole of it.
+
+        The fixture has two sequences of three frames, so the answer is 2 + 2 = 4
+        pairs. A reader that flattened them into one list would give 5 and the extra
+        one would pair the end of sequence 0 with the start of sequence 1, holding a
+        flow file that belongs to neither.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "hd1k")
+                for seq in (0, 1):
+                    for k in range(3):
+                        _png8(os.path.join(base, "hd1k_input", "image_2",
+                                           f"{seq:06d}_{k:04d}.png"), _rgb(seq * 10 + k))
+                        field = np.zeros((_H, _W, 3), np.uint16)
+                        ramp = np.arange(_H * _W).reshape(_H, _W)
+                        field[:, :, 0] = (ramp * 64 + 2 ** 15 + k) % 65535
+                        field[:, :, 1] = (2 ** 15 - ramp * 320 - seq) % 65535
+                        field[:, :, 2] = (ramp + k) % 2
+                        _png16(os.path.join(base, "hd1k_flow_gt", "flow_occ",
+                                            f"{seq:06d}_{k:04d}.png"), field)
+                if _is_real_torch(L):
+                    from torchvision.datasets import HD1K as real
+                    loaded = real(root)
+                else:
+                    loaded = _vision_datasets(L).HD1K(root)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def kitti_stereo(year):
+        """`Kitti2012Stereo` and `Kitti2015Stereo`. **The disparity is sixteen-bit grey
+        divided by 256** — the case that needed the PNG reader fixed rather than
+        extended, because a reader that narrowed it to eight would divide a number that
+        still looks like a distance.
+
+        2012 pairs `colored_0` with `colored_1` and ships one disparity; 2015 pairs
+        `image_2` with `image_3` and ships two, of which the item carries the left.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                ramp = np.arange(_H * _W).reshape(_H, _W)
+                if year == 2012:
+                    base = os.path.join(root, "Kitti2012", "training")
+                    for i in (1, 2):
+                        _png8(os.path.join(base, "colored_0", f"{i:06d}_10.png"), _rgb(i))
+                        _png8(os.path.join(base, "colored_1", f"{i:06d}_10.png"), _rgb(i + 3))
+                        _png16(os.path.join(base, "disp_noc", f"{i:06d}.png"),
+                               (ramp * 1000 + i).astype(np.uint16))
+                else:
+                    base = os.path.join(root, "Kitti2015", "training")
+                    for i in (1, 2):
+                        _png8(os.path.join(base, "image_2", f"{i:06d}_10.png"), _rgb(i))
+                        _png8(os.path.join(base, "image_3", f"{i:06d}_10.png"), _rgb(i + 3))
+                        for offset, side in ((0, "disp_occ_0"), (7, "disp_occ_1")):
+                            _png16(os.path.join(base, side, f"{i:06d}_10.png"),
+                                   (ramp * 900 + i + offset).astype(np.uint16))
+                name = f"Kitti{year}Stereo"
+                if _is_real_torch(L):
+                    import torchvision.datasets as real
+                    loaded = getattr(real, name)(root)
+                else:
+                    loaded = getattr(_vision_datasets(L), name)(root)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def instereo2k():
+        """`InStereo2k` — **one scene per directory**, and the disparity divided by
+        1024 rather than 256. The number is the dataset's, not a convention, and the
+        fixture's values are large enough that the wrong divisor is not a rounding."""
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "InStereo2k", "train")
+                ramp = np.arange(_H * _W).reshape(_H, _W)
+                for k, scene in enumerate(("aaa", "bbb")):
+                    _png8(os.path.join(base, scene, "left.png"), _rgb(k))
+                    _png8(os.path.join(base, scene, "right.png"), _rgb(k + 4))
+                    for offset, side in ((0, "left_disp.png"), (5, "right_disp.png")):
+                        _png16(os.path.join(base, scene, side),
+                               (ramp * 700 + offset).astype(np.uint16))
+                if _is_real_torch(L):
+                    from torchvision.datasets import InStereo2k as real
+                    loaded = real(root)
+                else:
+                    loaded = _vision_datasets(L).InStereo2k(root)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def sintel_stereo(pass_name):
+        """`SintelStereo`. Two things here are PNG files that are not pictures:
+
+        - **the disparity is packed into a colour**, `r * 4 + g / 2**6 + b / 2**14`.
+          Reading the red channel alone gives a map that is coarse and plausible, so
+          the fixture's green and blue are not zero.
+        - **the validity mask is two files**, occlusion and out-of-frame, and a pixel
+          is valid only where both are zero. The two disagree in the fixture, so
+          taking either alone is a different mask.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "Sintel", "training")
+                ramp = np.arange(_H * _W).reshape(_H, _W)
+                for name in ("final", "clean"):
+                    for scene in ("alley", "bamboo"):
+                        for k in range(2):
+                            _png8(os.path.join(base, f"{name}_left", scene,
+                                               f"f{k}.png"), _rgb(k + len(name)))
+                            _png8(os.path.join(base, f"{name}_right", scene,
+                                               f"f{k}.png"), _rgb(k + 9))
+                for scene in ("alley", "bamboo"):
+                    for k in range(2):
+                        _png8(os.path.join(base, "disparities", scene, f"f{k}.png"),
+                              _rgb(k * 3 + 1))
+                        _png8(os.path.join(base, "occlusions", scene, f"f{k}.png"),
+                              (ramp % 2 * 255))
+                        _png8(os.path.join(base, "outofframe", scene, f"f{k}.png"),
+                              (ramp % 3 * 255))
+                if _is_real_torch(L):
+                    from torchvision.datasets import SintelStereo as real
+                    loaded = real(root, pass_name=pass_name)
+                else:
+                    loaded = _vision_datasets(L).SintelStereo(root, pass_name=pass_name)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
     cases += [
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
         (prefix + "Sintel(both passes)", sintel("both")),
+        # **The flow is a PNG too** — the row said *a codec and then another format*
+        # and there was never a second format, only a second use of the first.
+        (prefix + "KittiFlow(train, pairs by suffix)", kitti_flow("train")),
+        # **No flow on `test`**, and the `None`s are written into the answer.
+        (prefix + "KittiFlow(test, no flow)", kitti_flow("test")),
+        (prefix + "HD1K(each sequence stops one short)", hd1k()),
+        (prefix + "Kitti2012Stereo(disparity is 16-bit grey / 256)", kitti_stereo(2012)),
+        (prefix + "Kitti2015Stereo(both disparities present)", kitti_stereo(2015)),
+        (prefix + "InStereo2k(disparity / 1024)", instereo2k()),
+        (prefix + "SintelStereo(disparity packed into a colour)", sintel_stereo("final")),
+        # **`both` is final then clean**, in that order — the opposite of `Sintel`'s.
+        (prefix + "SintelStereo(both passes)", sintel_stereo("both")),
     ]
 
     cases += [

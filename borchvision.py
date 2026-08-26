@@ -76,6 +76,7 @@ at 0 or 1 are deterministic, so that is where the golden compares.
 import bz2 as _bz2
 import csv as _csv
 import enum as _enum
+import glob as _glob
 import gzip as _gzip
 import hashlib as _hashlib
 import inspect as _inspect
@@ -3916,12 +3917,25 @@ def _mat_matrix(body):
 # **two open PNG and no JPEG** and one opens PPM. So the sentence was carrying fifteen
 # rows that are genuinely blocked and three that were not, and nobody had asked which.
 
-def _png_read(data):
+def _png_read(data, keep_depth=False):
     """One PNG as `uint8` — `(h, w)` for grey, `(h, w, 3)` or `(h, w, 4)` for colour.
 
     Interlaced files are refused by name: Adam7 reorders the whole image into seven
     passes, and a reader that ignored the flag would return a picture built from the
     first pass alone — recognisable, wrong, and silent.
+
+    ## Sixteen bits
+
+    **PIL keeps them for grey and drops them for colour**, and this follows PIL because
+    `_folder_loader` stands in its place. A sixteen-bit grey PNG comes back `uint16`;
+    a sixteen-bit colour one comes back `uint8`, with the low byte gone, which is what
+    PIL hands over and what a viewer shows.
+
+    `keep_depth=True` asks for the samples at their own depth whatever the channel
+    count — what `torchvision.io.decode_png` does. **The two are not a preference.**
+    KITTI stores its flow as sixteen-bit colour and reads it as `(x - 2**15) / 64`;
+    on the eight-bit answer that arithmetic still runs and still returns a flow field
+    of the right shape, pointing somewhere else.
     """
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("not a PNG — the eight-byte signature does not match")
@@ -3953,10 +3967,12 @@ def _png_read(data):
 
     channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colour]
     raw = _zlib.decompress(b"".join(idat))
-    return _png_rows(raw, width, height, depth, channels, colour, palette, alpha)
+    return _png_rows(raw, width, height, depth, channels, colour, palette, alpha,
+                     keep_depth)
 
 
-def _png_rows(raw, width, height, depth, channels, colour, palette, alpha):
+def _png_rows(raw, width, height, depth, channels, colour, palette, alpha,
+              keep_depth=False):
     """Undo the per-row filters and lay the samples out.
 
     **Every filter refers to the row above**, so this cannot be vectorised over rows —
@@ -4001,8 +4017,12 @@ def _png_rows(raw, width, height, depth, channels, colour, palette, alpha):
         samples = out.reshape(height, width, channels)
     elif depth == 16:
         pairs = out.reshape(height, -1, 2).astype(_np.uint16)
-        wide = (pairs[..., 0] << 8) | pairs[..., 1]
-        samples = (wide >> 8).astype(_np.uint8).reshape(height, width, channels)
+        wide = ((pairs[..., 0] << 8) | pairs[..., 1]).reshape(height, width, channels)
+        # **Grey keeps its sixteen bits and colour does not** — PIL's split, not one
+        # chosen here, and the disparity maps depend on the grey half: KITTI's are
+        # sixteen-bit grey divided by 256, so a reader that scaled them down first
+        # would be off by that factor with every number still looking like a distance.
+        samples = wide if (keep_depth or channels == 1) else (wide >> 8).astype(_np.uint8)
     else:
         # **Sub-byte depths are packed high bit first**, and a row is padded to a whole
         # byte. Omniglot's strokes are 1-bit, so this is the path its pictures take.
@@ -5459,6 +5479,375 @@ class Sintel(VisionDataset):
             first, second, flow, _ = self.transforms(first, second, flow, None)
         return first, second, flow
 
+
+def _read_16bit_flow_png(path):
+    """KITTI's and HD1K's flow: **a sixteen-bit colour PNG carrying three things.**
+
+    Two channels are the motion, stored as `x * 64 + 2**15` so that a signed
+    displacement fits in an unsigned sample, and the third is a flag saying whether
+    the pixel was measured at all. Undoing it is the two lines below.
+
+    The reason this needs `keep_depth` is that PIL cannot hold the file: it narrows
+    sixteen-bit colour to eight, and `(x - 2**15) / 64` on the narrowed samples still
+    runs, still returns a field of the right shape, and points somewhere else.
+    """
+    with open(path, "rb") as handle:
+        both = _png_read(handle.read(), keep_depth=True).astype(_np.float32)
+    flow = (both[:, :, :2] - 2 ** 15) / 64
+    return flow.transpose(2, 0, 1), both[:, :, 2].astype(bool)
+
+
+def _as_rgb(picture):
+    """What torchvision's stereo `_read_img` does — a grey picture is stacked three
+    deep rather than left as one channel, so the two sides of a pair have the same
+    shape whichever way each was stored."""
+    picture = _np.asarray(picture)
+    if picture.ndim == 2:
+        return _np.repeat(picture[:, :, None], 3, axis=2)
+    return picture[:, :, :3]
+
+
+class _StereoMatchingDataset(VisionDataset):
+    """The half that four stereo datasets share: two lists of pairs, and an item that
+    is `(left, right, disparity)` — or the same with a mask when the dataset ships
+    one.
+
+    **`_scan_pairs` sorts both sides separately and zips them**, which only pairs the
+    right pictures with the right ones because the two directories use the same names.
+    A dataset that broke that convention would pair silently and wrongly, so the
+    counts are compared and a mismatch is refused rather than truncated by `zip`.
+    """
+
+    _has_built_in_disparity_mask = False
+
+    def __init__(self, root, transforms=None):
+        super().__init__(root)
+        self.transforms = transforms
+        self._images = []
+        self._disparities = []
+
+    def _scan_pairs(self, left_pattern, right_pattern=None):
+        left = sorted(_glob.glob(left_pattern))
+        if not left:
+            raise FileNotFoundError(
+                f"Could not find any files matching the patterns: {left_pattern}")
+        if right_pattern is None:
+            return [(one, None) for one in left]
+        right = sorted(_glob.glob(right_pattern))
+        if len(left) != len(right):
+            raise ValueError(
+                f"Found {len(left)} left files but {len(right)} right files using:\n "
+                f"left pattern: {left_pattern}\n"
+                f"right pattern: {right_pattern}\n")
+        return list(zip(left, right))
+
+    def _read_img(self, path):
+        return _as_rgb(_folder_loader(path))
+
+    def _read_disparity(self, path):
+        raise NotImplementedError
+
+    def __len__(self):
+        return len(self._images)
+
+    def __getitem__(self, index):
+        left = self._read_img(self._images[index][0])
+        right = self._read_img(self._images[index][1])
+        maps, masks = [], []
+        for path in self._disparities[index]:
+            one, mask = self._read_disparity(path)
+            maps.append(one)
+            masks.append(mask)
+        images = (left, right)
+        if self.transforms is not None:
+            images, maps, masks = self.transforms(images, tuple(maps), tuple(masks))
+        if self._has_built_in_disparity_mask or masks[0] is not None:
+            return images[0], images[1], maps[0], masks[0]
+        return images[0], images[1], maps[0]
+
+
+class KittiFlow(VisionDataset):
+    """KITTI 2015, **as optical flow**: two frames and the motion between them.
+
+    <http://www.cvlibs.net/datasets/kitti/eval_scene_flow.php?benchmark=flow>
+
+    ## Why it was refused and is not
+
+    Its row read *a codec and then another format*. Both halves were wrong here. The
+    pictures are PNG, read already; the flow is **also** PNG — sixteen-bit, with the
+    motion in two channels and a validity flag in the third. There was never a second
+    format, only a second use of the first.
+
+    The frames pair by **suffix, not by order**: `*_10.png` is every first frame and
+    `*_11.png` is every second, in two sorted lists zipped together. A reader that
+    took the directory in order would pair each scene's second frame with the next
+    scene's first — half the items would be a cut, and all of them would load.
+    """
+
+    _has_builtin_flow_mask = True
+
+    def __init__(self, root, split="train", transforms=None, loader=None):
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        super().__init__(root)
+        self.transforms = transforms
+        self.loader = _folder_loader if loader is None else loader
+        base = _os.path.join(self.root, "KittiFlow", split + "ing")
+        first = sorted(_glob.glob(_os.path.join(base, "image_2", "*_10.png")))
+        second = sorted(_glob.glob(_os.path.join(base, "image_2", "*_11.png")))
+        if not first or not second:
+            raise FileNotFoundError(
+                "Could not find the Kitti flow images. Please make sure the "
+                "directory structure is correct.")
+        self._image_list = [[one, two] for one, two in zip(first, second)]
+        self._flow_list = (sorted(_glob.glob(_os.path.join(base, "flow_occ", "*_10.png")))
+                           if split == "train" else [])
+
+    def __len__(self):
+        return len(self._image_list)
+
+    def __getitem__(self, index):
+        first = self.loader(self._image_list[index][0])
+        second = self.loader(self._image_list[index][1])
+        flow = mask = None
+        if self._flow_list:
+            flow, mask = _read_16bit_flow_png(self._flow_list[index])
+        if self.transforms is not None:
+            first, second, flow, mask = self.transforms(first, second, flow, mask)
+        return first, second, flow, mask
+
+
+class HD1K(VisionDataset):
+    """HD1K, **thirty-six sequences** of frames and the flow between them.
+
+    <http://hci-benchmark.iwr.uni-heidelberg.de/>
+
+    ## Why it was refused and is not
+
+    As `KittiFlow` — the row said *a codec and then another format*, and the second
+    format is the same sixteen-bit PNG.
+
+    **The sequences are walked one at a time and each stops one frame short**, which
+    is the whole of what this class has to get right. Flattening the thirty-six into
+    one sorted list would pair the last frame of a sequence with the first of the
+    next, and the flow file it took would belong to neither.
+    """
+
+    _has_builtin_flow_mask = True
+    _SEQUENCES = 36
+
+    def __init__(self, root, split="train", transforms=None, loader=None):
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        super().__init__(root)
+        self.transforms = transforms
+        self.loader = _folder_loader if loader is None else loader
+        self._image_list = []
+        self._flow_list = []
+        base = _os.path.join(self.root, "hd1k")
+        if split == "train":
+            for sequence in range(self._SEQUENCES):
+                flows = sorted(_glob.glob(_os.path.join(
+                    base, "hd1k_flow_gt", "flow_occ", f"{sequence:06d}_*.png")))
+                frames = sorted(_glob.glob(_os.path.join(
+                    base, "hd1k_input", "image_2", f"{sequence:06d}_*.png")))
+                for i in range(len(flows) - 1):
+                    self._flow_list += [flows[i]]
+                    self._image_list += [[frames[i], frames[i + 1]]]
+        else:
+            first = sorted(_glob.glob(_os.path.join(
+                base, "hd1k_challenge", "image_2", "*10.png")))
+            second = sorted(_glob.glob(_os.path.join(
+                base, "hd1k_challenge", "image_2", "*11.png")))
+            self._image_list = [[one, two] for one, two in zip(first, second)]
+        if not self._image_list:
+            raise FileNotFoundError(
+                "Could not find the HD1K images. Please make sure the directory "
+                "structure is correct.")
+
+    def __len__(self):
+        return len(self._image_list)
+
+    def __getitem__(self, index):
+        first = self.loader(self._image_list[index][0])
+        second = self.loader(self._image_list[index][1])
+        flow = mask = None
+        if self._flow_list:
+            flow, mask = _read_16bit_flow_png(self._flow_list[index])
+        if self.transforms is not None:
+            first, second, flow, mask = self.transforms(first, second, flow, mask)
+        return first, second, flow, mask
+
+
+class Kitti2012Stereo(_StereoMatchingDataset):
+    """KITTI 2012, **as stereo**: a left and a right picture and the disparity.
+
+    <http://www.cvlibs.net/datasets/kitti/eval_stereo_flow.php>
+
+    ## Why it was refused and is not
+
+    Its row named a codec. The pictures are PNG and so is the disparity — **sixteen-bit
+    grey, divided by 256**, which is the half that needed the reader fixed rather than
+    extended. On a reader that narrowed sixteen bits to eight the division still runs
+    and every distance is off by that factor while still looking like a distance.
+
+    The `colored_0` and `colored_1` directories are the RGB pair; the dataset also
+    ships a greyscale pair, and torchvision takes the colour one for consistency with
+    2015.
+    """
+
+    _has_built_in_disparity_mask = True
+
+    def __init__(self, root, split="train", transforms=None):
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        super().__init__(root, transforms)
+        base = _os.path.join(self.root, "Kitti2012", split + "ing")
+        self._images = self._scan_pairs(
+            _os.path.join(base, "colored_0", "*_10.png"),
+            _os.path.join(base, "colored_1", "*_10.png"))
+        if split == "train":
+            self._disparities = self._scan_pairs(
+                _os.path.join(base, "disp_noc", "*.png"), None)
+        else:
+            self._disparities = [(None, None) for _ in self._images]
+
+    def _read_disparity(self, path):
+        if path is None:
+            return None, None
+        return _np.asarray(_folder_loader(path))[None, :, :] / 256.0, None
+
+
+class Kitti2015Stereo(_StereoMatchingDataset):
+    """KITTI 2015, **as stereo**. As `Kitti2012Stereo`, with both disparities present.
+
+    <http://www.cvlibs.net/datasets/kitti/eval_scene_flow.php>
+
+    The pair is `image_2` against `image_3` and the disparities are `disp_occ_0` and
+    `disp_occ_1` — **the right disparity is read and then dropped**, because the item
+    is the left one. It is read anyway so that a missing right file is an error here
+    rather than a surprise to whoever writes the transform that wants it.
+    """
+
+    _has_built_in_disparity_mask = True
+
+    def __init__(self, root, split="train", transforms=None):
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        super().__init__(root, transforms)
+        base = _os.path.join(self.root, "Kitti2015", split + "ing")
+        self._images = self._scan_pairs(_os.path.join(base, "image_2", "*.png"),
+                                        _os.path.join(base, "image_3", "*.png"))
+        if split == "train":
+            self._disparities = self._scan_pairs(
+                _os.path.join(base, "disp_occ_0", "*.png"),
+                _os.path.join(base, "disp_occ_1", "*.png"))
+        else:
+            self._disparities = [(None, None) for _ in self._images]
+
+    def _read_disparity(self, path):
+        if path is None:
+            return None, None
+        return _np.asarray(_folder_loader(path))[None, :, :] / 256.0, None
+
+
+class InStereo2k(_StereoMatchingDataset):
+    """InStereo2k — **one scene per directory**, each holding its four files.
+
+    <https://github.com/YuhuaXu/StereoDataset>
+
+    ## Why it was refused and is not
+
+    A codec, said the row, and it is PNG throughout. The disparity is **divided by
+    1024** rather than 256; the number is the dataset's and not a convention, which is
+    why it is written here beside the one it is not.
+    """
+
+    _DISPARITY_SCALE = 1024.0
+
+    def __init__(self, root, split="train", transforms=None):
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        super().__init__(root, transforms)
+        base = _os.path.join(self.root, "InStereo2k", split)
+        self._images = self._scan_pairs(_os.path.join(base, "*", "left.png"),
+                                        _os.path.join(base, "*", "right.png"))
+        self._disparities = self._scan_pairs(
+            _os.path.join(base, "*", "left_disp.png"),
+            _os.path.join(base, "*", "right_disp.png"))
+
+    def _read_disparity(self, path):
+        one = _np.asarray(_folder_loader(path), dtype=_np.float32)
+        return one[None, :, :] / self._DISPARITY_SCALE, None
+
+
+class SintelStereo(_StereoMatchingDataset):
+    """Sintel again, **as stereo** — the same film, a left and a right eye.
+
+    <http://sintel.is.tue.mpg.de/stereo>
+
+    ## Why it was refused and is not
+
+    A codec, said the row. Everything here is PNG, including two things that are not
+    pictures:
+
+    - **The disparity is packed into a colour**, `r * 4 + g / 2**6 + b / 2**14`, which
+      is the dataset's README and not a convention. Reading the red channel alone
+      gives a disparity map that is coarse and plausible.
+    - **The validity mask is two files**, occlusion and out-of-frame, and a pixel is
+      valid only where both are zero. Taking either alone leaves invalid pixels marked
+      valid, and they are exactly the ones a stereo model would otherwise be scored on.
+
+    Both mask files are required. A missing one is refused by path rather than
+    defaulted to all-valid, because all-valid is a mask that trains.
+    """
+
+    _has_built_in_disparity_mask = True
+
+    def __init__(self, root, pass_name="final", transforms=None):
+        if pass_name not in ("final", "clean", "both"):
+            raise ValueError(f"Unknown value '{pass_name}' for argument pass_name. "
+                             "Valid values are {final, clean, both}.")
+        super().__init__(root, transforms)
+        base = _os.path.join(self.root, "Sintel")
+        for name in (("final", "clean") if pass_name == "both" else (pass_name,)):
+            self._images += self._scan_pairs(
+                _os.path.join(base, "training", f"{name}_left", "*", "*.png"),
+                _os.path.join(base, "training", f"{name}_right", "*", "*.png"))
+            self._disparities += self._scan_pairs(
+                _os.path.join(base, "training", "disparities", "*", "*.png"), None)
+
+    def _get_occlussion_mask_paths(self, path):
+        scene = _os.path.dirname(path)
+        sample = _os.path.dirname(_os.path.dirname(scene))
+        name = _os.path.basename(path)
+        occlusion = _os.path.join(sample, "occlusions", _os.path.basename(scene), name)
+        out_of_frame = _os.path.join(sample, "outofframe", _os.path.basename(scene), name)
+        if not _os.path.exists(occlusion):
+            raise FileNotFoundError(f"Occlusion mask {occlusion} does not exist")
+        if not _os.path.exists(out_of_frame):
+            raise FileNotFoundError(
+                f"Out of frame mask {out_of_frame} does not exist")
+        return occlusion, out_of_frame
+
+    def _read_disparity(self, path):
+        if path is None:
+            return None, None
+        packed = _np.asarray(_folder_loader(path), dtype=_np.float32)
+        red, green, blue = _np.split(packed, 3, axis=-1)
+        one = _np.transpose(red * 4 + green / (2 ** 6) + blue / (2 ** 14), (2, 0, 1))
+        occlusion, out_of_frame = self._get_occlussion_mask_paths(path)
+        mask = _np.logical_and(
+            _np.asarray(_folder_loader(out_of_frame)) == 0,
+            _np.asarray(_folder_loader(occlusion)) == 0)
+        return one, mask
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -5962,7 +6351,8 @@ _sys.modules["borchvision.transforms.functional"] = functional
 datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
-              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification", "Sintel", "RenderedSST2",
+              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder", "ImageFolder", "CLEVRClassification", "Sintel", "RenderedSST2", "KittiFlow", "HD1K",
+              "Kitti2012Stereo", "Kitti2015Stereo", "InStereo2k", "SintelStereo",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
 
