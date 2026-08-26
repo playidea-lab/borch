@@ -13593,6 +13593,212 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(out))
         return run
 
+    def _ppm(path, seed):
+        import os
+        from PIL import Image as _PIL
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _PIL.fromarray(((np.arange(_H * _W * 3).reshape(_H, _W, 3) * 5 + seed) % 251)
+                       .astype(np.uint8)).save(path)
+
+    def _pfm(path, channels, seed):
+        """A `.pfm` written little-endian — **the scale's sign is the byte order**, and
+        `-1.0` is how the format says little. A reader taking the machine's gets
+        numbers that are enormous rather than absurd."""
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        block = ((np.arange(_H * _W * channels).reshape(_H, _W, channels) + seed)
+                 * 0.5 - 3).astype("<f4")
+        header = ((b"PF\n" if channels == 3 else b"Pf\n")
+                  + f"{_W} {_H}\n".encode() + b"-1.0\n")
+        with open(path, "wb") as handle:
+            handle.write(header + block.tobytes())
+
+    def carla_stereo():
+        """`CarlaStereo`. Two things, and the second is why this fixture is uneven.
+
+        **The disparity is stored signed and used positive** — the sign is the
+        direction the pixel moved, which the file keeps and the dataset does not want.
+        The values here straddle zero, so a reader that skipped the `abs` gets half a
+        map of negative distances that are all finite.
+
+        **The left file is three-channel `PF` and the right is one-channel `Pf`**,
+        because `.pfm` holds either and the number of channels sliced out is what
+        distinguishes a disparity from a flow. Written both ways it was measured that
+        on a one-channel file the wrong slice is *invisible* — `[:2]` of one channel is
+        one channel — so a fixture that used `Pf` twice would pass with the flow
+        reader's default and say nothing.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "carla-highres", "trainingF")
+                for k, scene in enumerate(("s1", "s2")):
+                    _png8(os.path.join(base, scene, "im0.png"), _rgb(k))
+                    _png8(os.path.join(base, scene, "im1.png"), _rgb(k + 5))
+                    _pfm(os.path.join(base, scene, "disp0GT.pfm"), 3, k)
+                    _pfm(os.path.join(base, scene, "disp1GT.pfm"), 1, k + 2)
+                if _is_real_torch(L):
+                    from torchvision.datasets import CarlaStereo as real
+                    loaded = real(root)
+                else:
+                    loaded = _vision_datasets(L).CarlaStereo(root)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def eth3d_stereo(split):
+        """`ETH3DStereo`. **The pictures and the ground truth live in different
+        directories**, zipped by position because the scene names match.
+
+        Its mask is a PNG read as a boolean — **non-zero is valid**, the opposite of
+        `SintelStereo`'s zero-is-valid, which is why neither is written as the usual
+        way. On `test` there is no ground truth at all and the `None`s are in the
+        answer.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "ETH3D")
+                pictures = "two_view_training" if split == "train" else "two_view_test"
+                for k, scene in enumerate(("s1", "s2")):
+                    _png8(os.path.join(base, pictures, scene, "im0.png"), _rgb(k))
+                    _png8(os.path.join(base, pictures, scene, "im1.png"), _rgb(k + 4))
+                    _pfm(os.path.join(base, "two_view_training_gt", scene,
+                                      "disp0GT.pfm"), 1, k)
+                    _png8(os.path.join(base, "two_view_training_gt", scene,
+                                       "mask0nocc.png"),
+                          np.arange(_H * _W).reshape(_H, _W) % 2 * 255)
+                if _is_real_torch(L):
+                    from torchvision.datasets import ETH3DStereo as real
+                    loaded = real(root, split=split)
+                else:
+                    loaded = _vision_datasets(L).ETH3DStereo(root, split=split)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def scene_flow(variant):
+        """`SceneFlowStereo`. **The three variants differ only in how deep the scene
+        directories nest** — `Monkaa` one level, the other two three — and that is the
+        whole of what `variant` selects. Both are built here, so a glob written for one
+        depth is a count of zero rather than a wrong number."""
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "SceneFlow", variant)
+                middle = ("",) if variant == "Monkaa" else ("TRAIN", "A")
+                for k, scene in enumerate(("a", "b")):
+                    for eye, seed in (("left", k), ("right", k + 3)):
+                        parts = [one for one in middle if one] + [scene, eye]
+                        _png8(os.path.join(base, "frames_cleanpass", *parts, "f1.png"),
+                              _rgb(seed))
+                        _pfm(os.path.join(base, "disparity", *parts, "f1.pfm"), 1, seed)
+                if _is_real_torch(L):
+                    from torchvision.datasets import SceneFlowStereo as real
+                    loaded = real(root, variant=variant)
+                else:
+                    loaded = _vision_datasets(L).SceneFlowStereo(root, variant=variant)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def flying_things(pass_name, camera):
+        """`FlyingThings3D`. Three loops, and **direction is the one that is not a
+        filter**: `into_future` pairs frame `i` with `i + 1` and takes flow `i`, while
+        `into_past` pairs `i + 1` with `i` — the frames swapped, not the list reversed
+        — and takes flow `i + 1`.
+
+        Both directions are always walked, so the count is twice what the frames
+        suggest. The fixture gives the two directions different flow values, so a
+        reader that paired `into_past` the same way agrees on every shape and on no
+        number.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "FlyingThings3D")
+                for scene in ("0000", "0001"):
+                    for eye in ("left", "right"):
+                        for k in range(3):
+                            _png8(os.path.join(base, "frames_cleanpass", "TRAIN", "A",
+                                               scene, eye, f"{k:04d}.png"), _rgb(k))
+                            _png8(os.path.join(base, "frames_finalpass", "TRAIN", "A",
+                                               scene, eye, f"{k:04d}.png"), _rgb(k + 20))
+                            for offset, direction in ((0, "into_future"),
+                                                      (7, "into_past")):
+                                _pfm(os.path.join(base, "optical_flow", "TRAIN", "A",
+                                                  scene, direction, eye,
+                                                  f"{k:04d}.pfm"), 3, k + offset)
+                if _is_real_torch(L):
+                    from torchvision.datasets import FlyingThings3D as real
+                    loaded = real(root, pass_name=pass_name, camera=camera)
+                else:
+                    loaded = _vision_datasets(L).FlyingThings3D(
+                        root, pass_name=pass_name, camera=camera)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def flying_chairs(split):
+        """`FlyingChairs` — **one flat directory and a text file that cuts it in two.**
+
+        The pictures pair by *position* in one sorted list: item `i` is `images[2i]`
+        and `images[2i + 1]`, nothing in the names matched. The split file is one
+        integer per pair, `1` for train and `2` for val; the fixture writes `1 2 1`, so
+        the two splits are different lengths and a reader that ignored the file would
+        give three for both.
+
+        The codec here is **PPM**, which was read before the row that refused this
+        dataset was written.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "FlyingChairs")
+                for i in range(1, 4):
+                    _ppm(os.path.join(base, "data", f"{i:05d}_img1.ppm"), i)
+                    _ppm(os.path.join(base, "data", f"{i:05d}_img2.ppm"), i + 30)
+                    field = (np.arange(_H * _W * 2).reshape(_H, _W, 2) * 0.25
+                             + i).astype("<f4")
+                    with open(os.path.join(base, "data", f"{i:05d}_flow.flo"), "wb") as fh:
+                        fh.write(b"PIEH" + (_W).to_bytes(4, "little")
+                                 + (_H).to_bytes(4, "little") + field.tobytes())
+                with open(os.path.join(base, "FlyingChairs_train_val.txt"), "w") as fh:
+                    fh.write("1\n2\n1\n")
+                if _is_real_torch(L):
+                    from torchvision.datasets import FlyingChairs as real
+                    loaded = real(root, split=split)
+                else:
+                    loaded = _vision_datasets(L).FlyingChairs(root, split=split)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
     cases += [
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
@@ -13609,6 +13815,23 @@ def dataset_last_three_cases(inp=None):
         (prefix + "SintelStereo(disparity packed into a colour)", sintel_stereo("final")),
         # **`both` is final then clean**, in that order — the opposite of `Sintel`'s.
         (prefix + "SintelStereo(both passes)", sintel_stereo("both")),
+        # **`.pfm` is a container too** — the last of the fourteen that read as a wall.
+        (prefix + "CarlaStereo(disparity signed, used positive)", carla_stereo()),
+        (prefix + "ETH3DStereo(mask beside the pfm, non-zero is valid)",
+         eth3d_stereo("train")),
+        (prefix + "ETH3DStereo(test, no ground truth)", eth3d_stereo("test")),
+        # **The variant is a directory depth**, not a filter.
+        (prefix + "SceneFlowStereo(Monkaa, one level)", scene_flow("Monkaa")),
+        (prefix + "SceneFlowStereo(FlyingThings3D, three levels)",
+         scene_flow("FlyingThings3D")),
+        # **into_past swaps the frames and shifts the flow.**
+        (prefix + "FlyingThings3D(clean, left, both directions)",
+         flying_things("clean", "left")),
+        (prefix + "FlyingThings3D(both passes, both cameras)",
+         flying_things("both", "both")),
+        # **Pairs by position, split by a text file.**
+        (prefix + "FlyingChairs(train, pairs by position)", flying_chairs("train")),
+        (prefix + "FlyingChairs(val, the file cuts it)", flying_chairs("val")),
     ]
 
     cases += [
