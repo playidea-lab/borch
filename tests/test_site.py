@@ -898,6 +898,19 @@ def test_a_page_teaching_around_a_missing_name_is_still_missing_it():
     assert not problems, "\n  ".join([""] + problems)
 
 
+# **The stack outgrew one repository.** This check was written when a link to any other
+# repository under this owner meant a stale address — the site carried `browsertorch` for
+# thirty-eight files after the rename, and the links still opened through a redirect, so
+# nobody looked. That reason still holds; what changed is that some of those addresses are
+# now correct. So the siblings are named here, with why the site points at each, and an
+# address that is neither this repository nor one of these still fails.
+SIBLING_REPOSITORIES = {
+    "bimm": "the architecture catalog — timm's seat, where a manifest's `arch` resolves",
+    "borch-hub": "the client that fetches a manifest, checks the hash and loads the model",
+    "borch-hub-registry": "the manifests and the provenance note behind each model",
+}
+
+
 def test_site_links_to_this_repository():
     """The GitHub address the site points at has to be **this repository's**.
 
@@ -922,15 +935,18 @@ def test_site_links_to_this_repository():
     # no reason to match this one. Checking every address caught exactly that notice link.
     owner = here.rsplit("/", 2)[-2]
     linked = re.compile(rf"https://github\.com/{re.escape(owner)}/[\w.-]+")
+    allowed = {here} | {f"https://github.com/{owner}/{r}" for r in SIBLING_REPOSITORIES}
     wrong = []
     for page in _pages():
         for i, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
             for hit in linked.findall(line):
-                if hit.removesuffix(".git") != here:
-                    wrong.append(f"{page.relative_to(ROOT)}:{i}  {hit} — this repository is {here}")
+                if hit.removesuffix(".git") not in allowed:
+                    wrong.append(f"{page.relative_to(ROOT)}:{i}  {hit} — not this repository "
+                                 f"({here}) and not a named sibling")
     assert not wrong, (
-        "the site points at another repository:\n  " + "\n  ".join(wrong[:12]) +
-        (f"\n  … and {len(wrong) - 12} more" if len(wrong) > 12 else ""))
+        "the site points at a repository it has no name for:\n  " + "\n  ".join(wrong[:12]) +
+        (f"\n  … and {len(wrong) - 12} more" if len(wrong) > 12 else "") +
+        "\n  add it to SIBLING_REPOSITORIES with the reason, or fix the address.")
 
 
 def test_share_metadata_is_complete_and_gets_an_address():
