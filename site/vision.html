@@ -51,13 +51,13 @@
     <p class="eyebrow">torchvision's seat</p>
     <h1>Images, boxes and datasets</h1>
     <p class="lead">
-      <strong><span data-count="_vision_total">507</span> of the library's <span data-count="_total">2532</span> names are the vision side.</strong> They are shaped
+      <strong><span data-count="_vision_total">547</span> of the library's <span data-count="_total">2577</span> names are the vision side.</strong> They are shaped
       like <code>torchvision</code> and they are here for one reason: training needs a place
       where an image becomes a tensor, and that place is where things go quietly wrong.
       Every section below names a way it does.
     </p>
 
-    <h2 id="transforms">transforms &mdash; <span data-count="vision">274</span> names</h2>
+    <h2 id="transforms">transforms &mdash; <span data-count="vision">278</span> names</h2>
     <p>
       Where <code>torchvision.transforms</code> would be. <strong>An image is an
       <code>(H, W, C)</code> array here, not a tensor.</strong> torchvision receives a PIL
@@ -87,13 +87,25 @@
       own order, and reading the wrong one gives you a transposed image that still trains.
     </p>
 
-    <h2 id="ops">ops &mdash; <span data-count="ops">17</span> names</h2>
+    <h2 id="ops">ops &mdash; <span data-count="ops">53</span> names</h2>
     <p>
-      Box geometry and the losses built on it: <code>boxIou</code> and its generalized,
-      distance and complete variants, the three IoU losses, <code>sigmoidFocalLoss</code>,
-      <code>nms</code> and <code>batchedNms</code>. What is <em>not</em> here is everything
-      that wants a detector's feature maps or its predictions &mdash; there is no detector in
-      this library yet, and these take nothing but four numbers a box.
+      Two halves. <strong>Box arithmetic</strong> &mdash; <code>boxIou</code> with its
+      generalized, distance and complete variants, the three IoU losses,
+      <code>sigmoidFocalLoss</code>, <code>nms</code> and <code>batchedNms</code>. And
+      <strong>the geometry of v2's transforms applied to everything that is not the
+      image</strong>: flip, crop, pad, resize, affine, rotate, perspective and elastic, each
+      written again for <code>BoundingBoxes</code>, <code>Mask</code> and
+      <code>Keypoints</code>.
+    </p>
+    <p>
+      That second half is the point of v2. <strong>A transform that moves the picture has to
+      move the boxes drawn on it</strong>, and a crop that forgets its annotations leaves a
+      dataset that trains on labels pointing at the wrong pixels &mdash; the same quiet
+      failure the decoders have, one layer up.
+    </p>
+    <p>
+      What is <em>not</em> here is everything that wants a detector's feature maps or its
+      predictions. There is no detector in this library yet.
     </p>
     <p>
       <strong>The arithmetic happens on the CPU, on purpose.</strong> Boxes come in tens, not

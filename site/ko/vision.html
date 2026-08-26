@@ -51,12 +51,12 @@
     <p class="eyebrow">torchvision 의 자리</p>
     <h1>이미지, 박스, 데이터셋</h1>
     <p class="lead">
-      <strong>라이브러리의 이름 <span data-count="_total">2532</span>개 중 <span data-count="_vision_total">507</span>개가 비전 쪽이다.</strong> <code>torchvision</code>
+      <strong>라이브러리의 이름 <span data-count="_total">2577</span>개 중 <span data-count="_vision_total">547</span>개가 비전 쪽이다.</strong> <code>torchvision</code>
       모양을 하고 있고, 여기 있는 이유는 하나다 — 학습에는 이미지가 텐서가 되는 자리가 필요하고,
       그 자리가 바로 조용히 틀어지는 곳이다. 아래 각 절이 틀어지는 방식을 하나씩 이름 붙인다.
     </p>
 
-    <h2 id="transforms">transforms &mdash; 이름 <span data-count="vision">274</span>개</h2>
+    <h2 id="transforms">transforms &mdash; 이름 <span data-count="vision">278</span>개</h2>
     <p>
       <code>torchvision.transforms</code> 자리. <strong>여기서 이미지는 텐서가 아니라
       <code>(H, W, C)</code> 배열이다.</strong> torchvision 은 PIL 이미지를 받는데 브라우저에는
@@ -85,13 +85,24 @@
       나오는데 그것도 학습은 된다.</strong>
     </p>
 
-    <h2 id="ops">ops &mdash; 이름 <span data-count="ops">17</span>개</h2>
+    <h2 id="ops">ops &mdash; 이름 <span data-count="ops">53</span>개</h2>
     <p>
-      박스 기하와 그 위에 세운 손실들 — <code>boxIou</code> 와 generalized·distance·complete
-      변종, IoU 손실 셋, <code>sigmoidFocalLoss</code>, <code>nms</code>·<code>batchedNms</code>.
-      <em>없는</em> 것은 탐지기의 특징맵이나 예측을 필요로 하는 전부다. 이 라이브러리에는 아직
-      탐지기가 없고, 여기 있는 것들은 <strong>박스 하나에 숫자 넷</strong> 말고는 아무것도
-      필요로 하지 않는다.
+      절반씩이다. <strong>박스 산술</strong> — <code>boxIou</code> 와
+      generalized·distance·complete 변종, IoU 손실 셋, <code>sigmoidFocalLoss</code>,
+      <code>nms</code>·<code>batchedNms</code>. 그리고 <strong>v2 변환의 기하를 이미지가 아닌
+      것들에 적용한 쪽</strong> — flip·crop·pad·resize·affine·rotate·perspective·elastic 이
+      <code>BoundingBoxes</code>·<code>Mask</code>·<code>Keypoints</code> 각각에 대해 다시
+      쓰여 있다.
+    </p>
+    <p>
+      그 두 번째 절반이 v2 의 요점이다. <strong>그림을 움직이는 변환은 그 위에 그려진 박스도
+      움직여야 한다.</strong> 주석을 잊은 crop 은 <strong>엉뚱한 픽셀을 가리키는 라벨로
+      학습되는</strong> 데이터셋을 남긴다 — 디코더들이 내는 그 조용한 실패가 한 층 위에서
+      똑같이 나는 것이다.
+    </p>
+    <p>
+      <em>없는</em> 것은 탐지기의 특징맵이나 예측을 필요로 하는 전부다. 이 라이브러리에는
+      아직 탐지기가 없다.
     </p>
     <p>
       <strong>산술은 일부러 CPU 에서 한다.</strong> 박스는 수백만이 아니라 수십 개 단위로 오고,
