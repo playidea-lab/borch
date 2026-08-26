@@ -1,0 +1,133 @@
+<!doctype html>
+<!--
+  허브 — 주장하는 페이지가 아니라 받아오는 페이지.
+
+  **No model list is written here.** The table is built from
+  https://models.pilab.kr/index.json at load time, and the button downloads a real model
+  and verifies it against the sample the manifest names. A hand-written list is the exact
+  failure this repository spent a day on: it keeps looking right after it stops being.
+
+  The Korean edition is `ko/models.html`; both are edited together.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>모델 — borch</title>
+<meta name="description" content="borch 런타임이 브라우저 탭으로 바로 싣는 사전학습 모델 — 목차, 그리고 하나를 받아 샘플과 대조하는 버튼.">
+<link rel="alternate" hreflang="en" href="../models.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="모델 — borch">
+<meta property="og:description" content="브라우저 탭으로 실리는 사전학습 모델. 해시와 샘플을 눈앞에서 대조한다.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/models.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "../../borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.6.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.2.3?external=borch-ts,bimm-ts"
+} }
+</script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">배우기</a>
+      <a href="tutorials/">튜토리얼</a>
+      <a href="models.html" class="on" aria-current="page">모델</a>
+      <a href="vision.html">비전</a>
+      <a href="api/">API</a>
+      <a href="python.html">파이썬</a>
+      <a href="setup.html">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../models.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">허브</p>
+    <h1>이 탭에서 돌릴 수 있는 모델</h1>
+    <p class="lead">
+      가중치, 그것이 무엇인지 말하는 매니페스트, 그리고 모델이 재현해내야 하는 샘플.
+      <strong>아래 어느 것도 스크린샷이 아니다.</strong> 목록은 이 페이지가 열릴 때
+      목차에서 받아 온 것이고, 버튼은 진짜 모델을 당신 브라우저로 내려받아 검사한다.
+    </p>
+
+    <h2>여기서 하나 검증해 보기</h2>
+    <p>
+      전 과정을 돈다 — <strong>브라우저가 무엇을 할 수 있는지 묻고 → 매니페스트를 받고 →
+      가중치를 내려받고 → 해시를 대조하고 → 아키텍처를 세우고 → 샘플 입력을 통과시키고 →
+      샘플 출력과 비교한다.</strong> 순서가 요점이다. 환경 판정이 마지막이면 10MB 를 받은
+      뒤에 안 된다고 말하게 되고, 해시를 싣고 나서 보면 틀린 바이트가 이미 메모리에 있다.
+    </p>
+    <p>
+      <button id="go" class="run">받아서 검증하기</button>
+      <span id="badge" class="small"></span>
+    </p>
+    <pre id="out" class="small" style="overflow-x:auto">대기</pre>
+    <p class="small">
+      진짜로 내려받는다. 목차에서 가장 작은 모델을 고르므로 10메가바이트 정도 든다.
+    </p>
+
+    <h2>목차</h2>
+    <p>
+      두 종류가 산다. 그 차이를 읽을 값어치가 있다.
+      <strong><code>trained-by-borch</code></strong> 는 그 가중치가 <strong>이 라이브러리로,
+      브라우저에서</strong> 만들어졌다는 뜻이다.
+      <strong><code>converted-from-torch</code></strong> 는 남이 학습한 것을 옮겨 왔다는
+      뜻이고, <a href="https://github.com/playidea-lab/borch-hub-registry">레지스트리</a>가
+      그것이 누구 것이었는지 적은 출처 문서를 하나씩 들고 있다.
+    </p>
+    <div style="overflow-x:auto"><table id="cat">
+      <thead><tr>
+        <th>모델</th><th>과제</th><th>학습 데이터</th><th>크기</th>
+        <th>출처</th><th>라이선스</th>
+      </tr></thead>
+      <tbody><tr><td colspan="6" class="small">목차 받는 중…</td></tr></tbody>
+    </table></div>
+    <p class="small">
+      <strong>라이선스는 하나가 아니라 둘이다.</strong> 가중치가 자기 것을 달고, 그것이
+      학습된 데이터가 또 자기 것을 단다. 둘이 같은 문장인 경우는 드물다 — Apache-2.0
+      가중치라고 해서 ImageNet 의 조건이 사라지지 않는다.
+    </p>
+
+    <h2>당신 페이지에서</h2>
+    <pre class="small" style="overflow-x:auto"><code>import { init } from "borch-ts";
+import { load, verify } from "borch-hub";
+
+await init();
+const { model, manifest } = await load(MANIFEST_URL);
+const badge = await verify(model, manifest, MANIFEST_URL);</code></pre>
+    <p>
+      <code>load</code> 는 <code>fetch</code> 를 받는다. 비공개 모델·조직 계정·서명 URL 이
+      전부 그 훅 하나를 탄다. 목차 자체도 문서 하나다 —
+      <a href="https://models.pilab.kr/index.json">index.json</a> — 그리고 이 페이지는
+      자기 목록을 갖고 있지 않다. 저것을 읽는다.
+    </p>
+
+    <h2>이것이 아닌 것</h2>
+    <p>
+      torchvision 쪽에 대응하는 이름이 없다. <code>torch.hub</code> 가 가장 가깝지만 그쪽은
+      저장소에서 모델을 불러오는 일이고 자기 카탈로그가 없다. 여기 있는 셋 —
+      <strong>발행된 매니페스트, 싣기 전의 해시 대조, 받기 전의 환경 판정</strong> — 은
+      timm 에도 <code>torch.hub</code> 에도 없다. 아키텍처는
+      <a href="https://github.com/playidea-lab/bimm">bimm</a> 에서 오고, 그것이 timm 의
+      자리다. <strong>허브는 카탈로그를 알고, 카탈로그는 허브를 모른다.</strong>
+    </p>
+  </main>
+</div>
+<script type="module" src="../assets/models.js"></script>
+
+</body>
+</html>
