@@ -6519,6 +6519,332 @@ class PhotoTour(VisionDataset):
         return one, two, same
 
 
+
+class Country211(ImageFolder):
+    """CLIP's country set — **the label is which country the photograph was taken in.**
+
+    <https://github.com/openai/CLIP/blob/main/data/country211.md>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*, inherited from a sentence about JPEG. The
+    pictures **are** JPEG — fetched and checked, the first bytes of `country211.tgz`
+    are `ff d8` — and that is still not what this class does. It is `ImageFolder`
+    pointed at one of three directories, which is the same shape `ImageFolder` itself
+    was let in for: the walk is here, the codec is in the loader, and `loader=` is
+    torchvision's own parameter rather than an escape hatch invented here.
+
+    So this loads on a tree of PNG. **On the real one it stops before the codec** and
+    says so differently from the rest of this file: `ImageFolder` filters by
+    `IMG_EXTENSIONS` before any loader runs, so a directory of `.jpg` is *no valid
+    file for the classes …, supported extensions are …* rather than *that is JPEG*.
+    Both name what is read here; the first names it earlier.
+    """
+
+    _SPLITS = ("train", "valid", "test")
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False, loader=None):
+        if split not in self._SPLITS:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, valid, test}.")
+        if download:
+            raise ValueError(
+                "Country211(download=True) is not implemented here.\n"
+                "  It is one 2.6GB archive; the reader above takes the extracted tree.")
+        self._split = split
+        base = _os.path.join(_os.path.expanduser(root), "country211")
+        if not _os.path.isdir(base):
+            raise RuntimeError(
+                "Dataset not found. You can use download=True to download it")
+        super().__init__(_os.path.join(base, split), transform=transform,
+                         target_transform=target_transform,
+                         loader=_folder_loader if loader is None else loader)
+        self.root = _os.path.expanduser(root)
+
+
+class EuroSAT(ImageFolder):
+    """Sentinel-2 land-cover patches, **RGB version.**
+
+    <https://github.com/phelber/eurosat>
+
+    As `Country211`: `ImageFolder` pointed at `eurosat/2750`, with ten class
+    directories. The multispectral version is a different dataset and not this one.
+    """
+
+    def __init__(self, root, transform=None, target_transform=None, download=False,
+                 loader=None):
+        if download:
+            raise ValueError(
+                "EuroSAT(download=True) is not implemented here.\n"
+                "  The reader above takes the extracted tree.")
+        base = _os.path.expanduser(root)
+        self._base_folder = _os.path.join(base, "eurosat")
+        self._data_folder = _os.path.join(self._base_folder, "2750")
+        if not _os.path.exists(self._data_folder):
+            raise RuntimeError(
+                "Dataset not found. You can use download=True to download it")
+        super().__init__(self._data_folder, transform=transform,
+                         target_transform=target_transform,
+                         loader=_folder_loader if loader is None else loader)
+        self.root = base
+
+
+class DTD(VisionDataset):
+    """Describable Textures — **forty-seven words for what a surface looks like.**
+
+    <https://www.robots.ox.ac.uk/~vgg/data/dtd/>
+
+    ## The partition is not a split
+
+    `split` chooses train, val or test; `partition` chooses **which of ten shufflings**
+    of the same images that split refers to. Combining all three splits gives every
+    image whichever partition is asked for, which is what makes the argument safe to
+    get wrong: a reader that ignored it returns a dataset of the right size, drawn
+    from the right pictures, and cross-validating on it measures nothing.
+
+    The classes come from the **split file's own paths**, so they are the classes
+    present in that file rather than the forty-seven on disk.
+    """
+
+    _SPLITS = ("train", "val", "test")
+    _PARTITIONS = 10
+
+    def __init__(self, root, split="train", partition=1, transform=None,
+                 target_transform=None, download=False, loader=None):
+        if split not in self._SPLITS:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, val, test}.")
+        if not isinstance(partition, int) or not 1 <= partition <= self._PARTITIONS:
+            raise ValueError(
+                "Parameter 'partition' should be an integer with `1 <= partition <= "
+                f"10`, but got {partition} instead")
+        if download:
+            raise ValueError(
+                "DTD(download=True) is not implemented here.\n"
+                "  The reader above takes the extracted tree.")
+        self._split = split
+        self._partition = partition
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self._base_folder = _os.path.join(self.root, type(self).__name__.lower())
+        self._data_folder = _os.path.join(self._base_folder, "dtd")
+        self._meta_folder = _os.path.join(self._data_folder, "labels")
+        self._images_folder = _os.path.join(self._data_folder, "images")
+        if not _os.path.isdir(self._data_folder):
+            raise RuntimeError(
+                "Dataset not found. You can use download=True to download it")
+        self.loader = _folder_loader if loader is None else loader
+        self._image_files = []
+        classes = []
+        with open(_os.path.join(self._meta_folder,
+                                f"{split}{partition}.txt")) as handle:
+            for line in handle:
+                folder, name = line.strip().split("/")
+                self._image_files.append(
+                    _os.path.join(self._images_folder, folder, name))
+                classes.append(folder)
+        self.classes = sorted(set(classes))
+        self.class_to_idx = dict(zip(self.classes, range(len(self.classes))))
+        self._labels = [self.class_to_idx[one] for one in classes]
+
+    def __len__(self):
+        return len(self._image_files)
+
+    def __getitem__(self, index):
+        image = self.loader(self._image_files[index])
+        label = self._labels[index]
+        if self.transform:
+            image = self.transform(image)
+        if self.target_transform:
+            label = self.target_transform(label)
+        return image, label
+
+    def extra_repr(self):
+        return f"split={self._split}, partition={self._partition}"
+
+
+class Food101(VisionDataset):
+    """A hundred and one dishes, **and the training half was never cleaned.**
+
+    <https://data.vision.ee.ethz.ch/cvl/datasets_extra/food-101/>
+
+    The split is a JSON of class name to a list of relative paths, and **the order of
+    the items is the order of that file** rather than sorted. The classes are sorted
+    and the labels index into them, so a reader that took the JSON's key order for the
+    class list would give every label a different number and nothing would look wrong.
+    """
+
+    _SPLITS = ("train", "test")
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False, loader=None):
+        if split not in self._SPLITS:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, test}.")
+        if download:
+            raise ValueError(
+                "Food101(download=True) is not implemented here.\n"
+                "  It is a 5GB archive; the reader above takes the extracted tree.")
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self._split = split
+        self._base_folder = _os.path.join(self.root, "food-101")
+        self._meta_folder = _os.path.join(self._base_folder, "meta")
+        self._images_folder = _os.path.join(self._base_folder, "images")
+        if not all(_os.path.isdir(one) for one in
+                   (self._meta_folder, self._images_folder)):
+            raise RuntimeError(
+                "Dataset not found. You can use download=True to download it")
+        self.loader = _folder_loader if loader is None else loader
+        with open(_os.path.join(self._meta_folder, f"{split}.json")) as handle:
+            metadata = _json.loads(handle.read())
+        self.classes = sorted(metadata.keys())
+        self.class_to_idx = dict(zip(self.classes, range(len(self.classes))))
+        self._labels = []
+        self._image_files = []
+        for name, relative in metadata.items():
+            self._labels += [self.class_to_idx[name]] * len(relative)
+            self._image_files += [
+                _os.path.join(self._images_folder, *f"{one}.jpg".split("/"))
+                for one in relative]
+
+    def __len__(self):
+        return len(self._image_files)
+
+    def __getitem__(self, index):
+        image = self.loader(self._image_files[index])
+        label = self._labels[index]
+        if self.transform:
+            image = self.transform(image)
+        if self.target_transform:
+            label = self.target_transform(label)
+        return image, label
+
+    def extra_repr(self):
+        return f"split={self._split}"
+
+
+class SUN397(VisionDataset):
+    """Scene UNderstanding — **three hundred and ninety-seven kinds of place.**
+
+    <https://vision.princeton.edu/projects/2010/SUN/>
+
+    Two things here are easy to write differently and hard to see:
+
+    - **The class name has its first three characters cut off.** `ClassName.txt` reads
+      `/a/abbey`, and the class is `abbey`; keeping the prefix gives 397 classes with
+      the right count and the wrong names.
+    - **The label comes from the path, minus its first part.** A scene at
+      `a/abbey/sun_x.jpg` is `abbey`, and one at `a/apartment_building/outdoor/...`
+      is `apartment_building/outdoor` — the letter directory is dropped and everything
+      after it is kept, so a reader taking the parent directory alone maps every
+      nested scene to its last component.
+    """
+
+    def __init__(self, root, transform=None, target_transform=None, download=False,
+                 loader=None):
+        if download:
+            raise ValueError(
+                "SUN397(download=True) is not implemented here.\n"
+                "  It is a 37GB archive; the reader above takes the extracted tree.")
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self._data_dir = _os.path.join(self.root, "SUN397")
+        if not _os.path.exists(_os.path.join(self._data_dir, "ClassName.txt")):
+            raise RuntimeError(
+                "Dataset not found. You can use download=True to download it")
+        self.loader = _folder_loader if loader is None else loader
+        with open(_os.path.join(self._data_dir, "ClassName.txt")) as handle:
+            self.classes = [line[3:].strip() for line in handle]
+        self.class_to_idx = dict(zip(self.classes, range(len(self.classes))))
+        self._image_files = []
+        for folder, _folders, names in _os.walk(self._data_dir):
+            for name in names:
+                if name.startswith("sun_") and name.endswith(".jpg"):
+                    self._image_files.append(_os.path.join(folder, name))
+        self._labels = [
+            self.class_to_idx["/".join(
+                _os.path.relpath(one, self._data_dir).split(_os.sep)[1:-1])]
+            for one in self._image_files]
+
+    def __len__(self):
+        return len(self._image_files)
+
+    def __getitem__(self, index):
+        image = self.loader(self._image_files[index])
+        label = self._labels[index]
+        if self.transform:
+            image = self.transform(image)
+        if self.target_transform:
+            label = self.target_transform(label)
+        return image, label
+
+
+class FGVCAircraft(VisionDataset):
+    """Aircraft, **labelled at three heights at once.**
+
+    <https://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/>
+
+    `annotation_level` picks `variant`, `family` or `manufacturer`, and it chooses
+    **two files together** — the class list and the label file — so the labels always
+    index into the list they were written against. Mixing one level's classes with
+    another's labels is a `KeyError` here rather than a silently shifted target, which
+    is why the two lookups are built from the same argument.
+
+    Each label line is `name` then the rest of the line: **the class name contains
+    spaces**, so it splits once and not on every space. `Boeing 737-700` is one class.
+    """
+
+    _SPLITS = ("train", "val", "trainval", "test")
+    _LEVELS = {"variant": "variants.txt", "family": "families.txt",
+               "manufacturer": "manufacturers.txt"}
+
+    def __init__(self, root, split="trainval", annotation_level="variant",
+                 transform=None, target_transform=None, download=False, loader=None):
+        if split not in self._SPLITS:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             "values are {train, val, trainval, test}.")
+        if annotation_level not in self._LEVELS:
+            raise ValueError(
+                f"Unknown value '{annotation_level}' for argument annotation_level. "
+                "Valid values are {variant, family, manufacturer}.")
+        if download:
+            raise ValueError(
+                "FGVCAircraft(download=True) is not implemented here.\n"
+                "  The reader above takes the extracted tree.")
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self._split = split
+        self._annotation_level = annotation_level
+        self._data_path = _os.path.join(self.root, "fgvc-aircraft-2013b")
+        if not _os.path.isdir(self._data_path):
+            raise RuntimeError(
+                "Dataset not found. You can use download=True to download it")
+        self.loader = _folder_loader if loader is None else loader
+        data = _os.path.join(self._data_path, "data")
+        with open(_os.path.join(data, self._LEVELS[annotation_level])) as handle:
+            self.classes = [line.strip() for line in handle]
+        self.class_to_idx = dict(zip(self.classes, range(len(self.classes))))
+        self._image_files = []
+        self._labels = []
+        with open(_os.path.join(
+                data, f"images_{annotation_level}_{split}.txt")) as handle:
+            for line in handle:
+                name, label = line.strip().split(" ", 1)
+                self._image_files.append(
+                    _os.path.join(data, "images", f"{name}.jpg"))
+                self._labels.append(self.class_to_idx[label])
+
+    def __len__(self):
+        return len(self._image_files)
+
+    def __getitem__(self, index):
+        image = self.loader(self._image_files[index])
+        label = self._labels[index]
+        if self.transform:
+            image = self.transform(image)
+        if self.target_transform:
+            label = self.target_transform(label)
+        return image, label
+
+
 class CLEVRClassification(VisionDataset):
     """CLEVR, **counted**: the label is how many objects are in the scene.
 
@@ -7026,6 +7352,7 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "Kitti2012Stereo", "Kitti2015Stereo", "InStereo2k", "SintelStereo",
               "CarlaStereo", "ETH3DStereo", "SceneFlowStereo", "FlyingThings3D",
               "Middlebury2014Stereo", "Kitti", "PhotoTour",
+              "Country211", "EuroSAT", "DTD", "Food101", "SUN397", "FGVCAircraft",
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])

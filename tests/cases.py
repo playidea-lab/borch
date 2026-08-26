@@ -13980,6 +13980,168 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(out))
         return run
 
+    def _pic(path, seed, suffix=".png"):
+        """**A picture named `.jpg` whose bytes are PNG.**
+
+        Not a trick — it is the difference these six turn on. `Food101`, `SUN397` and
+        `FGVCAircraft` build their paths by appending `.jpg`, so the name has to be
+        that; both libraries then dispatch on the first bytes, torchvision through PIL
+        and this one through `_folder_loader`. The two `ImageFolder` subclasses filter
+        by extension *before* any loader runs, which is why their fixture files are
+        named `.png` and why that difference is written into their classes.
+        """
+        import os
+        from PIL import Image as _PIL
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _PIL.fromarray(_rgb(seed).astype(np.uint8)).save(path, format="PNG")
+
+    def _labelled_out(loaded):
+        """Count, class list length, then every (picture, label) — with the labels
+        kept as numbers so a class list built in a different order shows up."""
+        parts = [np.asarray([len(loaded), len(loaded.classes)], dtype=np.float32)]
+        for i in range(len(loaded)):
+            picture, label = loaded[i]
+            parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+            parts.append(np.asarray([float(label)], dtype=np.float32))
+        return np.concatenate(parts)
+
+    def _folder_case(build, make):
+        def run(L):
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                build(root)
+                loaded = make(L, root)
+                out = _labelled_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def _made(L, name):
+        if _is_real_torch(L):
+            import torchvision.datasets as real
+            return getattr(real, name)
+        return getattr(_vision_datasets(L), name)
+
+    def country211(split):
+        """`Country211`. **`ImageFolder` pointed at one of three directories** — which
+        is the shape `ImageFolder` itself was let in for, and torchvision's own
+        `loader=` parameter says so. The three splits hold the same countries, so a
+        reader that took the wrong one gives the right classes and the wrong pictures.
+        """
+        import os
+        def build(root):
+            # **The three splits get different pictures**, and by index rather than by
+            # `len(name)` — `train` and `valid` are both five letters, so the first
+            # version of this fixture gave them identical bytes and a reader that
+            # ignored `split` passed. Measured by mutation, not noticed by reading.
+            for turn, name in enumerate(("train", "valid", "test")):
+                for k, country in enumerate(("AD", "ZW")):
+                    _pic(os.path.join(root, "country211", name, country,
+                                      f"{k}.png"), k + turn * 17)
+        return _folder_case(build, lambda L, root: _made(L, "Country211")(
+            root, split=split))
+
+    def eurosat():
+        """`EuroSAT`, RGB version — `ImageFolder` at `eurosat/2750`. The multispectral
+        release is a different dataset and this is not it."""
+        import os
+        def build(root):
+            for k, kind in enumerate(("Forest", "River")):
+                for i in range(2):
+                    _pic(os.path.join(root, "eurosat", "2750", kind,
+                                      f"{kind}_{i}.png"), k * 3 + i)
+        return _folder_case(build, lambda L, root: _made(L, "EuroSAT")(root))
+
+    def dtd(split, partition):
+        """`DTD`. **The partition is not a split**: it chooses which of ten shufflings
+        of the same images `split` refers to. The fixture's partition 2 is partition 1
+        reversed, so a reader that ignored the argument returns a dataset of the right
+        size drawn from the right pictures — and cross-validating on it measures
+        nothing. The classes come from the split file's own paths.
+        """
+        import os
+        def build(root):
+            base = os.path.join(root, "dtd", "dtd")
+            for k, cls in enumerate(("banded", "zigzagged")):
+                for i in range(2):
+                    _pic(os.path.join(base, "images", cls, f"{cls}_{i}.jpg"),
+                         k * 5 + i)
+            os.makedirs(os.path.join(base, "labels"), exist_ok=True)
+            listings = {"train": ["banded/banded_0", "zigzagged/zigzagged_1"],
+                        "val": ["banded/banded_1"],
+                        "test": ["zigzagged/zigzagged_0"]}
+            for part in (1, 2):
+                for name, lines in listings.items():
+                    if part == 2:
+                        lines = list(reversed(lines))
+                    with open(os.path.join(base, "labels",
+                                           f"{name}{part}.txt"), "w") as fh:
+                        fh.write("\n".join(f"{one}.jpg" for one in lines) + "\n")
+        return _folder_case(build, lambda L, root: _made(L, "DTD")(
+            root, split=split, partition=partition))
+
+    def food101(split):
+        """`Food101`. The split is a JSON of class to relative paths, and **the items
+        keep that file's order while the classes are sorted.** The fixture's JSON is
+        written with `waffles` before `apple_pie`, so a reader that took the key order
+        for the class list gives every label a different number and nothing looks
+        wrong."""
+        import json
+        import os
+        def build(root):
+            base = os.path.join(root, "food-101")
+            meta = {"waffles": ["waffles/1", "waffles/2"], "apple_pie": ["apple_pie/3"]}
+            os.makedirs(os.path.join(base, "meta"), exist_ok=True)
+            for name in ("train", "test"):
+                with open(os.path.join(base, "meta", f"{name}.json"), "w") as fh:
+                    json.dump(meta, fh)
+            for paths in meta.values():
+                for one in paths:
+                    _pic(os.path.join(base, "images", *f"{one}.jpg".split("/")),
+                         len(one))
+        return _folder_case(build, lambda L, root: _made(L, "Food101")(
+            root, split=split))
+
+    def fgvc(level):
+        """`FGVCAircraft`. `annotation_level` chooses **two files together** — the
+        class list and the label file — so the labels always index into the list they
+        were written against.
+
+        Each label line is a name and then the rest of the line: **the class name
+        contains spaces.** The fixture's `Boeing 737-700` is one class, and a reader
+        that split on every space raises rather than mislabelling, which is the good
+        kind of wrong.
+        """
+        import os
+        def build(root):
+            data = os.path.join(root, "fgvc-aircraft-2013b", "data")
+            os.makedirs(data, exist_ok=True)
+            written = {"variants.txt": ["Boeing 737-700", "A340-300"],
+                       "families.txt": ["Boeing 737", "A340"],
+                       "manufacturers.txt": ["Boeing", "Airbus"]}
+            for name, lines in written.items():
+                with open(os.path.join(data, name), "w") as fh:
+                    fh.write("\n".join(lines) + "\n")
+            # **The levels do not agree on which picture is class 0.** `manufacturer`
+            # is written the other way round, so a reader that took one level's labels
+            # for another's gets different numbers. Without this the three levels
+            # produced the same `[0, 1]` and the argument could be ignored — a
+            # mutation caught it, reading did not.
+            for name, lines in (("variant", written["variants.txt"]),
+                                ("family", written["families.txt"]),
+                                ("manufacturer", written["manufacturers.txt"][::-1])):
+                for one in ("train", "val", "trainval", "test"):
+                    with open(os.path.join(
+                            data, f"images_{name}_{one}.txt"), "w") as fh:
+                        fh.write(f"0000001 {lines[0]}\n0000002 {lines[1]}\n")
+            for i in (1, 2):
+                _pic(os.path.join(data, "images", f"{i:07d}.jpg"), i)
+        return _folder_case(build, lambda L, root: _made(L, "FGVCAircraft")(
+            root, annotation_level=level))
+
     cases += [
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
@@ -14026,6 +14188,19 @@ def dataset_last_three_cases(inp=None):
         # **BMP sheets cut into a grid**, row-major, sheets sorted.
         (prefix + "PhotoTour(train, one patch)", photo_tour(True)),
         (prefix + "PhotoTour(test, two patches and the answer)", photo_tour(False)),
+        # **A walk plus a loader** — the shape `ImageFolder` was let in for, and
+        # torchvision's own `loader=` says so about each of these.
+        (prefix + "Country211(train)", country211("train")),
+        (prefix + "Country211(valid, the same countries)", country211("valid")),
+        (prefix + "EuroSAT(ten covers, RGB version)", eurosat()),
+        # **partition 2 is partition 1 reversed**, so ignoring it still returns a set.
+        (prefix + "DTD(train, partition 1)", dtd("train", 1)),
+        (prefix + "DTD(train, partition 2)", dtd("train", 2)),
+        # **The JSON's order is the items' and the classes are sorted.**
+        (prefix + "Food101(train, sorted classes over a JSON order)", food101("train")),
+        # **The level chooses two files at once**, and a class name has a space in it.
+        (prefix + "FGVCAircraft(variant)", fgvc("variant")),
+        (prefix + "FGVCAircraft(manufacturer)", fgvc("manufacturer")),
     ]
 
     cases += [
