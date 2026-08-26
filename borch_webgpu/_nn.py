@@ -954,7 +954,12 @@ class Module:
         Where there is no `describe` over there, only the class name comes back.
         """
         if self._m is None:
-            return f"{type(self).__name__}()"
+            # **Written here, because there is no layer over there to ask.** These
+            # are the ones this file computes in Python — they hold their own
+            # parameters — so `describe` has nothing to answer with, and the rules
+            # come from the core's single table rather than a second wording.
+            extra = getattr(self, "extra_repr", None)
+            return f"{type(self).__name__}({extra() if extra else ''})"
         fn = getattr(self._m, "describe", None)
         return str(fn()) if fn is not None else f"{type(self).__name__}()"
 
@@ -1961,19 +1966,32 @@ for _dims in (1, 2, 3):
         globals()[_pad_name] = _pad_layer(_pad_name)
 
 
-def _batchnorm(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True, *,
-               bias=True):
+def _batchnorm(name):
     """torch's list. `affine` and `bias` are the two halves of the same idea —
     `affine=False` is no learnable scale or shift at all, `bias=False` keeps the
     scale and drops the shift. Neither crossed before, so a checkpoint from a torch
-    layer built either way could not be read here in strict mode."""
-    if not track_running_stats:
-        from borch._base import _unsupported
-        _unsupported("BatchNorm with track_running_stats=False")
-    return _layer("BatchNormND", n, eps, momentum, bool(affine), True, bool(bias))
+    layer built either way could not be read here in strict mode.
+
+    **The per-dimension name is borch.ts's now.** All three stood up `BatchNormND`,
+    which is what `describe` printed — five golden cases said `BatchNormND(4, …)`
+    where torch says `BatchNorm2d(4, …)`. The reason written on `_layer` for keeping
+    one name, *borch.ts has no per-dimension names*, was true and stopped being true:
+    `BatchNorm1d`, `2d` and `3d` are empty subclasses over there and `describe` reads
+    `this.constructor.name`, so standing the right one up is the whole fix.
+    """
+    def make(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True, *,
+             bias=True):
+        if not track_running_stats:
+            from borch._base import _unsupported
+            _unsupported("BatchNorm with track_running_stats=False")
+        return _layer(name, n, eps, momentum, bool(affine), True, bool(bias))
+    make.__name__ = name
+    return make
 
 
-BatchNorm1d = BatchNorm2d = BatchNorm3d = _batchnorm
+BatchNorm1d = _batchnorm("BatchNorm1d")
+BatchNorm2d = _batchnorm("BatchNorm2d")
+BatchNorm3d = _batchnorm("BatchNorm3d")
 
 
 def _maybe_in_place(layer, inplace):
@@ -1991,19 +2009,43 @@ def ReLU(inplace=False):
     return _maybe_in_place(_layer("ReLU"), inplace)
 
 
-def _max_pool_layer(js_name):
-    """With `return_indices` on there are two answers — the values and where
-    each one won."""
-    def make(k=2, stride=None, return_indices=False):
+def _max_pool_layer(name, wide=False):
+    """**It stands borch.ts's layer up rather than wrapping the tensor method.**
+
+    The same move `AvgPool1d` below records, and the same reason: wrapping the method
+    reaches a function that takes a kernel and a stride and nothing else, so torch's
+    other four arguments have no seat and a `_Wrap` has no name to print. Four golden
+    cases came back `<borch_webgpu._nn._Wrap object at …>` where torch prints
+    `MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)`.
+
+    **Only the two-dimensional one has the other four seats over there**, and it
+    refuses `padding`, `dilation` and `ceil_mode` rather than ignoring them. So the
+    refusal now arrives where torch would have done the work, instead of the argument
+    being dropped on the way.
+
+    `return_indices` keeps the Python path: it hands back a pair, and the layer that
+    consumes those positions reads them from here.
+    """
+    def make(kernel_size=2, stride=None, padding=0, dilation=1,
+             return_indices=False, ceil_mode=False):
         if return_indices:
-            return _Wrap(lambda x: _pool_with_indices(x, k, stride))
-        return _Wrap(lambda x: wrap(getattr(handle(x), js_name)(k, stride)))
+            return _Wrap(lambda x: _pool_with_indices(x, kernel_size, stride))
+        if wide:
+            return _layer(name, kernel_size, stride, padding, dilation, False,
+                          ceil_mode)
+        for what, asked in (("padding", padding != 0), ("dilation", dilation != 1),
+                            ("ceil_mode", ceil_mode)):
+            if asked:
+                from borch._base import _unsupported
+                _unsupported(f"{name}({what}=…)")
+        return _layer(name, kernel_size, stride)
+    make.__name__ = name
     return make
 
 
-MaxPool1d = _max_pool_layer("maxPool1d")
-MaxPool2d = _max_pool_layer("maxPool2d")
-MaxPool3d = _max_pool_layer("maxPool3d")
+MaxPool1d = _max_pool_layer("MaxPool1d")
+MaxPool2d = _max_pool_layer("MaxPool2d", wide=True)
+MaxPool3d = _max_pool_layer("MaxPool3d")
 
 
 def _spread(v, n):
@@ -2117,12 +2159,33 @@ def _pool_layer(kind, adaptive):
     return make
 
 
+def _adaptive_layer(name, indices):
+    """The adaptive poolings borch.ts has as layers. As `_max_pool_layer` above.
+
+    **`AdaptiveAvgPool2d` is not among them** and stays on the wrapped method — the
+    average side over there has the 1-D and 3-D names and not the 2-D one, which is
+    the row `borch-ts/test/run.py` already carries as declined.
+    """
+    def make(output_size, return_indices=False):
+        # **The pair keeps the Python path**, as `_max_pool_layer` above. borch.ts's
+        # layer hands back `{values, indices}` and `Module.__call__` wraps that as one
+        # tensor, so `pool(x)[1]` indexed the values — a case that had been passing
+        # said `index 1 is out of bounds` the moment this was repointed.
+        if indices and return_indices:
+            n = (output_size[0] if isinstance(output_size, (list, tuple))
+                 else output_size)
+            return _Wrap(lambda x: _pool_with_indices(x, n, None, adaptive=True))
+        return _layer(name, output_size)
+    make.__name__ = name
+    return make
+
+
 AdaptiveAvgPool2d = _pool_layer("avg", True)
-AdaptiveAvgPool1d = _pool_layer("avg", True)
-AdaptiveAvgPool3d = _pool_layer("avg", True)
-AdaptiveMaxPool1d = _pool_layer("max", True)
-AdaptiveMaxPool2d = _pool_layer("max", True)
-AdaptiveMaxPool3d = _pool_layer("max", True)
+AdaptiveAvgPool1d = _adaptive_layer("AdaptiveAvgPool1d", False)
+AdaptiveAvgPool3d = _adaptive_layer("AdaptiveAvgPool3d", False)
+AdaptiveMaxPool1d = _adaptive_layer("AdaptiveMaxPool1d", True)
+AdaptiveMaxPool2d = _adaptive_layer("AdaptiveMaxPool2d", True)
+AdaptiveMaxPool3d = _adaptive_layer("AdaptiveMaxPool3d", True)
 def AvgPool1d(kernel_size, stride=None, padding=0, ceil_mode=False,
               count_include_pad=True):
     """**It stands borch.ts's layer up rather than calling the functional path.**
@@ -2144,11 +2207,19 @@ def AvgPool3d(kernel_size, stride=None, padding=0, ceil_mode=False,
                   count_include_pad, divisor_override)
 
 
-def LPPool1d(norm_type, kernel_size, stride=None, ceil_mode=False):
-    return _layer("LPPool1d", norm_type, kernel_size, stride, ceil_mode)
+def _lp_pool_layer(name):
+    """As `_batchnorm` — `LPPool2d` and `LPPool3d` are subclasses over there and
+    `describe` reads the constructor's name, so all three stood up `LPPool1d` and
+    printed it."""
+    def make(norm_type, kernel_size, stride=None, ceil_mode=False):
+        return _layer(name, norm_type, kernel_size, stride, ceil_mode)
+    make.__name__ = name
+    return make
 
 
-LPPool2d = LPPool3d = LPPool1d
+LPPool1d = _lp_pool_layer("LPPool1d")
+LPPool2d = _lp_pool_layer("LPPool2d")
+LPPool3d = _lp_pool_layer("LPPool3d")
 
 
 def AvgPool2d(k=2, stride=None):
@@ -2308,6 +2379,9 @@ class PReLU(Module):
     def forward(self, x):
         return wrap(handle(x).prelu(handle(self.weight)))
 
+    def extra_repr(self):
+        return f"num_parameters={int(handle(self.weight).size)}"
+
 
 class GroupNorm(Module):
     """Normalise with the channels gathered into groups. It carries weights, so
@@ -2321,10 +2395,19 @@ class GroupNorm(Module):
         import numpy as _np
 
         self.num_groups, self.eps = num_groups, eps
+        # **Stored because the repr prints them.** `num_channels` was readable off
+        # the weight and unreadable with `affine=False`, and `affine` was not kept
+        # at all — two golden cases printed `GroupNorm()`.
+        self.num_channels, self.affine = num_channels, affine
+        self.weight = self.bias = None
         if affine:
             self.weight = Parameter(_np.ones(num_channels, dtype=_np.float32))
             if bias:
                 self.bias = Parameter(_np.zeros(num_channels, dtype=_np.float32))
+
+    def extra_repr(self):
+        from borch._nn import _group_norm_extra_repr
+        return _group_norm_extra_repr(self)
 
     def forward(self, x):
         h = handle(x)
@@ -2364,10 +2447,18 @@ class _InstanceNorm(Module):
             from borch._base import _unsupported
             _unsupported("InstanceNorm with track_running_stats=True")
         self.eps = eps
+        # As `GroupNorm` above — torch prints all six and this kept one.
+        self.num_features, self.momentum, self.affine = num_features, momentum, affine
+        self.track_running_stats = track_running_stats
+        self.weight = self.bias = None
         if affine:
             self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
             if bias:
                 self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
+
+    def extra_repr(self):
+        from borch._nn import _norm_extra_repr
+        return _norm_extra_repr(self)
 
     def forward(self, x):
         h = handle(x)
@@ -2378,7 +2469,18 @@ class _InstanceNorm(Module):
         return out * self.weight.reshape(*shape) + self.bias.reshape(*shape)
 
 
-InstanceNorm1d = InstanceNorm2d = InstanceNorm3d = _InstanceNorm
+class InstanceNorm1d(_InstanceNorm):
+    """**The per-dimension name is what torch prints.** All three were the one class
+    `_InstanceNorm`, so the repr announced a private name — and a reader who looks it
+    up finds nothing in torch."""
+
+
+class InstanceNorm2d(_InstanceNorm):
+    pass
+
+
+class InstanceNorm3d(_InstanceNorm):
+    pass
 
 
 class RMSNorm(Module):
@@ -2407,14 +2509,29 @@ class _ConvTransposeND(Module):
     nd = 2
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
-                 bias=True):
+                 output_padding=0, groups=1, bias=True, dilation=1,
+                 padding_mode="zeros"):
+        """**torch's whole list, and it took six of ten.** `output_padding`,
+        `groups` and `dilation` were absent while the tensor method over there has
+        taken all three from the start — so `ConvTranspose2d(2, 3, 3, stride=2,
+        output_padding=1)` stopped with a `TypeError` naming a private class, and
+        the fix was to pass on what was already being received one layer down.
+
+        They are stored as well as passed, because the repr prints them: the layer
+        printed `ConvTranspose1d()` where torch prints its channels and kernel.
+        """
         super().__init__()
         import numpy as _np
 
-        self.stride, self.padding = stride, padding
         nd = type(self).nd
-        shape = (in_channels, out_channels) + (kernel_size,) * nd
-        bound = 1.0 / (out_channels * kernel_size ** nd) ** 0.5
+        self.in_channels, self.out_channels = in_channels, out_channels
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        self.output_padding, self.groups, self.dilation = (output_padding, groups,
+                                                           dilation)
+        self.padding_mode = padding_mode
+        self.bias = None
+        shape = (in_channels, out_channels // groups) + (kernel_size,) * nd
+        bound = 1.0 / ((out_channels // groups) * kernel_size ** nd) ** 0.5
         rng = _np.random.default_rng(0)
         self.weight = Parameter(rng.uniform(-bound, bound, shape).astype(_np.float32))
         if bias:
@@ -2422,10 +2539,15 @@ class _ConvTransposeND(Module):
                 rng.uniform(-bound, bound, out_channels).astype(_np.float32))
 
     def forward(self, x):
-        b = getattr(self, "bias", None)
+        b = self.bias
         return wrap(handle(x).convTransposeND(
             handle(self.weight), handle(b) if b is not None else None,
-            self.stride, self.padding))
+            self.stride, self.padding, self.output_padding, self.groups,
+            self.dilation))
+
+    def extra_repr(self):
+        from borch._nn import _conv_extra_repr
+        return _conv_extra_repr(type(self).nd, transposed=True)(self)
 
 
 class ConvTranspose1d(_ConvTransposeND):
