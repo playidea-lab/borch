@@ -815,15 +815,16 @@ SKIPPED = {
     # below names a specific thing that is absent**, and two of them are the same thing:
     #
     #   - `Conv3dNormActivation` needs 3-D convolution, which the core declines.
-    #   - **The deformable convolution** needs the sampler too, and its coordinates are
-    #     learned rather than given — the offsets are a tensor the network produces, so
-    #     the gradient runs back through the sampling positions as well as the values.
-    #     That is the one thing here the RoI work did not already build.
+    # **One name is left, and this time the sentence is a size rather than a shape.**
+    # `Conv3dNormActivation` wants a three-dimensional convolution, which the core does
+    # not have; every other row in this block turned out to name a use rather than a
+    # need, and each of the four rewrites of the reason was still too wide until the
+    # names were checked one at a time.
     #
-    # The pyramid and the level-picker are gone from this list: both were written on the
-    # sampler that went in with the RoI names, and neither needed anything else. Their
-    # rows read *the detector's neck. Nothing feeds it here* — a statement about the
-    # catalogue rather than about the library.
+    # For the record of what those rewrites cost: the layers went in first, then the
+    # losses, then the dropouts, then eight RoI names, then the pyramid and the
+    # level-picker, then the deformable convolution — **twenty-two names, in six
+    # commits, none of which needed anything the core lacked.**
     #
     # The second is 아직 and not a wall — `roi_align` takes a tensor and a list of
     # boxes, like everything else that turned out to be writable. It is left because it
@@ -831,8 +832,6 @@ SKIPPED = {
     "ops.Conv3dNormActivation": "**3-D convolution is declined in the core** — the 2-D "
                                 "one is written now, and this is the ingredient it "
                                 "would need",
-    "ops.DeformConv2d": "아직 — as `RoIAlign`, and the offsets make the sampling harder rather than different",
-    "ops.deform_conv2d": "as above",
     # **The four losses were here and are built.** The row read *a detection loss — it
     # takes a model's predictions*, and every word of that is true and none of it was a
     # reason. A prediction arriving as an argument is a tensor; the loss never meets the

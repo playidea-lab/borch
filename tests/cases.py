@@ -12837,6 +12837,106 @@ def ops_cases(inp=None):
          lambda L: repr(_ops_of(L).MultiScaleRoIAlign(["feat0", "feat1"], 3, 2))),
     ]
 
+    # ── the convolution whose sampling positions are learned ────────────────────
+    #
+    # **The last of the eleven**, and the only one that needed something the RoI work
+    # did not build: the coordinates come from a tensor the network produced, so the
+    # gradient runs back through the *positions* as well as the values.
+    #
+    # The offsets here are large enough — over a pixel — that most of them leave the
+    # kernel's own footprint, and some leave the map. **Small offsets hide both edge
+    # rules**: a displacement of a tenth of a pixel never crosses a border, and the
+    # whole thing then agrees with an implementation that clamps.
+    def _deform_input(seed, batch, in_c, out_c, kh, kw, h, w, wgroups, ogroups,
+                      use_mask, stride, padding, dilation):
+        rng = np.random.default_rng(seed)
+        out_h = (h + 2 * padding[0] - (dilation[0] * (kh - 1) + 1)) // stride[0] + 1
+        out_w = (w + 2 * padding[1] - (dilation[1] * (kw - 1) + 1)) // stride[1] + 1
+        return {
+            "input": rng.standard_normal((batch, in_c, h, w)).astype(np.float32),
+            "weight": (rng.standard_normal((out_c, in_c // wgroups, kh, kw))
+                       .astype(np.float32) * 0.3),
+            "offset": (rng.standard_normal((batch, ogroups * 2 * kh * kw, out_h, out_w))
+                       .astype(np.float32) * 1.2),
+            "mask": (rng.random((batch, ogroups * kh * kw, out_h, out_w))
+                     .astype(np.float32) if use_mask else None),
+            "bias": rng.standard_normal((out_c,)).astype(np.float32),
+        }
+
+    def deform_case(label, **shape):
+        given = _deform_input(**shape)
+        settings = {k: shape[k] for k in ("stride", "padding", "dilation")}
+        del label
+
+        def run(L):
+            out = _ops_of(L).deform_conv2d(
+                L.tensor(np.ascontiguousarray(given["input"])),
+                L.tensor(np.ascontiguousarray(given["offset"])),
+                L.tensor(np.ascontiguousarray(given["weight"])),
+                L.tensor(np.ascontiguousarray(given["bias"])),
+                mask=(None if given["mask"] is None
+                      else L.tensor(np.ascontiguousarray(given["mask"]))),
+                **settings)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
+        return run
+
+    def deform_module_case():
+        """The module, with the weight written rather than drawn — and **the offsets
+        still come from outside.** That is the shape of the layer: it holds a weight and
+        takes a displacement field, because the field is produced by another convolution
+        the caller writes."""
+        given = _deform_input(seed=11, batch=2, in_c=4, out_c=6, kh=3, kw=3, h=6, w=6,
+                              wgroups=1, ogroups=1, use_mask=False, stride=(1, 1),
+                              padding=(1, 1), dilation=(1, 1))
+
+        def run(L):
+            layer = _fill(L, _ops_of(L).DeformConv2d(4, 6, 3, padding=1))
+            layer.eval()
+            with L.no_grad():
+                out = layer(L.tensor(np.ascontiguousarray(given["input"])),
+                            L.tensor(np.ascontiguousarray(given["offset"])))
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
+        return run
+
+    _DEFORM = dict(seed=3, batch=2, in_c=4, out_c=6, kh=3, kw=3, h=7, w=8,
+                   wgroups=1, ogroups=1, use_mask=False,
+                   stride=(1, 1), padding=(0, 0), dilation=(1, 1))
+
+    cases += [
+        (OPS_PREFIX + "deform_conv2d", deform_case("plain", **_DEFORM)),
+        # **v2 adds a learned weight per position**, not only a learned place.
+        (OPS_PREFIX + "deform_conv2d(mask, v2)",
+         deform_case("mask", **{**_DEFORM, "use_mask": True})),
+        # **Two kinds of group, and they may differ** — one offset field can steer
+        # several groups of filters. The mask is indexed by the offset group too, which
+        # a fixture with one group cannot show.
+        (OPS_PREFIX + "deform_conv2d(weight groups)",
+         deform_case("wg", **{**_DEFORM, "wgroups": 2})),
+        (OPS_PREFIX + "deform_conv2d(offset groups)",
+         deform_case("og", **{**_DEFORM, "ogroups": 2})),
+        (OPS_PREFIX + "deform_conv2d(both groups, mask)",
+         deform_case("both", **{**_DEFORM, "wgroups": 2, "ogroups": 2,
+                                "use_mask": True})),
+        # **The kernel's dilation is applied before the offset**, so a zero displacement
+        # leaves an ordinary dilated convolution.
+        (OPS_PREFIX + "deform_conv2d(stride, padding, dilation)",
+         deform_case("spd", **{**_DEFORM, "h": 9, "w": 9, "stride": (2, 2),
+                               "padding": (1, 1), "dilation": (2, 2)})),
+        (OPS_PREFIX + "deform_conv2d(1x1 kernel, mask)",
+         deform_case("1x1", **{**_DEFORM, "kh": 1, "kw": 1, "h": 5, "w": 5,
+                               "use_mask": True})),
+        (OPS_PREFIX + "deform_conv2d(non-square kernel)",
+         deform_case("3x1", **{**_DEFORM, "kw": 1, "h": 6, "w": 6})),
+        (OPS_PREFIX + "DeformConv2d(4, 6, 3, padding=1)", deform_module_case()),
+        (OPS_PREFIX + "DeformConv2d(groups, no bias)=repr",
+         lambda L: repr(_ops_of(L).DeformConv2d(4, 6, 3, groups=2, bias=False,
+                                                dilation=2))),
+        (OPS_PREFIX + "DeformConv2d(4, 6, 3, padding=1)=repr",
+         lambda L: repr(_ops_of(L).DeformConv2d(4, 6, 3, padding=1))),
+    ]
+
     return cases
 
 

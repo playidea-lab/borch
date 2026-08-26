@@ -3539,6 +3539,161 @@ def ps_roi_pool(input, boxes, output_size, spatial_scale=1.0):
         return L.zeros((0, out_channels, pooled_h, pooled_w))
     return L.stack(out, dim=0)
 
+def _deform_sample(picture, y, x):
+    """`picture[b, :, y, x]` at fractional `(y, x)`, **zero outside the map.**
+
+    `y` and `x` are `(b, oh, ow)`; what comes back is `(b, c, oh, ow)`.
+
+    **It is not `_bilinear_sample`'s rule with different bounds — it is a different
+    rule.** That one clamps the coordinate to the edge and reads four real neighbours;
+    this one keeps the coordinate and **drops each of the four corners separately** when
+    that corner is off the map. At `y = -0.5` the two disagree completely: clamped, the
+    sample is read at rows 0 and 1; here, the row above does not exist, so it
+    contributes nothing and the row below carries half its weight.
+
+    Written with a clamp, the whole thing is right in the middle of the map and wrong
+    along every border — which is exactly where a deformable convolution spends its
+    offsets, and the reason it was measured against the compiled op rather than shared
+    with the sampler next door.
+
+    The outer guard is the kernel's own: a coordinate at or past the edge by a whole
+    pixel contributes nothing at all, whichever corners would have been valid.
+    """
+    L = _backend()
+    _, channels, height, width = picture.shape
+    inside = (y > -1.0) & (y < height) & (x > -1.0) & (x < width)
+    y_low, x_low = y.floor(), x.floor()
+    y_high, x_high = y_low + 1, x_low + 1
+    ly, lx = y - y_low, x - x_low
+    hy, hx = 1.0 - ly, 1.0 - lx
+
+    batch = L.arange(int(picture.shape[0])).long()[:, None, None, None]
+    rows = L.arange(channels).long()[None, :, None, None]
+
+    def at(down, across, low_ok, high_ok):
+        """One corner, read from a clamped index and then **thrown away if that index
+        was not the one asked for.** The clamp is only so the gather has somewhere to
+        land; the mask is what decides."""
+        safe_down = down.clamp(min=0, max=height - 1)
+        safe_across = across.clamp(min=0, max=width - 1)
+        value = picture[batch, rows,
+                        safe_down.long()[:, None, :, :],
+                        safe_across.long()[:, None, :, :]]
+        keep = (low_ok & high_ok)[:, None, :, :]
+        return L.where(keep, value, L.zeros_like(value))
+
+    def weigh(down, across):
+        return (down * across)[:, None, :, :]
+
+    low_y_ok, high_y_ok = y_low >= 0, y_high <= height - 1
+    low_x_ok, high_x_ok = x_low >= 0, x_high <= width - 1
+
+    value = (weigh(hy, hx) * at(y_low, x_low, low_y_ok, low_x_ok)
+             + weigh(hy, lx) * at(y_low, x_high, low_y_ok, high_x_ok)
+             + weigh(ly, hx) * at(y_high, x_low, high_y_ok, low_x_ok)
+             + weigh(ly, lx) * at(y_high, x_high, high_y_ok, high_x_ok))
+    return L.where(inside[:, None, :, :], value, L.zeros_like(value))
+
+
+def deform_conv2d(input, offset, weight, bias=None, stride=(1, 1), padding=(0, 0),
+                  dilation=(1, 1), mask=None):
+    """A convolution whose sampling positions are **learned**.
+
+    <https://arxiv.org/abs/1703.06211> — and v2, with `mask`,
+    <https://arxiv.org/abs/1811.11168>
+
+    An ordinary convolution reads a fixed grid: nine positions in a 3×3, always the same
+    nine relative to the output pixel. This adds a learned displacement to each of them,
+    produced by another convolution over the same input, so the receptive field bends
+    with the content. `mask` is v2's addition — a learned weight per position as well as
+    a learned place, which lets the layer turn a tap off rather than only move it.
+
+    **The gradient runs back through the positions, not only the values.** That is the
+    whole difficulty and the reason this could not be built on the RoI sampler: there
+    the coordinates come from boxes and are given, here they come from a tensor the
+    network produced, so `∂out/∂offset` has to exist. It does because the bilinear
+    weights are arithmetic on the coordinate — `1 - frac` and `frac` — and the backend
+    differentiates them like anything else.
+
+    Three shapes have to line up and each mismatch is silent in a different way:
+
+    - **The offset has `2 * groups * kh * kw` channels**, `y` before `x` for each
+      kernel position. Swapping the pair transposes every displacement, which is a
+      layer that trains and reads the wrong way round.
+    - **`groups` is inferred, not passed.** The weight's second dimension against the
+      input's channels gives the weight groups; the offset's channel count against
+      `2 * kh * kw` gives the offset groups. The two are allowed to differ — one offset
+      field can steer several groups of filters.
+    - **The kernel's own dilation is applied before the offset**, so a displacement of
+      zero leaves an ordinary dilated convolution. Adding it after makes the offsets
+      mean something different at every dilation.
+    """
+    L = _backend()
+    stride_h, stride_w = _pair(stride, "stride")
+    pad_h, pad_w = _pair(padding, "padding")
+    dil_h, dil_w = _pair(dilation, "dilation")
+    batch, in_channels, height, width = [int(one) for one in input.shape]
+    out_channels = int(weight.shape[0])
+    group_channels = int(weight.shape[1])
+    kernel_h, kernel_w = int(weight.shape[2]), int(weight.shape[3])
+
+    offset_groups = int(offset.shape[1]) // (2 * kernel_h * kernel_w)
+    if offset_groups == 0:
+        raise RuntimeError(
+            "the shape of the offset tensor at dimension 1 is not valid. It should "
+            "be a multiple of 2 * weight.size[2] * weight.size[3].\n"
+            f"Got offset.shape[1]={int(offset.shape[1])}, while 2 * weight.size[2] * "
+            f"weight.size[3]={2 * kernel_h * kernel_w}")
+    weight_groups = in_channels // group_channels
+
+    out_h = (height + 2 * pad_h - (dil_h * (kernel_h - 1) + 1)) // stride_h + 1
+    out_w = (width + 2 * pad_w - (dil_w * (kernel_w - 1) + 1)) // stride_w + 1
+
+    base_y = (L.arange(out_h).float() * stride_h - pad_h)[None, :, None]
+    base_x = (L.arange(out_w).float() * stride_w - pad_w)[None, None, :]
+
+    total = None
+    for p in range(kernel_h):
+        for q in range(kernel_w):
+            which = p * kernel_w + q
+            columns = []
+            for group in range(offset_groups):
+                start = (group * kernel_h * kernel_w + which) * 2
+                dy = offset[:, start]
+                dx = offset[:, start + 1]
+                y = base_y + p * dil_h + dy
+                x = base_x + q * dil_w + dx
+                per_group = in_channels // offset_groups
+                taken = _deform_sample(
+                    input[:, group * per_group:(group + 1) * per_group], y, x)
+                if mask is not None:
+                    # **The mask is per offset group as well as per kernel position.**
+                    # Its channels run `group * kh * kw + which`, the same layout as the
+                    # offsets without the pair — and read as `which` alone, every group
+                    # gets the first group's weights. That is right whenever there is one
+                    # group, which is what a fixture written with `groups=1` shows, and
+                    # it survived `offset_groups=2` on its own because the value it got
+                    # wrong was multiplied by an offset it also got wrong.
+                    taken = taken * mask[:, group * kernel_h * kernel_w + which][:, None]
+                columns.append(taken)
+            sampled = L.cat(columns, dim=1) if len(columns) > 1 else columns[0]
+            # **The weight groups are folded here**, not in the sampling: filter `co`
+            # sees only the channels of its own group, and `co // (out / groups)` is
+            # which one. Letting every filter see every channel gives an answer of the
+            # right shape from `groups` times as many terms.
+            pieces = []
+            per_out = out_channels // weight_groups
+            for group in range(weight_groups):
+                block = sampled[:, group * group_channels:(group + 1) * group_channels]
+                taps = weight[group * per_out:(group + 1) * per_out, :, p, q]
+                pieces.append(
+                    (block[:, None] * taps[None, :, :, None, None]).sum(dim=2))
+            step = L.cat(pieces, dim=1) if len(pieces) > 1 else pieces[0]
+            total = step if total is None else total + step
+    if bias is not None:
+        total = total + bias[None, :, None, None]
+    return total
+
 def _ordered(pairs):
     """An `OrderedDict`, which is what torchvision hands back and what a caller iterates
     in order. A plain dict keeps insertion order too, and is not the same type — a
@@ -4179,7 +4334,74 @@ def _ops_layers(L):
                     f"output_size={self.output_size}, "
                     f"sampling_ratio={self.sampling_ratio})")
 
+    class DeformConv2d(nn.Module):
+        """`deform_conv2d` as a module, holding the weight.
+
+        **It does not produce the offsets.** They arrive as a second argument, from
+        another convolution the caller writes — which is why `forward` takes two tensors
+        and three when the mask is used. A layer that made its own offsets would be a
+        different and more convenient thing, and would not load a torchvision
+        checkpoint.
+
+        **`kaiming_uniform_(a=√5)` here, not `a=1`.** That is `Conv2d`'s own default and
+        not the pyramid's wider one — the two initialisations differ by √3, and this one
+        takes the narrower because a deformable convolution is a convolution.
+        """
+
+        _KAIMING_A = 5.0
+
+        def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                     dilation=1, groups=1, bias=True):
+            super().__init__()
+            if in_channels % groups != 0:
+                raise ValueError("in_channels must be divisible by groups")
+            if out_channels % groups != 0:
+                raise ValueError("out_channels must be divisible by groups")
+            self.in_channels = in_channels
+            self.out_channels = out_channels
+            self.kernel_size = _pair(kernel_size, "kernel_size")
+            self.stride = _pair(stride, "stride")
+            self.padding = _pair(padding, "padding")
+            self.dilation = _pair(dilation, "dilation")
+            self.groups = groups
+            shape = (out_channels, in_channels // groups) + self.kernel_size
+            self.weight = nn.Parameter(L.empty(shape))
+            self.bias = nn.Parameter(L.empty((out_channels,))) if bias else None
+            self.reset_parameters()
+
+        def reset_parameters(self):
+            gain = _math.sqrt(2.0 / (1.0 + self._KAIMING_A))
+            _kaiming_uniform(self.weight, gain)
+            if self.bias is not None:
+                shape = tuple(int(one) for one in self.weight.shape)
+                fan_in = shape[1]
+                for one in shape[2:]:
+                    fan_in *= one
+                bound = 1.0 / _math.sqrt(fan_in)
+                with L.no_grad():
+                    self.bias.copy_(L.empty(tuple(self.bias.shape))
+                                    .uniform_(-bound, bound))
+
+        def forward(self, input, offset, mask=None):
+            return deform_conv2d(input, offset, self.weight, self.bias,
+                                 stride=self.stride, padding=self.padding,
+                                 dilation=self.dilation, mask=mask)
+
+        def __repr__(self):
+            out = (f"{type(self).__name__}({self.in_channels}, {self.out_channels}"
+                   f", kernel_size={self.kernel_size}, stride={self.stride}")
+            if self.padding != (0, 0):
+                out += f", padding={self.padding}"
+            if self.dilation != (1, 1):
+                out += f", dilation={self.dilation}"
+            if self.groups != 1:
+                out += f", groups={self.groups}"
+            if self.bias is None:
+                out += ", bias=False"
+            return out + ")"
+
     made = {"ConvNormActivation": ConvNormActivation,
+            "DeformConv2d": DeformConv2d,
             "FeaturePyramidNetwork": FeaturePyramidNetwork,
             "MultiScaleRoIAlign": MultiScaleRoIAlign,
             "RoIAlign": RoIAlign, "RoIPool": RoIPool,
@@ -9195,7 +9417,8 @@ for _name in ("batched_nms", "box_area", "box_convert", "box_iou",
               "generalized_box_iou_loss", "masks_to_boxes", "nms",
               "remove_small_boxes", "sigmoid_focal_loss",
               "stochastic_depth", "drop_block2d", "drop_block3d",
-              "roi_align", "roi_pool", "ps_roi_align", "ps_roi_pool"):
+              "roi_align", "roi_pool", "ps_roi_align", "ps_roi_pool",
+              "deform_conv2d"):
     setattr(ops, _name, globals()[_name])
 
 # The layer classes are built against whichever backend is attached **when they are
