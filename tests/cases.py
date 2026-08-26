@@ -13360,7 +13360,109 @@ def v2_functional_cases(inp=None):
             return str(call(F, given))
         return run
 
-    return [
+    # Boxes for the `*_bounding_boxes` kernels, in a canvas that is **not square** — a
+    # square one lets a height/width mix-up through every one of these, and the two
+    # orders are opposite (`(x, y)` against `(height, width)`).
+    #
+    # The last two sit on and past the right edge, which is what makes the crop family's
+    # clamping visible: without them every box stays inside and the clip never runs.
+    boxes = np.array([[0.0, 0.0, 10.0, 10.0],
+                      [5.0, 5.0, 15.0, 20.0],
+                      [2.0, 3.0, 4.0, 9.0],
+                      [28.0, 20.0, 32.0, 24.0],
+                      [30.0, 22.0, 31.0, 23.0]], dtype=np.float32)
+    canvas = (24, 32)
+
+    def on_boxes(fmt, call):
+        """Boxes through a kernel, in the format named.
+
+        **torchvision wants its `BoundingBoxFormat` enum and this library wants a
+        string.** Handed a string, torchvision iterates it and raises `IndexError: index
+        4 is out of bounds` — so the two sides are given different spellings of the same
+        format here, which is a real divergence and is written down rather than hidden.
+
+        **The return shape is compared, not normalised.** Five of these answer
+        `(boxes, canvas_size)` and two answer boxes alone; a probe that flattened that
+        away is what made the first implementation return the wrong thing from three of
+        them.
+        """
+        def run(L):
+            F = _vision_v2_functional(L)
+            if _is_real_torch(L):
+                import torchvision.tv_tensors as _tv
+                given = L.tensor(np.ascontiguousarray(
+                    _as_numpy(_vision_ops(L).box_convert(L.tensor(boxes), "xyxy", fmt))))
+                got = call(F, given, _tv.BoundingBoxFormat[fmt.upper()])
+            else:
+                got = call(F, _vision_ops(L).box_convert(boxes, "xyxy", fmt), fmt)
+            if isinstance(got, tuple):
+                rest = " ".join(str(int(v)) for v in got[1]) if not hasattr(
+                    got[1], "tolist") else str(_as_numpy(got[1]).astype(np.int64).tolist())
+                return f"{_boxtext(got[0])} {rest}"
+            return _boxtext(got)
+        return run
+
+    def _boxtext(values):
+        """The rows as text, **with negative zero folded into zero.**
+
+        These are frozen as strings so the canvas can ride along in the same answer, and
+        a string freeze compares spellings where the rest of the golden compares numbers.
+        That invented a difference: mirroring a box whose far edge is the canvas edge
+        gives `32 - 32`, and torchvision spells the result `-0.0` where this gives `0.0`.
+        The two are the same number and `-0.0 == 0.0` is true; only the text differs.
+
+        **Four cases failed on it and none of them was a defect.** Folding the sign of
+        zero is the narrowest thing that removes the false difference — rounding or
+        tolerance would also hide real ones.
+
+        ## Rounded in float64, and rounding in float32 was not rounding
+
+        `np.round(x, 4)` on a **float32** array picks the nearest float32 to the rounded
+        decimal, and widening that back to a double prints `4.571400165557861` rather
+        than `4.5714`. Three cases disagreed with borch.ts on exactly that: the values
+        were equal, one side was printing float32's neighbour and the other the decimal.
+        So the widening happens **before** the rounding, and the text is then the number
+        that was asked for.
+        """
+        arr = np.round(np.asarray(_as_numpy(values), dtype=np.float64), 4)
+        return str(np.where(arr == 0, 0.0, arr).tolist())
+
+    box_cases = []
+    for _fmt in ("xyxy", "xywh", "cxcywh"):
+        box_cases += [
+            (V2F_PREFIX + f"horizontal_flip_bounding_boxes({_fmt})",
+             on_boxes(_fmt, lambda F, b, f: F.horizontal_flip_bounding_boxes(
+                 b, format=f, canvas_size=canvas))),
+            (V2F_PREFIX + f"vertical_flip_bounding_boxes({_fmt})",
+             on_boxes(_fmt, lambda F, b, f: F.vertical_flip_bounding_boxes(
+                 b, format=f, canvas_size=canvas))),
+            (V2F_PREFIX + f"crop_bounding_boxes({_fmt})",
+             on_boxes(_fmt, lambda F, b, f: F.crop_bounding_boxes(
+                 b, format=f, top=1, left=2, height=12, width=14))),
+            # **An odd output size, because an even one cannot tell the rounding apart.**
+            # The offset is `round((canvas - out) / 2)` and Python's `round` breaks ties
+            # to even; a floor division agrees on every even size and is off by a whole
+            # pixel here. The floor version shipped until this case was written.
+            (V2F_PREFIX + f"center_crop_bounding_boxes(odd, {_fmt})",
+             on_boxes(_fmt, lambda F, b, f: F.center_crop_bounding_boxes(
+                 b, format=f, canvas_size=canvas, output_size=[11, 13]))),
+            (V2F_PREFIX + f"pad_bounding_boxes(four sides, {_fmt})",
+             on_boxes(_fmt, lambda F, b, f: F.pad_bounding_boxes(
+                 b, format=f, canvas_size=canvas, padding=[1, 2, 3, 4]))),
+            (V2F_PREFIX + f"resize_bounding_boxes(pair, {_fmt})",
+             on_boxes(_fmt, lambda F, b, f: F.resize_bounding_boxes(
+                 b, canvas_size=canvas, size=[12, 16], format=f))),
+            # A single number keeps the aspect ratio, which a pair does not — the two
+            # spellings of `size` are different functions wearing one name.
+            (V2F_PREFIX + f"resize_bounding_boxes(short edge, {_fmt})",
+             on_boxes(_fmt, lambda F, b, f: F.resize_bounding_boxes(
+                 b, canvas_size=canvas, size=[12], format=f))),
+            (V2F_PREFIX + f"resized_crop_bounding_boxes({_fmt})",
+             on_boxes(_fmt, lambda F, b, f: F.resized_crop_bounding_boxes(
+                 b, format=f, top=1, left=2, height=12, width=14, size=[6, 8]))),
+        ]
+
+    return box_cases + [
         (V2F_PREFIX + "horizontal_flip", on(img_f, lambda F, x, L: F.horizontal_flip(x))),
         (V2F_PREFIX + "vertical_flip", on(img_f, lambda F, x, L: F.vertical_flip(x))),
         (V2F_PREFIX + "grayscale_to_rgb(one channel)",

@@ -2947,6 +2947,248 @@ def complete_box_iou(boxes1, boxes2, eps=1e-7):
     return _boxes_out(diou - alpha * v, was_tensor, _np.float32)
 
 
+# ── v2's bounding-box kernels ────────────────────────────────────────────────
+#
+# **These were declined as tv_tensor kernels and they take a plain tensor.**
+#
+# The row read *a tv_tensor type, and the type system is declined in `v2`*. Measured:
+# torchvision's own error on a bare tensor is *"For pure tensor inputs, `format`,
+# `canvas_size` and `clamping_mode` have to be passed"* — so the plain-tensor path is a
+# **supported, documented** one, and what the tv_tensor carries is handed over as
+# ordinary arguments instead. Sixth time in this repository that a sentence which was
+# true about torchvision's design was read as a reason we could not build something.
+#
+# ## What is deliberately different here
+#
+# `format` is a **string**, as everywhere else in this file, where torchvision wants a
+# `BoundingBoxFormat`. That is not only for consistency: passing `"XYXY"` to torchvision
+# raises `IndexError: index 4 is out of bounds` — the string is iterated as if it were a
+# format — and a name that reads as accepted and fails four frames later is the thing
+# this library refuses on purpose.
+#
+# `clamping_mode` is not taken. torchvision defaults it to `"soft"` on the crop family,
+# `"auto"` on `clamp` and does not have it on the flips, and only the `"soft"` behaviour
+# is reproduced here. A parameter accepted and ignored is worse than one that is absent,
+# so it is absent, and `clamp_bounding_boxes` stays declined for the same reason: its
+# whole subject is that taxonomy.
+
+
+def _canvas(canvas_size, where):
+    """`(height, width)`, and it is checked rather than unpacked.
+
+    **A box's own numbers run `(x, y)` and a canvas runs `(height, width)`**, so the two
+    are transposed with respect to each other and a caller who swaps them gets boxes that
+    are wrong without being obviously wrong. Two of torchvision's own names disagree about
+    this (`get_size` against `get_image_size`), which is why it is spelled out at every
+    entrance rather than once at the top.
+    """
+    try:
+        height, width = canvas_size
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{where} wants canvas_size as (height, width) — got {canvas_size!r}.\n"
+            "(torch: canvas_size must be a two-element sequence)") from None
+    return float(height), float(width)
+
+
+def _boxes_as_xyxy(boxes, fmt, where):
+    if fmt not in _BOX_FORMATS:
+        raise ValueError(
+            f"Unsupported Bounding Box format {fmt} for {where} — it is one of "
+            f"{', '.join(_BOX_FORMATS)}.\n"
+            f"(torch: Unsupported Bounding Box format {fmt})")
+    arr, was_tensor = _boxes_in(boxes)
+    return _to_xyxy(arr, fmt), was_tensor
+
+
+def _xyxy_back(xyxy, fmt, was_tensor):
+    if fmt == "xyxy":
+        out = xyxy
+    else:
+        x1, y1, x2, y2 = xyxy[..., 0], xyxy[..., 1], xyxy[..., 2], xyxy[..., 3]
+        w, h = x2 - x1, y2 - y1
+        out = (_np.stack((x1, y1, w, h), axis=-1) if fmt == "xywh"
+               else _np.stack((x1 + 0.5 * w, y1 + 0.5 * h, w, h), axis=-1))
+    return _boxes_out(out, was_tensor, _np.float32)
+
+
+def _clamp_to(xyxy, height, width):
+    """Corners back inside a canvas of `(height, width)`.
+
+    **This is what torchvision's `clamping_mode="soft"` does** on the crop family, and it
+    is why `center_crop_bounding_boxes` can return a box of zero width: a box that left
+    the picture entirely collapses onto the edge rather than being dropped. Dropping is
+    `sanitize_bounding_boxes`, one function over, and keeping the two apart is the point —
+    the caller usually has labels indexed alongside these rows.
+    """
+    out = xyxy.copy()
+    out[..., 0::2] = _np.clip(out[..., 0::2], 0.0, width)
+    out[..., 1::2] = _np.clip(out[..., 1::2], 0.0, height)
+    return out
+
+
+def horizontal_flip_bounding_boxes(bounding_boxes, format, canvas_size):  # noqa: A002
+    """Boxes mirrored left-to-right across a canvas of `canvas_size`."""
+    height, width = _canvas(canvas_size, "horizontal_flip_bounding_boxes")
+    xyxy, was_tensor = _boxes_as_xyxy(bounding_boxes, format,
+                                      "horizontal_flip_bounding_boxes")
+    out = xyxy.copy()
+    out[..., 0], out[..., 2] = width - xyxy[..., 2], width - xyxy[..., 0]
+    del height
+    return _xyxy_back(out, format, was_tensor)
+
+
+def vertical_flip_bounding_boxes(bounding_boxes, format, canvas_size):  # noqa: A002
+    """Boxes mirrored top-to-bottom across a canvas of `canvas_size`."""
+    height, width = _canvas(canvas_size, "vertical_flip_bounding_boxes")
+    xyxy, was_tensor = _boxes_as_xyxy(bounding_boxes, format,
+                                      "vertical_flip_bounding_boxes")
+    out = xyxy.copy()
+    out[..., 1], out[..., 3] = height - xyxy[..., 3], height - xyxy[..., 1]
+    del width
+    return _xyxy_back(out, format, was_tensor)
+
+
+def crop_bounding_boxes(bounding_boxes, format, top, left, height, width):  # noqa: A002
+    """Boxes moved into a crop's frame and clipped to it, as **`(boxes, canvas_size)`.**
+
+    **Every one of these that changes the canvas returns the pair**, even where the
+    caller just passed the new size in. An earlier draft of this file returned bare boxes
+    from here, from `center_crop` and from `resized_crop`, and explained at length why
+    torchvision was asymmetric about it. torchvision is not: the flips return a bare
+    tensor because the canvas does not move, and the other five return the pair.
+
+    The wrong version came out of a probe that read
+    `out[0] if isinstance(out, tuple) else out` — **a helper that normalised away the
+    exact property being measured**, and then the prose explained the normalised picture
+    as though it were the measurement.
+    """
+    xyxy, was_tensor = _boxes_as_xyxy(bounding_boxes, format, "crop_bounding_boxes")
+    out = xyxy.copy()
+    out[..., 0::2] -= float(left)
+    out[..., 1::2] -= float(top)
+    return (_xyxy_back(_clamp_to(out, float(height), float(width)), format, was_tensor),
+            (int(height), int(width)))
+
+
+def center_crop_bounding_boxes(bounding_boxes, format, canvas_size,  # noqa: A002
+                               output_size):
+    """`crop` about the middle, as **`(boxes, canvas_size)`.**
+
+    **The offset is `round`, and `round` in Python breaks ties to even.** torchvision
+    writes `int(round((image_width - crop_width) / 2.0))`, so a margin of 19 gives 10 and
+    a margin of 13 gives 6 — up in one and down in the other, from the same rule.
+
+    This said *floor-divided* and was wrong, and every even output size agrees with floor
+    division, so the only cases that can tell the two apart are the odd ones. The golden
+    asks an odd size for that reason: measured against torchvision, `[10, 12]` matched
+    while `[11, 13]` was off by a whole pixel in x.
+    """
+    height, width = _canvas(canvas_size, "center_crop_bounding_boxes")
+    out_h, out_w = _canvas(output_size, "center_crop_bounding_boxes")
+    top = int(round((height - out_h) / 2.0))
+    left = int(round((width - out_w) / 2.0))
+    return crop_bounding_boxes(bounding_boxes, format, top, left, out_h, out_w)
+
+
+def pad_bounding_boxes(bounding_boxes, format, canvas_size, padding,  # noqa: A002
+                       padding_mode="constant"):
+    """Boxes shifted by a pad, as **`(boxes, canvas_size)`** — the canvas grew and the
+    caller cannot tell by how much without repeating this arithmetic.
+
+    `padding` is torch's four spellings: one number for all sides, two as
+    `(left/right, top/bottom)`, four as `(left, top, right, bottom)`.
+    """
+    height, width = _canvas(canvas_size, "pad_bounding_boxes")
+    pad = [padding] * 4 if isinstance(padding, (int, float)) else list(padding)
+    if len(pad) == 2:
+        pad = [pad[0], pad[1], pad[0], pad[1]]
+    if len(pad) != 4:
+        raise ValueError(
+            f"padding wants 1, 2 or 4 numbers — got {len(pad)}.\n"
+            "(torch: Padding must be an int or a 1, 2, or 4 element tuple)")
+    # **`padding_mode` changes what fills the new pixels, not where a box goes.** It is
+    # taken so that a caller writing torchvision's call reaches the same behaviour, and
+    # it is genuinely unused here rather than silently unsupported.
+    del padding_mode
+    left, top, right, bottom = (float(v) for v in pad)
+    xyxy, was_tensor = _boxes_as_xyxy(bounding_boxes, format, "pad_bounding_boxes")
+    out = xyxy.copy()
+    out[..., 0::2] += left
+    out[..., 1::2] += top
+    return (_xyxy_back(out, format, was_tensor),
+            (int(height + top + bottom), int(width + left + right)))
+
+
+def resize_bounding_boxes(bounding_boxes, canvas_size, size, max_size=None,
+                          format="xyxy"):  # noqa: A002
+    """Boxes scaled to a new canvas, as **`(boxes, canvas_size)`**.
+
+    **`size` as a single number keeps the aspect ratio**, matching the shorter edge, and
+    as a pair it does not. `max_size` then caps the longer edge, which only bites in the
+    single-number case — torchvision raises if both are given with a pair, and so does
+    this, because a cap that can never apply is a caller who meant something else.
+    """
+    height, width = _canvas(canvas_size, "resize_bounding_boxes")
+    want = [size] if isinstance(size, (int, float)) else list(size)
+    if len(want) == 1:
+        short, long_ = min(height, width), max(height, width)
+        new_short = float(want[0])
+        new_long = long_ * new_short / short
+        if max_size is not None and new_long > max_size:
+            new_short = new_short * max_size / new_long
+            new_long = float(max_size)
+        new_h, new_w = ((new_short, new_long) if height <= width
+                        else (new_long, new_short))
+        new_h, new_w = int(new_h), int(new_w)
+    elif len(want) == 2:
+        if max_size is not None:
+            raise ValueError(
+                "max_size is only used when size is a single number.\n"
+                "(torch: max_size should only be passed if size specifies the length "
+                "of the smaller edge)")
+        new_h, new_w = int(want[0]), int(want[1])
+    else:
+        raise ValueError(
+            f"size wants one or two numbers — got {len(want)}.\n"
+            "(torch: size should be an int or a 1 or 2 element tuple/list)")
+    xyxy, was_tensor = _boxes_as_xyxy(bounding_boxes, format, "resize_bounding_boxes")
+    out = xyxy.copy()
+    out[..., 0::2] *= new_w / width
+    out[..., 1::2] *= new_h / height
+    return _xyxy_back(out, format, was_tensor), (new_h, new_w)
+
+
+def resized_crop_bounding_boxes(bounding_boxes, format, top, left,  # noqa: A002
+                                height, width, size):
+    """`crop` and then `resize`, as **`(boxes, canvas_size)`.**"""
+    cropped, _ = crop_bounding_boxes(bounding_boxes, format, top, left, height, width)
+    return resize_bounding_boxes(cropped, (height, width), size, format=format)
+
+
+def sanitize_bounding_boxes(bounding_boxes, format="xyxy", canvas_size=None,  # noqa: A002
+                            min_size=1.0, min_area=1.0):
+    """The boxes worth keeping, as **`(boxes, mask)`** — a boolean per row, not indices.
+
+    A mask is what a caller needs here: the labels and scores sit in parallel arrays and
+    get filtered by the same one. `remove_small_boxes` in `ops` answers with indices for
+    the same reason from the other direction — both spellings exist in torchvision and
+    each is the shape its own callers already have.
+    """
+    xyxy, was_tensor = _boxes_as_xyxy(bounding_boxes, format,
+                                      "sanitize_bounding_boxes")
+    w = xyxy[..., 2] - xyxy[..., 0]
+    h = xyxy[..., 3] - xyxy[..., 1]
+    keep = (w >= min_size) & (h >= min_size) & (w * h >= min_area)
+    if canvas_size is not None:
+        height, width = _canvas(canvas_size, "sanitize_bounding_boxes")
+        inside = ((xyxy[..., 0] >= 0) & (xyxy[..., 1] >= 0)
+                  & (xyxy[..., 2] <= width) & (xyxy[..., 3] <= height))
+        keep = keep & inside
+    kept = _xyxy_back(xyxy[keep], format, was_tensor)
+    return kept, (_backend().tensor(keep) if was_tensor else keep)
+
+
 def _reduce(values, reduction):
     """`none`, `mean` or `sum`, as every loss in torch takes.
 
@@ -9527,6 +9769,13 @@ _V2_IMAGE_KERNELS = (
 )
 for _name in _V2_IMAGE_KERNELS:
     setattr(v2_functional, _name + "_image", getattr(v2_functional, _name))
+
+
+for _name in ("horizontal_flip_bounding_boxes", "vertical_flip_bounding_boxes",
+              "crop_bounding_boxes", "center_crop_bounding_boxes",
+              "pad_bounding_boxes", "resize_bounding_boxes",
+              "resized_crop_bounding_boxes", "sanitize_bounding_boxes"):
+    setattr(v2_functional, _name, globals()[_name])
 
 
 def to_image(inpt):

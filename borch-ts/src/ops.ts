@@ -557,3 +557,243 @@ export async function batchedNms(
   });
   return Tensor.from(nmsOn(shifted, values, iouThreshold));
 }
+
+// ── v2's bounding-box kernels ────────────────────────────────────────────────
+//
+// **Declined as tv_tensor kernels, and they take a plain tensor.** torchvision's own
+// error on a bare tensor is *"For pure tensor inputs, `format`, `canvas_size` and
+// `clamping_mode` have to be passed"* — the plain-tensor path is documented and
+// supported, and what the tv_tensor would have carried arrives as ordinary arguments.
+//
+// **Five of the seven return `[boxes, canvasSize]`** and the two flips return boxes
+// alone, because a flip does not move the canvas. The core got this wrong first, from a
+// probe that read `out[0] if isinstance(out, tuple) else out` — a helper that normalised
+// away the exact property being measured.
+//
+// `format` is a string here, as everywhere else in this file. torchvision wants its
+// `BoundingBoxFormat` enum and answers a string with `IndexError: index 4 is out of
+// bounds`, having iterated it.
+
+/** `(height, width)`, checked rather than unpacked — a box runs `(x, y)` and a canvas does not. */
+function canvasOf(canvasSize: readonly number[], where: string): [number, number] {
+  const [h, w] = canvasSize;
+  if (h === undefined || w === undefined) {
+    throw new Error(`${where} wants canvasSize as [height, width].`);
+  }
+  return [h, w];
+}
+
+/** Corners back inside a canvas — torchvision's `clamping_mode: "soft"`. */
+function clampTo(box: number[], height: number, width: number): number[] {
+  return [
+    Math.min(Math.max(box[0] ?? 0, 0), width),
+    Math.min(Math.max(box[1] ?? 0, 0), height),
+    Math.min(Math.max(box[2] ?? 0, 0), width),
+    Math.min(Math.max(box[3] ?? 0, 0), height),
+  ];
+}
+
+function fromXyxy(box: number[], fmt: BoxFormat): number[] {
+  const [x1 = 0, y1 = 0, x2 = 0, y2 = 0] = box;
+  if (fmt === "xyxy") return [x1, y1, x2, y2];
+  const w = x2 - x1;
+  const h = y2 - y1;
+  if (fmt === "xywh") return [x1, y1, w, h];
+  return [x1 + 0.5 * w, y1 + 0.5 * h, w, h];
+}
+
+async function mapBoxes(
+  boxes: Tensor,
+  fmt: string,
+  move: (xyxy: number[]) => number[],
+): Promise<Tensor> {
+  checkFormat(fmt, "format");
+  const src = await rows(boxes);
+  const out: number[] = [];
+  for (const box of src) out.push(...fromXyxy(move(toXyxy(box, fmt)), fmt));
+  return Tensor.from(out, [src.length, 4]);
+}
+
+/** Boxes mirrored left-to-right. */
+export async function horizontalFlipBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvasSize: readonly number[],
+): Promise<Tensor> {
+  const [, width] = canvasOf(canvasSize, "horizontalFlipBoundingBoxes");
+  return mapBoxes(boundingBoxes, format,
+    (b) => [width - (b[2] ?? 0), b[1] ?? 0, width - (b[0] ?? 0), b[3] ?? 0]);
+}
+
+/** Boxes mirrored top-to-bottom. */
+export async function verticalFlipBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvasSize: readonly number[],
+): Promise<Tensor> {
+  const [height] = canvasOf(canvasSize, "verticalFlipBoundingBoxes");
+  return mapBoxes(boundingBoxes, format,
+    (b) => [b[0] ?? 0, height - (b[3] ?? 0), b[2] ?? 0, height - (b[1] ?? 0)]);
+}
+
+/** Boxes moved into a crop's frame and clipped to it, as `[boxes, canvasSize]`. */
+export async function cropBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  top: number,
+  left: number,
+  height: number,
+  width: number,
+): Promise<[Tensor, [number, number]]> {
+  const out = await mapBoxes(boundingBoxes, format,
+    (b) => clampTo(
+      [(b[0] ?? 0) - left, (b[1] ?? 0) - top, (b[2] ?? 0) - left, (b[3] ?? 0) - top],
+      height, width));
+  return [out, [height, width]];
+}
+
+/**
+ * `crop` about the middle, as `[boxes, canvasSize]`.
+ *
+ * **The offset is `round`, and torchvision's `round` breaks ties to even.** A margin of
+ * 19 gives 10 and one of 13 gives 6, from the same rule. Written as a floor division
+ * this agrees on every even output size and is off by a whole pixel on odd ones, which
+ * is what the golden's odd case is for — the core shipped the floor version until an
+ * odd size was measured.
+ */
+export async function centerCropBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvasSize: readonly number[],
+  outputSize: readonly number[],
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "centerCropBoundingBoxes");
+  const [outH, outW] = canvasOf(outputSize, "centerCropBoundingBoxes");
+  return cropBoundingBoxes(boundingBoxes, format,
+    roundHalfToEven((height - outH) / 2), roundHalfToEven((width - outW) / 2),
+    outH, outW);
+}
+
+/**
+ * **`Math.round` is not Python's `round`.** `Math.round(6.5)` is 7 and Python's is 6:
+ * one rounds halves up, the other to the nearer even. torchvision is written in Python,
+ * so the Python rule is the one that has to be here.
+ */
+function roundHalfToEven(x: number): number {
+  const floor = Math.floor(x);
+  if (x - floor !== 0.5) return Math.round(x);
+  return floor % 2 === 0 ? floor : floor + 1;
+}
+
+/** Boxes shifted by a pad, as `[boxes, canvasSize]` — the canvas grew. */
+export async function padBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  canvasSize: readonly number[],
+  padding: number | readonly number[],
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "padBoundingBoxes");
+  let pad = typeof padding === "number" ? [padding, padding, padding, padding] : [...padding];
+  if (pad.length === 2) pad = [pad[0]!, pad[1]!, pad[0]!, pad[1]!];
+  if (pad.length !== 4) {
+    throw new Error(`padding wants 1, 2 or 4 numbers — got ${pad.length}.`);
+  }
+  const [l = 0, t = 0, r = 0, b = 0] = pad;
+  const out = await mapBoxes(boundingBoxes, format,
+    (x) => [(x[0] ?? 0) + l, (x[1] ?? 0) + t, (x[2] ?? 0) + l, (x[3] ?? 0) + t]);
+  return [out, [height + t + b, width + l + r]];
+}
+
+/**
+ * Boxes scaled to a new canvas, as `[boxes, canvasSize]`.
+ *
+ * **`size` as a single number keeps the aspect ratio**, matching the shorter edge; as a
+ * pair it does not. `maxSize` caps the longer edge and only bites in the first case, so
+ * giving it with a pair raises rather than being ignored.
+ */
+export async function resizeBoundingBoxes(
+  boundingBoxes: Tensor,
+  canvasSize: readonly number[],
+  size: number | readonly number[],
+  maxSize?: number,
+  format: string = "xyxy",
+): Promise<[Tensor, [number, number]]> {
+  const [height, width] = canvasOf(canvasSize, "resizeBoundingBoxes");
+  const want = typeof size === "number" ? [size] : [...size];
+  let newH: number;
+  let newW: number;
+  if (want.length === 1) {
+    const short = Math.min(height, width);
+    const long = Math.max(height, width);
+    let newShort = want[0]!;
+    let newLong = (long * newShort) / short;
+    if (maxSize !== undefined && newLong > maxSize) {
+      newShort = (newShort * maxSize) / newLong;
+      newLong = maxSize;
+    }
+    [newH, newW] = height <= width ? [newShort, newLong] : [newLong, newShort];
+    newH = Math.trunc(newH);
+    newW = Math.trunc(newW);
+  } else if (want.length === 2) {
+    if (maxSize !== undefined) {
+      throw new Error("maxSize is only used when size is a single number.");
+    }
+    newH = Math.trunc(want[0]!);
+    newW = Math.trunc(want[1]!);
+  } else {
+    throw new Error(`size wants one or two numbers — got ${want.length}.`);
+  }
+  const sy = newH / height;
+  const sx = newW / width;
+  const out = await mapBoxes(boundingBoxes, format,
+    (b) => [(b[0] ?? 0) * sx, (b[1] ?? 0) * sy, (b[2] ?? 0) * sx, (b[3] ?? 0) * sy]);
+  return [out, [newH, newW]];
+}
+
+/** `crop` then `resize`, as `[boxes, canvasSize]`. */
+export async function resizedCropBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string,
+  top: number,
+  left: number,
+  height: number,
+  width: number,
+  size: number | readonly number[],
+): Promise<[Tensor, [number, number]]> {
+  const [cropped] = await cropBoundingBoxes(boundingBoxes, format, top, left, height, width);
+  return resizeBoundingBoxes(cropped, [height, width], size, undefined, format);
+}
+
+/**
+ * The boxes worth keeping, as `[boxes, mask]` — **a boolean per row, not indices.**
+ *
+ * A mask is the shape the caller already has: labels and scores sit in parallel arrays
+ * and get filtered by the same one. `removeSmallBoxes` answers with indices for the same
+ * reason from the other side, and both spellings are torchvision's.
+ */
+export async function sanitizeBoundingBoxes(
+  boundingBoxes: Tensor,
+  format: string = "xyxy",
+  canvasSize?: readonly number[],
+  minSize = 1.0,
+  minArea = 1.0,
+): Promise<[Tensor, Tensor]> {
+  checkFormat(format, "format");
+  const src = await rows(boundingBoxes);
+  const keep: number[] = [];
+  const out: number[] = [];
+  for (const box of src) {
+    const xyxy = toXyxy(box, format);
+    const w = (xyxy[2] ?? 0) - (xyxy[0] ?? 0);
+    const h = (xyxy[3] ?? 0) - (xyxy[1] ?? 0);
+    let ok = w >= minSize && h >= minSize && w * h >= minArea;
+    if (ok && canvasSize !== undefined) {
+      const [height, width] = canvasOf(canvasSize, "sanitizeBoundingBoxes");
+      ok = (xyxy[0] ?? 0) >= 0 && (xyxy[1] ?? 0) >= 0
+        && (xyxy[2] ?? 0) <= width && (xyxy[3] ?? 0) <= height;
+    }
+    keep.push(ok ? 1 : 0);
+    if (ok) out.push(...box);
+  }
+  return [Tensor.from(out, [out.length / 4, 4]), Tensor.from(keep, [keep.length])];
+}

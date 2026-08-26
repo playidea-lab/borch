@@ -759,7 +759,36 @@ SKIPPED = {
                                         "project",
     "transforms.v2.functional.*_mask": "as above, for segmentation masks — a tv_tensor "
                                        "type, and the type system is declined in `v2`",
-    "transforms.v2.functional.*_bounding_boxes": "as above, for boxes",
+    # **Not "as above" any more — that sentence was disproved for boxes.**
+    #
+    # The mask row says these kernels want a tv_tensor type this library declines, and
+    # the box kernels borrowed it. They do not: torchvision's own error on a bare tensor
+    # is *"For pure tensor inputs, `format`, `canvas_size` and `clamping_mode` have to be
+    # passed"*, so the plain-tensor path is documented and supported, and eight of them
+    # are built here now.
+    #
+    # What is left is six, and each is left for its own reason rather than a shared one:
+    # `affine`, `rotate`, `perspective` and `elastic` warp four corners and then take the
+    # axis-aligned box around them, which is real arithmetic nobody has written;
+    # `clamp_bounding_boxes` is entirely about the `clamping_mode` taxonomy
+    # (`soft`/`hard`/`none`/`auto`), and only `soft` is reproduced here; `get_size` reads
+    # the canvas out of the tv_tensor itself, so on a plain tensor there is nothing for
+    # it to read.
+    "transforms.v2.functional.affine_bounding_boxes": "the corner warp — four corners "
+                                                      "moved, then the axis-aligned box "
+                                                      "around them. Not written yet",
+    "transforms.v2.functional.rotate_bounding_boxes": "as above",
+    "transforms.v2.functional.perspective_bounding_boxes": "as above",
+    "transforms.v2.functional.elastic_bounding_boxes": "as above",
+    "transforms.v2.functional.clamp_bounding_boxes": "its whole subject is the "
+                                                     "`clamping_mode` taxonomy, and the "
+                                                     "crop family here reproduces `soft` "
+                                                     "alone. A mode accepted and ignored "
+                                                     "is worse than one that is absent",
+    "transforms.v2.functional.get_size_bounding_boxes": "it reads the canvas out of the "
+                                                        "tv_tensor, and a plain tensor "
+                                                        "carries none — the canvas is an "
+                                                        "argument everywhere else here",
     "transforms.v2.functional.*_keypoints": "as above, for keypoints",
 
     # The eight left over are not kernels and not v1's. Each carries its own reason.
