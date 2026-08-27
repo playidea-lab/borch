@@ -90,11 +90,11 @@
 
     <h2>Linux with an NVIDIA card</h2>
     <p>
-      <strong>Two flags are enough, and the runner now sends those two.</strong> Chrome keeps a
-      blocklist and consults it <em>before</em> asking the driver, so a working card is
-      refused — but the flag named after that blocklist turns out not to be the one that
-      lifts it. Measured on both cards the same way, a real X session and the system
-      Chrome:
+      <strong>Two flags are enough, and the runner now sends those two.</strong> What
+      happens without them is not a refusal &mdash; it is quieter than that. Chrome hands
+      back its CPU rasteriser and lets the page run, and it keeps doing that until its
+      Vulkan backend is switched on. Measured on both cards the same way, a real X session
+      and the system Chrome:
     </p>
     <div style="overflow-x:auto">
     <table>
@@ -126,8 +126,10 @@
     </table>
     </div>
     <p>
-      So this is the line to paste, and the two flags after the first are the ones doing
-      the work:
+      So this is the line to paste. <strong>Two flags, and the second is the one doing the
+      work</strong> — on Linux, WebGPU runs on Chrome's Vulkan backend, and until that is
+      switched on the browser hands back its CPU rasteriser instead of refusing. The card
+      was never blocked; the backend was off.
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
   --enable-unsafe-webgpu --enable-features=Vulkan</code></pre>
@@ -135,6 +137,14 @@
       In <code>chrome://flags</code> they are <strong>#enable-unsafe-webgpu</strong> and
       <strong>#enable-vulkan</strong>. Relaunch after changing them — <strong>a window
       already open keeps the old settings</strong>, which cost an hour here.
+    </p>
+    <p>
+      <strong>If those two do not do it, add <code>--ignore-gpu-blocklist</code>.</strong>
+      Chrome keeps a list of GPU and driver combinations it refuses before asking the
+      driver anything, and that flag is how you tell it to go and look. It changed nothing
+      on any machine measured here &mdash; but <strong>none of those machines were on the
+      list</strong>, so this page has never seen the situation the flag exists for. Yours
+      might be it.
     </p>
     <p class="small">
       <strong>The whole suite was run on those two flags</strong>, not just an adapter
