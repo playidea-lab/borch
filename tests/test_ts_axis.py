@@ -379,7 +379,22 @@ FROZEN = {
     # one is the clearest kind of absence here: they walk directories and read archives
     # off disk, and a page has neither. **The number rising is this row working**, not
     # failing — each name here is a Python-side dataset whose reason is a filesystem.
-    "datasets": 47,
+    #
+    # 47 → 50. The two VOC halves and the pets, off the gap table's declined list on a
+    # measurement rather than a reading: torchvision decodes nothing, it hands the path
+    # to `PIL.Image.open`, and PIL sniffs the content rather than the name. The reason
+    # under them said *a codec*, which is one line inside a loader and not the dataset.
+    #
+    # 50 → 52. `CREStereo` and `FallingThingsStereo`, the last two of the stereo and
+    # flow family, on the same measurement. **The family is whole.**
+    #
+    # 52 → 54. The two Caltechs, whose rows said an md5 — and whose `_check_integrity`
+    # is one `os.path.exists`, with torchvision's own comment beside it reading *can be
+    # more robust and check hash of files*.
+    #
+    # 54 → 55. `WIDERFace`, whose `_check_integrity` is a loop of `os.path.exists` over
+    # four directory names — the third of the group whose row claimed an md5.
+    "datasets": 55,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the

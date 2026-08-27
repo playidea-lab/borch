@@ -641,38 +641,69 @@ SKIPPED = {
     # rather than at zero.
     #
     # Eight names are **absent with no reason on purpose**; see this file's docstring.
+    #
+    # ## And a fifth way `as above — a codec` was wrong
+    #
+    # The four above were each about a dataset that reads no JPEG. This one is about
+    # datasets that do, and it is larger: **the codec is not the dataset's wall at
+    # all.** torchvision decodes nothing — it hands the path to `PIL.Image.open`, and
+    # PIL **sniffs the content rather than the name**. Measured: a `.jpg` holding PNG
+    # bytes opens there, and `_folder_loader` settles it on the magic number here, for
+    # a reason that was already written on it.
+    #
+    # So what these classes actually do — walk a split file, pair a picture with a
+    # target, fold an XML tree, build class names out of file names — can be written
+    # and compared against torchvision's own answer. The codec is one line inside the
+    # loader, it is still refused, and somebody holding a real JPEG meets it there with
+    # a message that names it.
+    #
+    # `VOCSegmentation`, `VOCDetection` and `OxfordIIITPet` came off this list on that
+    # measurement. The rows left are the ones where a **second** wall was standing
+    # behind the sentence and nobody had said so: an md5 of the real archive, a
+    # third-party package, a video container, a database. Each is named on its own row
+    # now rather than pointing at the row above it — which is the habit that let one
+    # sentence take twenty-five names off the table.
 
-    "datasets.Caltech101": "as above — a codec",
-    "datasets.Caltech256": "as above — a codec",
-    "datasets.CelebA": "as above — a codec",
+    "datasets.CelebA": "`_check_integrity` md5s five files, and there is no fixture that passes it",
     "datasets.Cityscapes": "its pictures are PNG and `_png_read` handles those now — the wall left is the dataset rather than the format: thirty splits crossed with five target types, polygon annotations in JSON, and a 60GB archive behind a login. **The codec was never the expensive half of this one**, which the old row (`as above — a codec`) could not say because it pointed at a sentence about JPEG",
-    "datasets.CocoCaptions": "as above — a codec",
-    "datasets.CocoDetection": "as above — a codec",
-    # **A new kind of wall, and it is not a codec.** These four gate on the *md5 of the
-    # real archive* before they read anything: `check_integrity` on a `.tgz` or on the
-    # annotation files themselves. A fixture cannot pass that check, so torchvision's
-    # own reader refuses the tree this repository would compare against — and every
-    # dataset here is compared against torchvision's own or it is not written. The
-    # class is a walk plus a loader like the ones that went in; what is missing is a
-    # way to check it, which is a different sentence and is why these are declined
-    # rather than 아직.
+    "datasets.CocoCaptions": "as `CocoDetection` — `pycocotools`, which is a dependency and not a codec",
+    "datasets.CocoDetection": "it reads its annotations through **`pycocotools`**, a third-party package with a compiled half. Its row said *a codec*, which is a smaller wall standing in front of a larger one",
+    # **A wall that is not a codec, and it is smaller than it was written.** These gate
+    # on the *md5 of the real archive* before they read anything: `check_integrity` on a
+    # `.tgz` or on the annotation files themselves. A fixture cannot pass that, so
+    # torchvision's own reader refuses the tree this repository would compare against —
+    # and every dataset here is compared against torchvision's own or it is not written.
+    #
+    # **The sentence was applied to five names it was not true of**, and the count in
+    # this note was wrong once before it was right. `Caltech101`, `Caltech256` and
+    # `WIDERFace` have a `_check_integrity` that is `os.path.exists` — torchvision's own
+    # comment on two of them reads *can be more robust and check hash of files* — and
+    # `ImageNet` and `SBDataset` have no such method at all: the first parses a devkit
+    # tar for the synsets and the second imports `scipy` before anything else. All
+    # three of the first group are in.
+    #
+    # **The two `LFW`s were counted among them and should not have been.** Neither
+    # subclass has the method; their base `_LFW` does, and it calls `check_integrity`
+    # with an md5 on both the archive and the labels file. Written the other way here
+    # first — from reading the subclasses and stopping — which is the same habit this
+    # paragraph is about, one level up the inheritance instead of one row down the list.
+    #
+    # It was written from the *word* `_check_integrity` rather than from opening it,
+    # which is the same habit as `as above — a codec` one screen up. Measured, all three
+    # of the first group construct from a fixture; the two Caltechs are in.
     "datasets.Flowers102": "its labels are a plain numeric `.mat` and `_mat_read` reads those — but `_check_integrity` md5s the real `imagelabels.mat` and `setid.mat` before reading, so no fixture reaches torchvision's own answer to compare against",
     "datasets.LFWPeople": "as above — `_LFW._check_integrity` md5s both the archive and the annotation file",
     "datasets.LFWPairs": "as above — the same base class, the same two md5s",
     "datasets.Places365": "as above — the devkit tar is md5'd",
     "datasets.SBU": "as above, and `download=True` is its default",
     "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
-    "datasets.ImageNet": "as above — a codec",
-    "datasets.Kinetics": "as above",
+    "datasets.ImageNet": "**its meta file is a torch pickle.** `load_meta_file` is `torch.load(meta.bin, weights_only=True)`, and when that file is absent `parse_devkit_archive` builds it by reading `data/meta.mat` out of the devkit tar — a **MATLAB struct array**. So a fixture has to write one format or the other, and both are formats this repository reads rather than writes. Nothing is md5'd: `check_integrity` is called on the meta file with no hash, which is an existence check",
+    "datasets.Kinetics": "video, as `HMDB51` and `UCF101`. Its row said `as above` under a sentence about a codec, which is the wrong wall by a wide margin — this one wants a container, a codec and a clip sampler",
     "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",
     "datasets.LSUNClass": "as above",
-    "datasets.OxfordIIITPet": "as above — a codec",
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
-    "datasets.SBDataset": "its pictures are JPEG, which is the codec wall. Its `.mat` annotations are not — `_mat_read` handles those, and this row named them as a second reason when there was only ever one",
+    "datasets.SBDataset": "**its annotations are sparse matrices inside a struct array.** `_get_boundaries_target` reads `mat['GTcls'][0]['Boundaries'][0][i][0]` and calls `.toarray()` on it — twenty scipy sparse matrices per picture. `_mat_read` reads dense numeric, struct, cell and char, and `mxSPARSE_CLASS` is none of those. The `segmentation` mode alone is dense and would be reachable, and a fixture would still have to **write** a struct-array `.mat` without scipy, which is a writer this repository does not have. The old row said a codec, and named the `.mat` as a second reason it then dismissed — the dismissal was of the half that turned out to be the wall",
     "datasets.UCF101": "as above",
-    "datasets.VOCDetection": "as above — a codec",
-    "datasets.VOCSegmentation": "as above — a codec",
-    "datasets.WIDERFace": "as above — a codec",
 
     # The stereo and optical-flow sets were one row and are no longer one kind. It read
     # *paired pictures plus a disparity field, so a codec and then another format*, and
@@ -682,11 +713,12 @@ SKIPPED = {
     # read. The row was one true sentence covering fourteen names, and it was true of
     # two of them.
     #
-    # What is left below is a codec, and it is the same codec as everywhere else.
-    "datasets.CREStereo": "its pictures are JPEG, which is the codec wall. The rest "
-                            "of this family went in — the disparity fields turned out "
-                            "to be PNG, `.flo` or `.pfm`, none of which needs a codec",
-    "datasets.FallingThingsStereo": "as above — JPEG",
+    # **Nothing is left below.** That sentence used to be followed by two rows saying
+    # *a codec*, and the codec was a loader's line rather than either dataset's: what
+    # `CREStereo` needed was four directory names in the order its *code* gives — not
+    # the one its docstring draws — and a disparity divided by thirty-two, and what
+    # `FallingThingsStereo` needed was a depth turned into a disparity with the focal
+    # length out of a JSON beside the picture. **The whole family is in.**
     # Every 아직 row that stood here is gone, including the one written this same
     # session claiming Middlebury needed *a calibration file per scene to parse*. That
     # sentence was written without opening one: `calib.txt` is in every scene directory

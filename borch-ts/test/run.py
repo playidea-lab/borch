@@ -876,11 +876,12 @@ NOT_PORTED = {
     # calls a loader on each path, and a page has no directories to walk. Everything
     # else under `dataset::` is a format that could in principle cross; this is a
     # filesystem, which is not a format at all.
-    "dataset::": (54, "파이썬 — CIFAR's batches are pickles and the browser side "
-                      "reaches CIFAR through a JPEG sprite instead; `ImageFolder`, "
-                      "CLEVR, RenderedSST2, the twelve stereo and flow sets, Kitti, PhotoTour and the eleven that walk a listing and call a loader "
-                      "walk directories and read archives off disk, and a page has "
-                      "neither"),
+    "dataset::": (65, "파이썬 — CIFAR's batches are pickles and the browser side "
+                        "reaches CIFAR through a JPEG sprite instead; `ImageFolder`, "
+                        "CLEVR, RenderedSST2, the fourteen stereo and flow sets, Kitti, "
+                        "PhotoTour, the two VOC halves, the pets, the two Caltechs, the faces and the eleven that "
+                        "walk a listing and call a loader walk directories and read "
+                        "archives off disk, and a page has neither"),
     # `v2::` **was** a row here — 71, then 52, then gone. The nineteen that needed no v1
     # field access went first; the fifty-two twins followed once it was clear the fields
     # did not have to be read at all. Each twin extends the v1 class and keeps its own

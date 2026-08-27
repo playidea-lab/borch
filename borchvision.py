@@ -97,6 +97,7 @@ import zipfile as _zipfile
 import zlib as _zlib
 import urllib.request as _urlreq
 import warnings as _warnings
+import xml.etree.ElementTree as _ElementTree
 
 import numpy as _np
 
@@ -9154,6 +9155,114 @@ class CarlaStereo(_StereoMatchingDataset):
         return _np.abs(_read_pfm_file(path)), None
 
 
+class CREStereo(_StereoMatchingDataset):
+    """The synthetic set CREStereo trains on, **four kinds of scene in four
+    directories.**
+
+    <https://arxiv.org/pdf/2203.11483.pdf>
+
+    ## Why it was refused and is not
+
+    Its row read *its pictures are JPEG, which is the codec wall*, and that was the last
+    of the twelve in this family to say so. **The codec is not this class's wall**:
+    torchvision hands the path to `PIL.Image.open`, which reads the content rather than
+    the name, and `_folder_loader` does the same here. What the row took off the table
+    was four directory names and a division.
+
+    **The disparity is a PNG divided by thirty-two**, which is how the archive stores a
+    fractional map in whole numbers. Read without it every disparity is thirty-two times
+    too large — a number that is finite, plausible and wrong by a constant, which is the
+    kind a picture of the output does not show.
+
+    **The four scene directories are read in a fixed order**, not `glob`'s, and the
+    order is `shapenet, reflective, tree, hole`. A directory scan would sort them
+    alphabetically and pair the same pictures under different indices, and the count
+    would still come out right.
+
+    **torchvision's own docstring disagrees with its code, twice.** The tree it draws
+    puts `tree` first and names the disparities `*_left.disp.jpg`; the code lists
+    `shapenet` first and globs `*_left.disp.png`. Written from the drawing — which is
+    what a reader reaches for — this class pairs the wrong scenes and finds no
+    disparities at all. The code is what runs, so the code is what is copied.
+    """
+
+    _has_built_in_disparity_mask = True
+    _SCENES = ("shapenet", "reflective", "tree", "hole")
+
+    def __init__(self, root, transforms=None, loader=None):
+        super().__init__(root, transforms)
+        self.loader = _folder_loader if loader is None else loader
+        base = _os.path.join(self.root, "CREStereo")
+        for scene in self._SCENES:
+            self._images += self._scan_pairs(
+                _os.path.join(base, scene, "*_left.jpg"),
+                _os.path.join(base, scene, "*_right.jpg"))
+            self._disparities += self._scan_pairs(
+                _os.path.join(base, scene, "*_left.disp.png"),
+                _os.path.join(base, scene, "*_right.disp.png"))
+
+    def _read_disparity(self, path):
+        block = _np.asarray(self.loader(path), dtype=_np.float32)
+        return block[None, :, :] / 32.0, None
+
+
+class FallingThingsStereo(_StereoMatchingDataset):
+    """NVIDIA's Falling Things, **where the file on disk is a depth and the dataset
+    wants a disparity.**
+
+    <https://research.nvidia.com/publication/2018-06_falling-things>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — JPEG*, pointing at `CREStereo`'s codec sentence. The codec
+    is a loader's, not this class's: what the row took off the table is the conversion
+    below and a directory pattern that differs per variant.
+
+    **The depth is turned into a disparity with the camera's own focal length**, read
+    out of `_camera_settings.json` beside the picture. `disparity = baseline · focal ·
+    100 / depth`, and the hundred is a pixel constant the readme gives inverted. Handed
+    back as a depth the map is finite, smooth and upside down — near and far swapped —
+    which is a picture that looks like a disparity map to anyone glancing at it.
+
+    **`single` is nested one directory deeper than `mixed`.** One pattern for both finds
+    nothing for whichever variant it does not match, and `both` then quietly holds half
+    of what it says.
+    """
+
+    _has_built_in_disparity_mask = False
+    _BASELINE = 6
+    _PIXEL_CONSTANT = 100
+
+    def __init__(self, root, variant="single", transforms=None, loader=None):
+        super().__init__(root, transforms)
+        if variant not in ("single", "mixed", "both"):
+            raise ValueError(
+                f"Unknown value '{variant}' for argument variant. Valid values are "
+                "{single, mixed, both}.")
+        self.loader = _folder_loader if loader is None else loader
+        base = _os.path.join(self.root, "FallingThings")
+        variants = {"single": ["single"], "mixed": ["mixed"],
+                    "both": ["single", "mixed"]}[variant]
+        prefix = {"single": ("*", "*"), "mixed": ("*",)}
+        for one in variants:
+            where = _os.path.join(base, one, *prefix[one])
+            self._images += self._scan_pairs(
+                _os.path.join(where, "*.left.jpg"),
+                _os.path.join(where, "*.right.jpg"))
+            self._disparities += self._scan_pairs(
+                _os.path.join(where, "*.left.depth.png"),
+                _os.path.join(where, "*.right.depth.png"))
+
+    def _read_disparity(self, path):
+        depth = _np.asarray(self.loader(path), dtype=_np.float32)
+        with open(_os.path.join(_os.path.dirname(path),
+                                "_camera_settings.json")) as handle:
+            settings = _json.load(handle)
+        focal = settings["camera_settings"][0]["intrinsic_settings"]["fx"]
+        disparity = (self._BASELINE * focal * self._PIXEL_CONSTANT) / depth
+        return disparity[None, :, :], None
+
+
 class ETH3DStereo(_StereoMatchingDataset):
     """ETH3D's low-resolution two-view set.
 
@@ -10039,6 +10148,505 @@ class FGVCAircraft(VisionDataset):
             label = self.target_transform(label)
         return image, label
 
+
+
+# ── the three whose only stated wall was a codec ─────────────────────────────────
+#
+# **`as above — a codec` was fifteen rows, and for these three it was not the wall.**
+# torchvision does not decode anything: it hands the path to `PIL.Image.open`, and PIL
+# **sniffs the content rather than the name.** Measured — a `.jpg` holding PNG bytes
+# opens there and reads here, because `_folder_loader` settles it on the magic number
+# too, for a reason it already gives.
+#
+# So what these classes actually do — walk a split file, pair a picture with a target,
+# fold an XML tree, read a segmentation map — can be written and asked. What cannot is
+# the codec, and that refusal lives in `_folder_loader`, one line down, where somebody
+# holding a real JPEG meets it with a message that names it.
+#
+# The old row said the opposite of that: it put the loader's limit on the dataset's row
+# and took twenty-five names off the table with one sentence. `Cityscapes` had already
+# been corrected the same way — *the codec was never the expensive half of this one* —
+# and the correction stopped at the one row somebody happened to open.
+
+
+class _VOCBase(VisionDataset):
+    """What the two VOC datasets share: **a split file naming the pairs.**
+
+    The directory is `VOCdevkit/VOC{year}`, the pictures are in `JPEGImages`, and the
+    targets are beside them under a name each subclass gives. Every entry in the split
+    file becomes one pair, in the file's own order — sorting it would be tidier and
+    would not be the dataset, because the split file is the dataset.
+    """
+
+    _SPLITS_DIR = ""
+    _TARGET_DIR = ""
+    _TARGET_FILE_EXT = ""
+    _YEARS = tuple(str(one) for one in range(2007, 2013))
+
+    def __init__(self, root, year="2012", image_set="train", download=False,
+                 transform=None, target_transform=None, transforms=None, loader=None):
+        super().__init__(root, transforms, transform, target_transform)
+        if year not in self._YEARS:
+            raise ValueError(
+                f"Unknown value '{year}' for argument year. Valid values are "
+                f"{{{', '.join(self._YEARS)}}}.")
+        self.year = year
+        # **`test` exists for 2007 alone.** It is a different archive with a different
+        # checksum, and offering it for every year would name a split that is not there.
+        allowed = ["train", "trainval", "val"] + (["test"] if year == "2007" else [])
+        if image_set not in allowed:
+            raise ValueError(
+                f"Unknown value '{image_set}' for argument image_set. Valid values are "
+                f"{{{', '.join(allowed)}}}.")
+        self.image_set = image_set
+        # **The archive is not fetched here and the flag is not refused either.** VOC's
+        # tarball is two gigabytes behind a university host that has moved twice; what
+        # this class needs is the extracted tree, and the message below says which one.
+        # A `download=True` that raised would be the trap this file's own note warns
+        # about, and one that pretended to fetch would be worse.
+        del download
+        base = _os.path.join(self.root, "VOCdevkit", f"VOC{year}")
+        if not _os.path.isdir(base):
+            raise RuntimeError(
+                "Dataset not found or corrupted. You can use download=True to "
+                "download it")
+        self.loader = _folder_loader if loader is None else loader
+        split_file = _os.path.join(base, "ImageSets", self._SPLITS_DIR,
+                                   image_set.rstrip("\n") + ".txt")
+        with open(split_file) as handle:
+            names = [one.strip() for one in handle.readlines()]
+        self.images = [_os.path.join(base, "JPEGImages", one + ".jpg")
+                       for one in names]
+        self.targets = [_os.path.join(base, self._TARGET_DIR,
+                                      one + self._TARGET_FILE_EXT) for one in names]
+
+    def __len__(self):
+        return len(self.images)
+
+
+class VOCSegmentation(_VOCBase):
+    """Pascal VOC's segmentation half — a picture and a map of class numbers.
+
+    **The map is a palette PNG and comes back as one channel**, which is what
+    `_png_read` gives for a paletted image. Read as three, every class number would
+    arrive as the colour the palette gives it and the labels would be gone.
+    """
+
+    _SPLITS_DIR = "Segmentation"
+    _TARGET_DIR = "SegmentationClass"
+    _TARGET_FILE_EXT = ".png"
+
+    @property
+    def masks(self):
+        return self.targets
+
+    def __getitem__(self, index):
+        image = self.loader(self.images[index])
+        target = self.loader(self.targets[index])
+        if self.transforms is not None:
+            image, target = self.transforms(image, target)
+        return image, target
+
+
+class VOCDetection(_VOCBase):
+    """Pascal VOC's detection half — a picture and **the annotation XML as a tree of
+    dictionaries.**
+
+    Three things about the folding, and all three are torchvision's:
+
+    - **A tag that appears once is its value and a tag that repeats is a list.** So
+      `size` is a dictionary and two `object`s are a list of two, and a reader written
+      against a one-object fixture indexes a dictionary by number.
+    - **`object` is a list even when there is one**, which is the exception to the
+      line above and the reason it is written separately: a detector iterates the
+      objects, and iterating a single dictionary walks its keys.
+    - **Text is stripped and kept only on a leaf.** A node with children carries
+      whitespace between them, and taking that as a value gives every branch a `\n  `.
+    """
+
+    _SPLITS_DIR = "Main"
+    _TARGET_DIR = "Annotations"
+    _TARGET_FILE_EXT = ".xml"
+
+    @property
+    def annotations(self):
+        return self.targets
+
+    def __getitem__(self, index):
+        image = self.loader(self.images[index])
+        target = self.parse_voc_xml(
+            _ElementTree.parse(self.annotations[index]).getroot())
+        if self.transforms is not None:
+            image, target = self.transforms(image, target)
+        return image, target
+
+    @staticmethod
+    def parse_voc_xml(node):
+        out = {}
+        children = list(node)
+        if children:
+            gathered = _collections.defaultdict(list)
+            for one in map(VOCDetection.parse_voc_xml, children):
+                for key, value in one.items():
+                    gathered[key].append(value)
+            if node.tag == "annotation":
+                gathered["object"] = [gathered["object"]]
+            out = {node.tag: {key: value[0] if len(value) == 1 else value
+                              for key, value in gathered.items()}}
+        if node.text:
+            text = node.text.strip()
+            if not children:
+                out[node.tag] = text
+        return out
+
+
+class Caltech101(VisionDataset):
+    """A hundred and one object categories, **and a directory that is not one of them.**
+
+    <https://data.caltech.edu/records/mzrjq-6wc02>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*, and then said the wall was an md5. **Neither is
+    true.** torchvision's `_check_integrity` here is one line — `os.path.exists` on the
+    category directory — and its own comment says so: *can be more robust and check hash
+    of files*. The row was written from the word `_check_integrity` rather than from
+    opening it.
+
+    Three things this class has to get right:
+
+    - **`BACKGROUND_Google` is a directory and not a class**, and it is removed after
+      the sort. Left in, every label above it shifts by one and the picture still comes
+      back from the directory the label names.
+    - **Four category names differ between the pictures and the annotations**, and the
+      map is torchvision's: `airplanes` is `Airplanes_Side_2`, `Faces` is `Faces_2`.
+      A reader that assumed the two agree finds no annotation for four categories out of
+      a hundred and one, which is a `FileNotFoundError` on four percent of the set.
+    - **The index is one-based per category**, so `image_0001.jpg` is the first of each.
+      Counted across the whole set instead, every picture after the first category is
+      looked for under a name that is not there.
+    """
+
+    _ANNOTATION_NAMES = {"Faces": "Faces_2", "Faces_easy": "Faces_3",
+                         "Motorbikes": "Motorbikes_16",
+                         "airplanes": "Airplanes_Side_2"}
+
+    def __init__(self, root, target_type="category", transform=None,
+                 target_transform=None, download=False, loader=None):
+        super().__init__(_os.path.join(root, "caltech101"), transform=transform,
+                         target_transform=target_transform)
+        _os.makedirs(self.root, exist_ok=True)
+        if isinstance(target_type, str):
+            target_type = [target_type]
+        for one in target_type:
+            if one not in ("category", "annotation"):
+                raise ValueError(
+                    f"Unknown value '{one}' for argument target_type. Valid values are "
+                    "{category, annotation}.")
+        self.target_type = list(target_type)
+        self.loader = _folder_loader if loader is None else loader
+        del download
+        if not _os.path.exists(_os.path.join(self.root, "101_ObjectCategories")):
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        self.categories = sorted(
+            _os.listdir(_os.path.join(self.root, "101_ObjectCategories")))
+        self.categories.remove("BACKGROUND_Google")
+        self.annotation_categories = [self._ANNOTATION_NAMES.get(one, one)
+                                      for one in self.categories]
+        self.index = []
+        self.y = []
+        for i, category in enumerate(self.categories):
+            count = len(_os.listdir(
+                _os.path.join(self.root, "101_ObjectCategories", category)))
+            self.index.extend(range(1, count + 1))
+            self.y.extend(count * [i])
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, index):
+        image = self.loader(_os.path.join(
+            self.root, "101_ObjectCategories", self.categories[self.y[index]],
+            f"image_{self.index[index]:04d}.jpg"))
+        target = []
+        for one in self.target_type:
+            if one == "category":
+                target.append(self.y[index])
+            else:
+                data = _mat_read(_os.path.join(
+                    self.root, "Annotations",
+                    self.annotation_categories[self.y[index]],
+                    f"annotation_{self.index[index]:04d}.mat"))
+                target.append(data["obj_contour"])
+        target = tuple(target) if len(target) > 1 else target[0]
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+
+class Caltech256(VisionDataset):
+    """Two hundred and fifty-six categories, **numbered in their own directory names.**
+
+    <https://data.caltech.edu/records/nyy15-4j048>
+
+    Its row said an md5 too, and here as well `_check_integrity` is one `os.path.exists`.
+
+    **The file name carries the label**: `003_0001.jpg` is the first picture of the
+    third category, so the number comes from the position in the sorted listing and not
+    from the directory's own prefix. The two agree on the real archive, which is why a
+    reader that took the prefix passes on it — and disagrees the moment a category is
+    missing, which is what a fixture is.
+
+    **Only `.jpg` files are counted.** The archive ships a stray `RENAME2` and a
+    `.mat` beside the pictures in some categories, and counting the directory whole
+    walks off the end of the numbering.
+    """
+
+    def __init__(self, root, transform=None, target_transform=None, download=False,
+                 loader=None):
+        super().__init__(_os.path.join(root, "caltech256"), transform=transform,
+                         target_transform=target_transform)
+        _os.makedirs(self.root, exist_ok=True)
+        self.loader = _folder_loader if loader is None else loader
+        del download
+        if not _os.path.exists(_os.path.join(self.root, "256_ObjectCategories")):
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        self.categories = sorted(
+            _os.listdir(_os.path.join(self.root, "256_ObjectCategories")))
+        self.index = []
+        self.y = []
+        for i, category in enumerate(self.categories):
+            count = len([one for one in _os.listdir(
+                _os.path.join(self.root, "256_ObjectCategories", category))
+                if one.endswith(".jpg")])
+            self.index.extend(range(1, count + 1))
+            self.y.extend(count * [i])
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, index):
+        image = self.loader(_os.path.join(
+            self.root, "256_ObjectCategories", self.categories[self.y[index]],
+            f"{self.y[index] + 1:03d}_{self.index[index]:04d}.jpg"))
+        target = self.y[index]
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+
+class WIDERFace(VisionDataset):
+    """Faces in crowds, **with nine numbers per box and only four of them a box.**
+
+    <http://shuoyang1213.me/WIDERFACE/>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*, and then that an md5 stood behind it. Neither.
+    torchvision's `_check_integrity` here is a loop of `os.path.exists` over the four
+    extracted directory names — measured, a fixture with all four constructs.
+
+    **The annotation file is a state machine, not a table.** A line is a path, then a
+    count, then that many box lines, and then a path again. Read as columns it is
+    nonsense; read with the count ignored, one image's boxes run into the next one's
+    and every image after the first is wrong while the total stays right.
+
+    **Ten numbers a line and the first four are the box** — `x, y, w, h`, not a corner
+    pair. The other six are per-face flags, and each is its own key: a reader that kept
+    them as one array of six gives the same numbers under a shape nobody asked for.
+
+    **`test` has no annotations at all**, and its file is a plain list of paths under a
+    different name. The target there is `None`, which is what a detector's evaluation
+    loop checks for.
+    """
+
+    _EXTRACTED = ("WIDER_train", "WIDER_val", "WIDER_test", "wider_face_split")
+    _FLAGS = ("blur", "expression", "illumination", "occlusion", "pose", "invalid")
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False, loader=None):
+        super().__init__(_os.path.join(root, "widerface"), transform=transform,
+                         target_transform=target_transform)
+        if split not in ("train", "val", "test"):
+            raise ValueError(
+                f"Unknown value '{split}' for argument split. Valid values are "
+                "{train, val, test}.")
+        self.split = split
+        self.loader = _folder_loader if loader is None else loader
+        del download
+        for name in self._EXTRACTED:
+            if not _os.path.exists(_os.path.join(self.root, name)):
+                raise RuntimeError(
+                    "Dataset not found or corrupted. You can use download=True to "
+                    "download and prepare it")
+        self.img_info = []
+        if split == "test":
+            self._parse_test()
+        else:
+            self._parse_annotations()
+
+    def _parse_annotations(self):
+        name = f"wider_face_{self.split}_bbx_gt.txt"
+        with open(_os.path.join(self.root, "wider_face_split", name)) as handle:
+            lines = handle.readlines()
+        # **Three states, and the count is what leaves the last one.** Written as
+        # "a path line is one with a slash in it" the parser agrees on this archive and
+        # breaks on the first directory that has none.
+        want_path, want_count, want_boxes = True, False, False
+        count, seen, labels = 0, 0, []
+        for line in lines:
+            line = line.rstrip()
+            if want_path:
+                path = _os.path.abspath(_os.path.expanduser(_os.path.join(
+                    self.root, "WIDER_" + self.split, "images", line)))
+                want_path, want_count = False, True
+            elif want_count:
+                count = int(line)
+                want_count, want_boxes = False, True
+            elif want_boxes:
+                seen += 1
+                labels.append([int(one) for one in line.split(" ")])
+                if seen >= count:
+                    want_boxes, want_path = False, True
+                    block = _np.asarray(labels, dtype=_np.int64)
+                    self.img_info.append({
+                        "img_path": path,
+                        "annotations": dict(
+                            [("bbox", block[:, 0:4].copy())]
+                            + [(key, block[:, 4 + i].copy())
+                               for i, key in enumerate(self._FLAGS)]),
+                    })
+                    seen, labels = 0, []
+
+    def _parse_test(self):
+        with open(_os.path.join(self.root, "wider_face_split",
+                                "wider_face_test_filelist.txt")) as handle:
+            for line in handle.readlines():
+                self.img_info.append({"img_path": _os.path.abspath(
+                    _os.path.expanduser(_os.path.join(
+                        self.root, "WIDER_test", "images", line.rstrip())))})
+
+    def __len__(self):
+        return len(self.img_info)
+
+    def __getitem__(self, index):
+        image = self.loader(self.img_info[index]["img_path"])
+        if self.transform is not None:
+            image = self.transform(image)
+        target = (None if self.split == "test"
+                  else self.img_info[index]["annotations"])
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+    def extra_repr(self):
+        return f"Split: {self.split}"
+
+
+class OxfordIIITPet(VisionDataset):
+    """Thirty-seven breeds of cat and dog, **with three different targets.**
+
+    <https://www.robots.ox.ac.uk/~vgg/data/pets/>
+
+    Its declined row read *as above — a codec*, and the codec is not this class's wall:
+    what it does is read one annotation file, take the label and the cat-or-dog flag off
+    each line, and build the breed names back out of the file names.
+
+    Three things it has to get right, and the fixture asks all three:
+
+    - **The labels are one-based in the file and zero-based here.** Off by one is a
+      dataset that trains and a class list shifted by one, which shows up only as a
+      confusion matrix nobody can read.
+    - **`target_types` is a list, and one entry is not a tuple.** `("category",)` gives
+      the number itself and `("category", "segmentation")` gives a pair — a caller
+      unpacking two from the first gets the digits of an integer.
+    - **The breed names come from the file names, ordered by label.** `Abyssinian_1`
+      becomes `Abyssinian`, and `british_shorthair_5` becomes `British Shorthair` —
+      the underscore is the word break and each word is capitalised.
+    """
+
+    _VALID_TARGET_TYPES = ("category", "binary-category", "segmentation")
+
+    def __init__(self, root, split="trainval", target_types="category",
+                 transforms=None, transform=None, target_transform=None,
+                 download=False, loader=None):
+        if split not in ("trainval", "test"):
+            raise ValueError(
+                f"Unknown value '{split}' for argument split. Valid values are "
+                "{trainval, test}.")
+        self._split = split
+        if isinstance(target_types, str):
+            target_types = [target_types]
+        for one in target_types:
+            if one not in self._VALID_TARGET_TYPES:
+                raise ValueError(
+                    f"Unknown value '{one}' for argument target_types. Valid values "
+                    f"are {{{', '.join(self._VALID_TARGET_TYPES)}}}.")
+        self._target_types = list(target_types)
+        super().__init__(root, transforms=transforms, transform=transform,
+                         target_transform=target_transform)
+        self.loader = _folder_loader if loader is None else loader
+        base = _os.path.join(self.root, "oxford-iiit-pet")
+        self._images_folder = _os.path.join(base, "images")
+        self._anns_folder = _os.path.join(base, "annotations")
+        self._segs_folder = _os.path.join(self._anns_folder, "trimaps")
+        del download
+        for folder in (self._images_folder, self._anns_folder):
+            if not _os.path.isdir(folder):
+                raise RuntimeError("Dataset not found. You can use download=True to "
+                                   "download it")
+        image_ids = []
+        self._labels = []
+        self._bin_labels = []
+        with open(_os.path.join(self._anns_folder, f"{split}.txt")) as handle:
+            for line in handle:
+                image_id, label, bin_label, _rest = line.strip().split()
+                image_ids.append(image_id)
+                self._labels.append(int(label) - 1)
+                self._bin_labels.append(int(bin_label) - 1)
+        self.bin_classes = ["Cat", "Dog"]
+        self.classes = [
+            " ".join(part.title() for part in raw.split("_"))
+            for raw, _label in sorted(
+                {(image_id.rsplit("_", 1)[0], label)
+                 for image_id, label in zip(image_ids, self._labels)},
+                key=lambda pair: pair[1])]
+        self.bin_class_to_idx = dict(zip(self.bin_classes,
+                                         range(len(self.bin_classes))))
+        self.class_to_idx = dict(zip(self.classes, range(len(self.classes))))
+        self._images = [_os.path.join(self._images_folder, f"{one}.jpg")
+                        for one in image_ids]
+        self._segs = [_os.path.join(self._segs_folder, f"{one}.png")
+                      for one in image_ids]
+
+    def __len__(self):
+        return len(self._images)
+
+    def __getitem__(self, index):
+        image = self.loader(self._images[index])
+        target = []
+        for one in self._target_types:
+            if one == "category":
+                target.append(self._labels[index])
+            elif one == "binary-category":
+                target.append(self._bin_labels[index])
+            else:
+                target.append(self.loader(self._segs[index]))
+        if not target:
+            target = None
+        elif len(target) == 1:
+            target = target[0]
+        else:
+            target = tuple(target)
+        if self.transforms is not None:
+            image, target = self.transforms(image, target)
+        return image, target
 
 
 class Imagenette(VisionDataset):
@@ -11017,7 +11625,9 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "Country211", "EuroSAT", "DTD", "Food101", "SUN397", "FGVCAircraft",
               "Imagenette", "Flickr8k", "Flickr30k", "StanfordCars", "INaturalist",
               "FlyingChairs",
-              "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
+              "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB",
+              "VOCSegmentation", "VOCDetection", "OxfordIIITPet",
+              "CREStereo", "FallingThingsStereo", "Caltech101", "Caltech256", "WIDERFace"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")

@@ -15078,6 +15078,99 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(out))
         return run
 
+    def cre_stereo():
+        """`CREStereo`. The last of this family whose row said *a codec*, and the codec
+        was not its wall.
+
+        **The disparity is a PNG divided by thirty-two**, which is how the archive keeps
+        a fractional map in whole numbers. Read without the division every value is
+        thirty-two times too large — finite, plausible, and wrong by a constant.
+
+        **The four scene directories are read in torchvision's order**, not sorted, and
+        that order is `shapenet, reflective, tree, hole` — which is **not** the order
+        torchvision's own docstring draws. The fixture puts one pair in each and
+        gives them different values, so a reader that let `glob` sort them pairs the
+        same pictures under different indices and the count still comes out right.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "CREStereo")
+                for k, scene in enumerate(("shapenet", "reflective", "tree", "hole")):
+                    _png8(os.path.join(base, scene, "img1_left.jpg"), _rgb(k))
+                    _png8(os.path.join(base, scene, "img1_right.jpg"), _rgb(k + 9))
+                    # **Whole numbers that are not multiples of thirty-two**, so the
+                    # division leaves a fraction and a reader that skipped it cannot
+                    # land on the same values by rounding.
+                    left = (np.arange(_H * _W).reshape(_H, _W) * 3 + k * 7) % 200
+                    _png8(os.path.join(base, scene, "img1_left.disp.png"), left)
+                    _png8(os.path.join(base, scene, "img1_right.disp.png"),
+                          (left + 11) % 200)
+                if _is_real_torch(L):
+                    from torchvision.datasets import CREStereo as real
+                    loaded = real(root)
+                else:
+                    loaded = _vision_datasets(L).CREStereo(root)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def falling_things(variant):
+        """`FallingThingsStereo`. **The file on disk is a depth and the answer is a
+        disparity**, converted with the camera's own focal length out of a JSON beside
+        the picture.
+
+        Two things a fixture can hide and this one does not:
+
+        - **The two variants are nested at different depths** — `single` one directory
+          deeper than `mixed`. Both are written, so `both` is the case that catches one
+          pattern used for the two.
+        - **The two scenes carry different focal lengths.** With one focal everywhere,
+          a reader that took a constant instead of reading the JSON agrees exactly.
+        """
+        def run(L):
+            import json
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "FallingThings")
+                places = [("single", ("s1", "kitchen"), 320.0),
+                          ("single", ("s2", "office"), 411.5),
+                          ("mixed", ("m1",), 275.25)]
+                for k, (kind, parts, focal) in enumerate(places):
+                    where = os.path.join(base, kind, *parts)
+                    _png8(os.path.join(where, "000000.left.jpg"), _rgb(k))
+                    _png8(os.path.join(where, "000000.right.jpg"), _rgb(k + 6))
+                    # **No zero anywhere in the depth** — it is the divisor, and a zero
+                    # would put an infinity in the answer that compares equal to
+                    # nothing.
+                    depth = (np.arange(_H * _W).reshape(_H, _W) * 5 + k * 3) % 200 + 1
+                    _png8(os.path.join(where, "000000.left.depth.png"), depth)
+                    _png8(os.path.join(where, "000000.right.depth.png"),
+                          (depth + 17) % 200 + 1)
+                    with open(os.path.join(where, "_camera_settings.json"),
+                              "w") as handle:
+                        json.dump({"camera_settings": [
+                            {"intrinsic_settings": {"fx": focal}}]}, handle)
+                if _is_real_torch(L):
+                    from torchvision.datasets import FallingThingsStereo as real
+                    loaded = real(root, variant=variant)
+                else:
+                    loaded = _vision_datasets(L).FallingThingsStereo(
+                        root, variant=variant)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
     def eth3d_stereo(split):
         """`ETH3DStereo`. **The pictures and the ground truth live in different
         directories**, zipped by position because the scene names match.
@@ -15764,7 +15857,322 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(out))
         return run
 
+    # ── the three whose declined row said only "a codec" ────────────────────────
+    #
+    # **The codec was never these datasets' wall.** torchvision hands the path to
+    # `PIL.Image.open`, which sniffs the content rather than the name, so a `.jpg`
+    # holding PNG bytes opens there — measured — and `_folder_loader` settles it on the
+    # magic number here for a reason it already gives. What the row took off the table
+    # was the split file, the pairing and the XML fold, none of which is a codec.
+    #
+    # These fixtures write PNG bytes into files named `.jpg`, which is what the real
+    # archive would hold in a form both sides can read. The codec itself is still
+    # refused, one line down, where somebody holding a real JPEG meets it.
+    def _voc_tree(root, targets):
+        import os
+        base = os.path.join(root, "VOCdevkit", "VOC2012")
+        os.makedirs(os.path.join(base, "JPEGImages"))
+        for name, block in (("a", 0), ("b", 7), ("c", 13)):
+            picture = ((np.arange(4 * 5 * 3) + block) % 251).reshape(4, 5, 3)
+            _write_png8(os.path.join(base, "JPEGImages", name + ".jpg"), picture)
+        os.makedirs(os.path.join(base, "ImageSets", targets["splits"]))
+        # **The split file's own order, not sorted.** Two of the three are out of
+        # alphabetical order on purpose: the split file is the dataset, and a reader
+        # that sorted would agree with one written the other way on any fixture that
+        # happened to be in order already.
+        with open(os.path.join(base, "ImageSets", targets["splits"], "train.txt"),
+                  "w") as handle:
+            handle.write("c\na\nb\n")
+        return base
+
+    def voc_segmentation():
+        """`VOCSegmentation`. **The map comes back as one channel**, because it is a
+        paletted PNG and its numbers are the classes rather than a colour."""
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = _voc_tree(root, {"splits": "Segmentation"})
+                os.makedirs(os.path.join(base, "SegmentationClass"))
+                for i, name in enumerate(("a", "b", "c")):
+                    block = ((np.arange(4 * 5) + i * 3) % 4).reshape(4, 5)
+                    _write_png8(os.path.join(base, "SegmentationClass",
+                                             name + ".png"), block)
+                loaded = _made(L, "VOCSegmentation")(
+                    root, year="2012", image_set="train")
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    parts.append(np.asarray(target).reshape(-1).astype(np.float32))
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def voc_detection():
+        """`VOCDetection`. **The answer is the XML folded into dictionaries**, and the
+        three rules that fold decides are asked here: a tag seen once is its value, a
+        tag seen twice is a list, and `object` is a list even when there is one.
+
+        The middle picture carries two objects and the others one, so a reader that
+        skipped the `object` exception agrees on two of the three.
+        """
+        import json
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = _voc_tree(root, {"splits": "Main"})
+                os.makedirs(os.path.join(base, "Annotations"))
+                counts = {"a": 1, "b": 2, "c": 1}
+                for name, many in counts.items():
+                    objects = "".join(
+                        f"<object><name>k{j}</name><bndbox><xmin>{j}</xmin>"
+                        f"<ymin>{j + 1}</ymin><xmax>{j + 2}</xmax>"
+                        f"<ymax>{j + 3}</ymax></bndbox></object>"
+                        for j in range(many))
+                    with open(os.path.join(base, "Annotations", name + ".xml"),
+                              "w") as handle:
+                        handle.write(
+                            "<annotation><folder>VOC2012</folder>"
+                            f"<filename>{name}.jpg</filename>"
+                            "<size><width>5</width><height>4</height>"
+                            f"<depth>3</depth></size>{objects}</annotation>")
+                loaded = _made(L, "VOCDetection")(root, year="2012",
+                                                  image_set="train")
+                rows = [str(len(loaded))]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    rows.append(str(int(np.asarray(picture).sum())))
+                    # **The tree as text.** Sorted keys, so the two sides are compared
+                    # on the shape they built and not on a dictionary's order.
+                    rows.append(json.dumps(target, sort_keys=True))
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return "\n".join(rows)
+        return run
+
+    def oxford_pet(target_types):
+        """`OxfordIIITPet`. **Three targets, and one of them is a picture.**
+
+        The fixture holds two breeds with two pictures each and the labels out of
+        order, so the class list — built from the file names and sorted by label —
+        cannot come out right by accident.
+        """
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "oxford-iiit-pet")
+                os.makedirs(os.path.join(base, "images"))
+                os.makedirs(os.path.join(base, "annotations", "trimaps"))
+                # **The second breed comes first in the file and second by label.**
+                # Written the other way the two orders agree and a reader that used
+                # the file's order would pass.
+                rows = [("british_shorthair_5", 2, 1), ("Abyssinian_1", 1, 1),
+                        ("british_shorthair_9", 2, 1), ("Abyssinian_7", 1, 2)]
+                for i, (name, label, kind) in enumerate(rows):
+                    picture = ((np.arange(4 * 5 * 3) + i * 5) % 251).reshape(4, 5, 3)
+                    _write_png8(os.path.join(base, "images", name + ".jpg"), picture)
+                    trimap = ((np.arange(4 * 5) + i) % 3 + 1).reshape(4, 5)
+                    _write_png8(os.path.join(base, "annotations", "trimaps",
+                                             name + ".png"), trimap)
+                with open(os.path.join(base, "annotations", "trainval.txt"),
+                          "w") as handle:
+                    for name, label, kind in rows:
+                        handle.write(f"{name} {label} {kind} 1\n")
+                loaded = _made(L, "OxfordIIITPet")(
+                    root, split="trainval", target_types=target_types)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    pieces = target if isinstance(target, tuple) else [target]
+                    for one in pieces:
+                        parts.append(np.asarray(one).reshape(-1).astype(np.float32))
+                names = "|".join(loaded.classes)
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return f"{names}\n{list(np.round(out, 4))}"
+        return run
+
+    def caltech101():
+        """`Caltech101`. **A directory that is not a class, removed after the sort.**
+
+        `BACKGROUND_Google` sorts between `airplanes` and `car_side`, so leaving it in
+        shifts every label above it by one — and the picture still comes back from the
+        directory that label names, which is why the count and the shapes agree either
+        way.
+
+        The fixture's categories are chosen to straddle it, and the third has two
+        pictures so the one-based per-category index cannot be mistaken for a running
+        one.
+        """
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "caltech101", "101_ObjectCategories")
+                counts = {"accordion": 1, "airplanes": 1, "BACKGROUND_Google": 1,
+                          "car_side": 2}
+                for k, (name, many) in enumerate(sorted(counts.items())):
+                    for i in range(1, many + 1):
+                        picture = ((np.arange(4 * 5 * 3) + k * 11 + i) % 251)
+                        _write_png8(os.path.join(base, name, f"image_{i:04d}.jpg"),
+                                    picture.reshape(4, 5, 3))
+                loaded = _made(L, "Caltech101")(root, target_type="category")
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    parts.append(np.asarray([target], dtype=np.float32))
+                names = "|".join(loaded.categories)
+                mapped = "|".join(loaded.annotation_categories)
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return f"{names}\n{mapped}\n{list(np.round(out, 4))}"
+        return run
+
+    def caltech256():
+        """`Caltech256`. **The label comes from the sorted position, not the directory's
+        own number**, and the file name is built from it.
+
+        The fixture leaves a gap in the numbering — `001`, `003` — so the two disagree.
+        On the real archive they never do, which is why a reader that took the prefix
+        passes there and fails here.
+
+        **Only `.jpg` files are counted.** A stray file beside the pictures is in the
+        fixture for that: counted whole, the index walks off the end of the numbering
+        and the read is a `FileNotFoundError` on the last item.
+        """
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "caltech256", "256_ObjectCategories")
+                for k, name in enumerate(("001.ak47", "003.backpack")):
+                    for i in range(1, k + 2):
+                        picture = ((np.arange(4 * 5 * 3) + k * 13 + i) % 251)
+                        _write_png8(
+                            os.path.join(base, name, f"{k + 1:03d}_{i:04d}.jpg"),
+                            picture.reshape(4, 5, 3))
+                    with open(os.path.join(base, name, "RENAME2"), "w") as handle:
+                        handle.write("not a picture\n")
+                loaded = _made(L, "Caltech256")(root)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    parts.append(np.asarray([target], dtype=np.float32))
+                names = "|".join(loaded.categories)
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return f"{names}\n{list(np.round(out, 4))}"
+        return run
+
+    def widerface(split):
+        """`WIDERFace`. **The annotation file is a state machine**, not a table: a path,
+        a count, that many box lines, a path again.
+
+        The fixture gives the three images **three different counts** — two, one and
+        three — so a reader that ignored the count runs one image's boxes into the next
+        and every image after the first is wrong while the total stays right.
+
+        **Ten numbers a line and the first four are the box.** The other six are per-face
+        flags, each its own key, and the fixture gives them values that differ from one
+        another so a reader that kept them as one array of six cannot come out equal.
+
+        `test` has no annotations at all and its list lives under a different file name;
+        the target there is `None`, which is written as a length so that a split which
+        should have none cannot pass by handing back zeros.
+        """
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "widerface")
+                for name in ("WIDER_train", "WIDER_val", "WIDER_test"):
+                    os.makedirs(os.path.join(base, name, "images", "0--Parade"))
+                os.makedirs(os.path.join(base, "wider_face_split"))
+                names = ["0--Parade/p_%d.jpg" % i for i in range(3)]
+                for i, one in enumerate(names):
+                    picture = ((np.arange(4 * 5 * 3) + i * 9) % 251).reshape(4, 5, 3)
+                    for folder in ("WIDER_train", "WIDER_val", "WIDER_test"):
+                        _write_png8(os.path.join(base, folder, "images", one), picture)
+                rows = []
+                for i, (one, many) in enumerate(zip(names, (2, 1, 3))):
+                    rows.append(one)
+                    rows.append(str(many))
+                    for k in range(many):
+                        # **Ten values, and no two of the six flags alike** — an array
+                        # of six read as one block would compare equal to a reader that
+                        # split them, if they held the same number.
+                        rows.append(" ".join(str(v) for v in (
+                            i * 10 + k, i * 10 + k + 1, 3 + k, 4 + k,
+                            k % 2, (k + 1) % 3, (k + 2) % 4, k % 5, (k + 3) % 6,
+                            (k + 4) % 7)))
+                for kind in ("train", "val"):
+                    with open(os.path.join(base, "wider_face_split",
+                                           f"wider_face_{kind}_bbx_gt.txt"),
+                              "w") as handle:
+                        handle.write("\n".join(rows) + "\n")
+                with open(os.path.join(base, "wider_face_split",
+                                       "wider_face_test_filelist.txt"), "w") as handle:
+                    handle.write("\n".join(names) + "\n")
+                loaded = _made(L, "WIDERFace")(root, split=split)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    if target is None:
+                        parts.append(np.asarray([-1.0], dtype=np.float32))
+                        continue
+                    for key in sorted(target):
+                        parts.append(
+                            np.asarray(target[key]).reshape(-1).astype(np.float32))
+                out = np.concatenate(parts)
+                # **The split alone, not the whole repr.** `repr` carries the root,
+                # and the root is a temporary directory that differs between the two
+                # runs being compared — a case that can never agree with itself.
+                shown = loaded.extra_repr()
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return f"{shown}\n{list(np.round(out, 4))}"
+        return run
+
     cases += [
+        (prefix + "WIDERFace(a count between the boxes)", widerface("train")),
+        (prefix + "WIDERFace(test has no annotations)", widerface("test")),
+        (prefix + "Caltech101(a directory that is not a class)", caltech101()),
+        (prefix + "Caltech256(the label is the sorted position)", caltech256()),
+        (prefix + "OxfordIIITPet(category)", oxford_pet("category")),
+        (prefix + "OxfordIIITPet(a picture beside a number)",
+         oxford_pet(("binary-category", "segmentation"))),
+        (prefix + "VOCSegmentation(split order, palette target)", voc_segmentation()),
+        (prefix + "VOCDetection(the XML fold)", voc_detection()),
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
         (prefix + "Sintel(both passes)", sintel("both")),
@@ -15782,6 +16190,12 @@ def dataset_last_three_cases(inp=None):
         (prefix + "SintelStereo(both passes)", sintel_stereo("both")),
         # **`.pfm` is a container too** — the last of the fourteen that read as a wall.
         (prefix + "CarlaStereo(disparity signed, used positive)", carla_stereo()),
+        (prefix + "CREStereo(four scenes, a disparity over thirty-two)",
+         cre_stereo()),
+        (prefix + "FallingThingsStereo(single, depth into disparity)",
+         falling_things("single")),
+        (prefix + "FallingThingsStereo(both, two nesting depths)",
+         falling_things("both")),
         (prefix + "ETH3DStereo(mask beside the pfm, non-zero is valid)",
          eth3d_stereo("train")),
         (prefix + "ETH3DStereo(test, no ground truth)", eth3d_stereo("test")),
