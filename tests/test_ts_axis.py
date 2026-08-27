@@ -329,10 +329,22 @@ FROZEN = {
     # coordinate and drops each of the four corners on its own, where the other clamps
     # to the edge and reads four real neighbours.
     #
-    # What is left is the sixteen module classes. They hold parameters, so carrying them
-    # means a way to write parameters by name on that side — which is the same thing the
-    # `ops::` row in `borch-ts/test/run.py` is waiting for.
-    "ops": 16,
+    # 16 → 8. Eleven layer classes, and none of them holds a weight: the four RoI
+    # wrappers, `Permute`, the two `DropBlock`s and `StochasticDepth`. *They hold
+    # parameters* was true of the eight that remain and had been standing for all
+    # sixteen — the second time this row's one sentence covered more names than it
+    # described.
+    #
+    # **Four of them do not extend `Module`, and that is deliberate.** Everything here
+    # that reads a feature map reads it back into JavaScript numbers first, so its
+    # answer is a promise, while `Module.forward` hands back a tensor. A class saying
+    # `extends Module` that cannot be called like one is worse than a plain class that
+    # says what it is — and torchvision's own `RoIAlign` cannot go into a `Sequential`
+    # either, taking two arguments.
+    #
+    # The eight left hold parameters or buffers, so carrying them means a way to write
+    # those by name — the same thing the `ops::` row in `borch-ts/test/run.py` waits for.
+    "ops": 8,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     #

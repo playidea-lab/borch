@@ -350,14 +350,17 @@ NOT_PORTED = {
     # from the same numbers on both sides. borch.ts has the layers; what is missing is
     # the harness that fills a module's parameters and buffers by name, which the
     # Python cases grew for this and the TS runner has never needed.
-    "ops::": (27, "아직 — the five layer classes, the pyramid, the level-picker "
-                        "and the two deformable *modules*. They need a harness for "
-                        "writing parameters and buffers by name, which is what the "
-                        "Python side's `_fill` is and this side has no counterpart to. "
-                        "**The eight RoI names crossed**, and then the deformable "
-                        "convolution and the four dropout settings that draw nothing. "
-                        "What is left of the dropouts is the coin itself, which has no "
-                        "shared answer rather than no implementation"),
+    "ops::": (14, "아직 — eight need a way to **write parameters and buffers by "
+                        "name**, which is what the Python side's `_fill` is and this "
+                        "side has no counterpart to: the two blocks, the two "
+                        "multi-layer perceptrons, the excitation, the pyramid, the "
+                        "deformable module and the frozen norm. The other six are the "
+                        "level-picker and three reprs, and they want only the class. "
+                        "**The eight RoI names crossed**, then the deformable "
+                        "convolution and the dropouts' deterministic halves, then the "
+                        "eleven layers that hold settings and no weights. What is left "
+                        "of the dropouts is the coin itself, which has no shared answer "
+                        "rather than no implementation"),
     # 104 → 103. What `dtype::없는이름::` was asking about moved to `narrow_copy` and
     # `unsafe_chunk` — torch actually answers the earlier one, so it was no absent name.
     # 103 → 111 → 147 → 156 → 157. Whether the dtype aliases and the factories really

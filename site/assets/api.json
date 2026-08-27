@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 318
+  "missing": 330
  },
  "modules": [
   {
@@ -7618,6 +7618,14 @@
      "doc_ko": "차원 수에 상관없는 합성곱 층. `spatial` 이 공간 축의 수다.\n\n`Conv1d`·`Conv2d`·`Conv3d` 가 그 수만 다르다 — 클래스를 셋 세우면 그중 하나만\n고치는 날이 온다."
     },
     {
+     "kind": "function",
+     "name": "pyNumber",
+     "signature": "export declare function pyNumber(value: number): string",
+     "doc": "A number as Python's `repr` writes it.\n\n**The two languages switch to an exponent at different sizes.** JavaScript writes\n`1e-5` as `0.00001` and only reaches for an exponent below `1e-7`; Python reaches\nfor one below `1e-4` and pads the exponent to two digits. Every normalisation layer\nin this file prints `eps=1e-05`, so without this they all read as *nearly* right —\nthe same number, spelled the way the other language spells it.",
+     "members": [],
+     "torch": "py_number"
+    },
+    {
      "kind": "class",
      "name": "Conv1d",
      "signature": "export declare class Conv1d extends ConvND",
@@ -11870,7 +11878,7 @@
      ]
     }
    ],
-   "count": 787,
+   "count": 788,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -16845,9 +16853,273 @@
      "doc": "`dropBlock` over depth, height and width.",
      "members": [],
      "torch": "drop_block3d"
+    },
+    {
+     "kind": "class",
+     "name": "RoIAlign",
+     "signature": "export declare class RoIAlign",
+     "doc": "`roiAlign` as a layer. See the function for what the four arguments do.",
+     "members": [
+      {
+       "name": "outputSize",
+       "signature": "readonly outputSize: number | readonly number[]",
+       "doc": "",
+       "torch": "output_size"
+      },
+      {
+       "name": "spatialScale",
+       "signature": "readonly spatialScale: number",
+       "doc": "",
+       "torch": "spatial_scale"
+      },
+      {
+       "name": "samplingRatio",
+       "signature": "readonly samplingRatio: number",
+       "doc": "",
+       "torch": "sampling_ratio"
+      },
+      {
+       "name": "aligned",
+       "signature": "readonly aligned: boolean",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(outputSize: number | readonly number[], spatialScale: number, samplingRatio: number, aligned?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor, rois: Tensor): Promise<Tensor>",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RoIPool",
+     "signature": "export declare class RoIPool",
+     "doc": "`roiPool` as a layer.",
+     "members": [
+      {
+       "name": "outputSize",
+       "signature": "readonly outputSize: number | readonly number[]",
+       "doc": "",
+       "torch": "output_size"
+      },
+      {
+       "name": "spatialScale",
+       "signature": "readonly spatialScale: number",
+       "doc": "",
+       "torch": "spatial_scale"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(outputSize: number | readonly number[], spatialScale: number)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor, rois: Tensor): Promise<Tensor>",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "PSRoIAlign",
+     "signature": "export declare class PSRoIAlign",
+     "doc": "`psRoiAlign` as a layer. **No `aligned` argument**, and the correction is on\n regardless — see the function.",
+     "members": [
+      {
+       "name": "outputSize",
+       "signature": "readonly outputSize: number",
+       "doc": "",
+       "torch": "output_size"
+      },
+      {
+       "name": "spatialScale",
+       "signature": "readonly spatialScale: number",
+       "doc": "",
+       "torch": "spatial_scale"
+      },
+      {
+       "name": "samplingRatio",
+       "signature": "readonly samplingRatio: number",
+       "doc": "",
+       "torch": "sampling_ratio"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(outputSize: number, spatialScale: number, samplingRatio: number)",
+       "doc": "*The output size is one number here and a pair on the other two.** That is\n torchvision's: the position-sensitive pair takes a single `output_size` because\n its channels are already laid out as `out * ph * pw`, and a rectangle would need\n the channel count to follow."
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor, rois: Tensor): Promise<Tensor>",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "PSRoIPool",
+     "signature": "export declare class PSRoIPool",
+     "doc": "`psRoiPool` as a layer.",
+     "members": [
+      {
+       "name": "outputSize",
+       "signature": "readonly outputSize: number",
+       "doc": "",
+       "torch": "output_size"
+      },
+      {
+       "name": "spatialScale",
+       "signature": "readonly spatialScale: number",
+       "doc": "",
+       "torch": "spatial_scale"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(outputSize: number, spatialScale: number)",
+       "doc": "*The output size is one number here and a pair on the other two.** That is\n torchvision's: the position-sensitive pair takes a single `output_size` because\n its channels are already laid out as `out * ph * pw`, and a rectangle would need\n the channel count to follow."
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor, rois: Tensor): Promise<Tensor>",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Permute",
+     "signature": "export declare class Permute extends Module",
+     "doc": "`permute` as a layer, so it can sit in a `Sequential`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(dims: readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "StochasticDepth",
+     "signature": "export declare class StochasticDepth extends Module",
+     "doc": "`stochasticDepth` as a layer.\n\n**The mode prints unquoted** — `mode=row`, not `mode='row'` — which is torchvision's\nown repr and not this file's usual rule. It is copied because the string is what is\nbeing matched, and a tidier one would differ from the library.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p: number, mode: \"batch\" | \"row\")",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "DropBlock2d",
+     "signature": "export declare class DropBlock2d extends Module",
+     "doc": "`dropBlock2d` as a layer.\n\n**The repr does not print `eps`**, which torchvision's does not either — it is a\nguard against dividing by zero rather than a setting, and printing it would invite\nsomebody to tune it.",
+     "members": [
+      {
+       "name": "p",
+       "signature": "protected readonly p: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "blockSize",
+       "signature": "protected readonly blockSize: number",
+       "doc": "",
+       "protected": true,
+       "torch": "block_size"
+      },
+      {
+       "name": "inplace",
+       "signature": "protected readonly inplace: boolean",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "eps",
+       "signature": "protected readonly eps: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(p: number, blockSize: number, inplace?: boolean, eps?: number)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "*The class's own name, not the literal** — `DropBlock3d` inherits this line."
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "DropBlock3d",
+     "signature": "export declare class DropBlock3d extends DropBlock2d",
+     "doc": "As `DropBlock2d`, over three spatial axes.",
+     "members": [
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor): Tensor",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 61
+   "count": 106
   },
   {
    "name": "datasets",
@@ -19367,5 +19639,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2597
+ "total": 2643
 }

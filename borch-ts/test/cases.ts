@@ -1674,6 +1674,20 @@ function addOps(out: Map<string, Case>): void {
   // ways each of these declines to draw are asked: `training = false`, and a rate of
   // zero. That is a fact about the comparison and not about the functions — the
   // drawing halves are written and only these branches can be frozen.
+  // **Two ramps, because the case table has two.** `_passthrough` builds
+  // `(i·0.017) % 1.7 − 0.8` and `_layer_values` builds `(i·0.013) % 1.9 − 0.9`, and the
+  // layers below go through the second. Written with one, `Permute` and
+  // `DropBlock2d(eval)` came back off by a tenth at every position — a difference small
+  // enough to read as a tolerance and large enough not to be one.
+  const layerRamp = (shape: number[]): Tensor => {
+    const n = shape.reduce((a, b) => a * b, 1);
+    const values: number[] = [];
+    const f = Math.fround;
+    for (let i = 0; i < n; i++) {
+      values.push(f(f(f(i * f(0.013)) % f(1.9)) - f(0.9)));
+    }
+    return Tensor.from(values, shape);
+  };
   const ramp = (shape: number[]): Tensor => {
     const n = shape.reduce((a, b) => a * b, 1);
     const values: number[] = [];
@@ -1696,6 +1710,46 @@ function addOps(out: Map<string, Case>): void {
     flat(async () => ops.dropBlock2d(ramp([2, 3, 5, 5]), 0.3, 3, false, 1e-6, false)));
   out.set("ops::drop_block3d(training=False)",
     flat(async () => ops.dropBlock3d(ramp([2, 3, 5, 5, 5]), 0.3, 3, false, 1e-6, false)));
+
+  // ── the ops that are layers ─────────────────────────────────────────────────
+  //
+  // **A layer's repr is an answer with the same standing as a value.** These hold
+  // settings and no weights, so nothing has to be written into them first — which is
+  // the half of the `ops::` ledger row that its one sentence about a harness did not
+  // describe.
+  const layerReprs: [string, () => { describe(): string }][] = [
+    ["RoIAlign(2, 1.0, 2, aligned)", () => new ops.RoIAlign(2, 1.0, 2, true)],
+    ["RoIPool(2, 0.5)", () => new ops.RoIPool(2, 0.5)],
+    ["PSRoIAlign(2, 1.0, 2)", () => new ops.PSRoIAlign(2, 1.0, 2)],
+    ["PSRoIPool(2, 1.0)", () => new ops.PSRoIPool(2, 1.0)],
+    ["DropBlock2d(0.3, 3)", () => new ops.DropBlock2d(0.3, 3)],
+    ["DropBlock3d(0.2, 5, inplace)", () => new ops.DropBlock3d(0.2, 5, true)],
+    ["StochasticDepth(0.5, row)", () => new ops.StochasticDepth(0.5, "row")],
+  ];
+  for (const [name, make] of layerReprs) {
+    out.set(`ops::${name}=repr`, () => make().describe());
+  }
+
+  // **The modules take the same arguments the functions were asked with**, which is
+  // `(2, 1.0, 2)` rather than the function cases' `[3, 2]` — a layer built with the
+  // function's settings would be a second copy of the function case.
+  out.set("ops::RoIAlign(aligned)",
+    flat(() => new ops.RoIAlign(2, 1.0, 2, true).forward(featureMap(), rois())));
+  out.set("ops::RoIPool",
+    flat(() => new ops.RoIPool(2, 1.0).forward(featureMap(), rois())));
+  out.set("ops::PSRoIAlign",
+    flat(() => new ops.PSRoIAlign(2, 1.0, 2).forward(psMap(), psRois())));
+  out.set("ops::PSRoIPool",
+    flat(() => new ops.PSRoIPool(2, 1.0).forward(psMap(), psRois())));
+  out.set("ops::Permute([0, 2, 3, 1])",
+    flat(async () => new ops.Permute([0, 2, 3, 1]).call(layerRamp([2, 3, 4, 5]))));
+  // **`eval()` is the whole case.** In training mode this draws, and a draw has no
+  // shared answer; the layer is here to be asked whether it stops.
+  out.set("ops::DropBlock2d(eval)", flat(async () => {
+    const layer = new ops.DropBlock2d(0.3, 3);
+    layer.training = false;
+    return layer.call(layerRamp([2, 3, 5, 5]));
+  }));
 
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look

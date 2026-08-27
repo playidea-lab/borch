@@ -26,6 +26,7 @@
  * reading the tuple in box order silently clips against the wrong edge.
  */
 
+import { Module, pyNumber } from "./nn.js";
 import { Tensor } from "./tensor.js";
 // **The warp kernels borrow three helpers from `vision.ts`** rather than carrying a
 // second copy of the affine formula. They are exported there for this and nothing else.
@@ -2192,4 +2193,185 @@ export function dropBlock3d(
   training = true,
 ): Tensor {
   return dropBlock(input, p, blockSize, inplace, eps, training, 3);
+}
+
+// ── the ops that are layers ──────────────────────────────────────────────────
+//
+// **These do not extend `Module`, and the reason is the `await`.** `Module.forward`
+// hands back a `Tensor`; everything in this file that reads a feature map reads it back
+// into JavaScript numbers first, so its answer is a promise. A class that said
+// `extends Module` and could not be called like one would be worse than a plain class
+// that says what it is — and torchvision's own `RoIAlign` cannot go into a `Sequential`
+// either, because it takes two arguments.
+//
+// The ones that are pure tensor arithmetic — `Permute`, `StochasticDepth`, the two
+// `DropBlock`s — are synchronous and do extend it.
+
+/** `roiAlign` as a layer. See the function for what the four arguments do. */
+export class RoIAlign {
+  constructor(readonly outputSize: number | readonly number[],
+              readonly spatialScale: number,
+              readonly samplingRatio: number,
+              readonly aligned = false) {}
+
+  forward(input: Tensor, rois: Tensor): Promise<Tensor> {
+    return roiAlign(input, rois, this.outputSize, this.spatialScale,
+                    this.samplingRatio, this.aligned);
+  }
+
+  describe(): string {
+    return `RoIAlign(output_size=${describeSize(this.outputSize)}`
+      + `, spatial_scale=${pyFloat(this.spatialScale)}`
+      + `, sampling_ratio=${this.samplingRatio}`
+      + `, aligned=${this.aligned ? "True" : "False"})`;
+  }
+}
+
+/** `roiPool` as a layer. */
+export class RoIPool {
+  constructor(readonly outputSize: number | readonly number[],
+              readonly spatialScale: number) {}
+
+  forward(input: Tensor, rois: Tensor): Promise<Tensor> {
+    return roiPool(input, rois, this.outputSize, this.spatialScale);
+  }
+
+  describe(): string {
+    return `RoIPool(output_size=${describeSize(this.outputSize)}, `
+      + `spatial_scale=${pyFloat(this.spatialScale)})`;
+  }
+}
+
+/** `psRoiAlign` as a layer. **No `aligned` argument**, and the correction is on
+ *  regardless — see the function. */
+export class PSRoIAlign {
+  /** **The output size is one number here and a pair on the other two.** That is
+   *  torchvision's: the position-sensitive pair takes a single `output_size` because
+   *  its channels are already laid out as `out * ph * pw`, and a rectangle would need
+   *  the channel count to follow. */
+  constructor(readonly outputSize: number,
+              readonly spatialScale: number,
+              readonly samplingRatio: number) {}
+
+  forward(input: Tensor, rois: Tensor): Promise<Tensor> {
+    return psRoiAlign(input, rois, this.outputSize, this.spatialScale,
+                      this.samplingRatio);
+  }
+
+  describe(): string {
+    return `PSRoIAlign(output_size=${describeSize(this.outputSize)}`
+      + `, spatial_scale=${pyFloat(this.spatialScale)}`
+      + `, sampling_ratio=${this.samplingRatio})`;
+  }
+}
+
+/** `psRoiPool` as a layer. */
+export class PSRoIPool {
+  /** **The output size is one number here and a pair on the other two.** That is
+   *  torchvision's: the position-sensitive pair takes a single `output_size` because
+   *  its channels are already laid out as `out * ph * pw`, and a rectangle would need
+   *  the channel count to follow. */
+  constructor(readonly outputSize: number,
+              readonly spatialScale: number) {}
+
+  forward(input: Tensor, rois: Tensor): Promise<Tensor> {
+    return psRoiPool(input, rois, this.outputSize, this.spatialScale);
+  }
+
+  describe(): string {
+    return `PSRoIPool(output_size=${describeSize(this.outputSize)}, `
+      + `spatial_scale=${pyFloat(this.spatialScale)})`;
+  }
+}
+
+/** torchvision prints a size as **the pair it becomes**, so a single number reads
+ *  `(3, 3)` — except on the four RoI layers above, which print it as it was given.
+ *  That difference is torchvision's and it is copied rather than tidied. */
+function describeSize(size: number | readonly number[]): string {
+  return typeof size === "number" ? `${size}` : `(${size.join(", ")})`;
+}
+
+/**
+ * A number as Python writes it, **keeping the point on a whole one.**
+ *
+ * `spatial_scale=1.0` is a float in Python and `${1.0}` is `1` in JavaScript. Every one
+ * of these layers carries a scale, and it is almost always exactly one — so without
+ * this the four reprs read as *nearly* right, the same number spelled the way the other
+ * language spells it. The same trap `pyNumber` was written for, at the other end of the
+ * scale.
+ */
+function pyFloat(value: number): string {
+  return Number.isInteger(value) ? `${value}.0` : pyNumber(value);
+}
+
+/** `permute` as a layer, so it can sit in a `Sequential`. */
+export class Permute extends Module {
+  constructor(private readonly dims: readonly number[]) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.permute([...this.dims]);
+  }
+
+  override describe(): string {
+    return `Permute()`;
+  }
+}
+
+/**
+ * `stochasticDepth` as a layer.
+ *
+ * **The mode prints unquoted** — `mode=row`, not `mode='row'` — which is torchvision's
+ * own repr and not this file's usual rule. It is copied because the string is what is
+ * being matched, and a tidier one would differ from the library.
+ */
+export class StochasticDepth extends Module {
+  constructor(private readonly p: number,
+              private readonly mode: "batch" | "row") {
+    super();
+  }
+
+  override forward(input: Tensor): Tensor {
+    return stochasticDepth(input, this.p, this.mode, this.training);
+  }
+
+  override describe(): string {
+    return `StochasticDepth(p=${pyNumber(this.p)}, mode=${this.mode})`;
+  }
+}
+
+/**
+ * `dropBlock2d` as a layer.
+ *
+ * **The repr does not print `eps`**, which torchvision's does not either — it is a
+ * guard against dividing by zero rather than a setting, and printing it would invite
+ * somebody to tune it.
+ */
+export class DropBlock2d extends Module {
+  constructor(protected readonly p: number,
+              protected readonly blockSize: number,
+              protected readonly inplace = false,
+              protected readonly eps = 1e-6) {
+    super();
+  }
+
+  override forward(input: Tensor): Tensor {
+    return dropBlock2d(input, this.p, this.blockSize, this.inplace, this.eps,
+                       this.training);
+  }
+
+  /** **The class's own name, not the literal** — `DropBlock3d` inherits this line. */
+  override describe(): string {
+    return `${this.constructor.name}(p=${pyNumber(this.p)}, `
+      + `block_size=${this.blockSize}, inplace=${this.inplace ? "True" : "False"})`;
+  }
+}
+
+/** As `DropBlock2d`, over three spatial axes. */
+export class DropBlock3d extends DropBlock2d {
+  override forward(input: Tensor): Tensor {
+    return dropBlock3d(input, this.p, this.blockSize, this.inplace, this.eps,
+                       this.training);
+  }
 }
