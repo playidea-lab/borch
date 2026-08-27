@@ -950,9 +950,13 @@ class Tensor:
         out = _np.squeeze(self.data) if dim is None else _np.squeeze(self.data, axis=dim)
         return self._make(out, (self,), lambda g: (g.reshape(old),))
 
-    def transpose(self, d0, d1):
-        return self._make(_np.swapaxes(self.data, d0, d1), (self,),
-                          lambda g: (_np.swapaxes(g, d0, d1),), "TransposeBackward0")
+    def transpose(self, dim0, dim1):
+        # **The seats are `dim0`/`dim1`, because that is what torch answers to.**
+        # `t.transpose(dim0=-2, dim1=-1)` works there and `d0=`/`d1=` raises, so
+        # a caller who reads torch's documentation and writes the keyword form
+        # was met with a TypeError here. Checked by calling, not by reading.
+        return self._make(_np.swapaxes(self.data, dim0, dim1), (self,),
+                          lambda g: (_np.swapaxes(g, dim0, dim1),), "TransposeBackward0")
 
     @property
     def T(self):

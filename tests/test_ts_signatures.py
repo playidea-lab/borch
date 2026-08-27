@@ -897,7 +897,12 @@ SHORTER = {
     #
     # **A row appearing because a signature stopped lying is not the axis widening.**
     # The gap was there the whole time; nothing could see it.
-    "Tensor": 20,
+    #
+    # 20 → 19. `transpose` left. It took **no** arguments and refused anything but a
+    # matrix, so against the core's `(dim0, dim1)` it was a truncation; it now takes
+    # both and swaps at any rank. The core moved in the same commit — it was
+    # `(d0, d1)`, and torch answers to `dim0=`/`dim1=` and raises on `d0=`.
+    "Tensor": 19,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and

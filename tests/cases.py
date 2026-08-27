@@ -9608,6 +9608,15 @@ def ndim_cases(inp=None):
     m4a = np.arange(12, dtype=np.float32).reshape(2, 1, 2, 3) / 12.0
     m4b = np.arange(48, dtype=np.float32).reshape(1, 4, 3, 4) / 48.0
     cases += [
+        # **`transpose` takes two dimensions and works at any rank.** It used
+        # to take none here and refuse anything but a matrix, and every case in
+        # this table was 2-D, so nothing asked. The negative-index pair is the
+        # one models actually write — attention swaps the last two axes.
+        ("transpose::3d", lambda L: L.transpose(L.tensor(m3a), 1, 2)),
+        ("transpose::3d_negative", lambda L: L.transpose(L.tensor(m3a), -2, -1)),
+        ("transpose::4d_outer", lambda L: L.transpose(L.tensor(m4a), 0, 2)),
+        # The alias torch documents for it. Same answer or the two have drifted.
+        ("transpose::swapaxes_agrees", lambda L: L.swapaxes(L.tensor(m3a), -2, -1)),
         ("matmul::3d@3d", lambda L: L.matmul(L.tensor(m3a), L.tensor(m3b))),
         # The 2-D side is shared by every batch element rather than zipped.
         ("matmul::3d@2d", lambda L: L.matmul(L.tensor(m3a), L.tensor(m2))),
