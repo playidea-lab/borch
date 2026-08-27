@@ -735,6 +735,58 @@ def test_site_has_no_broken_relative_links():
     assert not missing, "the site has broken links:\n  " + "\n  ".join(missing)
 
 
+def test_no_page_wears_a_class_that_styles_nothing():
+    """A class name that no rule defines is **a broken link on the style axis.**
+
+    The check above reads `href`; this one reads `class`. Both ask the same question — does
+    this reference point at something that exists — and both catch a defect **no behavioural
+    test can see**, because the page does exactly what it was written to do and only looks
+    wrong. A peer found one of these by taking a screenshot: a button carrying `class="run"`
+    where no `.run` rule existed. It worked. It just did not look like a button.
+
+    Ours was `class="lede"` on the two Python pages, where the other fifty-two say `lead` —
+    the same word, two spellings, and the one that is defined is `lead`. The opening
+    paragraph rendered as plain body text at full column width on both.
+
+    JavaScript is read as a definition too: `classList.add("x")`, `className = "x"`, and
+    `querySelector(".x")` all mean the name is alive even when the stylesheet is not where
+    it is spelled out. Without that this check would be **loud in a way that gets it
+    switched off**, which is worse than not having it.
+
+    The other direction — a rule nobody wears — is deliberately *not* asserted. Most of this
+    site's markup is built at runtime from `api.json`, so the classes in that markup never
+    appear in a `class="…"` attribute on disk and the reading would be false against dozens
+    of live rules.
+    """
+    css = "".join(sheet.read_text(encoding="utf-8") for sheet in sorted(SITE.rglob("*.css")))
+    scripts = "".join(sheet.read_text(encoding="utf-8") for sheet in sorted(SITE.rglob("*.js")))
+    for page in _pages():
+        text = page.read_text(encoding="utf-8")
+        css += "".join(re.findall(r"<style[^>]*>(.*?)</style>", text, re.S))
+        scripts += "".join(re.findall(r"<script[^>]*>(.*?)</script>", text, re.S))
+
+    defined = set(re.findall(r"\.([A-Za-z_][-\w]*)", css))
+    for chunk in (re.findall(r"classList\.\w+\(\s*[\"'`]([-\w]+)", scripts)
+                  + re.findall(r"className\s*=\s*[\"'`]([-\w ]+)", scripts)
+                  + re.findall(r"querySelector(?:All)?\(\s*[\"'`]\.([-\w]+)", scripts)):
+        defined.update(chunk.split())
+
+    assert "lead" in defined and "doc-main" in defined, (
+        "the stylesheet is not being read — every class would look undefined and this check "
+        "would fail on all of them, which reads as a broken site rather than a broken test")
+
+    dangling = {}
+    for page in _pages():
+        for attr in re.findall(r'class\s*=\s*"([^"]*)"', page.read_text(encoding="utf-8")):
+            for name in attr.split():
+                if name not in defined:
+                    dangling.setdefault(name, set()).add(page.relative_to(ROOT).as_posix())
+    assert not dangling, (
+        "these class names style nothing — the markup asks for an appearance that has no "
+        "rule behind it:\n  " +
+        "\n  ".join(f".{name} — {', '.join(sorted(where))}" for name, where in sorted(dangling.items())))
+
+
 def test_every_page_carries_the_same_global_nav():
     """The global nav has to be **one and the same on every page**.
 
