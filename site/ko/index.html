@@ -56,6 +56,7 @@
     <a href="#how">구조</a>
     <a href="#python">파이썬</a>
     <a href="#state">지금 되는 것</a>
+    <a href="#stack">스택</a>
     <a href="#measured">잰 것</a>
     <a href="#install">설치</a>
   </div>
@@ -75,6 +76,7 @@
 
     <div class="cta-row">
       <a class="btn primary" href="playground.html">Playground 열기 →</a>
+      <a class="btn ghost" href="models.html">사전학습 모델 돌려보기 →</a>
       <a class="btn ghost mono" href="#install">npm install borch-ts</a>
       <a class="btn ghost" href="https://github.com/playidea-lab/borch">GitHub</a>
     </div>
@@ -356,6 +358,47 @@ for step in range(201):
       </tbody>
     </table>
     </div>
+  </div>
+</section>
+
+<!-- ── 스택 ───────────────────────────────────────────────────────── -->
+<section id="stack">
+  <div class="wrap">
+    <p class="eyebrow">패키지 넷, 런타임 하나</p>
+    <h2>이제 라이브러리 하나가 아니다</h2>
+    <p class="lead">
+      각자 이미 아는 자리를 하나씩 차지한다. 마지막 하나만 빼고 — 그것은 파이썬 쪽에
+      대응하는 것이 없다.
+    </p>
+
+    <div class="scroll-x" style="margin-top:1.6rem">
+    <table class="data">
+      <thead><tr><th>여기</th><th>저기</th><th>무엇을 들고 있나</th></tr></thead>
+      <tbody>
+        <tr><td><strong>borch</strong></td><td><code>torch</code></td>
+            <td>텐서·autograd·모듈·옵티마이저 — 나머지 전부가 딛고 서는 런타임</td></tr>
+        <tr><td><strong>borchvision</strong></td><td><code>torchvision</code></td>
+            <td>transforms, v2, 박스·마스크 기하, 데이터셋 디코더 — <a href="vision.html">이름 547개</a></td></tr>
+        <tr><td><strong>bimm</strong></td><td><code>timm</code></td>
+            <td>아키텍처 카탈로그 — ResNet, EfficientNet, MobileNet, ViT</td></tr>
+        <tr><td><strong>borch-hub</strong></td><td>—</td>
+            <td>발행된 매니페스트, 싣기 전의 해시 대조, 받기 전의 환경 판정</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <p style="margin-top:1.6rem">
+      <strong>대응이 없는 것은 마지막 줄이다.</strong> <code>torch.hub</code> 는 저장소에서
+      받아오고 자기 카탈로그가 없다. timm 은 카탈로그를 갖고 있고 매니페스트를 발행하지
+      않는다. 여기서는 모델이 <strong>자기가 재현해야 하는 샘플과 함께</strong> 도착하고,
+      당신 브라우저가 그것을 먼저 대조한 다음에야 실렸다고 말한다.
+    </p>
+    <p class="cta-row" style="margin-top:1.4rem">
+      <a class="btn primary" href="models.html">모델을 받아서 검증해 보기 →</a>
+    </p>
+    <p class="small muted">
+      10메가바이트쯤 들고 몇 초면 끝난다. 설치하는 것은 없다.
+    </p>
   </div>
 </section>
 
