@@ -1,0 +1,138 @@
+<!doctype html>
+<!--
+  골든을 읽는 사람의 브라우저에서, 읽는 사람의 GPU 로 돌린다.
+
+  `borch-ts/test/index.html` 이 같은 러너이고 그것은 이 기계에서만 돌았다 —
+  Playwright 가 몰아서. 그래서 이 저장소의 모든 벤더 주장이 노트북 한 대에서 나왔고,
+  그중 하나가 몇 달 동안 틀려 있었다: `845/845` 를 두 벤더 확인으로 적어뒀는데
+  어댑터가 내내 `google / swiftshader` 였다.
+
+  이 페이지는 답이 여기 아무도 안 가진 기계에서 오게 하려고 있다. 사이트가 이미
+  올리는 그 `dist` 와 로컬 러너가 읽는 그 `tests/golden.json` 을 그대로 읽는다 —
+  지켜야 할 두 번째 사본이 없다.
+
+  영어판은 `../check.html`; 둘은 같이 고친다.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 GPU 로 확인 — borch</title>
+<meta name="description" content="borch 의 골든 전부를 진짜 PyTorch 답과 맞대어 당신의 브라우저, 당신의 GPU 에서 돌린다 — 그리고 실제로 쓰인 벤더가 무엇인지 함께 본다.">
+<link rel="alternate" hreflang="en" href="../check.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="내 GPU 로 확인 — borch">
+<meta property="og:description" content="골든 전부를, 당신의 브라우저에서, 당신의 GPU 로.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/check.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">배우기</a>
+      <a href="tutorials/">튜토리얼</a>
+      <a href="models.html">모델</a>
+      <a href="vision.html">비전</a>
+      <a href="api/">API</a>
+      <a href="python.html">파이썬</a>
+      <a href="setup.html" class="on" aria-current="page">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../check.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">같은 골든, 당신의 기계</p>
+    <h1>내 GPU 로 확인</h1>
+    <p class="lead">
+      <strong>아래 케이스는 전부 진짜 PyTorch 를 돌려 굳힌 것</strong>이고, 답을 자리
+      하나하나 맞대어 얻었다. 이 페이지는 같은 질문을 당신의 GPU 에 묻는다. 아무것도
+      올라가지 않는다 &mdash; 실행은 이 탭 안에서 일어나고 결과도 이 페이지에 남는다.
+    </p>
+
+    <p>
+      <button id="go" class="btn">골든 돌리기</button>
+      <span id="where" class="muted"></span>
+    </p>
+
+    <pre id="out" class="out">버튼을 누르면 된다. 몇 초 걸리고 그동안 이 탭은 바쁘다.</pre>
+
+    <h2>이 페이지가 있는 이유</h2>
+    <p>
+      <strong>이 저장소의 벤더 주장은 전부 노트북 한 대에서 나왔고</strong>, 그중 하나가
+      몇 달 동안 틀려 있었다. <code>845 / 845</code> 통과를 두 벤더 확인으로 적어뒀는데
+      어댑터가 내내 <code>google / swiftshader</code> 였다. 통과는 진짜였고, 그것이
+      무엇을 증명하는지에 대한 문장이 틀렸다.
+    </p>
+    <p>
+      그래서 어댑터는 개수와 <strong>항상 같은 숨에</strong> 찍힌다.
+      <code>google / swiftshader</code> 가 나와도 그건 <em>실제 결과</em>다 &mdash;
+      WebGPU 자신의 CPU 경로이고 값은 여전히 값이다. 다만 GPU 에 대한 진술이 아닐 뿐이다.
+    </p>
+    <p>
+      이 저장소가 한 번도 못 본 카드를 갖고 계시다면, 알려주는 데 필요한 것은 이게
+      전부다: 버튼을 누르고 첫 줄을
+      <a href="https://github.com/playidea-lab/borch/issues">이슈</a>에 붙여 주시면 된다.
+    </p>
+  </main>
+</div>
+
+<script type="module">
+  // **상대 경로 하나뿐이다.** 로컬에서는 저장소 루트에서, 배포에서는 `_site` 에서
+  // 서빙되는데 배치는 같다 — `borch-ts/dist` 와 `tests/golden.json` 이 `site/` 옆에
+  // 있다. 호스트를 박아 넣으면 그 둘 중 한 곳에서만 맞는다.
+  const GOLDEN = "../../tests/golden.json";
+
+  const out = document.getElementById("out");
+  const where = document.getElementById("where");
+  const go = document.getElementById("go");
+
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    out.textContent = "도는 중…";
+    try {
+      const { run, format } = await import("../../borch-ts/dist/test/golden.js");
+      const report = await run(GOLDEN);
+      // 자동 러너가 읽을 수 있는 자리에 둔다. 로컬 페이지도 그렇게 한다.
+      window.__borchReport = report;
+      // **`adapter` 는 쌍이 아니라 문자열이다.** `{vendor, architecture}` 로 읽었더니
+      // 버튼 옆에 `undefined / undefined` 가 찍혔다 — 리포트 자신은
+      // `apple / metal-3` 이라고 말하는데.
+      where.textContent = report.adapter ?? "";
+      out.textContent = format(report);
+      out.className = report.failed.length === 0 && report.unknown.length === 0
+        ? "out ok" : "out fail";
+    } catch (err) {
+      // **안 돈 것과 틀린 것은 다른 물건이다.** 하나를 다른 하나로 찍는 페이지가,
+      // GPU 가 없는 것을 라이브러리가 깨진 것으로 읽히게 만든다.
+      out.textContent = `돌리지 못했다: ${err && err.message ? err.message : err}`;
+      out.className = "out fail";
+    } finally {
+      go.disabled = false;
+    }
+  });
+</script>
+
+<style>
+  .out { white-space: pre-wrap; overflow-x: auto; padding: 1rem;
+         border-radius: .5rem; background: var(--code-bg, #1116);
+         font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .out.ok { border-left: 3px solid #0a7b34; }
+  .out.fail { border-left: 3px solid #b00020; }
+  .muted { opacity: .7; margin-left: .75rem;
+           font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+
+</body>
+</html>

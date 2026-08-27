@@ -73,6 +73,13 @@
       <li><strong>No adapter at all</strong> — the browser refused before the driver was
         asked. That is the case the rest of this page is about.</li>
     </ul>
+    <p>
+      <strong>The badge says which device; <a href="check.html">Check your GPU</a> says
+      whether the answers are right on it.</strong> It runs the whole golden — every case
+      frozen against real PyTorch — in your tab, and prints the adapter beside the count.
+      Every vendor row on this page came from a machine somebody here owns, which is why
+      one of them was wrong for months.
+    </p>
 
     <h2>macOS</h2>
     <p>
@@ -160,23 +167,26 @@
 
     <h2>Windows</h2>
     <p>
-      <strong>Not measured.</strong> Chrome uses D3D12 on Windows rather than the Vulkan
-      path measured above, so nothing on this page carries over to it — not the flags, not
-      the ladder, not the outcome. If you have a Windows machine with a GPU, opening the
-      <a href="playground.html">playground</a> and reading the badge settles it in thirty
-      seconds, and the answer is welcome.
+      <strong>Nothing to do.</strong> Measured on a Windows desktop with an NVIDIA card:
+      the playground's badge came back <code>nvidia / blackwell</code> and Run worked
+      with <strong>no flags at all</strong>. Chrome uses D3D12 there rather than the
+      Vulkan path the Linux section is about, so none of that ladder applies — and it
+      turns out none of it is needed.
     </p>
     <p>
-      <strong>What the implementers say, which is not a measurement.</strong> The same
+      <strong>This cell said <em>not measured</em> until somebody opened the page.</strong>
+      What stood here named its own retirement condition — "it stays marked not measured
+      until someone opens the page on one, because a page that says <em>we read that it
+      works</em> and a page that says <em>we saw it work</em> are different pages". The
       <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status">implementation
-      status</a> page lists Windows on x86 and x64 as enabled by default since Chrome 113,
-      and Windows on ARM64 as still behind <code>#enable-unsafe-webgpu</code> — so "Windows
-      works" is two answers depending on which Windows. That is what is written down by the
-      people who ship it, and it is why nobody here expects this cell to need flags on an
-      ordinary desktop. It stays marked <em>not measured</em> until someone opens the page
-      on one, because a page that says <em>we read that it works</em> and a page that says
-      <em>we saw it work</em> are different pages, and this repository spent two days
-      learning which one it wants to be.
+      status</a> page had said Windows on x86 and x64 was enabled by default since Chrome
+      113, and reading that was never the same as seeing it. It agrees with what came back,
+      which is worth knowing and is not why this paragraph changed.
+    </p>
+    <p>
+      <strong>Windows on ARM64 is still unmeasured</strong>, and the same page lists it as
+      behind <code>#enable-unsafe-webgpu</code> — so "Windows works" is still two answers
+      depending on which Windows, and only one of them has been seen here.
     </p>
 
     <h2>Phones and tablets</h2>
