@@ -697,12 +697,12 @@ SKIPPED = {
     "datasets.Places365": "as above — the devkit tar is md5'd",
     "datasets.SBU": "as above, and `download=True` is its default",
     "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
-    "datasets.ImageNet": "the devkit tar is parsed for the synsets and md5'd first, so a fixture reaches nothing to compare against",
+    "datasets.ImageNet": "**its meta file is a torch pickle.** `load_meta_file` is `torch.load(meta.bin, weights_only=True)`, and when that file is absent `parse_devkit_archive` builds it by reading `data/meta.mat` out of the devkit tar — a **MATLAB struct array**. So a fixture has to write one format or the other, and both are formats this repository reads rather than writes. Nothing is md5'd: `check_integrity` is called on the meta file with no hash, which is an existence check",
     "datasets.Kinetics": "video, as `HMDB51` and `UCF101`. Its row said `as above` under a sentence about a codec, which is the wrong wall by a wide margin — this one wants a container, a codec and a clip sampler",
     "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",
     "datasets.LSUNClass": "as above",
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
-    "datasets.SBDataset": "its pictures are JPEG, which is the codec wall. Its `.mat` annotations are not — `_mat_read` handles those, and this row named them as a second reason when there was only ever one",
+    "datasets.SBDataset": "**its annotations are sparse matrices inside a struct array.** `_get_boundaries_target` reads `mat['GTcls'][0]['Boundaries'][0][i][0]` and calls `.toarray()` on it — twenty scipy sparse matrices per picture. `_mat_read` reads dense numeric, struct, cell and char, and `mxSPARSE_CLASS` is none of those. The `segmentation` mode alone is dense and would be reachable, and a fixture would still have to **write** a struct-array `.mat` without scipy, which is a writer this repository does not have. The old row said a codec, and named the `.mat` as a second reason it then dismissed — the dismissal was of the half that turned out to be the wall",
     "datasets.UCF101": "as above",
 
     # The stereo and optical-flow sets were one row and are no longer one kind. It read
