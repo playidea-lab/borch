@@ -365,7 +365,11 @@ FROZEN = {
     # handle to a GPU buffer with nothing to subclass — so `isinstance`, which is the
     # whole mechanism, has no answer there. Carrying this over is designing a second
     # mechanism rather than writing a second body.
-    "transforms.v2": 12,
+    #
+    # 12 → 14. The two `Sanitize` transforms. Their rows on the gap table read *it is
+    # boxes or it is nothing*, and the boxes went in on the Python side — so this row
+    # rising is that row falling, for the reason this one already gives.
+    "transforms.v2": 14,
     #
     # 1 → 3. The format conversion and the two clamps go up with the type system,
     # because the clamping taxonomy is what `BoundingBoxes` carries.

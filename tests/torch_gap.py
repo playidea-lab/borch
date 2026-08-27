@@ -597,10 +597,15 @@ SKIPPED = {
     #
     # Everything else absent from v2 is the to-do list and reads as one: 38 of its 72
     # names are the transforms this library already has, one namespace over.
-    "transforms.v2.SanitizeBoundingBoxes": "as above",
-    "transforms.v2.SanitizeKeyPoints": "as above",
-    "transforms.v2.RandomIoUCrop": "a detection augmentation — it crops by how much of "
-                                   "a box survives, so it is boxes or it is nothing",
+    "transforms.v2.RandomIoUCrop": "**it draws until a crop meets a minimum overlap**, "
+                                   "so its answer is a sample from a loop rather than "
+                                   "a value. Its old reason — *it is boxes or it is "
+                                   "nothing* — stopped being true the day the boxes "
+                                   "went in, and the two beside it came off this list "
+                                   "on that. What is left is the draw: the three "
+                                   "implementations do not share a generator, so a "
+                                   "frozen answer would be one library's and not the "
+                                   "others'",
     "transforms.v2.UniformTemporalSubsample": "video. There is no video anywhere in "
                                               "this project and a tutorial's first ten "
                                               "lines do not open one",

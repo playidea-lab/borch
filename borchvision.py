@@ -4535,6 +4535,55 @@ def get_bounding_boxes(flat_inputs):
     return found[0]
 
 
+def _find_labels_default(inputs):
+    """Where the labels are, when nobody said. **torchvision's three shapes**, and its
+    two-step key search.
+
+    A pair whose second item is a tensor is a batched classification sample; a pair
+    whose second is a dictionary, or a dictionary alone, is a detection one. Inside a
+    dictionary the search is for a key spelled exactly `labels` in any case **first**,
+    and only then for one with `label` anywhere in it — the order matters, because a
+    sample carrying both `labels` and `label_ids` has one right answer and the
+    single-pass search picks whichever came first.
+    """
+    if isinstance(inputs, (tuple, list)):
+        inputs = inputs[1]
+    if is_pure_tensor(inputs):
+        return inputs
+    if not isinstance(inputs, _collections.abc.Mapping):
+        raise ValueError(
+            "When using the default labels_getter, the input passed to forward must be "
+            "a dictionary or a two-tuple whose second item is a dictionary or a "
+            f"tensor, but got {inputs} instead.")
+    found = next((key for key in inputs if key.lower() == "labels"), None)
+    if found is None:
+        found = next((key for key in inputs if "label" in key.lower()), None)
+    if found is None:
+        raise ValueError(
+            "Could not infer where the labels are in the sample. Try passing a "
+            "callable as the labels_getter parameter? If there are no labels in the "
+            "sample by design, pass labels_getter=None.")
+    return inputs[found]
+
+
+def _parse_labels_getter(labels_getter):
+    """`"default"`, a callable, or `None` — and **`None` is not the default.**
+
+    They read the same at a glance and mean opposite things: `None` says *this sample
+    has no labels*, and `"default"` says *find them*. Defaulting to `None` would drop
+    boxes and leave every label after them pointing at the wrong object, silently.
+    """
+    if labels_getter == "default":
+        return _find_labels_default
+    if callable(labels_getter):
+        return labels_getter
+    if labels_getter is None:
+        return lambda _inputs: None
+    raise ValueError(
+        "labels_getter should either be 'default', a callable, or None, but got "
+        f"{labels_getter}.")
+
+
 def get_keypoints(flat_inputs):
     """As above, for keypoints."""
     found = [one for one in flat_inputs if isinstance(one, KeyPoints)]
@@ -4688,11 +4737,126 @@ def _v2_transform_base():
             return BoundingBoxes.wrap(inpt, inpt,
                                       clamping_mode=self.clamping_mode)
 
+    class SanitizeBoundingBoxes(Transform):
+        """Drop the boxes not worth keeping — **and everything that sits beside them.**
+
+        Its row read *a detection augmentation — it crops by how much of a box survives,
+        so it is boxes or it is nothing*, and the boxes arrived. The functional half was
+        already written; this is the walk over the sample that uses it.
+
+        **The mask filters more than the boxes.** Labels and masks are parallel arrays,
+        one entry per box, and dropping a box without dropping its label leaves every
+        label after it pointing at the wrong object. That is the whole reason this is a
+        transform and not a call on the boxes: it is the only place that can see the
+        rest of the sample.
+
+        **`labels_getter` defaults to reading a key called `labels`**, and the default
+        is not "no labels" — a sample that carries them under that name gets them
+        filtered without being asked, which is what a detector expects.
+        """
+
+        def __init__(self, min_size=1.0, min_area=1.0, labels_getter="default"):
+            super().__init__()
+            if min_size < 1:
+                raise ValueError(f"min_size must be >= 1, got {min_size}.")
+            if min_area < 1:
+                raise ValueError(f"min_area must be >= 1, got {min_area}.")
+            self.min_size, self.min_area = min_size, min_area
+            self.labels_getter = labels_getter
+            self._labels_getter = _parse_labels_getter(labels_getter)
+
+        def forward(self, *inputs):
+            inputs = inputs if len(inputs) > 1 else inputs[0]
+            labels = self._labels_getter(inputs)
+            if labels is not None and not isinstance(labels, (tuple, list)):
+                labels = (labels,)
+            flat_inputs, spec = _tree_flatten(inputs)
+            boxes = get_bounding_boxes(flat_inputs)
+            _kept, valid = sanitize_bounding_boxes(
+                boxes, format=boxes.format.value.lower(),
+                canvas_size=boxes.canvas_size, min_size=self.min_size,
+                min_area=self.min_area)
+            keep = _np.asarray(_to_numpy(valid)).astype(bool).reshape(-1)
+            out = [self._pick(one, keep, labels) for one in flat_inputs]
+            return _tree_unflatten(out, spec)
+
+        def _pick(self, inpt, keep, labels):
+            is_label = labels is not None and any(inpt is one for one in labels)
+            if not (is_label or isinstance(inpt, (BoundingBoxes, Mask))):
+                return inpt
+            block = _np.asarray(_to_numpy(inpt))
+            if block.shape[:1] != keep.shape:
+                # **A shape that does not line up is passed through**, which is
+                # torchvision's own answer: a mask that is one picture rather than one
+                # per box has nothing to filter and is not an error.
+                return inpt
+            taken = _backend().tensor(_np.ascontiguousarray(block[keep]))
+            if isinstance(inpt, TVTensor):
+                return type(inpt).wrap(taken, inpt)
+            return taken
+
+    class SanitizeKeyPoints(Transform):
+        """As above, for points — **and the unit is the group.**
+
+        A skeleton is kept or dropped whole, because half a pose with its joints
+        renumbered is not a smaller pose. That rule is in `sanitize_keypoints`; what is
+        here is the walk that carries the labels with it.
+
+        **`labels_getter` defaults to `None` here and to `"default"` on the boxes.** Two
+        sibling classes with opposite defaults, and the two words read alike — so this
+        one leaves the labels alone unless it is told where they are, and its sibling
+        goes looking. Written the same on both, the points case answers with three
+        labels for two skeletons and only the *first* still lines up. Measured against
+        torchvision, which is the only thing that says so.
+
+        **And it checks the counts before it filters.** A label array whose length is
+        not the number of groups is refused rather than passed through — the boxes'
+        sibling passes such a thing through, and the two differ there as well.
+        """
+
+        def __init__(self, labels_getter=None):
+            super().__init__()
+            self.labels_getter = labels_getter
+            self._labels_getter = _parse_labels_getter(labels_getter)
+
+        def forward(self, *inputs):
+            inputs = inputs if len(inputs) > 1 else inputs[0]
+            labels = self._labels_getter(inputs)
+            if labels is not None and not isinstance(labels, (tuple, list)):
+                labels = (labels,)
+            flat_inputs, spec = _tree_flatten(inputs)
+            points = get_keypoints(flat_inputs)
+            for one in labels or ():
+                if int(points.shape[0]) != int(one.shape[0]):
+                    raise ValueError(
+                        f"Number of kepyoints (shape={tuple(points.shape)}) must match "
+                        f"the number of labels."
+                        f"Found labels with shape={tuple(one.shape)})")
+            _kept, valid = sanitize_keypoints(points,
+                                              canvas_size=points.canvas_size)
+            keep = _np.asarray(_to_numpy(valid)).astype(bool).reshape(-1)
+            out = []
+            for one in flat_inputs:
+                is_label = labels is not None and any(one is x for x in labels)
+                if not (is_label or isinstance(one, KeyPoints)):
+                    out.append(one)
+                    continue
+                block = _np.asarray(_to_numpy(one))
+                if block.shape[:1] != keep.shape:
+                    out.append(one)
+                    continue
+                taken = _backend().tensor(_np.ascontiguousarray(block[keep]))
+                out.append(type(one).wrap(taken, one)
+                           if isinstance(one, TVTensor) else taken)
+            return _tree_unflatten(out, spec)
+
     return {"Transform": Transform,
             "ConvertBoundingBoxFormat": ConvertBoundingBoxFormat,
             "ClampBoundingBoxes": ClampBoundingBoxes,
             "ClampKeyPoints": ClampKeyPoints,
-            "SetClampingMode": SetClampingMode}
+            "SetClampingMode": SetClampingMode,
+            "SanitizeBoundingBoxes": SanitizeBoundingBoxes,
+            "SanitizeKeyPoints": SanitizeKeyPoints}
 
 
 _V2_BASES = {}

@@ -13471,6 +13471,56 @@ def v2_cases(inp=None):
             (np.arange(6 * 7) % 3).reshape(6, 7).astype(np.float32))
         return made.Mask(L.tensor(block) if _is_real_torch(L) else block)
 
+    _SANITIZE_BOXES = np.array([[1.0, 2.0, 5.0, 8.0],
+                                [0.0, 0.0, 0.5, 0.5],
+                                [2.0, 2.0, 6.0, 7.0]], dtype=np.float32)
+
+    def sanitize_case(labels_getter="default"):
+        """`SanitizeBoundingBoxes` over a dict. **The labels are filtered too**, unless
+        the caller says there are none — and `None` and `"default"` read alike and mean
+        opposite things."""
+        def run(L):
+            made = _tv(L)
+            block = np.ascontiguousarray(_SANITIZE_BOXES)
+            boxes = made.BoundingBoxes(
+                L.tensor(block) if _is_real_torch(L) else block,
+                format="XYXY", canvas_size=_CANVAS)
+            labels = L.tensor(np.ascontiguousarray(
+                np.array([7.0, 8.0, 9.0], dtype=np.float32)))
+            out = _vision_v2(L).SanitizeBoundingBoxes(
+                labels_getter=labels_getter)({"boxes": boxes, "labels": labels})
+            return "%s | %s | %s" % (
+                np.asarray(_as_numpy(out["boxes"])).round(4).tolist(),
+                np.asarray(_as_numpy(out["labels"])).round(4).tolist(),
+                tuple(out["boxes"].canvas_size))
+        return run
+
+    def sanitize_points_case(labels_getter=None):
+        """`SanitizeKeyPoints`. **One boolean per group**, not per point: the middle
+        skeleton has one joint outside the canvas and goes whole.
+
+        **Its `labels_getter` defaults to `None` and its sibling's to `"default"`** —
+        two classes side by side with opposite defaults, and the two words read alike.
+        So the labels are asked both ways: left alone by default, filtered when told.
+        """
+        def run(L):
+            made = _tv(L)
+            block = np.ascontiguousarray(np.array([
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[1.0, 2.0], [99.0, 4.0]],
+                [[5.0, 6.0], [7.0, 7.0]]], dtype=np.float32))
+            points = made.KeyPoints(
+                L.tensor(block) if _is_real_torch(L) else block,
+                canvas_size=_CANVAS)
+            labels = L.tensor(np.ascontiguousarray(
+                np.array([1.0, 2.0, 3.0], dtype=np.float32)))
+            out = _vision_v2(L).SanitizeKeyPoints(labels_getter=labels_getter)(
+                {"points": points, "labels": labels})
+            return "%s | %s" % (
+                np.asarray(_as_numpy(out["points"])).round(4).tolist(),
+                np.asarray(_as_numpy(out["labels"])).round(4).tolist())
+        return run
+
     def _values(L, out):
         return L.tensor(np.ascontiguousarray(
             np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
@@ -13594,6 +13644,25 @@ def v2_cases(inp=None):
              _vision_v2(L).functional.is_pure_tensor(
                  L.tensor(np.ascontiguousarray(_BOXES))),
              _vision_v2(L).functional.is_pure_tensor(_boxes(L)))),
+        # ── the two that were declined for "it is boxes or it is nothing" ───────
+        #
+        # The boxes arrived, and their functional halves were already written. What was
+        # missing is the walk over the sample — **which is the whole point of these**:
+        # labels sit in a parallel array, one entry per box, and dropping a box without
+        # dropping its label leaves every label after it pointing at the wrong object.
+        #
+        # The fixture's middle box is the one that goes, so a reader that filtered the
+        # boxes and left the labels alone keeps three labels for two boxes and the
+        # **first** one still lines up.
+        (V2_PREFIX + "SanitizeBoundingBoxes(the labels go with them)",
+         sanitize_case()),
+        (V2_PREFIX + "SanitizeBoundingBoxes(labels_getter=None leaves them)",
+         sanitize_case(labels_getter=None)),
+        # **The unit is the group.** A skeleton is kept or dropped whole, because half a
+        # pose with its joints renumbered is not a smaller pose.
+        (V2_PREFIX + "SanitizeKeyPoints(a group at a time)", sanitize_points_case()),
+        (V2_PREFIX + "SanitizeKeyPoints(told where the labels are)",
+         sanitize_points_case(labels_getter="default")),
         (V2_PREFIX + "query_size(the boxes' canvas)", query_case("query_size")),
         (V2_PREFIX + "query_chw(images only)", query_case("query_chw")),
         (V2_PREFIX + "Transform(a dict comes back a dict)", nest_case("dict")),
