@@ -10686,6 +10686,28 @@ for _nm in _AS_METHOD:
 # first), and the methods have to be **the top-level ones.** `_AS_METHOD` works
 # only where there is one name, so these two are attached by hand — put into the
 # list they would give methods that call the wrong function.
+# **`Tensor.relu` was `F.relu` itself, so `F`'s `inplace` seat appeared on the
+# method.** torch does not put it there — `x.relu(inplace=True)` raises
+# `TensorBase.relu() takes no keyword arguments`, while `F.relu(x, inplace=True)`
+# works. Measured; and the core offered a call torch rejects, so code written against
+# it fails on the real thing.
+#
+# One object, two doors, two signatures — the same shape as `matmul` (whose free
+# function is `other` and whose method is too, once you call it rather than read the
+# docstring) and `qr` (a boolean at the top level, a string under `linalg`). The
+# functional keeps its argument; the method gets its own two lines.
+#
+# The signature axis reported this as **borch.ts being short of `inplace`**, because
+# it compares the core against borch.ts and torch is in neither column. It is the
+# core that was long. `tests/test_torch_names.py` did not catch it either: that axis
+# compares names at the same position and says so — it does not look at length.
+def _relu_method(self):
+    """`x.relu()`. **No `inplace` here** — torch keeps that on `F.relu` alone."""
+    return relu(self)
+
+
+Tensor.relu = _relu_method
+
 Tensor.lu = _as_method("lu_top")
 Tensor.lu.__name__ = "lu"
 Tensor.lu_solve = _as_method("lu_solve_top")

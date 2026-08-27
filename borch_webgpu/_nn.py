@@ -2697,12 +2697,18 @@ def Unflatten(dim, sizes):
     return _layer("Unflatten", dim, _arg(list(sizes)))
 
 
-def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None):
+def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None,
+             recompute_scale_factor=None):
     """**The first position is `size`**, as it is in torch. It used to be the
     scale factor, and `mode` was accepted and unused — asking for bilinear
-    quietly produced nearest."""
+    quietly produced nearest.
+
+    `recompute_scale_factor` is torch's fifth seat and it was missing here while
+    borch.ts grew it: with a fractional factor torch either samples at the number it
+    was given or derives the scale back from the floored output size, and those are
+    different values at the same shape."""
     return _layer("Upsample", _arg(size) if size is not None else None,
-                  scale_factor, mode, align_corners)
+                  scale_factor, mode, align_corners, recompute_scale_factor)
 
 
 # **The reduction is part of the loss — it has to exist on the layer side too.**

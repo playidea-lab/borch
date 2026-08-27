@@ -1322,8 +1322,31 @@ export class Tensor implements Node<Tensor> {
    * over there has to serialise one stream, and there is no reason for this
    * side to do the same.
    */
-  bernoulli(): Tensor {
-    return Tensor.rand(this.shape).binary("lt", this).to(this.dtype);
+  /**
+   * **`p` is torch's other form and it was not here.** Given nothing, the tensor's own
+   * values are the probabilities; given a number, that probability is used everywhere
+   * and the values are ignored. The core's docstring records both and this side had
+   * only the first, so `x.bernoulli(0.5)` was a surplus argument — discarded, and the
+   * draw came from the values instead of from `0.5`.
+   *
+   * `out` is refused rather than carried further: this library has no `out=` anywhere,
+   * and a seat that silently allocates instead of writing where it was told is worse
+   * than one that says so.
+   */
+  bernoulli(p?: number, generator?: never, out?: never): Tensor {
+    // **`generator` is the second seat and `out` the third**, keyword-only in torch
+    // (`bernoulli(p, *, generator, out)`). The first draft of this took `(p, out)` and
+    // put `out` where `generator` sits — a drop from the middle rather than a short
+    // tail, which the signature axis caught as `dropped` within the hour.
+    if (generator !== undefined) {
+      throw new Error(
+        "bernoulli(generator=…) — there is one stream here; seed it with manualSeed");
+    }
+    if (out !== undefined) {
+      throw new Error("bernoulli(out=…) — writing into a given tensor is not here");
+    }
+    const probs = p === undefined ? this : Tensor.full(this.shape, p);
+    return Tensor.rand(this.shape).binary("lt", probs).to(this.dtype);
   }
 
   /**
@@ -2802,9 +2825,20 @@ export class Tensor implements Node<Tensor> {
    * At `k=1` it is `out[i][j] = in[j][C-1-i]` — swapping the axes while
    * reversing one, which writes down directly as a rule table.
    */
-  rot90(k = 1): Tensor {
+  /**
+   * **`dims` chooses the plane and there is only one plane here.** torch turns within
+   * whichever two axes it is given, so `dims=[1, 2]` on a rank-3 tensor is a different
+   * answer from the default `[0, 1]` — measured, different shapes. This is 2-D only,
+   * so the pair can be nothing but `[0, 1]`; carried and refused rather than left out,
+   * because a caller writing `dims` is asking for a plane and getting silence.
+   */
+  rot90(k = 1, dims: readonly number[] = [0, 1]): Tensor {
     if (this.shape.length !== 2) {
       throw new Error(`rot90 is 2-D only for now: [${this.shape}]`);
+    }
+    if (dims.length !== 2 || dims[0] !== 0 || dims[1] !== 1) {
+      throw new Error(
+        `rot90(dims=[${dims}]) — this side turns in the [0, 1] plane only`);
     }
     const turns = ((k % 4) + 4) % 4;
     if (turns === 0) return this.reshape(this.shape);
@@ -6134,7 +6168,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * leaving the two out is right on squares and wrong only on rectangles —
    * the golden cases ask with rectangles too.
    */
-  async pinverse(): Promise<Tensor> {
+  /**
+   * **`rcond` is the cut-off below which a singular value counts as zero**, and it
+   * changes the answer rather than only its precision — measured on torch, a 2×2 at
+   * `rcond=0.9` comes back entirely different from the default.
+   *
+   * `LA.pinverse` decides that cut-off itself, so the seat is carried and refused
+   * until it takes one. Left out, `pinverse(rcond=0.9)` was a surplus argument and
+   * JavaScript discards those.
+   */
+  async pinverse(rcond?: number): Promise<Tensor> {
+    if (rcond !== undefined) {
+      throw new Error(
+        `pinverse(rcond=${rcond}) — the cut-off is not carried across yet; the `
+        + "solver picks its own");
+    }
     const v = await this.asBatch(false);
     const { rows: m, cols: n } = v;
     const ps = v.mats.map((a) => LA.pinverse(a, m, n));
@@ -6943,7 +6991,24 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Spread into `P`, `L` and `U`. Easier to read than the packed plate.
    */
-  async lu(): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+  /**
+   * **The two seats are carried so they can be refused.**
+   *
+   * `pivot=false` is LU without row swaps, which torch declines on the CPU too
+   * (measured: `linalg.lu_factor: LU without pivoting is not implemented`), and
+   * `getInfos=true` makes torch return a **third** value — so it changes the shape of
+   * the answer rather than its contents, which is the kind of argument that must not
+   * be dropped in silence.
+   */
+  async lu(pivot = true, getInfos = false):
+      Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+    if (!pivot) {
+      throw new Error("lu(pivot=false) — LU without pivoting is not implemented");
+    }
+    if (getInfos) {
+      throw new Error(
+        "lu(getInfos=true) — the third value torch returns is not carried across");
+    }
     const v = await this.asBatch(false);
     const { rows, cols } = v;
     const k = Math.min(rows, cols);
@@ -9108,9 +9173,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * **It leans to the right** — it measures against `b`'s magnitude, so
    * swapping the two can change the answer. torch defines it that way.
    */
-  isclose(other: Tensor, rtol = 1e-5, atol = 1e-8): Tensor {
+  /**
+   * **`equalNan` decides whether NaN matches NaN**, and it was missing while
+   * `allclose` twenty lines down has had it from the start. Two functions asking the
+   * same question, one of them able to answer it.
+   *
+   * `allclose` reads the values back and can test with `Number.isNaN`; this one stays
+   * on the device, so the same rule is written in tensor operations: a cell where
+   * both sides are NaN is `x !== x && y !== y`, and `binary("ne", self)` is that test.
+   */
+  isclose(other: Tensor, rtol = 1e-5, atol = 1e-8, equalNan = false): Tensor {
     const room = other.abs().mul(Tensor.full([], rtol)).add(Tensor.full([], atol));
-    return this.sub(other).abs().binary("le", room);
+    const near = this.sub(other).abs().binary("le", room);
+    if (!equalNan) return near;
+    const bothNan = this.binary("ne", this).mul(other.binary("ne", other));
+    return near.add(bothNan).binary("gt", Tensor.full([], 0));
   }
 
   // `allclose` is not here — **it is already below and that one is better.** It checks

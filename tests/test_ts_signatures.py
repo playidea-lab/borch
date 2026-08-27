@@ -915,7 +915,26 @@ SHORTER = {
     # `Generator` object to hand a method. The core's nine did the opposite — they had
     # `Generator`, `DataLoader` honoured it, and each filler opened with
     # `del generator`; that is fixed and the golden asks about it now.
-    "Tensor": 15,
+    #
+    # **15 → 8.** `isclose` took `equalNan` (`allclose` twenty lines away had it),
+    # `rot90` and `pinverse` carry `dims` and `rcond` to refuse them, `lu` the same for
+    # `pivot` and `getInfos`, and `bernoulli` grew torch's other form — a number is the
+    # probability everywhere, where the tensor's own values are it otherwise.
+    #
+    # Two of the seven were **this file being blind rather than borch.ts being short**:
+    #
+    #   · `unique` carries all four and was read as `unique(sorted?)`, because
+    #     `build_api.py` keeps the first declaration in `signature` and pushes the rest
+    #     into `overloads`, which this file did not read. TypeScript declares the narrow
+    #     overload first, so an overloaded name arrived here as its smallest shape.
+    #     Second blind spot of that kind after `InstanceNorm1d`'s empty subclass body.
+    #
+    #   · `relu` was the **core** being long, not borch.ts short. `Tensor.relu` was
+    #     `F.relu` itself, so the functional's `inplace` appeared on the method — where
+    #     torch raises `TensorBase.relu() takes no keyword arguments`. This axis cannot
+    #     see that: torch is in neither of its columns. `test_torch_names.py` did not
+    #     either — it compares names at the same position and says so.
+    "Tensor": 8,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and

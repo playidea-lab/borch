@@ -424,13 +424,13 @@
       },
       {
        "name": "bernoulli",
-       "signature": "bernoulli(): Tensor",
-       "doc": "Each slot **reads its own value as a probability** and lands on 0 or 1.\nAt `p=0` all zeros, at `p=1` all ones.\n\n**The comparison finishes on the device** — once the drawn randomness\nis uploaded, no value comes back down. The binding (`borch_webgpu`)\nbuilds the same name out of numpy, but that is because `get_rng_state`\nover there has to serialise one stream, and there is no reason for this\nside to do the same.",
+       "signature": "bernoulli(p?: number, generator?: never, out?: never): Tensor",
+       "doc": "**`p` is torch's other form and it was not here.** Given nothing, the tensor's own\nvalues are the probabilities; given a number, that probability is used everywhere\nand the values are ignored. The core's docstring records both and this side had\nonly the first, so `x.bernoulli(0.5)` was a surplus argument — discarded, and the\ndraw came from the values instead of from `0.5`.\n\n`out` is refused rather than carried further: this library has no `out=` anywhere,\nand a seat that silently allocates instead of writing where it was told is worse\nthan one that says so.",
        "section": {
         "ko": "Creation",
         "en": "Creation"
        },
-       "doc_ko": "자리마다 **자기 값을 확률로 읽어** 0 이나 1 을 놓는다. `p=0` 이면 전부 0,\n`p=1` 이면 전부 1 이다.\n\n**비교가 장치 위에서 끝난다** — 뽑은 난수를 한 번 올리고 나면 값이 안 내려온다.\n결속(`borch_webgpu`)은 같은 이름을 numpy 로 만드는데, 그쪽은 `get_rng_state` 가\n한 줄기를 직렬화해야 해서 그런 것이지 이쪽이 그럴 이유는 없다."
+       "doc_ko": "자리마다 **자기 값을 확률로 읽어** 0 이나 1 을 놓는다. `p=0` 이면 전부 0,\n`p=1` 이면 전부 1 이다.\n\n**비교가 장치 위에서 끝난다** — 뽑은 난수를 한 번 올리고 나면 값이 안 내려온다.\n결속(`borch_webgpu`)은 같은 이름을 numpy 로 만드는데, 그쪽은 `get_rng_state` 가\n한 줄기를 직렬화해야 해서 그런 것이지 이쪽이 그럴 이유는 없다.\n\n## `p` 는 torch 의 다른 형태이고 여기 없었다\n\n인자 없이 부르면 텐서 자신의 값이 확률이고, 숫자를 주면 그 확률을 어디에나 쓰며\n값은 안 읽는다. 코어의 docstring 이 그 둘을 이미 적어뒀는데 이쪽에는 앞의 것만\n있었다 — `x.bernoulli(0.5)` 는 남는 인자였고, JavaScript 는 남는 인자를 버리므로\n뽑기가 `0.5` 가 아니라 값에서 나왔다.\n\n`out` 은 더 싣지 않고 거절한다. 이 라이브러리에는 `out=` 이 어디에도 없고, 시키는\n자리에 쓰는 대신 조용히 새로 할당하는 자리는 그렇다고 말하는 자리보다 나쁘다.\n"
       },
       {
        "name": "poisson",
@@ -1118,13 +1118,13 @@
       },
       {
        "name": "rot90",
-       "signature": "rot90(k?: number): Tensor",
-       "doc": "Rotates by 90° within a two-dimensional plane.\n\nAt `k=1` it is `out[i][j] = in[j][C-1-i]` — swapping the axes while\nreversing one, which writes down directly as a rule table.",
+       "signature": "rot90(k?: number, dims?: readonly number[]): Tensor",
+       "doc": "**`dims` chooses the plane and there is only one plane here.** torch turns within\nwhichever two axes it is given, so `dims=[1, 2]` on a rank-3 tensor is a different\nanswer from the default `[0, 1]` — measured, different shapes. This is 2-D only,\nso the pair can be nothing but `[0, 1]`; carried and refused rather than left out,\nbecause a caller writing `dims` is asking for a plane and getting silence.",
        "section": {
         "ko": "Shape",
         "en": "Shape"
        },
-       "doc_ko": "2차원 평면 안에서 90° 씩 돌린다.\n\n`k=1` 이면 `out[i][j] = in[j][C-1-i]` 다 — 축을 바꾸면서 한쪽을 뒤집는 것이라,\n규칙 표로 그대로 적힌다."
+       "doc_ko": "2차원 평면 안에서 90° 씩 돌린다.\n\n`k=1` 이면 `out[i][j] = in[j][C-1-i]` 다 — 축을 바꾸면서 한쪽을 뒤집는 것이라,\n규칙 표로 그대로 적힌다.\n\n## `dims` 는 평면을 고르고, 여기엔 평면이 하나뿐이다\n\ntorch 는 건네받은 두 축 안에서 돌린다. 랭크 3 텐서에 `dims=[1, 2]` 는 기본값\n`[0, 1]` 과 다른 답이다 — 실측으로 모양부터 다르다. 이쪽은 2 차원 전용이라 그 쌍이\n`[0, 1]` 말고는 될 수 없다. 빼두지 않고 싣고 거절한다: `dims` 를 쓰는 호출자는\n평면을 요청하는 것이고, 빼두면 침묵을 받는다.\n"
       },
       {
        "name": "unfold",
@@ -2747,13 +2747,13 @@
       },
       {
        "name": "pinverse",
-       "signature": "pinverse(): Promise<Tensor>",
-       "doc": "The pseudoinverse. **It has a gradient** — in three terms.\n\n    Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)\n\nThe last two terms **go to zero for a square invertible matrix.** There\n`I − AP` and `I − PA` are both zero, only the first term remains, and\nthat first term is the same formula as the inverse's gradient. So\nleaving the two out is right on squares and wrong only on rectangles —\nthe golden cases ask with rectangles too.",
+       "signature": "pinverse(rcond?: number): Promise<Tensor>",
+       "doc": "**`rcond` is the cut-off below which a singular value counts as zero**, and it\nchanges the answer rather than only its precision — measured on torch, a 2×2 at\n`rcond=0.9` comes back entirely different from the default.\n\n`LA.pinverse` decides that cut-off itself, so the seat is carried and refused\nuntil it takes one. Left out, `pinverse(rcond=0.9)` was a surplus argument and\nJavaScript discards those.",
        "section": {
         "ko": "Linear algebra",
         "en": "Linear algebra"
        },
-       "doc_ko": "유사역행렬. **기울기가 있다** — 항이 셋이다.\n\n    Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)\n\n뒤의 두 항은 **정사각 정칙에서 0 이 된다.** 그때는 `I − AP` 와 `I − PA` 가 둘 다\n0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을\n빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다 — 골든이 직사각으로도 묻는다."
+       "doc_ko": "유사역행렬. **기울기가 있다** — 항이 셋이다.\n\n    Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)\n\n뒤의 두 항은 **정사각 정칙에서 0 이 된다.** 그때는 `I − AP` 와 `I − PA` 가 둘 다\n0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을\n빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다 — 골든이 직사각으로도 묻는다.\n\n## `rcond` 는 정밀도가 아니라 답을 바꾼다\n\n특잇값을 0 으로 셀 문턱인데, 그것이 달라지면 결과가 통째로 달라진다 — torch 에서\n실측하면 2×2 가 `rcond=0.9` 에서 기본값과 전혀 다른 값으로 온다.\n\n`LA.pinverse` 가 그 문턱을 스스로 정하므로, 그것이 문턱을 받을 때까지 자리는\n싣고 거절한다. 빼두면 `pinverse(rcond=0.9)` 는 남는 인자이고 JavaScript 는\n남는 인자를 버린다.\n"
       },
       {
        "name": "cholesky",
@@ -3078,13 +3078,13 @@
       },
       {
        "name": "lu",
-       "signature": "lu(): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
-       "doc": "Spread into `P`, `L` and `U`. Easier to read than the packed plate.",
+       "signature": "lu(pivot?: boolean, getInfos?: boolean): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
+       "doc": "**The two seats are carried so they can be refused.**\n\n`pivot=false` is LU without row swaps, which torch declines on the CPU too\n(measured: `linalg.lu_factor: LU without pivoting is not implemented`), and\n`getInfos=true` makes torch return a **third** value — so it changes the shape of\nthe answer rather than its contents, which is the kind of argument that must not\nbe dropped in silence.",
        "section": {
         "ko": "Linear algebra",
         "en": "Linear algebra"
        },
-       "doc_ko": "`P`·`L`·`U` 셋으로 펴서. 겹쳐 담은 것보다 읽기 쉽다."
+       "doc_ko": "`P`·`L`·`U` 셋으로 펴서. 겹쳐 담은 것보다 읽기 쉽다.\n\n## 두 자리는 거절하려고 싣는다\n\n`pivot=false` 는 행 교환 없는 LU 인데 torch 도 CPU 에서 거절한다(실측:\n`linalg.lu_factor: LU without pivoting is not implemented`). `getInfos=true` 는\ntorch 가 **세 번째** 값을 돌려주게 만든다 — 내용이 아니라 답의 모양이 달라지는\n인자이고, 그런 것은 조용히 버려지면 안 된다.\n"
       },
       {
        "name": "luSolveFactored",
@@ -5017,13 +5017,13 @@
       },
       {
        "name": "isclose",
-       "signature": "isclose(other: Tensor, rtol?: number, atol?: number): Tensor",
-       "doc": "Whether each position is **close.** `|a−b| ≤ atol + rtol·|b|`.\n\n**It leans to the right** — it measures against `b`'s magnitude, so\nswapping the two can change the answer. torch defines it that way.",
+       "signature": "isclose(other: Tensor, rtol?: number, atol?: number, equalNan?: boolean): Tensor",
+       "doc": "**`equalNan` decides whether NaN matches NaN**, and it was missing while\n`allclose` twenty lines down has had it from the start. Two functions asking the\nsame question, one of them able to answer it.\n\n`allclose` reads the values back and can test with `Number.isNaN`; this one stays\non the device, so the same rule is written in tensor operations: a cell where\nboth sides are NaN is `x !== x && y !== y`, and `binary(\"ne\", self)` is that test.",
        "section": {
         "ko": "Names that existed only in the binding",
         "en": "Names that existed only in the binding"
        },
-       "doc_ko": "자리마다 **가까운가.** `|a−b| ≤ atol + rtol·|b|` 다.\n\n**오른쪽으로 기울어 있다** — `b` 의 크기로 재므로 둘을 바꾸면 답이 달라질 수\n있다. torch 가 그렇게 정의한다."
+       "doc_ko": "자리마다 **가까운가.** `|a−b| ≤ atol + rtol·|b|` 다.\n\n**오른쪽으로 기울어 있다** — `b` 의 크기로 재므로 둘을 바꾸면 답이 달라질 수\n있다. torch 가 그렇게 정의한다.\n\n## `equalNan` 이 빠져 있었다\n\nNaN 이 NaN 과 같은지를 정하는 자리인데, 스무 줄 아래 `allclose` 는 처음부터 갖고\n있었다. 같은 질문을 하는 함수 둘 중 하나만 답할 수 있었던 셈이다.\n\n`allclose` 는 값을 되읽으므로 `Number.isNaN` 으로 시험할 수 있다. 이쪽은 장치에\n남아야 하므로 같은 규칙을 텐서 연산으로 쓴다 — 양쪽이 NaN 인 칸은\n`x !== x && y !== y` 이고, `binary(\"ne\", self)` 가 그 시험이다.\n"
       },
       {
        "name": "isin",
