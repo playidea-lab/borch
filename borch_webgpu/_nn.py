@@ -877,6 +877,66 @@ class Module:
         object.__setattr__(self, "_m", module)
         object.__setattr__(self, "training", True)
 
+    def __setattr__(self, name, value):
+        """**Writing a weight has to reach the layer underneath.**
+
+        A wrapped layer keeps its tensors in the borch.ts module, and there was no
+        `__setattr__` at all — so `layer.weight = nn.Parameter(w)` put the tensor on the
+        Python object while `forward` went on through `self._m` with the weights it was
+        built with. No exception, the right shapes, and a plausible wrong number: on a
+        3→4 convolution it answered 9.94 where 68.44 was right.
+
+        The sister defect one level down (`p.data = t` landing on a field nothing reads)
+        is fixed in `_base.py`, and both were found the same way — by training a network
+        in a browser and getting a different loss on identical weights.
+
+        **The values move; the slot does not.** borch.ts declares a layer's `weight` as
+        `readonly`, so there is no slot to swap even if we wanted one, and `copyFrom`'s
+        comment over there gives the reason to prefer this anyway: the optimizer holds
+        the parameter's handle, so replacing it leaves training running against something
+        the optimizer no longer points at. torch does replace, and after it you are
+        expected to rebuild the optimizer; here you are not.
+
+        **A different shape stops here, and torch does not** — measured, both ways. torch
+        takes the assignment and the layer breaks later, in `forward`, on a shape nobody
+        can trace back to the line that set it. This cannot take it at all, because the
+        slot is `readonly` over there, so it says so at the assignment with both shapes in
+        the message. A stop at the cause beats a stop three frames away, and it is never a
+        wrong value.
+
+        Anything that is not a slot of the wrapped layer falls through to an ordinary
+        attribute, as before.
+        """
+        target = None
+        module = self.__dict__.get("_m")
+        if module is not None and isinstance(value, Tensor) and not name.startswith("_"):
+            for slot in (module.namedParameters(), module.namedBuffers()):
+                if name in [str(k) for k in _js.Object.keys(slot)]:
+                    target = wrap(getattr(slot, name))
+                    break
+        if target is None:
+            object.__setattr__(self, name, value)
+            return
+        here = tuple(int(v) for v in target.shape)
+        given = tuple(int(v) for v in value.shape)
+        if here != given:
+            # Raised before `copyFrom`, whose own message is a JavaScript `Error` reading
+            # `size mismatch` with no mention of the attribute, the layer or torch.
+            # **The core's type, not a new one** — `_base.py` says why where it refuses:
+            # code that catches `BorchError` has to catch this too.
+            from borch._base import BorchError                       # noqa: PLC0415
+            raise BorchError(
+                f"{type(self).__name__}.{name} is {here} and cannot become {given}.\n"
+                "  torch would put the new tensor in the slot; borch.ts declares a layer's "
+                "parameters\n"
+                "  readonly, so this copies values into the slot instead and a different "
+                "shape has\n"
+                "  nowhere to go. Build the layer with the shape you want, or use "
+                "`load_state_dict`.")
+        from ._ops import no_grad                                    # noqa: PLC0415
+        with no_grad():
+            target._h.copyFrom(handle(value))
+
     # ── the layers a subclass attached as attributes ──────────────────────
 
     def _children(self):
