@@ -366,7 +366,7 @@ NOT_PORTED = {
                        "tv_tensor, or ask whether a tensor is one. As `v2::` below: "
                        "borch.ts's `Tensor` is a handle to a buffer and cannot be "
                        "subclassed to carry a label"),
-    "v2::": (17, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
+    "v2::": (18, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
                         "to a buffer and cannot be subclassed to carry a label, so this "
                         "needs a mechanism that side does not have rather than a body "
                         "it has not been given"),

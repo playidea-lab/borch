@@ -172,6 +172,12 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
     ["flip", () => x2().flip(0)],
     ["roll", () => x1().roll(2)],
     ["index_select", () => x2().indexSelect(0, Tensor.from([2, 0], [2]))],
+    // **A negative dimension counts from the end**, and the core did not: it built the
+    // axis as `dim` leading slices, `range(-1)` is empty, and the selection landed on
+    // axis 0. This side had it right from the start — `dim < 0 ? dim + rank : dim`, one
+    // line in `indexSelect` — so the case is here to keep the two together.
+    ["index_select(dim=-1)",
+      () => x2().indexSelect(-1, Tensor.from([3, 1], [2]))],
     ["narrow", () => x2().narrow(1, 1, 2)],
     ["split", () => piece(x1().splitSize(0, 2), 1)],
     ["chunk", () => piece(x1().chunk(3), 2)],
@@ -1871,6 +1877,28 @@ function addOps(out: Map<string, Case>): void {
                        padding: [1, 1] });
     return layer.forward(g.input, g.offset);
   }));
+
+  // ── the frame axis, which is the only thing here that is about video ────────
+  //
+  // Thirty-seven names were declined on the Python side for *there is no video anywhere
+  // in this project*. In torchvision thirty-three of them are one line delegating to
+  // the image kernel — no container, no codec — and they stay out there for a different
+  // reason: that file's image kernels are v1's and take an `(H, W, C)` array.
+  //
+  // These two touch no picture kernel at all. **A linspace, not a stride**: seven
+  // frames sampled to three takes 0, 3, 6, where `T / n` takes 0, 2, 4 and never
+  // reaches the end. The clip's frame count is not a multiple of the sample count,
+  // which is the only arrangement where the two part.
+  const clip = () => {
+    const values: number[] = [];
+    const f = Math.fround;
+    for (let i = 0; i < 2 * 7 * 3 * 4 * 5; i++) values.push(f(i * f(0.05)));
+    return Tensor.from(values, [2, 7, 3, 4, 5]);
+  };
+  out.set("v2f::uniform_temporal_subsample(linspace, not a stride)",
+    flat(async () => ops.uniformTemporalSubsample(clip(), 3)));
+  out.set("v2f::get_num_frames(the fourth axis from the end)",
+    () => String(ops.getNumFrames(clip())));
 
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look

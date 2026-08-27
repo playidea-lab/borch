@@ -369,7 +369,10 @@ FROZEN = {
     # 12 → 14. The two `Sanitize` transforms. Their rows on the gap table read *it is
     # boxes or it is nothing*, and the boxes went in on the Python side — so this row
     # rising is that row falling, for the reason this one already gives.
-    "transforms.v2": 14,
+    #
+    # 14 → 15. `UniformTemporalSubsample`, the transform. Its functional is on both
+    # sides; what is here alone is the `Transform` subclass, for the reason above.
+    "transforms.v2": 15,
     #
     # 1 → 3. The format conversion and the two clamps go up with the type system,
     # because the clamping taxonomy is what `BoundingBoxes` carries.
@@ -380,7 +383,11 @@ FROZEN = {
     # gone by the afternoon the five types went in on the Python side. **This row
     # rising is that row falling**, and the reason it rises is the one `transforms.v2`
     # above already gives.
-    "transforms.v2.functional": 7,
+    #
+    # 7 → 9. `get_num_frames` and `uniform_temporal_subsample` under their `_video`
+    # spellings. The plain names are on both sides; the second spelling is a
+    # tv_tensor-keyed alias, and there are no tv_tensor types over there to key it on.
+    "transforms.v2.functional": 9,
     # **Eighteen, and they are one decision rather than eighteen.** A dataset is an
     # address and a format; the address needs hosts that send a CORS header and
     # torchvision's do not, so what crossed is the decoders. Written per name because a

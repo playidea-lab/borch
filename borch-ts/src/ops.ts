@@ -2876,3 +2876,33 @@ function withInplace(made: Module, inplace: boolean): Module {
     return made;
   }
 }
+
+/**
+ * How many frames. **The fourth axis from the end**, which is the one thing in the video
+ * family that is a fact about video rather than about pictures.
+ *
+ * Counted from the end because the leading axes are the batch's and there may be none of
+ * them: `(T, C, H, W)` and `(N, T, C, H, W)` both put the frames at `-4`.
+ */
+export function getNumFrames(video: Tensor): number {
+  return video.shape[video.shape.length - 4] ?? 0;
+}
+
+/**
+ * `numSamples` frames spread evenly over the clip.
+ *
+ * **The endpoints are kept and the spacing is a `linspace`, not a stride.** A stride of
+ * `T / n` drops the tail whenever the division is uneven — a seven-frame clip sampled to
+ * three takes 0, 2, 4 and never reaches the end of the action, where the spread takes
+ * 0, 3, 6.
+ *
+ * **The indices are truncated, not rounded**, which is torch's `.long()` on the
+ * linspace. Rounded, a clip of ten to three takes 0, 5, 9 instead of 0, 4, 9.
+ */
+export function uniformTemporalSubsample(video: Tensor, numSamples: number): Tensor {
+  const frames = getNumFrames(video);
+  const step = numSamples > 1 ? (frames - 1) / (numSamples - 1) : 0;
+  const picked: number[] = [];
+  for (let i = 0; i < numSamples; i++) picked.push(Math.trunc(i * step));
+  return video.indexSelect(-4, Tensor.from(picked, [picked.length]));
+}
