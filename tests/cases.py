@@ -15078,6 +15078,99 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(out))
         return run
 
+    def cre_stereo():
+        """`CREStereo`. The last of this family whose row said *a codec*, and the codec
+        was not its wall.
+
+        **The disparity is a PNG divided by thirty-two**, which is how the archive keeps
+        a fractional map in whole numbers. Read without the division every value is
+        thirty-two times too large — finite, plausible, and wrong by a constant.
+
+        **The four scene directories are read in torchvision's order**, not sorted, and
+        that order is `shapenet, reflective, tree, hole` — which is **not** the order
+        torchvision's own docstring draws. The fixture puts one pair in each and
+        gives them different values, so a reader that let `glob` sort them pairs the
+        same pictures under different indices and the count still comes out right.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "CREStereo")
+                for k, scene in enumerate(("shapenet", "reflective", "tree", "hole")):
+                    _png8(os.path.join(base, scene, "img1_left.jpg"), _rgb(k))
+                    _png8(os.path.join(base, scene, "img1_right.jpg"), _rgb(k + 9))
+                    # **Whole numbers that are not multiples of thirty-two**, so the
+                    # division leaves a fraction and a reader that skipped it cannot
+                    # land on the same values by rounding.
+                    left = (np.arange(_H * _W).reshape(_H, _W) * 3 + k * 7) % 200
+                    _png8(os.path.join(base, scene, "img1_left.disp.png"), left)
+                    _png8(os.path.join(base, scene, "img1_right.disp.png"),
+                          (left + 11) % 200)
+                if _is_real_torch(L):
+                    from torchvision.datasets import CREStereo as real
+                    loaded = real(root)
+                else:
+                    loaded = _vision_datasets(L).CREStereo(root)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def falling_things(variant):
+        """`FallingThingsStereo`. **The file on disk is a depth and the answer is a
+        disparity**, converted with the camera's own focal length out of a JSON beside
+        the picture.
+
+        Two things a fixture can hide and this one does not:
+
+        - **The two variants are nested at different depths** — `single` one directory
+          deeper than `mixed`. Both are written, so `both` is the case that catches one
+          pattern used for the two.
+        - **The two scenes carry different focal lengths.** With one focal everywhere,
+          a reader that took a constant instead of reading the JSON agrees exactly.
+        """
+        def run(L):
+            import json
+            import os
+            import shutil
+            import tempfile
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "FallingThings")
+                places = [("single", ("s1", "kitchen"), 320.0),
+                          ("single", ("s2", "office"), 411.5),
+                          ("mixed", ("m1",), 275.25)]
+                for k, (kind, parts, focal) in enumerate(places):
+                    where = os.path.join(base, kind, *parts)
+                    _png8(os.path.join(where, "000000.left.jpg"), _rgb(k))
+                    _png8(os.path.join(where, "000000.right.jpg"), _rgb(k + 6))
+                    # **No zero anywhere in the depth** — it is the divisor, and a zero
+                    # would put an infinity in the answer that compares equal to
+                    # nothing.
+                    depth = (np.arange(_H * _W).reshape(_H, _W) * 5 + k * 3) % 200 + 1
+                    _png8(os.path.join(where, "000000.left.depth.png"), depth)
+                    _png8(os.path.join(where, "000000.right.depth.png"),
+                          (depth + 17) % 200 + 1)
+                    with open(os.path.join(where, "_camera_settings.json"),
+                              "w") as handle:
+                        json.dump({"camera_settings": [
+                            {"intrinsic_settings": {"fx": focal}}]}, handle)
+                if _is_real_torch(L):
+                    from torchvision.datasets import FallingThingsStereo as real
+                    loaded = real(root, variant=variant)
+                else:
+                    loaded = _vision_datasets(L).FallingThingsStereo(
+                        root, variant=variant)
+                out = _stereo_out(loaded)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
     def eth3d_stereo(split):
         """`ETH3DStereo`. **The pictures and the ground truth live in different
         directories**, zipped by position because the scene names match.
@@ -15938,6 +16031,12 @@ def dataset_last_three_cases(inp=None):
         (prefix + "SintelStereo(both passes)", sintel_stereo("both")),
         # **`.pfm` is a container too** — the last of the fourteen that read as a wall.
         (prefix + "CarlaStereo(disparity signed, used positive)", carla_stereo()),
+        (prefix + "CREStereo(four scenes, a disparity over thirty-two)",
+         cre_stereo()),
+        (prefix + "FallingThingsStereo(single, depth into disparity)",
+         falling_things("single")),
+        (prefix + "FallingThingsStereo(both, two nesting depths)",
+         falling_things("both")),
         (prefix + "ETH3DStereo(mask beside the pfm, non-zero is valid)",
          eth3d_stereo("train")),
         (prefix + "ETH3DStereo(test, no ground truth)", eth3d_stereo("test")),

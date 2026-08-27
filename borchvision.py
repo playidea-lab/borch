@@ -9152,6 +9152,114 @@ class CarlaStereo(_StereoMatchingDataset):
         return _np.abs(_read_pfm_file(path)), None
 
 
+class CREStereo(_StereoMatchingDataset):
+    """The synthetic set CREStereo trains on, **four kinds of scene in four
+    directories.**
+
+    <https://arxiv.org/pdf/2203.11483.pdf>
+
+    ## Why it was refused and is not
+
+    Its row read *its pictures are JPEG, which is the codec wall*, and that was the last
+    of the twelve in this family to say so. **The codec is not this class's wall**:
+    torchvision hands the path to `PIL.Image.open`, which reads the content rather than
+    the name, and `_folder_loader` does the same here. What the row took off the table
+    was four directory names and a division.
+
+    **The disparity is a PNG divided by thirty-two**, which is how the archive stores a
+    fractional map in whole numbers. Read without it every disparity is thirty-two times
+    too large — a number that is finite, plausible and wrong by a constant, which is the
+    kind a picture of the output does not show.
+
+    **The four scene directories are read in a fixed order**, not `glob`'s, and the
+    order is `shapenet, reflective, tree, hole`. A directory scan would sort them
+    alphabetically and pair the same pictures under different indices, and the count
+    would still come out right.
+
+    **torchvision's own docstring disagrees with its code, twice.** The tree it draws
+    puts `tree` first and names the disparities `*_left.disp.jpg`; the code lists
+    `shapenet` first and globs `*_left.disp.png`. Written from the drawing — which is
+    what a reader reaches for — this class pairs the wrong scenes and finds no
+    disparities at all. The code is what runs, so the code is what is copied.
+    """
+
+    _has_built_in_disparity_mask = True
+    _SCENES = ("shapenet", "reflective", "tree", "hole")
+
+    def __init__(self, root, transforms=None, loader=None):
+        super().__init__(root, transforms)
+        self.loader = _folder_loader if loader is None else loader
+        base = _os.path.join(self.root, "CREStereo")
+        for scene in self._SCENES:
+            self._images += self._scan_pairs(
+                _os.path.join(base, scene, "*_left.jpg"),
+                _os.path.join(base, scene, "*_right.jpg"))
+            self._disparities += self._scan_pairs(
+                _os.path.join(base, scene, "*_left.disp.png"),
+                _os.path.join(base, scene, "*_right.disp.png"))
+
+    def _read_disparity(self, path):
+        block = _np.asarray(self.loader(path), dtype=_np.float32)
+        return block[None, :, :] / 32.0, None
+
+
+class FallingThingsStereo(_StereoMatchingDataset):
+    """NVIDIA's Falling Things, **where the file on disk is a depth and the dataset
+    wants a disparity.**
+
+    <https://research.nvidia.com/publication/2018-06_falling-things>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — JPEG*, pointing at `CREStereo`'s codec sentence. The codec
+    is a loader's, not this class's: what the row took off the table is the conversion
+    below and a directory pattern that differs per variant.
+
+    **The depth is turned into a disparity with the camera's own focal length**, read
+    out of `_camera_settings.json` beside the picture. `disparity = baseline · focal ·
+    100 / depth`, and the hundred is a pixel constant the readme gives inverted. Handed
+    back as a depth the map is finite, smooth and upside down — near and far swapped —
+    which is a picture that looks like a disparity map to anyone glancing at it.
+
+    **`single` is nested one directory deeper than `mixed`.** One pattern for both finds
+    nothing for whichever variant it does not match, and `both` then quietly holds half
+    of what it says.
+    """
+
+    _has_built_in_disparity_mask = False
+    _BASELINE = 6
+    _PIXEL_CONSTANT = 100
+
+    def __init__(self, root, variant="single", transforms=None, loader=None):
+        super().__init__(root, transforms)
+        if variant not in ("single", "mixed", "both"):
+            raise ValueError(
+                f"Unknown value '{variant}' for argument variant. Valid values are "
+                "{single, mixed, both}.")
+        self.loader = _folder_loader if loader is None else loader
+        base = _os.path.join(self.root, "FallingThings")
+        variants = {"single": ["single"], "mixed": ["mixed"],
+                    "both": ["single", "mixed"]}[variant]
+        prefix = {"single": ("*", "*"), "mixed": ("*",)}
+        for one in variants:
+            where = _os.path.join(base, one, *prefix[one])
+            self._images += self._scan_pairs(
+                _os.path.join(where, "*.left.jpg"),
+                _os.path.join(where, "*.right.jpg"))
+            self._disparities += self._scan_pairs(
+                _os.path.join(where, "*.left.depth.png"),
+                _os.path.join(where, "*.right.depth.png"))
+
+    def _read_disparity(self, path):
+        depth = _np.asarray(self.loader(path), dtype=_np.float32)
+        with open(_os.path.join(_os.path.dirname(path),
+                                "_camera_settings.json")) as handle:
+            settings = _json.load(handle)
+        focal = settings["camera_settings"][0]["intrinsic_settings"]["fx"]
+        disparity = (self._BASELINE * focal * self._PIXEL_CONSTANT) / depth
+        return disparity[None, :, :], None
+
+
 class ETH3DStereo(_StereoMatchingDataset):
     """ETH3D's low-resolution two-view set.
 
@@ -11266,7 +11374,8 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "Imagenette", "Flickr8k", "Flickr30k", "StanfordCars", "INaturalist",
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB",
-              "VOCSegmentation", "VOCDetection", "OxfordIIITPet"):
+              "VOCSegmentation", "VOCDetection", "OxfordIIITPet",
+              "CREStereo", "FallingThingsStereo"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")

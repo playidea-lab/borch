@@ -384,7 +384,10 @@ FROZEN = {
     # measurement rather than a reading: torchvision decodes nothing, it hands the path
     # to `PIL.Image.open`, and PIL sniffs the content rather than the name. The reason
     # under them said *a codec*, which is one line inside a loader and not the dataset.
-    "datasets": 50,
+    #
+    # 50 → 52. `CREStereo` and `FallingThingsStereo`, the last two of the stereo and
+    # flow family, on the same measurement. **The family is whole.**
+    "datasets": 52,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the

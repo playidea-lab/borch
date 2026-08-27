@@ -701,11 +701,12 @@ SKIPPED = {
     # read. The row was one true sentence covering fourteen names, and it was true of
     # two of them.
     #
-    # What is left below is a codec, and it is the same codec as everywhere else.
-    "datasets.CREStereo": "its pictures are JPEG, which is the codec wall. The rest "
-                            "of this family went in — the disparity fields turned out "
-                            "to be PNG, `.flo` or `.pfm`, none of which needs a codec",
-    "datasets.FallingThingsStereo": "as above — JPEG",
+    # **Nothing is left below.** That sentence used to be followed by two rows saying
+    # *a codec*, and the codec was a loader's line rather than either dataset's: what
+    # `CREStereo` needed was four directory names in the order its *code* gives — not
+    # the one its docstring draws — and a disparity divided by thirty-two, and what
+    # `FallingThingsStereo` needed was a depth turned into a disparity with the focal
+    # length out of a JSON beside the picture. **The whole family is in.**
     # Every 아직 row that stood here is gone, including the one written this same
     # session claiming Middlebury needed *a calibration file per scene to parse*. That
     # sentence was written without opening one: `calib.txt` is in every scene directory
