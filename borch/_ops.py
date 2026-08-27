@@ -3237,19 +3237,19 @@ def rot90(input, k=1, dims=(0, 1)):
                    "Rot90Backward0")
 
 
-def unfold(t, dimension, size, step):
+def unfold(input, dimension, size, step):        # noqa: A002
     """Turn a sliding window into a new axis. Where the windows overlap **the
     gradient accumulates in the backward** (measured: length 5 unfolded at size 3,
     stride 1 gives [1,2,3,2,1])."""
-    t = _wrap(t)
-    axis = dimension % t.data.ndim
-    count = (t.data.shape[axis] - size) // step + 1
+    input = _wrap(input)
+    axis = dimension % input.data.ndim
+    count = (input.data.shape[axis] - size) // step + 1
     starts = _np.arange(count) * step
-    pieces = [_np.take(t.data, _np.arange(s, s + size), axis=axis) for s in starts]
+    pieces = [_np.take(input.data, _np.arange(s, s + size), axis=axis) for s in starts]
     out = _np.stack([_np.moveaxis(p, axis, -1) for p in pieces], axis=axis)
 
     def back(g):
-        z = _np.zeros_like(t.data)
+        z = _np.zeros_like(input.data)
         gg = _np.asarray(g)
         for i, s in enumerate(starts):
             piece = _np.moveaxis(_np.take(gg, i, axis=axis), -1, axis)
@@ -3258,7 +3258,7 @@ def unfold(t, dimension, size, step):
             z[tuple(idx)] += piece
         return (z,)
 
-    return t._make(out, (t,), back, "UnfoldBackward0")
+    return input._make(out, (input,), back, "UnfoldBackward0")
 
 
 def hsplit(t, sections):
@@ -6119,7 +6119,7 @@ def _window_index(shape, kernel, dilation, padding, stride):
     return idx, (out_h, out_w)
 
 
-def unfold_im2col(x, kernel_size, dilation=1, padding=0, stride=1):
+def unfold_im2col(input, kernel_size, dilation=1, padding=0, stride=1):  # noqa: A002
     """Spread the windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.
 
     **The name collides with an existing one.** `Tensor.unfold(dim, size, step)`
@@ -6129,7 +6129,7 @@ def unfold_im2col(x, kernel_size, dilation=1, padding=0, stride=1):
     covered the former and three `shape::unfold` cases collapsed at once. Here the
     names are kept apart and this is attached to `F.unfold` alone.
     """
-    t = _mat(x, "unfold", square=False)
+    t = _mat(input, "unfold", square=False)
     if t.data.ndim != 4:
         _unsupported("unfold (anything but 4-D)")
     kernel, dil = _pair(kernel_size), _pair(dilation)
@@ -6405,7 +6405,7 @@ def _pad_index(mode, size, before, after):
     return _np.asarray(idx, dtype=_np.intp)
 
 
-def pad(x, padding, mode="constant", value=0.0):
+def pad(input, pad, mode="constant", value=0.0):   # noqa: A002
     """Taken from the last dimension in (before, after) order — torch's rule.
 
     **The pair count and the rank are interlocked.** One pair needs rank 2 or 3,
@@ -6413,25 +6413,25 @@ def pad(x, padding, mode="constant", value=0.0):
     else with a `NotImplementedError`. Accepting any rank lets a wrongly chosen
     axis pass, so it is blocked here alongside.
     """
-    x = _wrap(x)
-    rank = x.data.ndim
-    pairs = len(padding) // 2
+    input = _wrap(input)
+    rank = input.data.ndim
+    pairs = len(pad) // 2
     if mode != "constant" and rank not in (pairs + 1, pairs + 2):
         raise NotImplementedError(
-            f"Padding size {len(padding)} is not supported for {rank}D input tensor")
+            f"Padding size {len(pad)} is not supported for {rank}D input tensor")
 
-    data = x.data
+    data = input.data
     steps = []
     for i in range(pairs):
         axis = rank - 1 - i
-        before, after = padding[2 * i], padding[2 * i + 1]
+        before, after = pad[2 * i], pad[2 * i + 1]
         if before == 0 and after == 0:
             continue
         size = data.shape[axis]
         if mode == "reflect" and (before >= size or after >= size):
             raise RuntimeError(
                 "Argument #4: Padding size should be less than the corresponding "
-                f"input dimension, but got: padding ({before}, {after}) at dimension "
+                f"input dimension, but got: pad ({before}, {after}) at dimension "
                 f"{axis} of input {rank}")
         idx = _pad_index(mode, size, before, after)
         steps.append((axis, idx, size))
@@ -6459,7 +6459,7 @@ def pad(x, padding, mode="constant", value=0.0):
             gg = out
         return (gg,)
 
-    return x._make(data, (x,), back, "PadBackward0")
+    return input._make(data, (input,), back, "PadBackward0")
 
 
 def normalize(input, p=2, dim=1, eps=1e-12, out=None):

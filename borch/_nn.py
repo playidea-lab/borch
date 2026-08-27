@@ -400,9 +400,9 @@ class ModuleList(Module):
             self.layers.append(Block())
     """
 
-    def __init__(self, mods=()):
+    def __init__(self, modules=()):
         super().__init__()
-        self._layers = list(mods)
+        self._layers = list(modules)
         for i, m in enumerate(self._layers):
             self._modules[str(i)] = m
 
@@ -422,8 +422,8 @@ class ModuleList(Module):
         self._modules[str(len(self._layers) - 1)] = module
         return self
 
-    def extend(self, mods):
-        for m in mods:
+    def extend(self, modules):
+        for m in modules:
             self.append(m)
         return self
 
@@ -442,8 +442,8 @@ class ModuleList(Module):
         self._layers[i] = module
         self._renumber()
 
-    def __iadd__(self, mods):
-        return self.extend(mods)
+    def __iadd__(self, modules):
+        return self.extend(modules)
 
     def __len__(self):
         return len(self._layers)
@@ -475,9 +475,9 @@ class ModuleDict(Module):
     `blocks.down.weight`.
     """
 
-    def __init__(self, mods=None):
+    def __init__(self, modules=None):
         super().__init__()
-        for name, m in _ordered(mods):
+        for name, m in _ordered(modules):
             self._modules[str(name)] = m
 
     def __getitem__(self, key):
@@ -504,8 +504,8 @@ class ModuleDict(Module):
     def items(self):
         return self._modules.items()
 
-    def update(self, mods):
-        for name, m in _ordered(mods):
+    def update(self, modules):
+        for name, m in _ordered(modules):
             self._modules[str(name)] = m
         return self
 
@@ -523,9 +523,9 @@ class ParameterList(Module):
     this class.
     """
 
-    def __init__(self, params=()):
+    def __init__(self, values=()):
         super().__init__()
-        for i, p in enumerate(params):
+        for i, p in enumerate(values):
             self._params[str(i)] = p
 
     def _at(self, i):
@@ -536,8 +536,8 @@ class ParameterList(Module):
         self._params[str(len(self._params))] = param
         return self
 
-    def extend(self, params):
-        for p in params:
+    def extend(self, values):
+        for p in values:
             self.append(p)
         return self
 
@@ -557,9 +557,9 @@ class ParameterList(Module):
 class ParameterDict(Module):
     """A named group of `Parameter`s. It exists for `ParameterList`'s reason."""
 
-    def __init__(self, params=None):
+    def __init__(self, parameters=None):
         super().__init__()
-        for name, p in _ordered(params):
+        for name, p in _ordered(parameters):
             self._params[str(name)] = p
 
     def __getitem__(self, key):
@@ -586,8 +586,8 @@ class ParameterDict(Module):
     def items(self):
         return self._params.items()
 
-    def update(self, params):
-        for name, p in _ordered(params):
+    def update(self, parameters):
+        for name, p in _ordered(parameters):
             self._params[str(name)] = p
         return self
 

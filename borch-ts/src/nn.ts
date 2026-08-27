@@ -487,9 +487,9 @@ export class Sequential extends Module {
 export class ModuleList extends Module {
   private readonly items: Module[];
 
-  constructor(mods: readonly Module[] = []) {
+  constructor(modules: readonly Module[] = []) {
     super();
-    this.items = [...mods];
+    this.items = [...modules];
   }
 
   override children(): Module[] {
@@ -519,8 +519,8 @@ export class ModuleList extends Module {
     return this;
   }
 
-  extend(mods: readonly Module[]): this {
-    this.items.push(...mods);
+  extend(modules: readonly Module[]): this {
+    this.items.push(...modules);
     return this;
   }
 
@@ -561,9 +561,9 @@ function sortedEntries<T>(obj: Readonly<Record<string, T>>): [string, T][] {
 export class ModuleDict extends Module {
   private readonly items = new Map<string, Module>();
 
-  constructor(mods: Readonly<Record<string, Module>> = {}) {
+  constructor(modules: Readonly<Record<string, Module>> = {}) {
     super();
-    for (const [name, m] of sortedEntries(mods)) this.items.set(name, m);
+    for (const [name, m] of sortedEntries(modules)) this.items.set(name, m);
   }
 
   override children(): Module[] {
@@ -609,9 +609,9 @@ export class ModuleDict extends Module {
 export class ParameterList extends Module {
   private readonly items: Tensor[];
 
-  constructor(params: readonly Tensor[] = []) {
+  constructor(values: readonly Tensor[] = []) {
     super();
-    this.items = [...params];
+    this.items = [...values];
     this.claim(...this.items);
   }
 
@@ -647,9 +647,9 @@ export class ParameterList extends Module {
 export class ParameterDict extends Module {
   private readonly items = new Map<string, Tensor>();
 
-  constructor(params: Readonly<Record<string, Tensor>> = {}) {
+  constructor(parameters: Readonly<Record<string, Tensor>> = {}) {
     super();
-    for (const [name, p] of sortedEntries(params)) this.items.set(name, p);
+    for (const [name, p] of sortedEntries(parameters)) this.items.set(name, p);
     this.claim(...this.items.values());
   }
 

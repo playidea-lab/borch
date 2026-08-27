@@ -7347,7 +7347,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(mods?: readonly Module[])",
+       "signature": "constructor(modules?: readonly Module[])",
        "doc": ""
       },
       {
@@ -7375,7 +7375,7 @@
       },
       {
        "name": "extend",
-       "signature": "extend(mods: readonly Module[]): this",
+       "signature": "extend(modules: readonly Module[]): this",
        "doc": ""
       },
       {
@@ -7404,7 +7404,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(mods?: Readonly<Record<string, Module>>)",
+       "signature": "constructor(modules?: Readonly<Record<string, Module>>)",
        "doc": ""
       },
       {
@@ -7454,7 +7454,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params?: readonly Tensor[])",
+       "signature": "constructor(values?: readonly Tensor[])",
        "doc": ""
       },
       {
@@ -7494,7 +7494,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params?: Readonly<Record<string, Tensor>>)",
+       "signature": "constructor(parameters?: Readonly<Record<string, Tensor>>)",
        "doc": ""
       },
       {

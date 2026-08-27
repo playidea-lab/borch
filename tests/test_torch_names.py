@@ -136,6 +136,95 @@ def _rows():
     return rows
 
 
+def _plain(fn):
+    """Argument names for a Python-implemented callable, or None.
+
+    `torch.nn` and `torch.optim` are Python all the way down, so `inspect.signature`
+    answers for them and no schema is needed — the easier half of the same question,
+    which is why it went unasked first.
+    """
+    target = fn.__init__ if isinstance(fn, type) else fn
+    try:
+        params = list(inspect.signature(target).parameters.values())
+    except (TypeError, ValueError):
+        return None
+    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
+        return None
+    return [p.name for p in params if p.name != "self"]
+
+
+# The namespaces swept beside `Tensor`, as (label, torch side, core side) resolved at
+# call time so that an import failure is a skip rather than a collection error.
+_SPACES = (
+    ("nn", "nn", "nn"),
+    ("nn.functional", "nn.functional", "nn.functional"),
+    ("optim", "optim", "optim"),
+    ("optim.lr_scheduler", "optim.lr_scheduler", "optim.lr_scheduler"),
+)
+
+
+def _reach(root, path):
+    for part in path.split("."):
+        root = getattr(root, part, None)
+        if root is None:
+            return None
+    return root
+
+
+def _namespace_rows():
+    import borch
+
+    rows = []
+    for label, their_path, our_path in _SPACES:
+        theirs_ns = _reach(torch, their_path)
+        ours_ns = _reach(borch, our_path)
+        if theirs_ns is None or ours_ns is None:
+            continue
+        for name in sorted(dir(ours_ns)):
+            if name.startswith("_"):
+                continue
+            ours, theirs = getattr(ours_ns, name, None), getattr(theirs_ns, name, None)
+            if theirs is None or not callable(ours) or not callable(theirs):
+                continue
+            mine, want = _plain(ours), _plain(theirs)
+            if not mine or not want:
+                continue
+            clash = [(a, b) for a, b in zip(mine, want)
+                     if a != b and ALLOWED.get((name, a)) != b]
+            if clash:
+                rows.append((f"{label}.{name}", clash))
+    return rows
+
+
+def test_the_layers_and_optimisers_take_the_keyword_torch_takes():
+    """The same question as below, asked of `nn` and `optim` rather than `Tensor`.
+
+    **This half was easier and went unasked for a day.** The `Tensor` sweep needed the
+    JIT schema registry because 540 of its 566 methods are C-implemented; `torch.nn`
+    and `torch.optim` are Python, so `inspect.signature` simply answers. Writing the
+    hard half first and stopping there left six live divergences in the easy half —
+    `ModuleList(mods)` against torch's `modules`, `ParameterList(params)` against
+    `values`, `F.pad(x, padding)` against `(input, pad)`, and two more.
+
+    `optim` and `lr_scheduler` came back clean across thirty names, which is worth
+    saying: a sweep that finds nothing where something was expected is a result.
+
+    **The receiver filter here is not load-bearing, and that is a difference from the
+    `Tensor` half.** There, torch's names come from the schema (no `self`) and ours from
+    `inspect` (receiver included), so failing to drop it shifts one side against the
+    other and every method reads as renamed. Here both sides go through `_plain`, so
+    dropping it or keeping it moves them together and no row changes — checked by
+    removing the filter, which left this test green. So it stays for clarity and there
+    is no check pinning it: a check that cannot fail is worse than none, because it
+    reads as coverage.
+    """
+    rows = _namespace_rows()
+    assert not rows, (
+        "the core names an argument something torch will not accept:\n  "
+        + "\n  ".join(f"{name}: " + ", ".join(f"{a} -> {b}" for a, b in clash)
+                      for name, clash in rows))
+
+
 def test_the_core_takes_the_keyword_torch_takes():
     """Every argument seat the core and torch both have carries torch's name.
 
