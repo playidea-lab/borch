@@ -1508,7 +1508,19 @@ def _pages_marking_counts():
 @pytest.mark.parametrize("name", [p.relative_to(ROOT / "site").as_posix()
                                   for p in _pages_marking_counts()])
 def test_a_marked_count_agrees_with_the_generated_reference(name):
-    """Every marked number against `api.json`, wherever it is claimed."""
+    """Every marked number against `api.json`, wherever it is claimed.
+
+    **Stale and wrong have to look different on screen.** If `dist` is behind the sources
+    then `api.json` was generated from yesterday's library, and a page that disagrees with
+    it may be the one telling the truth. Failing here would send somebody to edit a correct
+    page until it matched a stale reference — the wrong direction, and it would look like
+    progress. `test_api_reference_is_not_stale` owns that case; this one steps aside and
+    says which of the two is speaking.
+    """
+    stale = _stale_dist()
+    if stale:
+        pytest.skip(f"the bundle is behind the sources, so api.json is not a reference yet "
+                    f"— run `npm run build:ts && npm run docs:api` ({stale.splitlines()[0][:80]})")
     api = json.loads(API.read_text(encoding="utf-8"))
     counts = {m["name"]: m["count"] for m in api["modules"]}
     truth = {n: counts[n] for n in _VISION_MODULES}
