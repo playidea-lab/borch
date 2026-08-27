@@ -3718,9 +3718,9 @@ function addUnpool(out: Map<string, Case>): void {
     ["MaxPool3d", () => new nn.MaxPool3d(2)],
     ["AvgPool1d", () => new nn.AvgPool1d(2)],
     ["AvgPool2d", () => new nn.AvgPool2d(2)],
-    // **Its padding was the row this side carried as declined**, on the ground that
-    // the layer took a kernel and a stride and nothing else. Its 1-D and 3-D siblings
-    // went through `poolND`, which has taken the other four all along.
+    // **This one could not be asked until today.** The ledger row said `AvgPool2d`
+    // takes no padding, which was true while it called the two-dimensional kernel
+    // and stopped being true when it moved to `poolND` like its two siblings.
     ["AvgPool2d(stride, padding)", () => new nn.AvgPool2d(3, 2, 1)],
     ["AvgPool3d", () => new nn.AvgPool3d(2)],
     ["LPPool1d", () => new nn.LPPool1d(2, 2)],
@@ -7378,6 +7378,16 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
   const m4a = () => Tensor.from([0.0, 0.0833333358, 0.1666666716, 0.25, 0.3333333433, 0.4166666567, 0.5, 0.5833333135, 0.6666666865, 0.75, 0.8333333135, 0.9166666865], [2, 1, 2, 3]);
   const m4b = () => Tensor.from([0.0, 0.020833334, 0.0416666679, 0.0625, 0.0833333358, 0.1041666642, 0.125, 0.1458333284, 0.1666666716, 0.1875, 0.2083333284, 0.2291666716, 0.25, 0.2708333433, 0.2916666567, 0.3125, 0.3333333433, 0.3541666567, 0.375, 0.3958333433, 0.4166666567, 0.4375, 0.4583333433, 0.4791666567, 0.5, 0.5208333135, 0.5416666865, 0.5625, 0.5833333135, 0.6041666865, 0.625, 0.6458333135, 0.6666666865, 0.6875, 0.7083333135, 0.7291666865, 0.75, 0.7708333135, 0.7916666865, 0.8125, 0.8333333135, 0.8541666865, 0.875, 0.8958333135, 0.9166666865, 0.9375, 0.9583333135, 0.9791666865], [1, 4, 3, 4]);
 
+  // **transpose takes two dimensions and works at any rank.** It took none
+  // and refused anything but a matrix until now, and every case here was 2-D,
+  // so nothing asked. The negative pair is what models write.
+  out.set("transpose::3d", () => m3a().transpose(1, 2));
+  out.set("transpose::3d_negative", () => m3a().transpose(-2, -1));
+  // Axes 0 and 2 are both 2 here, so the shape does not move and only the
+  // values do — a case that a shape check alone would pass.
+  out.set("transpose::4d_outer", () => m4a().transpose(0, 2));
+  out.set("transpose::swapaxes_agrees", () => m3a().swapaxes(-2, -1));
+
   out.set("matmul::3d@3d", () => m3a().matmul(m3b()));
   out.set("matmul::3d@2d", () => m3a().matmul(m2t()));
   out.set("matmul::2d@3d", () => m2t().transpose().matmul(m3b()));
@@ -7797,7 +7807,10 @@ function addLinalgStruct(out: Map<string, Case>): void {
     // ── Rectangles ────────────────────────────────────────────────────
     ["rect::qr/R", async () => (await rect().qr()).r],
     ["rect::qr/|Q|", async () => (await rect().qr()).q.abs()],
-    ["rect::qr(complete)/|Q|", async () => (await rect().qr("complete")).q.abs()],
+    // `qr(false)` is `some=False`, which is `linalg.qr(mode="complete")` — the Python
+    // side of this case asks through that other door. Two spellings, one answer, and
+    // the golden holds the answer, so it is the place that would catch them parting.
+    ["rect::qr(complete)/|Q|", async () => (await rect().qr(false)).q.abs()],
     ["rect::svd/S", async () => (await rect().linalgSvd()).s],
     ["rect::svd/|U|", async () => (await rect().linalgSvd()).u.abs()],
     ["rect::svd(축소)/|U|", async () => (await rect().linalgSvd(false)).u.abs()],

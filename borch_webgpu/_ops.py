@@ -3235,6 +3235,21 @@ class _Linalg:
     def householder_product(self, a, tau):
         return wrap(guarded(handle(a).householderProduct, handle(tau)))
 
+    def qr(self, a, mode="reduced"):
+        """torch takes **a word** and borch.ts takes a boolean.
+
+        `mode` had a row in `_SIGNATURE` so that it would not be discarded, and the
+        note above that row names this very call — *`qr(mode="complete")` produces the
+        reduced form*. It was written as the hazard and the row underneath was the
+        hazard: forwarded as it arrives, `"complete"` is a non-empty string, which is
+        true, so it asked for `reduced` and got the opposite of what was written.
+
+        Not an exception. A `Q` one column narrower than it should be, and the values
+        in the block the two share agree — so the only thing that says so is a shape,
+        and the only check that looks is this binding's golden.
+        """
+        return guarded(handle(a).qr, mode != "complete")
+
     def __getattr__(self, name):
         # torch's abbreviations. `pinv` was empty for a long time and never
         # surfaced because the golden always asked under the long name
@@ -3248,8 +3263,12 @@ class _Linalg:
         #
         # The values in the overlapping block agree, so the only thing that says so
         # is a shape, and the only check that looks is this binding's golden.
+        # **`matmul` is not `mm` any more.** It was, while borch.ts had only the
+        # two-dimensional kernel; that side's `matmul` batches and broadcasts now, and
+        # the same stale rename at the top level sent six golden cases into
+        # `mm is 2-D by 2-D`.
         js_name = camel({"inv": "inverse", "pinv": "pinverse", "svd": "linalgSvd",
-                         "matmul": "mm", "matrix_rank": "matrixRank"}.get(name, name))
+                         "matrix_rank": "matrixRank"}.get(name, name))
 
         def call(x, *args, **kw):
             fn = getattr(handle(x), js_name, None)

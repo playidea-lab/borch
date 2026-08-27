@@ -897,7 +897,12 @@ SHORTER = {
     #
     # **A row appearing because a signature stopped lying is not the axis widening.**
     # The gap was there the whole time; nothing could see it.
-    "Tensor": 20,
+    #
+    # 20 → 19. `transpose` left. It took **no** arguments and refused anything but a
+    # matrix, so against the core's `(dim0, dim1)` it was a truncation; it now takes
+    # both and swaps at any rank. The core moved in the same commit — it was
+    # `(d0, d1)`, and torch answers to `dim0=`/`dim1=` and raises on `d0=`.
+    "Tensor": 19,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and
@@ -1099,7 +1104,33 @@ SHORTER = {
     #
     # Those fourteen are the whole of the row now: **no row is short of device/dtype
     # alone any more**, so the next reading of this line is about features, not seats.
-    "nn": 11,
+    #
+    # **14 → 6, and eight of those were wiring rather than arithmetic.** Measured by
+    # asking, for each row, whether the layer next door already had the argument:
+    #
+    #   ConvTranspose1d/2d/3d  paddingMode   Conv1d/2d/3d had it
+    #   LazyLinear             bias          Linear had it
+    #   MaxPool1d/3d           four seats    MaxPool2d carried and refused them
+    #   AvgPool2d              four seats    AvgPool1d/3d reach them through poolND
+    #   RMSNorm                eps, affine   the rmsNorm kernel took eps all along
+    #
+    # Two are worth naming apart. `AvgPool2d` called the two-dimensional kernel while
+    # its siblings called `poolND`, which reads its rank off the input and has carried
+    # all four since it was written — the arguments were one call away, not one
+    # implementation away, and `AvgPool1d`'s own comment about `divisorOverride` only
+    # makes sense if the 2-D form has it. And `MaxPool1d`/`3d` were *printing*
+    # `padding=0, dilation=1, ceil_mode=False` for seats they did not have, which is
+    # the same shape as the dropout family printing `inplace=False`.
+    #
+    # `ConvTranspose*`'s `paddingMode` is a third kind: **torch refuses it too.**
+    # `padding_mode="reflect"` raises there, so porting the seat means porting the
+    # error — and its absence here meant the call was accepted in silence exactly
+    # where torch stops.
+    #
+    # What is left is six rows with no wiring among them: `LazyInstanceNorm1d/2d/3d`
+    # and `RNNBase` want arguments no neighbour has either, `Upsample` wants
+    # `recomputeScaleFactor`, and `Hardtanh` is short on purpose.
+    "nn": 6,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

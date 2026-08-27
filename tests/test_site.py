@@ -1466,3 +1466,46 @@ def test_the_vision_page_counts_agree_with_the_generated_reference(name):
         f"site/{name} and site/assets/api.json disagree (page, reference):\n  " +
         "\n  ".join(f"{k}: {p} vs {t}" for k, (p, t) in sorted(wrong.items())) +
         "\n  regenerate with `npm run docs:api` and update the page, in that order.")
+
+
+# **The nav is the only way to reach most of the site, and it grows.** It went from six
+# entries to eight to ten; the CSS carries a measurement from the first time that broke —
+# six items took 404px against a 390px viewport and pushed every page out by 125px. The
+# fix was to let the bar scroll instead of overflowing the document, and it still holds:
+# measured at 390px the bar scrolls and every entry is reachable, and from 900px up the
+# whole bar fits with nothing to scroll.
+#
+# That measurement lives in a comment, and a comment only works on somebody who reads it.
+# Adding the ninth and tenth entries, this session assumed the bar had broken, mis-read
+# "extends past the viewport" as "cannot be reached", and came close to rewriting a rule
+# that was doing its job. What stopped it was re-measuring — which is luck, not a guard.
+#
+# So the mechanism is pinned. This cannot see a rendered page; what it can see is whether
+# the rule that makes the overflow scrollable is still there, and that is the part whose
+# removal produced the documented 125px.
+_MOBILE_NAV = re.compile(
+    r"@media\s*\(max-width:\s*700px\)\s*\{(.*?)\n\}", re.S)
+
+
+def test_the_menu_bar_can_still_be_scrolled_on_a_phone():
+    """The nav has more entries than a phone fits, so it has to scroll rather than overflow."""
+    css = (SITE / "assets" / "style.css").read_text(encoding="utf-8")
+    block = _MOBILE_NAV.search(css)
+    assert block, (
+        "site/assets/style.css has no `@media (max-width: 700px)` block.\n"
+        "  the narrow-screen nav rules lived there; without them a bar that does not fit\n"
+        "  pushes the whole document sideways (measured once at 125px).")
+    rules = block.group(1)
+    nav = [line for line in rules.splitlines() if ".top nav" in line and "a" not in
+           line.split("{")[0].split(".top nav")[1][:2]]
+    assert nav, "no `.top nav` rule inside the narrow-screen block"
+    joined = " ".join(nav)
+    for prop in ("overflow-x: auto", "width: 100%"):
+        assert prop in joined, (
+            f"the narrow-screen `.top nav` rule lost `{prop}`:\n    {joined.strip()}\n"
+            "  without it the bar overflows the document instead of scrolling inside\n"
+            "  itself, and entries past the right edge become unreachable rather than\n"
+            "  merely off-screen. Ten entries do not fit 390px and are not meant to.")
+    assert "white-space: nowrap" in rules, (
+        "`.top nav a { white-space: nowrap }` is gone — the entries wrap mid-word instead\n"
+        "  of scrolling as a row.")

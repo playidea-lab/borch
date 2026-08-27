@@ -80,7 +80,7 @@ export function cholesky(input: Tensor, upper = false): Promise<Tensor> {
 export function qr(
   a: Tensor, mode: "reduced" | "complete" = "reduced",
 ): Promise<{ q: Tensor; r: Tensor }> {
-  return a.qr(mode);
+  return a.qr(mode !== "complete");
 }
 
 /** `svd(A, full_matrices=True)` — the singular value decomposition. */

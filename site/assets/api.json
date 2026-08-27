@@ -625,13 +625,13 @@
       },
       {
        "name": "transpose",
-       "signature": "transpose(): Tensor",
-       "doc": "Two-dimensional transpose. For now it actually moves the data — views\nare T1.",
+       "signature": "transpose(dim0?: number, dim1?: number): Tensor",
+       "doc": "Swaps two axes, as torch's `transpose(dim0, dim1)` does — **any rank.**\n\nIt used to take no arguments and refuse anything but a matrix, while\n`swapaxes(axis0, axis1)` — the name torch documents as this one's alias —\nsat next to it handling every rank. So the operation a porting reader\nreaches for first was the narrower of the two, and bimm's ViT wrote\n`permute([0, 2, 1])` to swap the last two axes of an attention score\nmatrix because `transpose()` threw.\n\n**The seats are `dim0`/`dim1` because that is what torch answers to** —\n`t.transpose(dim0=-2, dim1=-1)` works there. Checked by calling it, not\nby reading the signature line: torch's doc and torch's runtime disagree\non other methods, so reading is not measuring.\n\nThe no-argument call still means \"swap the two axes of a matrix\", which\nis what every existing caller in this file meant by it.",
        "section": {
         "ko": "Matrix products",
         "en": "Matrix products"
        },
-       "doc_ko": "2차원 전치. 지금은 실제로 옮겨 담는다 — 뷰는 T1 이다."
+       "doc_ko": "두 축을 맞바꾼다 — torch 의 `transpose(dim0, dim1)` 처럼 **랭크를 안 가린다.**\n\n전에는 인자를 안 받고 행렬만 받았는데, 바로 옆에 `swapaxes(axis0, axis1)` — torch 가 이것의 별칭이라 적어 둔 이름 — 이 모든 랭크를 받고 있었다. 옮겨오는 사람이 먼저 찾는 이름이 둘 중 좁은 쪽이었던 것이고, 그래서 bimm 의 ViT 는 attention 점수의 마지막 두 축을 바꾸려고 `permute([0, 2, 1])` 을 썼다 — `transpose()` 가 던졌기 때문이다.\n\n**자리 이름이 `dim0`/`dim1` 인 것은 torch 가 그 이름에 답하기 때문이다** — `t.transpose(dim0=-2, dim1=-1)` 가 거기서 된다. 시그니처 줄을 읽은 게 아니라 **불러서** 확인했다: torch 는 다른 메서드에서 문서와 런타임이 갈리므로, 읽는 것은 재는 것이 아니다.\n\n인자 없는 호출은 여전히 \"행렬의 두 축을 바꾼다\" 이고, 이 파일의 기존 호출자들이 그 뜻으로 쓰고 있다."
       },
       {
        "name": "sum",
@@ -1109,7 +1109,7 @@
       },
       {
        "name": "unfold",
-       "signature": "unfold(dim: number, size: number, step: number): Tensor",
+       "signature": "unfold(dimension: number, size: number, step: number): Tensor",
        "doc": "A sliding window. With a step smaller than the window, the windows\noverlap.\n\n**Overlaps accumulate in the backward** — spreading a length of 5 with\n`unfold(0, 3, 1)` gives a gradient of `[1,2,3,2,1]`. Without the\naddition they would all be 1, and a value check alone does not catch\nit.",
        "section": {
         "ko": "Shape",
@@ -1152,7 +1152,7 @@
       },
       {
        "name": "hsplit",
-       "signature": "hsplit(parts: number): Tensor[]",
+       "signature": "hsplit(sections: number): Tensor[]",
        "doc": "",
        "section": {
         "ko": "Shape",
@@ -1161,7 +1161,7 @@
       },
       {
        "name": "vsplit",
-       "signature": "vsplit(parts: number): Tensor[]",
+       "signature": "vsplit(sections: number): Tensor[]",
        "doc": "",
        "section": {
         "ko": "Shape",
@@ -2786,7 +2786,7 @@
       },
       {
        "name": "qr",
-       "signature": "qr(mode?: \"reduced\" | \"complete\"): Promise<{ q: Tensor; r: Tensor; }>",
+       "signature": "qr(some?: boolean): Promise<{ q: Tensor; r: Tensor; }>",
        "doc": "QR factorisation. **`reduced` has a gradient.**\n\n    N = Qᵀ·Q̄ − R̄·Rᵀ\n    Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ\n\nKeeping only the lower triangle is the whole of this derivation —\ndifferentiating `QᵀQ = I` makes `Qᵀ·dQ` antisymmetric, and the upper\nhalf is the lower half's mirror, so there is nothing separate to count.\n\n`complete` has leftover columns in `Q` and a different derivation. That\nside returns values only.",
        "section": {
         "ko": "Linear algebra",
@@ -3080,7 +3080,7 @@
       },
       {
        "name": "choleskySolve",
-       "signature": "choleskySolve(factor: Tensor, upper?: boolean): Promise<Tensor>",
+       "signature": "choleskySolve(input2: Tensor, upper?: boolean): Promise<Tensor>",
        "doc": "Solves `A x = b` **from the Cholesky factor.** `A = L Lᵀ` (or `Uᵀ U`).\n\nIt rebuilds `A` and sends it to `solve`. Two triangular substitutions\nwould be cheaper, but written that way the backward has to be\nhand-written and **the gradient towards the factor goes missing\nquietly.**",
        "torch": "cholesky_solve",
        "section": {
@@ -3124,7 +3124,7 @@
       },
       {
        "name": "luSolve",
-       "signature": "luSolve(luData: Tensor, pivots: Tensor): Promise<Tensor>",
+       "signature": "luSolve(luData: Tensor, luPivots: Tensor): Promise<Tensor>",
        "doc": "`torch.Tensor.lu_solve` — **the receiver is the right-hand side `b`.**\n\ntorch has `b.lu_solve(LU, piv)`, so it is the same here. The side that\ntakes the factorisation as receiver is `luSolveFactored`, which is\n`linalg.lu_solve`'s argument order.",
        "torch": "lu_solve",
        "section": {
@@ -3157,7 +3157,7 @@
       },
       {
        "name": "orgqr",
-       "signature": "orgqr(tau: Tensor): Promise<Tensor>",
+       "signature": "orgqr(input2: Tensor): Promise<Tensor>",
        "doc": "Another name for `householderProduct`. torch offers both.",
        "section": {
         "ko": "Linear algebra at the top level",
@@ -3167,7 +3167,7 @@
       },
       {
        "name": "ormqr",
-       "signature": "ormqr(tau: Tensor, other: Tensor, left?: boolean, transpose?: boolean): Promise<Tensor>",
+       "signature": "ormqr(input2: Tensor, input3: Tensor, left?: boolean, transpose?: boolean): Promise<Tensor>",
        "doc": "Multiplies into `C` **without standing Q up** — here it stands it up\nand multiplies. The value is the same and nothing is saved at this\nsize.\n\n**It is a different Q from `orgqr`'s.** That one gives a Q **cut** to\n`m×k`, while this uses the uncut `m×m` — the reflectors are maps on\n`Rᵐ`, and cutting multiplies by only part of that map. The answer\ndiverges entirely on a tall matrix (measured). Measured on squares\nalone, the two are the same and nothing shows.",
        "section": {
         "ko": "Linear algebra at the top level",
@@ -3500,7 +3500,7 @@
       },
       {
        "name": "dsplit",
-       "signature": "dsplit(parts: number): Tensor[]",
+       "signature": "dsplit(sections: number): Tensor[]",
        "doc": "Split along **axis 2**. `torch.Tensor.dsplit`.",
        "section": {
         "ko": "In-place operations",
@@ -5145,7 +5145,7 @@
       },
       {
        "name": "fillDiagonal_",
-       "signature": "fillDiagonal_(value: number, wrap?: boolean): Tensor",
+       "signature": "fillDiagonal_(fillValue: number, wrap?: boolean): Tensor",
        "doc": "The diagonal to one value.\n\n**`wrap` only means something on a tall matrix.** The stride is `cols +\n1` either way, and all that differs is **where it stops** — off, it\nstops at `cols²` slots and paints only the first block's diagonal; on,\nit runs to the end and paints the lower blocks' diagonals too. numpy's\n`fill_diagonal` is exactly that one line and torch takes it as-is.\n\nIt was first written down as \"the wrapped position skips a row\", and\ncoded that way — no such rule exists. There was one case and it asked\nwith a square, so that branch was **passing through nothing** — a case\nasking with a tall matrix goes in alongside.",
        "torch": "fill_diagonal_",
        "section": {
@@ -8217,13 +8217,13 @@
      "members": [
       {
        "name": "weight",
-       "signature": "readonly weight: Tensor",
+       "signature": "readonly weight: Tensor | null",
        "doc": ""
       },
       {
        "name": "constructor",
-       "signature": "constructor(normalizedShape: number | readonly number[])",
-       "doc": ""
+       "signature": "constructor(normalizedShape: number | readonly number[], eps?: number | null, elementwiseAffine?: boolean, device?: null, dtype?: null)",
+       "doc": "**`eps` was already in the kernel and the layer did not hand it over.**\n`Tensor.rmsNorm(dims, eps)` has carried it from the start with torch's float32\ndefault; this class took the shape alone, so `RMSNorm(4, 1e-3)` set nothing.\n\n`elementwiseAffine=false` is the layer with **no learnable scale at all** — not a\nscale left at one. The difference shows in `stateDict`, where torch's has no\n`weight` key, so a checkpoint written by `RMSNorm(4, elementwise_affine=False)`\ncould not be read here in strict mode. Same shape as `GroupNorm`'s `affine`.\n\ntorch's `eps` defaults to `None`, meaning *use the dtype's epsilon*, and there is\none dtype here — so `null` and the kernel's default are the same answer."
       },
       {
        "name": "ownParameters",
@@ -8257,7 +8257,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, spatial: number, stride?: number, padding?: number, bias?: boolean, outputPadding?: number, groups?: number, dilation?: number)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, spatial: number, stride?: number, padding?: number, bias?: boolean, outputPadding?: number, groups?: number, dilation?: number, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       },
       {
@@ -8287,7 +8287,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ],
@@ -8301,7 +8301,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ],
@@ -8315,7 +8315,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ],
@@ -8408,6 +8408,11 @@
      "doc": "`torch.nn.MaxPool1d`.",
      "members": [
       {
+       "name": "padding",
+       "signature": "readonly padding: number",
+       "doc": ""
+      },
+      {
        "name": "dilation",
        "signature": "readonly dilation: number",
        "doc": ""
@@ -8419,9 +8424,15 @@
        "torch": "return_indices"
       },
       {
+       "name": "ceilMode",
+       "signature": "readonly ceilMode: boolean",
+       "doc": "",
+       "torch": "ceil_mode"
+      },
+      {
        "name": "constructor",
        "signature": "constructor(kernelSize?: number, stride?: number | undefined, padding?: number, dilation?: number, returnIndices?: boolean, ceilMode?: boolean)",
-       "doc": "torch's list, as `MaxPool2d` beside it — **all six seats, in torch's order.**\n Written with `padding` and `ceilMode` alone, `ceilMode` sat where torch puts\n `dilation`, so `new MaxPool1d(2, 2, 0, true)` meant two different things on the\n two sides. The signature axis said so in the same run that added them."
+       "doc": ""
       },
       {
        "name": "pick",
@@ -8448,6 +8459,11 @@
      "doc": "`torch.nn.MaxPool3d`.",
      "members": [
       {
+       "name": "padding",
+       "signature": "readonly padding: number",
+       "doc": ""
+      },
+      {
        "name": "dilation",
        "signature": "readonly dilation: number",
        "doc": ""
@@ -8459,9 +8475,15 @@
        "torch": "return_indices"
       },
       {
+       "name": "ceilMode",
+       "signature": "readonly ceilMode: boolean",
+       "doc": "",
+       "torch": "ceil_mode"
+      },
+      {
        "name": "constructor",
        "signature": "constructor(kernelSize?: number, stride?: number | undefined, padding?: number, dilation?: number, returnIndices?: boolean, ceilMode?: boolean)",
-       "doc": "torch's list, as `MaxPool2d` beside it — **all six seats, in torch's order.**\n Written with `padding` and `ceilMode` alone, `ceilMode` sat where torch puts\n `dilation`, so `new MaxPool3d(2, 2, 0, true)` meant two different things on the\n two sides. The signature axis said so in the same run that added them."
+       "doc": ""
       },
       {
        "name": "pick",
@@ -8729,7 +8751,7 @@
       {
        "name": "constructor",
        "signature": "constructor(kernelSize: number, stride?: number | undefined, padding?: number, ceilMode?: boolean, countIncludePad?: boolean, divisorOverride?: number | null)",
-       "doc": "**It took two of torch's six while its siblings took five.** `AvgPool1d` and\n`AvgPool3d` both go through `poolND`, which has taken `padding`, `ceilMode` and\n`countIncludePad` from the start; only this one called `avgPool2d`, a kernel with\ntwo arguments — so `new AvgPool2d(2, 2, 1)` was a type error where torch pads.\n`poolND` is general over the number of spatial axes, which is why the 1-D form\nuses it, so the middle size needed nothing new.\n\n`divisorOverride` is torch's for the 2-D and 3-D forms, and this is a 2-D one."
+       "doc": "**The other four came from moving to the path its two siblings already use.**\n\nThis took `(kernelSize, stride)` and called `avgPool2d`, the two-dimensional\nkernel. `AvgPool1d` and `AvgPool3d` call `poolND`, which reads its rank off the\ninput (`shape.length - 2`) and has carried `padding`, `ceilMode`,\n`countIncludePad` and `divisorOverride` from the start. So the missing arguments\nwere not missing arithmetic — they were one call away, in a function the file\nnext door was already using, and the 1-D layer's own comment explains\n`divisorOverride`'s absence there in a sentence that only makes sense if the\n2-D form has it."
       },
       {
        "name": "forward",
@@ -9755,8 +9777,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outFeatures: number)",
-       "doc": ""
+       "signature": "constructor(outFeatures: number, bias?: boolean, device?: null, dtype?: null)",
+       "doc": "*`bias` reaches the `Linear` it builds** — the label printed `bias=True`\nunconditionally, so a `bias=false` layer would have said otherwise."
       }
      ]
     },
@@ -11829,7 +11851,7 @@
      ]
     }
    ],
-   "count": 783,
+   "count": 787,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -19294,5 +19316,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2588
+ "total": 2592
 }

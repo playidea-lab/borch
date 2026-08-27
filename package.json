@@ -1,6 +1,6 @@
 {
   "name": "borch-ts",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A PyTorch-shaped tensor library running on WebGPU in the browser — no dependencies",
   "license": "Apache-2.0",
   "author": "PLAYIDEALAB Inc.",
@@ -26,6 +26,10 @@
     "borch-ts/src",
     "borch-ts/test/bench.ts",
     "borch-ts/test/accuracy.ts",
+    "borch-ts/dist/test/bench.js",
+    "borch-ts/dist/test/bench.d.ts",
+    "borch-ts/dist/test/accuracy.js",
+    "borch-ts/dist/test/accuracy.d.ts",
     "README.md",
     "BORCH-TS.md",
     "LICENSE"

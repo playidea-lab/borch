@@ -323,18 +323,27 @@ NOT_PORTED = {
     # argument borch.ts does not take and two about a name it does not have.
     # `AdaptiveAvgPool2d` is absent there; `MaxPool2d`'s `padding`, `dilation` and
     # `ceilMode` are held and refused until the pooling kernel implements them;
-    # `AvgPool2d` takes no padding; `Flatten` takes no arguments at all. Each is a
-    # question this side cannot be asked yet, which the name and signature axes already
-    # count — writing the case would only move the refusal.
+    # `Flatten` takes no arguments at all. Each is a question this side cannot be asked
+    # yet, which the name and signature axes already count — writing the case would
+    # only move the refusal.
+    #
+    # **6 → 5: `AvgPool2d`'s padding case was in this list and is now written.** The
+    # row said "AvgPool2d takes no padding", which was true while the layer called the
+    # two-dimensional kernel and stopped being true the moment it moved to `poolND`,
+    # the path its 1-D and 3-D siblings already used. A reason recorded here goes on
+    # being read after its cause is gone; this one lasted about an hour, and only
+    # because the same change that ended it was made by someone who then read this
+    # line.
     "unpool::": (4, "없음 — two ask about arguments borch.ts does not take "
                         "(MaxPool2d's `dilation`, which no pooling kernel here "
                         "dilates, and Flatten's two) and two about "
                         "`AdaptiveAvgPool2d`, which is not a name over there. "
-                        "**The maximum's padding and ceilMode left this row**: they "
-                        "were refused on the ground that its backward reads the input "
-                        "at each window and a padded position has none, and the "
-                        "average had the answer one function away — take the padding "
-                        "off the coordinate and skip what falls outside"),
+                        "**The maximum's padding and ceilMode left this row** with "
+                        "AvgPool2d's: they were refused on the ground that the "
+                        "maximum's backward reads the input at each window position "
+                        "and a padded one has none, and the average had answered that "
+                        "one function away — take the padding off the coordinate and "
+                        "skip what falls outside"),
     # **`ops::` was a row here once, at 11, and was emptied by porting all of them.**
     # It is back at 8 for a different reason: the eleven were box geometry on plain
     # arrays and these eight are `nn.Module` layers whose weights have to be written

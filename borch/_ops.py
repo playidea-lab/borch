@@ -3154,7 +3154,21 @@ def swapaxes(input, axis0, axis1):
     return input.permute(*order)
 
 
-swapdims = swapaxes
+def swapdims(input, dim0, dim1):                             # noqa: A002
+    """The same operation as `swapaxes`, **and not the same signature.**
+
+    It was `swapdims = swapaxes`, which is the obvious way to write an alias and
+    makes `x.swapdims(dim0=0, dim1=1)` raise: the seats were called `axis0` and
+    `axis1`. torch names them apart on purpose — `swapaxes` follows numpy and
+    `swapdims` follows `transpose`, and it accepts only its own spelling on each:
+
+        x.swapaxes(axis0=0, axis1=1)   works        x.swapaxes(dim0=0, …)   raises
+        x.swapdims(dim0=0, dim1=1)     works        x.swapdims(axis0=0, …)  raises
+
+    So an alias by assignment is right about the values and wrong about the door.
+    A peer found the same shape in `transpose`, whose seats were `d0`/`d1` here.
+    """
+    return swapaxes(input, dim0, dim1)
 
 
 def select(input, dim, index):
@@ -3223,12 +3237,12 @@ def rot90(input, k=1, dims=(0, 1)):
                    "Rot90Backward0")
 
 
-def unfold(t, dim, size, step):
+def unfold(t, dimension, size, step):
     """Turn a sliding window into a new axis. Where the windows overlap **the
     gradient accumulates in the backward** (measured: length 5 unfolded at size 3,
     stride 1 gives [1,2,3,2,1])."""
     t = _wrap(t)
-    axis = dim % t.data.ndim
+    axis = dimension % t.data.ndim
     count = (t.data.shape[axis] - size) // step + 1
     starts = _np.arange(count) * step
     pieces = [_np.take(t.data, _np.arange(s, s + size), axis=axis) for s in starts]
@@ -3247,18 +3261,22 @@ def unfold(t, dim, size, step):
     return t._make(out, (t,), back, "UnfoldBackward0")
 
 
-def hsplit(t, parts):
-    """Split horizontally — axis 0 in 1-D and axis 1 otherwise."""
+def hsplit(t, sections):
+    """Split horizontally — axis 0 in 1-D and axis 1 otherwise.
+
+    **`sections`, not `parts`.** torch takes that keyword on both the free
+    function and the method, and a name the caller cannot write is a name that
+    is not there."""
     t = _wrap(t)
-    return chunk(t, parts, dim=0 if t.data.ndim == 1 else 1)
+    return chunk(t, sections, dim=0 if t.data.ndim == 1 else 1)
 
 
-def vsplit(t, parts):
-    return chunk(_wrap(t), parts, dim=0)
+def vsplit(t, sections):
+    return chunk(_wrap(t), sections, dim=0)
 
 
-def dsplit(t, parts):
-    return chunk(_wrap(t), parts, dim=2)
+def dsplit(t, sections):
+    return chunk(_wrap(t), sections, dim=2)
 
 
 def fliplr(input):
@@ -7237,10 +7255,23 @@ def matrix_power(input, n):
 # position by position, so getting one wrong is wrong loudly rather than
 # quietly.
 
-def qr(input, mode="reduced"):                               # noqa: A002
-    """The QR factorisation. **It has a gradient.**
+def qr(input, some=True):                                    # noqa: A002
+    """`torch.qr` — **which is not `torch.linalg.qr`**, in the same way
+    `svd` below is not `linalg.svd`.
 
-    `input` at the top level and `A` under `linalg` — see `_linalg_A` below.
+    The factorisation is one thing asked for in two vocabularies, and both are
+    torch's. This door takes `input` and a boolean; the other takes `A` and a
+    string. It was one function with `mode=` on both, so `x.qr(some=False)` —
+    a line torch code contains — raised on the keyword.
+
+        some=True   ->  mode="reduced"
+        some=False  ->  mode="complete"
+    """
+    return _qr_impl(input, "reduced" if some else "complete")
+
+
+def _qr_impl(input, mode="reduced"):                         # noqa: A002
+    """The arithmetic both doors reach.
 
         N = Qᵀ·Q̄ − R̄·Rᵀ
         Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ
@@ -8119,8 +8150,17 @@ def _linalg_slogdet(A):                                      # noqa: N803
 
 
 def _linalg_qr(A, mode="reduced"):                           # noqa: N803
-    """`linalg.qr`. `torch.qr` takes `input`; this takes `A`."""
-    return qr(A, mode)
+    """`linalg.qr`. **Two names and two vocabularies, both torch's.**
+
+    `torch.qr` takes `input` and a boolean `some`; `torch.linalg.qr` takes `A`
+    and a string `mode`. They are the same factorisation asked for in the two
+    ways torch offers, so the translation happens here rather than the older
+    spelling being dropped — `x.qr(some=False)` is a line torch code contains.
+
+        some=True   <->  mode="reduced"
+        some=False  <->  mode="complete"
+    """
+    return _qr_impl(A, mode)
 
 
 class _Linalg(_Namespace):
@@ -9662,15 +9702,15 @@ def _as_lower(factor, upper):
     return _mT(triu(factor)) if upper else tril(factor)
 
 
-def cholesky_solve(b, factor, upper=False):
-    """Solve `A x = b` **through a Cholesky factor.** `A = L Lᵀ` (or `Uᵀ U`).
+def cholesky_solve(b, input2, upper=False):
+    """Solve `A x = b` **through a Cholesky input2.** `A = L Lᵀ` (or `Uᵀ U`).
 
     `A` is rebuilt and handed to `solve`. Two triangular substitutions would be
     cheaper, and written that way the backward has to be written by hand and **the
-    gradient towards the factor quietly goes missing** — a bigger risk than what
+    gradient towards the input2 quietly goes missing** — a bigger risk than what
     the saving is worth at this size.
     """
-    low = _as_lower(_wrap(factor), upper)
+    low = _as_lower(_wrap(input2), upper)
     return solve(matmul(low, _mT(low)), _wrap(b))
 
 
@@ -9707,10 +9747,14 @@ def triangular_solve(b, A, upper=True, transpose=False, unitriangular=False):
     return _TriangularSolve(solve(tri, b), Tensor(_np.array(A.data, copy=True)))
 
 
-def lu_solve_top(b, lu_data, pivots):
+def lu_solve_top(b, LU_data, LU_pivots):                     # noqa: N803
     """**The argument order is reversed from `linalg.lu_solve`** — `b` comes
-    first here."""
-    return lu_solve(lu_data, pivots, b)
+    first here, and the two that follow carry torch's capitals.
+
+    `LU_data`/`LU_pivots` on the method, `LU`/`pivots` on the free function one
+    screen up. Both are torch's: it spells the same two things differently
+    depending on which door you come through."""
+    return lu_solve(LU_data, LU_pivots, b)
 
 
 def lu_top(A, pivot=True, get_infos=False):                  # noqa: N803
@@ -9766,13 +9810,13 @@ def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True):
         Tensor(up.astype(kind)) if unpack_data else empty)
 
 
-def orgqr(input, tau):
+def orgqr(input, input2):                                    # noqa: A002
     """Multiply the reflectors `geqrf` packed away and **build Q.** The same as
     `linalg.householder_product`; torch gives it two names."""
-    return householder_product(input, tau)
+    return householder_product(input, input2)
 
 
-def ormqr(input, tau, other, left=True, transpose=False):
+def ormqr(input, input2, input3, left=True, transpose=False):  # noqa: A002
     """Multiply into `C` **without building Q.** That is the point on a large
     matrix, and here it is built and multiplied — the value is the same and there
     is nothing to save at this size.
@@ -9785,12 +9829,12 @@ def ormqr(input, tau, other, left=True, transpose=False):
 
     `left` says which side to multiply from and `transpose` whether to use `Qᵀ`.
     """
-    q = _full_q(input, tau)
+    q = _full_q(input, input2)
     if transpose:
         q = q.T
-    c = _np.asarray(_wrap(other).data, dtype=_np.float64)
+    c = _np.asarray(_wrap(input3).data, dtype=_np.float64)
     out = (q @ c) if left else (c @ q)
-    return Tensor(out.astype(_wrap(other).data.dtype))
+    return Tensor(out.astype(_wrap(input3).data.dtype))
 
 
 def _full_q(a, tau):

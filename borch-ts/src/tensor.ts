@@ -1781,12 +1781,32 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * Two-dimensional transpose. For now it actually moves the data — views
-   * are T1.
+   * Swaps two axes, as torch's `transpose(dim0, dim1)` does — **any rank.**
+   *
+   * It used to take no arguments and refuse anything but a matrix, while
+   * `swapaxes(axis0, axis1)` — the name torch documents as this one's alias —
+   * sat next to it handling every rank. So the operation a porting reader
+   * reaches for first was the narrower of the two, and bimm's ViT wrote
+   * `permute([0, 2, 1])` to swap the last two axes of an attention score
+   * matrix because `transpose()` threw.
+   *
+   * **The seats are `dim0`/`dim1` because that is what torch answers to** —
+   * `t.transpose(dim0=-2, dim1=-1)` works there. Checked by calling it, not
+   * by reading the signature line: torch's doc and torch's runtime disagree
+   * on other methods, so reading is not measuring.
+   *
+   * The no-argument call still means "swap the two axes of a matrix", which
+   * is what every existing caller in this file meant by it.
    */
-  transpose(): Tensor {
+  transpose(dim0?: number, dim1?: number): Tensor {
+    if (dim0 !== undefined || dim1 !== undefined) {
+      return this.swapaxes(dim0 ?? 0, dim1 ?? 1);
+    }
     if (this.shape.length !== 2) {
-      throw new Error(`transpose is 2-D only for now: [${this.shape}]`);
+      throw new Error(
+        `transpose() with no arguments is the 2-D swap: [${this.shape}]. ` +
+        "Pass the two dimensions, as torch does — transpose(dim0, dim1).",
+      );
     }
     const M = this.shape[0] ?? 0;
     const N = this.shape[1] ?? 0;
@@ -2801,9 +2821,9 @@ export class Tensor implements Node<Tensor> {
    * addition they would all be 1, and a value check alone does not catch
    * it.
    */
-  unfold(dim: number, size: number, step: number): Tensor {
+  unfold(dimension: number, size: number, step: number): Tensor {
     const rank = this.shape.length;
-    const axis = dim < 0 ? dim + rank : dim;
+    const axis = dimension < 0 ? dimension + rank : dimension;
     const own = this.strides();
     const axisSize = this.shape[axis] ?? 0;
     const windows = Math.floor((axisSize - size) / step) + 1;
@@ -2920,12 +2940,12 @@ export class Tensor implements Node<Tensor> {
     return out;
   }
 
-  hsplit(parts: number): Tensor[] {
-    return this.splitParts(1, parts);
+  hsplit(sections: number): Tensor[] {
+    return this.splitParts(1, sections);
   }
 
-  vsplit(parts: number): Tensor[] {
-    return this.splitParts(0, parts);
+  vsplit(sections: number): Tensor[] {
+    return this.splitParts(0, sections);
   }
 
   /**
@@ -6227,7 +6247,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `complete` has leftover columns in `Q` and a different derivation. That
    * side returns values only.
    */
-  async qr(mode: "reduced" | "complete" = "reduced"): Promise<{ q: Tensor; r: Tensor }> {
+  async qr(some = true): Promise<{ q: Tensor; r: Tensor }> {
+    // **`torch.qr` is not `torch.linalg.qr`.** The method takes a boolean and
+    // `linalg.qr` takes a string; both are torch's, and this took the string on
+    // both doors, so `x.qr(some=false)` — a line torch code contains — did not
+    // reach the complete form. `linalg.qr` translates on its way in.
+    const mode: "reduced" | "complete" = some ? "reduced" : "complete";
     const v = await this.asBatch(false);
     const { rows, cols } = v;
     const k = Math.min(rows, cols);
@@ -6921,8 +6946,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * hand-written and **the gradient towards the factor goes missing
    * quietly.**
    */
-  async choleskySolve(factor: Tensor, upper = false): Promise<Tensor> {
-    const low = Tensor.asLower(factor, upper);
+  async choleskySolve(input2: Tensor, upper = false): Promise<Tensor> {
+    const low = Tensor.asLower(input2, upper);
     return low.mm(low.transpose()).solve(this);
   }
 
@@ -6985,8 +7010,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * takes the factorisation as receiver is `luSolveFactored`, which is
    * `linalg.lu_solve`'s argument order.
    */
-  async luSolve(luData: Tensor, pivots: Tensor): Promise<Tensor> {
-    return luData.luSolveFactored(pivots, this);
+  async luSolve(luData: Tensor, luPivots: Tensor): Promise<Tensor> {
+    return luData.luSolveFactored(luPivots, this);
   }
 
   /**
@@ -7037,8 +7062,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Another name for `householderProduct`. torch offers both.
    */
-  async orgqr(tau: Tensor): Promise<Tensor> {
-    return this.householderProduct(tau);
+  async orgqr(input2: Tensor): Promise<Tensor> {
+    return this.householderProduct(input2);
   }
 
   /**
@@ -7053,15 +7078,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * alone, the two are the same and nothing shows.
    */
   async ormqr(
-    tau: Tensor,
-    other: Tensor,
+    input2: Tensor,
+    input3: Tensor,
     left = true,
     transpose = false,
   ): Promise<Tensor> {
     const v = await this.asBatch(false);
     const { rows: m, cols: n } = v;
-    const taus = await tau.toArray();
-    const k = tau.shape[tau.shape.length - 1] ?? 0;
+    const taus = await input2.toArray();
+    const k = input2.shape[input2.shape.length - 1] ?? 0;
     const mat = v.mats[0]!;
     const q = new Float64Array(m * m);
     for (let i = 0; i < m; i++) q[i * m + i] = 1;
@@ -7080,10 +7105,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       }
     }
     const qm = transpose ? LA.transpose(q, m, m) : q;
-    const c = LA.fromF32(await other.toArray());
-    const [cr, cc] = other.shape.length === 1
-      ? [other.shape[0] ?? 0, 1]
-      : [other.shape[0] ?? 0, other.shape[1] ?? 0];
+    const c = LA.fromF32(await input3.toArray());
+    const [cr, cc] = input3.shape.length === 1
+      ? [input3.shape[0] ?? 0, 1]
+      : [input3.shape[0] ?? 0, input3.shape[1] ?? 0];
     const out = left
       ? LA.matmul(qm, c, m, m, cc)
       : LA.matmul(c, qm, cr, m, m);
@@ -7460,8 +7485,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /** Split along **axis 2**. `torch.Tensor.dsplit`. */
-  dsplit(parts: number): Tensor[] {
-    return this.splitParts(2, parts);
+  dsplit(sections: number): Tensor[] {
+    return this.splitParts(2, sections);
   }
 
   /**
@@ -9218,7 +9243,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * with a square, so that branch was **passing through nothing** — a case
    * asking with a tall matrix goes in alongside.
    */
-  fillDiagonal_(value: number, wrap = false): Tensor {
+  fillDiagonal_(fillValue: number, wrap = false): Tensor {
     const rows = this.shape[0] ?? 0;
     const cols = this.shape[1] ?? 0;
     const step = cols + 1;
@@ -9227,7 +9252,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     for (let at = 0; at < limit; at += step) spots.push(at);
     return this.mutate(() => this.reshape([this.size]).scatterSpots(
       Tensor.spotsTensor(Float32Array.from(spots)),
-      Tensor.full([spots.length], value), false, "FillDiagonalBackward0",
+      Tensor.full([spots.length], fillValue), false, "FillDiagonalBackward0",
     ).reshape(this.shape));
   }
 
