@@ -344,23 +344,16 @@ NOT_PORTED = {
                         "and a padded one has none, and the average had answered that "
                         "one function away — take the padding off the coordinate and "
                         "skip what falls outside"),
-    # **`ops::` was a row here once, at 11, and was emptied by porting all of them.**
-    # It is back at 8 for a different reason: the eleven were box geometry on plain
-    # arrays and these eight are `nn.Module` layers whose weights have to be written
-    # from the same numbers on both sides. borch.ts has the layers; what is missing is
-    # the harness that fills a module's parameters and buffers by name, which the
-    # Python cases grew for this and the TS runner has never needed.
-    "ops::": (8, "아직 — the eight that hold weights: the two blocks, the two "
-                       "multi-layer perceptrons, the excitation, the pyramid, the "
-                       "deformable module and the frozen norm. They need a way to "
-                       "**write parameters and buffers by name**, which is what the "
-                       "Python side's `_fill` is and this side has no counterpart to — "
-                       "and four of them have no class here yet either. Everything "
-                       "else under this prefix has crossed: the RoI names, the "
-                       "deformable convolution, the dropouts' deterministic halves, "
-                       "the eleven layers that hold settings and no weights, the "
-                       "level-picker, and the three reprs of layers whose weights the "
-                       "repr does not read"),
+    # **`ops::` is gone, and it was the only row that said 아직.** Thirty-nine cases,
+    # and the reason under them named a harness for writing parameters by name — true
+    # of eight, and standing for all thirty-nine. What actually stopped the rest, taken
+    # in turn: a fixture drawn from `numpy.random` where TypeScript has no generator
+    # (twelve), a layer that holds settings and no weights so there was nothing to write
+    # (eleven), a repr that never reads the weights its layer holds (six), and a coin
+    # whose answer cannot be shared (the two dropouts, which is why only their
+    # deterministic settings are asked).
+    #
+    # The harness is nine lines in `cases.ts` and it was the last of the four.
     # 104 → 103. What `dtype::없는이름::` was asking about moved to `narrow_copy` and
     # `unsafe_chunk` — torch actually answers the earlier one, so it was no absent name.
     # 103 → 111 → 147 → 156 → 157. Whether the dtype aliases and the factories really

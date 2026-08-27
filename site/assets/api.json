@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 334
+  "missing": 345
  },
  "modules": [
   {
@@ -17205,6 +17205,12 @@
        "doc": ""
       },
       {
+       "name": "namedBuffers",
+       "signature": "namedBuffers(persistentOnly?: boolean): Record<string, Tensor>",
+       "doc": "**All four leave as buffers**, which is the whole of what this class is: a batch\nnorm whose statistics do not move, so that one inside a pre-trained network stops\nlearning when the network is fine-tuned on batches too small to estimate a mean\nfrom. `weight` and `bias` are buffers too — nothing here trains.\n\nListed here rather than registered, for the reason `BatchNormND` gives: a field\nnamed `runningMean` has to leave under the key `running_mean`, and\n`registerBuffer` makes the field name the key. Written the other way round, the\nfield was `running_mean` and the name axis caught it at once — two spellings that\nflatten onto one lookup key, where a collision merges two entries and nothing\nanywhere mismatches.\n\nLeft out altogether, `namedBuffers` returns nothing, anything writing weights by\nname writes nothing, and the layer answers with the identity — a plausible picture\nand not this layer's.",
+       "torch": "named_buffers"
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -17281,14 +17287,147 @@
        "doc": ""
       },
       {
+       "name": "namedParameters",
+       "signature": "namedParameters(prefix?: string): Record<string, Tensor>",
+       "doc": "*It reports what it holds even though it is not a `Module`.** Being callable and\n holding weights are two different things, and only the second is what a caller\n loading a checkpoint — or a test writing one — needs from it.",
+       "torch": "named_parameters"
+      },
+      {
+       "name": "namedBuffers",
+       "signature": "namedBuffers(): Record<string, Tensor>",
+       "doc": "",
+       "torch": "named_buffers"
+      },
+      {
        "name": "describe",
        "signature": "describe(): string",
        "doc": "*Only what is not the default is printed**, which is torchvision's rule for the\n convolutions and not this file's usual one."
       }
      ]
+    },
+    {
+     "kind": "type",
+     "name": "ConvFactory",
+     "signature": "export type ConvFactory = (inChannels: number, outChannels: number, kernelSize: number, stride: number, padding: number, dilation: number, groups: number, bias: boolean) => Module",
+     "doc": "What builds the convolution. **The last of torch's seats**, and it is what makes\n `Conv3dNormActivation` the same class with one argument changed.",
+     "members": []
+    },
+    {
+     "kind": "class",
+     "name": "ConvNormActivation",
+     "signature": "export declare class ConvNormActivation extends Sequential",
+     "doc": "A convolution, a normalisation and an activation, in that order.\n\n**`padding = null` means \"keep the size\"**, computed as `(k − 1) / 2 · dilation`\nrather than left at zero — a block built with zero padding shrinks its input by two\nper layer, which is a network that trains and a resolution that quietly runs out.\n\n**`bias = null` means \"only when there is no norm\"**, because a normalisation\nimmediately after a convolution subtracts the mean and the bias with it. Leaving it on\ncosts a parameter per channel that provably does nothing, and a checkpoint written\nagainst torchvision's would carry a tensor this one has no slot for.",
+     "members": [
+      {
+       "name": "outChannels",
+       "signature": "readonly outChannels: number",
+       "doc": "",
+       "torch": "out_channels"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize?: number, stride?: number, padding?: number | null, groups?: number, normLayer?: ((width: number) => Module) | null, activationLayer?: (() => Module) | null, dilation?: number, inplace?: boolean | null, bias?: boolean | null, convLayer?: ConvFactory)",
+       "doc": "*torch's seats, `inplace` included.** Written without it, `bias` sat where torch\n puts `inplace` — and the signature axis says so, which is what it is for."
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Conv2dNormActivation",
+     "signature": "export declare class Conv2dNormActivation extends ConvNormActivation",
+     "doc": "`ConvNormActivation` with the convolution fixed to two dimensions.",
+     "members": []
+    },
+    {
+     "kind": "class",
+     "name": "SqueezeExcitation",
+     "signature": "export declare class SqueezeExcitation extends Module",
+     "doc": "Squeeze-and-Excitation — **the channels weight themselves.**\n\n<https://arxiv.org/abs/1709.01507>\n\nPool each channel to one number, run two 1×1 convolutions over that, multiply the\ninput by the result. **The two activations are not the same one**: the inner is a\nrectifier and the outer squashes to `(0, 1)`, because the outer's output is a gain.\nUsing the rectifier for both gives gains unbounded above — the block still trains and\nthe scale drifts.",
+     "members": [
+      {
+       "name": "fc1",
+       "signature": "readonly fc1: Conv2d",
+       "doc": ""
+      },
+      {
+       "name": "fc2",
+       "signature": "readonly fc2: Conv2d",
+       "doc": ""
+      },
+      {
+       "name": "activation",
+       "signature": "readonly activation: Module",
+       "doc": ""
+      },
+      {
+       "name": "scaleActivation",
+       "signature": "readonly scaleActivation: Module",
+       "doc": "",
+       "torch": "scale_activation"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(inputChannels: number, squeezeChannels: number, activation?: () => Module, scaleActivation?: () => Module)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor): Tensor",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "MLP",
+     "signature": "export declare class MLP extends Sequential",
+     "doc": "Linear layers with an activation and dropout between them.\n\n**The last layer gets neither norm nor activation, and still gets dropout.** That\nasymmetry is the whole of the class: written with the loop covering every hidden size,\nthe output passes through a rectifier and can never be negative — a head that trains,\non half the range.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inChannels: number, hiddenChannels: readonly number[], normLayer?: ((width: number) => Module) | null, activationLayer?: () => Module, inplace?: boolean | null, bias?: boolean, dropout?: number)",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "FeaturePyramidNetwork",
+     "signature": "export declare class FeaturePyramidNetwork extends Module",
+     "doc": "A pyramid of feature maps that all carry the same number of channels.\n\n<https://arxiv.org/abs/1612.03144>\n\nEach map goes through a 1×1 convolution to a common width, and then **the coarse map\nis added into the fine one**, top down, so the fine map gains what only the coarse one\ncould see.\n\n- **The maps arrive in increasing depth order**, so the last is the coarsest.\n  Reversing them adds the fine into the coarse, which runs and learns the opposite of\n  the point.\n- **The top-down step resizes to the lateral's own size**, not by a fixed factor of\n  two. Feature maps are not always exactly half their neighbour — an odd input makes\n  them off by one — and a hard-coded factor gives a shape error on some inputs and a\n  silent crop on others.",
+     "members": [
+      {
+       "name": "innerBlocks",
+       "signature": "readonly innerBlocks: ModuleList",
+       "doc": "",
+       "torch": "inner_blocks"
+      },
+      {
+       "name": "layerBlocks",
+       "signature": "readonly layerBlocks: ModuleList",
+       "doc": "",
+       "torch": "layer_blocks"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(inChannelsList: readonly number[], outChannels: number, extraBlocks?: unknown, normLayer?: ((width: number) => Module) | null)",
+       "doc": "`extraBlocks` sits in torch's seat, **before** the norm. It is a callable that\n appends further levels to the pyramid; there is none here yet, so a real one is\n refused rather than stored and skipped."
+      },
+      {
+       "name": "forwardMaps",
+       "signature": "forwardMaps(x: Map<string, Tensor>): Map<string, Tensor>",
+       "doc": "Takes and gives back **a named, ordered set of maps** — a detector reads them by\n name, and the order is what decides which is the coarsest.",
+       "torch": "forward_maps"
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 136
+   "count": 159
   },
   {
    "name": "datasets",
@@ -19808,5 +19947,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2673
+ "total": 2696
 }

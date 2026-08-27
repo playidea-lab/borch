@@ -1789,6 +1789,85 @@ function addOps(out: Map<string, Case>): void {
   out.set("ops::DeformConv2d(groups, no bias)=repr",
     () => new ops.DeformConv2d(4, 6, 3, 1, 0, 2, 2, false).describe());
 
+  // ── the blocks, with the weights written rather than drawn ──────────────────
+  //
+  // **This is the harness the `ops::` ledger row has been waiting for.** The two
+  // libraries initialise from different generators, so a layer compared as built
+  // compares two draws; every parameter and buffer is written here from one ramp
+  // instead, in sorted name order so that both sides give the same slot the same turn.
+  //
+  // `running_var` is made positive because a variance is, and **one channel's is very
+  // nearly zero** — the only place epsilon shows. With every variance comfortably
+  // positive, `(v + eps).rsqrt()` and `v.rsqrt()` agree to five decimals.
+  interface Weighted {
+    namedParameters(prefix?: string): Record<string, Tensor>;
+    namedBuffers(persistent?: boolean, prefix?: string): Record<string, Tensor>;
+  }
+  const fill = <T extends Weighted>(module: T): T => {
+    const seen: Record<string, Tensor> = {
+      ...module.namedParameters(), ...module.namedBuffers(),
+    };
+    const f = Math.fround;
+    Object.keys(seen).sort().forEach((name, turn) => {
+      if (name.includes("num_batches")) return;
+      const target = seen[name] as Tensor;
+      const n = target.size;
+      const values: number[] = [];
+      for (let i = 0; i < n; i++) {
+        values.push(f(f(f(f(i * f(0.037)) + f(turn * 0.11)) % f(1.7)) - f(0.6)));
+      }
+      if (name.includes("running_var")) {
+        for (let i = 0; i < n; i++) values[i] = f(Math.abs(values[i] ?? 0) + f(0.5));
+        values[0] = f(1e-9);
+      }
+      noGrad(() => target.copyFrom(Tensor.from(values, [...target.shape])));
+    });
+    return module;
+  };
+  const blockCase = (make: () => nn.Module, shape: number[]) => flat(async () => {
+    const layer = fill(make());
+    layer.eval();
+    return noGrad(() => layer.call(layerRamp(shape)));
+  });
+
+  out.set("ops::Conv2dNormActivation(3→4, k3)",
+    blockCase(() => new ops.Conv2dNormActivation(3, 4), [2, 3, 6, 7]));
+  // **`bias = null` means "only when there is no norm"** — with the norm dropped the
+  // convolution grows a bias, and the parameter list changes shape.
+  out.set("ops::Conv2dNormActivation(k5, dilation 2, no norm)",
+    blockCase(() => new ops.Conv2dNormActivation(3, 4, 5, 1, null, 1, null,
+                                                 () => new nn.ReLU(), 2),
+              [2, 3, 9, 9]));
+  out.set("ops::SqueezeExcitation(6, 2)",
+    blockCase(() => new ops.SqueezeExcitation(6, 2), [2, 6, 5, 4]));
+  out.set("ops::MLP(4 → [6, 3])",
+    blockCase(() => new ops.MLP(4, [6, 3]), [5, 4]));
+  out.set("ops::MLP(with a norm between)",
+    blockCase(() => new ops.MLP(4, [6, 3], (w) => new nn.BatchNorm1d(w)), [5, 4]));
+  out.set("ops::FrozenBatchNorm2d(3)",
+    blockCase(() => new ops.FrozenBatchNorm2d(3), [2, 3, 4, 5]));
+
+  // **The count goes in front of the values.** The pyramid answers a named set, and a
+  // reader that dropped one map would otherwise agree on everything it did return.
+  out.set("ops::FeaturePyramidNetwork(three widths, three sizes)", flat(async () => {
+    const model = fill(new ops.FeaturePyramidNetwork([4, 6, 8], 5));
+    model.eval();
+    const got = noGrad(() => model.forwardMaps(fpnInput()));
+    const parts = [Tensor.from([got.size], [1])];
+    for (const value of got.values()) parts.push(value.reshape([-1]));
+    return Tensor.cat(parts, 0);
+  }));
+
+  // **The offsets still come from outside.** That is the shape of the layer: it holds a
+  // weight and takes a displacement field, because the field is produced by another
+  // convolution the caller writes.
+  out.set("ops::DeformConv2d(4, 6, 3, padding=1)", flat(async () => {
+    const layer = fill(new ops.DeformConv2d(4, 6, 3, 1, 1));
+    const g = deform({ seed: 11, batch: 2, inC: 4, outC: 6, kh: 3, kw: 3, h: 6, w: 6,
+                       padding: [1, 1] });
+    return layer.forward(g.input, g.offset);
+  }));
+
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look
   // identical either way**, so a wrong one is a wrong answer with nothing raised — and

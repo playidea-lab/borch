@@ -26,8 +26,11 @@
  * reading the tuple in box order silently clips against the wrong edge.
  */
 
-import { Module, pyNumber } from "./nn.js";
-import { Tensor } from "./tensor.js";
+import {
+  BatchNorm2d, Conv2d, Dropout, Linear, Module, ModuleList, ReLU, Sequential,
+  Sigmoid, pyNumber,
+} from "./nn.js";
+import { keepAlive, Tensor } from "./tensor.js";
 // **The warp kernels borrow three helpers from `vision.ts`** rather than carrying a
 // second copy of the affine formula. They are exported there for this and nothing else.
 import * as vision from "./vision.js";
@@ -2528,6 +2531,37 @@ export class FrozenBatchNorm2d extends Module {
     this.bias = Tensor.zeros([numFeatures]);
     this.runningMean = Tensor.zeros([numFeatures]);
     this.runningVar = Tensor.ones([numFeatures]);
+    // Not parameters, so nobody else holds them past the scope.
+    for (const one of [this.weight, this.bias, this.runningMean, this.runningVar]) {
+      keepAlive(one);
+    }
+  }
+
+  /**
+   * **All four leave as buffers**, which is the whole of what this class is: a batch
+   * norm whose statistics do not move, so that one inside a pre-trained network stops
+   * learning when the network is fine-tuned on batches too small to estimate a mean
+   * from. `weight` and `bias` are buffers too — nothing here trains.
+   *
+   * Listed here rather than registered, for the reason `BatchNormND` gives: a field
+   * named `runningMean` has to leave under the key `running_mean`, and
+   * `registerBuffer` makes the field name the key. Written the other way round, the
+   * field was `running_mean` and the name axis caught it at once — two spellings that
+   * flatten onto one lookup key, where a collision merges two entries and nothing
+   * anywhere mismatches.
+   *
+   * Left out altogether, `namedBuffers` returns nothing, anything writing weights by
+   * name writes nothing, and the layer answers with the identity — a plausible picture
+   * and not this layer's.
+   */
+  override namedBuffers(persistentOnly = false): Record<string, Tensor> {
+    void persistentOnly;
+    return {
+      weight: this.weight,
+      bias: this.bias,
+      running_mean: this.runningMean,
+      running_var: this.runningVar,
+    };
   }
 
   override forward(x: Tensor): Tensor {
@@ -2586,6 +2620,19 @@ export class DeformConv2d {
                         this.padding, this.dilation, mask);
   }
 
+  /** **It reports what it holds even though it is not a `Module`.** Being callable and
+   *  holding weights are two different things, and only the second is what a caller
+   *  loading a checkpoint — or a test writing one — needs from it. */
+  namedParameters(prefix = ""): Record<string, Tensor> {
+    const out: Record<string, Tensor> = { [`${prefix}weight`]: this.weight };
+    if (this.bias !== null) out[`${prefix}bias`] = this.bias;
+    return out;
+  }
+
+  namedBuffers(): Record<string, Tensor> {
+    return {};
+  }
+
   /** **Only what is not the default is printed**, which is torchvision's rule for the
    *  convolutions and not this file's usual one. */
   describe(): string {
@@ -2601,5 +2648,211 @@ export class DeformConv2d {
     if (this.groups !== 1) out += `, groups=${this.groups}`;
     if (this.bias === null) out += ", bias=False";
     return `${out})`;
+  }
+}
+
+/** What builds the convolution. **The last of torch's seats**, and it is what makes
+ *  `Conv3dNormActivation` the same class with one argument changed. */
+export type ConvFactory = (
+  inChannels: number, outChannels: number, kernelSize: number, stride: number,
+  padding: number, dilation: number, groups: number, bias: boolean,
+) => Module;
+
+/**
+ * A convolution, a normalisation and an activation, in that order.
+ *
+ * **`padding = null` means "keep the size"**, computed as `(k − 1) / 2 · dilation`
+ * rather than left at zero — a block built with zero padding shrinks its input by two
+ * per layer, which is a network that trains and a resolution that quietly runs out.
+ *
+ * **`bias = null` means "only when there is no norm"**, because a normalisation
+ * immediately after a convolution subtracts the mean and the bias with it. Leaving it on
+ * costs a parameter per channel that provably does nothing, and a checkpoint written
+ * against torchvision's would carry a tensor this one has no slot for.
+ */
+export class ConvNormActivation extends Sequential {
+  readonly outChannels: number;
+
+  /** **torch's seats, `inplace` included.** Written without it, `bias` sat where torch
+   *  puts `inplace` — and the signature axis says so, which is what it is for. */
+  constructor(inChannels: number, outChannels: number, kernelSize = 3, stride = 1,
+              padding: number | null = null, groups = 1,
+              normLayer: ((width: number) => Module) | null = (w) => new BatchNorm2d(w),
+              activationLayer: (() => Module) | null = () => new ReLU(),
+              dilation = 1, inplace: boolean | null = true,
+              bias: boolean | null = null,
+              convLayer: ConvFactory = (...a) => new Conv2d(...a)) {
+    const pad = padding ?? Math.floor((kernelSize - 1) / 2) * dilation;
+    const withBias = bias ?? normLayer === null;
+    const layers: Module[] = [
+      convLayer(inChannels, outChannels, kernelSize, stride, pad, dilation, groups,
+                withBias),
+    ];
+    if (normLayer !== null) layers.push(normLayer(outChannels));
+    // **`inplace` reaches the activation and nothing else** — it is the activation's
+    // argument, given here because the block builds it. `null` means "do not pass it",
+    // which is not the same as `false`: a layer that takes no such argument is handed
+    // one either way if this forwards it always.
+    if (activationLayer !== null) {
+      const made = activationLayer();
+      layers.push(inplace === null ? made : withInplace(made, inplace));
+    }
+    super(...layers);
+    this.outChannels = outChannels;
+  }
+}
+
+/** `ConvNormActivation` with the convolution fixed to two dimensions. */
+export class Conv2dNormActivation extends ConvNormActivation {}
+
+/**
+ * Squeeze-and-Excitation — **the channels weight themselves.**
+ *
+ * <https://arxiv.org/abs/1709.01507>
+ *
+ * Pool each channel to one number, run two 1×1 convolutions over that, multiply the
+ * input by the result. **The two activations are not the same one**: the inner is a
+ * rectifier and the outer squashes to `(0, 1)`, because the outer's output is a gain.
+ * Using the rectifier for both gives gains unbounded above — the block still trains and
+ * the scale drifts.
+ */
+export class SqueezeExcitation extends Module {
+  readonly fc1: Conv2d;
+  readonly fc2: Conv2d;
+  readonly activation: Module;
+  readonly scaleActivation: Module;
+
+  constructor(inputChannels: number, squeezeChannels: number,
+              activation: () => Module = () => new ReLU(),
+              scaleActivation: () => Module = () => new Sigmoid()) {
+    super();
+    this.fc1 = new Conv2d(inputChannels, squeezeChannels, 1);
+    this.fc2 = new Conv2d(squeezeChannels, inputChannels, 1);
+    this.activation = activation();
+    this.scaleActivation = scaleActivation();
+  }
+
+  override forward(input: Tensor): Tensor {
+    // **`AdaptiveAvgPool2d` is not a name over there**, which is a row in the ledger and
+    // not a missing operation — `adaptivePool` is the same pooling without the class,
+    // and this block holds no parameters in it either way.
+    let scale = input.adaptivePool("avg", 1);
+    scale = this.fc1.forward(scale);
+    scale = this.activation.forward(scale);
+    scale = this.fc2.forward(scale);
+    return this.scaleActivation.forward(scale).mul(input);
+  }
+}
+
+/**
+ * Linear layers with an activation and dropout between them.
+ *
+ * **The last layer gets neither norm nor activation, and still gets dropout.** That
+ * asymmetry is the whole of the class: written with the loop covering every hidden size,
+ * the output passes through a rectifier and can never be negative — a head that trains,
+ * on half the range.
+ */
+export class MLP extends Sequential {
+  constructor(inChannels: number, hiddenChannels: readonly number[],
+              normLayer: ((width: number) => Module) | null = null,
+              activationLayer: () => Module = () => new ReLU(),
+              inplace: boolean | null = null, bias = true, dropout = 0) {
+    const layers: Module[] = [];
+    let width = inChannels;
+    for (const size of hiddenChannels.slice(0, -1)) {
+      layers.push(new Linear(width, size, bias));
+      if (normLayer !== null) layers.push(normLayer(size));
+      const made = activationLayer();
+      layers.push(inplace === null ? made : withInplace(made, inplace));
+      layers.push(new Dropout(dropout));
+      width = size;
+    }
+    const last = hiddenChannels[hiddenChannels.length - 1] ?? width;
+    layers.push(new Linear(width, last, bias));
+    layers.push(new Dropout(dropout));
+    super(...layers);
+  }
+}
+
+/**
+ * A pyramid of feature maps that all carry the same number of channels.
+ *
+ * <https://arxiv.org/abs/1612.03144>
+ *
+ * Each map goes through a 1×1 convolution to a common width, and then **the coarse map
+ * is added into the fine one**, top down, so the fine map gains what only the coarse one
+ * could see.
+ *
+ * - **The maps arrive in increasing depth order**, so the last is the coarsest.
+ *   Reversing them adds the fine into the coarse, which runs and learns the opposite of
+ *   the point.
+ * - **The top-down step resizes to the lateral's own size**, not by a fixed factor of
+ *   two. Feature maps are not always exactly half their neighbour — an odd input makes
+ *   them off by one — and a hard-coded factor gives a shape error on some inputs and a
+ *   silent crop on others.
+ */
+export class FeaturePyramidNetwork extends Module {
+  readonly innerBlocks = new ModuleList();
+  readonly layerBlocks = new ModuleList();
+
+  /** `extraBlocks` sits in torch's seat, **before** the norm. It is a callable that
+   *  appends further levels to the pyramid; there is none here yet, so a real one is
+   *  refused rather than stored and skipped. */
+  constructor(inChannelsList: readonly number[], outChannels: number,
+              extraBlocks: unknown = null,
+              normLayer: ((width: number) => Module) | null = null) {
+    super();
+    if (extraBlocks !== null && extraBlocks !== undefined) {
+      throw new Error(
+        "FeaturePyramidNetwork(extra_blocks=…) is not carried across yet. The argument "
+        + "is here so that it cannot take another one's place.");
+    }
+    for (const inChannels of inChannelsList) {
+      if (inChannels === 0) {
+        throw new Error("in_channels=0 is currently not supported");
+      }
+      this.innerBlocks.append(new Conv2dNormActivation(
+        inChannels, outChannels, 1, 1, 0, 1, normLayer, null));
+      this.layerBlocks.append(new Conv2dNormActivation(
+        outChannels, outChannels, 3, 1, null, 1, normLayer, null));
+    }
+  }
+
+  /** Takes and gives back **a named, ordered set of maps** — a detector reads them by
+   *  name, and the order is what decides which is the coarsest. */
+  forwardMaps(x: Map<string, Tensor>): Map<string, Tensor> {
+    const names = [...x.keys()];
+    const maps = [...x.values()];
+    const inner = (i: number): Module => this.innerBlocks.at(i) as Module;
+    const layer = (i: number): Module => this.layerBlocks.at(i) as Module;
+    let last = inner(maps.length - 1).forward(maps[maps.length - 1] as Tensor);
+    const results = [layer(maps.length - 1).forward(last)];
+    for (let i = maps.length - 2; i >= 0; i--) {
+      const lateral = inner(i).forward(maps[i] as Tensor);
+      const size = lateral.shape.slice(-2);
+      last = lateral.add(last.interpolate(size, null, "nearest"));
+      results.unshift(layer(i).forward(last));
+    }
+    const out = new Map<string, Tensor>();
+    names.forEach((name, i) => out.set(name, results[i] as Tensor));
+    return out;
+  }
+
+  override forward(x: Tensor): Tensor {
+    void x;
+    throw new Error(
+      "FeaturePyramidNetwork takes a named set of maps — use forwardMaps.");
+  }
+}
+
+/** An activation built with `inplace` where the layer takes it, and as it came where it
+ *  does not. `ReLU` and its family take one; `Sigmoid` and `GELU` do not, and handing
+ *  them a surplus argument is discarded in silence rather than refused. */
+function withInplace(made: Module, inplace: boolean): Module {
+  const kind = made.constructor as new (inplace?: boolean) => Module;
+  try {
+    return new kind(inplace);
+  } catch {
+    return made;
   }
 }

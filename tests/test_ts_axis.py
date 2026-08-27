@@ -347,11 +347,16 @@ FROZEN = {
     # other two hold weights whose values their reprs never read, so the name and the
     # printing cross before the values do.
     #
-    # The five left are the blocks: `ConvNormActivation`, `Conv2dNormActivation`, `MLP`,
-    # `SqueezeExcitation` and `FeaturePyramidNetwork`. Carrying them means a way to
-    # write parameters by name — the same thing the `ops::` row in
-    # `borch-ts/test/run.py` waits for.
-    "ops": 5,
+    # **5 → 0, and this row is the last of `ops` to close.** The five blocks are on that
+    # side now, and the thing that carried them is nine lines: walk
+    # `namedParameters()` and `namedBuffers()`, write a ramp into each in sorted name
+    # order. That is what the `ops::` case ledger meant by *a harness for writing
+    # parameters by name*, and it was the last of four different reasons standing under
+    # one sentence.
+    #
+    # Zero is not a promise that the row stays gone: the core can grow a name, and the
+    # message above says so. It is left here at zero rather than deleted for that.
+    "ops": 0,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     #
