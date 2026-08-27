@@ -225,6 +225,96 @@ def test_the_layers_and_optimisers_take_the_keyword_torch_takes():
                       for name, clash in rows))
 
 
+def _vision_rows():
+    """Divergences in `borchvision`, with the re-export ones filtered by their cause."""
+    torchvision = pytest.importorskip("torchvision")
+    import torchvision.ops
+    import torchvision.transforms
+    import torchvision.transforms.functional
+    import torchvision.transforms.v2
+    import torchvision.transforms.v2.functional
+
+    import borchvision as bv
+
+    spaces = [
+        ("transforms.functional", torchvision.transforms.functional, bv),
+        ("ops", torchvision.ops, getattr(bv, "ops", None)),
+        ("transforms", torchvision.transforms, bv),
+        ("v2", torchvision.transforms.v2, getattr(bv, "v2", None)),
+        ("v2.functional", torchvision.transforms.v2.functional,
+         getattr(getattr(bv, "v2", None), "functional", None)),
+    ]
+    # Every callable borchvision offers at its top level — the v1 surface. `v2` reaches
+    # into this set rather than copying it, and that is the whole of the exemption
+    # below.
+    _v1_objects = {id(getattr(bv, n)) for n in dir(bv)
+                   if not n.startswith("_") and callable(getattr(bv, n, None))}
+    rows = []
+    for label, theirs_ns, ours_ns in spaces:
+        if ours_ns is None:
+            continue
+        for name in sorted(dir(ours_ns)):
+            if name.startswith("_"):
+                continue
+            ours, theirs = getattr(ours_ns, name, None), getattr(theirs_ns, name, None)
+            if theirs is None or not callable(ours) or not callable(theirs):
+                continue
+            mine, want = _plain(ours), _plain(theirs)
+            if not mine or not want:
+                continue
+            clash = [(a, b) for a, b in zip(mine, want) if a != b]
+            if not clash:
+                continue
+            # **The re-export exemption, written as its cause rather than as a list.**
+            # `borchvision` binds one object into `v1`, `v2` and `v2`'s `_image`
+            # kernel; torchvision writes three. Where the object we are looking at is
+            # one of v1's, its first parameter cannot also be v2's — so that seat is
+            # exempt, and only that seat. Everything after it still has to agree.
+            #
+            # Matched **by object**, not by name. Checking `getattr(bv, name)` was
+            # tried and left nineteen rows standing, because v2 renamed several of
+            # them: `horizontal_flip` is v1's `hflip`, `get_size` is `get_image_size`.
+            # The shared object is the fact; the shared name is not.
+            if id(ours) in _v1_objects and len(clash) == 1 and clash[0][0] == mine[0]:
+                continue
+            rows.append((f"{label}.{name}", clash))
+    return rows
+
+
+def test_borchvision_takes_the_keyword_torchvision_takes():
+    """The same question again, of `borchvision` against `torchvision`.
+
+    Four of its five namespaces are clean across 149 names. The fifth,
+    `v2.functional`, has 78 rows and **all of them are one decision**: torchvision
+    names the same first argument three ways —
+
+        transforms.functional.adjust_brightness(img, ...)
+        v2.functional.adjust_brightness(inpt, ...)
+        v2.functional.adjust_brightness_image(image, ...)
+
+    — and writes three separate objects to hold them (`tvF.adjust_brightness is not
+    tv2F.adjust_brightness`). `borchvision` binds **one** object into all three, which
+    is deliberate and is on the vision page: v2 is "re-exported, not copied", so the
+    arithmetic is not written twice.
+
+    One object cannot carry three parameter names. Renaming its seat to satisfy v2
+    was tried and it broke v1 and the kernels — 43 rows closed and 68 opened, measured
+    rather than predicted. So the first seat of a re-exported name is exempt, and the
+    exemption is expressed as *the object being the v1 one* rather than as a list of
+    78 names: a list goes stale as names are added, and this cannot.
+
+    **The seats after the first are not exempt**, which is what makes this worth
+    running: `resize_mask` had `max_size` where torchvision has `interpolation`, and
+    that is a shift rather than a name — `resize_mask(m, size, 100)` meant two
+    different things and neither call raised.
+    """
+    rows = _vision_rows()
+    assert not rows, (
+        "borchvision names an argument something torchvision will not accept:\n  "
+        + "\n  ".join(f"{name}: " + ", ".join(f"{a} -> {b}" for a, b in clash)
+                      for name, clash in rows))
+
+
 def test_the_core_takes_the_keyword_torch_takes():
     """Every argument seat the core and torch both have carries torch's name.
 
