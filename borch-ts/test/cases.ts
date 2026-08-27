@@ -7668,7 +7668,10 @@ function addLinalgStruct(out: Map<string, Case>): void {
     // ── Rectangles ────────────────────────────────────────────────────
     ["rect::qr/R", async () => (await rect().qr()).r],
     ["rect::qr/|Q|", async () => (await rect().qr()).q.abs()],
-    ["rect::qr(complete)/|Q|", async () => (await rect().qr("complete")).q.abs()],
+    // `qr(false)` is `some=False`, which is `linalg.qr(mode="complete")` — the Python
+    // side of this case asks through that other door. Two spellings, one answer, and
+    // the golden holds the answer, so it is the place that would catch them parting.
+    ["rect::qr(complete)/|Q|", async () => (await rect().qr(false)).q.abs()],
     ["rect::svd/S", async () => (await rect().linalgSvd()).s],
     ["rect::svd/|U|", async () => (await rect().linalgSvd()).u.abs()],
     ["rect::svd(축소)/|U|", async () => (await rect().linalgSvd(false)).u.abs()],

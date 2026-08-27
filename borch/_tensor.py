@@ -1675,14 +1675,14 @@ def _is_same_size(self, other):
     return tuple(self.data.shape) == tuple(_np.asarray(other.data).shape)
 
 
-def _fill_diagonal_(self, value, wrap=False):
+def _fill_diagonal_(self, fill_value, wrap=False):
     """Fill the diagonal. `wrap` **wraps the diagonal around** on a tall
     matrix."""
     if self.requires_grad and _grad_mode.enabled:
         raise RuntimeError(_like_torch(
             "`fill_diagonal_` cannot be used on a leaf tensor that requires grad.",
             "a leaf Variable that requires grad is being used in an in-place operation"))
-    _np.fill_diagonal(self._array, value, wrap=wrap)
+    _np.fill_diagonal(self._array, fill_value, wrap=wrap)
     return self
 
 
@@ -2263,7 +2263,7 @@ for _n in ("pin_memory", "record_stream"):
 del _n
 
 
-def _is_set_to(self, other):
+def _is_set_to(self, tensor):
     """**Do two tensors point at the same storage.** The shape, the strides and
     the starting offset all have to match.
 
@@ -2271,9 +2271,9 @@ def _is_set_to(self, other):
     predicate is also **the name that asks** whether `tensor()` takes a copy and
     whether `from_numpy` shares.
     """
-    if not isinstance(other, Tensor):
+    if not isinstance(tensor, Tensor):
         return False
-    mine, theirs = self.data, other.data
+    mine, theirs = self.data, tensor.data
     return bool(
         mine.__array_interface__["data"][0] == theirs.__array_interface__["data"][0]
         and mine.shape == theirs.shape and mine.strides == theirs.strides)

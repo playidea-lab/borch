@@ -1109,7 +1109,7 @@
       },
       {
        "name": "unfold",
-       "signature": "unfold(dim: number, size: number, step: number): Tensor",
+       "signature": "unfold(dimension: number, size: number, step: number): Tensor",
        "doc": "A sliding window. With a step smaller than the window, the windows\noverlap.\n\n**Overlaps accumulate in the backward** — spreading a length of 5 with\n`unfold(0, 3, 1)` gives a gradient of `[1,2,3,2,1]`. Without the\naddition they would all be 1, and a value check alone does not catch\nit.",
        "section": {
         "ko": "Shape",
@@ -1152,7 +1152,7 @@
       },
       {
        "name": "hsplit",
-       "signature": "hsplit(parts: number): Tensor[]",
+       "signature": "hsplit(sections: number): Tensor[]",
        "doc": "",
        "section": {
         "ko": "Shape",
@@ -1161,7 +1161,7 @@
       },
       {
        "name": "vsplit",
-       "signature": "vsplit(parts: number): Tensor[]",
+       "signature": "vsplit(sections: number): Tensor[]",
        "doc": "",
        "section": {
         "ko": "Shape",
@@ -2786,7 +2786,7 @@
       },
       {
        "name": "qr",
-       "signature": "qr(mode?: \"reduced\" | \"complete\"): Promise<{ q: Tensor; r: Tensor; }>",
+       "signature": "qr(some?: boolean): Promise<{ q: Tensor; r: Tensor; }>",
        "doc": "QR factorisation. **`reduced` has a gradient.**\n\n    N = Qᵀ·Q̄ − R̄·Rᵀ\n    Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ\n\nKeeping only the lower triangle is the whole of this derivation —\ndifferentiating `QᵀQ = I` makes `Qᵀ·dQ` antisymmetric, and the upper\nhalf is the lower half's mirror, so there is nothing separate to count.\n\n`complete` has leftover columns in `Q` and a different derivation. That\nside returns values only.",
        "section": {
         "ko": "Linear algebra",
@@ -3080,7 +3080,7 @@
       },
       {
        "name": "choleskySolve",
-       "signature": "choleskySolve(factor: Tensor, upper?: boolean): Promise<Tensor>",
+       "signature": "choleskySolve(input2: Tensor, upper?: boolean): Promise<Tensor>",
        "doc": "Solves `A x = b` **from the Cholesky factor.** `A = L Lᵀ` (or `Uᵀ U`).\n\nIt rebuilds `A` and sends it to `solve`. Two triangular substitutions\nwould be cheaper, but written that way the backward has to be\nhand-written and **the gradient towards the factor goes missing\nquietly.**",
        "torch": "cholesky_solve",
        "section": {
@@ -3124,7 +3124,7 @@
       },
       {
        "name": "luSolve",
-       "signature": "luSolve(luData: Tensor, pivots: Tensor): Promise<Tensor>",
+       "signature": "luSolve(luData: Tensor, luPivots: Tensor): Promise<Tensor>",
        "doc": "`torch.Tensor.lu_solve` — **the receiver is the right-hand side `b`.**\n\ntorch has `b.lu_solve(LU, piv)`, so it is the same here. The side that\ntakes the factorisation as receiver is `luSolveFactored`, which is\n`linalg.lu_solve`'s argument order.",
        "torch": "lu_solve",
        "section": {
@@ -3157,7 +3157,7 @@
       },
       {
        "name": "orgqr",
-       "signature": "orgqr(tau: Tensor): Promise<Tensor>",
+       "signature": "orgqr(input2: Tensor): Promise<Tensor>",
        "doc": "Another name for `householderProduct`. torch offers both.",
        "section": {
         "ko": "Linear algebra at the top level",
@@ -3167,7 +3167,7 @@
       },
       {
        "name": "ormqr",
-       "signature": "ormqr(tau: Tensor, other: Tensor, left?: boolean, transpose?: boolean): Promise<Tensor>",
+       "signature": "ormqr(input2: Tensor, input3: Tensor, left?: boolean, transpose?: boolean): Promise<Tensor>",
        "doc": "Multiplies into `C` **without standing Q up** — here it stands it up\nand multiplies. The value is the same and nothing is saved at this\nsize.\n\n**It is a different Q from `orgqr`'s.** That one gives a Q **cut** to\n`m×k`, while this uses the uncut `m×m` — the reflectors are maps on\n`Rᵐ`, and cutting multiplies by only part of that map. The answer\ndiverges entirely on a tall matrix (measured). Measured on squares\nalone, the two are the same and nothing shows.",
        "section": {
         "ko": "Linear algebra at the top level",
@@ -3500,7 +3500,7 @@
       },
       {
        "name": "dsplit",
-       "signature": "dsplit(parts: number): Tensor[]",
+       "signature": "dsplit(sections: number): Tensor[]",
        "doc": "Split along **axis 2**. `torch.Tensor.dsplit`.",
        "section": {
         "ko": "In-place operations",
@@ -5145,7 +5145,7 @@
       },
       {
        "name": "fillDiagonal_",
-       "signature": "fillDiagonal_(value: number, wrap?: boolean): Tensor",
+       "signature": "fillDiagonal_(fillValue: number, wrap?: boolean): Tensor",
        "doc": "The diagonal to one value.\n\n**`wrap` only means something on a tall matrix.** The stride is `cols +\n1` either way, and all that differs is **where it stops** — off, it\nstops at `cols²` slots and paints only the first block's diagonal; on,\nit runs to the end and paints the lower blocks' diagonals too. numpy's\n`fill_diagonal` is exactly that one line and torch takes it as-is.\n\nIt was first written down as \"the wrapped position skips a row\", and\ncoded that way — no such rule exists. There was one case and it asked\nwith a square, so that branch was **passing through nothing** — a case\nasking with a tall matrix goes in alongside.",
        "torch": "fill_diagonal_",
        "section": {

@@ -435,6 +435,23 @@ RENAMES = {
     # It is here rather than fixed because there is nothing to fix: the two rows were
     # a fact about Python's grammar being read as a divergence between two libraries.
     "from_": "from",             # `uniform_` and `random_`
+    # **The fold cannot lower an acronym.** torch spells these `LU_data` and
+    # `LU_pivots`; `_camel` capitalises after each underscore and leaves what is
+    # already capital alone, so they come out `LUData`/`LUPivots`, and `_fold_initial`
+    # lowers one letter to `lUData`. borch.ts writes `luData`/`luPivots`, which is what
+    # anybody writing camelCase from `LU_data` writes.
+    #
+    # So the two rows were a weakness in the fold being read as a divergence between
+    # two libraries — the same shape as `from_` above. Fixing `_camel` to lower a
+    # leading run of capitals would be the deeper repair and it is global: it would
+    # also rewrite `T_max`, `T_0` and `T_mult`, which `_fold_initial` already handles
+    # its own way. Two mechanisms for one job is how the last set of folds here went
+    # wrong.
+    #
+    # Narrow because it can be: `LU_data` and `LU_pivots` are on `lu_solve` and
+    # nowhere else in torch.
+    "LU_data": "lu_data",        # `lu_solve`, the method form
+    "LU_pivots": "lu_pivots",
 }
 
 
