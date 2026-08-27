@@ -322,7 +322,41 @@ FROZEN = {
     # numbers, as the rest of `ops.ts` is, so the values cross and the gradient does
     # not. The four module classes that wrap them are still on this side alone, which is
     # what keeps the number at twenty rather than sixteen.
-    "ops": 20,
+    #
+    # 20 → 16. `deformConv2d`, `stochasticDepth`, `dropBlock2d` and `dropBlock3d`. The
+    # first is the sampler this row named as the piece to carry, and it is a different
+    # rule from `roiAlign`'s rather than the same one with other bounds: it keeps the
+    # coordinate and drops each of the four corners on its own, where the other clamps
+    # to the edge and reads four real neighbours.
+    #
+    # 16 → 8. Eleven layer classes, and none of them holds a weight: the four RoI
+    # wrappers, `Permute`, the two `DropBlock`s and `StochasticDepth`. *They hold
+    # parameters* was true of the eight that remain and had been standing for all
+    # sixteen — the second time this row's one sentence covered more names than it
+    # described.
+    #
+    # **Four of them do not extend `Module`, and that is deliberate.** Everything here
+    # that reads a feature map reads it back into JavaScript numbers first, so its
+    # answer is a promise, while `Module.forward` hands back a tensor. A class saying
+    # `extends Module` that cannot be called like one is worse than a plain class that
+    # says what it is — and torchvision's own `RoIAlign` cannot go into a `Sequential`
+    # either, taking two arguments.
+    #
+    # 8 → 5. `MultiScaleRoIAlign`, `FrozenBatchNorm2d` and `DeformConv2d`. The first
+    # holds no weight at all — it picks a level per box and calls `roiAlign` — and the
+    # other two hold weights whose values their reprs never read, so the name and the
+    # printing cross before the values do.
+    #
+    # **5 → 0, and this row is the last of `ops` to close.** The five blocks are on that
+    # side now, and the thing that carried them is nine lines: walk
+    # `namedParameters()` and `namedBuffers()`, write a ramp into each in sorted name
+    # order. That is what the `ops::` case ledger meant by *a harness for writing
+    # parameters by name*, and it was the last of four different reasons standing under
+    # one sentence.
+    #
+    # Zero is not a promise that the row stays gone: the core can grow a name, and the
+    # message above says so. It is left here at zero rather than deleted for that.
+    "ops": 0,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     #

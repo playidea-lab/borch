@@ -882,7 +882,7 @@ function describeSize(value: number | readonly number[]): string {
  * in this file prints `eps=1e-05`, so without this they all read as *nearly* right —
  * the same number, spelled the way the other language spells it.
  */
-function pyNumber(value: number): string {
+export function pyNumber(value: number): string {
   if (value !== 0 && Math.abs(value) < 1e-4) {
     const [mantissa = "0", exponent = "0"] = value.toExponential().split("e");
     const sign = exponent.startsWith("-") ? "-" : "+";

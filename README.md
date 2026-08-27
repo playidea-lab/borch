@@ -727,7 +727,7 @@ random, so it cannot be measured".
 
 It does not go through Python. **It does not go through TF.js either** — the
 kernels are written directly in WGSL. **Zero** runtime dependencies, and it is
-an ES module a browser simply reads (351KB gzipped, 1282KB before compression).
+an ES module a browser simply reads (371KB gzipped, 1356KB before compression).
 
 ```bash
 npm install borch-ts
@@ -803,8 +803,8 @@ The core covers 3687 cases, and the 53 *it* does not see are this side's alone
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 3248 cases. **The remaining 492 are two
-things**: 453 deliberately not carried across, and 39 owed. The binding
+borch.ts itself has written TS bodies for 3287 cases. **The remaining 453 are two
+things**: 453 deliberately not carried across, and 0 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the declined ask about a Python

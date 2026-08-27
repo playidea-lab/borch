@@ -26,7 +26,11 @@
  * reading the tuple in box order silently clips against the wrong edge.
  */
 
-import { Tensor } from "./tensor.js";
+import {
+  BatchNorm2d, Conv2d, Dropout, Linear, Module, ModuleList, ReLU, Sequential,
+  Sigmoid, pyNumber,
+} from "./nn.js";
+import { keepAlive, Tensor } from "./tensor.js";
 // **The warp kernels borrow three helpers from `vision.ts`** rather than carrying a
 // second copy of the affine formula. They are exported there for this and nothing else.
 import * as vision from "./vision.js";
@@ -1934,4 +1938,921 @@ export async function elasticBoundingBoxes(
   const [height, width] = canvasOf(canvasSize, "elasticBoundingBoxes");
   return warpBoxes(boundingBoxes, format, [height, width],
     elasticMove(displacement, fieldHeight, fieldWidth, width, height));
+}
+
+/**
+ * A convolution whose sampling positions are **learned.**
+ *
+ * <https://arxiv.org/abs/1703.06211> — and v2, with `mask`,
+ * <https://arxiv.org/abs/1811.11168>
+ *
+ * **Its sampling is not `sampleAt`'s rule with different bounds — it is a different
+ * rule.** That one clamps the coordinate to the edge and reads four real neighbours;
+ * this one keeps the coordinate and **drops each of the four corners separately** when
+ * that corner is off the map. At `y = -0.5` the two disagree completely: clamped, the
+ * sample is read at rows 0 and 1; here the row above does not exist, contributes
+ * nothing, and the row below carries half its weight.
+ *
+ * Written with a clamp it is right in the middle of the map and wrong along every
+ * border — which is exactly where a deformable convolution spends its offsets.
+ *
+ * **Two group counts, and they are allowed to differ.** The weight's second axis
+ * against the input's channels gives the weight groups; the offset's channel count
+ * against `2 * kh * kw` gives the offset groups, and one offset field can steer several
+ * groups of filters.
+ *
+ * **The kernel's own dilation is applied before the offset**, so a displacement of zero
+ * leaves an ordinary dilated convolution. Added afterwards the offsets would mean
+ * something different at every dilation.
+ */
+export async function deformConv2d(
+  input: Tensor,
+  offset: Tensor,
+  weight: Tensor,
+  bias: Tensor | null = null,
+  stride: number | readonly number[] = 1,
+  padding: number | readonly number[] = 0,
+  dilation: number | readonly number[] = 1,
+  mask: Tensor | null = null,
+): Promise<Tensor> {
+  const [strideH, strideW] = pairOfSizes(stride);
+  const [padH, padW] = pairOfSizes(padding);
+  const [dilH, dilW] = pairOfSizes(dilation);
+  const f = await featureOf(input, "deformConv2d");
+  const off = await featureOf(offset, "deformConv2d");
+  const wShape = weight.shape as number[];
+  const w = Array.from(await weight.toArray());
+  const outChannels = wShape[0] ?? 0;
+  const groupChannels = wShape[1] ?? 0;
+  const kernelH = wShape[2] ?? 0;
+  const kernelW = wShape[3] ?? 0;
+  const offsetGroups = Math.floor(off.channels / (2 * kernelH * kernelW));
+  if (offsetGroups === 0) {
+    throw new Error(
+      "the shape of the offset tensor at dimension 1 is not valid. It should be a "
+      + "multiple of 2 * weight.size[2] * weight.size[3].\n"
+      + `Got offset.shape[1]=${off.channels}, while 2 * weight.size[2] * `
+      + `weight.size[3]=${2 * kernelH * kernelW}`);
+  }
+  const weightGroups = groupChannels === 0 ? 1 : Math.floor(f.channels / groupChannels);
+  const outH = Math.floor(
+    (f.height + 2 * padH - (dilH * (kernelH - 1) + 1)) / strideH) + 1;
+  const outW = Math.floor(
+    (f.width + 2 * padW - (dilW * (kernelW - 1) + 1)) / strideW) + 1;
+
+  const m = mask === null ? null : await featureOf(mask, "deformConv2d");
+  const b = bias === null ? null : Array.from(await bias.toArray());
+  const perOffsetGroup = Math.floor(f.channels / offsetGroups);
+  const perOut = Math.floor(outChannels / weightGroups);
+  const out = new Array<number>(f.batch * outChannels * outH * outW).fill(0);
+
+  for (let n = 0; n < f.batch; n++) {
+    for (let i = 0; i < outH; i++) {
+      for (let j = 0; j < outW; j++) {
+        for (let p = 0; p < kernelH; p++) {
+          for (let q = 0; q < kernelW; q++) {
+            const which = p * kernelW + q;
+            for (let g = 0; g < offsetGroups; g++) {
+              const start = (g * kernelH * kernelW + which) * 2;
+              const at = (ch: number): number =>
+                off.values[((n * off.channels + ch) * off.height + i) * off.width + j]
+                ?? 0;
+              const y = i * strideH - padH + p * dilH + at(start);
+              const x = j * strideW - padW + q * dilW + at(start + 1);
+              const gain = m === null ? 1
+                : m.values[((n * m.channels + g * kernelH * kernelW + which)
+                            * m.height + i) * m.width + j] ?? 0;
+              for (let k = 0; k < perOffsetGroup; k++) {
+                const cin = g * perOffsetGroup + k;
+                const taken = deformSample(f, n, cin, y, x) * gain;
+                if (taken === 0) continue;
+                // **The weight groups fold here**, not in the sampling: filter `co`
+                // sees only its own group's channels. Letting every filter see every
+                // channel gives the right shape from `weightGroups` times as many terms.
+                const wg = groupChannels === 0 ? 0 : Math.floor(cin / groupChannels);
+                const inGroup = cin - wg * groupChannels;
+                for (let o = 0; o < perOut; o++) {
+                  const co = wg * perOut + o;
+                  const tap = w[((co * groupChannels + inGroup) * kernelH + p)
+                                * kernelW + q] ?? 0;
+                  const seat = ((n * outChannels + co) * outH + i) * outW + j;
+                  out[seat] = (out[seat] ?? 0) + taken * tap;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  if (b !== null) {
+    for (let n = 0; n < f.batch; n++) {
+      for (let c = 0; c < outChannels; c++) {
+        const add = b[c] ?? 0;
+        for (let k = 0; k < outH * outW; k++) {
+          out[(n * outChannels + c) * outH * outW + k] =
+            (out[(n * outChannels + c) * outH * outW + k] ?? 0) + add;
+        }
+      }
+    }
+  }
+  return Tensor.from(out, [f.batch, outChannels, outH, outW]);
+}
+
+/**
+ * One value at a fractional `(y, x)`, **zero outside the map** — and each of the four
+ * corners dropped on its own when that corner is off it.
+ *
+ * The outer guard is the compiled kernel's own: a coordinate at or past the edge by a
+ * whole pixel contributes nothing at all, whichever corners would have been valid.
+ */
+function deformSample(f: Feature, image: number, channel: number,
+                      y: number, x: number): number {
+  if (y <= -1 || y >= f.height || x <= -1 || x >= f.width) return 0;
+  const yLow = Math.floor(y);
+  const xLow = Math.floor(x);
+  const ly = y - yLow;
+  const lx = x - xLow;
+  const plane = (image * f.channels + channel) * f.height * f.width;
+  const read = (r: number, c: number): number =>
+    (r < 0 || r >= f.height || c < 0 || c >= f.width)
+      ? 0
+      : f.values[plane + r * f.width + c] ?? 0;
+  return (1 - ly) * (1 - lx) * read(yLow, xLow)
+    + (1 - ly) * lx * read(yLow, xLow + 1)
+    + ly * (1 - lx) * read(yLow + 1, xLow)
+    + ly * lx * read(yLow + 1, xLow + 1);
+}
+
+/**
+ * Whole residual branches dropped at random.
+ *
+ * <https://arxiv.org/abs/1603.09382>
+ *
+ * **`mode` decides what a coin is tossed for**: `batch` drops the branch for the whole
+ * batch at once, `row` drops it per example. The two differ only in the shape of the
+ * noise, and getting it wrong gives a network that trains at a different effective
+ * depth — nothing raises and the curve moves.
+ *
+ * **The survivors are divided by the survival rate**, so the expected value is
+ * unchanged and evaluation needs no rescaling. Dropped without it, every layer is
+ * quieter than the next one expects.
+ *
+ * The golden asks the two settings that draw nothing — `training = false` and `p = 0`.
+ * What the coin does has no shared answer to compare against, which is a fact about
+ * the comparison rather than about this function.
+ */
+export function stochasticDepth(
+  input: Tensor, p: number, mode: "batch" | "row", training = true,
+): Tensor {
+  if (p < 0 || p > 1) {
+    throw new Error(`drop probability has to be between 0 and 1, but got ${p}`);
+  }
+  if (mode !== "batch" && mode !== "row") {
+    throw new Error(`mode has to be either 'batch' or 'row', but got ${mode}`);
+  }
+  if (!training || p === 0) return input;
+  const survival = 1 - p;
+  const shape = input.shape.map((d, i) => (mode === "row" && i === 0 ? d : 1));
+  let noise = Tensor.full([...shape], survival).bernoulli();
+  if (survival > 0) noise = noise.binary("div", Tensor.full([], survival));
+  return input.mul(noise);
+}
+
+/**
+ * DropBlock in `spatial` dimensions — **contiguous regions, not single pixels.**
+ *
+ * <https://arxiv.org/abs/1810.12890>
+ *
+ * Dropping pixels one at a time does little to a convolutional map, because the
+ * neighbours carry the same information. So a seed is drawn per position and then
+ * **grown to a block by a max pool**, which is the whole trick: the pool spreads each
+ * surviving one over its window, and one minus that is the mask.
+ *
+ * **The seeds are drawn on a smaller grid than the map.** A block centred at the very
+ * edge would hang off it, so the positions a seed may take are `size - block + 1` per
+ * axis and the field is padded back out with zeros afterwards. Drawn at full size, the
+ * rate is right and the blocks at the border are clipped, which drops less than asked.
+ */
+function dropBlock(
+  input: Tensor, p: number, blockSize: number, inplace: boolean, eps: number,
+  training: boolean, spatial: 2 | 3,
+): Tensor {
+  if (p < 0 || p > 1) {
+    throw new Error(`drop probability has to be between 0 and 1, but got ${p}.`);
+  }
+  if (input.shape.length !== spatial + 2) {
+    throw new Error(`input should be ${spatial + 2} dimensional. Got `
+      + `${input.shape.length} dimensions.`);
+  }
+  if (!training || p === 0) return input;
+  const sizes = input.shape.slice(2);
+  const block = Math.min(blockSize, ...sizes);
+  if (block % 2 === 0) {
+    throw new Error(`block size should be odd. Got ${block} which is even.`);
+  }
+  const seeds = sizes.map((one) => one - block + 1);
+  const total = sizes.reduce((a, b) => a * b, 1);
+  const positions = seeds.reduce((a, b) => a * b, 1);
+  const gamma = (p * total) / (block ** spatial * positions);
+  const drawn = Tensor.full([input.shape[0] ?? 1, input.shape[1] ?? 1, ...seeds], gamma)
+    .bernoulli();
+  // **`pad` here is one axis at a time**, where torch takes the whole list. The spatial
+  // axes are the last `spatial` of them, and the half-block goes on both ends of each.
+  const half = Math.floor(block / 2);
+  let field = drawn;
+  for (let axis = 2; axis < 2 + spatial; axis++) {
+    field = field.pad(axis, half, half, 0);
+  }
+  const grown = field.poolND("max", block, 1);
+  const noise = Tensor.full([], 1).sub(grown);
+  // **The scale is the survivors' share, and `eps` is on the sum rather than after
+  // it.** Divided afterwards, a field that dropped everything gives infinity instead of
+  // a very large number, and the difference shows only in the one case nobody writes.
+  const scale = Tensor.full([], noise.numel()).binary(
+    "div", noise.sum().binary("add", Tensor.full([], eps)));
+  const out = input.mul(noise).binary("mul", scale);
+  return inplace ? input.copyFrom(out) : out;
+}
+
+/** `dropBlock` over height and width.
+ *
+ * **`inplace` sits fourth, where torch puts it.** Written without that seat, `eps` took
+ * it — so `drop_block2d(x, 0.3, 3, 1e-6)` set `inplace` to a number, which is truthy.
+ * The signature axis said so in the run that added this function, which is what that
+ * axis is: a count of positions rather than of names, and it caught the same defect
+ * this file spent the day on an hour after it was written about.
+ */
+export function dropBlock2d(
+  input: Tensor, p: number, blockSize: number, inplace = false, eps = 1e-6,
+  training = true,
+): Tensor {
+  return dropBlock(input, p, blockSize, inplace, eps, training, 2);
+}
+
+/** `dropBlock` over depth, height and width. */
+export function dropBlock3d(
+  input: Tensor, p: number, blockSize: number, inplace = false, eps = 1e-6,
+  training = true,
+): Tensor {
+  return dropBlock(input, p, blockSize, inplace, eps, training, 3);
+}
+
+// ── the ops that are layers ──────────────────────────────────────────────────
+//
+// **These do not extend `Module`, and the reason is the `await`.** `Module.forward`
+// hands back a `Tensor`; everything in this file that reads a feature map reads it back
+// into JavaScript numbers first, so its answer is a promise. A class that said
+// `extends Module` and could not be called like one would be worse than a plain class
+// that says what it is — and torchvision's own `RoIAlign` cannot go into a `Sequential`
+// either, because it takes two arguments.
+//
+// The ones that are pure tensor arithmetic — `Permute`, `StochasticDepth`, the two
+// `DropBlock`s — are synchronous and do extend it.
+
+/** `roiAlign` as a layer. See the function for what the four arguments do. */
+export class RoIAlign {
+  constructor(readonly outputSize: number | readonly number[],
+              readonly spatialScale: number,
+              readonly samplingRatio: number,
+              readonly aligned = false) {}
+
+  forward(input: Tensor, rois: Tensor): Promise<Tensor> {
+    return roiAlign(input, rois, this.outputSize, this.spatialScale,
+                    this.samplingRatio, this.aligned);
+  }
+
+  describe(): string {
+    return `RoIAlign(output_size=${describeSize(this.outputSize)}`
+      + `, spatial_scale=${pyFloat(this.spatialScale)}`
+      + `, sampling_ratio=${this.samplingRatio}`
+      + `, aligned=${this.aligned ? "True" : "False"})`;
+  }
+}
+
+/** `roiPool` as a layer. */
+export class RoIPool {
+  constructor(readonly outputSize: number | readonly number[],
+              readonly spatialScale: number) {}
+
+  forward(input: Tensor, rois: Tensor): Promise<Tensor> {
+    return roiPool(input, rois, this.outputSize, this.spatialScale);
+  }
+
+  describe(): string {
+    return `RoIPool(output_size=${describeSize(this.outputSize)}, `
+      + `spatial_scale=${pyFloat(this.spatialScale)})`;
+  }
+}
+
+/** `psRoiAlign` as a layer. **No `aligned` argument**, and the correction is on
+ *  regardless — see the function. */
+export class PSRoIAlign {
+  /** **The output size is one number here and a pair on the other two.** That is
+   *  torchvision's: the position-sensitive pair takes a single `output_size` because
+   *  its channels are already laid out as `out * ph * pw`, and a rectangle would need
+   *  the channel count to follow. */
+  constructor(readonly outputSize: number,
+              readonly spatialScale: number,
+              readonly samplingRatio: number) {}
+
+  forward(input: Tensor, rois: Tensor): Promise<Tensor> {
+    return psRoiAlign(input, rois, this.outputSize, this.spatialScale,
+                      this.samplingRatio);
+  }
+
+  describe(): string {
+    return `PSRoIAlign(output_size=${describeSize(this.outputSize)}`
+      + `, spatial_scale=${pyFloat(this.spatialScale)}`
+      + `, sampling_ratio=${this.samplingRatio})`;
+  }
+}
+
+/** `psRoiPool` as a layer. */
+export class PSRoIPool {
+  /** **The output size is one number here and a pair on the other two.** That is
+   *  torchvision's: the position-sensitive pair takes a single `output_size` because
+   *  its channels are already laid out as `out * ph * pw`, and a rectangle would need
+   *  the channel count to follow. */
+  constructor(readonly outputSize: number,
+              readonly spatialScale: number) {}
+
+  forward(input: Tensor, rois: Tensor): Promise<Tensor> {
+    return psRoiPool(input, rois, this.outputSize, this.spatialScale);
+  }
+
+  describe(): string {
+    return `PSRoIPool(output_size=${describeSize(this.outputSize)}, `
+      + `spatial_scale=${pyFloat(this.spatialScale)})`;
+  }
+}
+
+/** torchvision prints a size as **the pair it becomes**, so a single number reads
+ *  `(3, 3)` — except on the four RoI layers above, which print it as it was given.
+ *  That difference is torchvision's and it is copied rather than tidied. */
+function describeSize(size: number | readonly number[]): string {
+  return typeof size === "number" ? `${size}` : `(${size.join(", ")})`;
+}
+
+/**
+ * A number as Python writes it, **keeping the point on a whole one.**
+ *
+ * `spatial_scale=1.0` is a float in Python and `${1.0}` is `1` in JavaScript. Every one
+ * of these layers carries a scale, and it is almost always exactly one — so without
+ * this the four reprs read as *nearly* right, the same number spelled the way the other
+ * language spells it. The same trap `pyNumber` was written for, at the other end of the
+ * scale.
+ */
+function pyFloat(value: number): string {
+  return Number.isInteger(value) ? `${value}.0` : pyNumber(value);
+}
+
+/** `permute` as a layer, so it can sit in a `Sequential`. */
+export class Permute extends Module {
+  constructor(private readonly dims: readonly number[]) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.permute([...this.dims]);
+  }
+
+  override describe(): string {
+    return `Permute()`;
+  }
+}
+
+/**
+ * `stochasticDepth` as a layer.
+ *
+ * **The mode prints unquoted** — `mode=row`, not `mode='row'` — which is torchvision's
+ * own repr and not this file's usual rule. It is copied because the string is what is
+ * being matched, and a tidier one would differ from the library.
+ */
+export class StochasticDepth extends Module {
+  constructor(private readonly p: number,
+              private readonly mode: "batch" | "row") {
+    super();
+  }
+
+  override forward(input: Tensor): Tensor {
+    return stochasticDepth(input, this.p, this.mode, this.training);
+  }
+
+  override describe(): string {
+    return `StochasticDepth(p=${pyNumber(this.p)}, mode=${this.mode})`;
+  }
+}
+
+/**
+ * `dropBlock2d` as a layer.
+ *
+ * **The repr does not print `eps`**, which torchvision's does not either — it is a
+ * guard against dividing by zero rather than a setting, and printing it would invite
+ * somebody to tune it.
+ */
+export class DropBlock2d extends Module {
+  constructor(protected readonly p: number,
+              protected readonly blockSize: number,
+              protected readonly inplace = false,
+              protected readonly eps = 1e-6) {
+    super();
+  }
+
+  override forward(input: Tensor): Tensor {
+    return dropBlock2d(input, this.p, this.blockSize, this.inplace, this.eps,
+                       this.training);
+  }
+
+  /** **The class's own name, not the literal** — `DropBlock3d` inherits this line. */
+  override describe(): string {
+    return `${this.constructor.name}(p=${pyNumber(this.p)}, `
+      + `block_size=${this.blockSize}, inplace=${this.inplace ? "True" : "False"})`;
+  }
+}
+
+/** As `DropBlock2d`, over three spatial axes. */
+export class DropBlock3d extends DropBlock2d {
+  override forward(input: Tensor): Tensor {
+    return dropBlock3d(input, this.p, this.blockSize, this.inplace, this.eps,
+                       this.training);
+  }
+}
+
+/**
+ * `roiAlign` over a pyramid, **choosing a level per box by its size.**
+ *
+ * <https://arxiv.org/abs/1612.03144> — equation 1.
+ *
+ * A small box wants the fine map and a large one wants the coarse: a 224-pixel box goes
+ * to level 4 and the level moves by one for every doubling of the box's side.
+ * `canonicalScale` and `canonicalLevel` are those two numbers.
+ *
+ * **The scales are inferred once, from the first call**, and then cached — so a second
+ * call with differently sized images reuses the first call's answer. That is
+ * torchvision's behaviour, cache and all, and it is copied rather than fixed: a
+ * detector calls this with one image size.
+ *
+ * **The boxes are in image coordinates, not map coordinates**, which is what the scale
+ * is for and what makes the level choice possible at all.
+ */
+export class MultiScaleRoIAlign {
+  readonly outputSize: readonly [number, number];
+  private scales: number[] | null = null;
+  private kMin = 0;
+  private kMax = 0;
+
+  /** **Added inside the floor, not outside.** A box of exactly the canonical size lands
+   *  on an integer, and floating point puts it a hair below as often as above — so
+   *  without this the same box goes to two different levels on two runs. */
+  private static readonly LEVEL_EPS = 1e-6;
+
+  constructor(readonly featmapNames: readonly string[],
+              outputSize: number | readonly number[],
+              readonly samplingRatio: number,
+              readonly canonicalScale = 224,
+              readonly canonicalLevel = 4) {
+    this.outputSize = typeof outputSize === "number"
+      ? [outputSize, outputSize]
+      : [outputSize[0] ?? 0, outputSize[1] ?? outputSize[0] ?? 0];
+  }
+
+  async forward(x: Map<string, Tensor>, boxes: Tensor[],
+                imageShapes: readonly (readonly [number, number])[]): Promise<Tensor> {
+    const maps: Tensor[] = [];
+    for (const [name, value] of x) {
+      if (this.featmapNames.includes(name)) maps.push(value);
+    }
+    if (this.scales === null) {
+      if (imageShapes.length === 0) {
+        throw new Error("images list should not be empty");
+      }
+      const widest = Math.max(...imageShapes.map((s) => s[0]));
+      const tallest = Math.max(...imageShapes.map((s) => s[1]));
+      this.scales = maps.map((one) => inferScale(one, [widest, tallest]));
+      this.kMin = Math.trunc(-Math.log2(this.scales[0] ?? 1));
+      this.kMax = Math.trunc(-Math.log2(this.scales[this.scales.length - 1] ?? 1));
+    }
+    const rois = roiBoxes(boxes);
+    if (maps.length === 1) {
+      return roiAlign(maps[0] as Tensor, rois, this.outputSize,
+                      this.scales[0] ?? 1, this.samplingRatio);
+    }
+    const levels = await this.levels(boxes);
+    const pieces: Tensor[] = [];
+    for (let i = 0; i < levels.length; i++) {
+      const level = levels[i] ?? 0;
+      const one = await roiAlign(maps[level] as Tensor,
+                                 rois.narrow(0, i, 1), this.outputSize,
+                                 this.scales[level] ?? 1, this.samplingRatio);
+      pieces.push(one.reshape([-1]));
+    }
+    const channels = (maps[0] as Tensor).shape[1] ?? 0;
+    const tail = [channels, this.outputSize[0], this.outputSize[1]];
+    if (pieces.length === 0) return Tensor.zeros([0, ...tail]);
+    return Tensor.cat(pieces, 0).reshape([pieces.length, ...tail]);
+  }
+
+  /** Equation 1: `floor(lvl0 + log2(√area / s0))`, clamped. */
+  private async levels(boxes: Tensor[]): Promise<number[]> {
+    const out: number[] = [];
+    for (const group of boxes) {
+      const rows = Array.from(await group.toArray());
+      const width = group.shape[1] ?? 4;
+      for (let i = 0; i < rows.length; i += width) {
+        const x1 = rows[i] ?? 0;
+        const y1 = rows[i + 1] ?? 0;
+        const x2 = rows[i + 2] ?? 0;
+        const y2 = rows[i + 3] ?? 0;
+        const side = Math.sqrt(Math.max(x2 - x1, 0) * Math.max(y2 - y1, 0));
+        const raw = Math.floor(
+          this.canonicalLevel + Math.log2(side / this.canonicalScale)
+          + MultiScaleRoIAlign.LEVEL_EPS);
+        out.push(Math.min(Math.max(raw, this.kMin), this.kMax) - this.kMin);
+      }
+    }
+    return out;
+  }
+
+  describe(): string {
+    const names = this.featmapNames.map((n) => `'${n}'`).join(", ");
+    return `MultiScaleRoIAlign(featmap_names=[${names}], `
+      + `output_size=(${this.outputSize[0]}, ${this.outputSize[1]}), `
+      + `sampling_ratio=${this.samplingRatio})`;
+  }
+}
+
+/**
+ * A map's scale as a **power of two**, read off its size against the image's.
+ *
+ * Rounded in log space rather than taken as the ratio: an 800×800 image gives a 50×50
+ * map at stride 16, and 50/800 is exactly 1/16 — but 801 gives 51, and 51/801 is not a
+ * power of two at all. Rounding the exponent is what makes both answer 1/16.
+ */
+function inferScale(feature: Tensor, original: readonly [number, number]): number {
+  const size = feature.shape.slice(-2);
+  return 2 ** Math.round(Math.log2((size[0] ?? 1) / original[0]));
+}
+
+/** The boxes as one `(K, 5)` table with the image index in front, which is what
+ *  `roiAlign` reads. A detector hands one list per image. */
+function roiBoxes(groups: readonly Tensor[]): Tensor {
+  const rows: Tensor[] = [];
+  for (let image = 0; image < groups.length; image++) {
+    const group = groups[image] as Tensor;
+    const count = group.shape[0] ?? 0;
+    if (count === 0) continue;
+    rows.push(Tensor.cat([Tensor.full([count, 1], image), group], 1));
+  }
+  return rows.length === 0 ? Tensor.zeros([0, 5]) : Tensor.cat(rows, 0);
+}
+
+/**
+ * Batch norm with the statistics fixed — **an affine transform wearing four buffers.**
+ *
+ * All four are buffers rather than parameters, and that is the point: this exists so a
+ * batch norm inside a pre-trained network stops moving when the network is fine-tuned on
+ * batches too small to estimate a mean from. `weight` and `bias` are buffers too, so
+ * nothing here trains.
+ *
+ * **Epsilon is added before the reciprocal square root**, not after. The other order
+ * divides by something arbitrarily small on variances near zero, and what comes back is
+ * finite, enormous, and shaped exactly like an activation.
+ */
+export class FrozenBatchNorm2d extends Module {
+  readonly weight: Tensor;
+  readonly bias: Tensor;
+  readonly runningMean: Tensor;
+  readonly runningVar: Tensor;
+
+  constructor(private readonly numFeatures: number, private readonly eps = 1e-5) {
+    super();
+    this.weight = Tensor.ones([numFeatures]);
+    this.bias = Tensor.zeros([numFeatures]);
+    this.runningMean = Tensor.zeros([numFeatures]);
+    this.runningVar = Tensor.ones([numFeatures]);
+    // Not parameters, so nobody else holds them past the scope.
+    for (const one of [this.weight, this.bias, this.runningMean, this.runningVar]) {
+      keepAlive(one);
+    }
+  }
+
+  /**
+   * **All four leave as buffers**, which is the whole of what this class is: a batch
+   * norm whose statistics do not move, so that one inside a pre-trained network stops
+   * learning when the network is fine-tuned on batches too small to estimate a mean
+   * from. `weight` and `bias` are buffers too — nothing here trains.
+   *
+   * Listed here rather than registered, for the reason `BatchNormND` gives: a field
+   * named `runningMean` has to leave under the key `running_mean`, and
+   * `registerBuffer` makes the field name the key. Written the other way round, the
+   * field was `running_mean` and the name axis caught it at once — two spellings that
+   * flatten onto one lookup key, where a collision merges two entries and nothing
+   * anywhere mismatches.
+   *
+   * Left out altogether, `namedBuffers` returns nothing, anything writing weights by
+   * name writes nothing, and the layer answers with the identity — a plausible picture
+   * and not this layer's.
+   */
+  override namedBuffers(persistentOnly = false): Record<string, Tensor> {
+    void persistentOnly;
+    return {
+      weight: this.weight,
+      bias: this.bias,
+      running_mean: this.runningMean,
+      running_var: this.runningVar,
+    };
+  }
+
+  override forward(x: Tensor): Tensor {
+    const shape = [1, this.numFeatures, 1, 1];
+    const scale = this.weight.reshape(shape).mul(
+      this.runningVar.reshape(shape).binary("add", Tensor.full([], this.eps))
+        .unary("rsqrt"));
+    return x.mul(scale).add(
+      this.bias.reshape(shape).sub(this.runningMean.reshape(shape).mul(scale)));
+  }
+
+  override describe(): string {
+    return `FrozenBatchNorm2d(${this.numFeatures}, eps=${pyNumber(this.eps)})`;
+  }
+}
+
+/**
+ * `deformConv2d` as a layer, holding the weight.
+ *
+ * **It does not produce the offsets.** They arrive as a second argument, from another
+ * convolution the caller writes — which is why `forward` takes two tensors, and three
+ * when the mask is used. A layer that made its own offsets would be a different and more
+ * convenient thing, and would not load a torchvision checkpoint.
+ */
+export class DeformConv2d {
+  readonly kernelSize: [number, number];
+  readonly stride: [number, number];
+  readonly padding: [number, number];
+  readonly dilation: [number, number];
+  readonly weight: Tensor;
+  readonly bias: Tensor | null;
+
+  constructor(readonly inChannels: number, readonly outChannels: number,
+              kernelSize: number | readonly number[],
+              stride: number | readonly number[] = 1,
+              padding: number | readonly number[] = 0,
+              dilation: number | readonly number[] = 1,
+              readonly groups = 1, bias = true) {
+    if (inChannels % groups !== 0) {
+      throw new Error("in_channels must be divisible by groups");
+    }
+    if (outChannels % groups !== 0) {
+      throw new Error("out_channels must be divisible by groups");
+    }
+    this.kernelSize = pairOfSizes(kernelSize);
+    this.stride = pairOfSizes(stride);
+    this.padding = pairOfSizes(padding);
+    this.dilation = pairOfSizes(dilation);
+    this.weight = Tensor.zeros(
+      [outChannels, inChannels / groups, ...this.kernelSize]);
+    this.bias = bias ? Tensor.zeros([outChannels]) : null;
+  }
+
+  forward(input: Tensor, offset: Tensor, mask: Tensor | null = null): Promise<Tensor> {
+    return deformConv2d(input, offset, this.weight, this.bias, this.stride,
+                        this.padding, this.dilation, mask);
+  }
+
+  /** **It reports what it holds even though it is not a `Module`.** Being callable and
+   *  holding weights are two different things, and only the second is what a caller
+   *  loading a checkpoint — or a test writing one — needs from it. */
+  namedParameters(prefix = ""): Record<string, Tensor> {
+    const out: Record<string, Tensor> = { [`${prefix}weight`]: this.weight };
+    if (this.bias !== null) out[`${prefix}bias`] = this.bias;
+    return out;
+  }
+
+  namedBuffers(): Record<string, Tensor> {
+    return {};
+  }
+
+  /** **Only what is not the default is printed**, which is torchvision's rule for the
+   *  convolutions and not this file's usual one. */
+  describe(): string {
+    const pair = (p: readonly [number, number]): string => `(${p[0]}, ${p[1]})`;
+    let out = `DeformConv2d(${this.inChannels}, ${this.outChannels}`
+      + `, kernel_size=${pair(this.kernelSize)}, stride=${pair(this.stride)}`;
+    if (this.padding[0] !== 0 || this.padding[1] !== 0) {
+      out += `, padding=${pair(this.padding)}`;
+    }
+    if (this.dilation[0] !== 1 || this.dilation[1] !== 1) {
+      out += `, dilation=${pair(this.dilation)}`;
+    }
+    if (this.groups !== 1) out += `, groups=${this.groups}`;
+    if (this.bias === null) out += ", bias=False";
+    return `${out})`;
+  }
+}
+
+/** What builds the convolution. **The last of torch's seats**, and it is what makes
+ *  `Conv3dNormActivation` the same class with one argument changed. */
+export type ConvFactory = (
+  inChannels: number, outChannels: number, kernelSize: number, stride: number,
+  padding: number, dilation: number, groups: number, bias: boolean,
+) => Module;
+
+/**
+ * A convolution, a normalisation and an activation, in that order.
+ *
+ * **`padding = null` means "keep the size"**, computed as `(k − 1) / 2 · dilation`
+ * rather than left at zero — a block built with zero padding shrinks its input by two
+ * per layer, which is a network that trains and a resolution that quietly runs out.
+ *
+ * **`bias = null` means "only when there is no norm"**, because a normalisation
+ * immediately after a convolution subtracts the mean and the bias with it. Leaving it on
+ * costs a parameter per channel that provably does nothing, and a checkpoint written
+ * against torchvision's would carry a tensor this one has no slot for.
+ */
+export class ConvNormActivation extends Sequential {
+  readonly outChannels: number;
+
+  /** **torch's seats, `inplace` included.** Written without it, `bias` sat where torch
+   *  puts `inplace` — and the signature axis says so, which is what it is for. */
+  constructor(inChannels: number, outChannels: number, kernelSize = 3, stride = 1,
+              padding: number | null = null, groups = 1,
+              normLayer: ((width: number) => Module) | null = (w) => new BatchNorm2d(w),
+              activationLayer: (() => Module) | null = () => new ReLU(),
+              dilation = 1, inplace: boolean | null = true,
+              bias: boolean | null = null,
+              convLayer: ConvFactory = (...a) => new Conv2d(...a)) {
+    const pad = padding ?? Math.floor((kernelSize - 1) / 2) * dilation;
+    const withBias = bias ?? normLayer === null;
+    const layers: Module[] = [
+      convLayer(inChannels, outChannels, kernelSize, stride, pad, dilation, groups,
+                withBias),
+    ];
+    if (normLayer !== null) layers.push(normLayer(outChannels));
+    // **`inplace` reaches the activation and nothing else** — it is the activation's
+    // argument, given here because the block builds it. `null` means "do not pass it",
+    // which is not the same as `false`: a layer that takes no such argument is handed
+    // one either way if this forwards it always.
+    if (activationLayer !== null) {
+      const made = activationLayer();
+      layers.push(inplace === null ? made : withInplace(made, inplace));
+    }
+    super(...layers);
+    this.outChannels = outChannels;
+  }
+}
+
+/** `ConvNormActivation` with the convolution fixed to two dimensions. */
+export class Conv2dNormActivation extends ConvNormActivation {}
+
+/**
+ * Squeeze-and-Excitation — **the channels weight themselves.**
+ *
+ * <https://arxiv.org/abs/1709.01507>
+ *
+ * Pool each channel to one number, run two 1×1 convolutions over that, multiply the
+ * input by the result. **The two activations are not the same one**: the inner is a
+ * rectifier and the outer squashes to `(0, 1)`, because the outer's output is a gain.
+ * Using the rectifier for both gives gains unbounded above — the block still trains and
+ * the scale drifts.
+ */
+export class SqueezeExcitation extends Module {
+  readonly fc1: Conv2d;
+  readonly fc2: Conv2d;
+  readonly activation: Module;
+  readonly scaleActivation: Module;
+
+  constructor(inputChannels: number, squeezeChannels: number,
+              activation: () => Module = () => new ReLU(),
+              scaleActivation: () => Module = () => new Sigmoid()) {
+    super();
+    this.fc1 = new Conv2d(inputChannels, squeezeChannels, 1);
+    this.fc2 = new Conv2d(squeezeChannels, inputChannels, 1);
+    this.activation = activation();
+    this.scaleActivation = scaleActivation();
+  }
+
+  override forward(input: Tensor): Tensor {
+    // **`AdaptiveAvgPool2d` is not a name over there**, which is a row in the ledger and
+    // not a missing operation — `adaptivePool` is the same pooling without the class,
+    // and this block holds no parameters in it either way.
+    let scale = input.adaptivePool("avg", 1);
+    scale = this.fc1.forward(scale);
+    scale = this.activation.forward(scale);
+    scale = this.fc2.forward(scale);
+    return this.scaleActivation.forward(scale).mul(input);
+  }
+}
+
+/**
+ * Linear layers with an activation and dropout between them.
+ *
+ * **The last layer gets neither norm nor activation, and still gets dropout.** That
+ * asymmetry is the whole of the class: written with the loop covering every hidden size,
+ * the output passes through a rectifier and can never be negative — a head that trains,
+ * on half the range.
+ */
+export class MLP extends Sequential {
+  constructor(inChannels: number, hiddenChannels: readonly number[],
+              normLayer: ((width: number) => Module) | null = null,
+              activationLayer: () => Module = () => new ReLU(),
+              inplace: boolean | null = null, bias = true, dropout = 0) {
+    const layers: Module[] = [];
+    let width = inChannels;
+    for (const size of hiddenChannels.slice(0, -1)) {
+      layers.push(new Linear(width, size, bias));
+      if (normLayer !== null) layers.push(normLayer(size));
+      const made = activationLayer();
+      layers.push(inplace === null ? made : withInplace(made, inplace));
+      layers.push(new Dropout(dropout));
+      width = size;
+    }
+    const last = hiddenChannels[hiddenChannels.length - 1] ?? width;
+    layers.push(new Linear(width, last, bias));
+    layers.push(new Dropout(dropout));
+    super(...layers);
+  }
+}
+
+/**
+ * A pyramid of feature maps that all carry the same number of channels.
+ *
+ * <https://arxiv.org/abs/1612.03144>
+ *
+ * Each map goes through a 1×1 convolution to a common width, and then **the coarse map
+ * is added into the fine one**, top down, so the fine map gains what only the coarse one
+ * could see.
+ *
+ * - **The maps arrive in increasing depth order**, so the last is the coarsest.
+ *   Reversing them adds the fine into the coarse, which runs and learns the opposite of
+ *   the point.
+ * - **The top-down step resizes to the lateral's own size**, not by a fixed factor of
+ *   two. Feature maps are not always exactly half their neighbour — an odd input makes
+ *   them off by one — and a hard-coded factor gives a shape error on some inputs and a
+ *   silent crop on others.
+ */
+export class FeaturePyramidNetwork extends Module {
+  readonly innerBlocks = new ModuleList();
+  readonly layerBlocks = new ModuleList();
+
+  /** `extraBlocks` sits in torch's seat, **before** the norm. It is a callable that
+   *  appends further levels to the pyramid; there is none here yet, so a real one is
+   *  refused rather than stored and skipped. */
+  constructor(inChannelsList: readonly number[], outChannels: number,
+              extraBlocks: unknown = null,
+              normLayer: ((width: number) => Module) | null = null) {
+    super();
+    if (extraBlocks !== null && extraBlocks !== undefined) {
+      throw new Error(
+        "FeaturePyramidNetwork(extra_blocks=…) is not carried across yet. The argument "
+        + "is here so that it cannot take another one's place.");
+    }
+    for (const inChannels of inChannelsList) {
+      if (inChannels === 0) {
+        throw new Error("in_channels=0 is currently not supported");
+      }
+      this.innerBlocks.append(new Conv2dNormActivation(
+        inChannels, outChannels, 1, 1, 0, 1, normLayer, null));
+      this.layerBlocks.append(new Conv2dNormActivation(
+        outChannels, outChannels, 3, 1, null, 1, normLayer, null));
+    }
+  }
+
+  /** Takes and gives back **a named, ordered set of maps** — a detector reads them by
+   *  name, and the order is what decides which is the coarsest. */
+  forwardMaps(x: Map<string, Tensor>): Map<string, Tensor> {
+    const names = [...x.keys()];
+    const maps = [...x.values()];
+    const inner = (i: number): Module => this.innerBlocks.at(i) as Module;
+    const layer = (i: number): Module => this.layerBlocks.at(i) as Module;
+    let last = inner(maps.length - 1).forward(maps[maps.length - 1] as Tensor);
+    const results = [layer(maps.length - 1).forward(last)];
+    for (let i = maps.length - 2; i >= 0; i--) {
+      const lateral = inner(i).forward(maps[i] as Tensor);
+      const size = lateral.shape.slice(-2);
+      last = lateral.add(last.interpolate(size, null, "nearest"));
+      results.unshift(layer(i).forward(last));
+    }
+    const out = new Map<string, Tensor>();
+    names.forEach((name, i) => out.set(name, results[i] as Tensor));
+    return out;
+  }
+
+  override forward(x: Tensor): Tensor {
+    void x;
+    throw new Error(
+      "FeaturePyramidNetwork takes a named set of maps — use forwardMaps.");
+  }
+}
+
+/** An activation built with `inplace` where the layer takes it, and as it came where it
+ *  does not. `ReLU` and its family take one; `Sigmoid` and `GELU` do not, and handing
+ *  them a surplus argument is discarded in silence rather than refused. */
+function withInplace(made: Module, inplace: boolean): Module {
+  const kind = made.constructor as new (inplace?: boolean) => Module;
+  try {
+    return new kind(inplace);
+  } catch {
+    return made;
+  }
 }
