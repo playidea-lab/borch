@@ -13455,6 +13455,22 @@ def v2_cases(inp=None):
         return made.BoundingBoxes(np.ascontiguousarray(_BOXES), format=fmt,
                                   canvas_size=_CANVAS)
 
+    def _points(L):
+        """Two points on a canvas that is neither of their coordinates."""
+        made = _tv(L)
+        block = np.ascontiguousarray(
+            np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+        return made.KeyPoints(L.tensor(block) if _is_real_torch(L) else block,
+                              canvas_size=_CANVAS)
+
+    def _mask(L):
+        """**A mask carries no canvas** — it is the picture, so its size is its own
+        shape, and the fixture's is neither of the canvas's numbers."""
+        made = _tv(L)
+        block = np.ascontiguousarray(
+            (np.arange(6 * 7) % 3).reshape(6, 7).astype(np.float32))
+        return made.Mask(L.tensor(block) if _is_real_torch(L) else block)
+
     def _values(L, out):
         return L.tensor(np.ascontiguousarray(
             np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
@@ -13553,6 +13569,31 @@ def v2_cases(inp=None):
          transform_case(lambda m: m.ClampBoundingBoxes())),
         (V2_PREFIX + "ConvertBoundingBoxFormat(XYWH)",
          transform_case(lambda m: m.ConvertBoundingBoxFormat("XYWH"))),
+        # ── the four that went stale the day the types arrived ──────────────────
+        #
+        # Each was declined for a sentence that was true when it was written. The size
+        # pair read *a plain tensor carries no canvas*; `get_size_mask` read
+        # *torchvision's own body raises on a plain tensor here* — measured, it answers
+        # `[4, 5]`; and `is_pure_tensor` read *here every tensor is plain, so it could
+        # only ever answer True — a question with one answer is not a question*, which
+        # is right and whose premise is gone.
+        #
+        # **The canvas is not the array's shape**, and the fixture makes them differ:
+        # three boxes of four numbers on a canvas that is neither three nor four.
+        (V2F_PREFIX + "get_size_bounding_boxes(the canvas, not the array)",
+         lambda L: str(_vision_v2(L).functional.get_size_bounding_boxes(_boxes(L)))),
+        (V2F_PREFIX + "get_size_keypoints(the canvas, not the array)",
+         lambda L: str(_vision_v2(L).functional.get_size_keypoints(_points(L)))),
+        # **A mask has no canvas** — it *is* the picture, so its size is the array's.
+        (V2F_PREFIX + "get_size_mask(the array, and it does not raise)",
+         lambda L: str(_vision_v2(L).functional.get_size_mask(_mask(L)))),
+        # **Both answers, in one string.** Asked only of a plain tensor it is `True`
+        # everywhere and says nothing about the dispatch it exists for.
+        (V2F_PREFIX + "is_pure_tensor(a plain one and a labelled one)",
+         lambda L: "%s %s" % (
+             _vision_v2(L).functional.is_pure_tensor(
+                 L.tensor(np.ascontiguousarray(_BOXES))),
+             _vision_v2(L).functional.is_pure_tensor(_boxes(L)))),
         (V2_PREFIX + "query_size(the boxes' canvas)", query_case("query_size")),
         (V2_PREFIX + "query_chw(images only)", query_case("query_chw")),
         (V2_PREFIX + "Transform(a dict comes back a dict)", nest_case("dict")),

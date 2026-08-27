@@ -194,7 +194,10 @@ CEILINGS = {
     # whole factor is the one number that cannot tell flooring from not flooring, nor
     # `recompute_scale_factor` from its absence — at 1.5 the first gave a shape with a
     # `.5` in it and the second is a 10% difference in the values.
-    "borch-ts/test": 3419,
+    # 3419 → 3421. Two, and the ledger's own vocabulary: a new `v2f::` row, whose reason
+    # has to open with one of `아직` / `없음` / `별칭` / `파이썬` for `test_site.py` to
+    # split the remainder. This one is 없음.
+    "borch-ts/test": 3421,
 }
 
 

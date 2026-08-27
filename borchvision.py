@@ -4434,6 +4434,46 @@ def _size_of(item):
     return shape[-2], shape[-1]
 
 
+def get_size_bounding_boxes(bounding_boxes):
+    """`[height, width]` of **the canvas the boxes are drawn on**, which is not the shape
+    of the array holding them.
+
+    Its declined row read *it reads the canvas out of the tv_tensor, and a plain tensor
+    carries none — the canvas is an argument everywhere else here*. That was exactly
+    right the morning it was written and stopped being right the afternoon
+    `BoundingBoxes` went in, with nothing watching the sentence.
+    """
+    return list(bounding_boxes.canvas_size)
+
+
+def get_size_keypoints(keypoints):
+    """As `get_size_bounding_boxes` — the canvas, off the label."""
+    return list(keypoints.canvas_size)
+
+
+def get_size_mask(mask):
+    """**A mask has no canvas** — it *is* the picture, so its size is its own last two
+    axes.
+
+    Its declined row read *torchvision's own body raises on a plain tensor here — it
+    reaches for a shape on what the tv_tensor would have carried*. Measured:
+    `F.get_size_mask(torch.zeros(4, 5))` answers `[4, 5]`, and its body is one line
+    calling `get_size_image`.
+
+    **It is not bound to this file's `get_size_image`, and torchvision binds its own.**
+    Theirs reads `shape[-2:]` off a tensor; the one here is v1's, which takes an
+    `(H, W, C)` numpy array and refuses a tensor with a message about `ToTensor`. Two
+    functions of one name in two libraries, and binding to the local one hands a mask
+    to a reader that wants a picture — caught by the case, which is the only thing that
+    could have.
+    """
+    shape = [int(one) for one in mask.shape[-2:]]
+    if len(shape) != 2:
+        raise TypeError("Input tensor should have at least two dimensions, but got "
+                        f"{len(mask.shape)}")
+    return shape
+
+
 def query_size(flat_inputs):
     """The one `(H, W)` the whole sample agrees on.
 
@@ -11850,6 +11890,22 @@ _V2_IMAGE_KERNELS = (
 )
 for _name in _V2_IMAGE_KERNELS:
     setattr(v2_functional, _name + "_image", getattr(v2_functional, _name))
+
+# **The size family, and four rows that went stale the day the types arrived.**
+#
+# `get_size_bounding_boxes` and `get_size_keypoints` were declined for *a plain tensor
+# carries no canvas*, which was true until `BoundingBoxes` and `KeyPoints` did.
+#
+# `get_size_mask` was declined for *torchvision's own body raises on a plain tensor
+# here*. Measured — `F.get_size_mask(torch.zeros(4, 5))` answers `[4, 5]`. It is written
+# out rather than bound to this file's `get_size_image`, and the reason is on it.
+#
+# `is_pure_tensor` was declined for *here every tensor is plain, so it could only ever
+# answer True — a question with one answer is not a question*. The sentence is right and
+# its premise is gone.
+for _name in ("get_size_bounding_boxes", "get_size_keypoints", "get_size_mask",
+              "is_pure_tensor"):
+    setattr(v2_functional, _name, globals()[_name])
 
 
 for _name in ("horizontal_flip_bounding_boxes", "vertical_flip_bounding_boxes",

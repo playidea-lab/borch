@@ -356,6 +356,16 @@ NOT_PORTED = {
     # that `isinstance` answers. Carrying this over is designing a second mechanism, not
     # writing a second body — a tagged wrapper, or a parallel dict of metadata, and
     # which one is a decision nobody has taken.
+    # **The size family and `is_pure_tensor`, for the same reason as `v2::` itself.**
+    # Three of the four read a label off a tv_tensor and the fourth asks whether a
+    # tensor is one, and borch.ts has no subclassable tensor to hang a label on — its
+    # `Tensor` is a handle to a GPU buffer. The four came off the gap table's declined
+    # list on the Python side the day the types went in there; this side is where they
+    # would need the mechanism rather than the bodies.
+    "v2f::": (4, "없음 — the size family and `is_pure_tensor` read a label off a "
+                       "tv_tensor, or ask whether a tensor is one. As `v2::` below: "
+                       "borch.ts's `Tensor` is a handle to a buffer and cannot be "
+                       "subclassed to carry a label"),
     "v2::": (13, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
                         "to a buffer and cannot be subclassed to carry a label, so this "
                         "needs a mechanism that side does not have rather than a body "
