@@ -597,10 +597,15 @@ SKIPPED = {
     #
     # Everything else absent from v2 is the to-do list and reads as one: 38 of its 72
     # names are the transforms this library already has, one namespace over.
-    "transforms.v2.SanitizeBoundingBoxes": "as above",
-    "transforms.v2.SanitizeKeyPoints": "as above",
-    "transforms.v2.RandomIoUCrop": "a detection augmentation — it crops by how much of "
-                                   "a box survives, so it is boxes or it is nothing",
+    "transforms.v2.RandomIoUCrop": "**it draws until a crop meets a minimum overlap**, "
+                                   "so its answer is a sample from a loop rather than "
+                                   "a value. Its old reason — *it is boxes or it is "
+                                   "nothing* — stopped being true the day the boxes "
+                                   "went in, and the two beside it came off this list "
+                                   "on that. What is left is the draw: the three "
+                                   "implementations do not share a generator, so a "
+                                   "frozen answer would be one library's and not the "
+                                   "others'",
     "transforms.v2.UniformTemporalSubsample": "video. There is no video anywhere in "
                                               "this project and a tutorial's first ten "
                                               "lines do not open one",
@@ -771,9 +776,6 @@ SKIPPED = {
     # **The warps went in too**, so only `get_size_mask` is left — and torchvision
     # itself cannot run that one on a plain tensor (it raises `AttributeError: 'list'
     # object has no attribute 'shape'`).
-    "transforms.v2.functional.get_size_mask": "torchvision's own body raises on a plain "
-                                              "tensor here — it reaches for a shape on "
-                                              "what the tv_tensor would have carried",
     # **Not "as above" any more — that sentence was disproved for boxes.**
     #
     # The mask row says these kernels want a tv_tensor type this library declines, and
@@ -794,18 +796,11 @@ SKIPPED = {
                                                      "crop family here reproduces `soft` "
                                                      "alone. A mode accepted and ignored "
                                                      "is worse than one that is absent",
-    "transforms.v2.functional.get_size_bounding_boxes": "it reads the canvas out of the "
-                                                        "tv_tensor, and a plain tensor "
-                                                        "carries none — the canvas is an "
-                                                        "argument everywhere else here",
     # Nine keypoint kernels are built. **A keypoint is not a box shifted by four
     # numbers**: a box's `x2` is an exclusive edge on `[0, width]` and a point is a pixel
     # index on `[0, width - 1]`, so the flips mirror about `width - 1` and the clamp
     # stops one short. Written the box way every one of them is off by a single pixel —
     # a skeleton that is still a skeleton, one column from where it belongs.
-    "transforms.v2.functional.get_size_keypoints": "it reads the canvas out of the "
-                                                   "tv_tensor — as `get_size_bounding_"
-                                                   "boxes`",
 
     # The eight left over are not kernels and not v1's. Each carries its own reason.
     "transforms.v2.functional.convert_bounding_box_format": "boxes travelling with the "
@@ -823,16 +818,13 @@ SKIPPED = {
     "transforms.v2.functional.get_num_frames": "video — it answers how many frames a "
                                                "clip has, and nothing here is a clip",
     "transforms.v2.functional.register_kernel": "**the dispatch registry itself.** It "
-                                                "attaches a body to a (functional, "
-                                                "tv_tensor type) pair, and there are "
-                                                "no tv_tensor types here to attach to",
-    "transforms.v2.functional.is_pure_tensor": "asks whether a tensor is a plain one "
-                                               "rather than a tv_tensor subclass. Here "
-                                               "every tensor is plain, so it could "
-                                               "only ever answer True — **a question "
-                                               "with one answer is not a question**, "
-                                               "and present it would read as support "
-                                               "for the type system it is testing for",
+        "attaches a body to a (functional, tv_tensor type) pair. Its old reason — "
+        "*there are no tv_tensor types here to attach to* — stopped being true the day "
+        "the five types went in, and what is missing now is the other half of the "
+        "pair: the functionals here are plain functions that take what they are given, "
+        "not dispatchers that look a kernel up by the argument's type. A registry "
+        "would be a table nobody reads, and **a table nobody reads is worse than an "
+        "absent one** because it looks like the mechanism is there",
 
     # `ops`. **The eleven that are here are box geometry and the twenty-eight that are
     # not need a model.** The old one-line reason covered all thirty-nine and
@@ -874,9 +866,6 @@ SKIPPED = {
     # The second is 아직 and not a wall — `roi_align` takes a tensor and a list of
     # boxes, like everything else that turned out to be writable. It is left because it
     # is a day's work, not because it needs a model.
-    "ops.Conv3dNormActivation": "**3-D convolution is declined in the core** — the 2-D "
-                                "one is written now, and this is the ingredient it "
-                                "would need",
     # **The four losses were here and are built.** The row read *a detection loss — it
     # takes a model's predictions*, and every word of that is true and none of it was a
     # reason. A prediction arriving as an argument is a tensor; the loss never meets the

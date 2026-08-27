@@ -4434,6 +4434,46 @@ def _size_of(item):
     return shape[-2], shape[-1]
 
 
+def get_size_bounding_boxes(bounding_boxes):
+    """`[height, width]` of **the canvas the boxes are drawn on**, which is not the shape
+    of the array holding them.
+
+    Its declined row read *it reads the canvas out of the tv_tensor, and a plain tensor
+    carries none — the canvas is an argument everywhere else here*. That was exactly
+    right the morning it was written and stopped being right the afternoon
+    `BoundingBoxes` went in, with nothing watching the sentence.
+    """
+    return list(bounding_boxes.canvas_size)
+
+
+def get_size_keypoints(keypoints):
+    """As `get_size_bounding_boxes` — the canvas, off the label."""
+    return list(keypoints.canvas_size)
+
+
+def get_size_mask(mask):
+    """**A mask has no canvas** — it *is* the picture, so its size is its own last two
+    axes.
+
+    Its declined row read *torchvision's own body raises on a plain tensor here — it
+    reaches for a shape on what the tv_tensor would have carried*. Measured:
+    `F.get_size_mask(torch.zeros(4, 5))` answers `[4, 5]`, and its body is one line
+    calling `get_size_image`.
+
+    **It is not bound to this file's `get_size_image`, and torchvision binds its own.**
+    Theirs reads `shape[-2:]` off a tensor; the one here is v1's, which takes an
+    `(H, W, C)` numpy array and refuses a tensor with a message about `ToTensor`. Two
+    functions of one name in two libraries, and binding to the local one hands a mask
+    to a reader that wants a picture — caught by the case, which is the only thing that
+    could have.
+    """
+    shape = [int(one) for one in mask.shape[-2:]]
+    if len(shape) != 2:
+        raise TypeError("Input tensor should have at least two dimensions, but got "
+                        f"{len(mask.shape)}")
+    return shape
+
+
 def query_size(flat_inputs):
     """The one `(H, W)` the whole sample agrees on.
 
@@ -4493,6 +4533,55 @@ def get_bounding_boxes(flat_inputs):
     if len(found) > 1:
         raise ValueError("Found multiple bounding boxes instances in the sample")
     return found[0]
+
+
+def _find_labels_default(inputs):
+    """Where the labels are, when nobody said. **torchvision's three shapes**, and its
+    two-step key search.
+
+    A pair whose second item is a tensor is a batched classification sample; a pair
+    whose second is a dictionary, or a dictionary alone, is a detection one. Inside a
+    dictionary the search is for a key spelled exactly `labels` in any case **first**,
+    and only then for one with `label` anywhere in it — the order matters, because a
+    sample carrying both `labels` and `label_ids` has one right answer and the
+    single-pass search picks whichever came first.
+    """
+    if isinstance(inputs, (tuple, list)):
+        inputs = inputs[1]
+    if is_pure_tensor(inputs):
+        return inputs
+    if not isinstance(inputs, _collections.abc.Mapping):
+        raise ValueError(
+            "When using the default labels_getter, the input passed to forward must be "
+            "a dictionary or a two-tuple whose second item is a dictionary or a "
+            f"tensor, but got {inputs} instead.")
+    found = next((key for key in inputs if key.lower() == "labels"), None)
+    if found is None:
+        found = next((key for key in inputs if "label" in key.lower()), None)
+    if found is None:
+        raise ValueError(
+            "Could not infer where the labels are in the sample. Try passing a "
+            "callable as the labels_getter parameter? If there are no labels in the "
+            "sample by design, pass labels_getter=None.")
+    return inputs[found]
+
+
+def _parse_labels_getter(labels_getter):
+    """`"default"`, a callable, or `None` — and **`None` is not the default.**
+
+    They read the same at a glance and mean opposite things: `None` says *this sample
+    has no labels*, and `"default"` says *find them*. Defaulting to `None` would drop
+    boxes and leave every label after them pointing at the wrong object, silently.
+    """
+    if labels_getter == "default":
+        return _find_labels_default
+    if callable(labels_getter):
+        return labels_getter
+    if labels_getter is None:
+        return lambda _inputs: None
+    raise ValueError(
+        "labels_getter should either be 'default', a callable, or None, but got "
+        f"{labels_getter}.")
 
 
 def get_keypoints(flat_inputs):
@@ -4648,11 +4737,126 @@ def _v2_transform_base():
             return BoundingBoxes.wrap(inpt, inpt,
                                       clamping_mode=self.clamping_mode)
 
+    class SanitizeBoundingBoxes(Transform):
+        """Drop the boxes not worth keeping — **and everything that sits beside them.**
+
+        Its row read *a detection augmentation — it crops by how much of a box survives,
+        so it is boxes or it is nothing*, and the boxes arrived. The functional half was
+        already written; this is the walk over the sample that uses it.
+
+        **The mask filters more than the boxes.** Labels and masks are parallel arrays,
+        one entry per box, and dropping a box without dropping its label leaves every
+        label after it pointing at the wrong object. That is the whole reason this is a
+        transform and not a call on the boxes: it is the only place that can see the
+        rest of the sample.
+
+        **`labels_getter` defaults to reading a key called `labels`**, and the default
+        is not "no labels" — a sample that carries them under that name gets them
+        filtered without being asked, which is what a detector expects.
+        """
+
+        def __init__(self, min_size=1.0, min_area=1.0, labels_getter="default"):
+            super().__init__()
+            if min_size < 1:
+                raise ValueError(f"min_size must be >= 1, got {min_size}.")
+            if min_area < 1:
+                raise ValueError(f"min_area must be >= 1, got {min_area}.")
+            self.min_size, self.min_area = min_size, min_area
+            self.labels_getter = labels_getter
+            self._labels_getter = _parse_labels_getter(labels_getter)
+
+        def forward(self, *inputs):
+            inputs = inputs if len(inputs) > 1 else inputs[0]
+            labels = self._labels_getter(inputs)
+            if labels is not None and not isinstance(labels, (tuple, list)):
+                labels = (labels,)
+            flat_inputs, spec = _tree_flatten(inputs)
+            boxes = get_bounding_boxes(flat_inputs)
+            _kept, valid = sanitize_bounding_boxes(
+                boxes, format=boxes.format.value.lower(),
+                canvas_size=boxes.canvas_size, min_size=self.min_size,
+                min_area=self.min_area)
+            keep = _np.asarray(_to_numpy(valid)).astype(bool).reshape(-1)
+            out = [self._pick(one, keep, labels) for one in flat_inputs]
+            return _tree_unflatten(out, spec)
+
+        def _pick(self, inpt, keep, labels):
+            is_label = labels is not None and any(inpt is one for one in labels)
+            if not (is_label or isinstance(inpt, (BoundingBoxes, Mask))):
+                return inpt
+            block = _np.asarray(_to_numpy(inpt))
+            if block.shape[:1] != keep.shape:
+                # **A shape that does not line up is passed through**, which is
+                # torchvision's own answer: a mask that is one picture rather than one
+                # per box has nothing to filter and is not an error.
+                return inpt
+            taken = _backend().tensor(_np.ascontiguousarray(block[keep]))
+            if isinstance(inpt, TVTensor):
+                return type(inpt).wrap(taken, inpt)
+            return taken
+
+    class SanitizeKeyPoints(Transform):
+        """As above, for points — **and the unit is the group.**
+
+        A skeleton is kept or dropped whole, because half a pose with its joints
+        renumbered is not a smaller pose. That rule is in `sanitize_keypoints`; what is
+        here is the walk that carries the labels with it.
+
+        **`labels_getter` defaults to `None` here and to `"default"` on the boxes.** Two
+        sibling classes with opposite defaults, and the two words read alike — so this
+        one leaves the labels alone unless it is told where they are, and its sibling
+        goes looking. Written the same on both, the points case answers with three
+        labels for two skeletons and only the *first* still lines up. Measured against
+        torchvision, which is the only thing that says so.
+
+        **And it checks the counts before it filters.** A label array whose length is
+        not the number of groups is refused rather than passed through — the boxes'
+        sibling passes such a thing through, and the two differ there as well.
+        """
+
+        def __init__(self, labels_getter=None):
+            super().__init__()
+            self.labels_getter = labels_getter
+            self._labels_getter = _parse_labels_getter(labels_getter)
+
+        def forward(self, *inputs):
+            inputs = inputs if len(inputs) > 1 else inputs[0]
+            labels = self._labels_getter(inputs)
+            if labels is not None and not isinstance(labels, (tuple, list)):
+                labels = (labels,)
+            flat_inputs, spec = _tree_flatten(inputs)
+            points = get_keypoints(flat_inputs)
+            for one in labels or ():
+                if int(points.shape[0]) != int(one.shape[0]):
+                    raise ValueError(
+                        f"Number of kepyoints (shape={tuple(points.shape)}) must match "
+                        f"the number of labels."
+                        f"Found labels with shape={tuple(one.shape)})")
+            _kept, valid = sanitize_keypoints(points,
+                                              canvas_size=points.canvas_size)
+            keep = _np.asarray(_to_numpy(valid)).astype(bool).reshape(-1)
+            out = []
+            for one in flat_inputs:
+                is_label = labels is not None and any(one is x for x in labels)
+                if not (is_label or isinstance(one, KeyPoints)):
+                    out.append(one)
+                    continue
+                block = _np.asarray(_to_numpy(one))
+                if block.shape[:1] != keep.shape:
+                    out.append(one)
+                    continue
+                taken = _backend().tensor(_np.ascontiguousarray(block[keep]))
+                out.append(type(one).wrap(taken, one)
+                           if isinstance(one, TVTensor) else taken)
+            return _tree_unflatten(out, spec)
+
     return {"Transform": Transform,
             "ConvertBoundingBoxFormat": ConvertBoundingBoxFormat,
             "ClampBoundingBoxes": ClampBoundingBoxes,
             "ClampKeyPoints": ClampKeyPoints,
-            "SetClampingMode": SetClampingMode}
+            "SetClampingMode": SetClampingMode,
+            "SanitizeBoundingBoxes": SanitizeBoundingBoxes,
+            "SanitizeKeyPoints": SanitizeKeyPoints}
 
 
 _V2_BASES = {}
@@ -5586,12 +5790,7 @@ def _ops_layers(L):
             self.out_channels = out_channels
 
     class Conv2dNormActivation(ConvNormActivation):
-        """`ConvNormActivation` with the convolution fixed to two dimensions.
-
-        Its 3-D twin stays declined, and **that row is the one real refusal in this
-        group**: 3-D convolution is absent from the core, which is a missing
-        ingredient rather than a missing use.
-        """
+        """`ConvNormActivation` with the convolution fixed to two dimensions."""
 
         def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
                      padding=None, groups=1, norm_layer=nn.BatchNorm2d,
@@ -5599,6 +5798,28 @@ def _ops_layers(L):
             super().__init__(in_channels, out_channels, kernel_size, stride, padding,
                              groups, norm_layer, activation_layer, dilation, inplace,
                              bias, nn.Conv2d)
+
+    class Conv3dNormActivation(ConvNormActivation):
+        """The same block over three dimensions.
+
+        Its row read *3-D convolution is declined in the core — the 2-D one is written
+        now, and this is the ingredient it would need*, and it was **the one this group
+        called its real refusal**. Measured: `nn.Conv3d(2, 3, 3)` on a `(1, 2, 5, 5, 5)`
+        input answers `(1, 3, 3, 3, 3)`. The ingredient was there; the sentence naming it
+        as missing outlived whatever made it true.
+
+        **`conv_layer` is the whole difference**, which is what that argument is for —
+        the base takes it as its last seat and this passes `Conv3d` where its twin
+        passes `Conv2d`. The norm goes with it: a 3-D block wants `BatchNorm3d`, and
+        left at the 2-D default it would refuse a five-axis input.
+        """
+
+        def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
+                     padding=None, groups=1, norm_layer=nn.BatchNorm3d,
+                     activation_layer=nn.ReLU, dilation=1, inplace=True, bias=None):
+            super().__init__(in_channels, out_channels, kernel_size, stride, padding,
+                             groups, norm_layer, activation_layer, dilation, inplace,
+                             bias, nn.Conv3d)
 
     class SqueezeExcitation(nn.Module):
         """Squeeze-and-Excitation — **the channels weight themselves.**
@@ -6059,6 +6280,7 @@ def _ops_layers(L):
             "DropBlock2d": DropBlock2d, "DropBlock3d": DropBlock3d,
             "StochasticDepth": StochasticDepth,
             "Conv2dNormActivation": Conv2dNormActivation,
+            "Conv3dNormActivation": Conv3dNormActivation,
             "SqueezeExcitation": SqueezeExcitation, "MLP": MLP,
             "Permute": Permute, "FrozenBatchNorm2d": FrozenBatchNorm2d}
     _OPS_LAYERS[id(L)] = made
@@ -11850,6 +12072,22 @@ _V2_IMAGE_KERNELS = (
 )
 for _name in _V2_IMAGE_KERNELS:
     setattr(v2_functional, _name + "_image", getattr(v2_functional, _name))
+
+# **The size family, and four rows that went stale the day the types arrived.**
+#
+# `get_size_bounding_boxes` and `get_size_keypoints` were declined for *a plain tensor
+# carries no canvas*, which was true until `BoundingBoxes` and `KeyPoints` did.
+#
+# `get_size_mask` was declined for *torchvision's own body raises on a plain tensor
+# here*. Measured — `F.get_size_mask(torch.zeros(4, 5))` answers `[4, 5]`. It is written
+# out rather than bound to this file's `get_size_image`, and the reason is on it.
+#
+# `is_pure_tensor` was declined for *here every tensor is plain, so it could only ever
+# answer True — a question with one answer is not a question*. The sentence is right and
+# its premise is gone.
+for _name in ("get_size_bounding_boxes", "get_size_keypoints", "get_size_mask",
+              "is_pure_tensor"):
+    setattr(v2_functional, _name, globals()[_name])
 
 
 for _name in ("horizontal_flip_bounding_boxes", "vertical_flip_bounding_boxes",

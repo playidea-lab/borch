@@ -12896,6 +12896,13 @@ def ops_cases(inp=None):
     cases += [
         # **`padding=None` keeps the size**, and zero padding is a network that trains
         # on an input that shrinks by two per layer.
+        # **The one this group called its real refusal.** Its row read *3-D convolution
+        # is declined in the core*; measured, `nn.Conv3d(2, 3, 3)` on a five-axis input
+        # answers. `conv_layer` is the whole difference, which is what that last seat is
+        # for — and the norm goes with it, because a 2-D norm refuses five axes.
+        (OPS_PREFIX + "Conv3dNormActivation(2→3, the last seat)",
+         _layer_values(lambda L: _ops_of(L).Conv3dNormActivation(2, 3),
+                       (2, 2, 4, 5, 6))),
         (OPS_PREFIX + "Conv2dNormActivation(3→4, k3)",
          _layer_values(lambda L: _ops_of(L).Conv2dNormActivation(3, 4), (2, 3, 6, 7))),
         # **`bias=None` means "only when there is no norm"** — with the norm dropped
@@ -13455,6 +13462,72 @@ def v2_cases(inp=None):
         return made.BoundingBoxes(np.ascontiguousarray(_BOXES), format=fmt,
                                   canvas_size=_CANVAS)
 
+    def _points(L):
+        """Two points on a canvas that is neither of their coordinates."""
+        made = _tv(L)
+        block = np.ascontiguousarray(
+            np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+        return made.KeyPoints(L.tensor(block) if _is_real_torch(L) else block,
+                              canvas_size=_CANVAS)
+
+    def _mask(L):
+        """**A mask carries no canvas** — it is the picture, so its size is its own
+        shape, and the fixture's is neither of the canvas's numbers."""
+        made = _tv(L)
+        block = np.ascontiguousarray(
+            (np.arange(6 * 7) % 3).reshape(6, 7).astype(np.float32))
+        return made.Mask(L.tensor(block) if _is_real_torch(L) else block)
+
+    _SANITIZE_BOXES = np.array([[1.0, 2.0, 5.0, 8.0],
+                                [0.0, 0.0, 0.5, 0.5],
+                                [2.0, 2.0, 6.0, 7.0]], dtype=np.float32)
+
+    def sanitize_case(labels_getter="default"):
+        """`SanitizeBoundingBoxes` over a dict. **The labels are filtered too**, unless
+        the caller says there are none — and `None` and `"default"` read alike and mean
+        opposite things."""
+        def run(L):
+            made = _tv(L)
+            block = np.ascontiguousarray(_SANITIZE_BOXES)
+            boxes = made.BoundingBoxes(
+                L.tensor(block) if _is_real_torch(L) else block,
+                format="XYXY", canvas_size=_CANVAS)
+            labels = L.tensor(np.ascontiguousarray(
+                np.array([7.0, 8.0, 9.0], dtype=np.float32)))
+            out = _vision_v2(L).SanitizeBoundingBoxes(
+                labels_getter=labels_getter)({"boxes": boxes, "labels": labels})
+            return "%s | %s | %s" % (
+                np.asarray(_as_numpy(out["boxes"])).round(4).tolist(),
+                np.asarray(_as_numpy(out["labels"])).round(4).tolist(),
+                tuple(out["boxes"].canvas_size))
+        return run
+
+    def sanitize_points_case(labels_getter=None):
+        """`SanitizeKeyPoints`. **One boolean per group**, not per point: the middle
+        skeleton has one joint outside the canvas and goes whole.
+
+        **Its `labels_getter` defaults to `None` and its sibling's to `"default"`** —
+        two classes side by side with opposite defaults, and the two words read alike.
+        So the labels are asked both ways: left alone by default, filtered when told.
+        """
+        def run(L):
+            made = _tv(L)
+            block = np.ascontiguousarray(np.array([
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[1.0, 2.0], [99.0, 4.0]],
+                [[5.0, 6.0], [7.0, 7.0]]], dtype=np.float32))
+            points = made.KeyPoints(
+                L.tensor(block) if _is_real_torch(L) else block,
+                canvas_size=_CANVAS)
+            labels = L.tensor(np.ascontiguousarray(
+                np.array([1.0, 2.0, 3.0], dtype=np.float32)))
+            out = _vision_v2(L).SanitizeKeyPoints(labels_getter=labels_getter)(
+                {"points": points, "labels": labels})
+            return "%s | %s" % (
+                np.asarray(_as_numpy(out["points"])).round(4).tolist(),
+                np.asarray(_as_numpy(out["labels"])).round(4).tolist())
+        return run
+
     def _values(L, out):
         return L.tensor(np.ascontiguousarray(
             np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
@@ -13553,6 +13626,50 @@ def v2_cases(inp=None):
          transform_case(lambda m: m.ClampBoundingBoxes())),
         (V2_PREFIX + "ConvertBoundingBoxFormat(XYWH)",
          transform_case(lambda m: m.ConvertBoundingBoxFormat("XYWH"))),
+        # ── the four that went stale the day the types arrived ──────────────────
+        #
+        # Each was declined for a sentence that was true when it was written. The size
+        # pair read *a plain tensor carries no canvas*; `get_size_mask` read
+        # *torchvision's own body raises on a plain tensor here* — measured, it answers
+        # `[4, 5]`; and `is_pure_tensor` read *here every tensor is plain, so it could
+        # only ever answer True — a question with one answer is not a question*, which
+        # is right and whose premise is gone.
+        #
+        # **The canvas is not the array's shape**, and the fixture makes them differ:
+        # three boxes of four numbers on a canvas that is neither three nor four.
+        (V2F_PREFIX + "get_size_bounding_boxes(the canvas, not the array)",
+         lambda L: str(_vision_v2(L).functional.get_size_bounding_boxes(_boxes(L)))),
+        (V2F_PREFIX + "get_size_keypoints(the canvas, not the array)",
+         lambda L: str(_vision_v2(L).functional.get_size_keypoints(_points(L)))),
+        # **A mask has no canvas** — it *is* the picture, so its size is the array's.
+        (V2F_PREFIX + "get_size_mask(the array, and it does not raise)",
+         lambda L: str(_vision_v2(L).functional.get_size_mask(_mask(L)))),
+        # **Both answers, in one string.** Asked only of a plain tensor it is `True`
+        # everywhere and says nothing about the dispatch it exists for.
+        (V2F_PREFIX + "is_pure_tensor(a plain one and a labelled one)",
+         lambda L: "%s %s" % (
+             _vision_v2(L).functional.is_pure_tensor(
+                 L.tensor(np.ascontiguousarray(_BOXES))),
+             _vision_v2(L).functional.is_pure_tensor(_boxes(L)))),
+        # ── the two that were declined for "it is boxes or it is nothing" ───────
+        #
+        # The boxes arrived, and their functional halves were already written. What was
+        # missing is the walk over the sample — **which is the whole point of these**:
+        # labels sit in a parallel array, one entry per box, and dropping a box without
+        # dropping its label leaves every label after it pointing at the wrong object.
+        #
+        # The fixture's middle box is the one that goes, so a reader that filtered the
+        # boxes and left the labels alone keeps three labels for two boxes and the
+        # **first** one still lines up.
+        (V2_PREFIX + "SanitizeBoundingBoxes(the labels go with them)",
+         sanitize_case()),
+        (V2_PREFIX + "SanitizeBoundingBoxes(labels_getter=None leaves them)",
+         sanitize_case(labels_getter=None)),
+        # **The unit is the group.** A skeleton is kept or dropped whole, because half a
+        # pose with its joints renumbered is not a smaller pose.
+        (V2_PREFIX + "SanitizeKeyPoints(a group at a time)", sanitize_points_case()),
+        (V2_PREFIX + "SanitizeKeyPoints(told where the labels are)",
+         sanitize_points_case(labels_getter="default")),
         (V2_PREFIX + "query_size(the boxes' canvas)", query_case("query_size")),
         (V2_PREFIX + "query_chw(images only)", query_case("query_chw")),
         (V2_PREFIX + "Transform(a dict comes back a dict)", nest_case("dict")),

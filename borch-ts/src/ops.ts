@@ -27,7 +27,7 @@
  */
 
 import {
-  BatchNorm2d, Conv2d, Dropout, Linear, Module, ModuleList, ReLU, Sequential,
+  BatchNorm2d, BatchNorm3d, Conv2d, Conv3d, Dropout, Linear, Module, ModuleList, ReLU, Sequential,
   Sigmoid, pyNumber,
 } from "./nn.js";
 import { keepAlive, Tensor } from "./tensor.js";
@@ -2704,6 +2704,26 @@ export class ConvNormActivation extends Sequential {
 
 /** `ConvNormActivation` with the convolution fixed to two dimensions. */
 export class Conv2dNormActivation extends ConvNormActivation {}
+
+/**
+ * The same block over three dimensions.
+ *
+ * **`convLayer` is the whole difference**, which is what that last seat is for. The norm
+ * goes with it: a 3-D block wants `BatchNorm3d`, and left at the 2-D default it would
+ * refuse a five-axis input.
+ */
+export class Conv3dNormActivation extends ConvNormActivation {
+  constructor(inChannels: number, outChannels: number, kernelSize = 3, stride = 1,
+              padding: number | null = null, groups = 1,
+              normLayer: ((width: number) => Module) | null = (w) => new BatchNorm3d(w),
+              activationLayer: (() => Module) | null = () => new ReLU(),
+              dilation = 1, inplace: boolean | null = true,
+              bias: boolean | null = null) {
+    super(inChannels, outChannels, kernelSize, stride, padding, groups, normLayer,
+          activationLayer, dilation, inplace, bias,
+          (...a) => new Conv3d(...a));
+  }
+}
 
 /**
  * Squeeze-and-Excitation — **the channels weight themselves.**

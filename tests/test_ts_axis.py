@@ -365,11 +365,22 @@ FROZEN = {
     # handle to a GPU buffer with nothing to subclass — so `isinstance`, which is the
     # whole mechanism, has no answer there. Carrying this over is designing a second
     # mechanism rather than writing a second body.
-    "transforms.v2": 12,
+    #
+    # 12 → 14. The two `Sanitize` transforms. Their rows on the gap table read *it is
+    # boxes or it is nothing*, and the boxes went in on the Python side — so this row
+    # rising is that row falling, for the reason this one already gives.
+    "transforms.v2": 14,
     #
     # 1 → 3. The format conversion and the two clamps go up with the type system,
     # because the clamping taxonomy is what `BoundingBoxes` carries.
-    "transforms.v2.functional": 3,
+    #
+    # 3 → 7. The size family and `is_pure_tensor`. Their rows on the gap table read *a
+    # plain tensor carries no canvas* and *every tensor here is plain, so it could only
+    # ever answer True* — both exactly right the morning they were written and both
+    # gone by the afternoon the five types went in on the Python side. **This row
+    # rising is that row falling**, and the reason it rises is the one `transforms.v2`
+    # above already gives.
+    "transforms.v2.functional": 7,
     # **Eighteen, and they are one decision rather than eighteen.** A dataset is an
     # address and a format; the address needs hosts that send a CORS header and
     # torchvision's do not, so what crossed is the decoders. Written per name because a

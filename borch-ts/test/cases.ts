@@ -1832,6 +1832,10 @@ function addOps(out: Map<string, Case>): void {
 
   out.set("ops::Conv2dNormActivation(3→4, k3)",
     blockCase(() => new ops.Conv2dNormActivation(3, 4), [2, 3, 6, 7]));
+  // **`convLayer` is the whole difference**, which is what that last seat is for. The
+  // norm goes with it — a 2-D norm refuses five axes.
+  out.set("ops::Conv3dNormActivation(2→3, the last seat)",
+    blockCase(() => new ops.Conv3dNormActivation(2, 3), [2, 2, 4, 5, 6]));
   // **`bias = null` means "only when there is no norm"** — with the norm dropped the
   // convolution grows a bias, and the parameter list changes shape.
   out.set("ops::Conv2dNormActivation(k5, dilation 2, no norm)",
