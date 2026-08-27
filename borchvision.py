@@ -97,6 +97,7 @@ import zipfile as _zipfile
 import zlib as _zlib
 import urllib.request as _urlreq
 import warnings as _warnings
+import xml.etree.ElementTree as _ElementTree
 
 import numpy as _np
 
@@ -10038,6 +10039,256 @@ class FGVCAircraft(VisionDataset):
 
 
 
+# ── the three whose only stated wall was a codec ─────────────────────────────────
+#
+# **`as above — a codec` was fifteen rows, and for these three it was not the wall.**
+# torchvision does not decode anything: it hands the path to `PIL.Image.open`, and PIL
+# **sniffs the content rather than the name.** Measured — a `.jpg` holding PNG bytes
+# opens there and reads here, because `_folder_loader` settles it on the magic number
+# too, for a reason it already gives.
+#
+# So what these classes actually do — walk a split file, pair a picture with a target,
+# fold an XML tree, read a segmentation map — can be written and asked. What cannot is
+# the codec, and that refusal lives in `_folder_loader`, one line down, where somebody
+# holding a real JPEG meets it with a message that names it.
+#
+# The old row said the opposite of that: it put the loader's limit on the dataset's row
+# and took twenty-five names off the table with one sentence. `Cityscapes` had already
+# been corrected the same way — *the codec was never the expensive half of this one* —
+# and the correction stopped at the one row somebody happened to open.
+
+
+class _VOCBase(VisionDataset):
+    """What the two VOC datasets share: **a split file naming the pairs.**
+
+    The directory is `VOCdevkit/VOC{year}`, the pictures are in `JPEGImages`, and the
+    targets are beside them under a name each subclass gives. Every entry in the split
+    file becomes one pair, in the file's own order — sorting it would be tidier and
+    would not be the dataset, because the split file is the dataset.
+    """
+
+    _SPLITS_DIR = ""
+    _TARGET_DIR = ""
+    _TARGET_FILE_EXT = ""
+    _YEARS = tuple(str(one) for one in range(2007, 2013))
+
+    def __init__(self, root, year="2012", image_set="train", download=False,
+                 transform=None, target_transform=None, transforms=None, loader=None):
+        super().__init__(root, transforms, transform, target_transform)
+        if year not in self._YEARS:
+            raise ValueError(
+                f"Unknown value '{year}' for argument year. Valid values are "
+                f"{{{', '.join(self._YEARS)}}}.")
+        self.year = year
+        # **`test` exists for 2007 alone.** It is a different archive with a different
+        # checksum, and offering it for every year would name a split that is not there.
+        allowed = ["train", "trainval", "val"] + (["test"] if year == "2007" else [])
+        if image_set not in allowed:
+            raise ValueError(
+                f"Unknown value '{image_set}' for argument image_set. Valid values are "
+                f"{{{', '.join(allowed)}}}.")
+        self.image_set = image_set
+        # **The archive is not fetched here and the flag is not refused either.** VOC's
+        # tarball is two gigabytes behind a university host that has moved twice; what
+        # this class needs is the extracted tree, and the message below says which one.
+        # A `download=True` that raised would be the trap this file's own note warns
+        # about, and one that pretended to fetch would be worse.
+        del download
+        base = _os.path.join(self.root, "VOCdevkit", f"VOC{year}")
+        if not _os.path.isdir(base):
+            raise RuntimeError(
+                "Dataset not found or corrupted. You can use download=True to "
+                "download it")
+        self.loader = _folder_loader if loader is None else loader
+        split_file = _os.path.join(base, "ImageSets", self._SPLITS_DIR,
+                                   image_set.rstrip("\n") + ".txt")
+        with open(split_file) as handle:
+            names = [one.strip() for one in handle.readlines()]
+        self.images = [_os.path.join(base, "JPEGImages", one + ".jpg")
+                       for one in names]
+        self.targets = [_os.path.join(base, self._TARGET_DIR,
+                                      one + self._TARGET_FILE_EXT) for one in names]
+
+    def __len__(self):
+        return len(self.images)
+
+
+class VOCSegmentation(_VOCBase):
+    """Pascal VOC's segmentation half — a picture and a map of class numbers.
+
+    **The map is a palette PNG and comes back as one channel**, which is what
+    `_png_read` gives for a paletted image. Read as three, every class number would
+    arrive as the colour the palette gives it and the labels would be gone.
+    """
+
+    _SPLITS_DIR = "Segmentation"
+    _TARGET_DIR = "SegmentationClass"
+    _TARGET_FILE_EXT = ".png"
+
+    @property
+    def masks(self):
+        return self.targets
+
+    def __getitem__(self, index):
+        image = self.loader(self.images[index])
+        target = self.loader(self.targets[index])
+        if self.transforms is not None:
+            image, target = self.transforms(image, target)
+        return image, target
+
+
+class VOCDetection(_VOCBase):
+    """Pascal VOC's detection half — a picture and **the annotation XML as a tree of
+    dictionaries.**
+
+    Three things about the folding, and all three are torchvision's:
+
+    - **A tag that appears once is its value and a tag that repeats is a list.** So
+      `size` is a dictionary and two `object`s are a list of two, and a reader written
+      against a one-object fixture indexes a dictionary by number.
+    - **`object` is a list even when there is one**, which is the exception to the
+      line above and the reason it is written separately: a detector iterates the
+      objects, and iterating a single dictionary walks its keys.
+    - **Text is stripped and kept only on a leaf.** A node with children carries
+      whitespace between them, and taking that as a value gives every branch a `\n  `.
+    """
+
+    _SPLITS_DIR = "Main"
+    _TARGET_DIR = "Annotations"
+    _TARGET_FILE_EXT = ".xml"
+
+    @property
+    def annotations(self):
+        return self.targets
+
+    def __getitem__(self, index):
+        image = self.loader(self.images[index])
+        target = self.parse_voc_xml(
+            _ElementTree.parse(self.annotations[index]).getroot())
+        if self.transforms is not None:
+            image, target = self.transforms(image, target)
+        return image, target
+
+    @staticmethod
+    def parse_voc_xml(node):
+        out = {}
+        children = list(node)
+        if children:
+            gathered = _collections.defaultdict(list)
+            for one in map(VOCDetection.parse_voc_xml, children):
+                for key, value in one.items():
+                    gathered[key].append(value)
+            if node.tag == "annotation":
+                gathered["object"] = [gathered["object"]]
+            out = {node.tag: {key: value[0] if len(value) == 1 else value
+                              for key, value in gathered.items()}}
+        if node.text:
+            text = node.text.strip()
+            if not children:
+                out[node.tag] = text
+        return out
+
+
+class OxfordIIITPet(VisionDataset):
+    """Thirty-seven breeds of cat and dog, **with three different targets.**
+
+    <https://www.robots.ox.ac.uk/~vgg/data/pets/>
+
+    Its declined row read *as above — a codec*, and the codec is not this class's wall:
+    what it does is read one annotation file, take the label and the cat-or-dog flag off
+    each line, and build the breed names back out of the file names.
+
+    Three things it has to get right, and the fixture asks all three:
+
+    - **The labels are one-based in the file and zero-based here.** Off by one is a
+      dataset that trains and a class list shifted by one, which shows up only as a
+      confusion matrix nobody can read.
+    - **`target_types` is a list, and one entry is not a tuple.** `("category",)` gives
+      the number itself and `("category", "segmentation")` gives a pair — a caller
+      unpacking two from the first gets the digits of an integer.
+    - **The breed names come from the file names, ordered by label.** `Abyssinian_1`
+      becomes `Abyssinian`, and `british_shorthair_5` becomes `British Shorthair` —
+      the underscore is the word break and each word is capitalised.
+    """
+
+    _VALID_TARGET_TYPES = ("category", "binary-category", "segmentation")
+
+    def __init__(self, root, split="trainval", target_types="category",
+                 transforms=None, transform=None, target_transform=None,
+                 download=False, loader=None):
+        if split not in ("trainval", "test"):
+            raise ValueError(
+                f"Unknown value '{split}' for argument split. Valid values are "
+                "{trainval, test}.")
+        self._split = split
+        if isinstance(target_types, str):
+            target_types = [target_types]
+        for one in target_types:
+            if one not in self._VALID_TARGET_TYPES:
+                raise ValueError(
+                    f"Unknown value '{one}' for argument target_types. Valid values "
+                    f"are {{{', '.join(self._VALID_TARGET_TYPES)}}}.")
+        self._target_types = list(target_types)
+        super().__init__(root, transforms=transforms, transform=transform,
+                         target_transform=target_transform)
+        self.loader = _folder_loader if loader is None else loader
+        base = _os.path.join(self.root, "oxford-iiit-pet")
+        self._images_folder = _os.path.join(base, "images")
+        self._anns_folder = _os.path.join(base, "annotations")
+        self._segs_folder = _os.path.join(self._anns_folder, "trimaps")
+        del download
+        for folder in (self._images_folder, self._anns_folder):
+            if not _os.path.isdir(folder):
+                raise RuntimeError("Dataset not found. You can use download=True to "
+                                   "download it")
+        image_ids = []
+        self._labels = []
+        self._bin_labels = []
+        with open(_os.path.join(self._anns_folder, f"{split}.txt")) as handle:
+            for line in handle:
+                image_id, label, bin_label, _rest = line.strip().split()
+                image_ids.append(image_id)
+                self._labels.append(int(label) - 1)
+                self._bin_labels.append(int(bin_label) - 1)
+        self.bin_classes = ["Cat", "Dog"]
+        self.classes = [
+            " ".join(part.title() for part in raw.split("_"))
+            for raw, _label in sorted(
+                {(image_id.rsplit("_", 1)[0], label)
+                 for image_id, label in zip(image_ids, self._labels)},
+                key=lambda pair: pair[1])]
+        self.bin_class_to_idx = dict(zip(self.bin_classes,
+                                         range(len(self.bin_classes))))
+        self.class_to_idx = dict(zip(self.classes, range(len(self.classes))))
+        self._images = [_os.path.join(self._images_folder, f"{one}.jpg")
+                        for one in image_ids]
+        self._segs = [_os.path.join(self._segs_folder, f"{one}.png")
+                      for one in image_ids]
+
+    def __len__(self):
+        return len(self._images)
+
+    def __getitem__(self, index):
+        image = self.loader(self._images[index])
+        target = []
+        for one in self._target_types:
+            if one == "category":
+                target.append(self._labels[index])
+            elif one == "binary-category":
+                target.append(self._bin_labels[index])
+            else:
+                target.append(self.loader(self._segs[index]))
+        if not target:
+            target = None
+        elif len(target) == 1:
+            target = target[0]
+        else:
+            target = tuple(target)
+        if self.transforms is not None:
+            image, target = self.transforms(image, target)
+        return image, target
+
+
 class Imagenette(VisionDataset):
     """Ten ImageNet classes that are **easy to tell apart on purpose.**
 
@@ -11014,7 +11265,8 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "Country211", "EuroSAT", "DTD", "Food101", "SUN397", "FGVCAircraft",
               "Imagenette", "Flickr8k", "Flickr30k", "StanfordCars", "INaturalist",
               "FlyingChairs",
-              "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
+              "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB",
+              "VOCSegmentation", "VOCDetection", "OxfordIIITPet"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")

@@ -15764,7 +15764,163 @@ def dataset_last_three_cases(inp=None):
             return L.tensor(np.ascontiguousarray(out))
         return run
 
+    # ── the three whose declined row said only "a codec" ────────────────────────
+    #
+    # **The codec was never these datasets' wall.** torchvision hands the path to
+    # `PIL.Image.open`, which sniffs the content rather than the name, so a `.jpg`
+    # holding PNG bytes opens there — measured — and `_folder_loader` settles it on the
+    # magic number here for a reason it already gives. What the row took off the table
+    # was the split file, the pairing and the XML fold, none of which is a codec.
+    #
+    # These fixtures write PNG bytes into files named `.jpg`, which is what the real
+    # archive would hold in a form both sides can read. The codec itself is still
+    # refused, one line down, where somebody holding a real JPEG meets it.
+    def _voc_tree(root, targets):
+        import os
+        base = os.path.join(root, "VOCdevkit", "VOC2012")
+        os.makedirs(os.path.join(base, "JPEGImages"))
+        for name, block in (("a", 0), ("b", 7), ("c", 13)):
+            picture = ((np.arange(4 * 5 * 3) + block) % 251).reshape(4, 5, 3)
+            _write_png8(os.path.join(base, "JPEGImages", name + ".jpg"), picture)
+        os.makedirs(os.path.join(base, "ImageSets", targets["splits"]))
+        # **The split file's own order, not sorted.** Two of the three are out of
+        # alphabetical order on purpose: the split file is the dataset, and a reader
+        # that sorted would agree with one written the other way on any fixture that
+        # happened to be in order already.
+        with open(os.path.join(base, "ImageSets", targets["splits"], "train.txt"),
+                  "w") as handle:
+            handle.write("c\na\nb\n")
+        return base
+
+    def voc_segmentation():
+        """`VOCSegmentation`. **The map comes back as one channel**, because it is a
+        paletted PNG and its numbers are the classes rather than a colour."""
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = _voc_tree(root, {"splits": "Segmentation"})
+                os.makedirs(os.path.join(base, "SegmentationClass"))
+                for i, name in enumerate(("a", "b", "c")):
+                    block = ((np.arange(4 * 5) + i * 3) % 4).reshape(4, 5)
+                    _write_png8(os.path.join(base, "SegmentationClass",
+                                             name + ".png"), block)
+                loaded = _made(L, "VOCSegmentation")(
+                    root, year="2012", image_set="train")
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    parts.append(np.asarray(target).reshape(-1).astype(np.float32))
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(out))
+        return run
+
+    def voc_detection():
+        """`VOCDetection`. **The answer is the XML folded into dictionaries**, and the
+        three rules that fold decides are asked here: a tag seen once is its value, a
+        tag seen twice is a list, and `object` is a list even when there is one.
+
+        The middle picture carries two objects and the others one, so a reader that
+        skipped the `object` exception agrees on two of the three.
+        """
+        import json
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = _voc_tree(root, {"splits": "Main"})
+                os.makedirs(os.path.join(base, "Annotations"))
+                counts = {"a": 1, "b": 2, "c": 1}
+                for name, many in counts.items():
+                    objects = "".join(
+                        f"<object><name>k{j}</name><bndbox><xmin>{j}</xmin>"
+                        f"<ymin>{j + 1}</ymin><xmax>{j + 2}</xmax>"
+                        f"<ymax>{j + 3}</ymax></bndbox></object>"
+                        for j in range(many))
+                    with open(os.path.join(base, "Annotations", name + ".xml"),
+                              "w") as handle:
+                        handle.write(
+                            "<annotation><folder>VOC2012</folder>"
+                            f"<filename>{name}.jpg</filename>"
+                            "<size><width>5</width><height>4</height>"
+                            f"<depth>3</depth></size>{objects}</annotation>")
+                loaded = _made(L, "VOCDetection")(root, year="2012",
+                                                  image_set="train")
+                rows = [str(len(loaded))]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    rows.append(str(int(np.asarray(picture).sum())))
+                    # **The tree as text.** Sorted keys, so the two sides are compared
+                    # on the shape they built and not on a dictionary's order.
+                    rows.append(json.dumps(target, sort_keys=True))
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return "\n".join(rows)
+        return run
+
+    def oxford_pet(target_types):
+        """`OxfordIIITPet`. **Three targets, and one of them is a picture.**
+
+        The fixture holds two breeds with two pictures each and the labels out of
+        order, so the class list — built from the file names and sorted by label —
+        cannot come out right by accident.
+        """
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "oxford-iiit-pet")
+                os.makedirs(os.path.join(base, "images"))
+                os.makedirs(os.path.join(base, "annotations", "trimaps"))
+                # **The second breed comes first in the file and second by label.**
+                # Written the other way the two orders agree and a reader that used
+                # the file's order would pass.
+                rows = [("british_shorthair_5", 2, 1), ("Abyssinian_1", 1, 1),
+                        ("british_shorthair_9", 2, 1), ("Abyssinian_7", 1, 2)]
+                for i, (name, label, kind) in enumerate(rows):
+                    picture = ((np.arange(4 * 5 * 3) + i * 5) % 251).reshape(4, 5, 3)
+                    _write_png8(os.path.join(base, "images", name + ".jpg"), picture)
+                    trimap = ((np.arange(4 * 5) + i) % 3 + 1).reshape(4, 5)
+                    _write_png8(os.path.join(base, "annotations", "trimaps",
+                                             name + ".png"), trimap)
+                with open(os.path.join(base, "annotations", "trainval.txt"),
+                          "w") as handle:
+                    for name, label, kind in rows:
+                        handle.write(f"{name} {label} {kind} 1\n")
+                loaded = _made(L, "OxfordIIITPet")(
+                    root, split="trainval", target_types=target_types)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    pieces = target if isinstance(target, tuple) else [target]
+                    for one in pieces:
+                        parts.append(np.asarray(one).reshape(-1).astype(np.float32))
+                names = "|".join(loaded.classes)
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return f"{names}\n{list(np.round(out, 4))}"
+        return run
+
     cases += [
+        (prefix + "OxfordIIITPet(category)", oxford_pet("category")),
+        (prefix + "OxfordIIITPet(a picture beside a number)",
+         oxford_pet(("binary-category", "segmentation"))),
+        (prefix + "VOCSegmentation(split order, palette target)", voc_segmentation()),
+        (prefix + "VOCDetection(the XML fold)", voc_detection()),
         (prefix + "Sintel(clean, pairs within a scene)", sintel("clean")),
         # **`both` walks the flow list once per pass**, so the count doubles.
         (prefix + "Sintel(both passes)", sintel("both")),

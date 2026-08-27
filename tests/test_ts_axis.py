@@ -379,7 +379,12 @@ FROZEN = {
     # one is the clearest kind of absence here: they walk directories and read archives
     # off disk, and a page has neither. **The number rising is this row working**, not
     # failing — each name here is a Python-side dataset whose reason is a filesystem.
-    "datasets": 47,
+    #
+    # 47 → 50. The two VOC halves and the pets, off the gap table's declined list on a
+    # measurement rather than a reading: torchvision decodes nothing, it hands the path
+    # to `PIL.Image.open`, and PIL sniffs the content rather than the name. The reason
+    # under them said *a codec*, which is one line inside a loader and not the dataset.
+    "datasets": 50,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the
