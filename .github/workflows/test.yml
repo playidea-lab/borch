@@ -82,6 +82,19 @@ jobs:
       # step exists for. The runner stops rather than measuring the wrong one.
       - name: fetch a browser
         run: uv run --with playwright playwright install --with-deps chromium
+      # **The one Linux this project has is this runner.** Everything else is a Mac, and
+      # a layout that fits there can be cut on a machine whose fonts are wider. The scan
+      # asks a yes/no question — is anything inside a box that clips, or past the window
+      # edge with nowhere to scroll — so it does not carry a threshold to tune. It found
+      # the Run button on `python.html` missing 51px at 360px and 89px in Korean, on
+      # every phone-sized screen, for as long as that row had five controls.
+      #
+      # It runs before the value comparisons because it is seconds and needs no golden.
+      - name: whether anything on the site is cut off
+        env:
+          BORCH_HEADLESS: "1"
+        run: uv run --with playwright python tests/browser/clipped.py
+
       - name: compare the values in a browser
         env:
           BORCH_HEADLESS: "1"
