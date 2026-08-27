@@ -674,13 +674,22 @@ SKIPPED = {
     # torchvision's own reader refuses the tree this repository would compare against —
     # and every dataset here is compared against torchvision's own or it is not written.
     #
-    # **The sentence was applied to seven names it was not true of.** `Caltech101`,
-    # `Caltech256` and `WIDERFace` have a `_check_integrity` that is `os.path.exists` —
-    # torchvision's own comment on two of them reads *can be more robust and check hash
-    # of files* — and `ImageNet`, `SBDataset` and the two `LFW`s have no such method at
-    # all. It was written from the *word* `_check_integrity` rather than from opening
-    # it, which is the same habit as `as above — a codec` one screen up. Measured, all
-    # three of the first group construct from a fixture; the two Caltechs are in.
+    # **The sentence was applied to five names it was not true of**, and the count in
+    # this note was wrong once before it was right. `Caltech101`, `Caltech256` and
+    # `WIDERFace` have a `_check_integrity` that is `os.path.exists` — torchvision's own
+    # comment on two of them reads *can be more robust and check hash of files* — and
+    # `ImageNet` and `SBDataset` have no such method at all: the first parses a devkit
+    # tar for the synsets and the second imports `scipy` before anything else.
+    #
+    # **The two `LFW`s were counted among them and should not have been.** Neither
+    # subclass has the method; their base `_LFW` does, and it calls `check_integrity`
+    # with an md5 on both the archive and the labels file. Written the other way here
+    # first — from reading the subclasses and stopping — which is the same habit this
+    # paragraph is about, one level up the inheritance instead of one row down the list.
+    #
+    # It was written from the *word* `_check_integrity` rather than from opening it,
+    # which is the same habit as `as above — a codec` one screen up. Measured, all three
+    # of the first group construct from a fixture; the two Caltechs are in.
     "datasets.Flowers102": "its labels are a plain numeric `.mat` and `_mat_read` reads those — but `_check_integrity` md5s the real `imagelabels.mat` and `setid.mat` before reading, so no fixture reaches torchvision's own answer to compare against",
     "datasets.LFWPeople": "as above — `_LFW._check_integrity` md5s both the archive and the annotation file",
     "datasets.LFWPairs": "as above — the same base class, the same two md5s",
