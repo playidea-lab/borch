@@ -240,6 +240,27 @@ class Tensor:
         if name == "_h":
             object.__setattr__(self, name, value)
             return
+        # **`p.data = t` moves the values, it does not swap the slot.**
+        #
+        # Without this it went through the general branch below and set a field named
+        # `data` on the borch.ts tensor — a field nothing reads. So the assignment was
+        # accepted, **reading `p.data` back gave the new values**, and the layer went on
+        # computing with its original weights. Loading weights by hand ran without a
+        # word and trained a different model; `tests/resnet.py` in a browser lost the
+        # first convolution's output by a factor of six while every one of the golden's
+        # convolution cases passed, because those call the kernel rather than fill a
+        # layer.
+        #
+        # `copyFrom` is the same door `load_state_dict` already used, and the reason is
+        # written on it over there: the optimizer holds the parameter's handle, so
+        # putting a new tensor in the slot leaves the optimizer looking at something
+        # else — training runs and the parameters do not move.
+        if name == "data":
+            from ._ops import no_grad                                # noqa: PLC0415
+            with no_grad():
+                self._h.copyFrom(handle(value if isinstance(value, Tensor)
+                                        else tensor(value)))
+            return
         # **`None` has to arrive as JavaScript's `null`.** Pyodide passes it as
         # `undefined`, and borch.ts asks **strictly** — `node.grad === null`
         # (`autograd.ts`). So a backward pass after `p.grad = None` fails to
@@ -261,6 +282,16 @@ class Tensor:
     # `to_numpy` in `tests/cases.py` calls only `t.detach().numpy()`. Supply
     # those two and the golden harness compares this implementation without a
     # single line changing.
+
+    @property
+    def data(self):
+        """torch's detached view of the same values.
+
+        A property because the setter above no longer leaves a field to read back, and
+        because **the read has to share the slot** — code that does `p.data.copy_(w)`
+        or reads a weight expects to be looking at the parameter, not a snapshot of it.
+        """
+        return Tensor(self._h.detach())
 
     def detach(self):
         return Tensor(self._h.detach())

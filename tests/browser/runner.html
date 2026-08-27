@@ -57,6 +57,10 @@ const FILES = [
   ["/tests/browser/bench.py", "/work/bench.py"],
   // The benchmark's pair — that one times, this one counts. Called by `--cost`.
   ["/tests/browser/cost.py", "/work/cost.py"],
+  // The training comparison, called by `--resnet`. **The same file the native run uses**
+  // — it takes the library rather than importing one, so the browser asks the identical
+  // thirty steps rather than a second copy of them that could drift.
+  ["/tests/resnet.py", "/work/tests/resnet.py"],
 ];
 for (const [pkg, mods] of Object.entries(PACKAGES)) {
   for (const m of mods) FILES.push([`/${pkg}/${m}.py`, `/work/${pkg}/${m}.py`]);

@@ -191,7 +191,22 @@ def main():
                     help="runs one condition only. **Splitting them is the better experiment** — "
                          "run back to back in one session, the second model's initial weights "
                          "differ and mix into augmentation's effect")
+    ap.add_argument("--resnet", action="store_true",
+                    help="trains the small ResNet of tests/resnet.py **in the browser** and "
+                         "prints the same key/value lines the native run prints, so the two "
+                         "can be compared line for line")
     args = ap.parse_args()
+    if args.resnet and not args.probe:
+        # **The native file, loaded by path.** `/work/tests` is not a package, so the same
+        # `spec_from_file_location` the page uses for `golden.py` is used here. Copying the
+        # network into a browser-side module instead would put the thing being compared in
+        # two places, and the copy that is not run is the one that drifts.
+        args.probe = (
+            "import importlib, importlib.util\n"
+            "_s = importlib.util.spec_from_file_location('bt_resnet', '/work/tests/resnet.py')\n"
+            "_m = importlib.util.module_from_spec(_s); _s.loader.exec_module(_m)\n"
+            f"L = importlib.import_module({args.lib!r})\n"
+            "'\\n'.join(f'{k}\\t{v!r}' for k, v in _m.report(L).items())")
     if args.bench and not args.probe:
         args.probe = (f"import bench, importlib\n"
                       f"L = importlib.import_module({args.lib!r})\n"
