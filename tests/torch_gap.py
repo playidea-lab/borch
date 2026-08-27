@@ -606,9 +606,6 @@ SKIPPED = {
                                    "implementations do not share a generator, so a "
                                    "frozen answer would be one library's and not the "
                                    "others'",
-    "transforms.v2.UniformTemporalSubsample": "video. There is no video anywhere in "
-                                              "this project and a tutorial's first ten "
-                                              "lines do not open one",
     "transforms.v2.ToPILImage": "there is no PIL here — as in v1",
     "transforms.v2.PILToTensor": "it takes a PIL image and nothing here makes one — "
                                  "as in v1",
@@ -761,8 +758,19 @@ SKIPPED = {
     # The four rows that remain are the tv_tensor half, which is a different claim: those
     # kernels take a type this library does not have, rather than a plain tensor under a
     # second name.
-    "transforms.v2.functional.*_video": "as above, and there is no video in this "
-                                        "project",
+    "transforms.v2.functional.*_video": "**not that there is no video, but that there "
+        "is no N-D image kernel for a `_video` name to bind to.** In torchvision every "
+        "one of these is a single line — `def resize_video(video, …): return "
+        "resize_image(video, …)` — with no container, codec or decoder anywhere in it: "
+        "a video there is a tensor with one more leading axis and its image kernels "
+        "work over the leading axes. Measured, `resize_video` on a `(2, 3, 3, 4, 5)` "
+        "tensor answers `(2, 3, 3, 2, 3)`. It does not follow here, because this "
+        "file's image kernels are **v1's**: they take an `(H, W, C)` numpy array and "
+        "refuse a tensor with a message about `ToTensor`. Bound anyway, these would be "
+        "thirty-three names that accept a video and cannot take one, which is worse "
+        "than their absence. `get_num_frames` and `uniform_temporal_subsample` are not "
+        "among them and are in — they index along the frame axis and touch no picture "
+        "kernel",
     # **The `*_mask` row is gone too, and it was the sentence the box rows borrowed.**
     #
     # It read *a tv_tensor type, and the type system is declined in `v2`*. A mask is an

@@ -282,6 +282,22 @@ def wide_cases(inp=None):
         ("roll", lambda L: L.roll(L.tensor(x1), 2)),
         ("index_select",
          lambda L: L.index_select(L.tensor(x2), 0, L.tensor(np.array([2, 0], dtype=np.int64)))),
+        # **A negative dimension counts from the end**, and this one did not: the axis
+        # was built as `dim` leading slices, `range(-1)` is empty, and the selection
+        # landed on **axis 0**. Asked at `0` alone — which every case here did — the two
+        # readings are the same answer.
+        #
+        # On a square tensor it would not even raise. `x2` is 3×4, so `-1` picks two of
+        # four columns where axis 0 has three rows and the wrong reading stops; make it
+        # 4×4 and the shapes agree and the numbers do not.
+        #
+        # **`dim=-2` is not asked**, and the check that names an argument saw why: on a
+        # 2-D tensor `-2` *is* axis 0, so its answer equals the default case's — and it
+        # equals the old reading's too. A case that cannot tell the two apart is not a
+        # case.
+        ("index_select(dim=-1)",
+         lambda L: L.index_select(L.tensor(x2), -1,
+                                  L.tensor(np.array([3, 1], dtype=np.int64)))),
         ("masked_select", lambda L: L.masked_select(L.tensor(x1), L.tensor(x1) > 0)),
         ("narrow", lambda L: L.narrow(L.tensor(x2), 1, 1, 2)),
         ("split", lambda L: L.split(L.tensor(x1), 2)[1]),
@@ -13528,6 +13544,18 @@ def v2_cases(inp=None):
                 np.asarray(_as_numpy(out["labels"])).round(4).tolist())
         return run
 
+    def _clip(L):
+        """**Seven frames, and three does not divide it** — which is the only shape
+        where `linspace` and a stride part company."""
+        block = np.ascontiguousarray(
+            (np.arange(2 * 7 * 3 * 4 * 5, dtype=np.float32) * 0.05).reshape(
+                2, 7, 3, 4, 5))
+        return L.tensor(block)
+
+    def _values_flat(L, out):
+        return L.tensor(np.ascontiguousarray(
+            np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
+
     def _values(L, out):
         return L.tensor(np.ascontiguousarray(
             np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
@@ -13670,6 +13698,26 @@ def v2_cases(inp=None):
         (V2_PREFIX + "SanitizeKeyPoints(a group at a time)", sanitize_points_case()),
         (V2_PREFIX + "SanitizeKeyPoints(told where the labels are)",
          sanitize_points_case(labels_getter="default")),
+        # ── the frame axis, which is the only thing here that is about video ────
+        #
+        # Thirty-seven names were declined for *there is no video anywhere in this
+        # project*. In torchvision thirty-three of them are one line delegating to the
+        # image kernel — no container, no codec — and they stay out here for a different
+        # reason: **this file's image kernels are v1's** and take an `(H, W, C)` array.
+        #
+        # These two touch no picture kernel at all. **`linspace`, not a stride**: a
+        # seven-frame clip sampled to three takes 0, 3, 6, where a stride of `T // n`
+        # takes 0, 2, 4 and never reaches the end of the action. The fixture's frame
+        # count is not a multiple of the sample count, which is the only arrangement
+        # where the two differ.
+        (V2F_PREFIX + "uniform_temporal_subsample(linspace, not a stride)",
+         lambda L: _values_flat(
+             L, _vision_v2(L).functional.uniform_temporal_subsample(_clip(L), 3))),
+        (V2F_PREFIX + "get_num_frames(the fourth axis from the end)",
+         lambda L: str(_vision_v2(L).functional.get_num_frames(_clip(L)))),
+        (V2_PREFIX + "UniformTemporalSubsample(the transform around it)",
+         lambda L: _values_flat(
+             L, _vision_v2(L).UniformTemporalSubsample(3)(_clip(L)))),
         (V2_PREFIX + "query_size(the boxes' canvas)", query_case("query_size")),
         (V2_PREFIX + "query_chw(images only)", query_case("query_chw")),
         (V2_PREFIX + "Transform(a dict comes back a dict)", nest_case("dict")),

@@ -3317,14 +3317,30 @@ def _negate(shifts):
     return -shifts if isinstance(shifts, int) else tuple(-s for s in shifts)
 
 
-def index_select(input, dim, index):
+def index_select(input, dim, index):   # noqa: A002
+    """**A negative `dim` counts from the end**, as everywhere else in torch.
+
+    It did not here: `_index_at` built `dim` leading slices, and `range(-2)` is empty —
+    so `index_select(x, -2, i)` selected along **axis 0**. On a tensor whose axes happen
+    to be the same length that is not an error but a different answer, and on one whose
+    are not it is an `IndexError` from a place that says nothing about the argument.
+
+    Found by calling it, not by reading it: `uniform_temporal_subsample` picks frames
+    along `-4` because the batch axes in front of them may or may not be there, and that
+    is what a negative dimension is for.
+    """
     input = _wrap(input)
     idx = index.data.astype(int) if isinstance(index, Tensor) else _np.asarray(index, dtype=int)
-    return input[_index_at(dim, idx)]
+    return input[_index_at(dim, idx, len(input.data.shape))]
 
 
-def _index_at(dim, idx):
-    return tuple(slice(None) for _ in range(dim)) + (idx,)
+def _index_at(dim, idx, rank):
+    axis = dim + rank if dim < 0 else dim
+    if not 0 <= axis < rank:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of [{-rank}, "
+            f"{rank - 1}], but got {dim})")
+    return tuple(slice(None) for _ in range(axis)) + (idx,)
 
 
 # **The function form** of the ones that existed as methods only. torch offers

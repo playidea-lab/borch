@@ -4434,6 +4434,34 @@ def _size_of(item):
     return shape[-2], shape[-1]
 
 
+def get_num_frames(video):
+    """How many frames. **The fourth axis from the end**, which is the one thing in the
+    video family that is a fact about video rather than about pictures.
+
+    Counted from the end because the leading axes are the batch's and there may be none
+    of them: `(T, C, H, W)` and `(N, T, C, H, W)` both put the frames at `-4`.
+    """
+    return int(video.shape[-4])
+
+
+def uniform_temporal_subsample(video, num_samples):
+    """`num_samples` frames spread evenly over the clip.
+
+    **The endpoints are kept and the spacing is `linspace`, not a stride.** A stride of
+    `T // n` drops the tail whenever the division is uneven — a fourteen-frame clip
+    sampled to four takes frames 0, 3, 6, 9 and never sees the end of the action, where
+    `linspace` takes 0, 4, 8, 13.
+
+    **The indices are truncated, not rounded**, which is torch's `.long()` on the
+    linspace. Rounded, a clip of 10 to 3 samples takes 0, 5, 9 instead of 0, 4, 9 — one
+    frame apart and every frame after it different.
+    """
+    L = _backend()
+    frames = int(video.shape[-4])
+    picked = _np.linspace(0, frames - 1, num_samples).astype(_np.int64)
+    return L.index_select(video, -4, L.tensor(_np.ascontiguousarray(picked)))
+
+
 def get_size_bounding_boxes(bounding_boxes):
     """`[height, width]` of **the canvas the boxes are drawn on**, which is not the shape
     of the array holding them.
@@ -4850,7 +4878,23 @@ def _v2_transform_base():
                            if isinstance(one, TVTensor) else taken)
             return _tree_unflatten(out, spec)
 
+    class UniformTemporalSubsample(Transform):
+        """`num_samples` frames spread evenly over the clip.
+
+        Its row read *video. There is no video anywhere in this project* — and this one
+        never opens a file: it picks along the frame axis of a tensor it is handed. The
+        functional it wraps is one `linspace` and an `index_select`.
+        """
+
+        def __init__(self, num_samples):
+            super().__init__()
+            self.num_samples = num_samples
+
+        def transform(self, inpt, params):
+            return uniform_temporal_subsample(inpt, self.num_samples)
+
     return {"Transform": Transform,
+            "UniformTemporalSubsample": UniformTemporalSubsample,
             "ConvertBoundingBoxFormat": ConvertBoundingBoxFormat,
             "ClampBoundingBoxes": ClampBoundingBoxes,
             "ClampKeyPoints": ClampKeyPoints,
@@ -12072,6 +12116,31 @@ _V2_IMAGE_KERNELS = (
 )
 for _name in _V2_IMAGE_KERNELS:
     setattr(v2_functional, _name + "_image", getattr(v2_functional, _name))
+
+# ── the two `_video` names that are not aliases ──────────────────────────────────
+#
+# **The declined reason was wrong, and not in the direction it looked.** Thirty-seven
+# names read *there is no video anywhere in this project*, and in torchvision every one
+# of these kernels is a single line — `def resize_video(video, …): return
+# resize_image(video, …)`. No container, no codec, no decoder; a video there is a tensor
+# with one more leading axis, and its image kernels are N-D tensor operations that work
+# over the leading axes. Measured: `resize_video` on a `(2, 3, 3, 4, 5)` tensor answers
+# `(2, 3, 3, 2, 3)`.
+#
+# **It does not follow here, because this file's image kernels are v1's.** They take an
+# `(H, W, C)` numpy array and refuse a tensor with a message about `ToTensor` — measured,
+# binding `resize_video` to `resize` and handing it a five-axis tensor stops at
+# `Resize takes a (H,W,C) numpy array`. So the thirty-three aliases would be names that
+# accept a video and cannot take one, which is worse than their absence.
+#
+# The real reason is one axis lower than the old one: **not that there is no video, but
+# that there is no N-D image kernel for a `_video` name to bind to.**
+#
+# These two are different: they are pure indexing along the frame axis and touch no
+# picture kernel at all.
+for _name in ("get_num_frames", "uniform_temporal_subsample"):
+    setattr(v2_functional, _name, globals()[_name])
+    setattr(v2_functional, _name + "_video", globals()[_name])
 
 # **The size family, and four rows that went stale the day the types arrived.**
 #
