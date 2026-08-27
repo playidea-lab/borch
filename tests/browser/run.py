@@ -38,7 +38,7 @@ import socketserver
 import sys
 import threading
 
-from launch import browser as browser_of
+from launch import browser as browser_of, is_software
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
@@ -202,6 +202,10 @@ def main():
                     help="trains the small ResNet of tests/resnet.py **in the browser** and "
                          "prints the same key/value lines the native run prints, so the two "
                          "can be compared line for line")
+    ap.add_argument("--require-gpu", action="store_true",
+                    help="stop with a non-zero exit if the adapter turns out to be a software "
+                         "one. The default is to run and say so in a line — use this when the "
+                         "point of the run is the GPU path rather than the values")
     ap.add_argument("--resnet-ts", action="store_true",
                     help="the same network written in TypeScript (borch-ts/test/resnet.ts), "
                          "trained through borch.ts's own API rather than through the Python "
@@ -335,6 +339,30 @@ def main():
     # the wall clock keeps running.
     if result.get("faults"):
         print(f"  {result['faults']} GPU validation errors")
+    # **A run whose purpose is the GPU has to be able to say so.**
+    #
+    # `warn_if_software` narrows the claim in a printed line and lets the run pass, and
+    # that default is right: a device does not change values, so the golden is real
+    # evidence on a software adapter, and CI has no GPU and must stay green.
+    #
+    # But the same green is what somebody sets out to get when they are trying to prove
+    # the GPU path, and then the warning is all that separates the two — a line that has
+    # to be read. It very nearly was not: a session brought an RTX 4090 up, ran the whole
+    # golden, got `3758/3758`, and was one unread line away from reporting *the golden
+    # passes on a 4090*. The card had fallen off the PCIe bus mid-run (`rev ff`) and
+    # everything ran on SwiftShader.
+    #
+    # So the intent goes on the command line instead of in the reader. `warn_if_software`'s
+    # own docstring says the difference from `refuse_if_software` is deliberate and that
+    # widening it is a person's decision — this is that decision, made per run rather than
+    # once for everybody.
+    if args.require_gpu and is_software(result.get("backend") or ""):
+        print("\n**--require-gpu, and this was not a GPU.**\n"
+              f"  The adapter is `{result.get('backend')}` — a CPU behind WebGPU's interface.\n"
+              "  Every number above is real and none of it is evidence about a GPU.\n"
+              "  On Linux the card can also be gone rather than blocked: `lspci` showing\n"
+              "  `rev ff` on the slot means it left the bus and a reboot is the fix.")
+        return 1
     if bad:
         print("\nwhere it diverged:")
         for why in bad:

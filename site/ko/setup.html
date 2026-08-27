@@ -85,9 +85,9 @@
 
     <h2>NVIDIA 카드를 단 리눅스</h2>
     <p>
-      <strong>플래그 둘이면 충분한데 러너는 넷을 보냅니다.</strong> 크롬은 차단 목록을 들고
-      있고 드라이버에 <em>묻기 전에</em> 그것을 봅니다. 그래서 멀쩡한 카드가 거절되는데,
-      정작 <strong>그 차단 목록의 이름을 딴 플래그가 그것을 푸는 플래그가 아닙니다.</strong>
+      <strong>플래그 둘이면 충분하고, 러너도 이제 그 둘을 보냅니다.</strong> 그 둘이 없을 때
+      벌어지는 일은 <strong>거절이 아닙니다</strong> — 그보다 조용합니다. 크롬은 자기 CPU
+      래스터라이저를 내주고 페이지를 돌게 두며, Vulkan 백엔드가 켜질 때까지 계속 그럽니다.
       두 카드를 같은 방식으로 쟀습니다 — 진짜 X 세션과 시스템 크롬:
     </p>
     <div style="overflow-x:auto">
@@ -109,7 +109,10 @@
         <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code><br>
+        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code></td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td><strong><code>nvidia / lovelace</code></strong></td></tr>
+        <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
                 <span class="small">이 행이 러너의 목록이다</span></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
@@ -117,7 +120,10 @@
     </table>
     </div>
     <p>
-      그러니 붙여넣을 줄은 이것이고, 일을 하는 것은 <strong>앞의 하나 뒤에 오는 둘</strong>입니다:
+      그러니 붙여넣을 줄은 이것입니다. <strong>플래그 둘, 그리고 일을 하는 것은 둘째</strong> —
+      리눅스에서 WebGPU 는 크롬의 Vulkan 백엔드 위에서 돌고, 그것이 켜지기 전까지 브라우저는
+      거절하는 대신 <strong>자기 CPU 래스터라이저를 대신 내줍니다.</strong> 카드가 막힌 적은
+      없었고, 백엔드가 꺼져 있었을 뿐입니다.
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
   --enable-unsafe-webgpu --enable-features=Vulkan</code></pre>
@@ -126,12 +132,22 @@
       <strong>#enable-vulkan</strong> 입니다. 바꾼 뒤 다시 띄워야 합니다 —
       <strong>이미 열려 있던 창은 예전 설정을 그대로 씁니다.</strong> 여기서 한 시간을 썼습니다.
     </p>
+    <p>
+      <strong>그 둘로 안 되면 <code>--ignore-gpu-blocklist</code> 를 더하십시오.</strong>
+      크롬은 드라이버에 아무것도 묻기 전에 거절하는 GPU·드라이버 조합 목록을 들고 있고, 그
+      플래그가 그것에게 가서 보라고 말하는 방법입니다. 여기서 잰 어느 기계에서도 아무것도
+      바꾸지 않았습니다 &mdash; <strong>다만 그 기계들은 하나도 그 목록에 없었습니다.</strong>
+      그러니 이 페이지는 그 플래그가 존재하는 이유가 되는 상황을 <strong>본 적이 없습니다.</strong>
+      당신 기계가 그것일 수 있습니다.
+    </p>
     <p class="small">
       <strong>그 두 플래그로 스위트 전체를 돌렸습니다.</strong> 어댑터만 물어본 것이 아니라 —
-      5080 에서 <code>3753 / 3755 일치 [nvidia / blackwell]</code>. 갈린 둘은 GPU 가 아니라
-      <strong>그 기계의 torch 빌드</strong> 탓입니다. CUDA 가 있으니 <em>양쪽 다 거절한다</em>
-      는 전제의 케이스가 거기서 거짓이 되고, CUDA 휠이 링크한 LAPACK 이 행렬 하나에 다른 답을
-      냅니다. 4090 은 어댑터 측정만 있고 골든은 돌린 적이 없습니다.
+      5080 에서 <code>agreeing 3758 / 3758 [nvidia / blackwell]</code>, 그리고 학습도 맞습니다.
+      작은 ResNet 30 스텝의 궤적, 층별 기울기, 배치정규화 버퍼, eval 까지 torch 와 대조해
+      <code>64 values</code>, 파이썬 바인딩으로 한 번 borch.ts 자체 API 로 한 번. 이 페이지는 앞서
+      여기에 <code>3753 / 3755</code> 라고 적었습니다 — 갈린 둘은 torch 가 아니라 <strong>기계에
+      대한 답</strong>이 얼려져 있던 것이고, 변명되지 않고 고쳐졌습니다. 4090 은 어댑터 측정만
+      있고 골든은 돌린 적이 없습니다.
     </p>
     <p class="small">
       <strong>이 표의 이전 판은 차단목록 플래그가 5080 을 연다고 말했습니다.</strong> 아닙니다 —

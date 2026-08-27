@@ -46,12 +46,16 @@ import sys
 # proprietary NVIDIA driver is on that list. So the flag is not a workaround for this
 # repository's code — it is how you ask Chrome to go and look.
 #
-# They went in as a pair and **the pair has since been separated**:
-# `--ignore-gpu-blocklist` alone finds the adapter, so
-# `--disable-gpu-driver-bug-workarounds` is not doing the work. It is still carried,
-# because the run that produced `passed 2901 / failed 0  [nvidia / blackwell]` had both
-# and **the number the documents quote and the flags this file ships have to be the same
-# configuration.** Dropping it first would make them two.
+# They went in as a pair, were separated (`--ignore-gpu-blocklist` alone finds the
+# adapter, so `--disable-gpu-driver-bug-workarounds` was not doing the work), and **both
+# have now left.** The reason they stayed as long as they did is worth keeping: the
+# number the documents quoted came from a run that had them, and **the number the
+# documents quote and the flags this file ships have to be the same configuration.**
+# Dropping a flag without re-measuring makes those two things different, and then the
+# quoted score belongs to a browser nobody launches.
+#
+# So the list shrank only once every adapter had been asked with **the shipped list
+# itself**, and the quoted numbers were taken from those runs. See the table below.
 #
 # **These four are not the WebGPU working group's four.** Its implementation status
 # gives Linux as `--enable-unsafe-webgpu --ozone-platform=x11 --use-angle=vulkan
@@ -59,18 +63,28 @@ import sys
 #
 # **That measurement has now been made, on a second card, and this list holds.**
 #
-#     flags                                       5080 / 580    4090 / 550
-#     none                                        none          none
-#     --enable-unsafe-webgpu                      swiftshader   swiftshader
-#       + --ignore-gpu-blocklist                  blackwell     swiftshader
-#       + --enable-features=Vulkan   (= FLAGS)    blackwell     lovelace
-#     --enable-unsafe-webgpu --enable-features=Vulkan
-#                                                 not measured  lovelace
+#     flags                                    5080/580/151  4090/550/143  M4 Max
+#     none                                     none          none          metal-3
+#     --enable-unsafe-webgpu                   swiftshader   swiftshader   metal-3
+#       + --ignore-gpu-blocklist               swiftshader¹  swiftshader   metal-3
+#       + --enable-features=Vulkan             blackwell     lovelace      metal-3
+#     --enable-unsafe-webgpu
+#       + --enable-features=Vulkan  (= FLAGS)  blackwell     lovelace      metal-3
 #
-# **The two cards want different flags and this list carries both.** A 5080 needs the
-# blocklist override; a 4090 needs `--enable-features=Vulkan` and is unmoved by the
-# blocklist. Neither middle rung is enough alone, which is why the four-flag list opens
-# both.
+# **The third column is the browser**, and it is there because leaving it out made this
+# table lie by omission. The two Linux columns differ in card, driver **and Chrome major
+# version at once** (151 against 143), so a difference between them cannot be attributed
+# to the hardware — which the sentence that used to stand here did, twice.
+#
+# ¹ **This row read `blackwell` until Chrome 151 was asked.** Reproduced three times on
+#   the newer browser. The old reading came from Playwright's bundled Chromium and the
+#   new one from the system Chrome, so what moved is not established and is not claimed —
+#   only that the row is no longer what it says it was.
+#
+# **`--enable-features=Vulkan` is the flag that carries, on both cards.** The blocklist
+# override opens no adapter that it does not, on any of the three; macOS is on Metal and
+# gives an adapter with no flags at all, so the pair there only has to break nothing, and
+# does not. That is why the list is two and not four.
 #
 # ## This comment said the opposite for one commit
 #
@@ -111,8 +125,7 @@ import sys
 #
 # Still unmeasured: the 5080 on `--enable-features=Vulkan` alone, which is what would
 # let this list shrink.
-FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan",
-         "--ignore-gpu-blocklist", "--disable-gpu-driver-bug-workarounds"]
+FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan"]
 
 # Implementations that run on the CPU. Chrome has SwiftShader; Linux Mesa has lavapipe (llvmpipe).
 _SOFTWARE = re.compile(r"swiftshader|llvmpipe|lavapipe|software", re.I)

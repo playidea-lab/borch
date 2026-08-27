@@ -90,11 +90,11 @@
 
     <h2>Linux with an NVIDIA card</h2>
     <p>
-      <strong>Two flags are enough, and the runner sends four.</strong> Chrome keeps a
-      blocklist and consults it <em>before</em> asking the driver, so a working card is
-      refused — but the flag named after that blocklist turns out not to be the one that
-      lifts it. Measured on both cards the same way, a real X session and the system
-      Chrome:
+      <strong>Two flags are enough, and the runner now sends those two.</strong> What
+      happens without them is not a refusal &mdash; it is quieter than that. Chrome hands
+      back its CPU rasteriser and lets the page run, and it keeps doing that until its
+      Vulkan backend is switched on. Measured on both cards the same way, a real X session
+      and the system Chrome:
     </p>
     <div style="overflow-x:auto">
     <table>
@@ -115,7 +115,10 @@
         <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code><br>
+        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code></td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td><strong><code>nvidia / lovelace</code></strong></td></tr>
+        <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
                 <span class="small">this row is the runner's flags</span></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
@@ -123,8 +126,10 @@
     </table>
     </div>
     <p>
-      So this is the line to paste, and the two flags after the first are the ones doing
-      the work:
+      So this is the line to paste. <strong>Two flags, and the second is the one doing the
+      work</strong> — on Linux, WebGPU runs on Chrome's Vulkan backend, and until that is
+      switched on the browser hands back its CPU rasteriser instead of refusing. The card
+      was never blocked; the backend was off.
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
   --enable-unsafe-webgpu --enable-features=Vulkan</code></pre>
@@ -133,13 +138,23 @@
       <strong>#enable-vulkan</strong>. Relaunch after changing them — <strong>a window
       already open keeps the old settings</strong>, which cost an hour here.
     </p>
+    <p>
+      <strong>If those two do not do it, add <code>--ignore-gpu-blocklist</code>.</strong>
+      Chrome keeps a list of GPU and driver combinations it refuses before asking the
+      driver anything, and that flag is how you tell it to go and look. It changed nothing
+      on any machine measured here &mdash; but <strong>none of those machines were on the
+      list</strong>, so this page has never seen the situation the flag exists for. Yours
+      might be it.
+    </p>
     <p class="small">
-      <strong>The whole suite was run on those two flags</strong>, not just an adapter
-      probe: <code>3753 / 3755 agreeing [nvidia / blackwell]</code> on the 5080. The two
-      that differ are that machine's torch build rather than its GPU — it has CUDA, so a
-      case asserting <em>both sides refuse</em> is false there, and its CUDA wheel links a
-      LAPACK that answers one matrix differently. The 4090 has the adapter measurement
-      only; no golden has been run on it.
+      <strong>The whole suite was run on those two flags</strong>, not just an adapter probe:
+      <code>agreeing 3758 / 3758 [nvidia / blackwell]</code> on the 5080, and the training
+      agrees too &mdash; thirty steps of a small ResNet with its per-layer gradients,
+      batch-norm buffers and eval, matched against torch to <code>64 values</code>, once
+      through the Python binding and once through borch.ts's own API. Earlier this page
+      reported <code>3753 / 3755</code> here: the two that differed were frozen answers about
+      the machine rather than about torch, and they have since been fixed rather than
+      excused. The 4090 has the adapter measurement only; no golden has been run on it.
     </p>
     <p class="small">
       <strong>An earlier version of this table said the blocklist flag opened the 5080.</strong>
