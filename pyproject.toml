@@ -8,14 +8,26 @@
 # happens to be adjacent. So there is no way to bring somebody who typed `pip install
 # borch` here, and the two can only be told apart in the documentation.
 #
-# On npm `borch` was free, so it is used as is. The names differing between the two
-# places is that circumstance, not a design.
+# **npm did not have it either.** `borch` is blocked there by the registry's similarity
+# filter, and so is `bimm`; both went out with a `-ts` suffix. So the installed names
+# differ from the project's name in all three places, and none of it is a design —
+# it is what was available.
 name = "pyborch"
 version = "1.4.0"
 description = "A thin PyTorch-shaped layer on numpy — practise the syntax in the browser with nothing installed"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
 license = { text = "Apache-2.0" }
+readme = "README.md"
+authors = [{ name = "PLAYIDEALAB Inc." }]
+
+# **어디 사는지 적는다.** 없으면 PyPI 페이지에 링크가 하나도 안 나오고, 설치한 사람은
+# 소스를 손에 들고도(sdist 에 들어 있다) 프로젝트가 어디 있는지, 뭔가 깨졌을 때 어디에
+# 말하는지 알 길이 없다. npm 쪽도 같은 구멍이었고 같이 메웠다.
+[project.urls]
+Homepage = "https://playidea-lab.github.io/borch/"
+Repository = "https://github.com/playidea-lab/borch"
+Issues = "https://github.com/playidea-lab/borch/issues"
 
 [project.optional-dependencies]
 # Real torch is needed for the comparison checks alone. Using it needs numpy only.
