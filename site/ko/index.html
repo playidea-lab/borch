@@ -210,8 +210,8 @@
 <!-- ── 플레이그라운드 ─────────────────────────────────────────────── -->
 <section id="start">
   <div class="wrap">
-    <p class="eyebrow">배우기 · 튜토리얼 · API · Playground</p>
-    <h2>들어가는 길 넷, 전부 도는 것</h2>
+    <p class="eyebrow">배우기 · 튜토리얼 · 모델 · 비전 · API · Playground</p>
+    <h2>들어가는 길 여섯, 전부 도는 것</h2>
     <p class="lead">
       강의를 읽으면서 읽고 있는 그 페이지에서 Run 을 누른다. 이름을 찾으면 컴파일러가 낸
       시그니처를 그대로 본다. 아니면 손실 곡선과 GPU 계측이 붙은 큰 편집기를 연다.
@@ -255,6 +255,18 @@
       <a class="btn primary" href="learn/">강의 시작 →</a>
       <a class="btn ghost" href="tutorials/">아니면 만들어 보기</a>
       <a class="btn ghost" href="playground.html">Playground 열기</a>
+      <a class="tile" href="models.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>모델 — 허브</h3>
+        <p class="small">탭으로 바로 실리는 사전학습 가중치. 페이지가 하나를 받아서
+          발행자가 얼려둔 샘플과 눈앞에서 대조한다.</p>
+      </a>
+      <a class="tile" href="vision.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>비전 — torchvision 의 자리</h3>
+        <p class="small">transforms, v2, 박스·마스크·키포인트의 기하, 그리고 데이터셋
+          디코더 — 각각이 조용히 틀어지는 방식과 함께.</p>
+      </a>
     </p>
   </div>
 </section>
@@ -377,7 +389,7 @@ for step in range(201):
         <tr><td><strong>borch</strong></td><td><code>torch</code></td>
             <td>텐서·autograd·모듈·옵티마이저 — 나머지 전부가 딛고 서는 런타임</td></tr>
         <tr><td><strong>borchvision</strong></td><td><code>torchvision</code></td>
-            <td>transforms, v2, 박스·마스크 기하, 데이터셋 디코더 — <a href="vision.html">이름 547개</a></td></tr>
+            <td>transforms, v2, 박스·마스크 기하, 데이터셋 디코더 — <a href="vision.html">이름 <span data-count="_vision_total">653</span>개</a></td></tr>
         <tr><td><strong>bimm</strong></td><td><code>timm</code></td>
             <td>아키텍처 카탈로그 — ResNet, EfficientNet, MobileNet, ViT</td></tr>
         <tr><td><strong>borch-hub</strong></td><td>—</td>
@@ -459,7 +471,7 @@ for step in range(201):
 <!-- ── 셋 ─────────────────────────────────────────────────────────── -->
 <section id="install">
   <div class="wrap">
-    <p class="eyebrow">이 이름을 쓰는 셋</p>
+    <p class="eyebrow">패키지 다섯, 그중 셋이 이 이름을 나눠 쓴다</p>
     <h2>어디서 돌릴 것인가에 따라 고른다</h2>
     <div class="scroll-x" style="margin-top:1.6rem">
     <table class="data">
@@ -467,6 +479,10 @@ for step in range(201):
       <tbody>
         <tr><td><strong>pyborch</strong> — <code>import borch</code></td><td>numpy</td><td>어디서나 · Pyodide</td><td>MNIST 급</td></tr>
         <tr><td><strong>borch-ts</strong> (npm)</td><td>WGSL 직접, 의존성 0</td><td>브라우저 안에서만</td><td>CIFAR ResNet-18 에폭 1.5분</td></tr>
+        <tr><td><strong>bimm-ts</strong> (npm)</td><td>borch-ts</td>
+            <td>브라우저 안에서만</td><td>아키텍처 카탈로그 — 이름 하나로 모델까지</td></tr>
+        <tr><td><strong>borch-hub</strong> (npm)</td><td>borch-ts, bimm-ts</td>
+            <td>브라우저 안에서만</td><td>발행된 모델 — 싣기 전에 해시를 대조한다</td></tr>
         <tr><td><strong>borch-webgpu</strong> (파이썬)</td><td>위의 borch.ts</td><td>브라우저 안에서만</td><td>같은 것이 에폭 1.6분</td></tr>
       </tbody>
     </table>

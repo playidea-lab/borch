@@ -215,8 +215,8 @@
 <!-- ── Playground ─────────────────────────────────────────────────── -->
 <section id="start">
   <div class="wrap">
-    <p class="eyebrow">Learn · Tutorials · API · Playground</p>
-    <h2>Four ways in, all of them running</h2>
+    <p class="eyebrow">Learn · Tutorials · Models · Vision · API · Playground</p>
+    <h2>Six ways in, all of them running</h2>
     <p class="lead">
       Read a lesson and press Run on the page you are reading. Look a name up and see the
       signature the compiler emitted. Or open the full editor with a loss curve and the GPU
@@ -260,6 +260,19 @@
       <a class="btn primary" href="learn/">Start the lessons →</a>
       <a class="btn ghost" href="tutorials/">Or build something</a>
       <a class="btn ghost" href="playground.html">Open Playground</a>
+      <a class="tile" href="models.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Models — the hub</h3>
+        <p class="small">Pretrained weights that load straight into a tab. The page
+          downloads one and checks it against the sample its publisher froze, in front
+          of you.</p>
+      </a>
+      <a class="tile" href="vision.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Vision — torchvision's seat</h3>
+        <p class="small">Transforms, v2, the geometry of boxes, masks and keypoints, and
+          the dataset decoders — with the way each of them goes quietly wrong.</p>
+      </a>
     </p>
   </div>
 </section>
@@ -383,7 +396,7 @@ for step in range(201):
         <tr><td><strong>borch</strong></td><td><code>torch</code></td>
             <td>Tensors, autograd, modules, optimisers — the runtime everything else stands on</td></tr>
         <tr><td><strong>borchvision</strong></td><td><code>torchvision</code></td>
-            <td>Transforms, v2, box and mask geometry, dataset decoders — <a href="vision.html">547 names</a></td></tr>
+            <td>Transforms, v2, box and mask geometry, dataset decoders — <a href="vision.html"><span data-count="_vision_total">653</span> names</a></td></tr>
         <tr><td><strong>bimm</strong></td><td><code>timm</code></td>
             <td>The architecture catalog — ResNet, EfficientNet, MobileNet, ViT</td></tr>
         <tr><td><strong>borch-hub</strong></td><td>—</td>
@@ -466,7 +479,7 @@ for step in range(201):
 <!-- ── The three ──────────────────────────────────────────────────── -->
 <section id="install">
   <div class="wrap">
-    <p class="eyebrow">Three things share this name</p>
+    <p class="eyebrow">Five packages, and three of them share this name</p>
     <h2>Pick by where you intend to run</h2>
     <div class="scroll-x" style="margin-top:1.6rem">
     <table class="data">
@@ -474,6 +487,10 @@ for step in range(201):
       <tbody>
         <tr><td><strong>pyborch</strong> — <code>import borch</code></td><td>numpy</td><td>anywhere · Pyodide</td><td>MNIST class</td></tr>
         <tr><td><strong>borch-ts</strong> (npm)</td><td>WGSL directly, zero deps</td><td>browser only</td><td>CIFAR ResNet-18, 1.5 min/epoch</td></tr>
+        <tr><td><strong>bimm-ts</strong> (npm)</td><td>borch-ts</td>
+            <td>browser only</td><td>the architecture catalog — a model from a name</td></tr>
+        <tr><td><strong>borch-hub</strong> (npm)</td><td>borch-ts, bimm-ts</td>
+            <td>browser only</td><td>a published model, hashed and checked before it loads</td></tr>
         <tr><td><strong>borch-webgpu</strong> (Python)</td><td>borch.ts above</td><td>browser only</td><td>the same at 1.6 min/epoch</td></tr>
       </tbody>
     </table>
