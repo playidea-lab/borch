@@ -2154,7 +2154,19 @@ export class Tensor implements Node<Tensor> {
    * Averages excluding NaN. **The count excludes NaN too** — that is what
    * differs from mean.
    */
-  nanmean(dim?: number, keepdim = false): Tensor {
+  nanmean(dim?: number, keepdim = false, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // As `mean` above: `dtype=` releases the refusal on the **input** side, and a
+      // result that has to land on an integer still has no answer. torch stops in the
+      // same place — measured, `softmax(dtype=int64)` is a `NotImplementedError` and
+      // `nanmean(dtype=int64)` says it could not infer the output dtype.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "nanmean(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).nanmean(dim, keepdim).to(dtype);
+    }
     const total = this.nansum(dim, keepdim);
     const present = this.unary("notNan");
     const count = (dim === undefined
@@ -3575,7 +3587,19 @@ export class Tensor implements Node<Tensor> {
   /**
    * The L2 norm.
    */
-  norm(p: number = 2, dim?: number, keepdim = false): Tensor {
+  norm(p: number = 2, dim?: number, keepdim = false, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // As `mean` above: `dtype=` releases the refusal on the **input** side, and a
+      // result that has to land on an integer still has no answer. torch stops in the
+      // same place — measured, `softmax(dtype=int64)` is a `NotImplementedError` and
+      // `nanmean(dtype=int64)` says it could not infer the output dtype.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "norm(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).norm(p, dim, keepdim).to(dtype);
+    }
     // **It stops where torch stops** (measured). A division or a square root has no
     // answer that fits an integer cell — promoted quietly to float the way numpy does,
     // that code then breaks on real torch.
@@ -3660,7 +3684,19 @@ export class Tensor implements Node<Tensor> {
    * `exp(x) / Σ exp(x)`. **Computed with the maximum subtracted** —
    * otherwise it overflows at large values.
    */
-  softmax(dim = 0): Tensor {
+  softmax(dim = 0, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // As `mean` above: `dtype=` releases the refusal on the **input** side, and a
+      // result that has to land on an integer still has no answer. torch stops in the
+      // same place — measured, `softmax(dtype=int64)` is a `NotImplementedError` and
+      // `nanmean(dtype=int64)` says it could not infer the output dtype.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "softmax(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).softmax(dim).to(dtype);
+    }
     const m = this.amax(dim, true).detach();
     const e = this.sub(m).exp();
     return e.div(e.sumDim(dim, true));
@@ -3671,7 +3707,19 @@ export class Tensor implements Node<Tensor> {
    * small probabilities become 0 and the log becomes -inf. Written directly
    * as a subtraction, that place does not exist.
    */
-  logSoftmax(dim = 0): Tensor {
+  logSoftmax(dim = 0, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // As `mean` above: `dtype=` releases the refusal on the **input** side, and a
+      // result that has to land on an integer still has no answer. torch stops in the
+      // same place — measured, `softmax(dtype=int64)` is a `NotImplementedError` and
+      // `nanmean(dtype=int64)` says it could not infer the output dtype.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "log_softmax(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).logSoftmax(dim).to(dtype);
+    }
     return this.sub(this.logsumexp(dim, true));
   }
 

@@ -5560,6 +5560,40 @@ def data_loader_cases(inp=None):
                   lambda L: str(order(L, 7) == order(L, 7))))
     cases.append((DATACONV_PREFIX + "DataLoader(generator)/다른 씨앗은 다른 순서",
                   lambda L: str(order(L, 7) != order(L, 11))))
+
+    # **The nine random fillers took `generator` and dropped it**, each opening with
+    # `del generator`, so `x.normal_(generator=g)` drew from the global stream and the
+    # caller's reproducibility was quietly somebody else's. `bernoulli` two hundred
+    # lines away had done the right thing in one line the whole time.
+    #
+    # The values cannot be frozen — the generators differ between the three sides — so
+    # what is asked is the **property that separates honouring from discarding**, and
+    # the first attempt did not: "same seed, same values" is true of a global stream
+    # too. This shakes the global stream *between* the seed and the draw. A filler that
+    # uses the generator it was handed does not feel it; one that reaches for the
+    # global does.
+    def steady(L, fill):
+        def once(noise):
+            g = L.Generator()
+            g.manual_seed(7)
+            for _ in range(noise):
+                L.rand(3)                 # only the global stream moves
+            out = fill(L.zeros(6), g)
+            return [float(v) for v in out.detach().numpy().ravel()]
+        return str(once(0) == once(5))
+
+    for _fname, _fill in (
+            ("normal_", lambda t, g: t.normal_(0.0, 1.0, generator=g)),
+            ("uniform_", lambda t, g: t.uniform_(0.0, 1.0, generator=g)),
+            ("exponential_", lambda t, g: t.exponential_(1.0, generator=g)),
+            ("cauchy_", lambda t, g: t.cauchy_(0.0, 1.0, generator=g)),
+            ("log_normal_", lambda t, g: t.log_normal_(1.0, 2.0, generator=g)),
+            ("geometric_", lambda t, g: t.geometric_(0.5, generator=g)),
+            ("random_", lambda t, g: t.random_(0, 100, generator=g)),
+            ("bernoulli_", lambda t, g: t.bernoulli_(0.5, generator=g)),
+            ("bernoulli", lambda t, g: t.bernoulli(0.5, generator=g))):
+        cases.append((DATACONV_PREFIX + f"{_fname}(generator)/전역이 흔들려도 그대로",
+                      lambda L, f=_fill: steady(L, f)))
     # Positional, and past the two seats that were swapped: the sixth is
     # `num_workers` and the ninth is `drop_last`.
     cases.append((DATACONV_PREFIX + "DataLoader(자리로 준 drop_last)",

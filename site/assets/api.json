@@ -792,7 +792,7 @@
       },
       {
        "name": "nanmean",
-       "signature": "nanmean(dim?: number, keepdim?: boolean): Tensor",
+       "signature": "nanmean(dim?: number, keepdim?: boolean, dtype?: DType): Tensor",
        "doc": "Averages excluding NaN. **The count excludes NaN too** — that is what\ndiffers from mean.",
        "section": {
         "ko": "Reductions",
@@ -1468,7 +1468,7 @@
       },
       {
        "name": "norm",
-       "signature": "norm(p?: number, dim?: number, keepdim?: boolean): Tensor",
+       "signature": "norm(p?: number, dim?: number, keepdim?: boolean, dtype?: DType): Tensor",
        "doc": "The L2 norm.",
        "section": {
         "ko": "Shape",
@@ -1519,7 +1519,7 @@
       },
       {
        "name": "softmax",
-       "signature": "softmax(dim?: number): Tensor",
+       "signature": "softmax(dim?: number, dtype?: DType): Tensor",
        "doc": "`exp(x) / Σ exp(x)`. **Computed with the maximum subtracted** —\notherwise it overflows at large values.",
        "section": {
         "ko": "Shape",
@@ -1529,7 +1529,7 @@
       },
       {
        "name": "logSoftmax",
-       "signature": "logSoftmax(dim?: number): Tensor",
+       "signature": "logSoftmax(dim?: number, dtype?: DType): Tensor",
        "doc": "`log(softmax(x))`. **It does not compute `softmax` and take the log** —\nsmall probabilities become 0 and the log becomes -inf. Written directly\nas a subtraction, that place does not exist.",
        "torch": "log_softmax",
        "section": {

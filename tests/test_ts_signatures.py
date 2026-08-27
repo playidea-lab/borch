@@ -902,7 +902,20 @@ SHORTER = {
     # matrix, so against the core's `(dim0, dim1)` it was a truncation; it now takes
     # both and swaps at any rank. The core moved in the same commit — it was
     # `(d0, d1)`, and torch answers to `dim0=`/`dim1=` and raises on `d0=`.
-    "Tensor": 19,
+    #
+    # **19 → 15.** `softmax`, `logSoftmax`, `nanmean` and `norm` grew `dtype`, which
+    # eight other reductions here had already: `castFirst` is the whole mechanism and
+    # those four did not call it. Integers are refused as `mean` refuses them, and
+    # torch stops in the same place — measured, `softmax(dtype=int64)` is a
+    # `NotImplementedError` there and `nanmean(dtype=int64)` says it could not infer
+    # the output dtype.
+    #
+    # The nine `generator` rows are the largest cluster left and they are **not**
+    # wiring on this side: there is one stream here (`random.ts`, `manualSeed`) and no
+    # `Generator` object to hand a method. The core's nine did the opposite — they had
+    # `Generator`, `DataLoader` honoured it, and each filler opened with
+    # `del generator`; that is fixed and the golden asks about it now.
+    "Tensor": 15,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and

@@ -10752,69 +10752,71 @@ def _needs_continuous(self, name):
         f"{phrase} '{shown}'"))
 
 
-def _fill_from(self, name, draw):
+def _fill_from(self, name, draw, generator=None):
+    """**`generator` picks the stream and the nine callers used to drop it.**
+
+    Every one of them opened with `del generator` — accepted, discarded, and no
+    warning, so `x.normal_(generator=g)` drew from the global stream and the caller's
+    reproducibility was quietly somebody else's. `bernoulli` two hundred lines up has
+    done the right thing in one line the whole time, and `Generator` exists here and
+    is honoured by `DataLoader`, so this was wiring rather than a missing mechanism.
+    """
     _refuse_leaf(self, name)
     if name in _CONTINUOUS_REFUSAL:
         _needs_continuous(self, name)
-    self.data[...] = _np.asarray(draw(_rng, self.data.shape),
+    rng = generator.rng() if generator is not None else _rng
+    self.data[...] = _np.asarray(draw(rng, self.data.shape),
                                  dtype=self.data.dtype)
     return self
 
 
 def _normal_(self, mean=0.0, std=1.0, generator=None):
-    del generator
     if std < 0:
         raise RuntimeError(_like_torch(
             f"the standard deviation for normal_ must be >= 0 (got {std}).",
             f"normal expects std >= 0.0, but found std {std}"))
-    return _fill_from(self, "normal_", lambda r, s: r.normal(mean, std, s))
+    return _fill_from(self, "normal_", lambda r, s: r.normal(mean, std, s), generator)
 
 
 def _uniform_(self, from_=0.0, to=1.0, generator=None):
-    del generator
     if from_ > to:
         raise RuntimeError(_like_torch(
             f"uniform_ takes [from, to) (got {from_}, {to}).",
             f"uniform_ expects to return a [from, to) range, but found from={from_} > to={to}"))
-    return _fill_from(self, "uniform_", lambda r, s: r.uniform(from_, to, s))
+    return _fill_from(self, "uniform_", lambda r, s: r.uniform(from_, to, s), generator)
 
 
 def _exponential_(self, lambd=1.0, generator=None):
-    del generator
     if lambd <= 0:
         raise RuntimeError(_like_torch(
             f"the lambda for exponential_ must be > 0 (got {lambd}).",
             f"exponential_ expects lambda > 0.0, but found lambda={lambd}"))
     return _fill_from(self, "exponential_",
-                      lambda r, s: r.exponential(1.0 / lambd, s))
+                      lambda r, s: r.exponential(1.0 / lambd, s), generator)
 
 
 def _cauchy_(self, median=0.0, sigma=1.0, generator=None):
-    del generator
     return _fill_from(self, "cauchy_",
-                      lambda r, s: median + sigma * r.standard_cauchy(s))
+                      lambda r, s: median + sigma * r.standard_cauchy(s), generator)
 
 
 def _log_normal_(self, mean=1.0, std=2.0, generator=None):
-    del generator
-    return _fill_from(self, "log_normal_", lambda r, s: r.lognormal(mean, std, s))
+    return _fill_from(self, "log_normal_", lambda r, s: r.lognormal(mean, std, s), generator)
 
 
 def _geometric_(self, p, generator=None):
     """**Discrete, so it runs on an integer tensor too.** The one that parts from
     the five continuous ones."""
-    del generator
     if not 0 < p < 1:
         raise RuntimeError(_like_torch(
             f"the p for geometric_ must be in (0, 1) (got {p}).",
             f"geometric_ expects p to be in (0, 1), but got p={p}"))
-    return _fill_from(self, "geometric_", lambda r, s: r.geometric(p, s))
+    return _fill_from(self, "geometric_", lambda r, s: r.geometric(p, s), generator)
 
 
 def _random_(self, from_=0, to=None, generator=None):
     """**The range depends on the dtype** — given nothing it reaches as far as
     that dtype can hold."""
-    del generator
     # **The upper bound is as far as that dtype counts exactly.** Past 2^24
     # float32 cannot tell neighbouring integers apart, so drawing above that
     # clumps the values — torch cuts it there too (measured: the maximum is
@@ -10828,7 +10830,7 @@ def _random_(self, from_=0, to=None, generator=None):
             f"the from for random_ must be less than to (got {from_}, {to}).",
             f"random_ expects 'from' to be less than 'to', but got from={from_} >= to={to}"))
     return _fill_from(self, "random_",
-                      lambda r, s: r.integers(from_, to, s))
+                      lambda r, s: r.integers(from_, to, s), generator)
 
 
 for _rname, _rfn in (("normal_", _normal_), ("uniform_", _uniform_),
@@ -10849,9 +10851,10 @@ def _bernoulli_(self, p=0.5, generator=None):
     from the same seed gave different values and nobody asked — the seed check ran
     over the seven added later and did not count this one.
     """
-    del generator
     _refuse_leaf(self, "bernoulli_")
-    self.data[...] = (_rng.random(self.data.shape) < p).astype(self.data.dtype)
+    # As `bernoulli` above, and as `_fill_from` now: the stream the caller asked for.
+    rng = generator.rng() if generator is not None else _rng
+    self.data[...] = (rng.random(self.data.shape) < p).astype(self.data.dtype)
     return self
 
 Tensor.bernoulli_ = _bernoulli_
