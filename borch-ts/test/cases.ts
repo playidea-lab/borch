@@ -3631,6 +3631,10 @@ function addUnpool(out: Map<string, Case>): void {
     ["MaxPool3d", () => new nn.MaxPool3d(2)],
     ["AvgPool1d", () => new nn.AvgPool1d(2)],
     ["AvgPool2d", () => new nn.AvgPool2d(2)],
+    // **This one could not be asked until today.** The ledger row said `AvgPool2d`
+    // takes no padding, which was true while it called the two-dimensional kernel
+    // and stopped being true when it moved to `poolND` like its two siblings.
+    ["AvgPool2d(stride, padding)", () => new nn.AvgPool2d(3, 2, 1)],
     ["AvgPool3d", () => new nn.AvgPool3d(2)],
     ["LPPool1d", () => new nn.LPPool1d(2, 2)],
     ["LPPool2d(stride, ceil)", () => new nn.LPPool2d(3, 2, 2, true)],

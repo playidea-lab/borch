@@ -1457,6 +1457,67 @@ export async function report(): Promise<Report> {
     want("a layer with neither still builds", plain.describe().includes("in_features=2"),
       plain.describe());
   }
+
+  // ── nine seats the layer next door already had ────────────────────────
+  //
+  // The axis had fourteen `nn` rows left and said they were features. Asking, for
+  // each, whether a sibling already carried the argument split them: **eight were
+  // wiring.** `AvgPool2d` called the two-dimensional kernel while `AvgPool1d` and
+  // `AvgPool3d` called `poolND`, which reads its rank off the input and has carried
+  // padding, ceilMode, countIncludePad and divisorOverride since it was written. So
+  // the arguments were one call away, not one implementation away.
+  {
+    // `AvgPool2d(3, 2, 1)` — padding reaches the kernel, so the answer changes.
+    const img = Tensor.from(
+      Array.from({ length: 16 }, (_, i) => i + 1), [1, 1, 4, 4]);
+    const padded = await new nn.AvgPool2d(3, 2, 1).call(img).toArray();
+    const bare = await new nn.AvgPool2d(3, 2).call(img).toArray();
+    want("AvgPool2d padding reaches poolND",
+      JSON.stringify(padded) !== JSON.stringify(bare),
+      `${padded} against ${bare}`);
+    want("and it prints what it holds",
+      new nn.AvgPool2d(3, 2, 1).describe()
+        === "AvgPool2d(kernel_size=3, stride=2, padding=1)",
+      new nn.AvgPool2d(3, 2, 1).describe());
+
+    // **MaxPool1d/3d were printing three arguments they could not take.**
+    const M1 = nn.MaxPool1d as unknown as new (...a: unknown[]) => { describe(): string };
+    let refused = "";
+    try { new M1(2, undefined, 1); } catch (e) { refused = (e as Error).message; }
+    want("MaxPool1d refuses padding by name rather than dropping it",
+      refused.includes("MaxPool1d(padding"), refused || "(no error)");
+    want("and its repr is now what it holds, not a constant",
+      new nn.MaxPool1d(2).describe()
+        === "MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)",
+      new nn.MaxPool1d(2).describe());
+
+    // **torch refuses this one itself** — porting the seat means porting the error.
+    const CT = nn.ConvTranspose2d as unknown as new (...a: unknown[]) => unknown;
+    let ctRefused = "";
+    try {
+      new CT(1, 1, 2, 1, 0, 0, 1, true, 1, "reflect");
+    } catch (e) { ctRefused = (e as Error).message; }
+    want("ConvTranspose2d says what torch says about a non-zeros padding mode",
+      ctRefused.includes('Only "zeros" padding mode is supported'),
+      ctRefused || "(no error)");
+    // The default still builds — the refusal is on the value, not on the seat.
+    want("and zeros still builds", !!new nn.ConvTranspose2d(1, 1, 2));
+
+    // `LazyLinear`'s label claimed `bias=True` unconditionally.
+    want("LazyLinear(bias=false) says so",
+      new nn.LazyLinear(3, false).describe().includes("bias=False"),
+      new nn.LazyLinear(3, false).describe());
+
+    // `RMSNorm`: the kernel took `eps` all along and the layer did not hand it over.
+    const r = Tensor.from([1.0, 2.0, 3.0, 4.0], [1, 4]);
+    const tight = await new nn.RMSNorm(4).call(r).toArray();
+    const loose = await new nn.RMSNorm(4, 0.5).call(r).toArray();
+    want("RMSNorm eps reaches the kernel",
+      JSON.stringify(tight) !== JSON.stringify(loose), `${tight} vs ${loose}`);
+    want("and elementwiseAffine=false keeps no weight",
+      Object.keys(new nn.RMSNorm(4, null, false).stateDict()).length === 0,
+      JSON.stringify(Object.keys(new nn.RMSNorm(4, null, false).stateDict())));
+  }
     // **This asked the wrong question and passed.** It read
     // `nn.gumbelSoftmax.length === 1` — that the parameter is *absent* — which is not
     // what "eps must not matter" means, and is not what torch does: torch keeps `eps`

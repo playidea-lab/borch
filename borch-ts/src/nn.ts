@@ -1496,24 +1496,42 @@ export class InstanceNorm3d extends InstanceNormND {}
  * `LayerNorm`.
  */
 export class RMSNorm extends Module {
-  readonly weight: Tensor;
+  readonly weight: Tensor | null;
 
-  constructor(private readonly normalizedShape: number | readonly number[]) {
+  /**
+   * **`eps` was already in the kernel and the layer did not hand it over.**
+   * `Tensor.rmsNorm(dims, eps)` has carried it from the start with torch's float32
+   * default; this class took the shape alone, so `RMSNorm(4, 1e-3)` set nothing.
+   *
+   * `elementwiseAffine=false` is the layer with **no learnable scale at all** — not a
+   * scale left at one. The difference shows in `stateDict`, where torch's has no
+   * `weight` key, so a checkpoint written by `RMSNorm(4, elementwise_affine=False)`
+   * could not be read here in strict mode. Same shape as `GroupNorm`'s `affine`.
+   *
+   * torch's `eps` defaults to `None`, meaning *use the dtype's epsilon*, and there is
+   * one dtype here — so `null` and the kernel's default are the same answer.
+   */
+  constructor(private readonly normalizedShape: number | readonly number[],
+              private readonly eps: number | null = null,
+              elementwiseAffine = true,
+              device?: null, dtype?: null) {
     super();
+    refuseDeviceDtype("RMSNorm", device, dtype);
     const dims = typeof normalizedShape === "number"
       ? [normalizedShape] : [...normalizedShape];
-    this.weight = Tensor.owned(dims, 1);
-    this.claim(this.weight);
+    this.weight = elementwiseAffine ? Tensor.owned(dims, 1) : null;
+    if (this.weight) this.claim(this.weight);
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return { weight: this.weight };
+    return this.weight ? { weight: this.weight } : {};
   }
 
   override forward(x: Tensor): Tensor {
     const dims = typeof this.normalizedShape === "number"
       ? 1 : this.normalizedShape.length;
-    return x.rmsNorm(dims).mul(this.weight);
+    const out = this.eps === null ? x.rmsNorm(dims) : x.rmsNorm(dims, this.eps);
+    return this.weight ? out.mul(this.weight) : out;
   }
 }
 
@@ -1541,8 +1559,18 @@ export class ConvTransposeND extends Module {
     private readonly outputPadding = 0,
     private readonly groups = 1,
     private readonly dilation = 1,
+    paddingMode: PadMode | "zeros" = "zeros",
   ) {
     super();
+    // **torch refuses this itself, and the refusal is the whole of the argument.**
+    // `ConvTranspose2d(..., padding_mode="reflect")` raises `Only "zeros" padding
+    // mode is supported for ConvTranspose2d` — measured, not assumed. So this seat
+    // is not an unimplemented feature: porting it means porting the error. Left out,
+    // `paddingMode: "reflect"` was accepted in silence exactly where torch stops.
+    if (paddingMode !== "zeros") {
+      throw new RuntimeError(
+        `Only "zeros" padding mode is supported for ConvTranspose${spatial}d`);
+    }
     if (inChannels % groups !== 0 || outChannels % groups !== 0) {
       throw new RuntimeError(
         `groups=${groups} divides neither the input channels (${inChannels}) nor the `
@@ -1598,27 +1626,36 @@ export class ConvTransposeND extends Module {
  */
 export class ConvTranspose1d extends ConvTransposeND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
-              outputPadding = 0, groups = 1, bias = true, dilation = 1) {
+              outputPadding = 0, groups = 1, bias = true, dilation = 1,
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("ConvTranspose1d", device, dtype);
     super(inChannels, outChannels, kernelSize, 1, stride, padding, bias, outputPadding, groups,
-          dilation);
+          dilation, paddingMode);
   }
 }
 
 /** `torch.nn.ConvTranspose2d`. See `ConvTranspose1d` on the argument order. */
 export class ConvTranspose2d extends ConvTransposeND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
-              outputPadding = 0, groups = 1, bias = true, dilation = 1) {
+              outputPadding = 0, groups = 1, bias = true, dilation = 1,
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("ConvTranspose2d", device, dtype);
     super(inChannels, outChannels, kernelSize, 2, stride, padding, bias, outputPadding, groups,
-          dilation);
+          dilation, paddingMode);
   }
 }
 
 /** `torch.nn.ConvTranspose3d`. See `ConvTranspose1d` on the argument order. */
 export class ConvTranspose3d extends ConvTransposeND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
-              outputPadding = 0, groups = 1, bias = true, dilation = 1) {
+              outputPadding = 0, groups = 1, bias = true, dilation = 1,
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("ConvTranspose3d", device, dtype);
     super(inChannels, outChannels, kernelSize, 3, stride, padding, bias, outputPadding, groups,
-          dilation);
+          dilation, paddingMode);
   }
 }
 
@@ -1714,6 +1751,35 @@ export function scaledDotProductAttention(
   return Tensor.stack(outs, 0);
 }
 
+/**
+ * **`padding`, `dilation` and `ceilMode` hold torch's positions and refuse.**
+ *
+ * The core grew all three as working arguments; until the WGSL pooling kernel does
+ * too, the choice is between an argument that is absent and one that is in the wrong
+ * seat — and the wrong seat is what makes `new MaxPool2d(2, 2, 1)` set
+ * `returnIndices` where torch and the core set `padding`. A refusal that names the
+ * argument is the smaller wrong.
+ *
+ * It was written inline in `MaxPool2d` and the 1-D and 3-D layers had **no seats at
+ * all** while printing `padding=0, dilation=1, ceil_mode=False` in their `describe`
+ * — a repr for arguments they could not take, which is the tidiest way to look
+ * finished. Three classes now share the one refusal, which is the third repetition
+ * and the point at which this stops being a copy.
+ */
+function refuseUnwiredPooling(layer: string, padding: number, dilation: number,
+                              ceilMode: boolean): void {
+  for (const [name, asked] of [["padding", padding !== 0],
+                               ["dilation", dilation !== 1],
+                               ["ceilMode", ceilMode]] as const) {
+    if (asked) {
+      throw new Error(
+        `${layer}(${name}=…) is not carried across yet — the core implements it ` +
+        "and this side does not. The argument is here so that it cannot take " +
+        "another one's place.");
+    }
+  }
+}
+
 export class MaxPool2d extends Module {
   /**
    * **`returnIndices` was missing until the layer that consumes them arrived.**
@@ -1727,23 +1793,7 @@ export class MaxPool2d extends Module {
               readonly returnIndices = false,
               readonly ceilMode = false) {
     super();
-    // **`padding`, `dilation` and `ceilMode` hold torch's positions and refuse.**
-    // The core grew all three as working arguments in the same afternoon; until the
-    // WGSL pooling kernel does too, the choice here is between an argument that is
-    // absent and one that is in the wrong seat — and the wrong seat is what makes
-    // `new MaxPool2d(2, 2, 1)` set `returnIndices` where torch and the core set
-    // `padding`. A refusal that names the argument is the smaller wrong, and it is
-    // the same trade the core made for `add_bias_kv` an hour earlier.
-    for (const [name, asked] of [["padding", padding !== 0],
-                                 ["dilation", dilation !== 1],
-                                 ["ceilMode", ceilMode]] as const) {
-      if (asked) {
-        throw new Error(
-          `MaxPool2d(${name}=…) is not carried across yet — the core implements it ` +
-          "and this side does not. The argument is here so that it cannot take " +
-          "another one's place.");
-      }
-    }
+    refuseUnwiredPooling("MaxPool2d", padding, dilation, ceilMode);
   }
 
   override forward(x: Tensor): Tensor {
@@ -1778,8 +1828,14 @@ export class MaxPool2d extends Module {
 
 /** `torch.nn.MaxPool1d`. */
 export class MaxPool1d extends Module {
-  constructor(private readonly kernelSize = 2, private readonly stride?: number) {
+  constructor(private readonly kernelSize = 2,
+              private readonly stride?: number,
+              readonly padding = 0,
+              readonly dilation = 1,
+              readonly returnIndices = false,
+              readonly ceilMode = false) {
     super();
+    refuseUnwiredPooling("MaxPool1d", padding, dilation, ceilMode);
   }
 
   override forward(x: Tensor): Tensor {
@@ -1791,14 +1847,21 @@ export class MaxPool1d extends Module {
    * than the behaviour. */
   override describe(): string {
     return `MaxPool1d(kernel_size=${this.kernelSize}, stride=${this.stride ?? this.kernelSize}`
-      + ", padding=0, dilation=1, ceil_mode=False)";
+      + `, padding=${this.padding}, dilation=${this.dilation}`
+      + `, ceil_mode=${this.ceilMode ? "True" : "False"})`;
   }
 }
 
 /** `torch.nn.MaxPool3d`. */
 export class MaxPool3d extends Module {
-  constructor(private readonly kernelSize = 2, private readonly stride?: number) {
+  constructor(private readonly kernelSize = 2,
+              private readonly stride?: number,
+              readonly padding = 0,
+              readonly dilation = 1,
+              readonly returnIndices = false,
+              readonly ceilMode = false) {
     super();
+    refuseUnwiredPooling("MaxPool3d", padding, dilation, ceilMode);
   }
 
   override forward(x: Tensor): Tensor {
@@ -1808,7 +1871,8 @@ export class MaxPool3d extends Module {
   /** As `MaxPool1d`. */
   override describe(): string {
     return `MaxPool3d(kernel_size=${this.kernelSize}, stride=${this.stride ?? this.kernelSize}`
-      + ", padding=0, dilation=1, ceil_mode=False)";
+      + `, padding=${this.padding}, dilation=${this.dilation}`
+      + `, ceil_mode=${this.ceilMode ? "True" : "False"})`;
   }
 }
 
@@ -2034,19 +2098,36 @@ export class FractionalMaxPool3d extends FractionalMaxPoolND {
 }
 
 export class AvgPool2d extends Module {
+  /**
+   * **The other four came from moving to the path its two siblings already use.**
+   *
+   * This took `(kernelSize, stride)` and called `avgPool2d`, the two-dimensional
+   * kernel. `AvgPool1d` and `AvgPool3d` call `poolND`, which reads its rank off the
+   * input (`shape.length - 2`) and has carried `padding`, `ceilMode`,
+   * `countIncludePad` and `divisorOverride` from the start. So the missing arguments
+   * were not missing arithmetic — they were one call away, in a function the file
+   * next door was already using, and the 1-D layer's own comment explains
+   * `divisorOverride`'s absence there in a sentence that only makes sense if the
+   * 2-D form has it.
+   */
   constructor(private readonly kernelSize: number,
-              private readonly stride?: number) {
+              private readonly stride?: number,
+              private readonly padding = 0,
+              private readonly ceilMode = false,
+              private readonly countIncludePad = true,
+              private readonly divisorOverride: number | null = null) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.avgPool2d(this.kernelSize, this.stride);
+    return x.poolND("avg", this.kernelSize, this.stride, this.padding, this.ceilMode,
+                    this.countIncludePad, this.divisorOverride);
   }
 
   /** torch's `_AvgPoolNd.extra_repr` — three arguments and no `ceil_mode`. */
   override describe(): string {
     return `AvgPool2d(kernel_size=${this.kernelSize}, `
-      + `stride=${this.stride ?? this.kernelSize}, padding=0)`;
+      + `stride=${this.stride ?? this.kernelSize}, padding=${this.padding})`;
   }
 }
 
@@ -2975,9 +3056,13 @@ const lastAxis = (x: Tensor) => x.shape[x.shape.length - 1] ?? 0;
 const channels = (x: Tensor) => x.shape[1] ?? 0;
 
 export class LazyLinear extends LazyModule {
-  constructor(outFeatures: number) {
-    super(`LazyLinear(in_features=0, out_features=${outFeatures}, bias=True)`,
-      (inF) => new Linear(inF, outFeatures), lastAxis);
+  /** **`bias` reaches the `Linear` it builds** — the label printed `bias=True`
+   * unconditionally, so a `bias=false` layer would have said otherwise. */
+  constructor(outFeatures: number, bias = true, device?: null, dtype?: null) {
+    refuseDeviceDtype("LazyLinear", device, dtype);
+    super(`LazyLinear(in_features=0, out_features=${outFeatures}, `
+      + `bias=${bias ? "True" : "False"})`,
+      (inF) => new Linear(inF, outFeatures, bias), lastAxis);
   }
 }
 
