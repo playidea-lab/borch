@@ -838,3 +838,17 @@ a.api-link code { color: var(--ember-text); }
   margin-left: 50%;
   transform: translateX(-50%);
 }
+
+/* **The Run button was cut off on a phone.** `.runnable` clips (`overflow: hidden`, which
+   is what keeps the rounded corner), and on `python.html` the head carries five controls
+   — label, spacer, an "open" link, reset and run — which is two more than a lesson page.
+   Measured: `button.go` crossed the box by 21px at 390px and 51px at 360px, and fitted
+   only from 414px up. So on most phones the primary control of that page was half there.
+   It was found by geometry rather than by eye: an element overflowing an ancestor whose
+   `overflow-x` is `hidden` is cut, and that is a number rather than an opinion.
+   The row wraps instead. The spacer goes full-width and flat, which turns it from
+   "push the rest right" into "break the line here". */
+@media (max-width: 700px) {
+  .runnable-head { flex-wrap: wrap; row-gap: .35rem; }
+  .runnable-head .grow { margin-left: 0; width: 100%; height: 0; }
+}
