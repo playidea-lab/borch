@@ -86,14 +86,26 @@ def _conv_transpose(x, weight, bias=None, stride=1, padding=0):
 
 def _pool_fn(kind, adaptive):
     """One pooling. **No per-dimension names over there** — `poolND` does all of
-    them."""
-    def call(x, size, stride=None, return_indices=False):
+    them.
+
+    `padding` and `ceil_mode` reach `poolND`, which has taken them for the average
+    since it was written and takes them for the maximum now. Absent here, they were
+    not refused but **received and dropped**: `F.max_pool2d(x, 3, padding=1)` answered
+    with the unpadded pooling, a smaller table of plausible numbers.
+    """
+    def call(x, size, stride=None, padding=0, dilation=1, return_indices=False,
+             ceil_mode=False, count_include_pad=True, divisor_override=None):
         h = handle(x)
         if return_indices:
             return _pool_with_indices(x, size, stride, adaptive)
         if adaptive:
             return wrap(h.adaptivePool(kind, size))
-        return wrap(h.poolND(kind, size, stride if stride is not None else size))
+        if dilation != 1:
+            from borch._base import _unsupported
+            _unsupported(f"{kind}_pool(dilation=…)")
+        return wrap(h.poolND(kind, size, stride if stride is not None else size,
+                             padding, ceil_mode, count_include_pad,
+                             divisor_override))
     return call
 
 
@@ -2082,10 +2094,10 @@ def _max_pool_layer(name, wide=False):
     cases came back `<borch_webgpu._nn._Wrap object at …>` where torch prints
     `MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)`.
 
-    **Only the two-dimensional one has the other four seats over there**, and it
-    refuses `padding`, `dilation` and `ceil_mode` rather than ignoring them. So the
-    refusal now arrives where torch would have done the work, instead of the argument
-    being dropped on the way.
+    **`dilation` is the only one still refused**, and only the two-dimensional layer
+    has a seat for it — torch gives it to all three, and writing the same refusal in
+    three places would say the gap is three gaps. `padding` and `ceil_mode` are real
+    now: the maximum's kernel grew the guard the average had.
 
     `return_indices` keeps the Python path: it hands back a pair, and the layer that
     consumes those positions reads them from here.
@@ -2097,12 +2109,13 @@ def _max_pool_layer(name, wide=False):
         if wide:
             return _layer(name, kernel_size, stride, padding, dilation, False,
                           ceil_mode)
-        for what, asked in (("padding", padding != 0), ("dilation", dilation != 1),
-                            ("ceil_mode", ceil_mode)):
-            if asked:
-                from borch._base import _unsupported
-                _unsupported(f"{name}({what}=…)")
-        return _layer(name, kernel_size, stride)
+        # **All six, in torch's order**, because that is the order over there now.
+        # Written as four — kernel, stride, padding, ceil — `ceil_mode` landed in
+        # `dilation`'s seat and every 1-D and 3-D max pool stopped with a refusal
+        # naming an argument nobody had passed. The same seat, on the same layers,
+        # that the signature axis had just caught on the borch.ts side.
+        return _layer(name, kernel_size, stride, padding, dilation, False,
+                      ceil_mode)
     make.__name__ = name
     return make
 

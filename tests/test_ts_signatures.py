@@ -1026,9 +1026,16 @@ SHORTER = {
     # its 1-D and 3-D siblings had gone through `poolND` — which has all four of the
     # others — the whole time. It was short for no reason anybody had written down.
     #
+    # **45 → 43.** `MaxPool1d` and `MaxPool3d` took two of six for the same reason the
+    # average did, once the maximum's kernel learned padding. Adding `padding` and
+    # `ceilMode` alone put `ceilMode` in `dilation`'s seat — **this axis caught that in
+    # the run that added them**, which is the whole reason it counts positions and not
+    # names. `dilation` is refused on all three and is present so that it cannot take
+    # another argument's place.
+    #
     # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
-    # is what nearly all forty-five are short of.
-    "nn": 45,
+    # is what nearly all forty-three are short of.
+    "nn": 43,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

@@ -5050,6 +5050,38 @@ def unpool_cases(inp=None):
         add(f"층::repr::MaxUnpool{dim}d",
             lambda L, d=dim: repr(getattr(L.nn, f"MaxUnpool{d}d")(2)))
 
+    # ── the maximum's padding, which only its repr used to be asked about ──
+    #
+    # borch.ts refused `padding` and `ceil_mode` on the ground that the maximum's
+    # backward reads the input at each window position and a padded position has none.
+    # The average had the answer one function away all along: take the padding off the
+    # coordinate and skip what falls outside. So the only case that existed was the
+    # layer's repr — **which a refusal fails and a wrong answer passes**, because a
+    # repr is a string about the arguments and not about the pooling.
+    #
+    # The three below are about the pooling. A 3×3 window with stride 2 over a 4×4
+    # plane: with `padding=1` the corners are windows that hang off two sides at once,
+    # and with `ceil_mode` there is an extra row and column of windows that start
+    # inside and end outside. Both are places where a kernel that reads past the edge
+    # gives a plausible number rather than an error.
+    for _tag, _kw in (("padding", {"padding": 1}), ("ceil", {"ceil_mode": True}),
+                      ("padding, ceil", {"padding": 1, "ceil_mode": True})):
+        add(f"자리::max_pool2d({_tag})",
+            lambda L, k=_kw: F(L).max_pool2d(L.tensor(plane), 3, stride=2, **k))
+        add(f"자리::MaxPool2d({_tag})",
+            lambda L, k=_kw: L.nn.MaxPool2d(3, stride=2, **k)(L.tensor(plane)))
+
+    # **The gradient is where a wrong window shows.** Forward, a cell read past the
+    # edge is one number among a maximum's; backward, the whole window's gradient goes
+    # to whichever cell it decided had won, so reading the wrong cell moves the
+    # gradient to the wrong place and the sum stays the same.
+    def grad_padded(L):
+        x = L.tensor(plane, requires_grad=True)
+        F(L).max_pool2d(x, 3, stride=2, padding=1).sum().backward()
+        return x.grad
+
+    add("자리::grad::max_pool2d(padding)", grad_padded)
+
     # ── gradients ──
     def grad_pool(L):
         x = L.tensor(plane, requires_grad=True)

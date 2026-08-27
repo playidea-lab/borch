@@ -2424,24 +2424,43 @@ export function poolNDKey(p: PoolNDShape): string {
 }
 
 export function poolNDForward(p: PoolNDShape, kind: "max" | "avg"): string {
+  if (kind === "avg") return avgNDForward(p);
   const inSpace = p.inDims.reduce((a, b) => a * b, 1);
   const outSpace = p.outDims.reduce((a, b) => a * b, 1);
   const inStride = suffixStrides(p.inDims);
   const outStride = suffixStrides(p.outDims);
+  const pad = p.pad ?? p.kernel.map(() => 0);
   const n = p.NC * outSpace;
   const decode = p.outDims.map((_, d) =>
-    `  let o${d} = (r / ${outStride[d] ?? 1}u) % ${p.outDims[d] ?? 1}u;`).join("\n");
+    `  let o${d} = i32((r / ${outStride[d] ?? 1}u) % ${p.outDims[d] ?? 1}u);`).join("\n");
   const open: string[] = [];
   const close: string[] = [];
+  const guards: string[] = [];
   const terms: string[] = [];
   for (const [d, size] of p.kernel.entries()) {
-    open.push(`    for (var k${d} = 0u; k${d} < ${size}u; k${d} = k${d} + 1u) {`);
+    const st = p.stride[d] ?? 1;
+    const pd = pad[d] ?? 0;
+    const dim = p.inDims[d] ?? 1;
+    open.push(`    for (var k${d} = 0; k${d} < ${size}; k${d} = k${d} + 1) {`);
     close.push("    }");
-    terms.push(`(o${d} * ${p.stride[d] ?? 1}u + k${d}) * ${inStride[d] ?? 1}u`);
+    // **The same guard the average has had all along.** The window is laid out in
+    // padded coordinates and the buffer holds the real ones, so the padding comes off
+    // before the read and anything outside is not read at all.
+    guards.push(`      let a${d} = o${d} * ${st} + k${d} - ${pd};`);
+    guards.push(`      if (a${d} < 0 || a${d} >= ${dim}) { continue; }`);
+    terms.push(`u32(a${d}) * ${inStride[d] ?? 1}u`);
   }
-  if (kind === "avg") return avgNDForward(p);
-  const init = "X[base]";
-  const step = "acc = max(acc, v);";
+  // **It starts below every real value rather than at the window's first cell.** With
+  // padding that first cell can be outside the input, and reading it was the whole
+  // reason this kernel refused the argument. torch's own answer is the same: a padded
+  // position is −infinity and never wins. It cannot win everywhere either — torch
+  // requires the padding to be at most half the kernel, so no window is all padding.
+  //
+  // **One digit lower than f32's maximum**, and the reduction table above says why:
+  // `3.4028235e38` is the decimal rounding and sits *above* the true maximum, so WGSL
+  // discards the whole shader as "cannot be represented as f32". Written with the
+  // rounded value first, every max pool came back zero — a dispatch that never ran
+  // looks exactly like a buffer nobody wrote.
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
@@ -2451,11 +2470,11 @@ ${flatId(n)}
   let plane = gid / ${outSpace}u;
   let r = gid % ${outSpace}u;
 ${decode}
-  let base = plane * ${inSpace}u + ${terms.map((t) => t.replace(/k\d+/g, "0u")).join(" + ")};
-  var acc = ${init};
+  var acc = -3.4028234e38;
 ${open.join("\n")}
+${guards.join("\n")}
       let v = X[plane * ${inSpace}u + ${terms.join(" + ")}];
-      ${step}
+      acc = max(acc, v);
 ${close.join("\n")}
   Out[gid] = acc;
 }`;
@@ -2545,7 +2564,6 @@ export function poolNDBackward(p: PoolNDShape, kind: "max" | "avg"): string {
   const open: string[] = [];
   const close: string[] = [];
   const oTerms: string[] = [];
-  const wTerms: string[] = [];
   const counts: string[] = [];
   for (const [d, size] of p.outDims.entries()) {
     const st = p.stride[d] ?? 1;
@@ -2557,7 +2575,6 @@ export function poolNDBackward(p: PoolNDShape, kind: "max" | "avg"): string {
     open.push(`      if (d${d} < 0 || d${d} >= ${ks}) { continue; }`);
     close.push("    }");
     oTerms.push(`u32(o${d}) * ${outStride[d] ?? 1}u`);
-    wTerms.push(`u32(o${d} * ${st}) * ${inStride[d] ?? 1}u`);
     const lo = `(o${d} * ${st})`;
     counts.push(p.countIncludePad === false
       ? `max(min(${lo} + ${ks}, ${pd + dim}) - max(${lo}, ${pd}), 0)`
@@ -2570,35 +2587,56 @@ export function poolNDBackward(p: PoolNDShape, kind: "max" | "avg"): string {
   const divisor = p.divisorOverride != null
     ? p.divisorOverride.toFixed(1)
     : `f32(${counts.join(" * ")})`;
+  // **The window is scanned in padded coordinates and read in real ones.** Every read
+  // below takes the padding off first and skips what falls outside — the same guard
+  // the forward has. Written without it, `o·stride + m` was used straight as a memory
+  // offset, which is right only while the padding is zero and is why the maximum
+  // refused the argument rather than answering with it.
   const kOpen: string[] = [];
   const kClose: string[] = [];
+  const kGuard: string[] = [];
   const kTerms: string[] = [];
-  const kMatch: string[] = [];
+  const kOrder: string[] = [];
+  const mineTerms: string[] = [];
+  const mineOrder: string[] = [];
   for (const [d, size] of p.kernel.entries()) {
-    kOpen.push(`        for (var m${d} = 0u; m${d} < ${size}u; m${d} = m${d} + 1u) {`);
+    const st = p.stride[d] ?? 1;
+    const pd = pad[d] ?? 0;
+    const dim = p.inDims[d] ?? 1;
+    kOpen.push(`        for (var m${d} = 0; m${d} < ${size}; m${d} = m${d} + 1) {`);
     kClose.push("        }");
-    kTerms.push(`m${d} * ${inStride[d] ?? 1}u`);
-    kMatch.push(`m${d} == u32(d${d})`);
+    kGuard.push(`          let b${d} = o${d} * ${st} + m${d} - ${pd};`);
+    kGuard.push(`          if (b${d} < 0 || b${d} >= ${dim}) { continue; }`);
+    kTerms.push(`u32(b${d}) * ${inStride[d] ?? 1}u`);
+    // The tie-break runs over the window's own positions, so its ordering stays in
+    // window coordinates while the reads are in real ones.
+    kOrder.push(`u32(m${d}) * ${inStride[d] ?? 1}u`);
+    mineTerms.push(`u32(i${d} - ${pd}) * ${inStride[d] ?? 1}u`);
+    mineOrder.push(`u32(d${d}) * ${inStride[d] ?? 1}u`);
   }
   const body = kind === "avg"
     ? `      acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}] / ${divisor};`
     : `      {
-        let wbase = plane * ${inSpace}u + ${wTerms.join(" + ")};
-        var best = X[wbase];
-        var win = true;
+        let mineAt = plane * ${inSpace}u + ${mineTerms.join(" + ")};
+        var best = X[mineAt];
 ${kOpen.join("\n")}
-          let v = X[wbase + ${kTerms.join(" + ")}];
+${kGuard.join("\n")}
+          let v = X[plane * ${inSpace}u + ${kTerms.join(" + ")}];
           if (v > best) { best = v; }
 ${kClose.join("\n")}
         // On a tie **the earlier position** wins. An equal value earlier beats it.
         var earlier = false;
 ${kOpen.join("\n")}
-          let idx = ${kTerms.join(" + ")};
-          let mine = ${wTerms.map((_, d) => `u32(d${d}) * ${inStride[d] ?? 1}u`).join(" + ")};
-          if (idx < mine && X[wbase + idx] == best) { earlier = true; }
+${kGuard.join("\n")}
+          let idx = ${kOrder.join(" + ")};
+          let mine = ${mineOrder.join(" + ")};
+          if (idx < mine && X[plane * ${inSpace}u + ${kTerms.join(" + ")}] == best) {
+            earlier = true;
+          }
 ${kClose.join("\n")}
-        win = (X[wbase + ${wTerms.map((_, d) => `u32(d${d}) * ${inStride[d] ?? 1}u`).join(" + ")}] == best) && !earlier;
-        if (win) { acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}]; }
+        if (X[mineAt] == best && !earlier) {
+          acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}];
+        }
       }`;
   // **The average does not look at the input.** And merely declaring `X` makes
   // `layout: "auto"` drop the unused binding, so a caller passing three buffers is

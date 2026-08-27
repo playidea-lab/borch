@@ -1709,27 +1709,25 @@ export class MaxPool2d extends Module {
               readonly returnIndices = false,
               readonly ceilMode = false) {
     super();
-    // **`padding`, `dilation` and `ceilMode` hold torch's positions and refuse.**
-    // The core grew all three as working arguments in the same afternoon; until the
-    // WGSL pooling kernel does too, the choice here is between an argument that is
-    // absent and one that is in the wrong seat — and the wrong seat is what makes
-    // `new MaxPool2d(2, 2, 1)` set `returnIndices` where torch and the core set
-    // `padding`. A refusal that names the argument is the smaller wrong, and it is
-    // the same trade the core made for `add_bias_kv` an hour earlier.
-    for (const [name, asked] of [["padding", padding !== 0],
-                                 ["dilation", dilation !== 1],
-                                 ["ceilMode", ceilMode]] as const) {
-      if (asked) {
-        throw new Error(
-          `MaxPool2d(${name}=…) is not carried across yet — the core implements it ` +
-          "and this side does not. The argument is here so that it cannot take " +
-          "another one's place.");
-      }
+    // **`padding` and `ceilMode` were refused with `dilation` and are not the same
+    // kind of gap.** Both are a coordinate the window lands on, and `poolND` has taken
+    // them for the average since it was written; the maximum's kernel needed the same
+    // guard and a starting value below every real one, and it has them now.
+    //
+    // `dilation` stays refused, and it stays as an argument rather than as an absence
+    // for the reason written when all three were here: left out, `new MaxPool2d(2, 2,
+    // 1)` sets `returnIndices` where torch and the core set `padding`, and a wrong
+    // seat is worse than a refusal that names what it refuses.
+    if (dilation !== 1) {
+      throw new Error(
+        "MaxPool2d(dilation=…) is not carried across yet — the core implements it " +
+        "and this side does not. The argument is here so that it cannot take " +
+        "another one's place.");
     }
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool2d(this.kernelSize, this.stride);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
   }
 
   /** The values and the positions that produced them. `MaxUnpool2d` takes both. */
@@ -1760,12 +1758,31 @@ export class MaxPool2d extends Module {
 
 /** `torch.nn.MaxPool1d`. */
 export class MaxPool1d extends Module {
-  constructor(private readonly kernelSize = 2, private readonly stride?: number) {
+  /** torch's list, as `MaxPool2d` beside it — **all six seats, in torch's order.**
+   *  Written with `padding` and `ceilMode` alone, `ceilMode` sat where torch puts
+   *  `dilation`, so `new MaxPool1d(2, 2, 0, true)` meant two different things on the
+   *  two sides. The signature axis said so in the same run that added them. */
+  constructor(private readonly kernelSize = 2, private readonly stride?: number,
+              private readonly padding = 0,
+              readonly dilation = 1,
+              readonly returnIndices = false,
+              private readonly ceilMode = false) {
     super();
+    if (dilation !== 1) {
+      throw new Error(
+        `MaxPool1d(dilation=…) is not carried across yet — the core implements it ` +
+        "and this side does not. The argument is here so that it cannot take " +
+        "another one's place.");
+    }
+  }
+
+  /** The values and the positions that produced them, as `MaxPool2d.pick`. */
+  pick(x: Tensor): { values: Tensor; indices: Tensor } {
+    return x.maxPoolWithIndices(this.kernelSize, this.stride);
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool1d(this.kernelSize, this.stride);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
   }
 
   /** torch's `_MaxPoolNd.extra_repr`. **A stride left unset prints the kernel**, which
@@ -1773,24 +1790,45 @@ export class MaxPool1d extends Module {
    * than the behaviour. */
   override describe(): string {
     return `MaxPool1d(kernel_size=${this.kernelSize}, stride=${this.stride ?? this.kernelSize}`
-      + ", padding=0, dilation=1, ceil_mode=False)";
+      + `, padding=${this.padding}, dilation=${this.dilation}`
+      + `, ceil_mode=${this.ceilMode ? "True" : "False"})`;
   }
 }
 
 /** `torch.nn.MaxPool3d`. */
 export class MaxPool3d extends Module {
-  constructor(private readonly kernelSize = 2, private readonly stride?: number) {
+  /** torch's list, as `MaxPool2d` beside it — **all six seats, in torch's order.**
+   *  Written with `padding` and `ceilMode` alone, `ceilMode` sat where torch puts
+   *  `dilation`, so `new MaxPool3d(2, 2, 0, true)` meant two different things on the
+   *  two sides. The signature axis said so in the same run that added them. */
+  constructor(private readonly kernelSize = 2, private readonly stride?: number,
+              private readonly padding = 0,
+              readonly dilation = 1,
+              readonly returnIndices = false,
+              private readonly ceilMode = false) {
     super();
+    if (dilation !== 1) {
+      throw new Error(
+        `MaxPool3d(dilation=…) is not carried across yet — the core implements it ` +
+        "and this side does not. The argument is here so that it cannot take " +
+        "another one's place.");
+    }
+  }
+
+  /** The values and the positions that produced them, as `MaxPool2d.pick`. */
+  pick(x: Tensor): { values: Tensor; indices: Tensor } {
+    return x.maxPoolWithIndices(this.kernelSize, this.stride);
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool3d(this.kernelSize, this.stride);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
   }
 
   /** As `MaxPool1d`. */
   override describe(): string {
     return `MaxPool3d(kernel_size=${this.kernelSize}, stride=${this.stride ?? this.kernelSize}`
-      + ", padding=0, dilation=1, ceil_mode=False)";
+      + `, padding=${this.padding}, dilation=${this.dilation}`
+      + `, ceil_mode=${this.ceilMode ? "True" : "False"})`;
   }
 }
 

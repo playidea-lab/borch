@@ -10055,13 +10055,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
          divisorOverride: number | null = null): Tensor {
     const spatial = this.shape.length - 2;
     if (spatial < 1) throw new Error(`pooling: the shape does not match: [${this.shape}]`);
-    // **The maximum refuses what only the average implements.** Its backward reads the
-    // input at each window position to find which cell won, and a padded position has
-    // no input to read — so the argument is not merely unwired, it has no meaning here
-    // yet. Refusing by name is the same trade `MaxPool2d` makes one file over.
-    if (kind === "max" && (padding !== 0 || ceilMode)) {
-      throw new Error(`maxPool: ${padding !== 0 ? "padding" : "ceilMode"} is not implemented`);
-    }
+    // **The maximum used to refuse what only the average implements**, on the ground
+    // that its backward reads the input at each window position and a padded position
+    // has none to read. The average had the answer one function away the whole time:
+    // take the padding off the coordinate and skip what falls outside. The maximum
+    // needed that guard and a starting value below every real one, and both kernels
+    // now carry it.
     const step = stride ?? kernel;
     const inDims = this.shape.slice(2);
     const p: PoolNDShape = {

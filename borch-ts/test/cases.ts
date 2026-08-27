@@ -3410,6 +3410,30 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("unpool::층::AdaptiveMaxPool2d 자리",
     () => new nn.AdaptiveMaxPool2d(2, true).pick(plane()).indices);
 
+  // **The maximum's padding, which only its repr used to be asked about.** It was
+  // refused here on the ground that the backward reads the input at each window
+  // position and a padded position has none; the average had the answer one function
+  // away — take the padding off the coordinate and skip what falls outside. A repr is
+  // a string about the arguments, so the case that existed failed on a refusal and
+  // would have passed on a wrong answer.
+  for (const [tag, pad, ceil] of [["padding", 1, false], ["ceil", 0, true],
+                                  ["padding, ceil", 1, true]] as const) {
+    out.set(`unpool::자리::max_pool2d(${tag})`,
+      () => plane().poolND("max", 3, 2, pad, ceil));
+    out.set(`unpool::자리::MaxPool2d(${tag})`,
+      () => new nn.MaxPool2d(3, 2, pad, 1, false, ceil).call(plane()));
+  }
+  // **The gradient is where a wrong window shows.** Forward, a cell read past the edge
+  // is one number among a maximum's; backward, the whole window's gradient goes to
+  // whichever cell it decided had won, so reading the wrong one moves the gradient and
+  // leaves the sum alone.
+  out.set("unpool::자리::grad::max_pool2d(padding)", () => {
+    const x = grid([1, 1, 4, 4]);
+    x.requiresGrad = true;
+    x.poolND("max", 3, 2, 1, false).sum().backward();
+    return gradOf(x, "maxPool padding");
+  });
+
   out.set("unpool::grad::자리 판의 풀링", () => {
     const x = grid([1, 1, 4, 4]);
     x.requiresGrad = true;
@@ -3686,6 +3710,11 @@ function addUnpool(out: Map<string, Case>): void {
     ["LayerNorm(shape, no affine)", () => new nn.LayerNorm([2, 4], 1e-5, false)],
     ["MaxPool1d", () => new nn.MaxPool1d(2)],
     ["MaxPool2d", () => new nn.MaxPool2d(2)],
+    // **This was the row this side carried as declined**, and it was declined for
+    // `padding` and `ceilMode` — which the kernel now takes. `dilation` is what is
+    // left, and it keeps its seat so that nothing else lands in it.
+    ["MaxPool2d(stride, padding, ceil)",
+      () => new nn.MaxPool2d(3, 2, 1, 1, false, true)],
     ["MaxPool3d", () => new nn.MaxPool3d(2)],
     ["AvgPool1d", () => new nn.AvgPool1d(2)],
     ["AvgPool2d", () => new nn.AvgPool2d(2)],

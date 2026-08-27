@@ -187,7 +187,9 @@ CEILINGS = {
     # than the values, and with a branch narrower than the mask. Every `where` case
     # before them handed all three the same shape, which is the one arrangement that
     # cannot tell broadcasting from three buffers read at the same offset.
-    "borch-ts/test": 3398,
+    # 3398 → 3404. Six, and case names again: the maximum's `자리::` group, which asks
+    # what its padding and `ceil_mode` compute rather than how the layer prints them.
+    "borch-ts/test": 3404,
 }
 
 
