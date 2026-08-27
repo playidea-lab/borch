@@ -16008,7 +16008,91 @@ def dataset_last_three_cases(inp=None):
             return f"{names}\n{list(np.round(out, 4))}"
         return run
 
+    def caltech101():
+        """`Caltech101`. **A directory that is not a class, removed after the sort.**
+
+        `BACKGROUND_Google` sorts between `airplanes` and `car_side`, so leaving it in
+        shifts every label above it by one — and the picture still comes back from the
+        directory that label names, which is why the count and the shapes agree either
+        way.
+
+        The fixture's categories are chosen to straddle it, and the third has two
+        pictures so the one-based per-category index cannot be mistaken for a running
+        one.
+        """
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "caltech101", "101_ObjectCategories")
+                counts = {"accordion": 1, "airplanes": 1, "BACKGROUND_Google": 1,
+                          "car_side": 2}
+                for k, (name, many) in enumerate(sorted(counts.items())):
+                    for i in range(1, many + 1):
+                        picture = ((np.arange(4 * 5 * 3) + k * 11 + i) % 251)
+                        _write_png8(os.path.join(base, name, f"image_{i:04d}.jpg"),
+                                    picture.reshape(4, 5, 3))
+                loaded = _made(L, "Caltech101")(root, target_type="category")
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    parts.append(np.asarray([target], dtype=np.float32))
+                names = "|".join(loaded.categories)
+                mapped = "|".join(loaded.annotation_categories)
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return f"{names}\n{mapped}\n{list(np.round(out, 4))}"
+        return run
+
+    def caltech256():
+        """`Caltech256`. **The label comes from the sorted position, not the directory's
+        own number**, and the file name is built from it.
+
+        The fixture leaves a gap in the numbering — `001`, `003` — so the two disagree.
+        On the real archive they never do, which is why a reader that took the prefix
+        passes there and fails here.
+
+        **Only `.jpg` files are counted.** A stray file beside the pictures is in the
+        fixture for that: counted whole, the index walks off the end of the numbering
+        and the read is a `FileNotFoundError` on the last item.
+        """
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "caltech256", "256_ObjectCategories")
+                for k, name in enumerate(("001.ak47", "003.backpack")):
+                    for i in range(1, k + 2):
+                        picture = ((np.arange(4 * 5 * 3) + k * 13 + i) % 251)
+                        _write_png8(
+                            os.path.join(base, name, f"{k + 1:03d}_{i:04d}.jpg"),
+                            picture.reshape(4, 5, 3))
+                    with open(os.path.join(base, name, "RENAME2"), "w") as handle:
+                        handle.write("not a picture\n")
+                loaded = _made(L, "Caltech256")(root)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    parts.append(np.asarray([target], dtype=np.float32))
+                names = "|".join(loaded.categories)
+                out = np.concatenate(parts)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return f"{names}\n{list(np.round(out, 4))}"
+        return run
+
     cases += [
+        (prefix + "Caltech101(a directory that is not a class)", caltech101()),
+        (prefix + "Caltech256(the label is the sorted position)", caltech256()),
         (prefix + "OxfordIIITPet(category)", oxford_pet("category")),
         (prefix + "OxfordIIITPet(a picture beside a number)",
          oxford_pet(("binary-category", "segmentation"))),

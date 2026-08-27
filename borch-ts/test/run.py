@@ -814,10 +814,10 @@ NOT_PORTED = {
     # calls a loader on each path, and a page has no directories to walk. Everything
     # else under `dataset::` is a format that could in principle cross; this is a
     # filesystem, which is not a format at all.
-    "dataset::": (61, "파이썬 — CIFAR's batches are pickles and the browser side "
+    "dataset::": (63, "파이썬 — CIFAR's batches are pickles and the browser side "
                         "reaches CIFAR through a JPEG sprite instead; `ImageFolder`, "
                         "CLEVR, RenderedSST2, the fourteen stereo and flow sets, Kitti, "
-                        "PhotoTour, the two VOC halves, the pets and the eleven that "
+                        "PhotoTour, the two VOC halves, the pets, the two Caltechs and the eleven that "
                         "walk a listing and call a loader walk directories and read "
                         "archives off disk, and a page has neither"),
     # `v2::` **was** a row here — 71, then 52, then gone. The nineteen that needed no v1

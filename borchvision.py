@@ -10297,6 +10297,147 @@ class VOCDetection(_VOCBase):
         return out
 
 
+class Caltech101(VisionDataset):
+    """A hundred and one object categories, **and a directory that is not one of them.**
+
+    <https://data.caltech.edu/records/mzrjq-6wc02>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*, and then said the wall was an md5. **Neither is
+    true.** torchvision's `_check_integrity` here is one line — `os.path.exists` on the
+    category directory — and its own comment says so: *can be more robust and check hash
+    of files*. The row was written from the word `_check_integrity` rather than from
+    opening it.
+
+    Three things this class has to get right:
+
+    - **`BACKGROUND_Google` is a directory and not a class**, and it is removed after
+      the sort. Left in, every label above it shifts by one and the picture still comes
+      back from the directory the label names.
+    - **Four category names differ between the pictures and the annotations**, and the
+      map is torchvision's: `airplanes` is `Airplanes_Side_2`, `Faces` is `Faces_2`.
+      A reader that assumed the two agree finds no annotation for four categories out of
+      a hundred and one, which is a `FileNotFoundError` on four percent of the set.
+    - **The index is one-based per category**, so `image_0001.jpg` is the first of each.
+      Counted across the whole set instead, every picture after the first category is
+      looked for under a name that is not there.
+    """
+
+    _ANNOTATION_NAMES = {"Faces": "Faces_2", "Faces_easy": "Faces_3",
+                         "Motorbikes": "Motorbikes_16",
+                         "airplanes": "Airplanes_Side_2"}
+
+    def __init__(self, root, target_type="category", transform=None,
+                 target_transform=None, download=False, loader=None):
+        super().__init__(_os.path.join(root, "caltech101"), transform=transform,
+                         target_transform=target_transform)
+        _os.makedirs(self.root, exist_ok=True)
+        if isinstance(target_type, str):
+            target_type = [target_type]
+        for one in target_type:
+            if one not in ("category", "annotation"):
+                raise ValueError(
+                    f"Unknown value '{one}' for argument target_type. Valid values are "
+                    "{category, annotation}.")
+        self.target_type = list(target_type)
+        self.loader = _folder_loader if loader is None else loader
+        del download
+        if not _os.path.exists(_os.path.join(self.root, "101_ObjectCategories")):
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        self.categories = sorted(
+            _os.listdir(_os.path.join(self.root, "101_ObjectCategories")))
+        self.categories.remove("BACKGROUND_Google")
+        self.annotation_categories = [self._ANNOTATION_NAMES.get(one, one)
+                                      for one in self.categories]
+        self.index = []
+        self.y = []
+        for i, category in enumerate(self.categories):
+            count = len(_os.listdir(
+                _os.path.join(self.root, "101_ObjectCategories", category)))
+            self.index.extend(range(1, count + 1))
+            self.y.extend(count * [i])
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, index):
+        image = self.loader(_os.path.join(
+            self.root, "101_ObjectCategories", self.categories[self.y[index]],
+            f"image_{self.index[index]:04d}.jpg"))
+        target = []
+        for one in self.target_type:
+            if one == "category":
+                target.append(self.y[index])
+            else:
+                data = _mat_read(_os.path.join(
+                    self.root, "Annotations",
+                    self.annotation_categories[self.y[index]],
+                    f"annotation_{self.index[index]:04d}.mat"))
+                target.append(data["obj_contour"])
+        target = tuple(target) if len(target) > 1 else target[0]
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+
+class Caltech256(VisionDataset):
+    """Two hundred and fifty-six categories, **numbered in their own directory names.**
+
+    <https://data.caltech.edu/records/nyy15-4j048>
+
+    Its row said an md5 too, and here as well `_check_integrity` is one `os.path.exists`.
+
+    **The file name carries the label**: `003_0001.jpg` is the first picture of the
+    third category, so the number comes from the position in the sorted listing and not
+    from the directory's own prefix. The two agree on the real archive, which is why a
+    reader that took the prefix passes on it — and disagrees the moment a category is
+    missing, which is what a fixture is.
+
+    **Only `.jpg` files are counted.** The archive ships a stray `RENAME2` and a
+    `.mat` beside the pictures in some categories, and counting the directory whole
+    walks off the end of the numbering.
+    """
+
+    def __init__(self, root, transform=None, target_transform=None, download=False,
+                 loader=None):
+        super().__init__(_os.path.join(root, "caltech256"), transform=transform,
+                         target_transform=target_transform)
+        _os.makedirs(self.root, exist_ok=True)
+        self.loader = _folder_loader if loader is None else loader
+        del download
+        if not _os.path.exists(_os.path.join(self.root, "256_ObjectCategories")):
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        self.categories = sorted(
+            _os.listdir(_os.path.join(self.root, "256_ObjectCategories")))
+        self.index = []
+        self.y = []
+        for i, category in enumerate(self.categories):
+            count = len([one for one in _os.listdir(
+                _os.path.join(self.root, "256_ObjectCategories", category))
+                if one.endswith(".jpg")])
+            self.index.extend(range(1, count + 1))
+            self.y.extend(count * [i])
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, index):
+        image = self.loader(_os.path.join(
+            self.root, "256_ObjectCategories", self.categories[self.y[index]],
+            f"{self.y[index] + 1:03d}_{self.index[index]:04d}.jpg"))
+        target = self.y[index]
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+
 class OxfordIIITPet(VisionDataset):
     """Thirty-seven breeds of cat and dog, **with three different targets.**
 
@@ -11375,7 +11516,7 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB",
               "VOCSegmentation", "VOCDetection", "OxfordIIITPet",
-              "CREStereo", "FallingThingsStereo"):
+              "CREStereo", "FallingThingsStereo", "Caltech101", "Caltech256"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")

@@ -387,7 +387,11 @@ FROZEN = {
     #
     # 50 → 52. `CREStereo` and `FallingThingsStereo`, the last two of the stereo and
     # flow family, on the same measurement. **The family is whole.**
-    "datasets": 52,
+    #
+    # 52 → 54. The two Caltechs, whose rows said an md5 — and whose `_check_integrity`
+    # is one `os.path.exists`, with torchvision's own comment beside it reading *can be
+    # more robust and check hash of files*.
+    "datasets": 54,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the

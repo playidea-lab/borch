@@ -664,20 +664,23 @@ SKIPPED = {
     # now rather than pointing at the row above it — which is the habit that let one
     # sentence take twenty-five names off the table.
 
-    "datasets.Caltech101": "its `__init__` builds the category list from a fixed name (`BACKGROUND_Google`) and md5s the archive — measured, a fixture tree stops at `list.remove(x): x not in list` before any picture is opened",
-    "datasets.Caltech256": "as above — the same base and the same md5",
     "datasets.CelebA": "`_check_integrity` md5s five files, and there is no fixture that passes it",
     "datasets.Cityscapes": "its pictures are PNG and `_png_read` handles those now — the wall left is the dataset rather than the format: thirty splits crossed with five target types, polygon annotations in JSON, and a 60GB archive behind a login. **The codec was never the expensive half of this one**, which the old row (`as above — a codec`) could not say because it pointed at a sentence about JPEG",
     "datasets.CocoCaptions": "as `CocoDetection` — `pycocotools`, which is a dependency and not a codec",
     "datasets.CocoDetection": "it reads its annotations through **`pycocotools`**, a third-party package with a compiled half. Its row said *a codec*, which is a smaller wall standing in front of a larger one",
-    # **A new kind of wall, and it is not a codec.** These four gate on the *md5 of the
-    # real archive* before they read anything: `check_integrity` on a `.tgz` or on the
-    # annotation files themselves. A fixture cannot pass that check, so torchvision's
-    # own reader refuses the tree this repository would compare against — and every
-    # dataset here is compared against torchvision's own or it is not written. The
-    # class is a walk plus a loader like the ones that went in; what is missing is a
-    # way to check it, which is a different sentence and is why these are declined
-    # rather than 아직.
+    # **A wall that is not a codec, and it is smaller than it was written.** These gate
+    # on the *md5 of the real archive* before they read anything: `check_integrity` on a
+    # `.tgz` or on the annotation files themselves. A fixture cannot pass that, so
+    # torchvision's own reader refuses the tree this repository would compare against —
+    # and every dataset here is compared against torchvision's own or it is not written.
+    #
+    # **The sentence was applied to seven names it was not true of.** `Caltech101`,
+    # `Caltech256` and `WIDERFace` have a `_check_integrity` that is `os.path.exists` —
+    # torchvision's own comment on two of them reads *can be more robust and check hash
+    # of files* — and `ImageNet`, `SBDataset` and the two `LFW`s have no such method at
+    # all. It was written from the *word* `_check_integrity` rather than from opening
+    # it, which is the same habit as `as above — a codec` one screen up. Measured, all
+    # three of the first group construct from a fixture; the two Caltechs are in.
     "datasets.Flowers102": "its labels are a plain numeric `.mat` and `_mat_read` reads those — but `_check_integrity` md5s the real `imagelabels.mat` and `setid.mat` before reading, so no fixture reaches torchvision's own answer to compare against",
     "datasets.LFWPeople": "as above — `_LFW._check_integrity` md5s both the archive and the annotation file",
     "datasets.LFWPairs": "as above — the same base class, the same two md5s",
