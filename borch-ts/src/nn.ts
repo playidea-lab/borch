@@ -1096,14 +1096,47 @@ export class Softshrink extends Module {
 }
 
 export class Hardtanh extends Module {
-  constructor(private readonly minVal = -1.0, private readonly maxVal = 1.0,
-              private readonly inplace = false) {
+  private readonly minVal: number;
+  private readonly maxVal: number;
+
+  /**
+   * **`minValue` and `maxValue` are deprecated and they are not inert.**
+   *
+   * The signature table called this row short on purpose — "closing it means adding
+   * two arguments torch itself tells you not to use". Measured, torch does more than
+   * tolerate them: each **overrides** its replacement, even when both are given.
+   *
+   *     nn.Hardtanh(min_val=-1, min_value=-2)   ->   Hardtanh(min_val=-2, max_val=1.0)
+   *
+   * So they change the answer, and left out of a JavaScript signature they are not
+   * refused — they are discarded in silence. That is the difference between a seat
+   * torch says not to use and a seat a caller cannot tell went nowhere.
+   *
+   * Carried, warned about and honoured, in torch's order. `describe` prints `min_val`
+   * whichever way it was set, as torch's does.
+   */
+  constructor(minVal = -1.0, maxVal = 1.0,
+              private readonly inplace = false,
+              minValue?: number, maxValue?: number) {
     super();
+    for (const [old, now] of [["min_value", "min_val"],
+                              ["max_value", "max_val"]] as const) {
+      if ((old === "min_value" ? minValue : maxValue) !== undefined) {
+        console.warn(`keyword argument \`${old}\` is deprecated and renamed to \`${now}\``);
+      }
+    }
+    this.minVal = minValue ?? minVal;
+    this.maxVal = maxValue ?? maxVal;
   }
 
   override forward(x: Tensor): Tensor {
     const out = x.hardtanh(this.minVal, this.maxVal);
     return this.inplace ? writeBack(x, out) : out;
+  }
+
+  override describe(): string {
+    return `Hardtanh(min_val=${pyFloat(this.minVal)}, max_val=${pyFloat(this.maxVal)}`
+      + `${this.inplace ? ", inplace=True" : ""})`;
   }
 }
 
@@ -1426,9 +1459,18 @@ export class InstanceNormND extends Module {
     // that is refused, so `false` is what this layer does.
     private readonly affine = false,
     private readonly trackRunningStats = false,
+    device?: null,
+    dtype?: null,
     bias = true,
   ) {
     super();
+    // **`bias` sits behind `device` and `dtype`, and it did not.** torch declares it
+    // keyword-only (`*, bias: bool = True`) after the pair, so a sixth positional
+    // argument is `device` there and was `bias` here — a shift rather than a short
+    // tail, and one the signature axis cannot see: `InstanceNorm1d/2d/3d` declare no
+    // constructor of their own, so the emitted `.d.ts` has no argument list for them
+    // and the axis reads `no argument list` rather than a disagreement.
+    refuseDeviceDtype("InstanceNorm", device, dtype);
     if (trackRunningStats) {
       // torch registers three running statistics here and **reads them in eval
       // mode**. Accepting this and ignoring it leaves training right and
@@ -1487,9 +1529,31 @@ export class InstanceNormND extends Module {
  * core's `nn` against borch.ts's `nn` was not a question any file asked** —
  * `tests/test_nn_names.py` now asks it.
  */
-export class InstanceNorm1d extends InstanceNormND {}
-export class InstanceNorm2d extends InstanceNormND {}
-export class InstanceNorm3d extends InstanceNormND {}
+// **They declare the list rather than inheriting it silently.** With an empty body
+// the emitted `.d.ts` carries no argument list for these three, and the signature axis
+// reads that as `no argument list` — not as agreement and not as a gap, just a row it
+// skips. `InstanceNormND` had `bias` in `device`'s seat for exactly as long.
+export class InstanceNorm1d extends InstanceNormND {
+  constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    super(numFeatures, eps, momentum, affine, trackRunningStats, device, dtype, bias);
+  }
+}
+export class InstanceNorm2d extends InstanceNormND {
+  constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    super(numFeatures, eps, momentum, affine, trackRunningStats, device, dtype, bias);
+  }
+}
+export class InstanceNorm3d extends InstanceNormND {
+  constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    super(numFeatures, eps, momentum, affine, trackRunningStats, device, dtype, bias);
+  }
+}
 
 /**
  * **It does not subtract the mean.** That is the only difference from
@@ -2350,10 +2414,18 @@ export class LayerNorm extends Module {
  * values catch it.
  */
 export class Upsample extends Module {
+  /**
+   * **`recomputeScaleFactor` was missing and the kernel behaved as though it were
+   * on.** With a fractional factor torch works out the integer output size and then
+   * either samples at the factor it was given (the default) or derives the scale back
+   * from that size (the flag). Same shape, different values — measured on torch at
+   * `scale_factor=1.5`: sums 120 and 132.
+   */
   constructor(private readonly size: number | readonly number[] | null = null,
               private readonly scaleFactor: number | null = null,
               private readonly mode: "nearest" | "bilinear" = "nearest",
-              private readonly alignCorners: boolean | null = null) {
+              private readonly alignCorners: boolean | null = null,
+              private readonly recomputeScaleFactor: boolean | null = null) {
     super();
   }
 
@@ -2362,7 +2434,7 @@ export class Upsample extends Module {
       throw new RuntimeError("either size or scale_factor should be defined");
     }
     return x.interpolate(this.size, this.scaleFactor, this.mode,
-                         this.alignCorners ?? false);
+                         this.alignCorners ?? false, this.recomputeScaleFactor);
   }
 
   /** **Whichever of the two was given**, not both — a layer built with a size prints
@@ -3178,13 +3250,29 @@ export class LazyConvTranspose3d extends LazyConvTransposeBase {
  * stops matching.
  */
 class LazyNormBase extends LazyModule {
+  /**
+   * **The instance branch took four arguments and handed over one.**
+   * `new InstanceNormND(c, eps)` dropped `momentum`, `affine`, `trackRunningStats`
+   * and `bias` on the floor, so `LazyInstanceNorm2d(1e-5, 0.1, true)` built a layer
+   * with no parameters at all and said nothing. The batch branch beside it passed all
+   * six from the start, which is what made the gap invisible: the signature next door
+   * looked like the proof.
+   *
+   * torch defaults `affine` and `trackRunningStats` **the other way round** between
+   * the two — true on batch, false on instance — so the arguments cannot be forwarded
+   * with one set of defaults. They come in as `undefined` and each branch fills its
+   * own.
+   */
   constructor(kind: "batch" | "instance", spatial: number, eps = 1e-5,
-              momentum = 0.1, affine = true, trackRunningStats = true,
+              momentum = 0.1, affine?: boolean, trackRunningStats?: boolean,
               bias = true) {
-    super(`Lazy${kind === "batch" ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
-      (c) => (kind === "batch"
-        ? new BatchNormND(c, eps, momentum, affine, trackRunningStats, bias)
-        : new InstanceNormND(c, eps)),
+    const batch = kind === "batch";
+    super(`Lazy${batch ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
+      (c) => (batch
+        ? new BatchNormND(c, eps, momentum, affine ?? true,
+                          trackRunningStats ?? true, bias)
+        : new InstanceNormND(c, eps, momentum, affine ?? false,
+                             trackRunningStats ?? false, undefined, undefined, bias)),
       channels);
   }
 }
@@ -3214,13 +3302,31 @@ export class LazyBatchNorm3d extends LazyNormBase {
   }
 }
 export class LazyInstanceNorm1d extends LazyNormBase {
-  constructor(eps?: number) { super("instance", 1, eps); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyInstanceNorm1d", device, dtype);
+    super("instance", 1, eps, momentum, affine, trackRunningStats,
+          bias);
+  }
 }
 export class LazyInstanceNorm2d extends LazyNormBase {
-  constructor(eps?: number) { super("instance", 2, eps); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyInstanceNorm2d", device, dtype);
+    super("instance", 2, eps, momentum, affine, trackRunningStats,
+          bias);
+  }
 }
 export class LazyInstanceNorm3d extends LazyNormBase {
-  constructor(eps?: number) { super("instance", 3, eps); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyInstanceNorm3d", device, dtype);
+    super("instance", 3, eps, momentum, affine, trackRunningStats,
+          bias);
+  }
 }
 
 // ── Loss layers ────────────────────────────────────────────────────────
@@ -4762,8 +4868,39 @@ export class RNNBase extends Module {
     numLayers = 1,
     bias = true,
     readonly batchFirst = false,
+    dropout = 0,
+    bidirectional = false,
+    projSize = 0,
+    device?: null,
+    dtype?: null,
   ) {
     super();
+    refuseDeviceDtype("RNNBase", device, dtype);
+    // **The three after `batchFirst` are a trailing tail, and a tail is not safe
+    // here.** Python raises on a surplus positional and JavaScript discards it, so
+    // `new RNNBase("LSTM", 2, 4, 1, true, false, 0, true)` built a one-directional net
+    // and said nothing about the `true`. Carried and refused for the same reason
+    // `numLayers` and `bias` below are: an argument that raises with its own name
+    // beats one the caller cannot tell went nowhere.
+    //
+    // `dropout` is the exception and it is torch's own: at one layer torch warns and
+    // ignores it, because the dropout goes *between* layers and there is no between.
+    // Refusing it would stop a line torch accepts.
+    if (dropout !== 0) {
+      console.warn(
+        "dropout option adds dropout after all but last recurrent layer, so "
+        + `non-zero dropout expects num_layers greater than 1, but got dropout=${dropout} `
+        + "and num_layers=1");
+    }
+    if (bidirectional) {
+      throw new NotImplementedError(
+        "RNNBase(bidirectional=true) — a second set of weights and a reversed pass, "
+        + "neither of which is here");
+    }
+    if (projSize !== 0) {
+      throw new NotImplementedError(
+        `RNNBase(projSize=${projSize}) — the LSTM projection is not carried across`);
+    }
     // **The seats between `hidden` and `batchFirst` exist so that `batchFirst` sits
     // where torch has it.** Left out, a line copied from torch positionally puts
     // `numLayers` into `batchFirst` and the net silently reads its axes the wrong way

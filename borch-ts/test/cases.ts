@@ -7619,6 +7619,20 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
     // line enlarge in one reading and shrink in the other, and both shapes are plausible.
     // 12 is 3× and so diverges from the default of 2.
     ["nn.Upsample(첫 자리는 size)", () => new nn.Upsample(12).call(nd("nd_img"))],
+    // The three the whole-factor cases above were blind to. `interpolate` multiplied
+    // without flooring, so 1.5 asked for a fractional number of rows — a shape with a
+    // .5 in it, which nearest returned as zeros without throwing.
+    // **Three rows, not four.** `nd_img` is 4×4 and 4 × 1.5 = 6 exactly, so flooring
+    // and not flooring agree on it — the first draft of these three passed with the
+    // floor taken out. Cropped to three rows they part: 3 × 1.5 = 4.5.
+    ["nn.Upsample(분수 배율)",
+      () => new nn.Upsample(null, 1.5).call(nd("nd_img").narrow(2, 0, 3))],
+    ["nn.Upsample(분수 배율, 겹선형)",
+      () => new nn.Upsample(null, 1.5, "bilinear")
+        .call(nd("nd_img").narrow(2, 0, 3))],
+    ["nn.Upsample(분수 배율, recompute)",
+      () => new nn.Upsample(null, 1.5, "bilinear", null, true)
+        .call(nd("nd_img").narrow(2, 0, 3))],
     ["nn.AvgPool2d", () => new nn.AvgPool2d(2).call(nd("nd_img"))],
     ["nn.AvgPool2d(보폭)", () => new nn.AvgPool2d(2, 1).call(nd("nd_img"))],
     ["nn.LPPool1d", () => new nn.LPPool1d(2, 2).call(nd("nd_seq"))],

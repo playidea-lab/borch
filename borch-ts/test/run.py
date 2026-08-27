@@ -855,9 +855,18 @@ NOT_PORTED = {
     #   · two `generator` rows — one host stream, the decision at the top of data.ts
     #   · `drop_last` given by **position** — borch.ts takes an options object, so
     #     there is no ninth seat to put it in. That one is the language, not a gap.
-    "dataconv::": (6, "파이썬 — `default_convert`, `get_worker_info`, the two "
-                      "`generator` rows (one host stream), and `drop_last` given by "
-                      "position (borch.ts takes an options object)"),
+    #
+    # **6 → 15.** Nine more `generator` rows, and they are the same one host stream:
+    # the core's nine random fillers each opened with `del generator`, so
+    # `x.normal_(generator=g)` drew from the global stream. They honour it now, and
+    # what the cases ask is the property that separates honouring from discarding —
+    # the global stream is shaken between the seed and the draw, and a filler using
+    # the generator it was handed does not feel it. borch.ts has `manualSeed` and one
+    # stream, so there is no second generator here to hand it; that is the decision at
+    # the top of `data.ts` and these rows sit behind it with the other two.
+    "dataconv::": (15, "파이썬 — `default_convert`, `get_worker_info`, the eleven "
+                       "`generator` rows (one host stream), and `drop_last` given by "
+                       "position (borch.ts takes an options object)"),
 }
 
 

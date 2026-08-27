@@ -102,14 +102,24 @@ function windowIndex(
 
 /** For bilinear upsampling, **which two input positions in what proportion** each
  *  output position mixes. */
-function bilinearAxis(sizeIn: number, sizeOut: number, alignCorners: boolean) {
+/**
+ * @param given the scale the caller asked for, when it is to be used **instead of**
+ *   `sizeIn / sizeOut`. Those two are the same number only when the output divides
+ *   exactly; at `scale_factor = 1.5` on a 3-high input they are `0.6667` and `0.75`,
+ *   and that is the whole of what `recompute_scale_factor` selects between. This
+ *   function had only the second, so borch.ts answered as though the flag were always
+ *   on — invisible at whole factors, which is what anybody tries first.
+ */
+function bilinearAxis(sizeIn: number, sizeOut: number, alignCorners: boolean,
+                      given: number | null = null) {
   const lo: number[] = [];
   const hi: number[] = [];
   const frac: number[] = [];
+  const step = given === null ? sizeIn / sizeOut : 1 / given;
   for (let i = 0; i < sizeOut; i++) {
     const src = alignCorners
       ? i * ((sizeIn - 1) / Math.max(1, sizeOut - 1))
-      : Math.max(0, (i + 0.5) * (sizeIn / sizeOut) - 0.5);
+      : Math.max(0, (i + 0.5) * step - 0.5);
     const base = Math.floor(src);
     lo.push(base);
     hi.push(Math.min(base + 1, sizeIn - 1));
@@ -1312,8 +1322,31 @@ export class Tensor implements Node<Tensor> {
    * over there has to serialise one stream, and there is no reason for this
    * side to do the same.
    */
-  bernoulli(): Tensor {
-    return Tensor.rand(this.shape).binary("lt", this).to(this.dtype);
+  /**
+   * **`p` is torch's other form and it was not here.** Given nothing, the tensor's own
+   * values are the probabilities; given a number, that probability is used everywhere
+   * and the values are ignored. The core's docstring records both and this side had
+   * only the first, so `x.bernoulli(0.5)` was a surplus argument — discarded, and the
+   * draw came from the values instead of from `0.5`.
+   *
+   * `out` is refused rather than carried further: this library has no `out=` anywhere,
+   * and a seat that silently allocates instead of writing where it was told is worse
+   * than one that says so.
+   */
+  bernoulli(p?: number, generator?: never, out?: never): Tensor {
+    // **`generator` is the second seat and `out` the third**, keyword-only in torch
+    // (`bernoulli(p, *, generator, out)`). The first draft of this took `(p, out)` and
+    // put `out` where `generator` sits — a drop from the middle rather than a short
+    // tail, which the signature axis caught as `dropped` within the hour.
+    if (generator !== undefined) {
+      throw new Error(
+        "bernoulli(generator=…) — there is one stream here; seed it with manualSeed");
+    }
+    if (out !== undefined) {
+      throw new Error("bernoulli(out=…) — writing into a given tensor is not here");
+    }
+    const probs = p === undefined ? this : Tensor.full(this.shape, p);
+    return Tensor.rand(this.shape).binary("lt", probs).to(this.dtype);
   }
 
   /**
@@ -2144,7 +2177,19 @@ export class Tensor implements Node<Tensor> {
    * Averages excluding NaN. **The count excludes NaN too** — that is what
    * differs from mean.
    */
-  nanmean(dim?: number, keepdim = false): Tensor {
+  nanmean(dim?: number, keepdim = false, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // As `mean` above: `dtype=` releases the refusal on the **input** side, and a
+      // result that has to land on an integer still has no answer. torch stops in the
+      // same place — measured, `softmax(dtype=int64)` is a `NotImplementedError` and
+      // `nanmean(dtype=int64)` says it could not infer the output dtype.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "nanmean(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).nanmean(dim, keepdim).to(dtype);
+    }
     const total = this.nansum(dim, keepdim);
     const present = this.unary("notNan");
     const count = (dim === undefined
@@ -2780,9 +2825,20 @@ export class Tensor implements Node<Tensor> {
    * At `k=1` it is `out[i][j] = in[j][C-1-i]` — swapping the axes while
    * reversing one, which writes down directly as a rule table.
    */
-  rot90(k = 1): Tensor {
+  /**
+   * **`dims` chooses the plane and there is only one plane here.** torch turns within
+   * whichever two axes it is given, so `dims=[1, 2]` on a rank-3 tensor is a different
+   * answer from the default `[0, 1]` — measured, different shapes. This is 2-D only,
+   * so the pair can be nothing but `[0, 1]`; carried and refused rather than left out,
+   * because a caller writing `dims` is asking for a plane and getting silence.
+   */
+  rot90(k = 1, dims: readonly number[] = [0, 1]): Tensor {
     if (this.shape.length !== 2) {
       throw new Error(`rot90 is 2-D only for now: [${this.shape}]`);
+    }
+    if (dims.length !== 2 || dims[0] !== 0 || dims[1] !== 1) {
+      throw new Error(
+        `rot90(dims=[${dims}]) — this side turns in the [0, 1] plane only`);
     }
     const turns = ((k % 4) + 4) % 4;
     if (turns === 0) return this.reshape(this.shape);
@@ -3565,7 +3621,19 @@ export class Tensor implements Node<Tensor> {
   /**
    * The L2 norm.
    */
-  norm(p: number = 2, dim?: number, keepdim = false): Tensor {
+  norm(p: number = 2, dim?: number, keepdim = false, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // As `mean` above: `dtype=` releases the refusal on the **input** side, and a
+      // result that has to land on an integer still has no answer. torch stops in the
+      // same place — measured, `softmax(dtype=int64)` is a `NotImplementedError` and
+      // `nanmean(dtype=int64)` says it could not infer the output dtype.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "norm(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).norm(p, dim, keepdim).to(dtype);
+    }
     // **It stops where torch stops** (measured). A division or a square root has no
     // answer that fits an integer cell — promoted quietly to float the way numpy does,
     // that code then breaks on real torch.
@@ -3650,7 +3718,19 @@ export class Tensor implements Node<Tensor> {
    * `exp(x) / Σ exp(x)`. **Computed with the maximum subtracted** —
    * otherwise it overflows at large values.
    */
-  softmax(dim = 0): Tensor {
+  softmax(dim = 0, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // As `mean` above: `dtype=` releases the refusal on the **input** side, and a
+      // result that has to land on an integer still has no answer. torch stops in the
+      // same place — measured, `softmax(dtype=int64)` is a `NotImplementedError` and
+      // `nanmean(dtype=int64)` says it could not infer the output dtype.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "softmax(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).softmax(dim).to(dtype);
+    }
     const m = this.amax(dim, true).detach();
     const e = this.sub(m).exp();
     return e.div(e.sumDim(dim, true));
@@ -3661,7 +3741,19 @@ export class Tensor implements Node<Tensor> {
    * small probabilities become 0 and the log becomes -inf. Written directly
    * as a subtraction, that place does not exist.
    */
-  logSoftmax(dim = 0): Tensor {
+  logSoftmax(dim = 0, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // As `mean` above: `dtype=` releases the refusal on the **input** side, and a
+      // result that has to land on an integer still has no answer. torch stops in the
+      // same place — measured, `softmax(dtype=int64)` is a `NotImplementedError` and
+      // `nanmean(dtype=int64)` says it could not infer the output dtype.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "log_softmax(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).logSoftmax(dim).to(dtype);
+    }
     return this.sub(this.logsumexp(dim, true));
   }
 
@@ -4060,11 +4152,12 @@ export class Tensor implements Node<Tensor> {
    * misaligns the edges — the interior is close enough that an eye does not
    * separate them.
    */
-  interpolateBilinear(outH: number, outW: number, alignCorners: boolean): Tensor {
+  interpolateBilinear(outH: number, outW: number, alignCorners: boolean,
+                      given: number | null = null): Tensor {
     const h = this.shape[2] ?? 1;
     const w = this.shape[3] ?? 1;
-    const ys = bilinearAxis(h, outH, alignCorners);
-    const xs = bilinearAxis(w, outW, alignCorners);
+    const ys = bilinearAxis(h, outH, alignCorners, given);
+    const xs = bilinearAxis(w, outW, alignCorners, given);
     const pick = (t: Tensor, axis: number, at: number[]) =>
       t.indexSelect(axis, Tensor.from(at, [at.length]));
     const wy = Tensor.from(ys.frac, [outH, 1]);
@@ -6075,7 +6168,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * leaving the two out is right on squares and wrong only on rectangles —
    * the golden cases ask with rectangles too.
    */
-  async pinverse(): Promise<Tensor> {
+  /**
+   * **`rcond` is the cut-off below which a singular value counts as zero**, and it
+   * changes the answer rather than only its precision — measured on torch, a 2×2 at
+   * `rcond=0.9` comes back entirely different from the default.
+   *
+   * `LA.pinverse` decides that cut-off itself, so the seat is carried and refused
+   * until it takes one. Left out, `pinverse(rcond=0.9)` was a surplus argument and
+   * JavaScript discards those.
+   */
+  async pinverse(rcond?: number): Promise<Tensor> {
+    if (rcond !== undefined) {
+      throw new Error(
+        `pinverse(rcond=${rcond}) — the cut-off is not carried across yet; the `
+        + "solver picks its own");
+    }
     const v = await this.asBatch(false);
     const { rows: m, cols: n } = v;
     const ps = v.mats.map((a) => LA.pinverse(a, m, n));
@@ -6884,7 +6991,24 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Spread into `P`, `L` and `U`. Easier to read than the packed plate.
    */
-  async lu(): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+  /**
+   * **The two seats are carried so they can be refused.**
+   *
+   * `pivot=false` is LU without row swaps, which torch declines on the CPU too
+   * (measured: `linalg.lu_factor: LU without pivoting is not implemented`), and
+   * `getInfos=true` makes torch return a **third** value — so it changes the shape of
+   * the answer rather than its contents, which is the kind of argument that must not
+   * be dropped in silence.
+   */
+  async lu(pivot = true, getInfos = false):
+      Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+    if (!pivot) {
+      throw new Error("lu(pivot=false) — LU without pivoting is not implemented");
+    }
+    if (getInfos) {
+      throw new Error(
+        "lu(getInfos=true) — the third value torch returns is not carried across");
+    }
     const v = await this.asBatch(false);
     const { rows, cols } = v;
     const k = Math.min(rows, cols);
@@ -9049,9 +9173,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * **It leans to the right** — it measures against `b`'s magnitude, so
    * swapping the two can change the answer. torch defines it that way.
    */
-  isclose(other: Tensor, rtol = 1e-5, atol = 1e-8): Tensor {
+  /**
+   * **`equalNan` decides whether NaN matches NaN**, and it was missing while
+   * `allclose` twenty lines down has had it from the start. Two functions asking the
+   * same question, one of them able to answer it.
+   *
+   * `allclose` reads the values back and can test with `Number.isNaN`; this one stays
+   * on the device, so the same rule is written in tensor operations: a cell where
+   * both sides are NaN is `x !== x && y !== y`, and `binary("ne", self)` is that test.
+   */
+  isclose(other: Tensor, rtol = 1e-5, atol = 1e-8, equalNan = false): Tensor {
     const room = other.abs().mul(Tensor.full([], rtol)).add(Tensor.full([], atol));
-    return this.sub(other).abs().binary("le", room);
+    const near = this.sub(other).abs().binary("le", room);
+    if (!equalNan) return near;
+    const bothNan = this.binary("ne", this).mul(other.binary("ne", other));
+    return near.add(bothNan).binary("gt", Tensor.full([], 0));
   }
 
   // `allclose` is not here — **it is already below and that one is better.** It checks
@@ -10241,24 +10377,49 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * without dispatching on it, asking for bilinear gives you nearest — not
    * an exception, a quietly different value.
    */
+  /**
+   * **A fractional `scaleFactor` has to be floored, and was not.**
+   *
+   * torch's output extent is `floor(in · scale)`. Multiplying without it gave
+   * `Upsample(scale_factor=1.5)` on a 3×4 input a shape of `[1, 1, 4.5, 6]` — a
+   * non-integer dimension, which for `nearest` produced a tensor summing to zero and
+   * *did not throw*, and for `bilinear` blew up somewhere else entirely (`shape
+   * [4.5,1] does not match 5 elements`). At 2.3 it reached WebGPU as `Size (253) must
+   * be a multiple of 4`.
+   *
+   * Whole factors were right, which is why this stood: 2 and 3 are what anybody tries.
+   *
+   * `recomputeScaleFactor` is torch's fourth answer to the same arithmetic. With it
+   * on, torch works out the integer output size and then **derives the scale back
+   * from it** per axis, so a 3-high input at 1.5 samples at 4/3 rather than 1.5. Same
+   * shape, different values — measured on torch: sum 120 against 132.
+   */
   interpolate(size: number | readonly number[] | null = null,
               scaleFactor: number | null = null,
               mode: "nearest" | "bilinear" = "nearest",
-              alignCorners = false): Tensor {
+              alignCorners = false,
+              recomputeScaleFactor: boolean | null = null): Tensor {
     const h = this.shape[2] ?? 1;
     const w = this.shape[3] ?? 1;
     const pair = (v: number | readonly number[]): [number, number] =>
       typeof v === "number" ? [v, v] : [v[0] ?? 1, v[1] ?? v[0] ?? 1];
+    const scale = scaleFactor ?? 2;
+    // torch's own rule, in one place so the two modes cannot part.
+    const extent = (inp: number) => Math.floor(inp * scale);
     if (mode === "nearest") {
-      if (size === null) return this.upsample(scaleFactor ?? 2);
-      // **It no longer has to be a whole multiple.** The kernel takes the output
-      // extents and maps `src = floor(o · in / out)`, which is torch's rule.
-      const [oh, ow] = pair(size);
+      // `resizeNearest` maps `src = floor(o · in / out)`, which *is* recomputing the
+      // scale from the output size — so nearest gives the same answer either way and
+      // torch says as much by ignoring the flag outside the fractional bilinear case.
+      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
       return this.resizeNearest([oh, ow]);
     }
-    const [oh, ow] = size === null
-      ? [h * (scaleFactor ?? 2), w * (scaleFactor ?? 2)] : pair(size);
-    return this.interpolateBilinear(oh, ow, alignCorners);
+    const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
+    // **The default is the *given* scale; recomputing is what the flag turns on.**
+    // The kernel had only the recomputed rule (`in / out`), so borch.ts answered as
+    // though the flag were always set. A size rather than a factor has no scale to
+    // recompute from, so that path is unchanged.
+    const given = size === null && !recomputeScaleFactor ? scale : null;
+    return this.interpolateBilinear(oh, ow, alignCorners, given);
   }
 
   /**

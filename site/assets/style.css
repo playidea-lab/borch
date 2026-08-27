@@ -135,6 +135,14 @@ header.top {
   /* The header is no longer 58px tall, so whatever was pinned to that number is
      detached from it. */
   .subnav { position: static; }
+  /* **Two clipped scrollers stacked read as a broken page.** The global bar and the
+     landing's section list both cut off mid-word on a 390px screen — reachable by
+     scrolling, which is not the same as looking finished, and together they spent 90px
+     of an 844px viewport before any content. The section list is the one that can go:
+     its entries are anchors into a page the reader is already scrolling, so nothing
+     becomes unreachable. The global bar stays, because it is the only route to the
+     rest of the site. */
+  .subnav { display: none; }
 }
 .brand {
   font: 700 17px/1 var(--mono);
@@ -806,3 +814,41 @@ a.api-link code { color: var(--ember-text); }
    macOS. */
 .runnable .out { background-image: linear-gradient(135deg, transparent 50%, var(--line-soft) 50%);
   background-position: bottom right; background-size: 10px 10px; background-repeat: no-repeat; }
+
+/* **A result needs a frame or it reads as prose.** The landing's demo puts its output in
+   a card; the hub page had the same output as bare text, so a model that had just been
+   downloaded, hashed and checked against its sample looked like a paragraph that happened
+   to contain JSON. Same `.out` type as everywhere else, now with an edge around it. */
+.panel {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: .85rem 1rem;
+  margin: 1rem 0;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+/* **A table is not prose and does not want prose's measure.** `.lesson` is 46rem, which
+   is right for sentences and wrong for six columns: the catalog broke model names
+   mid-token (`imagenet-mobilenetv3-` / `small-100`) and wrapped its own headings. This
+   lets one child out to the page's width while the paragraphs around it stay readable. */
+.lesson .wide {
+  width: min(72rem, calc(100vw - 3rem));
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+
+/* **The Run button was cut off on a phone.** `.runnable` clips (`overflow: hidden`, which
+   is what keeps the rounded corner), and on `python.html` the head carries five controls
+   — label, spacer, an "open" link, reset and run — which is two more than a lesson page.
+   Measured: `button.go` crossed the box by 21px at 390px and 51px at 360px, and fitted
+   only from 414px up. So on most phones the primary control of that page was half there.
+   It was found by geometry rather than by eye: an element overflowing an ancestor whose
+   `overflow-x` is `hidden` is cut, and that is a number rather than an opinion.
+   The row wraps instead. The spacer goes full-width and flat, which turns it from
+   "push the rest right" into "break the line here". */
+@media (max-width: 700px) {
+  .runnable-head { flex-wrap: wrap; row-gap: .35rem; }
+  .runnable-head .grow { margin-left: 0; width: 100%; height: 0; }
+}

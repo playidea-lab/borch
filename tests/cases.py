@@ -5583,6 +5583,40 @@ def data_loader_cases(inp=None):
                   lambda L: str(order(L, 7) == order(L, 7))))
     cases.append((DATACONV_PREFIX + "DataLoader(generator)/다른 씨앗은 다른 순서",
                   lambda L: str(order(L, 7) != order(L, 11))))
+
+    # **The nine random fillers took `generator` and dropped it**, each opening with
+    # `del generator`, so `x.normal_(generator=g)` drew from the global stream and the
+    # caller's reproducibility was quietly somebody else's. `bernoulli` two hundred
+    # lines away had done the right thing in one line the whole time.
+    #
+    # The values cannot be frozen — the generators differ between the three sides — so
+    # what is asked is the **property that separates honouring from discarding**, and
+    # the first attempt did not: "same seed, same values" is true of a global stream
+    # too. This shakes the global stream *between* the seed and the draw. A filler that
+    # uses the generator it was handed does not feel it; one that reaches for the
+    # global does.
+    def steady(L, fill):
+        def once(noise):
+            g = L.Generator()
+            g.manual_seed(7)
+            for _ in range(noise):
+                L.rand(3)                 # only the global stream moves
+            out = fill(L.zeros(6), g)
+            return [float(v) for v in out.detach().numpy().ravel()]
+        return str(once(0) == once(5))
+
+    for _fname, _fill in (
+            ("normal_", lambda t, g: t.normal_(0.0, 1.0, generator=g)),
+            ("uniform_", lambda t, g: t.uniform_(0.0, 1.0, generator=g)),
+            ("exponential_", lambda t, g: t.exponential_(1.0, generator=g)),
+            ("cauchy_", lambda t, g: t.cauchy_(0.0, 1.0, generator=g)),
+            ("log_normal_", lambda t, g: t.log_normal_(1.0, 2.0, generator=g)),
+            ("geometric_", lambda t, g: t.geometric_(0.5, generator=g)),
+            ("random_", lambda t, g: t.random_(0, 100, generator=g)),
+            ("bernoulli_", lambda t, g: t.bernoulli_(0.5, generator=g)),
+            ("bernoulli", lambda t, g: t.bernoulli(0.5, generator=g))):
+        cases.append((DATACONV_PREFIX + f"{_fname}(generator)/전역이 흔들려도 그대로",
+                      lambda L, f=_fill: steady(L, f)))
     # Positional, and past the two seats that were swapped: the sixth is
     # `num_workers` and the ninth is `drop_last`.
     cases.append((DATACONV_PREFIX + "DataLoader(자리로 준 drop_last)",
@@ -9763,6 +9797,29 @@ def ndim_cases(inp=None):
         # integer multiple** — asked as 6 it is 1.5×, and all three refused.
         (NDIM_PREFIX + "nn.Upsample(첫 자리는 size)",
          lambda L: L.nn.Upsample(12)(L.tensor(img))),
+        # **"asked as 6 it is 1.5×, and all three refused" was the bug, not the reason.**
+        # The line above avoided a fractional factor because it did not work; borch.ts
+        # multiplied without flooring, so `scale_factor=1.5` on a 3-high input asked for
+        # 4.5 rows — for nearest a tensor that summed to zero and did not throw, for
+        # bilinear an exception two layers down. Whole factors were right, which is why
+        # every case here was 2.
+        # **The input needs an odd extent or the case is blind.** `nd_img` is 4×4 and
+        # 4 × 1.5 = 6 exactly, so flooring and not flooring agree there — the first
+        # draft of these three passed with the floor removed. Cropped to three rows,
+        # 3 × 1.5 = 4.5 and they part.
+        (NDIM_PREFIX + "nn.Upsample(분수 배율)",
+         lambda L: L.nn.Upsample(scale_factor=1.5)(L.tensor(img[:, :, :3, :]))),
+        (NDIM_PREFIX + "nn.Upsample(분수 배율, 겹선형)",
+         lambda L: L.nn.Upsample(scale_factor=1.5,
+                                 mode="bilinear")(L.tensor(img[:, :, :3, :]))),
+        # **The flag only shows here.** With the output size floored, torch either samples
+        # at the factor it was given or derives the scale back from that size, and those
+        # two are the same number whenever the factor divides exactly. So a case at 2 is
+        # blind to it and this one is the whole of the difference.
+        (NDIM_PREFIX + "nn.Upsample(분수 배율, recompute)",
+         lambda L: L.nn.Upsample(scale_factor=1.5, mode="bilinear",
+                                 recompute_scale_factor=True)(
+             L.tensor(img[:, :, :3, :]))),
         (NDIM_PREFIX + "nn.AvgPool2d", lambda L: L.nn.AvgPool2d(2)(L.tensor(img))),
         (NDIM_PREFIX + "nn.AvgPool2d(보폭)",
          lambda L: L.nn.AvgPool2d(2, 1)(L.tensor(img))),

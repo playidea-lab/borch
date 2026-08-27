@@ -269,6 +269,36 @@ MODULES = {
 }
 
 
+def _declarations(sym):
+    """Every declaration of one name, not only the first.
+
+    **`build_api.py` keeps the first in `signature` and pushes the rest into
+    `overloads`**, and this file read only the first. TypeScript declares the narrow
+    overload first — resolution walks them in order — so an overloaded name arrived
+    here as its *smallest* shape. `unique` carries `sorted`, `returnInverse`,
+    `returnCounts` and `dim`, and was counted as short of the last three because the
+    reference showed `unique(sorted?: boolean)`.
+
+    That is the second blind spot of this kind. `InstanceNorm1d` was the first, from a
+    different cause: an empty subclass body emits no argument list at all. Both read as
+    a row this axis skips rather than a row it disagrees with, which is the quietest
+    way for a measurement to be wrong.
+
+    **The widest one, not all of them.** Filing every declaration was tried and moved
+    `unique` from `shorter` to `ambiguous` — less wrong and still not compared.
+    `ambiguous` is this file's answer to *one name in two modules*, where the two can
+    mean different things; overloads are several declarations of **one** callable, so
+    there is nothing to be ambiguous between. The widest is the closest single answer
+    to what a caller may pass, and TypeScript's narrow-first order is a resolution
+    detail rather than a statement about the surface.
+    """
+    sigs = [sym.get("signature")] + list(sym.get("overloads") or ())
+    sigs = [one for one in sigs if one and _arg_list(one) is not None]
+    if not sigs:
+        return []
+    return [max(sigs, key=lambda one: len(_split_top(_arg_list(one) or "")))]
+
+
 def ts_signatures():
     """`{module: {name: [signature, ...]}}`, members included.
 
@@ -306,7 +336,8 @@ def ts_signatures():
                 # filed produces no row of any kind — not even an unreadable one.
                 # What is not filed cannot be counted as unfiled.
                 if name and sig and _arg_list(sig) is not None:
-                    into.setdefault(name, []).append(sig)
+                    for one in _declarations(sym):
+                        into.setdefault(name, []).append(one)
                 walk(into, members, True)
                 continue
             if sym.get("kind") == "class":
@@ -330,7 +361,8 @@ def ts_signatures():
                 # first version skipped it and the whole `nn` namespace went silent.
                 into.setdefault(name, []).append(ctor[0] if ctor else sig)
             elif name and sig and sym.get("kind") in CALLABLE_KINDS:
-                into.setdefault(name, []).append(sig)
+                for one in _declarations(sym):
+                    into.setdefault(name, []).append(one)
             walk(into, members, True)
 
     for module in modules:

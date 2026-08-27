@@ -80,10 +80,9 @@
     </p>
 
     <div class="cta-row">
-      <a class="btn primary" href="playground.html">Try Playground →</a>
-      <a class="btn ghost" href="models.html">Run a pretrained model →</a>
+      <a class="btn primary" href="models.html">Run a pretrained model →</a>
+      <a class="btn ghost" href="playground.html">Open the Playground →</a>
       <a class="btn ghost mono" href="#install">npm install borch-ts</a>
-      <a class="btn ghost" href="https://github.com/playidea-lab/borch">GitHub</a>
     </div>
     <p class="install">Zero runtime dependencies · 371KB gzipped ES module (1356KB raw) · safetensors checkpoints</p>
 
@@ -453,7 +452,7 @@ for step in range(201):
     </table>
     </div>
     <p class="small muted" style="margin-top:.8rem">
-      On top of that, <strong>3728 golden cases</strong> hold all three implementations to the same expected values.
+      On top of that, <strong>3740 golden cases</strong> hold all three implementations to the same expected values.
       Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
       identically on Apple Metal, and borch.ts's share of it matches on <strong>NVIDIA</strong> too —
       <code>passed 2901 / failed 0 [nvidia / blackwell]</code>, an RTX 5080 under Xvfb.

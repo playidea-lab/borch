@@ -2317,13 +2317,26 @@ def normal(mean=0.0, std=1.0, size=None, **kw):
     return _made(_t(_rng.normal(float(mean), float(std), shape).astype(_np.float32)), kw)
 
 
-def bernoulli(t):
+def bernoulli(t, p=None, *, generator=None, out=None):
     """A 1 at each position with that probability. **0 gives all zeros, 1 gives
-    all ones.**"""
+    all ones.**
+
+    **`p` is torch's other form** — a number is the probability everywhere and the
+    tensor's own values are ignored; given nothing, the values are the probabilities.
+    This took neither, so `x.bernoulli(0.5)` stopped on the argument count.
+
+    `generator` picks the stream, and it was not here at all. The core holds
+    `Generator` and honours it; this side hands it along.
+    """
     from ._base import tensor as _t
 
-    p = _np.asarray(wrap(t).numpy(), dtype=_np.float64)
-    return _t((_rng.random(p.shape) < p).astype(_np.float32))
+    if out is not None:
+        raise NotImplementedError("`bernoulli(out=…)` is not carried across")
+    rng = generator.rng() if generator is not None else _rng
+    probs = (_np.full(tuple(int(v) for v in handle(wrap(t)).shape), float(p))
+             if p is not None
+             else _np.asarray(wrap(t).numpy(), dtype=_np.float64))
+    return _t((rng.random(probs.shape) < probs).astype(_np.float32))
 
 
 def bernoulli_(t, p=0.5, generator=None, **kw):
@@ -2336,12 +2349,14 @@ def bernoulli_(t, p=0.5, generator=None, **kw):
     **quietly wrong only at the probabilities in between.** The core kept it out
     of the automatic table for the same reason.
     """
-    del generator, kw
+    del kw
     from ._base import tensor as _t
 
+    # As `bernoulli` above: the stream the caller asked for, not always the global one.
+    rng = generator.rng() if generator is not None else _rng
     got = wrap(t)
     shape = tuple(int(v) for v in handle(got).shape)
-    return _t((_rng.random(shape) < p).astype(_np.float32))
+    return _t((rng.random(shape) < p).astype(_np.float32))
 
 
 def float_power_(t, exponent, **kw):

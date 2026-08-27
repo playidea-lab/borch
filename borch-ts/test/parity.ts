@@ -1481,11 +1481,19 @@ export async function report(): Promise<Report> {
       new nn.AvgPool2d(3, 2, 1).describe());
 
     // **MaxPool1d/3d were printing three arguments they could not take.**
+    // **This asked about `padding` and now asks about `dilation`.** A peer implemented
+    // padding and ceilMode in the pooling kernel between one run and the next, so the
+    // refusal moved and the check was measuring a seat that had stopped refusing —
+    // the same shape as a reason outliving its cause, in a check rather than a
+    // comment. `dilation` is what is left: no pooling kernel here dilates.
     const M1 = nn.MaxPool1d as unknown as new (...a: unknown[]) => { describe(): string };
     let refused = "";
-    try { new M1(2, undefined, 1); } catch (e) { refused = (e as Error).message; }
-    want("MaxPool1d refuses padding by name rather than dropping it",
-      refused.includes("MaxPool1d(padding"), refused || "(no error)");
+    try { new M1(2, undefined, 0, 2); } catch (e) { refused = (e as Error).message; }
+    want("MaxPool1d refuses dilation by name rather than dropping it",
+      refused.includes("MaxPool1d(dilation"), refused || "(no error)");
+    // And the two that were refused with it now work, which is why this moved.
+    want("while padding and ceilMode are carried now",
+      !!new nn.MaxPool1d(2, undefined, 1, 1, false, true));
     want("and its repr is now what it holds, not a constant",
       new nn.MaxPool1d(2).describe()
         === "MaxPool1d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)",
@@ -1507,6 +1515,80 @@ export async function report(): Promise<Report> {
     want("LazyLinear(bias=false) says so",
       new nn.LazyLinear(3, false).describe().includes("bias=False"),
       new nn.LazyLinear(3, false).describe());
+
+    // **`LazyInstanceNorm*` took four arguments and handed over one.**
+    // `new InstanceNormND(c, eps)` dropped `momentum`, `affine`, `trackRunningStats`
+    // and `bias`, so a layer asked for parameters got none and said nothing. The batch
+    // branch beside it forwarded all six from the start, which is what made this
+    // invisible — the signature next door looked like the proof.
+    {
+      const img = Tensor.from(
+        Array.from({ length: 24 }, (_, i) => i + 1), [1, 2, 3, 4]);
+      const lazy = new nn.LazyInstanceNorm2d(1e-5, 0.1, true);
+      lazy.call(img);                       // the shape is learned on the first pass
+      want("LazyInstanceNorm2d(affine) reaches the layer it builds",
+        Object.keys(lazy.stateDict()).sort().join(",") === "bias,weight",
+        JSON.stringify(Object.keys(lazy.stateDict())));
+
+      // `bias=false` is the seventh seat, behind `device` and `dtype` — torch declares
+      // it keyword-only after the pair, so it is not the sixth.
+      const noBias = new nn.LazyInstanceNorm2d(1e-5, 0.1, true, false, null, null,
+                                               false);
+      noBias.call(img);
+      want("and bias sits behind device and dtype",
+        Object.keys(noBias.stateDict()).join(",") === "weight",
+        JSON.stringify(Object.keys(noBias.stateDict())));
+
+      // The default is torch's: no affine on instance, unlike batch.
+      const plainNorm = new nn.LazyInstanceNorm2d();
+      plainNorm.call(img);
+      want("and the default still carries no parameters",
+        Object.keys(plainNorm.stateDict()).length === 0,
+        JSON.stringify(Object.keys(plainNorm.stateDict())));
+
+      // The same seat on the eager layer, where it had been in `device`'s place.
+      const eager = new nn.InstanceNorm2d(2, 1e-5, 0.1, true, false, null, null, false);
+      want("InstanceNorm2d's bias is the eighth seat too",
+        Object.keys(eager.stateDict()).join(",") === "weight",
+        JSON.stringify(Object.keys(eager.stateDict())));
+    }
+
+    // **The last two rows, and neither was what the table said it was.**
+    {
+      // `Hardtanh`'s deprecated pair was called short *on purpose* — "adding two
+      // arguments torch itself tells you not to use". Measured, torch does more than
+      // tolerate them: each overrides its replacement, even when both are given.
+      const H = nn.Hardtanh as unknown as new (...a: unknown[]) =>
+        { describe(): string };
+      want("Hardtanh's minValue overrides minVal, as torch's does",
+        new H(-1, 1, false, -2).describe() === "Hardtanh(min_val=-2.0, max_val=1.0)",
+        new H(-1, 1, false, -2).describe());
+      want("and the modern pair still works alone",
+        new nn.Hardtanh(-2, 3).describe() === "Hardtanh(min_val=-2.0, max_val=3.0)",
+        new nn.Hardtanh(-2, 3).describe());
+
+      // `RNNBase`'s three sit *after* `batchFirst`, so they are a trailing tail — and
+      // a tail is not safe in a language that discards surplus arguments. Before
+      // this, `bidirectional` was dropped in silence and the caller got a
+      // one-directional net.
+      const R = nn.RNNBase as unknown as new (...a: unknown[]) => unknown;
+      let said = "";
+      try { new R("LSTM", 2, 4, 1, true, false, 0, true); } catch (e) {
+        said = (e as Error).message;
+      }
+      want("RNNBase refuses bidirectional by name",
+        said.includes("bidirectional"), said || "(no error)");
+      said = "";
+      try { new R("LSTM", 2, 4, 1, true, false, 0, false, 1); } catch (e) {
+        said = (e as Error).message;
+      }
+      want("and projSize, which is the seat after it",
+        said.includes("projSize"), said || "(no error)");
+      // `dropout` is torch's own exception: at one layer it warns and carries on,
+      // because the dropout goes between layers and there is no between.
+      want("but dropout is accepted at one layer, as torch accepts it",
+        !!new nn.RNNBase("LSTM", 2, 4, 1, true, false, 0.5));
+    }
 
     // `RMSNorm`: the kernel took `eps` all along and the layer did not hand it over.
     const r = Tensor.from([1.0, 2.0, 3.0, 4.0], [1, 4]);

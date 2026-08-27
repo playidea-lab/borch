@@ -902,7 +902,39 @@ SHORTER = {
     # matrix, so against the core's `(dim0, dim1)` it was a truncation; it now takes
     # both and swaps at any rank. The core moved in the same commit — it was
     # `(d0, d1)`, and torch answers to `dim0=`/`dim1=` and raises on `d0=`.
-    "Tensor": 19,
+    #
+    # **19 → 15.** `softmax`, `logSoftmax`, `nanmean` and `norm` grew `dtype`, which
+    # eight other reductions here had already: `castFirst` is the whole mechanism and
+    # those four did not call it. Integers are refused as `mean` refuses them, and
+    # torch stops in the same place — measured, `softmax(dtype=int64)` is a
+    # `NotImplementedError` there and `nanmean(dtype=int64)` says it could not infer
+    # the output dtype.
+    #
+    # The nine `generator` rows are the largest cluster left and they are **not**
+    # wiring on this side: there is one stream here (`random.ts`, `manualSeed`) and no
+    # `Generator` object to hand a method. The core's nine did the opposite — they had
+    # `Generator`, `DataLoader` honoured it, and each filler opened with
+    # `del generator`; that is fixed and the golden asks about it now.
+    #
+    # **15 → 8.** `isclose` took `equalNan` (`allclose` twenty lines away had it),
+    # `rot90` and `pinverse` carry `dims` and `rcond` to refuse them, `lu` the same for
+    # `pivot` and `getInfos`, and `bernoulli` grew torch's other form — a number is the
+    # probability everywhere, where the tensor's own values are it otherwise.
+    #
+    # Two of the seven were **this file being blind rather than borch.ts being short**:
+    #
+    #   · `unique` carries all four and was read as `unique(sorted?)`, because
+    #     `build_api.py` keeps the first declaration in `signature` and pushes the rest
+    #     into `overloads`, which this file did not read. TypeScript declares the narrow
+    #     overload first, so an overloaded name arrived here as its smallest shape.
+    #     Second blind spot of that kind after `InstanceNorm1d`'s empty subclass body.
+    #
+    #   · `relu` was the **core** being long, not borch.ts short. `Tensor.relu` was
+    #     `F.relu` itself, so the functional's `inplace` appeared on the method — where
+    #     torch raises `TensorBase.relu() takes no keyword arguments`. This axis cannot
+    #     see that: torch is in neither of its columns. `test_torch_names.py` did not
+    #     either — it compares names at the same position and says so.
+    "Tensor": 8,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and
@@ -1130,7 +1162,58 @@ SHORTER = {
     # What is left is six rows with no wiring among them: `LazyInstanceNorm1d/2d/3d`
     # and `RNNBase` want arguments no neighbour has either, `Upsample` wants
     # `recomputeScaleFactor`, and `Hardtanh` is short on purpose.
-    "nn": 6,
+    #
+    # **6 → 5. `Upsample` took `recomputeScaleFactor`, and the seat was the smaller
+    # half of what was wrong there.** `interpolate` multiplied the input extent by the
+    # scale without flooring, so a fractional factor asked for a fractional number of
+    # rows: `Upsample(scale_factor=1.5)` on a 3-high input gave a shape with a `.5` in
+    # it, which `nearest` returned as zeros **without throwing**. Whole factors were
+    # right, and every `Upsample` case in the golden used 2 — a whole factor cannot
+    # tell flooring from not flooring, nor this flag from its absence.
+    #
+    # The case table said so out loud and it read as a limit rather than a defect:
+    # "asked as 6 it is 1.5×, and all three refused". Three fractional cases now stand
+    # where that sentence was.
+    #
+    # **5 → 2**, and the same shape twice more. `LazyInstanceNorm1d/2d/3d` accepted
+    # four arguments and handed one to the layer they build — `new InstanceNormND(c,
+    # eps)`, with `momentum`, `affine`, `trackRunningStats` and `bias` dropped on the
+    # floor, so a layer asked for parameters got none and said nothing. The batch
+    # branch of the same base forwarded all six from the start, which is what made it
+    # invisible: the signature next door looked like the proof.
+    #
+    # And going to fix that found a shift the axis is **blind to**. `InstanceNormND`
+    # had `bias` in `device`'s seat — torch declares it keyword-only *after* the pair
+    # (`*, bias: bool = True`), so a sixth positional argument is `device` there and
+    # was `bias` here. The axis reads `InstanceNorm1d/2d/3d` as `no argument list`,
+    # because they were `class InstanceNorm1d extends InstanceNormND {}` with an empty
+    # body and the emitted `.d.ts` carries no list for such a class. Not agreement and
+    # not a gap — a row it skips. The three declare their arguments now.
+    #
+    # **2 → 0**, and neither last row was what this table said it was.
+    #
+    # `Hardtanh` was "short on purpose — closing this row means adding two arguments
+    # torch itself tells you not to use". Measured, torch does more than tolerate
+    # `min_value`/`max_value`: each **overrides** its replacement, even when both are
+    # given (`Hardtanh(min_val=-1, min_value=-2)` prints `min_val=-2`). So they change
+    # the answer, and a deprecated seat left out of a JavaScript signature is not
+    # refused — it is discarded. Carried, warned about and honoured, as torch does.
+    #
+    # `RNNBase`'s three sit *after* `batchFirst`, so they were a trailing tail, which
+    # this table has called safe throughout. It is safe against a shift and not against
+    # silence: `new RNNBase("LSTM", 2, 4, 1, true, false, 0, true)` built a
+    # one-directional net and dropped the `true`. `bidirectional` and `projSize` are
+    # refused by name now — a second set of weights and a reversed pass are not here —
+    # and `dropout` is accepted and warned about at one layer, because that is what
+    # torch does rather than an omission of ours.
+    #
+    # **This row started the day at 46.** What emptied it was mostly not arithmetic:
+    # eight seats the layer next door already had, twenty-four that only needed
+    # refusing, and two rows whose "deliberate" reason did not survive being measured.
+    #
+    # Retiring this line means the count stays 0. A row appearing here again is a
+    # signature that parted from the core, and the first question is which side moved.
+    "nn": 0,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

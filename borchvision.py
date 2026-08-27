@@ -3278,12 +3278,27 @@ def pad_mask(mask, padding, fill=0, padding_mode="constant"):
                      was_tensor)
 
 
-def resize_mask(mask, size, max_size=None):
+def resize_mask(mask, size, interpolation="nearest", max_size=None):
     """A mask resampled, **nearest and only nearest.**
 
     Any other sampling averages neighbouring class indices — 3 and 5 becoming 4 — and
     produces a label map that is smooth, plausible and wrong everywhere two regions meet.
+
+    **`interpolation` is torchvision's third seat and `max_size` sat in it.** Not a
+    short tail — a shift: `resize_mask(m, [8, 8], 100)` set `max_size` here and an
+    interpolation mode there, and neither call raises. torchvision carries the
+    argument, defaults it to `BILINEAR`, then coerces anything but nearest back to
+    nearest with a comment saying that preserves "the historical behavior of ignoring
+    the signature-level default". Measured across NEAREST, BILINEAR and BICUBIC: the
+    same array all three times.
+
+    So it is carried, validated and dropped, in that order, which is torchvision's own.
+    Left out, a caller porting `resize_mask(m, size, InterpolationMode.NEAREST)` lands
+    on `max_size`.
     """
+    # `_interpolation` is the checker `Resize` uses, so a nonsense mode raises here as
+    # it does there rather than being taken by a seat nobody reads.
+    _interpolation(interpolation)
     arr, was_tensor = _mask_in(mask)
     src_h, src_w = arr.shape[-2], arr.shape[-1]
     new_h, new_w = _resize_target(src_h, src_w, size, max_size, "resize_mask")

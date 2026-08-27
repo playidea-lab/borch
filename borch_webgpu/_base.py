@@ -533,6 +533,11 @@ class Tensor:
     #
     # The values are made in Python and written back. Drawing them in a shader
     # would make two sets of seeding rules, and two sets diverge eventually.
+    # **`generator` is handed through.** These seven each opened with
+    # `del generator`, as the core's did until the same afternoon — accepted,
+    # discarded, and the draw came from the global stream whatever the caller asked
+    # for. The core holds the streams (`Generator`, honoured by `DataLoader` from the
+    # start), so this side has only to pass it along.
     def _draw_(self, name, *args, **kw):
         from borch._tensor import Tensor as _Core
 
@@ -542,34 +547,27 @@ class Tensor:
         return self._write_back(_t(core.data))
 
     def normal_(self, mean=0.0, std=1.0, generator=None):
-        del generator
-        return self._draw_("normal_", mean, std)
+        return self._draw_("normal_", mean, std, generator=generator)
 
     def uniform_(self, from_=0.0, to=1.0, generator=None):
-        del generator
-        return self._draw_("uniform_", from_, to)
+        return self._draw_("uniform_", from_, to, generator=generator)
 
     def exponential_(self, lambd=1.0, generator=None):
-        del generator
-        return self._draw_("exponential_", lambd)
+        return self._draw_("exponential_", lambd, generator=generator)
 
     def cauchy_(self, median=0.0, sigma=1.0, generator=None):
-        del generator
-        return self._draw_("cauchy_", median, sigma)
+        return self._draw_("cauchy_", median, sigma, generator=generator)
 
     def log_normal_(self, mean=1.0, std=2.0, generator=None):
-        del generator
-        return self._draw_("log_normal_", mean, std)
+        return self._draw_("log_normal_", mean, std, generator=generator)
 
     def geometric_(self, p, generator=None):
         """**Discrete, so it runs on an integer tensor too** — the one that
         parts ways with the five continuous ones."""
-        del generator
-        return self._draw_("geometric_", p)
+        return self._draw_("geometric_", p, generator=generator)
 
     def random_(self, from_=0, to=None, generator=None):
-        del generator
-        return self._draw_("random_", from_, to)
+        return self._draw_("random_", from_, to, generator=generator)
 
     def fill_diagonal_(self, value, wrap=False):
         """**The composition moved over there.** While it lived here the name did
