@@ -145,6 +145,67 @@ def require_fresh_golden(root=ROOT):
         "   cause is invisible.)")
 
 
+def require_installed_matches_lock(root=ROOT):
+    """**Stop when `node_modules` holds something the lock does not name.**
+
+    Third of this family, and the one nobody had. `node_modules` is not committed and CI
+    reinstalls it from the lock on every run, so **CI cannot have this failure at all** —
+    which means a green tick on main tells the person in front of a stale tree that the
+    code is at fault rather than their checkout. `dist` and the golden are the same shape
+    and both already stop.
+
+    npm writes what it actually put on disk into `node_modules/.package-lock.json`, so the
+    two files answer the same question and disagreeing is the whole test.
+
+    ## What it does not see, said out loud
+
+    **Only changes that went through npm.** Editing files inside an installed package —
+    dropping a locally built `dist` over one, say — leaves the manifest untouched and this
+    stays silent. That was measured, not assumed: the session that met this ran both
+    halves apart and the hand-swap reproduced green while `npm install <name>@<version>`
+    reproduced the failure.
+
+    A consistent `npm install` is invisible here too, because it moves all three together.
+    What this catches is the state afterwards — a lock put back by `git` or arriving on a
+    branch switch while the installed tree stays where it was, which is a tree that
+    describes itself wrongly.
+
+    Saying so matters more than the check. A guard whose blind half is unwritten reads as
+    cover for the whole area, and then the green is worse than nothing.
+    """
+    import json
+
+    lock = root / "package-lock.json"
+    installed = root / "node_modules" / ".package-lock.json"
+    if not lock.exists() or not installed.exists():
+        return                     # nothing installed yet; the build stops on its own
+    try:
+        want = json.loads(lock.read_text(encoding="utf-8")).get("packages", {})
+        have = json.loads(installed.read_text(encoding="utf-8")).get("packages", {})
+    except (OSError, ValueError):
+        return                     # unreadable is not the same as disagreeing
+
+    # The root entry ("") carries this package's own version, which `npm ci` does not read
+    # and which drifts on a release. `tests/test_version.py` is where that belongs.
+    want = {k: v for k, v in want.items() if k.startswith("node_modules/")}
+    have = {k: v for k, v in have.items() if k.startswith("node_modules/")}
+    if not want:
+        return                     # nothing to compare; do not report agreement we have not measured
+
+    wrong = []
+    for name in sorted(set(want) | set(have)):
+        a = want.get(name, {}).get("version")
+        b = have.get(name, {}).get("version")
+        if a != b:
+            wrong.append(f"    {name}: lock says {a or '(absent)'}, installed is {b or '(absent)'}")
+    if wrong:
+        raise SystemExit(
+            "what is installed is not what the lock names:\n" + "\n".join(wrong) +
+            "\n  first: npm ci\n"
+            "  (build against this and the emit comes from a dependency nobody chose,\n"
+            "   which fails as a value, not as a version.)")
+
+
 def _names_still_match(root, exported):
     """Is the frozen name table the one `cases.py` produces today?
 
@@ -216,6 +277,7 @@ def run(headed=False, verbose=False):
     """
     from playwright.sync_api import sync_playwright
 
+    require_installed_matches_lock()
     require_fresh_dist()
     require_fresh_golden()
     port, stop = serve(ROOT)

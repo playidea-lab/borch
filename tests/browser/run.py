@@ -74,7 +74,11 @@ def run(lib, headed, probe=None):
     # `dist` comes out with the same wording as a real gap — two copies of a check means only
     # one gets fixed, so the TS runner's is borrowed.
     sys.path.insert(0, str(ROOT / "borch-ts" / "test"))
-    from run import require_fresh_dist, require_fresh_golden   # noqa: PLC0415
+    from run import (require_fresh_dist, require_fresh_golden,   # noqa: PLC0415
+                     require_installed_matches_lock)
+    # Ahead of `dist`, because a stale install builds a stale emit and then the emit is
+    # blamed for what the dependency did.
+    require_installed_matches_lock(ROOT)
     require_fresh_dist(ROOT)
     # The golden answers are the same trap — editing `cases.py` without dumping makes a new
     # case come out as "that name is not in the golden answers", the same wording as a typo.
@@ -231,6 +235,22 @@ def main():
     # `golden.npz` is not committed, which is exactly why only local runs can go stale.
     # The sister rule is `require_fresh_dist` above; `test_site.py` borrows that one
     # rather than restating it, for the same reason this stops rather than warning.
+    #
+    # **The time is the whole test here, and that is a trade rather than an oversight.**
+    # `require_fresh_golden` does better for `golden.json`: when the times disagree it
+    # compares the name table and goes through if it is unchanged, because a comment
+    # edit moves the time and a false alarm left standing teaches people to walk past
+    # the real one. That escalation cannot be borrowed here. The two stamps the `npz`
+    # carries are the case **names** (`__manifest__`) and the **shared** input arrays
+    # (`__inputs__`), and the case that made this guard necessary moved neither: the
+    # deform fixture is built inside the case from a seeded generator, so its bytes
+    # changed while both stamps stayed identical. Escalating would make this guard
+    # silent for exactly the failure it was written for.
+    #
+    # So the cost is real and it is the one that docstring warns about — editing only a
+    # comment in `cases.py` stops this runner. The remedy it prints is correct anyway
+    # and takes a minute, which is what makes the trade bearable; a fingerprint that
+    # reached case-local fixtures would end it, and nothing computes one today.
     cases = ROOT / "tests" / "cases.py"
     if cases.exists() and cases.stat().st_mtime > GOLDEN.stat().st_mtime:
         print(f"the golden is older than the case table — {GOLDEN.name} was frozen before "
