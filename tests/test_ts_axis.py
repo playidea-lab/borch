@@ -322,7 +322,17 @@ FROZEN = {
     # numbers, as the rest of `ops.ts` is, so the values cross and the gradient does
     # not. The four module classes that wrap them are still on this side alone, which is
     # what keeps the number at twenty rather than sixteen.
-    "ops": 20,
+    #
+    # 20 → 16. `deformConv2d`, `stochasticDepth`, `dropBlock2d` and `dropBlock3d`. The
+    # first is the sampler this row named as the piece to carry, and it is a different
+    # rule from `roiAlign`'s rather than the same one with other bounds: it keeps the
+    # coordinate and drops each of the four corners on its own, where the other clamps
+    # to the edge and reads four real neighbours.
+    #
+    # What is left is the sixteen module classes. They hold parameters, so carrying them
+    # means a way to write parameters by name on that side — which is the same thing the
+    # `ops::` row in `borch-ts/test/run.py` is waiting for.
+    "ops": 16,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     #

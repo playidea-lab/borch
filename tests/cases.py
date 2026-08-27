@@ -40,6 +40,29 @@ def _same_object(L, layer):
     return str(layer(x) is x)
 
 
+def _minstd(shape, scale, seed):
+    """A spread **computed rather than drawn**, so that TypeScript can compute the same
+    one.
+
+    MINSTD — `s ← s·48271 mod 2³¹−1`. The modulus is small enough that the product
+    stays under 2⁵³, so JavaScript's float64 multiply is exact and the two sides agree
+    bit for bit. A larger multiplier would not: `1103515245 · 2³¹` is past where a
+    double counts by ones, and the sequences would part after a step or two with
+    nothing saying so.
+
+    Uniform in `[-scale, scale)`. Where a fixture needs the *size* of its values rather
+    than their distribution, that is enough — and where it needs the distribution, this
+    is the wrong tool and `numpy` is the right one.
+    """
+    total = int(np.prod(shape)) or 1
+    out = np.empty(total, dtype=np.float32)
+    state = seed % 2147483647 or 1
+    for i in range(total):
+        state = (state * 48271) % 2147483647
+        out[i] = (state / 2147483647.0 - 0.5) * 2.0 * scale
+    return np.ascontiguousarray(out.reshape(shape))
+
+
 def golden_inputs():
     """The inputs the cases use. The **order** they are drawn in decides the values, so it is left alone."""
     rng = np.random.default_rng(0)
@@ -13066,18 +13089,28 @@ def ops_cases(inp=None):
     # whole thing then agrees with an implementation that clamps.
     def _deform_input(seed, batch, in_c, out_c, kh, kw, h, w, wgroups, ogroups,
                       use_mask, stride, padding, dilation):
-        rng = np.random.default_rng(seed)
+        """**Computed, not drawn.** `default_rng` is numpy's and TypeScript has none of
+        it, so a fixture built from it can be asked of one implementation and not of
+        the other — which is the whole of why these eight cases were never ported.
+
+        `_minstd` gives both sides the same bytes from the same three numbers. What was
+        lost is that the values were normal; what the comment above actually asks for is
+        their **size**, and that is checked below rather than assumed.
+        """
         out_h = (h + 2 * padding[0] - (dilation[0] * (kh - 1) + 1)) // stride[0] + 1
         out_w = (w + 2 * padding[1] - (dilation[1] * (kw - 1) + 1)) // stride[1] + 1
+        offset = _minstd((batch, ogroups * 2 * kh * kw, out_h, out_w), 2.4, seed + 2)
+        # **The claim the comment makes, asked rather than trusted.** Small offsets hide
+        # both edge rules: a displacement of a tenth of a pixel never crosses a border,
+        # and the whole thing then agrees with an implementation that clamps.
+        assert (np.abs(offset) > 1.0).mean() > 0.4, "the offsets stay inside the kernel"
         return {
-            "input": rng.standard_normal((batch, in_c, h, w)).astype(np.float32),
-            "weight": (rng.standard_normal((out_c, in_c // wgroups, kh, kw))
-                       .astype(np.float32) * 0.3),
-            "offset": (rng.standard_normal((batch, ogroups * 2 * kh * kw, out_h, out_w))
-                       .astype(np.float32) * 1.2),
-            "mask": (rng.random((batch, ogroups * kh * kw, out_h, out_w))
-                     .astype(np.float32) if use_mask else None),
-            "bias": rng.standard_normal((out_c,)).astype(np.float32),
+            "input": _minstd((batch, in_c, h, w), 2.0, seed),
+            "weight": _minstd((out_c, in_c // wgroups, kh, kw), 0.6, seed + 1),
+            "offset": offset,
+            "mask": (_minstd((batch, ogroups * kh * kw, out_h, out_w), 0.5, seed + 3)
+                     + 0.5 if use_mask else None),
+            "bias": _minstd((out_c,), 2.0, seed + 4),
         }
 
     def deform_case(label, **shape):

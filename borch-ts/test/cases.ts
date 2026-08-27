@@ -1588,6 +1588,115 @@ function addOps(out: Map<string, Case>): void {
   out.set("ops::ps_roi_pool(spatial_scale=0.5)",
     flat(() => ops.psRoiPool(psMap(), psRois(), 2, 0.5)));
 
+  // ── the convolution whose sampling positions are learned ────────────────────
+  //
+  // **The fixture is computed, not drawn.** The Python side built these from
+  // `numpy.random.default_rng`, and there is none of that here — which is the whole of
+  // why these eight were never asked on this side. `minstd` is the same three numbers
+  // on both, and its modulus is small enough that a float64 multiply stays exact.
+  const minstd = (count: number, scale: number, seed: number): number[] => {
+    const out: number[] = [];
+    let state = seed % 2147483647;
+    if (state <= 0) state = 1;
+    for (let i = 0; i < count; i++) {
+      state = (state * 48271) % 2147483647;
+      out.push(Math.fround((state / 2147483647 - 0.5) * 2 * scale));
+    }
+    return out;
+  };
+  const spread = (shape: number[], scale: number, seed: number): Tensor =>
+    Tensor.from(minstd(shape.reduce((a, b) => a * b, 1), scale, seed), shape);
+
+  interface Deform {
+    seed: number; batch: number; inC: number; outC: number;
+    kh: number; kw: number; h: number; w: number;
+    wgroups: number; ogroups: number; useMask: boolean;
+    stride: [number, number]; padding: [number, number]; dilation: [number, number];
+  }
+  const DEFORM: Deform = {
+    seed: 3, batch: 2, inC: 4, outC: 6, kh: 3, kw: 3, h: 7, w: 8,
+    wgroups: 1, ogroups: 1, useMask: false,
+    stride: [1, 1], padding: [0, 0], dilation: [1, 1],
+  };
+  const deform = (over: Partial<Deform>) => {
+    const d = { ...DEFORM, ...over };
+    const outH = Math.floor(
+      (d.h + 2 * d.padding[0] - (d.dilation[0] * (d.kh - 1) + 1)) / d.stride[0]) + 1;
+    const outW = Math.floor(
+      (d.w + 2 * d.padding[1] - (d.dilation[1] * (d.kw - 1) + 1)) / d.stride[1]) + 1;
+    // **The mask is a gain in [0, 1)**, which is what the Python side builds by adding
+    // half to a spread of half — written as a spread of one it would go negative and
+    // stop being a gain.
+    const maskValues = minstd(d.batch * d.ogroups * d.kh * d.kw * outH * outW,
+                              0.5, d.seed + 3).map((v) => v + 0.5);
+    return {
+      input: spread([d.batch, d.inC, d.h, d.w], 2.0, d.seed),
+      offset: spread([d.batch, d.ogroups * 2 * d.kh * d.kw, outH, outW],
+                     2.4, d.seed + 2),
+      weight: spread([d.outC, d.inC / d.wgroups, d.kh, d.kw], 0.6, d.seed + 1),
+      bias: spread([d.outC], 2.0, d.seed + 4),
+      mask: d.useMask
+        ? Tensor.from(maskValues,
+                      [d.batch, d.ogroups * d.kh * d.kw, outH, outW])
+        : null,
+      settings: d,
+    };
+  };
+  const deformCase = (over: Partial<Deform>) => flat(async () => {
+    const g = deform(over);
+    return ops.deformConv2d(g.input, g.offset, g.weight, g.bias,
+                            g.settings.stride, g.settings.padding,
+                            g.settings.dilation, g.mask);
+  });
+
+  out.set("ops::deform_conv2d", deformCase({}));
+  // **v2 adds a learned weight per position**, not only a learned place.
+  out.set("ops::deform_conv2d(mask, v2)", deformCase({ useMask: true }));
+  // **Two kinds of group, and they may differ** — one offset field can steer several
+  // groups of filters. The mask is indexed by the offset group too, which a fixture
+  // with one group cannot show.
+  out.set("ops::deform_conv2d(weight groups)", deformCase({ wgroups: 2 }));
+  out.set("ops::deform_conv2d(offset groups)", deformCase({ ogroups: 2 }));
+  out.set("ops::deform_conv2d(both groups, mask)",
+    deformCase({ wgroups: 2, ogroups: 2, useMask: true }));
+  // **The kernel's dilation is applied before the offset**, so a zero displacement
+  // leaves an ordinary dilated convolution.
+  out.set("ops::deform_conv2d(stride, padding, dilation)",
+    deformCase({ h: 9, w: 9, stride: [2, 2], padding: [1, 1], dilation: [2, 2] }));
+  out.set("ops::deform_conv2d(1x1 kernel, mask)",
+    deformCase({ kh: 1, kw: 1, h: 5, w: 5, useMask: true }));
+  out.set("ops::deform_conv2d(non-square kernel)",
+    deformCase({ kw: 1, h: 6, w: 6 }));
+
+  // ── the structured dropouts, at the settings that draw nothing ──────────────
+  //
+  // **What the coin does has no shared answer to compare against**, so only the two
+  // ways each of these declines to draw are asked: `training = false`, and a rate of
+  // zero. That is a fact about the comparison and not about the functions — the
+  // drawing halves are written and only these branches can be frozen.
+  const ramp = (shape: number[]): Tensor => {
+    const n = shape.reduce((a, b) => a * b, 1);
+    const values: number[] = [];
+    // **Rounded to f32 at every step, because numpy is.** `(i * 0.017) % 1.7` in
+    // float64 and then rounded gives a different number wherever the product lands on
+    // a multiple of the modulus: at `i = 500` the product is 8.5, which is five 1.7s
+    // exactly in double and a hair under five in f32 — so one side answered −0.8 and
+    // the other 0.9. One case in 750 values, and only that one.
+    const f = Math.fround;
+    for (let i = 0; i < n; i++) {
+      values.push(f(f(f(i * f(0.017)) % f(1.7)) - f(0.8)));
+    }
+    return Tensor.from(values, shape);
+  };
+  out.set("ops::stochastic_depth(training=False)",
+    flat(async () => ops.stochasticDepth(ramp([2, 3, 4, 5]), 0.5, "row", false)));
+  out.set("ops::stochastic_depth(p=0)",
+    flat(async () => ops.stochasticDepth(ramp([2, 3, 4, 5]), 0, "batch")));
+  out.set("ops::drop_block2d(training=False)",
+    flat(async () => ops.dropBlock2d(ramp([2, 3, 5, 5]), 0.3, 3, false, 1e-6, false)));
+  out.set("ops::drop_block3d(training=False)",
+    flat(async () => ops.dropBlock3d(ramp([2, 3, 5, 5, 5]), 0.3, 3, false, 1e-6, false)));
+
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look
   // identical either way**, so a wrong one is a wrong answer with nothing raised — and

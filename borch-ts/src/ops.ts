@@ -1935,3 +1935,261 @@ export async function elasticBoundingBoxes(
   return warpBoxes(boundingBoxes, format, [height, width],
     elasticMove(displacement, fieldHeight, fieldWidth, width, height));
 }
+
+/**
+ * A convolution whose sampling positions are **learned.**
+ *
+ * <https://arxiv.org/abs/1703.06211> — and v2, with `mask`,
+ * <https://arxiv.org/abs/1811.11168>
+ *
+ * **Its sampling is not `sampleAt`'s rule with different bounds — it is a different
+ * rule.** That one clamps the coordinate to the edge and reads four real neighbours;
+ * this one keeps the coordinate and **drops each of the four corners separately** when
+ * that corner is off the map. At `y = -0.5` the two disagree completely: clamped, the
+ * sample is read at rows 0 and 1; here the row above does not exist, contributes
+ * nothing, and the row below carries half its weight.
+ *
+ * Written with a clamp it is right in the middle of the map and wrong along every
+ * border — which is exactly where a deformable convolution spends its offsets.
+ *
+ * **Two group counts, and they are allowed to differ.** The weight's second axis
+ * against the input's channels gives the weight groups; the offset's channel count
+ * against `2 * kh * kw` gives the offset groups, and one offset field can steer several
+ * groups of filters.
+ *
+ * **The kernel's own dilation is applied before the offset**, so a displacement of zero
+ * leaves an ordinary dilated convolution. Added afterwards the offsets would mean
+ * something different at every dilation.
+ */
+export async function deformConv2d(
+  input: Tensor,
+  offset: Tensor,
+  weight: Tensor,
+  bias: Tensor | null = null,
+  stride: number | readonly number[] = 1,
+  padding: number | readonly number[] = 0,
+  dilation: number | readonly number[] = 1,
+  mask: Tensor | null = null,
+): Promise<Tensor> {
+  const [strideH, strideW] = pairOfSizes(stride);
+  const [padH, padW] = pairOfSizes(padding);
+  const [dilH, dilW] = pairOfSizes(dilation);
+  const f = await featureOf(input, "deformConv2d");
+  const off = await featureOf(offset, "deformConv2d");
+  const wShape = weight.shape as number[];
+  const w = Array.from(await weight.toArray());
+  const outChannels = wShape[0] ?? 0;
+  const groupChannels = wShape[1] ?? 0;
+  const kernelH = wShape[2] ?? 0;
+  const kernelW = wShape[3] ?? 0;
+  const offsetGroups = Math.floor(off.channels / (2 * kernelH * kernelW));
+  if (offsetGroups === 0) {
+    throw new Error(
+      "the shape of the offset tensor at dimension 1 is not valid. It should be a "
+      + "multiple of 2 * weight.size[2] * weight.size[3].\n"
+      + `Got offset.shape[1]=${off.channels}, while 2 * weight.size[2] * `
+      + `weight.size[3]=${2 * kernelH * kernelW}`);
+  }
+  const weightGroups = groupChannels === 0 ? 1 : Math.floor(f.channels / groupChannels);
+  const outH = Math.floor(
+    (f.height + 2 * padH - (dilH * (kernelH - 1) + 1)) / strideH) + 1;
+  const outW = Math.floor(
+    (f.width + 2 * padW - (dilW * (kernelW - 1) + 1)) / strideW) + 1;
+
+  const m = mask === null ? null : await featureOf(mask, "deformConv2d");
+  const b = bias === null ? null : Array.from(await bias.toArray());
+  const perOffsetGroup = Math.floor(f.channels / offsetGroups);
+  const perOut = Math.floor(outChannels / weightGroups);
+  const out = new Array<number>(f.batch * outChannels * outH * outW).fill(0);
+
+  for (let n = 0; n < f.batch; n++) {
+    for (let i = 0; i < outH; i++) {
+      for (let j = 0; j < outW; j++) {
+        for (let p = 0; p < kernelH; p++) {
+          for (let q = 0; q < kernelW; q++) {
+            const which = p * kernelW + q;
+            for (let g = 0; g < offsetGroups; g++) {
+              const start = (g * kernelH * kernelW + which) * 2;
+              const at = (ch: number): number =>
+                off.values[((n * off.channels + ch) * off.height + i) * off.width + j]
+                ?? 0;
+              const y = i * strideH - padH + p * dilH + at(start);
+              const x = j * strideW - padW + q * dilW + at(start + 1);
+              const gain = m === null ? 1
+                : m.values[((n * m.channels + g * kernelH * kernelW + which)
+                            * m.height + i) * m.width + j] ?? 0;
+              for (let k = 0; k < perOffsetGroup; k++) {
+                const cin = g * perOffsetGroup + k;
+                const taken = deformSample(f, n, cin, y, x) * gain;
+                if (taken === 0) continue;
+                // **The weight groups fold here**, not in the sampling: filter `co`
+                // sees only its own group's channels. Letting every filter see every
+                // channel gives the right shape from `weightGroups` times as many terms.
+                const wg = groupChannels === 0 ? 0 : Math.floor(cin / groupChannels);
+                const inGroup = cin - wg * groupChannels;
+                for (let o = 0; o < perOut; o++) {
+                  const co = wg * perOut + o;
+                  const tap = w[((co * groupChannels + inGroup) * kernelH + p)
+                                * kernelW + q] ?? 0;
+                  const seat = ((n * outChannels + co) * outH + i) * outW + j;
+                  out[seat] = (out[seat] ?? 0) + taken * tap;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  if (b !== null) {
+    for (let n = 0; n < f.batch; n++) {
+      for (let c = 0; c < outChannels; c++) {
+        const add = b[c] ?? 0;
+        for (let k = 0; k < outH * outW; k++) {
+          out[(n * outChannels + c) * outH * outW + k] =
+            (out[(n * outChannels + c) * outH * outW + k] ?? 0) + add;
+        }
+      }
+    }
+  }
+  return Tensor.from(out, [f.batch, outChannels, outH, outW]);
+}
+
+/**
+ * One value at a fractional `(y, x)`, **zero outside the map** — and each of the four
+ * corners dropped on its own when that corner is off it.
+ *
+ * The outer guard is the compiled kernel's own: a coordinate at or past the edge by a
+ * whole pixel contributes nothing at all, whichever corners would have been valid.
+ */
+function deformSample(f: Feature, image: number, channel: number,
+                      y: number, x: number): number {
+  if (y <= -1 || y >= f.height || x <= -1 || x >= f.width) return 0;
+  const yLow = Math.floor(y);
+  const xLow = Math.floor(x);
+  const ly = y - yLow;
+  const lx = x - xLow;
+  const plane = (image * f.channels + channel) * f.height * f.width;
+  const read = (r: number, c: number): number =>
+    (r < 0 || r >= f.height || c < 0 || c >= f.width)
+      ? 0
+      : f.values[plane + r * f.width + c] ?? 0;
+  return (1 - ly) * (1 - lx) * read(yLow, xLow)
+    + (1 - ly) * lx * read(yLow, xLow + 1)
+    + ly * (1 - lx) * read(yLow + 1, xLow)
+    + ly * lx * read(yLow + 1, xLow + 1);
+}
+
+/**
+ * Whole residual branches dropped at random.
+ *
+ * <https://arxiv.org/abs/1603.09382>
+ *
+ * **`mode` decides what a coin is tossed for**: `batch` drops the branch for the whole
+ * batch at once, `row` drops it per example. The two differ only in the shape of the
+ * noise, and getting it wrong gives a network that trains at a different effective
+ * depth — nothing raises and the curve moves.
+ *
+ * **The survivors are divided by the survival rate**, so the expected value is
+ * unchanged and evaluation needs no rescaling. Dropped without it, every layer is
+ * quieter than the next one expects.
+ *
+ * The golden asks the two settings that draw nothing — `training = false` and `p = 0`.
+ * What the coin does has no shared answer to compare against, which is a fact about
+ * the comparison rather than about this function.
+ */
+export function stochasticDepth(
+  input: Tensor, p: number, mode: "batch" | "row", training = true,
+): Tensor {
+  if (p < 0 || p > 1) {
+    throw new Error(`drop probability has to be between 0 and 1, but got ${p}`);
+  }
+  if (mode !== "batch" && mode !== "row") {
+    throw new Error(`mode has to be either 'batch' or 'row', but got ${mode}`);
+  }
+  if (!training || p === 0) return input;
+  const survival = 1 - p;
+  const shape = input.shape.map((d, i) => (mode === "row" && i === 0 ? d : 1));
+  let noise = Tensor.full([...shape], survival).bernoulli();
+  if (survival > 0) noise = noise.binary("div", Tensor.full([], survival));
+  return input.mul(noise);
+}
+
+/**
+ * DropBlock in `spatial` dimensions — **contiguous regions, not single pixels.**
+ *
+ * <https://arxiv.org/abs/1810.12890>
+ *
+ * Dropping pixels one at a time does little to a convolutional map, because the
+ * neighbours carry the same information. So a seed is drawn per position and then
+ * **grown to a block by a max pool**, which is the whole trick: the pool spreads each
+ * surviving one over its window, and one minus that is the mask.
+ *
+ * **The seeds are drawn on a smaller grid than the map.** A block centred at the very
+ * edge would hang off it, so the positions a seed may take are `size - block + 1` per
+ * axis and the field is padded back out with zeros afterwards. Drawn at full size, the
+ * rate is right and the blocks at the border are clipped, which drops less than asked.
+ */
+function dropBlock(
+  input: Tensor, p: number, blockSize: number, inplace: boolean, eps: number,
+  training: boolean, spatial: 2 | 3,
+): Tensor {
+  if (p < 0 || p > 1) {
+    throw new Error(`drop probability has to be between 0 and 1, but got ${p}.`);
+  }
+  if (input.shape.length !== spatial + 2) {
+    throw new Error(`input should be ${spatial + 2} dimensional. Got `
+      + `${input.shape.length} dimensions.`);
+  }
+  if (!training || p === 0) return input;
+  const sizes = input.shape.slice(2);
+  const block = Math.min(blockSize, ...sizes);
+  if (block % 2 === 0) {
+    throw new Error(`block size should be odd. Got ${block} which is even.`);
+  }
+  const seeds = sizes.map((one) => one - block + 1);
+  const total = sizes.reduce((a, b) => a * b, 1);
+  const positions = seeds.reduce((a, b) => a * b, 1);
+  const gamma = (p * total) / (block ** spatial * positions);
+  const drawn = Tensor.full([input.shape[0] ?? 1, input.shape[1] ?? 1, ...seeds], gamma)
+    .bernoulli();
+  // **`pad` here is one axis at a time**, where torch takes the whole list. The spatial
+  // axes are the last `spatial` of them, and the half-block goes on both ends of each.
+  const half = Math.floor(block / 2);
+  let field = drawn;
+  for (let axis = 2; axis < 2 + spatial; axis++) {
+    field = field.pad(axis, half, half, 0);
+  }
+  const grown = field.poolND("max", block, 1);
+  const noise = Tensor.full([], 1).sub(grown);
+  // **The scale is the survivors' share, and `eps` is on the sum rather than after
+  // it.** Divided afterwards, a field that dropped everything gives infinity instead of
+  // a very large number, and the difference shows only in the one case nobody writes.
+  const scale = Tensor.full([], noise.numel()).binary(
+    "div", noise.sum().binary("add", Tensor.full([], eps)));
+  const out = input.mul(noise).binary("mul", scale);
+  return inplace ? input.copyFrom(out) : out;
+}
+
+/** `dropBlock` over height and width.
+ *
+ * **`inplace` sits fourth, where torch puts it.** Written without that seat, `eps` took
+ * it — so `drop_block2d(x, 0.3, 3, 1e-6)` set `inplace` to a number, which is truthy.
+ * The signature axis said so in the run that added this function, which is what that
+ * axis is: a count of positions rather than of names, and it caught the same defect
+ * this file spent the day on an hour after it was written about.
+ */
+export function dropBlock2d(
+  input: Tensor, p: number, blockSize: number, inplace = false, eps = 1e-6,
+  training = true,
+): Tensor {
+  return dropBlock(input, p, blockSize, inplace, eps, training, 2);
+}
+
+/** `dropBlock` over depth, height and width. */
+export function dropBlock3d(
+  input: Tensor, p: number, blockSize: number, inplace = false, eps = 1e-6,
+  training = true,
+): Tensor {
+  return dropBlock(input, p, blockSize, inplace, eps, training, 3);
+}

@@ -350,14 +350,14 @@ NOT_PORTED = {
     # from the same numbers on both sides. borch.ts has the layers; what is missing is
     # the harness that fills a module's parameters and buffers by name, which the
     # Python cases grew for this and the TS runner has never needed.
-    "ops::": (39, "아직 — the five layer classes, the six structured dropouts, the "
-                  "pyramid, the level-picker and the deformable convolution. The module "
-                  "cases need a harness for writing parameters and buffers by name; the "
-                  "dropouts' random half would need a shared generator rather than a "
-                  "shared answer. **The eight RoI names crossed** — the sampler is "
-                  "written here now, in JavaScript numbers like the rest of this file "
-                  "rather than in tensor operations, so the browser side computes the "
-                  "same values and hands back no gradient"),
+    "ops::": (27, "아직 — the five layer classes, the pyramid, the level-picker "
+                        "and the two deformable *modules*. They need a harness for "
+                        "writing parameters and buffers by name, which is what the "
+                        "Python side's `_fill` is and this side has no counterpart to. "
+                        "**The eight RoI names crossed**, and then the deformable "
+                        "convolution and the four dropout settings that draw nothing. "
+                        "What is left of the dropouts is the coin itself, which has no "
+                        "shared answer rather than no implementation"),
     # 104 → 103. What `dtype::없는이름::` was asking about moved to `narrow_copy` and
     # `unsafe_chunk` — torch actually answers the earlier one, so it was no absent name.
     # 103 → 111 → 147 → 156 → 157. Whether the dtype aliases and the factories really
