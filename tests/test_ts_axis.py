@@ -273,7 +273,11 @@ FROZEN = {
     # This axis counts names, so the feature read as absent while sitting three
     # lines above the loader that called it — a comment naming what something
     # *would* be called is not the name.
-    "utils.data": 2,
+    #
+    # 2 → 3. `DistributedSampler`. It is not a network — it interleaves indices and
+    # slices by rank — but borch.ts has no `utils.data` at all: a page loads its own
+    # data and there is nothing there to sample from.
+    "utils.data": 3,
     # **These two were not measured at all until now.** `ts_axis.py` left them out
     # because the golden's `vision::` cases were said to hold them name by name, and
     # for `five_crop`, `ten_crop` and `to_grayscale` the golden had no case — the

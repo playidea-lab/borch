@@ -422,7 +422,6 @@ SKIPPED = {
     "OutOfMemoryError": "we do not separate out device memory errors",
     "DataParallel": "for several devices — this is one tab",
     "SyncBatchNorm": "for distributed training — this is inside one tab",
-    "DistributedSampler": "for distributed training — this is inside one tab",
 
     # Vendor kernels. They mean something only where that hardware is.
     "cudnn_*": "an NVIDIA kernel — not in a browser",

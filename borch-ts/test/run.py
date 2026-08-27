@@ -937,9 +937,13 @@ NOT_PORTED = {
     # the generator it was handed does not feel it. borch.ts has `manualSeed` and one
     # stream, so there is no second generator here to hand it; that is the decision at
     # the top of `data.ts` and these rows sit behind it with the other two.
-    "dataconv::": (15, "파이썬 — `default_convert`, `get_worker_info`, the eleven "
-                       "`generator` rows (one host stream), and `drop_last` given by "
-                       "position (borch.ts takes an options object)"),
+    "dataconv::": (21, "파이썬 — `default_convert`, `get_worker_info`, the eleven "
+                        "`generator` rows (one host stream), `drop_last` given by "
+                        "position (borch.ts takes an options object), and the six "
+                        "`DistributedSampler` rows. That last one is not a network — "
+                        "it interleaves indices and slices by rank — but borch.ts has "
+                        "no `utils.data` at all: a page loads its own data and there "
+                        "is nothing there to sample from"),
 }
 
 

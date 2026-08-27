@@ -222,7 +222,8 @@ from ._optim import (
 )
 from ._data import (
     BatchSampler, ChainDataset, ConcatDataset, DataLoader, Dataset, IterableDataset,
-    RandomSampler, Sampler, SequentialSampler, StackDataset, Subset,
+    DistributedSampler, RandomSampler, Sampler, SequentialSampler, StackDataset,
+    Subset,
     SubsetRandomSampler, TensorDataset, WeightedRandomSampler, _Utils, _UtilsData,
     default_collate, random_split, utils,
 )
@@ -867,8 +868,9 @@ for _name in (
     "CosineAnnealingWarmRestarts", "CyclicLR", "ExponentialLR", "LambdaLR", "LinearLR",
     "MultiStepLR", "MultiplicativeLR", "OneCycleLR", "PolynomialLR",
     "ReduceLROnPlateau", "SequentialLR", "StepLR",
-    # ── these 16 in `utils.data`.
+    # ── these 17 in `utils.data`.
     "BatchSampler", "ChainDataset", "ConcatDataset", "DataLoader", "Dataset",
+    "DistributedSampler",
     "IterableDataset", "RandomSampler", "Sampler", "SequentialSampler", "StackDataset",
     "Subset", "SubsetRandomSampler", "TensorDataset", "WeightedRandomSampler",
     "default_collate", "random_split",

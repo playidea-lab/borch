@@ -82,6 +82,25 @@ class SequentialSampler:
         return len(self.data_source)
 
 
+class DistributedSampler:
+    """Every rank takes **an interleaved slice** of the same shuffled order.
+
+    **The core's body, imported rather than written again.** It is arithmetic on a list
+    of integers — no tensor is made, no kernel runs — so a second copy here would be a
+    second place for the padding rule to drift. The binding's own samplers exist because
+    they hand indices to a loader that builds tensors; this one hands indices to those.
+
+    Its declined row read *for distributed training — this is inside one tab*, which
+    names what the class is for and not what it needs: given `num_replicas` and `rank`
+    it never reaches for a process group. Measured on the binding's golden, which is
+    what noticed it was absent here after it went into the core.
+    """
+
+    def __new__(cls, *args, **kwargs):
+        from borch._data import DistributedSampler as _Core
+        return _Core(*args, **kwargs)
+
+
 class RandomSampler:
     def __init__(self, data_source, replacement=False, num_samples=None,
                  generator=None):
@@ -320,6 +339,7 @@ class _UtilsData:
     RandomSampler = RandomSampler
     SequentialSampler = SequentialSampler
     WeightedRandomSampler = WeightedRandomSampler
+    DistributedSampler = DistributedSampler
     default_collate = staticmethod(default_collate)
     default_convert = staticmethod(default_convert)
     get_worker_info = staticmethod(get_worker_info)

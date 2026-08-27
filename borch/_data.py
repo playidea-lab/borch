@@ -11,6 +11,7 @@ from ._ops import (
     _Namespace, _rng, _wrap, as_tensor, stack,
 )
 from ._base import (
+    _like_torch,
     _np,
 )
 
@@ -88,6 +89,103 @@ class RandomSampler:
     def __len__(self):
         return (len(self.data_source) if self._num_samples is None
                 else self._num_samples)
+
+
+class DistributedSampler:
+    """Every rank takes **an interleaved slice** of the same shuffled order.
+
+    Its row read *for distributed training — this is inside one tab*, which names what
+    the class is **for** rather than what it needs. Measured: given `num_replicas` and
+    `rank` it never touches `torch.distributed` at all —
+    `DistributedSampler(range(10), num_replicas=2, rank=0)` answers `[0, 2, 4, 6, 8]`.
+    It is arithmetic on indices, and a process group is only where the two numbers come
+    from when nobody passes them.
+
+    Three things it has to get right, and none of them is a network:
+
+    - **The slice is `rank::num_replicas`, interleaved and not contiguous.** Cut into
+      blocks instead, each rank sees one region of a sorted dataset and the batches stop
+      being a sample of it. Nothing raises and the loss curve is the only witness.
+    - **The order is redrawn per epoch, from `seed + epoch`.** Every rank draws the same
+      permutation because they draw from the same seed, which is what makes the
+      interleave a partition. Left at one seed forever, every epoch sees the same order.
+    - **Short of a whole multiple it pads by wrapping**, or drops with `drop_last`. The
+      ranks have to receive the same count or the one that runs out ends the epoch for
+      everybody, and the padding is the front of the same list rather than a repeat of
+      the tail.
+
+    **`set_epoch` is not decoration.** A loader that never calls it draws the same
+    permutation every epoch, which is the failure this class is most often used wrong
+    for — and it is invisible except as a model that stops improving early.
+
+    **Shuffled, the indices are not torch's.** torch draws with `torch.randperm` and a
+    `torch.Generator`; this draws with numpy's, and the same seed gives a different
+    permutation — measured. Unshuffled the two agree exactly, so that is what the golden
+    freezes; what shuffling has to get right is a **property** and not a value, and the
+    properties are asked separately: the ranks partition the padded list, one epoch
+    repeats, and two epochs differ.
+    """
+
+    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, seed=0,
+                 drop_last=False):
+        if num_replicas is None or rank is None:
+            # **`ValueError`, not `RuntimeError`, and the difference is not ours.**
+            # torch has both here: `RuntimeError` when the distributed package cannot
+            # be imported at all, and `ValueError` from `get_world_size` when it can
+            # and no process group has been started. On any ordinary install the second
+            # is the one a caller meets — measured, including on a CPU-only build where
+            # `dist.is_available()` is still True.
+            raise ValueError(_like_torch(
+                "`num_replicas` and `rank` have to be given. There is one process "
+                "here, so there is nothing to read them from — everything after them "
+                "is arithmetic and works.",
+                "Default process group has not been initialized, please make sure to "
+                "call init_process_group"))
+        if rank >= num_replicas or rank < 0:
+            raise ValueError(
+                f"Invalid rank {rank}, rank should be in the interval "
+                f"[0, {num_replicas - 1}]")
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.epoch = 0
+        self.drop_last = drop_last
+        count = len(dataset)
+        if drop_last and count % num_replicas != 0:
+            self.num_samples = -(-(count - num_replicas) // num_replicas)
+        else:
+            self.num_samples = -(-count // num_replicas)
+        self.total_size = self.num_samples * num_replicas
+        self.shuffle = shuffle
+        self.seed = seed
+
+    def __iter__(self):
+        count = len(self.dataset)
+        if self.shuffle:
+            # **The generator is made here and seeded here**, not taken from the module
+            # — every rank has to draw the same permutation for the interleave to be a
+            # partition, and a shared stream would give each of them a different one.
+            rng = _np.random.default_rng(self.seed + self.epoch)
+            indices = rng.permutation(count).tolist()
+        else:
+            indices = list(range(count))
+        if not self.drop_last:
+            padding = self.total_size - len(indices)
+            if padding <= len(indices):
+                indices += indices[:padding]
+            else:
+                indices += (indices * (-(-padding // len(indices))))[:padding]
+        else:
+            indices = indices[:self.total_size]
+        indices = indices[self.rank:self.total_size:self.num_replicas]
+        return iter(indices)
+
+    def __len__(self):
+        return self.num_samples
+
+    def set_epoch(self, epoch):
+        """Which epoch's order to draw. See the note above on why it matters."""
+        self.epoch = epoch
 
 
 class DataLoader:
@@ -424,6 +522,7 @@ class _UtilsData(_Namespace):
     WeightedRandomSampler = WeightedRandomSampler
     Sampler = Sampler
     SubsetRandomSampler = SubsetRandomSampler
+    DistributedSampler = DistributedSampler
     BatchSampler = BatchSampler
     IterableDataset = IterableDataset
     ChainDataset = ChainDataset

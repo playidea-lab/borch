@@ -5640,6 +5640,46 @@ def data_loader_cases(inp=None):
                       ",".join(str(int(v)) for v in b)
                       for b in L.utils.data.DataLoader(items, 4, False, None, None, 0,
                                                        None, False, True))))
+    # **The row said *for distributed training — this is inside one tab*, which names
+    # what the class is for and not what it needs.** Given `num_replicas` and `rank` it
+    # never touches `torch.distributed`: it interleaves indices, pads to a whole
+    # multiple and slices by rank.
+    #
+    # **Every rank is asked, and their union is the answer.** Asked one rank at a time
+    # the interleave and a contiguous split look alike on the first one — rank 0 gets
+    # `[0, 2, 4]` one way and `[0, 1, 2]` the other, both of which start at zero and
+    # have the right length.
+    #
+    # Ten over three is where the padding shows: without `drop_last` the list is padded
+    # back to twelve from its own front, and with it the tail is cut to nine.
+    for _tag, _count, _reps, _drop in (("10 over 2", 10, 2, False),
+                                       ("10 over 3, padded", 10, 3, False),
+                                       ("10 over 3, dropped", 10, 3, True),
+                                       ("7 over 4, padded past its own length", 7, 4,
+                                        False)):
+        cases.append((
+            DATACONV_PREFIX + f"DistributedSampler({_tag})",
+            lambda L, n=_count, r=_reps, d=_drop: " | ".join(
+                ",".join(str(v) for v in L.utils.data.DistributedSampler(
+                    list(range(n)), num_replicas=r, rank=k, shuffle=False,
+                    drop_last=d))
+                for k in range(r))))
+    # **The refusal when the two numbers are absent**, which is the only place the
+    # distributed package would have come in.
+    def _refused(body):
+        def run(L):
+            try:
+                body(L)
+                return "예외가 안 났다"
+            except Exception as exc:                            # noqa: BLE001
+                return type(exc).__name__
+        return run
+
+    cases.append((DATACONV_PREFIX + "DistributedSampler(no ranks given)=거절",
+                  _refused(lambda L: L.utils.data.DistributedSampler(list(range(4))))))
+    cases.append((DATACONV_PREFIX + "DistributedSampler(rank out of range)=거절",
+                  _refused(lambda L: L.utils.data.DistributedSampler(
+                      list(range(4)), num_replicas=2, rank=2))))
     cases.append((DATACONV_PREFIX + "DataLoader(batch_sampler)",
                   lambda L: " | ".join(
                       ",".join(str(int(v)) for v in b)
