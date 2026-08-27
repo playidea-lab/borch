@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 347
+  "missing": 348
  },
  "modules": [
   {
@@ -17363,6 +17363,19 @@
     },
     {
      "kind": "class",
+     "name": "Conv3dNormActivation",
+     "signature": "export declare class Conv3dNormActivation extends ConvNormActivation",
+     "doc": "The same block over three dimensions.\n\n**`convLayer` is the whole difference**, which is what that last seat is for. The norm\ngoes with it: a 3-D block wants `BatchNorm3d`, and left at the 2-D default it would\nrefuse a five-axis input.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize?: number, stride?: number, padding?: number | null, groups?: number, normLayer?: ((width: number) => Module) | null, activationLayer?: (() => Module) | null, dilation?: number, inplace?: boolean | null, bias?: boolean | null)",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
      "name": "SqueezeExcitation",
      "signature": "export declare class SqueezeExcitation extends Module",
      "doc": "Squeeze-and-Excitation — **the channels weight themselves.**\n\n<https://arxiv.org/abs/1709.01507>\n\nPool each channel to one number, run two 1×1 convolutions over that, multiply the\ninput by the result. **The two activations are not the same one**: the inner is a\nrectifier and the outer squashes to `(0, 1)`, because the outer's output is a gain.\nUsing the rectifier for both gives gains unbounded above — the block still trains and\nthe scale drifts.",
@@ -17450,7 +17463,7 @@
      ]
     }
    ],
-   "count": 159
+   "count": 161
   },
   {
    "name": "datasets",
@@ -19970,5 +19983,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2700
+ "total": 2702
 }

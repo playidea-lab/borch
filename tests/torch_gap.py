@@ -866,9 +866,6 @@ SKIPPED = {
     # The second is 아직 and not a wall — `roi_align` takes a tensor and a list of
     # boxes, like everything else that turned out to be writable. It is left because it
     # is a day's work, not because it needs a model.
-    "ops.Conv3dNormActivation": "**3-D convolution is declined in the core** — the 2-D "
-                                "one is written now, and this is the ingredient it "
-                                "would need",
     # **The four losses were here and are built.** The row read *a detection loss — it
     # takes a model's predictions*, and every word of that is true and none of it was a
     # reason. A prediction arriving as an argument is a tensor; the loss never meets the

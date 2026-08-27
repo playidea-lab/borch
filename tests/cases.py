@@ -12896,6 +12896,13 @@ def ops_cases(inp=None):
     cases += [
         # **`padding=None` keeps the size**, and zero padding is a network that trains
         # on an input that shrinks by two per layer.
+        # **The one this group called its real refusal.** Its row read *3-D convolution
+        # is declined in the core*; measured, `nn.Conv3d(2, 3, 3)` on a five-axis input
+        # answers. `conv_layer` is the whole difference, which is what that last seat is
+        # for — and the norm goes with it, because a 2-D norm refuses five axes.
+        (OPS_PREFIX + "Conv3dNormActivation(2→3, the last seat)",
+         _layer_values(lambda L: _ops_of(L).Conv3dNormActivation(2, 3),
+                       (2, 2, 4, 5, 6))),
         (OPS_PREFIX + "Conv2dNormActivation(3→4, k3)",
          _layer_values(lambda L: _ops_of(L).Conv2dNormActivation(3, 4), (2, 3, 6, 7))),
         # **`bias=None` means "only when there is no norm"** — with the norm dropped

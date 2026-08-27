@@ -5790,12 +5790,7 @@ def _ops_layers(L):
             self.out_channels = out_channels
 
     class Conv2dNormActivation(ConvNormActivation):
-        """`ConvNormActivation` with the convolution fixed to two dimensions.
-
-        Its 3-D twin stays declined, and **that row is the one real refusal in this
-        group**: 3-D convolution is absent from the core, which is a missing
-        ingredient rather than a missing use.
-        """
+        """`ConvNormActivation` with the convolution fixed to two dimensions."""
 
         def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
                      padding=None, groups=1, norm_layer=nn.BatchNorm2d,
@@ -5803,6 +5798,28 @@ def _ops_layers(L):
             super().__init__(in_channels, out_channels, kernel_size, stride, padding,
                              groups, norm_layer, activation_layer, dilation, inplace,
                              bias, nn.Conv2d)
+
+    class Conv3dNormActivation(ConvNormActivation):
+        """The same block over three dimensions.
+
+        Its row read *3-D convolution is declined in the core — the 2-D one is written
+        now, and this is the ingredient it would need*, and it was **the one this group
+        called its real refusal**. Measured: `nn.Conv3d(2, 3, 3)` on a `(1, 2, 5, 5, 5)`
+        input answers `(1, 3, 3, 3, 3)`. The ingredient was there; the sentence naming it
+        as missing outlived whatever made it true.
+
+        **`conv_layer` is the whole difference**, which is what that argument is for —
+        the base takes it as its last seat and this passes `Conv3d` where its twin
+        passes `Conv2d`. The norm goes with it: a 3-D block wants `BatchNorm3d`, and
+        left at the 2-D default it would refuse a five-axis input.
+        """
+
+        def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
+                     padding=None, groups=1, norm_layer=nn.BatchNorm3d,
+                     activation_layer=nn.ReLU, dilation=1, inplace=True, bias=None):
+            super().__init__(in_channels, out_channels, kernel_size, stride, padding,
+                             groups, norm_layer, activation_layer, dilation, inplace,
+                             bias, nn.Conv3d)
 
     class SqueezeExcitation(nn.Module):
         """Squeeze-and-Excitation — **the channels weight themselves.**
@@ -6263,6 +6280,7 @@ def _ops_layers(L):
             "DropBlock2d": DropBlock2d, "DropBlock3d": DropBlock3d,
             "StochasticDepth": StochasticDepth,
             "Conv2dNormActivation": Conv2dNormActivation,
+            "Conv3dNormActivation": Conv3dNormActivation,
             "SqueezeExcitation": SqueezeExcitation, "MLP": MLP,
             "Permute": Permute, "FrozenBatchNorm2d": FrozenBatchNorm2d}
     _OPS_LAYERS[id(L)] = made
