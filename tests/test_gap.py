@@ -476,3 +476,66 @@ def test_the_not_api_bin_has_not_grown():
         + "\n\nThis bin is subtracted from the denominator. A name put here rather than "
           "in SKIPPED raises the percentage, so growing it is a decision, not a tidy-up "
           "— move the number deliberately, with the reason in the commit message.")
+
+
+# ── The other direction ─────────────────────────────────────────────────────────
+#
+# Everything above this line reads `theirs - ours`. **Nothing read `ours - theirs`**,
+# though the tool has printed that column since it was written (`--extra`).
+#
+# `install` is ours by definition, and `BorchError` is the type our refusals raise.
+# Nothing else has a claim to be here.
+OURS_BY_RIGHT = {"torch": {"BorchError", "install"}}
+
+
+def test_no_namespace_offers_a_door_torch_does_not_have():
+    """**A name we have and torch does not teaches a syntax that does not exist.**
+
+    This library exists so that someone can practise torch's syntax with nothing
+    installed, and the principle at the top of `borch/__init__.py` is that an absent
+    feature beats a wrong answer — what is missing stops loudly rather than quietly
+    answering differently. A door torch has not got is that same defect **pointing the
+    other way**: nothing is wrong until the student leaves, and then
+
+        model = torch.Linear(3, 4)
+
+    stops on real torch with `AttributeError`. Everything they ran here said it was
+    fine. That is worse than a stop, because the stop arrives later and somewhere else.
+
+    ## It was 281, and not one of them was invented
+
+    Every one had a home in torch, just not that one: 169 `Tensor` methods (`add_`,
+    `item`, `size`, `view`, `backward`), 49 `nn` classes, 16 in `utils.data`, 15
+    schedulers, 13 optimisers, 13 out of `nn.functional`. Not a wrong API — **a second
+    door onto a right one.**
+
+    They were an import's side effect rather than a decision. The classes have to be in
+    scope to build the `nn` namespace and to be bound as methods, and importing them by
+    name binds them at the top level as well. The standard was already being applied
+    twenty lines above: seven losses are deliberately *not* re-exported, because torch's
+    top-level versions take an integer reduction and default to `none`, so the friendly
+    alias would diverge starting at the shape. That reasoning is this test — written
+    once, applied to seven names, and then not held for the rest.
+    """
+    extra = {}
+    for space, theirs, ours in _spaces():
+        surplus = _public(ours) - _public(theirs) - OURS_BY_RIGHT.get(space, set())
+        if surplus:
+            extra[space] = sorted(surplus)
+
+    # **A blind reader here passes silently.** `theirs - ours` fails loudly when it
+    # cannot see, because then everything looks missing; this direction reads empty and
+    # reports no surplus. So the surfaces are checked to be there at all first.
+    for space, _theirs, ours in _spaces():
+        assert len(_public(ours)) > 5, (
+            f"{space} offers almost nothing — this test cannot see a surplus in a "
+            "namespace it is not reading, and would be passing by being blind")
+
+    assert not extra, (
+        "these names exist here and not in torch:\n  " +
+        "\n  ".join(f"{space} ({len(names)}): " + ", ".join(names[:12]) +
+                    (" …" if len(names) > 12 else "")
+                    for space, names in sorted(extra.items())) +
+        "\n\nEach is a line somebody can write here that stops on real torch. Keep it "
+        "where torch keeps it and take it off the top level, or — if it is genuinely "
+        "ours — write it into OURS_BY_RIGHT with the reason.")

@@ -794,3 +794,93 @@ def install(name="torch", modules=None):
         registered.append(path)
         walk(value, path)
     return registered
+
+
+# ======================================== closing the doors torch does not have
+#
+# Everything above needs these names **in scope**: the layers to build `nn`, the
+# functions to be bound onto `Tensor`, the optimisers to build `optim`. Importing
+# them by name is how they get there, and binding them at the top level is what
+# that leaves behind. Nobody chose it.
+#
+# The cost is not a wrong value, it is a **wrong lesson.** This library exists so
+# that torch's syntax can be practised with nothing installed, and
+#
+#     model = torch.Linear(3, 4)
+#
+# runs here and stops on real torch with `AttributeError`. The stop arrives after
+# the student has left, which is the one place we cannot say anything from.
+#
+# The standard was already written down two hundred lines above: seven losses are
+# deliberately not re-exported, because torch's top-level versions of them take an
+# integer reduction and default to `none`, so the friendly alias would diverge
+# starting at the shape. This applies the same reasoning to the rest of them.
+#
+# None of these was invented — every one has a home in torch, just not this one.
+# `tests/test_gap.py` holds the list closed from now on.
+for _name in (
+    # ── torch keeps these 169 on `Tensor`. The module-level function is what gets
+    #    bound on as the method, so the name has to exist here first.
+    "absolute_", "add_", "addbmm_", "addcdiv_", "addcmul_", "addmm_", "addr_", "apply_",
+    "arctan2_", "as_subclass", "atan2_", "backward", "baddbmm_", "bernoulli_",
+    "bitwise_and_", "bitwise_left_shift_", "bitwise_not_", "bitwise_or_",
+    "bitwise_right_shift_", "bitwise_xor_", "byte", "cauchy_", "ccol_indices", "char",
+    "coalesce", "col_indices", "const_data_ptr", "contiguous", "copy_", "copysign_",
+    "crow_indices", "cumprod_", "cumsum_", "data_ptr", "dense_dim", "digamma_", "dim",
+    "dim_order", "div_", "divide_", "element_size", "eq_", "erfinv_", "expand",
+    "expand_as", "exponential_", "fill_diagonal_", "float_power_", "floor_divide_",
+    "fmod_", "ge_", "geometric_", "greater_", "greater_equal_", "gt_", "heaviside_",
+    "hypot_", "igamma_", "igammac_", "index", "index_add_", "index_copy_",
+    "index_fill_", "index_reduce_", "indices", "ipu", "is_coalesced", "is_contiguous",
+    "is_pinned", "is_set_to", "is_shared", "item", "le_", "lerp_", "less_",
+    "less_equal_", "lgamma_", "log_normal_", "logical_and_", "logical_not_",
+    "logical_or_", "logical_xor_", "lt_", "map2_", "map_", "masked_fill_",
+    "masked_scatter_", "module_load", "mul_", "multiply_", "mvlgamma_", "ndimension",
+    "ne_", "nelement", "new", "new_empty", "new_empty_strided", "new_full", "new_ones",
+    "new_tensor", "new_zeros", "nextafter_", "normal_", "not_equal_", "numpy",
+    "pin_memory", "polygamma_", "pow_", "put_", "random_", "record_stream",
+    "register_hook", "register_post_accumulate_grad_hook", "reinforce", "remainder_",
+    "renorm_", "repeat", "requires_grad_", "reshape_as", "resize", "resize_",
+    "resize_as", "retain_grad", "row_indices", "scatter_", "scatter_add_",
+    "scatter_reduce_", "set_", "sgn_", "share_memory_", "sign_", "size", "sparse_dim",
+    "sparse_mask", "sparse_resize_", "sparse_resize_and_clear_", "squeeze_",
+    "storage_offset", "storage_type", "stride", "sub_", "subtract_", "sum_to_size",
+    "swapaxes_", "swapdims_", "t_", "to", "to_dense", "to_mkldnn", "to_padded_tensor",
+    "to_sparse", "to_sparse_bsc", "to_sparse_bsr", "to_sparse_coo", "to_sparse_csc",
+    "to_sparse_csr", "tolist", "transpose_", "tril_", "triu_", "true_divide_", "type",
+    "type_as", "uniform_", "unsqueeze_", "untyped_storage", "values", "view", "view_as",
+    # ── torch keeps these 49 in `nn`.
+    "AdaptiveAvgPool2d", "AvgPool2d", "BCELoss", "BCEWithLogitsLoss", "BatchNorm1d",
+    "BatchNorm2d", "BatchNorm3d", "Conv1d", "Conv2d", "Conv3d", "CrossEntropyLoss",
+    "Dropout", "ELU", "Embedding", "Flatten", "GELU", "GRU", "Identity", "L1Loss",
+    "LSTM", "LayerNorm", "LeakyReLU", "Linear", "LogSoftmax", "MSELoss", "MaxPool1d",
+    "MaxPool2d", "MaxPool3d", "Module", "ModuleList", "MultiheadAttention", "NLLLoss",
+    "Parameter", "ParameterList", "RNN", "ReLU", "Sequential", "SiLU", "Sigmoid",
+    "SmoothL1Loss", "Softmax", "Tanh", "Transformer", "TransformerDecoder",
+    "TransformerDecoderLayer", "TransformerEncoder", "TransformerEncoderLayer",
+    "Unflatten", "Upsample",
+    # ── torch keeps these 14 in `optim`.
+    "ASGD", "Adadelta", "Adafactor", "Adagrad", "Adam", "AdamW", "Adamax", "LBFGS",
+    "NAdam", "Optimizer", "RAdam", "RMSprop", "Rprop", "SGD",
+    # ── and these 15 in `optim.lr_scheduler`.
+    "ChainedScheduler", "ConstantLR", "CosineAnnealingLR",
+    "CosineAnnealingWarmRestarts", "CyclicLR", "ExponentialLR", "LambdaLR", "LinearLR",
+    "MultiStepLR", "MultiplicativeLR", "OneCycleLR", "PolynomialLR",
+    "ReduceLROnPlateau", "SequentialLR", "StepLR",
+    # ── these 16 in `utils.data`.
+    "BatchSampler", "ChainDataset", "ConcatDataset", "DataLoader", "Dataset",
+    "IterableDataset", "RandomSampler", "Sampler", "SequentialSampler", "StackDataset",
+    "Subset", "SubsetRandomSampler", "TensorDataset", "WeightedRandomSampler",
+    "default_collate", "random_split",
+    # ── these 14 in `nn.functional`. `F.pad` is the door; `torch.pad` is not one.
+    "adaptive_avg_pool2d", "avg_pool2d", "elu", "gelu", "interpolate", "l1_loss",
+    "leaky_relu", "nll_loss", "normalize", "one_hot", "pad", "silu", "smooth_l1_loss",
+    "unfold",
+    # ── and one apiece in `linalg` and `nn.utils.rnn`.
+    "eigh", "pad_sequence",
+):
+    # **Written out rather than measured.** Working the list out at import time would
+    # mean importing torch to ask, and this package exists for machines that have not
+    # got it. The list being static is what makes the test above necessary.
+    del globals()[_name]
+del _name

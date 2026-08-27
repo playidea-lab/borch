@@ -6046,8 +6046,11 @@ def _ops_layers(L):
                 out += ", bias=False"
             return out + ")"
 
-    made = {"ConvNormActivation": ConvNormActivation,
-            "DeformConv2d": DeformConv2d,
+    # **`ConvNormActivation` is not one of these.** torchvision keeps it in
+    # `ops.misc` and puts only the two fixed-dimension subclasses in `ops`, so a
+    # name here is a door that side has not got — `ops.Conv2dNormActivation` is the
+    # one to reach for, and it carries this as its base either way.
+    made = {"DeformConv2d": DeformConv2d,
             "FeaturePyramidNetwork": FeaturePyramidNetwork,
             "MultiScaleRoIAlign": MultiScaleRoIAlign,
             "RoIAlign": RoIAlign, "RoIPool": RoIPool,
