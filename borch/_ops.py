@@ -6702,6 +6702,72 @@ def is_inference_mode_enabled():
 # The ones that **only ask** and change no value. Textbook code branches on them,
 # so without them the arithmetic is all right and it stops at that line.
 
+# ── the eight `sym_*` helpers ───────────────────────────────────────────────────
+#
+# **Their row read *symbolic sizes — for graph capture, and they do not sit on wasm*,
+# which is what they are for and not what they need.** Measured: `torch.sym_max(3, 5)`
+# answers `5` on ordinary numbers, with no tracing anywhere. That is the whole point of
+# them — code written once keeps working when nothing is being traced, and these are the
+# branch it takes then.
+#
+# **`sym_max` is not `max`.** It promotes to float if *either* argument is one, where
+# the builtin returns whichever object won: `max(7, 3.0)` is `7` and `sym_max(7, 3.0)`
+# is `7.0`. torch's own docstring says so, and it is the only place these eight differ
+# from the builtins they look like — so it is the only place a reader who reached for
+# `max` instead would be wrong, and they would be wrong in the type rather than the
+# value.
+
+
+def sym_max(a, b):
+    """The larger, **promoted to float if either side is one.**"""
+    out = a if a >= b else b
+    return float(out) if isinstance(a, float) or isinstance(b, float) else out
+
+
+def sym_min(a, b):
+    """The smaller, promoted as `sym_max` is."""
+    out = a if a <= b else b
+    return float(out) if isinstance(a, float) or isinstance(b, float) else out
+
+
+def sym_float(a):
+    """`float(a)`."""
+    return float(a)
+
+
+def sym_int(a):
+    """`int(a)` — **truncating toward zero**, as `int` does and as torch's does:
+    `sym_int(-3.7)` is `-3` and not `-4`."""
+    return int(a)
+
+
+def sym_not(a):
+    """`not a`."""
+    return not a
+
+
+def sym_sqrt(a):
+    """The square root, always a float."""
+    return _math.sqrt(a)
+
+
+def sym_sum(*args):
+    """`sum`, taking **either a list or the values loose** — `sym_sum([a, b])` and
+    `sym_sum(a, b)` are both torch's, which is why the signature is varargs and the one
+    argument is unpacked when it is a sequence."""
+    if len(args) == 1 and isinstance(args[0], (list, tuple)):
+        args = tuple(args[0])
+    return sum(args)
+
+
+def sym_ite(b, t, f):     # noqa: E741
+    """`t if b else f`. **The condition has to be a boolean**; the branches are
+    anything."""
+    if not isinstance(b, bool):
+        raise AssertionError(type(b))
+    return t if b else f
+
+
 def is_tensor(x):
     return isinstance(x, Tensor)
 

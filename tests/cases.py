@@ -4868,6 +4868,42 @@ def top_level_cases(inp=None):
 
     add("기울기 모드::inference_mode 안", inference)
 
+    # ── the eight `sym_*` helpers ──────────────────────────────────────────────
+    #
+    # Their row read *symbolic sizes — for graph capture*, which is what they are for.
+    # On ordinary numbers they are the branch that runs when nothing is being traced,
+    # and that is the whole point of them: code written once keeps working either way.
+    #
+    # **`sym_max` is not `max`, and the difference is a type.** It promotes to float if
+    # *either* argument is one — `max(7, 3.0)` is `7` and `sym_max(7, 3.0)` is `7.0`.
+    # So the pair is asked both ways round, with the larger on each side: written with
+    # the float always larger, a reader that returned the winning object unchanged
+    # agrees on every case.
+    for _tag, _fn in (
+            ("max(int, int)", lambda L: L.sym_max(3, 5)),
+            ("max(int, float) — the int wins", lambda L: L.sym_max(7, 3.0)),
+            ("max(int, float) — the float wins", lambda L: L.sym_max(3, 5.0)),
+            ("min(int, float) — the int wins", lambda L: L.sym_min(3, 5.0)),
+            ("min(int, int)", lambda L: L.sym_min(5, 3)),
+            ("float", lambda L: L.sym_float(3)),
+            # **Truncating toward zero**, which is `int`'s rule and not `floor`'s.
+            ("int(-3.7) truncates toward zero", lambda L: L.sym_int(-3.7)),
+            ("int(True)", lambda L: L.sym_int(True)),
+            ("not(False)", lambda L: L.sym_not(False)),
+            ("not(1) — anything truthy", lambda L: L.sym_not(1)),
+            ("sqrt", lambda L: L.sym_sqrt(9)),
+            # **Both spellings** — a list, and the values loose.
+            ("sum(loose)", lambda L: L.sym_sum(1, 2, 3)),
+            ("sum([list])", lambda L: L.sym_sum([1.5, 2])),
+            ("ite(True)", lambda L: L.sym_ite(True, 1, 2)),
+            ("ite(False) — the branches are anything",
+             lambda L: L.sym_ite(False, "a", "b")),
+    ):
+        # **The type is in the answer.** `7` and `7.0` compare equal, and the promotion
+        # is the only thing separating these from the builtins they look like.
+        cases.append((TOP_PREFIX + f"sym_{_tag}",
+                      lambda L, f=_fn: f"{f(L)!r} {type(f(L)).__name__}"))
+
     # ── introspection ──
     ints = np.array([1, 2], dtype=np.int64)
     checks = (

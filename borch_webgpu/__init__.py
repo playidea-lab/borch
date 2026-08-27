@@ -300,6 +300,22 @@ def _aten_reduction(value):
     return ("none", "mean", "sum")[value]
 
 
+# ── the eight `sym_*` helpers, taken from the core ────────────────────────────
+#
+# **Arithmetic on ordinary numbers, so there is nothing here to do differently.** They
+# make no tensor and run no kernel; a second copy on this side would be a second place
+# for `sym_max`'s float promotion to drift, and that promotion is the only thing
+# separating these from the builtins they look like.
+#
+# The general forwarding rule sends an unknown name to borch.ts, which has none of these
+# — measured, fifteen golden cases said `borch.ts does not have symMax` after they went
+# into the core. A name that is Python arithmetic has no business crossing to the GPU
+# side to be refused there.
+from borch import (                                          # noqa: E402
+    sym_float, sym_int, sym_ite, sym_max, sym_min, sym_not, sym_sqrt, sym_sum,
+)
+
+
 def binary_cross_entropy_with_logits(self, target, weight=None, pos_weight=None,
                                      reduction=0):
     return nn.functional.binary_cross_entropy_with_logits(

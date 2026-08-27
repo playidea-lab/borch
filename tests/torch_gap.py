@@ -479,7 +479,18 @@ SKIPPED = {
     # Symbolic sizes and graph capture. The same reason as `DELIBERATE`'s compile and
     # export, but the names do not match there.
     "Sym*": "symbolic sizes — for graph capture, and they do not sit on wasm",
-    "sym_*": "symbolic sizes — as above",
+    # **`sym_*` was one glob over sixteen names, and eight of them are not that.**
+    # `sym_max`, `sym_min`, `sym_float`, `sym_int`, `sym_not`, `sym_sqrt`, `sym_sum` and
+    # `sym_ite` answer on ordinary numbers with nothing being traced — measured,
+    # `torch.sym_max(3, 5)` is `5` — and that is what they are *for*: code written once
+    # keeps working when tracing is not happening, and these are the branch it takes
+    # then. They are in.
+    #
+    # What is left really is the machinery: two that constrain a symbolic range, one
+    # that mints a fresh size, and the three `Sym*` types themselves.
+    "sym_constrain_range": "constrains a symbolic range — there are no symbolic sizes "
+                           "here to constrain",
+    "sym_constrain_range_for_size": "as above",
     # **Namespaced, because `linalg.cond` is a different function and we built it.** Bare,
     # this reason reached the condition number — which works, returns 14.93 on a 2×2, and
     # was being explained to any reader of this table as *a control-flow capture op*.

@@ -663,7 +663,14 @@ NOT_PORTED = {
     # They land here for the reason already written above rather than a new one: five of
     # the six hand back a dtype as a value, and over there a dtype is a string. The sixth
     # is a refusal whose whole content is which of two functions you called.
-    "top::": (45, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
+    "top::": (60, "파이썬 — dtype introspection, the `device` object, with, integer "
+                        "enums, and the fifteen `sym_*` rows. Those last are pure "
+                        "number arithmetic and could be written here in a line each — "
+                        "what cannot cross is the **answer**: `sym_max(7, 3.0)` is "
+                        "`7.0` where `max` is `7`, and that difference is a Python "
+                        "type. JavaScript has one number, so the case would compare "
+                        "`7` against `7` and say nothing about the only rule that "
+                        "separates these eight from the builtins they look like"),
     # `spot::` was gone — 47 cases, all ported — then back with two, and gone again.
     #
     # The two were `unique(dim=)`, and the reason written here said it is a different
