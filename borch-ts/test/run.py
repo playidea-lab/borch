@@ -1049,6 +1049,18 @@ def main(argv):
     # numbers do not reconcile. One line of count cannot show the golden growing while the
     # TS side fails to follow.
     ok = not report["failed"] and not report["unknown"] and gap_ok
+    # **`--require-gpu` is on `tests/browser/run.py` and deliberately not here.**
+    #
+    # It turns the warning above into an exit code, for a run whose purpose is the GPU
+    # path rather than the values — and it was written here too, and taken out again,
+    # because **it could not be fired.** Verifying it needs this runner to finish on a
+    # software adapter, and on one it does not: the note at the top of this file says so,
+    # and a local `BORCH_HEADLESS=1` run confirmed it, timing out at case 2958.
+    #
+    # The first attempt read that timeout's exit code 1 as the guard working. A stop read
+    # as a verdict, which is the same mistake three other tools in this repository have
+    # made — so the guard lives in the runner where it can be shown to fire, and this one
+    # keeps the line that has to be read.
     return 0 if ok else 1
 
 
