@@ -1781,12 +1781,32 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * Two-dimensional transpose. For now it actually moves the data — views
-   * are T1.
+   * Swaps two axes, as torch's `transpose(dim0, dim1)` does — **any rank.**
+   *
+   * It used to take no arguments and refuse anything but a matrix, while
+   * `swapaxes(axis0, axis1)` — the name torch documents as this one's alias —
+   * sat next to it handling every rank. So the operation a porting reader
+   * reaches for first was the narrower of the two, and bimm's ViT wrote
+   * `permute([0, 2, 1])` to swap the last two axes of an attention score
+   * matrix because `transpose()` threw.
+   *
+   * **The seats are `dim0`/`dim1` because that is what torch answers to** —
+   * `t.transpose(dim0=-2, dim1=-1)` works there. Checked by calling it, not
+   * by reading the signature line: torch's doc and torch's runtime disagree
+   * on other methods, so reading is not measuring.
+   *
+   * The no-argument call still means "swap the two axes of a matrix", which
+   * is what every existing caller in this file meant by it.
    */
-  transpose(): Tensor {
+  transpose(dim0?: number, dim1?: number): Tensor {
+    if (dim0 !== undefined || dim1 !== undefined) {
+      return this.swapaxes(dim0 ?? 0, dim1 ?? 1);
+    }
     if (this.shape.length !== 2) {
-      throw new Error(`transpose is 2-D only for now: [${this.shape}]`);
+      throw new Error(
+        `transpose() with no arguments is the 2-D swap: [${this.shape}]. ` +
+        "Pass the two dimensions, as torch does — transpose(dim0, dim1).",
+      );
     }
     const M = this.shape[0] ?? 0;
     const N = this.shape[1] ?? 0;
