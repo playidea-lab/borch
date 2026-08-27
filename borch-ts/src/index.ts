@@ -208,6 +208,10 @@ export {
 } from "./rnn.js";
 export type { RnnOptions } from "./rnn.js";
 
+// Which build this is. A receiver comparing a manifest's `runtime.ts` range needs it —
+// without it that field is written and never read.
+export { VERSION } from "./version.js";
+
 // The special functions. `n` is a shader constant, so they do not fit the unary table and
 // stand apart.
 export { igamma, igammac, polygamma } from "./special.js";
