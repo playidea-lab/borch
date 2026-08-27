@@ -53,6 +53,29 @@ BATCH, CHANNELS, SIDE, CLASSES = 8, 3, 16, 4
 WIDTH = 8
 
 
+def minstd(shape, scale, seed):
+    """A spread **computed rather than drawn**, so TypeScript can compute the same one.
+
+    Borrowed from `tests/cases.py`, where it was written for the deformable convolution's
+    fixture and for the same reason: a fixture from `numpy.random` can be asked of the
+    Python surfaces and not of the JavaScript one, and then the comparison stops one
+    surface short.
+
+    MINSTD — `s ← s·48271 mod 2³¹−1`. The modulus is small enough that the product stays
+    under 2⁵³, so JavaScript's float64 multiply is exact and the two sides agree bit for
+    bit. **Restated here rather than imported**: `cases.py` is 800KB of case table that
+    the browser page copies in whole, and this file is meant to be loadable on its own.
+    The two are pinned to each other by `test_resnet.py`, which fails if they part.
+    """
+    total = int(np.prod(shape)) or 1
+    out = np.empty(total, dtype=np.float32)
+    state = seed % 2147483647 or 1
+    for i in range(total):
+        state = (state * 48271) % 2147483647
+        out[i] = (state / 2147483647.0 - 0.5) * 2.0 * scale
+    return np.ascontiguousarray(out.reshape(shape))
+
+
 def _build(torch):
     """The network and its weights — **one construction path**, so `shapes` below reports
     on the same object `report` trains rather than on a second one built alongside it."""
@@ -100,18 +123,27 @@ def _build(torch):
             # the last linear sees a reduction's gradient.
             return self.head(x.mean(dim=3).mean(dim=2))
 
-    rng = np.random.default_rng(7)
-    images = rng.standard_normal((BATCH, CHANNELS, SIDE, SIDE)).astype(np.float32)
-    labels = rng.integers(0, CLASSES, BATCH).astype(np.int64)
+    images = minstd((BATCH, CHANNELS, SIDE, SIDE), 1.7, 11)
+    # Labels from the same stream, folded into the class count. Drawing them would put
+    # this fixture back out of TypeScript's reach for the sake of eight integers.
+    labels = np.array([int(abs(v) * 1000) % CLASSES
+                       for v in minstd((BATCH,), 1.0, 29)], dtype=np.int64)
 
     model = Net()
-    # **The same bytes everywhere.** Kaiming init draws, and the libraries draw
-    # differently on purpose, so nothing here is left to any of their streams.
-    for name, p in model.named_parameters():
+    # **The same bytes on every surface.** Kaiming init draws, and the libraries draw
+    # differently on purpose, so nothing here is left to any of their streams — and the
+    # generator is one JavaScript can compute, so borch.ts can build this network too
+    # rather than being the one surface the comparison cannot reach.
+    #
+    # The seed is the parameter's position, not a running stream: iteration order is a
+    # property of each library's `named_parameters`, and a shared stream would make every
+    # later weight depend on it. It matches today (measured, all four), and this way a
+    # future reordering shows up as one weight moving rather than all of them.
+    for index, (name, p) in enumerate(model.named_parameters()):
         shape = tuple(int(v) for v in p.shape)
         fan = int(np.prod(shape[1:])) if len(shape) > 1 else shape[0]
-        scale = float(np.sqrt(2.0 / max(fan, 1)))
-        p.data = torch.tensor((rng.standard_normal(shape) * scale).astype(np.float32))
+        scale = float(np.sqrt(6.0 / max(fan, 1)))      # uniform, matched to Kaiming's variance
+        p.data = torch.tensor(minstd(shape, scale, 101 + index * 7))
     return model, images, labels
 
 
@@ -211,10 +243,62 @@ def _numpy(value):
     return value.numpy() if hasattr(value, "numpy") else value
 
 
+FROZEN = "tests/resnet.json"
+
+
+def compare(got, root):
+    """`got` against the frozen torch answers. Returns the lines that parted.
+
+    **The browser surfaces cannot ask torch.** The native comparison runs both sides live
+    and needs no file; a page has no torch to run, so what it compares against has to have
+    been written down by something that did. Same two-stage shape as the golden.
+    """
+    import json
+    import pathlib
+
+    path = pathlib.Path(root) / FROZEN
+    if not path.exists():
+        # **Raised rather than returned.** Coming back as one more line in the list of
+        # differences made the caller print "the run parted from torch's" over "there is
+        # nothing to compare against" — not measured and measured-wrong wearing the same
+        # sentence, which is the failure this whole file was written to stop.
+        raise SystemExit(
+            f"no frozen answers: {FROZEN} — there is nothing to compare against, which is\n"
+            "not the same as a divergence.\n"
+            "  first: uv run --with numpy --with torch python tests/resnet.py freeze")
+    want = json.loads(path.read_text(encoding="utf-8"))
+    # **A reader that found nothing would report agreement.** The count is checked before
+    # the values, because "every key I looked at matched" is also true of no keys at all.
+    if len(got) < len(want):
+        missing = sorted(set(want) - set(got))
+        return [f"{len(missing)} of the {len(want)} answers never came back — "
+                f"{missing[:4]}{' …' if len(missing) > 4 else ''}"]
+    bad = []
+    for key, expected in sorted(want.items()):
+        mine = got.get(key)
+        if mine is None:
+            bad.append(f"{key} — absent")
+            continue
+        rel = abs(expected - mine) / max(1.0, abs(expected))
+        if rel > 1e-4:
+            bad.append(f"{key} — torch {expected!r} · here {mine!r}  (relative {rel:.2e})")
+    return bad
+
+
 def main(argv):
     import sys
 
     which = argv[1] if len(argv) > 1 else "borch"
+    if which == "freeze":
+        import json
+        import pathlib
+
+        import torch
+        out = pathlib.Path(__file__).resolve().parent.parent / FROZEN
+        out.write_text(json.dumps(report(torch), indent=1, sort_keys=True) + "\n",
+                       encoding="utf-8")
+        print(f"froze the training answers — {len(report(torch))} values → {out}")
+        return
     if which == "borch":
         import pathlib
         root = pathlib.Path(__file__).resolve().parent.parent

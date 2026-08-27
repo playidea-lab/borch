@@ -67,7 +67,7 @@ def serve(root):
     return httpd.server_address[1], httpd.shutdown
 
 
-def run(lib, headed, probe=None):
+def run(lib, headed, probe=None, js=None):
     from playwright.sync_api import sync_playwright
 
     # **Whether the emitted files are older than the sources is looked at first.** A stale
@@ -109,6 +109,13 @@ def run(lib, headed, probe=None):
                 # A channel for seeing what only reproduces inside the browser.
                 probed = page.evaluate(
                     "async (code) => String(await window.PY.runPythonAsync(code))", probe)
+            if js:
+                # **The same channel one language over.** The page has already loaded
+                # borch.ts and awaited `init()`, so a module imported here shares that
+                # instance and the adapter that was reported above — importing a second
+                # copy would build a second device and measure something else.
+                probed = page.evaluate(
+                    "async (src) => String(await (await import(src)).report())", js)
     finally:
         stop()
     return result, probed
@@ -195,6 +202,10 @@ def main():
                     help="trains the small ResNet of tests/resnet.py **in the browser** and "
                          "prints the same key/value lines the native run prints, so the two "
                          "can be compared line for line")
+    ap.add_argument("--resnet-ts", action="store_true",
+                    help="the same network written in TypeScript (borch-ts/test/resnet.ts), "
+                         "trained through borch.ts's own API rather than through the Python "
+                         "binding. Prints the same lines")
     args = ap.parse_args()
     if args.resnet and not args.probe:
         # **The native file, loaded by path.** `/work/tests` is not a package, so the same
@@ -280,11 +291,33 @@ def main():
     # Pyodide comes from local files. Fetched once if absent, compared by hash if present.
     vendor.ensure()
 
-    result, probed = run(args.lib, args.headed, args.probe)
+    result, probed = run(args.lib, args.headed, args.probe,
+                         "/borch-ts/dist/test/resnet.js" if args.resnet_ts else None)
     if probed is not None:
         print("-- probe --")
         print(probed)
         print()
+    # **A training run that only prints is a comment.** Both `--resnet` flags return the
+    # same key/value lines the native run prints, and until this was here reading them was
+    # left to whoever remembered to look. They are judged against the answers real torch
+    # wrote down, because a page has no torch to ask.
+    if (args.resnet or args.resnet_ts) and probed is not None:
+        import importlib.util                                       # noqa: PLC0415
+
+        spec = importlib.util.spec_from_file_location(
+            "bt_resnet_cmp", ROOT / "tests" / "resnet.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        got = {k: float(v) for k, v in
+               (line.split("\t") for line in probed.splitlines() if "\t" in line)}
+        parted = mod.compare(got, ROOT)
+        where = "borch.ts, through its own API" if args.resnet_ts else args.lib
+        if parted:
+            print(f"the training run on {where} parted from torch's:")
+            for line in parted:
+                print(f"  {line}")
+            return 1
+        print(f"the training run on {where} agrees with torch — {len(got)} values")
     total, bad = result["total"], result["bad"]
     if result.get("error"):
         print("the runner blew up:\n" + result["error"])

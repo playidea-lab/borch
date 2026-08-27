@@ -80,3 +80,39 @@ def test_a_resnet_trains_the_same_way_real_torch_does():
         "  a `grad·` row is the backward pass before any weight moved — the most local\n"
         "  thing here. `loss·NN` says which step it began at. `buffer·` alone means the\n"
         "  running statistics, which training never reads and `eval` does.")
+
+
+def test_the_frozen_answers_are_the_ones_torch_gives_now():
+    """`tests/resnet.json` against a fresh run of real torch.
+
+    **The browser surfaces cannot ask torch.** The comparison above runs both sides live
+    and needs no file; a page has none, so what it compares against is written down — and
+    a file written down once is a file that goes quietly stale. Change the architecture,
+    the fixture or a hyper-parameter and the two browser runs then measure agreement with
+    a network nobody has any more, and they say so in the wording of a real divergence.
+
+    Same job `test_committed_golden.py` does for the exported golden, and the same reason.
+    """
+    import json
+    import pathlib
+
+    frozen = pathlib.Path(__file__).resolve().parent / "resnet.json"
+    assert frozen.exists(), (
+        "tests/resnet.json is missing — the browser runs have nothing to compare against.\n"
+        "  uv run --with numpy --with torch python tests/resnet.py freeze")
+    want = json.loads(frozen.read_text(encoding="utf-8"))
+    now = _run("real")
+
+    assert set(want) == set(now), (
+        "the frozen answers name a different set of values than the run produces — "
+        f"only frozen: {sorted(set(want) - set(now))[:4]}, "
+        f"only now: {sorted(set(now) - set(want))[:4]}\n"
+        "  freeze again: uv run --with numpy --with torch python tests/resnet.py freeze")
+    stale = [f"{k} — frozen {want[k]!r} · torch now {now[k]!r}"
+             for k in sorted(want)
+             if abs(want[k] - now[k]) > TOLERANCE * max(1.0, abs(want[k]))]
+    assert not stale, (
+        "the frozen answers are not what torch gives now:\n  " + "\n  ".join(stale[:8]) +
+        "\n\n  freeze again: uv run --with numpy --with torch python tests/resnet.py freeze\n"
+        "  (until then the browser runs compare against a network that no longer exists,\n"
+        "   and report it in the words of a real divergence.)")

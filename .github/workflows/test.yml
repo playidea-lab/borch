@@ -114,7 +114,19 @@ jobs:
         run: >
           uv run --with numpy --with torch --with torchvision --with scipy
           python tests/golden.py dump
+      # **`--resnet` rides along.** It trains the small ResNet in the page and judges it
+      # against `tests/resnet.json`, on the same page load as the golden comparison, so
+      # the second measurement costs no second browser.
       - name: compare the values through the binding
         env:
           BORCH_HEADLESS: "1"
-        run: uv run --with playwright python tests/browser/run.py --lib borch_webgpu
+        run: uv run --with playwright python tests/browser/run.py --lib borch_webgpu --resnet
+      # The same thirty steps written in TypeScript and driven through borch.ts's own API
+      # rather than the binding's. **What it adds is the surface, not the arithmetic** —
+      # the binding already runs every one of these kernels, and it writes the JavaScript
+      # itself, so whether a person can subclass `Module` and train it is the half nothing
+      # else asks.
+      - name: train the same network through borch.ts
+        env:
+          BORCH_HEADLESS: "1"
+        run: uv run --with playwright python tests/browser/run.py --lib borch_webgpu --resnet-ts
