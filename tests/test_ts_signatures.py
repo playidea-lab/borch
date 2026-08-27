@@ -1142,7 +1142,26 @@ SHORTER = {
     # The case table said so out loud and it read as a limit rather than a defect:
     # "asked as 6 it is 1.5×, and all three refused". Three fractional cases now stand
     # where that sentence was.
-    "nn": 5,
+    #
+    # **5 → 2**, and the same shape twice more. `LazyInstanceNorm1d/2d/3d` accepted
+    # four arguments and handed one to the layer they build — `new InstanceNormND(c,
+    # eps)`, with `momentum`, `affine`, `trackRunningStats` and `bias` dropped on the
+    # floor, so a layer asked for parameters got none and said nothing. The batch
+    # branch of the same base forwarded all six from the start, which is what made it
+    # invisible: the signature next door looked like the proof.
+    #
+    # And going to fix that found a shift the axis is **blind to**. `InstanceNormND`
+    # had `bias` in `device`'s seat — torch declares it keyword-only *after* the pair
+    # (`*, bias: bool = True`), so a sixth positional argument is `device` there and
+    # was `bias` here. The axis reads `InstanceNorm1d/2d/3d` as `no argument list`,
+    # because they were `class InstanceNorm1d extends InstanceNormND {}` with an empty
+    # body and the emitted `.d.ts` carries no list for such a class. Not agreement and
+    # not a gap — a row it skips. The three declare their arguments now.
+    #
+    # What is left is two rows and neither is wiring: `RNNBase` wants `dropout`,
+    # `bidirectional` and `projSize`, which is a second set of weights and a reversed
+    # pass, and `Hardtanh` is short on purpose.
+    "nn": 2,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

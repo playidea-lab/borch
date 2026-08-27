@@ -1426,9 +1426,18 @@ export class InstanceNormND extends Module {
     // that is refused, so `false` is what this layer does.
     private readonly affine = false,
     private readonly trackRunningStats = false,
+    device?: null,
+    dtype?: null,
     bias = true,
   ) {
     super();
+    // **`bias` sits behind `device` and `dtype`, and it did not.** torch declares it
+    // keyword-only (`*, bias: bool = True`) after the pair, so a sixth positional
+    // argument is `device` there and was `bias` here — a shift rather than a short
+    // tail, and one the signature axis cannot see: `InstanceNorm1d/2d/3d` declare no
+    // constructor of their own, so the emitted `.d.ts` has no argument list for them
+    // and the axis reads `no argument list` rather than a disagreement.
+    refuseDeviceDtype("InstanceNorm", device, dtype);
     if (trackRunningStats) {
       // torch registers three running statistics here and **reads them in eval
       // mode**. Accepting this and ignoring it leaves training right and
@@ -1487,9 +1496,31 @@ export class InstanceNormND extends Module {
  * core's `nn` against borch.ts's `nn` was not a question any file asked** —
  * `tests/test_nn_names.py` now asks it.
  */
-export class InstanceNorm1d extends InstanceNormND {}
-export class InstanceNorm2d extends InstanceNormND {}
-export class InstanceNorm3d extends InstanceNormND {}
+// **They declare the list rather than inheriting it silently.** With an empty body
+// the emitted `.d.ts` carries no argument list for these three, and the signature axis
+// reads that as `no argument list` — not as agreement and not as a gap, just a row it
+// skips. `InstanceNormND` had `bias` in `device`'s seat for exactly as long.
+export class InstanceNorm1d extends InstanceNormND {
+  constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    super(numFeatures, eps, momentum, affine, trackRunningStats, device, dtype, bias);
+  }
+}
+export class InstanceNorm2d extends InstanceNormND {
+  constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    super(numFeatures, eps, momentum, affine, trackRunningStats, device, dtype, bias);
+  }
+}
+export class InstanceNorm3d extends InstanceNormND {
+  constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    super(numFeatures, eps, momentum, affine, trackRunningStats, device, dtype, bias);
+  }
+}
 
 /**
  * **It does not subtract the mean.** That is the only difference from
@@ -3186,13 +3217,29 @@ export class LazyConvTranspose3d extends LazyConvTransposeBase {
  * stops matching.
  */
 class LazyNormBase extends LazyModule {
+  /**
+   * **The instance branch took four arguments and handed over one.**
+   * `new InstanceNormND(c, eps)` dropped `momentum`, `affine`, `trackRunningStats`
+   * and `bias` on the floor, so `LazyInstanceNorm2d(1e-5, 0.1, true)` built a layer
+   * with no parameters at all and said nothing. The batch branch beside it passed all
+   * six from the start, which is what made the gap invisible: the signature next door
+   * looked like the proof.
+   *
+   * torch defaults `affine` and `trackRunningStats` **the other way round** between
+   * the two — true on batch, false on instance — so the arguments cannot be forwarded
+   * with one set of defaults. They come in as `undefined` and each branch fills its
+   * own.
+   */
   constructor(kind: "batch" | "instance", spatial: number, eps = 1e-5,
-              momentum = 0.1, affine = true, trackRunningStats = true,
+              momentum = 0.1, affine?: boolean, trackRunningStats?: boolean,
               bias = true) {
-    super(`Lazy${kind === "batch" ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
-      (c) => (kind === "batch"
-        ? new BatchNormND(c, eps, momentum, affine, trackRunningStats, bias)
-        : new InstanceNormND(c, eps)),
+    const batch = kind === "batch";
+    super(`Lazy${batch ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
+      (c) => (batch
+        ? new BatchNormND(c, eps, momentum, affine ?? true,
+                          trackRunningStats ?? true, bias)
+        : new InstanceNormND(c, eps, momentum, affine ?? false,
+                             trackRunningStats ?? false, undefined, undefined, bias)),
       channels);
   }
 }
@@ -3222,13 +3269,31 @@ export class LazyBatchNorm3d extends LazyNormBase {
   }
 }
 export class LazyInstanceNorm1d extends LazyNormBase {
-  constructor(eps?: number) { super("instance", 1, eps); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyInstanceNorm1d", device, dtype);
+    super("instance", 1, eps, momentum, affine, trackRunningStats,
+          bias);
+  }
 }
 export class LazyInstanceNorm2d extends LazyNormBase {
-  constructor(eps?: number) { super("instance", 2, eps); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyInstanceNorm2d", device, dtype);
+    super("instance", 2, eps, momentum, affine, trackRunningStats,
+          bias);
+  }
 }
 export class LazyInstanceNorm3d extends LazyNormBase {
-  constructor(eps?: number) { super("instance", 3, eps); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, device?: null, dtype?: null,
+              bias?: boolean) {
+    refuseDeviceDtype("LazyInstanceNorm3d", device, dtype);
+    super("instance", 3, eps, momentum, affine, trackRunningStats,
+          bias);
+  }
 }
 
 // ── Loss layers ────────────────────────────────────────────────────────
