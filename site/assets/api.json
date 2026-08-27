@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 330
+  "missing": 334
  },
  "modules": [
   {
@@ -17117,9 +17117,178 @@
        "doc": ""
       }
      ]
+    },
+    {
+     "kind": "class",
+     "name": "MultiScaleRoIAlign",
+     "signature": "export declare class MultiScaleRoIAlign",
+     "doc": "`roiAlign` over a pyramid, **choosing a level per box by its size.**\n\n<https://arxiv.org/abs/1612.03144> — equation 1.\n\nA small box wants the fine map and a large one wants the coarse: a 224-pixel box goes\nto level 4 and the level moves by one for every doubling of the box's side.\n`canonicalScale` and `canonicalLevel` are those two numbers.\n\n**The scales are inferred once, from the first call**, and then cached — so a second\ncall with differently sized images reuses the first call's answer. That is\ntorchvision's behaviour, cache and all, and it is copied rather than fixed: a\ndetector calls this with one image size.\n\n**The boxes are in image coordinates, not map coordinates**, which is what the scale\nis for and what makes the level choice possible at all.",
+     "members": [
+      {
+       "name": "featmapNames",
+       "signature": "readonly featmapNames: readonly string[]",
+       "doc": "",
+       "torch": "featmap_names"
+      },
+      {
+       "name": "samplingRatio",
+       "signature": "readonly samplingRatio: number",
+       "doc": "",
+       "torch": "sampling_ratio"
+      },
+      {
+       "name": "canonicalScale",
+       "signature": "readonly canonicalScale: number",
+       "doc": "",
+       "torch": "canonical_scale"
+      },
+      {
+       "name": "canonicalLevel",
+       "signature": "readonly canonicalLevel: number",
+       "doc": "",
+       "torch": "canonical_level"
+      },
+      {
+       "name": "outputSize",
+       "signature": "readonly outputSize: readonly [number, number]",
+       "doc": "",
+       "torch": "output_size"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(featmapNames: readonly string[], outputSize: number | readonly number[], samplingRatio: number, canonicalScale?: number, canonicalLevel?: number)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Map<string, Tensor>, boxes: Tensor[], imageShapes: readonly (readonly [number, number])[]): Promise<Tensor>",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "FrozenBatchNorm2d",
+     "signature": "export declare class FrozenBatchNorm2d extends Module",
+     "doc": "Batch norm with the statistics fixed — **an affine transform wearing four buffers.**\n\nAll four are buffers rather than parameters, and that is the point: this exists so a\nbatch norm inside a pre-trained network stops moving when the network is fine-tuned on\nbatches too small to estimate a mean from. `weight` and `bias` are buffers too, so\nnothing here trains.\n\n**Epsilon is added before the reciprocal square root**, not after. The other order\ndivides by something arbitrarily small on variances near zero, and what comes back is\nfinite, enormous, and shaped exactly like an activation.",
+     "members": [
+      {
+       "name": "weight",
+       "signature": "readonly weight: Tensor",
+       "doc": ""
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias: Tensor",
+       "doc": ""
+      },
+      {
+       "name": "runningMean",
+       "signature": "readonly runningMean: Tensor",
+       "doc": "",
+       "torch": "running_mean"
+      },
+      {
+       "name": "runningVar",
+       "signature": "readonly runningVar: Tensor",
+       "doc": "",
+       "torch": "running_var"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(numFeatures: number, eps?: number)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "DeformConv2d",
+     "signature": "export declare class DeformConv2d",
+     "doc": "`deformConv2d` as a layer, holding the weight.\n\n**It does not produce the offsets.** They arrive as a second argument, from another\nconvolution the caller writes — which is why `forward` takes two tensors, and three\nwhen the mask is used. A layer that made its own offsets would be a different and more\nconvenient thing, and would not load a torchvision checkpoint.",
+     "members": [
+      {
+       "name": "inChannels",
+       "signature": "readonly inChannels: number",
+       "doc": "",
+       "torch": "in_channels"
+      },
+      {
+       "name": "outChannels",
+       "signature": "readonly outChannels: number",
+       "doc": "",
+       "torch": "out_channels"
+      },
+      {
+       "name": "groups",
+       "signature": "readonly groups: number",
+       "doc": ""
+      },
+      {
+       "name": "kernelSize",
+       "signature": "readonly kernelSize: [number, number]",
+       "doc": "",
+       "torch": "kernel_size"
+      },
+      {
+       "name": "stride",
+       "signature": "readonly stride: [number, number]",
+       "doc": ""
+      },
+      {
+       "name": "padding",
+       "signature": "readonly padding: [number, number]",
+       "doc": ""
+      },
+      {
+       "name": "dilation",
+       "signature": "readonly dilation: [number, number]",
+       "doc": ""
+      },
+      {
+       "name": "weight",
+       "signature": "readonly weight: Tensor",
+       "doc": ""
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias: Tensor | null",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number | readonly number[], stride?: number | readonly number[], padding?: number | readonly number[], dilation?: number | readonly number[], groups?: number, bias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor, offset: Tensor, mask?: Tensor | null): Promise<Tensor>",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": "*Only what is not the default is printed**, which is torchvision's rule for the\n convolutions and not this file's usual one."
+      }
+     ]
     }
    ],
-   "count": 106
+   "count": 136
   },
   {
    "name": "datasets",
@@ -19639,5 +19808,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2643
+ "total": 2673
 }

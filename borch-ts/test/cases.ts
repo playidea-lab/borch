@@ -1751,6 +1751,44 @@ function addOps(out: Map<string, Case>): void {
     return layer.call(layerRamp([2, 3, 5, 5]));
   }));
 
+  // ── the pyramid's level-picker ──────────────────────────────────────────────
+  //
+  // **The three boxes are 10, 200 and 56 pixels a side against a 64-pixel image**, so
+  // they land on three different levels. A fixture whose boxes were all one size would
+  // pass against a reader that always took the first map.
+  const fpnShapes: number[][] = [[1, 4, 16, 16], [1, 6, 8, 8], [1, 8, 4, 4]];
+  const fpnInput = (widths?: number): Map<string, Tensor> => {
+    const out = new Map<string, Tensor>();
+    fpnShapes.forEach((shape, i) => {
+      const s = widths === undefined ? shape : [1, widths, ...shape.slice(2)];
+      const n = s.reduce((a, b) => a * b, 1);
+      const values: number[] = [];
+      for (let k = 0; k < n; k++) values.push(Math.fround((k % 11) * 0.2));
+      out.set(`feat${i}`, Tensor.from(values, s));
+    });
+    return out;
+  };
+  const multiscale = (samplingRatio: number) => flat(async () => {
+    const model = new ops.MultiScaleRoIAlign(
+      ["feat0", "feat1", "feat2"], 3, samplingRatio);
+    const box = Tensor.from(
+      [0, 0, 10, 10, 0, 0, 200, 200, 4, 4, 60, 60], [3, 4]);
+    return model.forward(fpnInput(5), [box], [[64, 64]]);
+  });
+  out.set("ops::MultiScaleRoIAlign(a level per box)", multiscale(2));
+  out.set("ops::MultiScaleRoIAlign(sampling_ratio=-1)", multiscale(-1));
+  out.set("ops::MultiScaleRoIAlign(names, 3, 2)=repr",
+    () => new ops.MultiScaleRoIAlign(["feat0", "feat1"], 3, 2).describe());
+
+  // **These two hold weights and the repr does not read them** — only the shapes they
+  // were built from. So the reprs cross before the values do.
+  out.set("ops::FrozenBatchNorm2d(3)=repr",
+    () => new ops.FrozenBatchNorm2d(3).describe());
+  out.set("ops::DeformConv2d(4, 6, 3, padding=1)=repr",
+    () => new ops.DeformConv2d(4, 6, 3, 1, 1).describe());
+  out.set("ops::DeformConv2d(groups, no bias)=repr",
+    () => new ops.DeformConv2d(4, 6, 3, 1, 0, 2, 2, false).describe());
+
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look
   // identical either way**, so a wrong one is a wrong answer with nothing raised — and

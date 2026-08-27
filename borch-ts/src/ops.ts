@@ -2375,3 +2375,231 @@ export class DropBlock3d extends DropBlock2d {
                        this.training);
   }
 }
+
+/**
+ * `roiAlign` over a pyramid, **choosing a level per box by its size.**
+ *
+ * <https://arxiv.org/abs/1612.03144> — equation 1.
+ *
+ * A small box wants the fine map and a large one wants the coarse: a 224-pixel box goes
+ * to level 4 and the level moves by one for every doubling of the box's side.
+ * `canonicalScale` and `canonicalLevel` are those two numbers.
+ *
+ * **The scales are inferred once, from the first call**, and then cached — so a second
+ * call with differently sized images reuses the first call's answer. That is
+ * torchvision's behaviour, cache and all, and it is copied rather than fixed: a
+ * detector calls this with one image size.
+ *
+ * **The boxes are in image coordinates, not map coordinates**, which is what the scale
+ * is for and what makes the level choice possible at all.
+ */
+export class MultiScaleRoIAlign {
+  readonly outputSize: readonly [number, number];
+  private scales: number[] | null = null;
+  private kMin = 0;
+  private kMax = 0;
+
+  /** **Added inside the floor, not outside.** A box of exactly the canonical size lands
+   *  on an integer, and floating point puts it a hair below as often as above — so
+   *  without this the same box goes to two different levels on two runs. */
+  private static readonly LEVEL_EPS = 1e-6;
+
+  constructor(readonly featmapNames: readonly string[],
+              outputSize: number | readonly number[],
+              readonly samplingRatio: number,
+              readonly canonicalScale = 224,
+              readonly canonicalLevel = 4) {
+    this.outputSize = typeof outputSize === "number"
+      ? [outputSize, outputSize]
+      : [outputSize[0] ?? 0, outputSize[1] ?? outputSize[0] ?? 0];
+  }
+
+  async forward(x: Map<string, Tensor>, boxes: Tensor[],
+                imageShapes: readonly (readonly [number, number])[]): Promise<Tensor> {
+    const maps: Tensor[] = [];
+    for (const [name, value] of x) {
+      if (this.featmapNames.includes(name)) maps.push(value);
+    }
+    if (this.scales === null) {
+      if (imageShapes.length === 0) {
+        throw new Error("images list should not be empty");
+      }
+      const widest = Math.max(...imageShapes.map((s) => s[0]));
+      const tallest = Math.max(...imageShapes.map((s) => s[1]));
+      this.scales = maps.map((one) => inferScale(one, [widest, tallest]));
+      this.kMin = Math.trunc(-Math.log2(this.scales[0] ?? 1));
+      this.kMax = Math.trunc(-Math.log2(this.scales[this.scales.length - 1] ?? 1));
+    }
+    const rois = roiBoxes(boxes);
+    if (maps.length === 1) {
+      return roiAlign(maps[0] as Tensor, rois, this.outputSize,
+                      this.scales[0] ?? 1, this.samplingRatio);
+    }
+    const levels = await this.levels(boxes);
+    const pieces: Tensor[] = [];
+    for (let i = 0; i < levels.length; i++) {
+      const level = levels[i] ?? 0;
+      const one = await roiAlign(maps[level] as Tensor,
+                                 rois.narrow(0, i, 1), this.outputSize,
+                                 this.scales[level] ?? 1, this.samplingRatio);
+      pieces.push(one.reshape([-1]));
+    }
+    const channels = (maps[0] as Tensor).shape[1] ?? 0;
+    const tail = [channels, this.outputSize[0], this.outputSize[1]];
+    if (pieces.length === 0) return Tensor.zeros([0, ...tail]);
+    return Tensor.cat(pieces, 0).reshape([pieces.length, ...tail]);
+  }
+
+  /** Equation 1: `floor(lvl0 + log2(√area / s0))`, clamped. */
+  private async levels(boxes: Tensor[]): Promise<number[]> {
+    const out: number[] = [];
+    for (const group of boxes) {
+      const rows = Array.from(await group.toArray());
+      const width = group.shape[1] ?? 4;
+      for (let i = 0; i < rows.length; i += width) {
+        const x1 = rows[i] ?? 0;
+        const y1 = rows[i + 1] ?? 0;
+        const x2 = rows[i + 2] ?? 0;
+        const y2 = rows[i + 3] ?? 0;
+        const side = Math.sqrt(Math.max(x2 - x1, 0) * Math.max(y2 - y1, 0));
+        const raw = Math.floor(
+          this.canonicalLevel + Math.log2(side / this.canonicalScale)
+          + MultiScaleRoIAlign.LEVEL_EPS);
+        out.push(Math.min(Math.max(raw, this.kMin), this.kMax) - this.kMin);
+      }
+    }
+    return out;
+  }
+
+  describe(): string {
+    const names = this.featmapNames.map((n) => `'${n}'`).join(", ");
+    return `MultiScaleRoIAlign(featmap_names=[${names}], `
+      + `output_size=(${this.outputSize[0]}, ${this.outputSize[1]}), `
+      + `sampling_ratio=${this.samplingRatio})`;
+  }
+}
+
+/**
+ * A map's scale as a **power of two**, read off its size against the image's.
+ *
+ * Rounded in log space rather than taken as the ratio: an 800×800 image gives a 50×50
+ * map at stride 16, and 50/800 is exactly 1/16 — but 801 gives 51, and 51/801 is not a
+ * power of two at all. Rounding the exponent is what makes both answer 1/16.
+ */
+function inferScale(feature: Tensor, original: readonly [number, number]): number {
+  const size = feature.shape.slice(-2);
+  return 2 ** Math.round(Math.log2((size[0] ?? 1) / original[0]));
+}
+
+/** The boxes as one `(K, 5)` table with the image index in front, which is what
+ *  `roiAlign` reads. A detector hands one list per image. */
+function roiBoxes(groups: readonly Tensor[]): Tensor {
+  const rows: Tensor[] = [];
+  for (let image = 0; image < groups.length; image++) {
+    const group = groups[image] as Tensor;
+    const count = group.shape[0] ?? 0;
+    if (count === 0) continue;
+    rows.push(Tensor.cat([Tensor.full([count, 1], image), group], 1));
+  }
+  return rows.length === 0 ? Tensor.zeros([0, 5]) : Tensor.cat(rows, 0);
+}
+
+/**
+ * Batch norm with the statistics fixed — **an affine transform wearing four buffers.**
+ *
+ * All four are buffers rather than parameters, and that is the point: this exists so a
+ * batch norm inside a pre-trained network stops moving when the network is fine-tuned on
+ * batches too small to estimate a mean from. `weight` and `bias` are buffers too, so
+ * nothing here trains.
+ *
+ * **Epsilon is added before the reciprocal square root**, not after. The other order
+ * divides by something arbitrarily small on variances near zero, and what comes back is
+ * finite, enormous, and shaped exactly like an activation.
+ */
+export class FrozenBatchNorm2d extends Module {
+  readonly weight: Tensor;
+  readonly bias: Tensor;
+  readonly runningMean: Tensor;
+  readonly runningVar: Tensor;
+
+  constructor(private readonly numFeatures: number, private readonly eps = 1e-5) {
+    super();
+    this.weight = Tensor.ones([numFeatures]);
+    this.bias = Tensor.zeros([numFeatures]);
+    this.runningMean = Tensor.zeros([numFeatures]);
+    this.runningVar = Tensor.ones([numFeatures]);
+  }
+
+  override forward(x: Tensor): Tensor {
+    const shape = [1, this.numFeatures, 1, 1];
+    const scale = this.weight.reshape(shape).mul(
+      this.runningVar.reshape(shape).binary("add", Tensor.full([], this.eps))
+        .unary("rsqrt"));
+    return x.mul(scale).add(
+      this.bias.reshape(shape).sub(this.runningMean.reshape(shape).mul(scale)));
+  }
+
+  override describe(): string {
+    return `FrozenBatchNorm2d(${this.numFeatures}, eps=${pyNumber(this.eps)})`;
+  }
+}
+
+/**
+ * `deformConv2d` as a layer, holding the weight.
+ *
+ * **It does not produce the offsets.** They arrive as a second argument, from another
+ * convolution the caller writes — which is why `forward` takes two tensors, and three
+ * when the mask is used. A layer that made its own offsets would be a different and more
+ * convenient thing, and would not load a torchvision checkpoint.
+ */
+export class DeformConv2d {
+  readonly kernelSize: [number, number];
+  readonly stride: [number, number];
+  readonly padding: [number, number];
+  readonly dilation: [number, number];
+  readonly weight: Tensor;
+  readonly bias: Tensor | null;
+
+  constructor(readonly inChannels: number, readonly outChannels: number,
+              kernelSize: number | readonly number[],
+              stride: number | readonly number[] = 1,
+              padding: number | readonly number[] = 0,
+              dilation: number | readonly number[] = 1,
+              readonly groups = 1, bias = true) {
+    if (inChannels % groups !== 0) {
+      throw new Error("in_channels must be divisible by groups");
+    }
+    if (outChannels % groups !== 0) {
+      throw new Error("out_channels must be divisible by groups");
+    }
+    this.kernelSize = pairOfSizes(kernelSize);
+    this.stride = pairOfSizes(stride);
+    this.padding = pairOfSizes(padding);
+    this.dilation = pairOfSizes(dilation);
+    this.weight = Tensor.zeros(
+      [outChannels, inChannels / groups, ...this.kernelSize]);
+    this.bias = bias ? Tensor.zeros([outChannels]) : null;
+  }
+
+  forward(input: Tensor, offset: Tensor, mask: Tensor | null = null): Promise<Tensor> {
+    return deformConv2d(input, offset, this.weight, this.bias, this.stride,
+                        this.padding, this.dilation, mask);
+  }
+
+  /** **Only what is not the default is printed**, which is torchvision's rule for the
+   *  convolutions and not this file's usual one. */
+  describe(): string {
+    const pair = (p: readonly [number, number]): string => `(${p[0]}, ${p[1]})`;
+    let out = `DeformConv2d(${this.inChannels}, ${this.outChannels}`
+      + `, kernel_size=${pair(this.kernelSize)}, stride=${pair(this.stride)}`;
+    if (this.padding[0] !== 0 || this.padding[1] !== 0) {
+      out += `, padding=${pair(this.padding)}`;
+    }
+    if (this.dilation[0] !== 1 || this.dilation[1] !== 1) {
+      out += `, dilation=${pair(this.dilation)}`;
+    }
+    if (this.groups !== 1) out += `, groups=${this.groups}`;
+    if (this.bias === null) out += ", bias=False";
+    return `${out})`;
+  }
+}

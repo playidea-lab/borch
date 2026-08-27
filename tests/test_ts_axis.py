@@ -342,9 +342,16 @@ FROZEN = {
     # says what it is — and torchvision's own `RoIAlign` cannot go into a `Sequential`
     # either, taking two arguments.
     #
-    # The eight left hold parameters or buffers, so carrying them means a way to write
-    # those by name — the same thing the `ops::` row in `borch-ts/test/run.py` waits for.
-    "ops": 8,
+    # 8 → 5. `MultiScaleRoIAlign`, `FrozenBatchNorm2d` and `DeformConv2d`. The first
+    # holds no weight at all — it picks a level per box and calls `roiAlign` — and the
+    # other two hold weights whose values their reprs never read, so the name and the
+    # printing cross before the values do.
+    #
+    # The five left are the blocks: `ConvNormActivation`, `Conv2dNormActivation`, `MLP`,
+    # `SqueezeExcitation` and `FeaturePyramidNetwork`. Carrying them means a way to
+    # write parameters by name — the same thing the `ops::` row in
+    # `borch-ts/test/run.py` waits for.
+    "ops": 5,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
     #
