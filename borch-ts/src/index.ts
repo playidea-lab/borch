@@ -208,8 +208,8 @@ export {
 } from "./rnn.js";
 export type { RnnOptions } from "./rnn.js";
 
-// 이 배포판이 몇 판인가. 매니페스트의 `runtime.ts` 범위를 받는 쪽이 대조하려면
-// 필요하다 — 자기 판을 모르면 그 필드는 적히기만 하고 읽히지 않는다.
+// Which build this is. A receiver comparing a manifest's `runtime.ts` range needs it —
+// without it that field is written and never read.
 export { VERSION } from "./version.js";
 
 // The special functions. `n` is a shader constant, so they do not fit the unary table and

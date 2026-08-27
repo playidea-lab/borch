@@ -1,16 +1,16 @@
 /**
- * 이 배포판의 판 번호.
+ * Which build this is.
  *
- * ## 왜 상수로 두는가
+ * ## Why a constant rather than reading package.json
  *
- * `package.json` 을 임포트하면 번들러마다 다르게 굴고, 브라우저에서는 아예 없는 파일이
- * 된다. 그래서 손으로 적고, **`tests/test_version.py` 가 `package.json` 과 어긋나면
- * 실패시킨다.** 두 곳에 적히지만 갈릴 수는 없다.
+ * Bundlers disagree about importing it, and in a browser the file is not there at all.
+ * So the number is written by hand in two places, and `tests/test_version.py` fails
+ * when they disagree — a version that has drifted is a quiet thing.
  *
- * ## 무엇에 쓰이는가
+ * ## What it is for
  *
- * 매니페스트가 `runtime.ts` 에 semver 범위를 적는다 — "이 가중치는 이 판 이상에서
- * 돈다". 받는 쪽이 그것을 대조하려면 **자기가 몇 판인지 알아야 하고**, 지금까지
- * 그것을 알 방법이 없어서 그 필드는 적히기만 하고 읽히지 않았다.
+ * A manifest carries `runtime.ts`, a semver range saying which builds its weights run
+ * on. The receiver can only compare that against something if it knows what it is, and
+ * until now it did not — so the field was written and never read.
  */
 export const VERSION = "0.2.2";
