@@ -723,7 +723,9 @@ export class Linear extends Module {
    */
   readonly bias: Tensor | null;
 
-  constructor(inFeatures: number, outFeatures: number, bias = true) {
+  constructor(inFeatures: number, outFeatures: number, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Linear", device, dtype);
     super();
     // The golden plants the weights from outside, so whatever is here is overwritten
     // — a non-zero value is left for the case where nobody plants anything.
@@ -937,7 +939,9 @@ function convExtra(f: ConvFields): string {
 export class Conv1d extends ConvND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
-              paddingMode: PadMode | "zeros" = "zeros") {
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Conv1d", device, dtype);
     super(inChannels, outChannels, kernelSize, 1, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
@@ -945,7 +949,9 @@ export class Conv1d extends ConvND {
 export class Conv2d extends ConvND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
-              paddingMode: PadMode | "zeros" = "zeros") {
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Conv2d", device, dtype);
     super(inChannels, outChannels, kernelSize, 2, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
@@ -953,7 +959,9 @@ export class Conv2d extends ConvND {
 export class Conv3d extends ConvND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
-              paddingMode: PadMode | "zeros" = "zeros") {
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Conv3d", device, dtype);
     super(inChannels, outChannels, kernelSize, 3, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
@@ -1285,7 +1293,8 @@ export class LogSoftmax extends Module {
 export class PReLU extends Module {
   readonly weight: Tensor;
 
-  constructor(numParameters = 1, init = 0.25) {
+  constructor(numParameters = 1, init = 0.25, device?: null, dtype?: null) {
+    refuseDeviceDtype("PReLU", device, dtype);
     super();
     this.weight = Tensor.owned([numParameters], init);
     this.claim(this.weight);
@@ -1361,8 +1370,8 @@ export class GroupNorm extends Module {
     dtype?: null,
     bias = true,
   ) {
-    super();
     refuseDeviceDtype("GroupNorm", device, dtype);
+    super();
     this.weight = affine ? Tensor.owned([numChannels], 1) : null;
     this.bias = affine && bias ? Tensor.owned([numChannels], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
@@ -2191,7 +2200,9 @@ export class LayerNorm extends Module {
 
   constructor(normalizedShape: number | readonly number[],
               private readonly eps = 1e-5,
-              private readonly elementwiseAffine = true, bias = true) {
+              private readonly elementwiseAffine = true, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("LayerNorm", device, dtype);
     super();
     const shape = typeof normalizedShape === "number"
       ? [normalizedShape] : [...normalizedShape];
@@ -2300,7 +2311,9 @@ export class RNNCellBase extends Module {
    * order visible, and the order is the part that mattered.
    */
   constructor(readonly inputSize: number, readonly hidden: number,
-              readonly bias = true, numChunks = 1) {
+              readonly bias = true, numChunks = 1,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("RNNCellBase", device, dtype);
     super();
     const rows = hidden * numChunks;
     const bound = 1 / Math.sqrt(Math.max(1, hidden));
@@ -2342,7 +2355,9 @@ export class RNNCellBase extends Module {
 
 export class RNNCell extends RNNCellBase {
   constructor(inputSize: number, hidden: number, bias = true,
-              readonly nonlinearity: "tanh" | "relu" = "tanh") {
+              readonly nonlinearity: "tanh" | "relu" = "tanh",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("RNNCell", device, dtype);
     super(inputSize, hidden, bias, 1);
   }
 
@@ -2362,7 +2377,9 @@ export class RNNCell extends RNNCellBase {
 }
 
 export class GRUCell extends RNNCellBase {
-  constructor(inputSize: number, hidden: number, bias = true) {
+  constructor(inputSize: number, hidden: number, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("GRUCell", device, dtype);
     super(inputSize, hidden, bias, 3);
   }
 
@@ -2390,7 +2407,9 @@ export class GRUCell extends RNNCellBase {
  * loses the memory cell.
  */
 export class LSTMCell extends RNNCellBase {
-  constructor(inputSize: number, hidden: number, bias = true) {
+  constructor(inputSize: number, hidden: number, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("LSTMCell", device, dtype);
     super(inputSize, hidden, bias, 4);
   }
 
@@ -2464,7 +2483,9 @@ export class Bilinear extends Module {
    * pointed at `nn` as well as at `optim`.
    */
   constructor(readonly in1Features: number, readonly in2Features: number,
-              readonly outFeatures: number, bias = true) {
+              readonly outFeatures: number, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Bilinear", device, dtype);
     super();
     const bound = 1 / Math.sqrt(Math.max(1, in1Features));
     this.weight = uniform([outFeatures, in1Features, in2Features], bound);
@@ -2676,7 +2697,9 @@ export class Embedding extends Module {
               readonly scaleGradByFreq = false,
               readonly sparse = false,
               _weight: Tensor | null = null,
-              _freeze = false) {
+              _freeze = false,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Embedding", device, dtype);
     super();
     if (scaleGradByFreq) {
       throw new NotImplementedError("Embedding(scaleGradByFreq) is not carried across");
@@ -2760,7 +2783,9 @@ export class EmbeddingBag extends Module {
               readonly sparse = false,
               _weight: Tensor | null = null,
               readonly includeLastOffset = false,
-              readonly paddingIdx: number | null = null) {
+              readonly paddingIdx: number | null = null,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("EmbeddingBag", device, dtype);
     super();
     this.weight = _weight ?? uniform([numEmbeddings, embeddingDim], 1);
     this.claim(this.weight);
@@ -2968,7 +2993,9 @@ export class LazyLinear extends LazyModule {
 class LazyConvBase extends LazyModule {
   constructor(spatial: number, outChannels: number, kernelSize: number, stride = 1,
               padding = 0, dilation = 1, groups = 1, bias = true,
-              paddingMode: PadMode | "zeros" = "zeros") {
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype(`LazyConv${spatial}d`, device, dtype);
     super(`LazyConv${spatial}d`,
       (inChannels) => new ConvND(inChannels, outChannels, kernelSize, spatial, stride, padding, bias,
                           dilation, groups, paddingMode),
@@ -2979,7 +3006,9 @@ class LazyConvBase extends LazyModule {
 class LazyConvTransposeBase extends LazyModule {
   constructor(spatial: number, outChannels: number, kernelSize: number, stride = 1,
               padding = 0, outputPadding = 0, groups = 1, bias = true,
-              dilation = 1, paddingMode: PadMode | "zeros" = "zeros") {
+              dilation = 1, paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype(`LazyConvTranspose${spatial}d`, device, dtype);
     void paddingMode;
     super(`LazyConvTranspose${spatial}d`,
       (inChannels) => new ConvTransposeND(inChannels, outChannels, kernelSize, spatial, stride, padding,
@@ -3011,12 +3040,14 @@ class LazyConvTransposeBase extends LazyModule {
  */
 type ConvArgs = [outChannels: number, kernelSize: number, stride?: number,
                  padding?: number, dilation?: number, groups?: number,
-                 bias?: boolean, paddingMode?: PadMode | "zeros"];
+                 bias?: boolean, paddingMode?: PadMode | "zeros",
+                 device?: null, dtype?: null];
 
 type ConvTransposeArgs = [outChannels: number, kernelSize: number, stride?: number,
                           padding?: number, outputPadding?: number, groups?: number,
                           bias?: boolean, dilation?: number,
-                          paddingMode?: PadMode | "zeros"];
+                          paddingMode?: PadMode | "zeros",
+                          device?: null, dtype?: null];
 
 export class LazyConv1d extends LazyConvBase {
   constructor(...a: ConvArgs) { super(1, ...a); }
@@ -3133,7 +3164,10 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
     cutoffs: readonly number[],
     readonly divValue = 4.0,
     readonly headBias = false,
+    device?: null,
+    dtype?: null,
   ) {
+    refuseDeviceDtype("AdaptiveLogSoftmaxWithLoss", device, dtype);
     super();
     this.cutoffs = [...cutoffs, nClasses];
     this.shortlistSize = this.cutoffs[0] ?? 0;
@@ -4991,7 +5025,9 @@ export class MultiheadAttention extends Module {
               addZeroAttn = false,
               kdim: number | null = null,
               vdim: number | null = null,
-              readonly batchFirst = false) {
+              readonly batchFirst = false,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("MultiheadAttention", device, dtype);
     super();
     if (embedDim % numHeads) {
       throw new Error(
@@ -5220,7 +5256,9 @@ export class TransformerEncoderLayer extends Module {
     dModel: number, nhead: number, dimFeedforward = 2048, dropout = 0.1,
     activation = "relu", layerNormEps = 1e-5, batchFirst = false,
     normFirst = false, bias = true,
+    device?: null, dtype?: null,
   ) {
+    refuseDeviceDtype("TransformerEncoderLayer", device, dtype);
     super();
     // **`batchFirst` was taken and thrown away** — `void batchFirst;` sat here, in the
     // class whose own comment above is about an argument landing in the wrong seat.
@@ -5317,7 +5355,9 @@ export class TransformerDecoderLayer extends Module {
     dModel: number, nhead: number, dimFeedforward = 2048, dropout = 0.1,
     activation = "relu", layerNormEps = 1e-5, batchFirst = false,
     normFirst = false, bias = true,
+    device?: null, dtype?: null,
   ) {
+    refuseDeviceDtype("TransformerDecoderLayer", device, dtype);
     super();
     // **`batchFirst` was taken and thrown away** — `void batchFirst;` sat here, in the
     // class whose own comment above is about an argument landing in the wrong seat.
@@ -5423,7 +5463,9 @@ export class Transformer extends Module {
     activation = "relu", customEncoder: TransformerEncoder | null = null,
     customDecoder: TransformerDecoder | null = null, layerNormEps = 1e-5,
     batchFirst = false, normFirst = false, bias = true,
+    device?: null, dtype?: null,
   ) {
+    refuseDeviceDtype("Transformer", device, dtype);
     super();
     this.encoder = customEncoder ?? new TransformerEncoder(
       new TransformerEncoderLayer(dModel, nhead, dimFeedforward, dropout, activation,

@@ -1034,8 +1034,27 @@ SHORTER = {
     # would be the more sensible behaviour and the wrong port — code written against
     # torch may read `x` after the call, and torch guarantees it survives.
     #
-    # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
-    # is what 24 of these 38 are short of and nothing else.
+    # **38 → 14.** The 24 that were short of `device` and `dtype` and nothing else now
+    # carry both, refused at torch's own position by `refuseDeviceDtype`.
+    #
+    # Those seats had been left out on purpose, and the reasoning is in that function's
+    # own comment: where the pair is last, omitting it makes the row `shorter`, and
+    # `shorter` is safe. **That is true of the failure it was written about and false
+    # of this one.** It protects against a shift — an argument landing in the seat next
+    # door — and there is no shift when nothing follows. What it does not protect
+    # against is the other half: `new nn.Linear(2, 3, true, "cuda")` built the layer and
+    # dropped the word, because **JavaScript discards a surplus argument in silence
+    # where Python raises.** The core carries and refuses all seventeen of its own in
+    # the language that would have raised anyway; this side, which would not, had
+    # fewer.
+    #
+    # The pair is typed `null`, so TypeScript stops it at compile time and the runtime
+    # refusal is for callers who arrive from JavaScript or through a bag of arguments.
+    #
+    # Only rows short of *exactly* those two were touched. `ConvTranspose1d` is short of
+    # `paddingMode` as well, so appending the pair there would seat `device` where
+    # `paddingMode` belongs — turning a short tail into the shift the original comment
+    # was right to fear.
     #
     # That sentence was here, was replaced with its opposite, and is back. The
     # replacement claimed those two "accounted for 66 of 231 missing arguments" with
@@ -1065,7 +1084,10 @@ SHORTER = {
     #   RNNBase                              dropout, bidirectional, projSize
     #   Upsample                             recomputeScaleFactor
     #   Hardtanh                             minValue, maxValue — deliberate, see above
-    "nn": 38,
+    #
+    # Those fourteen are the whole of the row now: **no row is short of device/dtype
+    # alone any more**, so the next reading of this line is about features, not seats.
+    "nn": 14,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

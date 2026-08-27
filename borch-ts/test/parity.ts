@@ -1398,6 +1398,65 @@ export async function report(): Promise<Report> {
       fad.call(fa) !== fa
       && JSON.stringify(await fa.toArray()) === JSON.stringify(faBefore));
   }
+
+  // ── device and dtype, carried so they can be refused ──────────────────
+  //
+  // torch puts these last on nearly every layer and borch.ts runs on one device in
+  // one precision, so there is nothing to do with them. **The question is what
+  // happens to a caller who passes them**, and until now the answer was nothing at
+  // all: `new nn.Linear(2, 3, true, "cuda")` built the layer and dropped the word.
+  //
+  // The seats had been left out deliberately, on the reasoning that where they are
+  // last a missing tail is `shorter` and `shorter` is safe. That is true of the
+  // failure it was written about — an argument landing in the wrong seat — and false
+  // of this one. **Python raises on a surplus positional; JavaScript discards it.**
+  // The core carries and refuses all seventeen of its own, in the language that would
+  // have raised anyway.
+  //
+  // TypeScript stops this at compile time (the seats are typed `null`), so what is
+  // asked here is the other half: a JavaScript caller, or anything that reaches the
+  // constructor through a bag of arguments, gets an error naming which of the two it
+  // was — not silence.
+  {
+    const refuses = async (label: string, build: () => unknown, word: string) => {
+      let said = "";
+      try { build(); } catch (e) { said = (e as Error).message; }
+      want(`${label} refuses ${word} rather than dropping it`,
+        said.includes(word) && said.includes("browser subset"), said || "(no error)");
+    };
+
+    // Cast away the `null` type to stand where a JS caller stands.
+    const L = nn.Linear as unknown as new (...a: unknown[]) => unknown;
+    await refuses("Linear", () => new L(2, 3, true, "cuda"), "device");
+    await refuses("Linear", () => new L(2, 3, true, null, "float64"), "dtype");
+
+    const C = nn.Conv2d as unknown as new (...a: unknown[]) => unknown;
+    await refuses("Conv2d", () => new C(1, 1, 1, 1, 0, 1, 1, true, "zeros", "cuda"),
+      "device");
+
+    // **The tenth seat is `device` and not `paddingMode`.** Conv2d's own parity check
+    // above pins bias at the eighth; this pins that adding two did not move it.
+    const ok = new nn.Conv2d(1, 1, 1, 1, 0, 1, 1, true, "zeros");
+    want("and the seats before it did not move", ok.describe().includes("bias=False")
+      === false, ok.describe());
+
+    const M = nn.MultiheadAttention as unknown as new (...a: unknown[]) => unknown;
+    await refuses("MultiheadAttention",
+      () => new M(2, 1, 0, true, false, false, null, null, false, "cuda"), "device");
+
+    const Z = nn.LazyConv2d as unknown as new (...a: unknown[]) => unknown;
+    await refuses("LazyConv2d", () => new Z(1, 1, 1, 0, 1, 1, true, "zeros", "cuda"),
+      "device");
+
+    // A layer that was already carrying them keeps working the same way.
+    const G = nn.GroupNorm as unknown as new (...a: unknown[]) => unknown;
+    await refuses("GroupNorm", () => new G(2, 4, 1e-5, true, "cuda"), "device");
+
+    // And nothing was broken for the caller who passes neither.
+    const plain = new nn.Linear(2, 3);
+    want("a layer with neither still builds", plain.describe().includes("in_features=2"),
+      plain.describe());
+  }
     // **This asked the wrong question and passed.** It read
     // `nn.gumbelSoftmax.length === 1` — that the parameter is *absent* — which is not
     // what "eps must not matter" means, and is not what torch does: torch keeps `eps`

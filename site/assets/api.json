@@ -7534,7 +7534,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inFeatures: number, outFeatures: number, bias?: boolean)",
+       "signature": "constructor(inFeatures: number, outFeatures: number, bias?: boolean, device?: null, dtype?: null)",
        "doc": ""
       },
       {
@@ -7606,7 +7606,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -7619,7 +7619,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -7632,7 +7632,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -8086,7 +8086,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(numParameters?: number, init?: number)",
+       "signature": "constructor(numParameters?: number, init?: number, device?: null, dtype?: null)",
        "doc": ""
       },
       {
@@ -8863,7 +8863,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(normalizedShape: number | readonly number[], eps?: number, elementwiseAffine?: boolean, bias?: boolean)",
+       "signature": "constructor(normalizedShape: number | readonly number[], eps?: number, elementwiseAffine?: boolean, bias?: boolean, device?: null, dtype?: null)",
        "doc": ""
       },
       {
@@ -8957,7 +8957,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean, numChunks?: number)",
+       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean, numChunks?: number, device?: null, dtype?: null)",
        "doc": "**`bias` sits third, as it does in torch, and `numChunks` behind it.** The two\nwere the other way round — `(inputSize, hidden, gates, bias)` — so a positional\n`new RNNCellBase(4, 8, false)` set the *gate count* to `false` here and the bias\nflag in torch. Both build a layer; only the shapes differ.\n\nIt was invisible while the third parameter was called `gates`: the lists could\nnot be lined up at all, so the row sat in the axis's `unaligned` bucket, which\nreports nothing beneath it. Renaming it to torch's `numChunks` is what made the\norder visible, and the order is the part that mattered."
       },
       {
@@ -9004,7 +9004,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean, nonlinearity?: \"tanh\" | \"relu\")",
+       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean, nonlinearity?: \"tanh\" | \"relu\", device?: null, dtype?: null)",
        "doc": ""
       },
       {
@@ -9032,7 +9032,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean, device?: null, dtype?: null)",
        "doc": ""
       },
       {
@@ -9060,7 +9060,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, bias?: boolean, device?: null, dtype?: null)",
        "doc": ""
       },
       {
@@ -9211,7 +9211,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(in1Features: number, in2Features: number, outFeatures: number, bias?: boolean)",
+       "signature": "constructor(in1Features: number, in2Features: number, outFeatures: number, bias?: boolean, device?: null, dtype?: null)",
        "doc": "**`bias` was accepted by the binding and had nowhere to go.** This constructor\ntook three numbers and always built a bias, so `Bilinear(a, b, c, bias=False)`\ngot one anyway — no error, a parameter the caller asked not to have, and a\ngradient flowing into it every step. Found by the argument check once it was\npointed at `nn` as well as at `optim`."
       },
       {
@@ -9413,7 +9413,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(numEmbeddings: number, embeddingDim: number, paddingIdx?: number | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, sparse?: boolean, _weight?: Tensor | null, _freeze?: boolean)",
+       "signature": "constructor(numEmbeddings: number, embeddingDim: number, paddingIdx?: number | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, sparse?: boolean, _weight?: Tensor | null, _freeze?: boolean, device?: null, dtype?: null)",
        "doc": "torch's nine, of which two do real work here.\n\n**The comment on `embedding()` said this layer was absent from all three and\nthat the golden did not ask for it.** That was true when it was written. The\ncore then took torch's nine arguments, seven cases were added, and this side\nwas not touched — so the binding answered `module 'borch_webgpu._nn' has no\nattribute 'Embedding'` seven times and the sentence explaining the absence was\nthe reason nobody looked.\n\nTwo arguments do real work and each has a case that fails without it:\n\n- **`maxNorm` shortens the rows that were looked up, in the table itself.** The\n  same side effect on a parameter that `embeddingBag` has, through the same\n  `renormRows`, not a second copy of the rule.\n- **`paddingIdx` stops that row learning.** The forward is untouched — torch\n  returns the padding row's values like any other — so a version that leaves the\n  gradient flowing passes every value case and fails only on the gradient one.\n  Done here by splitting the table into a part the gradient flows through and a\n  detached part, which needs no new autograd machinery.\n\n  **This used to say \"an implementation that masks the output instead\" passes\n  every value case.** It does not: torch hands the padding row's real values\n  back, so masking the output changes the answer and the *value* case catches it.\n  Measured both ways — cut the gradient block and only the gradient case reddens;\n  mask the output and only the forward case reddens. Two defects, two cases, and\n  the sentence had merged them into one.\n\nAnd one line that is about **who supplied the weights** rather than about\npadding: a fresh table has its padding row zeroed and a given one does not.\ntorch draws it in the same place, and both halves are asked because either\nalone reads as a rule about padding."
       },
       {
@@ -9499,7 +9499,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(numEmbeddings: number, embeddingDim: number, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, _weight?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null)",
+       "signature": "constructor(numEmbeddings: number, embeddingDim: number, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, _weight?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null, device?: null, dtype?: null)",
        "doc": "**`mode` sits sixth, where torch has it.**\n\nIt used to be third, so `new EmbeddingBag(10, 3, \"sum\")` set `maxNorm` in\ntorch and the mode here. Both readings then build a layer and return bags of\nthe right shape, and only the numbers differ."
       },
       {
@@ -9736,7 +9736,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -9749,7 +9749,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -9762,7 +9762,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -9775,7 +9775,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -9788,7 +9788,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -9801,7 +9801,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\")",
+       "signature": "constructor(outChannels: number, kernelSize: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number, paddingMode?: PadMode | \"zeros\", device?: null, dtype?: null)",
        "doc": ""
       }
      ]
@@ -9949,7 +9949,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inFeatures: number, nClasses: number, cutoffs: readonly number[], divValue?: number, headBias?: boolean)",
+       "signature": "constructor(inFeatures: number, nClasses: number, cutoffs: readonly number[], divValue?: number, headBias?: boolean, device?: null, dtype?: null)",
        "doc": ""
       },
       {
@@ -11486,7 +11486,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(embedDim: number, numHeads: number, dropout?: number, bias?: boolean, addBiasKv?: boolean, addZeroAttn?: boolean, kdim?: number | null, vdim?: number | null, batchFirst?: boolean)",
+       "signature": "constructor(embedDim: number, numHeads: number, dropout?: number, bias?: boolean, addBiasKv?: boolean, addZeroAttn?: boolean, kdim?: number | null, vdim?: number | null, batchFirst?: boolean, device?: null, dtype?: null)",
        "doc": "torch's eleven, of which three do work here and four are refused by name.\n\n**This took `(embedDim, numHeads)`, so seven arguments were missing from the\nmiddle and every one of them shifted what followed.** `new MultiheadAttention(64,\n8, 0.1)` — torch's own way of writing a dropout of 0.1 — reached nothing at all\nhere, and the core had the same list a shift earlier where `0.1` landed on\n`bias`. An absent feature beats a wrong answer, and **a wrong position is a wrong\nanswer wearing the shape of a feature.**\n\n`dropout`, `bias` and `batchFirst` work. `addBiasKv`, `addZeroAttn` and a\n`kdim`/`vdim` unlike the embedding stop with their own name — the refusal exists\na layer down in `multiHeadAttentionForward` already, and carrying the argument\nhere is what makes it arrive with the right name attached.\n\n**`batchFirst` defaults to `false`, which flips what this class used to do.** It\nread `(batch, len, E)` unconditionally, which is torch's `batch_first=True`, so\nthe default was the option torch does not take."
       },
       {
@@ -11610,7 +11610,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(dModel: number, nhead: number, dimFeedforward?: number, dropout?: number, activation?: string, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean)",
+       "signature": "constructor(dModel: number, nhead: number, dimFeedforward?: number, dropout?: number, activation?: string, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean, device?: null, dtype?: null)",
        "doc": "**torch's order**, which is not the order this was first written in:\n`(…, activation, layerNormEps, batchFirst, normFirst, bias)`. With `batchFirst`\nin the sixth seat, `new TransformerEncoderLayer(4, 2, 8, 0.1, \"relu\", true)` put\n`true` into torch's epsilon and the layer normalised with eps = 1. Nothing\nraises — the shapes are right and the loss goes down."
       },
       {
@@ -11713,7 +11713,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(dModel: number, nhead: number, dimFeedforward?: number, dropout?: number, activation?: string, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean)",
+       "signature": "constructor(dModel: number, nhead: number, dimFeedforward?: number, dropout?: number, activation?: string, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean, device?: null, dtype?: null)",
        "doc": "torch's order — see `TransformerEncoderLayer`."
       },
       {
@@ -11780,7 +11780,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(dModel?: number, nhead?: number, numEncoderLayers?: number, numDecoderLayers?: number, dimFeedforward?: number, dropout?: number, activation?: string, customEncoder?: TransformerEncoder | null, customDecoder?: TransformerDecoder | null, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean)",
+       "signature": "constructor(dModel?: number, nhead?: number, numEncoderLayers?: number, numDecoderLayers?: number, dimFeedforward?: number, dropout?: number, activation?: string, customEncoder?: TransformerEncoder | null, customDecoder?: TransformerDecoder | null, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean, device?: null, dtype?: null)",
        "doc": "torch's order, with `customEncoder` and `customDecoder` in their seats — those\nlet a caller hand in an assembled stack instead of the one built here, and left\nout, torch's eighth and ninth positions land on `layerNormEps` and `batchFirst`."
       },
       {
