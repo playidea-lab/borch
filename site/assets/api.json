@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 314
+  "missing": 315
  },
  "modules": [
   {
@@ -1734,7 +1734,7 @@
       },
       {
        "name": "interpolateBilinear",
-       "signature": "interpolateBilinear(outH: number, outW: number, alignCorners: boolean): Tensor",
+       "signature": "interpolateBilinear(outH: number, outW: number, alignCorners: boolean, given?: number | null): Tensor",
        "doc": "Bilinear enlargement.\n\n**`alignCorners` changes the values.** True pins both ends and divides\nevenly between them; false measures from the centre of a cell.\n`UpsamplingBilinear2d` is true and `Upsample(mode='bilinear')` defaults\nto false, so treating them as aliases on the strength of the names\nmisaligns the edges — the interior is close enough that an eye does not\nseparate them.",
        "torch": "interpolate_bilinear",
        "section": {
@@ -5619,13 +5619,13 @@
       },
       {
        "name": "interpolate",
-       "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean): Tensor",
-       "doc": "Enlargement taking `size`, `scaleFactor` and `mode` in one place. The\n`Upsample` layer is this.\n\n**Taking `mode` and then not using it is the reason this function\nexists.** Nearest and bilinear are entirely different kernels, and\nwithout dispatching on it, asking for bilinear gives you nearest — not\nan exception, a quietly different value.",
+       "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean, recomputeScaleFactor?: boolean | null): Tensor",
+       "doc": "**A fractional `scaleFactor` has to be floored, and was not.**\n\ntorch's output extent is `floor(in · scale)`. Multiplying without it gave\n`Upsample(scale_factor=1.5)` on a 3×4 input a shape of `[1, 1, 4.5, 6]` — a\nnon-integer dimension, which for `nearest` produced a tensor summing to zero and\n*did not throw*, and for `bilinear` blew up somewhere else entirely (`shape\n[4.5,1] does not match 5 elements`). At 2.3 it reached WebGPU as `Size (253) must\nbe a multiple of 4`.\n\nWhole factors were right, which is why this stood: 2 and 3 are what anybody tries.\n\n`recomputeScaleFactor` is torch's fourth answer to the same arithmetic. With it\non, torch works out the integer output size and then **derives the scale back\nfrom it** per axis, so a 3-high input at 1.5 samples at 4/3 rather than 1.5. Same\nshape, different values — measured on torch: sum 120 against 132.",
        "section": {
         "ko": "CTC",
         "en": "CTC"
        },
-       "doc_ko": "`size`·`scaleFactor`·`mode` 를 한자리에서 받는 확대. `Upsample` 층이 이것이다.\n\n**`mode` 를 받아만 놓고 안 쓰는 것이 이 함수가 있는 이유다.** 최근접과 겹선형은\n커널이 아예 다른데, 골라 주지 않으면 겹선형을 달라고 해도 최근접이 나온다 —\n예외가 아니라 조용히 다른 값이다."
+       "doc_ko": "`size`·`scaleFactor`·`mode` 를 한자리에서 받는 확대. `Upsample` 층이 이것이다.\n\n**`mode` 를 받아만 놓고 안 쓰는 것이 이 함수가 있는 이유다.** 최근접과 겹선형은\n커널이 아예 다른데, 골라 주지 않으면 겹선형을 달라고 해도 최근접이 나온다 —\n예외가 아니라 조용히 다른 값이다.\n\n## 분수 배율은 바닥을 취해야 하는데 안 그러고 있었다\n\ntorch 의 출력 크기는 `floor(in · scale)` 이다. 그것 없이 곱하니\n`Upsample(scale_factor=1.5)` 가 3 줄짜리 입력에 4.5 줄을 요구했다 — 최근접에서는\n합이 0 인 텐서가 나오고 **예외는 안 났고**, 겹선형에서는 두 층 아래에서\n`shape [4.5,1] does not match 5 elements` 로 터졌다. 2.3 에서는 WebGPU 까지 가서\n`Size (253) must be a multiple of 4` 였다. 정수 배율은 맞았고, 그래서 이게 살아남았다\n— 2 와 3 이 누구나 먼저 시도하는 수다.\n\n`recomputeScaleFactor` 는 같은 산술에 대한 torch 의 넷째 답이다. 켜면 정수 출력\n크기를 먼저 정하고 **거기서 배율을 되돌려 뽑아** 축마다 쓴다. 3 줄 입력에 1.5 면\n1.5 가 아니라 4/3 로 표본을 뜬다. 모양은 같고 값이 다르다 — torch 에서 실측한 합이\n120 대 132 다.\n"
       },
       {
        "name": "upsample",
@@ -8966,8 +8966,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean | null)",
-       "doc": ""
+       "signature": "constructor(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean | null, recomputeScaleFactor?: boolean | null)",
+       "doc": "**`recomputeScaleFactor` was missing and the kernel behaved as though it were\non.** With a fractional factor torch works out the integer output size and then\neither samples at the factor it was given (the default) or derives the scale back\nfrom that size (the flag). Same shape, different values — measured on torch at\n`scale_factor=1.5`: sums 120 and 132."
       },
       {
        "name": "forward",

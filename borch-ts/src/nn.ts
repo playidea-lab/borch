@@ -2350,10 +2350,18 @@ export class LayerNorm extends Module {
  * values catch it.
  */
 export class Upsample extends Module {
+  /**
+   * **`recomputeScaleFactor` was missing and the kernel behaved as though it were
+   * on.** With a fractional factor torch works out the integer output size and then
+   * either samples at the factor it was given (the default) or derives the scale back
+   * from that size (the flag). Same shape, different values — measured on torch at
+   * `scale_factor=1.5`: sums 120 and 132.
+   */
   constructor(private readonly size: number | readonly number[] | null = null,
               private readonly scaleFactor: number | null = null,
               private readonly mode: "nearest" | "bilinear" = "nearest",
-              private readonly alignCorners: boolean | null = null) {
+              private readonly alignCorners: boolean | null = null,
+              private readonly recomputeScaleFactor: boolean | null = null) {
     super();
   }
 
@@ -2362,7 +2370,7 @@ export class Upsample extends Module {
       throw new RuntimeError("either size or scale_factor should be defined");
     }
     return x.interpolate(this.size, this.scaleFactor, this.mode,
-                         this.alignCorners ?? false);
+                         this.alignCorners ?? false, this.recomputeScaleFactor);
   }
 
   /** **Whichever of the two was given**, not both — a layer built with a size prints

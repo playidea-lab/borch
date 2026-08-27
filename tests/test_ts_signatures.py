@@ -1130,7 +1130,19 @@ SHORTER = {
     # What is left is six rows with no wiring among them: `LazyInstanceNorm1d/2d/3d`
     # and `RNNBase` want arguments no neighbour has either, `Upsample` wants
     # `recomputeScaleFactor`, and `Hardtanh` is short on purpose.
-    "nn": 6,
+    #
+    # **6 → 5. `Upsample` took `recomputeScaleFactor`, and the seat was the smaller
+    # half of what was wrong there.** `interpolate` multiplied the input extent by the
+    # scale without flooring, so a fractional factor asked for a fractional number of
+    # rows: `Upsample(scale_factor=1.5)` on a 3-high input gave a shape with a `.5` in
+    # it, which `nearest` returned as zeros **without throwing**. Whole factors were
+    # right, and every `Upsample` case in the golden used 2 — a whole factor cannot
+    # tell flooring from not flooring, nor this flag from its absence.
+    #
+    # The case table said so out loud and it read as a limit rather than a defect:
+    # "asked as 6 it is 1.5×, and all three refused". Three fractional cases now stand
+    # where that sentence was.
+    "nn": 5,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

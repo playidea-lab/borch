@@ -189,7 +189,12 @@ CEILINGS = {
     # cannot tell broadcasting from three buffers read at the same offset.
     # 3398 → 3404. Six, and case names again: the maximum's `자리::` group, which asks
     # what its padding and `ceil_mode` compute rather than how the layer prints them.
-    "borch-ts/test": 3404,
+    # 3404 → 3419. Fifteen, case names once more: `Upsample` at a **fractional** scale
+    # factor, in three arrangements. Every `Upsample` case before them used 2, and a
+    # whole factor is the one number that cannot tell flooring from not flooring, nor
+    # `recompute_scale_factor` from its absence — at 1.5 the first gave a shape with a
+    # `.5` in it and the second is a 10% difference in the values.
+    "borch-ts/test": 3419,
 }
 
 

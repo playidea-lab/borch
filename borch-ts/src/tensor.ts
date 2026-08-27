@@ -102,14 +102,24 @@ function windowIndex(
 
 /** For bilinear upsampling, **which two input positions in what proportion** each
  *  output position mixes. */
-function bilinearAxis(sizeIn: number, sizeOut: number, alignCorners: boolean) {
+/**
+ * @param given the scale the caller asked for, when it is to be used **instead of**
+ *   `sizeIn / sizeOut`. Those two are the same number only when the output divides
+ *   exactly; at `scale_factor = 1.5` on a 3-high input they are `0.6667` and `0.75`,
+ *   and that is the whole of what `recompute_scale_factor` selects between. This
+ *   function had only the second, so borch.ts answered as though the flag were always
+ *   on — invisible at whole factors, which is what anybody tries first.
+ */
+function bilinearAxis(sizeIn: number, sizeOut: number, alignCorners: boolean,
+                      given: number | null = null) {
   const lo: number[] = [];
   const hi: number[] = [];
   const frac: number[] = [];
+  const step = given === null ? sizeIn / sizeOut : 1 / given;
   for (let i = 0; i < sizeOut; i++) {
     const src = alignCorners
       ? i * ((sizeIn - 1) / Math.max(1, sizeOut - 1))
-      : Math.max(0, (i + 0.5) * (sizeIn / sizeOut) - 0.5);
+      : Math.max(0, (i + 0.5) * step - 0.5);
     const base = Math.floor(src);
     lo.push(base);
     hi.push(Math.min(base + 1, sizeIn - 1));
@@ -4060,11 +4070,12 @@ export class Tensor implements Node<Tensor> {
    * misaligns the edges — the interior is close enough that an eye does not
    * separate them.
    */
-  interpolateBilinear(outH: number, outW: number, alignCorners: boolean): Tensor {
+  interpolateBilinear(outH: number, outW: number, alignCorners: boolean,
+                      given: number | null = null): Tensor {
     const h = this.shape[2] ?? 1;
     const w = this.shape[3] ?? 1;
-    const ys = bilinearAxis(h, outH, alignCorners);
-    const xs = bilinearAxis(w, outW, alignCorners);
+    const ys = bilinearAxis(h, outH, alignCorners, given);
+    const xs = bilinearAxis(w, outW, alignCorners, given);
     const pick = (t: Tensor, axis: number, at: number[]) =>
       t.indexSelect(axis, Tensor.from(at, [at.length]));
     const wy = Tensor.from(ys.frac, [outH, 1]);
@@ -10241,24 +10252,49 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * without dispatching on it, asking for bilinear gives you nearest — not
    * an exception, a quietly different value.
    */
+  /**
+   * **A fractional `scaleFactor` has to be floored, and was not.**
+   *
+   * torch's output extent is `floor(in · scale)`. Multiplying without it gave
+   * `Upsample(scale_factor=1.5)` on a 3×4 input a shape of `[1, 1, 4.5, 6]` — a
+   * non-integer dimension, which for `nearest` produced a tensor summing to zero and
+   * *did not throw*, and for `bilinear` blew up somewhere else entirely (`shape
+   * [4.5,1] does not match 5 elements`). At 2.3 it reached WebGPU as `Size (253) must
+   * be a multiple of 4`.
+   *
+   * Whole factors were right, which is why this stood: 2 and 3 are what anybody tries.
+   *
+   * `recomputeScaleFactor` is torch's fourth answer to the same arithmetic. With it
+   * on, torch works out the integer output size and then **derives the scale back
+   * from it** per axis, so a 3-high input at 1.5 samples at 4/3 rather than 1.5. Same
+   * shape, different values — measured on torch: sum 120 against 132.
+   */
   interpolate(size: number | readonly number[] | null = null,
               scaleFactor: number | null = null,
               mode: "nearest" | "bilinear" = "nearest",
-              alignCorners = false): Tensor {
+              alignCorners = false,
+              recomputeScaleFactor: boolean | null = null): Tensor {
     const h = this.shape[2] ?? 1;
     const w = this.shape[3] ?? 1;
     const pair = (v: number | readonly number[]): [number, number] =>
       typeof v === "number" ? [v, v] : [v[0] ?? 1, v[1] ?? v[0] ?? 1];
+    const scale = scaleFactor ?? 2;
+    // torch's own rule, in one place so the two modes cannot part.
+    const extent = (inp: number) => Math.floor(inp * scale);
     if (mode === "nearest") {
-      if (size === null) return this.upsample(scaleFactor ?? 2);
-      // **It no longer has to be a whole multiple.** The kernel takes the output
-      // extents and maps `src = floor(o · in / out)`, which is torch's rule.
-      const [oh, ow] = pair(size);
+      // `resizeNearest` maps `src = floor(o · in / out)`, which *is* recomputing the
+      // scale from the output size — so nearest gives the same answer either way and
+      // torch says as much by ignoring the flag outside the fractional bilinear case.
+      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
       return this.resizeNearest([oh, ow]);
     }
-    const [oh, ow] = size === null
-      ? [h * (scaleFactor ?? 2), w * (scaleFactor ?? 2)] : pair(size);
-    return this.interpolateBilinear(oh, ow, alignCorners);
+    const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
+    // **The default is the *given* scale; recomputing is what the flag turns on.**
+    // The kernel had only the recomputed rule (`in / out`), so borch.ts answered as
+    // though the flag were always set. A size rather than a factor has no scale to
+    // recompute from, so that path is unchanged.
+    const given = size === null && !recomputeScaleFactor ? scale : null;
+    return this.interpolateBilinear(oh, ow, alignCorners, given);
   }
 
   /**

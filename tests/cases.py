@@ -9740,6 +9740,29 @@ def ndim_cases(inp=None):
         # integer multiple** — asked as 6 it is 1.5×, and all three refused.
         (NDIM_PREFIX + "nn.Upsample(첫 자리는 size)",
          lambda L: L.nn.Upsample(12)(L.tensor(img))),
+        # **"asked as 6 it is 1.5×, and all three refused" was the bug, not the reason.**
+        # The line above avoided a fractional factor because it did not work; borch.ts
+        # multiplied without flooring, so `scale_factor=1.5` on a 3-high input asked for
+        # 4.5 rows — for nearest a tensor that summed to zero and did not throw, for
+        # bilinear an exception two layers down. Whole factors were right, which is why
+        # every case here was 2.
+        # **The input needs an odd extent or the case is blind.** `nd_img` is 4×4 and
+        # 4 × 1.5 = 6 exactly, so flooring and not flooring agree there — the first
+        # draft of these three passed with the floor removed. Cropped to three rows,
+        # 3 × 1.5 = 4.5 and they part.
+        (NDIM_PREFIX + "nn.Upsample(분수 배율)",
+         lambda L: L.nn.Upsample(scale_factor=1.5)(L.tensor(img[:, :, :3, :]))),
+        (NDIM_PREFIX + "nn.Upsample(분수 배율, 겹선형)",
+         lambda L: L.nn.Upsample(scale_factor=1.5,
+                                 mode="bilinear")(L.tensor(img[:, :, :3, :]))),
+        # **The flag only shows here.** With the output size floored, torch either samples
+        # at the factor it was given or derives the scale back from that size, and those
+        # two are the same number whenever the factor divides exactly. So a case at 2 is
+        # blind to it and this one is the whole of the difference.
+        (NDIM_PREFIX + "nn.Upsample(분수 배율, recompute)",
+         lambda L: L.nn.Upsample(scale_factor=1.5, mode="bilinear",
+                                 recompute_scale_factor=True)(
+             L.tensor(img[:, :, :3, :]))),
         (NDIM_PREFIX + "nn.AvgPool2d", lambda L: L.nn.AvgPool2d(2)(L.tensor(img))),
         (NDIM_PREFIX + "nn.AvgPool2d(보폭)",
          lambda L: L.nn.AvgPool2d(2, 1)(L.tensor(img))),
