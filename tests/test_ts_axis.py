@@ -391,7 +391,10 @@ FROZEN = {
     # 52 → 54. The two Caltechs, whose rows said an md5 — and whose `_check_integrity`
     # is one `os.path.exists`, with torchvision's own comment beside it reading *can be
     # more robust and check hash of files*.
-    "datasets": 54,
+    #
+    # 54 → 55. `WIDERFace`, whose `_check_integrity` is a loop of `os.path.exists` over
+    # four directory names — the third of the group whose row claimed an md5.
+    "datasets": 55,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the

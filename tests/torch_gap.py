@@ -679,7 +679,8 @@ SKIPPED = {
     # `WIDERFace` have a `_check_integrity` that is `os.path.exists` — torchvision's own
     # comment on two of them reads *can be more robust and check hash of files* — and
     # `ImageNet` and `SBDataset` have no such method at all: the first parses a devkit
-    # tar for the synsets and the second imports `scipy` before anything else.
+    # tar for the synsets and the second imports `scipy` before anything else. All
+    # three of the first group are in.
     #
     # **The two `LFW`s were counted among them and should not have been.** Neither
     # subclass has the method; their base `_LFW` does, and it calls `check_integrity`
@@ -703,7 +704,6 @@ SKIPPED = {
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
     "datasets.SBDataset": "its pictures are JPEG, which is the codec wall. Its `.mat` annotations are not — `_mat_read` handles those, and this row named them as a second reason when there was only ever one",
     "datasets.UCF101": "as above",
-    "datasets.WIDERFace": "`check_integrity` gates the whole tree — measured, a fixture tree stops at *Dataset not found or corrupted*",
 
     # The stereo and optical-flow sets were one row and are no longer one kind. It read
     # *paired pictures plus a disparity field, so a codec and then another format*, and

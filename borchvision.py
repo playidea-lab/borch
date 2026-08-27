@@ -10438,6 +10438,114 @@ class Caltech256(VisionDataset):
         return image, target
 
 
+class WIDERFace(VisionDataset):
+    """Faces in crowds, **with nine numbers per box and only four of them a box.**
+
+    <http://shuoyang1213.me/WIDERFACE/>
+
+    ## Why it was refused and is not
+
+    Its row read *as above — a codec*, and then that an md5 stood behind it. Neither.
+    torchvision's `_check_integrity` here is a loop of `os.path.exists` over the four
+    extracted directory names — measured, a fixture with all four constructs.
+
+    **The annotation file is a state machine, not a table.** A line is a path, then a
+    count, then that many box lines, and then a path again. Read as columns it is
+    nonsense; read with the count ignored, one image's boxes run into the next one's
+    and every image after the first is wrong while the total stays right.
+
+    **Ten numbers a line and the first four are the box** — `x, y, w, h`, not a corner
+    pair. The other six are per-face flags, and each is its own key: a reader that kept
+    them as one array of six gives the same numbers under a shape nobody asked for.
+
+    **`test` has no annotations at all**, and its file is a plain list of paths under a
+    different name. The target there is `None`, which is what a detector's evaluation
+    loop checks for.
+    """
+
+    _EXTRACTED = ("WIDER_train", "WIDER_val", "WIDER_test", "wider_face_split")
+    _FLAGS = ("blur", "expression", "illumination", "occlusion", "pose", "invalid")
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False, loader=None):
+        super().__init__(_os.path.join(root, "widerface"), transform=transform,
+                         target_transform=target_transform)
+        if split not in ("train", "val", "test"):
+            raise ValueError(
+                f"Unknown value '{split}' for argument split. Valid values are "
+                "{train, val, test}.")
+        self.split = split
+        self.loader = _folder_loader if loader is None else loader
+        del download
+        for name in self._EXTRACTED:
+            if not _os.path.exists(_os.path.join(self.root, name)):
+                raise RuntimeError(
+                    "Dataset not found or corrupted. You can use download=True to "
+                    "download and prepare it")
+        self.img_info = []
+        if split == "test":
+            self._parse_test()
+        else:
+            self._parse_annotations()
+
+    def _parse_annotations(self):
+        name = f"wider_face_{self.split}_bbx_gt.txt"
+        with open(_os.path.join(self.root, "wider_face_split", name)) as handle:
+            lines = handle.readlines()
+        # **Three states, and the count is what leaves the last one.** Written as
+        # "a path line is one with a slash in it" the parser agrees on this archive and
+        # breaks on the first directory that has none.
+        want_path, want_count, want_boxes = True, False, False
+        count, seen, labels = 0, 0, []
+        for line in lines:
+            line = line.rstrip()
+            if want_path:
+                path = _os.path.abspath(_os.path.expanduser(_os.path.join(
+                    self.root, "WIDER_" + self.split, "images", line)))
+                want_path, want_count = False, True
+            elif want_count:
+                count = int(line)
+                want_count, want_boxes = False, True
+            elif want_boxes:
+                seen += 1
+                labels.append([int(one) for one in line.split(" ")])
+                if seen >= count:
+                    want_boxes, want_path = False, True
+                    block = _np.asarray(labels, dtype=_np.int64)
+                    self.img_info.append({
+                        "img_path": path,
+                        "annotations": dict(
+                            [("bbox", block[:, 0:4].copy())]
+                            + [(key, block[:, 4 + i].copy())
+                               for i, key in enumerate(self._FLAGS)]),
+                    })
+                    seen, labels = 0, []
+
+    def _parse_test(self):
+        with open(_os.path.join(self.root, "wider_face_split",
+                                "wider_face_test_filelist.txt")) as handle:
+            for line in handle.readlines():
+                self.img_info.append({"img_path": _os.path.abspath(
+                    _os.path.expanduser(_os.path.join(
+                        self.root, "WIDER_test", "images", line.rstrip())))})
+
+    def __len__(self):
+        return len(self.img_info)
+
+    def __getitem__(self, index):
+        image = self.loader(self.img_info[index]["img_path"])
+        if self.transform is not None:
+            image = self.transform(image)
+        target = (None if self.split == "test"
+                  else self.img_info[index]["annotations"])
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+
+    def extra_repr(self):
+        return f"Split: {self.split}"
+
+
 class OxfordIIITPet(VisionDataset):
     """Thirty-seven breeds of cat and dog, **with three different targets.**
 
@@ -11516,7 +11624,7 @@ for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMN
               "FlyingChairs",
               "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB",
               "VOCSegmentation", "VOCDetection", "OxfordIIITPet",
-              "CREStereo", "FallingThingsStereo", "Caltech101", "Caltech256"):
+              "CREStereo", "FallingThingsStereo", "Caltech101", "Caltech256", "WIDERFace"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")

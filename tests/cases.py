@@ -16090,7 +16090,82 @@ def dataset_last_three_cases(inp=None):
             return f"{names}\n{list(np.round(out, 4))}"
         return run
 
+    def widerface(split):
+        """`WIDERFace`. **The annotation file is a state machine**, not a table: a path,
+        a count, that many box lines, a path again.
+
+        The fixture gives the three images **three different counts** — two, one and
+        three — so a reader that ignored the count runs one image's boxes into the next
+        and every image after the first is wrong while the total stays right.
+
+        **Ten numbers a line and the first four are the box.** The other six are per-face
+        flags, each its own key, and the fixture gives them values that differ from one
+        another so a reader that kept them as one array of six cannot come out equal.
+
+        `test` has no annotations at all and its list lives under a different file name;
+        the target there is `None`, which is written as a length so that a split which
+        should have none cannot pass by handing back zeros.
+        """
+        import os
+        import shutil
+        import tempfile
+
+        def run(L):
+            root = tempfile.mkdtemp()
+            try:
+                base = os.path.join(root, "widerface")
+                for name in ("WIDER_train", "WIDER_val", "WIDER_test"):
+                    os.makedirs(os.path.join(base, name, "images", "0--Parade"))
+                os.makedirs(os.path.join(base, "wider_face_split"))
+                names = ["0--Parade/p_%d.jpg" % i for i in range(3)]
+                for i, one in enumerate(names):
+                    picture = ((np.arange(4 * 5 * 3) + i * 9) % 251).reshape(4, 5, 3)
+                    for folder in ("WIDER_train", "WIDER_val", "WIDER_test"):
+                        _write_png8(os.path.join(base, folder, "images", one), picture)
+                rows = []
+                for i, (one, many) in enumerate(zip(names, (2, 1, 3))):
+                    rows.append(one)
+                    rows.append(str(many))
+                    for k in range(many):
+                        # **Ten values, and no two of the six flags alike** — an array
+                        # of six read as one block would compare equal to a reader that
+                        # split them, if they held the same number.
+                        rows.append(" ".join(str(v) for v in (
+                            i * 10 + k, i * 10 + k + 1, 3 + k, 4 + k,
+                            k % 2, (k + 1) % 3, (k + 2) % 4, k % 5, (k + 3) % 6,
+                            (k + 4) % 7)))
+                for kind in ("train", "val"):
+                    with open(os.path.join(base, "wider_face_split",
+                                           f"wider_face_{kind}_bbx_gt.txt"),
+                              "w") as handle:
+                        handle.write("\n".join(rows) + "\n")
+                with open(os.path.join(base, "wider_face_split",
+                                       "wider_face_test_filelist.txt"), "w") as handle:
+                    handle.write("\n".join(names) + "\n")
+                loaded = _made(L, "WIDERFace")(root, split=split)
+                parts = [np.asarray([len(loaded)], dtype=np.float32)]
+                for i in range(len(loaded)):
+                    picture, target = loaded[i]
+                    parts.append(np.asarray(picture).reshape(-1).astype(np.float32))
+                    if target is None:
+                        parts.append(np.asarray([-1.0], dtype=np.float32))
+                        continue
+                    for key in sorted(target):
+                        parts.append(
+                            np.asarray(target[key]).reshape(-1).astype(np.float32))
+                out = np.concatenate(parts)
+                # **The split alone, not the whole repr.** `repr` carries the root,
+                # and the root is a temporary directory that differs between the two
+                # runs being compared — a case that can never agree with itself.
+                shown = loaded.extra_repr()
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return f"{shown}\n{list(np.round(out, 4))}"
+        return run
+
     cases += [
+        (prefix + "WIDERFace(a count between the boxes)", widerface("train")),
+        (prefix + "WIDERFace(test has no annotations)", widerface("test")),
         (prefix + "Caltech101(a directory that is not a class)", caltech101()),
         (prefix + "Caltech256(the label is the sorted position)", caltech256()),
         (prefix + "OxfordIIITPet(category)", oxford_pet("category")),
