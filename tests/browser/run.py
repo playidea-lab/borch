@@ -220,6 +220,28 @@ def main():
               "  first: uv run --with numpy --with torch python tests/golden.py dump")
         return 1
 
+    # **A golden older than the case table compares yesterday's answers to today's
+    # questions**, and every difference it prints reads as a defect in whatever was
+    # last changed. That is not a hypothetical: a commit moved `deform_conv2d`'s
+    # fixture off `numpy.random` onto a generator both languages can compute, and a
+    # dump from before it turned nine cases red here. They were reported as a defect on
+    # main, a second session spent time reasoning about the cause, and CI had been green
+    # throughout — because CI dumps a fresh golden every run and so cannot have this.
+    #
+    # `golden.npz` is not committed, which is exactly why only local runs can go stale.
+    # The sister rule is `require_fresh_dist` above; `test_site.py` borrows that one
+    # rather than restating it, for the same reason this stops rather than warning.
+    cases = ROOT / "tests" / "cases.py"
+    if cases.exists() and cases.stat().st_mtime > GOLDEN.stat().st_mtime:
+        print(f"the golden is older than the case table — {GOLDEN.name} was frozen before "
+              f"{cases.relative_to(ROOT)} last changed.\n"
+              "  first: uv run --with numpy --with torch --with torchvision --with scipy "
+              "python tests/golden.py dump\n"
+              "  (run it as it is and a case whose fixture moved comes back as a value "
+              "mismatch, which is\n"
+              "   **the same wording** as a real divergence, so the cause is invisible.)")
+        return 1
+
     # Pyodide comes from local files. Fetched once if absent, compared by hash if present.
     vendor.ensure()
 
