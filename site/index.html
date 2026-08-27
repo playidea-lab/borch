@@ -363,11 +363,11 @@ for step in range(201):
         <tr><td><strong>Model I/O</strong></td><td><span class="state now">here</span></td>
             <td>safetensors — the Python borch, numpy and HF tools read the same file</td></tr>
         <tr><td>Model catalogue (<code>bimm</code>)</td><td><span class="state soon">partial</span></td>
-            <td><code>createModel(library, name, args)</code> builds; not published to npm yet</td></tr>
+            <td><code>createModel(library, name, args)</code> builds. On npm as <code>bimm-ts</code>; the catalogue is five families deep, not timm's hundreds</td></tr>
         <tr><td>Learn (interactive tutorials)</td><td><span class="state now">here</span></td>
             <td>Ten lessons and ten tutorials, every code block running in the page — tensors through ResNet and a Vision Transformer</td></tr>
         <tr><td>Hub (<code>borch-hub</code>)</td><td><span class="state soon">partial</span></td>
-            <td>Manifest, hash check, environment report. Weights do load in a browser — measured, <code>access-control-allow-origin: *</code> on a 44.7MB safetensors. Not published to npm yet</td></tr>
+            <td>Manifest, hash check, environment report. Weights do load in a browser — measured, <code>access-control-allow-origin: *</code> on a 44.7MB safetensors. On npm as <code>borch-hub</code>, and <a href="models.html">this site reads the catalogue, loads a model and verifies it</a> &mdash; the count is not written here because it moves</td></tr>
         <tr><td>Without WebGPU — Python mode on wasm</td><td><span class="state now">here</span></td>
             <td>Pyodide <strong>is</strong> wasm and the core is numpy, so <code>import borch as torch</code> trains with no adapter — measured in a browser with <code>navigator.gpu</code> removed: loss 17.2945 → 0.000001. What is missing then is <code>borch_webgpu</code>, and it says so by not being importable</td></tr>
         <tr><td>CUDA · distributed · mixed precision · torch.compile</td>
