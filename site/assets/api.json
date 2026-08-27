@@ -50,7 +50,7 @@
     {
      "kind": "const",
      "name": "VERSION",
-     "signature": "export declare const VERSION = \"0.2.2\"",
+     "signature": "export declare const VERSION = \"0.2.3\"",
      "doc": "Which build this is.\n\n## Why a constant rather than reading package.json\n\nBundlers disagree about importing it, and in a browser the file is not there at all.\nSo the number is written by hand in two places, and `tests/test_version.py` fails\nwhen they disagree — a version that has drifted is a quiet thing.\n\n## What it is for\n\nA manifest carries `runtime.ts`, a semver range saying which builds its weights run\non. The receiver can only compare that against something if it knows what it is, and\nuntil now it did not — so the field was written and never read.",
      "members": []
     }
