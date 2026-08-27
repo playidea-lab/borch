@@ -1493,9 +1493,22 @@ _COUNT_SPAN = re.compile(r'<span data-count="([a-z_0-9]+)">(\d+)</span>')
 _VISION_MODULES = ("vision", "vision_v2", "vision_v2_twins", "ops", "datasets")
 
 
-@pytest.mark.parametrize("name", ["vision.html", "ko/vision.html"])
-def test_the_vision_page_counts_agree_with_the_generated_reference(name):
-    """Every marked number against `api.json`, including the two derived totals."""
+# **The guard has to follow the number, not the page.** The vision page kept `653` current
+# because a test read its spans; the landing carried `547` for the same fact with nothing
+# reading it, and drifted 106 names behind in half a day. Same repository, same day, same
+# number — the difference was only whether anything looked.
+#
+# So this walks every page that marks a count rather than a list of pages, and a page that
+# starts marking one is covered the moment it does.
+def _pages_marking_counts():
+    return [p for p in sorted((ROOT / "site").rglob("*.html"))
+            if _COUNT_SPAN.search(p.read_text(encoding="utf-8"))]
+
+
+@pytest.mark.parametrize("name", [p.relative_to(ROOT / "site").as_posix()
+                                  for p in _pages_marking_counts()])
+def test_a_marked_count_agrees_with_the_generated_reference(name):
+    """Every marked number against `api.json`, wherever it is claimed."""
     api = json.loads(API.read_text(encoding="utf-8"))
     counts = {m["name"]: m["count"] for m in api["modules"]}
     truth = {n: counts[n] for n in _VISION_MODULES}
@@ -1508,12 +1521,14 @@ def test_the_vision_page_counts_agree_with_the_generated_reference(name):
     assert claimed, (
         f"site/{name} marks no counts at all.\n"
         "  the numbers have to stay inside data-count spans, where this can read them.")
-    missing = sorted(set(truth) - set(claimed))
-    assert not missing, (
-        f"site/{name} stopped claiming: {missing}\n"
-        "  a count that leaves the page leaves nothing behind to go stale — but it also\n"
-        "  leaves the reader without it. Put it back or drop it from _VISION_MODULES.")
-    wrong = {k: (claimed[k], truth[k]) for k in truth if claimed.get(k) != truth[k]}
+    unknown = sorted(set(claimed) - set(truth))
+    assert not unknown, (
+        f"site/{name} marks counts nothing can check: {unknown}\n"
+        "  a `data-count` name has to be a module in api.json, `_total`, or\n"
+        "  `_vision_total` — otherwise the span looks guarded and is not.")
+    # 페이지가 주장한 것만 비교한다 — 첫 화면은 합계 하나만 주장하고
+    # 모듈별 수는 주장하지 않는다. 안 한 주장까지 요구하면 검사가 페이지 모양을 정한다.
+    wrong = {k: (claimed[k], truth[k]) for k in claimed if claimed[k] != truth[k]}
     assert not wrong, (
         f"site/{name} and site/assets/api.json disagree (page, reference):\n  " +
         "\n  ".join(f"{k}: {p} vs {t}" for k, (p, t) in sorted(wrong.items())) +
