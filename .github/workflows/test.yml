@@ -62,15 +62,46 @@ jobs:
       # So this catches every wrong number and no wrong second, which is exactly the
       # half that can be automated safely.
       #
-      # ## Not the binding's golden yet
+      # ## And the binding's golden, which is the day this said it would go in
       #
-      # `tests/browser/run.py --lib borch_webgpu` runs the same way and is **red right
-      # now** — work in progress on another branch. Adding it today would make every
-      # push red for a week, and a permanently red check is ignored exactly as fast as a
-      # permanently green one. It goes in beside this line the day it passes.
+      # The line here said `tests/browser/run.py --lib borch_webgpu` was red — work in
+      # progress on another branch — and that it goes in beside the borch.ts one **the
+      # day it passes**. It passes: 3719 of 3719.
+      #
+      # It is the third implementation and the only one nothing was watching. Every gap
+      # closed on that branch was found by running this by hand, and one of them —
+      # `matmul` still renamed to `mm` after borch.ts grew a batching one — arrived from
+      # `main` **the same day this step was added**, which is the argument for the step
+      # rather than for the branch.
+      #
+      # Pyodide is vendored (`vendor/pyodide/`), so this needs no network beyond the
+      # browser download above.
+      #
+      # **`--lib` has no default and that is deliberate.** Leaving it off runs the numpy
+      # core inside a browser, which is almost always green and is not the layer this
+      # step exists for. The runner stops rather than measuring the wrong one.
       - name: fetch a browser
         run: uv run --with playwright playwright install --with-deps chromium
       - name: compare the values in a browser
         env:
           BORCH_HEADLESS: "1"
         run: uv run --with playwright python borch-ts/test/run.py
+      # **The binding's runner reads `tests/golden.npz`, which is not committed.** The
+      # borch.ts one reads `tests/golden.json`, which is — so the step above needed
+      # nothing and this one failed with `no golden answers` the first time it ran.
+      #
+      # Frozen here rather than read from the committed export, because that is the
+      # command the runner's own message names and because the two are already pinned
+      # to each other: `test_committed_golden.py` holds the export against the case
+      # table and `test_golden.py` holds a fresh dump against the core, both in the
+      # pytest step above. A dump that disagreed with the export would have turned
+      # those red first, so this cannot be the thing that goes red for a reason about
+      # torch's version rather than about us.
+      - name: freeze the golden answers from real torch
+        run: >
+          uv run --with numpy --with torch --with torchvision --with scipy
+          python tests/golden.py dump
+      - name: compare the values through the binding
+        env:
+          BORCH_HEADLESS: "1"
+        run: uv run --with playwright python tests/browser/run.py --lib borch_webgpu

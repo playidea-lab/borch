@@ -1765,18 +1765,20 @@ export function scaledDotProductAttention(
  * — a repr for arguments they could not take, which is the tidiest way to look
  * finished. Three classes now share the one refusal, which is the third repetition
  * and the point at which this stops being a copy.
+ *
+ * **`padding` and `ceilMode` have left it.** They were refused on the ground that the
+ * maximum's backward reads the input at each window position and a padded one has
+ * none to read — which the average had answered one function away, by taking the
+ * padding off the coordinate and skipping what falls outside. `poolND` does both for
+ * the maximum now. `dilation` is the whole of what is left, and it keeps its seat for
+ * the reason above.
  */
-function refuseUnwiredPooling(layer: string, padding: number, dilation: number,
-                              ceilMode: boolean): void {
-  for (const [name, asked] of [["padding", padding !== 0],
-                               ["dilation", dilation !== 1],
-                               ["ceilMode", ceilMode]] as const) {
-    if (asked) {
-      throw new Error(
-        `${layer}(${name}=…) is not carried across yet — the core implements it ` +
-        "and this side does not. The argument is here so that it cannot take " +
-        "another one's place.");
-    }
+function refuseUnwiredPooling(layer: string, dilation: number): void {
+  if (dilation !== 1) {
+    throw new Error(
+      `${layer}(dilation=…) is not carried across yet — the core implements it ` +
+      "and this side does not. The argument is here so that it cannot take " +
+      "another one's place.");
   }
 }
 
@@ -1793,11 +1795,11 @@ export class MaxPool2d extends Module {
               readonly returnIndices = false,
               readonly ceilMode = false) {
     super();
-    refuseUnwiredPooling("MaxPool2d", padding, dilation, ceilMode);
+    refuseUnwiredPooling("MaxPool2d", dilation);
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool2d(this.kernelSize, this.stride);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
   }
 
   /** The values and the positions that produced them. `MaxUnpool2d` takes both. */
@@ -1835,11 +1837,16 @@ export class MaxPool1d extends Module {
               readonly returnIndices = false,
               readonly ceilMode = false) {
     super();
-    refuseUnwiredPooling("MaxPool1d", padding, dilation, ceilMode);
+    refuseUnwiredPooling("MaxPool1d", dilation);
+  }
+
+  /** The values and the positions that produced them, as `MaxPool2d.pick`. */
+  pick(x: Tensor): { values: Tensor; indices: Tensor } {
+    return x.maxPoolWithIndices(this.kernelSize, this.stride);
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool1d(this.kernelSize, this.stride);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
   }
 
   /** torch's `_MaxPoolNd.extra_repr`. **A stride left unset prints the kernel**, which
@@ -1861,11 +1868,16 @@ export class MaxPool3d extends Module {
               readonly returnIndices = false,
               readonly ceilMode = false) {
     super();
-    refuseUnwiredPooling("MaxPool3d", padding, dilation, ceilMode);
+    refuseUnwiredPooling("MaxPool3d", dilation);
+  }
+
+  /** The values and the positions that produced them, as `MaxPool2d.pick`. */
+  pick(x: Tensor): { values: Tensor; indices: Tensor } {
+    return x.maxPoolWithIndices(this.kernelSize, this.stride);
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool3d(this.kernelSize, this.stride);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
   }
 
   /** As `MaxPool1d`. */

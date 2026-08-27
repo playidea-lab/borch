@@ -316,11 +316,26 @@ FROZEN = {
     # needs anything borch.ts lacks, and all of it is a second implementation rather
     # than an export. The sampler is the piece to carry first — eight of the names are
     # a wrapper around it.
-    "ops": 24,
+    #
+    # 24 → 20. **The first time this row has gone down.** `roiAlign`, `roiPool`,
+    # `psRoiAlign` and `psRoiPool` are written on the browser side now — in JavaScript
+    # numbers, as the rest of `ops.ts` is, so the values cross and the gradient does
+    # not. The four module classes that wrap them are still on this side alone, which is
+    # what keeps the number at twenty rather than sixteen.
+    "ops": 20,
     # `InterpolationMode` in each, which is a type on this side rather than a missing
     # name — the same reason the two rows above carry.
-    "transforms.v2": 1,
-    "transforms.v2.functional": 1,
+    #
+    # 1 → 12. **v2's type system arrived on the Python side and cannot follow.**
+    # `tv_tensors` are tensor subclasses carrying a label, and borch.ts's `Tensor` is a
+    # handle to a GPU buffer with nothing to subclass — so `isinstance`, which is the
+    # whole mechanism, has no answer there. Carrying this over is designing a second
+    # mechanism rather than writing a second body.
+    "transforms.v2": 12,
+    #
+    # 1 → 3. The format conversion and the two clamps go up with the type system,
+    # because the clamping taxonomy is what `BoundingBoxes` carries.
+    "transforms.v2.functional": 3,
     # **Eighteen, and they are one decision rather than eighteen.** A dataset is an
     # address and a format; the address needs hosts that send a CORS header and
     # torchvision's do not, so what crossed is the decoders. Written per name because a

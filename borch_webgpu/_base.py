@@ -742,13 +742,13 @@ class Tensor:
                 # **An in-place name, so it writes back.** Returning only the
                 # value leaves `x.bernoulli_(0)` without changing `x`, and that
                 # is not an in-place operation.
-                self._refuse_inplace_on_leaf(name)
-                return lambda *a, **k: self._write_back(exact(self, *a, **k))
+                return self._when_run(name,
+                    lambda *a, **k: self._write_back(exact(self, *a, **k)))
             fn = _EXTREME[bare] if bare in _EXTREME else getattr(_ops, bare)
             if not inplace:
                 return lambda *a, **k: fn(self, *a, **k)
-            self._refuse_inplace_on_leaf(name)
-            return lambda *a, **k: self._write_back(fn(self, *a, **k))
+            return self._when_run(name,
+                lambda *a, **k: self._write_back(fn(self, *a, **k)))
 
         # **A leaf with gradients on cannot be edited in place.** torch throws
         # there and the golden froze it — let it through and a backward pass
@@ -760,8 +760,15 @@ class Tensor:
         # **`detach_` is the exception.** It leaves the values alone and only
         # cuts the graph, so no backward pass can read a moved value — torch
         # allows it on a leaf as well.
-        if inplace and bare != "detach":
-            self._refuse_inplace_on_leaf(name)
+        #
+        # **It is refused when it runs, not when the name is looked up.** Raised
+        # here, `hasattr(p, "copy_")` on a parameter *raises* — `hasattr` catches
+        # `AttributeError` and nothing else, so a `RuntimeError` about an in-place
+        # operation comes out of a question about whether a name exists, before any
+        # `with no_grad()` the caller was about to enter. That is what `_fill` in
+        # the case table does, and **ten golden cases stopped there** while the very
+        # next line would have made the write legal.
+        guarded_inplace = inplace and bare != "detach"
 
         js_name = camel(name)
 
@@ -773,13 +780,16 @@ class Tensor:
         # `_inplace`. Two copies of the expression diverge eventually, and the
         # values stay plausible enough that nobody sees it.
         if inplace and getattr(self._h, js_name, None) is None:
-            return lambda *a, **k: self._write_back(
-                getattr(self, bare)(*a, **k))
+            return self._when_run(name, lambda *a, **k: self._write_back(
+                getattr(self, bare)(*a, **k)), guarded_inplace)
 
         if name in _BINARY_ONLY:
             # borch.ts derives methods from the table for unary only. Binary
             # goes through `binary(name, other)`.
-            return lambda other, *_: guarded(self._h.binary, js_name, handle(other))
+            return self._when_run(
+                name,
+                lambda other, *_: guarded(self._h.binary, js_name, handle(other)),
+                guarded_inplace)
         got = getattr(self._h, js_name, None)
         if got is None:
             # **The opening clause matches torch's.** It used to say only that
@@ -809,7 +819,25 @@ class Tensor:
             return self if inplace else out
 
         call.__name__ = name
-        return call
+        return self._when_run(name, call, guarded_inplace)
+
+    def _when_run(self, name, call, guard=True):
+        """The refusal moved from the lookup to the call.
+
+        `x.copy_` is a question about a name and `x.copy_(...)` is the operation.
+        Refusing at the first means `hasattr` — and anything that asks whether a
+        tensor can do something before deciding how — stops with a `RuntimeError`
+        that no caller expected there.
+        """
+        if not guard:
+            return call
+
+        def go(*args, **kw):
+            self._refuse_inplace_on_leaf(name)
+            return call(*args, **kw)
+
+        go.__name__ = name
+        return go
 
     def _refuse_inplace_on_leaf(self, _name):
         """**A leaf with gradients on cannot be edited in place.** torch throws
@@ -867,7 +895,9 @@ class Tensor:
         return guarded(self._h.remainder, float(other))
 
     def __matmul__(self, other):
-        return guarded(self._h.mm, handle(other))
+        """`a @ b` is `matmul`, **not `mm`.** torch's operator batches and broadcasts;
+        `mm` is the two-dimensional kernel underneath it and refuses everything else."""
+        return guarded(self._h.matmul, handle(other))
 
     def _inplace(js_name):                                   # noqa: N805
         """`x += 1` is an in-place operation too — torch refuses it on a leaf
@@ -980,6 +1010,9 @@ class Tensor:
     def __getitem__(self, key):
         """`x[0]`, `x[1:3]`, `x[:, 1]`. The most common thing torch code does."""
         keys = key if isinstance(key, tuple) else (key,)
+        kinds = [isinstance(k, (Tensor, list, tuple)) for k in keys]
+        if sum(kinds) > 1 and all(kinds):
+            return self._gather_at(keys)
         out, axis = self, 0
         for k in keys:
             if isinstance(k, slice):
@@ -1012,6 +1045,42 @@ class Tensor:
                         f"with size {n}")
                 out = wrap(out._h.select(axis, at))
         return out
+
+    @staticmethod
+    def _flat_count(sizes):
+        total = 1
+        for one in sizes:
+            total *= one
+        return total
+
+    def _gather_at(self, keys):
+        """**Several index tensors at once**, which is a different operation from
+        several one at a time.
+
+        torch broadcasts the index tensors against each other and reads **one element
+        per position of the broadcast shape**. Applied one axis after another with
+        `indexSelect`, each axis instead grows to that index's element count and the
+        result is their product: `picture[b, c, y, x]` with the six-dimensional
+        indices `roi_align` builds came back `[1, 2, 16, 16]` where torch gives
+        `[1, 2, 2, 2, 8, 8]`. **Twenty-one golden cases**, all of them the samplers
+        under `roi_align`, `ps_roi_align` and `deform_conv2d`.
+
+        The positions are turned into one offset — the row-major sum `((i₀·n₁ + i₁)·n₂
+        + i₂)…` — and read from a flattened view, so the broadcasting is the ordinary
+        arithmetic kind and there is no second rule to keep in step. Whatever axes the
+        keys do not cover stay behind the offset and come back as they were.
+        """
+        shape = [int(one) for one in self.shape]
+        lead, rest = shape[:len(keys)], shape[len(keys):]
+        offset = None
+        for size, k in zip(lead, keys):
+            idx = k if isinstance(k, Tensor) else tensor(list(k), int64_name())
+            offset = idx if offset is None else offset * size + idx
+        flat = wrap(self._h.reshape(_js_list(
+            [self._flat_count(lead), *rest] if rest else [self._flat_count(lead)])))
+        picked = wrap(flat._h.indexSelect(0, offset.reshape(-1).long()._h))
+        return wrap(picked._h.reshape(_js_list(
+            [int(one) for one in offset.shape] + rest)))
 
     def __iter__(self):
         for i in range(len(self)):

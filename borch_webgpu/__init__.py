@@ -8,7 +8,7 @@ underneath.
 It used to belong to the TF.js implementation. That one was **5,307 lines**,
 because TF.js supplies 104 primitive operations and nothing else, so the
 autograd tape, `nn.Module` and the optimisers all had to be rebuilt in Python.
-This one is **8,769 lines** — borch.ts already has all of it, so Python's job
+This one is **9,249 lines** — borch.ts already has all of it, so Python's job
 is swapping names across.
 
 `_data.py` is nearly identical in both. It came over unchanged, sits on numpy
@@ -274,4 +274,69 @@ from math import e, inf, nan, pi                        # noqa: E402,F401
 # torch has it as plain `None` too — a marker that it means the same as
 # `x[:, None]`.
 newaxis = None
+
+
+# ── the seven losses torch keeps at top level as well as under `F` ──────────
+#
+# **`torch.kl_div` and `F.kl_div` are two different functions.** The reduction is an
+# integer here — `0` none, `1` mean, `2` sum — where `F` takes the word, and it defaults
+# to none where every `F` loss defaults to mean.
+#
+# They are written out rather than left to the module's `__getattr__`, which forwards an
+# unknown name to **the first argument's method** — `kl_div(a, b)` would become
+# `a.kl_div(b)`, and a tensor has no such method. The core has the same seven for the
+# same reason; this side had none of them, and eighteen golden cases said so.
+def _aten_reduction(value):
+    """The integer the ATen ops take, as the word `F` takes.
+
+    **`int` is a dtype in this module's namespace**, so the builtin is reached through
+    `builtins` — asking `isinstance(value, int)` here asks whether a number is a dtype
+    and raises. Measured on the core first, and it is the same shape of trap.
+    """
+    import builtins as _builtins
+    if (not isinstance(value, _builtins.int) or isinstance(value, _builtins.bool)
+            or not 0 <= value <= 2):
+        raise ValueError(f"reduction has to be 0, 1 or 2, but got {value!r}.")
+    return ("none", "mean", "sum")[value]
+
+
+def binary_cross_entropy_with_logits(self, target, weight=None, pos_weight=None,
+                                     reduction=0):
+    return nn.functional.binary_cross_entropy_with_logits(
+        self, target, weight=weight, pos_weight=pos_weight,
+        reduction=_aten_reduction(reduction))
+
+
+def cosine_embedding_loss(input1, input2, target, margin=0.0, reduction=0):
+    return nn.functional.cosine_embedding_loss(
+        input1, input2, target, margin=margin, reduction=_aten_reduction(reduction))
+
+
+def hinge_embedding_loss(self, target, margin=1.0, reduction=0):
+    return nn.functional.hinge_embedding_loss(
+        self, target, margin=margin, reduction=_aten_reduction(reduction))
+
+
+def kl_div(self, target, reduction=0, *, log_target=False):
+    return nn.functional.kl_div(self, target, reduction=_aten_reduction(reduction),
+                                log_target=log_target)
+
+
+def margin_ranking_loss(input1, input2, target, margin=0.0, reduction=0):
+    return nn.functional.margin_ranking_loss(
+        input1, input2, target, margin=margin, reduction=_aten_reduction(reduction))
+
+
+def poisson_nll_loss(input, target, log_input, full, eps, reduction):
+    """**Six required arguments and no defaults**, which is the schema."""
+    return nn.functional.poisson_nll_loss(
+        input, target, log_input=log_input, full=full, eps=eps,
+        reduction=_aten_reduction(reduction))
+
+
+def triplet_margin_loss(anchor, positive, negative, margin=1.0, p=2.0, eps=1e-6,
+                        swap=False, reduction=0):
+    return nn.functional.triplet_margin_loss(
+        anchor, positive, negative, margin=margin, p=p, eps=eps, swap=swap,
+        reduction=_aten_reduction(reduction))
 

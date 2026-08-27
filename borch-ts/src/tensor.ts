@@ -3508,6 +3508,22 @@ export class Tensor implements Node<Tensor> {
    * is `x.where(cond, other)`.
    */
   where(condition: Tensor, other: Tensor): Tensor {
+    // **The three broadcast against each other**, as torch's `where` does and as
+    // every binary operation on this class already does. Without it the kernel runs
+    // over *this* tensor's element count and reads the other two buffers at the same
+    // positions, so a mask that is right but shorter — `[1,1,H,W,K,K]` against
+    // `[N,C,H,W,K,K]`, which is what a per-position mask over channels looks like —
+    // selects by whatever happened to sit at that offset. The shape came out right
+    // and the values did not, which is the quietest way for this to be wrong:
+    // twenty-one golden cases under `roi_align` and the samplers beside it.
+    const wide = broadcastShapes(broadcastShapes(this.shape, other.shape),
+                                 condition.shape);
+    const fits = (s: readonly number[]): boolean =>
+      s.length === wide.length && s.every((d, i) => d === wide[i]);
+    if (!fits(this.shape) || !fits(other.shape) || !fits(condition.shape)) {
+      return this.broadcastTo(wide)
+        .where(condition.broadcastTo(wide), other.broadcastTo(wide));
+    }
     const n = this.size;
     const out = dev().alloc(n);
     dev().run1d(
@@ -10165,13 +10181,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
          divisorOverride: number | null = null): Tensor {
     const spatial = this.shape.length - 2;
     if (spatial < 1) throw new Error(`pooling: the shape does not match: [${this.shape}]`);
-    // **The maximum refuses what only the average implements.** Its backward reads the
-    // input at each window position to find which cell won, and a padded position has
-    // no input to read — so the argument is not merely unwired, it has no meaning here
-    // yet. Refusing by name is the same trade `MaxPool2d` makes one file over.
-    if (kind === "max" && (padding !== 0 || ceilMode)) {
-      throw new Error(`maxPool: ${padding !== 0 ? "padding" : "ceilMode"} is not implemented`);
-    }
+    // **The maximum used to refuse what only the average implements**, on the ground
+    // that its backward reads the input at each window position and a padded position
+    // has none to read. The average had the answer one function away the whole time:
+    // take the padding off the coordinate and skip what falls outside. The maximum
+    // needed that guard and a starting value below every real one, and both kernels
+    // now carry it.
     const step = stride ?? kernel;
     const inDims = this.shape.slice(2);
     const p: PoolNDShape = {

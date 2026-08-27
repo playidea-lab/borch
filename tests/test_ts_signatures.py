@@ -1080,8 +1080,20 @@ SHORTER = {
     # 66 was stable across both measurements and looked like confirmation. **A number
     # that survives a broken instrument is not thereby checked.**
     #
-    # The fourteen rows that need something else too:
-    #   AvgPool2d, MaxPool1d, MaxPool3d      padding, ceilMode, dilation, returnIndices
+    # **14 → 11.** The three poolings left. `AvgPool2d` was short because it called a
+    # two-argument kernel while its 1-D and 3-D siblings went through `poolND`, which
+    # has the other four; the two maximums were short because `poolND` refused padding
+    # for the maximum, on the ground that its backward reads the input at each window
+    # and a padded position has none — which the average had answered one function
+    # away. `dilation` is refused on all three and **present**, because a refused seat
+    # cannot be taken by the argument after it.
+    #
+    # Adding `padding` and `ceilMode` to the two maximums without the two seats between
+    # them put `ceilMode` where torch puts `dilation`. **This line caught it in the run
+    # that added them** — `shifted` went to 2 while `shorter` fell — which is why the
+    # count is of positions and not of names.
+    #
+    # The eleven rows that need something else too:
     #   ConvTranspose1d/2d/3d                paddingMode
     #   LazyInstanceNorm1d/2d/3d             momentum, affine, trackRunningStats, bias
     #   LazyLinear                           bias

@@ -1163,6 +1163,354 @@ export async function sanitizeKeypoints(
   ];
 }
 
+/* ── sampling a feature map at coordinates that are not integers ──────────────
+ *
+ * **Eleven names in `ops` waited on one piece of arithmetic**, and their rows on the
+ * Python side read *it crops from a feature map. A feature map comes from a model* —
+ * true of where the tensor came from, not of what the function needs.
+ *
+ * **This side computes in JavaScript numbers, as the rest of this file does.** The
+ * Python `roi_align` is written in the backend's own operations so that a gradient
+ * reaches the feature map; here `boxIou` and the losses beside it all read to an array
+ * and write a tensor back, and one differentiable function among value-level neighbours
+ * would be the odder thing. What that costs is written into the gap table rather than
+ * left for somebody to discover: a detector trained in the browser would want the
+ * gradient, and this does not give it.
+ */
+
+interface Feature {
+  values: number[];
+  batch: number;
+  channels: number;
+  height: number;
+  width: number;
+}
+
+async function featureOf(input: Tensor, where: string): Promise<Feature> {
+  const shape = input.shape as number[];
+  if (shape.length !== 4) {
+    throw new Error(`${where} expects a (N, C, H, W) tensor — got ${shape.length} axes.`);
+  }
+  return {
+    values: Array.from(await input.toArray()),
+    batch: shape[0] ?? 0,
+    channels: shape[1] ?? 0,
+    height: shape[2] ?? 0,
+    width: shape[3] ?? 0,
+  };
+}
+
+/**
+ * One value out of a feature map at a fractional `(y, x)`.
+ *
+ * **A sample outside the map contributes zero, and is still counted.** Not the clamped
+ * edge value — torchvision's own Python reference clamps and its compiled kernel does
+ * not, and the kernel is what a caller meets. Measured on the Python side: a box hanging
+ * half off the left edge comes back at exactly twice torchvision's answer when the
+ * clamping rule is used, one real sample and one zero averaged over two.
+ *
+ * The last row and column have no neighbour above them, so the high index is held there
+ * and the coordinate is snapped with it — moving one without the other weighs a
+ * neighbour that is not the one being read.
+ */
+function sampleAt(f: Feature, image: number, channel: number, y: number, x: number): number {
+  if (y < -1 || y > f.height || x < -1 || x > f.width) return 0;
+  const yy = Math.max(y, 0);
+  const xx = Math.max(x, 0);
+  let yLow = Math.floor(yy);
+  let xLow = Math.floor(xx);
+  let yHigh = yLow + 1;
+  let xHigh = xLow + 1;
+  let dy = yy;
+  let dx = xx;
+  if (yLow >= f.height - 1) {
+    yHigh = f.height - 1;
+    yLow = f.height - 1;
+    dy = yLow;
+  }
+  if (xLow >= f.width - 1) {
+    xHigh = f.width - 1;
+    xLow = f.width - 1;
+    dx = xLow;
+  }
+  const ly = dy - yLow;
+  const lx = dx - xLow;
+  const hy = 1 - ly;
+  const hx = 1 - lx;
+  const plane = (image * f.channels + channel) * f.height * f.width;
+  const at = (r: number, c: number) => f.values[plane + r * f.width + c] ?? 0;
+  return hy * hx * at(yLow, xLow) + hy * lx * at(yLow, xHigh)
+    + ly * hx * at(yHigh, xLow) + ly * lx * at(yHigh, xHigh);
+}
+
+/** `(k, 5)` rows — a batch index and four coordinates. */
+async function roiRows(boxes: Tensor): Promise<number[][]> {
+  const flat = Array.from(await boxes.toArray());
+  if (flat.length % 5 !== 0) {
+    throw new Error(
+      `boxes has ${flat.length} numbers, which is not a whole number of `
+      + "(batch, x1, y1, x2, y2) rows.",
+    );
+  }
+  const out: number[][] = [];
+  for (let i = 0; i < flat.length; i += 5) {
+    out.push([flat[i] ?? 0, flat[i + 1] ?? 0, flat[i + 2] ?? 0,
+              flat[i + 3] ?? 0, flat[i + 4] ?? 0]);
+  }
+  return out;
+}
+
+function pairOfSizes(outputSize: number | readonly number[]): [number, number] {
+  if (typeof outputSize === "number") return [outputSize, outputSize];
+  return [outputSize[0] ?? 1, outputSize[1] ?? outputSize[0] ?? 1];
+}
+
+/**
+ * Crop each box out of the feature map at a fixed size, **without rounding it.**
+ *
+ * That is the whole difference from `roiPool` below and what the paper is named for: a
+ * box's edges land between pixels, and rounding them to the grid moves the crop by up to
+ * half a cell.
+ *
+ * - **`spatialScale` is how much smaller the map is than the image.** A stride-16
+ *   backbone wants `1/16`; left at 1 this samples the top-left sixteenth of everything.
+ * - **`samplingRatio = -1` means as many samples as the bin is wide**, computed per box.
+ * - **`aligned` shifts by half a pixel** and stops clamping the box to a minimum size of
+ *   one. It is the correction to the original implementation and it moves every output;
+ *   `false` is the default because that is what the released weights were trained with.
+ */
+export async function roiAlign(
+  input: Tensor,
+  boxes: Tensor,
+  outputSize: number | readonly number[],
+  spatialScale = 1,
+  samplingRatio = -1,
+  aligned = false,
+): Promise<Tensor> {
+  const f = await featureOf(input, "roiAlign");
+  const rois = await roiRows(boxes);
+  const [ph, pw] = pairOfSizes(outputSize);
+  const out: number[] = [];
+  const shift = aligned ? 0.5 : 0;
+  for (const roi of rois) {
+    const image = Math.trunc(roi[0] ?? 0);
+    const startW = (roi[1] ?? 0) * spatialScale - shift;
+    const startH = (roi[2] ?? 0) * spatialScale - shift;
+    let roiW = (roi[3] ?? 0) * spatialScale - shift - startW;
+    let roiH = (roi[4] ?? 0) * spatialScale - shift - startH;
+    if (!aligned) {
+      roiW = Math.max(roiW, 1);
+      roiH = Math.max(roiH, 1);
+    }
+    const binH = roiH / ph;
+    const binW = roiW / pw;
+    const gridH = samplingRatio > 0 ? samplingRatio : Math.ceil(roiH / ph);
+    const gridW = samplingRatio > 0 ? samplingRatio : Math.ceil(roiW / pw);
+    const count = Math.max(gridH * gridW, 1);
+    for (let c = 0; c < f.channels; c++) {
+      for (let i = 0; i < ph; i++) {
+        for (let j = 0; j < pw; j++) {
+          let total = 0;
+          for (let iy = 0; iy < gridH; iy++) {
+            const y = startH + i * binH + (iy + 0.5) * (binH / gridH);
+            for (let ix = 0; ix < gridW; ix++) {
+              const x = startW + j * binW + (ix + 0.5) * (binW / gridW);
+              total += sampleAt(f, image, c, y, x);
+            }
+          }
+          out.push(total / count);
+        }
+      }
+    }
+  }
+  return Tensor.from(out, [rois.length, f.channels, ph, pw]);
+}
+
+/**
+ * The **maximum** in each bin, with the box rounded to the grid.
+ *
+ * Faster R-CNN's pooling, and the thing `roiAlign` was written to replace.
+ *
+ * **An empty bin answers zero rather than negative infinity.** A box small enough that a
+ * bin covers no cell at all is real — a distant object on a stride-32 map — and a
+ * maximum over nothing has no value to give.
+ *
+ * **The rounding is C's, halves away from zero**, where JavaScript's `Math.round` sends
+ * `-0.5` to `-0` and `0.5` to `1`. At `spatialScale = 1` nothing ever lands on a half;
+ * at `0.5` every odd coordinate does.
+ */
+export async function roiPool(
+  input: Tensor,
+  boxes: Tensor,
+  outputSize: number | readonly number[],
+  spatialScale = 1,
+): Promise<Tensor> {
+  const f = await featureOf(input, "roiPool");
+  const rois = await roiRows(boxes);
+  const [ph, pw] = pairOfSizes(outputSize);
+  const out: number[] = [];
+  for (const roi of rois) {
+    const image = Math.trunc(roi[0] ?? 0);
+    const left = cRound((roi[1] ?? 0) * spatialScale);
+    const top = cRound((roi[2] ?? 0) * spatialScale);
+    const right = cRound((roi[3] ?? 0) * spatialScale);
+    const bottom = cRound((roi[4] ?? 0) * spatialScale);
+    const boxH = Math.max(bottom - top + 1, 1);
+    const boxW = Math.max(right - left + 1, 1);
+    for (let c = 0; c < f.channels; c++) {
+      const plane = (image * f.channels + c) * f.height * f.width;
+      for (let i = 0; i < ph; i++) {
+        for (let j = 0; j < pw; j++) {
+          const y0 = Math.min(Math.max(top + Math.floor((i * boxH) / ph), 0), f.height);
+          const y1 = Math.min(Math.max(top + Math.ceil(((i + 1) * boxH) / ph), 0), f.height);
+          const x0 = Math.min(Math.max(left + Math.floor((j * boxW) / pw), 0), f.width);
+          const x1 = Math.min(Math.max(left + Math.ceil(((j + 1) * boxW) / pw), 0), f.width);
+          if (y1 <= y0 || x1 <= x0) {
+            out.push(0);
+            continue;
+          }
+          let best = -Infinity;
+          for (let r = y0; r < y1; r++) {
+            for (let cc = x0; cc < x1; cc++) {
+              best = Math.max(best, f.values[plane + r * f.width + cc] ?? 0);
+            }
+          }
+          out.push(best);
+        }
+      }
+    }
+  }
+  return Tensor.from(out, [rois.length, f.channels, ph, pw]);
+}
+
+/** C's `round` — to the nearest, halves **away from zero**. */
+function cRound(value: number): number {
+  return Math.sign(value) * Math.floor(Math.abs(value) + 0.5);
+}
+
+function psChannels(f: Feature, ph: number, pw: number): number {
+  if (f.channels % (ph * pw) !== 0) {
+    throw new Error("input channels must be a multiple of pooling height * pooling width");
+  }
+  return f.channels / (ph * pw);
+}
+
+/**
+ * `roiAlign`, **but each bin reads its own bank of channels.**
+ *
+ * R-FCN's pooling: the convolutions before it produce a map that already knows *where*
+ * in the object each channel is looking, so the position is in the channel index.
+ *
+ * **The output channel is the slow axis and the bin is the fast one** —
+ * `c * ph * pw + (i * pw + j)`. The other order gives an output of exactly the right
+ * shape built from the wrong channels.
+ *
+ * **It has no `aligned` flag and the correction is on.** `roiAlign` grew a flag and
+ * defaults it to `false`; this always subtracts the half pixel and never clamps the box
+ * to a minimum size. The absent argument is not the absent behaviour.
+ */
+export async function psRoiAlign(
+  input: Tensor,
+  boxes: Tensor,
+  outputSize: number,
+  spatialScale = 1,
+  samplingRatio = -1,
+): Promise<Tensor> {
+  const f = await featureOf(input, "psRoiAlign");
+  const rois = await roiRows(boxes);
+  const [ph, pw] = pairOfSizes(outputSize);
+  const outChannels = psChannels(f, ph, pw);
+  const out: number[] = [];
+  for (const roi of rois) {
+    const image = Math.trunc(roi[0] ?? 0);
+    const startW = (roi[1] ?? 0) * spatialScale - 0.5;
+    const startH = (roi[2] ?? 0) * spatialScale - 0.5;
+    const roiW = (roi[3] ?? 0) * spatialScale - 0.5 - startW;
+    const roiH = (roi[4] ?? 0) * spatialScale - 0.5 - startH;
+    const binH = roiH / ph;
+    const binW = roiW / pw;
+    const gridH = samplingRatio > 0 ? samplingRatio : Math.ceil(binH);
+    const gridW = samplingRatio > 0 ? samplingRatio : Math.ceil(binW);
+    const count = Math.max(gridH * gridW, 1);
+    for (let c = 0; c < outChannels; c++) {
+      for (let i = 0; i < ph; i++) {
+        for (let j = 0; j < pw; j++) {
+          const bank = c * ph * pw + i * pw + j;
+          let total = 0;
+          for (let iy = 0; iy < gridH; iy++) {
+            const y = startH + i * binH + (iy + 0.5) * (binH / gridH);
+            for (let ix = 0; ix < gridW; ix++) {
+              const x = startW + j * binW + (ix + 0.5) * (binW / gridW);
+              total += sampleAt(f, image, bank, y, x);
+            }
+          }
+          out.push(total / count);
+        }
+      }
+    }
+  }
+  return Tensor.from(out, [rois.length, outChannels, ph, pw]);
+}
+
+/**
+ * `roiPool`'s grid with `psRoiAlign`'s channel banks — and **an average, not a maximum.**
+ *
+ * That is the one thing here that reads like a typo and is not: a maximum over a
+ * position-sensitive bank would pick the single most confident position and throw away
+ * the vote, which is the opposite of what the bank is for.
+ *
+ * **Two things differ from `roiPool`** and both only show on a box that runs off the
+ * map: the rounding takes the start inside it, and the clip is to the last index rather
+ * than to the size.
+ */
+export async function psRoiPool(
+  input: Tensor,
+  boxes: Tensor,
+  outputSize: number,
+  spatialScale = 1,
+): Promise<Tensor> {
+  const f = await featureOf(input, "psRoiPool");
+  const rois = await roiRows(boxes);
+  const [ph, pw] = pairOfSizes(outputSize);
+  const outChannels = psChannels(f, ph, pw);
+  const out: number[] = [];
+  for (const roi of rois) {
+    const image = Math.trunc(roi[0] ?? 0);
+    const left = cRound((roi[1] ?? 0) * spatialScale);
+    const top = cRound((roi[2] ?? 0) * spatialScale);
+    const right = cRound((roi[3] ?? 0) * spatialScale);
+    const bottom = cRound((roi[4] ?? 0) * spatialScale);
+    const boxH = Math.max(bottom - top, 0.1);
+    const boxW = Math.max(right - left, 0.1);
+    for (let c = 0; c < outChannels; c++) {
+      for (let i = 0; i < ph; i++) {
+        for (let j = 0; j < pw; j++) {
+          const y0 = Math.min(Math.max(Math.floor((i * boxH) / ph + top), 0), f.height - 1);
+          const y1 = Math.min(Math.max(Math.ceil(((i + 1) * boxH) / ph + top), 0), f.height - 1);
+          const x0 = Math.min(Math.max(Math.floor((j * boxW) / pw + left), 0), f.width - 1);
+          const x1 = Math.min(Math.max(Math.ceil(((j + 1) * boxW) / pw + left), 0), f.width - 1);
+          const bank = c * ph * pw + i * pw + j;
+          const plane = (image * f.channels + bank) * f.height * f.width;
+          if (y1 <= y0 || x1 <= x0) {
+            out.push(0);
+            continue;
+          }
+          let total = 0;
+          let seen = 0;
+          for (let r = y0; r < y1; r++) {
+            for (let cc = x0; cc < x1; cc++) {
+              total += f.values[plane + r * f.width + cc] ?? 0;
+              seen += 1;
+            }
+          }
+          out.push(seen ? total / seen : 0);
+        }
+      }
+    }
+  }
+  return Tensor.from(out, [rois.length, outChannels, ph, pw]);
+}
+
 // ── v2's corner warps ────────────────────────────────────────────────────────
 //
 // `affine`, `rotate`, `perspective` and `elastic`, for boxes, masks and keypoints —

@@ -285,6 +285,34 @@ def run(headed=False, verbose=False):
 # head of a reason string and `test_site.py` reads `아직` to split the remainder into
 # backlog and never. They move when those checks move, and not before.
 NOT_PORTED = {
+    # **v2's type system.** `tv_tensors` are `torch.Tensor` subclasses that carry a
+    # label — a box's format and canvas, a mask's being a mask — and the thirteen names
+    # here are the dispatch that reads those labels off a flattened sample.
+    #
+    # borch.ts has no subclassable tensor to hang a label on: `Tensor` there is a handle
+    # to a GPU buffer, and the thing that makes a tv_tensor work on the Python side is
+    # that `isinstance` answers. Carrying this over is designing a second mechanism, not
+    # writing a second body — a tagged wrapper, or a parallel dict of metadata, and
+    # which one is a decision nobody has taken.
+    "v2::": (13, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
+                        "to a buffer and cannot be subclassed to carry a label, so this "
+                        "needs a mechanism that side does not have rather than a body "
+                        "it has not been given"),
+    # **The seven losses torch keeps at top level as well as under `F`.** They were
+    # declined as *the raw ATen op — its signature differs from F's*, which was about
+    # why the name looks redundant rather than about what was missing; the arithmetic
+    # was `F`'s and already there.
+    #
+    # borch.ts has the `F` side of all seven. What it does not have is a **top level**
+    # to put a second name on: over there `F` is the namespace and there is no `torch.`
+    # beside it, so `borch.klDiv` would be a name this side invented rather than one
+    # torch has. The integer reduction is the same — `F`'s takes the word, and a second
+    # spelling that takes a number is a Python-side fact about two bindings of one
+    # library.
+    "loss::": (18, "파이썬 — torch keeps these seven at top level as well as "
+                         "under `F`, with an integer reduction and a different default. "
+                         "borch.ts has one namespace, so there is no second place to "
+                         "put them"),
     # **`unpool::` came back at 46 and is down to 6.** The Python side printed
     # twenty-nine of sixty-four layers differently from torch and nothing was watching;
     # this side had the same hole for the same reason, and forty of the strings now
@@ -306,16 +334,30 @@ NOT_PORTED = {
     # being read after its cause is gone; this one lasted about an hour, and only
     # because the same change that ended it was made by someone who then read this
     # line.
-    "unpool::": (5, "없음 — three ask about arguments borch.ts does not take "
-                    "(MaxPool2d's padding/dilation/ceilMode, Flatten's two) and two "
-                    "about `AdaptiveAvgPool2d`, which is not a name over there"),
+    "unpool::": (4, "없음 — two ask about arguments borch.ts does not take "
+                        "(MaxPool2d's `dilation`, which no pooling kernel here "
+                        "dilates, and Flatten's two) and two about "
+                        "`AdaptiveAvgPool2d`, which is not a name over there. "
+                        "**The maximum's padding and ceilMode left this row** with "
+                        "AvgPool2d's: they were refused on the ground that the "
+                        "maximum's backward reads the input at each window position "
+                        "and a padded one has none, and the average had answered that "
+                        "one function away — take the padding off the coordinate and "
+                        "skip what falls outside"),
     # **`ops::` was a row here once, at 11, and was emptied by porting all of them.**
     # It is back at 8 for a different reason: the eleven were box geometry on plain
     # arrays and these eight are `nn.Module` layers whose weights have to be written
     # from the same numbers on both sides. borch.ts has the layers; what is missing is
     # the harness that fills a module's parameters and buffers by name, which the
     # Python cases grew for this and the TS runner has never needed.
-    "ops::": (51, "아직 — everything the detector half of `ops` grew: five layer classes, six structured dropouts, eight RoI names, the pyramid and the level-picker, and the deformable convolution. The module cases need a way to write a module's parameters and buffers by name, which nothing over there does yet; the functions need only the writing"),
+    "ops::": (39, "아직 — the five layer classes, the six structured dropouts, the "
+                  "pyramid, the level-picker and the deformable convolution. The module "
+                  "cases need a harness for writing parameters and buffers by name; the "
+                  "dropouts' random half would need a shared generator rather than a "
+                  "shared answer. **The eight RoI names crossed** — the sampler is "
+                  "written here now, in JavaScript numbers like the rest of this file "
+                  "rather than in tensor operations, so the browser side computes the "
+                  "same values and hands back no gradient"),
     # 104 → 103. What `dtype::없는이름::` was asking about moved to `narrow_copy` and
     # `unsafe_chunk` — torch actually answers the earlier one, so it was no absent name.
     # 103 → 111 → 147 → 156 → 157. Whether the dtype aliases and the factories really

@@ -1530,6 +1530,64 @@ function addOps(out: Map<string, Case>): void {
     [-1, 2, 0, 0.5, -3, 8, -40, 40, -0.25], [3, 3]);
   const hits = () => Tensor.from([0, 1, 1, 1, 0, 0, 1, 0, 1], [3, 3]);
 
+  // ── sampling a feature map at coordinates that are not integers ────────────
+  //
+  // **The boxes are arranged here too, and three of the five are why.** One fits, one
+  // hangs off the top-left, one off the bottom-right, one is smaller than a cell, and
+  // one is in the second image of the batch. Written with the inside ones alone this
+  // whole block passes against a reader that clamps a sample to the edge instead of
+  // zeroing it — which is what torchvision's *own Python reference* does, and what the
+  // first version of the Python side did.
+  const featureMap = () => {
+    const values: number[] = [];
+    for (let i = 0; i < 2 * 3 * 7 * 9; i++) values.push(((i % 17) * 0.3));
+    return Tensor.from(values, [2, 3, 7, 9]);
+  };
+  const rois = () => Tensor.from(
+    [0, 1, 1, 6, 5, 0, -3, -2, 4, 3, 0, 6, 4, 20, 20, 0, 2, 2, 2.4, 2.4,
+     1, 0, 0, 8, 6], [5, 5]);
+  // Eight channels so that `pooled = 2` leaves two out — the position-sensitive pair
+  // needs `out * ph * pw`, and one output channel would hide the channel ordering.
+  const psMap = () => {
+    const values: number[] = [];
+    for (let i = 0; i < 1 * 8 * 7 * 9; i++) values.push(((i % 13) * 0.4));
+    return Tensor.from(values, [1, 8, 7, 9]);
+  };
+  const psRois = () => Tensor.from(
+    [0, 1, 1, 6, 5, 0, -3, -2, 4, 3, 0, 6, 4, 20, 20, 0, 2, 2, 2.4, 2.4], [4, 5]);
+
+  // **`aligned` moves every value**, so both settings are asked.
+  // **The Python cases flatten before freezing**, so these do too — what is compared is
+  // the values in order, and the shape is asked on that side.
+  const flat = (make: () => Promise<Tensor>) =>
+    async () => (await make()).reshape([-1]);
+
+  out.set("ops::roi_align(aligned=False)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2])));
+  out.set("ops::roi_align(aligned=True)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2], 1, -1, true)));
+  out.set("ops::roi_align(sampling_ratio=2)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2], 1, 2)));
+  out.set("ops::roi_align(sampling_ratio=1)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2], 1, 1)));
+  out.set("ops::roi_align(spatial_scale=0.5)",
+    flat(() => ops.roiAlign(featureMap(), rois(), [3, 2], 0.5)));
+  out.set("ops::roi_align(output_size=1)",
+    flat(() => ops.roiAlign(featureMap(), rois(), 1)));
+  // **The rounding is C's, not JavaScript's.** `Math.round(-0.5)` is `-0` where C gives
+  // `-1`, and `spatial_scale = 0.5` puts every odd coordinate on a half.
+  out.set("ops::roi_pool", flat(() => ops.roiPool(featureMap(), rois(), [3, 2])));
+  out.set("ops::roi_pool(spatial_scale=0.5, halves)",
+    flat(() => ops.roiPool(featureMap(), rois(), [3, 2], 0.5)));
+  // **The output channel is the slow axis and the bin is the fast one.**
+  out.set("ops::ps_roi_align", flat(() => ops.psRoiAlign(psMap(), psRois(), 2)));
+  out.set("ops::ps_roi_align(sampling_ratio=2)",
+    flat(() => ops.psRoiAlign(psMap(), psRois(), 2, 1, 2)));
+  // **An average, not a maximum** — the one thing here that reads like a typo.
+  out.set("ops::ps_roi_pool", flat(() => ops.psRoiPool(psMap(), psRois(), 2)));
+  out.set("ops::ps_roi_pool(spatial_scale=0.5)",
+    flat(() => ops.psRoiPool(psMap(), psRois(), 2, 0.5)));
+
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look
   // identical either way**, so a wrong one is a wrong answer with nothing raised — and
@@ -3352,6 +3410,30 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("unpool::층::AdaptiveMaxPool2d 자리",
     () => new nn.AdaptiveMaxPool2d(2, true).pick(plane()).indices);
 
+  // **The maximum's padding, which only its repr used to be asked about.** It was
+  // refused here on the ground that the backward reads the input at each window
+  // position and a padded position has none; the average had the answer one function
+  // away — take the padding off the coordinate and skip what falls outside. A repr is
+  // a string about the arguments, so the case that existed failed on a refusal and
+  // would have passed on a wrong answer.
+  for (const [tag, pad, ceil] of [["padding", 1, false], ["ceil", 0, true],
+                                  ["padding, ceil", 1, true]] as const) {
+    out.set(`unpool::자리::max_pool2d(${tag})`,
+      () => plane().poolND("max", 3, 2, pad, ceil));
+    out.set(`unpool::자리::MaxPool2d(${tag})`,
+      () => new nn.MaxPool2d(3, 2, pad, 1, false, ceil).call(plane()));
+  }
+  // **The gradient is where a wrong window shows.** Forward, a cell read past the edge
+  // is one number among a maximum's; backward, the whole window's gradient goes to
+  // whichever cell it decided had won, so reading the wrong one moves the gradient and
+  // leaves the sum alone.
+  out.set("unpool::자리::grad::max_pool2d(padding)", () => {
+    const x = grid([1, 1, 4, 4]);
+    x.requiresGrad = true;
+    x.poolND("max", 3, 2, 1, false).sum().backward();
+    return gradOf(x, "maxPool padding");
+  });
+
   out.set("unpool::grad::자리 판의 풀링", () => {
     const x = grid([1, 1, 4, 4]);
     x.requiresGrad = true;
@@ -3628,6 +3710,11 @@ function addUnpool(out: Map<string, Case>): void {
     ["LayerNorm(shape, no affine)", () => new nn.LayerNorm([2, 4], 1e-5, false)],
     ["MaxPool1d", () => new nn.MaxPool1d(2)],
     ["MaxPool2d", () => new nn.MaxPool2d(2)],
+    // **This was the row this side carried as declined**, and it was declined for
+    // `padding` and `ceilMode` — which the kernel now takes. `dilation` is what is
+    // left, and it keeps its seat so that nothing else lands in it.
+    ["MaxPool2d(stride, padding, ceil)",
+      () => new nn.MaxPool2d(3, 2, 1, 1, false, true)],
     ["MaxPool3d", () => new nn.MaxPool3d(2)],
     ["AvgPool1d", () => new nn.AvgPool1d(2)],
     ["AvgPool2d", () => new nn.AvgPool2d(2)],
@@ -4468,7 +4555,7 @@ function addLoss(out: Map<string, Case>): void {
   // **torch's deprecated pair, and it beats `reduction`.** The last two read wrongly
   // at a glance and are the point: all three given folds to the *mean*, and the
   // positional string lands on `sizeAverage`, which is truthy, so it folds there too.
-  // Nothing else in this file runs `legacyReduction`.
+  // The `자리::` group below runs the same fold under `F`.
   const legacy: [string, () => Tensor][] = [
     ["size_average=False", () => new nn.L1Loss(false).call(a(), b())],
     ["reduce=False", () => new nn.L1Loss(null, false).call(a(), b())],
@@ -4479,6 +4566,54 @@ function addLoss(out: Map<string, Case>): void {
       () => new nn.L1Loss("sum" as unknown as boolean).call(a(), b())],
   ];
   for (const [name, fn] of legacy) out.set(`loss::가장자리::${name}`, fn);
+
+  // **The same pair, under `F` rather than on a layer.** Everything in `value`
+  // above gives `reduction` by name, and a keyword survives a signature whose
+  // seats are wrong — a position does not. `F`'s exports were short of torch's
+  // list by exactly these two seats, so torch's own line was a type error here
+  // and, on the Python binding reading the same table, a value silently at the
+  // default: `F.soft_margin_loss(a, b, "sum")` set `size_average`, which is
+  // neither null nor false, so the fold answered `mean`.
+  const seats: [string, (r: "none" | "sum" | "mean") => Tensor][] = [
+    ["soft_margin", (r) => F.softMarginLoss(x(), sgn(), null, null, r)],
+    ["hinge_embedding",
+      (r) => F.hingeEmbeddingLoss(x(), sgn(), 1.0, null, null, r)],
+    ["multilabel_margin", (r) => F.multilabelMarginLoss(
+      mm(), Tensor.from([2, -1, -1, 0, -1, -1], [2, 3]), null, null, r)],
+    ["kl_div", (r) => F.klDiv(logp(), tgtp(), null, null, r)],
+    // torch's third seat here **is** `reduction` — this one is newer and never
+    // carried the pair, so nothing steps over anything and it agreed all along.
+    // It is asked beside the others as the control.
+    ["huber", (r) => F.huberLoss(x(), y(), r)],
+  ];
+  for (const [name, fn] of seats) {
+    for (const r of ["none", "sum", "mean"] as const) {
+      out.set(`loss::자리::${name}(${r})`, () => fn(r));
+    }
+  }
+  // `multilabelSoftMarginLoss` takes a **`weight` in the third seat** on both
+  // sides, so this is the one place in the group where the seat is filled rather
+  // than stepped over.
+  out.set("loss::자리::multilabel_soft_margin(weight)",
+    () => F.multilabelSoftMarginLoss(
+      Tensor.from([0.5, -1, 2], [1, 3]), Tensor.from([1, 0, 1], [1, 3]),
+      Tensor.from([1, 2, 3], [3])));
+  out.set("loss::자리::multilabel_soft_margin(weight, none)",
+    () => F.multilabelSoftMarginLoss(
+      Tensor.from([0.5, -1, 2], [1, 3]), Tensor.from([1, 0, 1], [1, 3]),
+      Tensor.from([1, 2, 3], [3]), null, null, "none"));
+  // **One row could not tell a kept batch from a collapsed one.** The single
+  // `multilabel_margin` case above has one row, and the core meanwhile summed the
+  // whole batch into one number — `none` handed back the sum and `mean` divided it
+  // by one. This side kept the rows the whole time and had nobody to disagree with.
+  out.set("loss::multilabel_margin(두 행, none)",
+    () => F.multilabelMarginLoss(
+      mm(), Tensor.from([2, -1, -1, 0, -1, -1], [2, 3]), null, null, "none"));
+  // A row whose target starts at −1 has **no labels at all**: its loss is zero and
+  // the rows around it must not shift up to fill the seat.
+  out.set("loss::multilabel_margin(빈 행)",
+    () => F.multilabelMarginLoss(
+      mm(), Tensor.from([-1, -1, -1, 0, 1, -1], [2, 3]), null, null, "none"));
 
   const layers: [string, () => Tensor][] = [
     // `delta` moved behind `reduction` to match torch. The Python case passes
@@ -9165,6 +9300,23 @@ function addMethod(out: Map<string, Case>): void {
     // **The one place whose argument order is reversed from the function's** — the method
     // is `x.where(condition, other)`.
     ["where", () => vec().where(Tensor.from(M_MASK, [4]), other())],
+    // **The three broadcast against each other.** Every `where` above hands all
+    // three the same shape, which is the one arrangement that cannot tell a
+    // broadcasting `where` from one that walks three buffers at the same offset —
+    // and the second is what this was.
+    ["where(마스크가 좁다)", () => {
+      const wide = Tensor.from(
+        Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]);
+      const thin = Tensor.from(
+        Array.from({ length: 8 }, (_, i) => (i % 3 > 0 ? 1 : 0)), [2, 1, 4]);
+      return wide.where(thin, Tensor.zeros([2, 3, 4]));
+    }],
+    ["where(가지가 좁다)", () => {
+      const wide = Tensor.from(
+        Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]);
+      const narrow = Tensor.from([0, 1, 2, 3], [4]);
+      return narrow.where(wide.binary("gt", Tensor.full([], 5)), wide);
+    }],
     ["gather", () => mat().gather(1, Tensor.from([0, 2, 1, 0, 2, 1], [3, 2]))],
     ["argsort", () => vec().argsort(0)],
     ["sort", () => vec().sort(0).values],

@@ -125,8 +125,13 @@ export function hardtanh(input: Tensor, minVal = -1.0, maxVal = 1.0): Tensor {
   return input.hardtanh(minVal, maxVal);
 }
 
-export function hingeEmbeddingLoss(input: Tensor, target: Tensor, margin = 1.0, reduction: Reduction = "mean"): Tensor {
-  return input.hingeEmbeddingLoss(target, margin, reduction);
+export function hingeEmbeddingLoss(
+  input: Tensor, target: Tensor, margin = 1.0,
+  sizeAverage: boolean | null = null, reduce: boolean | null = null,
+  reduction: Reduction = "mean",
+): Tensor {
+  return input.hingeEmbeddingLoss(
+    target, margin, legacyReduction(sizeAverage, reduce, reduction));
 }
 
 
@@ -134,8 +139,13 @@ export function instanceNorm(input: Tensor, eps = 1e-5): Tensor {
   return input.instanceNorm(eps);
 }
 
-export function klDiv(input: Tensor, target: Tensor, reduction: Reduction | "batchmean" = "mean", logTarget = false): Tensor {
-  return input.klDiv(target, reduction, logTarget);
+export function klDiv(
+  input: Tensor, target: Tensor,
+  sizeAverage: boolean | null = null, reduce: boolean | null = null,
+  reduction: Reduction | "batchmean" = "mean", logTarget = false,
+): Tensor {
+  return input.klDiv(
+    target, legacyReduction(sizeAverage, reduce, reduction), logTarget);
 }
 
 export function l1Loss(
@@ -203,17 +213,25 @@ export function multiMarginLoss(
   return input.multiMarginLoss(target, p, margin, weight, reduction);
 }
 
-export function multilabelMarginLoss(input: Tensor, target: Tensor, reduction: Reduction = "mean"): Tensor {
-  return input.multilabelMarginLoss(target, reduction);
+export function multilabelMarginLoss(
+  input: Tensor, target: Tensor,
+  sizeAverage: boolean | null = null, reduce: boolean | null = null,
+  reduction: Reduction = "mean",
+): Tensor {
+  return input.multilabelMarginLoss(
+    target, legacyReduction(sizeAverage, reduce, reduction));
 }
 
 // `weight` sits between `target` and `reduction`, which is where torch's
 // `F.multilabel_soft_margin_loss(input, target, weight, size_average, reduce,
 // reduction)` puts it.
 export function multilabelSoftMarginLoss(
-  input: Tensor, target: Tensor, weight?: Tensor, reduction: Reduction = "mean",
+  input: Tensor, target: Tensor, weight?: Tensor,
+  sizeAverage: boolean | null = null, reduce: boolean | null = null,
+  reduction: Reduction = "mean",
 ): Tensor {
-  return input.multilabelSoftMarginLoss(target, weight, reduction);
+  return input.multilabelSoftMarginLoss(
+    target, weight, legacyReduction(sizeAverage, reduce, reduction));
 }
 
 export function nllLoss(
@@ -285,8 +303,20 @@ export function smoothL1Loss(
   return input.smoothL1Loss(target, beta, reduction);
 }
 
-export function softMarginLoss(input: Tensor, target: Tensor, reduction: Reduction = "mean"): Tensor {
-  return input.softMarginLoss(target, reduction);
+/**
+ * torch's list, with **the deprecated `size_average`/`reduce` in the seats it keeps
+ * them in.** Left out, everything after moves forward and torch's own line stops
+ * compiling — see `binaryCrossEntropyWithLogits` above, where the same two seats
+ * were the whole defect. `legacyReduction` folds the pair and warns, which is what
+ * torch does with it.
+ */
+export function softMarginLoss(
+  input: Tensor, target: Tensor,
+  sizeAverage: boolean | null = null, reduce: boolean | null = null,
+  reduction: Reduction = "mean",
+): Tensor {
+  return input.softMarginLoss(
+    target, legacyReduction(sizeAverage, reduce, reduction));
 }
 
 export function softmax(input: Tensor, dim = 0): Tensor {

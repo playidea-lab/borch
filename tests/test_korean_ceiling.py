@@ -172,7 +172,24 @@ CEILINGS = {
     # forty layer reprs ported to this side are written with one template literal
     # instead of forty `out.set` lines, so the shared prefix `unpool::층::repr::`
     # carries a single 층. Written out longhand it would have been forty of them.
-    "borch-ts/test": 3370,
+    # 3370 → 3373. **Three characters**, and they are the ledger's own vocabulary: the
+    # seven top-level losses get a row, and a row's reason has to open with one of
+    # `아직` / `없음` / `별칭` / `파이썬` for `test_site.py` to split the remainder. This
+    # one is 파이썬.
+    # 3373 → 3375. Two more, and the same kind: v2's tv_tensor dispatch gets a row and
+    # its reason opens with 없음.
+    # 3375 → 3387. Twelve, and all of them **case names**, which is the allowed kind:
+    # `자리::` for the group asking torch's argument seats positionally, and
+    # `(두 행)` / `(빈 행)` for the two that give `multilabel_margin` a second row.
+    # The names have to be the same string on both sides — the golden is keyed by
+    # them — so the Python side's name is what this side must write.
+    # 3387 → 3398. Eleven, and case names again: `where` asked with a mask narrower
+    # than the values, and with a branch narrower than the mask. Every `where` case
+    # before them handed all three the same shape, which is the one arrangement that
+    # cannot tell broadcasting from three buffers read at the same offset.
+    # 3398 → 3404. Six, and case names again: the maximum's `자리::` group, which asks
+    # what its padding and `ceil_mode` compute rather than how the layer prints them.
+    "borch-ts/test": 3404,
 }
 
 

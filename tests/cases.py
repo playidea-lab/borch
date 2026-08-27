@@ -5050,6 +5050,38 @@ def unpool_cases(inp=None):
         add(f"층::repr::MaxUnpool{dim}d",
             lambda L, d=dim: repr(getattr(L.nn, f"MaxUnpool{d}d")(2)))
 
+    # ── the maximum's padding, which only its repr used to be asked about ──
+    #
+    # borch.ts refused `padding` and `ceil_mode` on the ground that the maximum's
+    # backward reads the input at each window position and a padded position has none.
+    # The average had the answer one function away all along: take the padding off the
+    # coordinate and skip what falls outside. So the only case that existed was the
+    # layer's repr — **which a refusal fails and a wrong answer passes**, because a
+    # repr is a string about the arguments and not about the pooling.
+    #
+    # The three below are about the pooling. A 3×3 window with stride 2 over a 4×4
+    # plane: with `padding=1` the corners are windows that hang off two sides at once,
+    # and with `ceil_mode` there is an extra row and column of windows that start
+    # inside and end outside. Both are places where a kernel that reads past the edge
+    # gives a plausible number rather than an error.
+    for _tag, _kw in (("padding", {"padding": 1}), ("ceil", {"ceil_mode": True}),
+                      ("padding, ceil", {"padding": 1, "ceil_mode": True})):
+        add(f"자리::max_pool2d({_tag})",
+            lambda L, k=_kw: F(L).max_pool2d(L.tensor(plane), 3, stride=2, **k))
+        add(f"자리::MaxPool2d({_tag})",
+            lambda L, k=_kw: L.nn.MaxPool2d(3, stride=2, **k)(L.tensor(plane)))
+
+    # **The gradient is where a wrong window shows.** Forward, a cell read past the
+    # edge is one number among a maximum's; backward, the whole window's gradient goes
+    # to whichever cell it decided had won, so reading the wrong cell moves the
+    # gradient to the wrong place and the sum stays the same.
+    def grad_padded(L):
+        x = L.tensor(plane, requires_grad=True)
+        F(L).max_pool2d(x, 3, stride=2, padding=1).sum().backward()
+        return x.grad
+
+    add("자리::grad::max_pool2d(padding)", grad_padded)
+
     # ── gradients ──
     def grad_pool(L):
         x = L.tensor(plane, requires_grad=True)
@@ -6879,6 +6911,57 @@ def loss_cases(inp=None):
         lambda L: F(L).soft_margin_loss(L.tensor(x), L.tensor(np.sign(y)),
                                         reduction="none"))
 
+    # ── 자리로 주는 reduction ──
+    #
+    # **Every loss case above gives `reduction` by keyword, and that is why none
+    # of them measured the argument order.** A keyword survives a table that has
+    # the seats wrong; a position does not. The binding read torch's call with a
+    # table that left out the deprecated `size_average`/`reduce` pair, so every
+    # seat after it moved forward and `F.soft_margin_loss(a, b, "sum")` set
+    # `size_average` — where a string is neither `None` nor `False`, so the fold
+    # reads it as the mean and the answer comes back at the default with no
+    # warning anywhere.
+    #
+    # torch keeps the pair for compatibility and these are the seats it really
+    # has. `huber_loss` is the newest and never carried the pair, so its third
+    # seat is `reduction` itself — which is what makes it worth asking beside
+    # the others rather than instead of them.
+    _sgn = np.sign(y)
+    for _tag, _fn in (
+            ("soft_margin", lambda L, r: F(L).soft_margin_loss(
+                L.tensor(x), L.tensor(_sgn), None, None, r)),
+            ("hinge_embedding", lambda L, r: F(L).hinge_embedding_loss(
+                L.tensor(x), L.tensor(_sgn), 1.0, None, None, r)),
+            ("multilabel_margin", lambda L, r: F(L).multilabel_margin_loss(
+                L.tensor(_LOSS_MM), L.tensor(np.array([[2, -1, -1], [0, -1, -1]],
+                                                      dtype=np.int64)),
+                None, None, r)),
+            ("kl_div", lambda L, r: F(L).kl_div(
+                F(L).log_softmax(L.tensor(x), dim=1),
+                F(L).softmax(L.tensor(y), dim=1), None, None, r)),
+            # The third seat here **is** `reduction` — no pair to step over.
+            ("huber", lambda L, r: F(L).huber_loss(
+                L.tensor(x), L.tensor(y), r)),
+    ):
+        for _r in ("none", "sum", "mean"):
+            add(f"자리::{_tag}({_r})", lambda L, f=_fn, r=_r: f(L, r))
+
+    # `multilabel_soft_margin_loss` takes a **`weight` in the third seat**, and
+    # borch.ts takes one too — so this is the one place in the group where the
+    # seat is filled rather than refused, and giving `reduction` by position
+    # would put a string into it.
+    add("자리::multilabel_soft_margin(weight)",
+        lambda L: F(L).multilabel_soft_margin_loss(
+            L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
+            L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32)),
+            L.tensor(np.array([1.0, 2.0, 3.0], dtype=np.float32))))
+    add("자리::multilabel_soft_margin(weight, none)",
+        lambda L: F(L).multilabel_soft_margin_loss(
+            L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
+            L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32)),
+            L.tensor(np.array([1.0, 2.0, 3.0], dtype=np.float32)),
+            None, None, "none"))
+
     # ── triplet ──
     triplets = (("기본", {}), ("margin=2", {"margin": 2.0}), ("p=1", {"p": 1}),
                 ("swap", {"swap": True}))
@@ -6922,6 +7005,24 @@ def loss_cases(inp=None):
         lambda L: F(L).multilabel_margin_loss(
             L.tensor(np.array([[0.1, 0.2, 0.4, 0.8]], dtype=np.float32)),
             L.tensor(np.array([[3, 0, -1, 1]], dtype=np.int64))))
+    # **One row could not tell a kept batch from a collapsed one.** The case above
+    # was written for the −1 convention and measured it; the core meanwhile summed
+    # the whole batch into one number, so `reduction="none"` handed back the sum
+    # and `mean` divided it by one. With a single row those are the same array,
+    # and all three implementations were green — borch.ts kept the rows the whole
+    # time and had no one to disagree with.
+    add("multilabel_margin(두 행, none)",
+        lambda L: F(L).multilabel_margin_loss(
+            L.tensor(_LOSS_MM),
+            L.tensor(np.array([[2, -1, -1], [0, -1, -1]], dtype=np.int64)),
+            reduction="none"))
+    # A row whose target starts at −1 has **no labels at all**, so its loss is
+    # zero and the rows around it must not shift up to fill the seat.
+    add("multilabel_margin(빈 행)",
+        lambda L: F(L).multilabel_margin_loss(
+            L.tensor(_LOSS_MM),
+            L.tensor(np.array([[-1, -1, -1], [0, 1, -1]], dtype=np.int64)),
+            reduction="none"))
 
     # ── distances ──
     add("pairwise_distance",
@@ -7190,6 +7291,66 @@ def loss_cases(inp=None):
                 return "멈췄다" if b in str(exc) else f"다른 문구 <{exc}>"
             return "안 던졌다"
         add(f"reduction::거절::{bad}", refuses)
+
+    # ── the seven that are also at top level, and are not the same function ──────
+    #
+    # `torch.kl_div` and `F.kl_div` are two different things. The gap table declined the
+    # top-level seven as *the raw ATen op — its signature differs from F's*, which is
+    # true and is about why the name looks redundant rather than about what is missing:
+    # the arithmetic is `F`'s and was already here.
+    #
+    # Three measured differences, each asked below:
+    #
+    # - **the reduction is an integer**, `0` none / `1` mean / `2` sum, where `F` takes
+    #   the word;
+    # - **it defaults to none**, where every `F` loss defaults to mean — so
+    #   `torch.kl_div(a, b)` gives a table and `F.kl_div(a, b)` gives a number;
+    # - **`poisson_nll_loss` has no defaults at all.**
+    #
+    # And a fourth that is about torch rather than about this library: **the declared
+    # schema says `reduction=1` and the binding defaults to `0`.** `aten::kl_div(...,
+    # int reduction=1)` is mean; `torch.kl_div(a, b)` returns a table. The behaviour is
+    # the authority, and the first case here is the one that pins it.
+    def _top(name, args, **kwargs):
+        def run(L):
+            given = [L.tensor(np.ascontiguousarray(one))
+                     if isinstance(one, np.ndarray) else one for one in args]
+            return getattr(L, name)(*given, **kwargs)
+        return run
+
+    _logp = np.log(np.exp(x) / np.exp(x).sum(-1, keepdims=True)).astype(np.float32)
+    _prob = (np.exp(y) / np.exp(y).sum(-1, keepdims=True)).astype(np.float32)
+    _binary = (y > 0).astype(np.float32)
+    _pm = np.where(y > 0, 1.0, -1.0).astype(np.float32)
+
+    for _tag, _r in (("기본=none", None), ("reduction=0", 0), ("reduction=1", 1),
+                     ("reduction=2", 2)):
+        _tail = [] if _r is None else [_r]
+        add(f"aten::kl_div({_tag})", _top("kl_div", [_logp, _prob] + _tail))
+        add(f"aten::bce_with_logits({_tag})",
+            _top("binary_cross_entropy_with_logits",
+                 [x, _binary, None, None] + _tail if _r is not None
+                 else [x, _binary]))
+    # **`log_target` is keyword-only**, as the schema has it.
+    add("aten::kl_div(log_target)",
+        _top("kl_div", [_logp, np.log(_prob).astype(np.float32), 1], log_target=True))
+    add("aten::cosine_embedding_loss", _top("cosine_embedding_loss", [a, b, sign]))
+    add("aten::cosine_embedding_loss(margin, sum)",
+        _top("cosine_embedding_loss", [a, b, sign, 0.5, 2]))
+    add("aten::hinge_embedding_loss", _top("hinge_embedding_loss", [x, _pm]))
+    add("aten::hinge_embedding_loss(margin, mean)",
+        _top("hinge_embedding_loss", [x, _pm, 2.0, 1]))
+    add("aten::margin_ranking_loss",
+        _top("margin_ranking_loss", [x[:, 0], y[:, 0], sign]))
+    # **Six required arguments** — a caller cannot reach this one with two.
+    add("aten::poisson_nll_loss(log_input)",
+        _top("poisson_nll_loss", [np.abs(x), _binary, True, False, 1e-8, 1]))
+    add("aten::poisson_nll_loss(full, none)",
+        _top("poisson_nll_loss", [np.abs(x), _binary, False, True, 1e-8, 0]))
+    add("aten::triplet_margin_loss", _top("triplet_margin_loss", [anc, pos, neg]))
+    add("aten::triplet_margin_loss(swap, sum)",
+        _top("triplet_margin_loss", [anc, pos, neg, 2.0, 1.0, 1e-5, True, 2]))
+
     return cases
 
 
@@ -11378,6 +11539,26 @@ def method_cases(inp=None):
     # `where` — **the only place whose argument order is reversed from the function's.**
     cases.append((METHOD_PREFIX + "where",
                   lambda L: L.tensor(vec).where(L.tensor(mask), L.tensor(other))))
+    # **The three broadcast against each other**, and every `where` case above hands
+    # all three the same shape — which is the one arrangement that cannot tell a
+    # broadcasting `where` from one that walks three buffers at the same offset. The
+    # second is what borch.ts had: right shape, values taken from wherever the shorter
+    # buffer happened to reach. It surfaced through `roi_align`, four layers away,
+    # where a mask is per position and the values are per channel.
+    _wide = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    _thin = (np.arange(2 * 1 * 4) % 3 > 0).reshape(2, 1, 4)
+    cases.append((METHOD_PREFIX + "where(마스크가 좁다)",
+                  lambda L: L.where(L.tensor(np.ascontiguousarray(_thin)),
+                                    L.tensor(np.ascontiguousarray(_wide)),
+                                    L.zeros_like(L.tensor(
+                                        np.ascontiguousarray(_wide))))))
+    # And the other way: the mask is the wide one and a branch is the narrow one.
+    cases.append((METHOD_PREFIX + "where(가지가 좁다)",
+                  lambda L: L.where(
+                      L.tensor(np.ascontiguousarray(_wide)) > 5.0,
+                      L.tensor(np.ascontiguousarray(
+                          np.arange(4, dtype=np.float32))),
+                      L.tensor(np.ascontiguousarray(_wide)))))
     # The ones returning a boolean. **A predicate** is frozen rather than a value.
     cases.append((METHOD_PREFIX + "equal",
                   lambda L: str(bool(L.tensor(vec).equal(L.tensor(vec))))))
@@ -13149,6 +13330,144 @@ def v2_cases(inp=None):
         (V2_PREFIX + "ScaleJitter(one factor)",
          on(img_f, lambda m, L: m.ScaleJitter((8, 8), (1.0, 1.0)))),
     ]
+
+    # ── the type system, and the thirteen names that are it ─────────────────────
+    #
+    # **Thirteen of `v2`'s twenty absences were the type system rather than users of
+    # it.** The rows read *boxes travelling with the picture — the point of v2's type
+    # system*, and the point of a thing is not a reason it cannot exist.
+    #
+    # The boxes below are arranged, and three of the four are why: one sits inside the
+    # canvas, one hangs off the top-left into negative coordinates, one off the
+    # bottom-right past both edges, and one is degenerate. Clamping is the whole subject
+    # here and a box that is already inside cannot show it.
+    _BOXES = np.array([[1.0, 2.0, 5.0, 8.0],
+                       [-3.0, -1.0, 4.0, 3.0],
+                       [6.0, 4.0, 20.0, 20.0],
+                       [2.0, 2.0, 2.0, 6.0]], dtype=np.float32)
+    _CANVAS = (8, 10)
+
+    def _tv(L):
+        """`tv_tensors` for each side. **Not `_vision(L).tv_tensors`** — that helper
+        hands back the `transforms` module, and the types live one level up beside it."""
+        if _is_real_torch(L):
+            import torchvision.tv_tensors as real
+            return real
+        _vision(L)
+        import sys as _sys
+        return _sys.modules["borchvision"].tv_tensors
+
+    def _boxes(L, fmt="XYXY"):
+        made = _tv(L)
+        if _is_real_torch(L):
+            return made.BoundingBoxes(L.tensor(np.ascontiguousarray(_BOXES)),
+                                      format=fmt, canvas_size=_CANVAS)
+        return made.BoundingBoxes(np.ascontiguousarray(_BOXES), format=fmt,
+                                  canvas_size=_CANVAS)
+
+    def _values(L, out):
+        return L.tensor(np.ascontiguousarray(
+            np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
+
+    def convert_case(target):
+        """**The label goes with the numbers.** A conversion that returned a plain
+        tensor would leave the next transform reading the same four numbers under the
+        old rule — which is the failure the whole type system exists to prevent, and it
+        is invisible in the values."""
+        def run(L):
+            return _values(L, _vision_v2(L).functional.convert_bounding_box_format(
+                _boxes(L), new_format=target))
+        return run
+
+    def clamp_case(mode, fmt="XYXY"):
+        """**`soft` and `hard` are the same thing for a box that is not rotated**, which
+        is every box here — torchvision says so in a comment, and both are asked so that
+        a reader who invented a difference between them fails.
+
+        `None` returns the boxes untouched, which the two boxes hanging off the canvas
+        make visible and an inside-only fixture would not.
+        """
+        def run(L):
+            given = _boxes(L, fmt)
+            if fmt != "XYXY":
+                given = _vision_v2(L).functional.convert_bounding_box_format(
+                    _boxes(L), new_format=fmt)
+            return _values(L, _vision_v2(L).functional.clamp_bounding_boxes(
+                given, clamping_mode=mode))
+        return run
+
+    def transform_case(build):
+        def run(L):
+            return _values(L, build(_vision_v2(L))(_boxes(L)))
+        return run
+
+    def query_case(what):
+        """`query_size` asks **the boxes' canvas, not their shape.** A `(4, 4)` box
+        tensor is four boxes and not a four-by-four picture, which is why this cannot be
+        `shape[-2:]` on everything — and the fixture has exactly four boxes so that a
+        reader who did it that way agrees with the picture by accident."""
+        def run(L):
+            made = _tv(L)
+            picture = (made.Image(L.tensor(np.zeros((3, 8, 10), np.float32)))
+                       if _is_real_torch(L)
+                       else made.Image(np.zeros((3, 8, 10), np.float32)))
+            flat = [picture, _boxes(L)]
+            answer = getattr(_vision_v2(L), what)(flat)
+            return L.tensor(np.asarray(answer, dtype=np.float32))
+        return run
+
+    def nest_case(kind):
+        """**The shape of the sample comes back**, and the parts this transform does not
+        own come back untouched. A dict keeps its keys and their order; a tuple stays a
+        tuple; a string in the middle passes through.
+
+        Written against one tensor, every one of those is invisible.
+        """
+        def run(L):
+            v2 = _vision_v2(L)
+            made = _tv(L)
+
+            class Double(v2.Transform):
+                _transformed_types = (made.Image,)
+
+                def transform(self, inpt, params):
+                    return inpt * 2
+
+            picture = (made.Image(L.tensor(np.ones((1, 2, 2), np.float32)))
+                       if _is_real_torch(L)
+                       else made.Image(np.ones((1, 2, 2), np.float32)))
+            sample = ({"img": picture, "boxes": _boxes(L)} if kind == "dict"
+                      else (picture, _boxes(L)))
+            out = Double()(sample)
+            picked = out["img"] if kind == "dict" else out[0]
+            boxes = out["boxes"] if kind == "dict" else out[1]
+            marker = 1.0 if isinstance(out, dict) == (kind == "dict") else 0.0
+            kept = 1.0 if type(boxes).__name__ == "BoundingBoxes" else 0.0
+            return L.tensor(np.ascontiguousarray(np.concatenate([
+                np.asarray(_as_numpy(picked), dtype=np.float32).reshape(-1),
+                np.asarray([marker, kept], dtype=np.float32)])))
+        return run
+
+    cases += [
+        (V2_PREFIX + "convert_bounding_box_format(XYWH)", convert_case("XYWH")),
+        (V2_PREFIX + "convert_bounding_box_format(CXCYWH)", convert_case("CXCYWH")),
+        (V2_PREFIX + "clamp_bounding_boxes(soft)", clamp_case("soft")),
+        (V2_PREFIX + "clamp_bounding_boxes(hard, the same for these)",
+         clamp_case("hard")),
+        (V2_PREFIX + "clamp_bounding_boxes(None, untouched)", clamp_case(None)),
+        # **The clamp goes through XYXY and comes back**, so a format that is not the
+        # corners is where a one-way conversion shows.
+        (V2_PREFIX + "clamp_bounding_boxes(XYWH)", clamp_case("soft", "XYWH")),
+        (V2_PREFIX + "clamp_bounding_boxes(CXCYWH)", clamp_case("soft", "CXCYWH")),
+        (V2_PREFIX + "ClampBoundingBoxes",
+         transform_case(lambda m: m.ClampBoundingBoxes())),
+        (V2_PREFIX + "ConvertBoundingBoxFormat(XYWH)",
+         transform_case(lambda m: m.ConvertBoundingBoxFormat("XYWH"))),
+        (V2_PREFIX + "query_size(the boxes' canvas)", query_case("query_size")),
+        (V2_PREFIX + "query_chw(images only)", query_case("query_chw")),
+        (V2_PREFIX + "Transform(a dict comes back a dict)", nest_case("dict")),
+        (V2_PREFIX + "Transform(a tuple comes back a tuple)", nest_case("tuple")),
+    ]
     return cases
 
 
@@ -13162,6 +13481,57 @@ def _v2_from_picture(L, picture, build):
 
 
 DATASET_PREFIX = "dataset::"
+
+
+def _write_png8(path, arr):
+    """An eight-bit PNG, **written by hand rather than through PIL.**
+
+    These fixtures run in three places and one of them is Pyodide, where there is no
+    PIL — measured: fifty-one dataset cases failed on the binding with
+    `No module named 'PIL'` while numpy and the browser passed. **A fixture that needs a
+    library the case does not is a case only two of three implementations can be
+    asked**, and two of three is not this table's standard.
+
+    The comment these replaced said PIL kept *the bytes torchvision would meet*. It is
+    a real point and it is smaller than this one: what is written here is a PNG by the
+    specification, PIL reads it on the side that has PIL, and the other two sides can
+    now be asked at all.
+    """
+    import os
+    import struct
+    import zlib
+    arr = np.asarray(arr)
+    height, width = arr.shape[:2]
+    # `len(arr.shape)` and not `arr.ndim`, for the reason written twice above: this
+    # file is parsed for the names its cases ask about, and a fixture's numpy `.ndim`
+    # is indistinguishable from a tensor's.
+    channels = 1 if len(arr.shape) == 2 else arr.shape[2]
+    rows = arr.reshape(height, width * channels).astype(np.uint8)
+    raw = b"".join(b"\x00" + rows[y].tobytes() for y in range(height))
+
+    def chunk(kind, body):
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body)))
+
+    if os.path.dirname(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    header = struct.pack(">IIBBBBB", width, height, 8,
+                         {1: 0, 3: 2, 4: 6}[channels], 0, 0, 0)
+    with open(path, "wb") as handle:
+        handle.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def _write_ppm8(path, arr):
+    """A binary PPM — **a magic number, three numbers and the samples.**"""
+    import os
+    arr = np.asarray(arr).astype(np.uint8)
+    height, width = arr.shape[:2]
+    if os.path.dirname(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as handle:
+        handle.write(f"P6\n{width} {height}\n255\n".encode())
+        handle.write(arr.reshape(-1).tobytes())
 
 
 def _vision_datasets(L):
@@ -14086,7 +14456,6 @@ def dataset_last_three_cases(inp=None):
             # own `ImageFolder` opens through PIL, so the package is already required
             # for this side of the comparison — writing the files with it keeps the
             # bytes torchvision would meet rather than bytes this repository invented.
-            from PIL import Image as _PIL
             root = tempfile.mkdtemp()
             try:
                 for name, count in (("cat", 2), ("dog", 2), ("emu", 1)):
@@ -14094,12 +14463,10 @@ def dataset_last_three_cases(inp=None):
                     for k in range(count):
                         block = (np.arange(4 * 5 * 3).reshape(4, 5, 3)
                                  + len(name) * 11 + k * 3) % 251
-                        _PIL.fromarray(block.astype(np.uint8)).save(
-                            os.path.join(root, name, f"{k}.png"))
+                        _write_png8(os.path.join(root, name, f"{k}.png"), block)
                 # A PPM beside the PNGs, in the folder that has only one picture.
                 block = (np.arange(3 * 3 * 3).reshape(3, 3, 3) * 7) % 200
-                _PIL.fromarray(block.astype(np.uint8)).save(
-                    os.path.join(root, "emu", "p.ppm"))
+                _write_png8(os.path.join(root, "emu", "p.ppm"), block)
 
                 if _is_real_torch(L):
                     from torchvision.datasets import ImageFolder as real
@@ -14137,7 +14504,6 @@ def dataset_last_three_cases(inp=None):
             import os
             import shutil
             import tempfile
-            from PIL import Image as _PIL
             root = tempfile.mkdtemp()
             try:
                 base = os.path.join(root, "clevr", "CLEVR_v1.0")
@@ -14146,8 +14512,7 @@ def dataset_last_three_cases(inp=None):
                     os.makedirs(folder)
                     for k in range(count):
                         block = (np.arange(4 * 5 * 3).reshape(4, 5, 3) + k * 7) % 251
-                        _PIL.fromarray(block.astype(np.uint8)).save(
-                            os.path.join(folder, f"CLEVR_{name}_{k:06d}.png"))
+                        _write_png8(os.path.join(folder, f"CLEVR_{name}_{k:06d}.png"), block)
                 os.makedirs(os.path.join(base, "scenes"))
                 scenes = {"scenes": [
                     {"image_filename": "CLEVR_train_000002.png", "objects": [1, 2, 3, 4, 5]},
@@ -14193,7 +14558,6 @@ def dataset_last_three_cases(inp=None):
             import os
             import shutil
             import tempfile
-            from PIL import Image as _PIL
             root = tempfile.mkdtemp()
             try:
                 base = os.path.join(root, "rendered-sst2")
@@ -14205,8 +14569,7 @@ def dataset_last_three_cases(inp=None):
                         for k in range(n):
                             block = (np.arange(3 * 4 * 3).reshape(3, 4, 3)
                                      + k * 5 + len(name)) % 251
-                            _PIL.fromarray(block.astype(np.uint8)).save(
-                                os.path.join(d, f"{k}.png"))
+                            _write_png8(os.path.join(d, f"{k}.png"), block)
                 if _is_real_torch(L):
                     from torchvision.datasets import RenderedSST2 as real
                     loaded = real(root, split=split)
@@ -14241,7 +14604,6 @@ def dataset_last_three_cases(inp=None):
             import os
             import shutil
             import tempfile
-            from PIL import Image as _PIL
             root = tempfile.mkdtemp()
             try:
                 base = os.path.join(root, "Sintel")
@@ -14254,8 +14616,7 @@ def dataset_last_three_cases(inp=None):
                             block = (np.arange(3 * 4 * 3).reshape(3, 4, 3)
                                      + k * 9
                                      + (0 if name == "clean" else 101)) % 251
-                            _PIL.fromarray(block.astype(np.uint8)).save(
-                                os.path.join(d, f"frame_{k:04d}.png"))
+                            _write_png8(os.path.join(d, f"frame_{k:04d}.png"), block)
                 for scene, n in scenes:
                     d = os.path.join(base, "training", "flow", scene)
                     os.makedirs(d)
@@ -14326,10 +14687,39 @@ def dataset_last_three_cases(inp=None):
                          + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
     def _png8(path, arr):
+        """An eight-bit PNG, **written by hand like the sixteen-bit one above.**
+
+        Not through PIL. These fixtures run in three places, and one of them is Pyodide,
+        where there is no PIL — measured: fifty-one dataset cases failed on the binding
+        with `No module named 'PIL'` while numpy and the browser passed. A fixture that
+        needs a library the case does not is a case that only two of three
+        implementations can be asked.
+
+        The format costs nothing to write: a signature, an `IHDR` saying the size and
+        the depth, one `zlib` stream of rows each prefixed by a filter byte, and `IEND`.
+        Filter `0` means *no filter*, which a reader has to handle anyway.
+        """
         import os
-        from PIL import Image as _PIL
+        import struct
+        import zlib
+        arr = np.asarray(arr)
+        height, width = arr.shape[:2]
+        # `len(arr.shape)` and not `arr.ndim`, for the reason written twice above:
+        # this file is parsed for the names its cases ask about.
+        channels = 1 if len(arr.shape) == 2 else arr.shape[2]
+        rows = arr.reshape(height, width * channels).astype(np.uint8)
+        raw = b"".join(b"\x00" + rows[y].tobytes() for y in range(height))
+
+        def chunk(kind, body):
+            return (struct.pack(">I", len(body)) + kind + body
+                    + struct.pack(">I", zlib.crc32(kind + body)))
+
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        _PIL.fromarray(arr.astype(np.uint8)).save(path)
+        header = struct.pack(">IIBBBBB", width, height, 8,
+                             {1: 0, 3: 2, 4: 6}[channels], 0, 0, 0)
+        with open(path, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+                         + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
     def _stereo_out(loaded):
         """Count first, then every item flattened — including the `None`s, which are
@@ -14544,10 +14934,8 @@ def dataset_last_three_cases(inp=None):
 
     def _ppm(path, seed):
         import os
-        from PIL import Image as _PIL
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        _PIL.fromarray(((np.arange(_H * _W * 3).reshape(_H, _W, 3) * 5 + seed) % 251)
-                       .astype(np.uint8)).save(path)
+        _write_ppm8(path, ((np.arange(_H * _W * 3).reshape(_H, _W, 3) * 5 + seed)
+                           % 251))
 
     def _pfm(path, channels, seed):
         """A `.pfm` written little-endian — **the scale's sign is the byte order**, and
@@ -14812,10 +15200,31 @@ def dataset_last_three_cases(inp=None):
             handle.write(header + block.tobytes())
 
     def _bmp(path, arr):
+        """A grey BMP, **written by hand for the reason `_write_png8` is** — PIL is not
+        in Pyodide, and a fixture that needs it is a case only two of three
+        implementations can be asked.
+
+        Three things the format needs and a reader has to undo: the rows run **bottom to
+        top**, each is padded to four bytes, and eight-bit needs a palette — an identity
+        greyscale one, which is what PIL writes for mode `L` and what makes the reader
+        hand back one channel.
+        """
         import os
-        from PIL import Image as _PIL
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        _PIL.fromarray(arr.astype(np.uint8), "L").save(path, format="BMP")
+        import struct
+        arr = np.asarray(arr).astype(np.uint8)
+        height, width = arr.shape[:2]
+        stride = (width + 3) // 4 * 4
+        rows = b"".join(arr[y].tobytes() + b"\x00" * (stride - width)
+                        for y in range(height - 1, -1, -1))
+        palette = b"".join(bytes((i, i, i, 0)) for i in range(256))
+        offset = 14 + 40 + len(palette)
+        header = (b"BM" + struct.pack("<IHHI", offset + len(rows), 0, 0, offset)
+                  + struct.pack("<IiiHHIIiiII", 40, width, height, 1, 8, 0,
+                                len(rows), 0, 0, 256, 0))
+        if os.path.dirname(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(header + palette + rows)
 
     def kitti(train):
         """`Kitti`'s 2D object set. Its row read *as above — a codec* and **the
@@ -14939,10 +15348,7 @@ def dataset_last_three_cases(inp=None):
         by extension *before* any loader runs, which is why their fixture files are
         named `.png` and why that difference is written into their classes.
         """
-        import os
-        from PIL import Image as _PIL
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        _PIL.fromarray(_rgb(seed).astype(np.uint8)).save(path, format="PNG")
+        _write_png8(path, _rgb(seed))
 
     def _labelled_out(loaded):
         """Count, class list length, then every (picture, label) — with the labels
