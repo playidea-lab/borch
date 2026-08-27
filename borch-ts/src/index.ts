@@ -167,6 +167,7 @@ export function setNull(target: Record<string, unknown>, key: string): void {
   target[key] = null;
 }
 export { IndexError, RuntimeError } from "./errors.js";
+import { RuntimeError } from "./errors.js";
 export type { DType } from "./dtype.js";
 
 // The namespaces are kept apart — both `nn` and `vision` have a `manualSeed`, and torch
@@ -215,3 +216,108 @@ export { VERSION } from "./version.js";
 // The special functions. `n` is a shader constant, so they do not fit the unary table and
 // stand apart.
 export { igamma, igammac, polygamma } from "./special.js";
+
+// ── four names whose Python rows said what they are for ─────────────────────────
+//
+// Each of these was declined in the core with a sentence that was **true about
+// something else**. Written here so the three implementations answer one way.
+
+/**
+ * A `narrow` and a copy.
+ *
+ * torch's row for this said sparse tensors are why torch has it — a sparse tensor
+ * has no view to narrow — which is true and is not why it was absent. On a dense
+ * tensor it is a narrow and a clone, and **the clone is the whole difference**:
+ * writing into a narrow reaches the original, writing into this one does not.
+ */
+export function narrowCopy(
+  input: TensorClass, dim: number, start: number, length: number,
+): TensorClass {
+  return input.narrow(dim, start, length).clone();
+}
+
+/** The five reductions `segmentReduce` takes, by torch's spelling. */
+export type SegmentReduction = "sum" | "prod" | "mean" | "max" | "min";
+
+/**
+ * Reduce a tensor **in runs**, one answer per run.
+ *
+ * torch's row read *for sparse and ragged bundles*, and the ragged half is dense:
+ * a tensor and a list of run lengths. `lengths` and `offsets` are two spellings of
+ * one thing — lengths are how long each run is, offsets are where each one starts,
+ * so `offsets` carries one extra number, the end. A reader that took one for the
+ * other shifts every boundary by the first run's length, which **runs of equal
+ * size hide**, so the cases ask an uneven table too.
+ *
+ * `initial` seeds each run before reducing, which is what makes an empty run
+ * answerable at all.
+ */
+export function segmentReduce(
+  data: TensorClass,
+  reduce: SegmentReduction,
+  options: {
+    lengths?: readonly number[] | readonly (readonly number[])[];
+    offsets?: readonly number[] | readonly (readonly number[])[];
+    axis?: number;
+    initial?: number | null;
+  } = {},
+): TensorClass {
+  const { lengths, offsets, axis = 0, initial = null } = options;
+  if ((lengths === undefined) === (offsets === undefined)) {
+    throw new RuntimeError(
+      "segment_reduce(): Expected exactly one of lengths or offsets to be set");
+  }
+  // **A run table per row.** torch takes one, and the boundaries then differ between
+  // the rows, so no single slice across the axis answers it — each row is its own
+  // call and the answers stack.
+  const table = (lengths ?? offsets) as readonly unknown[];
+  if (Array.isArray(table[0])) {
+    const rows = table.map((row, i) => segmentReduce(
+      data.select(0, i), reduce,
+      lengths === undefined
+        ? { offsets: row as readonly number[], axis: axis - 1, initial }
+        : { lengths: row as readonly number[], axis: axis - 1, initial }));
+    return TensorClass.stack(rows, 0);
+  }
+  // One shape from here down: run `i` covers `[bound[i], bound[i + 1])`.
+  const bound: number[] = [0];
+  if (lengths !== undefined) {
+    for (const run of lengths as readonly number[]) {
+      bound.push((bound.at(-1) as number) + run);
+    }
+  } else {
+    bound.length = 0;
+    bound.push(...(offsets as readonly number[]));
+  }
+  const pieces: TensorClass[] = [];
+  for (let i = 0; i < bound.length - 1; i++) {
+    const at = bound[i] as number;
+    let run = data.narrow(axis, at, (bound[i + 1] as number) - at);
+    if (initial !== null) {
+      const seed = TensorClass.full(
+        run.shape.map((d, k) => (k === axis ? 1 : d)), initial);
+      run = TensorClass.cat([seed, run], axis);
+    }
+    const one = reduce === "sum" ? run.sum(axis)
+      : reduce === "prod" ? run.prod(axis)
+      : reduce === "mean" ? run.mean(axis)
+      : reduce === "max" ? run.amax(axis)
+      : run.amin(axis);
+    pieces.push(one.unsqueeze(axis));
+  }
+  return TensorClass.cat(pieces, axis);
+}
+
+/**
+ * `false`, and **not a placeholder** — torch answers the same on any ordinary
+ * build. Absent, a caller's `if (isVulkanAvailable())` stops here and runs there,
+ * which is the one direction a compatibility layer cannot afford to be wrong in.
+ */
+export function isVulkanAvailable(): boolean {
+  return false;
+}
+
+/** `false`, as torch answers on a build without cuDNN. As `isVulkanAvailable`. */
+export function cudnnIsAcceptable(_tensor: TensorClass): boolean {
+  return false;
+}

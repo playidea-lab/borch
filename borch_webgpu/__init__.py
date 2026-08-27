@@ -8,7 +8,7 @@ underneath.
 It used to belong to the TF.js implementation. That one was **5,307 lines**,
 because TF.js supplies 104 primitive operations and nothing else, so the
 autograd tape, `nn.Module` and the optimisers all had to be rebuilt in Python.
-This one is **9,249 lines** — borch.ts already has all of it, so Python's job
+This one is **9,770 lines** — borch.ts already has all of it, so Python's job
 is swapping names across.
 
 `_data.py` is nearly identical in both. It came over unchanged, sits on numpy
@@ -119,6 +119,10 @@ from ._ops import (                                      # noqa: E402,F401
     unique_consecutive, unravel_index, vander,
     # **Sparse-only, so absent.** The name stays and stops where it is called.
     sspaddmm,
+    # Four whose core rows named what they are for rather than what they need.
+    # borch.ts keeps all four as module functions, so `__getattr__` — which asks
+    # `Tensor.prototype` — cannot reach them and each needs a line.
+    cudnn_is_acceptable, is_vulkan_available, narrow_copy, segment_reduce,
     # Top-level linear algebra. **Only the three whose names collide with the
     # `linalg` namespace are written out** — `__getattr__` passes the rest to the
     # first argument's method.

@@ -75,6 +75,7 @@ CALLS = {
     "index_fill": lambda v: ((v["t"], BAD_DIM, v["idx"], 0.0), {}),
     "index_reduce": lambda v: ((v["t"], BAD_DIM, v["idx"], v["flat"], "prod"), {}),
     "narrow": lambda v: ((v["t"], BAD_DIM, 0, 1), {}),
+    "narrow_copy": lambda v: ((v["t"], BAD_DIM, 0, 1), {}),
     "repeat_interleave": lambda v: ((v["t"], 2), {"dim": BAD_DIM}),
     "scatter": lambda v: ((v["t"], BAD_DIM, v["idx"].reshape(1, 1), v["cell"]), {}),
     "scatter_add": lambda v: ((v["t"], BAD_DIM, v["idx"].reshape(1, 1), v["cell"]), {}),
@@ -158,6 +159,11 @@ NOT_AN_INDEX_INTO_THE_TENSOR = {
     # and a row here would report *torch accepts this, the case measures nothing*,
     # which is true and is about the case rather than about the library.
     "take_along_dim": "torch clamps an out-of-range index instead of refusing",
+    # **`lengths` are how long each run is, not where to read.** They are indices into
+    # the *axis's extent* rather than into the tensor, so an out-of-range one is not a
+    # position that does not exist — it is a run that runs past the end, which torch
+    # reports as a length mismatch and not as an index error.
+    "segment_reduce": "`lengths` are run lengths along the axis, not positions in it",
 }
 
 

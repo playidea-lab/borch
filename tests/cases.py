@@ -4868,6 +4868,84 @@ def top_level_cases(inp=None):
 
     add("기울기 모드::inference_mode 안", inference)
 
+    # ── four more whose rows named what they are for ───────────────────────────
+    #
+    # `narrow_copy`'s row explained why **torch** has it: sparse tensors have no
+    # view-narrow. True, and not why this one was absent — on a dense tensor it is one
+    # line, and `torch.narrow_copy(x, 0, 1, 2)` is a line somebody writes that stopped
+    # here.
+    #
+    # **The copy is the whole of the difference**, and a fixture that never writes into
+    # the answer cannot see it: `narrow` hands back a view. So the case writes into what
+    # came back and looks at the input afterwards.
+    def narrow_copy_case(L):
+        base = L.tensor(np.ascontiguousarray(
+            np.arange(6, dtype=np.float32).reshape(2, 3)))
+        taken = L.narrow_copy(base, 1, 1, 2)
+        with L.no_grad():
+            taken.copy_(L.zeros_like(taken))
+        # **Whole numbers, written whole.** Python spells a float `0.0` and JavaScript
+        # spells it `0`; a case that carries the spelling compares the two languages'
+        # printers rather than the two libraries' answers.
+        return (" ".join(str(int(v)) for v in np.asarray(_as_numpy(taken)).ravel())
+                + " | "
+                + " ".join(str(int(v)) for v in np.asarray(_as_numpy(base)).ravel()))
+
+    cases.append((TOP_PREFIX + "narrow_copy(writing into it leaves the input alone)",
+                  narrow_copy_case))
+
+    # `segment_reduce`'s row read *for sparse and ragged bundles — outside the
+    # curriculum*, and the ragged half is the part that is here: a dense tensor and a
+    # list of run lengths. Measured, `[1, 2, 3, 4]` summed over runs of `[2, 2]` is
+    # `[3, 7]` with no sparse anything.
+    #
+    # **`lengths` and `offsets` are two spellings of one thing** and are both asked: a
+    # reader that took one for the other shifts every boundary by the first run's
+    # length, and on runs of equal size that is invisible — so the runs here are `[1, 3]`
+    # as well as `[2, 2]`.
+    _seg = np.array([1.0, 5.0, 3.0, 4.0], dtype=np.float32)
+    for _tag, _fn in (
+            ("sum", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "sum",
+                lengths=L.tensor(np.array([2, 2], dtype=np.int64)))),
+            ("mean, uneven runs", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "mean",
+                lengths=L.tensor(np.array([1, 3], dtype=np.int64)))),
+            ("max", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "max",
+                lengths=L.tensor(np.array([2, 2], dtype=np.int64)))),
+            ("min", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "min",
+                lengths=L.tensor(np.array([1, 3], dtype=np.int64)))),
+            ("prod", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "prod",
+                lengths=L.tensor(np.array([2, 2], dtype=np.int64)))),
+            ("offsets say the same thing", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "sum",
+                offsets=L.tensor(np.array([0, 1, 4], dtype=np.int64)))),
+            # **`initial` seeds each run**, so it is ten more per run and not ten
+            # more overall.
+            ("initial seeds every run", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "sum",
+                lengths=L.tensor(np.array([2, 2], dtype=np.int64)), initial=10.0)),
+            # A run table per row, where the boundaries differ between the rows.
+            ("a run table per row", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(
+                    np.arange(8, dtype=np.float32).reshape(2, 4))), "sum",
+                lengths=L.tensor(np.array([[2, 2], [1, 3]], dtype=np.int64)), axis=1)),
+    ):
+        cases.append((TOP_PREFIX + f"segment_reduce({_tag})", _fn))
+
+    # **Both answer False, and that is not a placeholder** — torch on any ordinary build
+    # answers the same. Absent, a caller's `if torch.is_vulkan_available():` stops here
+    # and runs there, which is the one direction this library cannot afford.
+    cases.append((TOP_PREFIX + "is_vulkan_available",
+                  lambda L: str(L.is_vulkan_available())))
+    cases.append((TOP_PREFIX + "cudnn_is_acceptable",
+                  lambda L: str(L.cudnn_is_acceptable(
+                      L.tensor(np.ascontiguousarray(
+                          np.zeros((2, 2), dtype=np.float32)))))))
+
     # ── the eight `sym_*` helpers ──────────────────────────────────────────────
     #
     # Their row read *symbolic sizes — for graph capture*, which is what they are for.

@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 350
+  "missing": 355
  },
  "modules": [
   {
@@ -33,9 +33,48 @@
      "members": [],
      "torch": "set_null",
      "doc_ko": "자리 하나를 **`null` 로** 비운다.\n\n## 왜 이것이 밖에 있는가\n\n파이썬에서는 JS 의 `null` 을 만들 수 없다. Pyodide 는 `null` 을 파이썬 `None` 으로\n주고, 반대로 `None` 을 보내면 **`undefined`** 가 된다 — JS 에서 그 둘은 다른 값이다.\n\n그래서 `p.grad = None` 이 저쪽 자리를 `undefined` 로 만들었고, `autograd.ts` 는\n비었는지를 `node.grad === null` 로 묻는다. 비교가 거짓이 되어 없는 것에 기울기를\n쌓으려 들었고, 터진 자리는 `Cannot read properties of undefined (reading 'add')`\n였다 — 파이썬 줄에서 한참 떨어진 곳이다.\n\n**저쪽의 엄격한 비교를 느슨하게 바꾸지 않는다.** 그러면 TS 쪽 불변식이 약해지고\n진짜 원인인 변환은 그대로 남는다. null 이 있는 쪽에 만드는 자리를 낸다."
+    },
+    {
+     "kind": "function",
+     "name": "narrowCopy",
+     "signature": "export declare function narrowCopy(input: TensorClass, dim: number, start: number, length: number): TensorClass",
+     "doc": "A `narrow` and a copy.\n\ntorch's row for this said sparse tensors are why torch has it — a sparse tensor\nhas no view to narrow — which is true and is not why it was absent. On a dense\ntensor it is a narrow and a clone, and **the clone is the whole difference**:\nwriting into a narrow reaches the original, writing into this one does not.",
+     "members": [],
+     "torch": "narrow_copy"
+    },
+    {
+     "kind": "type",
+     "name": "SegmentReduction",
+     "signature": "export type SegmentReduction = \"sum\" | \"prod\" | \"mean\" | \"max\" | \"min\"",
+     "doc": "The five reductions `segmentReduce` takes, by torch's spelling.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "segmentReduce",
+     "signature": "export declare function segmentReduce(data: TensorClass, reduce: SegmentReduction, options?: { lengths?: readonly number[] | readonly (readonly number[])[]; offsets?: readonly number[] | readonly (readonly number[])[]; axis?: number; initial?: number | null; }): TensorClass",
+     "doc": "Reduce a tensor **in runs**, one answer per run.\n\ntorch's row read *for sparse and ragged bundles*, and the ragged half is dense:\na tensor and a list of run lengths. `lengths` and `offsets` are two spellings of\none thing — lengths are how long each run is, offsets are where each one starts,\nso `offsets` carries one extra number, the end. A reader that took one for the\nother shifts every boundary by the first run's length, which **runs of equal\nsize hide**, so the cases ask an uneven table too.\n\n`initial` seeds each run before reducing, which is what makes an empty run\nanswerable at all.",
+     "members": [],
+     "torch": "segment_reduce"
+    },
+    {
+     "kind": "function",
+     "name": "isVulkanAvailable",
+     "signature": "export declare function isVulkanAvailable(): boolean",
+     "doc": "`false`, and **not a placeholder** — torch answers the same on any ordinary\nbuild. Absent, a caller's `if (isVulkanAvailable())` stops here and runs there,\nwhich is the one direction a compatibility layer cannot afford to be wrong in.",
+     "members": [],
+     "torch": "is_vulkan_available"
+    },
+    {
+     "kind": "function",
+     "name": "cudnnIsAcceptable",
+     "signature": "export declare function cudnnIsAcceptable(_tensor: TensorClass): boolean",
+     "doc": "`false`, as torch answers on a build without cuDNN. As `isVulkanAvailable`.",
+     "members": [],
+     "torch": "cudnn_is_acceptable"
     }
    ],
-   "count": 2,
+   "count": 7,
    "doc_ko": "borch — 브라우저에서 WebGPU 위에 도는 PyTorch 모양의 텐서 라이브러리.\n\n```ts\nimport { init, Tensor, nn, optim, scope, keepAlive } from \"borch-ts\";\n\nawait init();                                  // WebGPU 어댑터를 잡는다\n\nconst model = new nn.Sequential(\n  new nn.Linear(784, 128), new nn.ReLU(), new nn.Linear(128, 10));\nconst opt = new optim.SGD(model.parameters(), 0.05, 0.9);\nconst crit = new nn.CrossEntropyLoss();\n\nconst x = keepAlive(Tensor.from(pixels, [32, 784]));\nconst y = keepAlive(Tensor.from(labels, [32], { dtype: \"int64\" }));\n\nfor (let i = 0; i < steps; i++) {\n  await scope(async () => {                    // 한 스텝의 중간 버퍼를 놓는다\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n    console.log(await loss.item());\n  });\n}\n```\n\n## 이 파일이 하는 일\n\n공개 표면을 **한 자리에 모은다.** 이것이 없으면 쓰는 사람이 `dist/src/tensor.js`\n같은 안쪽 경로를 직접 짚어야 하고, 그러면 우리가 파일을 옮기는 순간 남의 코드가\n깨진다. 여기 적힌 것만 약속이고 나머지는 안쪽 사정이다.\n\n## torch 와 갈리는 자리 — 미리 적는다\n\n**`await init()` 을 먼저 불러야 한다.** WebGPU 어댑터를 잡는 것이 비동기라 피할\n길이 없다. 안 부르고 텐서를 만들면 그 자리에서 문구와 함께 멈춘다. `torch.cuda.\nis_available()` 자리는 `await isAvailable()` 이고, 왜 안 되는지까지 알아야 하면\n`await probe()` 가 `'no-api'`(브라우저가 낡음)와 `'no-adapter'`(드라이버 차단·\n헤드리스)를 갈라 준다.\n\n**`'cpu'` 는 값이 담긴 그릇이지 연산되는 장치가 아니다.** `await t.cpu()` 로 값을\n호스트로 내리고 `t.webgpu()` 로 올린다. 내려온 텐서는 읽을 수는 있어도(`toArray`·\n`item`·`repr`) 연산에는 못 쓴다 — borch 에 CPU 커널이 없다. 넣으면 torch 와 같은\n문구(\"Expected all tensors to be on the same device\")로 멈춘다. `t.device` 가\n지금 어디인지 답한다.\n\n**값을 읽는 것이 비동기다.** `await t.item()`, `await t.toArray()`. GPU 메모리를\n다시 가져오는 일이라 그렇다. 순방향·역방향은 동기다.\n\n**구역을 열어야 학습이 돈다.** `scope()` 안에서 만든 중간 버퍼는 나갈 때 놓는다.\n자바스크립트의 쓰레기 수집은 GPU 메모리를 제때 안 놓아주므로, 한 스텝이 만드는\n수천 개를 그냥 두면 몇 스텝 만에 장치가 찬다. torch 에 없는 개념이고 TF.js 의\n`tidy` 와 같은 자리다. 파라미터처럼 살아남아야 하는 것은 `keepAlive` 로 표시한다.\n\n**꼴이 둘이다 — 파이썬의 `with` 에 가까운 쪽을 권한다.**\n\n```ts\nfor (let i = 0; i < steps; i++) {\n  using s = scope();                 // 블록 끝에서 닫힌다\n  opt.zeroGrad();\n  const loss = crit.call(model.call(x), y);\n  loss.backward();\n  opt.step();\n  console.log(await loss.item());\n}\n```\n\n놓는 일이 동기라 `await using` 이 아니라 `using` 이다. 블록을 벗어나는 시점은\n안의 `await` 이 전부 끝난 뒤이므로 위의 `await loss.item()` 은 안전하다(실측).\n콜백 꼴도 그대로 남는다 — 값을 그대로 돌려받는 자리는 그쪽이 짧다.\n\n**까먹으면 시끄럽게 멈춘다.** 표시 없이 구역 밖으로 들고 나간 텐서를 쓰면 그\n자리에서 예외가 난다. 한동안 안 그랬고, 그때는 **다음 할당이 덮어쓴 남의 값**이\n조용히 읽혔다(실측: `[1,2,3,4]` → `9,9,9,9`).\n\n**모델을 부르는 것은 `model.call(x)` 다.** 자바스크립트는 객체를 그냥 부를 수\n없어서 torch 의 `model(x)` 를 그대로 옮길 수 없다. `forward` 를 직접 불러도 같은\n값이 나오지만 `call` 쪽을 권한다 — 나중에 훅이 붙는다면 그 자리다."
   },
   {
@@ -19999,5 +20038,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2704
+ "total": 2709
 }

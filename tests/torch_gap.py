@@ -416,15 +416,21 @@ SKIPPED = {
     "get_device_module": "there is one device",
     "get_default_device": "there is one device",
     "set_default_device": "there is one device",
-    "is_vulkan_available": "not a backend a browser chooses",
-    "cudnn_is_acceptable": "there is no cuDNN",
     "AcceleratorError": "there is one accelerator",
     "OutOfMemoryError": "we do not separate out device memory errors",
     "DataParallel": "for several devices — this is one tab",
     "SyncBatchNorm": "for distributed training — this is inside one tab",
 
     # Vendor kernels. They mean something only where that hardware is.
-    "cudnn_*": "an NVIDIA kernel — not in a browser",
+    # `cudnn_*` was one row, and the sentence under it was true of seven names and
+    # **false of the eighth**. `cudnn_is_acceptable` is not a kernel; it is the question
+    # *would cudnn take this tensor*, and here the answer is a plain `False` — the same
+    # `False` torch itself gives on any build without cudnn. So the glob narrowed and
+    # the eighth name moved out of the excuse and into the library.
+    "cudnn_affine_grid_generator": "an NVIDIA kernel — not in a browser",
+    "cudnn_batch_norm*": "an NVIDIA kernel — not in a browser",
+    "cudnn_convolution*": "an NVIDIA kernel — not in a browser",
+    "cudnn_grid_sampler*": "an NVIDIA kernel — not in a browser",
     "miopen_*": "an AMD kernel — not in a browser",
     "mkldnn_*": "an Intel kernel — not in a browser",
     "fbgemm_*": "a quantised GEMM kernel — it means something only on real hardware",
@@ -446,7 +452,6 @@ SKIPPED = {
     "hspmm": "sparse matrix products — outside the curriculum",
     "saddmm": "sparse matrix products — outside the curriculum",
     "sspaddmm": "sparse matrix products — outside the curriculum",
-    "segment_reduce": "for sparse and ragged bundles — outside the curriculum",
     "resize_as_sparse_": "sparse tensors only — as above",
     # **By its name it looks like `nn.ParameterDict`'s counterpart, and it is not.**
     # Measured, its constructor takes a single `torch._C.ScriptModule` and it does not live
@@ -589,9 +594,6 @@ SKIPPED = {
     # The move matters beyond this name. `NOT_API` comes out of the denominator and
     # `SKIPPED` does not, so a wrong reason there is a wrong reason **that also
     # improves the number** — which is why that bin is now frozen by size below.
-    "narrow_copy": "`narrow` and then a copy. torch has it because sparse tensors have "
-                   "no view-narrow, and sparse is declined in the core, so what is "
-                   "left is `narrow(...).clone()`",
 
     "transforms.functional.to_pil_image": "there is no PIL here — as `ToPILImage`",
     "transforms.functional.pil_to_tensor": "it takes a PIL image and nothing here makes "

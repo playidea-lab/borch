@@ -1374,6 +1374,57 @@ def einsum(spec, *operands):
     return guarded(_ts.einsum, spec, *[handle(t) for t in operands])
 
 
+# ── the four names borch.ts keeps as module functions ──────────────────────────
+#
+# **The general rule reaches methods only.** It asks `Tensor.prototype`, and these
+# four are exported from borch.ts's module instead — so they need a line each, the
+# way `einsum` does.
+
+
+def narrow_copy(input, dim, start, length):   # noqa: A002
+    """A narrow and a copy. borch.ts holds it as a module function.
+
+    No `out=` here — the module-level wrapper adds it from the core's one table, and
+    a second seat on this side would be a second place for that table to drift."""
+    return guarded(_ts.narrowCopy, handle(input), dim, start, length)
+
+
+def segment_reduce(data, reduce="sum", *, lengths=None, indices=None, offsets=None,
+                   axis=0, unsafe=False, initial=None):
+    """Reduce runs of a tensor, given where the runs end.
+
+    **`lengths` and `offsets` are two spellings of one thing**, and borch.ts takes
+    them in one options object rather than as two keywords — so which of the two
+    arrived has to survive the crossing, or every boundary shifts by the first run's
+    length and the wrong answer looks like an answer.
+    """
+    del indices, unsafe
+    if (lengths is None) == (offsets is None):
+        raise RuntimeError("segment_reduce(): Exactly one of lengths or offsets"
+                           " must be defined")
+    given = lengths if lengths is not None else offsets
+    runs = _np.asarray(given.numpy() if isinstance(given, Tensor) else given)
+    # **A run table can be one row or one per row**, and `_js_list` flattens the
+    # second into nonsense. The nested shape is built here instead.
+    rows = ([_js_list(row) for row in runs.tolist()] if runs.ndim > 1
+            else _js_list(runs.tolist()))
+    settings = {"axis": axis, "initial": initial,
+                "lengths" if lengths is not None else "offsets":
+                    _to_js(rows) if runs.ndim > 1 else rows}
+    return guarded(_ts.segmentReduce, handle(data), reduce, _js_options(**settings))
+
+
+def is_vulkan_available(*args, **kw):
+    """False, as torch answers on any ordinary build."""
+    del args, kw
+    return bool(_ts.isVulkanAvailable())
+
+
+def cudnn_is_acceptable(tensor):
+    """False, as torch answers on a build without cuDNN."""
+    return bool(_ts.cudnnIsAcceptable(handle(tensor)))
+
+
 def as_tensor(data, dtype=None):
     from ._base import tensor as _t
     return data if isinstance(data, Tensor) else _t(data, dtype)

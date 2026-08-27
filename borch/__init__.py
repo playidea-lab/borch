@@ -132,6 +132,7 @@ from ._ops import (
     can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
     sym_float, sym_int, sym_ite, sym_max, sym_min, sym_not, sym_sqrt, sym_sum,
+    cudnn_is_acceptable, is_vulkan_available, narrow_copy, segment_reduce,
     result_type,
     set_default_dtype, typename,
     # Bitwise operations and integer maths. On `bool` they become logical
@@ -609,7 +610,7 @@ _TAKES_OUT = frozenset("""
     logaddexp2 logcumsumexp logical_and logical_not logical_or logit
     logspace logsumexp lt lu_solve masked_select matmul matrix_power max
     maximum mean min minimum mm mul multinomial multiply mv mvlgamma
-    nan_to_num nanmean nanquantile ne neg negative nextafter nonzero normal
+    nan_to_num nanmean nanquantile narrow_copy ne neg negative nextafter nonzero normal
     not_equal ones ormqr outer polar polygamma pow quantile rand randint
     randn randperm range reciprocal remainder renorm round row_stack rsqrt
     searchsorted sgn sigmoid sign signbit sin sinc sinh sqrt stack std sub
