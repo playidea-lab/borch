@@ -1262,6 +1262,201 @@ export async function report(): Promise<Report> {
     } catch { refusedPos = true; }
     want("and so is posWeight, at torch's seventh seat", refusedPos);
   }
+
+  // ── ten more functional losses, in torch's seats ──────────────────────
+  //
+  // The same defect the BCE pair had, sixteen more times. **What is asked here is not
+  // that the argument is accepted but that it arrives** — a signature that takes a
+  // seat and drops it is worse than one that is short, because the caller cannot tell.
+  //
+  // The seats are torch's own and are not tidy: `nll_loss` and `cross_entropy` put
+  // `ignore_index` **between** `sizeAverage` and `reduce`, and `poisson_nll_loss` puts
+  // `eps` there. A rule that inserted the pair side by side would be right about seven
+  // of these ten and wrong about three, which is what `nn.ts` already says about the
+  // classes.
+  {
+    const x = Tensor.from([0.5, -1.0, 2.0, 0.25], [4]);
+    const t = Tensor.from([1.0, 0.0, 1.0, 0.0], [4]);
+    const sum = (v: number, n: number) => near(v, n, 1e-5);
+
+    // `l1Loss` and `mseLoss`: reduction is the **fifth** seat, after the legacy pair.
+    const l1Sum = await F.l1Loss(x, t, null, null, "sum").item();
+    const l1Mean = await F.l1Loss(x, t, null, null, "mean").item();
+    want("l1Loss reduction arrives at the fifth seat", sum(l1Sum, l1Mean * 4),
+      `${l1Sum} against ${l1Mean} × 4`);
+    const mseSum = await F.mseLoss(x, t, null, null, "sum").item();
+    const mseMean = await F.mseLoss(x, t, null, null, "mean").item();
+    want("mseLoss too", sum(mseSum, mseMean * 4), `${mseSum} against ${mseMean} × 4`);
+
+    // **`smoothL1Loss` had `beta` in `sizeAverage`'s seat and no reduction at all**, so
+    // `smoothL1Loss(x, t, "sum")` set the beta to a string — false against every
+    // difference, and quietly the `beta = 1` answer.
+    const shSum = await F.smoothL1Loss(x, t, null, null, "sum").item();
+    const shMean = await F.smoothL1Loss(x, t, null, null, "mean").item();
+    want("smoothL1Loss reduction is no longer beta", sum(shSum, shMean * 4),
+      `${shSum} against ${shMean} × 4`);
+    // And `beta` still reaches its own seat, which is torch's sixth.
+    const wide = await F.smoothL1Loss(x, t, null, null, "sum", 4.0).item();
+    want("and beta reaches the sixth seat", !sum(wide, shSum),
+      `beta=4 gives ${wide}, beta=1 gives ${shSum}`);
+
+    // `sizeAverage = false` is torch's old spelling of `sum`, folded as everywhere.
+    const legacyL1 = await F.l1Loss(x, t, false).item();
+    want("the legacy pair still folds", sum(legacyL1, l1Sum),
+      `${legacyL1} against ${l1Sum}`);
+
+    // `nllLoss` and `crossEntropy`: **`ignoreIndex` sits between the pair.**
+    const logits = Tensor.from([2.0, 1.0, 0.1, 0.5, 3.0, 0.2], [2, 3]);
+    const labels = Tensor.from([0, 1], [2]);
+    const ceSum = await F.crossEntropy(logits, labels, undefined, null, -100, null,
+      "sum").item();
+    const ceMean = await F.crossEntropy(logits, labels, undefined, null, -100, null,
+      "mean").item();
+    want("crossEntropy reduction arrives at the seventh seat",
+      sum(ceSum, ceMean * 2), `${ceSum} against ${ceMean} × 2`);
+    // Ignoring the only two rows leaves nothing to average, which is a different
+    // answer from ignoring none — so the fifth seat is doing its job.
+    const ignored = await F.crossEntropy(logits, labels, undefined, null, 0, null,
+      "sum").item();
+    want("and ignoreIndex reaches the fifth, between the pair",
+      !sum(ignored, ceSum), `ignoring class 0 gives ${ignored}, none gives ${ceSum}`);
+
+    let ceRefused = false;
+    try {
+      F.crossEntropy(logits, labels, Tensor.from([1, 1, 1], [3]));
+    } catch { ceRefused = true; }
+    want("a class weight is refused there too", ceRefused);
+  }
+
+  // ── inplace on the eight that were passed over ────────────────────────
+  //
+  // Thirteen activations got `inplace`; these eight did not, and the dropout family
+  // was printing `inplace=False` for a seat it could not take. **What is asked here is
+  // the behaviour, not the seat** — the flag's whole purpose is that the thing handed
+  // back *is* the caller's tensor, so a name count cannot see whether it works.
+  //
+  // And torch does not treat its own eight alike. Measured, not assumed:
+  //   · Dropout·1d·2d·3d, RReLU, Threshold — honour it
+  //   · AlphaDropout, FeatureAlphaDropout — **take the seat and drop it**, because
+  //     torch's own `forward` calls `F.alpha_dropout(input, p, training)` with no
+  //     fourth argument while `Dropout2d` passes `self.inplace`
+  //   · the dropout family prints `inplace=` always; RReLU and Threshold only when true
+  {
+    const src = () => Tensor.from([1.0, -2.0, 3.0, -4.0], [4]);
+
+    // Threshold is deterministic, so it can be checked by value as well as identity.
+    const t = src();
+    const thr = new nn.Threshold(0.0, 9.0, true);
+    const back = thr.call(t);
+    want("Threshold(inplace) hands back the caller's own tensor", back === t);
+    want("and the caller's buffer moved", (await t.toArray()).includes(9),
+      `${await t.toArray()}`);
+    want("Threshold prints inplace only when true",
+      new nn.Threshold(0.0, 9.0).describe() === "Threshold(threshold=0.0, value=9.0)"
+      && thr.describe() === "Threshold(threshold=0.0, value=9.0, inplace=True)",
+      `${new nn.Threshold(0.0, 9.0).describe()} / ${thr.describe()}`);
+
+    const r = src();
+    const rr = new nn.RReLU(0.1, 0.2, true);
+    rr.train();
+    want("RReLU(inplace) does too", rr.call(r) === r);
+    want("and prints the same way",
+      rr.describe() === "RReLU(lower=0.1, upper=0.2, inplace=True)"
+      && new nn.RReLU(0.1, 0.2).describe() === "RReLU(lower=0.1, upper=0.2)",
+      `${rr.describe()} / ${new nn.RReLU(0.1, 0.2).describe()}`);
+
+    const d = src();
+    const drop = new nn.Dropout(0.5, true);
+    drop.train();
+    want("Dropout(inplace) does too", drop.call(d) === d);
+
+    const d2 = Tensor.from([1.0, -2.0, 3.0, -4.0, 5.0, -6.0], [2, 3]);
+    const drop2 = new nn.Dropout2d(0.5, true);
+    drop2.train();
+    want("Dropout2d(inplace) does too", drop2.call(d2) === d2);
+
+    // **The two that take it and drop it.** Reproducing torch here rather than doing
+    // the sensible thing: code written against torch may read `x` after the call, and
+    // torch guarantees it survives.
+    const a = src();
+    const before = await a.toArray();
+    const ad = new nn.AlphaDropout(0.5, true);
+    ad.train();
+    const aOut = ad.call(a);
+    want("AlphaDropout takes inplace and drops it, as torch's own layer does",
+      aOut !== a && JSON.stringify(await a.toArray()) === JSON.stringify(before));
+    want("but it still prints what it was given",
+      ad.describe() === "AlphaDropout(p=0.5, inplace=True)", ad.describe());
+    want("and prints False when it was not",
+      new nn.AlphaDropout(0.5).describe() === "AlphaDropout(p=0.5, inplace=False)");
+
+    const fa = Tensor.from([1.0, -2.0, 3.0, -4.0, 5.0, -6.0], [2, 3]);
+    const faBefore = await fa.toArray();
+    const fad = new nn.FeatureAlphaDropout(0.5, true);
+    fad.train();
+    want("FeatureAlphaDropout is the same pair",
+      fad.call(fa) !== fa
+      && JSON.stringify(await fa.toArray()) === JSON.stringify(faBefore));
+  }
+
+  // ── device and dtype, carried so they can be refused ──────────────────
+  //
+  // torch puts these last on nearly every layer and borch.ts runs on one device in
+  // one precision, so there is nothing to do with them. **The question is what
+  // happens to a caller who passes them**, and until now the answer was nothing at
+  // all: `new nn.Linear(2, 3, true, "cuda")` built the layer and dropped the word.
+  //
+  // The seats had been left out deliberately, on the reasoning that where they are
+  // last a missing tail is `shorter` and `shorter` is safe. That is true of the
+  // failure it was written about — an argument landing in the wrong seat — and false
+  // of this one. **Python raises on a surplus positional; JavaScript discards it.**
+  // The core carries and refuses all seventeen of its own, in the language that would
+  // have raised anyway.
+  //
+  // TypeScript stops this at compile time (the seats are typed `null`), so what is
+  // asked here is the other half: a JavaScript caller, or anything that reaches the
+  // constructor through a bag of arguments, gets an error naming which of the two it
+  // was — not silence.
+  {
+    const refuses = async (label: string, build: () => unknown, word: string) => {
+      let said = "";
+      try { build(); } catch (e) { said = (e as Error).message; }
+      want(`${label} refuses ${word} rather than dropping it`,
+        said.includes(word) && said.includes("browser subset"), said || "(no error)");
+    };
+
+    // Cast away the `null` type to stand where a JS caller stands.
+    const L = nn.Linear as unknown as new (...a: unknown[]) => unknown;
+    await refuses("Linear", () => new L(2, 3, true, "cuda"), "device");
+    await refuses("Linear", () => new L(2, 3, true, null, "float64"), "dtype");
+
+    const C = nn.Conv2d as unknown as new (...a: unknown[]) => unknown;
+    await refuses("Conv2d", () => new C(1, 1, 1, 1, 0, 1, 1, true, "zeros", "cuda"),
+      "device");
+
+    // **The tenth seat is `device` and not `paddingMode`.** Conv2d's own parity check
+    // above pins bias at the eighth; this pins that adding two did not move it.
+    const ok = new nn.Conv2d(1, 1, 1, 1, 0, 1, 1, true, "zeros");
+    want("and the seats before it did not move", ok.describe().includes("bias=False")
+      === false, ok.describe());
+
+    const M = nn.MultiheadAttention as unknown as new (...a: unknown[]) => unknown;
+    await refuses("MultiheadAttention",
+      () => new M(2, 1, 0, true, false, false, null, null, false, "cuda"), "device");
+
+    const Z = nn.LazyConv2d as unknown as new (...a: unknown[]) => unknown;
+    await refuses("LazyConv2d", () => new Z(1, 1, 1, 0, 1, 1, true, "zeros", "cuda"),
+      "device");
+
+    // A layer that was already carrying them keeps working the same way.
+    const G = nn.GroupNorm as unknown as new (...a: unknown[]) => unknown;
+    await refuses("GroupNorm", () => new G(2, 4, 1e-5, true, "cuda"), "device");
+
+    // And nothing was broken for the caller who passes neither.
+    const plain = new nn.Linear(2, 3);
+    want("a layer with neither still builds", plain.describe().includes("in_features=2"),
+      plain.describe());
+  }
     // **This asked the wrong question and passed.** It read
     // `nn.gumbelSoftmax.length === 1` — that the parameter is *absent* — which is not
     // what "eps must not matter" means, and is not what torch does: torch keeps `eps`

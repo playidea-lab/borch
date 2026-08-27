@@ -1,0 +1,156 @@
+<!doctype html>
+<!--
+  The vision side of the library, as a map rather than a copy.
+
+  The module docs in `site/assets/api.json` are generated from the built declarations and
+  say all of this at length. **This page does not repeat them** — a second copy of a
+  generated text is a second thing to keep true, and the counts here are checked against
+  that file by `tests/test_site.py` for exactly that reason.
+
+  The Korean edition is `ko/vision.html`; both are edited together.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vision — borch</title>
+<meta name="description" content="borch's vision side — transforms, v2, box ops and dataset decoders, shaped like torchvision, and what each of them gets quietly wrong.">
+<link rel="alternate" hreflang="ko" href="ko/vision.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Vision — borch">
+<meta property="og:description" content="Transforms, v2, box ops and dataset decoders — torchvision's shape in the browser.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/vision.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <a href="models.html">Models</a>
+      <a href="vision.html" class="on" aria-current="page">Vision</a>
+      <a href="api/">API</a>
+      <a href="python.html">Python</a>
+      <a href="setup.html">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/vision.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">torchvision's seat</p>
+    <h1>Images, boxes and datasets</h1>
+    <p class="lead">
+      <strong><span data-count="_vision_total">551</span> of the library's <span data-count="_total">2588</span> names are the vision side.</strong> They are shaped
+      like <code>torchvision</code> and they are here for one reason: training needs a place
+      where an image becomes a tensor, and that place is where things go quietly wrong.
+      Every section below names a way it does.
+    </p>
+
+    <h2 id="transforms">transforms &mdash; <span data-count="vision">278</span> names</h2>
+    <p>
+      Where <code>torchvision.transforms</code> would be. <strong>An image is an
+      <code>(H, W, C)</code> array here, not a tensor.</strong> torchvision receives a PIL
+      image; there is no PIL in a browser, so an array stands in its place. Making a tensor
+      per image makes one GPU buffer per image, which looks like it works right up until it
+      collapses on memory.
+    </p>
+    <p>
+      These use <strong>the same rules as the Python side</strong> (<code>borchvision.py</code>).
+      If the two ever diverge, the same data becomes different values depending on which
+      library read it &mdash; a difference no type checks and only a value comparison sees.
+    </p>
+
+    <h2 id="v2">v2 &mdash; <span data-count="vision_v2">68</span> functional, <span data-count="vision_v2_twins">130</span> classes</h2>
+    <p>
+      v2 is torchvision's current recommended surface, and <strong>it is v1 with a different
+      front.</strong> That was measured before any of it was written: on a plain image, v2's
+      transforms give what v1's give to the last bit. So the arithmetic is not written twice.
+      Everything v1 already had is <strong>re-exported, not copied</strong>, and the class
+      twins extend the v1 class and override only what it prints.
+    </p>
+    <p>
+      <strong>One pair answers backwards from its neighbour.</strong> v2's
+      <code>getSize</code> gives <code>[height, width]</code>; <code>getImageSize</code>, one
+      namespace over, gives <code>[width, height]</code>. torchvision reversed it deliberately
+      and deprecated the old spelling rather than change it. Both are here, both keep their
+      own order, and reading the wrong one gives you a transposed image that still trains.
+    </p>
+
+    <h2 id="ops">ops &mdash; <span data-count="ops">57</span> names</h2>
+    <p>
+      Box geometry and the losses built on it: <code>boxIou</code> and its generalized,
+      distance and complete variants, the three IoU losses, <code>sigmoidFocalLoss</code>,
+      <code>nms</code> and <code>batchedNms</code>. What is <em>not</em> here is everything
+      that wants a detector's feature maps or its predictions &mdash; there is no detector in
+      this library yet, and these take nothing but four numbers a box.
+    </p>
+    <p>
+      The rest is <strong>the same geometry applied to the things that ride along with an
+      image.</strong> Crop a picture and its boxes move; rotate it and its masks and keypoints
+      must turn with it. So each of the transforms &mdash; affine, crop, resize, resizedCrop,
+      rotate, perspective, elastic, pad and the two flips &mdash; has a kernel per target:
+      <code>rotateBoundingBoxes</code>, <code>rotateMask</code>, <code>rotateKeypoints</code>.
+      That is where the count comes from.
+    </p>
+    <p>
+      <strong>They are separate functions because they disagree.</strong> A rotated box is not
+      the rotated corners &mdash; it is the upright box around them, so it grows. A mask goes
+      through the same warp as the image but with nearest-neighbour sampling, because
+      interpolating a label invents labels that were never there. A keypoint that leaves the
+      canvas is clamped by one kernel and dropped by another. Handing all three to one
+      function would make those choices invisible.
+    </p>
+    <p>
+      <strong>The arithmetic happens on the CPU, on purpose.</strong> Boxes come in tens, not
+      millions, and every function here sorts, iterates until a set stops shrinking, or reads
+      a mask's extent &mdash; shapes a GPU kernel is bad at and a loop is good at. Each call
+      reads its tensors back once, which is why they are <code>async</code>.
+    </p>
+
+    <h2 id="datasets">datasets &mdash; <span data-count="datasets">18</span> names</h2>
+    <p>
+      <strong>The decoders, and only those.</strong> A dataset is an address and a format. The
+      address half &mdash; fetching, caching, checksums &mdash; is not here, because a test
+      case that downloads is a test case that fails on a train.
+    </p>
+    <p>
+      The format half is the part that fails <em>quietly</em>, and every function in this file
+      is one of those. Each of these leaves a dataset that still trains when it is read wrong:
+    </p>
+    <ul>
+      <li><strong>STL-10</strong> is stored column-major and its labels start at <strong>1</strong>.
+        Skip the transpose and every picture comes out rotated &mdash; still a picture.</li>
+      <li><strong>MovingMNIST</strong>'s split cuts the <strong>frames</strong>, not the clips.
+        A reader that cuts clips instead gets the right rank and half the count.</li>
+      <li><strong>FER2013</strong> keeps its pixels as a string of integers inside a cell, and
+        it has two layouts.</li>
+    </ul>
+
+    <h2 id="missing">What is not here</h2>
+    <p>
+      No detector, so no <code>roiAlign</code>, no <code>DeformConv2d</code>, no feature
+      pyramid. No dataset downloads. No PIL, and therefore no operation that needs one.
+      <strong>The API reference is generated from the built declarations</strong>, so the
+      surest answer to <em>&ldquo;does this exist?&rdquo;</em> is to look it up there rather
+      than to assume torchvision's answer carries over.
+    </p>
+    <p>
+      <a href="api/">Browse the API reference &rarr;</a>
+    </p>
+  </main>
+</div>
+
+</body>
+</html>

@@ -42,6 +42,8 @@
     <nav>
       <a href="learn/">Learn</a>
       <a href="tutorials/">Tutorials</a>
+      <a href="models.html">Models</a>
+      <a href="vision.html">Vision</a>
       <a href="api/">API</a>
       <a href="python.html">Python</a>
       <a href="setup.html">GPU</a>
@@ -59,6 +61,7 @@
     <a href="#how">How it works</a>
     <a href="#python">Python</a>
     <a href="#state">What exists</a>
+    <a href="#stack">Stack</a>
     <a href="#measured">Measured</a>
     <a href="#install">Install</a>
   </div>
@@ -78,6 +81,7 @@
 
     <div class="cta-row">
       <a class="btn primary" href="playground.html">Try Playground →</a>
+      <a class="btn ghost" href="models.html">Run a pretrained model →</a>
       <a class="btn ghost mono" href="#install">npm install borch-ts</a>
       <a class="btn ghost" href="https://github.com/playidea-lab/borch">GitHub</a>
     </div>
@@ -363,6 +367,47 @@ for step in range(201):
   </div>
 </section>
 
+<!-- ── The stack ──────────────────────────────────────────────────── -->
+<section id="stack">
+  <div class="wrap">
+    <p class="eyebrow">Four packages, one runtime</p>
+    <h2>It is not one library any more</h2>
+    <p class="lead">
+      Each has a seat you already know, except the last one, which has no equivalent on the
+      Python side.
+    </p>
+
+    <div class="scroll-x" style="margin-top:1.6rem">
+    <table class="data">
+      <thead><tr><th>Here</th><th>There</th><th>What it holds</th></tr></thead>
+      <tbody>
+        <tr><td><strong>borch</strong></td><td><code>torch</code></td>
+            <td>Tensors, autograd, modules, optimisers — the runtime everything else stands on</td></tr>
+        <tr><td><strong>borchvision</strong></td><td><code>torchvision</code></td>
+            <td>Transforms, v2, box and mask geometry, dataset decoders — <a href="vision.html">547 names</a></td></tr>
+        <tr><td><strong>bimm</strong></td><td><code>timm</code></td>
+            <td>The architecture catalog — ResNet, EfficientNet, MobileNet, ViT</td></tr>
+        <tr><td><strong>borch-hub</strong></td><td>—</td>
+            <td>A published manifest, the hash checked before loading, the environment checked before downloading</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <p style="margin-top:1.6rem">
+      <strong>The last row is the one with no counterpart.</strong> <code>torch.hub</code>
+      fetches from repositories and keeps no catalog; timm has the catalog and does not
+      publish manifests. Here a model arrives with a sample it has to reproduce, and your
+      browser checks that before it says the model loaded.
+    </p>
+    <p class="cta-row" style="margin-top:1.4rem">
+      <a class="btn primary" href="models.html">Download a model and verify it →</a>
+    </p>
+    <p class="small muted">
+      It costs about ten megabytes and finishes in a couple of seconds. Nothing is installed.
+    </p>
+  </div>
+</section>
+
 <!-- ── Measured ───────────────────────────────────────────────────── -->
 <section id="measured">
   <div class="wrap">
@@ -408,7 +453,7 @@ for step in range(201):
     </table>
     </div>
     <p class="small muted" style="margin-top:.8rem">
-      On top of that, <strong>3717 golden cases</strong> hold all three implementations to the same expected values.
+      On top of that, <strong>3724 golden cases</strong> hold all three implementations to the same expected values.
       Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
       identically on Apple Metal, and borch.ts's share of it matches on <strong>NVIDIA</strong> too —
       <code>passed 2901 / failed 0 [nvidia / blackwell]</code>, an RTX 5080 under Xvfb.

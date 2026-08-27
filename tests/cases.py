@@ -9753,7 +9753,34 @@ def ndim_cases(inp=None):
     # had one side, and it surfaced while matching against the sister library.
     mask = np.array([[True, False, True, False]] * 2)
     flat = np.arange(8, dtype=np.float32).reshape(2, 4)
+    # **`matmul` batches and broadcasts; `mm` does not.** Every matmul case in
+    # this table used to be 2-D, where the two are the same function, so the
+    # TypeScript side answered all of them with `mm` and nothing noticed that
+    # it had no batched path at all. These ask the part that differs.
+    #
+    # The 1-D cases are here because they do **not** follow from the others:
+    # a 1 is prepended (or appended) to make the operand a matrix and then
+    # **taken back out of the result**, so `[3] @ [5,3,4]` is `[5,4]` and not
+    # `[5,1,4]`. That is the rule most likely to be reimplemented wrongly.
+    m3a = np.arange(30, dtype=np.float32).reshape(5, 2, 3) / 30.0
+    m3b = np.arange(60, dtype=np.float32).reshape(5, 3, 4) / 60.0
+    m2 = np.arange(12, dtype=np.float32).reshape(3, 4) / 12.0
+    v3 = np.arange(3, dtype=np.float32) / 3.0
+    m4a = np.arange(12, dtype=np.float32).reshape(2, 1, 2, 3) / 12.0
+    m4b = np.arange(48, dtype=np.float32).reshape(1, 4, 3, 4) / 48.0
     cases += [
+        ("matmul::3d@3d", lambda L: L.matmul(L.tensor(m3a), L.tensor(m3b))),
+        # The 2-D side is shared by every batch element rather than zipped.
+        ("matmul::3d@2d", lambda L: L.matmul(L.tensor(m3a), L.tensor(m2))),
+        ("matmul::2d@3d", lambda L: L.matmul(L.tensor(m2.T.copy()), L.tensor(m3b))),
+        ("matmul::1d@3d", lambda L: L.matmul(L.tensor(v3), L.tensor(m3b))),
+        ("matmul::3d@1d",
+         lambda L: L.matmul(L.tensor(m3b), L.tensor(np.arange(4, dtype=np.float32) / 4.0))),
+        # Batch axes broadcast against each other: (2,1) with (1,4) is (2,4).
+        ("matmul::4d_broadcast", lambda L: L.matmul(L.tensor(m4a), L.tensor(m4b))),
+        # `F.linear` on a 3-D input — the case bimm's ViT had to work around.
+        ("matmul::linear_3d",
+         lambda L: L.nn.functional.linear(L.tensor(m3a), L.tensor(m2.T.copy()))),
         (NDIM_PREFIX + "torch.matmul",
          lambda L: L.matmul(L.tensor(flat), L.tensor(flat.T.copy()))),
         # **The shape comes as a single tuple.** torch refuses `torch.reshape(x, 4, 2)` — the

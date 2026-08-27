@@ -68,7 +68,12 @@ _RENAME = {
     "bitwise_not": "bitwise_not",
     "bitwise_left_shift": "bitwise_left_shift",
     "bitwise_right_shift": "bitwise_right_shift",
-    "matmul": "mm",
+    # **`matmul` was `mm` and is not any more.** borch.ts had only the 2-D by 2-D
+    # kernel when this rename was written, so pointing torch's general name at it was
+    # the closest thing there was; `matmul` over there now batches, broadcasts the
+    # leading axes and lifts a 1-D side the way torch does, and the rename went on
+    # sending every one of those to the two-dimensional one. Six golden cases came
+    # back `mm is 2-D by 2-D`.
     "var": "variance",
     # **`fill` is not here.** Aliases are looked up after the underscore is
     # stripped, so listing it would carry `fill_` along into `fillWith_`, which

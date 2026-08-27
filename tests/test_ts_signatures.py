@@ -1022,20 +1022,84 @@ SHORTER = {
     # torch itself tells you not to use, so it is short on purpose — the count going
     # down by three rather than four is the record of that.
     #
-    # **46 → 45.** `AvgPool2d` took a kernel and a stride where torch takes six, and
-    # its 1-D and 3-D siblings had gone through `poolND` — which has all four of the
-    # others — the whole time. It was short for no reason anybody had written down.
+    # **46 → 38.** The eight the thirteen activations passed over: `Dropout`, `1d`,
+    # `2d`, `3d`, `AlphaDropout`, `FeatureAlphaDropout`, `RReLU` and `Threshold`. The
+    # machinery was already here — `writeBack` — and the dropout family had been
+    # *printing* `inplace=False` for a seat it could not take, which is the tidiest way
+    # to look finished.
     #
-    # **45 → 43.** `MaxPool1d` and `MaxPool3d` took two of six for the same reason the
-    # average did, once the maximum's kernel learned padding. Adding `padding` and
-    # `ceilMode` alone put `ceilMode` in `dilation`'s seat — **this axis caught that in
-    # the run that added them**, which is the whole reason it counts positions and not
-    # names. `dilation` is refused on all three and is present so that it cannot take
-    # another argument's place.
+    # Two of the eight take the seat and do not act on it, because **torch's own layers
+    # do not**: `AlphaDropout.forward` calls `F.alpha_dropout(input, p, training)` with
+    # no fourth argument while `Dropout2d` passes `self.inplace`. Honouring it here
+    # would be the more sensible behaviour and the wrong port — code written against
+    # torch may read `x` after the call, and torch guarantees it survives.
     #
-    # **What retires this line:** borch.ts growing `device` and `dtype` seats, which
-    # is what nearly all forty-three are short of.
-    "nn": 43,
+    # **38 → 14.** The 24 that were short of `device` and `dtype` and nothing else now
+    # carry both, refused at torch's own position by `refuseDeviceDtype`.
+    #
+    # Those seats had been left out on purpose, and the reasoning is in that function's
+    # own comment: where the pair is last, omitting it makes the row `shorter`, and
+    # `shorter` is safe. **That is true of the failure it was written about and false
+    # of this one.** It protects against a shift — an argument landing in the seat next
+    # door — and there is no shift when nothing follows. What it does not protect
+    # against is the other half: `new nn.Linear(2, 3, true, "cuda")` built the layer and
+    # dropped the word, because **JavaScript discards a surplus argument in silence
+    # where Python raises.** The core carries and refuses all seventeen of its own in
+    # the language that would have raised anyway; this side, which would not, had
+    # fewer.
+    #
+    # The pair is typed `null`, so TypeScript stops it at compile time and the runtime
+    # refusal is for callers who arrive from JavaScript or through a bag of arguments.
+    #
+    # Only rows short of *exactly* those two were touched. `ConvTranspose1d` is short of
+    # `paddingMode` as well, so appending the pair there would seat `device` where
+    # `paddingMode` belongs — turning a short tail into the shift the original comment
+    # was right to fear.
+    #
+    # That sentence was here, was replaced with its opposite, and is back. The
+    # replacement claimed those two "accounted for 66 of 231 missing arguments" with
+    # "no row short of only them", and it came from a throwaway probe that folded
+    # names with
+    #
+    #     S._camel(a) if hasattr(S, "_camel") else a
+    #
+    # `_camel` lives in `ts_axis`, not here, so `hasattr` was False and the fold was a
+    # no-op on every call. Core `in_channels` was then compared against borch.ts's
+    # `inChannels` and counted as missing, along with every other multi-word argument
+    # — which inflated the denominator from 102 to 231 and buried the 24 single-cause
+    # rows under names that were never absent. Folded the way the axis folds
+    # (`ts_axis._camel(RENAMES.get(p, p))`, then `_fold_initial`), the original
+    # sentence is right.
+    #
+    # `device`/`dtype` were immune to the bug because they are one word each, so the
+    # 66 was stable across both measurements and looked like confirmation. **A number
+    # that survives a broken instrument is not thereby checked.**
+    #
+    # **14 → 11.** The three poolings left. `AvgPool2d` was short because it called a
+    # two-argument kernel while its 1-D and 3-D siblings went through `poolND`, which
+    # has the other four; the two maximums were short because `poolND` refused padding
+    # for the maximum, on the ground that its backward reads the input at each window
+    # and a padded position has none — which the average had answered one function
+    # away. `dilation` is refused on all three and **present**, because a refused seat
+    # cannot be taken by the argument after it.
+    #
+    # Adding `padding` and `ceilMode` to the two maximums without the two seats between
+    # them put `ceilMode` where torch puts `dilation`. **This line caught it in the run
+    # that added them** — `shifted` went to 2 while `shorter` fell — which is why the
+    # count is of positions and not of names.
+    #
+    # The eleven rows that need something else too:
+    #   ConvTranspose1d/2d/3d                paddingMode
+    #   LazyInstanceNorm1d/2d/3d             momentum, affine, trackRunningStats, bias
+    #   LazyLinear                           bias
+    #   RMSNorm                              eps, elementwiseAffine
+    #   RNNBase                              dropout, bidirectional, projSize
+    #   Upsample                             recomputeScaleFactor
+    #   Hardtanh                             minValue, maxValue — deliberate, see above
+    #
+    # Those fourteen are the whole of the row now: **no row is short of device/dtype
+    # alone any more**, so the next reading of this line is about features, not seats.
+    "nn": 11,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.
@@ -1267,6 +1331,44 @@ def _rows():
         pytest.skip(_stale())
     import ts_signatures
     return ts_signatures.compare()
+
+
+def test_the_name_fold_is_reachable_from_where_it_is_used():
+    """**`_camel` is imported, not local, and a probe that guesses wrong reads clean.**
+
+    `ts_signatures` folds core names with `ts_axis._camel(...)`. A throwaway measurement
+    written against this module reached for it as `S._camel` behind a `hasattr` guard,
+    found nothing, and silently compared `in_channels` against `inChannels` for every
+    row — so every multi-word argument looked absent. The numbers that came out were
+    plausible, contradicted a true sentence in the table above, and got that sentence
+    replaced with its opposite before anyone noticed.
+
+    What makes it worth a test rather than a comment: the failure is **silent and
+    plausible**. A fold that does nothing produces more findings, not fewer, and more
+    findings read as a better instrument. `device` and `dtype` came through it unharmed
+    because they are single words, so the one number that could be cross-checked
+    agreed — a number that survives a broken instrument is not thereby checked.
+
+    So this pins that the fold is where the axis expects and that it actually folds.
+    """
+    import ts_axis
+    import ts_signatures
+
+    assert hasattr(ts_axis, "_camel"), (
+        "ts_axis._camel is gone — every caller that folds core names into borch.ts "
+        "spelling goes through it, and a caller that cannot find it does not fail, "
+        "it stops folding")
+    assert not hasattr(ts_signatures, "_camel"), (
+        "ts_signatures grew its own `_camel`. Two folds means two answers; keep the "
+        "one in ts_axis and import it")
+
+    for snake, camel in (("in_channels", "inChannels"),
+                         ("padding_mode", "paddingMode"),
+                         ("track_running_stats", "trackRunningStats"),
+                         ("device", "device")):
+        assert ts_axis._camel(snake) == camel, (
+            f"the fold does not fold: {snake!r} -> {ts_axis._camel(snake)!r}, "
+            f"expected {camel!r}")
 
 
 def test_the_signature_axis_has_not_widened():

@@ -36,3 +36,41 @@ jobs:
       # never been run here at all. It is a test dependency and never a library one.
       - name: compare the values
         run: uv run --with pytest --with numpy --with torch --with torchvision --with scipy --quiet pytest tests/ -q
+
+      # ── the browser half, on a runner with no GPU ────────────────────────────
+      #
+      # **`pytest tests/` never opens a browser**, so until this step existed one of the
+      # three implementations had no automatic check of any kind. It is how 119 golden
+      # cases went red on `main` without anything saying so: they were found by a person
+      # running the runner by hand, a day later.
+      #
+      # ## Why this can live here when `gpu.yml` cannot
+      #
+      # `gpu.yml` is `workflow_dispatch` for a reason that has not changed and must not:
+      # a self-hosted runner on `push` turns write access to this repository into
+      # execution rights on a lab machine. That file's own comment says so.
+      #
+      # **But this is not the GPU check.** A GitHub runner has no GPU, so Chromium hands
+      # back SwiftShader — and the golden measures **values**, which are the same on any
+      # adapter. Measured before this step was written: headless on a machine whose real
+      # GPU was available, forced to no window, the runner reported
+      # `passed 3192 / failed 0  [google / swiftshader]` and printed its own caveat that
+      # the GPU path is unproved. That caveat is the whole distinction — `bench.py`
+      # refuses a software adapter because a **time** is a fact about a device, and this
+      # runner only warns because a **value** is not.
+      #
+      # So this catches every wrong number and no wrong second, which is exactly the
+      # half that can be automated safely.
+      #
+      # ## Not the binding's golden yet
+      #
+      # `tests/browser/run.py --lib borch_webgpu` runs the same way and is **red right
+      # now** — work in progress on another branch. Adding it today would make every
+      # push red for a week, and a permanently red check is ignored exactly as fast as a
+      # permanently green one. It goes in beside this line the day it passes.
+      - name: fetch a browser
+        run: uv run --with playwright playwright install --with-deps chromium
+      - name: compare the values in a browser
+        env:
+          BORCH_HEADLESS: "1"
+        run: uv run --with playwright python borch-ts/test/run.py

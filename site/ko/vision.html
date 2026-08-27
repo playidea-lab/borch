@@ -1,0 +1,151 @@
+<!doctype html>
+<!--
+  라이브러리의 비전 쪽 — 사본이 아니라 지도.
+
+  The module docs in `site/assets/api.json` are generated from the built declarations and
+  say all of this at length. **This page does not repeat them** — a second copy of a
+  generated text is a second thing to keep true, and the counts here are checked against
+  that file by `tests/test_site.py` for exactly that reason.
+
+  The Korean edition is `ko/vision.html`; both are edited together.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>비전 — borch</title>
+<meta name="description" content="borch 의 비전 쪽 — transforms, v2, 박스 ops, 데이터셋 디코더. torchvision 모양이고, 각각이 조용히 틀어지는 방식.">
+<link rel="alternate" hreflang="en" href="../vision.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="비전 — borch">
+<meta property="og:description" content="transforms, v2, 박스 ops, 데이터셋 디코더 — 브라우저 안의 torchvision 모양.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/vision.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">배우기</a>
+      <a href="tutorials/">튜토리얼</a>
+      <a href="models.html">모델</a>
+      <a href="vision.html" class="on" aria-current="page">비전</a>
+      <a href="api/">API</a>
+      <a href="python.html">파이썬</a>
+      <a href="setup.html">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../vision.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">torchvision 의 자리</p>
+    <h1>이미지, 박스, 데이터셋</h1>
+    <p class="lead">
+      <strong>라이브러리의 이름 <span data-count="_total">2588</span>개 중 <span data-count="_vision_total">551</span>개가 비전 쪽이다.</strong> <code>torchvision</code>
+      모양을 하고 있고, 여기 있는 이유는 하나다 — 학습에는 이미지가 텐서가 되는 자리가 필요하고,
+      그 자리가 바로 조용히 틀어지는 곳이다. 아래 각 절이 틀어지는 방식을 하나씩 이름 붙인다.
+    </p>
+
+    <h2 id="transforms">transforms &mdash; 이름 <span data-count="vision">278</span>개</h2>
+    <p>
+      <code>torchvision.transforms</code> 자리. <strong>여기서 이미지는 텐서가 아니라
+      <code>(H, W, C)</code> 배열이다.</strong> torchvision 은 PIL 이미지를 받는데 브라우저에는
+      PIL 이 없으니 배열이 그 자리를 대신한다. 이미지마다 텐서를 만들면 이미지마다 GPU 버퍼가
+      하나씩 생기고, 그건 메모리에서 무너지기 직전까지 잘 도는 것처럼 보인다.
+    </p>
+    <p>
+      이것들은 <strong>파이썬 쪽과 같은 규칙</strong>을 쓴다(<code>borchvision.py</code>). 둘이
+      갈라지면 같은 데이터가 어느 라이브러리로 읽었느냐에 따라 다른 값이 된다 &mdash; 타입은
+      못 잡고 값 비교만 보는 차이다.
+    </p>
+
+    <h2 id="v2">v2 &mdash; 함수 <span data-count="vision_v2">68</span>개, 클래스 <span data-count="vision_v2_twins">130</span>개</h2>
+    <p>
+      v2 는 torchvision 이 지금 권하는 표면이고, <strong>실체는 앞면만 다른 v1 이다.</strong>
+      이건 아무것도 쓰기 전에 측정했다 — 평범한 이미지에서 v2 의 변환은 v1 의 것과 마지막
+      비트까지 같은 값을 준다. 그래서 산술을 두 번 쓰지 않았다. v1 에 이미 있던 것은 전부
+      <strong>복사가 아니라 재수출</strong>이고, 클래스 쌍둥이는 v1 클래스를 상속해서
+      <strong>출력만</strong> 덮어쓴다.
+    </p>
+    <p>
+      <strong>한 쌍이 옆집과 거꾸로 답한다.</strong> v2 의 <code>getSize</code> 는
+      <code>[높이, 너비]</code>를, 한 네임스페이스 건너 <code>getImageSize</code> 는
+      <code>[너비, 높이]</code>를 준다. torchvision 이 일부러 뒤집고 옛 철자를 고치는 대신
+      폐기했다. 둘 다 여기 있고 각자 자기 순서를 지키며, 잘못 읽으면 <strong>전치된 이미지가
+      나오는데 그것도 학습은 된다.</strong>
+    </p>
+
+    <h2 id="ops">ops &mdash; 이름 <span data-count="ops">57</span>개</h2>
+    <p>
+      박스 기하와 그 위에 세운 손실들 — <code>boxIou</code> 와 generalized·distance·complete
+      변종, IoU 손실 셋, <code>sigmoidFocalLoss</code>, <code>nms</code>·<code>batchedNms</code>.
+      <em>없는</em> 것은 탐지기의 특징맵이나 예측을 필요로 하는 전부다. 이 라이브러리에는 아직
+      탐지기가 없고, 여기 있는 것들은 <strong>박스 하나에 숫자 넷</strong> 말고는 아무것도
+      필요로 하지 않는다.
+    </p>
+    <p>
+      나머지는 <strong>같은 기하를 이미지에 딸려 오는 것들에 적용한 것</strong>이다. 그림을
+      자르면 박스가 움직이고, 돌리면 마스크와 키포인트도 함께 돌아야 한다. 그래서 변환
+      하나마다 — affine·crop·resize·resizedCrop·rotate·perspective·elastic·pad 와 뒤집기 둘 —
+      대상별 커널이 하나씩 있다: <code>rotateBoundingBoxes</code>·<code>rotateMask</code>·
+      <code>rotateKeypoints</code>. 개수는 거기서 나온다.
+    </p>
+    <p>
+      <strong>따로 있는 이유는 셋이 서로 다른 답을 내기 때문이다.</strong> 돌아간 박스는 돌아간
+      네 꼭짓점이 아니라 <strong>그것을 감싸는 똑바른 박스</strong>라서 커진다. 마스크는 이미지와
+      같은 워프를 지나되 최근접 표본을 쓴다 — 라벨을 보간하면 원래 없던 라벨이 생긴다. 화면을
+      벗어난 키포인트는 어떤 커널에서는 잘려 붙고 어떤 커널에서는 버려진다. 셋을 함수 하나에
+      맡기면 그 선택들이 안 보이게 된다.
+    </p>
+    <p>
+      <strong>산술은 일부러 CPU 에서 한다.</strong> 박스는 수백만이 아니라 수십 개 단위로 오고,
+      여기 모든 함수는 정렬하거나, 집합이 안 줄어들 때까지 반복하거나, 마스크의 범위를 읽는다 —
+      GPU 커널이 못 하고 루프가 잘하는 모양이다. 호출마다 텐서를 한 번 되읽으며, 그래서
+      <code>async</code> 다.
+    </p>
+
+    <h2 id="datasets">datasets &mdash; 이름 <span data-count="datasets">18</span>개</h2>
+    <p>
+      <strong>디코더, 그리고 그것뿐이다.</strong> 데이터셋은 주소와 형식 두 가지인데, 주소 쪽
+      — 내려받기·캐시·체크섬 — 은 여기 없다. <strong>내려받는 테스트 케이스는 기차에서
+      실패하는 테스트 케이스</strong>이기 때문이다.
+    </p>
+    <p>
+      형식 쪽이 <em>조용히</em> 틀어지는 부분이고, 이 파일의 모든 함수가 그런 것이다. 아래는
+      전부 잘못 읽어도 <strong>학습이 되는</strong> 데이터셋을 남긴다:
+    </p>
+    <ul>
+      <li><strong>STL-10</strong> 은 열 우선으로 저장되고 라벨이 <strong>1</strong> 부터 시작한다.
+        전치를 건너뛰면 모든 그림이 돌아간 채로 나온다 — 그래도 그림이다.</li>
+      <li><strong>MovingMNIST</strong> 의 split 은 클립이 아니라 <strong>프레임</strong>을 자른다.
+        클립을 자르는 리더는 랭크는 맞고 개수는 절반인 결과를 낸다.</li>
+      <li><strong>FER2013</strong> 은 픽셀을 셀 안에 정수 문자열로 넣어두고, 배치가 두 가지다.</li>
+    </ul>
+
+    <h2 id="missing">여기 없는 것</h2>
+    <p>
+      탐지기가 없으니 <code>roiAlign</code> 도, <code>DeformConv2d</code> 도, 특징 피라미드도
+      없다. 데이터셋 내려받기도 없다. PIL 이 없으니 그것을 필요로 하는 연산도 없다.
+      <strong>API 레퍼런스는 빌드된 선언 파일에서 생성된다</strong>, 그러니
+      <em>&ldquo;이거 있나?&rdquo;</em> 에 대한 가장 확실한 답은 torchvision 의 답이 그대로
+      넘어온다고 가정하는 것이 아니라 거기서 찾아보는 것이다.
+    </p>
+    <p>
+      <a href="api/">API 레퍼런스 보기 &rarr;</a>
+    </p>
+  </main>
+</div>
+
+</body>
+</html>

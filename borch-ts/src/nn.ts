@@ -723,7 +723,9 @@ export class Linear extends Module {
    */
   readonly bias: Tensor | null;
 
-  constructor(inFeatures: number, outFeatures: number, bias = true) {
+  constructor(inFeatures: number, outFeatures: number, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Linear", device, dtype);
     super();
     // The golden plants the weights from outside, so whatever is here is overwritten
     // — a non-zero value is left for the case where nobody plants anything.
@@ -937,7 +939,9 @@ function convExtra(f: ConvFields): string {
 export class Conv1d extends ConvND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
-              paddingMode: PadMode | "zeros" = "zeros") {
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Conv1d", device, dtype);
     super(inChannels, outChannels, kernelSize, 1, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
@@ -945,7 +949,9 @@ export class Conv1d extends ConvND {
 export class Conv2d extends ConvND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
-              paddingMode: PadMode | "zeros" = "zeros") {
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Conv2d", device, dtype);
     super(inChannels, outChannels, kernelSize, 2, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
@@ -953,7 +959,9 @@ export class Conv2d extends ConvND {
 export class Conv3d extends ConvND {
   constructor(inChannels: number, outChannels: number, kernelSize: number, stride = 1, padding = 0,
               dilation = 1, groups = 1, bias = true,
-              paddingMode: PadMode | "zeros" = "zeros") {
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Conv3d", device, dtype);
     super(inChannels, outChannels, kernelSize, 3, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
@@ -1110,12 +1118,20 @@ export class Softplus extends Module {
 }
 
 export class Threshold extends Module {
-  constructor(private readonly threshold: number, private readonly value: number) {
+  constructor(private readonly threshold: number, private readonly value: number,
+              private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.threshold(this.threshold, this.value);
+    const out = x.threshold(this.threshold, this.value);
+    return this.inplace ? writeBack(x, out) : out;
+  }
+
+  // `inplace` only when true, as `RReLU` — not the dropout family's always-print.
+  override describe(): string {
+    const pair = `threshold=${pyFloat(this.threshold)}, value=${pyFloat(this.value)}`;
+    return `Threshold(${pair}${this.inplace ? ", inplace=True" : ""})`;
   }
 }
 
@@ -1277,7 +1293,8 @@ export class LogSoftmax extends Module {
 export class PReLU extends Module {
   readonly weight: Tensor;
 
-  constructor(numParameters = 1, init = 0.25) {
+  constructor(numParameters = 1, init = 0.25, device?: null, dtype?: null) {
+    refuseDeviceDtype("PReLU", device, dtype);
     super();
     this.weight = Tensor.owned([numParameters], init);
     this.claim(this.weight);
@@ -1353,8 +1370,8 @@ export class GroupNorm extends Module {
     dtype?: null,
     bias = true,
   ) {
-    super();
     refuseDeviceDtype("GroupNorm", device, dtype);
+    super();
     this.weight = affine ? Tensor.owned([numChannels], 1) : null;
     this.bias = affine && bias ? Tensor.owned([numChannels], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
@@ -1613,12 +1630,13 @@ export class ConvTranspose3d extends ConvTransposeND {
  * while only inference is wrong.
  */
 export class Dropout extends Module {
-  constructor(private readonly p = 0.5) {
+  constructor(private readonly p = 0.5, private readonly inplace = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.dropout(this.p, this.training);
+    const out = x.dropout(this.p, this.training);
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -2235,7 +2253,9 @@ export class LayerNorm extends Module {
 
   constructor(normalizedShape: number | readonly number[],
               private readonly eps = 1e-5,
-              private readonly elementwiseAffine = true, bias = true) {
+              private readonly elementwiseAffine = true, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("LayerNorm", device, dtype);
     super();
     const shape = typeof normalizedShape === "number"
       ? [normalizedShape] : [...normalizedShape];
@@ -2344,7 +2364,9 @@ export class RNNCellBase extends Module {
    * order visible, and the order is the part that mattered.
    */
   constructor(readonly inputSize: number, readonly hidden: number,
-              readonly bias = true, numChunks = 1) {
+              readonly bias = true, numChunks = 1,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("RNNCellBase", device, dtype);
     super();
     const rows = hidden * numChunks;
     const bound = 1 / Math.sqrt(Math.max(1, hidden));
@@ -2386,7 +2408,9 @@ export class RNNCellBase extends Module {
 
 export class RNNCell extends RNNCellBase {
   constructor(inputSize: number, hidden: number, bias = true,
-              readonly nonlinearity: "tanh" | "relu" = "tanh") {
+              readonly nonlinearity: "tanh" | "relu" = "tanh",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("RNNCell", device, dtype);
     super(inputSize, hidden, bias, 1);
   }
 
@@ -2406,7 +2430,9 @@ export class RNNCell extends RNNCellBase {
 }
 
 export class GRUCell extends RNNCellBase {
-  constructor(inputSize: number, hidden: number, bias = true) {
+  constructor(inputSize: number, hidden: number, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("GRUCell", device, dtype);
     super(inputSize, hidden, bias, 3);
   }
 
@@ -2434,7 +2460,9 @@ export class GRUCell extends RNNCellBase {
  * loses the memory cell.
  */
 export class LSTMCell extends RNNCellBase {
-  constructor(inputSize: number, hidden: number, bias = true) {
+  constructor(inputSize: number, hidden: number, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("LSTMCell", device, dtype);
     super(inputSize, hidden, bias, 4);
   }
 
@@ -2508,7 +2536,9 @@ export class Bilinear extends Module {
    * pointed at `nn` as well as at `optim`.
    */
   constructor(readonly in1Features: number, readonly in2Features: number,
-              readonly outFeatures: number, bias = true) {
+              readonly outFeatures: number, bias = true,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Bilinear", device, dtype);
     super();
     const bound = 1 / Math.sqrt(Math.max(1, in1Features));
     this.weight = uniform([outFeatures, in1Features, in2Features], bound);
@@ -2577,14 +2607,24 @@ export class Softmax2d extends Module {
 }
 
 export class RReLU extends Module {
-  constructor(readonly lower = 1 / 8, readonly upper = 1 / 3) { super(); }
+  constructor(readonly lower = 1 / 8, readonly upper = 1 / 3,
+              private readonly inplace = false) { super(); }
 
   override forward(x: Tensor): Tensor {
-    return x.rrelu(this.lower, this.upper, this.training);
+    const out = x.rrelu(this.lower, this.upper, this.training);
+    return this.inplace ? writeBack(x, out) : out;
   }
 
+  /**
+   * **`inplace` appears only when it is true**, which is not how the dropout family
+   * below prints it — those show `inplace=False` always. Two conventions inside one
+   * feature, and the only way to know which applies where is to call `repr` on the
+   * real thing. Measured: `RReLU(lower=0.125, upper=0.3333333333333333)` against
+   * `RReLU(lower=0.125, upper=0.3333333333333333, inplace=True)`.
+   */
   override describe(): string {
-    return `RReLU(lower=${pyFloat(this.lower)}, upper=${pyFloat(this.upper)})`;
+    const bounds = `lower=${pyFloat(this.lower)}, upper=${pyFloat(this.upper)}`;
+    return `RReLU(${bounds}${this.inplace ? ", inplace=True" : ""})`;
   }
 }
 
@@ -2710,7 +2750,9 @@ export class Embedding extends Module {
               readonly scaleGradByFreq = false,
               readonly sparse = false,
               _weight: Tensor | null = null,
-              _freeze = false) {
+              _freeze = false,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("Embedding", device, dtype);
     super();
     if (scaleGradByFreq) {
       throw new NotImplementedError("Embedding(scaleGradByFreq) is not carried across");
@@ -2794,7 +2836,9 @@ export class EmbeddingBag extends Module {
               readonly sparse = false,
               _weight: Tensor | null = null,
               readonly includeLastOffset = false,
-              readonly paddingIdx: number | null = null) {
+              readonly paddingIdx: number | null = null,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("EmbeddingBag", device, dtype);
     super();
     this.weight = _weight ?? uniform([numEmbeddings, embeddingDim], 1);
     this.claim(this.weight);
@@ -2861,40 +2905,71 @@ export class ChannelShuffle extends Module {
   override describe(): string { return `ChannelShuffle(groups=${this.groups})`; }
 }
 
-/** The root of the drop-by-channel family. **It prints `inplace` too** — torch does. */
+/**
+ * The root of the drop-by-channel family. **It prints `inplace` always** — torch does,
+ * unlike `RReLU` and `Threshold` above, which print it only when true.
+ *
+ * ## torch's two alpha layers accept the flag and drop it
+ *
+ * This is not a simplification on our side. Read torch's own `forward`:
+ *
+ * ```python
+ * class Dropout2d:            return F.dropout2d(input, self.p, self.training, self.inplace)
+ * class AlphaDropout:         return F.alpha_dropout(input, self.p, self.training)
+ * class FeatureAlphaDropout:  return F.feature_alpha_dropout(input, self.p, self.training)
+ * ```
+ *
+ * The functions honour `inplace`; the two alpha *layers* never hand it over. Measured
+ * on real torch across four ranks: `nn.AlphaDropout(0.5, inplace=True)(x)` returns a
+ * new tensor and leaves `x` untouched, while `F.alpha_dropout(x, inplace=True)` returns
+ * `x` itself with the buffer moved.
+ *
+ * **So `honours` is per-class, and the two that do not still take the seat.** Honouring
+ * it here would be the more sensible behaviour and the wrong port: code that works
+ * against torch may read `x` after the call, and torch guarantees it survives. Being
+ * better than the thing you are imitating is a way of being different from it.
+ */
 class FeatureDropoutBase extends Module {
   constructor(
     readonly label: string,
     readonly p = 0.5,
     private readonly alpha = false,
     private readonly perChannel = true,
+    private readonly inplace = false,
+    /** Whether torch's layer actually forwards the flag. False for the alpha pair. */
+    private readonly honours = true,
   ) { super(); }
 
   override forward(x: Tensor): Tensor {
-    return this.alpha
+    const out = this.alpha
       ? x.alphaDropout(this.p, this.training, this.perChannel)
       : x.featureDropout(this.p, this.training);
+    return this.inplace && this.honours ? writeBack(x, out) : out;
   }
 
   override describe(): string {
-    return `${this.label}(p=${this.p}, inplace=False)`;
+    return `${this.label}(p=${this.p}, inplace=${this.inplace ? "True" : "False"})`;
   }
 }
 
 export class Dropout1d extends FeatureDropoutBase {
-  constructor(p?: number) { super("Dropout1d", p); }
+  constructor(p?: number, inplace = false) { super("Dropout1d", p, false, true, inplace); }
 }
 export class Dropout2d extends FeatureDropoutBase {
-  constructor(p?: number) { super("Dropout2d", p); }
+  constructor(p?: number, inplace = false) { super("Dropout2d", p, false, true, inplace); }
 }
 export class Dropout3d extends FeatureDropoutBase {
-  constructor(p?: number) { super("Dropout3d", p); }
+  constructor(p?: number, inplace = false) { super("Dropout3d", p, false, true, inplace); }
 }
 export class AlphaDropout extends FeatureDropoutBase {
-  constructor(p?: number) { super("AlphaDropout", p, true, false); }
+  constructor(p?: number, inplace = false) {
+    super("AlphaDropout", p, true, false, inplace, false);
+  }
 }
 export class FeatureAlphaDropout extends FeatureDropoutBase {
-  constructor(p?: number) { super("FeatureAlphaDropout", p, true, true); }
+  constructor(p?: number, inplace = false) {
+    super("FeatureAlphaDropout", p, true, true, inplace, false);
+  }
 }
 
 // ── Lazy layers ────────────────────────────────────────────────────────
@@ -2971,7 +3046,9 @@ export class LazyLinear extends LazyModule {
 class LazyConvBase extends LazyModule {
   constructor(spatial: number, outChannels: number, kernelSize: number, stride = 1,
               padding = 0, dilation = 1, groups = 1, bias = true,
-              paddingMode: PadMode | "zeros" = "zeros") {
+              paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype(`LazyConv${spatial}d`, device, dtype);
     super(`LazyConv${spatial}d`,
       (inChannels) => new ConvND(inChannels, outChannels, kernelSize, spatial, stride, padding, bias,
                           dilation, groups, paddingMode),
@@ -2982,7 +3059,9 @@ class LazyConvBase extends LazyModule {
 class LazyConvTransposeBase extends LazyModule {
   constructor(spatial: number, outChannels: number, kernelSize: number, stride = 1,
               padding = 0, outputPadding = 0, groups = 1, bias = true,
-              dilation = 1, paddingMode: PadMode | "zeros" = "zeros") {
+              dilation = 1, paddingMode: PadMode | "zeros" = "zeros",
+              device?: null, dtype?: null) {
+    refuseDeviceDtype(`LazyConvTranspose${spatial}d`, device, dtype);
     void paddingMode;
     super(`LazyConvTranspose${spatial}d`,
       (inChannels) => new ConvTransposeND(inChannels, outChannels, kernelSize, spatial, stride, padding,
@@ -3014,12 +3093,14 @@ class LazyConvTransposeBase extends LazyModule {
  */
 type ConvArgs = [outChannels: number, kernelSize: number, stride?: number,
                  padding?: number, dilation?: number, groups?: number,
-                 bias?: boolean, paddingMode?: PadMode | "zeros"];
+                 bias?: boolean, paddingMode?: PadMode | "zeros",
+                 device?: null, dtype?: null];
 
 type ConvTransposeArgs = [outChannels: number, kernelSize: number, stride?: number,
                           padding?: number, outputPadding?: number, groups?: number,
                           bias?: boolean, dilation?: number,
-                          paddingMode?: PadMode | "zeros"];
+                          paddingMode?: PadMode | "zeros",
+                          device?: null, dtype?: null];
 
 export class LazyConv1d extends LazyConvBase {
   constructor(...a: ConvArgs) { super(1, ...a); }
@@ -3136,7 +3217,10 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
     cutoffs: readonly number[],
     readonly divValue = 4.0,
     readonly headBias = false,
+    device?: null,
+    dtype?: null,
   ) {
+    refuseDeviceDtype("AdaptiveLogSoftmaxWithLoss", device, dtype);
     super();
     this.cutoffs = [...cutoffs, nClasses];
     this.shortlistSize = this.cutoffs[0] ?? 0;
@@ -4994,7 +5078,9 @@ export class MultiheadAttention extends Module {
               addZeroAttn = false,
               kdim: number | null = null,
               vdim: number | null = null,
-              readonly batchFirst = false) {
+              readonly batchFirst = false,
+              device?: null, dtype?: null) {
+    refuseDeviceDtype("MultiheadAttention", device, dtype);
     super();
     if (embedDim % numHeads) {
       throw new Error(
@@ -5223,7 +5309,9 @@ export class TransformerEncoderLayer extends Module {
     dModel: number, nhead: number, dimFeedforward = 2048, dropout = 0.1,
     activation = "relu", layerNormEps = 1e-5, batchFirst = false,
     normFirst = false, bias = true,
+    device?: null, dtype?: null,
   ) {
+    refuseDeviceDtype("TransformerEncoderLayer", device, dtype);
     super();
     // **`batchFirst` was taken and thrown away** — `void batchFirst;` sat here, in the
     // class whose own comment above is about an argument landing in the wrong seat.
@@ -5320,7 +5408,9 @@ export class TransformerDecoderLayer extends Module {
     dModel: number, nhead: number, dimFeedforward = 2048, dropout = 0.1,
     activation = "relu", layerNormEps = 1e-5, batchFirst = false,
     normFirst = false, bias = true,
+    device?: null, dtype?: null,
   ) {
+    refuseDeviceDtype("TransformerDecoderLayer", device, dtype);
     super();
     // **`batchFirst` was taken and thrown away** — `void batchFirst;` sat here, in the
     // class whose own comment above is about an argument landing in the wrong seat.
@@ -5426,7 +5516,9 @@ export class Transformer extends Module {
     activation = "relu", customEncoder: TransformerEncoder | null = null,
     customDecoder: TransformerDecoder | null = null, layerNormEps = 1e-5,
     batchFirst = false, normFirst = false, bias = true,
+    device?: null, dtype?: null,
   ) {
+    refuseDeviceDtype("Transformer", device, dtype);
     super();
     this.encoder = customEncoder ?? new TransformerEncoder(
       new TransformerEncoderLayer(dModel, nhead, dimFeedforward, dropout, activation,

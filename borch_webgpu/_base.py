@@ -895,7 +895,9 @@ class Tensor:
         return guarded(self._h.remainder, float(other))
 
     def __matmul__(self, other):
-        return guarded(self._h.mm, handle(other))
+        """`a @ b` is `matmul`, **not `mm`.** torch's operator batches and broadcasts;
+        `mm` is the two-dimensional kernel underneath it and refuses everything else."""
+        return guarded(self._h.matmul, handle(other))
 
     def _inplace(js_name):                                   # noqa: N805
         """`x += 1` is an in-place operation too — torch refuses it on a leaf

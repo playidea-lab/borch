@@ -812,8 +812,19 @@ class Tensor:
             "MmBackward0" if self.data.ndim == 2 else "BmmBackward0",
         )
 
-    def matmul(self, o):
-        return self.__matmul__(o)
+    def matmul(self, other):
+        # **`other`, and the docstring disagrees.** `torch.Tensor.matmul.__doc__`
+        # opens with `matmul(tensor2) -> Tensor`, so reading the documentation gives
+        # one name and calling the function gives another:
+        #
+        #     a.matmul(other=b)    works
+        #     a.matmul(tensor2=b)  TypeError: missing 1 required positional
+        #                          arguments: "other"
+        #
+        # The keyword a caller can actually write is the one that belongs in the seat.
+        # Two of us read the doc and reached `tensor2` independently before anyone
+        # called it with a keyword — prose about an argument is not the argument.
+        return self.__matmul__(other)
 
     # In-place updates. **These three route to the underscore names rather than
     # carrying their own formula** — `a += b` and `a.add_(b)` are one operation
@@ -1797,12 +1808,25 @@ def _map2_(self, other, third, fn):
     return self
 
 
-def _resize_(self, *sizes):
+def _resize_(self, *sizes, size=None):
     """**Growing leaves the new cells undefined** — torch gives garbage
     (measured: sometimes it happens to be zero). This fills with zeros. The
     values cannot be pinned, so the golden asks about **shrinking and the shape
-    only.**"""
+    only.**
+
+    **`size=` is a fourth spelling, not a fourth behaviour.** torch takes all of
+    `resize_(4)`, `resize_(2, 2)`, `resize_((2, 2))` and `resize_(size=(2, 2))`;
+    a bare `*sizes` covers the first three and refuses the fourth, which is the
+    one a reader of the documentation writes. That doc, incidentally, calls the
+    argument `sizes` — the runtime calls it `size` and rejects `sizes=`. Fourteen
+    torch methods have that split between what they document and what they
+    accept, and the accepted name is the one that belongs here.
+    """
     _refuse_leaf_inplace(self, "resize_")
+    if size is not None:
+        if sizes:
+            raise TypeError("resize_() got size both positionally and by keyword")
+        sizes = (size,)
     shape = tuple(sizes[0]) if len(sizes) == 1 and isinstance(sizes[0], (tuple, list)) \
         else tuple(int(s) for s in sizes)
     want = int(_np.prod(shape)) if shape else 1

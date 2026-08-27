@@ -1,0 +1,138 @@
+<!doctype html>
+<!--
+  The hub, as a page that fetches rather than a page that claims.
+
+  **No model list is written here.** The table is built from
+  https://models.pilab.kr/index.json at load time, and the button downloads a real model
+  and verifies it against the sample the manifest names. A hand-written list is the exact
+  failure this repository spent a day on: it keeps looking right after it stops being.
+
+  The Korean edition is `ko/models.html`; both are edited together.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Models — borch</title>
+<meta name="description" content="Pretrained models the borch runtime loads straight into a browser tab — the catalog, and a button that downloads one and verifies it against its sample.">
+<link rel="alternate" hreflang="ko" href="ko/models.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Models — borch">
+<meta property="og:description" content="Pretrained models that load into a browser tab, with the hash and the sample checked in front of you.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/models.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "../borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.6.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.2.3?external=borch-ts,bimm-ts"
+} }
+</script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <a href="models.html" class="on" aria-current="page">Models</a>
+      <a href="vision.html">Vision</a>
+      <a href="api/">API</a>
+      <a href="python.html">Python</a>
+      <a href="setup.html">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/models.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">The hub</p>
+    <h1>Models you can run in this tab</h1>
+    <p class="lead">
+      Weights, a manifest that says what they are, and a sample the model has to reproduce.
+      <strong>Nothing below is a screenshot.</strong> The list is fetched from the catalog
+      when this page loads, and the button downloads a real model into your browser and
+      checks it.
+    </p>
+
+    <h2>Verify one, here</h2>
+    <p>
+      This runs the whole path: <strong>ask the browser what it can do → fetch the
+      manifest → download the weights → hash them → build the architecture → run the
+      sample input → compare with the sample output.</strong> The order matters — checking
+      the environment last would mean telling you it will not work after 10 MB had
+      arrived, and hashing after loading would mean the wrong bytes are already in memory.
+    </p>
+    <p>
+      <button id="go" class="run">Download and verify</button>
+      <span id="badge" class="small"></span>
+    </p>
+    <pre id="out" class="small" style="overflow-x:auto">idle</pre>
+    <p class="small">
+      It really downloads. The smallest model in the catalog is chosen so this costs about
+      ten megabytes.
+    </p>
+
+    <h2>The catalog</h2>
+    <p>
+      Two kinds of thing live here, and the difference is worth reading:
+      <strong><code>trained-by-borch</code></strong> means the weights were produced by
+      this library, in a browser. <strong><code>converted-from-torch</code></strong> means
+      somebody else trained them and they were carried across &mdash;
+      <a href="https://github.com/playidea-lab/borch-hub-registry">the registry</a> keeps a
+      provenance note for each saying whose they were.
+    </p>
+    <div style="overflow-x:auto"><table id="cat">
+      <thead><tr>
+        <th>Model</th><th>Task</th><th>Trained on</th><th>Size</th>
+        <th>Origin</th><th>Licence</th>
+      </tr></thead>
+      <tbody><tr><td colspan="6" class="small">loading the catalog…</td></tr></tbody>
+    </table></div>
+    <p class="small">
+      <strong>Two licences, not one.</strong> The weights carry theirs and the data they
+      were trained on carries its own, and they are rarely the same sentence &mdash;
+      Apache-2.0 weights trained on ImageNet do not make ImageNet's terms go away.
+    </p>
+
+    <h2>In your own page</h2>
+    <pre class="small" style="overflow-x:auto"><code>import { init } from "borch-ts";
+import { load, verify } from "borch-hub";
+
+await init();
+const { model, manifest } = await load(MANIFEST_URL);
+const badge = await verify(model, manifest, MANIFEST_URL);</code></pre>
+    <p>
+      <code>load</code> takes a <code>fetch</code>, so a private model, an organisation
+      account or a signed URL all go through that one hook. The catalog itself is a single
+      document &mdash; <a href="https://models.pilab.kr/index.json">index.json</a> &mdash;
+      and this page has no list of its own; it reads that one.
+    </p>
+
+    <h2>What this is not</h2>
+    <p>
+      There is no torchvision-shaped name for it. <code>torch.hub</code> is the closest and
+      it fetches models from repositories without a catalog of its own. The three things
+      here &mdash; <strong>a published manifest, a hash checked before loading, and an
+      environment check before downloading</strong> &mdash; are in neither timm nor
+      <code>torch.hub</code>. The architectures come from
+      <a href="https://github.com/playidea-lab/bimm">bimm</a>, which is timm's seat; the
+      hub knows the catalog and the catalog does not know the hub.
+    </p>
+  </main>
+</main>
+</div>
+<script type="module" src="assets/models.js"></script>
+
+</body>
+</html>
