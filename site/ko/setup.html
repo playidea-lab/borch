@@ -85,7 +85,7 @@
 
     <h2>NVIDIA 카드를 단 리눅스</h2>
     <p>
-      <strong>플래그 둘이면 충분한데 러너는 넷을 보냅니다.</strong> 크롬은 차단 목록을 들고
+      <strong>플래그 둘이면 충분하고, 러너도 이제 그 둘을 보냅니다.</strong> 크롬은 차단 목록을 들고
       있고 드라이버에 <em>묻기 전에</em> 그것을 봅니다. 그래서 멀쩡한 카드가 거절되는데,
       정작 <strong>그 차단 목록의 이름을 딴 플래그가 그것을 푸는 플래그가 아닙니다.</strong>
       두 카드를 같은 방식으로 쟀습니다 — 진짜 X 세션과 시스템 크롬:
@@ -109,7 +109,10 @@
         <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code><br>
+        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code></td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td><strong><code>nvidia / lovelace</code></strong></td></tr>
+        <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
                 <span class="small">이 행이 러너의 목록이다</span></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>

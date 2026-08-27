@@ -90,7 +90,7 @@
 
     <h2>Linux with an NVIDIA card</h2>
     <p>
-      <strong>Two flags are enough, and the runner sends four.</strong> Chrome keeps a
+      <strong>Two flags are enough, and the runner now sends those two.</strong> Chrome keeps a
       blocklist and consults it <em>before</em> asking the driver, so a working card is
       refused — but the flag named after that blocklist turns out not to be the one that
       lifts it. Measured on both cards the same way, a real X session and the system
@@ -115,7 +115,10 @@
         <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code><br>
+        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code></td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td><strong><code>nvidia / lovelace</code></strong></td></tr>
+        <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
                 <span class="small">this row is the runner's flags</span></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>

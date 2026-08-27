@@ -1295,17 +1295,32 @@ working group's implementation status gives Linux as:
 It shares exactly one entry with what `launch.py` carries — and that one entry,
 `--enable-features=Vulkan`, turns out to be the part that matters:
 
-| flags | RTX 5080 / 580 | RTX 4090 / 550 |
+| flags | 5080 / 580 / Chrome 151 | 4090 / 550 / Chrome 143 |
 |---|---|---|
 | none | none | none |
+| `--enable-features=Vulkan` alone | **blackwell** | none |
 | `--enable-unsafe-webgpu` | swiftshader | swiftshader |
-| ` + --ignore-gpu-blocklist` | **blackwell** | swiftshader |
-| ` + --enable-features=Vulkan --disable-gpu-driver-bug-workarounds`  (= `FLAGS`) | **blackwell** | **lovelace** |
-| `--enable-unsafe-webgpu --enable-features=Vulkan` | not measured | **lovelace** |
+| ` + --ignore-gpu-blocklist` | swiftshader † | swiftshader |
+| ` + --enable-features=Vulkan` | **blackwell** | **lovelace** |
+| ` + --disable-gpu-driver-bug-workarounds` | **blackwell** | **lovelace** |
+| `--enable-unsafe-webgpu --enable-features=Vulkan`  (= `FLAGS`) | **blackwell** | **lovelace** |
 
-**The two cards need different flags and the shipped list carries both.** A 5080 wants
-the blocklist override and a 4090 is unmoved by it; a 4090 wants Vulkan. Neither middle
-rung opens both, which is what the four-flag list is for.
+**Neither of the two carries alone.** `--enable-features=Vulkan` by itself reaches the
+5080 and gives the 4090 nothing; `--enable-unsafe-webgpu` by itself gives SwiftShader on
+both. Together they open both cards, and the blocklist override adds no adapter on either
+— which is why the shipped list is those two and not four.
+
+macOS is on Metal and hands back an adapter with no flags at all, so there the pair only
+has to break nothing: measured, the whole comparison passes under it.
+
+**The browser is in the column headings, and that matters.** The two Linux columns differ
+in card, driver **and Chrome major version at once**, so a difference between them cannot
+be attributed to the hardware. This page did attribute it, twice.
+
+> † **This row read `blackwell` until Chrome 151 was asked**, and it was reproduced three
+> times on the newer browser. The old reading came from Playwright's bundled Chromium and
+> the new one from the system Chrome, so what moved is not established — only that the row
+> is no longer what it said it was.
 
 Two narrowings came with it: `--ozone-platform=x11` is **not** needed, and
 `--use-angle=vulkan` on its own returns no adapter — ANGLE without Vulkan breaks what
