@@ -1,0 +1,144 @@
+<!doctype html>
+<!--
+  The golden, run in the reader's own browser on the reader's own GPU.
+
+  `borch-ts/test/index.html` is the same runner and it only ever ran on this machine,
+  driven by Playwright. That is why every vendor claim in this repository has come from
+  one laptop — and why one of them was wrong for months: `845/845` was written down as
+  two vendors when the adapter had been `google / swiftshader` the whole time.
+
+  This page exists so that the answer can come from a machine nobody here owns. It
+  loads the same `dist` the site already ships and the same `tests/golden.json` the
+  local runner reads, so there is no second copy of anything to keep true.
+
+  The Korean edition is `ko/check.html`; both are edited together.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Check your GPU — borch</title>
+<meta name="description" content="Run borch's full golden suite against real PyTorch answers, in your browser, on your GPU — and see the vendor it actually used.">
+<link rel="alternate" hreflang="ko" href="ko/check.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Check your GPU — borch">
+<meta property="og:description" content="The whole golden suite, in your browser, on your GPU.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/check.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <a href="models.html">Models</a>
+      <a href="vision.html">Vision</a>
+      <a href="api/">API</a>
+      <a href="python.html">Python</a>
+      <a href="setup.html" class="on" aria-current="page">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/check.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">the same suite, your machine</p>
+    <h1>Check your GPU</h1>
+    <p class="lead">
+      <strong>Every case below was frozen by running real PyTorch</strong> and comparing
+      the answer position by position. This page asks your browser the same questions on
+      your own GPU. Nothing is uploaded &mdash; the run happens in this tab and the
+      result stays on this page.
+    </p>
+
+    <p>
+      <button id="go" class="btn">Run the golden</button>
+      <span id="where" class="muted"></span>
+    </p>
+
+    <pre id="out" class="out">Press the button. It takes a few seconds and the tab
+will be busy while it runs.</pre>
+
+    <h2>Why this page exists</h2>
+    <p>
+      <strong>Every vendor claim in this repository has come from one laptop</strong>,
+      and one of them was wrong for months: a <code>845 / 845</code> pass was written
+      down as two vendors confirmed when the adapter had been
+      <code>google / swiftshader</code> the whole time. The pass was real; the sentence
+      about what it proved was not.
+    </p>
+    <p>
+      So the adapter is printed with the count, always, and in the same breath. A run
+      that says <code>google / swiftshader</code> is <em>also</em> a real result &mdash;
+      that is WebGPU's own CPU path and the values are still values. It just is not a
+      statement about a GPU.
+    </p>
+    <p>
+      If you have a card this repository has never seen, this is the whole of what it
+      takes to tell us: press the button and paste the first line into an
+      <a href="https://github.com/playidea-lab/borch/issues">issue</a>.
+    </p>
+  </main>
+</div>
+
+<script type="module">
+  // **Relative, and one path only.** The site is served from the repository root
+  // locally and from `_site` when deployed, and the layout is the same in both:
+  // `borch-ts/dist` and `tests/golden.json` sit beside `site/`. Nailing in a host
+  // would be right in one of those two places.
+  const GOLDEN = "../tests/golden.json";
+
+  const out = document.getElementById("out");
+  const where = document.getElementById("where");
+  const go = document.getElementById("go");
+
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    out.textContent = "running…";
+    try {
+      const { run, format } = await import("../borch-ts/dist/test/golden.js");
+      const report = await run(GOLDEN);
+      // Kept where an automated runner can read it, as the local page does.
+      window.__borchReport = report;
+      // **`adapter` is a string, not a pair.** Reading it as `{vendor, architecture}`
+      // put `undefined / undefined` beside the button while the report itself said
+      // `apple / metal-3` — the page would have shipped saying nothing, next to a
+      // count that was right.
+      where.textContent = report.adapter ?? "";
+      out.textContent = format(report);
+      out.className = report.failed.length === 0 && report.unknown.length === 0
+        ? "out ok" : "out fail";
+    } catch (err) {
+      // **What did not run and what failed are different things.** A page that prints
+      // one as the other is how a missing GPU reads as a broken library.
+      out.textContent = `it could not run: ${err && err.message ? err.message : err}`;
+      out.className = "out fail";
+    } finally {
+      go.disabled = false;
+    }
+  });
+</script>
+
+<style>
+  .out { white-space: pre-wrap; overflow-x: auto; padding: 1rem;
+         border-radius: .5rem; background: var(--code-bg, #1116);
+         font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .out.ok { border-left: 3px solid #0a7b34; }
+  .out.fail { border-left: 3px solid #b00020; }
+  .muted { opacity: .7; margin-left: .75rem;
+           font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+
+</body>
+</html>

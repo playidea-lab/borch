@@ -91,6 +91,13 @@ jobs:
           cp -r site borch-ts/dist borch borch_webgpu _site/
           mkdir -p _site/borch-ts && mv _site/dist _site/borch-ts/dist
           mkdir -p _site/vendor && cp -r vendor/pyodide _site/vendor/pyodide
+          # **The golden goes up so that `site/check.html` can run it.** 2MB beside a
+          # site that is already several, and it is the same file the local runner
+          # reads — copied rather than regenerated, so there is no second answer to
+          # keep true. The path is kept at `tests/` because the page reaches it as
+          # `../tests/golden.json` and the site is served from the repository root
+          # locally; one relative path that works in both places.
+          mkdir -p _site/tests && cp tests/golden.json _site/tests/golden.json
           cp borchvision.py THIRD-PARTY.md LICENSE _site/
           # Sends the root to the site. The cheapest way that touches no relative path.
           cat > _site/index.html <<'HTML'
