@@ -86,6 +86,21 @@ jobs:
         env:
           BORCH_HEADLESS: "1"
         run: uv run --with playwright python borch-ts/test/run.py
+      # **The binding's runner reads `tests/golden.npz`, which is not committed.** The
+      # borch.ts one reads `tests/golden.json`, which is — so the step above needed
+      # nothing and this one failed with `no golden answers` the first time it ran.
+      #
+      # Frozen here rather than read from the committed export, because that is the
+      # command the runner's own message names and because the two are already pinned
+      # to each other: `test_committed_golden.py` holds the export against the case
+      # table and `test_golden.py` holds a fresh dump against the core, both in the
+      # pytest step above. A dump that disagreed with the export would have turned
+      # those red first, so this cannot be the thing that goes red for a reason about
+      # torch's version rather than about us.
+      - name: freeze the golden answers from real torch
+        run: >
+          uv run --with numpy --with torch --with torchvision --with scipy
+          python tests/golden.py dump
       - name: compare the values through the binding
         env:
           BORCH_HEADLESS: "1"
