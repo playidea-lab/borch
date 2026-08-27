@@ -147,12 +147,14 @@
       might be it.
     </p>
     <p class="small">
-      <strong>The whole suite was run on those two flags</strong>, not just an adapter
-      probe: <code>3753 / 3755 agreeing [nvidia / blackwell]</code> on the 5080. The two
-      that differ are that machine's torch build rather than its GPU — it has CUDA, so a
-      case asserting <em>both sides refuse</em> is false there, and its CUDA wheel links a
-      LAPACK that answers one matrix differently. The 4090 has the adapter measurement
-      only; no golden has been run on it.
+      <strong>The whole suite was run on those two flags</strong>, not just an adapter probe:
+      <code>agreeing 3758 / 3758 [nvidia / blackwell]</code> on the 5080, and the training
+      agrees too &mdash; thirty steps of a small ResNet with its per-layer gradients,
+      batch-norm buffers and eval, matched against torch to <code>64 values</code>, once
+      through the Python binding and once through borch.ts's own API. Earlier this page
+      reported <code>3753 / 3755</code> here: the two that differed were frozen answers about
+      the machine rather than about torch, and they have since been fixed rather than
+      excused. The 4090 has the adapter measurement only; no golden has been run on it.
     </p>
     <p class="small">
       <strong>An earlier version of this table said the blocklist flag opened the 5080.</strong>
