@@ -459,8 +459,11 @@ for step in range(201):
     <p class="small muted" style="margin-top:.8rem">
       그 위에 <strong>골든 3763건</strong>이 세 구현을 같은 기대값에 대조한다. 진짜 torch 를 브라우저에
       넣을 수 없어서, 네이티브에서 굳힌 기대값을 브라우저로 들고 간다. Apple Metal 에서 골든이 전건 같다.
-      borch.ts 가 맡은 몫은 <strong>NVIDIA</strong> 에서도 같다 —
-      <code>passed 2901 / failed 0 [nvidia / blackwell]</code>, Xvfb 위의 RTX 5080 이다.
+      <strong>NVIDIA</strong> 에서도 같다 —
+      RTX 5080 에서 <code>agreeing 3758 / 3758 [nvidia / blackwell]</code>, 가상 프레임버퍼가 아니라
+      진짜 데스크톱 세션에서다. <strong>학습도 맞는다</strong> — 작은 ResNet 30 스텝의 궤적, 층별 기울기,
+      배치정규화 버퍼, eval 까지 torch 와 대조해 <code>64 values</code>. 파이썬 바인딩으로 한 번,
+      borch.ts 자체 API 로 한 번.
       <strong>몇 달 동안 두 번째 벤더로 읽혔던 그 실행은 두 번째 벤더가 아니었다.</strong> 리눅스 GPU 서버에서
       845/845 로 통과했지만 어댑터가 <code>google / swiftshader</code>, 즉 CPU 였다. 값은 맞았고 벤더 주장은
       틀렸다 — 러너가 어댑터를 출력만 하지 않고 판정하게 된 이유가 그것이다.

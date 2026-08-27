@@ -467,8 +467,12 @@ for step in range(201):
     <p class="small muted" style="margin-top:.8rem">
       On top of that, <strong>3763 golden cases</strong> hold all three implementations to the same expected values.
       Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
-      identically on Apple Metal, and borch.ts's share of it matches on <strong>NVIDIA</strong> too —
-      <code>passed 2901 / failed 0 [nvidia / blackwell]</code>, an RTX 5080 under Xvfb.
+      identically on Apple Metal, and on <strong>NVIDIA</strong> too —
+      <code>agreeing 3758 / 3758 [nvidia / blackwell]</code> on an RTX 5080, in a real desktop
+      session rather than a virtual framebuffer. <strong>The training agrees as well</strong>:
+      thirty steps of a small ResNet, its per-layer gradients, its batch-norm buffers and its
+      eval, against torch — <code>64 values</code>, once through the Python binding and
+      once through borch.ts's own API.
       <strong>The run that was read as a second vendor for months was not one.</strong> It passed 845 of 845 on a
       Linux GPU server whose adapter reported <code>google / swiftshader</code> — the CPU. The values were right and
       the vendor claim was not, which is why the runners now judge the adapter instead of printing it.
