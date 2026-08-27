@@ -85,71 +85,71 @@
 
     <h2>NVIDIA 카드를 단 리눅스</h2>
     <p>
-      <strong>여기 카드가 둘인데 서로 다른 플래그를 필요로 했다 — 다만 목록 하나가 둘 다
-      담는다.</strong> 크롬은 차단 목록을 들고 있고 드라이버에 <em>묻기 전에</em> 그것을
-      본다. 그래서 멀쩡한 카드가 거절된다. 가로로 읽을 것:
+      <strong>플래그 둘이면 충분한데 러너는 넷을 보냅니다.</strong> 크롬은 차단 목록을 들고
+      있고 드라이버에 <em>묻기 전에</em> 그것을 봅니다. 그래서 멀쩡한 카드가 거절되는데,
+      정작 <strong>그 차단 목록의 이름을 딴 플래그가 그것을 푸는 플래그가 아닙니다.</strong>
+      두 카드를 같은 방식으로 쟀습니다 — 진짜 X 세션과 시스템 크롬:
     </p>
     <div style="overflow-x:auto">
     <table>
       <thead><tr><th>크롬을 이렇게 띄우면</th>
-        <th>RTX 5080<br><span class="small">드라이버 580.159.04</span></th>
-        <th>RTX 4090<br><span class="small">드라이버 550.144.03</span></th></tr></thead>
+        <th>RTX 5080<br><span class="small">드라이버 580 · 크롬 151</span></th>
+        <th>RTX 4090<br><span class="small">드라이버 550 · 크롬 143</span></th></tr></thead>
       <tbody>
         <tr><td>아무것도 없이</td><td>없음</td><td>없음</td></tr>
+        <tr><td><code>--enable-features=Vulkan</code> 단독</td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td>없음</td></tr>
         <tr><td><code>--enable-unsafe-webgpu</code></td>
             <td><code>google / swiftshader</code></td>
             <td><code>google / swiftshader</code></td></tr>
         <tr><td>&nbsp;&nbsp;+ <code>--ignore-gpu-blocklist</code></td>
-            <td><strong><code>nvidia / blackwell</code></strong></td>
+            <td><code>google / swiftshader</code></td>
             <td><code>google / swiftshader</code></td></tr>
-        <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan --disable-gpu-driver-bug-workarounds</code><br><span class="small">이 행이 러너의 목록이다</span></td>
+        <tr><td>&nbsp;&nbsp;+ <code>--enable-features=Vulkan</code></td>
             <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
-        <tr><td><code>--enable-unsafe-webgpu --enable-features=Vulkan</code><br>
-                <span class="small">다른 것 없이</span></td>
-            <td>안 쟀다</td>
+        <tr><td>&nbsp;&nbsp;+ <code>--disable-gpu-driver-bug-workarounds</code><br>
+                <span class="small">이 행이 러너의 목록이다</span></td>
+            <td><strong><code>nvidia / blackwell</code></strong></td>
             <td><strong><code>nvidia / lovelace</code></strong></td></tr>
       </tbody>
     </table>
     </div>
     <p>
-      <strong>두 카드를 여는 스위치가 서로 다르다.</strong> 5080 은 차단 목록을 무시해야
-      하고, 4090 에서는 그 플래그가 아무 일도 하지 않고
-      <code>--enable-features=Vulkan</code> 이 카드에 닿는다 — 차단목록 플래그 없이
-      그것만으로. 둘 다 들고 다니면 한 줄로 둘 다 덮는다. <strong>이 넷이 테스트 러너가 보내는 것과 정확히 같다.</strong> 종이 위에서는 셋으로도 충분하지만 넷을 붙여넣으라고 하는 이유가 그것이다 &mdash; 두 카드에서 실제로 돌린 조합이 이쪽이다:
+      그러니 붙여넣을 줄은 이것이고, 일을 하는 것은 <strong>앞의 하나 뒤에 오는 둘</strong>입니다:
     </p>
     <pre class="small" style="overflow-x:auto"><code>google-chrome --user-data-dir=/tmp/borch-check \
-  --enable-unsafe-webgpu --enable-features=Vulkan \
-  --ignore-gpu-blocklist --disable-gpu-driver-bug-workarounds</code></pre>
+  --enable-unsafe-webgpu --enable-features=Vulkan</code></pre>
     <p>
-      <code>chrome://flags</code> 에서는 <strong>#enable-unsafe-webgpu</strong>,
-      <strong>#enable-vulkan</strong>, <strong>#ignore-gpu-blocklist</strong> 다.
-      바꾼 뒤 다시 띄워야 한다 — <strong>이미 열려 있던 창은 예전 설정을 그대로 쓴다.</strong>
-      여기서 한 시간을 썼다.
+      <code>chrome://flags</code> 에서는 <strong>#enable-unsafe-webgpu</strong> 와
+      <strong>#enable-vulkan</strong> 입니다. 바꾼 뒤 다시 띄워야 합니다 —
+      <strong>이미 열려 있던 창은 예전 설정을 그대로 씁니다.</strong> 여기서 한 시간을 썼습니다.
+    </p>
+    <p class="small">
+      <strong>그 두 플래그로 스위트 전체를 돌렸습니다.</strong> 어댑터만 물어본 것이 아니라 —
+      5080 에서 <code>3753 / 3755 일치 [nvidia / blackwell]</code>. 갈린 둘은 GPU 가 아니라
+      <strong>그 기계의 torch 빌드</strong> 탓입니다. CUDA 가 있으니 <em>양쪽 다 거절한다</em>
+      는 전제의 케이스가 거기서 거짓이 되고, CUDA 휠이 링크한 LAPACK 이 행렬 하나에 다른 답을
+      냅니다. 4090 은 어댑터 측정만 있고 골든은 돌린 적이 없습니다.
+    </p>
+    <p class="small">
+      <strong>이 표의 이전 판은 차단목록 플래그가 5080 을 연다고 말했습니다.</strong> 아닙니다 —
+      오늘 같은 기계에서 세 번 돌려 전부 <code>google / swiftshader</code> 였습니다. 그 값은
+      <strong>다른 브라우저</strong>(Playwright 가 들고 다니는 크로미움, 그리고 더 옛 크롬)에서
+      나온 것이고, 칸에 크롬 버전을 적은 이유도 그것입니다. <strong>두 카드는 카드·드라이버·
+      브라우저가 한꺼번에 다릅니다.</strong> 그러니 칸 사이의 차이를 하드웨어에만 돌릴 수
+      없습니다. <code>--enable-features=Vulkan</code> 단독이 5080 에는 닿고 4090 에는 안 닿는데,
+      그 사이에 크롬 메이저 여덟 개가 놓여 있습니다.
     </p>
     <p class="small">
       WebGPU 워킹그룹의
       <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status">구현 현황</a>은
-      리눅스에 다른 조합을 준다 — <code>--ozone-platform=x11 --use-angle=vulkan
-      --enable-features=Vulkan,VulkanFromANGLE</code> — 그리고 그것도
-      <code>nvidia / lovelace</code> 에 닿는다. 통하는 이유는 안에
-      <code>--enable-features=Vulkan</code> 이 있어서다.
+      리눅스에 다른 조합을 줍니다 — <code>--ozone-platform=x11 --use-angle=vulkan
+      --enable-features=Vulkan,VulkanFromANGLE</code> — 그리고 그것도 카드에 닿습니다. 통하는
+      이유는 안에 <code>--enable-features=Vulkan</code> 이 있어서입니다.
       <code>--use-angle=vulkan</code> 단독은 어댑터를 아예 못 주고,
-      <code>--ozone-platform=x11</code> 은 필요 없었다.
-    </p>
-    <p class="small">
-      5080 에서는 같은 실행을 Playwright 로 돌려
-      <code>passed 2901 / failed 0 [nvidia / blackwell]</code> 이 나왔다 — 이 프로젝트에서
-      골든이 두 번째 벤더에 동의한 첫 사례다. 4090 값들은 어댑터를 한 번씩 물어본 것이지
-      골든 실행이 아니다.
-    </p>
-    <p>
-      <strong>이 표의 이전 판은 정반대를 말했고</strong>, 그 실수는 보이게 두는 편이 낫다.
-      여기서 <em>러너의 플래그</em>라며 잰 줄에 <code>--enable-features=Vulkan</code> 이
-      빠져 있었다. 러너는 그것을 늘 보내고 있었는데. 그래서 **두 카드에 다 닿는 목록이
-      한쪽에서 실패한 것으로 측정됐고**, 이 페이지가 그것을 반나절 발행했다.
-      <strong>페이지가 재는 플래그는 페이지가 배포하는 플래그와 글자까지 같아야 한다</strong> —
-      기억으로 옮겨적는 것이 맞는 목록을 철회시키는 방식이다.
+      <code>--ozone-platform=x11</code> 은 필요 없었습니다.
     </p>
 
     <h2>AMD·Intel 카드를 단 리눅스</h2>

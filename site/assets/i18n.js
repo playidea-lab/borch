@@ -40,13 +40,13 @@ const STRINGS = {
     en: "What each platform asks for, measured →", ko: "플랫폼마다 무엇이 필요한지, 실측 →" },
   "device.linuxFlags": {
     en: "On Linux with an NVIDIA card, Chrome refuses before it asks the driver. "
-      + "The two cards measured here needed different switches, so turn on all three: "
-      + "#enable-unsafe-webgpu, #enable-vulkan and #ignore-gpu-blocklist — then relaunch, "
-      + "because a window already open keeps the old settings.",
+      + "Turn on #enable-unsafe-webgpu and #enable-vulkan, then relaunch — a window "
+      + "already open keeps the old settings. The blocklist switch is not the one that "
+      + "helps here, measured on both cards; the setup page has the table.",
     ko: "리눅스에 NVIDIA 카드면, 크롬이 드라이버에 묻기 전에 먼저 거절한다. "
-      + "여기서 잰 두 카드가 서로 다른 스위치를 필요로 했으니 셋 다 켜라 — "
-      + "#enable-unsafe-webgpu, #enable-vulkan, #ignore-gpu-blocklist. 그 다음 다시 띄워라, "
-      + "이미 떠 있는 창은 옛 설정을 그대로 쓴다." },
+      + "#enable-unsafe-webgpu 와 #enable-vulkan 을 켜고 다시 띄워라 — 이미 떠 있는 창은 "
+      + "옛 설정을 그대로 쓴다. 차단목록 스위치는 여기서 돕는 쪽이 아니다, 두 카드에서 "
+      + "실측했다. 표는 설정 페이지에 있다." },
   // **A software adapter is the failure that looks like a success.** It runs, it agrees
   // with the golden, and every number it prints is a CPU's. The same four names the
   // runners refuse on (`tests/browser/launch.py`).
