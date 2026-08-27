@@ -74,10 +74,10 @@
       arrived, and hashing after loading would mean the wrong bytes are already in memory.
     </p>
     <p>
-      <button id="go" class="run">Download and verify</button>
+      <button id="go" class="btn primary">Download and verify</button>
       <span id="badge" class="small"></span>
     </p>
-    <pre id="out" class="small" style="overflow-x:auto">idle</pre>
+    <div class="panel"><pre id="out" class="out">idle</pre></div>
     <p class="small">
       It really downloads. The smallest model in the catalog is chosen so this costs about
       ten megabytes.
@@ -92,7 +92,7 @@
       <a href="https://github.com/playidea-lab/borch-hub-registry">the registry</a> keeps a
       provenance note for each saying whose they were.
     </p>
-    <div style="overflow-x:auto"><table id="cat">
+    <div class="wide scroll-x"><table id="cat" class="data">
       <thead><tr>
         <th>Model</th><th>Task</th><th>Trained on</th><th>Size</th>
         <th>Origin</th><th>Licence</th>
