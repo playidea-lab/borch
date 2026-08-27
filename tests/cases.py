@@ -10019,6 +10019,28 @@ _LA_SYM3 = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]], dtype=np.float32
 # apart from counting from 0.**
 _LA_PIVOT = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
 _LA_SINGULAR = np.array([[1., 2.], [2., 4.]], dtype=np.float32)
+# **Indefinite rather than exactly singular**, and `cholesky_ex` is asked with this one.
+#
+# `_LA_SINGULAR`'s second leading minor is exactly `0`, and *is zero positive* is a question
+# two builds of the same torch answer differently. Measured, torch 2.13.0 both times:
+#
+#     matrix                       CPU wheel   +cu130 wheel
+#     [[1, 2], [2, 4]]  singular       2            0
+#     [[1, 2], [2, 1]]  indefinite     2            2
+#     [[-1, 0], [0, 1]]               1            1
+#     [[2, 1], [1, 2]]  posdef         0            0
+#
+# So `info` is dependable everywhere except on that tie, and the case had picked the tie.
+# The tensor is on the CPU in both runs — this is the LAPACK the wheel links, not the GPU.
+#
+# That mattered because **the golden's whole contract is that a frozen answer is a property
+# of torch and not of the machine.** Frozen on a CUDA box and compared anywhere, this one
+# case went red about nothing. It stayed invisible while every freeze happened on a machine
+# without CUDA, which was every freeze until an RTX 5080 ran one.
+#
+# `-3` is the second leading minor here, comfortably negative, and the case still asks what
+# it meant to ask: which minor `cholesky_ex` reports as the failure.
+_LA_INDEFINITE = np.array([[1., 2.], [2., 1.]], dtype=np.float32)
 
 
 def linalg_struct_cases(inp=None):
@@ -10127,7 +10149,7 @@ def linalg_struct_cases(inp=None):
         ("cholesky_ex/L",
          lambda L: L.linalg.cholesky_ex(L.tensor(_LA_BATCH_SYM[0])).L),
         ("cholesky_ex(비양정)/info",
-         lambda L: L.linalg.cholesky_ex(L.tensor(_LA_SINGULAR)).info),
+         lambda L: L.linalg.cholesky_ex(L.tensor(_LA_INDEFINITE)).info),
         ("solve_ex/값",
          lambda L: L.linalg.solve_ex(L.tensor(mat2),
                                      L.tensor(np.array([1., 2.], dtype=np.float32))
@@ -12164,9 +12186,25 @@ def dtype_cases(inp=None):
             return "기대대로" if real else "뜻밖의 성공"
         cases.append((INPLACE_PREFIX + f"없는기능::{name}=우리는거절", absent_here))
 
-    # `int_repr` and `cuda` **stop torch too** — a different branch from the four above. Kept in one
+    # `int_repr` **stops torch too** — a different branch from the four above. Kept in one
     # group, "does torch manage it" differs per name while the verdict is single, and it does not fit.
-    for name in ("int_repr", "cuda"):
+    #
+    # **`cuda` was here and is not any more, because the answer is a fact about the machine.**
+    # This asks whether `x.cuda()` raised. On a torch without a GPU it does, so the frozen
+    # answer read `멈췄다` and borch agreed; on a torch with one it does not, and the same case
+    # frozen there reads `안 던졌다` while borch — which refuses `cuda` everywhere, on purpose —
+    # still says `멈췄다`. The row's own name, *both sides stop*, is true only where torch has
+    # no GPU.
+    #
+    # It went unseen because every freeze had happened on a machine without CUDA, and an RTX
+    # 5080 ran the first one that had it. The golden's contract is that a frozen answer is a
+    # property of torch rather than of the machine, and this case was never that.
+    #
+    # What it was really checking — **that borch refuses `.cuda()`** — is not a comparison at
+    # all, and `tests/test_gap.py::test_skipped_does_not_claim_what_we_actually_do` already
+    # holds it by calling the name and requiring `BorchError`. Confirmed by removing the
+    # refusal with this case gone: that test still fails.
+    for name in ("int_repr",):
         def both_refuse(L, n=name):
             try:
                 getattr(L.tensor(square2), n)()

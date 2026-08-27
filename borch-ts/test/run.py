@@ -574,7 +574,7 @@ NOT_PORTED = {
     #
     # The remaining 97 really are python: `술어::` 23 (`is_cuda`, `is_mps`), `저장::` 10
     # (`stride`, `layout`), the ungrouped 47 (copy semantics, `from_numpy`), `희소::` 5.
-    "inplace::": (97, "파이썬 — views, sharing, properties, predicates, storage"),
+    "inplace::": (96, "파이썬 — views, sharing, properties, predicates, storage"),
     # `method2::` used to be here — 60 cases, "alias — Python's second name, as
     # `multiply` = `mul`". Some of them were aliases, and **nine had no name over there at
     # all** (`fmax`, `vdot`, `moveaxis`, `t`, `broadcast_to`, four comparisons). They went
