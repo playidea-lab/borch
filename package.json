@@ -25,6 +25,7 @@
     "borch-ts/dist/src",
     "borch-ts/src",
     "borch-ts/test/bench.ts",
+    "borch-ts/test/accuracy.ts",
     "README.md",
     "BORCH-TS.md",
     "LICENSE"
