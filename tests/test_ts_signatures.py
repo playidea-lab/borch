@@ -1158,10 +1158,30 @@ SHORTER = {
     # body and the emitted `.d.ts` carries no list for such a class. Not agreement and
     # not a gap — a row it skips. The three declare their arguments now.
     #
-    # What is left is two rows and neither is wiring: `RNNBase` wants `dropout`,
-    # `bidirectional` and `projSize`, which is a second set of weights and a reversed
-    # pass, and `Hardtanh` is short on purpose.
-    "nn": 2,
+    # **2 → 0**, and neither last row was what this table said it was.
+    #
+    # `Hardtanh` was "short on purpose — closing this row means adding two arguments
+    # torch itself tells you not to use". Measured, torch does more than tolerate
+    # `min_value`/`max_value`: each **overrides** its replacement, even when both are
+    # given (`Hardtanh(min_val=-1, min_value=-2)` prints `min_val=-2`). So they change
+    # the answer, and a deprecated seat left out of a JavaScript signature is not
+    # refused — it is discarded. Carried, warned about and honoured, as torch does.
+    #
+    # `RNNBase`'s three sit *after* `batchFirst`, so they were a trailing tail, which
+    # this table has called safe throughout. It is safe against a shift and not against
+    # silence: `new RNNBase("LSTM", 2, 4, 1, true, false, 0, true)` built a
+    # one-directional net and dropped the `true`. `bidirectional` and `projSize` are
+    # refused by name now — a second set of weights and a reversed pass are not here —
+    # and `dropout` is accepted and warned about at one layer, because that is what
+    # torch does rather than an omission of ours.
+    #
+    # **This row started the day at 46.** What emptied it was mostly not arithmetic:
+    # eight seats the layer next door already had, twenty-four that only needed
+    # refusing, and two rows whose "deliberate" reason did not survive being measured.
+    #
+    # Retiring this line means the count stays 0. A row appearing here again is a
+    # signature that parted from the core, and the first question is which side moved.
+    "nn": 0,
     # 0 → 1. `F.embedding` arrived from `unaligned`, short of torch's five
     # table-side arguments — `padding_idx`, `max_norm` and the rest, which the layer
     # next door does have.

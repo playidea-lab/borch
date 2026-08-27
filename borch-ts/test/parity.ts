@@ -1553,6 +1553,43 @@ export async function report(): Promise<Report> {
         JSON.stringify(Object.keys(eager.stateDict())));
     }
 
+    // **The last two rows, and neither was what the table said it was.**
+    {
+      // `Hardtanh`'s deprecated pair was called short *on purpose* — "adding two
+      // arguments torch itself tells you not to use". Measured, torch does more than
+      // tolerate them: each overrides its replacement, even when both are given.
+      const H = nn.Hardtanh as unknown as new (...a: unknown[]) =>
+        { describe(): string };
+      want("Hardtanh's minValue overrides minVal, as torch's does",
+        new H(-1, 1, false, -2).describe() === "Hardtanh(min_val=-2.0, max_val=1.0)",
+        new H(-1, 1, false, -2).describe());
+      want("and the modern pair still works alone",
+        new nn.Hardtanh(-2, 3).describe() === "Hardtanh(min_val=-2.0, max_val=3.0)",
+        new nn.Hardtanh(-2, 3).describe());
+
+      // `RNNBase`'s three sit *after* `batchFirst`, so they are a trailing tail — and
+      // a tail is not safe in a language that discards surplus arguments. Before
+      // this, `bidirectional` was dropped in silence and the caller got a
+      // one-directional net.
+      const R = nn.RNNBase as unknown as new (...a: unknown[]) => unknown;
+      let said = "";
+      try { new R("LSTM", 2, 4, 1, true, false, 0, true); } catch (e) {
+        said = (e as Error).message;
+      }
+      want("RNNBase refuses bidirectional by name",
+        said.includes("bidirectional"), said || "(no error)");
+      said = "";
+      try { new R("LSTM", 2, 4, 1, true, false, 0, false, 1); } catch (e) {
+        said = (e as Error).message;
+      }
+      want("and projSize, which is the seat after it",
+        said.includes("projSize"), said || "(no error)");
+      // `dropout` is torch's own exception: at one layer it warns and carries on,
+      // because the dropout goes between layers and there is no between.
+      want("but dropout is accepted at one layer, as torch accepts it",
+        !!new nn.RNNBase("LSTM", 2, 4, 1, true, false, 0.5));
+    }
+
     // `RMSNorm`: the kernel took `eps` all along and the layer did not hand it over.
     const r = Tensor.from([1.0, 2.0, 3.0, 4.0], [1, 4]);
     const tight = await new nn.RMSNorm(4).call(r).toArray();
