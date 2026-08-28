@@ -382,6 +382,18 @@ class Tensor:
         one branch without disturbing the rest. It was not an argument here, so
         `loss.backward(inputs=[w])` stopped with a `TypeError` about a count.
 
+        **`inputs` also retains, and that half was missing.** torch implements it by
+        retaining on each name — which is why its refusal for a tensor that does not
+        require grad says *can't retain_grad*. So a **derived** tensor named there
+        gets a `.grad` too, the way `retain_grad()` gives one. Here only leaves were
+        filled, so `loss.backward(inputs=[m])` on an intermediate `m` left `m.grad`
+        as `None` and said nothing. Measured against torch, which fills it.
+
+        The two refusals are measured as well, in torch's own order: an **empty**
+        `inputs` stops before anything else — before `requires_grad`, before the
+        scalar check — and a name that does not require grad stops *after* the seed
+        has been checked.
+
         **`create_graph` is refused.** It asks for the backward pass itself to be
         recorded, so that the gradient can be differentiated again — the thing a
         second-order method needs. Nothing here records it: the backward functions
@@ -391,6 +403,16 @@ class Tensor:
         """
         if create_graph:
             _unsupported("backward(create_graph=True) — double backward")
+        listed = None
+        if inputs is not None:
+            listed = [inputs] if isinstance(inputs, Tensor) else list(inputs)
+            # **First of all**, ahead of every other refusal (measured: a tensor that
+            # does not require grad, called with `inputs=[]`, still stops here).
+            if not listed:
+                raise RuntimeError(_like_torch(
+                    "backward(inputs=[]) names nothing to put a gradient on. Leave "
+                    "`inputs` out to fill every leaf instead.",
+                    "`inputs` argument to `backward()` cannot be empty."))
         if not self.requires_grad:
             raise RuntimeError(_like_torch(
                 "backward() cannot be called on a tensor that does not require grad.",
@@ -433,8 +455,16 @@ class Tensor:
                 f"torch.Size({list(seed.shape)}) and output[0] has a shape of "
                 f"torch.Size({list(self.data.shape)})."))
 
-        wanted = None if inputs is None else {
-            id(t) for t in ([inputs] if isinstance(inputs, Tensor) else inputs)}
+        # **After the seed, not before it** — torch checks the shape of the gradient
+        # first and only then complains about a name that cannot hold one (measured).
+        if listed is not None:
+            for one in listed:
+                if not one.requires_grad:
+                    raise RuntimeError(_like_torch(
+                        "backward(inputs=…) was given a tensor that does not require "
+                        "grad, so there is nowhere for a gradient to go.",
+                        "can't retain_grad on Tensor that has requires_grad=False"))
+        wanted = None if listed is None else {id(t) for t in listed}
 
         # A topological sort — back to front, each node once
         order, seen = [], set()
@@ -462,7 +492,13 @@ class Tensor:
             # too.** Otherwise that name only imitates the refusal and does
             # nothing — it gets as far as stopping at a leaf and never does the
             # thing it was for.
-            if getattr(t, "_retain", False):
+            #
+            # **A name in `inputs` is retained the same way**, which is what torch
+            # does: naming a derived tensor there fills its `.grad`. The two are
+            # `or`-ed rather than one replacing the other — a `retain_grad()` node
+            # *outside* `inputs` still gets its gradient in torch (measured), so
+            # `inputs` adds retention and does not take it away.
+            if getattr(t, "_retain", False) or (wanted is not None and id(t) in wanted):
                 t.grad = Tensor(g) if t.grad is None else Tensor(t.grad.data + g)
             for parent, pg in zip(t._parents, t._backward(g)):
                 if pg is None:

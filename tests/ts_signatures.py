@@ -547,6 +547,44 @@ def ts_members():
     return out
 
 
+def ts_member_signatures():
+    """`{module: {name: [signature, ...]}}` — **only** what is declared inside a class.
+
+    `ts_signatures` files a method and a free function of the same name into one
+    list, and in the `Tensor` space that made four names *ambiguous — 2
+    declarations*: `stft` and `istft` are methods on `Tensor` and functions in
+    `fft.ts`, `polygamma` is a method and a function in `special.ts`, and
+    `backward` is a method and — in `autograd.ts` — a generic graph walk,
+    `backward<T>(root: Node<T>, seed: T, add)`, which has nothing to do with
+    torch's.
+
+    **`ambiguous` was the wrong answer and not a harmless one.** It is this file's
+    word for *one name in two modules that may mean different things*, and here the
+    two do not: one is the counterpart and the other is a different callable. The
+    row read as unmeasurable while `backward` was genuinely short of `create_graph`
+    and `inputs` — a gap parked in the bucket that means *cannot judge*, which is
+    the absorbing state this axis has been caught by twice.
+
+    The rule is already written down thirty lines below, at the `only a free
+    function` branch: **a method's counterpart has to be a method.** This carries it
+    through to picking which declaration to compare.
+    """
+    if not API.exists():
+        raise SystemExit(f"no {API.relative_to(ROOT)} — run npm run docs:api first")
+    raw = json.loads(API.read_text(encoding="utf-8"))
+    modules = raw.get("modules") if isinstance(raw, dict) else raw
+    out = {}
+    for module in modules or []:
+        into = out.setdefault(module.get("name") or "?", {})
+        for sym in module.get("symbols") or []:
+            for member in sym.get("members") or []:
+                name, sig = member.get("name"), member.get("signature")
+                if name and sig and _arg_list(sig) is not None:
+                    for one in _declarations(member):
+                        into.setdefault(name, []).append(one)
+    return out
+
+
 def _theirs(by_module, space, camel):
     """Every declaration of `camel` in the modules `space` may be paired against."""
     found = []
@@ -788,6 +826,7 @@ def compare():
 
     theirs = ts_signatures()
     members = ts_members()
+    only_members = ts_member_signatures()
     stubs = ts_axis.refused()
     out = {}
     for space, _real, ours in torch_gap._spaces():
@@ -816,6 +855,18 @@ def compare():
                 rows.append((name, None, None,
                              "only a free function — no method of this name"))
                 continue
+            # **The same rule, carried one step further.** Having established that the
+            # counterpart is a method, take the *method's* declaration and leave the
+            # free function of the same name where it is. Without this the two arrive
+            # together and disagree, and the row reads `ambiguous` — which is the
+            # word for *two things that may differ*, not for *the counterpart and
+            # something else*. Four rows sat there, one of them (`backward`) paired
+            # against `autograd.ts`'s generic graph walk.
+            if space == "Tensor":
+                method = (_theirs(only_members, space, camel)
+                          or _theirs(only_members, space, name))
+                if method:
+                    sigs = method
             # In the `Tensor` space every name is reached through the class, so the
             # first parameter is the receiver — except a `staticmethod`, which has
             # none. Asked of the raw attribute so that a descriptor answers as

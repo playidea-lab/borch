@@ -130,10 +130,16 @@ FROZEN = {
     # is asynchronous; the `resize_`/`set_` family re-aims storage a borch.ts tensor
     # owns; `sspaddmm` and the sparse queries ask about a layout that does not exist.
     #
-    # **Three are marked `owed` rather than refused** — `sum_to_size`,
-    # `multinomial`, `retain_grad`. That word is doing work: without it "no reason"
-    # means *nobody looked*, and these have been looked at and are ordinary work.
-    "Tensor": 49,
+    # **Two are marked `owed` rather than refused** — `sum_to_size` and
+    # `multinomial`. That word is doing work: without it "no reason" means *nobody
+    # looked*, and these have been looked at and are ordinary work.
+    #
+    # 49 → 48. `retain_grad` was the third `owed` and it went out with
+    # `backward(…, inputs)`: both need a derived node able to hold a gradient, and
+    # closing either closes both. The row named the missing mechanism rather than
+    # the missing method, which is why it could leave with work that was not aimed
+    # at it.
+    "Tensor": 48,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
     # was a layer the core had and borch.ts did not, `embedding` a function both had;
     # folding the two reported the layer as present because the function was. torch's

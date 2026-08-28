@@ -299,11 +299,15 @@ DELIBERATE: dict[str, str] = {
     # row: `sum_to_size` folds broadcast axes back and `multinomial` draws by weight,
     # and both are ordinary work nobody has done. They are here so that "no reason"
     # means *nobody has looked*, and these have been looked at.
+    #
+    # **`retain_grad` was the third and it has gone.** Its row read *borch.ts keeps
+    # gradients on leaves only, and this asks for one on a non-leaf* — true when
+    # written, and the mechanism arrived with `backward(…, inputs)`, which needs the
+    # same thing. One row leaving with work it did not name is the shape an `owed`
+    # entry is supposed to have: it stated what was missing, not who would do it.
     "Tensor::sum_to_size": "owed — folds broadcast axes back; ordinary work, not yet done",
     "Tensor::multinomial": "owed — draws by weight; `WeightedRandomSampler` in data.ts "
                            "does the same arithmetic and could be shared",
-    "Tensor::retain_grad": "owed — borch.ts keeps gradients on leaves only, and this "
-                           "asks for one on a non-leaf",
     # **Not absent — spelled as a type.** The core needs a runtime object because
     # Python has no union of literals; TypeScript has one, so `vision.ts` writes the
     # parameter as `"bilinear" | "nearest"` and the compiler refuses a third value

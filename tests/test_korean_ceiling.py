@@ -233,7 +233,12 @@ CEILINGS = {
     # `거절::scatter(reduce) 의 기울기`). Each is a key in `golden.json`, and the two
     # refusals also **return** a fragment string that both sides spell by hand — so a
     # divergence here reads as a divergence in the answer, not in the name.
-    "borch-ts/test": 3765,
+    # 3765 → 3873. A hundred and eight, case names and one verdict: the nine
+    # `inplace::기울기::` rows that `backward(inputs=…)` and `retainGrad()` opened
+    # (`중간 노드도 채운다`, `안 부른 잎을 안 건드린다`, `inputs 밖에서도 남는다`,
+    # `거절::빈 inputs`), plus `있다`/`없다`, which is a **frozen value** in
+    # `golden.json` rather than a name and has to be spelled the same on both sides.
+    "borch-ts/test": 3873,
 }
 
 

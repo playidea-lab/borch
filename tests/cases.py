@@ -405,6 +405,14 @@ def _bn_roundtrip(L, img):
     return fresh(L.tensor(img))
 
 
+def _backward_by_inputs(L, arr):
+    """`a·b` differentiated against `a` alone, and `a` handed back."""
+    a = L.tensor(arr, requires_grad=True)
+    b = L.tensor(arr, requires_grad=True)
+    (a * b).sum().backward(inputs=[a])
+    return a
+
+
 def _grad_of(leaf, name):
     """Checks a gradient **actually arrived** at the leaf, and hands it back.
 
@@ -11716,8 +11724,98 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "기울기::잎에 부르면 지나간다",
                   lambda L: str(L.tensor(wide, requires_grad=True).retain_grad())))
 
-    # Whether a value is **really kept** after `retain_grad` is in `tests/test_fold_grad.py` —
-    # borch.ts does not hand out a derived tensor's `.grad`, so the three cannot be asked together.
+    # ── the gradient really being kept, and `backward(inputs=…)` ──
+    #
+    # **This block used to read "the three cannot be asked together."** borch.ts wrote
+    # into leaves only, so a derived tensor's `.grad` was `None` over there while the
+    # core filled it, and the value went to `tests/test_fold_grad.py` — which asks the
+    # core alone. The reason was true and stopped being true, and nothing would have
+    # said so: the signature axis could not read `backward` at all (`Tensor.backward`
+    # and `autograd.ts`'s generic graph walk share a name, so the row came back
+    # *ambiguous — 2 declarations*), and everything downstream of it went unasked.
+    #
+    # `retain_grad` and `backward(inputs=…)` are **one mechanism** — a derived node
+    # being able to hold a gradient — which is why torch's refusal for the second
+    # speaks of the first. Closing either closes both.
+    def kept(name, body):
+        cases.append((INPLACE_PREFIX + f"기울기::{name}", body))
+
+    def retained(L):
+        """The gradient at a hidden value. `m = 3x`, `loss = Σm²` → `dL/dm = 2m`."""
+        x = L.tensor(wide, requires_grad=True)
+        m = x * 3
+        m.retain_grad()
+        (m * m).sum().backward()
+        return _grad_of(m, "retain_grad")
+
+    kept("retain_grad 가 값을 정말 남긴다", retained)
+
+    def by_inputs(L):
+        """`inputs` names a **derived** tensor, and torch fills it — it retains too."""
+        x = L.tensor(wide, requires_grad=True)
+        m = x * 3
+        (m * m).sum().backward(inputs=[m])
+        return _grad_of(m, "inputs")
+
+    kept("backward(inputs) 는 중간 노드도 채운다", by_inputs)
+
+    def leaves_the_others(L):
+        """**The point of the argument.** The leaf that was not named keeps `None`.
+
+        Asked as *which of the two arrived*, not by value: the value of `a.grad` is
+        the next case's business, and a repr would carry each library's formatter
+        into a comparison about presence.
+        """
+        a = L.tensor(wide, requires_grad=True)
+        b = L.tensor(wide, requires_grad=True)
+        (a * b).sum().backward(inputs=[a])
+        return (f"a={'있다' if a.grad is not None else '없다'} "
+                f"b={'있다' if b.grad is not None else '없다'}")
+
+    kept("backward(inputs) 는 안 부른 잎을 안 건드린다", leaves_the_others)
+    kept("backward(inputs) 로 부른 잎의 값",
+         lambda L: _grad_of(_backward_by_inputs(L, wide), "a"))
+
+    def retain_outside_inputs(L):
+        """**The two rules do not cancel.** A `retain_grad` node outside `inputs` still
+        gets its gradient — measured against torch, which does not read `inputs` as the
+        list of the only things allowed a `.grad`.
+
+        `x` is checked for arrival and `m`'s value is what comes back: `_grad_of`
+        raises when a gradient did not arrive, so both are asked and one is compared.
+        """
+        x = L.tensor(wide, requires_grad=True)
+        m = x * 3
+        m.retain_grad()
+        (m * m).sum().backward(inputs=[x])
+        _grad_of(x, "x")
+        return _grad_of(m, "m")
+
+    kept("retain_grad 는 inputs 밖에서도 남는다", retain_outside_inputs)
+
+    def refuses_backward(name, fragment, call):
+        def run(L, f=call, frag=fragment):
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                return frag if frag in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+        cases.append((INPLACE_PREFIX + f"기울기::거절::{name}", run))
+
+    # **Empty stops before everything**, ahead even of `requires_grad` — measured.
+    refuses_backward("빈 inputs", "cannot be empty",
+                     lambda L: (L.tensor(wide, requires_grad=True) * 2).sum()
+                     .backward(inputs=[]))
+    refuses_backward("grad 없는 것을 inputs 에", "requires_grad=False",
+                     lambda L: (L.tensor(wide, requires_grad=True) * 2).sum()
+                     .backward(inputs=[L.tensor(wide)]))
+    # **torch computes this one.** Asked by value it would stay parted forever, so it is
+    # asked the way every deliberate divergence here is: torch succeeds, all three of
+    # ours refuse in the specified words, and both are *as documented*.
+    cases.append((INPLACE_PREFIX + "기울기::backward(create_graph)=우리는거절",
+                  refusal_case(lambda L: (L.tensor(wide, requires_grad=True) * 2)
+                               .sum().backward(create_graph=True))))
+
     cases.append((INPLACE_PREFIX + "기울기::grad_fn 의 형 이름",
                   lambda L: type((L.tensor(wide, requires_grad=True) * 2).grad_fn).__name__))
     cases.append((INPLACE_PREFIX + "기울기::잎의 grad_fn 은 없다",

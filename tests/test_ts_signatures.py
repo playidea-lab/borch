@@ -1507,17 +1507,29 @@ FREE_FUNCTION = {
 # move to zero unnoticed* — and this one can move the other way just as quietly,
 # because every row in it is a row the axis declined to judge.
 #
-# The four are `stft`, `istft`, `igamma` and `igammac`: torch has a module function
-# and a method for each, borch.ts now has both too, and the axis will not guess which
-# pair to compare. **That is the right thing for it to say and the wrong thing to
-# leave uncounted**, which is the whole reason this table exists rather than a
-# comment.
+# The four were `stft`, `istft`, `polygamma` and `backward`: torch has a module
+# function and a method for each, borch.ts now has both too, and the axis would not
+# guess which pair to compare. **That was the right thing for it to say and the wrong
+# thing to leave uncounted**, which is the whole reason this table exists rather than
+# a comment.
 #
-# **What retires a row**: one of the two spellings going away, on either side. None
-# should — torch has both — so this is a table that is expected to sit still, and a
-# table expected to sit still is exactly the kind that drifts without one.
+# **4 → 0, and the table is what made it worth looking.** The axis already knew it was
+# after a method — thirty lines above the `ambiguous` branch it files *only a free
+# function* for a name borch.ts writes as a function alone. It just did not carry that
+# through to picking a declaration, so `Tensor.backward` was set beside `autograd.ts`'s
+# `backward<T>(root, seed, add)`, a generic graph walk sharing nothing but a name.
+# `ts_signatures.ts_member_signatures` prefers the method now.
+#
+# What was underneath: `backward` was short of `create_graph` and `inputs`, borch.ts's
+# `retain_grad` was a flag nothing read, and the case table said in as many words that
+# the value "cannot be asked together". A row in a bucket meaning *cannot judge* stops
+# everything downstream of it, and nothing counts what it stopped.
+#
+# **What retires a row**: one of the two spellings going away, or the axis learning
+# which of them to compare — the second is what happened here, and it is the better
+# outcome, because the name still exists twice and is now judged.
 TWO_DECLARATIONS = {
-    "Tensor": 4,
+    "Tensor": 0,
     "nn": 0,
     "nn.functional": 0,
     "optim": 0,
@@ -1607,7 +1619,14 @@ DECLINED = {
 # ._interface_members` now resolves the reference out of `api.json`. That is the fourth
 # time on this axis that a number improved because a reader stopped.
 KEYWORD_GAP = {
-    "Tensor": 0,
+    # 0 → 2: `stft` and `istft`, out of `TWO_DECLARATIONS` and judged for the first
+    # time. Both carry **every** name torch has — `hopLength`, `winLength`, `window`,
+    # `center`, `padMode`, `normalized`, `onesided`, `returnComplex`, `alignToWindow`
+    # — inside an options object where torch has a positional tail. Nothing is
+    # missing; what the bucket records is that the order cannot be observed on either
+    # side, so they are compared as sets. **This is a row that reads worse than the
+    # thing it describes**, and that is the point of not folding it into `agree`.
+    "Tensor": 2,
     "nn": 0,
     "nn.functional": 0,
     "optim": 6,

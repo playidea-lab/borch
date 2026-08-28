@@ -24,9 +24,16 @@ export interface Node<T> {
    */
   requiresGrad: boolean;
   /**
-   * Accumulates on leaves only, as in torch.
+   * Accumulates on leaves, and on a derived node that asked to keep its gradient
+   * — `retainGrad()`, or being named in `backward(…, inputs)`.
    */
   grad: T | null;
+  /**
+   * Set by `retainGrad()`. A derived node does not keep its gradient otherwise:
+   * the intermediate values are the bulk of a training loop's memory, and torch
+   * makes keeping one an explicit request for the same reason.
+   */
+  retainsGrad?: boolean;
   /**
    * Takes one output gradient and returns **as many as there are parents.**
    *
@@ -104,12 +111,24 @@ function topoOrder<T>(root: Node<T>): Node<T>[] {
  *
  * @param add how two gradients are added. A value used in several places is
  *   added that many times.
+ * @param options.only torch's `backward(…, inputs)`: when given, **only** these
+ *   nodes are written to. Every other leaf keeps whatever `grad` it had, which
+ *   is how one branch is differentiated without disturbing the rest.
+ *
+ *   The two rules do not cancel. A node in `only` is written to whether it is a
+ *   leaf or not, and a node that called `retainGrad()` is written to even when
+ *   it is outside `only` — measured against torch, which fills a retained
+ *   intermediate's `grad` while `inputs` names something else entirely.
  */
 export function backward<T>(
   root: Node<T>,
   seed: T,
   add: (a: T, b: T) => T,
-  options: { retainGraph?: boolean; onSecondPass?: () => never } = {},
+  options: {
+    retainGraph?: boolean;
+    onSecondPass?: () => never;
+    only?: ReadonlySet<Node<T>>;
+  } = {},
 ): void {
   if (!root.requiresGrad) {
     throw new Error(
@@ -117,15 +136,22 @@ export function backward<T>(
         "(It was made under no_grad, or it passed through an operation that breaks the graph.)",
     );
   }
+  const { only } = options;
+  const keep = (node: Node<T>): boolean => only === undefined || only.has(node);
   const grads = new Map<Node<T>, T>();
   grads.set(root, seed);
   for (const node of topoOrder(root)) {
     const g = grads.get(node);
     if (g === undefined) continue;
     if (!node.backwardFn || node.parents.length === 0) {
-      // A leaf. As in torch, it accumulates here alone.
-      node.grad = node.grad === null ? g : add(node.grad, g);
+      // A leaf. As in torch, it accumulates here — unless `inputs` named others.
+      if (keep(node)) node.grad = node.grad === null ? g : add(node.grad, g);
       continue;
+    }
+    // A derived node keeps its gradient only when asked: `retainGrad()`, or
+    // being named in `inputs`.
+    if (node.retainsGrad || (only !== undefined && only.has(node))) {
+      node.grad = node.grad === null ? g : add(node.grad, g);
     }
     if (node.freed && options.onSecondPass) options.onSecondPass();
     if (!options.retainGraph) node.freed = true;

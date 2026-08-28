@@ -711,6 +711,8 @@ export class Tensor implements Node<Tensor> {
   requiresGrad: boolean;
   grad: Tensor | null = null;
   freed = false;
+  /** Set by `retainGrad()` — see there. */
+  retainsGrad = false;
   /**
    * **A label.** The values are always in a float32 buffer — the details
    * are in `src/dtype.ts`.
@@ -11148,6 +11150,31 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // ── Backward ──────────────────────────────────────────────────────────
 
   /**
+   * `torch.Tensor.retain_grad` — **keep this one's gradient even though it is
+   * derived.**
+   *
+   * A backward pass writes to leaves; everything in between is used and dropped,
+   * because the intermediates are the bulk of a training loop's memory. This says
+   * *keep that one*, which is how the gradient at a hidden activation is looked at.
+   *
+   * It was the same missing mechanism as `backward(…, inputs)`: both need a
+   * derived node to be able to hold a `grad`, and neither could. Closing one
+   * closed the other.
+   *
+   * On a leaf it is a no-op — a leaf already accumulates. torch is the same.
+   */
+  retainGrad(): void {
+    if (!this.requiresGrad) {
+      throw new RuntimeError(
+        "retainGrad() on a tensor that does not require grad — there would be no "
+        + "gradient to keep."
+        + "\n(torch: can't retain_grad on Tensor that has requires_grad=False)",
+      );
+    }
+    this.retainsGrad = true;
+  }
+
+  /**
    * @param retainGraph true keeps the graph. As in torch, **the default is
    *   to release it** — the intermediate values hold memory, and unreleased
    *   they accumulate through a training loop.
@@ -11170,8 +11197,53 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    *   broadcasting. A mismatched seed gives a wrong gradient with plausible
    *   values, and that surfaces only as training failing to work.
    * @param retainGraph keeps the graph so it can be flowed through again.
+   * @param createGraph **refused.** It asks for the backward pass itself to be
+   *   recorded so the gradient can be differentiated again — what a second-order
+   *   method needs. This tape does not record it: a backward is a closure over
+   *   GPU buffers, not a node. Walking the same ungraphed pass and returning
+   *   would answer a first-order question to a caller who asked a second-order
+   *   one, and the answer would look right. The core refuses it in the same
+   *   words.
+   * @param inputs restricts which tensors get a gradient. torch walks the whole
+   *   graph and writes only to the ones named, which is how a second loss is
+   *   differentiated against one branch without disturbing the rest. It also
+   *   **retains**: a derived tensor named here gets a `grad` the way
+   *   `retainGrad()` gives one — which is why torch's refusal for a tensor that
+   *   does not require grad says *can't retain_grad*.
    */
-  backward(gradient?: Tensor, retainGraph = false): void {
+  backward(
+    // **`null` counts as absent, and that is not tidiness.** The Python binding
+    // fills every position to reach the fourth, and Pyodide turns `None` into
+    // `null` — there is no way to send `undefined` from that side. Read strictly,
+    // `loss.backward(inputs=[w])` would arrive with a `null` seed, miss the
+    // implicit-1 branch, and go looking for `gradient.shape`.
+    gradient?: Tensor | null,
+    retainGraph = false,
+    createGraph = false,
+    inputs?: Tensor | readonly Tensor[] | null,
+  ): void {
+    if (createGraph) {
+      throw new NotImplementedError(
+        "backward(createGraph = true) — double backward is not in the browser subset. "
+        + "This tape holds closures over GPU buffers rather than nodes, so the backward "
+        + "pass is not itself recorded and the second derivative has nowhere to come from.",
+      );
+    }
+    let only: Set<Tensor> | undefined;
+    if (inputs !== undefined && inputs !== null) {
+      const listed = inputs instanceof Tensor ? [inputs] : [...inputs];
+      // **Before every other refusal**, which is torch's order: a tensor that
+      // does not require grad, called with an empty `inputs`, still stops here
+      // (measured).
+      if (listed.length === 0) {
+        throw new RuntimeError(
+          "backward(inputs: []) names nothing to put a gradient on. Leave `inputs` "
+          + "out to fill every leaf instead."
+          + "\n(torch: `inputs` argument to `backward()` cannot be empty.)",
+        );
+      }
+      only = new Set(listed);
+    }
     // **This check comes first.** Measured against torch, a non-scalar tensor that
     // does not require grad is refused this way rather than with "not a scalar" — it is
     // looked at before scalarness. The core (numpy) had that order from the start and
@@ -11195,7 +11267,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       );
     }
     let seed: Tensor;
-    if (gradient === undefined) {
+    if (gradient === undefined || gradient === null) {
       if (this.size !== 1) {
         throw new RuntimeError(
           `${TORCH.nonScalarBackward}: this shape is [${this.shape}] — ` +
@@ -11216,7 +11288,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       // graph.
       seed = gradient.detach();
     }
+    // **After the seed has been checked, not before it** — torch complains about a
+    // name that cannot hold a gradient only once the shape is settled (measured).
+    if (only !== undefined) {
+      for (const one of only) {
+        if (!one.requiresGrad) {
+          throw new RuntimeError(
+            "backward(inputs: …) was given a tensor that does not require grad, so "
+            + "there is nowhere for a gradient to go."
+            + "\n(torch: can't retain_grad on Tensor that has requires_grad=False)",
+          );
+        }
+      }
+    }
     tapeBackward<Tensor>(this, seed, (a, b) => a.add(b), {
+      ...(only === undefined ? {} : { only }),
       retainGraph,
       onSecondPass: () => {
         throw new RuntimeError(

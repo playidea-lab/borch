@@ -369,8 +369,28 @@ class Tensor:
             return complex(float(flat[0]), float(flat[1]))
         return float(flat[0])
 
-    def backward(self, *args):
-        return guarded(self._h.backward, *[handle(a) for a in args])
+    def backward(self, gradient=None, retain_graph=False, create_graph=False,
+                 inputs=None):
+        """torch's four names, written out.
+
+        It was `(*args)` — every argument positional, no keyword accepted at all,
+        so `loss.backward(inputs=[w])` stopped at *unexpected keyword argument*
+        while the core and torch both ran it. A bag takes anything and reports
+        nothing about what it will not do.
+
+        `inputs` crosses as a real JS array. Handed over as a Python list it
+        arrives a proxy, and `inputs instanceof Tensor` is false for a proxy while
+        the spread of it is empty — the argument would be received and do nothing,
+        which is the failure this binding is most often caught by.
+        """
+        import js as _js
+
+        listed = inputs
+        if inputs is not None and not isinstance(inputs, Tensor):
+            listed = _js.Array.from_([handle(t) for t in inputs])
+        return guarded(self._h.backward, handle(gradient) if gradient is not None else None,
+                       bool(retain_graph), bool(create_graph),
+                       handle(listed) if isinstance(listed, Tensor) else listed)
 
     # The dtype-changing names. borch.ts takes them all as `to("float32")`.
     def to(self, dtype):
@@ -1674,12 +1694,25 @@ def _sum_to_size(self, *size):
 
 
 def _retain_grad(self):
-    """**Stops on a leaf**, as the core does. borch.ts already keeps gradients
-    for a derived tensor, so this only raises the flag."""
+    """**It calls through now, and for a while it did not.**
+
+    The line that stood here said borch.ts already kept a derived tensor's
+    gradient, so the flag did not need setting — and that was false. borch.ts
+    accumulated into leaves only; the method raised on a tensor that takes no
+    gradients, passed on every other, and **did nothing**. A caller who asked for
+    a hidden activation's gradient got `None` and no word about why.
+
+    The claim was never checked because the signature axis could not read
+    `backward` at all: `Tensor.backward` and `autograd.ts`'s generic graph walk
+    share a name, the row came back *ambiguous — 2 declarations*, and everything
+    downstream of it went unasked. Closing `backward(inputs=…)` gave borch.ts the
+    mechanism, and this is the same mechanism.
+    """
     if not self._h.requiresGrad:
         raise RuntimeError(
             "`retain_grad()` cannot be used on a tensor that does not take gradients. "
             "(torch: can't retain_grad on Tensor that has requires_grad=False)")
+    guarded(self._h.retainGrad)
     return None
 
 

@@ -9112,6 +9112,87 @@ function addInplace(out: Map<string, Case>): void {
     return x;
   });
 
+  // ── keeping a derived tensor's gradient (`inplace::기울기::`) ──
+  //
+  // `retainGrad()` and `backward(…, inputs)` are **one mechanism**: a node that is
+  // not a leaf being able to hold a `grad`. This side wrote into leaves only, so
+  // `retain_grad` in the binding raised the flag and did nothing, and the Python
+  // case table said in as many words that the value "cannot be asked together".
+  // It can now, and these are that question.
+  const WIDE = [0, 1, 2, 3, 4, 5];
+  const wide = (): Tensor => Tensor.from(WIDE, [2, 3], { requiresGrad: true });
+
+  out.set("inplace::기울기::retain_grad 가 값을 정말 남긴다", () => {
+    const x = wide();
+    const m = x.mul(Tensor.full([], 3));
+    m.retainGrad();
+    m.mul(m).sum().backward();
+    return gradOf(m, "retain_grad");
+  });
+
+  out.set("inplace::기울기::backward(inputs) 는 중간 노드도 채운다", () => {
+    const x = wide();
+    const m = x.mul(Tensor.full([], 3));
+    m.mul(m).sum().backward(undefined, false, false, [m]);
+    return gradOf(m, "inputs");
+  });
+
+  out.set("inplace::기울기::backward(inputs) 는 안 부른 잎을 안 건드린다", () => {
+    const a = wide();
+    const b = wide();
+    a.mul(b).sum().backward(undefined, false, false, [a]);
+    return `a=${a.grad === null ? "없다" : "있다"} b=${b.grad === null ? "없다" : "있다"}`;
+  });
+
+  out.set("inplace::기울기::backward(inputs) 로 부른 잎의 값", () => {
+    const a = wide();
+    a.mul(wide()).sum().backward(undefined, false, false, [a]);
+    return gradOf(a, "a");
+  });
+
+  // **The two rules do not cancel** — `inputs` adds retention, it does not take it
+  // away from a node that asked for it.
+  out.set("inplace::기울기::retain_grad 는 inputs 밖에서도 남는다", () => {
+    const x = wide();
+    const m = x.mul(Tensor.full([], 3));
+    m.retainGrad();
+    m.mul(m).sum().backward(undefined, false, false, [x]);
+    gradOf(x, "x");
+    return gradOf(m, "m");
+  });
+
+  const refusesBackward = (name: string, fragment: string, body: () => void) => {
+    out.set(`inplace::기울기::거절::${name}`, () => {
+      try {
+        body();
+      } catch (err) {
+        const said = String(err);
+        return said.includes(fragment)
+          ? fragment : `다른 문구 <${said.slice(0, 44)}>`;
+      }
+      return "안 던졌다";
+    });
+  };
+
+  // Empty stops ahead of every other refusal, which is torch's order.
+  refusesBackward("빈 inputs", "cannot be empty",
+    () => wide().mul(Tensor.full([], 2)).sum().backward(undefined, false, false, []));
+  refusesBackward("grad 없는 것을 inputs 에", "requires_grad=False",
+    () => wide().mul(Tensor.full([], 2)).sum()
+      .backward(undefined, false, false, [Tensor.from(WIDE, [2, 3])]));
+
+  // torch computes this one; all three of ours refuse in the specified words.
+  out.set("inplace::기울기::backward(create_graph)=우리는거절", () => {
+    try {
+      wide().mul(Tensor.full([], 2)).sum().backward(undefined, false, true);
+    } catch (err) {
+      const said = String(err);
+      return said.includes("is not in the browser subset")
+        ? "기대대로" : `다른 문구 <${said.slice(0, 44)}>`;
+    }
+    return "뜻밖의 성공";
+  });
+
   // ── One computation under two names (`method2::`) ───────────────────
   //
   // `torch.add(x, y)` and `x.add(y)`. This repository had the loop in one direction only,
