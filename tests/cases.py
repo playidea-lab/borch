@@ -9963,6 +9963,22 @@ def _eig_holds(L, mat):
     return f"{float((left - right).abs().max()):.4f}"
 
 
+def _both_stop(L, call):
+    """**torch stops here too**, so what is asked is that both do — not that ours does.
+
+    `refusal_case` next door needs torch to succeed; used where torch also refuses it
+    freezes *unexpected refusal* as torch's answer and files a shared limit as our
+    defect. The exception's type is not compared: torch says `RuntimeError` and the
+    browser subset raises its own class, and a call that lands in the `except` at all
+    is the whole of what this asks.
+    """
+    try:
+        call(L)
+    except Exception:                                              # noqa: BLE001
+        return "둘 다 멈춘다"
+    return "여기선 통과했다"
+
+
 def linalg_cases(inp=None):
     """Linear-algebra decompositions. **Both sides have them** — the sister library reads back to
     the CPU and computes with numpy, warning once on the first call that it is slow.
@@ -10058,6 +10074,19 @@ _LA_BATCH_RHS = np.array([[[1., 0.], [2., 1.]],
                           [[0., 3.], [1., 1.]],
                           [[2., 2.], [0., 1.]]], dtype=np.float32)
 _LA_RECT = np.array([[1., 2.], [3., 4.], [5., 7.]], dtype=np.float32)
+# **For `lstsq`'s cutoff.** Its two singular values are 5.779 and 0.774, a ratio of
+# 7.5, so `rcond=0.9` drops the second one and `rcond=1e-6` drops neither. Asked with
+# a well-conditioned matrix the argument moves nothing and every driver agrees, which
+# is exactly the shape that let `rcond` be discarded unnoticed.
+_LA_TALL = np.array([[1., 1.], [1., 2.], [1., 3.], [1., 4.]], dtype=np.float32)
+_LA_TALL_RHS = np.array([[6.], [5.], [7.], [10.]], dtype=np.float32)
+# Rank 2 by construction — the second row is twice the first. `matrix_rank(tol=3.0)`
+# cuts it to 1, so the argument is asked where it changes the answer.
+_LA_RANK2 = np.array([[1., 2., 3.], [2., 4., 6.], [1., 0., 1.]], dtype=np.float32)
+_LA_RANK_RHS = np.array([[1.], [2.], [3.]], dtype=np.float32)
+# For `tensorsolve`. Four axes folded into a 4×4, which is what `dims` would reorder.
+_LA_T4 = (np.eye(4, dtype=np.float32) + 0.1).reshape(2, 2, 2, 2)
+_LA_B4 = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
 _LA_SYM3 = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]], dtype=np.float32)
 # The first element is smaller than the second row's → partial pivoting swaps a row. Asked only
 # with matrices that do not swap, the pivots are the identity and **counting from 1 cannot be told
@@ -10471,6 +10500,71 @@ def linalg_name_cases(inp=None):
          lambda L: L.linalg.norm(L.tensor(mat), 2, 1)),
         (LINALG_PREFIX + "name2::norm(ord, dim, keepdim)",
          lambda L: L.linalg.norm(L.tensor(mat), 2, 1, True)),
+
+        # ── the six seats `linalg` was short of ──
+        #
+        # Each was **an argument JavaScript received and dropped**, so the default
+        # answer came back under the name of a computation nobody ran. Three of them
+        # the browser side computes and three it refuses; both halves are asked,
+        # because a seat that only ever refuses and a seat that is not there look
+        # identical from a caller who never passes the argument.
+        # **Asked by keyword on purpose.** The binding unrolls keywords into positions
+        # through a table, and a name missing from that row raises there — while a
+        # positional call sails past the table untouched. Written positionally these
+        # three passed with the row still empty, so the row was carried by nothing.
+        (LINALG_PREFIX + "name2::matrix_norm(dim)",
+         lambda L: L.linalg.matrix_norm(L.tensor(_LA_BATCH), dim=(0, 1))),
+        # **`keepdim` keeps the two named axes as ones**, so this is a (1, 1) and
+        # not a scalar — a rank, which broadcasts differently and surfaces elsewhere.
+        (LINALG_PREFIX + "name2::matrix_norm(keepdim)",
+         lambda L: L.linalg.matrix_norm(L.tensor(mat), keepdim=True)),
+        # `tol` is an **absolute** cutoff on the singular values — not the `rcond` of
+        # `pinv`, which is relative to the largest. The fixture is rank 2, and this
+        # tolerance cuts it to 1.
+        (LINALG_PREFIX + "name2::matrix_rank(tol)",
+         lambda L: L.linalg.matrix_rank(L.tensor(_LA_RANK2), tol=3.0)),
+        # **`pinv`'s cut-off stopped being a refusal.** The browser side held the seat
+        # and raised on it while the solver picked its own tolerance; the solver takes
+        # one now. The core has matched torch here from the start, so this asks the
+        # third implementation to catch up rather than freezing anything new.
+        (LINALG_PREFIX + "name2::pinv(rcond)",
+         lambda L: L.linalg.pinv(L.tensor(_LA_RANK2), 0.5)),
+    ]
+    # **`lstsq`'s two, and they are where torch's four drivers separate.** At full
+    # rank all four agree to float noise and nothing shows; with `rcond=0.9` on this
+    # fixture, `gels` gives 3.50/1.40, `gelsy` 0.77/2.31 and `gelsd`/`gelss`
+    # 0.79/2.32. Ours is the SVD, so `gels` takes no cutoff (torch's reads none) and
+    # `gelsd` is exact — while `gelsy`, *the default*, is refused where the cutoff
+    # bites, because there is no pivoted QR here to produce its answer with.
+    for _tag, _drv in (("gels", "gels"), ("gelsd", "gelsd"), ("gelss", "gelss")):
+        cases.append((LINALG_PREFIX + f"name2::lstsq(rcond, {_tag})",
+                      lambda L, d=_drv: L.linalg.lstsq(
+                          L.tensor(_LA_TALL), L.tensor(_LA_TALL_RHS),
+                          rcond=0.9, driver=d).solution))
+    cases.append((LINALG_PREFIX + "name2::lstsq(rcond 이 안 자를 때)",
+                  lambda L: L.linalg.lstsq(L.tensor(_LA_TALL),
+                                           L.tensor(_LA_TALL_RHS), 1e-6).solution))
+    # The three the browser side refuses. torch computes all three, so the verdict is
+    # the shape `refusal_case` holds: torch succeeds and ours stops with the specified
+    # wording.
+    cases += [
+        (LINALG_PREFIX + "name2::lstsq(기본 driver 가 자르면)=우리는거절",
+         refusal_case(lambda L: L.linalg.lstsq(
+             L.tensor(_LA_TALL), L.tensor(_LA_TALL_RHS), 0.9).solution)),
+        # **torch refuses this one too** — *LU without pivoting is not implemented on
+        # the CPU*. So it is not a `refusal_case`, which needs torch to succeed; what
+        # is asked is that both stop. Written as a `refusal_case` it read as our defect
+        # and the note would have been the wrong one forever.
+        (LINALG_PREFIX + "name2::lu(pivot=False)=둘 다 거절",
+         lambda L: _both_stop(L, lambda M: M.linalg.lu(M.tensor(_LA_MAT),
+                                                       pivot=False).U)),
+        (LINALG_PREFIX + "name2::lu_solve(adjoint)=우리는거절",
+         refusal_case(lambda L: L.linalg.lu_solve(
+             *L.linalg.lu_factor(L.tensor(_LA_SYM3)),
+             L.tensor(_LA_RANK_RHS), adjoint=True))),
+        (LINALG_PREFIX + "name2::tensorsolve(dims)=우리는거절",
+         refusal_case(lambda L: L.linalg.tensorsolve(
+             L.tensor(_LA_T4), L.tensor(_LA_B4), (0, 1)))),
     ]
     for tag, ordv in (("1", 1), ("inf", float("inf")), ("-inf", float("-inf")),
                       ("0", 0), ("3", 3)):

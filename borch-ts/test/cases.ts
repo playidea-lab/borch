@@ -8130,6 +8130,9 @@ const LA_BATCH = [4, 1, 2, 3, 2, 0, 1, 5, 3, -1, 1, 2];
 const LA_BATCH_SYM = [4, 1, 1, 3, 9, 2, 2, 5, 2, 0.5, 0.5, 1];
 const LA_BATCH_VEC = [1, 2, 3, 1, 0, 4];
 const LA_BATCH_RHS = [1, 0, 2, 1, 0, 3, 1, 1, 2, 2, 0, 1];
+// Rank 2 by construction — the second row is twice the first — so `matrix_rank(3.0)`
+// cuts it to 1 and the tolerance is asked where it changes the answer.
+const LA_RANK2 = [1, 2, 3, 2, 4, 6, 1, 0, 1];
 const LA_RECT = [1, 2, 3, 4, 5, 7];
 const LA_SYM3 = [4, 1, 0, 1, 3, 1, 0, 1, 2];
 const LA_PIVOT = [1, 2, 3, 4];
@@ -8448,6 +8451,70 @@ function addLinalgNames(out: Map<string, Case>): void {
   out.set("linalg::name2::matrix_norm(기본)", async () => mat().matrixNorm());
   out.set("linalg::name2::matrix_norm(배치)",
     async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixNorm());
+
+  // ── the six seats `linalg` was short of ─────────────────────────────────
+  //
+  // Each was an argument **JavaScript received and dropped**, so the default answer
+  // came back under the name of a computation nobody ran. Three of them are computed
+  // here and three refused; both halves are asked, because a seat that only ever
+  // refuses and a seat that is not there look the same to a caller who never passes
+  // the argument.
+  out.set("linalg::name2::matrix_norm(dim)",
+    async () => linalg.matrixNorm(Tensor.from(LA_BATCH, [3, 2, 2]), "fro", [0, 1]));
+  out.set("linalg::name2::matrix_norm(keepdim)",
+    async () => linalg.matrixNorm(mat(), "fro", [-2, -1], true));
+  out.set("linalg::name2::matrix_rank(tol)",
+    async () => linalg.matrixRank(Tensor.from(LA_RANK2, [3, 3]), 3.0));
+  // **`pinv`'s cut-off stopped being a refusal here** — the solver takes one now, and
+  // the core has matched torch on it from the start.
+  out.set("linalg::name2::pinv(rcond)",
+    async () => linalg.pinv(Tensor.from(LA_RANK2, [3, 3]), 0.5));
+
+  // **Where torch's four drivers separate.** At full rank all four agree to float
+  // noise; with `rcond=0.9` on this fixture `gels` gives 3.50/1.40, `gelsy` 0.77/2.31
+  // and `gelsd`/`gelss` 0.79/2.32. This is the SVD, so `gels` takes no cutoff and
+  // `gelsd` is exact, while `gelsy` — *the default* — is refused where the cutoff
+  // bites, there being no pivoted QR here to produce its answer with.
+  const tall = () => Tensor.from([1, 1, 1, 2, 1, 3, 1, 4], [4, 2]);
+  const tallRhs = () => Tensor.from([6, 5, 7, 10], [4, 1]);
+  for (const drv of ["gels", "gelsd", "gelss"] as const) {
+    out.set(`linalg::name2::lstsq(rcond, ${drv})`,
+      async () => linalg.lstsq(tall(), tallRhs(), 0.9, drv));
+  }
+  out.set("linalg::name2::lstsq(rcond 이 안 자를 때)",
+    async () => linalg.lstsq(tall(), tallRhs(), 1e-6));
+
+  const laRefuses = (name: string, body: () => unknown) => {
+    out.set(`linalg::name2::${name}=우리는거절`, async () => {
+      try {
+        await body();
+      } catch (err) {
+        return (err as Error).message.includes("is not in the browser subset")
+          ? "기대대로"
+          : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "뜻밖의 성공";
+    });
+  };
+  laRefuses("lstsq(기본 driver 가 자르면)",
+    () => linalg.lstsq(tall(), tallRhs(), 0.9));
+  laRefuses("lu_solve(adjoint)", async () => {
+    const { LU, pivots } = await linalg.luFactor(sym3());
+    return linalg.luSolve(LU, pivots, Tensor.from([1, 2, 3], [3, 1]), true, true);
+  });
+  laRefuses("tensorsolve(dims)",
+    () => linalg.tensorsolve(Tensor.eye(4).reshape([2, 2, 2, 2]).add(
+      Tensor.full([], 0.1)), Tensor.from([1, 2, 3, 4], [2, 2]), [0, 1]));
+  // **torch refuses this one too** — *LU without pivoting is not implemented on the
+  // CPU* — so what is asked is that both stop, not that this one does.
+  out.set("linalg::name2::lu(pivot=False)=둘 다 거절", async () => {
+    try {
+      await linalg.lu(mat(), false);
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
   for (const [tag, pv] of [["기본", null], ["fro", "fro"], ["nuc", "nuc"], ["2", 2],
     ["-2", -2], ["1", 1], ["inf", Infinity]] as const) {
     out.set(`linalg::name2::cond(p=${tag})`, async () => mat().cond(pv));

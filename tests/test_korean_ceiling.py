@@ -203,7 +203,12 @@ CEILINGS = {
     # **The verdict strings cannot be English here.** They are the frozen values in
     # `golden.json`, written by `tests/cases.py`, and the two sides have to spell them
     # identically or every one of the eight reads as a divergence.
-    "borch-ts/test": 3441,
+    # 3441 → 3486. Forty-five, case names and two verdicts: the `linalg` group's six
+    # closed seats — `matrix_norm(dim)`, `matrix_norm(keepdim)`, `matrix_rank(tol)`,
+    # `pinv(rcond)`, four `lstsq` rows and three refusals — plus `둘 다 멈춘다` and
+    # `여기선 통과했다`, which are frozen values in `golden.json` and have to be spelled
+    # the same on both sides or the case reads as a divergence.
+    "borch-ts/test": 3486,
 }
 
 

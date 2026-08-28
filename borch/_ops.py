@@ -7623,6 +7623,29 @@ def lstsq(input, b, rcond=None, *, driver=None):  # noqa: A002
     `rcond` sets the cutoff below which a singular value counts as zero, which is
     numpy's own `rcond` and is what moves `rank`. Under `gels` there is no rank
     estimate to move.
+
+    **The table above is about the other three fields. `solution` has its own
+    story, and it was wrong in two places.** numpy exposes one path, the SVD one,
+    which is `gelsd`. At full rank all four of torch's drivers agree to float
+    noise and nothing shows. Once `rcond` actually cuts a singular value they
+    separate, measured on `[[1,1],[1,2],[1,3],[1,4]]` against `[6,5,7,10]` with
+    `rcond=0.9`:
+
+        gels             3.500, 1.400   — the cutoff is not applied at all
+        gelsy (default)  0.770, 2.310   — a rank-revealing QR
+        gelsd, gelss     0.790, 2.322   — the SVD, which is numpy's
+
+    So `gels` now passes `rcond=None` down: torch's `gels` assumes full rank and
+    has no cutoff to apply, and applying one was **a wrong number under an
+    argument that reads as a tuning knob** — 3.5 against 0.79, which is not a
+    tolerance away from anything.
+
+    And `gelsy` — *the default*, so this is what an unadorned call gets — is
+    refused when the cutoff bites. There is no pivoted QR in numpy to produce it
+    with; the alternative is handing back the SVD's answer under the name of a
+    different algorithm, and the two differ by 2.5% here. At full rank the
+    cutoff changes nothing and the call goes through, which is every ordinary
+    use of it.
     """
     if driver is not None and driver not in _LSTSQ_DRIVERS:
         raise RuntimeError(
@@ -7632,7 +7655,17 @@ def lstsq(input, b, rcond=None, *, driver=None):  # noqa: A002
     input, bt = _mat(input, "lstsq", square=False), _wrap(b)
     if input.data.ndim != 2:
         _unsupported("lstsq (batched)")
-    sol, res, rank, sv = _np.linalg.lstsq(input.data, bt.data, rcond=rcond)
+    # `gels` has no rank estimate, so it has no cutoff — torch's does not read
+    # `rcond` at all and neither does this.
+    cut = None if driver == "gels" else rcond
+    sol, res, rank, sv = _np.linalg.lstsq(input.data, bt.data, rcond=cut)
+    if driver == "gelsy" and rank < min(input.data.shape):
+        # The sentence has to stay a noun phrase — `_unsupported` finishes it with
+        # *is not in the browser subset*, which is the wording the golden matches on.
+        # The why is in the docstring above; `driver="gelsd"` is the way through.
+        _unsupported(f'lstsq(rcond={rcond}, driver="gelsy") on a cut that leaves '
+                     "the matrix rank-deficient, where a pivoted QR and the SVD "
+                     "part and only the SVD is here")
     empty_f = _np.zeros(0, dtype=sol.dtype)
     if driver == "gelsy":
         res = empty_f
@@ -8003,10 +8036,29 @@ def matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False):  # noqa: A002
     the singular values, `1` the largest column-wise sum of absolute values, and
     `inf` the row-wise one. Given a rank-1 matrix the first three happen to
     coincide and cannot be told apart, so the golden asks at rank 2.
+
+    **The two axes move together.** They used to move one at a time —
+    `movedim(dim[0], -2).movedim(dim[1], -1)` — and the first move shifts where the
+    second one's axis sits, so `dim[1]` named whatever had slid into that index. On a
+    `(3, 2, 2)` with `dim=(0, 1)` it reduced axes 1 and 0 of the *moved* tensor, which
+    are the original 2 and 0: **5.568 where torch says 5.916.** Not an exception and
+    not a wrong shape — a plausible norm of a different pair of axes.
+
+    Nothing saw it because every case asked the default, where the branch does not run.
+
+    `keepdim` then puts the ones back **where the caller's axes were** and not where
+    they were moved to: torch gives `(1, 1, 2)` for `dim=(0, 1)` and `(3, 1, 1)` for
+    the default.
     """
     x = _wrap(input)
-    if dim != (-2, -1):
-        x = x.movedim(dim[0], -2).movedim(dim[1], -1)
+    if tuple(dim) != (-2, -1):
+        rank = len(x.shape)
+        at = tuple(d % rank for d in dim)
+        x = x.movedim(tuple(dim), (-2, -1))
+        if keepdim:
+            flat = matrix_norm(x, ord, (-2, -1), False)
+            return flat.reshape(tuple(1 if i in at else n
+                                      for i, n in enumerate(_wrap(input).shape)))
     if ord in _SPECTRAL:
         s = svdvals(x)
         if ord == "nuc":

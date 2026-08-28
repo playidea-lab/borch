@@ -744,10 +744,17 @@ export function completeBasis(u: Mat, rows: number, k: number): Mat {
  * The Moore–Penrose pseudoinverse. Directions whose singular value is near
  * zero are dropped.
  */
-export function pinverse(a: Mat, rows: number, cols = rows): Mat {
+export function pinverse(a: Mat, rows: number, cols = rows, rcond?: number): Mat {
   const k = Math.min(rows, cols);
   const { u, s, vt } = svd(a, rows, cols);
-  const tol = (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON;
+  // **`rcond` is relative to the largest singular value and the default is not.**
+  // numpy's `lstsq` cutoff is `rcond * s[0]`; the machine-precision default carries
+  // a `max(rows, cols)` factor that `rcond` does not. Multiplying the given number
+  // by that factor too would make `rcond=0.9` cut a different set on a 4×2 than on
+  // a 2×4, which is not what either torch or numpy does.
+  const tol = rcond === undefined
+    ? (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON
+    : (s[0] ?? 0) * rcond;
   const inv = new Float64Array(k * k);
   for (let j = 0; j < k; j++) {
     const sj = s[j] ?? 0;
@@ -758,13 +765,35 @@ export function pinverse(a: Mat, rows: number, cols = rows): Mat {
 }
 
 /**
+ * How many singular values survive `pinverse`'s `rcond`.
+ *
+ * The same cutoff `pinverse` applies, counted rather than inverted, so the caller
+ * can ask **whether the cutoff bites** without a second convention. `lstsq` needs
+ * exactly that: under the default driver the answer is only ours while the matrix
+ * stays full rank.
+ */
+export function keptUnder(a: Mat, rows: number, cols: number,
+                          rcond: number): number {
+  const { s } = svd(a, rows, cols);
+  const tol = (s[0] ?? 0) * rcond;
+  let kept = 0;
+  for (let j = 0; j < Math.min(rows, cols); j++) if ((s[j] ?? 0) > tol) kept += 1;
+  return kept;
+}
+
+/**
  * The count of non-zero singular values. What counts as zero is scaled to
  * the largest singular value.
  */
-export function matrixRank(a: Mat, rows: number, cols = rows): number {
+export function matrixRank(a: Mat, rows: number, cols = rows,
+                           given?: number): number {
   const k = Math.min(rows, cols);
   const { s } = svd(a, rows, cols);
-  const tol = (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON;
+  // **A given tolerance is absolute.** numpy's `matrix_rank(tol=)` compares the
+  // singular values to it directly, and only the default is scaled to the largest
+  // one — which is why this is not the `rcond` of `pinverse` above under another
+  // name.
+  const tol = given ?? (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON;
   let rank = 0;
   for (let j = 0; j < k; j++) if ((s[j] ?? 0) > tol) rank += 1;
   return rank;

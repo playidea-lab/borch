@@ -152,11 +152,22 @@ _SIGNATURE = {
     # takes it third; left out of this row it was dropped on the way and the answer came
     # back a rank short — a shape, not an exception.
     "vector_norm": ("ord", "dim", "keepdim"),
-    "matrix_norm": ("ord",),
+    # **`dim` and `keepdim` were missing for the same reason `vector_norm`'s was**, and
+    # `matrix_norm(A, "fro", (-2, -1), True)` came back a scalar where torch keeps the
+    # two axes as ones.
+    "matrix_norm": ("ord", "dim", "keepdim"),
+    "matrix_rank": ("tol",),
     # `linalg.norm` is routed to borch.ts's **namespace** function rather than the `norm`
     # method, so its row is torch's `linalg.norm` and not `torch.norm`'s. The two differ
     # in the first name — `ord` against `p` — and in what they compute.
     "linalg.norm": ("ord", "dim", "keepdim", "dtype"),
+    # The other four that reach borch.ts's `linalg` namespace rather than a method.
+    # Their rows are torch's `linalg` argument names — the tensor methods next to them
+    # take neither the same names nor the same count.
+    "linalg.lu": ("pivot",),
+    "linalg.lu_solve": ("pivots", "b", "left", "adjoint"),
+    "linalg.tensorsolve": ("b", "dims"),
+    "linalg.lstsq": ("b", "rcond", "driver"),
     "vander": ("N",),
     "vecdot": ("other", "dim"),
     "eigvalsh": ("UPLO",),
@@ -3179,17 +3190,52 @@ class _MinMax:
 # **`torch.linalg` is a namespace.** Most of it exists as tensor methods, and the
 # ones whose sizes depend on the values (`cholesky`, `svd`, `eigh`) are
 # asynchronous, so `settle` waits on them.
+# **Answered by borch.ts's `linalg` namespace rather than by a tensor method.**
+#
+# Each of these five has an argument the method next to it does not take, and every one
+# of those arguments changes the answer:
+#
+#     norm         `ord` with no `dim` on a matrix is the largest singular value there
+#                  and the elementwise p-norm on the method — 16.848 against 16.882
+#     lu           `pivot=False` is a different factorisation, refused
+#     lu_solve     `left`/`adjoint` are different systems, refused
+#     tensorsolve  `dims` reorders the axes before the fold, refused
+#     lstsq        `rcond` is the cutoff and `driver` picks among four algorithms
+#
+# Reached through the method the extra words are handed to JavaScript and dropped, so
+# the default answer comes back under the name of a computation nobody ran. The values
+# are named here rather than derived because `lu_solve` is `luSolveFactored` over there.
+_VIA_NAMESPACE = {
+    "norm": "norm",
+    "lu": "lu",
+    "lu_solve": "luSolve",
+    "tensorsolve": "tensorsolve",
+    "lstsq": "lstsq",
+}
+
+
 class _Linalg:
     # Code that meets a singular matrix wraps it in
     # `except linalg.LinAlgError`. Without this here that wrapper cannot find the
     # name and the program dies — needed before any value is.
     LinAlgError = _LinAlgError
 
-    def lstsq(self, a, b):
+    def lstsq(self, a, b, rcond=None, *, driver=None):
         """torch gives an object holding `.solution` — borch.ts gives the answer
-        directly."""
+        directly.
+
+        **This one cannot go through `__getattr__` even though it is in
+        `_VIA_NAMESPACE`**, because the result has to be dressed as torch's named
+        tuple before it is handed back. It reaches the same namespace function the
+        table names; only the wrapping is here.
+
+        `rcond` and `driver` were absent, so `linalg.lstsq(A, B, 0.9)` was **a third
+        argument JavaScript discarded** and the uncut answer came back — 3.5 where
+        torch says 0.77, under an argument whose whole purpose is to move it.
+        """
         from ._base import _Fields
-        got = settle(handle(a).lstsq(handle(b)))
+        ns = getattr(_js.borch, "linalg", None)
+        got = settle(ns.lstsq(handle(a), handle(b), rcond, driver or "gelsy"))
         out = _Fields.__new__(_Fields)
         object.__setattr__(out, "_order", ["solution"])
         object.__setattr__(out, "_d", {"solution": got})
@@ -3220,9 +3266,15 @@ class _Linalg:
         return wrap(guarded(handle(a).diagonal, offset, dim1, dim2))
 
     def tensorsolve(self, a, b, dims=None):
-        if dims is not None:
-            raise RuntimeError("tensorsolve(dims) is not here yet")
-        return wrap(guarded(handle(a).tensorSolve, handle(b)))
+        """**The refusal moved to borch.ts and this forwards to it.**
+
+        It used to raise here, which was right while borch.ts had no seat for `dims`
+        at all — but it meant two libraries deciding one question, and a caller
+        reaching borch.ts directly got the unmoved answer in silence. One rule, one
+        place; this only carries the word across.
+        """
+        ns = getattr(_js.borch, "linalg", None)
+        return wrap(guarded(ns.tensorsolve, handle(a), handle(b), dims))
 
     def tensorinv(self, a, ind=2):
         return wrap(guarded(handle(a).tensorInv, ind))
@@ -3302,13 +3354,21 @@ class _Linalg:
             #
             # All three implementations had it wired to the elementwise one. The golden
             # case written for it caught borch.ts, then the core, then this.
-            if name == "norm":
+            #
+            # **The list grew and became a table.** `lu`, `luSolve` and `tensorsolve`
+            # each carry an argument in order to refuse it — `pivot`, `left`/`adjoint`,
+            # `dims` — and every one of those refusals lives in borch.ts's `linalg`
+            # namespace, not on the tensor. Reached by method the words are received by
+            # JavaScript and dropped, and the default answer comes back under the name
+            # of a computation nobody performed. That is the same failure `norm` was,
+            # one argument further in.
+            if name in _VIA_NAMESPACE:
                 ns = getattr(_js.borch, "linalg", None)
                 if ns is not None:
                     # The free function takes the tensor first; the method took it as
                     # the receiver.
-                    return guarded(ns.norm, handle(x),
-                                   *positional("linalg.norm", args, kw))
+                    return guarded(getattr(ns, _VIA_NAMESPACE[name]), handle(x),
+                                   *positional(f"linalg.{name}", args, kw))
             fn = getattr(handle(x), js_name, None)
             if fn is None:
                 raise AttributeError(f"borch.ts does not have `{js_name}` (linalg.{name})")

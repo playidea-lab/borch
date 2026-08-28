@@ -1335,10 +1335,25 @@ SHORTER = {
     # golden case written alongside caught it in borch.ts on the first run and in the
     # core on the next.
     #
-    # Six remain: `lstsq` neither `rcond` nor `driver`; `lu` no `pivot`; `lu_solve`
+    # Six remained: `lstsq` neither `rcond` nor `driver`; `lu` no `pivot`; `lu_solve`
     # neither `left` nor `adjoint`; `matrix_norm` no `dim`/`keepdim`; `matrix_rank` no
     # `tol`; `tensorsolve` no `dims`.
-    "linalg": 6,
+    #
+    # **6 → 0**, and the six moved into `DECLINED` — what is left on each is the `out`
+    # every row in this namespace has. Three compute (`matrix_norm`'s pair,
+    # `matrix_rank`'s `tol`, `lstsq`'s `rcond`) and three refuse with a reason (`lu`'s
+    # `pivot`, `lu_solve`'s pair, `tensorsolve`'s `dims`), which is what the core does
+    # with the same six. **Both halves have a golden case**: a seat that only ever
+    # refuses and a seat that is not there look identical from a caller who never
+    # passes the argument.
+    #
+    # Closing them found two defects that had nothing to do with borch.ts. The core's
+    # `matrix_norm` moved its two axes **one at a time**, so the second `movedim` named
+    # whatever the first had slid into that index — 5.568 where torch says 5.916 on a
+    # `(3, 2, 2)` with `dim=(0, 1)`. And the core's `lstsq` applied `rcond` under
+    # `driver="gels"`, which torch's does not read at all: 0.79 where torch says 3.50.
+    # Every case before these asked the default, where neither branch runs.
+    "linalg": 0,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
     # that they exist at all.
@@ -1480,7 +1495,11 @@ DECLINED = {
     # they were short of were carried across — what is left on those three is the `out`
     # this table is about. **A rise here is only good news when `SHORTER` fell by the
     # same three**, which is the pairing the test above enforces by holding both.
-    "linalg": 23,
+    # 23 → 29. The six that closed in `SHORTER` land here: with their seats carried,
+    # what is left on each is the `out` this table is about. **A rise here is only good
+    # news when `SHORTER` fell by the same six**, which is the pairing the test enforces
+    # by holding both — and this time `SHORTER["linalg"]` went to zero.
+    "linalg": 29,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,

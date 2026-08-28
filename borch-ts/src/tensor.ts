@@ -6173,19 +6173,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * changes the answer rather than only its precision — measured on torch, a 2×2 at
    * `rcond=0.9` comes back entirely different from the default.
    *
-   * `LA.pinverse` decides that cut-off itself, so the seat is carried and refused
-   * until it takes one. Left out, `pinverse(rcond=0.9)` was a surplus argument and
-   * JavaScript discards those.
+   * The seat was carried and **refused** while `LA.pinverse` decided the cut-off
+   * itself — carried because leaving it out made `pinverse(rcond=0.9)` a surplus
+   * argument, and JavaScript discards those. It takes one now, so the refusal is
+   * gone and the number is computed: `rcond` scales to the largest singular value,
+   * which is numpy's convention and torch's, and the core has always matched it.
    */
   async pinverse(rcond?: number): Promise<Tensor> {
-    if (rcond !== undefined) {
-      throw new Error(
-        `pinverse(rcond=${rcond}) — the cut-off is not carried across yet; the `
-        + "solver picks its own");
-    }
     const v = await this.asBatch(false);
     const { rows: m, cols: n } = v;
-    const ps = v.mats.map((a) => LA.pinverse(a, m, n));
+    const ps = v.mats.map((a) => LA.pinverse(a, m, n, rcond));
     const out = Tensor.fromBatch(ps, [...v.lead, n, m]);
     return this.linalgNode(out, (g) =>
       Tensor.perBatch(g, v.batch, [n, m], this.shape, (gb, b) => {
@@ -6604,7 +6601,32 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * the row equivalent. Only the three that need singular values make a CPU
    * round trip.
    */
-  async matrixNorm(ord: number | string = "fro"): Promise<Tensor> {
+  async matrixNorm(ord: number | string = "fro",
+                   dim: readonly [number, number] = [-2, -1],
+                   keepdim = false): Promise<Tensor> {
+    // **The two axes are brought to the end rather than the arithmetic moved to
+    // them.** Every branch below reduces the last two, so naming any other pair
+    // is a permutation and not a second implementation — and `dim` given as the
+    // trailing pair, which is the default, permutes to itself.
+    const rank = this.shape.length;
+    const at = dim.map((d) => (d < 0 ? d + rank : d));
+    const [d0, d1] = at as [number, number];
+    if (d0 === d1 || d0 >= rank || d1 >= rank || d0 < 0 || d1 < 0) {
+      throw new RuntimeError(
+        `matrixNorm: dim=[${dim[0]}, ${dim[1]}] is not two axes of a rank-${rank} tensor`);
+    }
+    const rest = [...Array(rank).keys()].filter((i) => i !== d0 && i !== d1);
+    const moved = rest.length === 0 && d0 === rank - 2 && d1 === rank - 1
+      ? this : this.permute([...rest, d0, d1]);
+    const flat = await moved.matrixNormOfLast(ord);
+    if (!keepdim) return flat;
+    // Back in the caller's axis order, with a 1 where each named axis stood.
+    const kept = this.shape.map((_, i) => (i === d0 || i === d1 ? 1 : this.shape[i]!));
+    return flat.reshape(kept);
+  }
+
+  /** `matrixNorm`'s arithmetic, always on the last two axes. */
+  private async matrixNormOfLast(ord: number | string): Promise<Tensor> {
     if (ord === "nuc" || ord === 2 || ord === -2) {
       const s = await this.svdvals();
       if (ord === "nuc") return s.sumDim(-1, false);
@@ -6756,14 +6778,22 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return inv.reshape([...this.shape.slice(ind), ...lead]);
   }
 
-  async matrixRank(): Promise<Tensor> {
+  async matrixRank(tol?: number): Promise<Tensor> {
     const v = await this.asBatch(false);
-    return Tensor.from(v.mats.map((a) => LA.matrixRank(a, v.rows, v.cols)), v.lead);
+    return Tensor.from(
+      v.mats.map((a) => LA.matrixRank(a, v.rows, v.cols, tol)), v.lead);
   }
 
   /**
    * The least-squares solution. Square and invertible, it gives the same
    * answer as `solve`.
+   */
+  /**
+   * **This method takes one argument and keeps taking one.** torch removed
+   * `Tensor.lstsq` and the core carries it as a tombstone with a single `other`,
+   * so `rcond` and `driver` — which live on `linalg.lstsq`, where torch puts them
+   * — do not belong on it. Given them here the method read *longer than the core*
+   * on the signature axis, which is exactly the report that argument was for.
    */
   async lstsq(other: Tensor): Promise<Tensor> {
     const v = await this.asBatch(false);

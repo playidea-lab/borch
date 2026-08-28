@@ -62,9 +62,9 @@ export function matrixPower(input: Tensor, n: number): Tensor {
   return input.matrixPower(n);
 }
 
-/** `matrix_rank(A)` — how many singular values are above the tolerance. */
-export function matrixRank(input: Tensor): Promise<Tensor> {
-  return input.matrixRank();
+/** `matrix_rank(A, tol=None)` — how many singular values are above the tolerance. */
+export function matrixRank(input: Tensor, tol?: number): Promise<Tensor> {
+  return input.matrixRank(tol);
 }
 
 /** `matrix_exp(A)` — the matrix exponential. */
@@ -130,14 +130,64 @@ export function solveTriangular(
   return input.solveTriangular(b, upper, left, unitriangular);
 }
 
-/** `lstsq(A, B)` — the least-squares solution. */
-export function lstsq(input: Tensor, b: Tensor): Promise<Tensor> {
-  return input.lstsq(b);
+/**
+ * `lstsq(A, B, rcond=None, *, driver=None)` — the least-squares solution.
+ *
+ * The last two used to be absent, so `rcond` was **received by JavaScript and
+ * discarded** — a cutoff that reads as a tuning knob and moved nothing.
+ *
+ * **The four drivers are four algorithms and this is one of them.** The
+ * pseudoinverse is the SVD, which is `gelsd`. At full rank all four of torch's
+ * agree to float noise; once the cutoff bites they separate, measured on
+ * `[[1,1],[1,2],[1,3],[1,4]]` against `[6,5,7,10]` with `rcond=0.9`: `gels`
+ * 3.500/1.400, `gelsy` 0.770/2.310, `gelsd` and `gelss` 0.790/2.322.
+ *
+ * So `gels` takes no cutoff — torch's assumes full rank and never reads `rcond` —
+ * and `gelsy`, *the default*, is refused where the cutoff would change the answer,
+ * because it solves with a pivoted QR there and handing back the SVD's numbers
+ * under its name is a wrong answer with nothing attached to it. The core refuses
+ * the same call for the same reason.
+ *
+ * The arithmetic is here rather than on `Tensor.lstsq`, which torch removed and
+ * the core keeps as a one-argument tombstone.
+ */
+export async function lstsq(input: Tensor, b: Tensor, rcond?: number,
+                            driver = "gelsy"): Promise<Tensor> {
+  if (!["gels", "gelsy", "gelsd", "gelss"].includes(driver)) {
+    throw new RuntimeError(
+      "lstsq: parameter `driver` should be one of (gels, gelsy, gelsd, gelss)");
+  }
+  if (input.shape.length !== 2) {
+    throw new RuntimeError("lstsq: batching is not here yet");
+  }
+  const cut = driver === "gels" ? undefined : rcond;
+  if (driver === "gelsy" && cut !== undefined && await cutBites(input, cut)) {
+    throw new RuntimeError(
+      `lstsq(rcond=${rcond}, driver="gelsy") on a cut that leaves the matrix `
+      + "rank-deficient is not in the browser subset — a pivoted QR and the SVD "
+      + 'part there and only the SVD is here. Ask for driver="gelsd" on purpose.');
+  }
+  // The least-squares solution **is** the pseudoinverse applied to `B`, and that
+  // one takes the cut-off — so this composes two public pieces rather than opening
+  // the matrix a second time. `Tensor.lstsq` next door is the same thing without a
+  // cut-off, which is what torch's removed method computed.
+  const p = await input.pinverse(cut);
+  return b.shape.length === 1 ? p.mv(b) : p.mm(b);
 }
 
-/** `matrix_norm(A, ord="fro")`. */
-export function matrixNorm(input: Tensor, ord: number | string = "fro"): Promise<Tensor> {
-  return input.matrixNorm(ord);
+/** Does this cut-off drop a singular value? `lstsq`'s default driver hinges on it. */
+async function cutBites(input: Tensor, rcond: number): Promise<boolean> {
+  const s = await input.svdvals();
+  const largest = await s.amax(-1, false).item();
+  const kept = await s.gt(Tensor.full([], largest * rcond)).sum().item();
+  return kept < Math.min(...input.shape);
+}
+
+/** `matrix_norm(A, ord="fro", dim=(-2,-1), keepdim=False)`. */
+export function matrixNorm(input: Tensor, ord: number | string = "fro",
+                           dim: readonly [number, number] = [-2, -1],
+                           keepdim = false): Promise<Tensor> {
+  return input.matrixNorm(ord, dim, keepdim);
 }
 
 /** `vector_norm(x, ord=2, dim=None, keepdim=False)`. */
@@ -195,8 +245,22 @@ export function luFactor(a: Tensor): Promise<{ LU: Tensor; pivots: Tensor }> {
   return a.luFactor();
 }
 
-/** `lu(A)` — the LU decomposition, expanded into `P`, `L` and `U`. */
-export function lu(A: Tensor): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+/**
+ * `lu(A, *, pivot=True)` — the LU decomposition, expanded into `P`, `L` and `U`.
+ *
+ * **`pivot` is carried in order to refuse it**, which is what the core does with the
+ * same argument. Without pivoting the factorisation is a different one and exists only
+ * where no pivot is ever needed; there is no such path here. Left out of the signature
+ * the word would be discarded by JavaScript and the pivoted answer returned under its
+ * name — a wrong factorisation that looks like a right one.
+ */
+export function lu(A: Tensor,
+                   pivot = true): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+  if (!pivot) {
+    throw new RuntimeError(
+      "lu(pivot=false) is not in the browser subset — the factorisation without "
+      + "pivoting is a different one and only the pivoted answer is computed here.");
+  }
   return A.lu();
 }
 
@@ -214,10 +278,11 @@ export function inv(a: Tensor): Promise<Tensor> {
 
 /** `pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`. */
 export function pinv(input: Tensor, rcond?: number): Promise<Tensor> {
-  // **Carried in order to refuse.** `pinverse` stops on a cut-off it does not honour,
-  // and the seat has to exist here for that stop to be reachable — left out, the door
-  // was narrower than the room behind it and `linalg.pinv(a, 1e-6)` discarded the
-  // number in silence, which is the answer a caller asked to stop getting.
+  // **Carried in order to refuse, and now carried in order to compute.** The seat had
+  // to exist here for `pinverse`'s stop to be reachable at all — left out, the door was
+  // narrower than the room behind it and `linalg.pinv(a, 1e-6)` discarded the number in
+  // silence. `pinverse` takes the cut-off now, so the same seat delivers it, and the
+  // core has been giving torch's answer for this all along.
   return input.pinverse(rcond);
 }
 
@@ -235,7 +300,16 @@ export function matmul(input: Tensor, other: Tensor): Tensor {
  * positionally would swap `LU` and `B`, and with square matrices nothing about the call
  * would look wrong.
  */
-export function luSolve(LU: Tensor, pivots: Tensor, b: Tensor): Promise<Tensor> {
+export function luSolve(LU: Tensor, pivots: Tensor, b: Tensor,
+                        left = true, adjoint = false): Promise<Tensor> {
+  // **Both carried in order to refuse**, as the core refuses them. `left=false`
+  // solves `X A = B` and `adjoint=true` solves `Aᴴ X = B`; each is a different
+  // system, and the seats have to exist for the stop to be reachable at all.
+  if (!left || adjoint) {
+    throw new RuntimeError(
+      "lu_solve(left=false or adjoint=true) is not in the browser subset — each "
+      + "solves a different system than the one these factors were made for.");
+  }
   return LU.luSolveFactored(pivots, b);
 }
 
@@ -317,7 +391,17 @@ export function multiDot(tensors: readonly Tensor[]): Tensor {
  * declarations colliding on one lookup key — the collision check another session added
  * this morning, after a normaliser folded `eq_` onto `eq`.
  */
-export function tensorsolve(input: Tensor, b: Tensor): Promise<Tensor> {
+export function tensorsolve(input: Tensor, b: Tensor,
+                            dims?: readonly number[]): Promise<Tensor> {
+  // **Carried in order to refuse**, as the core refuses it. `dims` moves the named
+  // axes of `A` to the end before the fold, so the matrix that gets solved is a
+  // different one; without the seat the list is discarded and the unmoved answer
+  // comes back under its name.
+  if (dims !== undefined) {
+    throw new RuntimeError(
+      "tensorsolve(dims) is not in the browser subset — it reorders A's axes "
+      + "before the fold, so the system solved is a different one.");
+  }
   return input.tensorSolve(b);
 }
 
