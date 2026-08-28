@@ -246,8 +246,21 @@ DEPRECATED_IN = ("nn", "nn.functional")
 # adding a parameter torch refuses; this one tempts **removing one torch accepts**,
 # which is the worse of the two — the first only widens the surface, the second takes
 # a working call away.
+#
+# **`Tensor.logit_` is the third of that kind, and it arrived by the row appearing.**
+# Its docstring is `logit_() -> Tensor`, and `torch.tensor([0., .2]).logit_(eps=0.1)`
+# returns the clamped answer (measured). The core was nullary there to match the
+# prose, which meant `x.logit_(eps=…)` stopped in this library and computed in torch
+# — the argument was given a seat, and then this row is what the prose had left.
+#
+# **`Tensor.scatter` is the fourth, and its own in-place twin is the witness.**
+# `scatter_`'s docstring lists `reduce`; `scatter`'s does not, and both accept it
+# (`x.scatter(0, i, s, reduce='add')` computes — measured). One argument, two
+# docstrings, one of them short: prose is not the function, said again by a pair
+# that disagrees with itself.
 TORCH_DOC_IS_WRONG = {"Tensor::atanh_", "Tensor::arctanh_",
-                      "Tensor::softmax", "Tensor::log_softmax"}
+                      "Tensor::softmax", "Tensor::log_softmax", "Tensor::logit_",
+                      "Tensor::scatter"}
 
 
 def _spaces():

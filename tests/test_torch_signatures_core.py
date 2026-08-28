@@ -657,7 +657,17 @@ JUDGED = {
     # seat torch has, refused here with the wording that says why) and `poisson`
     # declares nothing more than it takes. Two rows left an absorbing state, which is
     # the movement this check was written to make visible in the other direction.
-    "Tensor": (388, 509),
+    #
+    # **388 → 414, and this is the largest single move the row has recorded.** The
+    # core's in-place methods are generated: `_make_inplace` wraps the partner
+    # function in a `def method(self, *args, **kw)`, so every one of them declared a
+    # bag and every one of them was `variadic` — *cannot be judged*, twenty-six rows
+    # deep, and none of them counted as a gap anywhere. Teaching the generator to
+    # copy the partner's signature onto what it builds emptied that pocket, and two
+    # real defects were underneath it: `logit_` refused an `eps` torch computes, and
+    # `scatter_` had no `reduce` at all. Neither was reachable from a bucket that
+    # means the question cannot be asked.
+    "Tensor": (414, 509),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a

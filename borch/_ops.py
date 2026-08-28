@@ -1,6 +1,7 @@
 """A piece of borch, split out. __init__ gathers the public names."""
 
 import builtins as _builtins
+import inspect as _inspect
 import itertools as _itertools
 import math as _math
 
@@ -2581,7 +2582,7 @@ _INPLACE_UNARY = ("abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh", "sig
 # only against us.
 _INPLACE_MORE = (
     "absolute", "acosh", "arccos", "arccosh", "arcsin", "arcsinh", "arctan",
-    "arctanh", "asinh", "atanh", "deg2rad", "erfc", "exp2", "fix", "logit",
+    "arctanh", "asinh", "atanh", "deg2rad", "erfc", "exp2", "fix",
     "negative", "rad2deg", "sgn", "sinc",
 )
 # The ones taking one more argument. Only the argument count differs.
@@ -2596,6 +2597,18 @@ _INPLACE_ARGS = (
     # operation took different arguments — which is what `div_` had against `div`
     # with `rounding_mode`, found in the same run.
     "round",
+    # **`logit` moved here for the same reason, and it took a new instrument to
+    # see.** `logit_` was nullary while `logit` takes `eps`, so `x.logit_(eps=1e-6)`
+    # — which torch computes — stopped with *takes 1 positional argument but 2 were
+    # given*. It stayed because the method's declared signature was `(*args, **kw)`
+    # and every check that reads one went blind: the signature axis filed it as *no
+    # python signature*, one of ninety-seven `Tensor` rows in that bucket.
+    #
+    # `relu_` is the opposite case and stays nullary: its partner's extra argument
+    # is `inplace`, which **torch's method does not take either** (measured —
+    # `TensorBase.relu_() takes no keyword arguments`). Two names in one list with
+    # opposite answers, and only asking torch tells them apart.
+    "logit",
     "cumprod", "cumsum", "index_add", "index_copy", "index_fill", "ldexp",
     "masked_fill", "scatter", "scatter_add", "squeeze", "swapaxes", "swapdims",
     "transpose", "tril", "triu", "unsqueeze",
@@ -2615,14 +2628,56 @@ def _make_inplace(name, arity="nullary"):
     if arity == "nullary":
         def method(self):
             return self._inplace(lambda: fn(self), name + "_")
+        # **It takes nothing, and it was declaring otherwise.** `inspect.signature`
+        # follows `__wrapped__`, and some of the partners carry one — `relu_` read
+        # back as `(x, *args, **kw)`, promising to take anything while the body
+        # takes `self` alone. Over-promising is the same failure as the
+        # under-declaring below, pointing the other way, and both end in the axis's
+        # *no python signature* bucket.
+        method.__signature__ = _inspect.Signature(
+            [_inspect.Parameter("self", _inspect.Parameter.POSITIONAL_OR_KEYWORD)])
     else:
         def method(self, *args, **kw):
             return self._inplace(lambda: fn(self, *args, **kw), name + "_")
+        # **Only the forwarding branch may claim the forwarded list.** A nullary
+        # method takes `(self)` and already reads as that; attaching its partner's
+        # signature would declare arguments the method cannot accept, which is a
+        # worse lie than the `(*args, **kw)` it replaces — `relu_` is exactly that
+        # shape, and this line is why it is not.
+        _forwards(method, fn)
 
     method.__name__ = name + "_"
     method.__doc__ = (f"`{name}` in place. `{name}` does the arithmetic and this "
                       "only writes the result back.")
     return method
+
+
+def _forwards(method, fn):
+    """Say what the forwarder forwards, so `inspect.signature` can read it.
+
+    **A `(*args, **kw)` wrapper is a signature nothing can compare.** `add_` takes
+    exactly what `add` takes — that is what "in place" means here — and the wrapper
+    was declaring neither. `tests/ts_signatures.py` files such a row as *no python
+    signature*, which is the wording for **could not be measured**: ninety-seven
+    `Tensor` rows sat in that bucket, and a bucket that large reads as a limit of
+    Python rather than as a thing to fix.
+
+    It is not Python's limit. torch's C methods genuinely have no signature and this
+    one has one — it is sitting on the function next door.
+
+    The receiver is renamed to `self`, because that is what the axis strips. Where
+    the wrapped function is itself variadic (a handful reach a method by name and
+    have nothing to copy) nothing is attached and the row stays honestly unread.
+    """
+    try:
+        got = _inspect.signature(fn)
+    except (TypeError, ValueError):
+        return
+    params = list(got.parameters.values())
+    if not params or any(p.kind is p.VAR_POSITIONAL for p in params):
+        return
+    first = params[0].replace(name="self", kind=_inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    method.__signature__ = got.replace(parameters=[first] + params[1:])
 
 
 # **They are attached at the end of this file.** Attached here, the functions
@@ -4118,13 +4173,26 @@ def _in_bounds(idx, size, dim, kind=RuntimeError):
             f"with size {size}")
 
 
-def scatter(input, dim, index, src):
+def scatter(input, dim, index, src, reduce=None):
     """**Overwrites** at the positions the indices point at. On a collision the
     last write survives.
 
     It parts from `scatter_add` at colliding indices only — measured with
     non-colliding indices the two functions look identical. So the golden asks
     with indices where 0 appears twice.
+
+    **`reduce` is torch's deprecated overload and it is carried anyway.** torch
+    warns that `scatter_reduce` replaces it and still answers `'add'` and
+    `'multiply'`, refusing every other word — so a call written against torch
+    runs here. Given, it accumulates *onto what is already there* rather than
+    overwriting: `[[1,2]].scatter(0, [[0,0]], [[3,5]], reduce='add')` is
+    `1+3+5`, not `3+5` (measured).
+
+    **And it refuses to differentiate, because torch does** — `derivative for
+    aten::scatter is not implemented` the moment `reduce` is given, for both
+    operands. Computing a slope torch will not compute is the failure this
+    repository keeps finding from the other side: the number comes out, nothing
+    says it is ours alone, and it is wrong only in training.
     """
     input = _wrap(input)
     idx = _as_index(index)
@@ -4133,6 +4201,31 @@ def scatter(input, dim, index, src):
     scalar = not isinstance(src, Tensor)
     values = (_np.full(idx.shape, src, dtype=input.data.dtype) if scalar
               else _wrap(src).data)
+    if reduce is not None:
+        if reduce not in ("add", "multiply"):
+            raise RuntimeError(_like_torch(
+                f"scatter's `reduce` takes 'add' or 'multiply'; got {reduce!r}. "
+                "The wider set ('sum', 'prod', 'mean', 'amax', 'amin') belongs to "
+                "`scatter_reduce`, which is the replacement torch points at.",
+                "reduce argument must be either add or multiply."))
+        # Colliding indices accumulate here, so `put_along_axis` is not it — the
+        # same reason `scatter_add` reaches for `add.at`.
+        grid = _np.indices(idx.shape)
+        where = list(grid)
+        where[dim] = idx
+        (_np.add if reduce == "add" else _np.multiply).at(out, tuple(where), values)
+
+        def refuse(g):
+            # `RuntimeError`, not `NotImplementedError`, because that is what torch
+            # raises — and `NotImplementedError` *is* a `RuntimeError`, so an
+            # `except` clause would not have told them apart. Only the name does.
+            raise RuntimeError(_like_torch(
+                "scatter with `reduce` has no gradient — torch does not define one "
+                "either, and a slope invented here would be wrong only in training.",
+                "derivative for aten::scatter is not implemented"))
+
+        parents = (input,) if scalar else (input, _wrap(src))
+        return input._make(out, parents, refuse, "ScatterBackward0")
     _np.put_along_axis(out, idx, values, axis=dim)
 
     def back(g):

@@ -83,21 +83,34 @@ _RENAME = {
 
 # **Keyword arguments become positions.**
 #
-# torch code calls by name in many places — `clamp(x, min=-0.5, max=0.5)` — and
+# torch code calls by name in many places — `clip(x, min=-0.5, max=0.5)` — and
 # JavaScript has no such thing. Discarding `**kw` at first sent
-# `clamp(x, undefined, undefined)` down into a shader and WGSL stopped at
+# `clip(x, undefined, undefined)` down into a shader and WGSL stopped at
 # parsing: that was 72 failures.
 #
 # So the slot names are written down. The **argument order** is borch.ts's, with
 # torch's names placed into those slots. A function absent from here is one that
 # takes no keyword arguments.
+#
+# **Twenty-three rows were removed the day anything read this table.** Nothing
+# did: no test named `_SIGNATURE`, so a row could be written, be reached by no
+# call, and read for years as the reason a call works. `positional()` is entered
+# from four places only — the tensor method (`_base`), the module function
+# (`_ops.__getattr__`), `F.` (`_nn`) and `linalg` — and a name in
+# `_NOT_FORWARDED` with a hand-written `_ops` function of its own is behind all
+# four. `clamp` was one: the paragraph above names it as the example, and its
+# row had stopped mattering the day `def clamp` was written, because a real
+# Python signature takes its own keywords. `squeeze` was in here **twice**, which
+# is the fault the note further down records `quantile` having had.
+#
+# `tests/test_binding_arguments.py` holds it now. Adding a row that nothing can
+# reach is the cheap way to look like a gap was closed, and it was available
+# until then.
 _SIGNATURE = {
-    "clamp": ("min", "max"),
     "clip": ("min", "max"),
     # **`dtype` is the third slot**, exactly as in torch's signature — it means
     # convert before reducing, and that order changes the values when floats are
     # folded into integers.
-    "sum": ("dim", "keepdim", "dtype"),
     "mean": ("dim", "keepdim", "dtype"),
     "prod": ("dim", "keepdim", "dtype"),
     "nansum": ("dim", "keepdim", "dtype"),
@@ -117,6 +130,16 @@ _SIGNATURE = {
     "log_softmax": ("dim",),
     "cumsum": ("dim", "dtype"),
     "cumprod": ("dim", "dtype"),
+    # **The in-place twins need their own rows, and three arrived at once.** The core's
+    # generated `x_ = (*args, **kw)` forwarders were taught to declare what they
+    # forward, which handed `round_`, `logit_` and `heaviside_` the argument their
+    # partners always had. Here that is a keyword crossing into JavaScript, and a
+    # keyword with no row does not go through — `x.round_(decimals=1)` stopped at
+    # *does not take keyword arguments* while `x.round(decimals=1)` computed. The
+    # pair being one line apart in this table is what makes the absence visible.
+    "round_": ("decimals",),
+    "logit_": ("eps",),
+    "heaviside_": ("values",),
     "logcumsumexp": ("dim",),
     "mvlgamma": ("p",),
     "clamp_max": ("max",),
@@ -124,9 +147,7 @@ _SIGNATURE = {
     "fill": ("value",),
     "sort": ("dim", "descending", "stable"),
     "topk": ("k", "dim", "largest", "sorted"),
-    "squeeze": ("dim",),
     "unsqueeze": ("dim",),
-    "flatten": ("start_dim", "end_dim"),
     # Activation arguments. Many places call by name — `F.celu(x, alpha=0.5)`.
     "celu": ("alpha",),
     "hardshrink": ("lambd",),
@@ -180,9 +201,7 @@ _SIGNATURE = {
     "conv_transpose1d": ("weight", "bias", "stride", "padding"),
     "conv_transpose2d": ("weight", "bias", "stride", "padding"),
     "conv_transpose3d": ("weight", "bias", "stride", "padding"),
-    "flip": ("dims",),
     "roll": ("shifts", "dims"),
-    "norm": ("p", "dim", "keepdim"),
     "diff": ("n", "dim", "prepend", "append"),
     # Where the names diverge — Python has `rounding_mode` and JavaScript has
     # `roundingMode`. `_SIGNATURE` writes **torch's name** and follows borch.ts's
@@ -198,14 +217,9 @@ _SIGNATURE = {
     "gather": ("dim", "index", "sparse_grad"),
     "index_select": ("dim", "index"),
     "narrow": ("dim", "start", "length"),
-    "transpose": ("dim0", "dim1"),
-    "swapdims": ("dim0", "dim1"),
     "movedim": ("source", "destination"),
-    "repeat_interleave": ("repeats", "dim", "output_size"),
     "cat": ("dim",),
     "stack": ("dim",),
-    "split": ("size", "dim"),
-    "chunk": ("chunks", "dim"),
     "unbind": ("dim",),
     "conv1d": ("weight", "bias", "stride", "padding"),
     "conv2d": ("weight", "bias", "stride", "padding"),
@@ -242,9 +256,6 @@ _SIGNATURE = {
     "cross_entropy": ("target", "ignore_index", "reduction", "label_smoothing"),
     "huber_loss": ("target", "delta", "reduction"),
     "interpolate": ("scale_factor",),
-    "max": ("dim", "keepdim"),
-    "min": ("dim", "keepdim"),
-    "aminmax": ("dim",),
     # Boolean reductions and counting. **The dimension itself was missing for a
     # long time** — passing one had it quietly discarded and the whole tensor
     # reduced.
@@ -256,17 +267,19 @@ _SIGNATURE = {
     "nonzero": ("as_tuple",),
     "kthvalue": ("k", "dim", "keepdim"),
     "quantile": ("q", "dim", "keepdim", "interpolation"),
-    "index_fill": ("dim", "index", "value"),
-    "scatter": ("dim", "index", "src"),
     "cumulative_trapezoid": ("dim",),
     "diagonal": ("offset",),
-    "squeeze": ("dim",),
     "expand": ("shape",),
     "unflatten": ("dim", "sizes"),
     # **`quantile` was in this table twice**, thirteen lines apart and with the same
     # value, so the second silently won and the first was dead. Identical, nothing
     # diverged; the next edit to either one would have. One row now, up with
     # `kthvalue`.
+    #
+    # **`squeeze` was the same, and it was still here when this was written** — the
+    # note above it did not stop the next one, because a note is not a check. Both
+    # copies went out with the twenty-three, and the reachability test is what a
+    # third one meets.
     "add_": ("other", "alpha"),
     "sub_": ("other", "alpha"),
     "add": ("other", "alpha"),
@@ -280,13 +293,8 @@ _SIGNATURE = {
     "slice_scatter": ("src", "dim", "start", "end", "step"),
     "diagonal_scatter": ("src", "offset", "dim1", "dim2"),
     "diag_embed": ("offset", "dim1", "dim2"),
-    "tensor_split": ("indices_or_sections", "dim"),
-    "split_with_sizes": ("split_sizes", "dim"),
-    "unique_consecutive": ("return_inverse", "return_counts", "dim"),
     "masked_scatter": ("mask", "source"),
     "masked_scatter_": ("mask", "source"),
-    "index_put": ("indices", "values", "accumulate"),
-    "index_put_": ("indices", "values", "accumulate"),
     "index_reduce": ("dim", "index", "source", "reduce", "include_self"),
     "scatter_reduce": ("dim", "index", "src", "reduce", "include_self"),
     "put": ("index", "source", "accumulate"),
@@ -319,7 +327,6 @@ _SIGNATURE = {
     # Statistics. borch.ts's argument order.
     "histc": ("bins", "min", "max"),
     "histogram": ("bins", "range", "weight", "density"),
-    "histogramdd": ("bins",),
     "mode": ("dim", "keepdim"),
     "nanmedian": ("dim", "keepdim"),
     "gradient": ("spacing", "dim", "edge_order"),
@@ -2959,12 +2966,20 @@ def _spread_index(index, dim, shape):
     return broadcast_to(wrap(guarded(handle(index).reshape, _js_list(lifted))), shape)
 
 
-def scatter(t, dim, index, src):
+def scatter(t, dim, index, src, reduce=None):
     """**Overwrites** at the positions the indices point at. On a collision the
-    last write survives."""
+    last write survives.
+
+    `reduce` is torch's deprecated overload — `'add'` or `'multiply'`, combining
+    onto what is already there. It goes to borch.ts's own `scatter`, which refuses
+    to differentiate exactly where torch does.
+    """
     t = wrap(t)
     if not isinstance(src, Tensor):
         src = zeros(*[int(n) for n in handle(index).shape]) + float(src)
+    if reduce is not None:
+        return wrap(guarded(handle(t).scatter, dim, handle(index), handle(src),
+                            reduce))
     return wrap(guarded(handle(t).scatterSet, dim, handle(index), handle(src)))
 
 

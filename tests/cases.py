@@ -3144,6 +3144,21 @@ def index_cases(inp=None):
     add("scatter(스칼라)",
         lambda L: L.zeros(3, 4).scatter(1, L.tensor(dup), 7.0))
 
+    # ── `reduce`, torch's deprecated overload ──
+    #
+    # **It is asked on a non-zero base, because on zeros `add` is `scatter_add`.**
+    # `reduce` combines *onto what is already there*; started from zeros the two
+    # are the same function and the case would pass with the seat unimplemented.
+    # `x2` is that base, and `dup` repeats an index so collisions accumulate too —
+    # the second thing a `put_along_axis` implementation gets wrong.
+    for red in ("add", "multiply"):
+        add(f"scatter(reduce={red})",
+            lambda L, r=red: L.tensor(x2).scatter(1, L.tensor(dup),
+                                                  L.tensor(src), reduce=r))
+        add(f"제자리::scatter_(reduce={red})",
+            lambda L, r=red: L.tensor(x2).scatter_(1, L.tensor(dup),
+                                                   L.tensor(src), reduce=r))
+
     # The gradient is looked at too. **It has to flow only to where it was written.**
     def scatter_grad(L):
         s = L.tensor(src, requires_grad=True)
@@ -3214,6 +3229,24 @@ def index_cases(inp=None):
                                      side="left", right=True))
     refuses("side 가 셋째 값", "can only be 'left' or 'right'",
             lambda L: L.searchsorted(L.tensor(line), L.tensor(want), side="both"))
+    refuses("scatter(reduce=sum)", "must be either add or multiply",
+            lambda L: L.tensor(x2).scatter(1, L.tensor(dup), L.tensor(src),
+                                           reduce="sum"))
+
+    def scatter_reduce_backward(L):
+        """**torch stops here and so does this**, and the forward is not where it stops.
+
+        `scatter(reduce=…)` returns a tensor that carries `requires_grad` and a
+        `NotImplemented` node; only `backward()` raises. A refusal written into the
+        forward would have looked the same in every check that only calls the
+        function — and would have taken away a value torch hands back.
+        """
+        s = L.tensor(src, requires_grad=True)
+        out = L.tensor(x2).scatter(1, L.tensor(dup), s, reduce="add")
+        out.sum().backward()
+
+    refuses("scatter(reduce) 의 기울기", "derivative for aten::scatter is not implemented",
+            scatter_reduce_backward)
     return cases
 
 
@@ -11124,6 +11157,30 @@ def inplace_cases(inp=None):
         run("clip_", lambda x: x.clip_(2, 5), plain),
         # **Chaining is the real test.** What comes back has to be itself for a chain to work.
         run("이어 부르기", lambda x: x.mul_(2).add_(1).clamp_(0, 10), plain),
+        # ── the seats the in-place halves were short of ──
+        #
+        # **In place means the same arithmetic written back**, so the two spellings of
+        # one operation take one list — and four of them did not. None could be seen
+        # until the core's generated forwarders declared what they forward: they read
+        # `(*args, **kw)`, which the signature axis files as *no python signature*,
+        # and ninety-seven `Tensor` rows sat in that bucket.
+        #
+        # `logit_` was the sharpest: it was built **nullary** here while `logit` takes
+        # `eps`, so `x.logit_(eps=0.1)` — which torch computes — stopped on an
+        # argument count. borch.ts's took nothing either, so **both libraries agreed
+        # by being wrong the same way**, which is the one arrangement the golden
+        # cannot catch on its own.
+        run("round_(decimals)", lambda x: x.round_(decimals=1),
+            np.array([1.234, 4.567, 9.876, 2.345], dtype=np.float32)),
+        run("logit_(eps)", lambda x: x.logit_(eps=0.1),
+            np.array([0.0, 0.2, 0.5, 1.0], dtype=np.float32)),
+        run("cumsum_(dim)", lambda x: x.cumsum_(0), plain),
+        run("cumprod_(dim)", lambda x: x.cumprod_(0), plain),
+        # torch calls it `values`, and the browser side called it `other` — a keyword
+        # call reached one spelling and not the other.
+        run("heaviside_(values 라는 이름)",
+            lambda x: x.heaviside_(values=x.new_tensor([1., 1., 1., 1.])),
+            np.array([-1., 0., 1., 0.], dtype=np.float32)),
     ]
     for name in _INPLACE_UNARY:
         arr = small if name in ("asin_", "acos_", "atan_", "log_", "log2_", "log10_",

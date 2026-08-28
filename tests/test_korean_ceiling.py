@@ -227,7 +227,13 @@ CEILINGS = {
     # `점 찍힌 이름`, `이름을 나중에`, `add_param_group/스텝` …). Each is a key in
     # `golden.json` and has to be spelled identically on both sides or the case reads
     # as a divergence.
-    "borch-ts/test": 3734,
+    # 3734 → 3765. Thirty-one, case names: the five in-place rows the generated
+    # forwarders opened (`heaviside_(values 라는 이름)`) and the six `scatter` ones
+    # `reduce` opened (`제자리::scatter_(reduce=add)`, `거절::scatter(reduce=sum)`,
+    # `거절::scatter(reduce) 의 기울기`). Each is a key in `golden.json`, and the two
+    # refusals also **return** a fragment string that both sides spell by hand — so a
+    # divergence here reads as a divergence in the answer, not in the name.
+    "borch-ts/test": 3765,
 }
 
 

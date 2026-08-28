@@ -7533,6 +7533,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
+   * Writes back whatever the callback computes. **The general form of
+   * `inplaceUnary`**, for the two operations whose out-of-place half takes an
+   * argument the `UNARY` table cannot give it — `round_(decimals)` and
+   * `logit_(eps)`, both attached after the table for the ordering reason `abs` and
+   * `elu` are.
+   */
+  inplaceFrom(compute: () => Tensor): Tensor {
+    return this.mutate(compute);
+  }
+
+  /**
    * The table's **binary** operations, in place. Names like `hypot_` come here.
    *
    * It exists for the same reason `inplaceUnary` does: `mutate` is private, and the
@@ -7562,7 +7573,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.conjPhysical());
   }
 
-  swapaxes_(a: number, b: number): Tensor {
+  // **torch's names, which the partner three thousand lines up already uses.** This
+  // took `a`/`b` where `swapaxes` takes `axis0`/`axis1`, so the two spellings of one
+  // operation named their arguments differently and a keyword call reached one and
+  // not the other.
+  swapaxes_(axis0: number, axis1: number): Tensor {
+    return this.swapaxesInPlace(axis0, axis1);
+  }
+
+  private swapaxesInPlace(a: number, b: number): Tensor {
     return this.mutate(() => this.swapaxes(a, b));
   }
 
@@ -7592,13 +7611,49 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * `torch.Tensor.scatter` — **overwrite at the indexed positions.** borch.ts calls
    * it `scatterSet`, so torch's own name was absent while the operation was there.
+   *
+   * `reduce` is torch's deprecated overload, kept because torch still answers it.
+   * Given, it combines *onto what is there* instead of overwriting, and colliding
+   * indices accumulate — which is `scatterReduce(…, includeSelf = true)` under
+   * another two words, verified against torch rather than reasoned from the docs.
    */
-  scatter(dim: number, index: Tensor, src: Tensor): Tensor {
-    return this.scatterSet(dim, index, src);
+  scatter(dim: number, index: Tensor, src: Tensor, reduce?: string): Tensor {
+    if (reduce === undefined) return this.scatterSet(dim, index, src);
+    return this.scatterOnto(dim, index, src, reduce);
   }
 
-  scatter_(dim: number, index: Tensor, src: Tensor): Tensor {
-    return this.mutate(() => this.scatterSet(dim, index, src));
+  scatter_(dim: number, index: Tensor, src: Tensor, reduce?: string): Tensor {
+    return this.mutate(() => this.scatter(dim, index, src, reduce));
+  }
+
+  /**
+   * The `reduce` half of `scatter`, and **it refuses to differentiate.**
+   *
+   * The value is `scatterReduce`'s, which does have a backward here — so the
+   * refusal is a choice, not a limit. torch raises `derivative for aten::scatter is
+   * not implemented` for this overload, and computing a slope where torch stops
+   * would be the failure this repository keeps finding from the other side: the
+   * number comes out, nothing marks it as ours alone, and it is wrong only in
+   * training, where nobody is reading.
+   */
+  private scatterOnto(
+    dim: number, index: Tensor, src: Tensor, reduce: string,
+  ): Tensor {
+    if (reduce !== "add" && reduce !== "multiply") {
+      throw new RuntimeError(
+        `scatter's \`reduce\` takes 'add' or 'multiply'; got ${JSON.stringify(reduce)}. `
+        + "The wider set ('sum', 'prod', 'mean', 'amax', 'amin') belongs to "
+        + "`scatterReduce`, which is the replacement torch points at."
+        + "\n(torch: reduce argument must be either add or multiply.)");
+    }
+    const value = this.detach().scatterReduce(
+      dim, index, src.detach(), reduce === "add" ? "sum" : "prod", true);
+    return Tensor.make(value.raw, value.shape, [this, src], () => {
+      throw new RuntimeError(
+        "scatter with `reduce` has no gradient — torch does not define one either, "
+        + "and a slope invented here would be wrong only in training."
+        + "\n(torch: derivative for aten::scatter is not implemented)");
+    }, "ScatterBackward0", value.dtype);
   }
 
   scatterAdd_(dim: number, index: Tensor, src: Tensor): Tensor {
@@ -7763,12 +7818,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.triu(diagonal));
   }
 
-  cumsum_(dim = 0): Tensor {
-    return this.mutate(() => this.cumsum(dim));
+  // **`dtype` was on the partner and not on these.** In place means *the same
+  // arithmetic, written back* — so the two spellings of one operation must take one
+  // list, and `x.cumsum_(0, "int64")` was a word JavaScript dropped. It could not be
+  // seen until the core's forwarders declared what they forward: the signature axis
+  // filed both rows as *no python signature*, one of ninety-seven in that bucket.
+  cumsum_(dim = 0, dtype?: DType): Tensor {
+    return this.mutate(() => this.cumsum(dim, dtype));
   }
 
-  cumprod_(dim = 0): Tensor {
-    return this.mutate(() => this.cumprod(dim));
+  cumprod_(dim = 0, dtype?: DType): Tensor {
+    return this.mutate(() => this.cumprod(dim, dtype));
   }
 
   // ── In the kernel tables, with no name to type ────────────────────────
@@ -11829,6 +11889,33 @@ Object.defineProperty(Tensor.prototype, "round", {
   configurable: true,
 });
 
+/**
+ * **The in-place halves of the two above, which the table gave no seats.**
+ *
+ * `round_` and `logit_` came out of the `UNARY` loop taking nothing, while `round`
+ * and `logit` had been given `decimals` and `eps` by hand right here. So the two
+ * spellings of one operation took different arguments — `x.round_(2)` was a word
+ * JavaScript dropped and the answer came back rounded to whole numbers.
+ *
+ * It could not be seen from the Python side either: the core's `logit_` was built
+ * nullary, so **both libraries agreed by being wrong the same way**, and the
+ * signature axis filed the row as *no python signature* because the core's
+ * forwarders declared `(*args, **kw)`. Teaching those forwarders to declare what
+ * they forward is what surfaced all three.
+ */
+for (const [name, seats] of [["round", 1], ["logit", 1]] as const) {
+  void seats;
+  Object.defineProperty(Tensor.prototype, `${name}_`, {
+    value: function (this: Tensor, arg?: number | null): Tensor {
+      return this.inplaceFrom(() =>
+        (this as unknown as Record<string, (a?: number | null) => Tensor>)[name]!
+          .call(this, arg));
+    },
+    writable: true,
+    configurable: true,
+  });
+}
+
 {
   const realAbs = Tensor.prototype.abs;
   Object.defineProperty(Tensor.prototype, "abs", {
@@ -11917,7 +12004,10 @@ export interface Tensor {
   eq_(other: Tensor): Tensor;
   ge_(other: Tensor): Tensor;
   gt_(other: Tensor): Tensor;
-  heaviside_(other: Tensor): Tensor;
+  // **torch calls it `values`**, and `heaviside` above already does — these
+  // declarations are generated from one table and this row is the one where the
+  // table's own name is not torch's.
+  heaviside_(values: Tensor): Tensor;
   hypot_(other: Tensor): Tensor;
   le_(other: Tensor): Tensor;
   lt_(other: Tensor): Tensor;
@@ -11996,13 +12086,13 @@ export interface Tensor {
   sign_(): Tensor;
   floor_(): Tensor;
   ceil_(): Tensor;
-  round_(): Tensor;
+  round_(decimals?: number): Tensor;
   trunc_(): Tensor;
   frac_(): Tensor;
   deg2rad_(): Tensor;
   rad2deg_(): Tensor;
   positive_(): Tensor;
-  logit_(): Tensor;
+  logit_(eps?: number | null): Tensor;
   sinc_(): Tensor;
   erf_(): Tensor;
   erfc_(): Tensor;

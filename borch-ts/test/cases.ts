@@ -6689,6 +6689,47 @@ function addIndex(out: Map<string, Case>, inp: Inputs): void {
     return gradOf(s, "scatter_add");
   });
 
+  // ── `reduce`, torch's deprecated overload ──
+  //
+  // **Asked on a non-zero base.** `reduce` combines onto what is already there, so
+  // started from `base()` (zeros) `add` would be `scatterAdd` and the case would
+  // pass with nothing implemented. `x2` is the base and `dup` repeats an index, so
+  // the collisions accumulate here too.
+  for (const red of ["add", "multiply"]) {
+    out.set(`index::scatter(reduce=${red})`,
+      () => inp.get("x2").scatter(1, dup(), src(), red));
+    out.set(`index::제자리::scatter_(reduce=${red})`,
+      () => inp.get("x2").clone().scatter_(1, dup(), src(), red));
+  }
+
+  out.set("index::거절::scatter(reduce=sum)", () => {
+    try {
+      inp.get("x2").scatter(1, dup(), src(), "sum");
+    } catch (e) {
+      const said = String(e);
+      return said.includes("must be either add or multiply")
+        ? "must be either add or multiply" : `다른 문구 <${said.slice(0, 44)}>`;
+    }
+    return "안 던졌다";
+  });
+
+  // **The forward is not where it stops.** torch hands back a tensor that carries
+  // `requiresGrad`, and only `backward()` raises — so the refusal lives in the node,
+  // not in the call. Written the other way it would read the same to any check that
+  // only calls the function, and would take away a value torch returns.
+  out.set("index::거절::scatter(reduce) 의 기울기", () => {
+    const s = src(true);
+    try {
+      seeded(inp.get("x2").scatter(1, dup(), s, "add")).backward();
+    } catch (e) {
+      const said = String(e);
+      return said.includes("derivative for aten::scatter is not implemented")
+        ? "derivative for aten::scatter is not implemented"
+        : `다른 문구 <${said.slice(0, 44)}>`;
+    }
+    return "안 던졌다";
+  });
+
   // Finding a position inside something sorted.
   //
   // **These three did not call `searchSorted` for a long time.** They were written as
@@ -9001,6 +9042,31 @@ function addInplace(out: Map<string, Case>): void {
   each("clip_", (x) => x.clip_(2, 5));
   // **Chaining is the real test.** Only what it returns being itself keeps the chain.
   each("이어 부르기", (x) => x.mul_(2).add_(1).clamp_(0, 10));
+
+  // ── the seats the in-place halves were short of ──
+  //
+  // **In place means the same arithmetic written back**, so the two spellings of one
+  // operation take one list — and these took different ones. `round` and `logit` were
+  // given their argument by hand after the `UNARY` table (which cannot give one) and
+  // `round_`/`logit_` were left with the table's empty signature, so `x.round_(2)`
+  // was a word JavaScript dropped and the answer came back rounded to whole numbers.
+  //
+  // The Python side had it too — `logit_` was built nullary there — so **both
+  // libraries agreed by being wrong the same way**, which is the one arrangement the
+  // golden cannot catch on its own. What found it was teaching the core's generated
+  // forwarders to declare what they forward; until then the signature axis filed
+  // ninety-seven `Tensor` rows as *no python signature*.
+  each("round_(decimals)", (x) => x.round_(1), [1.234, 4.567, 9.876, 2.345]);
+  each("logit_(eps)", (x) => x.logit_(0.1), [0.0, 0.2, 0.5, 1.0]);
+  each("cumsum_(dim)", (x) => x.cumsum_(0));
+  each("cumprod_(dim)", (x) => x.cumprod_(0));
+  // torch calls it `values`; this side called it `other`. JavaScript has no keyword
+  // arguments, so only the axis can see that — the value is asked here all the same.
+  out.set("inplace::heaviside_(values 라는 이름)", () => {
+    const x = Tensor.from([-1, 0, 1, 0], [4]);
+    x.heaviside_(Tensor.from([1, 1, 1, 1], [4]));
+    return x;
+  });
 
   for (const name of ["abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh",
     "sigmoid", "relu", "erf", "floor", "ceil", "round", "sign", "reciprocal",
