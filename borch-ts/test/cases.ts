@@ -33,6 +33,7 @@ import * as optim from "../src/optim.js";
 import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
 import * as v2f from "../src/vision_v2.js";
+import * as v2twins from "../src/vision_v2_twins.js";
 import * as datasets from "../src/datasets.js";
 import * as ops from "../src/ops.js";
 import * as data from "../src/data.js";
@@ -1903,6 +1904,14 @@ function addOps(out: Map<string, Case>): void {
     flat(async () => ops.uniformTemporalSubsample(clip(), 3)));
   out.set("v2f::get_num_frames(the fourth axis from the end)",
     () => String(ops.getNumFrames(clip())));
+  // **The transform around the function.** The arithmetic above was here and the v2
+  // class was not, so the name axis reported it missing — and was right to, because
+  // that axis refuses to fold a capital-initial name onto a lowercase one:
+  // `nn.Embedding` is not `F.embedding`, and a transform is not its function. A
+  // pipeline is built out of transforms, so `Compose([…, UniformTemporalSubsample(8)])`
+  // was the line that could not be written.
+  out.set("v2::UniformTemporalSubsample(the transform around it)",
+    flat(async () => new v2twins.UniformTemporalSubsample(3).apply(clip()) as Tensor));
 
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look

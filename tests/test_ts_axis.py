@@ -372,7 +372,15 @@ FROZEN = {
     #
     # 14 → 15. `UniformTemporalSubsample`, the transform. Its functional is on both
     # sides; what is here alone is the `Transform` subclass, for the reason above.
-    "transforms.v2": 15,
+    #
+    # **15 → 14, and the reason above was the wrong one for it.** That row said *for
+    # the reason above*, which is the tv_tensor type system — and this transform
+    # touches no label at all: it keeps `n` frames of a video tensor, and the
+    # arithmetic had been in borch.ts's `ops.uniformTemporalSubsample` the whole time.
+    # What was missing was the class a pipeline is built out of, and it is thirteen
+    # lines wrapping the function. A reason borrowed from the row above it is the
+    # cheapest kind to write and the hardest to notice is wrong.
+    "transforms.v2": 14,
     #
     # 1 → 3. The format conversion and the two clamps go up with the type system,
     # because the clamping taxonomy is what `BoundingBoxes` carries.
@@ -502,6 +510,66 @@ def test_the_core_to_borch_ts_axis_has_not_widened():
           "  once already — reading tables alone found 14 of the 40.\n"
           "  See it: uv run --with numpy --with torch --with torchvision \\\n"
           "            python tests/ts_axis.py --show Tensor")
+
+
+def test_every_gap_carries_a_reason():
+    """**`DELIBERATE` was printed and asserted by nothing.**
+
+    `ts_axis.py --show` prints `까닭 없는 결손 N건` and the suite never read it, so
+    a name absent from both borch.ts and that table was invisible: the only thing
+    held was the frozen *count*, and a count is satisfied by editing it. Fifty-five
+    rows were written into the table in the commit that added this test, and until
+    it existed they changed a number nobody checked.
+
+    Measured, not argued: removing one row from `DELIBERATE` left the suite green.
+
+    `tests/test_class_methods.py` was written with this pair from the start — the
+    fourth axis got it right because this one had already gone wrong.
+    """
+    if _stale():
+        pytest.skip("generated index is stale")
+
+    import ts_axis
+
+    unexplained = sorted(
+        f"{space}::{name}"
+        for space, (gaps, _refusals) in ts_axis.compare().items()
+        for name in gaps
+        if f"{space}::{name}" not in ts_axis.DELIBERATE)
+    assert not unexplained, (
+        "these names are the core's, are not in borch.ts, and have no reason:\n  "
+        + "\n  ".join(unexplained)
+        + "\n\nWrite one into `ts_axis.DELIBERATE`, or carry the name across. A "
+          "reason says why it cannot or should not follow — not that it has not, "
+          "which the count already says.")
+
+
+def test_no_reason_outlives_the_gap_it_explains():
+    """**A reason for a name that has arrived is worse than no reason.** It reads
+    as a live limit and it is a record of the past.
+
+    The same pair as `test_class_methods.py`'s, and the same lesson underneath:
+    `borch-ts/test/run.py`'s `AvgPool2d` row stayed true for an hour after its cause
+    was gone, and survived only because the person who ended it read the line.
+
+    It fired for real on the first run: `UniformTemporalSubsample`'s row said *for
+    the reason above*, borrowing the tv_tensor argument from the rows beside it —
+    and that transform touches no label at all. **A borrowed reason is the cheapest
+    kind to write and the hardest to notice is wrong.**
+    """
+    if _stale():
+        pytest.skip("generated index is stale")
+
+    import ts_axis
+
+    live = {f"{space}::{name}"
+            for space, (gaps, _refusals) in ts_axis.compare().items()
+            for name in gaps}
+    stale = sorted(set(ts_axis.DELIBERATE) - live)
+    assert not stale, (
+        "these are excused in `DELIBERATE` and are no longer missing:\n  "
+        + "\n  ".join(stale)
+        + "\n\nTake the row out. The reason describes a state that has ended.")
 
 
 def test_the_measurement_still_runs_as_a_script():

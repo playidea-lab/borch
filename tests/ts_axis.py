@@ -196,12 +196,18 @@ DELIBERATE: dict[str, str] = {
                     ("swapdims", "transpose"), ("swapdims_", "transpose_"))},
     # There is one device and no storage objects. Both reasons are the core's own,
     # written into `_NOT_OURS` when the same question was asked of torch.
+    # **Three left this list by being answered rather than by being carried.**
+    # `pin_memory`, `record_stream` and `untyped_storage` are refusal stubs in the
+    # core now, so they sit in the `refusal stub` column and no longer in `gaps` —
+    # and a row here that no count reads is dead weight that reads as a live limit.
+    # Caught by `test_no_reason_outlives_the_gap_it_explains` on its first run, which
+    # is what that check is for.
     **{f"Tensor::{n}": _DEVICE
-       for n in ("get_device", "is_pinned", "pin_memory", "share_memory_",
-                 "is_shared", "record_stream", "is_distributed")},
+       for n in ("get_device", "is_pinned", "share_memory_",
+                 "is_shared", "is_distributed")},
     **{f"Tensor::{n}": _STORAGE
        for n in ("data_ptr", "const_data_ptr", "storage_offset", "element_size",
-                 "is_set_to", "dim_order", "untyped_storage")},
+                 "is_set_to", "dim_order")},
     # The numpy bridge, which has nothing on the far side in TypeScript.
     **{f"Tensor::{n}": _NUMPY for n in ("numpy", "tolist", "new_tensor")},
     # Worker processes do not exist in a browser, which is `run.py`'s stated reason
@@ -330,6 +336,58 @@ DELIBERATE: dict[str, str] = {
                  "STL10", "SVHN", "Omniglot", "GTSRB", "FER2013", "MovingMNIST",
                  "DatasetFolder", "ImageFolder", "CLEVRClassification",
                  "RenderedSST2", "Sintel")},
+    # **The other thirty-three, and their reason is not the twenty-two's.** Those have
+    # a format half in `datasets.ts` and are held back by the address half alone.
+    # These have **no format half at all**: every one of them is a reader that walks a
+    # directory tree or opens an archive — a `.zip` of per-class folders, a `.tar` of
+    # `.pfm` disparity maps, a `.mat` of annotations — and a page has neither a
+    # filesystem nor an archive to walk. `borchvision` has them because it runs on
+    # Python beside a disk.
+    #
+    # Written out per name rather than as a rule about the namespace, for the reason
+    # the twenty-two above give: a table that groups them hides the day one of them
+    # becomes possible. Two here are closer than the rest — `Imagenette` and
+    # `Country211` are folder-of-folders and would arrive the day a directory can be
+    # handed in — and grouping would bury that.
+    **{f"datasets::{n}":
+       "a reader that walks a directory tree or opens an archive; a page has neither "
+       "a filesystem nor an archive, and unlike the twenty-two above there is no "
+       "format half of this one in `datasets.ts`"
+       for n in ("CREStereo", "Caltech101", "Caltech256", "CarlaStereo",
+                 "Country211", "DTD", "ETH3DStereo", "EuroSAT", "FGVCAircraft",
+                 "FallingThingsStereo", "Flickr30k", "Flickr8k", "FlyingChairs",
+                 "FlyingThings3D", "Food101", "HD1K", "INaturalist", "Imagenette",
+                 "InStereo2k", "Kitti", "Kitti2012Stereo", "Kitti2015Stereo",
+                 "KittiFlow", "Middlebury2014Stereo", "OxfordIIITPet", "PhotoTour",
+                 "SUN397", "SceneFlowStereo", "SintelStereo", "StanfordCars",
+                 "VOCDetection", "VOCSegmentation", "WIDERFace")},
+    # ── the tv_tensor family ──
+    #
+    # **One decision, and it is about the type system rather than about any of these
+    # twenty.** torchvision marks a tensor as a bounding box, a mask, a set of
+    # keypoints or a video by *subclassing* `torch.Tensor`, and every name below
+    # either reads that mark, writes it, or dispatches on it. borch.ts's `Tensor` is a
+    # handle to a GPU buffer and cannot be subclassed to carry a label — the golden's
+    # `v2::` and `v2f::` skip rows say the same thing and are where this was first
+    # written down.
+    #
+    # The `_video` / `_bounding_boxes` / `_keypoints` / `_mask` suffixes are the
+    # kernel entries that dispatch reaches; the unsuffixed `uniform_temporal_subsample`
+    # is not here because borch.ts has it, which is the shape of the distinction.
+    **{f"transforms.v2::{n}":
+       "reads, writes or dispatches on torchvision's tv_tensor mark, which is a "
+       "`Tensor` subclass; borch.ts's is a handle to a buffer and cannot carry a label"
+       for n in ("ClampBoundingBoxes", "ClampKeyPoints", "ConvertBoundingBoxFormat",
+                 "SanitizeBoundingBoxes", "SanitizeKeyPoints", "SetClampingMode",
+                 "check_type", "get_bounding_boxes", "get_keypoints", "has_all",
+                 "has_any", "query_chw", "query_size")},
+    **{f"transforms.v2.functional::{n}":
+       "a tv_tensor kernel entry — the suffix names the mark it dispatches on, and "
+       "borch.ts's `Tensor` cannot carry one"
+       for n in ("clamp_bounding_boxes", "convert_bounding_box_format",
+                 "get_num_frames_video", "get_size_bounding_boxes",
+                 "get_size_keypoints", "get_size_mask", "is_pure_tensor",
+                 "uniform_temporal_subsample_video")},
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not
