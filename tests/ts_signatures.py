@@ -505,6 +505,45 @@ def _fold_initial(names):
     return [n[:1].lower() + n[1:] for n in names]
 
 
+# **Trailing arguments borch.ts does not take, on purpose, with the reason.**
+#
+# Without this the table has one bucket for two different things: *a feature not carried
+# across* and *a layering decision already made and implemented one layer up*. Both come
+# out as `shorter`, and then the number is a mixture nobody can act on — 47 rows of which
+# 23 were the same settled decision counted 23 times.
+#
+# That is `torch_gap.py`'s `SKIPPED` in a different file, and it took the same argument to
+# get here: a count is only a to-do list if everything in it is to do.
+#
+# **The claim in each reason has to be true of every row it covers**, so `out` was measured
+# before it was written: all 29 `linalg` names that torch gives an `out=` have one on the
+# Python side, and none of them has one in borch.ts. Whoever adds a row here should call
+# the thing before writing the sentence — the first attempt at *checking* this one found
+# seven names that seemed to break under `out=` and every one was the probe, which asked
+# `hasattr(result, "_fields")` on results that `_named` builds with `__slots__`. The
+# comment in `borch/_ops.py:_out` warns about exactly that question.
+TAIL_NOT_IN_TS = {
+    "out": ("borch.ts has no `out=` anywhere — the Python surfaces add it, by table: "
+            "`_TAKES_OUT` and `_LINALG_TAKES_OUT` in `borch/__init__.py`, which "
+            "`borch_webgpu` reads rather than restating. Measured: 29 of 29 `linalg` "
+            "names that torch gives an `out=` have one in Python and none in borch.ts."),
+}
+
+
+def _strip_declined(wanted, yours):
+    """`wanted` without the trailing arguments `TAIL_NOT_IN_TS` names, and the reason.
+
+    **Only from the tail, and only while they are missing on our side.** An argument gone
+    from the middle shifts everything after it, which is the one shape this axis exists to
+    catch, and it must not become invisible because the name happens to be in this table.
+    """
+    cut, why = list(wanted), None
+    while cut and cut[-1] in TAIL_NOT_IN_TS and cut[-1] not in yours:
+        why = TAIL_NOT_IN_TS[cut[-1]]
+        cut.pop()
+    return cut, why
+
+
 def _verdict(wanted, yours):
     """`agree` · `shorter` · `longer` · `differ` — **and the split is the point.**
 
@@ -527,6 +566,13 @@ def _verdict(wanted, yours):
     wanted, yours = _fold_initial(wanted), _fold_initial(yours)
     if wanted == yours:
         return "agree"
+    # **A settled decision is taken out before the tail is measured, not after.**
+    # `TAIL_NOT_IN_TS` names arguments borch.ts does not carry on purpose; with those
+    # gone the row either agrees — and is a decision rather than a debt — or it is still
+    # short, and what is left is the part somebody has to do.
+    trimmed, why = _strip_declined(wanted, yours)
+    if why is not None and trimmed == yours:
+        return "declined"
     if len(yours) < len(wanted) and yours == wanted[:len(yours)]:
         return "shorter"
     if len(yours) > len(wanted) and yours[:len(wanted)] == wanted:
@@ -705,7 +751,7 @@ def main(argv):
             print(f"  {n:>4}  {a}  →  {b}")
         return 0
     differ = bagged = unreadable = ambiguous = agreed = shorter = renamed = 0
-    unaligned = freefn = 0
+    unaligned = freefn = declined = 0
     for space, found in rows.items():
         d = [r for r in found if r[3] in ("dropped", "inserted", "reordered")]
         s = [r for r in found if r[3] in ("shorter", "longer")]
@@ -726,22 +772,28 @@ def main(argv):
         # false `unaligned` it replaced. A new verdict that nothing subtracts is a new
         # verdict that reads as green.
         f = [r for r in found if r[3].startswith("only a free function")]
+        # **Its own column, subtracted from the residual like every other verdict.**
+        # A new verdict that nothing subtracts is a new verdict that reads as green —
+        # written down when `only a free function` did exactly that.
+        c = [r for r in found if r[3] == "declined"]
         differ += len(d)
         shorter += len(s)
+        declined += len(c)
         bagged += len(b)
         ambiguous += len(a)
         unreadable += len(u)
         renamed += len(n)
         unaligned += len(x)
         freefn += len(f)
-        counted = len(d) + len(s) + len(n) + len(x) + len(b) + len(a) + len(u) + len(f)
+        counted = (len(d) + len(s) + len(n) + len(x) + len(b) + len(a) + len(u)
+                   + len(f) + len(c))
         agreed += len(found) - counted
         mark = " " if not (d or x or n or f) else "✘"
         print(f"  {mark} {space:22s} "
               f"agree {len(found) - counted:>4}   "
               f"shifted {len(d):>3}   unaligned {len(x):>3}   shorter {len(s):>4}   "
               f"renamed {len(n):>4}   bag {len(b):>3}   two {len(a):>3}   "
-              f"free {len(f):>3}   unread {len(u):>3}")
+              f"free {len(f):>3}   declined {len(c):>3}   unread {len(u):>3}")
         if show is not None and space.startswith(show):
             # **The agreeing pairs print too.** A namespace reporting nothing wrong is
             # the one to distrust — `nn`'s 144 constructors went from unmeasurable to
@@ -754,7 +806,13 @@ def main(argv):
     print(f"맞음 {agreed}건 · **밀림 {differ}건** · **못 맞춤 {unaligned}건** · "
           f"꼬리가 짧다 {shorter}건 · 이름만 다르다 {renamed}건 · "
           f"보따리에서 멈춘 것 {bagged}건 · 두 선언 {ambiguous}건 · "
-          f"**메서드가 없고 자유 함수만 {freefn}건** · 못 읽음 {unreadable}건.")
+          f"**메서드가 없고 자유 함수만 {freefn}건** · 사유가 적힌 것 {declined}건 · "
+          f"못 읽음 {unreadable}건.")
+    if declined:
+        print(f"사유가 적힌 {declined}건은 부채가 아니라 이미 내려진 결정이다 "
+              "— `TAIL_NOT_IN_TS` 에 이유가 있다:")
+        for arg, why in sorted(TAIL_NOT_IN_TS.items()):
+            print(f"  {arg}: {why}")
     print("밀림은 이름으로 밀린 것이 보이는 자리다. 못 맞춤과 이름만 다름은 "
           "이름으로 가를 수 없어 사람이 읽어야 하는 자리다 —")
     print("  `Optimizer` 는 둘째 자리가 torch 에선 defaults 사전이고 borch.ts 에선 "

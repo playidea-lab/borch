@@ -1305,7 +1305,20 @@ SHORTER = {
     # Raised by the session holding the core, whose change moved somebody else's
     # count: leaving the suite red is not an option and editing quietly is worse,
     # so it is written up here and said out loud in the ledger.
-    "linalg": 29,
+    #
+    # **29 → 9, and nothing was carried across.** Twenty of those rows differed from
+    # torch in one argument only, `out`, and the sentence above is the reason borch.ts
+    # has none — so they were a decision counted twenty times inside a number that is
+    # read as a list of things to do. They now say so: `ts_signatures.TAIL_NOT_IN_TS`
+    # holds the reason and `DECLINED` below holds the count, because an exemption that
+    # can grow without anyone deciding is worse than the mixture it replaced.
+    #
+    # What is left is nine rows of real absence, and they are legible for the first
+    # time: `norm` takes none of `p`, `dim`, `keepdim`, `dtype`; `lstsq` neither
+    # `rcond` nor `driver`; `lu` no `pivot`; `lu_solve` neither `left` nor `adjoint`;
+    # `matrix_norm` no `dim`/`keepdim`; `vector_norm` no `keepdim`; `matrix_rank` no
+    # `tol`; `pinv` no `rcond`; `tensorsolve` no `dims`.
+    "linalg": 9,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
     # that they exist at all.
@@ -1424,6 +1437,35 @@ TWO_DECLARATIONS = {
     "datasets": 0,
 }
 
+# **The bucket that says *this difference is a decision, and here is the reason*.**
+#
+# `ts_signatures.TAIL_NOT_IN_TS` names trailing arguments borch.ts does not carry on
+# purpose, and a row whose only difference is one of them lands here instead of in
+# `SHORTER`. That was worth doing — twenty `linalg` rows were one settled decision
+# counted twenty times inside a number people read as a to-do list.
+#
+# **And it is exactly the shape that goes wrong quietly.** An exemption is a way to make
+# a red number smaller without changing anything, so if this could grow unwatched the
+# next inconvenient row would join it and `SHORTER` would keep falling while nothing
+# improved. Frozen here, growing it is an edit somebody makes on purpose — the same
+# argument `torch_gap.NOT_API_SIZE` carries, and for the same reason: the one bin that
+# comes *out* of a count is the one nothing else is watching.
+DECLINED = {
+    "Tensor": 0,
+    "nn": 0,
+    "nn.functional": 0,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    "linalg": 20,
+    "utils.data": 0,
+    "transforms": 0,
+    "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
+}
+
 
 
 def _stale():
@@ -1494,7 +1536,7 @@ def test_the_signature_axis_has_not_widened():
     moved = []
     for space, found in sorted(rows.items()):
         got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0, "free": 0,
-               "two": 0}
+               "two": 0, "declined": 0}
         for _n, _m, _y, note in found:
             if note in ("dropped", "inserted", "reordered"):
                 got["shifted"] += 1
@@ -1504,6 +1546,8 @@ def test_the_signature_axis_has_not_widened():
                 got["unaligned"] += 1
             elif note == "renamed":
                 got["renamed"] += 1
+            elif note == "declined":
+                got["declined"] += 1
             elif note.startswith("only a free function"):
                 got["free"] += 1
             elif note.startswith("ambiguous"):
@@ -1511,7 +1555,11 @@ def test_the_signature_axis_has_not_widened():
         for key, table in (("shifted", SHIFTED), ("shorter", SHORTER),
                            ("unaligned", UNALIGNED), ("renamed", RENAMED),
                            ("free", FREE_FUNCTION),
-                           ("two", TWO_DECLARATIONS)):
+                           ("two", TWO_DECLARATIONS),
+                           # **Held like the rest.** A bucket that takes rows *out* of
+                           # `shorter` has to be as hard to grow as `shorter` is, or it
+                           # becomes the cheap way to make that number fall.
+                           ("declined", DECLINED)):
             if got[key] != table[space]:
                 moved.append(f"{space} {key}: {got[key]} now, {table[space]} written")
     assert not moved, (
