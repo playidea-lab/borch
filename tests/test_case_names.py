@@ -60,6 +60,13 @@ DELIBERATE = {
         "tensor it was handed and gives back the same object, computing the numbers "
         "it would have computed anyway. `act::nn.SELU(inplace)/같은 객체` beside it "
         "is where that is asked.",
+    # **Five more of the same shape.** These classes declared no constructor on the
+    # browser side, so the signature axis reported them as unreadable rather than
+    # short and nobody asked. Each has a `/같은 객체` row beside it.
+    **{f"act::nn.{_a}(inplace)":
+       "as `act::nn.SELU(inplace)` above — `inplace` moves the identity and not the "
+       "value, and the `/같은 객체` row beside it is where that is asked."
+       for _a in ("Hardsigmoid", "Hardswish", "Mish", "ReLU6", "SiLU")},
     # being equal is the answer
     "act::nn.Identity(인자를 삼킨다)":
         "torch's Identity swallows any argument — it is a placeholder, so users change the "

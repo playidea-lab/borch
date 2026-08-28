@@ -60,6 +60,16 @@ ATTESTED = {
         "computing the right values into a *new* tensor passes here and fails there. "
         "The other five activations escape this check only because their neighbour "
         "differs on some other argument, which is luck rather than a better case",
+    # **Five more of the same shape, and they arrived together.** These classes
+    # declared no constructor on the browser side, so the signature axis called them
+    # *unreadable* rather than short — `SELU` above had the seat and they did not, and
+    # nothing counted the difference. Each has a `/같은 객체` row beside it, which is
+    # the half that can fail.
+    **{f"act::nn.{_a}(inplace)":
+       "`inplace` changes the identity and not the value — see `act::nn.SELU(inplace)` "
+       "above, whose note is this one's. The `/같은 객체` row beside it is what a "
+       "version computing into a new tensor fails"
+       for _a in ("Hardsigmoid", "Hardswish", "Mish", "ReLU6", "SiLU")},
     "grad::sum(dim)":
         "the gradient of a sum is ones everywhere, whichever axis it was taken over",
     "grad::sort(내림차순)":

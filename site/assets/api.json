@@ -7689,6 +7689,11 @@
      "doc": "",
      "members": [
       {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -7701,6 +7706,11 @@
      "signature": "export declare class Hardswish extends Module",
      "doc": "",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
@@ -7715,6 +7725,11 @@
      "doc": "",
      "members": [
       {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -7728,6 +7743,11 @@
      "doc": "",
      "members": [
       {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -7740,6 +7760,11 @@
      "signature": "export declare class ReLU6 extends Module",
      "doc": "",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
@@ -7772,6 +7797,11 @@
      "doc": "",
      "members": [
       {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -7784,6 +7814,11 @@
      "signature": "export declare class Tanhshrink extends Module",
      "doc": "",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
@@ -7951,6 +7986,11 @@
      "signature": "export declare class SiLU extends Module",
      "doc": "",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
@@ -8708,15 +8748,25 @@
      "kind": "class",
      "name": "Flatten",
      "signature": "export declare class Flatten extends Module",
-     "doc": "Flattens, keeping only the batch axis.",
+     "doc": "Flattens the axes from `startDim` to `endDim`, keeping the rest.\n\n**The two seats were missing and the defaults hid it.** torch's are `1` and `-1`,\nwhich is \"keep the batch axis and fold everything else\" — exactly what this did\nwith no arguments at all, so every case that used the default passed while\n`Flatten(0)` and `Flatten(1, 2)` were arguments JavaScript dropped. The class\ndeclared no constructor, so the signature axis reported it as *unreadable* rather\nthan as short; that reader followed `extends` and found `Module`'s nothing.",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(startDim?: number, endDim?: number)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
       }
      ],
-     "doc_ko": "배치 축만 남기고 납작하게."
+     "doc_ko": "`startDim` 부터 `endDim` 까지의 축을 접고 나머지는 남긴다.\n\n**두 자리가 없었고, 그것을 감춘 건 그 자리들의 기본값이었다.** torch 의 기본은 `1` 과 `-1` — 배치 축은 두고 나머지를 접는다 — 인데, 그게 바로 이 클래스가 인자 없이 하던 일이다. 그래서 기본값을 쓰는 사례는 전부 통과했고 `Flatten(0)` 과 `Flatten(1, 2)` 는 JavaScript 가 버리는 낱말이었다. 생성자를 선언하지 않았으므로 서명 축은 이 클래스를 *꼬리가 짧다* 가 아니라 **못 읽음**으로 셌다 — 그 읽개가 `extends` 를 따라가 `Module` 의 '없음' 을 찾은 것이다."
     },
     {
      "kind": "class",
@@ -11901,7 +11951,7 @@
      ]
     }
    ],
-   "count": 792,
+   "count": 802,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -20063,5 +20113,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2714
+ "total": 2724
 }

@@ -406,9 +406,12 @@ NOT_PORTED = {
     # being read after its cause is gone; this one lasted about an hour, and only
     # because the same change that ended it was made by someone who then read this
     # line.
-    "unpool::": (4, "없음 — two ask about arguments borch.ts does not take "
-                        "(MaxPool2d's `dilation`, which no pooling kernel here "
-                        "dilates, and Flatten's two) and two about "
+    # **4 → 2: `Flatten`'s two are written.** The row said "arguments borch.ts does not
+    # take", and that stopped being true the moment the class took them — which is the
+    # `AvgPool2d` lesson one paragraph up, happening again to the line that records it.
+    # The class declared no constructor, so the signature axis called it *unreadable*
+    # rather than short and this reason was the only place the gap was written down.
+    "unpool::": (2, "없음 — two ask about "
                         "`AdaptiveAvgPool2d`, which is not a name over there. "
                         "**The maximum's padding and ceilMode left this row** with "
                         "AvgPool2d's: they were refused on the ground that the "

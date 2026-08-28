@@ -219,7 +219,10 @@ CEILINGS = {
     # Each is a key in `golden.json` and has to be spelled identically on both sides
     # or the case reads as a divergence — and `같은 객체=True` had to take **Python's**
     # spelling of the boolean for the same reason, `${true}` giving `true`.
-    "borch-ts/test": 3600,
+    # 3600 → 3627. Twenty-seven, case names: the five `(inplace)/같은 객체` rows, the
+    # three `=둘 다 거절` ones and `Flatten기본`. Each is a key in `golden.json` and has
+    # to be spelled the same on both sides or the case reads as a divergence.
+    "borch-ts/test": 3627,
 }
 
 

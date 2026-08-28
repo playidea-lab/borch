@@ -1012,32 +1012,61 @@ export class ReLU extends Module {
 // golden asks about the functional form and the layer form separately.
 
 export class Hardsigmoid extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("hardsigmoid");
+    const out = x.unary("hardsigmoid");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
 export class Hardswish extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("hardswish");
+    const out = x.unary("hardswish");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
 export class LogSigmoid extends Module {
+  constructor(inplace = false) {
+    super();
+    if (inplace) {
+      throw new RuntimeError(
+        "LogSigmoid(inplace=true) got an unexpected keyword argument 'inplace' — "
+        + "torch does not give this one an in-place form either");
+    }
+  }
+
   override forward(x: Tensor): Tensor {
     return x.unary("logsigmoid");
   }
 }
 
 export class Mish extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("mish");
+    const out = x.unary("mish");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
 export class ReLU6 extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("relu6");
+    const out = x.unary("relu6");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -1053,12 +1082,30 @@ export class SELU extends Module {
 }
 
 export class Softsign extends Module {
+  constructor(inplace = false) {
+    super();
+    if (inplace) {
+      throw new RuntimeError(
+        "Softsign(inplace=true) got an unexpected keyword argument 'inplace' — "
+        + "torch does not give this one an in-place form either");
+    }
+  }
+
   override forward(x: Tensor): Tensor {
     return x.unary("softsign");
   }
 }
 
 export class Tanhshrink extends Module {
+  constructor(inplace = false) {
+    super();
+    if (inplace) {
+      throw new RuntimeError(
+        "Tanhshrink(inplace=true) got an unexpected keyword argument 'inplace' — "
+        + "torch does not give this one an in-place form either");
+    }
+  }
+
   override forward(x: Tensor): Tensor {
     return x.unary("tanhshrink");
   }
@@ -1201,8 +1248,13 @@ export class GLU extends Module {
 // `Softmax()`'s default axis is **not `-1`.**
 
 export class SiLU extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("silu");
+    const out = x.unary("silu");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -2061,12 +2113,36 @@ export class MaxUnpool3d extends MaxUnpool1d {
 }
 
 /**
- * Flattens, keeping only the batch axis.
+ * Flattens the axes from `startDim` to `endDim`, keeping the rest.
+ *
+ * **The two seats were missing and the defaults hid it.** torch's are `1` and `-1`,
+ * which is "keep the batch axis and fold everything else" — exactly what this did
+ * with no arguments at all, so every case that used the default passed while
+ * `Flatten(0)` and `Flatten(1, 2)` were arguments JavaScript dropped. The class
+ * declared no constructor, so the signature axis reported it as *unreadable* rather
+ * than as short; that reader followed `extends` and found `Module`'s nothing.
  */
 export class Flatten extends Module {
+  constructor(private readonly startDim = 1, private readonly endDim = -1) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    const batch = x.shape[0] ?? 1;
-    return x.reshape([batch, x.size / batch]);
+    const rank = x.shape.length;
+    const from = this.startDim < 0 ? this.startDim + rank : this.startDim;
+    const to = this.endDim < 0 ? this.endDim + rank : this.endDim;
+    if (from > to || from < 0 || to >= rank) {
+      throw new RuntimeError(
+        `Flatten(${this.startDim}, ${this.endDim}) does not name a run of axes in a `
+        + `rank-${rank} tensor.`);
+    }
+    let folded = 1;
+    for (let i = from; i <= to; i++) folded *= x.shape[i] ?? 1;
+    return x.reshape([...x.shape.slice(0, from), folded, ...x.shape.slice(to + 1)]);
+  }
+
+  override describe(): string {
+    return `Flatten(start_dim=${this.startDim}, end_dim=${this.endDim})`;
   }
 }
 

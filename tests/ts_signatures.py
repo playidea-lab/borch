@@ -163,6 +163,53 @@ def _matching(text, open_at):
 _BAG_MEMBER = re.compile(r"([A-Za-z_$][\w$]*)\s*\??\s*:")
 
 _INTERFACES = {}
+_CTORS = {}
+
+_EXTENDS = re.compile(r"\bextends\s+(\w+)")
+
+
+def _class_constructors():
+    """`{class name: constructor signature}`, **following `extends`.**
+
+    TypeScript gives a class that declares no constructor its parent's, so what a
+    caller may write is the parent's list — and reading only the class's own members
+    reported `BatchNorm2d extends BatchNormND` as *no argument list*, which is the
+    wording for **could not be measured**. Eleven classes sat in that bucket with
+    their arguments declared one line up the chain.
+
+    A class with none anywhere up the chain takes **nothing**, and that is a fact
+    rather than an absence of one — it is filed as `constructor()` so the row is
+    compared. Left unreadable, `Hardsigmoid`, `Mish`, `ReLU6`, `LogSigmoid` and
+    `Hardswish` were reported as unmeasured while `SELU` thirty lines below them in
+    the same file takes torch's `inplace` and they do not. **The same family, half of
+    it short, and the count said nothing.**
+    """
+    if not _CTORS:
+        import json
+
+        raw, parents = {}, {}
+        for module in json.loads(API.read_text(encoding="utf-8"))["modules"]:
+            for sym in module.get("symbols", ()):
+                if sym.get("kind") != "class":
+                    continue
+                ctor = [m.get("signature") for m in sym.get("members", ())
+                        if m.get("name") == "constructor" and m.get("signature")]
+                raw[sym["name"]] = ctor[0] if ctor else None
+                found = _EXTENDS.search(sym.get("signature") or "")
+                parents[sym["name"]] = found.group(1) if found else None
+
+        for name in raw:
+            at, seen = name, set()
+            while at is not None and at not in seen:
+                seen.add(at)
+                if raw.get(at):
+                    _CTORS[name] = raw[at]
+                    break
+                at = parents.get(at)
+            else:
+                _CTORS[name] = "constructor()"
+            _CTORS.setdefault(name, "constructor()")
+    return _CTORS
 
 
 def _interface_members():
@@ -443,11 +490,16 @@ def ts_signatures():
                 # be a finding.
                 ctor = [m.get("signature") for m in members
                         if m.get("name") == "constructor" and m.get("signature")]
-                # A class with no constructor member is filed with its own bare
-                # declaration, which has no argument list and therefore lands in
-                # `unreadable`. **Loudly unmeasured beats quietly uncompared** — the
-                # first version skipped it and the whole `nn` namespace went silent.
-                into.setdefault(name, []).append(ctor[0] if ctor else sig)
+                # **A class with no constructor of its own is not unreadable.**
+                # TypeScript hands it the parent's, and with none anywhere up the
+                # chain the implicit one takes nothing — both are facts, and
+                # `_class_constructors` works out which. Filed as the bare
+                # declaration instead, twenty-eight classes landed in `unreadable`,
+                # and *loudly unmeasured* turned out to be quiet after all: half the
+                # activation family is short of torch's `inplace` and the count read
+                # `unread` rather than `shorter` for every one of them.
+                into.setdefault(name, []).append(
+                    ctor[0] if ctor else _class_constructors().get(name, sig))
             elif name and sig and sym.get("kind") in CALLABLE_KINDS:
                 for one in _declarations(sym):
                     into.setdefault(name, []).append(one)

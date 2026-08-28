@@ -455,7 +455,17 @@ UNALIGNED = {
     # **Two wrong verdicts in a row, each hiding the next.** Nobody predicted the
     # second or the third; both sessions guessed this would land in `shorter` as soon
     # as the alias was read.
-    "nn": 0,
+    #
+    # **0 → 3, and the three were never zero — they were unreadable.** `BatchNorm1d`,
+    # `BatchNorm2d` and `BatchNorm3d` declare no constructor of their own, so until the
+    # reader followed `extends` there was no argument list to compare and they sat in
+    # `unread`. Followed to `BatchNormND`, they part in two ways at once, which is what
+    # `unaligned` means: borch.ts calls torch's `num_features` **`channels`**, and it
+    # has no `device`/`dtype` seats, so `bias` — last in both — stands two places
+    # early. Both are closable (a rename, and two seats carried in order to refuse:
+    # one device, one precision), and `bias` moving is a **shift**, so it is written
+    # down rather than done at the end of a long sitting.
+    "nn": 3,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -1408,14 +1418,29 @@ SHORTER = {
     # **2 → 0**, with `Normalize` above and by the same measurement. `copyFrom` is
     # what they write through, which is what every optimizer step here already uses.
     "transforms.functional": 0,
-    "ops": 0,
+    # **0 → 1, and the row was never zero — it was unreadable.** `Conv2dNormActivation`
+    # declares no constructor of its own, so until the reader followed `extends` this
+    # class had no argument list to compare and sat in `unread`. Followed, it inherits
+    # `ConvNormActivation`'s, whose tail carries a `convLayer` that torch gives the
+    # *parent* and not this class. So the row is `longer`, which is the safe direction
+    # — a torch-shaped call never reaches a twelfth seat — and it is a real difference
+    # in what a caller may write.
+    "ops": 1,
     # 3 → 0. The three were `RandomResize`, `RandomShortestSize` and `ScaleJitter`,
     # each short of `antialias`. They take it now and **refuse `false`** rather than
     # accepting and dropping it: there is one resampling filter here and it
     # antialiases, so `false` is a request that cannot be honoured, and an argument
     # taken and ignored is the shape that trains slightly wrong in silence. v1's
     # `Resize` refuses it in the same words.
-    "transforms.v2": 0,
+    #
+    # **0 → 3, and these were unreadable too.** `CutMix`, `MixUp` and
+    # `LinearTransformation` declare no constructor anywhere up their chain, so they
+    # take *nothing* where torch takes two each — `alpha`/`num_classes` for the two
+    # mixers, `transformation_matrix`/`mean_vector` for the whitening one. Every one is
+    # a computation this side does not have rather than a seat it forgot, so they are
+    # named here rather than opened: a seat that accepts `alpha` and mixes nothing is
+    # the failure this repository spends its checks on.
+    "transforms.v2": 3,
     "transforms.v2.functional": 0,
     "datasets": 0,
 }

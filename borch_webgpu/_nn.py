@@ -2422,8 +2422,11 @@ def ELU(alpha=1.0, inplace=False):
     return _maybe_in_place(_layer("ELU", alpha), inplace)
 
 
-def SiLU():
-    return _layer("SiLU")
+# **`SiLU` sat here alone and took no `inplace`**, while its four siblings below —
+# `Hardsigmoid`, `Hardswish`, `Mish`, `ReLU6` — share `_unary_layer` and have one.
+# torch gives it one and so does the core, so `nn.SiLU(inplace=True)` stopped on an
+# argument count in the binding alone. Moved down to join them rather than given a
+# sixth spelling of the same three lines.
 
 
 def GELU(approximate="none"):
@@ -2477,6 +2480,7 @@ Hardswish = _unary_layer("hardswish")
 Mish = _unary_layer("mish")
 ReLU6 = _unary_layer("relu6")
 SELU = _unary_layer("selu")
+SiLU = _unary_layer("silu")
 
 
 # **These three take no `inplace` and torch gives them none either.** Sharing

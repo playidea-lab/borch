@@ -1058,6 +1058,23 @@ def act_cases(inp=None):
                       lambda L, a=_act, g=_args: getattr(L.nn, a)(*g, True)(L.tensor(k))))
         cases.append((ACT_PREFIX + f"nn.{_act}(inplace)/같은 객체",
                       lambda L, a=_act, g=_args: _same_object(L, getattr(L.nn, a)(*g, True))))
+    # **Five more take it and were asked by nobody.** The browser side declared no
+    # constructor for these, so the signature axis reported them as *unreadable*
+    # rather than as short — `SELU` thirty lines above them in the same file has the
+    # seat and these five did not, and the count said nothing either way.
+    for _act in ("Hardsigmoid", "Hardswish", "Mish", "ReLU6", "SiLU"):
+        cases.append((ACT_PREFIX + f"nn.{_act}(inplace)",
+                      lambda L, a=_act: getattr(L.nn, a)(True)(L.tensor(k))))
+        cases.append((ACT_PREFIX + f"nn.{_act}(inplace)/같은 객체",
+                      lambda L, a=_act: _same_object(L, getattr(L.nn, a)(True))))
+    # **And three refuse it, because torch gives them no in-place form.** The core
+    # stops on the word by name; the browser side had no seat for it, so JavaScript
+    # dropped it and the call went through. *Accepted where the authority declines*
+    # misleads exactly as much as *accepted and inert*.
+    for _act in ("LogSigmoid", "Softsign", "Tanhshrink"):
+        cases.append((ACT_PREFIX + f"nn.{_act}(inplace)=둘 다 거절",
+                      lambda L, a=_act: _both_stop(
+                          L, lambda M, n=a: getattr(M.nn, n)(True)(M.tensor(k)))))
     cases.append((ACT_PREFIX + "nn.Identity", lambda L: L.nn.Identity()(L.tensor(k))))
     # torch's `Identity` **swallows any argument at all** (measured). It is a placeholder
     # layer, so swapping a layer out and leaving its arguments in place while changing the name
@@ -6760,6 +6777,17 @@ def shuffle_cases(inp=None):
         lambda L: F(L).pixel_unshuffle(F(L).pixel_shuffle(L.tensor(pix), 2), 2))
     add("channel_shuffle(2)", lambda L: F(L).channel_shuffle(L.tensor(chan), 2))
     add("channel_shuffle(3)", lambda L: F(L).channel_shuffle(L.tensor(chan6), 3))
+    # ── `nn.Flatten`'s two seats ──
+    #
+    # **The defaults hid them.** torch's are `1` and `-1` — keep the batch axis, fold
+    # the rest — which is exactly what the browser side did with no arguments at all,
+    # so every case that used the default passed while `Flatten(0)` and `Flatten(1, 2)`
+    # were words JavaScript dropped. The class declared no constructor, so the
+    # signature axis called it *unreadable* rather than short.
+    for _label, _args in (("기본", ()), ("(0, -1)", (0, -1)), ("(1, 2)", (1, 2)),
+                          ("(2, 3)", (2, 3)), ("(0, 1)", (0, 1))):
+        add(f"층::Flatten{_label}",
+            lambda L, g=_args: L.nn.Flatten(*g)(L.tensor(pix)))
     add("층::PixelShuffle", lambda L: L.nn.PixelShuffle(2)(L.tensor(pix)))
     add("층::PixelUnshuffle", lambda L: L.nn.PixelUnshuffle(2)(L.tensor(flat)))
     add("층::ChannelShuffle", lambda L: L.nn.ChannelShuffle(2)(L.tensor(chan)))

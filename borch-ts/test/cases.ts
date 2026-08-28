@@ -3560,6 +3560,42 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
       return verdict(make(true).call(x) === x);
     });
   }
+  // **Five more take it and nobody asked.** These classes declared no constructor, so
+  // the signature axis reported them as *unreadable* rather than as short — `SELU`
+  // above them in the same file had the seat and these five did not, and the count
+  // said nothing either way.
+  for (const [name, make] of [
+    ["Hardsigmoid", (i: boolean) => new nn.Hardsigmoid(i)],
+    ["Hardswish", (i: boolean) => new nn.Hardswish(i)],
+    ["Mish", (i: boolean) => new nn.Mish(i)],
+    ["ReLU6", (i: boolean) => new nn.ReLU6(i)],
+    ["SiLU", (i: boolean) => new nn.SiLU(i)],
+  ] as const) {
+    out.set(`act::nn.${name}(inplace)`, () => make(true).call(inp.get("kinks")) as Tensor);
+    out.set(`act::nn.${name}(inplace)/같은 객체`, () => {
+      const x = Tensor.from([-1.0, 2.0]);
+      return verdict(make(true).call(x) === x);
+    });
+  }
+  // **And three refuse it**, because torch gives them no in-place form and the core
+  // stops on the word by name. With no seat here JavaScript dropped it and the call
+  // went through — *accepted where the authority declines* misleads exactly as much
+  // as *accepted and inert*.
+  for (const [name, make] of [
+    ["LogSigmoid", () => new nn.LogSigmoid(true)],
+    ["Softsign", () => new nn.Softsign(true)],
+    ["Tanhshrink", () => new nn.Tanhshrink(true)],
+  ] as const) {
+    out.set(`act::nn.${name}(inplace)=둘 다 거절`, () => {
+      try {
+        make().call(inp.get("kinks"));
+      } catch {
+        return "둘 다 멈춘다";
+      }
+      return "여기선 통과했다";
+    });
+  }
+
   out.set("act::nn.Identity", () => new nn.Identity().call(inp.get("kinks")));
   // torch's `Identity` swallows any argument. JavaScript simply discards extra arguments
   // so this side does it by itself, and **what happens by itself is asked about anyway** —
@@ -4088,6 +4124,11 @@ function addUnpool(out: Map<string, Case>): void {
     ["LogSoftmax(dim=-1)", () => new nn.LogSoftmax(-1)],
     ["PReLU", () => new nn.PReLU()],
     ["PReLU(4)", () => new nn.PReLU(4)],
+    // **These two left the never-asked list with `Flatten`'s seats.** The reason
+    // recorded there was "arguments borch.ts does not take", which stopped being true
+    // the moment the class took them.
+    ["Flatten", () => new nn.Flatten()],
+    ["Flatten(0, -2)", () => new nn.Flatten(0, -2)],
     ["Unflatten", () => new nn.Unflatten(1, [2, 3])],
     ["Upsample(scale_factor)", () => new nn.Upsample(null, 2)],
     ["Upsample(size)", () => new nn.Upsample([4, 4])],
@@ -4636,6 +4677,15 @@ function addShuffle(out: Map<string, Case>): void {
     ["층::PixelShuffle", () => new nn.PixelShuffle(2).call(pix())],
     ["층::PixelUnshuffle", () => new nn.PixelUnshuffle(2).call(flat())],
     ["층::ChannelShuffle", () => new nn.ChannelShuffle(2).call(chan())],
+    // **`Flatten`'s two seats, hidden by their own defaults.** torch's are `1` and
+    // `-1` — keep the batch axis, fold the rest — which is what this did with no
+    // arguments at all, so every case using the default passed while `Flatten(0)`
+    // and `Flatten(1, 2)` were words JavaScript dropped.
+    ["층::Flatten기본", () => new nn.Flatten().call(pix())],
+    ["층::Flatten(0, -1)", () => new nn.Flatten(0, -1).call(pix())],
+    ["층::Flatten(1, 2)", () => new nn.Flatten(1, 2).call(pix())],
+    ["층::Flatten(2, 3)", () => new nn.Flatten(2, 3).call(pix())],
+    ["층::Flatten(0, 1)", () => new nn.Flatten(0, 1).call(pix())],
   ];
   for (const [name, fn] of value) out.set(`shuffle::${name}`, fn);
 
