@@ -7941,8 +7941,16 @@ def vector_norm(input, ord=2, dim=None, keepdim=False):  # noqa: A002
     are written out separately.
     """
     x = _wrap(input).abs()
-    if dim is None and x.data.ndim > 1:
+    rank = x.data.ndim
+    if dim is None and rank > 1:
+        # **The rank is remembered before the flatten.** With no `dim` torch reduces
+        # everything and, asked to keep, hands back **all ones** rather than a scalar
+        # (measured). Flattened first, the reduction below keeps one axis instead of
+        # `rank` of them, and the answer comes back a rank short — right value, wrong
+        # shape, which broadcasts differently and surfaces somewhere else.
         x = x.reshape(-1)
+        if keepdim:
+            return vector_norm(x, ord, None, False).reshape((1,) * rank)
     if ord == _np.inf:
         return amax(x, dim=dim, keepdim=keepdim)
     if ord == -_np.inf:
@@ -7959,6 +7967,33 @@ def vector_norm(input, ord=2, dim=None, keepdim=False):  # noqa: A002
 # The branches that need singular values. The rest finish with a sum of absolute
 # values over the rows or the columns.
 _SPECTRAL = ("nuc", 2, -2)
+
+
+def _linalg_norm(input, ord=None, dim=None, keepdim=False, dtype=None):  # noqa: A002
+    """`torch.linalg.norm` — **which is not `torch.norm`, and was bound to it.**
+
+    The two have the same seats and different meanings. `linalg.norm` dispatches: with
+    an `ord` and no `dim` on a matrix it is `matrix_norm`, which for `ord=2` is the
+    largest singular value; everything else is `vector_norm`. `torch.norm` is the
+    elementwise p-norm throughout.
+
+    On `[[1..9]]` that is 16.848 against 16.882 — near enough to read as rounding and
+    produced by a different formula. Bound to the wrong one, `linalg.norm(A, 2)`
+    answered a question nobody asked and nothing said so; the golden case written the
+    same afternoon caught it here and in borch.ts at once.
+
+    torch spells the order `ord` here and `p` at the top level, which is the other half
+    of why one was mistaken for the other.
+    """
+    x = _wrap(input)
+    if dtype is not None:
+        x = _wrap(x.data.astype(_np_of(_requested_dtype(dtype))))
+    if dim is None and ord is not None and x.data.ndim == 2:
+        return matrix_norm(x, ord=ord, keepdim=keepdim)
+    if isinstance(dim, (tuple, list)) and len(dim) == 2:
+        return matrix_norm(x, ord=("fro" if ord is None else ord), dim=tuple(dim),
+                           keepdim=keepdim)
+    return vector_norm(x, ord=(2 if ord is None else ord), dim=dim, keepdim=keepdim)
 
 
 def matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False):  # noqa: A002
@@ -8222,7 +8257,7 @@ class _Linalg(_Namespace):
     ldl_factor_ex = staticmethod(ldl_factor_ex)
     ldl_solve = staticmethod(ldl_solve)
     householder_product = staticmethod(householder_product)
-    norm = staticmethod(norm)
+    norm = staticmethod(_linalg_norm)
     # The composite layers.
     matmul = staticmethod(matmul)
     vecdot = staticmethod(vecdot)

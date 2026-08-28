@@ -148,8 +148,15 @@ _SIGNATURE = {
     "svd": ("some", "compute_uv"),
     "linalgSvd": ("full_matrices",),
     # Keyword arguments of the composite layers.
-    "vector_norm": ("ord", "dim"),
+    # **`keepdim` was missing and the seat behind it existed.** borch.ts's `vectorNorm`
+    # takes it third; left out of this row it was dropped on the way and the answer came
+    # back a rank short — a shape, not an exception.
+    "vector_norm": ("ord", "dim", "keepdim"),
     "matrix_norm": ("ord",),
+    # `linalg.norm` is routed to borch.ts's **namespace** function rather than the `norm`
+    # method, so its row is torch's `linalg.norm` and not `torch.norm`'s. The two differ
+    # in the first name — `ord` against `p` — and in what they compute.
+    "linalg.norm": ("ord", "dim", "keepdim", "dtype"),
     "vander": ("N",),
     "vecdot": ("other", "dim"),
     "eigvalsh": ("UPLO",),
@@ -3286,6 +3293,22 @@ class _Linalg:
                          "matrix_rank": "matrixRank"}.get(name, name))
 
         def call(x, *args, **kw):
+            # **`linalg.norm` is not the `norm` method and must not be routed to it.**
+            # With an `ord` and no `dim` on a matrix torch takes the largest singular
+            # value where the method takes the elementwise p-norm — 16.848 against
+            # 16.882 on `[[1..9]]`, near enough to read as rounding. The dispatch lives
+            # in borch.ts's `linalg` namespace, which `index.ts` exports, so this reaches
+            # the free function rather than reimplementing the rule a third time.
+            #
+            # All three implementations had it wired to the elementwise one. The golden
+            # case written for it caught borch.ts, then the core, then this.
+            if name == "norm":
+                ns = getattr(_js.borch, "linalg", None)
+                if ns is not None:
+                    # The free function takes the tensor first; the method took it as
+                    # the receiver.
+                    return guarded(ns.norm, handle(x),
+                                   *positional("linalg.norm", args, kw))
             fn = getattr(handle(x), js_name, None)
             if fn is None:
                 raise AttributeError(f"borch.ts does not have `{js_name}` (linalg.{name})")

@@ -42,6 +42,7 @@
  */
 
 import { RuntimeError } from "./errors.js";
+import type { DType } from "./dtype.js";
 import { Tensor } from "./tensor.js";
 
 // ── Forwarded, receiver unchanged ───────────────────────────────────────
@@ -139,14 +140,39 @@ export function matrixNorm(input: Tensor, ord: number | string = "fro"): Promise
   return input.matrixNorm(ord);
 }
 
-/** `vector_norm(x, ord=2, dim=None)`. */
-export function vectorNorm(input: Tensor, ord = 2, dim?: number): Tensor {
-  return input.vectorNorm(ord, dim);
+/** `vector_norm(x, ord=2, dim=None, keepdim=False)`. */
+export function vectorNorm(input: Tensor, ord = 2, dim?: number,
+                           keepdim = false): Tensor {
+  return input.vectorNorm(ord, dim, keepdim);
 }
 
-/** `norm(A)` — the Frobenius norm of the whole tensor. */
-export function norm(input: Tensor): Tensor {
-  return input.norm();
+/**
+ * `norm(A, ord=None, dim=None, keepdim=False, dtype=None)`.
+ *
+ * **All four were missing and the method had all four.** This read `norm(input)` and
+ * called `input.norm()`, so `linalg.norm(x, 2, 1)` — the line a torch tutorial writes —
+ * threw away the order and the axis and returned the Frobenius norm of everything.
+ * JavaScript discards surplus arguments without a word, so it was not an error but a
+ * different number, of a different rank, that flows on and breaks somewhere unrelated.
+ *
+ * torch spells the first one `ord`; the method spells it `p`. Nothing else differs.
+ */
+export async function norm(input: Tensor, ord?: number, dim?: number,
+                           keepdim = false, dtype?: DType): Promise<Tensor> {
+  const x = dtype === undefined ? input : input.to(dtype);
+  // **It dispatches, and forwarding to `Tensor.norm` was wrong.** The seats line up and
+  // the meanings do not: with an `ord` and no `dim` on a matrix torch takes the
+  // *largest singular value*, where the method takes the elementwise p-norm. Measured on
+  // `[[1..9]]`: 16.848 against 16.882 — close enough to read as rounding and produced by
+  // a different formula. The golden case added with this caught it on its first run.
+  if (dim === undefined && ord !== undefined && x.shape.length === 2) {
+    const m = await x.matrixNorm(ord);
+    return keepdim ? m.reshape([1, 1]) : m;
+  }
+  // Everything else is a vector norm: no `ord` means the whole thing flattened, and an
+  // `ord` with a `dim` means along that axis. torch's two-axis `dim` reaches
+  // `matrix_norm` as well; borch.ts takes a single axis, so that spelling does not arise.
+  return x.vectorNorm(ord ?? 2, dim, keepdim);
 }
 
 /** `cond(A, p=None)` — the condition number. */
@@ -187,8 +213,12 @@ export function inv(a: Tensor): Promise<Tensor> {
 }
 
 /** `pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`. */
-export function pinv(input: Tensor): Promise<Tensor> {
-  return input.pinverse();
+export function pinv(input: Tensor, rcond?: number): Promise<Tensor> {
+  // **Carried in order to refuse.** `pinverse` stops on a cut-off it does not honour,
+  // and the seat has to exist here for that stop to be reachable — left out, the door
+  // was narrower than the room behind it and `linalg.pinv(a, 1e-6)` discarded the
+  // number in silence, which is the answer a caller asked to stop getting.
+  return input.pinverse(rcond);
 }
 
 /** `matmul(A, B)` — matrix multiplication. The method is `mm`. */

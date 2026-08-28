@@ -6705,18 +6705,27 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * minimum absolute value. Branches that must not go through the power
    * formula, so they are written separately.
    */
-  vectorNorm(ord = 2, dim?: number): Tensor {
-    const flat = dim === undefined && this.shape.length > 1
-      ? this.reshape([this.size])
-      : this;
+  vectorNorm(ord = 2, dim?: number, keepdim = false): Tensor {
+    // **`keepdim` was missing and every branch passed `false`.** torch keeps the
+    // reduced axes as length 1, and without it `vector_norm(x, dim=1, keepdim=True)`
+    // came back one rank short — which broadcasts against the input differently and
+    // is the shape of divergence that surfaces somewhere else entirely.
+    //
+    // With no `dim` torch reduces everything and, asked to keep, returns **all ones**
+    // rather than a scalar (measured). The flatten below makes the rank unavailable by
+    // then, so the original is remembered first.
+    const rank = this.shape.length;
+    const flat = dim === undefined && rank > 1 ? this.reshape([this.size]) : this;
     const x = flat.abs();
-    if (ord === Infinity) return x.amax(dim, false);
-    if (ord === -Infinity) return x.amin(dim, false);
-    if (ord === 0) return x.binary("ne", Tensor.full([], 0)).sumDim(dim ?? 0, false);
-    if (ord === 1) return dim === undefined ? x.sum() : x.sumDim(dim, false);
+    const whole = (t: Tensor) => (keepdim ? t.reshape(new Array(rank).fill(1)) : t);
+    if (ord === Infinity) return x.amax(dim, keepdim);
+    if (ord === -Infinity) return x.amin(dim, keepdim);
+    if (ord === 0) return x.binary("ne", Tensor.full([], 0)).sumDim(dim ?? 0, keepdim);
+    if (ord === 1) return dim === undefined ? whole(x.sum()) : x.sumDim(dim, keepdim);
     const powed = ord === 2 ? x.square() : x.powScalar(ord);
-    const total = dim === undefined ? powed.sum() : powed.sumDim(dim, false);
-    return ord === 2 ? total.sqrt() : total.powScalar(1 / ord);
+    const total = dim === undefined ? powed.sum() : powed.sumDim(dim, keepdim);
+    const done = ord === 2 ? total.sqrt() : total.powScalar(1 / ord);
+    return dim === undefined ? whole(done) : done;
   }
 
   /** The Vandermonde matrix. The columns are **increasing powers**. */

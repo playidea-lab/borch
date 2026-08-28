@@ -38,6 +38,10 @@ import * as ops from "../src/ops.js";
 import * as data from "../src/data.js";
 import * as F from "../src/functional.js";
 import { LinAlgError } from "../src/errors.js";
+// **The namespace, not the methods behind it.** Every `linalg` case here reaches a
+// method directly, which is why `linalg.norm` could sit taking one argument where the
+// method takes four and no case noticed: the door was never the thing being opened.
+import * as linalg from "../src/linalg.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
@@ -8355,6 +8359,15 @@ function addLinalgNames(out: Map<string, Case>): void {
     ["name2::vector_norm", async () => vec3().vectorNorm()],
     ["name2::vector_norm(행렬을 통째로)", async () => mat().vectorNorm()],
     ["name2::vector_norm(dim)", async () => mat().vectorNorm(2, 1)],
+    // `keepdim` keeps the reduced axis at length 1; with no `dim` torch keeps every
+    // axis rather than handing back a scalar. Both branches are asked because they are
+    // written apart — one threads the flag through the reduction, the other reshapes.
+    ["name2::vector_norm(dim, keepdim)", async () => mat().vectorNorm(2, 1, true)],
+    ["name2::vector_norm(keepdim, no dim)",
+      async () => mat().vectorNorm(2, undefined, true)],
+    ["name2::norm(ord)", async () => linalg.norm(mat(), 2)],
+    ["name2::norm(ord, dim)", async () => linalg.norm(mat(), 2, 1)],
+    ["name2::norm(ord, dim, keepdim)", async () => linalg.norm(mat(), 2, 1, true)],
 
     ["name2::multi_dot", async () => mat().mm(mat()).mm(mat())],
     ["name2::multi_dot(둘)", async () => mat().mm(mat())],

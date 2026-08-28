@@ -1313,12 +1313,23 @@ SHORTER = {
     # holds the reason and `DECLINED` below holds the count, because an exemption that
     # can grow without anyone deciding is worse than the mixture it replaced.
     #
-    # What is left is nine rows of real absence, and they are legible for the first
-    # time: `norm` takes none of `p`, `dim`, `keepdim`, `dtype`; `lstsq` neither
-    # `rcond` nor `driver`; `lu` no `pivot`; `lu_solve` neither `left` nor `adjoint`;
-    # `matrix_norm` no `dim`/`keepdim`; `vector_norm` no `keepdim`; `matrix_rank` no
-    # `tol`; `pinv` no `rcond`; `tensorsolve` no `dims`.
-    "linalg": 9,
+    # What was left was nine rows of real absence, legible for the first time — and
+    # **three of them are closed**, which is what took this to 6 and `DECLINED` to 23:
+    # `norm` takes all four of `ord`, `dim`, `keepdim` and `dtype`, `vector_norm` takes
+    # `keepdim`, and `pinv` carries `rcond` in order to refuse it. Their only remaining
+    # difference from torch is the `out` every row here has.
+    #
+    # `norm` was not the one-line forward it looked like. **`linalg.norm` is not
+    # `torch.norm`** — with an `ord` and no `dim` on a matrix torch takes the largest
+    # singular value where the method takes the elementwise p-norm, 16.848 against
+    # 16.882 on `[[1..9]]`. Both libraries had it wired to the elementwise one; the
+    # golden case written alongside caught it in borch.ts on the first run and in the
+    # core on the next.
+    #
+    # Six remain: `lstsq` neither `rcond` nor `driver`; `lu` no `pivot`; `lu_solve`
+    # neither `left` nor `adjoint`; `matrix_norm` no `dim`/`keepdim`; `matrix_rank` no
+    # `tol`; `tensorsolve` no `dims`.
+    "linalg": 6,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
     # that they exist at all.
@@ -1456,7 +1467,11 @@ DECLINED = {
     "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 0,
-    "linalg": 20,
+    # 20 → 23. `norm`, `vector_norm` and `pinv` arrived from `SHORTER` when the seats
+    # they were short of were carried across — what is left on those three is the `out`
+    # this table is about. **A rise here is only good news when `SHORTER` fell by the
+    # same three**, which is the pairing the test above enforces by holding both.
+    "linalg": 23,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,

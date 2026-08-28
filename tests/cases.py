@@ -10423,6 +10423,25 @@ def linalg_name_cases(inp=None):
          lambda L: L.linalg.vector_norm(L.tensor(mat))),
         (LINALG_PREFIX + "name2::vector_norm(dim)",
          lambda L: L.linalg.vector_norm(L.tensor(mat), dim=1)),
+        # **`keepdim` reduces to length 1 rather than dropping the axis**, and with no
+        # `dim` at all torch keeps *every* axis as 1 rather than handing back a scalar
+        # (measured). borch.ts took no such argument and every branch passed `false`, so
+        # the result came back one rank short — which broadcasts differently against the
+        # input and surfaces somewhere else entirely.
+        (LINALG_PREFIX + "name2::vector_norm(dim, keepdim)",
+         lambda L: L.linalg.vector_norm(L.tensor(mat), dim=1, keepdim=True)),
+        (LINALG_PREFIX + "name2::vector_norm(keepdim, no dim)",
+         lambda L: L.linalg.vector_norm(L.tensor(mat), keepdim=True)),
+        # **`linalg.norm` took none of its four**, while the method behind it had all
+        # four — so `norm(x, 2, 1)` threw the order and the axis away and returned the
+        # Frobenius norm of everything. Not an error: a different number of a different
+        # rank. These ask the seats one at a time.
+        (LINALG_PREFIX + "name2::norm(ord)",
+         lambda L: L.linalg.norm(L.tensor(mat), 2)),
+        (LINALG_PREFIX + "name2::norm(ord, dim)",
+         lambda L: L.linalg.norm(L.tensor(mat), 2, 1)),
+        (LINALG_PREFIX + "name2::norm(ord, dim, keepdim)",
+         lambda L: L.linalg.norm(L.tensor(mat), 2, 1, True)),
     ]
     for tag, ordv in (("1", 1), ("inf", float("inf")), ("-inf", float("-inf")),
                       ("0", 0), ("3", 3)):

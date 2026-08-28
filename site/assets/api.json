@@ -2949,7 +2949,7 @@
       },
       {
        "name": "vectorNorm",
-       "signature": "vectorNorm(ord?: number, dim?: number): Tensor",
+       "signature": "vectorNorm(ord?: number, dim?: number, keepdim?: boolean): Tensor",
        "doc": "The norm measured treating it as a vector. **Given a matrix it flattens\nthe whole thing** — where it parts from `matrixNorm`.\n\n`ord=0` is the count of non-zeros, and `±Infinity` the maximum and\nminimum absolute value. Branches that must not go through the power\nformula, so they are written separately.",
        "torch": "vector_norm",
        "section": {
@@ -18877,19 +18877,19 @@
     {
      "kind": "function",
      "name": "vectorNorm",
-     "signature": "export declare function vectorNorm(input: Tensor, ord?: number, dim?: number): Tensor",
-     "doc": "`vector_norm(x, ord=2, dim=None)`.",
+     "signature": "export declare function vectorNorm(input: Tensor, ord?: number, dim?: number, keepdim?: boolean): Tensor",
+     "doc": "`vector_norm(x, ord=2, dim=None, keepdim=False)`.",
      "members": [],
      "torch": "vector_norm",
-     "doc_ko": "`vector_norm(x, ord=2, dim=None)`."
+     "doc_ko": "`vector_norm(x, ord=2, dim=None, keepdim=False)`. `keepdim` 은 줄인 축을 길이 1 로 남긴다 — `dim` 이 없으면 모든 축을 1 로 남긴다."
     },
     {
      "kind": "function",
      "name": "norm",
-     "signature": "export declare function norm(input: Tensor): Tensor",
-     "doc": "`norm(A)` — the Frobenius norm of the whole tensor.",
+     "signature": "export declare function norm(input: Tensor, ord?: number, dim?: number, keepdim?: boolean, dtype?: DType): Promise<Tensor>",
+     "doc": "`norm(A, ord=None, dim=None, keepdim=False, dtype=None)`.\n\n**All four were missing and the method had all four.** This read `norm(input)` and\ncalled `input.norm()`, so `linalg.norm(x, 2, 1)` — the line a torch tutorial writes —\nthrew away the order and the axis and returned the Frobenius norm of everything.\nJavaScript discards surplus arguments without a word, so it was not an error but a\ndifferent number, of a different rank, that flows on and breaks somewhere unrelated.\n\ntorch spells the first one `ord`; the method spells it `p`. Nothing else differs.",
      "members": [],
-     "doc_ko": "`norm(A)` — 텐서 전체의 프로베니우스 노름."
+     "doc_ko": "`norm(A, ord=None, dim=None, keepdim=False, dtype=None)` — **`torch.norm` 이 아니다.** `ord` 가 있고 `dim` 이 없는 행렬이면 `matrix_norm` 으로 가고, `ord=2` 는 최대 특이값이다. 나머지는 `vector_norm`."
     },
     {
      "kind": "function",
@@ -18952,7 +18952,7 @@
     {
      "kind": "function",
      "name": "pinv",
-     "signature": "export declare function pinv(input: Tensor): Promise<Tensor>",
+     "signature": "export declare function pinv(input: Tensor, rcond?: number): Promise<Tensor>",
      "doc": "`pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`.",
      "members": [],
      "doc_ko": "`pinv(A)` — 무어-펜로즈 유사역행렬. 메서드 이름은 `pinverse` 다."
