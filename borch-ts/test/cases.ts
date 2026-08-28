@@ -2576,6 +2576,44 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     () => new vision.ToTensor().apply(pic("vis_gray", true)) as Tensor);
   out.set("vision::Normalize", () =>
     new vision.Normalize(mean, std).apply(new vision.ToTensor().apply(u8())));
+
+  // ── the three `inplace` seats ───────────────────────────────────────────
+  //
+  // **Only the identity separates them.** The returned numbers are the same either
+  // way, which is how `Normalize`'s flag sat accepted and inert on the Python side
+  // and absent here. What the argument is *for* is the call made for its side effect
+  // — the return thrown away — and that call did nothing at all.
+  const fresh = () => new vision.ToTensor().apply(u8());
+  const sameObject = (run: (t: Tensor) => Tensor) => () => {
+    const t = fresh();
+    // **Python's spelling of the boolean**, because the frozen value is Python's:
+    // `${true}` is `true` where the golden holds `True`, which fails a case on one
+    // character while the behaviour it asks about is right.
+    return `같은 객체=${run(t) === t ? "True" : "False"}`;
+  };
+  const afterwards = (run: (t: Tensor) => Tensor) => () => {
+    const t = fresh();
+    run(t);
+    return t;
+  };
+  const blank = () => Tensor.zeros([3, 2, 2]);
+
+  out.set("vision::Normalize(inplace)/같은 객체",
+    sameObject((t) => new vision.Normalize(mean, std, true).apply(t)));
+  out.set("vision::Normalize(inplace)/부른 쪽 텐서",
+    afterwards((t) => new vision.Normalize(mean, std, true).apply(t)));
+  out.set("vision::Normalize(기본은 그대로 둔다)",
+    afterwards((t) => new vision.Normalize(mean, std).apply(t)));
+  out.set("vision::F.normalize(inplace)/같은 객체",
+    sameObject((t) => vision.normalize(t, mean, std, true)));
+  out.set("vision::F.normalize(inplace)/부른 쪽 텐서",
+    afterwards((t) => vision.normalize(t, mean, std, true)));
+  out.set("vision::F.erase(inplace)/같은 객체",
+    sameObject((t) => vision.erase(t, 0, 0, 2, 2, blank(), true)));
+  out.set("vision::F.erase(inplace)/부른 쪽 텐서",
+    afterwards((t) => vision.erase(t, 0, 0, 2, 2, blank(), true)));
+  out.set("vision::F.erase(기본은 그대로 둔다)",
+    afterwards((t) => vision.erase(t, 0, 0, 2, 2, blank())));
   out.set("vision::Compose", () =>
     new vision.Compose([new vision.ToTensor(), new vision.Normalize(mean, std)])
       .apply(u8()) as Tensor);
@@ -5919,6 +5957,78 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   out.set("opt::CyclicLR(exp_range)/자취",
     () => trace((o) => new optim.CyclicLR(
       o, 0.01, 0.1, 3, null, "exp_range", 0.9).start(), 14));
+
+  // ── the six seats `CyclicLR` was short of ──────────────────────────────
+  //
+  // **`scaleMode` alone does nothing, and that is torch's rule** — the branch that
+  // derives a curve from `mode` sets both, so a `scaleMode` beside a bare `mode` is
+  // overwritten. This one let it win and `triangular2` halved by step: 0.04 where
+  // torch says 0.07 at the third entry, caught the first time the case ran.
+  out.set("opt::CyclicLR(scale_mode 만으로는 안 바뀐다)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular2", 1.0, null, "iterations").start(), 14));
+  // `scaleFn` **overrides** the mode's own curve — a version multiplying the two
+  // together passes every case above and fails this one.
+  out.set("opt::CyclicLR(scale_fn)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular2", 1.0, () => 0.5).start(), 14));
+  // **Together they act**, which is what makes the pair worth a seat.
+  out.set("opt::CyclicLR(scale_fn, iterations)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular", 1.0,
+      (i) => 1 / (1 + i), "iterations").start(), 14));
+  out.set("opt::CyclicLR(scale_fn, cycle)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular", 1.0,
+      (c) => 1 / (1 + c), "cycle").start(), 14));
+
+  // **`cycleMomentum` is the one of the six that changes trained values**, and no
+  // `자취` case can see it: those compare the printed learning rate and this moves
+  // the momentum, against the rate. torch's default is on.
+  const cyclicMomentum = (
+    base = 0.8, max = 0.9, on = true,
+  ): { param: Tensor; trail: Tensor } => {
+    const p = Tensor.from([1, -2, 0.5], [3], { requiresGrad: true });
+    const opt = new optim.SGD([p], 0.1, 0.9);
+    const sch = new optim.CyclicLR(
+      opt, 0.01, 0.1, 3, null, "triangular", 1.0, null, null, on, base, max,
+    ).start();
+    const seen: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      opt.zeroGrad();
+      p.grad = Tensor.from([0.3, 0.2, -0.4], [3]);
+      opt.step();
+      sch.step();
+      seen.push(opt.paramGroups[0]?.momentum ?? 0);
+    }
+    return { param: p.detach(), trail: Tensor.from(seen, [8]) };
+  };
+  out.set("opt::CyclicLR/momentum 자취", () => cyclicMomentum().trail);
+  out.set("opt::CyclicLR/momentum 이 값을 바꾼다", () => cyclicMomentum().param);
+  out.set("opt::CyclicLR(cycle_momentum=False)/자취",
+    () => cyclicMomentum(0.8, 0.9, false).trail);
+  out.set("opt::CyclicLR(base/max_momentum)",
+    () => cyclicMomentum(0.7, 0.95).trail);
+
+  // `lastEpoch` resumes mid-schedule. **The Python case sets `initial_lr` equal to
+  // `base_lr` on purpose** — torch assigns its own `base_lrs` after the base class
+  // has already taken one step, so the first value after a resume is measured from
+  // `initial_lr`; equal, that ordering cannot show. Nothing here carries an
+  // `initialLr` before the scheduler stamps one, so this side has no such seam.
+  out.set("opt::CyclicLR(last_epoch)/자취", () => {
+    const p = Tensor.from([0, 0, 0], [3], { requiresGrad: true });
+    const opt = new optim.SGD([p], 0.1);
+    const sch = new optim.CyclicLR(
+      opt, 0.01, 0.1, 3, null, "triangular", 1.0, null, null, false, 0.8, 0.9, 4,
+    ).start();
+    const seen: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      seen.push(opt.paramGroups[0]?.lr ?? 0);
+      opt.step();
+      sch.step();
+    }
+    return Tensor.from(seen, [6]);
+  });
 }
 
 /**

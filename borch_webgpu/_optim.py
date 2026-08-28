@@ -530,12 +530,13 @@ _SCHED_ARGS = {
                    "anneal_strategy", "cycle_momentum", "base_momentum",
                    "max_momentum", "div_factor", "final_div_factor", "three_phase",
                    "last_epoch"),
-    # **No `last_epoch` here and that is not an oversight.** torch's list continues
-    # `scale_fn, scale_mode, cycle_momentum, base_momentum, max_momentum, last_epoch`,
-    # and borch.ts stops at `gamma`. Appending it would put it in `scale_fn`'s seat over
-    # there — the shape this table's own comments have been wrong about twice.
+    # The middle used to be missing and `last_epoch` was left out with it — appending
+    # it alone would have put it in `scale_fn`'s seat over there, which is the shape
+    # this table's own comments have been wrong about twice. borch.ts carries all six
+    # now, so the row is torch's whole list.
     "CyclicLR": ("base_lr", "max_lr", "step_size_up", "step_size_down", "mode",
-                 "gamma"),
+                 "gamma", "scale_fn", "scale_mode", "cycle_momentum",
+                 "base_momentum", "max_momentum", "last_epoch"),
 }
 
 

@@ -3800,6 +3800,28 @@ _SCHEDULERS = [
     # **`exp_range` measures against the step, not the cycle.** That one thing is where it parts.
     ("CyclicLR(exp_range)", {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3,
                              "mode": "exp_range", "gamma": 0.9}, 14),
+    # **`scale_mode` alone does nothing, and that is torch's rule**: the branch that
+    # derives a curve from `mode` sets *both*, so a `scale_mode` passed beside a bare
+    # `mode` is overwritten. Frozen here because it is the shape a reader would guess
+    # wrong — borch.ts let it win and `triangular2` then halved by step, 0.04 where
+    # torch says 0.07 at the third entry.
+    ("CyclicLR(scale_mode 만으로는 안 바뀐다)",
+     {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3, "mode": "triangular2",
+      "scale_mode": "iterations"}, 14),
+    # `scale_fn` overrides the mode's own curve. Given one, `triangular2`'s halving
+    # must not happen — a version that multiplied the two together passes every case
+    # above and fails this.
+    ("CyclicLR(scale_fn)",
+     {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3, "mode": "triangular2",
+      "scale_fn": (lambda c: 0.5)}, 14),
+    # **Together they do act**, which is what makes the pair worth a seat: the same
+    # `scale_fn` handed the step count instead of the cycle number.
+    ("CyclicLR(scale_fn, iterations)",
+     {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3,
+      "scale_fn": (lambda i: 1 / (1 + i)), "scale_mode": "iterations"}, 14),
+    ("CyclicLR(scale_fn, cycle)",
+     {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3,
+      "scale_fn": (lambda c: 1 / (1 + c)), "scale_mode": "cycle"}, 14),
 ]
 
 
@@ -3880,6 +3902,75 @@ def opt_cases(inp=None):
 
     # **The two that chain.** This is where schedulers are composed, and a wrong composition
     # parts the values even with every individual scheduler right.
+    # ── `cycle_momentum`, which the `자취` cases cannot see ──
+    #
+    # Every scheduler case above compares the **printed learning rate**, and
+    # `cycle_momentum` moves the momentum instead — against the rate, low where the
+    # rate is high. torch's default for it is `True`, so a `CyclicLR` built the way a
+    # tutorial builds it was training with a fixed momentum on one of the three
+    # implementations: 0.632 against 0.588 after eight steps, about 7%, with an
+    # identical schedule on screen.
+    def cyclic_momentum(L, **kw):
+        p = L.tensor(np.array([1.0, -2.0, 0.5], dtype=np.float32), requires_grad=True)
+        opt = L.optim.SGD([p], lr=0.1, momentum=0.9)
+        sch = L.optim.lr_scheduler.CyclicLR(opt, base_lr=0.01, max_lr=0.1,
+                                            step_size_up=3, **kw)
+        seen = []
+        for _ in range(8):
+            opt.zero_grad()
+            p.grad = L.tensor(np.array([0.3, 0.2, -0.4], dtype=np.float32))
+            opt.step()
+            sch.step()
+            seen.append(round(float(opt.param_groups[0]["momentum"]), 6))
+        return p, L.tensor(np.array(seen, dtype=np.float32))
+
+    cases.append((OPT_PREFIX + "CyclicLR/momentum 자취",
+                  lambda L: cyclic_momentum(L)[1]))
+    cases.append((OPT_PREFIX + "CyclicLR/momentum 이 값을 바꾼다",
+                  lambda L: cyclic_momentum(L)[0]))
+    # The off branch, so the on branch is not the only thing measured — with both, a
+    # scheduler that never touched the momentum shows as the two agreeing.
+    cases.append((OPT_PREFIX + "CyclicLR(cycle_momentum=False)/자취",
+                  lambda L: cyclic_momentum(L, cycle_momentum=False)[1]))
+    cases.append((OPT_PREFIX + "CyclicLR(base/max_momentum)",
+                  lambda L: cyclic_momentum(L, base_momentum=0.7,
+                                            max_momentum=0.95)[1]))
+
+    # `last_epoch` resumes mid-schedule. The other fourteen schedulers take it; this
+    # one could not until its middle was written.
+    #
+    # **`initial_lr` is set to `base_lr` and that is not arbitrary.** torch's
+    # `CyclicLR` assigns `self.base_lrs = base_lrs` *after* `super().__init__()` has
+    # already taken one step, so the very first value after a resume is measured from
+    # `initial_lr` instead of from `base_lr` — measured, with `base_lr=0.01,
+    # max_lr=0.1, step_size_up=3, last_epoch=4`:
+    #
+    #     initial_lr=0.1   torch 0.100, 0.01, 0.04, …   ours 0.040, 0.01, 0.04, …
+    #     initial_lr=0.05  torch 0.067, 0.01, 0.04, …   ours 0.040, 0.01, 0.04, …
+    #     initial_lr=0.01  torch 0.040, 0.01, 0.04, …   ours 0.040, 0.01, 0.04, …
+    #
+    # Every entry from the second on agrees in all three rows; only the first moves,
+    # and it moves with a number that has no business in this schedule. Setting the
+    # two equal is the arrangement where torch's ordering cannot show, so the case
+    # asks what `last_epoch` is *for* — where the schedule resumes — rather than
+    # freezing an accident of construction order as the expected answer.
+    def cyclic_resume(L):
+        p = L.tensor(np.zeros(3, dtype=np.float32), requires_grad=True)
+        opt = L.optim.SGD([p], lr=0.1)
+        # A resumed scheduler needs the baseline torch stamps on the first build.
+        opt.param_groups[0]["initial_lr"] = 0.01
+        sch = L.optim.lr_scheduler.CyclicLR(opt, base_lr=0.01, max_lr=0.1,
+                                            step_size_up=3, cycle_momentum=False,
+                                            last_epoch=4)
+        seen = []
+        for _ in range(6):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            opt.step()
+            sch.step()
+        return L.tensor(np.array(seen, dtype=np.float32))
+
+    cases.append((OPT_PREFIX + "CyclicLR(last_epoch)/자취", cyclic_resume))
+
     def sequential(L):
         m = model_of(L)
         opt = L.optim.SGD(m.parameters(), lr=0.2)
@@ -8816,6 +8907,15 @@ def _vision(L):
     return _BT_VISION.transforms
 
 
+def _vfunc(L):
+    """`transforms.functional` for each side, through `_vision` so the module is
+    loaded and bound to `L` once rather than a second copy living beside the first."""
+    if _is_real_torch(L):
+        from torchvision.transforms import functional as real
+        return real
+    return _vision(L).functional
+
+
 def _vision_ops(L):
     """`borchvision.ops` for us, `torchvision.ops` for real torch."""
     if _is_real_torch(L):
@@ -8894,6 +8994,26 @@ def vision_cases(inp=None):
         T = _vision(L)
         return T.Normalize(mean, std)(T.ToTensor()(img_u8))
 
+    # ── the three `inplace` seats ──
+    #
+    # **Only the identity separates them**, and no value comparison can see it: the
+    # returned numbers are the same either way, which is why `Normalize`'s flag sat
+    # accepted and inert on the Python side and absent from borch.ts. What the
+    # argument is *for* is `t = …; f(t, inplace=True); use(t)` — the return thrown
+    # away — and that call did nothing at all.
+    def inplace_id(L, run):
+        T = _vision(L)
+        t = T.ToTensor()(img_u8)
+        out = run(T, t)
+        return f"같은 객체={out is t}"
+
+    def inplace_after(L, run):
+        """The caller's tensor **after** the call, which is the half that parts."""
+        T = _vision(L)
+        t = T.ToTensor()(img_u8)
+        run(T, t)
+        return t
+
     def flip(L, p):
         T = _vision(L)
         out = T.RandomHorizontalFlip(p=p)(_pil_position(L, img_u8))
@@ -8941,6 +9061,32 @@ def vision_cases(inp=None):
         (VISION_PREFIX + "ToTensor(실수)", lambda L: _vision(L).ToTensor()(img_f)),
         (VISION_PREFIX + "ToTensor(2차원)", lambda L: _vision(L).ToTensor()(gray)),
         (VISION_PREFIX + "Normalize", normalize),
+        (VISION_PREFIX + "Normalize(inplace)/같은 객체",
+         lambda L: inplace_id(L, lambda T, t: T.Normalize(mean, std, True)(t))),
+        (VISION_PREFIX + "Normalize(inplace)/부른 쪽 텐서",
+         lambda L: inplace_after(L, lambda T, t: T.Normalize(mean, std, True)(t))),
+        (VISION_PREFIX + "Normalize(기본은 그대로 둔다)",
+         lambda L: inplace_after(L, lambda T, t: T.Normalize(mean, std)(t))),
+        (VISION_PREFIX + "F.normalize(inplace)/같은 객체",
+         lambda L: inplace_id(
+             L, lambda T, t: _vfunc(L).normalize(t, mean, std, inplace=True))),
+        (VISION_PREFIX + "F.normalize(inplace)/부른 쪽 텐서",
+         lambda L: inplace_after(
+             L, lambda T, t: _vfunc(L).normalize(t, mean, std, inplace=True))),
+        (VISION_PREFIX + "F.erase(inplace)/같은 객체",
+         lambda L: inplace_id(
+             L, lambda T, t: _vfunc(L).erase(
+                 t, 0, 0, 2, 2, L.tensor(np.zeros((3, 2, 2), dtype=np.float32)),
+                 inplace=True))),
+        (VISION_PREFIX + "F.erase(inplace)/부른 쪽 텐서",
+         lambda L: inplace_after(
+             L, lambda T, t: _vfunc(L).erase(
+                 t, 0, 0, 2, 2, L.tensor(np.zeros((3, 2, 2), dtype=np.float32)),
+                 inplace=True))),
+        (VISION_PREFIX + "F.erase(기본은 그대로 둔다)",
+         lambda L: inplace_after(
+             L, lambda T, t: _vfunc(L).erase(
+                 t, 0, 0, 2, 2, L.tensor(np.zeros((3, 2, 2), dtype=np.float32))))),
         (VISION_PREFIX + "Compose", compose),
         (VISION_PREFIX + "Flip(p=1)", lambda L: flip(L, 1.0)),
         (VISION_PREFIX + "Flip(p=0)", lambda L: flip(L, 0.0)),

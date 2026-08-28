@@ -301,13 +301,15 @@ export class RandomGrayscale extends V1RandomGrayscale {
 }
 
 export class Normalize extends V1Normalize {
-  // **`inplace` is taken and not acted on.** There is no in-place path here, and torch
-  // has the seat — so a pipeline copied across keeps its argument list rather than
-  // stopping on an argument count, and v2 prints the flag it was given.
+  // **`inplace` used to be taken and not acted on** — there was no in-place path here
+  // and torch has the seat, so a pipeline copied across kept its argument list rather
+  // than stopping on an argument count. v1 writes through now, and this hands the flag
+  // down rather than shadowing it with a field of its own: two copies of one word is
+  // how the printed repr and the behaviour part.
   constructor(mean: readonly number[],
               std: readonly number[],
-              private readonly inplace = false) {
-    super(mean, std);
+              inplace = false) {
+    super(mean, std, inplace);
   }
 
   override describe(): string {

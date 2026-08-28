@@ -326,24 +326,31 @@ def test_grayscale_of_a_single_channel_image_passes_it_through():
     assert out.shape == (5, 4, 1) and np.allclose(out, 0.25)
 
 
-def test_normalize_inplace_is_a_no_op_and_the_input_survives():
-    """**The one argument in this file that is accepted and does nothing.** Found by
-    auditing constructor arguments that never reach `__call__`, after another session
-    found the same shape in `borch_webgpu`'s optimizers — `weight_decay` handed to a JS
-    call that discards surplus arguments, so five optimizers trained without it and
-    nothing raised.
+def test_normalize_inplace_writes_through_and_the_default_does_not():
+    """**This used to pin the opposite**, and it passed for a reason worth keeping.
 
-    Here the values are identical either way, so the argument stays and the docstring
-    says what it does. This is what stops that sentence from rotting: if somebody makes
-    `inplace` real on the core alone, the sister library cannot follow and the two
-    libraries part on the same line — so it fails here first.
+    `inplace` was accepted and did nothing — found by auditing constructor arguments
+    that never reach `__call__`, after another session found the same shape in
+    `borch_webgpu`'s optimizers. The reason written down for keeping it inert was that
+    the sister library's tensors were immutable and honouring it on one side alone
+    would part the two. **That sister library was deleted in 45be321**; what sits there
+    now writes through on every optimizer step, and `erase` in the same module has
+    honoured its own `inplace` throughout.
+
+    The old test used `mean=0.5, std=0.5` on an input of ones — where the normalised
+    value *is* one, so the input reads unchanged whether it was written through or not.
+    It could not have failed when the behaviour changed. Different numbers here, and
+    both branches asked, so the assertion has something to be wrong about.
     """
-    x = np.ones((3, 2, 2), dtype=np.float32)
-    out = V.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)(x)
-    assert np.allclose(out, 1.0), "the returned value must be normalised either way"
-    assert np.allclose(x, 1.0), (
-        "the input was written through. `inplace` is documented as a no-op because the "
-        "sister library's tensors are immutable — making it real here parts the two.")
+    x = np.full((3, 2, 2), 1.0, dtype=np.float32)
+    out = V.Normalize((0.5, 0.5, 0.5), (0.25, 0.25, 0.25), inplace=True)(x)
+    assert out is x, "`inplace=True` must hand back the caller's own array"
+    assert np.allclose(x, 2.0), "the input must carry the normalised value"
+
+    y = np.full((3, 2, 2), 1.0, dtype=np.float32)
+    plain = V.Normalize((0.5, 0.5, 0.5), (0.25, 0.25, 0.25))(y)
+    assert np.allclose(plain, 2.0) and np.allclose(y, 1.0), (
+        "the default must leave the caller's array alone")
 
 
 def test_random_crop_takes_its_arguments_in_torchvisions_order():

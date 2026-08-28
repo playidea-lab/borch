@@ -213,7 +213,13 @@ CEILINGS = {
     # `우리는거절` rows, and the two optimizer rows the Python table names. Every one
     # of these is a key in `golden.json` and has to be spelled identically on both
     # sides or the case reads as a divergence.
-    "borch-ts/test": 3523,
+    # 3523 → 3600. Seventy-seven, case names once more: the eight `inplace` rows
+    # (`같은 객체`, `부른 쪽 텐서`, `기본은 그대로 둔다`) and the seven `CyclicLR` ones
+    # (`momentum 자취`, `momentum 이 값을 바꾼다`, `scale_mode 만으로는 안 바뀐다` …).
+    # Each is a key in `golden.json` and has to be spelled identically on both sides
+    # or the case reads as a divergence — and `같은 객체=True` had to take **Python's**
+    # spelling of the boolean for the same reason, `${true}` giving `true`.
+    "borch-ts/test": 3600,
 }
 
 

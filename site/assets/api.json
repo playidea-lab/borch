@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 353
+  "missing": 357
  },
  "modules": [
   {
@@ -12685,6 +12685,12 @@
        "optional": true,
        "torch": "weight_decay",
        "doc_ko": "이 그룹만 다른 값을 쓸 때. 없으면 옵티마이저를 세울 때 준 값이다."
+      },
+      {
+       "name": "momentum",
+       "signature": "momentum?: number",
+       "doc": "**Present only on the optimizers that have one**, which is the condition\n`CyclicLR` reads: torch writes a cycling momentum into a group only where the\nkey already exists, and this key existing is what says so.",
+       "optional": true
       }
      ],
      "doc_ko": "파라미터 묶음 하나와 거기 걸린 하이퍼파라미터.\n\n**전에는 `params` 가 없었다.** 이름은 torch 의 `param_groups` 인데 언제나\n`[{ lr }]` 하나였고 스케줄러가 전부 `[0]` 만 봤다 — 층별 학습률도, bias·norm 에\nweight decay 를 빼는 것도 안 되는데 이름은 된다고 말하고 있었다. 모양만 torch 인\n것이 없는 것보다 나쁘다: 쓰는 사람이 `paramGroups.push(...)` 를 쓰면 조용히\n무시됐다."
@@ -12834,6 +12840,20 @@
        "doc": "What this group set for itself, or the optimizer's default if it set\nnothing.",
        "protected": true,
        "doc_ko": "지금 그룹이 따로 정한 값, 없으면 옵티마이저의 기본값."
+      },
+      {
+       "name": "momentumOf",
+       "signature": "protected momentumOf(fallback: number): number",
+       "doc": "The momentum of the group being stepped. **A scheduler can move it** — that is\nwhat `CyclicLR(cycle_momentum=True)` does, and it changes the trained values by\nabout 7% over eight steps, not the schedule that is printed.\n\nThe value goes into the pipeline key like the learning rate already does, and the\nlearning rate is moved every step by every scheduler here — so a momentum that\nmoves costs the same kind of shader cache and no new kind.",
+       "protected": true,
+       "torch": "momentum_of"
+      },
+      {
+       "name": "publishMomentum",
+       "signature": "protected publishMomentum(value: number): void",
+       "doc": "Publishes a momentum onto every group. Called by the optimizers that have one,\nso `CyclicLR` can tell them from the ones that do not — torch's own test is\nwhether the key is in the group.",
+       "protected": true,
+       "torch": "publish_momentum"
       },
       {
        "name": "zeroGrad",
@@ -13567,7 +13587,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, baseLr: number, maxLr: number, stepSizeUp?: number, stepSizeDown?: number | null, mode?: \"triangular\" | \"triangular2\" | \"exp_range\", gamma?: number)",
+       "signature": "constructor(opt: Optimizer, baseLr: number, maxLr: number, stepSizeUp?: number, stepSizeDown?: number | null, mode?: \"triangular\" | \"triangular2\" | \"exp_range\", gamma?: number, scaleFn?: ((x: number) => number) | null, scaleMode?: \"cycle\" | \"iterations\" | null, cycleMomentum?: boolean, baseMomentum?: number, maxMomentum?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13710,7 +13730,7 @@
      "doc_ko": "값이 나아지지 않으면 학습률을 줄인다.\n\n다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다."
     }
    ],
-   "count": 161,
+   "count": 164,
    "doc_ko": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다."
   },
   {
@@ -14373,9 +14393,15 @@
        "protected": true
       },
       {
+       "name": "inplace",
+       "signature": "protected readonly inplace: boolean",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(mean: readonly number[], std: readonly number[])",
-       "doc": ""
+       "signature": "constructor(mean: readonly number[], std: readonly number[], inplace?: boolean)",
+       "doc": "**`inplace` was absent here and a no-op on the Python side**, on a reason that\nexpired: the sister library whose tensors could not be written through was\ndeleted, and this one writes through in `optim.ts` on every step. `erase` below\nhas been honouring its own `inplace` the whole time, so one module answered the\nsame word two ways.\n\nThe difference no value comparison can see is the one the argument is *for* —\n`Normalize(m, s, true).apply(t)` called for the side effect, then `t` used."
       },
       {
        "name": "apply",
@@ -15112,14 +15138,14 @@
     {
      "kind": "function",
      "name": "normalize",
-     "signature": "export declare function normalize(tensor: Tensor, mean: readonly number[], std: readonly number[]): Tensor",
+     "signature": "export declare function normalize(tensor: Tensor, mean: readonly number[], std: readonly number[], inplace?: boolean): Tensor",
      "doc": "",
      "members": []
     },
     {
      "kind": "function",
      "name": "erase",
-     "signature": "export declare function erase(img: Tensor, i: number, j: number, h: number, w: number, v: Tensor): Tensor",
+     "signature": "export declare function erase(img: Tensor, i: number, j: number, h: number, w: number, v: Tensor, inplace?: boolean): Tensor",
      "doc": "Blank out a rectangle of a `(...,C,H,W)` tensor. **The position is given**,\nwhere `RandomErasing` draws it.",
      "members": []
     },
@@ -15911,7 +15937,7 @@
      ]
     }
    ],
-   "count": 278,
+   "count": 279,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -20037,5 +20063,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2710
+ "total": 2714
 }

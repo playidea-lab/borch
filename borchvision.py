@@ -438,24 +438,28 @@ class Normalize:
     at once (see `augment_batch`). To avoid writing the same arithmetic twice, the
     axes are lined up and one formula is kept.
 
-    **`inplace` is accepted and does nothing, and that is written here because it
-    was true before it was written.** An audit for constructor arguments that never
-    reach `__call__` found exactly one in this file, and it was this — the same
-    shape as `borch_webgpu`'s optimizers taking `weight_decay` and handing it to a
-    JS call that discards surplus arguments.
+    **`inplace` was accepted and did nothing, for a reason that has since expired.**
+    An audit for constructor arguments that never reach `__call__` found exactly one
+    in this file, and it was this — the same shape as `borch_webgpu`'s optimizers
+    taking `weight_decay` and handing it to a JS call that discards surplus
+    arguments.
 
-    It is kept rather than refused, and the distinction from `antialias=False` next
-    door is the whole reason. Ignoring `antialias` silently would give **different
-    pixels**; ignoring `inplace` gives **the same values and one more allocation** —
-    torchvision documents it as an optimisation, and `x = Normalize(..., inplace=
-    True)(x)` returns exactly what the out-of-place form returns. Refusing it would
-    stop a copied tutorial line for nothing.
+    The argument written down then was: the core's tensors could be written through,
+    but the sister library's could not, a TF.js tensor being immutable — so honouring
+    it on one side would make the same line mean two things. **That sister library
+    was deleted in 45be321.** What sits behind `borch_webgpu` now is borch.ts on
+    WebGPU, whose tensors are written through all over `optim.ts`, and `erase` four
+    hundred lines below this has been honouring its own `inplace` the whole time. Two
+    functions in one module answering the same word differently is the divergence
+    this repository exists to find, and one of the two was ours.
 
-    It cannot be honoured either. The core's tensors could be written through, but
-    the sister library's cannot — a TF.js tensor is immutable, which `borch/_tensor.py`
-    already records as where the two part. Doing it on one and not the other would
-    make the same line mean two things. `tests/test_vision.py` pins the no-op so this
-    paragraph cannot quietly stop being true.
+    So it is real now, on all three. The difference a value comparison cannot see is
+    `t = …; Normalize(m, s, inplace=True)(t); use(t)` — used for the side effect
+    rather than the return, which is what the argument is *for*, and which silently
+    did nothing.
+
+    **A leaf that requires grad is refused**, by the in-place guard rather than by
+    this function, and torchvision's `sub_`/`div_` refuse the same call.
     """
 
     def __init__(self, mean, std, inplace=False):
@@ -472,9 +476,21 @@ class Normalize:
         shape = (m.size, 1, 1)
         m, s = m.reshape(shape), s.reshape(shape)
         if isinstance(x, _np.ndarray):
-            return (x - m) / s
+            out = (x - m) / s
+            if not self.inplace:
+                return out
+            # `x[...] = out` rather than `x -= m; x /= s`: an integer array would
+            # refuse the first form and silently floor under the second.
+            x[...] = out
+            return x
         L = _backend()
-        return (x - L.tensor(m)) / L.tensor(s)
+        out = (x - L.tensor(m)) / L.tensor(s)
+        if not self.inplace:
+            return out
+        # The same write `erase` uses below, so both sides of this module reach
+        # in-place the one way — and the one way the binding is known to carry.
+        x[...] = out
+        return x
 
     def __repr__(self):
         return f"{type(self).__name__}(mean={self.mean}, std={self.std})"

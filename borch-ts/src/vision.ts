@@ -259,9 +259,20 @@ export class ToTensor implements Transform {
  * `(x - mean) / std`, per channel.
  */
 export class Normalize implements Transform {
+  /**
+   * **`inplace` was absent here and a no-op on the Python side**, on a reason that
+   * expired: the sister library whose tensors could not be written through was
+   * deleted, and this one writes through in `optim.ts` on every step. `erase` below
+   * has been honouring its own `inplace` the whole time, so one module answered the
+   * same word two ways.
+   *
+   * The difference no value comparison can see is the one the argument is *for* —
+   * `Normalize(m, s, true).apply(t)` called for the side effect, then `t` used.
+   */
   constructor(
     protected readonly mean: readonly number[],
     protected readonly std: readonly number[],
+    protected readonly inplace = false,
   ) {}
 
   apply(x: Image | Tensor): Tensor {
@@ -269,7 +280,10 @@ export class Normalize implements Transform {
     const shape = [this.mean.length, 1, 1];
     const m = Tensor.from([...this.mean], shape);
     const s = Tensor.from([...this.std], shape);
-    return x.sub(m).div(s);
+    const out = x.sub(m).div(s);
+    if (!this.inplace) return out;
+    x.copyFrom(out);
+    return x;
   }
 
   describe(): string {
@@ -1916,8 +1930,8 @@ export function toGrayscale(img: Image, numOutputChannels = 1): Image {
 }
 
 export function normalize(tensor: Tensor, mean: readonly number[],
-                          std: readonly number[]): Tensor {
-  return new Normalize(mean, std).apply(tensor);
+                          std: readonly number[], inplace = false): Tensor {
+  return new Normalize(mean, std, inplace).apply(tensor);
 }
 
 /**
@@ -1925,7 +1939,8 @@ export function normalize(tensor: Tensor, mean: readonly number[],
  * where `RandomErasing` draws it.
  */
 export function erase(img: Tensor, i: number, j: number,
-                      h: number, w: number, v: Tensor): Tensor {
+                      h: number, w: number, v: Tensor,
+                      inplace = false): Tensor {
   // **`i, j, h, w` are torchvision's names**, and all four collided with something the
   // body already had: `i` with the loop counter, `h` and `w` with the tensor's own
   // height and width. The arguments keep the outside names — those are what a caller
@@ -1957,7 +1972,14 @@ export function erase(img: Tensor, i: number, j: number,
       `erase: v padded to (${placed.shape.join(", ")}) does not match the image ` +
       `(${shape.join(", ")}).`);
   }
-  return placed.reshape(shape).where(Tensor.from(mask, shape), img);
+  const out = placed.reshape(shape).where(Tensor.from(mask, shape), img);
+  // **The Python side has honoured this since it was written**, so the seat was
+  // missing here alone and `erase(img, …, v, true)` was a surplus argument that
+  // JavaScript dropped: the rectangle came back blanked in a *copy* and the caller's
+  // image was untouched.
+  if (!inplace) return out;
+  img.copyFrom(out);
+  return img;
 }
 
 /** `[C, H, W]` — **h before w**, unlike `getImageSize` just below. */

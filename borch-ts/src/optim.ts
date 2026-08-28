@@ -49,6 +49,12 @@ export interface ParamGroup {
    * value given when the optimizer was built.
    */
   weightDecay?: number;
+  /**
+   * **Present only on the optimizers that have one**, which is the condition
+   * `CyclicLR` reads: torch writes a cycling momentum into a group only where the
+   * key already exists, and this key existing is what says so.
+   */
+  momentum?: number;
 }
 
 /**
@@ -256,6 +262,28 @@ export abstract class Optimizer {
   }
 
   /**
+   * The momentum of the group being stepped. **A scheduler can move it** — that is
+   * what `CyclicLR(cycle_momentum=True)` does, and it changes the trained values by
+   * about 7% over eight steps, not the schedule that is printed.
+   *
+   * The value goes into the pipeline key like the learning rate already does, and the
+   * learning rate is moved every step by every scheduler here — so a momentum that
+   * moves costs the same kind of shader cache and no new kind.
+   */
+  protected momentumOf(fallback: number): number {
+    return this.paramGroups[this.currentGroup]?.momentum ?? fallback;
+  }
+
+  /**
+   * Publishes a momentum onto every group. Called by the optimizers that have one,
+   * so `CyclicLR` can tell them from the ones that do not — torch's own test is
+   * whether the key is in the group.
+   */
+  protected publishMomentum(value: number): void {
+    for (const g of this.paramGroups) g.momentum = value;
+  }
+
+  /**
    * Empties the gradients. **It returns them to `null`** — filling with
    * zeros blurs the leaf test.
    */
@@ -415,6 +443,10 @@ export class SGD extends Optimizer {
     // `0·momentum + grad` is the same number as torch's `buf = grad.clone()`.
     this.buffers = momentum === 0 ? []
       : this.state(this.params);
+    // **The groups carry it so a scheduler can move it.** torch writes a cycling
+    // momentum only into groups that already have the key, and having it is what
+    // says this optimizer has a momentum at all.
+    if (momentum !== 0) this.publishMomentum(momentum);
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -438,11 +470,14 @@ export class SGD extends Optimizer {
     // handed `update` a negated gradient, so baking the flag in as well would
     // negate twice and quietly turn ascent back into descent. `sgdStep` still
     // takes the argument for callers outside this class; here it stays false.
+    // **Read from the group, not from the field** — `CyclicLR(cycle_momentum=true)`
+    // moves it every step, and the field is what the caller first said.
+    const mom = this.momentumOf(this.momentum);
     d.run1d(
       d.pipeline(
-        `sgd:${n}:${this.lr}:${this.momentum}:${decay}:${this.dampening}:` +
+        `sgd:${n}:${this.lr}:${mom}:${decay}:${this.dampening}:` +
         `${this.nesterov}:${first}`,
-        () => sgdStep(n, this.lr, this.momentum, decay, this.dampening,
+        () => sgdStep(n, this.lr, mom, decay, this.dampening,
                       this.nesterov, false, first)),
       buffers,
       n,
@@ -634,6 +669,9 @@ export class RMSprop extends Optimizer {
     // same order below — centred first, momentum second.
     this.gradAvgs = centered ? this.state(this.params) : [];
     this.buffers = momentum !== 0 ? this.state(this.params) : [];
+    // As `SGD`: the groups carry it so `CyclicLR` can move it, and having the key is
+    // what tells that scheduler this optimizer has a momentum.
+    if (momentum !== 0) this.publishMomentum(momentum);
   }
 
   protected override update(index: number, param: Tensor, g: Tensor): void {
@@ -658,11 +696,12 @@ export class RMSprop extends Optimizer {
       if (!b) throw new Error(`RMSprop: no momentum buffer for parameter ${index}`);
       buffers.push(b.buffer);
     }
+    const mom = this.momentumOf(this.momentum);
     d.run1d(
       d.pipeline(
-        `rms:${n}:${this.lr}:${this.alpha}:${this.eps}:${this.momentum}:${this.centered}`,
+        `rms:${n}:${this.lr}:${this.alpha}:${this.eps}:${mom}:${this.centered}`,
         () => rmspropStep(n, this.lr, this.alpha, this.eps,
-                          this.momentum, this.centered)),
+                          mom, this.centered)),
       buffers,
       n,
     );
@@ -1873,34 +1912,65 @@ export class CyclicLR extends LRScheduler {
     stepSizeDown: number | null = null,
     private readonly mode: "triangular" | "triangular2" | "exp_range" = "triangular",
     private readonly gamma = 1.0,
-    // **No `lastEpoch` here, and the omission is deliberate.**
+    // **The tail was left out and the omission was deliberate while the middle was
+    // missing.** Appending `lastEpoch` alone would have put it in `scale_fn`'s seat,
+    // so a caller writing torch's line hands a function to a number — a shifted seat
+    // is a wrong answer where a missing tail is only a missing feature.
     //
-    // torch's list continues `scale_fn, scale_mode, cycle_momentum, base_momentum,
-    // max_momentum, last_epoch`, and this one stops at `gamma`. Appending `lastEpoch`
-    // — which is what the other fourteen took — puts it in **`scale_fn`'s seat**, so a
-    // caller writing torch's line hands a function to a number. `ts_signatures.py`
-    // reported it as `shifted` the moment it was added, which is the column that
-    // matters: a missing tail is a missing feature, a shifted seat is a wrong answer.
-    //
-    // The tail cannot be closed here until the middle is. `scale_fn` changes the curve
-    // and accepting it unused would be worse than its absence, so it wants writing
-    // rather than declaring.
+    // The middle is written now, so the tail closes with it. `scale_fn` overrides the
+    // curve, and `scale_mode` says whether it is handed the cycle number or the step
+    // count — `exp_range` is the one mode that counts by step, which is where the
+    // three modes diverge.
+    private readonly scaleFn: ((x: number) => number) | null = null,
+    private readonly scaleMode: "cycle" | "iterations" | null = null,
+    // **`cycleMomentum` is the one of the six that changes trained values**, and its
+    // torch default is `true`. It moves the momentum against the learning rate — low
+    // where the rate is high — which came out 7% apart over eight SGD steps and is
+    // invisible to every trace case, those comparing the printed schedule alone.
+    private readonly cycleMomentum = true,
+    private readonly baseMomentum = 0.8,
+    private readonly maxMomentum = 0.9,
+    lastEpoch = -1,
   ) {
-    super(opt);
+    super(opt, lastEpoch);
     this.down = stepSizeDown ?? this.stepSizeUp;
   }
 
-  protected override compute(epoch: number): number {
+  /** The triangle, scaled — shared by the rate and by the momentum going the other way. */
+  private shape(epoch: number): number {
     const total = this.stepSizeUp + this.down;
     const ratio = this.stepSizeUp / total;
     const cycle = Math.floor(1 + epoch / total);
     const x = 1 + epoch / total - cycle;
     // The climbing stretch and the descending stretch have different slopes.
     const rise = x <= ratio ? x / ratio : (x - 1) / (ratio - 1);
-    const scale = this.mode === "triangular2"
-      ? 1 / 2 ** (cycle - 1)
-      : this.mode === "exp_range" ? this.gamma ** epoch : 1;
-    return this.baseLr + (this.maxLr - this.baseLr) * rise * scale;
+    // **`scaleMode` only applies when a `scaleFn` was given**, which is torch's own
+    // rule and the core's: the mode-derived branch sets *both*, so a `scale_mode`
+    // passed beside a bare `mode` is overwritten and does nothing. Letting it win
+    // instead made `triangular2` halve by step rather than by cycle — 0.04 where
+    // torch says 0.07 at the third entry, caught by the case written for the seat.
+    const fn = this.scaleFn;
+    if (fn === null) {
+      const scale = this.mode === "triangular2"
+        ? 1 / 2 ** (cycle - 1)
+        : this.mode === "exp_range" ? this.gamma ** epoch : 1;
+      return rise * scale;
+    }
+    return rise * fn(this.scaleMode === "iterations" ? epoch : cycle);
+  }
+
+  protected override compute(epoch: number): number {
+    const shape = this.shape(epoch);
+    if (this.cycleMomentum) {
+      // **Written into the groups that have one**, which is torch's own test — it
+      // writes only where the key is already there, and only the optimizers with a
+      // momentum publish it.
+      const span = (this.maxMomentum - this.baseMomentum) * shape;
+      for (const g of this.opt.paramGroups) {
+        if (g.momentum !== undefined) g.momentum = this.maxMomentum - span;
+      }
+    }
+    return this.baseLr + (this.maxLr - this.baseLr) * shape;
   }
 }
 

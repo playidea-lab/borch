@@ -1288,7 +1288,15 @@ SHORTER = {
     # which is the column that matters — a missing tail is a missing feature, a shifted
     # seat is a wrong answer. **A `shorter` is not worth closing by opening a
     # `shifted`.**
-    "optim.lr_scheduler": 1,
+    #
+    # **1 → 0.** The middle is written, so the tail closed with it. `cycle_momentum` is
+    # the one of the six that changes trained values — it moves the momentum against
+    # the learning rate, 0.632 against 0.588 after eight SGD steps, and **no trace case
+    # could see it** because those compare the printed schedule. `scale_mode` turned
+    # out to do nothing without a `scale_fn` beside it, which is torch's own rule and
+    # which this side got wrong at first: `triangular2` halved by step, 0.04 where
+    # torch says 0.07 at the third entry, caught by the case written for the seat.
+    "optim.lr_scheduler": 0,
     # 2 → 1. One of the two left for `unaligned` when the core took torch's `linalg`
     # names — a prefix stopped being a prefix once the words changed. See the note
     # in `RENAMED`.
@@ -1383,13 +1391,23 @@ SHORTER = {
     # and the number is here rather than the reason so that the day the door opens,
     # all four move at once and one of them not moving is visible.
     "utils.data": 4,
-    # `Normalize(mean, std, inplace)` against `(mean, std)` — there is no in-place
-    # on this side, and a tail that is short only refuses extra arguments.
-    "transforms": 1,
-# 0 → 2. `erase` and `normalize` arrived from `unaligned`; both are short of
-    # torchvision's `inplace`, which writes into the caller's tensor and has nothing
-    # to write into here.
-    "transforms.functional": 2,
+    # `Normalize(mean, std, inplace)` against `(mean, std)` — there was no in-place on
+    # this side, and a tail that is short only refuses extra arguments.
+    #
+    # **1 → 0, and the Python side moved with it.** `inplace` was accepted and inert
+    # there too, on a reason that expired: the sister library whose tensors could not
+    # be written through was deleted in 45be321, and `erase` in the same module had
+    # been honouring its own `inplace` all along. Two functions answering one word two
+    # ways, in one file. The difference no value comparison can see is the call made
+    # for its side effect — `f(t, inplace=True)` with the return thrown away — which
+    # did nothing at all.
+    "transforms": 0,
+    # 0 → 2. `erase` and `normalize` arrived from `unaligned`; both were short of
+    # torchvision's `inplace`, which writes into the caller's tensor.
+    #
+    # **2 → 0**, with `Normalize` above and by the same measurement. `copyFrom` is
+    # what they write through, which is what every optimizer step here already uses.
+    "transforms.functional": 0,
     "ops": 0,
     # 3 → 0. The three were `RandomResize`, `RandomShortestSize` and `ScaleJitter`,
     # each short of `antialias`. They take it now and **refuse `false`** rather than
