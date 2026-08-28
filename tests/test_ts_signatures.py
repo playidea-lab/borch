@@ -1466,6 +1466,37 @@ DECLINED = {
     "datasets": 0,
 }
 
+# **Where borch.ts's options object and torch's `*` tail do not line up.**
+#
+# Both are unordered — nobody can observe the order of an object literal's members or of
+# a keyword-only group — so they are compared as sets, and what comes out is presence and
+# absence rather than position. Twelve optimizers are here: every one has `maximize`, and
+# every one is short of some of `foreach`, `fused`, `capturable`, `differentiable`.
+# `ASGD` and `RMSprop` also offer `maximize` by keyword where **torch takes it
+# positionally**, which is a difference and is named on the row.
+#
+# **This table exists because its absence was invisible for one commit.** Those twelve
+# rows had been `agree to the bag` — measured nothing past `weightDecay` — and opening
+# the bag turned them into detailed rows that no bucket subtracted, so they were counted
+# as agreement and the whole suite stayed green while twelve rows changed meaning. The
+# file already carries that lesson twice, beside `FREE_FUNCTION` and beside `DECLINED`,
+# and it happened again the same afternoon to the person who had just written it down.
+KEYWORD_GAP = {
+    "Tensor": 0,
+    "nn": 0,
+    "nn.functional": 0,
+    "optim": 12,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    "utils.data": 0,
+    "transforms": 0,
+    "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
+}
+
 
 
 def _stale():
@@ -1536,9 +1567,15 @@ def test_the_signature_axis_has_not_widened():
     moved = []
     for space, found in sorted(rows.items()):
         got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0, "free": 0,
-               "two": 0, "declined": 0}
+               "two": 0, "declined": 0, "kw": 0}
         for _n, _m, _y, note in found:
-            if note in ("dropped", "inserted", "reordered"):
+            # **The keyword rows are taken first, and their note is compound.** A row
+            # reading `shorter · keyword-only absent: foreach` is one row, not one of
+            # each, and letting it fall to the `shorter` branch would count the
+            # positional half of a difference whose other half nothing watches.
+            if "keyword-only absent" in note or "by keyword here" in note:
+                got["kw"] += 1
+            elif note in ("dropped", "inserted", "reordered"):
                 got["shifted"] += 1
             elif note in ("shorter", "longer"):
                 got["shorter"] += 1
@@ -1559,7 +1596,8 @@ def test_the_signature_axis_has_not_widened():
                            # **Held like the rest.** A bucket that takes rows *out* of
                            # `shorter` has to be as hard to grow as `shorter` is, or it
                            # becomes the cheap way to make that number fall.
-                           ("declined", DECLINED)):
+                           ("declined", DECLINED),
+                           ("kw", KEYWORD_GAP)):
             if got[key] != table[space]:
                 moved.append(f"{space} {key}: {got[key]} now, {table[space]} written")
     assert not moved, (

@@ -79,6 +79,7 @@ and counted as `ambiguous`.
 
 import json
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -159,12 +160,43 @@ def _matching(text, open_at):
     return None
 
 
+_BAG_MEMBER = re.compile(r"([A-Za-z_$][\w$]*)\s*\??\s*:")
+
+
+def _bag_members(raw):
+    """The names inside an inline object type, or `None` when it is not written inline.
+
+    **The bag's members are in the declaration and were being thrown away.** borch.ts
+    writes `opts?: { maximize?: boolean }` and `.d.ts` carries that verbatim, so the one
+    name inside is as readable as any positional one. Stopping at the object read as
+    *nothing beyond here can be compared*, and for thirteen optimizers that was thirteen
+    rows where the axis said `agree to the bag` and measured nothing — while the
+    argument torch puts first in that group, `maximize`, was sitting inside and matching.
+
+    Only an object written **inline** can be opened. A named interface is a reference to
+    somewhere else in the file and following it is a different job; that still bags.
+    """
+    body = raw.split(":", 1)[1] if ":" in raw else raw
+    body = body.strip()
+    if not (body.startswith("{") and body.endswith("}")):
+        return None
+    # Nested objects would need a real parser; there are none here and one would be a
+    # silent under-read, so anything with a second `{` bags instead.
+    inner = body[1:-1]
+    if "{" in inner:
+        return None
+    return _BAG_MEMBER.findall(inner)
+
+
 def ts_params(signature):
     """`(names, bagged)` — the parameter names in order, and how many an options bag ate.
 
     A destructured or object-typed trailing parameter is where borch.ts puts what
-    torch spells as keyword arguments. It is not comparable name by name, so the
+    torch spells as keyword arguments. It is not comparable **by position**, so the
     list stops there and the number cut is carried out rather than dropped.
+
+    What is inside the bag is readable and is read by `ts_bag` below — separately,
+    because it lines up against a different half of the other signature.
     """
     inner = _arg_list(signature)
     if inner is None:
@@ -183,6 +215,33 @@ def ts_params(signature):
             return names, 1
         names.append(head)
     return names, 0
+
+
+def ts_bag(signature):
+    """The names inside the trailing options object — a **set** — or `None`.
+
+    `None` means there is no bag, or there is one this cannot read. Everything else is
+    what a caller can pass by keyword, and it is a set because order inside an object
+    literal is not something a caller can observe. That is the same reason
+    `signature_read.keyword_only` is a set on the other side, and the two are compared
+    to each other.
+
+    **This was being thrown away.** The declaration carries `opts?: { maximize?: boolean }`
+    verbatim, so the name inside is as readable as any positional one — and thirteen
+    optimizers were reported as `agree to the bag`, measuring nothing past `weightDecay`,
+    while the argument that group is mostly about was sitting inside and matching.
+    """
+    inner = _arg_list(signature)
+    if inner is None:
+        return None
+    for raw in _split_top(inner):
+        head = raw.split(":", 1)[0].strip() if raw else ""
+        if not (head.startswith("{") or head.rstrip("?") in ("options", "opts")
+                or head.rstrip("?").endswith("Options")):
+            continue
+        members = _bag_members(raw)
+        return None if members is None else set(members)
+    return None
 
 
 def core_params(fn, receiver=False):
@@ -697,8 +756,18 @@ def compare():
                 continue
             wanted = [ts_axis._camel(RENAMES.get(p, p)) for p in mine]
             if bagged:
-                # The bag stands where torch's keyword arguments do. Compare only as
-                # far as the bag reaches and say how much was left uncompared.
+                # **The bag and torch's keyword-only group are the same thing**, and
+                # both are unordered — nobody can observe the order of either, so
+                # comparing them by position describes a call that cannot be written.
+                # `signature_read.positional` already says where positions stop.
+                bag = ts_bag(sigs[0])
+                kw = _keyword_only_of(ours, name, space)
+                if bag is not None and kw is not None:
+                    rows.append(_bagged_row(name, mine, yours, wanted, bag, kw,
+                                            ours, space))
+                    continue
+                # Unreadable bag — as before: compare as far as it reaches and say how
+                # much was left. An unread tail is not an agreeing one.
                 head = wanted[:len(yours)]
                 if head == yours:
                     rows.append((name, mine, yours,
@@ -707,6 +776,58 @@ def compare():
             rows.append((name, mine, yours, _verdict(wanted, yours)))
         out[space] = rows
     return out
+
+
+def _keyword_only_of(namespace, name, space):
+    """The core's keyword-only names for one member, or `None` when unreadable."""
+    import inspect
+
+    from signature_read import VARIADIC, keyword_only
+
+    held = inspect.getattr_static(namespace, name, None)
+    del held, space                                   # the receiver never lands here
+    got = keyword_only(getattr(namespace, name))
+    return None if got is VARIADIC else got
+
+
+def _bagged_row(name, mine, yours, wanted, bag, kw, ours, space):
+    """One row when borch.ts writes an options object and the core has keyword-onlys.
+
+    The two halves are judged apart, which is the whole point:
+
+    - **positions** against `signature_read.positional` — the part where a shift is a
+      real hazard, because a positional call lands somewhere;
+    - **the bag** against `keyword_only` as sets — where a shift is not expressible, so
+      what is left is presence and absence.
+
+    Reading them together as one ordered list is what produced ten `dropped` rows on
+    optimizers whose only difference was that `maximize` sits inside an object. Ten
+    entries in the sharpest bucket there is, every one describing a call nobody can
+    write.
+    """
+    import ts_axis
+    from signature_read import VARIADIC, positional
+
+    pos = positional(getattr(ours, name), receiver=(space == "Tensor"))
+    if pos is None or pos is VARIADIC:
+        return (name, mine, yours, f"agree to the bag — {len(wanted) - len(yours)} uncompared")
+    want_pos = [ts_axis._camel(RENAMES.get(p, p)) for p in pos]
+    verdict = _verdict(want_pos, yours)
+    # A name the core reaches positionally and borch.ts only by keyword. Not a shift —
+    # the object sits in that seat, so a positional call lands on the object and not on
+    # a wrong parameter — but it is a difference and it is named rather than absorbed.
+    moved = sorted(bag & {ts_axis._camel(p) for p in pos})
+    absent = sorted({ts_axis._camel(p) for p in kw} - bag)
+    if verdict == "agree" and not absent and not moved:
+        return (name, mine, yours + sorted(bag), "agree")
+    notes = []
+    if verdict != "agree":
+        notes.append(verdict)
+    if absent:
+        notes.append(f"keyword-only absent: {', '.join(absent)}")
+    if moved:
+        notes.append(f"by keyword here, positional in torch: {', '.join(moved)}")
+    return (name, mine, yours + sorted(bag), " · ".join(notes))
 
 
 def renames(rows):
@@ -751,7 +872,7 @@ def main(argv):
             print(f"  {n:>4}  {a}  →  {b}")
         return 0
     differ = bagged = unreadable = ambiguous = agreed = shorter = renamed = 0
-    unaligned = freefn = declined = 0
+    unaligned = freefn = declined = kwgap = 0
     for space, found in rows.items():
         d = [r for r in found if r[3] in ("dropped", "inserted", "reordered")]
         s = [r for r in found if r[3] in ("shorter", "longer")]
@@ -763,6 +884,14 @@ def main(argv):
         # counting it beside the harmless spelling differences would bury it.
         x = [r for r in found if r[3] == "unaligned"]
         b = [r for r in found if r[3].startswith("agree to the bag")]
+        # **The keyword-only gap, and it needed its own column immediately.** The rows
+        # `_bagged_row` writes carry a compound note — a positional verdict, then what
+        # is missing from the options object — and until this line existed the twelve
+        # optimizers with `foreach`/`fused`/`capturable` absent fell through every
+        # branch into the residual and were counted as **agreement**. That is the
+        # failure written up beside `FREE_FUNCTION` two paragraphs down, happening
+        # again in the same file, on the same day, to the person who read it.
+        k = [r for r in found if "keyword-only absent" in r[3] or "by keyword here" in r[3]]
         a = [r for r in found if r[3].startswith("ambiguous")]
         u = [r for r in found if r[3].startswith("no ")]
         # **Its own column too, and it had to be.** The verdict reads *only a free
@@ -785,15 +914,17 @@ def main(argv):
         renamed += len(n)
         unaligned += len(x)
         freefn += len(f)
+        kwgap += len(k)
         counted = (len(d) + len(s) + len(n) + len(x) + len(b) + len(a) + len(u)
-                   + len(f) + len(c))
+                   + len(f) + len(c) + len(k))
         agreed += len(found) - counted
         mark = " " if not (d or x or n or f) else "✘"
         print(f"  {mark} {space:22s} "
               f"agree {len(found) - counted:>4}   "
               f"shifted {len(d):>3}   unaligned {len(x):>3}   shorter {len(s):>4}   "
               f"renamed {len(n):>4}   bag {len(b):>3}   two {len(a):>3}   "
-              f"free {len(f):>3}   declined {len(c):>3}   unread {len(u):>3}")
+              f"free {len(f):>3}   declined {len(c):>3}   kw {len(k):>3}   "
+              f"unread {len(u):>3}")
         if show is not None and space.startswith(show):
             # **The agreeing pairs print too.** A namespace reporting nothing wrong is
             # the one to distrust — `nn`'s 144 constructors went from unmeasurable to
@@ -807,7 +938,10 @@ def main(argv):
           f"꼬리가 짧다 {shorter}건 · 이름만 다르다 {renamed}건 · "
           f"보따리에서 멈춘 것 {bagged}건 · 두 선언 {ambiguous}건 · "
           f"**메서드가 없고 자유 함수만 {freefn}건** · 사유가 적힌 것 {declined}건 · "
-          f"못 읽음 {unreadable}건.")
+          f"키워드 전용이 빈 것 {kwgap}건 · 못 읽음 {unreadable}건.")
+    if kwgap:
+        print(f"키워드 전용 {kwgap}건은 위치로 못 미는 자리다 — 옵션 객체와 torch 의 "
+              "`*` 뒤는 둘 다 순서가 관측되지 않으므로 집합으로 비교한다.")
     if declined:
         print(f"사유가 적힌 {declined}건은 부채가 아니라 이미 내려진 결정이다 "
               "— `TAIL_NOT_IN_TS` 에 이유가 있다:")
