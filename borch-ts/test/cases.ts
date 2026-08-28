@@ -4186,6 +4186,59 @@ function addUnpool(out: Map<string, Case>): void {
     return gradOf(table, "embeddingBag");
   });
 
+  // ── embedding's five ───────────────────────────────────────────────────
+  //
+  // This function took **none** of them, so `embedding(i, w, 0)` handed the padding
+  // index to nothing — JavaScript discards a surplus argument — and the un-padded
+  // answer came back under the name of a padded one.
+  const emTable = () => Tensor.from(
+    Array.from({ length: 12 }, (_, i) => i), [4, 3]);
+  const emIdx = () => Tensor.from([0, 2, 1, 0], [4], { dtype: "int64" });
+
+  // **`paddingIdx` is gradient-only.** The forward hands back that row exactly as it
+  // stands and only its gradient goes to zero, so a value case cannot see it.
+  const emPad = (pad: number | null) => () => {
+    const w = emTable();
+    w.requiresGrad = true;
+    nn.embedding(emIdx(), w, pad).sum().backward();
+    return gradOf(w, "embedding");
+  };
+  out.set("fname::embedding::grad(padding_idx 없이)", emPad(null));
+  out.set("fname::embedding::grad(padding_idx=0)", emPad(0));
+
+  // `maxNorm` shortens the looked-up rows **in the table**, which no returned value
+  // shows — so the table is what comes back.
+  const emNorm = (maxNorm: number, normType: number) => {
+    const w = emTable();
+    nn.embedding(emIdx(), w, null, maxNorm, normType);
+    return w;
+  };
+  out.set("fname::embedding::max_norm(표가 짧아진다)", () => emNorm(1, 2));
+  out.set("fname::embedding::norm_type=1", () => emNorm(1, 1));
+  out.set("fname::embedding::max_norm(내놓는 값)",
+    () => nn.embedding(emIdx(), emTable(), null, 1));
+  // A row nobody looked up stays long — the whole-table shortcut is the obvious wrong
+  // version and only this row separates it.
+  out.set("fname::embedding::max_norm(안 본 줄은 그대로)",
+    () => emNorm(1, 2).select(0, 3));
+
+  const emRefuses = (flag: string, body: () => unknown) => {
+    out.set(`fname::embedding::${flag}=우리는거절`, () => {
+      try {
+        body();
+      } catch (err) {
+        return (err as Error).message.includes("is not in the browser subset")
+          ? "기대대로"
+          : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "뜻밖의 성공";
+    });
+  };
+  emRefuses("scale_grad_by_freq",
+    () => nn.embedding(emIdx(), emTable(), null, null, 2, true));
+  emRefuses("sparse",
+    () => nn.embedding(emIdx(), emTable(), null, null, 2, false, true));
+
   // ── The spatial transformer ───────────────────────────────────────────
   //
   // The two traps are written at length on the Python side. Briefly: asked with squares
@@ -5397,7 +5450,7 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     // ones would ask a question torch never froze an answer to, and the row would
     // pass by comparing borch.ts against itself.
     ["Adam(maximize)", (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0,
-      false, { maximize: true })],
+      false, false, { maximize: true })],
     ["RMSprop(maximize)", (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0,
       false, { maximize: true })],
     ["Adam(amsgrad)",
@@ -5408,6 +5461,12 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
       (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0.9)],
     ["NAdam(decoupled_weight_decay)",
       (ps) => new optim.NAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, 4e-3, true)],
+    // **The same flag on the other two torch gives it to.** Absent here the word was
+    // taken and discarded, and the coupled answer came back under the decoupled name.
+    ["Adam(decoupled_weight_decay)",
+      (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, false, true)],
+    ["RAdam(decoupled_weight_decay)",
+      (ps) => new optim.RAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, true)],
     // **A default is the one value a case cannot check by using it**, because every
     // row above names its own rate. So this one names none: `new SGD(params)` is the
     // line a first tutorial writes, and until `lr` had torch's default it stopped
@@ -5715,7 +5774,8 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     out.set(`opt::낱말::SGD(${word})`,
       carries((ps, o) => new optim.SGD(ps, 0.1, 0, 0, 0, false, o), word));
     out.set(`opt::낱말::Adam(${word})`,
-      carries((ps, o) => new optim.Adam(ps, 0.1, [0.9, 0.999], 1e-8, 0, false, o),
+      carries(
+        (ps, o) => new optim.Adam(ps, 0.1, [0.9, 0.999], 1e-8, 0, false, false, o),
         word));
   }
 

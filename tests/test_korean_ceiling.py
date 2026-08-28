@@ -208,7 +208,12 @@ CEILINGS = {
     # `pinv(rcond)`, four `lstsq` rows and three refusals — plus `둘 다 멈춘다` and
     # `여기선 통과했다`, which are frozen values in `golden.json` and have to be spelled
     # the same on both sides or the case reads as a divergence.
-    "borch-ts/test": 3486,
+    # 3486 → 3523. Thirty-seven, case names again: `embedding` 의 여섯 (`표가
+    # 짧아진다`, `안 본 줄은 그대로`, `내놓는 값`, `padding_idx 없이`) plus the two
+    # `우리는거절` rows, and the two optimizer rows the Python table names. Every one
+    # of these is a key in `golden.json` and has to be spelled identically on both
+    # sides or the case reads as a divergence.
+    "borch-ts/test": 3523,
 }
 
 

@@ -160,14 +160,22 @@ def SGD(params, lr=1e-3, momentum=0.0, dampening=0.0, weight_decay=0.0,
 
 
 def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
-         amsgrad=False, *, maximize=False,
+         amsgrad=False, *, maximize=False, decoupled_weight_decay=False,
          foreach=False, fused=False, capturable=False, differentiable=False):
     """**These two used to be accepted and refused.** `maximize` raised
     `NotImplementedError` and `amsgrad` was not there at all, on the reasoning that
     holding the position was better than dropping the flag — which was right while it
-    lasted, and is a reason with nothing left to hold now that borch.ts carries both."""
+    lasted, and is a reason with nothing left to hold now that borch.ts carries both.
+
+    `decoupled_weight_decay` is the third: torch reaches `AdamW`'s placement through
+    this flag as well as through the other name, and absent from the far side the word
+    was accepted and the **coupled** answer came back — 0.781 against 0.800 on the
+    second step. A training curve that is merely slightly wrong.
+    """
     bag = _opts(maximize, foreach, fused, capturable, differentiable)
-    return _Opt(_ts.optim.Adam.new(_params(params), lr, _pair(betas), eps, weight_decay, amsgrad, bag))
+    return _Opt(_ts.optim.Adam.new(_params(params), lr, _pair(betas), eps,
+                                   weight_decay, amsgrad,
+                                   decoupled_weight_decay, bag))
 
 
 def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01,
@@ -243,16 +251,21 @@ def NAdam(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
                                     decoupled_weight_decay, bag))
 
 
-def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
+def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
+          decoupled_weight_decay=False, *,
           maximize=False,
           foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    #
+    # **`decoupled_weight_decay` sits sixth and positionally**, which is where torch
+    # puts it on this class alone — `Adam` has it keyword-only. Given the `*` a
+    # position early it would take `weight_decay`'s place.
     bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.RAdam.new(_params(params), lr, _pair(betas), eps,
-                                    weight_decay, bag))
+                                    weight_decay, decoupled_weight_decay, bag))
 
 
 def ASGD(params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0.0, *,

@@ -189,6 +189,12 @@ ADDED_AFTER = frozenset({
     "opt::RMSprop(momentum)/0.weight", "opt::RMSprop(momentum)/손실",
     "opt::NAdam(decoupled_weight_decay)/0.weight",
     "opt::NAdam(decoupled_weight_decay)/손실",
+    # The same flag on the other two torch gives it to, carried across to borch.ts
+    # in the same edit. Same era, same reason as the four above.
+    "opt::Adam(decoupled_weight_decay)/0.weight",
+    "opt::Adam(decoupled_weight_decay)/손실",
+    "opt::RAdam(decoupled_weight_decay)/0.weight",
+    "opt::RAdam(decoupled_weight_decay)/손실",
 })
 
 

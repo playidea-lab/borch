@@ -3771,6 +3771,14 @@ _OPTIMIZERS = [
     ("RMSprop(momentum)", {"lr": 0.05, "momentum": 0.9}),
     ("NAdam(decoupled_weight_decay)",
      {"lr": 0.05, "decoupled_weight_decay": True, "weight_decay": 0.1}),
+    # **The same flag on the other two torch gives it to.** `NAdam` had it and the
+    # other two did not, so borch.ts took the word and discarded it — the coupled
+    # answer under the decoupled name, 0.781 against 0.800 on the second step. A
+    # training curve that is merely slightly wrong, which nothing else here catches.
+    ("Adam(decoupled_weight_decay)",
+     {"lr": 0.05, "decoupled_weight_decay": True, "weight_decay": 0.1}),
+    ("RAdam(decoupled_weight_decay)",
+     {"lr": 0.05, "decoupled_weight_decay": True, "weight_decay": 0.1}),
 ]
 
 # `(name, constructor arguments, how many steps)`. The learning rate's **trajectory** is asked.
@@ -4546,6 +4554,49 @@ def functional_name_cases(inp=None):
         return table.grad
 
     add("embedding_bag::grad", eb_grad)
+
+    # ── embedding's five ───────────────────────────────────────────────
+    #
+    # `F.embedding` took two of seven while `nn.Embedding` beside it had all of
+    # them, and borch.ts took **none** — so `F.embedding(i, w, 0)` handed the
+    # padding index to nothing and the un-padded answer came back under the name
+    # of a padded one.
+    em_table = np.arange(12, dtype=np.float32).reshape(4, 3)
+    em_idx = np.array([0, 2, 1, 0], dtype=np.int64)
+
+    # **`padding_idx` is gradient-only** (measured on torch): the forward hands
+    # back that row exactly as it stands and only its gradient goes to zero. So a
+    # value case cannot see it, and this asks the gradient.
+    def em_pad(L, pad):
+        w = L.tensor(em_table, requires_grad=True)
+        F(L).embedding(L.tensor(em_idx), w, padding_idx=pad).sum().backward()
+        return w.grad
+
+    add("embedding::grad(padding_idx 없이)", lambda L: em_pad(L, None))
+    add("embedding::grad(padding_idx=0)", lambda L: em_pad(L, 0))
+
+    # `max_norm` shortens the looked-up rows **in the table**, which no returned
+    # value shows — so the table is what is handed back.
+    def em_norm(L, max_norm, norm_type):
+        w = L.tensor(em_table.copy())
+        F(L).embedding(L.tensor(em_idx), w, max_norm=max_norm,
+                       norm_type=norm_type)
+        return w
+
+    add("embedding::max_norm(표가 짧아진다)", lambda L: em_norm(L, 1.0, 2.0))
+    add("embedding::norm_type=1", lambda L: em_norm(L, 1.0, 1.0))
+    add("embedding::max_norm(내놓는 값)",
+        lambda L: F(L).embedding(L.tensor(em_idx),
+                                 L.tensor(em_table.copy()), max_norm=1.0))
+    # A row nobody looked up stays long — the whole-table shortcut is the obvious
+    # wrong version and only this row separates it.
+    add("embedding::max_norm(안 본 줄은 그대로)",
+        lambda L: em_norm(L, 1.0, 2.0)[3])
+
+    for _flag in ("scale_grad_by_freq", "sparse"):
+        cases.append((FNAME_PREFIX + f"embedding::{_flag}=우리는거절",
+                      refusal_case(lambda L, f=_flag: F(L).embedding(
+                          L.tensor(em_idx), L.tensor(em_table), **{f: True}))))
 
     # ── gumbel_softmax ──
     #

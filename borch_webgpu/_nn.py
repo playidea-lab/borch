@@ -803,7 +803,8 @@ _HAND_WRITTEN = {
 functional = _Functional()
 
 
-def embedding(idx, table):
+def embedding(idx, table, padding_idx=None, max_norm=None, norm_type=2.0,
+              scale_grad_by_freq=False, sparse=False):
     """`F.embedding(indices, table)` — pick rows out of the table by index.
 
     **The definition itself.** The same work `index_select` does, and the
@@ -814,8 +815,16 @@ def embedding(idx, table):
     **The naming moved over there.** While these three lines lived here, borch.ts
     had no such name, and the golden goes through this function, so the table was
     green.
+
+    **torch's five arrived with borch.ts's.** They were absent from both, so
+    `F.embedding(i, w, 0)` handed a padding index to nothing — JavaScript discards
+    a surplus argument — and the un-padded answer came back under the name of a
+    padded one. Two of the five are refused on the far side; that refusal is
+    reachable only because the seats exist here to carry the word to it.
     """
-    return wrap(_ts.nn.functional.embedding(handle(idx), handle(table)))
+    return wrap(_ts.nn.functional.embedding(
+        handle(idx), handle(table), padding_idx, max_norm, norm_type,
+        scale_grad_by_freq, sparse))
 
 
 class Transformer:

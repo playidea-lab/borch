@@ -468,8 +468,15 @@ export class Adam extends Optimizer {
    * **`AdamW` is this class with the decay moved.** Coupled, it goes onto the
    * gradient before the moments see it; decoupled, onto the weights after the
    * update. That one placement is the whole difference between the two names.
+   *
+   * torch reaches the same placement a second way — `Adam(decoupled_weight_decay=
+   * True)` — so this is no longer a per-class constant. Left out of the signature
+   * the word was a surplus argument and JavaScript discards those: the call was
+   * accepted and the **coupled** answer came back, 0.781 against 0.800 on the
+   * second step of a plain descent, which is a training curve that is merely
+   * slightly wrong.
    */
-  protected readonly decoupled: boolean = false;
+  protected decoupled: boolean = false;
 
   private readonly beta1: number;
   private readonly beta2: number;
@@ -491,9 +498,13 @@ export class Adam extends Optimizer {
     private readonly eps = 1e-8,
     private readonly weightDecay = 0,
     private readonly amsgrad = false,
+    decoupledWeightDecay = false,
     opts: OptimizerOptions = {},
   ) {
     super(params, lr, opts);
+    // `AdamW` sets the field to `true` in its own body, which runs after this; a
+    // subclass that pins the placement is not asked what the caller wanted.
+    if (decoupledWeightDecay) this.decoupled = true;
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
     this.second = this.state(this.params);
@@ -593,7 +604,9 @@ export class AdamW extends Adam {
     amsgrad = false,
     opts: OptimizerOptions = {},
   ) {
-    super(params, lr, betas, eps, weightDecay, amsgrad, opts);
+    // **`true` in the sixth-from-last seat, not the options bag.** `AdamW` is the
+    // decoupled placement by definition, so it pins what `Adam` now asks for.
+    super(params, lr, betas, eps, weightDecay, amsgrad, true, opts);
   }
 }
 
@@ -940,7 +953,9 @@ export class RAdam extends Composed {
   constructor(params: ParamsArg, lr = 1e-3,
               betas: readonly [number, number] = [0.9, 0.999],
               private readonly eps = 1e-8,
-              weightDecay = 0, opts: OptimizerOptions = {}) {
+              weightDecay = 0,
+              private readonly decoupledWeightDecay = false,
+              opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
@@ -961,7 +976,17 @@ export class RAdam extends Composed {
   }
 
   protected override update(index: number, param: Tensor, g: Tensor): void {
-    const grad = this.decayed(param, g);
+    // **Decoupled, the decay shrinks the weight and never reaches the moments.**
+    // `p·(1 − lr·λ)` first and then an ordinary step is the same number as
+    // subtracting `lr·λ·p` after it, and the moments come from the gradient, so
+    // shrinking in advance does not disturb them — the same rewriting `Adam` uses.
+    // The difference is small on one step (0.92040 against 0.92021 here) and it is
+    // a different training curve, which is the kind that reads as a seed.
+    const wd = this.grouped(this.weightDecay);
+    if (this.decoupledWeightDecay && wd !== 0) {
+      noGrad(() => param.copyFrom(param.mul(this.k(1 - this.lr * wd))));
+    }
+    const grad = this.decoupledWeightDecay ? g : this.decayed(param, g);
     const m = this.at(this.first, index, "RAdam");
     const v = this.at(this.second, index, "RAdam");
     const t = this.stepCount;

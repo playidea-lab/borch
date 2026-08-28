@@ -1222,7 +1222,18 @@ SHORTER = {
     # back (see `RENAMED`) and keeps its own `noise` after torch's five, so borch.ts
     # is now *longer* — which this column also counts, being one fact about a common
     # prefix rather than two. A torch-shaped call never reaches that last seat.
-    "nn.functional": 2,
+    #
+    # **2 → 1.** `F.embedding` took all five: `max_norm`/`norm_type` shorten the
+    # looked-up rows in the table, `padding_idx` detaches the padding row so only its
+    # gradient goes to zero (measured — the forward is untouched), and the last two
+    # are refused where the core refuses them.
+    #
+    # The one left is `gumbel_softmax`'s `noise`, which is **deliberate and stays**:
+    # torch's draw cannot be reproduced from outside, and a golden case for a random
+    # function can only ask about properties. The seat is last and optional, so a
+    # torch-shaped call never reaches it — the divergence is a door this library opens
+    # and not one it leaves ajar.
+    "nn.functional": 1,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
     # many raises there, where the same gap in `shifted` would have meant a value
@@ -1249,7 +1260,13 @@ SHORTER = {
     # positional gap that was under it the whole time. **The bucket changed, the defect
     # did not.** Closing it means implementing decoupled decay in `RAdam`'s step, not
     # opening a seat — `AdamW` is that arithmetic and `NAdam` already carries the flag.
-    "optim": 1,
+    #
+    # **1 → 0**, and it was the arithmetic and not the seat: `p·(1 − lr·λ)` before an
+    # ordinary step, which is the rewriting `Adam` already used. `Adam` took the flag
+    # in the same edit — torch reaches `AdamW`'s placement through it as well as
+    # through the other name, and the two placements differ by 0.781 against 0.800 on
+    # the second step. Back to zero, which this bucket was the first to reach.
+    "optim": 0,
     # 12 → 11. borch.ts's `ReduceLROnPlateau` followed the core into torch's
     # list in the same edit, so the row stopped being a truncation. The
     # cooldown counter joined `stateDict` with it — left out, a resume inside

@@ -4418,10 +4418,55 @@ export function batchNorm(
  * and holds the weights rather than a new computation, so writing down that
  * it is absent is better than putting the name there alone.
  */
-export function embedding(input: Tensor, weight: Tensor): Tensor {
+/**
+ * **torch's five carried, and they split three ways.**
+ *
+ * `max_norm`/`norm_type` shorten the looked-up rows *in the table itself* — the same
+ * side effect `embeddingBag` has, through the same `renormRows`, which is why that
+ * function's long note applies here unchanged.
+ *
+ * `padding_idx` is **gradient-only**: measured on torch, the forward returns that row
+ * exactly as it stands and only its gradient becomes zero. So it cannot be done by
+ * changing what comes out — the padding row is detached on the way in instead, which
+ * leaves the forward identical to the bit and cuts the path back. Left in, a pad token
+ * drifts toward whatever the loss wants and the mask stops meaning *ignore this*.
+ *
+ * `scale_grad_by_freq` and `sparse` are refused, by name, because the core refuses
+ * them by name. Left out of the signature all five were surplus arguments and
+ * JavaScript discards those — `embedding(idx, w, 0)` returned the un-padded answer
+ * under the name of a padded one.
+ */
+export function embedding(input: Tensor, weight: Tensor,
+                          paddingIdx: number | null = null,
+                          maxNorm: number | null = null, normType = 2.0,
+                          scaleGradByFreq = false, sparse = false): Tensor {
+  if (scaleGradByFreq) {
+    throw new RuntimeError(
+      "embedding(scale_grad_by_freq=true) is not in the browser subset.");
+  }
+  if (sparse) {
+    throw new RuntimeError(
+      "embedding(sparse=true) — there is no sparse gradient here is not in the "
+      + "browser subset.");
+  }
   const dim = weight.shape[1] ?? 1;
-  const picked = weight.indexSelect(0, input.reshape([input.size]));
+  if (maxNorm !== null) renormRows(weight, input, maxNorm, normType);
+  const table = paddingIdx === null ? weight : detachRow(weight, paddingIdx);
+  const picked = table.indexSelect(0, input.reshape([input.size]));
   return picked.reshape([...input.shape, dim]);
+}
+
+/**
+ * The same table with one row cut out of the graph — value for value identical,
+ * and nothing flows back through that row.
+ */
+function detachRow(weight: Tensor, row: number): Tensor {
+  const rows = weight.shape[0] ?? 1;
+  const mask = Tensor.zeros([rows])
+    .indexAdd(0, Tensor.from([row], [1], { dtype: "int64" }), Tensor.ones([1]))
+    .reshape([rows, 1]);
+  const keep = Tensor.full([], 1).sub(mask);
+  return weight.mul(keep).add(weight.detach().mul(mask));
 }
 
 /**

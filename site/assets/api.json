@@ -11272,10 +11272,10 @@
     {
      "kind": "function",
      "name": "embedding",
-     "signature": "export declare function embedding(input: Tensor, weight: Tensor): Tensor",
-     "doc": "Selects rows from a table by index. Where `F.embedding(indices, table)`\ngoes.\n\n**It is the definition itself** — the same thing `indexSelect` does, and\nthat side already knows the gradient. An index appearing several times\naccumulates into that row several times. This is **naming something that\nexists**, not imitating something that does not, so there is no place for\nthe values to diverge.\n\nAnd yet this name was missing for a long time. The binding held the same\nthree lines in Python and the golden cases went through that side, so it\nwas a name absent only for those writing TypeScript — the place\n`tests/test_binding_fills_in.py` points at.\n\n**There is no `nn.Embedding` layer yet.** None of the three has it and\nthe golden cases do not ask. It would be a place that wraps this function\nand holds the weights rather than a new computation, so writing down that\nit is absent is better than putting the name there alone.",
+     "signature": "export declare function embedding(input: Tensor, weight: Tensor, paddingIdx?: number | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, sparse?: boolean): Tensor",
+     "doc": "**torch's five carried, and they split three ways.**\n\n`max_norm`/`norm_type` shorten the looked-up rows *in the table itself* — the same\nside effect `embeddingBag` has, through the same `renormRows`, which is why that\nfunction's long note applies here unchanged.\n\n`padding_idx` is **gradient-only**: measured on torch, the forward returns that row\nexactly as it stands and only its gradient becomes zero. So it cannot be done by\nchanging what comes out — the padding row is detached on the way in instead, which\nleaves the forward identical to the bit and cuts the path back. Left in, a pad token\ndrifts toward whatever the loss wants and the mask stops meaning *ignore this*.\n\n`scale_grad_by_freq` and `sparse` are refused, by name, because the core refuses\nthem by name. Left out of the signature all five were surplus arguments and\nJavaScript discards those — `embedding(idx, w, 0)` returned the un-padded answer\nunder the name of a padded one.",
      "members": [],
-     "doc_ko": "표에서 번호대로 행을 고른다. `F.embedding(번호, 표)` 자리다.\n\n**정의 그대로다** — `indexSelect` 가 하는 일과 같고 기울기도 그쪽이 이미 안다.\n같은 번호가 여러 번 나오면 그 행으로 여러 번 더해진다. 없는 것을 흉내 내는 것이\n아니라 **있는 것에 이름을 붙이는 것**이므로 값이 갈릴 자리가 없다.\n\n그런데도 이 이름이 오래 없었다. 결속이 같은 세 줄을 파이썬에 갖고 있었고 골든이\n그쪽을 지나서, TypeScript 로 쓰는 쪽에만 없는 이름이었다 —\n`tests/test_binding_fills_in.py` 가 가리킨 자리다.\n\n**`nn.Embedding` 층은 아직 없다.** 셋 어디에도 없고 골든도 안 묻는다. 그것은 이\n함수를 감싸고 가중치를 들고 있는 자리이지 새 계산이 아니므로, 여기 없다는 것을\n적어 두는 편이 이름만 놓는 것보다 낫다."
+     "doc_ko": "**torch 의 다섯을 실었고, 셋으로 갈린다.**\n\n`max_norm`/`norm_type` 은 찾아본 줄을 *표 자체에서* 짧게 만든다 — `embeddingBag` 과 같은 부작용이고 같은 `renormRows` 를 지나므로, 그쪽의 긴 설명이 여기에도 그대로 적용된다.\n\n`padding_idx` 는 **기울기 전용**이다. torch 로 재보면 순전파는 그 줄을 있는 그대로 내놓고 기울기만 0 이 된다. 그러니 내놓는 값을 바꿔서는 할 수 없고, 대신 들어가는 길에서 그 줄을 그래프에서 떼어 낸다 — 순전파는 비트까지 같고 돌아오는 길만 끊긴다. 남겨 두면 pad 토큰이 손실이 원하는 쪽으로 흘러가고 마스크가 *이건 무시하라* 는 뜻을 잃는다.\n\n`scale_grad_by_freq` 와 `sparse` 는 이름을 대고 거절한다 — 코어가 이름을 대고 거절하기 때문이다. 서명에서 빠져 있던 동안 다섯은 모두 남는 인자였고 JavaScript 는 남는 인자를 버린다 — `embedding(idx, w, 0)` 은 패딩 안 한 답을 패딩한 것의 이름으로 돌려주고 있었다."
     },
     {
      "kind": "function",
@@ -12916,13 +12916,13 @@
      "members": [
       {
        "name": "decoupled",
-       "signature": "protected readonly decoupled: boolean",
-       "doc": "**`AdamW` is this class with the decay moved.** Coupled, it goes onto the\ngradient before the moments see it; decoupled, onto the weights after the\nupdate. That one placement is the whole difference between the two names.",
+       "signature": "protected decoupled: boolean",
+       "doc": "**`AdamW` is this class with the decay moved.** Coupled, it goes onto the\ngradient before the moments see it; decoupled, onto the weights after the\nupdate. That one placement is the whole difference between the two names.\n\ntorch reaches the same placement a second way — `Adam(decoupled_weight_decay=\nTrue)` — so this is no longer a per-class constant. Left out of the signature\nthe word was a surplus argument and JavaScript discards those: the call was\naccepted and the **coupled** answer came back, 0.781 against 0.800 on the\nsecond step of a plain descent, which is a training curve that is merely\nslightly wrong.",
        "protected": true
       },
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: OptimizerOptions)",
+       "signature": "constructor(params: ParamsArg, lr: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, decoupledWeightDecay?: boolean, opts?: OptimizerOptions)",
        "doc": "**`betas` is one argument, because torch makes it one.** This took `beta1` and\n`beta2` in two positions, so every later argument sat one seat early and\n`new Adam(p, 1e-3, 0.9, 0.999, 1e-8)` meant something different from\n`Adam(p, 1e-3, (0.9, 0.999), 1e-8)` — the lists could not be lined up at all,\nwhich is the bucket that reports nothing beneath it.\n\nA pair is not a rename and it is not a short tail; splitting it is the one shape\nof divergence the axis has no name for."
       },
       {
@@ -13125,7 +13125,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, opts?: OptimizerOptions)",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, decoupledWeightDecay?: boolean, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
