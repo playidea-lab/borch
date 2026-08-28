@@ -222,7 +222,12 @@ CEILINGS = {
     # 3600 → 3627. Twenty-seven, case names: the five `(inplace)/같은 객체` rows, the
     # three `=둘 다 거절` ones and `Flatten기본`. Each is a key in `golden.json` and has
     # to be spelled the same on both sides or the case reads as a divergence.
-    "borch-ts/test": 3627,
+    # 3627 → 3734. A hundred and seven, case names: the nineteen `container::` rows
+    # that walk the module tree (`층 이름`, `뿌리는 빈 이름`, `자기를 돌려준다`,
+    # `점 찍힌 이름`, `이름을 나중에`, `add_param_group/스텝` …). Each is a key in
+    # `golden.json` and has to be spelled identically on both sides or the case reads
+    # as a divergence.
+    "borch-ts/test": 3734,
 }
 
 

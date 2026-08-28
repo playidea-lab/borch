@@ -8296,7 +8296,140 @@ def container_cases(inp=None):
         return m.layers[1](m.layers[0](L.tensor(xin)))
 
     cases.append((CONTAINER_PREFIX + "eval 이 컨테이너를 뚫는다", eval_through))
+
+    # ── walking the tree ──
+    #
+    # **Eleven methods that no check could see were missing.** The name axis counts a
+    # namespace's top-level names and `Module` is one of them; the signature axis
+    # compares constructors. Nothing read a class's *methods*, so `nn.Module` held 14
+    # of torch's 50 while borch.ts has had `children` and `namedChildren` all along —
+    # a three-way divergence, green everywhere. `tests/test_class_methods.py` is the
+    # axis that now asks.
+    def nested(L):
+        return L.nn.Sequential(L.nn.Linear(6, 8), L.nn.ReLU(),
+                               L.nn.Sequential(L.nn.Linear(8, 3)))
+
+    # **Read from the repr, not from `type(...).__name__`.** The binding wraps every
+    # layer in one generic Python class, so the class name there is `Module` for all
+    # of them while the repr is the layer's own — the question is *which layer sits
+    # here*, and the repr is the form all three can answer it in.
+    cases.append((CONTAINER_PREFIX + "children/층 이름",
+                  lambda L: " ".join(_layer_name(c) for c in nested(L).children())))
+    cases.append((CONTAINER_PREFIX + "named_children/이름",
+                  lambda L: " ".join(n for n, _ in nested(L).named_children())))
+    # **One level against the whole tree** is the difference between the two, and it
+    # is invisible on a flat model — hence a `Sequential` inside a `Sequential`.
+    cases.append((CONTAINER_PREFIX + "named_modules/이름",
+                  lambda L: "|".join(n for n, _ in nested(L).named_modules())))
+    # torch names the root `""`, so the join above starts with a bar. Asked on its own
+    # because an implementation that skips the root passes every later entry.
+    cases.append((CONTAINER_PREFIX + "named_modules/뿌리는 빈 이름",
+                  lambda L: str(next(iter(nested(L).named_modules()))[0] == "")))
+    # **Children first, then the parent** — the order is torch's, and a container that
+    # reads its children's shapes needs them already visited.
+    cases.append((CONTAINER_PREFIX + "apply/순서",
+                  lambda L: " ".join(_apply_order(nested(L)))))
+    cases.append((CONTAINER_PREFIX + "apply/자기를 돌려준다",
+                  lambda L: str(_apply_returns_self(nested(L)))))
+    cases.append((CONTAINER_PREFIX + "get_submodule(점 찍힌 이름)",
+                  lambda L: _layer_name(nested(L).get_submodule("2.0"))))
+    cases.append((CONTAINER_PREFIX + "get_submodule(빈 이름은 자기)",
+                  lambda L: str(_submodule_is_self(nested(L)))))
+    cases.append((CONTAINER_PREFIX + "get_parameter(점 찍힌 이름)/모양",
+                  lambda L: str(tuple(nested(L).get_parameter("0.weight").shape))))
+    cases.append((CONTAINER_PREFIX + "get_buffer(점 찍힌 이름)/모양",
+                  lambda L: str(tuple(np.asarray(
+                      L.nn.BatchNorm1d(3).get_buffer("running_mean")).shape))))
+    cases.append((CONTAINER_PREFIX + "add_module(이름을 나중에)",
+                  lambda L: _added_module_name(L)))
+    # **This is how a backbone is frozen**, and it hands back the model so the line
+    # reads as a statement about it.
+    cases.append((CONTAINER_PREFIX + "requires_grad_(False)",
+                  lambda L: _frozen(nested(L))))
+    cases.append((CONTAINER_PREFIX + "get_submodule(없는 이름)=둘 다 멈춘다",
+                  lambda L: _both_stop(L, lambda M: nested(M).get_submodule("nope"))))
+    # **The binding's `Sequential` had no `repr` at all** — `print(model)` gave an
+    # object address where the other two print the layers. Found by the case above
+    # reading a child's name out of its repr, which is a question about the walk and
+    # answered this one instead.
+    cases.append((CONTAINER_PREFIX + "Sequential/print", lambda L: repr(nested(L))))
+
+    # `add_param_group` — the optimizer half of the same seam. It is the line
+    # fine-tuning is written with: a fresh head at one rate on a backbone at another.
+    def added_group(L, what):
+        a = L.tensor(np.array([1.0, 2.0], dtype=np.float32), requires_grad=True)
+        b = L.tensor(np.array([3.0], dtype=np.float32), requires_grad=True)
+        opt = L.optim.SGD([a], lr=0.1, momentum=0.9)
+        opt.add_param_group({"params": [b], "lr": 0.3})
+        if what == "lr":
+            return " ".join(str(g["lr"]) for g in opt.param_groups)
+        # **The default is filled in from the constructor's arguments**, not from
+        # torch's own default — so the second group's momentum is 0.9 and not 0.
+        if what == "momentum":
+            return " ".join(str(g["momentum"]) for g in opt.param_groups)
+        a.grad = L.tensor(np.array([0.3, 0.2], dtype=np.float32))
+        b.grad = L.tensor(np.array([0.5], dtype=np.float32))
+        opt.step()
+        return L.tensor(np.concatenate([
+            np.asarray(a.detach().numpy()), np.asarray(b.detach().numpy())]))
+
+    for _what in ("lr", "momentum", "스텝"):
+        cases.append((CONTAINER_PREFIX + f"add_param_group/{_what}",
+                      lambda L, w=_what: added_group(L, w)))
+    cases.append((CONTAINER_PREFIX + "add_param_group(같은 파라미터 두 번)=둘 다 멈춘다",
+                  lambda L: _both_stop(L, _group_twice)))
+    cases.append((CONTAINER_PREFIX + "add_param_group(사전이 아니면)=둘 다 멈춘다",
+                  lambda L: _both_stop(L, _group_not_a_dict)))
     return cases
+
+
+def _layer_name(module):
+    """Which layer this is, **read from its repr.**
+
+    `type(m).__name__` is `Module` for every layer on the binding — one generic
+    Python class wrapping a JavaScript handle — while the repr is the layer's own.
+    The question is which layer sits at a position, and this is the form all three
+    implementations can answer it in.
+    """
+    return repr(module).split("(")[0].strip()
+
+
+def _apply_order(model):
+    seen = []
+    model.apply(lambda m: seen.append(_layer_name(m)))
+    return seen
+
+
+def _apply_returns_self(model):
+    return model.apply(lambda _m: None) is model
+
+
+def _submodule_is_self(model):
+    return model.get_submodule("") is model
+
+
+def _added_module_name(L):
+    holder = L.nn.Module()
+    holder.add_module("lin", L.nn.Linear(2, 2))
+    return " ".join(n for n, _ in holder.named_children())
+
+
+def _frozen(model):
+    back = model.requires_grad_(False)
+    return (f"{back is model} "
+            f"{any(p.requires_grad for p in model.parameters())}")
+
+
+def _group_twice(L):
+    a = L.tensor(np.array([1.0], dtype=np.float32), requires_grad=True)
+    opt = L.optim.SGD([a], lr=0.1)
+    opt.add_param_group({"params": [a]})
+
+
+def _group_not_a_dict(L):
+    a = L.tensor(np.array([1.0], dtype=np.float32), requires_grad=True)
+    opt = L.optim.SGD([a], lr=0.1)
+    opt.add_param_group([a])
 
 
 _TRAIN_STEPS = 5

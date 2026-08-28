@@ -199,6 +199,107 @@ export abstract class Module {
   }
 
   /**
+   * The whole tree with dotted names, **this module first and named `""`.**
+   *
+   * `children` is one level and this is every level — a difference invisible on a
+   * flat model, which is why the golden asks it of a `Sequential` inside a
+   * `Sequential`. The names are the `state_dict` keys' prefixes, so a caller who
+   * has a checkpoint key can find the layer it belongs to.
+   *
+   * `seen` drops a module reached twice. A model with tied weights holds one layer
+   * under two names, and walked twice `apply` would initialise it twice.
+   */
+  namedModules(prefix = "", seen: Set<Module> = new Set()): [string, Module][] {
+    if (seen.has(this)) return [];
+    seen.add(this);
+    const out: [string, Module][] = [[prefix, this]];
+    for (const [name, child] of Object.entries(this.namedChildren())) {
+      out.push(...child.namedModules(prefix ? `${prefix}.${name}` : name, seen));
+    }
+    return out;
+  }
+
+  /**
+   * `fn` on every module in the tree, **children first**, then this one, and hands
+   * back `this` so the line reads as a statement about the model.
+   *
+   * The order is torch's and it is the useful one: a container that reads its
+   * children's shapes sees them already initialised.
+   */
+  apply(fn: (m: Module) => void): this {
+    for (const child of Object.values(this.namedChildren())) child.apply(fn);
+    fn(this);
+    return this;
+  }
+
+  /**
+   * One module by its dotted name — `"layer4.1.conv2"`, which is the shape of a
+   * checkpoint key, so this is how a fine-tuning script reaches one layer.
+   */
+  getSubmodule(target: string): Module {
+    if (target === "") return this;
+    let at: Module = this;
+    for (const part of target.split(".")) {
+      const kid = at.namedChildren()[part];
+      if (kid === undefined) {
+        throw new RuntimeError(
+          `${at.constructor.name} has no attribute \`${part}\` is not in the `
+          + "browser subset.");
+      }
+      at = kid;
+    }
+    return at;
+  }
+
+  /** One parameter by its dotted name, as `getSubmodule` reaches a module. */
+  getParameter(target: string): Tensor {
+    return this.dotted(target, (m) => m.namedParameters(), "parameter");
+  }
+
+  /** One buffer by its dotted name. */
+  getBuffer(target: string): Tensor {
+    return this.dotted(target, (m) => m.namedBuffers(), "buffer");
+  }
+
+  private dotted(target: string, bank: (m: Module) => Record<string, Tensor>,
+                 what: string): Tensor {
+    const cut = target.lastIndexOf(".");
+    const owner = this.getSubmodule(cut < 0 ? "" : target.slice(0, cut));
+    const leaf = cut < 0 ? target : target.slice(cut + 1);
+    const held = bank(owner)[leaf];
+    if (held === undefined) {
+      throw new RuntimeError(
+        `${owner.constructor.name} has no ${what} named \`${leaf}\` is not in the `
+        + "browser subset.");
+    }
+    return held;
+  }
+
+  /**
+   * Attach a child under a name decided at run time.
+   *
+   * `namedChildren` reads this object's own fields, so assigning the property *is*
+   * the registration — the method exists because a name held in a variable cannot
+   * be written as a field. `registerModule` is torch's second spelling.
+   */
+  addModule(name: string, module: Module): void {
+    (this as unknown as Record<string, Module>)[name] = module;
+  }
+
+  registerModule(name: string, module: Module): void {
+    this.addModule(name, module);
+  }
+
+  /**
+   * Freeze or unfreeze the whole tree. **This is how a backbone is frozen**, and it
+   * returns `this` so the line reads as a statement about the model.
+   */
+  requiresGrad_(requiresGrad = true): this {
+    for (const p of this.parameters()) p.requiresGrad = requiresGrad;
+    return this;
+  }
+
+  /**
    * Gives the children **with their names.** The default is **the field
    * name**, as in torch.
    *

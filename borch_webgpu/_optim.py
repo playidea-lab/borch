@@ -25,6 +25,39 @@ class _Opt:
     def step(self):
         self._o.step()
 
+    def add_param_group(self, param_group):
+        """torch's — attach another group after the optimizer was built.
+
+        **It fell between two checks and neither was wrong.** The name axis counts a
+        namespace's top-level names and this is a method; the signature axis compares
+        constructors. `Optimizer`'s methods were read by nothing, so a name torch has,
+        borch.ts has as `addParamGroup`, and neither Python surface had was invisible
+        to every instrument here — `tests/test_class_methods.py` is the axis that asks
+        now.
+
+        The two refusals are torch's, measured: a dict is required, and a parameter
+        already in a group is refused because two groups would step it twice.
+        borch.ts refuses the second one; the first is a Python question and stops here.
+        """
+        if not isinstance(param_group, dict):
+            raise TypeError(
+                f"param_group must be a dict, but got {type(param_group)}")
+        group = dict(param_group)
+        params = group.get("params")
+        # A single tensor rather than a list — torch wraps it, so one parameter needs
+        # no brackets.
+        params = [params] if not isinstance(params, (list, tuple)) else list(params)
+        init = _js.JSON.parse("{}")
+        arr = _js.Array.new()
+        for p in params:
+            arr.push(handle(p))
+        init.params = arr
+        if "lr" in group:
+            init.lr = group["lr"]
+        if "weight_decay" in group:
+            init.weightDecay = group["weight_decay"]
+        self._o.addParamGroup(init)
+
     def state_dict(self):
         """**Resuming a run hangs on this.**
 

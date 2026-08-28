@@ -1195,6 +1195,94 @@ class Module:
                 continue
             yield from inner()
 
+    # ── walking the tree ──────────────────────────────────────────────────
+    #
+    # **Ten methods no check could see were missing.** Nothing read a class's
+    # *methods* — the name axis counts a namespace's top-level names, the signature
+    # axis compares constructors — so `nn.Module` held 14 of torch's 50 while
+    # borch.ts had `children` and `namedChildren` all along.
+    # `tests/test_class_methods.py` is the axis that asks now.
+
+    def named_children(self):
+        """The immediate children — **one level.** A `Tensor` attribute is not a
+        child; only what walks like a module is."""
+        for name, value in self._children():
+            if not isinstance(value, Tensor):
+                yield (name, value)
+
+    def children(self):
+        for _, m in self.named_children():
+            yield m
+
+    def named_modules(self, memo=None, prefix="", remove_duplicate=True):
+        """The whole tree with dotted names, **this one first and named `""`.**"""
+        memo = set() if memo is None else memo
+        if id(self) in memo:
+            return
+        if remove_duplicate:
+            memo.add(id(self))
+        yield (prefix, self)
+        for name, child in self.named_children():
+            walk = getattr(child, "named_modules", None)
+            below = f"{prefix}.{name}" if prefix else name
+            if walk is None:
+                yield (below, child)
+                continue
+            yield from walk(memo, below, remove_duplicate)
+
+    def apply(self, fn):
+        """`fn` on every module, **children first**, then this one. Returns `self`."""
+        for _, child in self.named_children():
+            inner = getattr(child, "apply", None)
+            if inner is None:
+                fn(child)
+            else:
+                inner(fn)
+        fn(self)
+        return self
+
+    def add_module(self, name, module):
+        setattr(self, name, module)
+
+    register_module = add_module
+
+    def register_parameter(self, name, param):
+        setattr(self, name, param)
+
+    def get_submodule(self, target):
+        """One module by its dotted name — the shape of a checkpoint key."""
+        if target == "":
+            return self
+        at = self
+        for part in target.split("."):
+            found = dict(at.named_children()).get(part)
+            if found is None:
+                raise AttributeError(
+                    f"{type(at).__name__} has no attribute `{part}`")
+            at = found
+        return at
+
+    def _dotted(self, target, bank, what):
+        head, _, leaf = target.rpartition(".")
+        owner = self.get_submodule(head)
+        held = dict(bank(owner))
+        if leaf not in held:
+            raise AttributeError(
+                f"{type(owner).__name__} has no {what} named `{leaf}`")
+        return held[leaf]
+
+    def get_parameter(self, target):
+        return self._dotted(target, lambda m: m.named_parameters(), "parameter")
+
+    def get_buffer(self, target):
+        return self._dotted(target, lambda m: m.named_buffers(), "buffer")
+
+    def requires_grad_(self, requires_grad=True):
+        """Freeze or unfreeze the whole tree, handing back the model."""
+        for p in self.parameters():
+            p.requires_grad = requires_grad
+        return self
+
     def __getattr__(self, name):
         """Forward what the layer holds, such as `bn.weight`.
 
@@ -1327,6 +1415,26 @@ class Sequential:
     def forward(self, x):
         return self(x)
 
+    def __repr__(self):
+        """torch's block, and **this class had none.**
+
+        `print(model)` — the first line anybody writes after building one — showed
+        `<borch_webgpu._nn.Sequential object at 0x…>`, an address where the other two
+        implementations print the layers. Found by a case reading a child's name out
+        of its repr, which is a question about the walk and answered this one instead.
+
+        Children indent by two, and a child that is itself a block indents its own
+        lines again — that recursion is the whole of torch's rule.
+        """
+        if not self.layers:
+            return f"{type(self).__name__}()"
+        rows = []
+        for i, layer in enumerate(self.layers):
+            body = repr(layer).split("\n")
+            head = f"  ({i}): {body[0]}"
+            rows.append("\n".join([head] + [f"  {line}" for line in body[1:]]))
+        return f"{type(self).__name__}(\n" + "\n".join(rows) + "\n)"
+
     def parameters(self):
         return [p for m in self.layers for p in _params_of(m)]
 
@@ -1372,6 +1480,90 @@ class Sequential:
                 yield m
                 continue
             yield from inner()
+
+    # ── walking the tree ──────────────────────────────────────────────────
+    #
+    # **This class does not inherit `Module`**, so the ten written there do not
+    # reach it — and `Sequential` is what every golden case walking a tree is built
+    # from. The names are positional, as `state_dict`'s already are.
+    #
+    # `modules` above is what these were missing beside: it existed and the nine
+    # torch spells out did not, in the same class, on the same walk.
+
+    def named_children(self):
+        return [(str(i), m) for i, m in enumerate(self.layers)]
+
+    def children(self):
+        return list(self.layers)
+
+    def named_modules(self, memo=None, prefix="", remove_duplicate=True):
+        memo = set() if memo is None else memo
+        if id(self) in memo:
+            return
+        if remove_duplicate:
+            memo.add(id(self))
+        yield (prefix, self)
+        for name, child in self.named_children():
+            walk = getattr(child, "named_modules", None)
+            below = f"{prefix}.{name}" if prefix else name
+            if walk is None:
+                yield (below, child)
+                continue
+            yield from walk(memo, below, remove_duplicate)
+
+    def apply(self, fn):
+        for m in self.layers:
+            inner = getattr(m, "apply", None)
+            if inner is None:
+                fn(m)
+            else:
+                inner(fn)
+        fn(self)
+        return self
+
+    def add_module(self, name, module):
+        """**Appended, not attached by name.** `Sequential`'s names are positions,
+        so a name that is not the next index would make `state_dict`'s keys and the
+        list disagree — torch's `Sequential.add_module` has the same rule."""
+        if name != str(len(self.layers)):
+            raise KeyError(
+                f"Sequential names its children by position — `{name}` is not "
+                f"`{len(self.layers)}`")
+        self.layers.append(module)
+
+    register_module = add_module
+
+    def get_submodule(self, target):
+        if target == "":
+            return self
+        at = self
+        for part in target.split("."):
+            found = dict(at.named_children()).get(part)
+            if found is None:
+                raise AttributeError(
+                    f"{type(at).__name__} has no attribute `{part}`")
+            at = found
+        return at
+
+    def _dotted(self, target, bank, what):
+        head, _, leaf = target.rpartition(".")
+        owner = self.get_submodule(head)
+        held = dict(bank(owner))
+        if leaf not in held:
+            raise AttributeError(
+                f"{type(owner).__name__} has no {what} named `{leaf}`")
+        return held[leaf]
+
+    def get_parameter(self, target):
+        return self._dotted(target, lambda m: m.named_parameters(), "parameter")
+
+    def get_buffer(self, target):
+        return self._dotted(target, lambda m: m.named_buffers(), "buffer")
+
+    def requires_grad_(self, requires_grad=True):
+        for p in self.parameters():
+            p.requires_grad = requires_grad
+        return self
 
 
 def _params_of(m):

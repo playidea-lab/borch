@@ -75,6 +75,46 @@ class Optimizer:
     def params(self):
         return [p for g in self.param_groups for p in g["params"]]
 
+    def add_param_group(self, param_group):
+        """torch's — attach another group after the optimizer was built.
+
+        **It fell between two checks and neither was wrong.** The name axis counts a
+        namespace's top-level names, and this is a method; the signature axis compares
+        the *constructors* of the classes in `optim`. `Optimizer`'s methods were read
+        by nothing, so a name torch has, borch.ts has as `addParamGroup`, and this side
+        did not have was invisible to every instrument in the repository.
+
+        It is what fine-tuning is written with — a fresh head at one rate bolted onto a
+        backbone at another — and `opt.add_param_group({"params": head.parameters(),
+        "lr": 1e-3})` is the line that does it.
+
+        The four behaviours are torch's, measured rather than assumed:
+
+            not a dict            TypeError, naming the type it got
+            `params` one tensor   wrapped, so a single parameter needs no brackets
+            missing keys          filled from `defaults`, the constructor's arguments
+            a parameter twice     ValueError — two groups would step it twice
+
+        The state bank needs no growing: `_state` allocates on first use, so a
+        parameter added here gets its slot the first time it is stepped.
+        """
+        if not isinstance(param_group, dict):
+            raise TypeError(
+                f"param_group must be a dict, but got {type(param_group)}")
+        group = dict(param_group)
+        params = group.get("params")
+        # A single tensor rather than a list — torch accepts it and wraps it, so a
+        # caller adding one parameter writes no brackets.
+        group["params"] = ([params] if isinstance(params, Tensor)
+                           else list(params))
+        seen = {id(p) for p in self.params}
+        if any(id(p) in seen for p in group["params"]):
+            raise ValueError(
+                "some parameters appear in more than one parameter group")
+        for key, value in self.defaults.items():
+            group.setdefault(key, value)
+        self.param_groups.append(group)
+
     def zero_grad(self, set_to_none=True):
         for p in self.params:
             p.grad = None

@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 357
+  "missing": 364
  },
  "modules": [
   {
@@ -7231,6 +7231,53 @@
        "doc": ""
       },
       {
+       "name": "namedModules",
+       "signature": "namedModules(prefix?: string, seen?: Set<Module>): [string, Module][]",
+       "doc": "The whole tree with dotted names, **this module first and named `\"\"`.**\n\n`children` is one level and this is every level — a difference invisible on a\nflat model, which is why the golden asks it of a `Sequential` inside a\n`Sequential`. The names are the `state_dict` keys' prefixes, so a caller who\nhas a checkpoint key can find the layer it belongs to.\n\n`seen` drops a module reached twice. A model with tied weights holds one layer\nunder two names, and walked twice `apply` would initialise it twice.",
+       "torch": "named_modules"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(fn: (m: Module) => void): this",
+       "doc": "`fn` on every module in the tree, **children first**, then this one, and hands\nback `this` so the line reads as a statement about the model.\n\nThe order is torch's and it is the useful one: a container that reads its\nchildren's shapes sees them already initialised."
+      },
+      {
+       "name": "getSubmodule",
+       "signature": "getSubmodule(target: string): Module",
+       "doc": "One module by its dotted name — `\"layer4.1.conv2\"`, which is the shape of a\ncheckpoint key, so this is how a fine-tuning script reaches one layer.",
+       "torch": "get_submodule"
+      },
+      {
+       "name": "getParameter",
+       "signature": "getParameter(target: string): Tensor",
+       "doc": "One parameter by its dotted name, as `getSubmodule` reaches a module.",
+       "torch": "get_parameter"
+      },
+      {
+       "name": "getBuffer",
+       "signature": "getBuffer(target: string): Tensor",
+       "doc": "One buffer by its dotted name.",
+       "torch": "get_buffer"
+      },
+      {
+       "name": "addModule",
+       "signature": "addModule(name: string, module: Module): void",
+       "doc": "Attach a child under a name decided at run time.\n\n`namedChildren` reads this object's own fields, so assigning the property *is*\nthe registration — the method exists because a name held in a variable cannot\nbe written as a field. `registerModule` is torch's second spelling.",
+       "torch": "add_module"
+      },
+      {
+       "name": "registerModule",
+       "signature": "registerModule(name: string, module: Module): void",
+       "doc": "",
+       "torch": "register_module"
+      },
+      {
+       "name": "requiresGrad_",
+       "signature": "requiresGrad_(requiresGrad?: boolean): this",
+       "doc": "Freeze or unfreeze the whole tree. **This is how a backbone is frozen**, and it\nreturns `this` so the line reads as a statement about the model.",
+       "torch": "requires_grad_"
+      },
+      {
        "name": "namedChildren",
        "signature": "namedChildren(): Record<string, Module>",
        "doc": "Gives the children **with their names.** The default is **the field\nname**, as in torch.\n\n```ts\nclass Net extends nn.Module {\n  fc1 = new nn.Linear(4, 8);      // → \"fc1.weight\", \"fc1.bias\"\n  fc2 = new nn.Linear(8, 2);\n  forward(x) { return this.fc2.call(this.fc1.call(x)); }\n}\n```\n\n**Arrays are not swept.** `layers = [a, b]` is not a child — torch does\nnot register a Python list either, and asks for `nn.ModuleList`.\nSweeping arrays leaves no way to tell them from \"an array that is not\nlayers\", and without that distinction the `state_dict` keys change\nquietly.\n\nContainers that want to be addressed by position (`Sequential`,\n`ModuleList`) override here.\n\n**The `state_dict` keys are these names.** Diverge and you cannot read\nanyone else's checkpoint.",
@@ -11951,7 +11998,7 @@
      ]
     }
    ],
-   "count": 802,
+   "count": 810,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -20113,5 +20160,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2724
+ "total": 2732
 }

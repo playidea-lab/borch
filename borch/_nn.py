@@ -166,6 +166,113 @@ class Module:
         for m in self._modules.values():
             yield from m.modules()
 
+    # ── walking the tree ──────────────────────────────────────────────────
+    #
+    # **Ten methods that no check could see were missing.** The name axis counts a
+    # namespace's top-level names and `Module` is one of them; the signature axis
+    # compares constructors. Nothing read a class's *methods*, so `nn.Module` had 14
+    # of torch's 50 and every instrument in the repository was green — while borch.ts
+    # has had `children` and `namedChildren` all along, which makes it a three-way
+    # divergence rather than a shared limit.
+    #
+    # `modules()` above already walked the tree, so these are the same walk under the
+    # names torch gives it. Each is a line a tutorial writes: `model.apply(init)` is
+    # how weights are initialised, and `get_submodule("layer4.1.conv2")` is how a
+    # fine-tuning script reaches one layer by its checkpoint name.
+
+    def named_children(self, ):
+        """The immediate children — **one level, not the whole tree.** That is the
+        whole difference from `named_modules`, and getting it wrong gives a walk that
+        works on a flat model and repeats itself on a nested one."""
+        yield from self._modules.items()
+
+    def children(self):
+        for _, m in self.named_children():
+            yield m
+
+    def named_modules(self, memo=None, prefix="", remove_duplicate=True):
+        """The whole tree with dotted names, **this module first and named `""`.**
+
+        `remove_duplicate` is torch's and it is not decoration: a model that holds one
+        layer under two names — weight tying — would otherwise be walked twice and
+        `apply` would initialise it twice.
+        """
+        memo = set() if memo is None else memo
+        if id(self) in memo:
+            return
+        if remove_duplicate:
+            memo.add(id(self))
+        yield (prefix, self)
+        for name, module in self._modules.items():
+            yield from module.named_modules(
+                memo, f"{prefix}.{name}" if prefix else name, remove_duplicate)
+
+    def apply(self, fn):
+        """`fn` on every module in the tree, **children first**, then this one.
+
+        The order is torch's and it is the useful one: a container that reads its
+        children's shapes sees them already initialised. It hands back `self`, so
+        `model.apply(init_weights)` reads as a statement about the model.
+        """
+        for module in self._modules.values():
+            module.apply(fn)
+        fn(self)
+        return self
+
+    def add_module(self, name, module):
+        """Attach a child under a name given at run time. `register_module` is
+        torch's second spelling of it and does the same thing."""
+        if module is not None and not isinstance(module, Module):
+            raise TypeError(f"{type(module)} is not a Module subclass")
+        self.__dict__.setdefault("_modules", {})[name] = module
+        object.__setattr__(self, name, module)
+
+    register_module = add_module
+
+    def register_parameter(self, name, param):
+        """The parameter counterpart of `register_buffer`. Assigning a `Parameter`
+        to an attribute already does this — `__setattr__` above catches it — and the
+        method exists because a name decided at run time cannot be assigned."""
+        if param is not None and not isinstance(param, Parameter):
+            raise TypeError(f"cannot assign {type(param)} as parameter '{name}'")
+        self.__dict__.setdefault("_params", {})[name] = param
+        object.__setattr__(self, name, param)
+
+    def get_submodule(self, target):
+        """One module by its dotted name — `"layer4.1.conv2"`, which is the name a
+        checkpoint key carries, so this is how a fine-tuning script reaches it."""
+        if target == "":
+            return self
+        at = self
+        for part in target.split("."):
+            if part not in getattr(at, "_modules", {}):
+                raise AttributeError(
+                    f"{type(at).__name__} has no attribute `{part}`")
+            at = at._modules[part]
+        return at
+
+    def _by_dotted(self, target, bank, what):
+        head, _, leaf = target.rpartition(".")
+        owner = self.get_submodule(head)
+        held = getattr(owner, bank, {})
+        if leaf not in held:
+            raise AttributeError(
+                f"{type(owner).__name__} has no {what} named `{leaf}`")
+        return held[leaf]
+
+    def get_parameter(self, target):
+        return self._by_dotted(target, "_params", "parameter")
+
+    def get_buffer(self, target):
+        return self._by_dotted(target, "_buffers", "buffer")
+
+    def requires_grad_(self, requires_grad=True):
+        """Freeze or unfreeze the whole tree. **This is how a backbone is frozen**,
+        and it returns `self` so it reads as a statement about the model."""
+        for p in self.parameters():
+            p.requires_grad = requires_grad
+        return self
+
     def train(self, mode=True):
         self.training = mode
         for m in self._modules.values():

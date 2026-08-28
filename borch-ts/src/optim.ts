@@ -174,13 +174,36 @@ export abstract class Optimizer {
     for (const g of groups) this.attach(g);
   }
 
+  /**
+   * What `publishMomentum` last published, so a group added **later** inherits it.
+   *
+   * torch fills a new group's missing keys from `defaults`, which is the
+   * constructor's arguments — measured: `SGD(p, momentum=0.9)` then
+   * `add_param_group({"params": q, "lr": 0.3})` gives the second group a momentum of
+   * 0.9 and not of 0. Without this the later group stepped with no momentum at all,
+   * which is a slower curve and no error.
+   */
+  private publishedMomentum: number | undefined;
+
   /** Attaches one group and appends it to the flat list. */
   private attach(init: ParamGroupInit): ParamGroup {
     const index = this.paramGroups.length;
+    // **A parameter in two groups would be stepped twice.** torch refuses it by
+    // name and so does the core; without the check the second step reads a value
+    // the first one just moved.
+    const seen = new Set(this.params);
+    for (const p of init.params) {
+      if (seen.has(p)) {
+        throw new RuntimeError(
+          "some parameters appear in more than one parameter group");
+      }
+    }
     const group: ParamGroup = {
       params: [...init.params],
       lr: init.lr ?? this.defaultLr,
       ...(init.weightDecay === undefined ? {} : { weightDecay: init.weightDecay }),
+      ...(this.publishedMomentum === undefined
+        ? {} : { momentum: this.publishedMomentum }),
     };
     this.paramGroups.push(group);
     for (const p of group.params) {
@@ -280,6 +303,7 @@ export abstract class Optimizer {
    * whether the key is in the group.
    */
   protected publishMomentum(value: number): void {
+    this.publishedMomentum = value;
     for (const g of this.paramGroups) g.momentum = value;
   }
 

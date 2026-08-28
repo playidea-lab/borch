@@ -3409,6 +3409,132 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
     m.eval();
     return m.forward(inp.get("train_x"));
   });
+
+  // ── walking the tree ───────────────────────────────────────────────────
+  //
+  // **Eleven methods that no check could see were missing.** Nothing read a class's
+  // *methods* — the name axis counts a namespace's top-level names and the signature
+  // axis compares constructors — so `nn.Module` held 14 of torch's 50 on the Python
+  // side while this one had `children` and `namedChildren` and neither knew.
+  // `tests/test_class_methods.py` is the axis that asks now.
+  const nested = () => new nn.Sequential(
+    new nn.Linear(6, 8), new nn.ReLU(),
+    new nn.Sequential(new nn.Linear(8, 3)));
+
+  // **Read from the repr, not from the class name.** The binding wraps every layer
+  // in one generic Python class, so its class name is `Module` for all of them while
+  // the repr is the layer's own — the question is *which layer sits here*.
+  const layerName = (m: nn.Module) => m.describe().split("(")[0]?.trim() ?? "";
+  out.set("container::children/층 이름",
+    () => nested().children().map(layerName).join(" "));
+  out.set("container::named_children/이름",
+    () => Object.keys(nested().namedChildren()).join(" "));
+  // **One level against the whole tree** — invisible on a flat model, hence a
+  // `Sequential` inside a `Sequential`.
+  out.set("container::named_modules/이름",
+    () => nested().namedModules().map(([n]) => n).join("|"));
+  out.set("container::named_modules/뿌리는 빈 이름",
+    () => verdict(nested().namedModules()[0]?.[0] === ""));
+  // **Children first, then the parent** — torch's order, and the one a container
+  // reading its children's shapes needs.
+  out.set("container::apply/순서", () => {
+    const seen: string[] = [];
+    nested().apply((m) => seen.push(layerName(m)));
+    return seen.join(" ");
+  });
+  out.set("container::apply/자기를 돌려준다", () => {
+    const m = nested();
+    return verdict(m.apply(() => undefined) === m);
+  });
+  out.set("container::get_submodule(점 찍힌 이름)",
+    () => layerName(nested().getSubmodule("2.0")));
+  out.set("container::get_submodule(빈 이름은 자기)", () => {
+    const m = nested();
+    return verdict(m.getSubmodule("") === m);
+  });
+  out.set("container::get_parameter(점 찍힌 이름)/모양",
+    () => `(${nested().getParameter("0.weight").shape.join(", ")})`);
+  out.set("container::get_buffer(점 찍힌 이름)/모양",
+    () => `(${new nn.BatchNorm1d(3).getBuffer("running_mean").shape.join(", ")},)`);
+  // **This is how a backbone is frozen**, and it hands back the model.
+  out.set("container::requires_grad_(False)", () => {
+    const m = nested();
+    const back = m.requiresGrad_(false) === m;
+    const any = m.parameters().some((p) => p.requiresGrad);
+    return `${back ? "True" : "False"} ${any ? "True" : "False"}`;
+  });
+  out.set("container::add_module(이름을 나중에)", () => {
+    // **A bare subclass, not `Sequential`.** `Module` is abstract here where torch's
+    // is constructible, and `Sequential` **overrides `namedChildren`** to report its
+    // positional layers — so a field added to one is invisible, which is what the
+    // case caught on its first run.
+    class Bare extends nn.Module {
+      override forward(x: Tensor): Tensor {
+        return x;
+      }
+    }
+    const holder = new Bare();
+    holder.addModule("lin", new nn.Linear(2, 2));
+    return Object.keys(holder.namedChildren()).join(" ");
+  });
+  // **The binding's `Sequential` had no repr at all** — `print(model)` gave an
+  // object address where the other two print the layers. Found by the case above
+  // reading a child's name out of its repr.
+  out.set("container::Sequential/print", () => nested().describe());
+  out.set("container::get_submodule(없는 이름)=둘 다 멈춘다", () => {
+    try {
+      nested().getSubmodule("nope");
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
+
+  // `addParamGroup` — the optimizer half of the same seam, and the line fine-tuning
+  // is written with.
+  const grouped = (): optim.SGD => {
+    const a = Tensor.from([1, 2], [2], { requiresGrad: true });
+    const b = Tensor.from([3], [1], { requiresGrad: true });
+    const opt = new optim.SGD([a], 0.1, 0.9);
+    opt.addParamGroup({ params: [b], lr: 0.3 });
+    return opt;
+  };
+  out.set("container::add_param_group/lr",
+    () => grouped().paramGroups.map((g) => g.lr).join(" "));
+  // **The default is the constructor's argument**, not torch's own default — so the
+  // second group's momentum is 0.9 and not 0.
+  out.set("container::add_param_group/momentum",
+    () => grouped().paramGroups.map((g) => g.momentum ?? 0).join(" "));
+  out.set("container::add_param_group/스텝", () => {
+    const a = Tensor.from([1, 2], [2], { requiresGrad: true });
+    const b = Tensor.from([3], [1], { requiresGrad: true });
+    const opt = new optim.SGD([a], 0.1, 0.9);
+    opt.addParamGroup({ params: [b], lr: 0.3 });
+    a.grad = Tensor.from([0.3, 0.2], [2]);
+    b.grad = Tensor.from([0.5], [1]);
+    opt.step();
+    return Tensor.cat([a.detach(), b.detach()], 0);
+  });
+  const groupStops = (name: string, body: () => void) => {
+    out.set(`container::add_param_group(${name})=둘 다 멈춘다`, () => {
+      try {
+        body();
+      } catch {
+        return "둘 다 멈춘다";
+      }
+      return "여기선 통과했다";
+    });
+  };
+  groupStops("같은 파라미터 두 번", () => {
+    const a = Tensor.from([1], [1], { requiresGrad: true });
+    new optim.SGD([a], 0.1).addParamGroup({ params: [a] });
+  });
+  groupStops("사전이 아니면", () => {
+    const a = Tensor.from([1], [1], { requiresGrad: true });
+    (new optim.SGD([a], 0.1) as unknown as {
+      addParamGroup: (g: unknown) => void
+    }).addParamGroup([a]);
+  });
 }
 
 /**
