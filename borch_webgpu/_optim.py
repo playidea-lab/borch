@@ -127,7 +127,7 @@ def _pair(two):
     return out
 
 
-def _opts(maximize):
+def _opts(maximize, foreach, fused, capturable, differentiable):
     """borch.ts's trailing options object.
 
     **Built through `JSON.parse` rather than as a dict.** A Python dict crossing the
@@ -135,30 +135,44 @@ def _opts(maximize):
     reads `undefined` off it — the flag is accepted on this side, delivered to the far
     side, and silently dropped there. That failure looks exactly like the feature not
     being implemented, which is what it was mistaken for for a long time.
+
+    **The four after `maximize` are carried, not judged here.** `capturable` and
+    `differentiable` are refused — by borch.ts, one step further on, which is where the
+    core's wording already lives. Deciding it twice would let the two answers drift, and
+    carrying it proves the bridge actually delivers the word: a flag dropped on the way
+    across looks exactly like a flag the far side chose to ignore.
     """
-    return _js.JSON.parse(f'{{"maximize":{str(bool(maximize)).lower()}}}')
+    flags = {"maximize": maximize, "foreach": foreach, "fused": fused,
+             "capturable": capturable, "differentiable": differentiable}
+    body = ",".join(f'"{k}":{str(bool(v)).lower()}' for k, v in flags.items())
+    return _js.JSON.parse("{" + body + "}")
 
 
 def SGD(params, lr=1e-3, momentum=0.0, dampening=0.0, weight_decay=0.0,
-        nesterov=False, *, maximize=False):
+        nesterov=False, *, maximize=False,
+        foreach=False, fused=False, capturable=False, differentiable=False):
     """torch's order. **`weight_decay` moved from fourth to fifth** and this call
     moved with it — a positional bridge is a bet that the far side's parameter order
     never changes, and `test_binding_arguments.py` is what collects on it."""
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.SGD.new(_params(params), lr, momentum, dampening,
-                                  weight_decay, nesterov, _opts(maximize)))
+                                  weight_decay, nesterov, bag))
 
 
 def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
-         amsgrad=False, *, maximize=False):
+         amsgrad=False, *, maximize=False,
+         foreach=False, fused=False, capturable=False, differentiable=False):
     """**These two used to be accepted and refused.** `maximize` raised
     `NotImplementedError` and `amsgrad` was not there at all, on the reasoning that
     holding the position was better than dropping the flag — which was right while it
     lasted, and is a reason with nothing left to hold now that borch.ts carries both."""
-    return _Opt(_ts.optim.Adam.new(_params(params), lr, _pair(betas), eps, weight_decay, amsgrad, _opts(maximize)))
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
+    return _Opt(_ts.optim.Adam.new(_params(params), lr, _pair(betas), eps, weight_decay, amsgrad, bag))
 
 
 def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01,
-          amsgrad=False, *, maximize=False):
+          amsgrad=False, *, maximize=False,
+          foreach=False, fused=False, capturable=False, differentiable=False):
     """**`weight_decay` defaults to 0.01 here and to 0 in `Adam`**, which is torch's
     split and most of the reason the two are separate names.
 
@@ -167,97 +181,116 @@ def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01,
     **An absence says so.** The defect a few lines below was a table sending arguments
     into the wrong seats, which said nothing at all for four of its eight.
     """
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.AdamW.new(_params(params), lr, _pair(betas),
-                                    eps, weight_decay, amsgrad, _opts(maximize)))
+                                    eps, weight_decay, amsgrad, bag))
 
 
 def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0,
-            momentum=0.0, centered=False, *, maximize=False):
+            momentum=0.0, centered=False, *, maximize=False,
+            foreach=False, fused=False, capturable=False, differentiable=False):
     """`momentum` and `centered` sit sixth and seventh — torch's seats. They were
     absent, so `RMSprop(p, 0.01, 0.99, 1e-8, 0, 0.9)` raised rather than adding a
     momentum buffer."""
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.RMSprop.new(_params(params), lr, alpha, eps,
                                       weight_decay, momentum, centered,
-                                      _opts(maximize)))
+ bag))
 
 
 def Adagrad(params, lr=0.01, lr_decay=0.0, weight_decay=0.0,
-            initial_accumulator_value=0.0, eps=1e-10, *, maximize=False):
+            initial_accumulator_value=0.0, eps=1e-10, *, maximize=False,
+            foreach=False, fused=False, capturable=False, differentiable=False):
     """`initial_accumulator_value` sits fifth, before `eps` — torch's order, and
     borch.ts moved with the core."""
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Adagrad.new(_params(params), lr, lr_decay, weight_decay,
                                       initial_accumulator_value, eps,
-                                      _opts(maximize)))
+ bag))
 
 
 def Adadelta(params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0, *,
-             maximize=False):
+             maximize=False,
+             foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Adadelta.new(_params(params), lr, rho, eps, weight_decay,
-                                       _opts(maximize)))
+ bag))
 
 
 def Adamax(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
-           maximize=False):
+           maximize=False,
+           foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Adamax.new(_params(params), lr, _pair(betas), eps,
-                                     weight_decay, _opts(maximize)))
+                                     weight_decay, bag))
 
 
 def NAdam(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
           momentum_decay=4e-3, decoupled_weight_decay=False, *,
-          maximize=False):
+          maximize=False,
+          foreach=False, fused=False, capturable=False, differentiable=False):
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.NAdam.new(_params(params), lr, _pair(betas), eps,
                                     weight_decay, momentum_decay,
-                                    decoupled_weight_decay, _opts(maximize)))
+                                    decoupled_weight_decay, bag))
 
 
 def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
-          maximize=False):
+          maximize=False,
+          foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.RAdam.new(_params(params), lr, _pair(betas), eps,
-                                    weight_decay, _opts(maximize)))
+                                    weight_decay, bag))
 
 
 def ASGD(params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0.0, *,
-         maximize=False):
+         maximize=False,
+         foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.ASGD.new(_params(params), lr, lambd, alpha, t0,
-                                   weight_decay, _opts(maximize)))
+                                   weight_decay, bag))
 
 
 def Rprop(params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50), *,
-          maximize=False):
+          maximize=False,
+          foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Rprop.new(_params(params), lr, _pair(etas),
-                                    _pair(step_sizes), _opts(maximize)))
+                                    _pair(step_sizes), bag))
 
 
 def Adafactor(params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3), d=1.0,
               weight_decay=0.0, *,
-              maximize=False):
+              maximize=False,
+              foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Adafactor.new(_params(params), lr, beta2_decay,
                                         _pair(eps), d, weight_decay,
-                                        _opts(maximize)))
+ bag))
 
 
 class LBFGS:

@@ -4297,6 +4297,35 @@ def opt_cases(inp=None):
         return dst(L.tensor(xin))
 
     cases.append((OPT_PREFIX + "되읽은 것을 그대로 얹을 수 있다", save_load_then_use))
+
+    # ── the four words every `torch.optim.*` carries and none of the three of us compute ──
+    #
+    # They split in two, and **torch draws the line, not us.** `foreach` and `fused` pick a
+    # kernel: measured on both classes, torch returns the very same numbers with them on. So
+    # ours take the word and ignore it, and a library that instead refused would be the one
+    # differing. `capturable` and `differentiable` change what a step means, and torch itself
+    # stops on both without CUDA — no such parameter on `SGD`, an assertion about the device on
+    # `Adam`, and an in-place-on-a-leaf error for `differentiable`. So ours stop too.
+    #
+    # **The verdict is the category and not the wording.** torch's own two classes refuse
+    # `capturable` with different exception types; asking for a phrase would only freeze which
+    # torch build froze the file. The `foreach`/`fused` rows are what keeps this from being
+    # passed by refusing everything — they are a real numeric comparison against the plain step.
+    def carries(L, name, word):
+        one = [np.array([0.3, 0.2, -0.4], dtype=np.float32)]
+        plain = np.asarray(walk(L, name, one, lr=0.1).detach().numpy())
+        try:
+            got = np.asarray(walk(L, name, one, lr=0.1, **{word: True})
+                             .detach().numpy())
+        except Exception:                                          # noqa: BLE001
+            return "거절"
+        return "받고 값이 같다" if np.array_equal(got, plain) else "받는데 값이 다르다"
+
+    for _cls in ("SGD", "Adam"):
+        for _word in ("foreach", "fused", "capturable", "differentiable"):
+            cases.append((OPT_PREFIX + f"낱말::{_cls}({_word})",
+                          lambda L, c=_cls, w=_word: carries(L, c, w)))
+
     return cases
 
 

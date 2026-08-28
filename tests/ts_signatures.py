@@ -162,6 +162,32 @@ def _matching(text, open_at):
 
 _BAG_MEMBER = re.compile(r"([A-Za-z_$][\w$]*)\s*\??\s*:")
 
+_INTERFACES = {}
+
+
+def _interface_members():
+    """`{interface name: [member names]}`, read once from `api.json`.
+
+    **Following a named type used to be "a different job".** It was, while every bag in
+    the library was written inline — and the day the thirteen optimizers factored their
+    five shared members into `OptimizerOptions`, that sentence turned twelve measured
+    rows back into `agree to the bag` and the `kw` count fell from 12 to 0. A tally
+    reaching zero because the reader stopped is the failure this file has now recorded
+    three times, and it is the one that reads as good news.
+
+    `api.json` already carries every interface's members, so the reference resolves out
+    of the same file the declaration came from and needs no second parser.
+    """
+    if not _INTERFACES:
+        import json
+
+        for module in json.loads(API.read_text(encoding="utf-8"))["modules"]:
+            for sym in module.get("symbols", ()):
+                if sym.get("kind") == "interface":
+                    _INTERFACES[sym["name"]] = [m["name"]
+                                                for m in sym.get("members", ())]
+    return _INTERFACES
+
 
 def _bag_members(raw):
     """The names inside an inline object type, or `None` when it is not written inline.
@@ -173,13 +199,16 @@ def _bag_members(raw):
     rows where the axis said `agree to the bag` and measured nothing — while the
     argument torch puts first in that group, `maximize`, was sitting inside and matching.
 
-    Only an object written **inline** can be opened. A named interface is a reference to
-    somewhere else in the file and following it is a different job; that still bags.
+    An object written **inline** is opened here. A named one is followed through
+    `_interface_members`, which reads the declaration `api.json` already carries —
+    added the day `OptimizerOptions` was factored out and this function's refusal to
+    follow a name silently un-measured twelve rows.
     """
     body = raw.split(":", 1)[1] if ":" in raw else raw
     body = body.strip()
     if not (body.startswith("{") and body.endswith("}")):
-        return None
+        named = _interface_members().get(body)
+        return list(named) if named else None
     # Nested objects would need a real parser; there are none here and one would be a
     # silent under-read, so anything with a second `{` bags instead.
     inner = body[1:-1]

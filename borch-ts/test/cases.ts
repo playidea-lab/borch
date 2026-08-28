@@ -5680,6 +5680,45 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   };
   const flip = (i: number) => Tensor.from(flipGrads[i] ?? [0, 0, 0], [3]);
 
+  // ── the four words every `torch.optim.*` carries and none of the three of us compute ──
+  //
+  // **torch draws the line, not us.** `foreach` and `fused` pick a kernel: measured on both
+  // classes, torch returns the very same numbers with them on, so ours take the word and
+  // ignore it. `capturable` and `differentiable` change what a step means, and torch itself
+  // stops on both without CUDA, so ours stop too. The verdict is the category and not the
+  // wording — torch's own two classes refuse `capturable` with different exception types,
+  // and asking for a phrase would freeze which torch build froze the file.
+  const carries = (
+    make: (ps: Tensor[], o: optim.OptimizerOptions) => optim.Optimizer,
+    word: keyof optim.OptimizerOptions,
+  ) => async () => {
+    const stepOnce = (o: optim.OptimizerOptions) => {
+      const p = start();
+      const opt = make([p], o);
+      opt.zeroGrad();
+      p.grad = Tensor.from([0.3, 0.2, -0.4], [3]);
+      opt.step();
+      return p.detach();
+    };
+    const plain = stepOnce({});
+    let got: Tensor;
+    try {
+      got = stepOnce({ [word]: true });
+    } catch {
+      return "거절";
+    }
+    return await got.sub(plain).abs().amax().item() === 0
+      ? "받고 값이 같다" : "받는데 값이 다르다";
+  };
+
+  for (const word of ["foreach", "fused", "capturable", "differentiable"] as const) {
+    out.set(`opt::낱말::SGD(${word})`,
+      carries((ps, o) => new optim.SGD(ps, 0.1, 0, 0, 0, false, o), word));
+    out.set(`opt::낱말::Adam(${word})`,
+      carries((ps, o) => new optim.Adam(ps, 0.1, [0.9, 0.999], 1e-8, 0, false, o),
+        word));
+  }
+
   out.set("opt::ASGD/기본값", walk((ps) => new optim.ASGD(ps), ramp));
   out.set("opt::ASGD/lambd",
     walk((ps) => new optim.ASGD(ps, 0.1, 0.01), ramp));

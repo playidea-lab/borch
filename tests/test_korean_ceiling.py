@@ -197,7 +197,13 @@ CEILINGS = {
     # 3419 → 3421. Two, and the ledger's own vocabulary: a new `v2f::` row, whose reason
     # has to open with one of `아직` / `없음` / `별칭` / `파이썬` for `test_site.py` to
     # split the remainder. This one is 없음.
-    "borch-ts/test": 3421,
+    # 3421 → 3441. Twenty, and case names plus the three verdicts they return: the
+    # `낱말::` group asks each of `foreach`, `fused`, `capturable`, `differentiable` of
+    # `SGD` and `Adam`, and answers `거절` / `받고 값이 같다` / `받는데 값이 다르다`.
+    # **The verdict strings cannot be English here.** They are the frozen values in
+    # `golden.json`, written by `tests/cases.py`, and the two sides have to spell them
+    # identically or every one of the eight reads as a divergence.
+    "borch-ts/test": 3441,
 }
 
 

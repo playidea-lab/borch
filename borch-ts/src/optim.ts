@@ -71,6 +71,49 @@ function isGroups(arg: ParamsArg): arg is readonly ParamGroupInit[] {
   return arg.length > 0 && !(arg[0] instanceof Tensor);
 }
 
+/**
+ * The keyword-only group every `torch.optim.*` carries, spelled as an object.
+ *
+ * **All five seats exist so that four of them can be answered.** Left out, they were
+ * surplus properties on an object literal — TypeScript rejects those at the call site,
+ * and JavaScript and the Python binding do not: `new SGD(p, 0.1, 0.9, 0, 1e-4, false,
+ * { fused: true })` was accepted and the word discarded. Present, each one gets the
+ * answer the core already gives, and the two libraries stop differing about a question
+ * neither of them computes.
+ */
+export interface OptimizerOptions {
+  maximize?: boolean;
+  /** A hint about batching the update, not a different answer. Accepted and unused. */
+  foreach?: boolean;
+  /** The same. torch fuses on CUDA; there is one kernel here and it is the same number. */
+  fused?: boolean;
+  capturable?: boolean;
+  differentiable?: boolean;
+}
+
+/**
+ * Stops on the two that would change the answer, and lets the two hints through.
+ *
+ * **The split is the core's, measured rather than chosen** — `borch.optim.SGD(...,
+ * foreach=True)` and `fused=True` are accepted there and change no value, while
+ * `differentiable=True` and `capturable=True` raise with a reason. Two surfaces of one
+ * library answering the same question differently is the divergence this repository
+ * exists to find, so this is the same rule written once more rather than a second
+ * opinion.
+ */
+function refuseUncarried(who: string, opts: OptimizerOptions): void {
+  if (opts.differentiable) {
+    throw new Error(
+      `${who}(differentiable=true) is not here — the step edits its parameters in `
+      + "place, so there is no graph through it to differentiate a second time.");
+  }
+  if (opts.capturable) {
+    throw new Error(
+      `${who}(capturable=true) needs a CUDA-like device to capture a graph on; `
+      + "WebGPU has no equivalent and torch asserts on the same thing without one.");
+  }
+}
+
 export abstract class Optimizer {
   /**
    * torch's shape — this is where a scheduler edits `lr`.
@@ -115,9 +158,10 @@ export abstract class Optimizer {
   constructor(
     params: ParamsArg,
     private readonly defaultLr: number,
-    { maximize = false }: { maximize?: boolean } = {},
+    opts: OptimizerOptions = {},
   ) {
-    this.maximize = maximize;
+    refuseUncarried(new.target?.name ?? "Optimizer", opts);
+    this.maximize = opts.maximize ?? false;
     const groups: readonly ParamGroupInit[] = isGroups(params)
       ? params
       : [{ params: params as readonly Tensor[] }];
@@ -355,7 +399,7 @@ export class SGD extends Optimizer {
     private readonly dampening = 0,
     private readonly weightDecay = 0,
     private readonly nesterov = false,
-    opts: { maximize?: boolean } = {},
+    opts: OptimizerOptions = {},
   ) {
     super(params, lr, opts);
     if (nesterov && (momentum <= 0 || dampening !== 0)) {
@@ -447,7 +491,7 @@ export class Adam extends Optimizer {
     private readonly eps = 1e-8,
     private readonly weightDecay = 0,
     private readonly amsgrad = false,
-    opts: { maximize?: boolean } = {},
+    opts: OptimizerOptions = {},
   ) {
     super(params, lr, opts);
     [this.beta1, this.beta2] = betas;
@@ -547,7 +591,7 @@ export class AdamW extends Adam {
     eps = 1e-8,
     weightDecay = 0.01,
     amsgrad = false,
-    opts: { maximize?: boolean } = {},
+    opts: OptimizerOptions = {},
   ) {
     super(params, lr, betas, eps, weightDecay, amsgrad, opts);
   }
@@ -568,7 +612,7 @@ export class RMSprop extends Optimizer {
     private readonly weightDecay = 0,
     private readonly momentum = 0,
     private readonly centered = false,
-    opts: { maximize?: boolean } = {},
+    opts: OptimizerOptions = {},
   ) {
     super(params, lr, opts);
     this.squares = this.state(this.params);
@@ -640,7 +684,7 @@ abstract class Composed extends Optimizer {
    */
   constructor(params: ParamsArg, lr: number,
               protected readonly weightDecay = 0,
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, opts);
   }
 
@@ -683,7 +727,7 @@ export class Adagrad extends Composed {
   constructor(params: ParamsArg, lr = 0.01, private readonly lrDecay = 0,
               weightDecay = 0, initialAccumulatorValue = 0,
               private readonly eps = 1e-10,
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     // **`initialAccumulatorValue` sits fifth, before `eps`** — torch's order, and
     // this is the second argument inserted into this constructor's middle rather
@@ -725,7 +769,7 @@ export class Adadelta extends Composed {
 
   constructor(params: ParamsArg, lr = 1.0, private readonly rho = 0.9,
               private readonly eps = 1e-6, weightDecay = 0,
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     this.squares = this.state(this.params);
     this.deltas = this.state(this.params);
@@ -760,7 +804,7 @@ export class Adamax extends Composed {
   constructor(params: ParamsArg, lr = 2e-3,
               betas: readonly [number, number] = [0.9, 0.999],
               private readonly eps = 1e-8,
-              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+              weightDecay = 0, opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
@@ -822,7 +866,7 @@ export class NAdam extends Composed {
               private readonly eps = 1e-8,
               weightDecay = 0, private readonly momentumDecay = 4e-3,
               private readonly decoupledWeightDecay = false,
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
@@ -896,7 +940,7 @@ export class RAdam extends Composed {
   constructor(params: ParamsArg, lr = 1e-3,
               betas: readonly [number, number] = [0.9, 0.999],
               private readonly eps = 1e-8,
-              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+              weightDecay = 0, opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
@@ -957,7 +1001,7 @@ export class ASGD extends Composed {
 
   constructor(params: ParamsArg, lr = 1e-2, private readonly lambd = 1e-4,
               private readonly alpha = 0.75, private readonly t0 = 1e6,
-              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+              weightDecay = 0, opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     this.ax = this.state(this.params);
     this.eta = lr;
@@ -1016,7 +1060,7 @@ export class Rprop extends Composed {
   constructor(params: ParamsArg, lr = 1e-2,
               etas: readonly [number, number] = [0.5, 1.2],
               stepSizes: readonly [number, number] = [1e-6, 50],
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, 0, opts);
     [this.etaMinus, this.etaPlus] = etas;
     [this.sizeMin, this.sizeMax] = stepSizes;
@@ -1253,7 +1297,7 @@ export class Adafactor extends Composed {
   constructor(params: ParamsArg, lr = 1e-2, private readonly beta2Decay = -0.8,
               eps: readonly [number | null, number] = [null, 1e-3],
               private readonly d = 1.0,
-              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+              weightDecay = 0, opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.eps1, this.eps2] = eps;
     this.extendState(this.params);

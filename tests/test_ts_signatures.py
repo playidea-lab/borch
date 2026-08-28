@@ -1240,7 +1240,16 @@ SHORTER = {
     # the far side of the mechanism the `nn` note above describes — the core moved
     # toward torch first and this number rose, and it falls again when borch.ts
     # follows. It is the first bucket on this axis to reach zero.
-    "optim": 0,
+    #
+    # **0 → 1, and it is a row that was already there.** `RAdam` is short of
+    # `decoupled_weight_decay`, which torch puts at position five — not in the keyword
+    # tail. It used to be counted in `kw`, because borch.ts's bag held only `maximize`
+    # and the three it was missing filled the `keyword-only absent` half of the note;
+    # with the bag now carrying all five, that half is empty and what is left is the
+    # positional gap that was under it the whole time. **The bucket changed, the defect
+    # did not.** Closing it means implementing decoupled decay in `RAdam`'s step, not
+    # opening a seat — `AdamW` is that arithmetic and `NAdam` already carries the flag.
+    "optim": 1,
     # 12 → 11. borch.ts's `ReduceLROnPlateau` followed the core into torch's
     # list in the same edit, so the row stopped being a truncation. The
     # cooldown counter joined `stateDict` with it — left out, a resume inside
@@ -1496,14 +1505,41 @@ DECLINED = {
 # as agreement and the whole suite stayed green while twelve rows changed meaning. The
 # file already carries that lesson twice, beside `FREE_FUNCTION` and beside `DECLINED`,
 # and it happened again the same afternoon to the person who had just written it down.
+#
+# **12 → 6, and the six left are not the same kind of thing as the twelve.** The twelve
+# were "borch.ts has `maximize` and none of the other four". borch.ts now carries all
+# five — `OptimizerOptions`, refused where refusing is what the core does — and what is
+# left divides in two:
+#
+#   · `ASGD` and `RMSprop` (4 names each) and `Adadelta`, `Adagrad`, `Adamax`
+#     (`foreach` alone) — **torch spells these positionally in those five classes and
+#     keyword-only everywhere else.** Measured against real torch, not assumed: the
+#     core matches torch exactly on all seven classes read. borch.ts puts them in the
+#     object for all thirteen, which is one rule instead of torch's two, and mirroring
+#     the inconsistency would mean four more positional seats on two classes only.
+#     A named difference, on purpose.
+#   · `Adam` is short of `decoupled_weight_decay`. That is a real absence and not a
+#     spelling — see the `SHORTER` note about `RAdam`, which is the same feature
+#     missing from a positional seat rather than a keyword one.
+#
+# **Following a named type is what made the six readable.** Factoring the five members
+# into an interface first turned all twelve rows back into `agree to the bag` — the
+# count fell to 0 and the suite went green while nothing had been carried. `ts_signatures
+# ._interface_members` now resolves the reference out of `api.json`. That is the fourth
+# time on this axis that a number improved because a reader stopped.
 KEYWORD_GAP = {
     "Tensor": 0,
     "nn": 0,
     "nn.functional": 0,
-    "optim": 12,
+    "optim": 6,
     "optim.lr_scheduler": 0,
     "linalg": 0,
-    "utils.data": 0,
+    # 0 → 1: `DataLoader`, which used to be `agree to the bag` and measured nothing past
+    # `dataset`. Opened, it names four members borch.ts has not — `inOrder`,
+    # `persistentWorkers`, `pinMemoryDevice`, `prefetchFactor` — every one of them about
+    # worker processes, which is the one-host-stream decision this repository already
+    # made. The row is more useful said out loud than counted as agreement.
+    "utils.data": 1,
     "transforms": 0,
     "transforms.functional": 0,
     "ops": 0,
