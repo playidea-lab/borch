@@ -1489,6 +1489,42 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
     return ramp(m).call(tseq());
   });
 
+  // **The three above are `eval()` and forward only**, which is the shape of the
+  // first defect this repository ever found: BatchNorm's backward was wrong and
+  // survived a long time because only the forward was being compared. The encoder is
+  // the largest block here and the one where a wrong gradient is least visible — a
+  // mask, a softmax and three projections meet inside attention, and a forward sum
+  // agrees whatever the backward does.
+  const rampedLayer = (): nn.TransformerEncoderLayer => {
+    const m = new nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, true);
+    m.eval();
+    return ramp(m);
+  };
+  // The weights start at 1 here, not 0 — a first slot weighted 0 drops the whole of
+  // that position out of the fold.
+  const foldWeights = (t: Tensor): Tensor =>
+    t.mul(Tensor.from(Array.from({ length: t.size }, (_, i) => i + 1), t.shape)).sum();
+
+  out.set("seq::grad::TransformerEncoderLayer/입력", () => {
+    const x = asLeaf(tseq());
+    foldWeights(rampedLayer().call(x)).backward();
+    return gradOf(x, "TransformerEncoderLayer");
+  });
+
+  out.set("seq::grad::TransformerEncoderLayer/파라미터 합", async () => {
+    const m = rampedLayer();
+    foldWeights(m.call(tseq())).backward();
+    let total = 0;
+    for (const p of m.parameters()) {
+      if (p.grad === null) continue;
+      total += await p.grad.abs().sum().item();
+    }
+    // A `Case` answers with a tensor or a string, and this is one number — so it goes
+    // back as a 0-d tensor and is compared numerically, which is what the Python side
+    // returning a bare float gets as well.
+    return Tensor.full([], total);
+  });
+
   // **The one that reads `memory`.** A decoder layer that quietly ignored it would
   // train, converge, and never look at the encoder — with every shape right. So the
   // memory here is a *different* tensor from the target.

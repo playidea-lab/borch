@@ -8818,6 +8818,50 @@ def train_cases(inp=None):
 
     cases.append(("seq::TransformerEncoder(2층)", _encoder_stack))
 
+    # **All three above are `eval()` and forward only, and that is the shape of the
+    # first defect this repository ever found.** `tests/scenario.py` says it in its
+    # own opening: BatchNorm's backward was wrong and survived a long time "because
+    # only the forward was being compared — training ran, the loss came down, and
+    # only the values differed."
+    #
+    # The encoder is the largest block here and the one where a wrong gradient is
+    # least visible: a mask, a softmax and three projections meet inside attention,
+    # and a forward sum agrees whatever the backward does.
+    def _encoder_grad(L):
+        """The gradient at the input, folded with a per-slot weight."""
+        m = _ramp(L, L.nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True))
+        m.eval()
+        x = L.tensor(_tseq.copy(), requires_grad=True)
+        got = m(x)
+        (got * (L.arange(got.numel()).reshape(got.shape).float() + 1)).sum().backward()
+        return _grad_of(x, "TransformerEncoderLayer")
+
+    cases.append(("seq::grad::TransformerEncoderLayer/입력", _encoder_grad))
+
+    def _encoder_param_grad(L):
+        """**And the parameters', which is what training actually moves.**
+
+        One number rather than every tensor: the layer holds a dozen, and the sum of
+        their magnitudes is enough to part a right backward from a plausible one
+        while staying a single comparable value.
+        """
+        m = _ramp(L, L.nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True))
+        m.eval()
+        got = m(L.tensor(_tseq.copy()))
+        (got * (L.arange(got.numel()).reshape(got.shape).float() + 1)).sum().backward()
+        # **Not rounded, and handed back as a tensor.** The first version returned
+        # `round(total, 4)` and the two sides came back 2098.6908 and 2098.6909 — a
+        # relative difference of 5e-11 that rounding turns into a mismatch, because a
+        # rounded number is compared as written and a tensor within tolerance.
+        # Quantising right at the digit where two float sums part is the one place
+        # rounding makes a check worse.
+        total = sum(float(p.grad.abs().sum().item()) for p in m.parameters()
+                    if p.grad is not None)
+        return L.tensor(total)
+
+    cases.append(("seq::grad::TransformerEncoderLayer/파라미터 합",
+                  _encoder_param_grad))
+
     def _decoder_layer(L):
         m = L.nn.TransformerDecoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True)
         m.eval()

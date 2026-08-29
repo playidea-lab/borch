@@ -245,7 +245,9 @@ CEILINGS = {
     # a key in `golden.json` and so spelled the same on both sides.
     # 3900 → 3911. Eleven, two case names: `제자리::transpose_(1, 2) 는 3차원에서`
     # and `제자리::squeeze_(0, 2)`. Both are keys in `golden.json`.
-    "borch-ts/test": 3911,
+    # 3911 → 3918. Seven, in the two `seq::grad::TransformerEncoderLayer/` case
+    # names — `입력` and `파라미터 합`. Both are keys in `golden.json`.
+    "borch-ts/test": 3918,
 }
 
 

@@ -774,6 +774,18 @@ RENAMED = {
     "nn.functional": 0,
     # 7 → 1: the six went back to `unaligned` when the core took torch's whole
     # optimizer surface and borch.ts stayed where it was. See the note there.
+    #
+    # **The one left is `Optimizer` itself, and it is a decision rather than a gap.**
+    # torch's second seat is a `defaults` **dict** — the mechanism `param_groups`
+    # fills a new group from — and borch.ts's is a `defaultLr` number beside the
+    # options object. The core matches torch; only borch.ts differs.
+    #
+    # What that costs is real and bounded: a custom optimizer copied from torch,
+    # `super().__init__(params, dict(lr=lr))`, does not port. What closing it costs is
+    # the base constructor of thirteen classes, and `ParamGroup` on that side already
+    # carries the per-group defaults by name, so the dict would be a second spelling
+    # of a thing that exists. Left named rather than closed — and named here, because
+    # a row nobody can find is the same as no row.
     "optim": 1,
     "optim.lr_scheduler": 0,
     # 17 → 18. `linalg.matmul`: the core says `input, other` now and borch.ts still
