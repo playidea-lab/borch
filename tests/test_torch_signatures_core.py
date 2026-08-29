@@ -684,7 +684,17 @@ JUDGED = {
     # `TORCH_DOC_IS_WRONG`), one real core defect (`resize_as_`'s argument is
     # `the_template`, and neither the docstring's `tensor` nor the family's `other` is
     # accepted by torch), and five borch.ts rows on the other axis.
-    "Tensor": (470, 509),
+    # **470 → 469, and down is the direction this row exists to stop.** It is
+    # allowed here for the one reason that makes it not a loss: `squeeze` became
+    # `(self, *dim)` because **torch's takes several axes**, so the row moved into
+    # `variadic` by matching torch rather than by hiding from it. The bucket means
+    # *no positional list to compare*, and there genuinely is none on either side.
+    #
+    # Written out because the check cannot tell those apart and a number moving the
+    # wrong way must not be edited quietly. What went in with it: `x.squeeze(0, 2)`
+    # is torch's form and stopped here, and `x.squeeze(1)` on an axis that is not
+    # length 1 is a no-op in torch and raised numpy's `ValueError` here.
+    "Tensor": (469, 509),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a

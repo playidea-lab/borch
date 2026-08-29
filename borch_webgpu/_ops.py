@@ -1545,13 +1545,22 @@ def flatten(x, start_dim=0, end_dim=-1, **kw):
     return guarded(h.reshape, _js_list(shape[:a] + [merged] + shape[b + 1:]))
 
 
-def squeeze(x, dim=None, **kw):
-    """With no `dim`, torch removes **every axis of length 1.** borch.ts does
-    one at a time."""
+def squeeze(x, *dim, **kw):
+    """With no `dim`, torch removes **every axis of length 1.**
+
+    **Several axes at once is torch's form too** — `x.squeeze(0, 2)` — and this
+    took one. borch.ts's `squeeze` is variadic now and the tuple spelling
+    (`squeeze((0, 2))`, which torch also takes) is unrolled here.
+    """
     h = handle(x)
-    dim = kw.get("dim", dim)
-    if dim is not None:
-        return guarded(h.squeeze, dim)
+    if "dim" in kw:
+        dim = (kw["dim"],)
+    if len(dim) == 1 and isinstance(dim[0], (tuple, list)):
+        dim = tuple(dim[0])
+    if dim and dim[0] is None:
+        dim = ()
+    if dim:
+        return guarded(h.squeeze, *[int(d) for d in dim])
     keep = [int(n) for n in h.shape if int(n) != 1]
     return guarded(h.reshape, _js_list(keep))
 

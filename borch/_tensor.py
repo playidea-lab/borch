@@ -970,20 +970,55 @@ class Tensor:
         return self._make(_np.expand_dims(self.data, dim), (self,), lambda g: (g.reshape(old),),
                           "UnsqueezeBackward0")
 
-    def squeeze(self, dim=None):
-        # **`squeeze(0, 2)` — several axes at once — is torch's form and is not
-        # taken here.** Widening it to `*dims` is three lines and it was written,
-        # measured against torch on every shape tried, and then withdrawn: with it
-        # in place `resize_as_` came back with the old shape and `stft`'s gradient
-        # chain went missing, both in a different file and neither naming `squeeze`.
-        #
-        # The behaviour it adds is right (torch leaves a non-length-1 axis alone
-        # where numpy raises), so something inside this library is standing on the
-        # raise. That is worth finding rather than guessing at, and shipping the
-        # widening before finding it would trade a `TypeError` a caller can read for
-        # a wrong shape they cannot.
+    def squeeze(self, *dim):
+        """Drop the length-1 axes. **Two of torch's rules, both once absent.**
+
+        `squeeze(0, 2)` names several axes, and `squeeze(1)` on an axis whose length
+        is not 1 **leaves it alone** — numpy raises there, and this raised with
+        numpy's wording.
+
+        **A previous session wrote this, measured it against torch, and withdrew
+        it**, leaving the reason in place: with the widening in, `resize_as_` came
+        back with the old shape and `stft`'s gradient chain went missing, both in a
+        different file and neither naming `squeeze`. The note said something inside
+        the library was standing on the raise and that it was worth finding.
+
+        **Neither failure reproduces, and this note does not claim to know why.**
+        The widening went back in and the suite is green; the first guess — that a
+        no-op squeeze hands back the parent's own array and something in-place moved
+        both — was written here as the cause and then **tested by removing the copy
+        again, which changed nothing.** So it was not that. Whatever the two
+        failures were, some commit between then and now took it away, and saying
+        which would be a reason borrowed from a plausible story rather than from a
+        measurement.
+
+        The no-op branch returns a numpy view, which is what `np.squeeze` gives on
+        every other path here and what torch gives too — chosen for that consistency
+        and not as a repair for anything.
+        """
         old = self.data.shape
-        out = _np.squeeze(self.data) if dim is None else _np.squeeze(self.data, axis=dim)
+        if not dim:
+            return self._make(_np.squeeze(self.data), (self,),
+                              lambda g: (g.reshape(old),))
+        want = (dim[0] if len(dim) == 1 and isinstance(dim[0], (tuple, list))
+                else dim)
+        rank = self.data.ndim
+        # **A 0-d tensor accepts dim -1 and 0**, and both are no-ops — torch treats
+        # it as having one axis for the purpose of naming one. Normalising against a
+        # rank of 0 turns -1 into -1 and the bounds check refuses a call torch takes.
+        span = max(rank, 1)
+        axes = tuple(int(d) + span if int(d) < 0 else int(d) for d in want)
+        for one in axes:
+            if not 0 <= one < span:
+                raise IndexError(_like_torch(
+                    f"squeeze(): dimension {one} is out of range for a tensor of "
+                    f"rank {rank}.",
+                    f"Dimension out of range (expected to be in range of [{-span}, "
+                    f"{span - 1}], but got {one})"))
+        # **The axes that are not length 1 come off the list, not out of an
+        # exception.** torch drops what it can and returns the rest unchanged.
+        axes = tuple(one for one in axes if rank and old[one] == 1)
+        out = _np.squeeze(self.data, axis=axes) if axes else self.data.view()
         return self._make(out, (self,), lambda g: (g.reshape(old),))
 
     def transpose(self, dim0, dim1):

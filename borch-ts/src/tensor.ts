@@ -2447,16 +2447,33 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * Removes an axis of size 1.
+   * Removes the named axes when they are of size 1.
+   *
+   * **Two of torch's rules, both once absent.** `squeeze(0, 2)` names several axes,
+   * and an axis whose length is not 1 is **left alone** rather than refused —
+   * `x.squeeze(1)` on `[1, 2, 3]` gives `[1, 2, 3]` in torch and threw here.
+   *
+   * Refusing looks like the safer of the two and is not: it is torch's own answer
+   * that is being refused, so a line copied from torch stops on a shape torch is
+   * happy with. The core carried the same pair of gaps.
    */
-  squeeze(dim: number): Tensor {
+  squeeze(...dim: number[]): Tensor {
     const rank = this.shape.length;
-    const axis = dim < 0 ? dim + rank : dim;
-    if (this.shape[axis] !== 1) {
-      throw new Error(`dimension ${dim} is not of size 1: [${this.shape}]`);
+    // A 0-d tensor accepts -1 and 0, and both are no-ops — torch counts one axis
+    // for the purpose of naming one.
+    const span = Math.max(rank, 1);
+    const axes = dim.map((d) => (d < 0 ? d + span : d));
+    for (const one of axes) {
+      if (one < 0 || one >= span) {
+        throw new IndexError(
+          `squeeze(): dimension ${one} is out of range for a tensor of rank ${rank}.`
+          + `\n(torch: Dimension out of range (expected to be in range of [${-span}, `
+          + `${span - 1}], but got ${one}))`);
+      }
     }
-    const outShape = [...this.shape];
-    outShape.splice(axis, 1);
+    const keep = axes.filter((one) => rank > 0 && this.shape[one] === 1);
+    if (keep.length === 0) return this.reshape([...this.shape]);
+    const outShape = this.shape.filter((_d, i) => !keep.includes(i));
     const shape = this.shape;
     return Tensor.make(
       this.buffer,

@@ -241,7 +241,9 @@ CEILINGS = {
     # 3873 → 3891. Eighteen: the two `container::BatchNorm(device|dtype)=우리는거절`
     # names and the `기대대로` / `뜻밖의 성공` verdicts they return, which are frozen
     # values in `golden.json` and have to be spelled identically on both sides.
-    "borch-ts/test": 3891,
+    # 3891 → 3900. Nine, one case name: `modfn::모양::squeeze(길이가 1 이 아닌 축)`,
+    # a key in `golden.json` and so spelled the same on both sides.
+    "borch-ts/test": 3900,
 }
 
 

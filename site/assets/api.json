@@ -981,13 +981,13 @@
       },
       {
        "name": "squeeze",
-       "signature": "squeeze(dim: number): Tensor",
-       "doc": "Removes an axis of size 1.",
+       "signature": "squeeze(...dim: number[]): Tensor",
+       "doc": "Removes the named axes when they are of size 1.\n\n**Two of torch's rules, both once absent.** `squeeze(0, 2)` names several axes,\nand an axis whose length is not 1 is **left alone** rather than refused —\n`x.squeeze(1)` on `[1, 2, 3]` gives `[1, 2, 3]` in torch and threw here.\n\nRefusing looks like the safer of the two and is not: it is torch's own answer\nthat is being refused, so a line copied from torch stops on a shape torch is\nhappy with. The core carried the same pair of gaps.",
        "section": {
         "ko": "Reductions",
         "en": "Reductions"
        },
-       "doc_ko": "크기 1 인 축을 뺀다."
+       "doc_ko": "이름 붙인 축이 길이 1 이면 없앤다.\n\n**torch 의 규칙 둘, 둘 다 없었다.** `squeeze(0, 2)` 처럼 축을 여러 개 부를 수 있고, 길이가 1 이 아닌 축은 거절이 아니라 **그냥 둔다** — `[1, 2, 3]` 에 `x.squeeze(1)` 은 torch 에서 `[1, 2, 3]` 이고 여기선 던졌다.\n\n거절이 더 안전해 보이지만 아니다. 거절당하는 것이 torch 자신의 답이라서, torch 에서 복사한 줄이 torch 는 괜찮은 모양에서 멈춘다. 코어도 같은 두 구멍을 갖고 있었다."
       },
       {
        "name": "reshape",

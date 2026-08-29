@@ -3522,6 +3522,21 @@ def module_function_cases(inp=None):
     add("permute", lambda L: L.permute(L.tensor(x2), (1, 0)))
     add("transpose", lambda L: L.transpose(L.tensor(x2), 0, 1))
     add("squeeze", lambda L: L.squeeze(L.tensor(x1).reshape(1, 6, 1)))
+    # **Two of torch's rules that had been absent for a long time.** Several axes at
+    # once, and an axis whose length is not 1 **left alone** rather than refused —
+    # `x.squeeze(1)` on `[1, 2, 3]` is a no-op in torch and raised numpy's
+    # `ValueError` here. A previous session wrote the widening, hit two failures
+    # elsewhere and withdrew it with the reason written down; neither failure
+    # reproduces now, so it went back in with a check under it.
+    for label, call in (
+        ("squeeze(0, 2)", lambda t: t.squeeze(0, 2)),
+        ("squeeze((0, 2))", lambda t: t.squeeze((0, 2))),
+        # 1 is not the axis of length 1 — torch drops what it can and keeps the rest.
+        ("squeeze(0, 1)", lambda t: t.squeeze(0, 1)),
+        ("squeeze(길이가 1 이 아닌 축)", lambda t: t.squeeze(1)),
+    ):
+        add(f"모양::{label}",
+            lambda L, f=call: str(tuple(f(L.tensor(x1).reshape(1, 6, 1)).shape)))
 
     # **`max` and `min` return a pair when given an axis.** Taken out by position it works
     # whatever the two sides call them.

@@ -6395,6 +6395,22 @@ function addModFn(out: Map<string, Case>, inp: Inputs): void {
   ];
   for (const [name, fn] of table) out.set(`modfn::${name}`, fn);
 
+  // **Two of torch's rules that were absent on both sides.** Several axes at once,
+  // and an axis whose length is not 1 left alone rather than refused — refusing looks
+  // like the safer answer and is not, because it is torch's own answer being refused.
+  const boxed = (): Tensor => inp.get("x1").reshape([1, 6, 1]);
+  for (const [name, call] of [
+    ["squeeze(0, 2)", (t: Tensor) => t.squeeze(0, 2)],
+    // borch.ts has no tuple spelling — JavaScript spreads instead, and the golden
+    // answer is the shape, which is the same either way.
+    ["squeeze((0, 2))", (t: Tensor) => t.squeeze(0, 2)],
+    ["squeeze(0, 1)", (t: Tensor) => t.squeeze(0, 1)],
+    ["squeeze(길이가 1 이 아닌 축)", (t: Tensor) => t.squeeze(1)],
+  ] as [string, (t: Tensor) => Tensor][]) {
+    out.set(`modfn::모양::${name}`, () => `(${call(boxed()).shape.join(", ")}${
+      call(boxed()).shape.length === 1 ? "," : ""})`);
+  }
+
   out.set("modfn::relu_(원본이 바뀐다)", () => {
     const t = inp.get("x1").clone();
     t.inplaceUnary("relu");
