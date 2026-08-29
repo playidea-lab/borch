@@ -1588,3 +1588,45 @@ def test_the_menu_bar_can_still_be_scrolled_on_a_phone():
     assert "white-space: nowrap" in rules, (
         "`.top nav a { white-space: nowrap }` is gone — the entries wrap mid-word instead\n"
         "  of scrolling as a row.")
+
+
+# **A run's size goes stale the way a count does, and nothing was reading it.** The pages
+# report a GPU run as `agreeing N / N`, and N is the size of the case table on the day
+# somebody ran it. Two days and fifteen commits later the table had grown by a hundred and
+# twenty-two while the pages still said 3758 — found by sweeping by hand, which is the
+# method this repository keeps replacing.
+#
+# **The live claim is marked rather than matched.** `setup.html` deliberately carries an
+# older figure in the clause that says what it used to claim, so a net cast over the prose
+# would catch the retraction it is supposed to preserve. `data-measured` says which one is
+# speaking for today.
+#
+# The counting is borrowed, not restated — `tests/test_docs.py` already decides what the
+# three legitimate totals are, and a second copy of that rule is a rule that diverges.
+_MEASURED = re.compile(r'<code data-measured="golden">agreeing (\d+) / (\d+)')
+
+
+@pytest.mark.parametrize("name", ["index.html", "setup.html",
+                                  "ko/index.html", "ko/setup.html"])
+def test_a_reported_run_covers_the_cases_that_exist_now(name):
+    """`agreeing N / N` has to be a run over the table as it stands."""
+    docs = _load_module("bt_docs", ROOT / "tests" / "test_docs.py")
+    total, core, bind = docs._counts()
+    page = (ROOT / "site" / name).read_text(encoding="utf-8")
+
+    hit = _MEASURED.search(page)
+    assert hit, (
+        f"site/{name} has no `data-measured=\"golden\"` run to check.\n"
+        "  the figure has to stay marked, or the next reader of this page cannot tell\n"
+        "  which of its numbers is a claim about today and which is a retracted one.")
+    asked, agreed = int(hit.group(1)), int(hit.group(2))
+    assert asked == agreed, (
+        f"site/{name} reports {agreed} of {asked} agreeing.\n"
+        "  a run with failures is not a thing to advertise on a landing page; say what\n"
+        "  diverged and why, as the page did when two cases were about the machine.")
+    assert asked in (total, core, bind), (
+        f"site/{name} reports a run over {asked} cases; the table now holds "
+        f"{total} ({core} for the core, {bind} through the binding).\n"
+        "  the measurement is older than the thing it measured. Re-run it on a real GPU\n"
+        "  and put the new figure here — editing the number alone would be a claim\n"
+        "  about a run nobody made.")

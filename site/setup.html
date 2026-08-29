@@ -148,7 +148,7 @@
     </p>
     <p class="small">
       <strong>The whole suite was run on those two flags</strong>, not just an adapter probe:
-      <code>agreeing 3758 / 3758 [nvidia / blackwell]</code> on the 5080, and the training
+      <code data-measured="golden">agreeing 3880 / 3880 [nvidia / blackwell]</code> on the 5080, and the training
       agrees too &mdash; thirty steps of a small ResNet with its per-layer gradients,
       batch-norm buffers and eval, matched against torch to <code>64 values</code>, once
       through the Python binding and once through borch.ts's own API. Earlier this page
