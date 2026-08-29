@@ -7371,6 +7371,11 @@ function addRecent(out: Map<string, Case>): void {
     ["clamp_min_", plain4, (x) => x.clampMin_(3)],
     ["digamma_", pos4, (x) => x.digamma_()],
     ["divide_", plain4, (x) => x.divide_(2)],
+    // **An alias narrower than what it aliases drops an argument in silence.** `div_`
+    // one line up carries `roundingMode` and `divide_` did not, so this call handed
+    // the mode to nothing and returned the true quotient — a number, and a plausible
+    // one.
+    ["divide_(rounding_mode)", plain4, (x) => x.divide_(2, "floor")],
     ["erfinv_", () => Tensor.from([0.0, 0.3, -0.2, 0.4], [4]), (x) => x.erfinv_()],
     ["floor_divide_", plain4, (x) => x.floorDivide_(2)],
     ["fmod_", plain4, (x) => x.fmod_(2)],

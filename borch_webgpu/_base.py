@@ -540,8 +540,13 @@ class Tensor:
         from . import _ops
         return _ops.imag(self)
 
-    def resize_as_(self, other):
+    def resize_as_(self, the_template, memory_format=None):
         """An underscore name with no pair, so the derived table does not build it.
+
+        **The argument is `the_template`.** torch registers it under that name and
+        refuses both `tensor=` (its own docstring's word) and `other=` (what every
+        neighbour and its non-in-place twin take) — measured, all three. The core
+        carries the same name, and this side said `other` until it did.
 
         **It is in place** — handing back a new tensor would make the name a
         lie. `_write_back` follows the shape change too, which is the same path
@@ -551,7 +556,10 @@ class Tensor:
         had since it was first committed. What it says here comes from reading
         the line below it rather than from guessing at the gaps.)
         """
-        return self._write_back(self.reshape(*[int(v) for v in other.shape]))
+        if memory_format is not None:
+            from borch._base import _unsupported
+            _unsupported("Tensor.resize_as_(memory_format=…)")
+        return self._write_back(self.reshape(*[int(v) for v in the_template.shape]))
 
     def is_same_size(self, other):
         return tuple(self.shape) == tuple(other.shape)

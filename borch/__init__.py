@@ -559,6 +559,20 @@ def _link_wrapped():
             # argument list it does not have; see `_deprecated_by_torch`.
             continue
         _target = getattr(_o, _n, None)
+        # **A name can be the same object on both sides, and then this pointed it at
+        # itself.** `_ops.eq` and `Tensor.eq` are one `_compare.<locals>.cmp`, so
+        # `_m.__wrapped__ = _target` made `__wrapped__` a self-loop — and
+        # `inspect.signature` does not shrug at that, it **raises**
+        # `ValueError: wrapper loop when unwrapping`. Eleven `Tensor` names were in
+        # that state: the eight comparisons and the three aliases pointing at them.
+        #
+        # Worse than the bag it was written to remove. A bag reads as
+        # `(self, *args, **kw)` and says little; a loop makes `inspect.signature`,
+        # `help()` and every editor's hover **fail** on `x.eq`, which torch answers.
+        # The axis filed all eleven as *no python signature*, one wording for two very
+        # different conditions.
+        if _target is _m:
+            continue
         if callable(_m) and callable(_target) and "<locals>" in getattr(
                 _m, "__qualname__", "") and getattr(_m, "__name__", None) == _n:
             try:
@@ -569,6 +583,66 @@ def _link_wrapped():
 
 _link_wrapped()
 del _link_wrapped
+
+
+# **The two generators in `_tensor.py` build `(self, *args, **kw)`, and a bag says
+# nothing.** `_bind_inplace` wraps the partner method and `_bind_from_module` wraps
+# an `_ops` function; both hand the arguments straight on, so what each will accept
+# is already written down one call away. Forty-seven `Tensor` rows were filed as
+# *no python signature* — the bucket meaning **cannot be judged**, which is an
+# absorbing state: no count holds it and nothing downstream of it gets asked.
+#
+# The same repair `_ops._make_inplace` took, on the two generators that live on the
+# other side of the import. **It runs here for the ordering reason above** —
+# `_bind_from_module` reads `_ops`, which does not exist while `_tensor` is being
+# built, and `_bind_inplace`'s partners are only fully readable once `_link_wrapped`
+# has finished.
+#
+# **A variadic source is left alone.** `expand(*sizes)` and `reshape(*shape)` really
+# do take any number, and copying a promise the method cannot keep is worse than the
+# bag — that is the mistake `relu_` caught in `_ops.py`, where a declared signature
+# outran what the method would accept.
+def _declare_forwarders():
+    import inspect as _inspect
+
+    from . import _ops as _o
+    from ._tensor import _INPLACE_FROM_PAIR, _INPLACE_LATE, _METHOD_FROM_MODULE
+    from ._tensor import Tensor as _T
+
+    def _copy(method, source, drop_receiver):
+        if source is None or getattr(method, "__signature__", None) is not None:
+            return
+        try:
+            got = _inspect.signature(source)
+        except (TypeError, ValueError):
+            return
+        params = list(got.parameters.values())
+        # **Not `any(...)`.** This module exports a tensor reduction called `any`, and
+        # inside a function defined here that global wins over the builtin — the
+        # generator expression went to `borch.any`, which tried to make a tensor out of
+        # it. A plain loop has no such name to collide with.
+        for one in params:
+            if one.kind in (one.VAR_POSITIONAL, one.VAR_KEYWORD):
+                return
+        if drop_receiver:
+            if not params:
+                return
+            params = params[1:]
+        first = _inspect.Parameter("self", _inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        method.__signature__ = got.replace(parameters=[first] + params)
+
+    # **The module-borrowed methods go first.** An in-place name reads its partner off
+    # the class, and three of them — `arctan2_`, `igamma_`, `igammac_` — have a partner
+    # that is itself one of these forwarders. Repaired in the other order they copied a
+    # bag and stayed bags, with nothing to say which pass had been the wrong way round.
+    for _n in _METHOD_FROM_MODULE:
+        _copy(getattr(_T, _n, None), getattr(_o, _n, None), drop_receiver=True)
+    for _n in _INPLACE_FROM_PAIR + _INPLACE_LATE:
+        _copy(getattr(_T, _n, None), getattr(_T, _n[:-1], None), drop_receiver=True)
+
+
+_declare_forwarders()
+del _declare_forwarders
 
 
 # ── `out=` — writing into a tensor made in advance ──────────────────────────

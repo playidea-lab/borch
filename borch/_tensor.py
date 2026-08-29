@@ -1750,7 +1750,16 @@ Tensor.requires_grad_ = _requires_grad_
 Tensor.share_memory_ = _share_memory_
 
 # With the partners in place, the underscore versions come from the same table.
-for _iname in ("arctan2_", "igamma_", "igammac_", "polygamma_"):
+#
+# **Named rather than written inline**, because `borch/__init__.py` has to walk these
+# too — it copies each forwarder's partner signature onto it once `_ops` exists, and a
+# group that is only a literal in a `for` is a group that pass cannot see. Four names
+# stayed `(self, *args, **kw)` for exactly that reason while the forty-two above were
+# repaired, which is the shape the note on `_INPLACE_FROM_PAIR` records: what was
+# measured and what was written diverge.
+_INPLACE_LATE = ("arctan2_", "igamma_", "igammac_", "polygamma_")
+
+for _iname in _INPLACE_LATE:
     setattr(Tensor, _iname, _bind_inplace(_iname))
 del _iname
 

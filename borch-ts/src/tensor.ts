@@ -8295,12 +8295,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.nextafter(other));
   }
 
-  clampMax_(high: number): Tensor {
-    return this.mutate(() => this.clampMax(high));
+  // **These four take their partner's word for the argument, and did not.** One line
+  // up, `clampMax(max)`, `clampMin(min)`, `fmod(other)` and `remainder(other)` all use
+  // torch's name; the in-place twins had invented `high`, `low` and `divisor`. Nothing
+  // a caller writes changes — JavaScript has no keyword arguments — but the printed
+  // API disagreed with torch's docs at four places, and the signature axis could not
+  // say so while the core's own methods were `(self, *args, **kw)`.
+  clampMax_(max: number): Tensor {
+    return this.mutate(() => this.clampMax(max));
   }
 
-  clampMin_(low: number): Tensor {
-    return this.mutate(() => this.clampMin(low));
+  clampMin_(min: number): Tensor {
+    return this.mutate(() => this.clampMin(min));
   }
 
   digamma_(): Tensor {
@@ -8323,12 +8329,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.floorDivide(Tensor.asTensor(other)));
   }
 
-  fmod_(divisor: number): Tensor {
-    return this.mutate(() => this.fmod(divisor));
+  fmod_(other: number): Tensor {
+    return this.mutate(() => this.fmod(other));
   }
 
-  remainder_(divisor: number): Tensor {
-    return this.mutate(() => this.remainder(divisor));
+  remainder_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.remainder(other));
   }
 
   lerp_(end: Tensor, weight: Tensor | number): Tensor {
@@ -8456,11 +8462,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // **Numbers only** — as their partners `div_`, `mul_` and `sub_` are. In-place
   // arithmetic taking a tensor is not here, and an alias wider than its partner is not
   // an alias but a new promise.
-  divide_(other: number): Tensor {
-    return this.div_(other);
+  // **An alias narrower than what it aliases drops an argument in silence.** `div_`
+  // takes `roundingMode` and `divide_` did not, so `x.divide_(2, "floor")` handed the
+  // mode to nothing and returned the true quotient — a number, and a plausible one.
+  divide_(other: number, roundingMode: "trunc" | "floor" | null = null): Tensor {
+    return this.div_(other, roundingMode);
   }
 
   trueDivide_(other: number): Tensor {
+    // **No `roundingMode` here, and that is torch's own line.** `true_divide` is
+    // always the true quotient; `divide` is `div`'s alias and carries the mode.
     return this.div_(other);
   }
 

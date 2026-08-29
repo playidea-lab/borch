@@ -667,7 +667,24 @@ JUDGED = {
     # real defects were underneath it: `logit_` refused an `eps` torch computes, and
     # `scatter_` had no `reduce` at all. Neither was reachable from a bucket that
     # means the question cannot be asked.
-    "Tensor": (414, 509),
+    #
+    # **414 → 470, and this one was larger again.** `_ops._make_inplace` was only one of
+    # four generators; the other three live in `_tensor.py` (`_bind_inplace`,
+    # `_bind_from_module`) and could not read their sources at class-build time, because
+    # `_ops` imports `_tensor` and not the other way round. `borch/__init__.py` copies
+    # the partner's signature onto each of them now, after both modules exist — the same
+    # place and the same reason `_link_wrapped` already sat there.
+    #
+    # Eleven more came from a `__wrapped__` that **pointed at itself**: `_ops.eq` and
+    # `Tensor.eq` are one object, so linking one to the other made a loop, and
+    # `inspect.signature` does not shrug at a loop — it raises. Worse than the bag it
+    # was meant to remove, and filed under the same wording.
+    #
+    # What the 56 exposed: fifteen places where torch's own prose is wrong (see
+    # `TORCH_DOC_IS_WRONG`), one real core defect (`resize_as_`'s argument is
+    # `the_template`, and neither the docstring's `tensor` nor the family's `other` is
+    # accepted by torch), and five borch.ts rows on the other axis.
+    "Tensor": (470, 509),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a

@@ -2690,17 +2690,23 @@ def dequantize(input):                                    # noqa: A002
     return wrap(guarded(handle(input).dequantize))
 
 
-def resize_as_(input, other):                             # noqa: A002
-    """In place, to `other`'s shape. **The values in the added cells are
+def resize_as_(input, the_template, memory_format=None):  # noqa: A002
+    """In place, to `the_template`'s shape. **The values in the added cells are
     undefined** (measured).
+
+    The argument is `the_template` because that is the name torch registers — see
+    the method of the same name in `_base.py`.
 
     **`copyFrom` cannot do it** — that needs the same element count, and changing
     the element count is the whole of this operation. In-placeness is kept by
     swapping the handle on the Python side: the object the caller holds stays,
     and only the buffer underneath changes.
     """
+    if memory_format is not None:
+        from borch._base import _unsupported
+        _unsupported("Tensor.resize_as_(memory_format=…)")
     x = wrap(input)
-    want = wrap(other).shape
+    want = wrap(the_template).shape
     flat = x.numpy().reshape(-1)
     need = 1
     for d in want:

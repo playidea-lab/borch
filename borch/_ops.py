@@ -4067,15 +4067,32 @@ def dequantize(input):                                          # noqa: A002
     return Tensor(_float_in(_np.asarray(_wrap(input).data).copy()))
 
 
-def resize_as_(input, other):                                   # noqa: A002
-    """Change **in place** to `other`'s shape.
+def resize_as_(input, the_template, memory_format=None):        # noqa: A002
+    """Change **in place** to `the_template`'s shape.
 
     **The values in the added cells are undefined** — torch does not initialise
     them either (measured). So the golden asks about **the shape only.** Pinning
     the values would mount that implementation's accident as the
     specification.
+
+    **The argument is `the_template`, and finding that out took a call.** This was
+    `other`, which is what the rest of the family takes and what torch's own
+    docstring for *this* one says — `resize_as_(tensor)`. Both are wrong:
+    `x.resize_as_(the_template=y)` is the call torch accepts, and it refuses both
+    `tensor=` and `other=` (measured, all three). A docstring disagreeing with the
+    registration is not unusual here; a docstring disagreeing with it while the
+    plausible guess is also wrong is why `test_torch_names.py` calls rather than
+    reads.
+
+    Its non-in-place twin `resize_as` really is `other` — the two do not share the
+    name, which is the part nobody would guess.
+
+    `memory_format` is torch's second seat, **carried and refused** the way
+    `clone`'s is.
     """
-    t, o = _wrap(input), _wrap(other)
+    if memory_format is not None:
+        _unsupported("Tensor.resize_as_(memory_format=…)")
+    t, o = _wrap(input), _wrap(the_template)
     flat = _np.asarray(t.data).reshape(-1)
     want = int(_np.prod(o.data.shape)) if o.data.shape else 1
     grown = _np.zeros(want, dtype=t.data.dtype)

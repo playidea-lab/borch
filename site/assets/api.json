@@ -4361,7 +4361,7 @@
       },
       {
        "name": "clampMax_",
-       "signature": "clampMax_(high: number): Tensor",
+       "signature": "clampMax_(max: number): Tensor",
        "doc": "",
        "torch": "clamp_max_",
        "section": {
@@ -4371,7 +4371,7 @@
       },
       {
        "name": "clampMin_",
-       "signature": "clampMin_(low: number): Tensor",
+       "signature": "clampMin_(min: number): Tensor",
        "doc": "",
        "torch": "clamp_min_",
        "section": {
@@ -4400,7 +4400,7 @@
       },
       {
        "name": "fmod_",
-       "signature": "fmod_(divisor: number): Tensor",
+       "signature": "fmod_(other: number): Tensor",
        "doc": "",
        "section": {
         "ko": "The thirty-eight in-place forms",
@@ -4409,7 +4409,7 @@
       },
       {
        "name": "remainder_",
-       "signature": "remainder_(divisor: number): Tensor",
+       "signature": "remainder_(other: Tensor | number): Tensor",
        "doc": "",
        "section": {
         "ko": "The thirty-eight in-place forms",
@@ -4594,7 +4594,7 @@
       },
       {
        "name": "divide_",
-       "signature": "divide_(other: number): Tensor",
+       "signature": "divide_(other: number, roundingMode?: \"trunc\" | \"floor\" | null): Tensor",
        "doc": "",
        "section": {
         "ko": "The thirty-eight in-place forms",

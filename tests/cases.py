@@ -11308,6 +11308,12 @@ def inplace_cases(inp=None):
         ("clamp_min_", lambda L, x: x.clamp_min_(3), plain),
         ("digamma_", lambda L, x: x.digamma_(), pos),
         ("divide_", lambda L, x: x.divide_(2), plain),
+        # **An alias narrower than what it aliases drops an argument in silence.**
+        # `div_` carries `rounding_mode` and borch.ts's `divide_` did not, so this
+        # call handed the mode to nothing and returned the true quotient — a number,
+        # and a plausible one. The two are one line apart in that file.
+        ("divide_(rounding_mode)",
+         lambda L, x: x.divide_(2, rounding_mode="floor"), plain),
         ("erfinv_", lambda L, x: x.erfinv_(), small - 0.5),
         ("floor_divide_", lambda L, x: x.floor_divide_(2), plain),
         ("fmod_", lambda L, x: x.fmod_(2), plain),
@@ -11563,6 +11569,22 @@ def inplace_cases(inp=None):
         return f"{tuple(x.shape)} {got is x}"
 
     cases.append((INPLACE_PREFIX + "짝없이::resize_as_ 는 제자리다", resized))
+
+    def resized_by_name(L):
+        """**The keyword is `the_template`**, which is neither what torch's docstring
+        says nor what the rest of the family takes.
+
+        Its own doc reads `resize_as_(tensor)`; the plausible repair is `other`, which
+        every neighbour uses and which its non-in-place twin `resize_as` really does
+        take. torch refuses both (measured, all three spellings). A name that can only
+        be found by calling is the reason `test_torch_names.py` calls.
+        """
+        x = L.tensor(grid2.copy())
+        x.resize_as_(the_template=L.tensor(np.zeros((1, 4), dtype=np.float32)))
+        return str(tuple(x.shape))
+
+    cases.append((INPLACE_PREFIX + "짝없이::resize_as_(the_template 이라는 이름)",
+                  resized_by_name))
 
     # ── the twenty predicates torch gives as attributes ──
     #
