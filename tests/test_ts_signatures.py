@@ -1701,6 +1701,53 @@ KEYWORD_GAP = {
     "datasets": 0,
 }
 
+# **The bucket that means *no list to compare*, and nothing was counting it.**
+#
+# Every other verdict on this axis is a difference between two argument lists.
+# This one says there is no list on the core's side — the method is variadic — so
+# no comparison happens at all. That makes it **absorbing**: a row entering it
+# leaves the other tables and turns up in no total, exactly the state
+# `test_torch_signatures_core.py` holds a ratio against on the other axis and
+# nothing held here.
+#
+# It was not theoretical. `squeeze` became `(self, *dim)` one commit ago and moved
+# into this bucket, and on this axis **no check said a word** — the other axis
+# caught it only because its ratio is frozen.
+#
+# What is left is variadic on torch's side too, which is the whole of the reason:
+#
+#   · **shape** — `expand(*sizes)`, `permute(*dims)`, `reshape(*shape)`,
+#     `view(*shape)`, `repeat(*reps)`, `tile(*reps)`, `flip(*dims)`,
+#     `broadcast_to(*shape)`, `squeeze(*dim)`, `squeeze_`, `count_nonzero(*dim)`
+#     and the three `new_*(*size)`. torch takes a spread list or a tuple at each,
+#     and a spread list has no positions to line up.
+#   · **`to`** — torch's own is three overloads in one name (dtype, device,
+#     tensor), which is what `(*args, **kwargs)` is standing in for.
+#   · **`nn`** — `RNN`, `GRU`, `LSTM`, `Identity` and `Sequential`: **torch's own
+#     `__init__` is `(*args, **kwargs)`** for all five (measured), so a bag here
+#     is the faithful shape rather than a missing one.
+#   · **`utils.data`** — `TensorDataset(*tensors)`, `StackDataset(*datasets,
+#     **named)`; **`transforms.v2`** — `Lambda(lambd, *types)`, `ToTensor()`.
+#
+# **What retires a row**: torch giving the name a fixed list, or this side finding
+# a spelling that has one. What must not retire a row is the core turning variadic
+# to make a comparison go away — which is why the number is frozen and not merely
+# printed.
+UNREAD = {
+    "Tensor": 15,
+    "nn": 5,
+    "nn.functional": 0,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    "utils.data": 2,
+    "transforms": 0,
+    "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 2,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
+}
 
 
 def _stale():
@@ -1771,7 +1818,7 @@ def test_the_signature_axis_has_not_widened():
     moved = []
     for space, found in sorted(rows.items()):
         got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0, "free": 0,
-               "two": 0, "declined": 0, "kw": 0}
+               "two": 0, "declined": 0, "kw": 0, "unread": 0}
         for _n, _m, _y, note in found:
             # **The keyword rows are taken first, and their note is compound.** A row
             # reading `shorter · keyword-only absent: foreach` is one row, not one of
@@ -1793,6 +1840,8 @@ def test_the_signature_axis_has_not_widened():
                 got["free"] += 1
             elif note.startswith("ambiguous"):
                 got["two"] += 1
+            elif note in ("no python signature", "no argument list"):
+                got["unread"] += 1
         for key, table in (("shifted", SHIFTED), ("shorter", SHORTER),
                            ("unaligned", UNALIGNED), ("renamed", RENAMED),
                            ("free", FREE_FUNCTION),
@@ -1801,7 +1850,8 @@ def test_the_signature_axis_has_not_widened():
                            # `shorter` has to be as hard to grow as `shorter` is, or it
                            # becomes the cheap way to make that number fall.
                            ("declined", DECLINED),
-                           ("kw", KEYWORD_GAP)):
+                           ("kw", KEYWORD_GAP),
+                           ("unread", UNREAD)):
             if got[key] != table[space]:
                 moved.append(f"{space} {key}: {got[key]} now, {table[space]} written")
     assert not moved, (

@@ -1640,12 +1640,12 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
 
 
 def transpose(x, dim0=None, dim1=None, **kw):
-    """borch.ts's `transpose()` is **2-D only** and takes no axes.
+    """torch swaps two axes at any rank, and this builds the permutation.
 
-    torch swaps two axes at any rank. Passing axes had them discarded; at rank 2
-    the answer happens to match and at rank 3 and up borch.ts throws, so it was
-    never quietly wrong. Still, `x.transpose(1, 2)` is something torch code does
-    all the time, so it is matched here.
+    **The note here said borch.ts's `transpose()` is 2-D only and takes no axes.**
+    That was true and stopped being true: that side takes `(dim0?, dim1?)` now.
+    The permutation is still built on this side rather than handed over, because
+    `swapdims` below shares it and the two spellings must not part.
     """
     dim0 = kw.get("dim0", dim0)
     dim1 = kw.get("dim1", dim1)

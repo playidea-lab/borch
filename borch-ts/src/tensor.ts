@@ -7817,12 +7817,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.variance(dim, take, keepdim);
   }
 
-  transpose_(): Tensor {
-    return this.mutate(() => this.transpose());
+  // **Both took less than their partners one screen up.** `transpose(dim0, dim1)`
+  // and `squeeze(...dim)` carry torch's whole list; the in-place twins took nothing
+  // and one axis, so `x.transpose_(0, 1)` dropped both numbers and did the 2-D swap,
+  // and `x.squeeze_(0, 2)` dropped the second. Same shape as `divide_`, which was
+  // narrower than `div_` for the same reason: an in-place twin written by hand
+  // rather than derived.
+  transpose_(dim0?: number, dim1?: number): Tensor {
+    return this.mutate(() => this.transpose(dim0, dim1));
   }
 
-  squeeze_(dim: number): Tensor {
-    return this.mutate(() => this.squeeze(dim));
+  squeeze_(...dim: number[]): Tensor {
+    return this.mutate(() => this.squeeze(...dim));
   }
 
   unsqueeze_(dim: number): Tensor {

@@ -694,7 +694,13 @@ JUDGED = {
     # wrong way must not be edited quietly. What went in with it: `x.squeeze(0, 2)`
     # is torch's form and stopped here, and `x.squeeze(1)` on an axis that is not
     # length 1 is a no-op in torch and raised numpy's `ValueError` here.
-    "Tensor": (469, 509),
+    #
+    # **469 → 470**, and back up by a different row: `transpose_`. `_make_inplace`
+    # reads a module function, and there is no `_ops.transpose` — so it fell back to
+    # a closure that calls the method, and `_forwards` had a bag to copy from. It
+    # reads `Tensor.transpose(dim0, dim1)` now, one attribute away and fully spelled
+    # the whole time.
+    "Tensor": (470, 509),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a

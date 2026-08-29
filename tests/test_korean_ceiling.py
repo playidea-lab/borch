@@ -243,7 +243,9 @@ CEILINGS = {
     # values in `golden.json` and have to be spelled identically on both sides.
     # 3891 → 3900. Nine, one case name: `modfn::모양::squeeze(길이가 1 이 아닌 축)`,
     # a key in `golden.json` and so spelled the same on both sides.
-    "borch-ts/test": 3900,
+    # 3900 → 3911. Eleven, two case names: `제자리::transpose_(1, 2) 는 3차원에서`
+    # and `제자리::squeeze_(0, 2)`. Both are keys in `golden.json`.
+    "borch-ts/test": 3911,
 }
 
 

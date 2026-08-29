@@ -3631,7 +3631,7 @@
       },
       {
        "name": "transpose_",
-       "signature": "transpose_(): Tensor",
+       "signature": "transpose_(dim0?: number, dim1?: number): Tensor",
        "doc": "",
        "section": {
         "ko": "The `new_*` family, and four more built from what is here",
@@ -3640,7 +3640,7 @@
       },
       {
        "name": "squeeze_",
-       "signature": "squeeze_(dim: number): Tensor",
+       "signature": "squeeze_(...dim: number[]): Tensor",
        "doc": "",
        "section": {
         "ko": "The `new_*` family, and four more built from what is here",

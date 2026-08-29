@@ -9390,6 +9390,22 @@ function addInplace(out: Map<string, Case>): void {
     return x;
   });
 
+  // **Rank 3, where a dropped pair of axes shows.** Every case above is 2-D, and at
+  // 2-D `transpose_(0, 1)` and `transpose_()` are the same answer — which is why
+  // `transpose_()` taking no axes at all passed all of them.
+  out.set("method2::제자리::transpose_(1, 2) 는 3차원에서", () => {
+    const x = Tensor.from([...Array(24).keys()], [2, 3, 4]);
+    x.transpose_(1, 2);
+    return x.reshape([-1]).at([[0, 1, 2, 3, 4, 5]]).toArray()
+      .then((v) => `(${x.shape.join(", ")}) [${[...v].map((n) => `${n}.0`).join(", ")}]`);
+  });
+
+  out.set("method2::제자리::squeeze_(0, 2)", () => {
+    const x = Tensor.from([...Array(6).keys()], [1, 6, 1]);
+    x.squeeze_(0, 2);
+    return `(${x.shape.join(", ")},)`;
+  });
+
   // The answer's spelling is Python's `str(True)` — the golden was frozen by Python, so
   // "true" does not match. Answering one question in one spelling is what makes the
   // comparison a comparison.

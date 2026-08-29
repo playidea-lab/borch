@@ -2621,7 +2621,15 @@ def _make_inplace(name, arity="nullary"):
     # not have it the method is called. Either way that does the computation and
     # this only writes back — two copies eventually diverge.
     fn = globals().get(name)
+    # **When there is no module form, the method is the source and also the thing to
+    # read.** The closure below is a bag, so `_forwards` had nothing to copy and
+    # `transpose_` stayed `(self, *args, **kw)` while `Tensor.transpose(dim0, dim1)`
+    # sat one attribute away, fully spelled. `reads` carries the readable one past
+    # the wrapper.
+    reads = fn
     if fn is None:
+        reads = getattr(Tensor, name, None)
+
         def fn(t, *a, **k):
             return getattr(t, name)(*a, **k)
 
@@ -2644,7 +2652,12 @@ def _make_inplace(name, arity="nullary"):
         # signature would declare arguments the method cannot accept, which is a
         # worse lie than the `(*args, **kw)` it replaces — `relu_` is exactly that
         # shape, and this line is why it is not.
-        _forwards(method, fn)
+        #
+        # **The receiver comes off when the source is a method.** A module function
+        # takes the tensor first and so does the wrapper, so the lists line up; a
+        # method's first parameter is already `self` and copying it whole would
+        # declare it twice.
+        _forwards(method, reads, drop=reads is not fn)
 
     method.__name__ = name + "_"
     method.__doc__ = (f"`{name}` in place. `{name}` does the arithmetic and this "
@@ -2652,7 +2665,7 @@ def _make_inplace(name, arity="nullary"):
     return method
 
 
-def _forwards(method, fn):
+def _forwards(method, fn, drop=False):
     """Say what the forwarder forwards, so `inspect.signature` can read it.
 
     **A `(*args, **kw)` wrapper is a signature nothing can compare.** `add_` takes
@@ -2676,8 +2689,13 @@ def _forwards(method, fn):
     params = list(got.parameters.values())
     if not params or any(p.kind is p.VAR_POSITIONAL for p in params):
         return
-    first = params[0].replace(name="self", kind=_inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    method.__signature__ = got.replace(parameters=[first] + params[1:])
+    if drop:
+        params = params[1:]
+    first = params[0].replace(name="self", kind=_inspect.Parameter.POSITIONAL_OR_KEYWORD) \
+        if not drop else _inspect.Parameter(
+            "self", _inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    method.__signature__ = got.replace(
+        parameters=[first] + (params[1:] if not drop else params))
 
 
 # **They are attached at the end of this file.** Attached here, the functions

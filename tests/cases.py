@@ -6122,6 +6122,28 @@ def method_name_cases(inp=None):
 
     add("제자리::transpose_ 의 값", inplace_transpose_values)
 
+    def inplace_transpose_rank3(L):
+        """**Rank 3, where a dropped pair of axes shows.**
+
+        Every case above is 2-D, and at 2-D `transpose_(0, 1)` and `transpose_()`
+        are the same answer — so borch.ts's `transpose_()`, which took no axes at
+        all and did the 2-D swap, passed all of them. The axes have to matter for
+        the case to ask anything.
+        """
+        x = L.tensor(np.arange(24, dtype=np.float32).reshape(2, 3, 4))
+        x.transpose_(1, 2)
+        return f"{tuple(x.shape)} {x.reshape(-1)[:6].tolist()}"
+
+    add("제자리::transpose_(1, 2) 는 3차원에서", inplace_transpose_rank3)
+
+    def inplace_squeeze_two_axes(L):
+        """`squeeze_(0, 2)` — several axes, as `squeeze` takes them."""
+        x = L.tensor(np.arange(6, dtype=np.float32).reshape(1, 6, 1))
+        x.squeeze_(0, 2)
+        return str(tuple(x.shape))
+
+    add("제자리::squeeze_(0, 2)", inplace_squeeze_two_axes)
+
     def inplace_is_same_object(L):
         """**In place edits the same tensor.** Handing back a new one is meaningless."""
         x = L.tensor(_small())
