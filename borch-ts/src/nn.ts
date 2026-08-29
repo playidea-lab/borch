@@ -3447,7 +3447,7 @@ class LazyNormBase extends LazyModule {
     super(`Lazy${batch ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
       (c) => (batch
         ? new BatchNormND(c, eps, momentum, affine ?? true,
-                          trackRunningStats ?? true, bias)
+                          trackRunningStats ?? true, undefined, undefined, bias)
         : new InstanceNormND(c, eps, momentum, affine ?? false,
                              trackRunningStats ?? false, undefined, undefined, bias)),
       channels);
@@ -4902,9 +4902,23 @@ export class BatchNormND extends Module {
    */
   private trackedBase: Tensor | null = null;
 
-  /** See `GroupNorm` on `affine` and `bias`. */
+  /**
+   * See `GroupNorm` on `affine` and `bias`.
+   *
+   * **`numFeatures`, not `channels`, and `bias` behind `device` and `dtype`.** This is
+   * the fix `InstanceNormND` took and this class did not, one file apart: torch declares
+   * `bias` keyword-only after the pair, so a sixth positional argument is `device` there
+   * and was `bias` here — **a shift, not a short tail.** The rename goes with it, because
+   * torch and the core both call the first argument `num_features` and its sibling
+   * already did.
+   *
+   * Two things next to it were already right and read like proof: `InstanceNormND`
+   * twenty lines up takes the pair, and `LazyBatchNorm1d` — this layer's own lazy
+   * spelling — declares `device` and `dtype` and refuses them. Only the eager batch
+   * class was short, and the signature axis is what said so.
+   */
   constructor(
-    readonly channels: number,
+    readonly numFeatures: number,
     private readonly eps = 1e-5,
     private readonly momentum = 0.1,
     // **Kept because `describe` prints them.** `trackRunningStats=false` is refused
@@ -4912,20 +4926,23 @@ export class BatchNormND extends Module {
     // is a statement about the layer rather than about the argument.
     private readonly affine = true,
     private readonly trackRunningStats = true,
+    device?: null,
+    dtype?: null,
     bias = true,
   ) {
     super();
+    refuseDeviceDtype("BatchNorm", device, dtype);
     if (!trackRunningStats) {
       // The forward pass reads the running statistics in eval mode, so accepting
       // this and ignoring it leaves training right and evaluation quietly wrong.
       throw new Error(
         "BatchNorm with trackRunningStats=false is not here yet.");
     }
-    this.weight = affine ? Tensor.owned([channels], 1) : null;
-    this.bias = affine && bias ? Tensor.owned([channels], 0) : null;
+    this.weight = affine ? Tensor.owned([numFeatures], 1) : null;
+    this.bias = affine && bias ? Tensor.owned([numFeatures], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
-    this.runningMean = Tensor.owned([channels], 0);
-    this.runningVar = Tensor.owned([channels], 1);
+    this.runningMean = Tensor.owned([numFeatures], 0);
+    this.runningVar = Tensor.owned([numFeatures], 1);
     // The running statistics take no gradient, and **still have to survive the scope
     // closing.**
     keepAlive(this.runningMean);
@@ -5014,7 +5031,7 @@ export class BatchNormND extends Module {
 
   /** torch's `_BatchNorm.extra_repr`, shared by the instance norms next door. */
   override describe(): string {
-    return `${this.constructor.name}(${this.channels}, eps=${pyNumber(this.eps)}, `
+    return `${this.constructor.name}(${this.numFeatures}, eps=${pyNumber(this.eps)}, `
       + `momentum=${this.momentum}, affine=${this.affine ? "True" : "False"}, `
       + `bias=${this.bias !== null ? "True" : "False"}, `
       + `track_running_stats=${this.trackRunningStats ? "True" : "False"})`;

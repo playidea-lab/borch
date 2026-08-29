@@ -183,32 +183,32 @@ def _class_constructors():
     `Hardswish` were reported as unmeasured while `SELU` thirty lines below them in
     the same file takes torch's `inplace` and they do not. **The same family, half of
     it short, and the count said nothing.**
+
+    **The walk moved to `build_api.py` and this reads its answer.** Following
+    `extends` here could only see what `api.json` holds, and a base can be
+    *unexported* (`declare abstract class MixBase`), reached through an **import
+    alias** (`LinearTransformation as V1LinearTransformation`, a name that exists
+    nowhere as a class), or both. Neither resolves without the declaration file, so
+    the chain broke and this filed `constructor()` — **a claim that the class takes
+    nothing**, which is what an unfinished walk should never produce. `CutMix`,
+    `MixUp` and `LinearTransformation` were counted three short of torchvision with
+    every argument present one line up.
+
+    The distinction that had gone missing: *the chain ended at a class with no
+    constructor* is a fact; *the chain ended because the next name could not be
+    found* is not.
     """
     if not _CTORS:
         import json
 
-        raw, parents = {}, {}
         for module in json.loads(API.read_text(encoding="utf-8"))["modules"]:
             for sym in module.get("symbols", ()):
                 if sym.get("kind") != "class":
                     continue
                 ctor = [m.get("signature") for m in sym.get("members", ())
                         if m.get("name") == "constructor" and m.get("signature")]
-                raw[sym["name"]] = ctor[0] if ctor else None
-                found = _EXTENDS.search(sym.get("signature") or "")
-                parents[sym["name"]] = found.group(1) if found else None
-
-        for name in raw:
-            at, seen = name, set()
-            while at is not None and at not in seen:
-                seen.add(at)
-                if raw.get(at):
-                    _CTORS[name] = raw[at]
-                    break
-                at = parents.get(at)
-            else:
-                _CTORS[name] = "constructor()"
-            _CTORS.setdefault(name, "constructor()")
+                _CTORS[sym["name"]] = (ctor[0] if ctor
+                                       else sym.get("inherited_ctor") or "constructor()")
     return _CTORS
 
 

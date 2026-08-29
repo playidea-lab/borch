@@ -465,7 +465,18 @@ UNALIGNED = {
     # early. Both are closable (a rename, and two seats carried in order to refuse:
     # one device, one precision), and `bias` moving is a **shift**, so it is written
     # down rather than done at the end of a long sitting.
-    "nn": 3,
+    #
+    # **3 → 0, and the shift is why it waited a sitting.** Done: `channels` is
+    # `numFeatures`, the two seats are carried and refused, and `bias` sits eighth. The
+    # move was safe to make because the compiler names every call site that passed a
+    # sixth positional argument — it named two in `cases.ts` and one in the binding,
+    # and each of the three meant `bias`. That is the difference between a shift here
+    # and a shift in Python: nothing has to be found by reading.
+    #
+    # What made it a defect rather than a spelling: `InstanceNormND` twenty lines up in
+    # the same file already took the pair, and `LazyBatchNorm1d` — **this layer's own
+    # lazy spelling** — declared and refused them. Two neighbours read like proof.
+    "nn": 0,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -1425,7 +1436,13 @@ SHORTER = {
     # *parent* and not this class. So the row is `longer`, which is the safe direction
     # — a torch-shaped call never reaches a twelfth seat — and it is a real difference
     # in what a caller may write.
-    "ops": 1,
+    #
+    # **1 → 0.** `Conv2dNormActivation` writes its own constructor now and fixes the
+    # factory to `Conv2d`, which is what the name promises: inherited, that seat took a
+    # factory for any rank, so `Conv3d` could be handed to a class called 2d. Its 3-D
+    # sibling had written its own from the start and read `agree` eleven lines below —
+    # the same asymmetry that gave `BatchNorm` away in `nn`.
+    "ops": 0,
     # 3 → 0. The three were `RandomResize`, `RandomShortestSize` and `ScaleJitter`,
     # each short of `antialias`. They take it now and **refuse `false`** rather than
     # accepting and dropping it: there is one resampling filter here and it
@@ -1435,12 +1452,22 @@ SHORTER = {
     #
     # **0 → 3, and these were unreadable too.** `CutMix`, `MixUp` and
     # `LinearTransformation` declare no constructor anywhere up their chain, so they
-    # take *nothing* where torch takes two each — `alpha`/`num_classes` for the two
-    # mixers, `transformation_matrix`/`mean_vector` for the whitening one. Every one is
-    # a computation this side does not have rather than a seat it forgot, so they are
-    # named here rather than opened: a seat that accepts `alpha` and mixes nothing is
-    # the failure this repository spends its checks on.
-    "transforms.v2": 3,
+    # take *nothing* where torch takes two each.
+    #
+    # **3 → 0, and nothing was written to close them — the reason above was wrong.**
+    # All three have their arguments; the chain the reader could not walk ends outside
+    # `api.json`. `CutMix` and `MixUp` extend `MixBase`, which is `declare abstract
+    # class` — **not exported**, so no symbol carries it. `LinearTransformation`
+    # extends `V1LinearTransformation`, an **import alias** for `vision.ts`'s class, a
+    # name that exists nowhere as a declaration. Walked in `build_api.py`, where the
+    # imports and the unexported declarations are, all three read their real lists.
+    #
+    # **The golden was already asking them with arguments and passing** —
+    # `new v2f.CutMix(0.5, 3)`, `new vision.LinearTransformation(rows, means)` — which
+    # is what says the sentence above was a description of the reader rather than of
+    # the library. A reason drawn from an instrument's blind spot is the same failure
+    # as a stale one, and it reads more convincingly.
+    "transforms.v2": 0,
     "transforms.v2.functional": 0,
     "datasets": 0,
 }

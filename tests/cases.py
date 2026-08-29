@@ -8269,6 +8269,18 @@ def container_cases(inp=None):
                   refusal_case(
                       lambda L: L.nn.BCEWithLogitsLoss(pos_weight=L.ones(3)))))
 
+    # **`device` and `dtype` are two seats, not one**, and BatchNorm had neither while
+    # its own lazy spelling and `InstanceNorm` beside it both did. That is not a short
+    # tail: torch declares `bias` keyword-only *after* the pair, so a sixth positional
+    # argument is `device` there and was `bias` here — **a shift**, which returns a
+    # layer rather than raising. What found it was the signature axis reading three
+    # `unaligned` rows where the neighbours read `agree`.
+    for which in ("device", "dtype"):
+        cases.append((CONTAINER_PREFIX + f"BatchNorm({which})=우리는거절",
+                      refusal_case(
+                          lambda L, w=which: L.nn.BatchNorm2d(
+                              3, **{w: ("cpu" if w == "device" else L.float32)}))))
+
     # Keys fitting is no use if **the values do not cross.** The buffer round trip is asked by value.
     def buffer_roundtrip(L):
         class Net(L.nn.Module):

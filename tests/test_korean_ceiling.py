@@ -238,7 +238,10 @@ CEILINGS = {
     # (`중간 노드도 채운다`, `안 부른 잎을 안 건드린다`, `inputs 밖에서도 남는다`,
     # `거절::빈 inputs`), plus `있다`/`없다`, which is a **frozen value** in
     # `golden.json` rather than a name and has to be spelled the same on both sides.
-    "borch-ts/test": 3873,
+    # 3873 → 3891. Eighteen: the two `container::BatchNorm(device|dtype)=우리는거절`
+    # names and the `기대대로` / `뜻밖의 성공` verdicts they return, which are frozen
+    # values in `golden.json` and have to be spelled identically on both sides.
+    "borch-ts/test": 3891,
 }
 
 

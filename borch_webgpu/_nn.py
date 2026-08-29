@@ -2324,12 +2324,27 @@ def _batchnorm(name):
     `BatchNorm1d`, `2d` and `3d` are empty subclasses over there and `describe` reads
     `this.constructor.name`, so standing the right one up is the whole fix.
     """
-    def make(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True, *,
-             bias=True):
+    def make(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True,
+             device=None, dtype=None, *, bias=True):
+        from borch._base import _unsupported
+
+        # **The pair is carried in order to refuse it**, and the note on
+        # `TransformerEncoderLayer` — *no layer in this file takes them* — is one
+        # exception shorter for it. Not taking them is not the same as refusing them:
+        # `BatchNorm2d(3, device="cpu")` came back *unexpected keyword argument*,
+        # which is the screen a typo gives and says nothing about this library. The
+        # core answers *is not in the browser subset* and now so does this.
+        for what, given in (("device", device), ("dtype", dtype)):
+            if given is not None:
+                _unsupported(f"nn.{name}({what}=…)")
         if not track_running_stats:
-            from borch._base import _unsupported
             _unsupported("BatchNorm with track_running_stats=False")
-        return _layer(name, n, eps, momentum, bool(affine), True, bool(bias))
+        # **`bias` sits eighth over there**, behind the `device` and `dtype` seats
+        # borch.ts carries in order to refuse. It used to be handed over sixth, which
+        # is `device` — and it only became wrong the day that class grew the pair, so
+        # the two `None`s are what keep this call at the argument it means.
+        return _layer(name, n, eps, momentum, bool(affine), True, None, None,
+                      bool(bias))
     make.__name__ = name
     return make
 

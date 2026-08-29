@@ -2702,8 +2702,30 @@ export class ConvNormActivation extends Sequential {
   }
 }
 
-/** `ConvNormActivation` with the convolution fixed to two dimensions. */
-export class Conv2dNormActivation extends ConvNormActivation {}
+/**
+ * `ConvNormActivation` with the convolution **fixed** to two dimensions.
+ *
+ * **Fixed, not defaulted, and the empty body was the difference.** Written
+ * `extends ConvNormActivation {}` it inherited the base's whole list, `convLayer`
+ * included — a twelfth seat torchvision's 2-D subclass does not have, and one that
+ * takes a factory for any rank. A caller could hand it `Conv3d` and build a
+ * three-dimensional block out of a class whose name says two.
+ *
+ * Its 3-D sibling wrote its own constructor and read `agree` while this one read
+ * `longer`, one line apart. The asymmetry is what the signature axis found.
+ */
+export class Conv2dNormActivation extends ConvNormActivation {
+  constructor(inChannels: number, outChannels: number, kernelSize = 3, stride = 1,
+              padding: number | null = null, groups = 1,
+              normLayer: ((width: number) => Module) | null = (w) => new BatchNorm2d(w),
+              activationLayer: (() => Module) | null = () => new ReLU(),
+              dilation = 1, inplace: boolean | null = true,
+              bias: boolean | null = null) {
+    super(inChannels, outChannels, kernelSize, stride, padding, groups, normLayer,
+          activationLayer, dilation, inplace, bias,
+          (...a) => new Conv2d(...a));
+  }
+}
 
 /**
  * The same block over three dimensions.

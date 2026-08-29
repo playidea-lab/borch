@@ -3326,6 +3326,26 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
   out.set("container::BatchNorm/named_buffers 열쇠",
     () => Object.keys(new nn.BatchNormND(3).namedBuffers()).sort().join(" "));
 
+  // **Two seats, carried in order to refuse them.** `InstanceNorm` beside this class
+  // and `LazyBatchNorm` — its own lazy spelling — both took `device` and `dtype`, and
+  // the eager batch class took neither. That is not a short tail: torch declares
+  // `bias` keyword-only after the pair, so a sixth positional argument is `device`
+  // there and was `bias` here, and a shift returns a layer instead of raising.
+  for (const which of ["device", "dtype"]) {
+    out.set(`container::BatchNorm(${which})=우리는거절`, () => {
+      try {
+        new nn.BatchNorm2d(3, 1e-5, 0.1, true, true,
+          which === "device" ? ("cpu" as unknown as null) : null,
+          which === "dtype" ? ("float32" as unknown as null) : null);
+      } catch (err) {
+        const said = String(err);
+        return said.includes("is not in the browser subset")
+          ? "기대대로" : `다른 문구 <${said.slice(0, 44)}>`;
+      }
+      return "뜻밖의 성공";
+    });
+  }
+
   // `registerBuffer` is **syntax the user writes** rather than a layer. Every model
   // carrying a mask or a positional table uses it. borch.ts needs it too for the same model
   // to stand up as on the Python side.
@@ -4224,7 +4244,9 @@ function addUnpool(out: Map<string, Case>): void {
     ["BatchNorm2d", () => new nn.BatchNorm2d(4)],
     ["BatchNorm2d(affine=False)", () => new nn.BatchNorm2d(4, 1e-5, 0.1, false)],
     ["BatchNorm2d(affine, no bias)",
-      () => new nn.BatchNorm2d(4, 1e-5, 0.1, true, true, false)],
+      // `bias` sits eighth, behind `device` and `dtype` — it was sixth here, which is
+      // `device` in torch. The compiler named both call sites the day the seats moved.
+      () => new nn.BatchNorm2d(4, 1e-5, 0.1, true, true, null, null, false)],
     ["BatchNorm3d(eps, momentum)", () => new nn.BatchNorm3d(4, 1e-3, 0.2)],
     ["InstanceNorm1d", () => new nn.InstanceNorm1d(4)],
     ["InstanceNorm2d(affine)", () => new nn.InstanceNorm2d(4, 1e-5, 0.1, true)],
@@ -5501,7 +5523,7 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
       () => Object.keys(new nn.GroupNorm(3, 3, 1e-5, affine, null, null, bias)
         .namedParameters()).join(" "));
     out.set(`norm::nn.BatchNorm2d(${flag})/파라미터 이름`,
-      () => Object.keys(new nn.BatchNormND(3, 1e-5, 0.1, affine, true, bias)
+      () => Object.keys(new nn.BatchNormND(3, 1e-5, 0.1, affine, true, null, null, bias)
         .namedParameters()).join(" "));
   }
 
