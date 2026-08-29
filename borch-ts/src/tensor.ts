@@ -10,7 +10,7 @@
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device, type DeviceKind, type InitOptions } from "./device.js";
 import { type AxisPlan, isSlice, planAxis, type Slice } from "./indexing.js";
-import { gauss, uniform } from "./random.js";
+import { gauss, refuseGenerator, uniform } from "./random.js";
 // **A cycle on purpose, and it holds because nothing is touched while loading.**
 // `fft.ts` and `special.ts` import `Tensor` from here; these five methods import their
 // bodies back. Every use is inside a method, so by the time one runs both modules have
@@ -8431,7 +8431,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * between.** The core kept it out of the automatic table for the same
    * reason.
    */
-  bernoulli_(p = 0.5): Tensor {
+  bernoulli_(p = 0.5, generator?: null): Tensor {
+    refuseGenerator("bernoulli_", generator);
     return this.mutate(
       () => Tensor.rand(this.shape).binary("lt", Tensor.full([], p)).to(this.dtype));
   }
@@ -9536,7 +9537,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The exponential distribution. Its mean is `1/lambd`, and **lambd has to
    * be positive**.
    */
-  exponential_(lambd = 1.0): Tensor {
+  exponential_(lambd = 1.0, generator?: null): Tensor {
+    refuseGenerator("exponential_", generator);
     this.needsFloatDraw("exponential_", "runtime");
     if (!(lambd > 0)) {
       throw new RuntimeError(
@@ -9550,7 +9552,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The Cauchy distribution. **It has no mean** — the tails are heavy
    * enough that the sample mean does not converge.
    */
-  cauchy_(median = 0.0, sigma = 1.0): Tensor {
+  cauchy_(median = 0.0, sigma = 1.0, generator?: null): Tensor {
+    refuseGenerator("cauchy_", generator);
     this.needsFloatDraw("cauchy_", "runtime");
     return this.drawInto_((u) => median + sigma * Math.tan(Math.PI * (u - 0.5)));
   }
@@ -9559,7 +9562,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The log-normal distribution. `mean` and `std` are the values **after
    * taking logs** (as in torch).
    */
-  logNormal_(mean = 1.0, std = 2.0): Tensor {
+  logNormal_(mean = 1.0, std = 2.0, generator?: null): Tensor {
+    refuseGenerator("log_normal_", generator);
     this.needsFloatDraw("log_normal_", "unimplemented");
     return this.drawInto_(() => Math.exp(mean + std * gauss()));
   }
@@ -9568,7 +9572,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Overwrites with the normal distribution. **`std` cannot be negative** —
    * at 0 it is the mean itself.
    */
-  normal_(mean = 0.0, std = 1.0): Tensor {
+  normal_(mean = 0.0, std = 1.0, generator?: null): Tensor {
+    refuseGenerator("normal_", generator);
     this.needsFloatDraw("normal_", "unimplemented");
     if (!(std >= 0)) {
       throw new RuntimeError(
@@ -9580,7 +9585,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Overwrites with reals in `[from, to)`. **`from < to` is required.**
    */
-  uniform_(from = 0.0, to = 1.0): Tensor {
+  uniform_(from = 0.0, to = 1.0, generator?: null): Tensor {
+    refuseGenerator("uniform_", generator);
     this.needsFloatDraw("uniform_", "unimplemented");
     if (!(from < to)) {
       throw new RuntimeError(
@@ -9596,7 +9602,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `p` is an **open interval**. At 0 the event never happens and at 1 it
    * always happens on the first try, so neither is a distribution.
    */
-  geometric_(p: number): Tensor {
+  geometric_(p: number, generator?: null): Tensor {
+    refuseGenerator("geometric_", generator);
     if (!(p > 0 && p < 1)) {
       throw new RuntimeError(
         `geometric_ expects p to be in (0, 1), but got p=${p}`);
@@ -9612,7 +9619,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * f32 cell and cannot count past that — drawn values above it have
    * neighbours that cannot be told apart. That is not imitated.
    */
-  random_(from = 0, to?: number): Tensor {
+  random_(from = 0, to?: number, generator?: null): Tensor {
+    refuseGenerator("random_", generator);
     const high = to ?? EXACT_INT_LIMIT;
     if (!(from < high)) {
       throw new RuntimeError(

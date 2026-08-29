@@ -955,7 +955,22 @@ SHORTER = {
     #     torch raises `TensorBase.relu() takes no keyword arguments`. This axis cannot
     #     see that: torch is in neither of its columns. `test_torch_names.py` did not
     #     either — it compares names at the same position and says so.
-    "Tensor": 8,
+    #
+    # **8 → 0.** All eight were `generator`, and the paragraph above them — *there is
+    # one stream here and no `Generator` object to hand a method* — described the
+    # library correctly and was doing the wrong job. It read as a reason for the row
+    # and was a reason for **refusing**, which is not the same thing: the seat did not
+    # exist, so `x.bernoulli_(0.5, g)` ran, dropped `g`, and drew from the global
+    # stream. JavaScript discards a surplus argument without a word, and what these
+    # produce is a random number, so nothing downstream looks wrong — somebody running
+    # five seeds to measure variance would get five streams that were never separate.
+    #
+    # The seats are there now and each one stops. Asked in `parity.ts`, not here: the
+    # golden compares torch, the core and the binding, and **all three honour a
+    # `Generator`** — the binding draws these through the core's numpy rather than
+    # through borch.ts — so borch.ts being the one side with a single stream has no
+    # seat in that table.
+    "Tensor": 0,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and
@@ -1249,12 +1264,17 @@ SHORTER = {
     # gradient goes to zero (measured — the forward is untouched), and the last two
     # are refused where the core refuses them.
     #
-    # The one left is `gumbel_softmax`'s `noise`, which is **deliberate and stays**:
-    # torch's draw cannot be reproduced from outside, and a golden case for a random
-    # function can only ask about properties. The seat is last and optional, so a
-    # torch-shaped call never reaches it — the divergence is a door this library opens
-    # and not one it leaves ajar.
-    "nn.functional": 1,
+    # The one left was `gumbel_softmax`'s `noise`, kept on the ground that torch's draw
+    # cannot be reproduced from outside and a golden case for a random function can
+    # only ask about properties.
+    #
+    # **1 → 0, and the reason above was answered rather than overruled.** The draw
+    # *can* be reproduced from outside: `manualSeed` rewinds the stream `Tensor.uniform`
+    # draws from, so seed-call-seed-call asks the same property the seat was there to
+    # ask, in the spelling a reader of torch already knows. Reproducibility that works
+    # on all three implementations beats a parameter that works on one, and the seat
+    # went out with the reason it was carrying.
+    "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
     # many raises there, where the same gap in `shifted` would have meant a value
@@ -1411,7 +1431,15 @@ SHORTER = {
     # door." Three more names inheriting a decision is not three more decisions —
     # and the number is here rather than the reason so that the day the door opens,
     # all four move at once and one of them not moving is visible.
-    "utils.data": 4,
+    #
+    # **4 → 0, and the door did not open — the doorway got a lock.** The decision above
+    # stands: one host stream, no `Generator` object. What changed is that all four now
+    # *take* the argument and stop, where before they took it and dropped it. "The
+    # choice was to not add another door" was a reason to refuse and was being read as
+    # a reason to have no seat, and those differ by exactly the silence JavaScript
+    # gives a surplus argument. All four moved at once, which is what this row was
+    # written for.
+    "utils.data": 0,
     # `Normalize(mean, std, inplace)` against `(mean, std)` — there was no in-place on
     # this side, and a tail that is short only refuses extra arguments.
     #

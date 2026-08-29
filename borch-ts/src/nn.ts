@@ -4807,9 +4807,14 @@ export function embeddingBag(
  * is hard and the derivative is soft. Keeping those two apart is what this
  * function means.
  *
- * @param noise Gumbel noise already drawn. Undrawn, it is drawn here — the
- *   golden cases can only ask about properties rather than values, but a
- *   caller sometimes wants to reproduce with fixed noise.
+ * **A sixth `noise` seat used to sit here and does not any more.** It let a caller
+ * hand in the Gumbel draw, which made the function reproducible — and torch has no
+ * such argument, so it was a seat only this implementation had. The one thing it was
+ * used for, asking whether the answer follows the draw rather than the call,
+ * `manualSeed` answers: seed, call, seed again, call again. Reproducibility that
+ * works the way a reader of torch already expects beats an extra parameter that
+ * works only here, and the signature axis counted the seat as this namespace's last
+ * open row.
  */
 export function gumbelSoftmax(
   logits: Tensor,
@@ -4817,7 +4822,6 @@ export function gumbelSoftmax(
   hard = false,
   eps = 1e-10,
   dim = -1,
-  noise: Tensor | null = null,
 ): Tensor {
   // **`eps` is accepted, ignored, and warned about — which is exactly what torch does.**
   //
@@ -4859,7 +4863,7 @@ export function gumbelSoftmax(
   // It keeps `log(0)` out of a uniform draw that can return exactly 0; the parameter
   // above is torch's dead one and never reaches here.
   const floor = 1e-10;
-  const g = noise ?? Tensor.uniform(logits.shape)
+  const g = Tensor.uniform(logits.shape)
     .binary("add", Tensor.full([], floor)).log().neg()
     .binary("add", Tensor.full([], floor)).log().neg();
   const soft = logits.add(g).div(Tensor.full([], tau)).softmax(axis);

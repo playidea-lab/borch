@@ -683,8 +683,12 @@ def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
     if float(eps) != 1e-10:
         _warnings.warn("`eps` parameter is deprecated and has no effect.",
                        stacklevel=2)
+    # **The trailing `None` was borch.ts's own sixth seat and it has gone.** That seat
+    # took the Gumbel draw so a caller could reproduce the answer; torch has no such
+    # argument, and `manual_seed` gives reproducibility on all three sides. Five
+    # arguments now, which is torch's list.
     return wrap(_ts.nn.gumbelSoftmax(handle(logits), float(tau), bool(hard),
-                                     float(eps), int(dim), None))
+                                     float(eps), int(dim)))
 
 
 def _functional_inplace(name):

@@ -47,7 +47,7 @@
  */
 
 import { RuntimeError } from "./errors.js";
-import { uniform } from "./random.js";
+import { refuseGenerator, uniform } from "./random.js";
 import { Tensor } from "./tensor.js";
 
 /**
@@ -191,8 +191,9 @@ export class ConcatDataset implements Dataset {
  * Shuffling follows `manualSeed`. The same seed gives the same split.
  */
 export function randomSplit(
-  dataset: Dataset, lengths: readonly number[],
+  dataset: Dataset, lengths: readonly number[], generator?: null,
 ): Subset[] {
+  refuseGenerator("random_split", generator);
   const total = lengths.reduce((a, b) => a + b, 0);
   if (total !== dataset.length) {
     throw new RuntimeError(
@@ -257,7 +258,9 @@ export class RandomSampler implements Sampler {
     private readonly dataSource: { readonly length: number },
     private readonly replacement = false,
     private readonly numSamples: number | null = null,
+    generator?: null,
   ) {
+    refuseGenerator("RandomSampler", generator);
     if (numSamples !== null && !replacement) {
       throw new RuntimeError(
         "numSamples should not be specified when replacement is false");
@@ -282,7 +285,9 @@ export class RandomSampler implements Sampler {
 
 /** A shuffled order over the indices given. `torch.utils.data.SubsetRandomSampler`. */
 export class SubsetRandomSampler implements Sampler {
-  constructor(private readonly indices: readonly number[]) {}
+  constructor(private readonly indices: readonly number[], generator?: null) {
+    refuseGenerator("SubsetRandomSampler", generator);
+  }
 
   get length(): number {
     return this.indices.length;
@@ -310,7 +315,9 @@ export class WeightedRandomSampler implements Sampler {
     weights: readonly number[],
     readonly numSamples: number,
     replacement = true,
+    generator?: null,
   ) {
+    refuseGenerator("WeightedRandomSampler", generator);
     if (!replacement) {
       // Drawing without replacement by weight needs the weights renormalised after
       // every pick, and torch's own answer differs from the obvious one. Refused

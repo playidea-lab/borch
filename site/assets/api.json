@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 369
+  "missing": 370
  },
  "modules": [
   {
@@ -4573,7 +4573,7 @@
       },
       {
        "name": "bernoulli_",
-       "signature": "bernoulli_(p?: number): Tensor",
+       "signature": "bernoulli_(p?: number, generator?: null): Tensor",
        "doc": "**A different operation from its counterpart.** `bernoulli()` reads its\nown values as probabilities; this one **ignores** them and fills with\n`p` (measured: feed it `[1,4,9,2]` and at `p=0` it is all zeros).\n\nBuilt from the counterpart on the strength of the underscore alone, the\nvalues agree wherever the probability is 0 or 1, because those are\ncertain, and **it is quietly wrong only at the probabilities in\nbetween.** The core kept it out of the automatic table for the same\nreason.",
        "section": {
         "ko": "The thirty-eight in-place forms",
@@ -5191,7 +5191,7 @@
       },
       {
        "name": "exponential_",
-       "signature": "exponential_(lambd?: number): Tensor",
+       "signature": "exponential_(lambd?: number, generator?: null): Tensor",
        "doc": "The exponential distribution. Its mean is `1/lambd`, and **lambd has to\nbe positive**.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5201,7 +5201,7 @@
       },
       {
        "name": "cauchy_",
-       "signature": "cauchy_(median?: number, sigma?: number): Tensor",
+       "signature": "cauchy_(median?: number, sigma?: number, generator?: null): Tensor",
        "doc": "The Cauchy distribution. **It has no mean** — the tails are heavy\nenough that the sample mean does not converge.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5211,7 +5211,7 @@
       },
       {
        "name": "logNormal_",
-       "signature": "logNormal_(mean?: number, std?: number): Tensor",
+       "signature": "logNormal_(mean?: number, std?: number, generator?: null): Tensor",
        "doc": "The log-normal distribution. `mean` and `std` are the values **after\ntaking logs** (as in torch).",
        "torch": "log_normal_",
        "section": {
@@ -5222,7 +5222,7 @@
       },
       {
        "name": "normal_",
-       "signature": "normal_(mean?: number, std?: number): Tensor",
+       "signature": "normal_(mean?: number, std?: number, generator?: null): Tensor",
        "doc": "Overwrites with the normal distribution. **`std` cannot be negative** —\nat 0 it is the mean itself.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5232,7 +5232,7 @@
       },
       {
        "name": "uniform_",
-       "signature": "uniform_(from?: number, to?: number): Tensor",
+       "signature": "uniform_(from?: number, to?: number, generator?: null): Tensor",
        "doc": "Overwrites with reals in `[from, to)`. **`from < to` is required.**",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5242,7 +5242,7 @@
       },
       {
        "name": "geometric_",
-       "signature": "geometric_(p: number): Tensor",
+       "signature": "geometric_(p: number, generator?: null): Tensor",
        "doc": "The geometric distribution. **Being discrete, it runs on integer\ntensors too** — that is what separates it from the continuous ones.\n\n`p` is an **open interval**. At 0 the event never happens and at 1 it\nalways happens on the first try, so neither is a distribution.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5252,7 +5252,7 @@
       },
       {
        "name": "random_",
-       "signature": "random_(from?: number, to?: number): Tensor",
+       "signature": "random_(from?: number, to?: number, generator?: null): Tensor",
        "doc": "Fills with integers from `[from, to)`.\n\n**Left out, the bound is as far as f32 counts exactly** (2^24). torch's\ndepends on the dtype and is 2^62 for int64, but int64 here lives in an\nf32 cell and cannot count past that — drawn values above it have\nneighbours that cannot be told apart. That is not imitated.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -11426,17 +11426,11 @@
     {
      "kind": "function",
      "name": "gumbelSoftmax",
-     "signature": "export declare function gumbelSoftmax(logits: Tensor, tau?: number, hard?: boolean, eps?: number, dim?: number, noise?: Tensor | null): Tensor",
-     "doc": "Picks one at random **while letting derivatives through.**\n\nDrawing one category is not differentiable, so Gumbel noise is added and\n`softmax` smooths it. The smaller `tau`, the more it concentrates on one\nside.\n\nWith `hard=true` the answer is 0/1 but **the gradient is the smooth\none's** — the common `hard - soft.detach() + soft` trick, where the value\nis hard and the derivative is soft. Keeping those two apart is what this\nfunction means.",
+     "signature": "export declare function gumbelSoftmax(logits: Tensor, tau?: number, hard?: boolean, eps?: number, dim?: number): Tensor",
+     "doc": "Picks one at random **while letting derivatives through.**\n\nDrawing one category is not differentiable, so Gumbel noise is added and\n`softmax` smooths it. The smaller `tau`, the more it concentrates on one\nside.\n\nWith `hard=true` the answer is 0/1 but **the gradient is the smooth\none's** — the common `hard - soft.detach() + soft` trick, where the value\nis hard and the derivative is soft. Keeping those two apart is what this\nfunction means.\n\n**A sixth `noise` seat used to sit here and does not any more.** It let a caller\nhand in the Gumbel draw, which made the function reproducible — and torch has no\nsuch argument, so it was a seat only this implementation had. The one thing it was\nused for, asking whether the answer follows the draw rather than the call,\n`manualSeed` answers: seed, call, seed again, call again. Reproducibility that\nworks the way a reader of torch already expects beats an extra parameter that\nworks only here, and the signature axis counted the seat as this namespace's last\nopen row.",
      "members": [],
-     "tags": [
-      {
-       "tag": "param",
-       "text": "noise Gumbel noise already drawn. Undrawn, it is drawn here — the golden cases can only ask about properties rather than values, but a caller sometimes wants to reproduce with fixed noise."
-      }
-     ],
      "torch": "gumbel_softmax",
-     "doc_ko": "무작위로 하나를 고르되 **미분이 흐르게** 고른다.\n\n범주 하나를 뽑는 것은 미분이 안 되는 일이라, Gumbel 잡음을 더해 `softmax` 로\n부드럽게 만든다. `tau` 가 작을수록 한쪽으로 몰린다.\n\n`hard=true` 면 답은 0/1 이지만 **기울기는 부드러운 쪽 것을 쓴다** —\n`hard - soft.detach() + soft` 라는 흔한 수법이고, 값은 hard 이고 미분은 soft 다.\n그 둘을 갈라 두지 않으면 이 함수의 뜻이 없어진다."
+     "doc_ko": "무작위로 하나를 고르되 **미분이 흐르게** 고른다.\n\n범주 하나를 뽑는 것은 미분이 안 되는 일이라, Gumbel 잡음을 더해 `softmax` 로\n부드럽게 만든다. `tau` 가 작을수록 한쪽으로 몰린다.\n\n`hard=true` 면 답은 0/1 이지만 **기울기는 부드러운 쪽 것을 쓴다** —\n`hard - soft.detach() + soft` 라는 흔한 수법이고, 값은 hard 이고 미분은 soft 다.\n그 둘을 갈라 두지 않으면 이 함수의 뜻이 없어진다.\n\n여섯째 `noise` 자리가 있었고 지금은 없다. 호출자가 Gumbel 추첨을 직접 건네 재현할 수 있게 한 자리인데, torch 에는 없는 자리라 이 구현에만 있었다. 그 자리로 묻던 것 — 답이 호출이 아니라 추첨을 따르는가 — 은 `manualSeed` 가 답한다. torch 독자가 이미 아는 방식의 재현성이 여기서만 되는 인자보다 낫다."
     },
     {
      "kind": "class",
@@ -14014,7 +14008,7 @@
     {
      "kind": "function",
      "name": "randomSplit",
-     "signature": "export declare function randomSplit(dataset: Dataset, lengths: readonly number[]): Subset[]",
+     "signature": "export declare function randomSplit(dataset: Dataset, lengths: readonly number[], generator?: null): Subset[]",
      "doc": "Splits without overlap. Where `torch.utils.data.random_split` goes.\n\n**The parts must sum to the whole.** torch stops there too — a leftover\nsample quietly discarded makes the train/validation ratio differ from the\none written down, and nobody sees it.\n\nShuffling follows `manualSeed`. The same seed gives the same split.",
      "members": [],
      "torch": "random_split",
@@ -14059,7 +14053,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(dataSource: { readonly length: number; }, replacement?: boolean, numSamples?: number | null)",
+       "signature": "constructor(dataSource: { readonly length: number; }, replacement?: boolean, numSamples?: number | null, generator?: null)",
        "doc": ""
       },
       {
@@ -14077,7 +14071,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(indices: readonly number[])",
+       "signature": "constructor(indices: readonly number[], generator?: null)",
        "doc": ""
       },
       {
@@ -14101,7 +14095,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(weights: readonly number[], numSamples: number, replacement?: boolean)",
+       "signature": "constructor(weights: readonly number[], numSamples: number, replacement?: boolean, generator?: null)",
        "doc": ""
       },
       {
@@ -19782,6 +19776,14 @@
     },
     {
      "kind": "function",
+     "name": "refuseGenerator",
+     "signature": "export declare function refuseGenerator(who: string, generator: unknown): void",
+     "doc": "`generator=` — **carried in order to refuse it**, wherever torch takes one.\n\nThere is one stream in this file and a `Generator` is a second one. torch's\nargument names a stream to draw from; here there is only the stream above, and\nthe honest answer is to say so rather than to accept the object and draw from\nthe global one anyway.\n\n**Accepting it is the failure this exists to stop, and it is silent twice\nover.** JavaScript discards a surplus argument without a word, so\n`x.bernoulli_(0.5, g)` ran and ignored `g`; and what it produces is a *random\nnumber*, so nothing downstream looks wrong. Somebody running five seeds to\nmeasure variance would get five streams that were never separate.\n\n`null` and `undefined` both pass: torch's default is `None`, and the Python\nbinding cannot send `undefined`.",
+     "members": [],
+     "torch": "refuse_generator"
+    },
+    {
+     "kind": "function",
      "name": "uniform",
      "signature": "export declare function uniform(): number",
      "doc": "One sample from the uniform distribution on `[0, 1)`.",
@@ -19806,7 +19808,7 @@
      "doc_ko": "`[-bound, bound]` 균등분포로 채운 배열. 층 초기화가 쓴다."
     }
    ],
-   "count": 5
+   "count": 6
   },
   {
    "name": "autograd",
@@ -20249,5 +20251,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2741
+ "total": 2742
 }

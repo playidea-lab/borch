@@ -10,8 +10,8 @@
  */
 
 import {
-  device, type DType, igamma, igammac, init, keepAlive, linalg, manualSeed, nn, noGrad,
-  optim, polygamma, scope, slice, stft, Tensor, vision,
+  data, device, type DType, igamma, igammac, init, keepAlive, linalg, manualSeed, nn,
+  noGrad, optim, polygamma, scope, slice, stft, Tensor, vision,
 } from "../src/index.js";
 
 interface Check { name: string; ok: boolean; note: string }
@@ -1223,9 +1223,14 @@ export async function report(): Promise<Report> {
     // place where the two libraries disagree on the same call. Structural checks would
     // all have stayed green, because the argument was visibly used.
     const logits = Tensor.from([0, 0.5, 1, 1.5, 2, 2.5], [2, 3]);
-    const draw = Tensor.from([0.1, 0.5, 0.9, 0.2, 0.7, 0.4], [2, 3]);
-    const soft = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1, draw).toArray();
-    const again = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1, draw).toArray();
+    // **Seeded rather than handed a draw.** A sixth `noise` parameter used to carry the
+    // Gumbel numbers in, and torch has no such seat — this side was the only one of the
+    // three with it. `manualSeed` asks the same property the way a reader of torch
+    // already knows: seed, call, seed again, call again.
+    manualSeed(11);
+    const soft = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1).toArray();
+    manualSeed(11);
+    const again = await nn.gumbelSoftmax(logits, 1, false, 1e-10, -1).toArray();
     want("gumbelSoftmax is a function of the draw, not of the call", same(soft, again));
 
   // ── the functional BCE pair takes torch's whole list ──────────────────
@@ -1608,7 +1613,8 @@ export async function report(): Promise<Report> {
     // `eps` in the other two. `ts_signatures.py` reported it as `renamed`.
     //
     // The property is now asked directly: a different `eps` must not move the answer.
-    const loud = await nn.gumbelSoftmax(logits, 1, false, 0.1, -1, draw).toArray();
+    manualSeed(11);
+    const loud = await nn.gumbelSoftmax(logits, 1, false, 0.1, -1).toArray();
     want("and a caller's eps does not move the answer", same(soft, loud),
       "eps is torch's deprecated parameter — accepted, ignored, warned about");
   }
@@ -1627,6 +1633,53 @@ export async function report(): Promise<Report> {
     want("and training=false ignores p", same(plain, await attend(0.5, false)));
     want("while dropping all of it leaves nothing",
       (await attend(1, true)).every((v) => v === 0));
+  }
+
+  {
+    // **`generator` is refused, and only this file can ask.** The golden compares
+    // torch, the core and the binding, and all three *honour* a `Generator` — the
+    // binding draws these through the core's numpy, not through here. So borch.ts
+    // being the one side with a single stream has no seat in that table, and the
+    // twelve places torch takes a generator were silently dropping it: JavaScript
+    // discards a surplus argument without a word, and what these produce is a random
+    // number, so nothing downstream looks wrong. Somebody running five seeds to
+    // measure variance would get five streams that were never separate.
+    //
+    // The seats exist now, and each one stops. Asked here rather than trusted to the
+    // signature axis, which reads a declaration and cannot tell a seat that refuses
+    // from a seat that accepts and ignores — the failure this repository writes the
+    // most checks against.
+    const fake = { manualSeed: () => undefined };
+    const draws: [string, (g: unknown) => unknown][] = [
+      ["bernoulli_", (g) => Tensor.zeros([4]).bernoulli_(0.5, g as null)],
+      ["exponential_", (g) => Tensor.zeros([4]).exponential_(1, g as null)],
+      ["cauchy_", (g) => Tensor.zeros([4]).cauchy_(0, 1, g as null)],
+      ["log_normal_", (g) => Tensor.zeros([4]).logNormal_(1, 2, g as null)],
+      ["normal_", (g) => Tensor.zeros([4]).normal_(0, 1, g as null)],
+      ["uniform_", (g) => Tensor.zeros([4]).uniform_(0, 1, g as null)],
+      ["geometric_", (g) => Tensor.zeros([4]).to("int64").geometric_(0.5, g as null)],
+      ["random_", (g) => Tensor.zeros([4]).to("int64").random_(0, 4, g as null)],
+      ["random_split", (g) => data.randomSplit(new data.TensorDataset(Tensor.zeros([2, 1])), [1, 1], g as null)],
+      ["RandomSampler", (g) => new data.RandomSampler({ length: 2 }, false, null, g as null)],
+      ["SubsetRandomSampler", (g) => new data.SubsetRandomSampler([0, 1], g as null)],
+      ["WeightedRandomSampler",
+        (g) => new data.WeightedRandomSampler([1, 1], 2, true, g as null)],
+    ];
+    for (const [name, call] of draws) {
+      wantThrow(`${name}(generator) stops rather than dropping it`,
+        "one stream here", () => call(fake));
+      // **And the absent case has to keep working**, or the seat would be a refusal
+      // of the default. `null` and `undefined` both mean *not given*: torch's default
+      // is `None`, and the Python binding cannot send `undefined`.
+      let quiet = true;
+      try {
+        call(undefined);
+        call(null);
+      } catch {
+        quiet = false;
+      }
+      want(`and ${name}() without one still runs`, quiet);
+    }
   }
 
   // **One validation fault and the green above cannot be believed.** WebGPU drops an
