@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 370
+  "missing": 371
  },
  "modules": [
   {
@@ -12904,6 +12904,21 @@
      ]
     },
     {
+     "kind": "interface",
+     "name": "AdamOptions",
+     "signature": "export interface AdamOptions extends OptimizerOptions",
+     "doc": "`Adam`'s options, and **only `Adam`'s.**\n\ntorch gives `decoupled_weight_decay` to three optimizers and declares it\ndifferently in each: keyword-only on `Adam`, positional on `NAdam` and `RAdam`.\nSo it cannot live in `OptimizerOptions` — put there it appears in every\noptimizer's object, and the two that take it positionally then read as having\nmoved it. The signature axis said exactly that the moment it was tried.\n\nA seventh positional seat on `Adam` was the other place it sat, and that made\n`Adam`'s positional list one longer than torch's. Neither of the two easy homes\nwas right; this is the third.",
+     "members": [
+      {
+       "name": "decoupledWeightDecay",
+       "signature": "decoupledWeightDecay?: boolean",
+       "doc": "",
+       "optional": true,
+       "torch": "decoupled_weight_decay"
+      }
+     ]
+    },
+    {
      "kind": "class",
      "name": "Optimizer",
      "signature": "export declare abstract class Optimizer",
@@ -13077,7 +13092,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, decoupledWeightDecay?: boolean, opts?: OptimizerOptions)",
+       "signature": "constructor(params: ParamsArg, lr: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: AdamOptions)",
        "doc": "**`betas` is one argument, because torch makes it one.** This took `beta1` and\n`beta2` in two positions, so every later argument sat one seat early and\n`new Adam(p, 1e-3, 0.9, 0.999, 1e-8)` meant something different from\n`Adam(p, 1e-3, (0.9, 0.999), 1e-8)` — the lists could not be lined up at all,\nwhich is the bucket that reports nothing beneath it.\n\nA pair is not a rename and it is not a short tail; splitting it is the one shape\nof divergence the axis has no name for."
       },
       {
@@ -13114,7 +13129,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: OptimizerOptions)",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: AdamOptions)",
        "doc": ""
       }
      ]
@@ -13865,7 +13880,7 @@
      "doc_ko": "값이 나아지지 않으면 학습률을 줄인다.\n\n다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다."
     }
    ],
-   "count": 164,
+   "count": 166,
    "doc_ko": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다."
   },
   {
@@ -20251,5 +20266,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2742
+ "total": 2744
 }

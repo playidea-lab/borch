@@ -160,7 +160,7 @@ def _pair(two):
     return out
 
 
-def _opts(maximize, foreach, fused, capturable, differentiable):
+def _opts(maximize, foreach, fused, capturable, differentiable, **more):
     """borch.ts's trailing options object.
 
     **Built through `JSON.parse` rather than as a dict.** A Python dict crossing the
@@ -175,8 +175,12 @@ def _opts(maximize, foreach, fused, capturable, differentiable):
     carrying it proves the bridge actually delivers the word: a flag dropped on the way
     across looks exactly like a flag the far side chose to ignore.
     """
+    # **`more` carries a name only one optimizer has.** `Adam`'s
+    # `decoupledWeightDecay` is keyword-only in torch and so belongs in the object;
+    # `NAdam` and `RAdam` take the same flag positionally there and keep it in a seat.
+    # Putting it in this shared dict would hand it to all thirteen.
     flags = {"maximize": maximize, "foreach": foreach, "fused": fused,
-             "capturable": capturable, "differentiable": differentiable}
+             "capturable": capturable, "differentiable": differentiable, **more}
     body = ",".join(f'"{k}":{str(bool(v)).lower()}' for k, v in flags.items())
     return _js.JSON.parse("{" + body + "}")
 
@@ -205,10 +209,15 @@ def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
     was accepted and the **coupled** answer came back — 0.781 against 0.800 on the
     second step. A training curve that is merely slightly wrong.
     """
-    bag = _opts(maximize, foreach, fused, capturable, differentiable)
+    # **The flag moved into the options object**, where torch declares it —
+    # keyword-only on `Adam`, positional on `NAdam` and `RAdam`, which is why borch.ts
+    # gives `Adam` its own `AdamOptions` rather than widening the shared one. Left in
+    # the seventh seat this call passed eight arguments into seven and JavaScript
+    # dropped the last; `test_binding_arguments.py` named it in the same run.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable,
+                decoupledWeightDecay=decoupled_weight_decay)
     return _Opt(_ts.optim.Adam.new(_params(params), lr, _pair(betas), eps,
-                                   weight_decay, amsgrad,
-                                   decoupled_weight_decay, bag))
+                                   weight_decay, amsgrad, bag))
 
 
 def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01,

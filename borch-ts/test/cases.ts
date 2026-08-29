@@ -5695,7 +5695,7 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     // ones would ask a question torch never froze an answer to, and the row would
     // pass by comparing borch.ts against itself.
     ["Adam(maximize)", (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0,
-      false, false, { maximize: true })],
+      false, { maximize: true })],
     ["RMSprop(maximize)", (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0,
       false, { maximize: true })],
     ["Adam(amsgrad)",
@@ -5709,7 +5709,8 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     // **The same flag on the other two torch gives it to.** Absent here the word was
     // taken and discarded, and the coupled answer came back under the decoupled name.
     ["Adam(decoupled_weight_decay)",
-      (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, false, true)],
+      (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, false,
+        { decoupledWeightDecay: true })],
     ["RAdam(decoupled_weight_decay)",
       (ps) => new optim.RAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, true)],
     // **A default is the one value a case cannot check by using it**, because every
@@ -6020,7 +6021,7 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
       carries((ps, o) => new optim.SGD(ps, 0.1, 0, 0, 0, false, o), word));
     out.set(`opt::낱말::Adam(${word})`,
       carries(
-        (ps, o) => new optim.Adam(ps, 0.1, [0.9, 0.999], 1e-8, 0, false, false, o),
+        (ps, o) => new optim.Adam(ps, 0.1, [0.9, 0.999], 1e-8, 0, false, o),
         word));
   }
 

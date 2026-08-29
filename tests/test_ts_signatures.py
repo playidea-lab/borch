@@ -1684,7 +1684,22 @@ KEYWORD_GAP = {
     "Tensor": 2,
     "nn": 0,
     "nn.functional": 0,
-    "optim": 6,
+    # **6 → 5, and the row that left was a finding about a name that was there.**
+    # `Adam` read `keyword-only absent: decoupledWeightDecay` while borch.ts carried it
+    # in a seat of its own — this file looked in the options object and nowhere else.
+    # TypeScript has no keyword arguments, so *positional* and *in the object* are the
+    # only two places a name can be, and both count as present now.
+    #
+    # The flag then moved into the object, where torch declares it (keyword-only on
+    # `Adam`, and positional on `NAdam` and `RAdam` — which is why borch.ts gives
+    # `Adam` its own `AdamOptions` rather than widening the shared one; put in the
+    # shared one it appeared in all thirteen and the two that take it positionally
+    # read as having moved it).
+    #
+    # The five left are the options-object decision itself: torch takes `foreach` and
+    # its neighbours positionally on these five and keyword-only on the rest, and
+    # borch.ts puts all of them in one object either way.
+    "optim": 5,
     "optim.lr_scheduler": 0,
     "linalg": 0,
     # 0 → 1: `DataLoader`, which used to be `agree to the bag` and measured nothing past
@@ -1885,6 +1900,45 @@ def test_the_measurement_still_reads_methods():
     assert len(rows["Tensor"]) > 200, (
         f"the Tensor namespace compared {len(rows['Tensor'])} pairs — the methods are "
         "the bulk of this library and they are not being read.")
+
+
+def test_a_keyword_only_name_carried_positionally_is_not_called_absent():
+    """**The two places a name can be, and the reader looked in one.**
+
+    TypeScript has no keyword arguments, so a name torch declares keyword-only lands
+    either inside borch.ts's options object or in a seat of its own. `_bagged_row`
+    subtracted the object alone, so a name carried positionally came back as
+    *keyword-only absent* — a finding about a name that was right there. That reads
+    as work to do when the work is done, and the next reader either does it twice or
+    stops believing the row.
+
+    `Adam`'s `decoupledWeightDecay` was exactly that. It has since moved into
+    `AdamOptions`, which is the right home for it and **also takes away the last row
+    that exercised this line** — a repair nothing exercises is a repair nothing
+    holds, so the situation is built here rather than waited for.
+    """
+    import ts_signatures
+
+    class Stub:
+        @staticmethod
+        def Thing(params, lr, flag=False):    # noqa: N802, N803
+            """The core-side callable whose positional list the row compares against."""
+
+    row = ts_signatures._bagged_row(
+        "Thing",
+        mine=["params", "lr", "flag"],
+        # borch.ts carries the keyword-only name **positionally**.
+        yours=["params", "lr", "decoupledWeightDecay"],
+        wanted=["params", "lr", "flag"],
+        bag=set(),
+        kw={"decoupled_weight_decay"},
+        ours=Stub,
+        space="optim",
+    )
+    assert "absent" not in row[3], (
+        f"a name borch.ts takes positionally was reported missing: {row[3]}\n"
+        "  `absent` has to subtract the positional list as well as the options "
+        "object — those are the only two places a name can be on that side.")
 
 
 def test_a_dropped_middle_argument_is_not_read_as_a_short_tail():

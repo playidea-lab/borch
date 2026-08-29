@@ -98,6 +98,23 @@ export interface OptimizerOptions {
 }
 
 /**
+ * `Adam`'s options, and **only `Adam`'s.**
+ *
+ * torch gives `decoupled_weight_decay` to three optimizers and declares it
+ * differently in each: keyword-only on `Adam`, positional on `NAdam` and `RAdam`.
+ * So it cannot live in `OptimizerOptions` — put there it appears in every
+ * optimizer's object, and the two that take it positionally then read as having
+ * moved it. The signature axis said exactly that the moment it was tried.
+ *
+ * A seventh positional seat on `Adam` was the other place it sat, and that made
+ * `Adam`'s positional list one longer than torch's. Neither of the two easy homes
+ * was right; this is the third.
+ */
+export interface AdamOptions extends OptimizerOptions {
+  decoupledWeightDecay?: boolean;
+}
+
+/**
  * Stops on the two that would change the answer, and lets the two hints through.
  *
  * **The split is the core's, measured rather than chosen** — `borch.optim.SGD(...,
@@ -557,13 +574,12 @@ export class Adam extends Optimizer {
     private readonly eps = 1e-8,
     private readonly weightDecay = 0,
     private readonly amsgrad = false,
-    decoupledWeightDecay = false,
-    opts: OptimizerOptions = {},
+    opts: AdamOptions = {},
   ) {
     super(params, lr, opts);
     // `AdamW` sets the field to `true` in its own body, which runs after this; a
     // subclass that pins the placement is not asked what the caller wanted.
-    if (decoupledWeightDecay) this.decoupled = true;
+    if (opts.decoupledWeightDecay) this.decoupled = true;
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
     this.second = this.state(this.params);
@@ -661,11 +677,14 @@ export class AdamW extends Adam {
     eps = 1e-8,
     weightDecay = 0.01,
     amsgrad = false,
-    opts: OptimizerOptions = {},
+    opts: AdamOptions = {},
   ) {
-    // **`true` in the sixth-from-last seat, not the options bag.** `AdamW` is the
-    // decoupled placement by definition, so it pins what `Adam` now asks for.
-    super(params, lr, betas, eps, weightDecay, amsgrad, true, opts);
+    // **In the options object, where torch declares it.** `AdamW` is the decoupled
+    // placement by definition, so it pins what `Adam` asks for — and it pins it
+    // *after* the caller's, because a caller who writes `AdamW(…, {
+    // decoupledWeightDecay: false })` is asking for something this class is not.
+    super(params, lr, betas, eps, weightDecay, amsgrad,
+      { ...opts, decoupledWeightDecay: true });
   }
 }
 

@@ -224,15 +224,32 @@ def _interface_members():
 
     `api.json` already carries every interface's members, so the reference resolves out
     of the same file the declaration came from and needs no second parser.
+
+    **`extends` is followed, and that is the same failure one level up.** An interface
+    that names a base declares only its own members, so reading them alone reports the
+    base's as absent — `AdamOptions extends OptimizerOptions` would have come back as
+    one member and five missing. Exactly what `_class_constructors` had to learn about
+    classes, and what the `unique` overload had to teach about declarations: **the
+    reader stopping at a reference improves a number while carrying nothing.**
     """
     if not _INTERFACES:
         import json
 
+        bases = {}
         for module in json.loads(API.read_text(encoding="utf-8"))["modules"]:
             for sym in module.get("symbols", ()):
-                if sym.get("kind") == "interface":
-                    _INTERFACES[sym["name"]] = [m["name"]
-                                                for m in sym.get("members", ())]
+                if sym.get("kind") != "interface":
+                    continue
+                _INTERFACES[sym["name"]] = [m["name"]
+                                            for m in sym.get("members", ())]
+                found = _EXTENDS.search(sym.get("signature") or "")
+                bases[sym["name"]] = found.group(1) if found else None
+        for name in _INTERFACES:
+            at, seen = bases.get(name), {name}
+            while at is not None and at not in seen:
+                seen.add(at)
+                _INTERFACES[name] += _INTERFACES.get(at, [])
+                at = bases.get(at)
     return _INTERFACES
 
 
@@ -949,7 +966,14 @@ def _bagged_row(name, mine, yours, wanted, bag, kw, ours, space):
     # the object sits in that seat, so a positional call lands on the object and not on
     # a wrong parameter — but it is a difference and it is named rather than absorbed.
     moved = sorted(bag & {ts_axis._camel(p) for p in pos})
-    absent = sorted({ts_axis._camel(p) for p in kw} - bag)
+    # **A keyword-only name may be carried positionally on the other side**, and
+    # looking in the bag alone called it absent. `Adam`'s `decoupledWeightDecay` was
+    # in a seat of its own and this reported it missing — a finding about a name that
+    # was right there, which is the worst kind: it reads as work to do and the work
+    # is already done, so the next reader either adds it twice or stops trusting the
+    # row. TypeScript has no keyword arguments, so *positional* and *in the options
+    # object* are the only two places a name can be, and both count as present.
+    absent = sorted({ts_axis._camel(p) for p in kw} - bag - set(yours))
     if verdict == "agree" and not absent and not moved:
         return (name, mine, yours + sorted(bag), "agree")
     notes = []
