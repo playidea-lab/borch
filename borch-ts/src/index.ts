@@ -233,7 +233,7 @@ export { igamma, igammac, polygamma } from "./special.js";
 export function narrowCopy(
   input: TensorClass, dim: number, start: number, length: number,
 ): TensorClass {
-  return input.narrow(dim, start, length).clone();
+  return input.narrowCopy(dim, start, length);
 }
 
 /** The five reductions `segmentReduce` takes, by torch's spelling. */

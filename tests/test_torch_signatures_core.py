@@ -657,7 +657,7 @@ JUDGED = {
     # seat torch has, refused here with the wording that says why) and `poisson`
     # declares nothing more than it takes. Two rows left an absorbing state, which is
     # the movement this check was written to make visible in the other direction.
-    "Tensor": (388, 509),
+    "Tensor": (389, 510),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a

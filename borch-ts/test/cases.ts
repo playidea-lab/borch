@@ -1919,6 +1919,14 @@ function addOps(out: Map<string, Case>): void {
     return `${a.join(" ")} | ${b.join(" ")}`;
   });
 
+  // The same thing spelled as a method — torch keeps both, and the two are separate
+  // seats: the function went in first and the method was absent for a while.
+  out.set("top::narrow_copy(as a method)", async () => {
+    const base = Tensor.from(Array.from({ length: 6 }, (_, k) => k), [2, 3]);
+    return Array.from(await base.narrowCopy(1, 1, 2).toArray())
+      .map((v) => String(Math.trunc(v))).join(" ");
+  });
+
   // `segment_reduce`'s row read *for sparse and ragged bundles*, and the ragged half is
   // the part that is here: a dense tensor and a list of run lengths.
   //

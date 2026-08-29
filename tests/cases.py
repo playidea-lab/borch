@@ -4936,6 +4936,16 @@ def top_level_cases(inp=None):
     ):
         cases.append((TOP_PREFIX + f"segment_reduce({_tag})", _fn))
 
+    # **The same thing spelled as a method.** torch keeps both `x.narrow_copy(…)` and
+    # `torch.narrow_copy(x, …)`, and the two spellings are separate seats — the function
+    # went in first and the method was absent for a while, which is a caller finding
+    # exactly half of what the docs show.
+    def narrow_copy_method(L):
+        base = L.tensor(np.arange(6, dtype=np.float32).reshape(2, 3))
+        return " ".join(str(int(v)) for v in
+                        np.asarray(_as_numpy(base.narrow_copy(1, 1, 2))).ravel())
+    cases.append((TOP_PREFIX + "narrow_copy(as a method)", narrow_copy_method))
+
     # **Both answer False, and that is not a placeholder** — torch on any ordinary build
     # answers the same. Absent, a caller's `if torch.is_vulkan_available():` stops here
     # and runs there, which is the one direction this library cannot afford.
@@ -12312,7 +12322,10 @@ def dtype_cases(inp=None):
     # **`coalesce`, `untyped_storage` and `int_repr` are no longer here.** All three were changed to
     # have the name and refuse with a reason — this check has to look at places where **the name
     # really is absent.** It uses the two `NOT_API` records as not being public API.
-    for name in ("narrow_copy", "unsafe_chunk"):
+    # `narrow_copy` was one of the two and **stopped being absent** — it is in the
+    # library now, so asking it here proved nothing about a missing name. `unsafe_split`
+    # takes its seat: still absent, and an internal by the same measure.
+    for name in ("unsafe_split", "unsafe_chunk"):
         cases.append((f"dtype::없는이름::{name}",
                       lambda L, n=name: missing_name(L, n)))
 

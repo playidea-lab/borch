@@ -3049,6 +3049,18 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
+   * A `narrow` and a copy — **the copy is the whole difference.**
+   *
+   * `narrow` gives a view, so writing into it reaches the original; this one
+   * writes into nothing but itself. torch keeps both spellings, `x.narrow_copy(…)`
+   * and `torch.narrow_copy(x, …)`, and a caller who wrote the method form should
+   * not find only the function.
+   */
+  narrowCopy(dim: number, start: number, length: number): Tensor {
+    return this.narrow(dim, start, length).clone();
+  }
+
+  /**
    * Shifts one axis. **What falls off the end comes back at the front.**
    *
    * It is `out[i] = in[(i - shift) mod n]`, so it is the rule table's `mod`
