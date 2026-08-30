@@ -10671,6 +10671,14 @@ _LA_RANK_RHS = np.array([[1.], [2.], [3.]], dtype=np.float32)
 # For `tensorsolve`. Four axes folded into a 4×4, which is what `dims` would reorder.
 _LA_T4 = (np.eye(4, dtype=np.float32) + 0.1).reshape(2, 2, 2, 2)
 _LA_B4 = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+# **For `dims`, and it has to be non-cubic.** `_LA_T4` above is 2×2×2×2, so moving
+# axes changes the values but leaves the answer's shape at 2×2 — and the shape is
+# half of what `dims` does. This one is 2×3×2×3, where `(1, 0)` gives 3×2 and `(0, 1)`
+# gives 2×3. Built from `arange` with the folded diagonal raised so that every
+# reordering asked below stays invertible (the determinants are ±44500).
+_LA_T6 = (np.arange(36, dtype=np.float32).reshape(2, 3, 2, 3) * 0.1
+          + np.eye(6, dtype=np.float32).reshape(2, 3, 2, 3) * 5.0)
+_LA_B6 = np.array([[1., 2., 3.], [4., 5., 6.]], dtype=np.float32)
 _LA_SYM3 = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]], dtype=np.float32)
 # The first element is smaller than the second row's → partial pivoting swaps a row. Asked only
 # with matrices that do not swap, the pivots are the identity and **counting from 1 cannot be told
@@ -11258,10 +11266,19 @@ def linalg_name_cases(inp=None):
         (LINALG_PREFIX + "name2::lu(pivot=False)=둘 다 거절",
          lambda L: _both_stop(L, lambda M: M.linalg.lu(M.tensor(_LA_MAT),
                                                        pivot=False).U)),
-        (LINALG_PREFIX + "name2::tensorsolve(dims)=우리는거절",
-         refusal_case(lambda L: L.linalg.tensorsolve(
-             L.tensor(_LA_T4), L.tensor(_LA_B4), (0, 1)))),
     ]
+    # **`dims` was refused, and numpy's `tensorsolve` had been taking it all along**
+    # under the name `axes`. It moves those axes of `A` to the end before the fold,
+    # in the order given, so it changes which axes become the matrix — the values and
+    # the answer's *shape* both. Six settings, and the shape parts on three of them.
+    for _tag, _dims in (("(0, 1)", (0, 1)), ("(1, 0)", (1, 0)), ("(0,)", (0,)),
+                        ("(2, 3)", (2, 3)), ("(3,)", (3,)), ("(1, 2)", (1, 2))):
+        cases.append((LINALG_PREFIX + f"name2::tensorsolve(dims={_tag})",
+                      lambda L, d=_dims: L.linalg.tensorsolve(
+                          L.tensor(_LA_T6), L.tensor(_LA_B6), d)))
+    cases.append((LINALG_PREFIX + "name2::tensorsolve(dims 없이, 2×3×2×3)",
+                  lambda L: L.linalg.tensorsolve(L.tensor(_LA_T6),
+                                                 L.tensor(_LA_B6))))
     for tag, ordv in (("1", 1), ("inf", float("inf")), ("-inf", float("-inf")),
                       ("0", 0), ("3", 3)):
         cases.append((LINALG_PREFIX + f"name2::vector_norm(ord={tag})",

@@ -2966,7 +2966,7 @@
       },
       {
        "name": "tensorSolve",
-       "signature": "tensorSolve(b: Tensor): Promise<Tensor>",
+       "signature": "tensorSolve(b: Tensor, dims?: readonly number[]): Promise<Tensor>",
        "doc": "Folds the tensor into a matrix, solves, and spreads it back.",
        "torch": "tensor_solve",
        "section": {

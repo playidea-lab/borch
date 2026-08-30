@@ -6780,11 +6780,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Folds the tensor into a matrix, solves, and spreads it back.
    */
-  async tensorSolve(b: Tensor): Promise<Tensor> {
+  async tensorSolve(b: Tensor, dims?: readonly number[]): Promise<Tensor> {
+    // **`dims` moves those axes to the end before the fold**, in the order given,
+    // with the rest keeping theirs. It therefore changes which axes become the
+    // matrix — and the answer's shape is the moved array's trailing axes, not this
+    // one's, which is the part a caller reading `slice(b.shape.length)` off the
+    // receiver would get wrong.
+    const a: Tensor = dims === undefined ? this : this.permute([
+      ...this.shape.map((_, k) => k).filter((k) => !dims.includes(k)), ...dims]);
     const n = b.size;
-    const folded = this.reshape([n, this.size / n]);
+    const folded = a.reshape([n, a.size / n]);
     const x = await folded.solve(b.reshape([n]));
-    return x.reshape(this.shape.slice(b.shape.length));
+    return x.reshape(a.shape.slice(b.shape.length));
   }
 
   /**

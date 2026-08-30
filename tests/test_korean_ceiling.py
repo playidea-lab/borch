@@ -262,7 +262,9 @@ CEILINGS = {
     # (`batch::lu_solve(adjoint, 한쪽만 교환)` and `(left=False, 한쪽만 교환)`) — keys in
     # `golden.json`, so both sides spell them the same. The other three new names are
     # `adjoint` and `left=False`, which are English.
-    "borch-ts/test": 4063,
+    # 4063 → 4065. Two, in `tensorsolve(dims 없이, 2×3×2×3)` — a key in `golden.json`.
+    # The six `dims=` names beside it are English.
+    "borch-ts/test": 4065,
 }
 
 

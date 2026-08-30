@@ -8887,6 +8887,15 @@ function addLinalgNames(out: Map<string, Case>): void {
   const rect = () => Tensor.from(LA_RECT, [3, 2]);
   const vec3 = () => Tensor.from([3, -4, 0], [3]);
   const upper = () => Tensor.from([2, 1, 0, 3], [2, 2]);
+  // `tensorsolve(dims)`'s fixture, built the way `tests/cases.py` builds it: a ramp
+  // with the folded diagonal raised so every reordering asked stays invertible. The
+  // arithmetic runs on tensors rather than in JS so the rounding is float32 on both
+  // sides. 2×3×2×3 rather than a cube, because a cube hides what `dims` does to the
+  // answer's shape.
+  const t6 = () => Tensor.from(Array.from({ length: 36 }, (_, i) => i), [2, 3, 2, 3])
+    .mul(Tensor.full([], 0.1))
+    .add(Tensor.eye(6).reshape([2, 3, 2, 3]).mul(Tensor.full([], 5)));
+  const b6 = () => Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
   const cube = () => Tensor.arange(24).reshape([2, 3, 4]);
   // Putting 99 in the upper triangle must not change the answer — the place asking whether
   // it reads the lower triangle alone.
@@ -8949,6 +8958,17 @@ function addLinalgNames(out: Map<string, Case>): void {
     ["name2::tensorsolve", async () => Tensor.eye(4).reshape([2, 2, 2, 2])
       .tensorSolve(Tensor.from([1, 2, 3, 4], [2, 2]))],
     ["name2::tensorinv", async () => Tensor.eye(4).reshape([2, 2, 2, 2]).tensorInv(2)],
+    // **`dims` was refused here and it is a permute away.** It moves those axes to
+    // the end before the fold, in the order given, so it changes which axes become
+    // the matrix — the values and the answer's *shape*. The fixture is 2×3×2×3
+    // rather than the cubic one above, because a cube hides the shape half.
+    ["name2::tensorsolve(dims 없이, 2×3×2×3)",
+      async () => t6().tensorSolve(b6())],
+    ...(([["(0, 1)", [0, 1]], ["(1, 0)", [1, 0]], ["(0,)", [0]], ["(2, 3)", [2, 3]],
+          ["(3,)", [3]], ["(1, 2)", [1, 2]]] as [string, number[]][])
+      .map(([tag, dims]): [string, () => Promise<Tensor>] =>
+        [`name2::tensorsolve(dims=${tag})`,
+          async () => linalg.tensorsolve(t6(), b6(), dims)])),
 
     ["name2::matrix_exp(멱영)",
       async () => Tensor.from([0, 1, 0, 0], [2, 2]).matrixExp()],
@@ -9091,9 +9111,6 @@ function addLinalgNames(out: Map<string, Case>): void {
   };
   laRefuses("lstsq(기본 driver 가 자르면)",
     () => linalg.lstsq(tall(), tallRhs(), 0.9));
-  laRefuses("tensorsolve(dims)",
-    () => linalg.tensorsolve(Tensor.eye(4).reshape([2, 2, 2, 2]).add(
-      Tensor.full([], 0.1)), Tensor.from([1, 2, 3, 4], [2, 2]), [0, 1]));
   // **torch refuses this one too** — *LU without pivoting is not implemented on the
   // CPU* — so what is asked is that both stop, not that this one does.
   out.set("linalg::name2::lu(pivot=False)=둘 다 거절", async () => {

@@ -3229,7 +3229,7 @@ class _MinMax:
 #                  and the elementwise p-norm on the method — 16.848 against 16.882
 #     lu           `pivot=False` is a different factorisation, refused
 #     lu_solve     `left`/`adjoint` are different systems, and each is answered now
-#     tensorsolve  `dims` reorders the axes before the fold, refused
+#     tensorsolve  `dims` reorders the axes before the fold, and it is answered now
 #     lstsq        `rcond` is the cutoff and `driver` picks among four algorithms
 #
 # Reached through the method the extra words are handed to JavaScript and dropped, so

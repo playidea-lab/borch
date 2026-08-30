@@ -422,16 +422,11 @@ export function multiDot(tensors: readonly Tensor[]): Tensor {
  */
 export function tensorsolve(input: Tensor, b: Tensor,
                             dims?: readonly number[]): Promise<Tensor> {
-  // **Carried in order to refuse**, as the core refuses it. `dims` moves the named
+  // **`dims` was carried in order to refuse and now it answers.** It moves the named
   // axes of `A` to the end before the fold, so the matrix that gets solved is a
-  // different one; without the seat the list is discarded and the unmoved answer
-  // comes back under its name.
-  if (dims !== undefined) {
-    throw new RuntimeError(
-      "tensorsolve(dims) is not in the browser subset — it reorders A's axes "
-      + "before the fold, so the system solved is a different one.");
-  }
-  return input.tensorSolve(b);
+  // different one and so is the answer's shape — which is a permute away, and the
+  // permute was already here.
+  return input.tensorSolve(b, dims);
 }
 
 /**

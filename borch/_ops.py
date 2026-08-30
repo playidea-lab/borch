@@ -8401,13 +8401,19 @@ def solve_triangular(input, b, upper, left=True, unitriangular=False):  # noqa: 
 
 
 def tensorsolve(input, b, dims=None):  # noqa: A002
-    """Fold the tensor into input matrix, solve, and spread it back."""
+    """Fold the tensor into input matrix, solve, and spread it back.
+
+    **`dims` moves those axes of `A` to the end before the fold**, so it changes
+    which axes become the matrix and therefore the shape of the answer as well as
+    its values. It was refused; what the refusal did not say is that numpy's
+    `tensorsolve` already takes it, under the name `axes`. Measured across six
+    settings on a `(2, 3, 2, 3)` — `None`, `(0, 1)`, `(1, 0)`, `(0,)`, `(2, 3)`,
+    `(3,)` — torch and numpy agree on every one, shape included.
+    """
     at, bt = _wrap(input), _wrap(b)
-    if dims is not None:
-        _unsupported("tensorsolve(dims)")
-    n = bt.data.size
-    out = _np.linalg.solve(at.data.reshape(n, -1), bt.data.reshape(n))
-    return Tensor(out.reshape(at.data.shape[bt.data.ndim:]))
+    out = _np.linalg.tensorsolve(at.data, bt.data,
+                                 axes=None if dims is None else tuple(dims))
+    return Tensor(out)
 
 
 def tensorinv(input, ind=2):  # noqa: A002
