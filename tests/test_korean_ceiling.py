@@ -249,7 +249,10 @@ CEILINGS = {
     # names — `입력` and `파라미터 합`. Both are keys in `golden.json`.
     # 3918 → 3923. Five, one case name: `batch::lu_solve(한쪽만 교환)`, a key in
     # `golden.json`.
-    "borch-ts/test": 3923,
+    # 3923 → 3938. Fifteen, in four `kron` case names — `kron(2차원)`,
+    # `kron(2차원 × 1차원)`, `kron(직사각)` and `kron(2차원)의 기울기`. All four are
+    # keys in `golden.json` and so are spelled the same on both sides.
+    "borch-ts/test": 3938,
 }
 
 

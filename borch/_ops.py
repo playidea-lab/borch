@@ -3146,13 +3146,39 @@ def vdot(input, other):
 
 def kron(input, other):
     """The Kronecker product. One side is stretched, multiplied and folded back
-    — no new kernel needed."""
+    — no new kernel needed.
+
+    **Any rank, and the 1-D line was already the general one.** It read
+    `a.reshape(n, 1) * b.reshape(1, m)` and then refused everything above one axis;
+    what that line does is interleave the two shapes and let broadcasting do the
+    product, which is `kron`'s definition at every rank:
+
+        out[(i, k), (j, l), …] = a[i, j, …] · b[k, l, …]
+
+    So `a` becomes `(a0, 1, a1, 1, …)`, `b` becomes `(1, b0, 1, b1, …)`, and the
+    result folds each pair back into one axis. **The shorter operand is padded at
+    the front**, which is numpy's rule and torch's — measured against both on
+    1×1, 2×2, 2×1, 1×2, 3×3, 2×3 and 0×2.
+
+    Written this way it stays inside operations that already carry a gradient, so
+    the backward is right by construction rather than by a second derivation. That
+    is what the original line's *no new kernel needed* was for, and the refusal
+    below it was hiding how far it already reached.
+    """
     input, other = _wrap(input), _wrap(other)
     ash, bsh = input.data.shape, other.data.shape
-    if len(ash) != 1 or len(bsh) != 1:
-        _unsupported("kron (anything but 1-D)")
-    out = input.reshape(ash[0], 1) * other.reshape(1, bsh[0])
-    return out.reshape(ash[0] * bsh[0])
+    rank = max(len(ash), len(bsh))
+    # numpy pads the shorter shape with leading 1s — `kron([[1, 2]], b3d)` is
+    # `(1, 1, 2)` against `(2, 2, 2)` and comes out `(2, 2, 4)`.
+    ash = (1,) * (rank - len(ash)) + tuple(ash)
+    bsh = (1,) * (rank - len(bsh)) + tuple(bsh)
+    a_spread, b_spread, folded = [], [], []
+    for a_dim, b_dim in zip(ash, bsh):
+        a_spread += [a_dim, 1]
+        b_spread += [1, b_dim]
+        folded.append(a_dim * b_dim)
+    out = input.reshape(*a_spread) * other.reshape(*b_spread)
+    return out.reshape(*folded) if folded else out
 
 
 def cross(input, other, dim=-1):

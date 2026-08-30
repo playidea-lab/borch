@@ -6033,6 +6033,39 @@ def method_name_cases(inp=None):
     add("kron",
         lambda L: L.tensor(np.array([1., 2., 3.], dtype=np.float32)).kron(
             L.tensor(np.array([4., 5.], dtype=np.float32))))
+    # **Above one axis, where it used to refuse.** The 1-D case cannot tell the
+    # general rule from the one-axis version that was wrong above it — both give the
+    # same answer on vectors, which is why the miniature above skips `kron` with a
+    # note rather than asking it. These three make the interleaving visible: two
+    # square matrices, a mixed rank (the shorter is padded at the *front*), and a
+    # rectangle where every axis has a different length so a transposed fold shows.
+    _k2a = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+    _k2b = np.array([[0., 5.], [6., 7.]], dtype=np.float32)
+    add("kron(2차원)", lambda L: L.tensor(_k2a).kron(L.tensor(_k2b)))
+    add("kron(2차원 × 1차원)",
+        lambda L: L.tensor(_k2a).kron(
+            L.tensor(np.array([5., 6.], dtype=np.float32))))
+    add("kron(직사각)",
+        lambda L: L.tensor(np.array([[1., 2., 3.]], dtype=np.float32)).kron(
+            L.tensor(np.array([[4.], [5.]], dtype=np.float32))))
+
+    def kron_grad(L):
+        """**The backward, which is what the general form had to keep.** It is built
+        from `reshape` and `mul`, both of which already carry one, so a wrong
+        interleaving shows here as much as in the value.
+
+        Both gradients come back as one tensor rather than as a formatted pair —
+        a `tolist()` in an f-string is Python's formatter, and the other side would
+        have to reproduce `82.0` rather than the number.
+        """
+        a = L.tensor(_k2a.copy(), requires_grad=True)
+        b = L.tensor(_k2b.copy(), requires_grad=True)
+        out = a.kron(b)
+        (out * (L.arange(out.numel()).reshape(out.shape).float() + 1)).sum().backward()
+        return L.cat([_grad_of(a, "kron/a").reshape(4),
+                      _grad_of(b, "kron/b").reshape(4)])
+
+    add("kron(2차원)의 기울기", kron_grad)
     add("broadcast_to",
         lambda L: L.tensor(np.array([1., 2.], dtype=np.float32)).broadcast_to((3, 2)))
     add("prelu",

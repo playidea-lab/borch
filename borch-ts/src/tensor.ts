@@ -9432,25 +9432,40 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * The Kronecker product. **One-dimensional only** — above that it
-   * refuses.
+   * The Kronecker product, at any rank.
    *
-   * The version in the binding was looking at one axis only (two
-   * `shape[0]`s), and given two dimensions the answer was quietly wrong. It
-   * could have been fixed while carrying it across, but that writes down a
-   * capability that is not here as though it were — **a missing feature
-   * beats a wrong answer** is this repository's rule.
+   * **This was 1-D only, and the 1-D line was already the general one.** It read
+   * `reshape([n, 1]).mul(other.reshape([1, m]))` and refused everything above one
+   * axis — but interleaving the two shapes and letting broadcasting multiply *is*
+   * `kron` at every rank:
+   *
+   *     out[(i, k), (j, l), …] = a[i, j, …] · b[k, l, …]
+   *
+   * The refusal was written because the binding's version looked at one axis only
+   * and was quietly wrong above it, and *a missing feature beats a wrong answer*.
+   * That was the right call on the day; what it hid is that the correct answer was
+   * one loop away from the line it sat on.
+   *
+   * **The shorter operand is padded at the front** — numpy's rule and torch's,
+   * measured against both across nine rank combinations including 0-D.
    */
   kron(other: Tensor): Tensor {
-    if (this.shape.length !== 1 || other.shape.length !== 1) {
-      throw new RuntimeError(
-        "kron only does 1-D — two or more dimensions are not here yet. " +
-        `(got shapes [${this.shape}] and [${other.shape}])`,
-      );
+    const rank = Math.max(this.shape.length, other.shape.length);
+    const pad = (s: readonly number[]): number[] =>
+      [...new Array<number>(rank - s.length).fill(1), ...s];
+    const a = pad(this.shape);
+    const b = pad(other.shape);
+    const aSpread: number[] = [];
+    const bSpread: number[] = [];
+    const folded: number[] = [];
+    for (let i = 0; i < rank; i++) {
+      aSpread.push(a[i] as number, 1);
+      bSpread.push(1, b[i] as number);
+      folded.push((a[i] as number) * (b[i] as number));
     }
-    const n = this.shape[0] ?? 0;
-    const m = other.shape[0] ?? 0;
-    return this.reshape([n, 1]).mul(other.reshape([1, m])).reshape([n * m]);
+    // Both 0-D: there is nothing to interleave and the product is the product.
+    if (rank === 0) return this.mul(other);
+    return this.reshape(aSpread).mul(other.reshape(bSpread)).reshape(folded);
   }
 
   /**

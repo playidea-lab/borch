@@ -2798,9 +2798,9 @@ def vdot(a, b, out=None):
 
 
 def kron(a, b, out=None):
-    """**1-D only.** The version that lived here looked at one axis, so 2-D
-    input gave a quietly wrong answer — moving it over there turned that place
-    into a refusal."""
+    """Any rank. The version that lived here looked at one axis, so 2-D input gave
+    a quietly wrong answer — moving it over there turned that place into a refusal,
+    and the refusal is gone now that borch.ts interleaves the two shapes."""
     _no_out(out)
     return wrap(guarded(handle(wrap(a)).kron, handle(wrap(b))))
 

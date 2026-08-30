@@ -85,7 +85,9 @@
     <p>
       Nothing to do. Measured on an Apple M4 Max: the adapter comes back
       <code>apple / metal-3</code> and Run works with no flags, no install, no settings.
-      Every number on this site that says <code>apple / metal-3</code> was taken that way.
+      Every number on this site that says <code>apple / metal-3</code> was taken that way,
+      the whole suite included &mdash;
+      <code data-measured="golden">agreeing 3885 / 3885 [apple / metal-3]</code>.
     </p>
 
     <h2>Linux with an NVIDIA card</h2>
@@ -148,7 +150,8 @@
     </p>
     <p class="small">
       <strong>The whole suite was run on those two flags</strong>, not just an adapter probe:
-      <code data-measured="golden">agreeing 3880 / 3880 [nvidia / blackwell]</code> on the 5080, and the training
+      <code>agreeing 3880 / 3880 [nvidia / blackwell]</code> on the 5080, measured on
+      2026-08-30 when the binding's share of the table was 3880, and the training
       agrees too &mdash; thirty steps of a small ResNet with its per-layer gradients,
       batch-norm buffers and eval, matched against torch to <code>64 values</code>, once
       through the Python binding and once through borch.ts's own API. Earlier this page

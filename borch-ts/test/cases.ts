@@ -9298,6 +9298,9 @@ function addInplace(out: Map<string, Case>): void {
   const m2sym = (): Tensor => Tensor.from([4, 1, 1, 3], [2, 2]);
   const m2neg = (): Tensor => Tensor.from([-1, 2, -3, 0.5], [2, 2]);
   const vec3a = (): Tensor => Tensor.from([1, 2, 3], [3]);
+  // `kron`'s two-dimensional pair, carried verbatim from `tests/cases.py`.
+  const k2a = (): Tensor => Tensor.from([1, 2, 3, 4], [2, 2]);
+  const k2b = (): Tensor => Tensor.from([0, 5, 6, 7], [2, 2]);
   const vec3b = (): Tensor => Tensor.from([4, 5, 6], [3]);
 
   const named: [string, () => Tensor][] = [
@@ -9332,6 +9335,27 @@ function addInplace(out: Map<string, Case>): void {
     ["cross", () => vec3a().cross(vec3b())],
     ["vdot", () => vec3a().vdot(vec3b())],
     ["kron", () => vec3a().kron(Tensor.from([4, 5], [2]))],
+    // **Above one axis, where it used to refuse.** A 1-D case cannot tell the
+    // general rule from a one-axis version that is wrong above it — both agree on
+    // vectors, which is why the value that was quietly wrong in the binding got as
+    // far as it did. These make the interleaving visible: two squares, a mixed rank
+    // (the shorter is padded at the *front*), and a rectangle whose axes all differ.
+    ["kron(2차원)", () => k2a().kron(k2b())],
+    ["kron(2차원 × 1차원)", () => k2a().kron(Tensor.from([5, 6], [2]))],
+    ["kron(직사각)", () => Tensor.from([1, 2, 3], [1, 3])
+      .kron(Tensor.from([4, 5], [2, 1]))],
+    // **The backward is what the general form had to keep.** It is `reshape` and
+    // `mul`, both of which already carry one, so a wrong interleaving shows here as
+    // much as in the value. Both gradients come back as one tensor.
+    ["kron(2차원)의 기울기", () => {
+      const a = asLeaf(k2a());
+      const b = asLeaf(k2b());
+      const out = a.kron(b);
+      out.mul(Tensor.from(
+        Array.from({ length: out.size }, (_, i) => i + 1), out.shape)).sum().backward();
+      return Tensor.cat([
+        gradOf(a, "kron/a").reshape([4]), gradOf(b, "kron/b").reshape([4])]);
+    }],
     ["broadcast_to", () => Tensor.from([1, 2], [2]).broadcastTo([3, 2])],
     ["prelu", () => m2neg().prelu(Tensor.from([0.25], [1]))],
   ];
