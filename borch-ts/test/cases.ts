@@ -8709,6 +8709,17 @@ function addLinalgStruct(out: Map<string, Case>): void {
     return f.LU.luSolveFactored(f.pivots, Tensor.from([1, 2], [2, 1]));
   });
 
+  // **A batch whose first matrix swaps a row and whose second does not.** This side
+  // refused a batch outright until now, which was honest and also meant this case
+  // could not be written — and the core, which did answer, answered wrongly: one
+  // permutation shared across the batch and applied to the batch axis. A refusal on
+  // one side and a wrong number on the other is a pair no golden row can hold.
+  out.set("linalg::batch::lu_solve(한쪽만 교환)", async () => {
+    const a = Tensor.from([1, 2, 3, 4, 5, 1, 1, 2], [2, 2, 2]);
+    const f = await a.luFactor();
+    return f.LU.luSolveFactored(f.pivots, Tensor.from([1, 0, 0, 1], [2, 2, 1]));
+  });
+
   out.set("linalg::ex::inv(특이)가 던지는 것", async () => {
     try {
       await Tensor.from(LA_SINGULAR, [2, 2]).inverse();

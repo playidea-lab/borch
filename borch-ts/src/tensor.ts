@@ -7092,14 +7092,28 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   async luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
-    if (v.batch !== 1) throw new RuntimeError("lu_solve: batching is not here yet");
     const n = v.rows;
+    // **Batched, by the same loop `solve` twenty lines up already uses.** This
+    // refused a batch outright, which was honest; what made it worth closing is
+    // that the core answered a batch and got it **wrong** — one permutation built
+    // from the flattened pivots and applied to the batch axis. A refusal here and a
+    // wrong number there is the pair a golden case cannot ask about, because the
+    // case cannot be written while one side stops.
+    const width = b.shape.length === this.shape.length - 1
+      ? 1 : (b.shape[b.shape.length - 1] ?? 1);
     const piv = Int32Array.from(await pivots.toArray());
-    const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
-    const rhs = LA.fromF32(await b.toArray());
-    const x = LA.luSolveFactored(
-      { lu: v.mats[0]!, piv, rows: n, cols: n }, rhs, width);
-    return Tensor.fromMat(x, b.shape);
+    const rhsFlat = LA.fromF32(await b.toArray());
+    const size = n * width;
+    const xs: LA.Mat[] = [];
+    for (let i = 0; i < v.batch; i++) {
+      xs.push(LA.luSolveFactored(
+        // Each matrix has its own pivots — `n` of them, in the same order as the
+        // matrices. Sharing one row of pivots across the batch is exactly the fault
+        // the core had.
+        { lu: v.mats[i]!, piv: piv.slice(i * n, (i + 1) * n), rows: n, cols: n },
+        rhsFlat.slice(i * size, (i + 1) * size), width));
+    }
+    return Tensor.fromBatch(xs, b.shape);
   }
 
   // ── Linear algebra at the top level ───────────────────────────────────

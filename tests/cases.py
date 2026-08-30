@@ -10565,6 +10565,19 @@ _LA_BATCH_VEC = np.array([[1., 2.], [3., 1.], [0., 4.]], dtype=np.float32)
 _LA_BATCH_RHS = np.array([[[1., 0.], [2., 1.]],
                           [[0., 3.], [1., 1.]],
                           [[2., 2.], [0., 1.]]], dtype=np.float32)
+# **None of `_LA_BATCH`'s three swap a row**, and the note above says the fixture was
+# written by hand so that a swap would happen — which it does for the factorisations
+# that pivot differently, and not for `lu_factor`. Partial pivoting takes the largest
+# absolute value in the column and 4 > 2, 2 > 1, 3 > 1: every one is `[1, 2]`.
+#
+# A permutation that is the identity hides anything done to it. The core built one
+# permutation for the whole batch and applied it to the batch axis, and against these
+# three that was harmless. Here the first matrix swaps and the second does not, so a
+# per-matrix permutation and a shared one give different numbers.
+_LA_BATCH_PIVOT = np.array([[[1., 2.], [3., 4.]],
+                            [[5., 1.], [1., 2.]]], dtype=np.float32)
+_LA_BATCH_PIVOT_RHS = np.array([[[1.], [0.]],
+                                [[0.], [1.]]], dtype=np.float32)
 _LA_RECT = np.array([[1., 2.], [3., 4.], [5., 7.]], dtype=np.float32)
 # **For `lstsq`'s cutoff.** Its two singular values are 5.779 and 0.774, a ratio of
 # 7.5, so `rcond=0.9` drops the second one and `rcond=1e-6` drops neither. Asked with
@@ -10767,6 +10780,26 @@ def linalg_struct_cases(inp=None):
                                  L.tensor(np.array([[1.], [2.]], dtype=np.float32)))
 
     cases.append((LINALG_PREFIX + "lu::lu_solve(교환)", lu_solve))
+
+    def lu_solve_batched(L):
+        """**One matrix, and every fault below it was invisible.**
+
+        The core built one permutation from `pivots.reshape(-1)` — the batch
+        flattened, so every matrix took the first one's — and applied it as
+        `rhs[order]`, which on a batch indexes the **batch** axis rather than the
+        rows. Both are unreachable with a single matrix, and both are silent when
+        the permutation happens to be the identity.
+
+        So this one asks a batch whose first matrix swaps and whose second does not.
+        Before the repair the second came back `[0.222, -0.111]` where the answer is
+        `[-0.111, 0.556]` — a plausible number with no exception. At 3×3 the same
+        code raised `IndexError: index 2 is out of bounds for axis 0 with size 2`,
+        numpy's words about an axis nobody had asked about.
+        """
+        f = L.linalg.lu_factor(L.tensor(_LA_BATCH_PIVOT))
+        return L.linalg.lu_solve(f.LU, f.pivots, L.tensor(_LA_BATCH_PIVOT_RHS))
+
+    cases.append((LINALG_PREFIX + "batch::lu_solve(한쪽만 교환)", lu_solve_batched))
 
     # ── `_ex`, LDL and reflectors ──
     #

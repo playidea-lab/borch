@@ -247,7 +247,9 @@ CEILINGS = {
     # and `제자리::squeeze_(0, 2)`. Both are keys in `golden.json`.
     # 3911 → 3918. Seven, in the two `seq::grad::TransformerEncoderLayer/` case
     # names — `입력` and `파라미터 합`. Both are keys in `golden.json`.
-    "borch-ts/test": 3918,
+    # 3918 → 3923. Five, one case name: `batch::lu_solve(한쪽만 교환)`, a key in
+    # `golden.json`.
+    "borch-ts/test": 3923,
 }
 
 

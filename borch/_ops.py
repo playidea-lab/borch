@@ -8044,7 +8044,23 @@ def lu(A, pivot=True):  # noqa: N803
 
 
 def lu_solve(LU, pivots, b, left=True, adjoint=False):  # noqa: N803
-    """Solve `A x = b` with what `lu_factor` produced."""
+    """Solve `A x = b` with what `lu_factor` produced.
+
+    **The permutation is per matrix and it goes on the rows.** It used to be built
+    once from `pivots.reshape(-1)` — the whole batch flattened, so every matrix got
+    the first one's pivots and only the first `n` of them — and applied as
+    `rhs[order]`, which indexes **axis 0**. On a batch that is the batch axis, so the
+    right-hand sides were permuted between matrices.
+
+    Both faults were invisible at 2×2, because two pivots that do not swap give the
+    identity and permuting anything by the identity is harmless. At 3×3 the pivot
+    value 3 ran off the end of a batch of 2 and it raised
+    `IndexError: index 2 is out of bounds for axis 0 with size 2` — numpy's words
+    about the wrong axis entirely. **And at 2×2 with a real swap it did not raise:**
+    `[[1,2],[3,4]]` needs one, and the second matrix came back `[0.222, -0.111]`
+    where the answer is `[-0.111, 0.556]`. A plausible number and no exception,
+    which is what the existing case could not see by asking one matrix.
+    """
     lu_t, piv_t, bt = _wrap(LU), _wrap(pivots), _wrap(b)
     if not left or adjoint:
         _unsupported("lu_solve(left=False or adjoint=True)")
@@ -8052,12 +8068,19 @@ def lu_solve(LU, pivots, b, left=True, adjoint=False):  # noqa: N803
     low = _np.tril(lu_t.data.astype(_np.float64), -1) + _np.eye(n)
     up = _np.triu(lu_t.data.astype(_np.float64))
     rhs = bt.data.astype(_np.float64).copy()
-    order = _np.arange(n)
-    for col in range(piv_t.data.shape[-1]):
-        src = int(_np.asarray(piv_t.data).reshape(-1)[col]) - 1
-        if src != col:
-            order[[col, src]] = order[[src, col]]
-    rhs = rhs[order]
+    piv = _np.asarray(piv_t.data).astype(int)
+    lead = piv.shape[:-1]
+    order = _np.broadcast_to(_np.arange(n), (*lead, n)).copy()
+    for at in (_np.ndindex(*lead) if lead else [()]):
+        row = order[at]
+        for col in range(piv.shape[-1]):
+            src = int(piv[at][col]) - 1
+            if src != col:
+                row[[col, src]] = row[[src, col]]
+    # **Broadcast to the right-hand side's own leading shape.** torch takes a batch
+    # of matrices against a single `b` as well as against a matching batch.
+    take = _np.broadcast_to(order, (*rhs.shape[:-1],))
+    rhs = _np.take_along_axis(rhs, take[..., None], axis=-2)
     y = _np.linalg.solve(low, rhs)
     return Tensor(_np.linalg.solve(up, y).astype(bt.data.dtype))
 
