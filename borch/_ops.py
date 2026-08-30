@@ -8147,8 +8147,6 @@ def lu_solve(LU, pivots, b, left=True, adjoint=False):  # noqa: N803
     which is what the existing case could not see by asking one matrix.
     """
     lu_t, piv_t, bt = _wrap(LU), _wrap(pivots), _wrap(b)
-    if not left or adjoint:
-        _unsupported("lu_solve(left=False or adjoint=True)")
     n = lu_t.data.shape[-1]
     low = _np.tril(lu_t.data.astype(_np.float64), -1) + _np.eye(n)
     up = _np.triu(lu_t.data.astype(_np.float64))
@@ -8162,12 +8160,35 @@ def lu_solve(LU, pivots, b, left=True, adjoint=False):  # noqa: N803
             src = int(piv[at][col]) - 1
             if src != col:
                 row[[col, src]] = row[[src, col]]
+    if left:
+        got = _lu_apply(low, up, order, rhs, adjoint)
+    else:
+        # `X A = B` is `Aᵀ Xᵀ = Bᵀ`, so the right-hand solve is the left one on the
+        # transposed sides with the adjoint flipped. Real storage only, so the
+        # conjugate half of torch's `Aᴴ` is a transpose.
+        got = _np.swapaxes(
+            _lu_apply(low, up, order, _np.swapaxes(rhs, -1, -2), not adjoint), -1, -2)
+    return Tensor(got.astype(bt.data.dtype))
+
+
+def _lu_apply(low, up, order, rhs, adjoint):
+    """One of the two left-hand solves against a factorisation already unpacked.
+
+    `A = P L U`, so `A x = b` permutes `b` onto `L U x = Pᵀ b` and runs forward then
+    back. **The adjoint runs the whole thing in reverse**: `Aᵀ = Uᵀ Lᵀ Pᵀ`, so `Uᵀ`
+    goes first, `Lᵀ` second, and the permutation lands on the *answer* rather than on
+    the right-hand side — `Pᵀ x = z` means `x = P z`, which is a scatter where the
+    forward direction is a gather. The inverse permutation is `argsort`.
+    """
     # **Broadcast to the right-hand side's own leading shape.** torch takes a batch
     # of matrices against a single `b` as well as against a matching batch.
     take = _np.broadcast_to(order, (*rhs.shape[:-1],))
-    rhs = _np.take_along_axis(rhs, take[..., None], axis=-2)
-    y = _np.linalg.solve(low, rhs)
-    return Tensor(_np.linalg.solve(up, y).astype(bt.data.dtype))
+    if not adjoint:
+        moved = _np.take_along_axis(rhs, take[..., None], axis=-2)
+        return _np.linalg.solve(up, _np.linalg.solve(low, moved))
+    w = _np.linalg.solve(_np.swapaxes(up, -1, -2), rhs)
+    z = _np.linalg.solve(_np.swapaxes(low, -1, -2), w)
+    return _np.take_along_axis(z, _np.argsort(take, axis=-1)[..., None], axis=-2)
 
 
 # ---- the composite layers

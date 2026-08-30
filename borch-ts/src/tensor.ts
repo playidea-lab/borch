@@ -7090,7 +7090,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * count both match, so **nothing catches at that point** and only the
    * value is wrong.
    */
-  async luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor> {
+  async luSolveFactored(pivots: Tensor, b: Tensor,
+                        left = true, adjoint = false): Promise<Tensor> {
+    if (!left) {
+      // `X A = B` is `Aᵀ Xᵀ = Bᵀ`, so the right-hand solve is the left one on the
+      // transposed sides with the adjoint flipped. Real storage only, so torch's
+      // `Aᴴ` is a transpose.
+      const t = await this.luSolveFactored(
+        pivots, b.transpose(-1, -2), true, !adjoint);
+      return t.transpose(-1, -2);
+    }
     const v = await this.asBatch();
     const n = v.rows;
     // **Batched, by the same loop `solve` twenty lines up already uses.** This
@@ -7111,7 +7120,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         // matrices. Sharing one row of pivots across the batch is exactly the fault
         // the core had.
         { lu: v.mats[i]!, piv: piv.slice(i * n, (i + 1) * n), rows: n, cols: n },
-        rhsFlat.slice(i * size, (i + 1) * size), width));
+        rhsFlat.slice(i * size, (i + 1) * size), width, adjoint));
     }
     return Tensor.fromBatch(xs, b.shape);
   }

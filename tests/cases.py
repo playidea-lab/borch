@@ -10645,6 +10645,25 @@ _LA_BATCH_TALL_RHS = np.array([[[6., 1.], [5., 2.], [7., 3.], [10., 4.]],
 # pair has to be *un*refused rather than refused to tell the two apart.
 _LA_BATCH_SCALE = np.array([[[10., 0.], [0., 9.5], [0., 0.], [0., 0.]],
                             [[1., 0.], [0., 0.95], [0., 0.], [0., 0.]]], dtype=np.float32)
+# **For `lu_solve`'s `left` and `adjoint`, and it has to be unsymmetric.** A
+# symmetric matrix is its own transpose, so `adjoint=True` on `_LA_SYM3` agrees with
+# the plain solve and an implementation that ignores the flag passes.
+#
+# **And its permutation has to be a three-cycle.** The adjoint puts the permutation on
+# the *answer* rather than on the right-hand side, which is a scatter where the
+# forward is a gather — but a single row swap is its own inverse, so with one the two
+# agree and the plant that gathers both ways passed untouched. This matrix pivots
+# `[2, 3, 3]`, giving the order `[1, 2, 0]` against the inverse `[2, 0, 1]`.
+#
+# The right-hand sides are 3×2 and 2×3: `A x = b` and `x A = b` want different shapes,
+# so one cannot stand in for the other.
+_LA_ASYM3 = np.array([[4., 2., -3.], [9., -1., -5.], [7., -6., 7.]], dtype=np.float32)
+_LA_ASYM3_RHS = np.array([[5., 1.], [-2., 3.], [9., 0.]], dtype=np.float32)
+_LA_ASYM3_RHS_T = np.array([[5., -2., 9.], [1., 3., 0.]], dtype=np.float32)
+# The batched twin of the pair above: `_LA_BATCH_PIVOT`'s first matrix swaps and its
+# second does not, so a permutation built once for the batch and a per-matrix one
+# part here — on the answer's side this time.
+_LA_BATCH_PIVOT_RHS_T = np.array([[[1., 0.]], [[0., 1.]]], dtype=np.float32)
 # Rank 2 by construction — the second row is twice the first. `matrix_rank(tol=3.0)`
 # cuts it to 1, so the argument is asked where it changes the answer.
 _LA_RANK2 = np.array([[1., 2., 3.], [2., 4., 6.], [1., 0., 1.]], dtype=np.float32)
@@ -10860,6 +10879,39 @@ def linalg_struct_cases(inp=None):
         return L.linalg.lu_solve(f.LU, f.pivots, L.tensor(_LA_BATCH_PIVOT_RHS))
 
     cases.append((LINALG_PREFIX + "batch::lu_solve(한쪽만 교환)", lu_solve_batched))
+
+    # **`left` and `adjoint`, which were carried in order to refuse.** The refusal
+    # said each solves a different system than the one these factors were made for.
+    # That was true, and it was also why it could be closed: `A = P L U` gives
+    # `Aᵀ = Uᵀ Lᵀ Pᵀ`, so the adjoint is the same three pieces in the other order with
+    # the permutation on the answer, and `X A = B` is `Aᵀ Xᵀ = Bᵀ`. All four are
+    # asked, and the matrix is unsymmetric because a symmetric one is its own
+    # transpose and would pass with the flag ignored.
+    for _tag, _left, _adj, _rhs in (
+            ("adjoint", True, True, _LA_ASYM3_RHS),
+            ("left=False", False, False, _LA_ASYM3_RHS_T),
+            ("left=False, adjoint", False, True, _LA_ASYM3_RHS_T)):
+        cases.append((LINALG_PREFIX + f"batch::lu_solve({_tag})",
+                      lambda L, le=_left, ad=_adj, r=_rhs: L.linalg.lu_solve(
+                          *L.linalg.lu_factor(L.tensor(_LA_ASYM3)),
+                          L.tensor(r), left=le, adjoint=ad)))
+
+    def lu_solve_adjoint_batched(L):
+        """**The adjoint's permutation goes on the answer, and this is where that
+        shows.** The first matrix swaps and the second does not, so a permutation
+        built once for the whole batch — the fault the plain solve had — parts from a
+        per-matrix one here as well. Applying the swaps forward is `Pᵀ`; the adjoint
+        needs `P`, which is the same swaps in reverse order."""
+        f = L.linalg.lu_factor(L.tensor(_LA_BATCH_PIVOT))
+        return L.linalg.lu_solve(f.LU, f.pivots, L.tensor(_LA_BATCH_PIVOT_RHS),
+                                 adjoint=True)
+
+    cases.append((LINALG_PREFIX + "batch::lu_solve(adjoint, 한쪽만 교환)",
+                  lu_solve_adjoint_batched))
+    cases.append((LINALG_PREFIX + "batch::lu_solve(left=False, 한쪽만 교환)",
+                  lambda L: L.linalg.lu_solve(
+                      *L.linalg.lu_factor(L.tensor(_LA_BATCH_PIVOT)),
+                      L.tensor(_LA_BATCH_PIVOT_RHS_T), left=False)))
 
     # ── `_ex`, LDL and reflectors ──
     #
@@ -11206,10 +11258,6 @@ def linalg_name_cases(inp=None):
         (LINALG_PREFIX + "name2::lu(pivot=False)=둘 다 거절",
          lambda L: _both_stop(L, lambda M: M.linalg.lu(M.tensor(_LA_MAT),
                                                        pivot=False).U)),
-        (LINALG_PREFIX + "name2::lu_solve(adjoint)=우리는거절",
-         refusal_case(lambda L: L.linalg.lu_solve(
-             *L.linalg.lu_factor(L.tensor(_LA_SYM3)),
-             L.tensor(_LA_RANK_RHS), adjoint=True))),
         (LINALG_PREFIX + "name2::tensorsolve(dims)=우리는거절",
          refusal_case(lambda L: L.linalg.tensorsolve(
              L.tensor(_LA_T4), L.tensor(_LA_B4), (0, 1)))),

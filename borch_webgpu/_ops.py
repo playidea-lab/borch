@@ -3228,7 +3228,7 @@ class _MinMax:
 #     norm         `ord` with no `dim` on a matrix is the largest singular value there
 #                  and the elementwise p-norm on the method — 16.848 against 16.882
 #     lu           `pivot=False` is a different factorisation, refused
-#     lu_solve     `left`/`adjoint` are different systems, refused
+#     lu_solve     `left`/`adjoint` are different systems, and each is answered now
 #     tensorsolve  `dims` reorders the axes before the fold, refused
 #     lstsq        `rcond` is the cutoff and `driver` picks among four algorithms
 #

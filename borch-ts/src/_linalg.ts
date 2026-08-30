@@ -1019,12 +1019,57 @@ export function eighGap(values: Float64Array, n: number): Mat {
 }
 
 /**
- * Solves `A x = b` using what `lu_factor` produced.
+ * Solves `A x = b` using what `lu_factor` produced, or `Aᵀ x = b` with `adjoint`.
+ *
+ * `A = P L U`, so the plain solve moves `b` onto `L U x = Pᵀ b` and runs forward
+ * then back. **The adjoint runs the whole thing in reverse**: `Aᵀ = Uᵀ Lᵀ Pᵀ`, so
+ * `Uᵀ` goes first — lower triangular, and its diagonal is `U`'s rather than ones —
+ * `Lᵀ` second with a unit diagonal, and the permutation lands on the *answer*
+ * instead of on the right-hand side. Applying the same swaps in reverse order is
+ * `P` where applying them forward is `Pᵀ`.
+ *
+ * Storage is real, so torch's `Aᴴ` is a transpose here.
  */
-export function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat {
+export function luSolveFactored(f: LuPacked, b: Mat, m: number,
+                                adjoint = false): Mat {
   const n = f.rows;
   const x = new Float64Array(n * m);
   for (let i = 0; i < n * m; i++) x[i] = b[i] ?? 0;
+  if (adjoint) {
+    // Uᵀ w = b, forward.
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < i; k++) {
+        const u = f.lu[k * f.cols + i] ?? 0;
+        if (u === 0) continue;
+        for (let j = 0; j < m; j++) {
+          x[i * m + j] = (x[i * m + j] ?? 0) - u * (x[k * m + j] ?? 0);
+        }
+      }
+      const d = f.lu[i * f.cols + i] ?? 1;
+      for (let j = 0; j < m; j++) x[i * m + j] = (x[i * m + j] ?? 0) / d;
+    }
+    // Lᵀ z = w, back. The diagonal is one, so there is nothing to divide by.
+    for (let i = n - 1; i >= 0; i--) {
+      for (let k = i + 1; k < n; k++) {
+        const l = f.lu[k * f.cols + i] ?? 0;
+        if (l === 0) continue;
+        for (let j = 0; j < m; j++) {
+          x[i * m + j] = (x[i * m + j] ?? 0) - l * (x[k * m + j] ?? 0);
+        }
+      }
+    }
+    // x = P z — the forward's swaps, undone.
+    for (let col = f.piv.length - 1; col >= 0; col--) {
+      const src = (f.piv[col] ?? col + 1) - 1;
+      if (src === col) continue;
+      for (let j = 0; j < m; j++) {
+        const t = x[col * m + j] ?? 0;
+        x[col * m + j] = x[src * m + j] ?? 0;
+        x[src * m + j] = t;
+      }
+    }
+    return x;
+  }
   // The swaps made in the forward are applied to the right-hand side in the same
   // order.
   for (let col = 0; col < f.piv.length; col++) {

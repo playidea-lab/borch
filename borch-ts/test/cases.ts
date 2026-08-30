@@ -8720,6 +8720,43 @@ function addLinalgStruct(out: Map<string, Case>): void {
     return f.LU.luSolveFactored(f.pivots, Tensor.from([1, 0, 0, 1], [2, 2, 1]));
   });
 
+  // **`left` and `adjoint`, which were carried here in order to refuse.** The refusal
+  // said each solves a different system than the one these factors were made for —
+  // true, and also the reason it could be closed: `Aᵀ = Uᵀ Lᵀ Pᵀ` is the same three
+  // pieces in the other order with the permutation on the answer, and `X A = B` is
+  // `Aᵀ Xᵀ = Bᵀ`. The matrix is unsymmetric because a symmetric one is its own
+  // transpose and would pass with the flag ignored.
+  // Its permutation is a three-cycle on purpose: a single row swap is its own
+  // inverse, and the adjoint's scatter and the forward's gather agree under one.
+  const asym3 = () => Tensor.from([4, 2, -3, 9, -1, -5, 7, -6, 7], [3, 3]);
+  const asymRhs = () => Tensor.from([5, 1, -2, 3, 9, 0], [3, 2]);
+  const asymRhsT = () => Tensor.from([5, -2, 9, 1, 3, 0], [2, 3]);
+  const luModes: [string, boolean, boolean, () => Tensor][] = [
+    ["adjoint", true, true, asymRhs],
+    ["left=False", false, false, asymRhsT],
+    ["left=False, adjoint", false, true, asymRhsT],
+  ];
+  for (const [tag, left, adjoint, rhs] of luModes) {
+    out.set(`linalg::batch::lu_solve(${tag})`, async () => {
+      const f = await asym3().luFactor();
+      return linalg.luSolve(f.LU, f.pivots, rhs(), left, adjoint);
+    });
+  }
+  // **The adjoint's permutation goes on the answer, and this is where that shows.**
+  // The first matrix swaps and the second does not, so a permutation built once for
+  // the batch parts from a per-matrix one here too. Forward the swaps are `Pᵀ`; the
+  // adjoint wants `P`, which is the same swaps in reverse order.
+  out.set("linalg::batch::lu_solve(adjoint, 한쪽만 교환)", async () => {
+    const f = await Tensor.from([1, 2, 3, 4, 5, 1, 1, 2], [2, 2, 2]).luFactor();
+    return linalg.luSolve(f.LU, f.pivots,
+                          Tensor.from([1, 0, 0, 1], [2, 2, 1]), true, true);
+  });
+  out.set("linalg::batch::lu_solve(left=False, 한쪽만 교환)", async () => {
+    const f = await Tensor.from([1, 2, 3, 4, 5, 1, 1, 2], [2, 2, 2]).luFactor();
+    return linalg.luSolve(f.LU, f.pivots,
+                          Tensor.from([1, 0, 0, 1], [2, 1, 2]), false, false);
+  });
+
   out.set("linalg::ex::inv(특이)가 던지는 것", async () => {
     try {
       await Tensor.from(LA_SINGULAR, [2, 2]).inverse();
@@ -9054,10 +9091,6 @@ function addLinalgNames(out: Map<string, Case>): void {
   };
   laRefuses("lstsq(기본 driver 가 자르면)",
     () => linalg.lstsq(tall(), tallRhs(), 0.9));
-  laRefuses("lu_solve(adjoint)", async () => {
-    const { LU, pivots } = await linalg.luFactor(sym3());
-    return linalg.luSolve(LU, pivots, Tensor.from([1, 2, 3], [3, 1]), true, true);
-  });
   laRefuses("tensorsolve(dims)",
     () => linalg.tensorsolve(Tensor.eye(4).reshape([2, 2, 2, 2]).add(
       Tensor.full([], 0.1)), Tensor.from([1, 2, 3, 4], [2, 2]), [0, 1]));

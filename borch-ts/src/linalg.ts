@@ -329,18 +329,17 @@ export function matmul(input: Tensor, other: Tensor): Tensor {
  * **The factors come first here and the method is received by `B`.** Forwarding this one
  * positionally would swap `LU` and `B`, and with square matrices nothing about the call
  * would look wrong.
+ *
+ * **`left` and `adjoint` were carried in order to refuse, and now they answer.** The
+ * refusal said each solves a different system than the one these factors were made
+ * for, which was true and was also the reason it could be closed: `A = P L U` gives
+ * `Aᵀ = Uᵀ Lᵀ Pᵀ`, so the adjoint is the same three pieces in the other order, and
+ * `X A = B` is `Aᵀ Xᵀ = Bᵀ` — the right-hand solve is the left one with the sides
+ * transposed and the flag flipped. All four combinations are measured against torch.
  */
 export function luSolve(LU: Tensor, pivots: Tensor, b: Tensor,
                         left = true, adjoint = false): Promise<Tensor> {
-  // **Both carried in order to refuse**, as the core refuses them. `left=false`
-  // solves `X A = B` and `adjoint=true` solves `Aᴴ X = B`; each is a different
-  // system, and the seats have to exist for the stop to be reachable at all.
-  if (!left || adjoint) {
-    throw new RuntimeError(
-      "lu_solve(left=false or adjoint=true) is not in the browser subset — each "
-      + "solves a different system than the one these factors were made for.");
-  }
-  return LU.luSolveFactored(pivots, b);
+  return LU.luSolveFactored(pivots, b, left, adjoint);
 }
 
 /**

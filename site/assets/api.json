@@ -3094,7 +3094,7 @@
       },
       {
        "name": "luSolveFactored",
-       "signature": "luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor>",
+       "signature": "luSolveFactored(pivots: Tensor, b: Tensor, left?: boolean, adjoint?: boolean): Promise<Tensor>",
        "doc": "Solves `A x = b` with the factorisation. **`this` is the LU** — the\nargument order of `linalg.lu_solve(LU, pivots, B)`, and a different\nreceiver from torch's `Tensor.lu_solve`.\n\nSo **the torch claim was taken out of the name.** This used to be\n`luSolve`, and someone carrying torch across writing `b.lu_solve(LU,\npiv)` puts `LU` into the `pivots` slot — the name and the argument\ncount both match, so **nothing catches at that point** and only the\nvalue is wrong.",
        "torch": "lu_solve_factored",
        "section": {
@@ -19216,10 +19216,10 @@
      "kind": "function",
      "name": "luSolve",
      "signature": "export declare function luSolve(LU: Tensor, pivots: Tensor, b: Tensor, left?: boolean, adjoint?: boolean): Promise<Tensor>",
-     "doc": "`lu_solve(LU, pivots, B)` — solve using factors from `lu_factor`.\n\n**The factors come first here and the method is received by `B`.** Forwarding this one\npositionally would swap `LU` and `B`, and with square matrices nothing about the call\nwould look wrong.",
+     "doc": "`lu_solve(LU, pivots, B)` — solve using factors from `lu_factor`.\n\n**The factors come first here and the method is received by `B`.** Forwarding this one\npositionally would swap `LU` and `B`, and with square matrices nothing about the call\nwould look wrong.\n\n**`left` and `adjoint` were carried in order to refuse, and now they answer.** The\nrefusal said each solves a different system than the one these factors were made\nfor, which was true and was also the reason it could be closed: `A = P L U` gives\n`Aᵀ = Uᵀ Lᵀ Pᵀ`, so the adjoint is the same three pieces in the other order, and\n`X A = B` is `Aᵀ Xᵀ = Bᵀ` — the right-hand solve is the left one with the sides\ntransposed and the flag flipped. All four combinations are measured against torch.",
      "members": [],
      "torch": "lu_solve",
-     "doc_ko": "`lu_solve(LU, pivots, B)` — `lu_factor` 가 낸 인수로 푼다.\n\n**여기서는 인수가 먼저 오고 메서드는 `B` 가 받는다.** 이것만 자리대로 넘기면 `LU` 와\n`B` 가 뒤바뀌는데, 정사각 행렬이면 부름의 어디를 봐도 이상해 보이지 않는다."
+     "doc_ko": "`lu_solve(LU, pivots, B)` — `lu_factor` 가 낸 인수로 푼다.\n\n**여기서는 인수가 먼저 오고 메서드는 `B` 가 받는다.** 이것만 자리대로 넘기면 `LU` 와\n`B` 가 뒤바뀌는데, 정사각 행렬이면 부름의 어디를 봐도 이상해 보이지 않는다.\n\n**`left` 와 `adjoint` 는 거절하려고 들고 있던 자리였고, 이제 답한다.** 거절문은 각각이 이 인수가 만들어진 것과 다른 계를 푼다고 적고 있었는데, 그것은 사실이었고 동시에 닫을 수 있었던 이유였다 — `A = P L U` 에서 `Aᵀ = Uᵀ Lᵀ Pᵀ` 이므로 수반은 같은 세 조각을 반대 순서로 쓰는 것이고, `X A = B` 는 `Aᵀ Xᵀ = Bᵀ` 이므로 오른쪽 풀이는 양변을 전치하고 깃발을 뒤집은 왼쪽 풀이다. 네 조합 모두 torch 에 대조했다."
     },
     {
      "kind": "function",

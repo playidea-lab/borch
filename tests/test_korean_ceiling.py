@@ -258,7 +258,11 @@ CEILINGS = {
     # more) plus the verdict strings they return — all of them keys or values in
     # `golden.json`, so both sides spell them the same — and the reason written beside
     # the `linalg::` row in `run.py`.
-    "borch-ts/test": 4053,
+    # 4053 → 4063. Ten, in `lu_solve`'s two new batched case names
+    # (`batch::lu_solve(adjoint, 한쪽만 교환)` and `(left=False, 한쪽만 교환)`) — keys in
+    # `golden.json`, so both sides spell them the same. The other three new names are
+    # `adjoint` and `left=False`, which are English.
+    "borch-ts/test": 4063,
 }
 
 
