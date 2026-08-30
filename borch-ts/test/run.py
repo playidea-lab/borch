@@ -745,6 +745,16 @@ NOT_PORTED = {
     # `linalg::` used to be here — 17 cases. Sixteen had simply never been asked, and one
     # (`ldl_factor_ex`) could not be asked because the binding was standing three of its
     # slots up by hand.
+    # 0 → 6. `lstsq` learned a batch, and four of its ten new cases were ported. **The six
+    # left all ask for a field the TypeScript function does not return.** torch's `lstsq`
+    # hands back a named tuple of four — solution, residuals, rank, singular values — and
+    # `linalg.lstsq` over there returns the solution as a bare tensor, because the SVD it
+    # is built from is `pinverse` and the other three would have to be computed a second
+    # time to be handed over. So this is a shape the function does not have rather than a
+    # body it has not been given; adding the field would be the port, and the four that
+    # are asked already pin the batching itself. They are `linalg::lstsqfield::` in
+    # `cases.py` and core-only for the same reason — the binding cannot reach them either.
+    "linalg::": (6, "없음 — `lstsq` 의 나머지 세 필드. TS 쪽은 해만 돌려준다"),
     "grad::": (12, "별칭 — a vjp is `backward(seed)`, and parity asks it already"),
     "cplx::": (10, "파이썬 — a complex `repr` belongs to Python's formatter"),
     # Five of the ten buffer cases were ported (registration, keeping one out of the

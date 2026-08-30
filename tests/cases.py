@@ -1674,7 +1674,16 @@ FFT_PREFIX = "fft::"
 # The binding could fill it in with numpy, but **that is the very thing being narrowed** — if
 # Python computes it instead, the name is still absent for anyone using borch.ts, and the golden
 # cases go green through the binding. This is written down so that cover is not built again.
-CORE_ONLY_PREFIXES = ("linalg::eig::",)
+#
+# **`linalg::lstsqfield::` is here for a smaller reason and a plainer one.** torch's
+# `linalg.lstsq` returns four fields; borch.ts returns the solution as a bare tensor,
+# because it is `pinverse` applied to `B` and the other three would each be a second
+# pass over the matrix. So the binding dresses one field as torch's named tuple, and
+# `.residuals`, `.rank` and `.singular_values` raise `AttributeError` through it.
+# Filling them in with numpy on the Python side is the cover the paragraph above
+# warns against: the names would still be absent for anyone holding borch.ts, and the
+# cases would go green. The solution itself is asked on both sides, batched.
+CORE_ONLY_PREFIXES = ("linalg::eig::", "linalg::lstsqfield::")
 
 
 def complex_cases(inp=None):
@@ -10618,6 +10627,24 @@ _LA_RECT = np.array([[1., 2.], [3., 4.], [5., 7.]], dtype=np.float32)
 # is exactly the shape that let `rcond` be discarded unnoticed.
 _LA_TALL = np.array([[1., 1.], [1., 2.], [1., 3.], [1., 4.]], dtype=np.float32)
 _LA_TALL_RHS = np.array([[6.], [5.], [7.], [10.]], dtype=np.float32)
+# **For `lstsq` over a batch.** The second matrix is not the first — a batched solve
+# that computes one matrix and stretches the answer agrees with a batch of copies and
+# with nothing else. The vector right-hand side is a batch of `(m,)` rows, which torch
+# reads as one vector per matrix; the matrix one is a batch of `(m, k)`, and the two
+# readings do not broadcast the same way.
+_LA_BATCH_TALL = np.array([[[1., 1.], [1., 2.], [1., 3.], [1., 4.]],
+                           [[2., 0.], [0., 1.], [1., 1.], [3., 2.]]], dtype=np.float32)
+_LA_BATCH_TALL_VEC = np.array([[6., 5., 7., 10.], [1., 2., 3., 4.]], dtype=np.float32)
+_LA_BATCH_TALL_RHS = np.array([[[6., 1.], [5., 2.], [7., 3.], [10., 4.]],
+                               [[1., 0.], [2., 1.], [3., 2.], [4., 3.]]], dtype=np.float32)
+# **The cut-off is per matrix, and this is the pair that says so.** Singular values
+# 10/9.5 and 1/0.95 — at `rcond=0.9` neither matrix loses one, so `gelsy` goes
+# through. Scale the whole batch against one largest instead and the second matrix
+# keeps nothing, and the call is refused where torch answers. The failure is one-way
+# (a shared largest is never smaller, so it can only over-refuse), which is why the
+# pair has to be *un*refused rather than refused to tell the two apart.
+_LA_BATCH_SCALE = np.array([[[10., 0.], [0., 9.5], [0., 0.], [0., 0.]],
+                            [[1., 0.], [0., 0.95], [0., 0.], [0., 0.]]], dtype=np.float32)
 # Rank 2 by construction — the second row is twice the first. `matrix_rank(tol=3.0)`
 # cuts it to 1, so the argument is asked where it changes the answer.
 _LA_RANK2 = np.array([[1., 2., 3.], [2., 4., 6.], [1., 0., 1.]], dtype=np.float32)
@@ -11099,6 +11126,69 @@ def linalg_name_cases(inp=None):
                       lambda L, d=_drv: L.linalg.lstsq(
                           L.tensor(_LA_TALL), L.tensor(_LA_TALL_RHS),
                           rcond=0.9, driver=d).solution))
+    # **`lstsq` over a batch, which was refused outright until now.** numpy's is
+    # two-dimensional, so the batch is a loop — and the loop is where a field can go
+    # wrong without the solution doing so. `gelsd` is the driver that fills all four,
+    # so all four are asked; the three that empty a field under another driver are
+    # asked for that emptiness, because an empty field stacked over a batch becomes a
+    # shape and stops being an absence.
+    cases.append((LINALG_PREFIX + "batch::lstsq(gelsd).solution",
+                  lambda L: L.linalg.lstsq(
+                      L.tensor(_LA_BATCH_TALL), L.tensor(_LA_BATCH_TALL_VEC),
+                      driver="gelsd").solution))
+    # **The other three fields are `lstsqfield::`, which is the core's alone.**
+    # borch.ts's `linalg.lstsq` returns the solution as a bare tensor — it is built
+    # from `pinverse`, and residuals, rank and singular values would each have to be
+    # computed a second time to be handed over — so the binding dresses one field as
+    # torch's named tuple and the other three raise `AttributeError` there. That is a
+    # real narrowing rather than a Python matter, and it is recorded here rather than
+    # covered by computing the three in Python, which would leave the names absent for
+    # anyone holding borch.ts while the cases went green.
+    for _field in ("residuals", "rank", "singular_values"):
+        cases.append((LINALG_PREFIX + f"lstsqfield::batch(gelsd).{_field}",
+                      lambda L, f=_field: getattr(L.linalg.lstsq(
+                          L.tensor(_LA_BATCH_TALL), L.tensor(_LA_BATCH_TALL_VEC),
+                          driver="gelsd"), f)))
+    # An empty field stacked over a batch becomes a shape and stops being an absence,
+    # so the three drivers that empty one are asked for that emptiness.
+    for _tag, _drv, _field in (("gels", "gels", "rank"),
+                               ("gels", "gels", "singular_values"),
+                               ("gelsy", "gelsy", "residuals")):
+        cases.append((LINALG_PREFIX + f"lstsqfield::batch({_tag}) 의 빈 {_field}",
+                      lambda L, d=_drv, f=_field: getattr(L.linalg.lstsq(
+                          L.tensor(_LA_BATCH_TALL), L.tensor(_LA_BATCH_TALL_VEC),
+                          driver=d), f)))
+    cases.append((LINALG_PREFIX + "batch::lstsq(행렬 우변)",
+                  lambda L: L.linalg.lstsq(L.tensor(_LA_BATCH_TALL),
+                                           L.tensor(_LA_BATCH_TALL_RHS),
+                                           driver="gelsd").solution))
+    # The matrix reading broadcasts its leading dimensions and the vector reading does
+    # not — measured, and the pair is what tells the two apart.
+    cases.append((LINALG_PREFIX + "batch::lstsq(우변 하나를 늘린다)",
+                  lambda L: L.linalg.lstsq(L.tensor(_LA_BATCH_TALL),
+                                           L.tensor(_LA_BATCH_TALL_RHS[:1]),
+                                           driver="gelsd").solution))
+    cases.append((LINALG_PREFIX + "batch::lstsq(잘림은 행렬마다 본다)",
+                  lambda L: L.linalg.lstsq(L.tensor(_LA_BATCH_SCALE),
+                                           L.tensor(_LA_BATCH_TALL_VEC),
+                                           0.9).solution))
+    cases.append((LINALG_PREFIX + "batch::lstsq(둘 다 잘리면)=우리는거절",
+                  refusal_case(lambda L: L.linalg.lstsq(
+                      L.tensor(_LA_BATCH_TALL), L.tensor(_LA_BATCH_TALL_VEC),
+                      0.9).solution)))
+    # **A batch of one, because two is the number that hid a defect.** The rank bound
+    # is `min(m, n)`, and written as `min(…shape)` over a `(2, 4, 2)` batch it comes to
+    # 2 either way — the plant survived the case above untouched. At `(1, 4, 2)` the
+    # same expression gives 1, the bitten matrix keeps 1, and `1 < 1` is false: the
+    # refusal disappears and torch's answer comes back from an algorithm nobody ran.
+    cases.append((LINALG_PREFIX + "batch::lstsq(하나짜리 배치도 잘린다)=우리는거절",
+                  refusal_case(lambda L: L.linalg.lstsq(
+                      L.tensor(_LA_BATCH_TALL[:1]), L.tensor(_LA_BATCH_TALL_VEC[:1]),
+                      0.9).solution)))
+    cases.append((LINALG_PREFIX + "batch::lstsq(벡터 우변은 안 늘어난다)=둘 다 거절",
+                  lambda L: _both_stop(L, lambda M: M.linalg.lstsq(
+                      M.tensor(_LA_BATCH_TALL), M.tensor(_LA_BATCH_TALL_VEC[:1]),
+                      driver="gelsd").solution)))
     cases.append((LINALG_PREFIX + "name2::lstsq(rcond 이 안 자를 때)",
                   lambda L: L.linalg.lstsq(L.tensor(_LA_TALL),
                                            L.tensor(_LA_TALL_RHS), 1e-6).solution))

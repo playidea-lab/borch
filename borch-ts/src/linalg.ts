@@ -150,6 +150,18 @@ export function solveTriangular(
  *
  * The arithmetic is here rather than on `Tensor.lstsq`, which torch removed and
  * the core keeps as a one-argument tombstone.
+ *
+ * **A batch is answered now, and the refusal that stood here was one line from
+ * the answer.** It read `input.shape.length !== 2` and threw — while `pinverse`
+ * one line below has batched all along, and `matmul` batches too. What was
+ * genuinely missing was smaller than the refusal: the cut-off test compared one
+ * count against `Math.min(...input.shape)`, which on a batch is the batch size.
+ *
+ * **The two readings of `B` do not broadcast the same way** — measured on torch,
+ * and the core carries the same rule with the same measurement written out. A
+ * right-hand side one dimension shorter is a vector per matrix and its leading
+ * dimensions must *equal* the matrix's; one of equal rank is `(*, m, k)` and its
+ * leading dimensions broadcast.
  */
 export async function lstsq(input: Tensor, b: Tensor, rcond?: number,
                             driver = "gelsy"): Promise<Tensor> {
@@ -157,8 +169,16 @@ export async function lstsq(input: Tensor, b: Tensor, rcond?: number,
     throw new RuntimeError(
       "lstsq: parameter `driver` should be one of (gels, gelsy, gelsd, gelss)");
   }
-  if (input.shape.length !== 2) {
-    throw new RuntimeError("lstsq: batching is not here yet");
+  const rank = input.shape.length;
+  const lead = input.shape.slice(0, -2);
+  const vector = b.shape.length === rank - 1
+    && b.shape.slice(0, -1).join() === lead.join();
+  const matrix = b.shape.length === rank && b.shape[rank - 2] === input.shape[rank - 2];
+  if (!vector && !matrix) {
+    throw new RuntimeError(b.shape.length < rank - 1
+      ? "lstsq: input.dim() must be greater or equal to other.dim() and "
+        + "(input.dim() - other.dim()) <= 1"
+      : "lstsq: input.size(-2) should match other.size(-2)");
   }
   const cut = driver === "gels" ? undefined : rcond;
   if (driver === "gelsy" && cut !== undefined && await cutBites(input, cut)) {
@@ -172,15 +192,25 @@ export async function lstsq(input: Tensor, b: Tensor, rcond?: number,
   // the matrix a second time. `Tensor.lstsq` next door is the same thing without a
   // cut-off, which is what torch's removed method computed.
   const p = await input.pinverse(cut);
-  return b.shape.length === 1 ? p.mv(b) : p.mm(b);
+  return vector ? p.matmul(b.unsqueeze(-1)).squeeze(-1) : p.matmul(b);
 }
 
-/** Does this cut-off drop a singular value? `lstsq`'s default driver hinges on it. */
+/**
+ * Does this cut-off drop a singular value? `lstsq`'s default driver hinges on it.
+ *
+ * **Any matrix in the batch is enough**, which is what the core does by refusing
+ * inside its per-matrix loop. The comparison is per matrix: the largest singular
+ * value is taken along the last axis and kept there, so each row scales by its own.
+ */
 async function cutBites(input: Tensor, rcond: number): Promise<boolean> {
   const s = await input.svdvals();
-  const largest = await s.amax(-1, false).item();
-  const kept = await s.gt(Tensor.full([], largest * rcond)).sum().item();
-  return kept < Math.min(...input.shape);
+  const kept = s.gt(s.amax(-1, true).mul(Tensor.full([], rcond))).sum(-1, false);
+  // `Math.min(...input.shape)` here is a defect a batch hides: over `[2, 4, 2]` it
+  // gives 2, which is also `min(m, n)`, and over `[1, 4, 2]` it gives 1 and the
+  // refusal disappears. The two trailing dimensions are the matrix.
+  const k = Math.min(input.shape[input.shape.length - 2] as number,
+                     input.shape[input.shape.length - 1] as number);
+  return Array.from(await kept.toArray()).some((c) => c < k);
 }
 
 /** `matrix_norm(A, ord="fro", dim=(-2,-1), keepdim=False)`. */

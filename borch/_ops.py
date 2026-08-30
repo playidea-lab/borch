@@ -7807,13 +7807,72 @@ def lstsq(input, b, rcond=None, *, driver=None):  # noqa: A002
             "(gels, gelsy, gelsd, gelss)")
     driver = driver or "gelsy"
     input, bt = _mat(input, "lstsq", square=False), _wrap(b)
-    if input.data.ndim != 2:
-        _unsupported("lstsq (batched)")
+    lead, vector = _lstsq_batch(input.data.shape, bt.data.shape)
+    if lead is None:
+        return _lstsq_one(input.data, bt.data, driver, rcond)
+    a_all = _np.broadcast_to(input.data, (*lead, *input.data.shape[-2:]))
+    b_tail = bt.data.shape[-1:] if vector else bt.data.shape[-2:]
+    b_all = _np.broadcast_to(bt.data, (*lead, *b_tail))
+    parts = [_lstsq_one(a_all[at], b_all[at], driver, rcond)
+             for at in _np.ndindex(*lead)]
+    # **An empty field stays empty rather than becoming a stack of empties.** torch
+    # gives `rank` as `(0,)` under `gels` whether or not there is a batch, and
+    # stacking would turn the absence into a shape.
+    def stacked(get):
+        rows = [_np.asarray(get(p).data) for p in parts]
+        if rows[0].size == 0 and rows[0].ndim == 1:
+            return rows[0]
+        return _np.stack(rows).reshape(*lead, *rows[0].shape)
+    return _Lstsq(Tensor(stacked(lambda p: p.solution)),
+                  Tensor(stacked(lambda p: p.residuals)),
+                  Tensor(stacked(lambda p: p.rank)),
+                  Tensor(stacked(lambda p: p.singular_values)))
+
+
+def _lstsq_batch(a, b):
+    """Which of the two readings of the right-hand side torch takes, and what the
+    batch shape is. `(None, False)` means there is no batch and numpy's own
+    two-dimensional path answers it.
+
+    **The two readings do not broadcast the same way, and that is measured rather
+    than assumed.** Against a `(2, 4, 2)` matrix torch takes `(2, 4)` as a batch of
+    vectors and refuses `(1, 4)`, which broadcasts perfectly well — so the vector
+    reading wants the leading dimensions *equal*. The matrix reading does
+    broadcast: `(1, 4, 1)` is accepted and stretched to two.
+
+    A shape neither reading accepts is refused here rather than answered, because
+    numpy would happily answer several of them and torch does not.
+
+    **Which refusal is a difference, and it is deliberate.** Ten right-hand-side
+    shapes were put to torch against `(2, 4, 2)`; both sides accept the same three
+    and refuse the same seven. On three of the seven — `(4, 1)`, `(4, 2)` and
+    `(3, 4, 1)` — torch names a broadcast failure and this names the size. Trying to
+    reproduce the choice: torch reports the broadcast for those three and the size
+    for `(1, 4)`, whose leading dimensions *do* broadcast, and for `(3, 4)`, whose do
+    not. No rule separates the five, because the two messages come from different
+    places inside torch rather than from one decision. **Refusing is what matters
+    and that agrees**; the wording of a refusal on a malformed shape does not.
+    """
+    if len(b) == len(a) and b[-2] == a[-2]:
+        return (_np.broadcast_shapes(a[:-2], b[:-2]) or None), False
+    if len(b) == len(a) - 1 and tuple(b[:-1]) == tuple(a[:-2]):
+        return (tuple(a[:-2]) or None), True
+    if len(b) < len(a) - 1:
+        raise RuntimeError(
+            "torch.linalg.lstsq: input.dim() must be greater or equal to "
+            "other.dim() and (input.dim() - other.dim()) <= 1")
+    raise RuntimeError(
+        "torch.linalg.lstsq: input.size(-2) should match other.size(-2)")
+
+
+def _lstsq_one(a, b, driver, rcond):
+    """One matrix's least squares. The batched path above calls this per matrix —
+    numpy's `lstsq` is two-dimensional and has no batch of its own."""
     # `gels` has no rank estimate, so it has no cutoff — torch's does not read
     # `rcond` at all and neither does this.
     cut = None if driver == "gels" else rcond
-    sol, res, rank, sv = _np.linalg.lstsq(input.data, bt.data, rcond=cut)
-    if driver == "gelsy" and rank < min(input.data.shape):
+    sol, res, rank, sv = _np.linalg.lstsq(a, b, rcond=cut)
+    if driver == "gelsy" and rank < min(a.shape):
         # The sentence has to stay a noun phrase — `_unsupported` finishes it with
         # *is not in the browser subset*, which is the wording the golden matches on.
         # The why is in the docstring above; `driver="gelsd"` is the way through.

@@ -8971,6 +8971,75 @@ function addLinalgNames(out: Map<string, Case>): void {
   out.set("linalg::name2::lstsq(rcond 이 안 자를 때)",
     async () => linalg.lstsq(tall(), tallRhs(), 1e-6));
 
+  // **A batch, which was refused here until `pinverse`'s own batching was noticed.**
+  // The second matrix is not the first, so a solve that computes one and stretches it
+  // agrees with a batch of copies and with nothing else. The free function gives the
+  // solution only — the other three fields are the core's `_Lstsq`, which has no seat
+  // on this side — so those cases stay Python's.
+  const batchTall = () => Tensor.from(
+    [1, 1, 1, 2, 1, 3, 1, 4, 2, 0, 0, 1, 1, 1, 3, 2], [2, 4, 2]);
+  const batchRhs = () => Tensor.from(
+    [6, 1, 5, 2, 7, 3, 10, 4, 1, 0, 2, 1, 3, 2, 4, 3], [2, 4, 2]);
+  out.set("linalg::batch::lstsq(gelsd).solution",
+    async () => linalg.lstsq(
+      batchTall(), Tensor.from([6, 5, 7, 10, 1, 2, 3, 4], [2, 4]),
+      undefined, "gelsd"));
+  out.set("linalg::batch::lstsq(행렬 우변)",
+    async () => linalg.lstsq(batchTall(), batchRhs(), undefined, "gelsd"));
+  // The matrix reading broadcasts its leading dimensions and the vector reading does
+  // not — the pair is what tells the two apart.
+  out.set("linalg::batch::lstsq(우변 하나를 늘린다)",
+    async () => linalg.lstsq(
+      batchTall(), Tensor.from([6, 1, 5, 2, 7, 3, 10, 4], [1, 4, 2]),
+      undefined, "gelsd"));
+  // **The cut-off is per matrix.** Singular values 10/9.5 and 1/0.95 — at `rcond=0.9`
+  // neither matrix loses one, so `gelsy` goes through. Scale the batch against one
+  // shared largest and the second keeps nothing and the call is refused where torch
+  // answers, which is why this pair is *un*refused rather than refused.
+  out.set("linalg::batch::lstsq(잘림은 행렬마다 본다)",
+    async () => linalg.lstsq(
+      Tensor.from([10, 0, 0, 9.5, 0, 0, 0, 0, 1, 0, 0, 0.95, 0, 0, 0, 0], [2, 4, 2]),
+      Tensor.from([6, 5, 7, 10, 1, 2, 3, 4], [2, 4]), 0.9));
+  // Both matrices lose a singular value here, so `gelsy` is refused — the wording is
+  // the one `refusal_case` freezes. `laRefuses` below writes a `name2::` prefix, so
+  // this one is spelled out rather than borrowed.
+  out.set("linalg::batch::lstsq(둘 다 잘리면)=우리는거절", async () => {
+    try {
+      await linalg.lstsq(batchTall(),
+                         Tensor.from([6, 5, 7, 10, 1, 2, 3, 4], [2, 4]), 0.9);
+    } catch (err) {
+      return (err as Error).message.includes("is not in the browser subset")
+        ? "기대대로"
+        : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+    }
+    return "뜻밖의 성공";
+  });
+  // **A batch of one, because two is the number that hid a defect.** The rank bound is
+  // `min(m, n)`; written as `Math.min(...shape)` over a `[2, 4, 2]` batch it comes to 2
+  // either way and the plant survived the case above untouched. At `[1, 4, 2]` the same
+  // expression gives 1, the bitten matrix keeps 1, and `1 < 1` is false — the refusal
+  // vanishes and torch's answer comes back from an algorithm nobody ran.
+  out.set("linalg::batch::lstsq(하나짜리 배치도 잘린다)=우리는거절", async () => {
+    try {
+      await linalg.lstsq(Tensor.from([1, 1, 1, 2, 1, 3, 1, 4], [1, 4, 2]),
+                         Tensor.from([6, 5, 7, 10], [1, 4]), 0.9);
+    } catch (err) {
+      return (err as Error).message.includes("is not in the browser subset")
+        ? "기대대로"
+        : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+    }
+    return "뜻밖의 성공";
+  });
+  out.set("linalg::batch::lstsq(벡터 우변은 안 늘어난다)=둘 다 거절", async () => {
+    try {
+      await linalg.lstsq(batchTall(), Tensor.from([6, 5, 7, 10], [1, 4]),
+                         undefined, "gelsd");
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
+
   const laRefuses = (name: string, body: () => unknown) => {
     out.set(`linalg::name2::${name}=우리는거절`, async () => {
       try {

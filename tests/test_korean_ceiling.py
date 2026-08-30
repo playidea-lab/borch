@@ -252,7 +252,13 @@ CEILINGS = {
     # 3923 → 3938. Fifteen, in four `kron` case names — `kron(2차원)`,
     # `kron(2차원 × 1차원)`, `kron(직사각)` and `kron(2차원)의 기울기`. All four are
     # keys in `golden.json` and so are spelled the same on both sides.
-    "borch-ts/test": 3938,
+    # 3938 → 4053. A hundred and fifteen, in `lstsq`'s eight new batched case names
+    # (`batch::lstsq(행렬 우변)`, `(우변 하나를 늘린다)`, `(벡터 우변은 안 늘어난다)`,
+    # `(잘림은 행렬마다 본다)`, `(둘 다 잘리면)`, `(하나짜리 배치도 잘린다)` and two
+    # more) plus the verdict strings they return — all of them keys or values in
+    # `golden.json`, so both sides spell them the same — and the reason written beside
+    # the `linalg::` row in `run.py`.
+    "borch-ts/test": 4053,
 }
 
 
