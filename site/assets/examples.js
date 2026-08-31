@@ -481,6 +481,63 @@ log("정규방정식으로:\\n" + await direct.repr());
 log("");
 const resid = y.sub(A.mm(solution));
 log("잔차 노름 =", (await resid.mul(resid).sum().sqrt().item()).toFixed(4));` } },
+  {
+    id: "boxes",
+    title: {
+      en: "9 · Boxes — overlap, and throwing the duplicates away",
+      ko: "9 · 박스 — 겹침, 그리고 중복을 버리는 일" },
+    blurb: {
+      en: "IoU and non-maximum suppression: four boxes on one object come out as one.",
+      ko: "IoU 와 비최대 억제. 한 물체 위의 박스 넷이 하나가 되어 나온다." },
+    code: {
+      en: `await init();
+
+// Four boxes on the same cat, one on a dog elsewhere.  (x1, y1, x2, y2)
+const boxes = Tensor.from([
+   10,  10,  60,  60,
+   12,  12,  62,  58,
+   11,   9,  59,  61,
+   14,  15,  64,  63,
+  200, 200, 260, 260,
+], [5, 4]);
+const scores = Tensor.from([0.90, 0.85, 0.80, 0.75, 0.95], [5]);
+
+// Every op here reads its tensors back once, so every one is awaited.
+log("areas:", JSON.stringify(Array.from(await (await ops.boxArea(boxes)).toArray())));
+log("");
+log("how much each box overlaps each other one:\\n" +
+    await (await ops.boxIou(boxes, boxes)).repr());
+log("");
+
+const kept = Array.from(await (await ops.nms(boxes, scores, 0.5)).toArray());
+log("nms keeps:", JSON.stringify(kept));
+log(\`\${5 - kept.length} of the five were the same object seen again.\`);
+log("");
+log("the survivors are the highest-scoring box of each cluster, which is the whole rule.");`,
+      ko: `await init();
+
+// 같은 고양이 위의 박스 넷, 그리고 저쪽 개 위의 하나.  (x1, y1, x2, y2)
+const boxes = Tensor.from([
+   10,  10,  60,  60,
+   12,  12,  62,  58,
+   11,   9,  59,  61,
+   14,  15,  64,  63,
+  200, 200, 260, 260,
+], [5, 4]);
+const scores = Tensor.from([0.90, 0.85, 0.80, 0.75, 0.95], [5]);
+
+// 여기 연산들은 전부 텐서를 한 번 되읽는다. 그래서 전부 await 이 붙는다.
+log("넓이:", JSON.stringify(Array.from(await (await ops.boxArea(boxes)).toArray())));
+log("");
+log("각 박스가 다른 박스와 얼마나 겹치나:\\n" +
+    await (await ops.boxIou(boxes, boxes)).repr());
+log("");
+
+const kept = Array.from(await (await ops.nms(boxes, scores, 0.5)).toArray());
+log("nms 가 남긴 것:", JSON.stringify(kept));
+log(\`다섯 중 \${5 - kept.length} 개는 같은 물체를 다시 본 것이었다.\`);
+log("");
+log("살아남은 것은 각 무리에서 점수가 가장 높은 박스다. 규칙은 그게 전부다.");` } },
 ];
 
 /**
