@@ -175,6 +175,11 @@ from ._data import (                                     # noqa: E402,F401
 from ._serialize import load, save                       # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
+# **Named here or `borch_webgpu.autograd` is an `AttributeError`.** A submodule is
+# not pulled in by importing the package, and `_ops.__getattr__` above answers
+# unknown names — so the miss would come out as this library's *not in the browser
+# subset* wording for a module that is right there on disk.
+from . import autograd                                   # noqa: E402,F401
 
 # In borch.ts a dtype is a label over float32 storage. It stays a label here
 # too, but the name shown is torch's — the golden froze `torch.float32` as the

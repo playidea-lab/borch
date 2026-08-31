@@ -586,7 +586,17 @@ NOT_PORTED = {
     # 96 → 97: `resize_as_(the_template …)`. borch.ts has no `resizeAs_` at all — that
     # family re-aims storage a borch.ts tensor owns, and the name axis says so — so the
     # case asks a keyword the core alone can be asked about.
-    "inplace::": (97, "파이썬 — views, sharing, properties, predicates, storage"),
+    # 97 → 101. Four `autograd.grad` cases. The other fifteen were ported and run
+    # against `Tensor.grad`; these four are **Python seats over there is no seat
+    # for**. Three are arguments `Tensor.grad` deliberately does not take —
+    # `create_graph` (`backward` already refuses it, and a second seat is a second
+    # wording to keep in step), `is_grads_batched` (it wants `vmap`) and
+    # `only_inputs=False` (a branch torch removed from itself). The fourth asks for
+    # the **exception's class name**, and Python classes are the binding's own
+    # surface: the unused-input refusal is a `RuntimeError` in torch and arrived as
+    # an `IndexError` here, because `translate`'s guess read the word "index" in the
+    # wording. That is what the case pins, and it cannot be pinned from TS.
+    "inplace::": (101, "파이썬 — views, sharing, properties, predicates, storage"),
     # `method2::` used to be here — 60 cases, "alias — Python's second name, as
     # `multiply` = `mul`". Some of them were aliases, and **nine had no name over there at
     # all** (`fmax`, `vdot`, `moveaxis`, `t`, `broadcast_to`, four comparisons). They went

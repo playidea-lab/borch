@@ -1289,14 +1289,26 @@ def translate(exc):
     # `replace` turned `RuntimeError: shape …` into `Runtimeshape …` and broke
     # the wording — us destroying the very phrasing that was kept so a search
     # would find it.
-    for head in ("RuntimeError: ", "IndexError: ", "Error: "):
+    said = None
+    for head, cls in (("RuntimeError: ", RuntimeError),
+                      ("IndexError: ", IndexError),
+                      ("Error: ", None)):
         if text.startswith(head):
-            text = text[len(head):]
+            text, said = text[len(head):], cls
             break
-    # The Korean spelling used to be checked here as well, back when our own
-    # messages were Korean. They are English now, so that branch could never
-    # match — a condition that cannot fire reads as one that is guarding
-    # something.
+    # **The name borch.ts threw wins over the guess.** The prefix was stripped and
+    # then dropped, so the guess below decided even where the far side had said
+    # which class it meant — and `autograd.grad`'s *"The differentiated Tensor at
+    # index 1 …"* is a `RuntimeError` in torch that arrived here as an `IndexError`,
+    # because its wording contains the word the guess looks for. The comment above
+    # named that hazard for `LinAlgError` and `NotImplementedError` and stopped
+    # there; these two were left to the guess although they were just as explicit.
+    if said is not None:
+        return said(text)
+    # A bare `Error` carries no class, so the wording is all there is to go on. The
+    # Korean spelling used to be checked here as well, back when our own messages
+    # were Korean. They are English now, so that branch could never match — a
+    # condition that cannot fire reads as one that is guarding something.
     kind = IndexError if "index" in text.lower() else RuntimeError
     return kind(text)
 

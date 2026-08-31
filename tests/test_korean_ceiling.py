@@ -330,7 +330,12 @@ CEILINGS = {
     # 4499 → 4503. Four, in the `index::` skip reason — `표기`, which names what the
     # eleven `걸음::` cases are about (`x[a:b:step]` is Python's notation and borch.ts
     # has no `[]`). A reason in `run.py`, not a case name.
-    "borch-ts/test": 4503,
+    # 4503 → 4587. Eighty-four, in the `autograd.grad` case names — `기울기::` on
+    # fifteen rows, `입력 둘`, `출력 둘`, `중간 텐서`, `안 쓰인 입력`, `씨앗 없는 벡터
+    # 출력`, `모양이 틀린 grad_outputs`, `.grad 를 안 건드린다`, `쌓는다` — and the
+    # `있다`/`None` verdict strings two of them return. Keys or values in
+    # `golden.json`, so both sides spell them the same.
+    "borch-ts/test": 4587,
 }
 
 

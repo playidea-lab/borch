@@ -271,9 +271,9 @@ const PYODIDE_DIR = new URL("../../vendor/pyodide/", import.meta.url).href;
  */
 const PACKAGES = {
   borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
-          "_data", "_rnn", "_serialize"],
+          "_data", "_rnn", "_serialize", "autograd"],
   borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data",
-                 "_serialize"],
+                 "_serialize", "autograd"],
 };
 
 let pyodide = null;

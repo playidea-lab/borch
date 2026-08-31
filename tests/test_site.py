@@ -251,6 +251,14 @@ def test_site_examples_name_only_real_modules():
     itself; the other side — a file gone from the package while the name stays in the
     list — makes fetch return 404 and `runner.js` turn it into an exception. Both are
     known only after the user presses Run. This looks first.
+
+    **Every quoted name counts, not the underscored ones.** The reader used to keep
+    only parts starting with `_` (plus `__init__`), which was every module either
+    package had at the time — so the first public one, `autograd`, was invisible to
+    the left-hand side of the comparison and could never be reconciled: added to the
+    list it still read as forgotten, and the only way to green was to delete the
+    module. A parser that cannot see a name cannot check it, which is this
+    repository's most-repeated shape.
     """
     runner = (ROOT / "site" / "assets" / "runner.js").read_text(encoding="utf-8")
     block = runner[runner.index("const PACKAGES = {"):runner.index("let pyodide")]
@@ -258,10 +266,9 @@ def test_site_examples_name_only_real_modules():
         listed = set()
         chunk = block[block.index(f"{package}:"):]
         for line in chunk.splitlines():
+            listed.update(re.findall(r'"(\w+)"', line))
             if "]" in line:
-                listed.update(part.strip().strip('",') for part in line.split('"') if part.startswith("_") or part == "__init__")
                 break
-            listed.update(part.strip().strip('",') for part in line.split('"') if part.startswith("_") or part == "__init__")
         real = {p.stem for p in (ROOT / package).glob("*.py")}
         missing = listed - real
         assert not missing, (
@@ -272,6 +279,55 @@ def test_site_examples_name_only_real_modules():
             f"the site does not load modules {package} has: {sorted(forgotten)}\n"
             "  add them to PACKAGES in site/assets/runner.js — left out, the browser "
             "blows up with an ImportError.")
+
+
+def test_every_page_that_loads_the_packages_lists_the_same_modules():
+    """**Three pages carry that list and only one of them was checked.**
+
+    `site/assets/runner.js` is the playground, `tests/browser/runner.html` is the
+    golden runner and `tests/browser/scope_escape.html` is the leak probe. The check
+    above reads the first against what is on disk; the other two were free to drift,
+    and they did — a new module went into the playground's list and the golden runner
+    stopped with *cannot import name … from partially initialized module*, a sentence
+    about circular imports for a file that was simply never laid down. It cost a
+    browser round trip to see, and the pages that run least often are the ones that
+    would find out last.
+
+    The lists are compared to each other rather than each to disk: whichever is
+    right, they have to be the same, and a mismatch names both sides.
+    """
+    pages = {
+        "site/assets/runner.js": "let pyodide",
+        "tests/browser/runner.html": "const FILES",
+        "tests/browser/scope_escape.html": "try {",
+    }
+    found = {}
+    for rel, ends in pages.items():
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        start = text.index("PACKAGES = {")
+        block = text[start:text.index(ends, start)]
+        per = {}
+        for package in ("borch", "borch_webgpu"):
+            chunk = block[block.index(f"{package}:"):]
+            names = set()
+            for line in chunk.splitlines():
+                names.update(re.findall(r'"(\w+)"', line))
+                if "]" in line:
+                    break
+            per[package] = names
+        found[rel] = per
+
+    first = next(iter(found))
+    for rel, per in found.items():
+        for package, names in per.items():
+            assert names == found[first][package], (
+                f"{rel} and {first} disagree about which {package} modules to load:\n"
+                f"  only in {rel}: {sorted(names - found[first][package])}\n"
+                f"  only in {first}: {sorted(found[first][package] - names)}\n"
+                "  all three pages lay the same package onto the same virtual "
+                "filesystem; a module in one list and not another is an ImportError "
+                "only whoever opens that page will see.")
+
 
 def test_the_site_deploys_every_root_file_the_runner_fetches():
     """A `.py` at the repository root that `runner.js` fetches has to be **deployed.**

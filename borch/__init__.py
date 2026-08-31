@@ -232,6 +232,11 @@ from ._rnn import (
 from ._serialize import (
     load, save,
 )
+# **A submodule, so it has to be imported by name.** `import borch` alone does not
+# pull one in, and `borch.autograd` would go on raising the `AttributeError` this
+# module was written to remove — the failure would be invisible because every test
+# that imports it directly would still pass.
+from . import autograd                                    # noqa: E402, F401
 
 # ==================================================== exposing them as methods
 #

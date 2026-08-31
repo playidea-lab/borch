@@ -7,7 +7,8 @@
  * constraints. Imitating it inherits someone else's detour for no reason.
  */
 
-import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
+import { backward as tapeBackward, flow as tapeFlow, gradMode, type Node }
+  from "./autograd.js";
 import { Device, type DeviceKind, type InitOptions } from "./device.js";
 import { type AxisPlan, isSlice, planAxis, type Slice } from "./indexing.js";
 import { gauss, refuseGenerator, uniform } from "./random.js";
@@ -11986,6 +11987,112 @@ fn gelu_tanh_grad(x: f32) -> f32 {
             "call backward(undefined, true) to keep the graph.",
         );
       },
+    });
+  }
+
+  /**
+   * `torch.autograd.grad` — the gradient **handed back rather than stored.**
+   *
+   * `backward()` accumulates into every leaf's `grad`. This returns the gradient
+   * and leaves every `grad` exactly as it found it, which is why torch has both: a
+   * gradient penalty, a meta-learning inner step and every physics-informed loss
+   * need the gradient as a value to keep computing with, and must not disturb the
+   * accumulation the optimiser is about to step on.
+   *
+   * **It was absent from all three, with no reason ever written.** On the Python
+   * side `borch.autograd` raised `AttributeError: module 'borch' has no attribute
+   * 'autograd'` — a sentence naming neither gradients nor what was missing, so a
+   * reader could not tell an absent feature from a typo.
+   *
+   * `createGraph` is not a parameter at all: it is the one thing this tape cannot
+   * do, `backward` refuses it by name, and a second seat for the same refusal is a
+   * second wording to keep in step.
+   *
+   * @param outputs what is being differentiated. Several are seeded together and
+   *   their gradients sum where the graphs meet — torch's `grad([y1, y2], x)`.
+   * @param inputs what to differentiate with respect to. **A derived tensor is
+   *   allowed**, not only a leaf.
+   * @param gradOutputs one seed per output. Left out, each output has to be a
+   *   scalar.
+   * @param allowUnused puts `null` in the slot of an input the graph never
+   *   reached, rather than stopping.
+   * @param materializeGrads puts zeros there instead. Measured: torch does **not**
+   *   require `allowUnused` alongside it.
+   */
+  static grad(
+    outputs: Tensor | readonly Tensor[],
+    inputs: Tensor | readonly Tensor[],
+    gradOutputs?: Tensor | readonly (Tensor | null)[] | null,
+    retainGraph = false,
+    allowUnused = false,
+    materializeGrads = false,
+  ): (Tensor | null)[] {
+    const outs = outputs instanceof Tensor ? [outputs] : [...outputs];
+    const ins = inputs instanceof Tensor ? [inputs] : [...inputs];
+    // **First of all**, ahead of every other refusal — the order `backward`
+    // follows for its own empty `inputs`.
+    if (ins.length === 0) {
+      throw new RuntimeError("`inputs` argument to `grad()` cannot be empty.");
+    }
+    for (const out of outs) {
+      if (!out.requiresGrad) {
+        throw new RuntimeError(
+          `element 0 of tensors ${TORCH.noGrad} and does not have a grad_fn: `
+          + "it was made under no_grad, or it passed through an operation that breaks the graph.",
+        );
+      }
+    }
+    const given: (Tensor | null)[] = gradOutputs === undefined || gradOutputs === null
+      ? outs.map(() => null)
+      : (gradOutputs instanceof Tensor ? [gradOutputs] : [...gradOutputs]);
+    const seeds = outs.map((out, i) => {
+      const seed = given[i] ?? null;
+      if (seed === null) {
+        if (out.size !== 1) {
+          throw new RuntimeError(
+            `${TORCH.nonScalarBackward}: this shape is [${out.shape}] — `
+            + "pass a gradient, or call .sum() first.",
+          );
+        }
+        return Tensor.full([], 1);
+      }
+      if (seed.shape.length !== out.shape.length
+        || seed.shape.some((n, k) => n !== out.shape[k])) {
+        throw new RuntimeError(
+          `${TORCH.gradShape}: grad_output[0] has a shape of [${seed.shape}] `
+          + `and output[0] has a shape of [${out.shape}].`,
+        );
+      }
+      // Detached, as `backward`'s seed is: this tape does no second derivatives, so
+      // an attached seed would only hold the graph alive through the returned value.
+      return seed.detach();
+    });
+    // **After the seeds have been checked, not before** — torch settles the
+    // gradient's shape first and only then complains about a name that cannot hold
+    // one (measured).
+    for (const one of ins) {
+      if (!one.requiresGrad) {
+        throw new RuntimeError("One of the differentiated Tensors does not require grad");
+      }
+    }
+    const got = tapeFlow<Tensor>(outs, seeds, (a, b) => a.add(b), {
+      retainGraph,
+      onSecondPass: () => {
+        throw new RuntimeError(
+          `${TORCH.secondBackward}. To flow through it again, `
+          + "pass retainGraph = true.",
+        );
+      },
+    });
+    return ins.map((one, at) => {
+      const had = got.get(one);
+      if (had !== undefined) return had;
+      if (materializeGrads) return Tensor.zeros(one.shape);
+      if (allowUnused) return null;
+      throw new RuntimeError(
+        `The differentiated Tensor at index ${at} appears to not have been used in `
+        + "the graph. Set allow_unused=True if this is the desired behavior.",
+      );
     });
   }
 

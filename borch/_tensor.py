@@ -53,6 +53,53 @@ def _unbroadcast(grad, shape):
     return grad.reshape(shape)
 
 
+def _flow(roots, seeds):
+    """The backward pass itself: **the gradient of every node reachable from the
+    roots**, and the topological order it was computed in.
+
+    It accumulates nothing into `.grad` — the caller decides what to do with the
+    map. `Tensor.backward` fills the leaves from it; `autograd.grad` reads out the
+    names it was asked for and leaves `.grad` alone, which is the whole difference
+    between the two functions.
+
+    **Written as one walk on purpose.** A second copy of this loop in `autograd`
+    would be a fourth implementation of the same arithmetic — three already have to
+    agree — and it is the copy that would drift, because `.grad`-accumulating code
+    is what every test exercises.
+
+    Several roots are allowed, which is `grad([y1, y2], x)`: their seeds are summed
+    where the graphs meet, exactly as torch does (measured: `grad([(x**2).sum(),
+    (x*5).sum()], x)` is `2x + 5`). A node reached from a later root is appended
+    after its own parents, so the order stays valid across all of them.
+    """
+    order, seen = [], set()
+
+    def visit(t):
+        if id(t) in seen:
+            return
+        seen.add(id(t))
+        for p in t._parents:
+            visit(p)
+        order.append(t)
+
+    for root in roots:
+        visit(root)
+
+    grads = {}
+    for root, seed in zip(roots, seeds):
+        grads[id(root)] = seed if id(root) not in grads else grads[id(root)] + seed
+    for t in reversed(order):
+        g = grads.get(id(t))
+        if g is None or t._backward is None:
+            continue
+        for parent, pg in zip(t._parents, t._backward(g)):
+            if pg is None:
+                continue
+            pg = _unbroadcast(_np.asarray(pg), parent.data.shape)
+            grads[id(parent)] = pg if id(parent) not in grads else grads[id(parent)] + pg
+    return order, grads
+
+
 # torch's dtype promotion differs from numpy's — it splits by **category** first
 # and promotes only within that category.
 #
@@ -465,21 +512,8 @@ class Tensor:
                         "grad, so there is nowhere for a gradient to go.",
                         "can't retain_grad on Tensor that has requires_grad=False"))
         wanted = None if listed is None else {id(t) for t in listed}
+        order, grads = _flow([self], [seed])
 
-        # A topological sort — back to front, each node once
-        order, seen = [], set()
-
-        def visit(t):
-            if id(t) in seen:
-                return
-            seen.add(id(t))
-            for p in t._parents:
-                visit(p)
-            order.append(t)
-
-        visit(self)
-
-        grads = {id(self): seed}
         for t in reversed(order):
             g = grads.get(id(t))
             if g is None:
@@ -500,13 +534,6 @@ class Tensor:
             # `inputs` adds retention and does not take it away.
             if getattr(t, "_retain", False) or (wanted is not None and id(t) in wanted):
                 t.grad = Tensor(g) if t.grad is None else Tensor(t.grad.data + g)
-            for parent, pg in zip(t._parents, t._backward(g)):
-                if pg is None:
-                    continue
-                # A leaf's .grad is filled by the branch above only. Filling it
-                # here as well accumulates twice.
-                pg = _unbroadcast(_np.asarray(pg), parent.data.shape)
-                grads[id(parent)] = pg if id(parent) not in grads else grads[id(parent)] + pg
 
         if not retain_graph:
             for t in order:

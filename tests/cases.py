@@ -13343,6 +13343,172 @@ def inplace_cases(inp=None):
                   refusal_case(lambda L: (L.tensor(wide, requires_grad=True) * 2)
                                .sum().backward(create_graph=True))))
 
+    # ── `torch.autograd.grad` — the gradient handed back, not stored ───────────
+    #
+    # **It was absent from all three and nobody had written a reason.**
+    # `borch.autograd` raised `AttributeError: module 'borch' has no attribute
+    # 'autograd'`, which names neither gradients nor what is missing, so an absent
+    # feature and a typo read the same. Every other gap here states itself.
+    def taken(L):
+        x = L.tensor(wide, requires_grad=True)
+        return L.autograd.grad((x ** 2).sum(), x)[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad", taken))
+
+    def leaves_dot_grad_alone(L):
+        """**The whole reason the function exists.** `backward()` accumulates and this
+        does not, so a gradient penalty can be differentiated without adding its
+        gradient to the one the optimiser is about to step on. Asked by the value it
+        returns alone, an implementation that accumulated as well would pass."""
+        x = L.tensor(wide, requires_grad=True)
+        L.autograd.grad((x ** 2).sum(), x)
+        return f"grad={x.grad}"
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad 는 .grad 를 안 건드린다",
+                  leaves_dot_grad_alone))
+
+    def two_inputs(L):
+        a = L.tensor(wide, requires_grad=True)
+        b = L.tensor(wide, requires_grad=True)
+        got = L.autograd.grad((a * b).sum(), [a, b])
+        return L.stack([got[0], got[1]])
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(입력 둘)", two_inputs))
+
+    def from_a_derived_tensor(L):
+        """**Not only a leaf.** torch differentiates with respect to an intermediate,
+        which is how a saliency map is taken against an activation."""
+        x = L.tensor(wide, requires_grad=True)
+        mid = x * 3
+        return L.autograd.grad((mid ** 2).sum(), mid)[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(중간 텐서)", from_a_derived_tensor))
+
+    def two_outputs(L):
+        """Several outputs are seeded together and their gradients **sum where the
+        graphs meet** — measured: `2x + 5`. A walk written for one root gives one of
+        the two halves and looks entirely reasonable."""
+        x = L.tensor(wide, requires_grad=True)
+        return L.autograd.grad([(x ** 2).sum(), (x * 5).sum()], x)[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(출력 둘)", two_outputs))
+
+    def with_a_seed(L):
+        x = L.tensor(wide, requires_grad=True)
+        return L.autograd.grad(x * 2, x, grad_outputs=L.ones(*wide.shape))[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(grad_outputs)", with_a_seed))
+
+    def unused_allowed(L):
+        """`None` in the slot, which is torch's answer and not an error. It is asked
+        as a string because a tuple holding `None` has no value to compare."""
+        a = L.tensor(wide, requires_grad=True)
+        b = L.tensor(wide, requires_grad=True)
+        got = L.autograd.grad((a * 2).sum(), [a, b], allow_unused=True)
+        # **Both slots**, because an implementation that put `None` in every slot
+        # would pass a case that only looked at the second.
+        return f"둘째={got[1]} 첫째={'있다' if got[0] is not None else None}"
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(allow_unused)", unused_allowed))
+
+    def unused_materialised(L):
+        """Zeros rather than `None` — and measured: torch does **not** ask for
+        `allow_unused` alongside it, though every reading of the documentation
+        suggests it would."""
+        a = L.tensor(wide, requires_grad=True)
+        b = L.tensor(wide, requires_grad=True)
+        got = L.autograd.grad((a * 2).sum(), [a, b], materialize_grads=True)
+        return L.stack([got[0], got[1]])
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(materialize_grads)",
+                  unused_materialised))
+
+    def retained_then_again(L):
+        """It releases the graph by default, as `backward()` does. Asked without
+        `retain_graph` the second walk stops; this asks that the flag works.
+
+        **The two walks are summed rather than the second one returned.** Returned
+        alone the answer is `2x`, which is exactly what the plain case above gives —
+        so the case hung an argument in its name and asked nothing the default did
+        not (`test_case_names.py` said so). Summed it is `4x`, which no single walk
+        produces."""
+        x = L.tensor(wide, requires_grad=True)
+        y = (x ** 2).sum()
+        first = L.autograd.grad(y, x, retain_graph=True)[0]
+        return first + L.autograd.grad(y, x)[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(retain_graph)", retained_then_again))
+
+    def free_backward(L):
+        """`torch.autograd.backward(y)` — the free-function spelling, which **does**
+        accumulate. The pair to the case above: one fills `.grad` and one must not."""
+        x = L.tensor(wide, requires_grad=True)
+        L.autograd.backward((x ** 2).sum())
+        return x.grad
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.backward 는 쌓는다", free_backward))
+
+    for name, fragment, call in (
+        # The fragment is `not **have** been used` — written without the "have" it
+        # matched neither side, and both came back `다른 문구 <…>` holding the very
+        # sentence it was looking for. A fragment that never matches turns a
+        # wording check into a check that both sides fail the same way.
+        ("안 쓰인 입력", "not have been used in the graph",
+         lambda L: L.autograd.grad(
+             (L.tensor(wide, requires_grad=True) * 2).sum(),
+             [L.tensor(wide, requires_grad=True)])),
+        ("빈 inputs", "cannot be empty",
+         lambda L: L.autograd.grad(
+             (L.tensor(wide, requires_grad=True) * 2).sum(), [])),
+        ("grad 없는 입력", "does not require grad",
+         lambda L: L.autograd.grad(
+             (L.tensor(wide, requires_grad=True) * 2).sum(), L.tensor(wide))),
+        ("씨앗 없는 벡터 출력", "only for scalar outputs",
+         lambda L: L.autograd.grad(
+             L.tensor(wide, requires_grad=True) * 2,
+             L.tensor(wide, requires_grad=True))),
+        ("모양이 틀린 grad_outputs", "Mismatch in shape",
+         lambda L: L.autograd.grad(
+             (x := L.tensor(wide, requires_grad=True)) * 2, x,
+             grad_outputs=L.ones(9))),
+    ):
+        refuses_backward(f"autograd.grad({name})", fragment, call)
+
+    # The type is API too: torch raises `RuntimeError` for the unused input, and the
+    # binding turned it into an `IndexError` because the wording contains the word
+    # its guess looks for. Frozen so the guess cannot come back.
+    def unused_is_a_runtime_error(L):
+        try:
+            L.autograd.grad((L.tensor(wide, requires_grad=True) * 2).sum(),
+                            [L.tensor(wide, requires_grad=True)])
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+        return "안 던졌다"
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(안 쓰인 입력) 의 형",
+                  unused_is_a_runtime_error))
+
+    # torch computes these three; all of ours refuse in the specified words.
+    for label, call in (
+        ("create_graph", lambda L: L.autograd.grad(
+            (x := L.tensor(wide, requires_grad=True) ** 3).sum(), x, create_graph=True)),
+        # **Shaped so torch succeeds.** Written as a scalar output with no seed,
+        # torch stopped too — inside `vmap`, complaining that a 0-d tensor has no
+        # axis to batch over — and `refusal_case` needs torch to answer or it
+        # freezes a shared limit as our defect. This is the whole Jacobian of
+        # `y = 2x`, which is what the argument is for.
+        ("is_grads_batched", lambda L: L.autograd.grad(
+            (x := L.tensor(np.arange(9, dtype=np.float32).reshape(3, 3),
+                           requires_grad=True)) * 2, x,
+            grad_outputs=L.eye(3).unsqueeze(1).expand(3, 3, 3).contiguous(),
+            is_grads_batched=True)),
+        ("only_inputs=False", lambda L: L.autograd.grad(
+            (x := L.tensor(wide, requires_grad=True) * 2).sum(), x,
+            only_inputs=False)),
+    ):
+        cases.append((INPLACE_PREFIX + f"기울기::autograd.grad({label})=우리는거절",
+                      refusal_case(call)))
+
     cases.append((INPLACE_PREFIX + "기울기::grad_fn 의 형 이름",
                   lambda L: type((L.tensor(wide, requires_grad=True) * 2).grad_fn).__name__))
     cases.append((INPLACE_PREFIX + "기울기::잎의 grad_fn 은 없다",

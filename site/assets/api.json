@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 380
+  "missing": 382
  },
  "modules": [
   {
@@ -158,7 +158,14 @@
       {
        "name": "grad",
        "signature": "grad: Tensor | null",
-       "doc": ""
+       "doc": "`torch.autograd.grad` — the gradient **handed back rather than stored.**\n\n`backward()` accumulates into every leaf's `grad`. This returns the gradient\nand leaves every `grad` exactly as it found it, which is why torch has both: a\ngradient penalty, a meta-learning inner step and every physics-informed loss\nneed the gradient as a value to keep computing with, and must not disturb the\naccumulation the optimiser is about to step on.\n\n**It was absent from all three, with no reason ever written.** On the Python\nside `borch.autograd` raised `AttributeError: module 'borch' has no attribute\n'autograd'` — a sentence naming neither gradients nor what was missing, so a\nreader could not tell an absent feature from a typo.\n\n`createGraph` is not a parameter at all: it is the one thing this tape cannot\ndo, `backward` refuses it by name, and a second seat for the same refusal is a\nsecond wording to keep in step.",
+       "overloads": [
+        "static grad(outputs: Tensor | readonly Tensor[], inputs: Tensor | readonly Tensor[], gradOutputs?: Tensor | readonly (Tensor | null)[] | null, retainGraph?: boolean, allowUnused?: boolean, materializeGrads?: boolean): (Tensor | null)[]"
+       ],
+       "section": {
+        "ko": "Backward",
+        "en": "Backward"
+       }
       },
       {
        "name": "freed",
@@ -20052,9 +20059,16 @@
       }
      ],
      "doc_ko": "역전파. `root` 에서 씨앗을 흘려 잎의 `grad` 에 쌓는다. 두 규칙은 서로를 지우지 않는다 — `only` 에 든 노드는 잎이든 아니든 채워지고, `retainGrad()` 를 부른 노드는 `only` 밖이어도 채워진다 (torch 로 실측)."
+    },
+    {
+     "kind": "function",
+     "name": "flow",
+     "signature": "export declare function flow<T>(roots: readonly Node<T>[], seeds: readonly T[], add: (a: T, b: T) => T, options?: { retainGraph?: boolean; onSecondPass?: () => never; }): Map<Node<T>, T>",
+     "doc": "The backward pass itself: **the gradient of every node the roots reach**, and\nnothing written to any `grad`.\n\n`backward` above layers accumulation on top of this; `Tensor.grad` reads the\nnames it was asked for out of the map and leaves every `grad` alone, which is\nthe whole difference between the two functions.\n\n**One walk on purpose.** A second copy of this loop for the returning form\nwould be a fourth implementation of the same arithmetic — three already have to\nagree — and it is the copy that drifts, because the accumulating one is what\nevery existing test exercises.",
+     "members": []
     }
    ],
-   "count": 11
+   "count": 12
   },
   {
    "name": "special",
@@ -20394,5 +20408,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2766
+ "total": 2767
 }

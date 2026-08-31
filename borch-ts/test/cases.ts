@@ -10265,6 +10265,93 @@ function addInplace(out: Map<string, Case>): void {
     return gradOf(m, "m");
   });
 
+  // ── `Tensor.grad` — the gradient handed back, not stored ───────────────────
+  //
+  // The tape's own walk with the accumulation left off. **It was absent from all
+  // three** and nobody had written a reason; on the Python side the miss came out
+  // as `AttributeError: module 'borch' has no attribute 'autograd'`, which names
+  // neither gradients nor what is missing.
+  const gradTaken = (t: Tensor | null): Tensor =>
+    t === null ? Tensor.full([], -999) : t;
+
+  out.set("inplace::기울기::autograd.grad", () => {
+    const x = wide();
+    return gradTaken(Tensor.grad(x.mul(x).sum(), x)[0] ?? null);
+  });
+
+  // **The whole reason the function exists.** Asked by the returned value alone,
+  // an implementation that also accumulated would pass.
+  out.set("inplace::기울기::autograd.grad 는 .grad 를 안 건드린다", () => {
+    const x = wide();
+    Tensor.grad(x.mul(x).sum(), x);
+    return `grad=${x.grad === null ? "None" : "있다"}`;
+  });
+
+  out.set("inplace::기울기::autograd.grad(입력 둘)", () => {
+    const a = wide();
+    const b = wide();
+    const got = Tensor.grad(a.mul(b).sum(), [a, b]);
+    return Tensor.stack([gradTaken(got[0] ?? null), gradTaken(got[1] ?? null)]);
+  });
+
+  // **Not only a leaf** — torch differentiates against an intermediate, which is
+  // how a saliency map is taken against an activation.
+  out.set("inplace::기울기::autograd.grad(중간 텐서)", () => {
+    const m = wide().mul(Tensor.full([], 3));
+    return gradTaken(Tensor.grad(m.mul(m).sum(), m)[0] ?? null);
+  });
+
+  // Several outputs are seeded together and their gradients **sum where the graphs
+  // meet** (measured: `2x + 5`). A walk written for one root gives one of the two
+  // halves and looks entirely reasonable.
+  out.set("inplace::기울기::autograd.grad(출력 둘)", () => {
+    const x = wide();
+    return gradTaken(
+      Tensor.grad([x.mul(x).sum(), x.mul(Tensor.full([], 5)).sum()], x)[0] ?? null);
+  });
+
+  out.set("inplace::기울기::autograd.grad(grad_outputs)", () => {
+    const x = wide();
+    return gradTaken(
+      Tensor.grad(x.mul(Tensor.full([], 2)), x, Tensor.ones([2, 3]))[0] ?? null);
+  });
+
+  out.set("inplace::기울기::autograd.grad(allow_unused)", () => {
+    const a = wide();
+    const b = wide();
+    const got = Tensor.grad(a.mul(Tensor.full([], 2)).sum(), [a, b],
+                            undefined, false, true);
+    return `둘째=${got[1] === null ? "None" : "있다"} 첫째=${
+      got[0] ? "있다" : "None"}`;
+  });
+
+  // Zeros rather than null — and measured: torch does **not** ask for
+  // `allow_unused` alongside it, though the documentation reads as though it would.
+  out.set("inplace::기울기::autograd.grad(materialize_grads)", () => {
+    const a = wide();
+    const b = wide();
+    const got = Tensor.grad(a.mul(Tensor.full([], 2)).sum(), [a, b],
+                            undefined, false, false, true);
+    return Tensor.stack([gradTaken(got[0] ?? null), gradTaken(got[1] ?? null)]);
+  });
+
+  // It releases the graph by default, as `backward()` does. **The two walks are
+  // summed** — the second one alone is `2x`, the same answer the plain case gives,
+  // so the name would hang an argument that changed nothing.
+  out.set("inplace::기울기::autograd.grad(retain_graph)", () => {
+    const x = wide();
+    const y = x.mul(x).sum();
+    const first = gradTaken(Tensor.grad(y, x, undefined, true)[0] ?? null);
+    return first.add(gradTaken(Tensor.grad(y, x)[0] ?? null));
+  });
+
+  // The pair to the case two above: one fills `grad` and one must not.
+  out.set("inplace::기울기::autograd.backward 는 쌓는다", () => {
+    const x = wide();
+    x.mul(x).sum().backward();
+    return gradOf(x, "autograd.backward");
+  });
+
   const refusesBackward = (name: string, fragment: string, body: () => void) => {
     out.set(`inplace::기울기::거절::${name}`, () => {
       try {
@@ -10284,6 +10371,22 @@ function addInplace(out: Map<string, Case>): void {
   refusesBackward("grad 없는 것을 inputs 에", "requires_grad=False",
     () => wide().mul(Tensor.full([], 2)).sum()
       .backward(undefined, false, false, [Tensor.from(WIDE, [2, 3])]));
+
+  refusesBackward("autograd.grad(안 쓰인 입력)", "not have been used in the graph",
+    () => { Tensor.grad(wide().mul(Tensor.full([], 2)).sum(), [wide()]); });
+  refusesBackward("autograd.grad(빈 inputs)", "cannot be empty",
+    () => { Tensor.grad(wide().mul(Tensor.full([], 2)).sum(), []); });
+  refusesBackward("autograd.grad(grad 없는 입력)", "does not require grad",
+    () => {
+      Tensor.grad(wide().mul(Tensor.full([], 2)).sum(), Tensor.from(WIDE, [2, 3]));
+    });
+  refusesBackward("autograd.grad(씨앗 없는 벡터 출력)", "only for scalar outputs",
+    () => { Tensor.grad(wide().mul(Tensor.full([], 2)), wide()); });
+  refusesBackward("autograd.grad(모양이 틀린 grad_outputs)", "Mismatch in shape",
+    () => {
+      const x = wide();
+      Tensor.grad(x.mul(Tensor.full([], 2)), x, Tensor.ones([9]));
+    });
 
   // torch computes this one; all three of ours refuse in the specified words.
   out.set("inplace::기울기::backward(create_graph)=우리는거절", () => {
