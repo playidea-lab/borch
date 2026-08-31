@@ -7560,14 +7560,44 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    *
    * **`largest` decides the order too** — true gives largest first, false
    * smallest first (measured).
+   *
+   * **`b` is the generalised problem `A x = λ B x`, and it was refused.** With `B`
+   * symmetric positive definite it reduces to a standard one in four lines:
+   * `B = L Lᵀ`, the eigenvalues of `L⁻¹ A L⁻ᵀ` are the generalised ones, and
+   * `x = L⁻ᵀ y` are the generalised vectors. Nothing iterative was needed.
+   *
+   * **Those vectors come out `B`-orthonormal**, not unit length — `xᵀBx = 1` and
+   * `xᵀx = 0.996` on the fixture. It falls out of the reduction (`xᵀBx = yᵀy`) and
+   * it is what torch returns; normalising them would look tidier and disagree.
+   *
+   * **`x` is a starting basis and this has nothing to start.** What it changes is
+   * the count: given `x` and no `k`, torch takes `k` from its columns, which is why
+   * `k` is `null` here rather than 1. The converged eigenvalues do not depend on it
+   * — torch with and without agrees to 5e-6, the distance its own answer moves with
+   * the seed.
    */
-  async lobpcg(k = 1, largest = true): Promise<{
+  async lobpcg(k: number | null = null, largest = true,
+               b: Tensor | null = null, x: Tensor | null = null): Promise<{
     eigenvalues: Tensor; eigenvectors: Tensor;
   }> {
-    const { values, vectors } = await this.eigh();
+    const want = k ?? (x === null ? 1 : (x.shape[x.shape.length - 1] ?? 1));
+    let values: Tensor;
+    let vectors: Tensor;
+    if (b === null) {
+      ({ values, vectors } = await this.eigh());
+    } else {
+      const low = await b.cholesky();
+      // `L⁻¹ A L⁻ᵀ`, symmetrised — the two solves are the reduction.
+      const half = await low.solveTriangular(this, false);
+      const inner = await low.solveTriangular(half.transpose(), false);
+      const sym = inner.transpose().add(inner).mul(Tensor.full([], 0.5));
+      const got = await sym.eigh();
+      values = got.values;
+      vectors = await low.transpose().solveTriangular(got.vectors, true);
+    }
     const n = values.shape[values.shape.length - 1] ?? 0;
     const picks: number[] = [];
-    for (let i = 0; i < k; i++) picks.push(largest ? n - 1 - i : i);
+    for (let i = 0; i < want; i++) picks.push(largest ? n - 1 - i : i);
     const idx = Tensor.from(picks, [picks.length]);
     return {
       eigenvalues: values.indexSelect(0, idx),

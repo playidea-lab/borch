@@ -325,7 +325,11 @@ _SIGNATURE = {
     "triangular_solve": ("A", "upper", "transpose", "unitriangular"),
     "orgqr": ("input2",),
     "ormqr": ("tau", "other", "left", "transpose"),
-    "lobpcg": ("k", "largest"),
+    # **`B` and `X` sit behind `largest` over there and in front of it in torch.**
+    # torch's order is `(A, k, B, X, …, largest, …)`; borch.ts keeps the two it had
+    # first and adds the pair at the end, so this table is what puts each word where
+    # it means the same thing.
+    "lobpcg": ("k", "largest", "B", "X"),
     "svd_lowrank": ("q", "niter", "M"),
     "pca_lowrank": ("q", "center", "niter"),
     # Statistics. borch.ts's argument order.

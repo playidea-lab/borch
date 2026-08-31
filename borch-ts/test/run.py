@@ -690,7 +690,11 @@ NOT_PORTED = {
     # against numpy at fourteen shape-and-axis pairs before the browser saw it, because
     # gathering a slice out of a flat row-major buffer is where this goes wrong and a
     # golden run costs ten minutes to say so.
-    "toplin::": (42, "별칭 — a top-level second name, as `lu` = `linalg.lu_factor`"),
+    # 42 → 48. Six `lobpcg` rows: `B` is the generalised problem and `X` sets `k` from
+    # its columns, both of which used to be refused. The reason on this row is
+    # unchanged and still the right one — `torch.lobpcg` is a second name for what the
+    # method already answers, and the method side asks the same six through parity.
+    "toplin::": (48, "별칭 — a top-level second name, as `lu` = `linalg.lu_factor`"),
     # `stat::` used to be here — 42 cases. 31 of them had simply never been asked, and the
     # other 11 could not be ported because **the name was not over there**, so those five
     # went into borch.ts.

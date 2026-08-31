@@ -2814,6 +2814,43 @@ def top_linalg_cases(inp=None):
             add(f"lobpcg(k={k}, largest={largest}) 고윳값",
                 lambda L, kk=k, lg=largest: L.lobpcg(L.tensor(big), k=kk,
                                                      largest=lg)[0])
+    # ── `B` and `X`, which were refused ────────────────────────────────
+    #
+    # `B` is the generalised problem `A x = λ B x`. With `B` symmetric positive
+    # definite it reduces to a standard one — `B = L Lᵀ`, eigenvalues of `L⁻¹ A L⁻ᵀ` —
+    # so nothing iterative and no new dependency were needed.
+    #
+    # **`X` is a starting basis and this has nothing to start.** What it changes is the
+    # count: given `X` and no `k`, torch takes `k` from `X`'s columns. That was
+    # unreachable here because `k` defaulted to 1 where torch's defaults to `None`, so
+    # the argument would have been received and the answer one pair wide whatever came
+    # in. Measured: the converged eigenvalues do not depend on `X` — torch with and
+    # without it agrees to 5e-6, the same distance its own answer moves with the seed.
+    _LOB_B = np.diag([2., 1., 1., 3., 1., 1., 2., 1., 1., 2.]).astype(np.float32)
+    _LOB_X = np.eye(10, dtype=np.float32)[:, :2].copy()
+    for _lg in (True, False):
+        add(f"lobpcg(B, largest={_lg}) 고윳값",
+            lambda L, lg=_lg: L.lobpcg(L.tensor(big), k=2, B=L.tensor(_LOB_B),
+                                       largest=lg)[0])
+    add("lobpcg(X 가 k 를 정한다) 고윳값",
+        lambda L: L.lobpcg(L.tensor(big), X=L.tensor(_LOB_X))[0])
+    add("lobpcg(X 가 k 를 정한다) 모양",
+        lambda L: str(tuple(L.lobpcg(L.tensor(big), X=L.tensor(_LOB_X))[1].shape)))
+    add("lobpcg(B 와 X) 고윳값",
+        lambda L: L.lobpcg(L.tensor(big), B=L.tensor(_LOB_B),
+                           X=L.tensor(_LOB_X))[0])
+
+    def lobpcg_b_orthonormal(L):
+        """**The generalised vectors come out `B`-orthonormal, not unit length.** It
+        falls out of the reduction (`xᵀBx = yᵀy`) and it is what torch returns —
+        normalising them would look tidier and disagree. The sign is arbitrary, so
+        what is asked is the quadratic form, which the sign cannot reach."""
+        w = L.lobpcg(L.tensor(big), k=2, B=L.tensor(_LOB_B))[1]
+        bm = L.tensor(_LOB_B)
+        return (w * (bm @ w)).sum(dim=0)
+
+    add("lobpcg(B) 의 벡터는 B-정규직교", lobpcg_b_orthonormal)
+
     # **Exactly rank 3** — over it, torch moves with the seed and there is nothing to freeze.
     low = (rng.standard_normal((8, 3))
            @ rng.standard_normal((3, 5))).astype(np.float32)

@@ -10768,7 +10768,7 @@ def _full_q(a, tau):
     return q
 
 
-def lobpcg(a, k=1, B=None, X=None, n=None, iK=None, niter=None, tol=None,
+def lobpcg(a, k=None, B=None, X=None, n=None, iK=None, niter=None, tol=None,
            largest=True, method=None, tracker=None, ortho_iparams=None,
            ortho_fparams=None, ortho_bparams=None):
     """The `k` **extreme eigenpairs** of a symmetric matrix.
@@ -10782,14 +10782,44 @@ def lobpcg(a, k=1, B=None, X=None, n=None, iK=None, niter=None, tol=None,
 
     **`largest` sets the order too** — true gives largest first and false smallest
     first (measured).
+
+    **`B` is the generalised problem `A x = λ B x`, and it was refused.** With `B`
+    symmetric positive definite it reduces to a standard one in four lines: `B = L Lᵀ`,
+    then the eigenvalues of `L⁻¹ A L⁻ᵀ` are the generalised ones and `x = L⁻ᵀ y` are
+    the generalised vectors. Nothing iterative and no new dependency.
+
+    **Those vectors come out `B`-orthonormal**, not unit length — `xᵀBx = 1` and
+    `xᵀx = 0.996` on the fixture. That falls out of the reduction (`xᵀBx = yᵀy`) and
+    it is also what torch returns, measured. Normalising them would look tidier and
+    disagree.
+
+    **`X` is a starting basis and this has nothing to start.** What it does change is
+    the count: given `X` and no `k`, torch takes `k` from `X`'s columns, and that is
+    read here. The converged eigenvalues do not depend on it — measured, torch with
+    and without `X` agrees to 5e-6, which is the same distance its own answer moves
+    with the seed.
     """
-    if B is not None or X is not None:
-        _unsupported("lobpcg(B= or X=) — the generalised eigenvalue problem")
-    vals, vecs = eigh(_wrap(a))
+    # **`k` defaulted to 1 here and to `None` in torch**, which was invisible while
+    # nothing read `X`: with neither given both mean one pair. Given `X` and no `k`,
+    # torch takes the count from `X`'s columns, and a default of 1 makes that
+    # unreachable — the argument would be received and the answer would be one pair
+    # wide whatever was handed in.
+    if k is None:
+        k = 1 if X is None else int(_np.asarray(_wrap(X).data).shape[-1])
+    if B is None:
+        vals, vecs = eigh(_wrap(a))
+        vals, vecs = _np.asarray(vals.data), _np.asarray(vecs.data)
+    else:
+        mat = _np.asarray(_wrap(a).data, dtype=_np.float64)
+        low = _np.linalg.cholesky(_np.asarray(_wrap(B).data, dtype=_np.float64))
+        inner = _np.linalg.solve(low, _np.linalg.solve(low, mat).T).T
+        vals, y = _np.linalg.eigh((inner + inner.T) / 2.0)
+        vecs = _np.linalg.solve(low.T, y)
+        vals = vals.astype(mat.dtype)
+        vecs = vecs.astype(mat.dtype)
     order = slice(None, None, -1) if largest else slice(None)
-    idx = _np.arange(vals.data.shape[-1])[order][:k]
-    return _Lobpcg(Tensor(_np.asarray(vals.data)[idx]),
-                   Tensor(_np.asarray(vecs.data)[:, idx]))
+    idx = _np.arange(vals.shape[-1])[order][:k]
+    return _Lobpcg(Tensor(vals[idx]), Tensor(vecs[:, idx]))
 
 
 def svd_lowrank(a, q=6, niter=2, M=None):
