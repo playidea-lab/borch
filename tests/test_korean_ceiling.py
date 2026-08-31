@@ -323,7 +323,11 @@ CEILINGS = {
     # 4456 → 4475. Nineteen, in the `torch.norm` case names — `dim 뒤집기`, `배치`,
     # the `F.lp_pool*d(올림)` rows' `올림`, and the widened `linalg::` skip reason in
     # `run.py`. Keys in `golden.json` except the last, which is a sentence.
-    "borch-ts/test": 4475,
+    # 4475 → 4499. Twenty-four, in the with-indices window case names — `자리 내놓기`
+    # on twelve `max_pool2d`/`MaxPool2d` rows, `셋 다` on three of them, and
+    # `창이 있는 자리` on the unpool row. Keys in `golden.json`, so both sides spell
+    # them the same.
+    "borch-ts/test": 4499,
 }
 
 

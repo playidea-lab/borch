@@ -10255,34 +10255,57 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // pooling return the positions alongside and hands them to the unpooling — a common
   // pair in an autoencoder.
 
-  /** The window list for a fixed window. `[start, end)` per axis. */
-  private fixedWindows(kernel: number, stride?: number): [number, number][][] {
+  /**
+   * The positions a fixed window reads, per axis and per output cell.
+   *
+   * **`padding`, `dilation` and `ceilMode` were refused on this path** while the plain
+   * pooling shader answered all three, because the window was `[start, end)` — an
+   * interval, which cannot skip cells and cannot hang off an edge. Written as the
+   * positions themselves, the dilation is the step of the loop that builds them and
+   * the padding is what makes some of them fall outside and be left out. A padded cell
+   * is `-inf` in torch and never wins, so an absent one is the same answer.
+   */
+  private fixedWindows(kernel: number, stride?: number, padding = 0,
+                       dilation = 1, ceilMode = false): number[][][] {
     const step = stride ?? kernel;
     return this.shape.slice(2).map((n) => {
-      const out: [number, number][] = [];
-      for (let s = 0; s + kernel <= n; s += step) out.push([s, s + kernel]);
+      const out: number[][] = [];
+      const cells = poolOut(n, padding, kernel, step, ceilMode, dilation);
+      for (let i = 0; i < cells; i++) {
+        const at: number[] = [];
+        for (let k = 0; k < kernel; k++) {
+          const p = i * step + k * dilation - padding;
+          if (p >= 0 && p < n) at.push(p);
+        }
+        out.push(at);
+      }
       return out;
     });
   }
 
-  /** The window list for the adaptive form. The start floors and the end ceils — the
+  /** The positions the adaptive form reads. The start floors and the end ceils — the
    *  length differs per position. */
-  private adaptiveWindows(outSize: number | readonly number[]): [number, number][][] {
+  private adaptiveWindows(outSize: number | readonly number[]): number[][][] {
     const spatial = this.shape.length - 2;
     const sizes = typeof outSize === "number"
       ? new Array<number>(spatial).fill(outSize)
       : [...outSize];
     return this.shape.slice(2).map((n, k) => {
       const want = sizes[k] ?? 1;
-      const out: [number, number][] = [];
+      const out: number[][] = [];
       for (let i = 0; i < want; i++) {
-        out.push([Math.floor((i * n) / want), Math.ceil(((i + 1) * n) / want)]);
+        const at: number[] = [];
+        for (let p = Math.floor((i * n) / want); p < Math.ceil(((i + 1) * n) / want);
+             p++) {
+          at.push(p);
+        }
+        out.push(at);
       }
       return out;
     });
   }
 
-  private maxWithIndex(axes: [number, number][][]): {
+  private maxWithIndex(axes: number[][][]): {
     values: Tensor;
     indices: Tensor;
   } {
@@ -10322,11 +10345,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return { values, indices };
   }
 
-  maxPoolWithIndices(kernel = 2, stride?: number): {
+  maxPoolWithIndices(kernel = 2, stride?: number, padding = 0, dilation = 1,
+                     ceilMode = false): {
     values: Tensor;
     indices: Tensor;
   } {
-    return this.maxWithIndex(this.fixedWindows(kernel, stride));
+    return this.maxWithIndex(
+      this.fixedWindows(kernel, stride, padding, dilation, ceilMode));
   }
 
   adaptiveMaxPoolWithIndices(outSize: number | readonly number[]): {
@@ -10450,13 +10475,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     for (let p = 0; p < N * C; p++) {
       const plane = this.narrow(0, Math.floor(p / C), 1)
         .narrow(1, p % C, 1);
-      const axes: [number, number][][] = [];
+      const axes: number[][][] = [];
       for (let k = 0; k < spatial; k++) {
         const u = samples[p]?.[order[k] ?? k] ?? 0;
         const starts = Tensor.fractionalStarts(
           this.shape[2 + k] ?? 1, kernel, outDims[k] ?? 1, u,
         );
-        axes.push(starts.map((s) => [s, s + kernel] as [number, number]));
+        // A window is the **positions it reads**, not a `[start, end)` pair. The
+        // fractional windows are contiguous, so it is `start … start+kernel-1` —
+        // but written out, because that is what the shader now walks.
+        axes.push(starts.map(
+          (s) => Array.from({ length: kernel }, (_, j) => s + j)));
       }
       const got = plane.maxWithIndex(axes);
       values.push(got.values);

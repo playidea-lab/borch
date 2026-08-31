@@ -2697,18 +2697,24 @@ export function poolNDBackwardNeedsInput(kind: "max" | "avg"): boolean {
 }
 
 /**
- * The window list — per axis, the interval each output cell covers.
+ * The window list — per axis, **the input positions each output cell reads.**
  *
- * It exists to hand the fixed and the adaptive forms across **in one shape.** The fixed
- * one is `start = o·stride` at a constant length; the adaptive one runs from
- * `floor(o·n/want)` to `ceil((o+1)·n/want)`, so the length differs per position. Writing
- * the two rules inside the shader means a day comes when only one is fixed.
+ * It exists to hand the fixed and the adaptive forms across in one shape. The fixed one
+ * is `start = o·stride` at a constant length; the adaptive one runs from
+ * `floor(o·n/want)` to `ceil((o+1)·n/want)`, so the length differs per position.
+ *
+ * **It used to be `[start, end)` per cell**, and that shape could say neither of the two
+ * things `max_pool(…, return_indices=True)` needs: a dilated window skips cells, so it
+ * is not an interval, and a padded window hangs off the edge, so some of its positions
+ * are not positions at all. Written as a list, both are the same thing — the positions
+ * that exist — and the padded ones are simply absent from it. That is what the
+ * refusal on those three arguments was about, and it was about this type.
  */
 export interface PoolWindows {
   readonly NC: number;
   readonly inDims: readonly number[];
-  /** Per axis, the list of `[start, end)`. Its length is that axis's output size. */
-  readonly axes: readonly (readonly (readonly [number, number])[])[];
+  /** Per axis, per output cell, the input positions read. */
+  readonly axes: readonly (readonly (readonly number[])[])[];
 }
 
 export function poolWindowsKey(p: PoolWindows): string {
@@ -2737,15 +2743,25 @@ export function poolMaxWithIndex(p: PoolWindows): string {
   const n = p.NC * outSpace;
 
   // The window table is baked into the shader as constants. The output cell count is
-  // small so it is cheap, and the adaptive form with its varying lengths rides in the
-  // same shape.
+  // small so it is cheap, and every form — fixed, adaptive, dilated, padded — rides in
+  // the same shape.
+  //
+  // **The positions are one flat run per axis with an offset table**, rather than a
+  // start and an end. An interval cannot hold a dilated window (it skips cells) or a
+  // padded one (some of its positions do not exist), and the flat run holds both:
+  // `S[o]` to `S[o+1]` names this cell's slice of `P`.
   const tables = p.axes.map((axis, d) => {
-    const starts = axis.map((w) => `${w[0]}u`).join(", ");
-    const ends = axis.map((w) => `${w[1]}u`).join(", ");
-    return `var<private> S${d}: array<u32, ${axis.length}> = `
-      + `array<u32, ${axis.length}>(${starts});\n`
-      + `var<private> E${d}: array<u32, ${axis.length}> = `
-      + `array<u32, ${axis.length}>(${ends});`;
+    const flat: number[] = [];
+    const offs: number[] = [0];
+    for (const cell of axis) {
+      flat.push(...cell);
+      offs.push(flat.length);
+    }
+    return `var<private> P${d}: array<u32, ${Math.max(1, flat.length)}> = `
+      + `array<u32, ${Math.max(1, flat.length)}>(`
+      + `${(flat.length ? flat : [0]).map((v) => `${v}u`).join(", ")});\n`
+      + `var<private> S${d}: array<u32, ${offs.length}> = `
+      + `array<u32, ${offs.length}>(${offs.map((v) => `${v}u`).join(", ")});`;
   }).join("\n");
 
   const decode = outDims.map((size, d) =>
@@ -2754,11 +2770,16 @@ export function poolMaxWithIndex(p: PoolWindows): string {
   const close: string[] = [];
   const terms: string[] = [];
   for (let d = 0; d < p.axes.length; d++) {
-    open.push(`  for (var k${d} = S${d}[o${d}]; k${d} < E${d}[o${d}]; k${d} = k${d} + 1u) {`);
+    open.push(`  for (var t${d} = S${d}[o${d}]; t${d} < S${d}[o${d} + 1u]; `
+              + `t${d} = t${d} + 1u) {`);
+    open.push(`    let k${d} = P${d}[t${d}];`);
     close.push("  }");
     terms.push(`k${d} * ${inStride[d] ?? 1}u`);
   }
-  const first = p.axes.map((_, d) => `S${d}[o${d}] * ${inStride[d] ?? 1}u`).join(" + ");
+  // The seed is the window's own first position, which exists because torch never
+  // produces an empty window: the padding is at most half the reach.
+  const first = p.axes.map((_, d) => `P${d}[S${d}[o${d}]] * ${inStride[d] ?? 1}u`)
+    .join(" + ");
 
   return `
 ${tables}

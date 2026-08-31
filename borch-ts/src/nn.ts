@@ -2044,7 +2044,8 @@ export class MaxPool2d extends Module {
 
   /** The values and the positions that produced them. `MaxUnpool2d` takes both. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
-    return x.maxPoolWithIndices(this.kernelSize, this.stride);
+    return x.maxPoolWithIndices(this.kernelSize, this.stride, this.padding,
+                                this.dilation, this.ceilMode);
   }
 
   /** As `MaxPool1d`, and this one really holds the other three — they are refused
@@ -2081,7 +2082,8 @@ export class MaxPool1d extends Module {
 
   /** The values and the positions that produced them, as `MaxPool2d.pick`. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
-    return x.maxPoolWithIndices(this.kernelSize, this.stride);
+    return x.maxPoolWithIndices(this.kernelSize, this.stride, this.padding,
+                                this.dilation, this.ceilMode);
   }
 
   override forward(x: Tensor): Tensor {
@@ -2112,7 +2114,8 @@ export class MaxPool3d extends Module {
 
   /** The values and the positions that produced them, as `MaxPool2d.pick`. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
-    return x.maxPoolWithIndices(this.kernelSize, this.stride);
+    return x.maxPoolWithIndices(this.kernelSize, this.stride, this.padding,
+                                this.dilation, this.ceilMode);
   }
 
   override forward(x: Tensor): Tensor {

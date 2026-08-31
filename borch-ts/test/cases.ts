@@ -4278,6 +4278,40 @@ function addUnpool(out: Map<string, Case>): void {
     x.poolND("max", 3, 2, 1, false, true, null, 2).sum().backward();
     return gradOf(x, "maxPool dilation");
   });
+  // ── the same three on the path that also hands back the positions ─────────
+  //
+  // The plain pooling goes through the shader; this one went through a **window list**
+  // whose entry was `[start, end)`. An interval cannot skip cells and cannot hang off
+  // an edge, so all three were refused here while the same three worked one call away.
+  // Written as the positions themselves the difference disappears.
+  const WINDOWED: Array<[string, number, number, number, boolean]> = [
+    // tag, stride, padding, dilation, ceilMode
+    ["padding", 2, 1, 1, false],
+    ["dilation", 3, 0, 2, false],
+    ["ceil", 2, 0, 1, true],
+    ["셋 다", 2, 1, 2, true],
+  ];
+  for (const [tag, stride, pad, dil, ceil] of WINDOWED) {
+    for (const part of [0, 1]) {
+      out.set(`unpool::자리::max_pool2d(자리 내놓기, ${tag})[${part}]`, () => {
+        const got = dilPlane().maxPoolWithIndices(3, stride, pad, dil, ceil);
+        return part === 0 ? got.values : got.indices;
+      });
+    }
+    out.set(`unpool::자리::MaxPool2d(자리 내놓기, ${tag})`,
+      () => new nn.MaxPool2d(3, stride, pad, dil, true, ceil)
+        .pick(dilPlane()).indices);
+  }
+  // **The positions have to be usable**, which comparing the pooled values cannot
+  // show: an index naming a cell the window never covered is caught here, where the
+  // unpooling puts the value back at it. The padding and not the dilation, because
+  // `maxUnpool` has none — given one it would rebuild a plane of a different size from
+  // the one the indices point into.
+  out.set("unpool::자리::max_unpool2d(창이 있는 자리)", () => {
+    const got = dilPlane().maxPoolWithIndices(3, 2, 1, 1, false);
+    return got.values.maxUnpool(got.indices, 3, 2, 1, [7, 8]);
+  });
+
   // torch's `avg_pool2d` has no dilation at all, and neither has this one.
   out.set("unpool::자리::avg_pool2d(dilation)=둘 다 거절", () => {
     try {

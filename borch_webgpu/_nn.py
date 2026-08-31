@@ -131,21 +131,17 @@ def _pool_with_indices(x, size, stride=None, padding=0, dilation=1,
     turned into a tuple — torch gives a tuple and textbook code unpacks it as
     `out, idx = ...`.
 
-    **The three window arguments are refused here and not on the plain path.** That
-    one goes through the pooling shader, which takes a padding, a dilation and a
-    ceiling; this one goes through the window-list machinery, where a window is
-    `[start, end)` per axis — no step between the cells it reads, and no room to hang
-    off an edge. Two paths, one of them carried across and one not, and the difference
-    is the shape of the thing that carries the positions.
+    **The three window arguments were refused here and not on the plain path**, and
+    the difference was the shape of the thing that carries the positions: that one
+    goes through the pooling shader, which takes a padding, a dilation and a ceiling,
+    while this one went through a window list whose entry was `[start, end)` — an
+    interval, with no step between the cells it reads and no room to hang off an edge.
+    A list of positions is both, so the refusal is gone with the interval.
     """
-    if padding or dilation != 1 or ceil_mode:
-        from borch._base import _unsupported
-
-        _unsupported("max_pool with return_indices and (padding, dilation, "
-                     "ceil_mode) — the window list has no step and no edge")
     h = handle(x)
     got = (h.adaptiveMaxPoolWithIndices(size) if adaptive
-           else h.maxPoolWithIndices(size, stride if stride is not None else size))
+           else h.maxPoolWithIndices(size, stride if stride is not None else size,
+                                     padding, dilation, bool(ceil_mode)))
     return wrap(got.values), wrap(got.indices)
 
 
@@ -2441,10 +2437,9 @@ def _max_pool_layer(name, wide=False):
     way earlier, when the maximum's kernel grew the guard the average had.
 
     `return_indices` still keeps the Python path: it hands back a pair, and the layer
-    that consumes those positions reads them from here. **That path is where `padding`,
-    `dilation` and `ceil_mode` are still refused** — it goes through the window-list
-    machinery rather than the shader, and a window list is `[start, end)` per axis with
-    no step and no room to hang off an edge.
+    that consumes those positions reads them from here. That path used to refuse the
+    same three, because its window was an interval rather than a list of positions;
+    `_pool_with_indices` says what changed.
     """
     def make(kernel_size=2, stride=None, padding=0, dilation=1,
              return_indices=False, ceil_mode=False):

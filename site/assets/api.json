@@ -5505,7 +5505,7 @@
       },
       {
        "name": "maxPoolWithIndices",
-       "signature": "maxPoolWithIndices(kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }",
+       "signature": "maxPoolWithIndices(kernel?: number, stride?: number, padding?: number, dilation?: number, ceilMode?: boolean): { values: Tensor; indices: Tensor; }",
        "doc": "",
        "torch": "max_pool_with_indices",
        "section": {

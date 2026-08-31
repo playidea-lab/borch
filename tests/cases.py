@@ -5898,6 +5898,48 @@ def unpool_cases(inp=None):
         lambda L: _both_stop(L, lambda M: M.nn.functional.avg_pool2d(
             M.tensor(_DIL), 2, dilation=2)))
 
+    # ── the same three on the path that also hands back the positions ────────
+    #
+    # The plain pooling went through the shader, which takes a padding, a dilation and
+    # a ceiling; this one went through a **window list** whose entry was `[start,
+    # end)`. An interval cannot skip cells and cannot hang off an edge, so all three
+    # were refused here while the same three arguments worked one call away. Written
+    # as the positions themselves the difference disappears — a padded cell is `-inf`
+    # in torch and never wins, so leaving it out of the list is the same answer.
+    #
+    # **The positions are the point, not the values.** A window that reads the wrong
+    # cells can still report the right maximum (the maximum of a superset often is),
+    # and the index is what `MaxUnpool` sends the gradient back through — so both
+    # halves are asked, and the unpooling after them.
+    for _tag, _kw in (("padding", {"padding": 1, "stride": 2}),
+                      ("dilation", {"dilation": 2}),
+                      ("ceil", {"stride": 2, "ceil_mode": True}),
+                      ("셋 다", {"padding": 1, "stride": 2, "dilation": 2,
+                                 "ceil_mode": True})):
+        for _part in (0, 1):
+            add(f"자리::max_pool2d(자리 내놓기, {_tag})[{_part}]",
+                lambda L, k=_kw, i=_part: F(L).max_pool2d(
+                    L.tensor(_DIL), 3, return_indices=True, **k)[i])
+        add(f"자리::MaxPool2d(자리 내놓기, {_tag})",
+            lambda L, k=_kw: L.nn.MaxPool2d(3, return_indices=True, **k)(
+                L.tensor(_DIL))[1])
+
+    def unpool_windowed(L):
+        """**The positions have to be usable.** An index that names a cell the window
+        never covered is not caught by comparing the pooled values — it is caught here,
+        where the unpooling puts the value back at that cell.
+
+        **The padding and not the dilation**, because `max_unpool2d` has no dilation:
+        given one it would rebuild a plane of a different size from the one the indices
+        point into, and torch refuses the mismatch before any of that is measured.
+        """
+        out, idx = F(L).max_pool2d(L.tensor(_DIL), 3, stride=2, padding=1,
+                                   return_indices=True)
+        return F(L).max_unpool2d(out, idx, 3, stride=2, padding=1,
+                                 output_size=(7, 8))
+
+    add("자리::max_unpool2d(창이 있는 자리)", unpool_windowed)
+
     # ── gradients ──
     def grad_pool(L):
         x = L.tensor(plane, requires_grad=True)
