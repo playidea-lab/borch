@@ -185,13 +185,36 @@ DELIBERATE = {
     "onnx": "exporting is deployment's job and this is grammar practice",
     "quantiz": "quantisation means something only on real hardware",
     "sparse": "outside the curriculum",
-    # **The eight one-dimensional ones are done** (`fft`, `ifft`, `rfft`, `irfft`,
-    # `fftfreq`, `rfftfreq`, `fftshift`, `ifftshift`). What is not done is 2-D, N-D and the
-    # fifteen Hermitian variants. While this read only "outside the curriculum", those
-    # eight were already running — declining a whole namespace hides **what is done there
-    # too.**
-    "fft": "only the eight one-dimensional ones — 2-D, N-D and the Hermitian variants are outside the curriculum",
-    "special": "outside the curriculum",
+    # **`fft` was here and is now surveyed** — see `_spaces()`. The row said "only the
+    # eight one-dimensional ones — 2-D, N-D and the Hermitian variants are outside the
+    # curriculum", and measured against real torch on a `(4, 6)` input, `fft2`, `ifft2`,
+    # `rfft2`, `irfft2`, `hfft2`, `ihfft2`, `fftn`, `ifftn`, `rfftn`, `irfftn`, `hfftn`,
+    # `ihfftn` and `hfft` all compute and all agree to 1e-4. Twenty-two of the
+    # twenty-three names are here.
+    #
+    # **The comment that used to sit on this line said the lesson and then the line went
+    # stale in exactly that way.** It read: *declining a whole namespace hides what is
+    # done there too* — written when the eight one-dimensional ones were found running
+    # under a blanket "outside the curriculum". The row was narrowed instead of removed,
+    # the rest were built, and nothing told the row. A reason that names its own failure
+    # mode is not protected from it; only a survey is.
+    # **Measured before this sentence was trusted, because the row above it had just
+    # been found false the same way.** Of `special`'s 57 public names, 20 are already
+    # here under another name and would be pure forwarding — `expit` is `sigmoid`,
+    # `gammaln` is `lgamma`, `psi` is `digamma`, and `erf`, `erfc`, `erfinv`, `i0`,
+    # `exp2`, `expm1`, `log1p`, `logit`, `round`, `sinc`, `modified_bessel_i0`,
+    # `log_softmax`, `logsumexp`, `polygamma`, `softmax` and `xlogy` are the same
+    # function twice. The other 36 are real arithmetic this library does not have:
+    # the Bessel, Airy, `ndtr`, Chebyshev, Hermite, Laguerre and Legendre families,
+    # plus `zeta`, `gammainc` and `multigammaln`.
+    #
+    # So the reason is honest about the 36 and **generous to itself about the 20**, and
+    # that half is written here rather than left for the next person to discover the way
+    # `fft` was discovered. A blanket over a namespace hides what is done there too.
+    "special": "outside the curriculum — 36 of its 57 names are arithmetic that is not "
+               "here (Bessel, Airy, ndtr, the orthogonal-polynomial families, zeta). "
+               "The other 20 are names this library already answers to and would be "
+               "forwarding, and that is a debt this row admits rather than hides",
     "futures": "outside the curriculum",
     "package": "outside the curriculum",
     "profiler": "outside the curriculum",
@@ -319,6 +342,7 @@ NOT_API = {
     "nn.functional.Tensor": "an imported label — not F's API",
     "transforms.functional.Tensor": "an imported label — not that namespace's API",
     "optim.lr_scheduler.Tensor": "an imported label — not that namespace's API",
+    "fft.Tensor": "an imported label — not that namespace's API",
     "optim.lr_scheduler.Optimizer": "an imported label — not that namespace's API",
     "ScalingType": "an imported label — an fp8 scaling kind",
     "SwizzleType": "an imported label — an fp8 layout kind",
@@ -968,6 +992,10 @@ NOT_API_SIZE = {
     "nn.functional": 10,
     "optim": 1,
     "optim.lr_scheduler": 2,
+    # `fft.Tensor` alone — the same imported label already written down for
+    # `optim.lr_scheduler` and `transforms.functional`. Written the day `fft` stopped
+    # being declined as a whole namespace and started being surveyed.
+    "fft": 1,
     "utils.data": 2,
     "transforms.functional": 1,
 }
@@ -996,6 +1024,12 @@ def _spaces():
            ("optim", torch.optim, borch.optim),
            ("optim.lr_scheduler", torch.optim.lr_scheduler, borch.optim.lr_scheduler),
            ("linalg", torch.linalg, borch.linalg),
+           # **Added because the blanket reason above it had gone false.** `fft` was
+           # declined at the namespace level while twenty-two of its twenty-three names
+           # were implemented and agreeing with torch — so the survey was under-counting
+           # this library by twenty-two, and the one number this file exists to produce
+           # was wrong in the direction nobody checks.
+           ("fft", torch.fft, borch.fft),
            ("utils.data", torch.utils.data, borch.utils.data)]
     if torchvision is not None:
         got += [("transforms", torchvision.transforms, borchvision.transforms),
