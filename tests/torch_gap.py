@@ -407,10 +407,38 @@ SKIPPED = {
     "set_autocast_*": "mixed precision — as above",
     "is_autocast_*": "mixed precision — as above",
     "GradScaler": "mixed precision's loss scaling — as above",
-    "get_num_threads": "inside one tab there is no thread count to choose",
-    "set_num_threads": "inside one tab there is no thread count to choose",
-    "get_num_interop_threads": "it is inside one tab",
-    "set_num_interop_threads": "it is inside one tab",
+    # **These four said "inside one tab there is no thread count to choose", and that
+    # was measured to be false.** In the runner's own page: `navigator.hardwareConcurrency`
+    # is 16, `Worker` is a function, and a worker posted `9.5` came back with `20` — so a
+    # second thread ran arithmetic. There is a count and there are threads.
+    #
+    # Nothing in this repository had ever asked. `Web Worker`, `hardwareConcurrency` and
+    # `SharedArrayBuffer` appear nowhere in `tests/`, `borch/`, `borch_webgpu/`,
+    # `borch-ts/src/` or `site/` — zero occurrences. A reason that asserts an absence
+    # nobody looked for is the shape this file warns about twenty lines from here: not
+    # counted is visible, **not counted for a false reason** is not.
+    #
+    # What is actually missing is two things, and neither is a thread.
+    "get_num_threads":
+        "**the answer is a property of the machine, so there is nothing to compare it "
+        "to.** Measured on the machine that freezes the golden, torch answers 12 here "
+        "and 16 for the interop pair — its own two numbers disagree because both are "
+        "derived from the core count. Frozen, that is a case that passes on one laptop "
+        "and fails on the next, which is the one thing the golden may not be. This "
+        "library runs its ops on the calling thread, so the honest answer is 1, and 1 "
+        "against torch's 12 is a divergence by design rather than a defect to find",
+    "get_num_interop_threads": "as `get_num_threads` — the machine's number, not ours",
+    "set_num_threads":
+        "**`SharedArrayBuffer` is `undefined` and `crossOriginIsolated` is false** — "
+        "measured in `site/index.html` by `tests/browser/platform_claims.py`, and the "
+        "published site cannot differ because GitHub Pages offers no way to set "
+        "response headers, which is what COOP/COEP are. "
+        "Workers exist, but without shared memory every hand-off is a structured-clone "
+        "copy or a transfer that takes the buffer away from the sender — and torch's "
+        "intra-op pool is threads over *one* buffer. So the knob would set a number no "
+        "pool reads: an argument accepted and never used, which is the defect class "
+        "`tests/test_unread_arguments.py` exists to refuse",
+    "set_num_interop_threads": "as `set_num_threads` — no shared buffer for a pool to work over",
     "Stream": "device streams — there is one",
     "Event": "device events — there is one stream to measure",
     "get_device_module": "there is one device",
@@ -497,7 +525,28 @@ SKIPPED = {
     # Exchange with the outside. Inside a browser there is nobody to hand to.
     "from_dlpack": "DLPack exchange — there is nobody to exchange with inside a browser",
     "to_dlpack": "DLPack exchange — as above",
-    "from_file": "file mapping — a browser has no such file layer",
+    # **This said "a browser has no such file layer", and the browser has one.** Measured
+    # in the runner's page: `showOpenFilePicker` is a function, `navigator.storage
+    # .getDirectory` is a function, and a round trip through OPFS worked — wrote
+    # `[7, 8, 9]` into `probe.bin` and read the same three bytes back.
+    #
+    # The word that was doing the work is **mapping**, and it is the one the reason
+    # dropped. `from_file` returns a tensor whose storage *is* the file: pages arrive
+    # when touched, `shared=True` writes through, and two readers see one buffer. The
+    # web gives none of that — a file is read into an ArrayBuffer, whole and eagerly,
+    # and `createSyncAccessHandle` (the nearest thing to a file descriptor) came back
+    # `undefined` because it exists on workers only. Nothing named like `mmap` exists
+    # anywhere on `self`.
+    #
+    # Same shape as the four thread rows above: the conclusion was right and the
+    # sentence proving it was false, which is worse than being wrong outright, because
+    # a false sentence is one nobody re-measures.
+    "from_file":
+        "file **mapping**. A browser has a file layer — OPFS and the File System Access "
+        "API both answer, and a write-then-read round trip through OPFS was measured — "
+        "but a file there is read into an ArrayBuffer whole. There is no paging on "
+        "touch and no `shared=True` writing through to one buffer two readers see, "
+        "which is what this name returns",
 
     # Debug switches. We have neither nondeterminism to turn on nor an anomaly detector.
     "use_deterministic_algorithms": "there is no nondeterministic kernel to choose",

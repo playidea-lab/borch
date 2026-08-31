@@ -95,6 +95,20 @@ jobs:
           BORCH_HEADLESS: "1"
         run: uv run --with playwright python tests/browser/clipped.py
 
+      # **Some declined names are declined because of what a browser cannot do, and a
+      # browser can start doing it.** Four of them said a tab has no thread count to
+      # choose; the tab has sixteen cores and runs workers, and that sentence had been
+      # false for the whole life of the library because nothing ever asked. This asks —
+      # it is a second of probes and no golden, so it sits with the scan above.
+      #
+      # Linux matters here more than for the scan. `crossOriginIsolated` is the load-
+      # bearing measurement, it is a property of what the server sends, and the Macs
+      # this repository is written on are not the machine that publishes the site.
+      - name: whether the reasons still say what the browser says
+        env:
+          BORCH_HEADLESS: "1"
+        run: uv run --with playwright python tests/browser/platform_claims.py
+
       - name: compare the values in a browser
         env:
           BORCH_HEADLESS: "1"
