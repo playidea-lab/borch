@@ -4027,9 +4027,24 @@ export class Tensor implements Node<Tensor> {
 
   /**
    * Spreads windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.
+   *
+   * **A 3-D input is one unbatched sample**, which is torch's rule and was missing on
+   * both sides — the core refused *anything but 4-D*, half right. `(2, 3, 4)` with a
+   * 2×2 kernel comes back as `(8, 6)`: `(C·kh·kw, L)` with no batch axis. Anything
+   * else is refused with torch's own wording.
    */
   unfoldIm2col(kernel: number | [number, number], dilation = 1, padding = 0,
                stride = 1): Tensor {
+    if (this.shape.length === 3) {
+      const got = this.reshape([1, ...this.shape])
+        .unfoldIm2col(kernel, dilation, padding, stride);
+      return got.reshape(got.shape.slice(1));
+    }
+    if (this.shape.length !== 4) {
+      throw new RuntimeError(
+        "Expected 3D or 4D (batch mode) tensor with possibly 0 batch size and other "
+        + `non-zero dimensions for input, but got: [${this.shape.join(", ")}]`);
+    }
     const [n, c, h, w] = this.shape as [number, number, number, number];
     const [kh, kw] = pairOf(kernel);
     const [ph, pw] = pairOf(padding);
@@ -4046,9 +4061,23 @@ export class Tensor implements Node<Tensor> {
   /**
    * Folds the spread back. **Overlapping positions are added** — that is
    * what this function means.
+   *
+   * **The unbatched form is 2-D here, one rank below `unfoldIm2col`'s**, because this
+   * side has already folded the channel and the kernel into one axis. `(8, 6)` comes
+   * back as `(2, 3, 4)`; 4-D is refused, with torch's own wording.
    */
   fold(outputSize: number | [number, number], kernel: number | [number, number],
        dilation = 1, padding = 0, stride = 1): Tensor {
+    if (this.shape.length === 2) {
+      const got = this.reshape([1, ...this.shape])
+        .fold(outputSize, kernel, dilation, padding, stride);
+      return got.reshape(got.shape.slice(1));
+    }
+    if (this.shape.length !== 3) {
+      throw new RuntimeError(
+        "Expected 2D or 3D (batch mode) tensor for input with possibly 0 batch size "
+        + `and non-zero dimensions for input, but got: [${this.shape.join(", ")}]`);
+    }
     const n = this.shape[0] ?? 1;
     const [kh, kw] = pairOf(kernel);
     const [oh, ow] = pairOf(outputSize);

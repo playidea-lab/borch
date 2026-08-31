@@ -4837,6 +4837,51 @@ function addMisc(out: Map<string, Case>): void {
     return gradOf(x, "unfold");
   });
 
+  // ── the unbatched rank, which the refusal had half right ──────────────
+  //
+  // The core said *anything but 4-D*, and torch takes 3-D as one unbatched sample:
+  // `(C, H, W)` comes back as `(C·kh·kw, L)` with no batch axis. `fold`'s unbatched
+  // form is one rank lower again — 2-D, because the channel and the kernel are already
+  // one axis there — and the pair is asked together because taking them for the same
+  // number is the mistake available.
+  const uf3d = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]);
+  const ufOpts: [string, [number, number, number]][] = [
+    ["기본", [1, 0, 1]], ["stride=2", [1, 0, 2]],
+    ["padding=1", [1, 1, 1]], ["dilation=2", [2, 0, 1]],
+  ];
+  for (const [tag, [dil, pad, stride]] of ufOpts) {
+    out.set(`misc::unfold(배치 없이, ${tag})`,
+      () => uf3d().unfoldIm2col(2, dil, pad, stride));
+  }
+  out.set("misc::fold(배치 없이)",
+    () => uf3d().unfoldIm2col(2).fold([3, 4], 2));
+  // The unbatched path goes through the batched one and reshapes, so the gradient has
+  // to come back out of that reshape with the batch axis gone — a value case cannot
+  // see a gradient that kept it.
+  out.set("misc::grad::unfold(배치 없이)", () => {
+    const x = uf3d();
+    x.requiresGrad = true;
+    seeded(x.unfoldIm2col(2)).backward();
+    return gradOf(x, "unfold/unbatched");
+  });
+  // torch's wording, compared as a string — an invented message would pass a check
+  // that only asks whether something was raised.
+  const rankRefusal = (name: string, body: () => unknown) => {
+    out.set(`misc::${name}=거절 문구`, () => {
+      try {
+        body();
+      } catch (err) {
+        const head = (err as Error).message.split(",")[0] ?? "";
+        return head.startsWith("Expected")
+          ? head : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "안 던졌다";
+    });
+  };
+  rankRefusal("unfold(5차원)", () => Tensor.zeros([2, 3, 4, 5, 6]).unfoldIm2col(2));
+  rankRefusal("fold(4차원)", () => Tensor.zeros([2, 3, 8, 6]).fold([3, 4], 2));
+
   const w = Array.from({ length: 24 }, (_, i) => i / 10);
   const bias = [0.5, -0.25];
   const a1 = () => Tensor.from([1, 2, 3], [1, 3]);

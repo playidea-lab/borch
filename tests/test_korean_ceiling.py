@@ -275,7 +275,11 @@ CEILINGS = {
     # 4119 → 4140. Twenty-one, in `interpolate`'s four gradient case names
     # (`… 의 기울기`) — keys in `golden.json` — and the reason written beside the
     # `fname::` row in `run.py` for the mode a compile-time union cannot refuse.
-    "borch-ts/test": 4140,
+    # 4140 → 4170. Thirty, in `unfold`/`fold`'s new case names — the four
+    # `배치 없이` suffixes, `grad::unfold(배치 없이)`, `fold(배치 없이)` and the two
+    # `=거절 문구` — plus the `안 던졌다` verdict. All are keys or values in
+    # `golden.json`, so both sides spell them the same.
+    "borch-ts/test": 4170,
 }
 
 

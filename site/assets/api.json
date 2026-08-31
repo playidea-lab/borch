@@ -1675,23 +1675,23 @@
       {
        "name": "unfoldIm2col",
        "signature": "unfoldIm2col(kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor",
-       "doc": "Spreads windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.",
+       "doc": "Spreads windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.\n\n**A 3-D input is one unbatched sample**, which is torch's rule and was missing on\nboth sides — the core refused *anything but 4-D*, half right. `(2, 3, 4)` with a\n2×2 kernel comes back as `(8, 6)`: `(C·kh·kw, L)` with no batch axis. Anything\nelse is refused with torch's own wording.",
        "torch": "unfold_im2col",
        "section": {
         "ko": "Windows",
         "en": "Windows"
        },
-       "doc_ko": "창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`."
+       "doc_ko": "창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`.\n\n**3 차원 입력은 배치 없는 표본 하나다.** torch 의 규칙이고 양쪽 다 없었다 — 코어는 *4 차원이 아니면 전부* 를 거절하고 있었는데 절반만 맞았다. `(2, 3, 4)` 에 2×2 커널이면 `(8, 6)` 이 나온다: 배치 축 없는 `(C·kh·kw, L)`. 그 밖의 차원은 torch 자신의 문구로 거절한다."
       },
       {
        "name": "fold",
        "signature": "fold(outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor",
-       "doc": "Folds the spread back. **Overlapping positions are added** — that is\nwhat this function means.",
+       "doc": "Folds the spread back. **Overlapping positions are added** — that is\nwhat this function means.\n\n**The unbatched form is 2-D here, one rank below `unfoldIm2col`'s**, because this\nside has already folded the channel and the kernel into one axis. `(8, 6)` comes\nback as `(2, 3, 4)`; 4-D is refused, with torch's own wording.",
        "section": {
         "ko": "Windows",
         "en": "Windows"
        },
-       "doc_ko": "편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다."
+       "doc_ko": "편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다.\n\n**배치 없는 꼴은 여기서 2 차원**으로, `unfoldIm2col` 보다 한 랭크 아래다. 이쪽은 채널과 커널이 이미 한 축으로 접혀 있기 때문이다. `(8, 6)` 은 `(2, 3, 4)` 로 돌아오고, 4 차원은 torch 자신의 문구로 거절한다."
       },
       {
        "name": "bilinear",

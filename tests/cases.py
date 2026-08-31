@@ -6773,6 +6773,53 @@ def misc_cases(inp=None):
 
     add("grad::unfold", unfold_grad)
 
+    # ── the unbatched rank, which the refusal had half right ────────────
+    #
+    # It said *anything but 4-D*, and torch takes 3-D as **one unbatched sample**:
+    # `(C, H, W)` comes back as `(C·kh·kw, L)` with no batch axis. `fold`'s unbatched
+    # form is one rank lower again — 2-D, because the channel and the kernel are
+    # already folded into one axis there — and the pair is asked together because
+    # taking them for the same number is the mistake available.
+    #
+    # 5-D and 4-D respectively are refused, and the wording is torch's own rather than
+    # invented: both messages were read off torch and are compared as strings.
+    _UF_3D = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    for _tag, _kw in (("기본", {}), ("stride=2", {"stride": 2}),
+                      ("padding=1", {"padding": 1}), ("dilation=2", {"dilation": 2})):
+        add(f"unfold(배치 없이, {_tag})",
+            lambda L, k=_kw: F(L).unfold(L.tensor(_UF_3D), 2, **k))
+    add("fold(배치 없이)",
+        lambda L: F(L).fold(F(L).unfold(L.tensor(_UF_3D), 2), (3, 4), 2))
+
+    def unfold_unbatched_grad(L):
+        """The unbatched path goes through the batched one and reshapes, so the
+        gradient has to come back out of that reshape with the batch axis gone. A
+        value case cannot see a gradient that kept it."""
+        x = L.tensor(_UF_3D.copy(), requires_grad=True)
+        out = F(L).unfold(x, 2)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(x, "unfold/unbatched")
+
+    add("grad::unfold(배치 없이)", unfold_unbatched_grad)
+
+    def rank_refusal(L, which):
+        """torch's wording, compared as a string — an invented message would pass a
+        check that only asks whether something was raised."""
+        shape = (2, 3, 4, 5, 6) if which == "unfold" else (2, 3, 8, 6)
+        bad = np.zeros(shape, dtype=np.float32)
+        try:
+            if which == "unfold":
+                F(L).unfold(L.tensor(bad), 2)
+            else:
+                F(L).fold(L.tensor(bad), (3, 4), 2)
+        except Exception as exc:                                # noqa: BLE001
+            head = str(exc).split(",")[0]
+            return head if head.startswith("Expected") else f"다른 문구 <{exc}>"
+        return "안 던졌다"
+
+    add("unfold(5차원)=거절 문구", lambda L: rank_refusal(L, "unfold"))
+    add("fold(4차원)=거절 문구", lambda L: rank_refusal(L, "fold"))
+
     # ── Bilinear ────────────────────────────────────────────────────────
     w = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4) / 10
     bias = np.array([0.5, -0.25], dtype=np.float32)

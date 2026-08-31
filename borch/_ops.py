@@ -6456,8 +6456,18 @@ def unfold_im2col(input, kernel_size, dilation=1, padding=0, stride=1):  # noqa:
     names are kept apart and this is attached to `F.unfold` alone.
     """
     t = _mat(input, "unfold", square=False)
+    # **torch takes 3-D as one unbatched sample**, and the refusal here said *anything
+    # but 4-D* — half right. Measured: `(2, 3, 4)` with a 2×2 kernel comes back as
+    # `(8, 6)`, which is `(C·kh·kw, L)` with no batch axis, and 5-D is refused with the
+    # message repeated below.
+    if t.data.ndim == 3:
+        got = unfold_im2col(t.reshape(1, *t.data.shape), kernel_size, dilation,
+                            padding, stride)
+        return got.reshape(*got.data.shape[1:])
     if t.data.ndim != 4:
-        _unsupported("unfold (anything but 4-D)")
+        raise RuntimeError(
+            "Expected 3D or 4D (batch mode) tensor with possibly 0 batch size and "
+            f"other non-zero dimensions for input, but got: {list(t.data.shape)}")
     kernel, dil = _pair(kernel_size), _pair(dilation)
     pad_, strd = _pair(padding), _pair(stride)
     padded = pad(t, (pad_[1], pad_[1], pad_[0], pad_[0]))
@@ -6471,6 +6481,17 @@ def fold(input, output_size, kernel_size, dilation=1, padding=0, stride=1):
     """Fold what was spread back. **Overlaps are added** — that is what this
     function means."""
     t = _wrap(input)
+    # **The unbatched form is 2-D here, one rank below `unfold`'s**, because this side
+    # has already folded the channel and the kernel into one axis. Measured: `(8, 6)`
+    # comes back as `(2, 3, 4)` and 4-D is refused.
+    if t.data.ndim == 2:
+        got = fold(t.reshape(1, *t.data.shape), output_size, kernel_size,
+                   dilation, padding, stride)
+        return got.reshape(*got.data.shape[1:])
+    if t.data.ndim != 3:
+        raise RuntimeError(
+            "Expected 2D or 3D (batch mode) tensor for input with possibly 0 batch "
+            f"size and non-zero dimensions for input, but got: {list(t.data.shape)}")
     kernel, dil = _pair(kernel_size), _pair(dilation)
     pad_, strd = _pair(padding), _pair(stride)
     out_h, out_w = _pair(output_size)
