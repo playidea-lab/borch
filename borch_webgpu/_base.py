@@ -697,16 +697,44 @@ class Tensor:
                 " is ambiguous)")
         return bool(self.item() != 0)
 
-    def is_contiguous(self):
+    def _memory_format(self, name, memory_format):
+        """torch's `memory_format`, **through the core's rule.**
+
+        `contiguous_format` and `preserve_format` name what already happens, so
+        they pass; `channels_last` names storage that does not exist, so it stops.
+        The core owns that decision — written again here it would be a second
+        wording for one rule, and the pair had already parted once on this
+        library's own `clone`.
+        """
+        from borch._tensor import Tensor as _Core
+
+        _Core._memory_format(self, name, memory_format)
+
+    def is_contiguous(self, memory_format=None):
         """**Always true** — GPU buffers are not shared out as views, so there is
         nowhere for non-contiguous to arise. In the core numpy's views make it
-        false after a transpose."""
+        false after a transpose.
+
+        **The `memory_format` seat was missing here and present on the core**, so
+        `x.is_contiguous(memory_format=torch.contiguous_format)` — a line torch
+        answers `True` to — stopped with *unexpected keyword argument*.
+        """
+        self._memory_format("is_contiguous", memory_format)
         return True
 
-    def contiguous(self):
+    def contiguous(self, memory_format=None):
         """Already contiguous, so it hands itself back. In the core a
         non-contiguous tensor gets copied."""
+        self._memory_format("contiguous", memory_format)
         return self
+
+    def clone(self, memory_format=None):
+        """**`clone` took no keywords at all on this side.** It reached borch.ts
+        through the forwarding path, which refuses every keyword by name, so
+        `x.clone(memory_format=torch.contiguous_format)` stopped with *`clone` does
+        not take keyword arguments* while the core answered it."""
+        self._memory_format("clone", memory_format)
+        return wrap(self._h.clone())
 
     def cfloat(self):
         """complex64. **Not a relabel** — borch.ts stores complex interleaved as
@@ -1474,6 +1502,25 @@ def handle(x):
     return wrap(x)._h
 
 
+def _gate_dtype(dtype):
+    """**A dtype with no storage stops here, in the core's wording.**
+
+    The name went across as a *label*: `str(dtype)` on the core's `uint8` is
+    `torch.uint8`, and borch.ts labelled the tensor with it and handed back
+    something whose dtype printed `torch.torch.uint8` — float32 storage wearing a
+    name for eight-bit integers. No exception anywhere.
+
+    The core keeps those names so `dtype=torch.uint8` says what is missing instead
+    of reading as a typo, and its `_AbsentDtype.np` is the gate that says it.
+    Reading the property here is the whole check: a real dtype answers, an absent
+    one raises with the sentence the core would have used.
+    """
+    from borch._base import dtype as _core_dtype
+
+    if isinstance(dtype, _core_dtype) and not isinstance(dtype, _DType):
+        dtype.np                                        # noqa: B018 — the gate
+
+
 def tensor(data, dtype=None, requires_grad=False):
     """Where `torch.tensor` sits. Takes numpy arrays, nested lists and numbers."""
     from pyodide.ffi import JsException
@@ -1482,6 +1529,7 @@ def tensor(data, dtype=None, requires_grad=False):
     if dtype is not None:
         # Something that shows as `torch.float32` still crosses to borch.ts as
         # `float32`.
+        _gate_dtype(dtype)
         name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
     elif arr.dtype.kind == "c":
         name = "complex64"
@@ -1695,8 +1743,15 @@ Tensor.layout = property(lambda self: _CoreLayout())
 
 
 def _CoreLayout():                                          # noqa: N802
-    from borch._tensor import _Layout
-    return _Layout()
+    """**The core's own `strided` object, not a fresh one.**
+
+    It used to build `_Layout()` per call, which read the same and made
+    `x.layout is torch.strided` false — torch's is true (measured), and `is` is how
+    a layout is compared as often as `==`. Borrowing the instance also means this
+    side cannot drift into a second layout vocabulary.
+    """
+    from borch._tensor import strided
+    return strided
 
 
 def _matrix_transpose(self):

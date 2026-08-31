@@ -335,7 +335,10 @@ CEILINGS = {
     # 출력`, `모양이 틀린 grad_outputs`, `.grad 를 안 건드린다`, `쌓는다` — and the
     # `있다`/`None` verdict strings two of them return. Keys or values in
     # `golden.json`, so both sides spell them the same.
-    "borch-ts/test": 4587,
+    # 4587 → 4601. Fourteen, in the `top::` skip reason — `난수::generator::`,
+    # `살펴보기::layout::`, `살펴보기::형식::`, which name the case groups the row
+    # accounts for. A reason in `run.py`, not case names.
+    "borch-ts/test": 4601,
 }
 
 

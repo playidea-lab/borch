@@ -1332,45 +1332,70 @@ def manual_seed(seed):
 
 
 class Generator:
-    """For keeping a separate stream, as in
-    `random_split(..., generator=g)`."""
+    """A stream of random numbers of its own, as in `random_split(..., generator=g)`.
+
+    **The core's class carries the same correction** — it built a fresh
+    `default_rng(seed)` on every `rng()` call, so two draws from one generator
+    returned the same numbers where torch's advance. The two are kept in step by
+    hand rather than shared because this side's `manual_seed` also reaches into
+    borch.ts, and a subclass that inherited would hide that.
+    """
 
     def __init__(self, device=None):
         self.seed = 0
+        self._rng = _np.random.default_rng(0)
 
     def manual_seed(self, seed):
         self.seed = seed
+        self._rng = _np.random.default_rng(seed)
         return self
 
+    def initial_seed(self):
+        return self.seed
+
     def rng(self):
-        return _np.random.default_rng(self.seed)
+        return self._rng
+
+
+def _stream(generator):
+    """The stream to draw from: the generator's own, or the global one. A generator
+    must not disturb the global stream, which is what keeping them apart means."""
+    return _rng if generator is None else generator.rng()
 
 
 def _shaped(shape):
     return shape[0] if len(shape) == 1 and isinstance(shape[0], (list, tuple)) else shape
 
 
-def randn(*shape, **kw):
+def randn(*shape, out=None, requires_grad=False, dtype=None, device=None,
+          generator=None):
     """Normal random numbers. **borch.ts has none, so they are made here.**
 
     The golden uses this only in error cases, where it looks at **whether it
     throws** rather than at values (`L.randn(3, 4) @ L.randn(3, 2)`). Once a case
     asks about values, this belongs in borch.ts properly — what is here goes
     through the CPU once.
+
+    **The `**kw` bag is gone, and `generator=` is why.** A bag is the only thing
+    that can swallow a keyword: `randn(3, generator=g)` was accepted and the
+    generator discarded, so two generators carrying the same seed produced
+    different numbers while the call looked exactly like torch's. `_no_out`'s own
+    docstring says the bags were removed for this reason; these two still had them.
     """
-    _no_out(kw.get("out"))
+    _no_out(out)
     from ._base import tensor as _t
 
-    return _t(_rng.standard_normal(tuple(_shaped(shape))).astype("float32"),
-              requires_grad=kw.get("requires_grad", False))
+    return _t(_stream(generator).standard_normal(tuple(_shaped(shape))).astype("float32"),
+              requires_grad=requires_grad)
 
 
-def rand(*shape, **kw):
-    _no_out(kw.get("out"))
+def rand(*shape, out=None, requires_grad=False, dtype=None, device=None,
+         generator=None):
+    _no_out(out)
     from ._base import tensor as _t
 
-    return _t(_rng.random(tuple(_shaped(shape))).astype("float32"),
-              requires_grad=kw.get("requires_grad", False))
+    return _t(_stream(generator).random(tuple(_shaped(shape))).astype("float32"),
+              requires_grad=requires_grad)
 
 
 def _no_out(out):
@@ -1393,7 +1418,7 @@ def _no_out(out):
 
 
 def randint(low, high=None, size=(), *, out=None, dtype=None,
-            requires_grad=False):
+            requires_grad=False, generator=None):
     """**`dtype` and `requires_grad` were falling into `**kw`.** torch declares both,
     keyword-only, and the label that came out here was whatever the body produced —
     `int64`, which is torch's default, so the values and the label agreed and nothing
@@ -1404,15 +1429,15 @@ def randint(low, high=None, size=(), *, out=None, dtype=None,
 
     if high is None:
         low, high = 0, low
-    made = _t(_rng.integers(low, high, tuple(size)).astype("int64"))
+    made = _t(_stream(generator).integers(low, high, tuple(size)).astype("int64"))
     return _made(made, {"dtype": dtype, "requires_grad": requires_grad})
 
 
-def randperm(n, *, out=None, dtype=None, requires_grad=False):
+def randperm(n, *, out=None, dtype=None, requires_grad=False, generator=None):
     _no_out(out)
     from ._base import tensor as _t
 
-    return _made(_t(_rng.permutation(n).astype("int64")),
+    return _made(_t(_stream(generator).permutation(n).astype("int64")),
                  {"dtype": dtype, "requires_grad": requires_grad})
 
 
@@ -1952,21 +1977,21 @@ def empty_like(t, **kw):
     return _kept(zeros(*_shape_list(t)), kw)
 
 
-def rand_like(t, **kw):
+def rand_like(t, generator=None, **kw):
     _no_out(kw.get("out"))
-    return _kept(rand(*_shape_list(t)), kw)
+    return _kept(rand(*_shape_list(t), generator=generator), kw)
 
 
-def randn_like(t, **kw):
+def randn_like(t, generator=None, **kw):
     _no_out(kw.get("out"))
-    return _kept(randn(*_shape_list(t)), kw)
+    return _kept(randn(*_shape_list(t), generator=generator), kw)
 
 
-def randint_like(t, low, high=None, **kw):
+def randint_like(t, low, high=None, generator=None, **kw):
     _no_out(kw.get("out"))
     if high is None:
         low, high = 0, low
-    return _kept(randint(low, high, tuple(_shape_list(t))), kw)
+    return _kept(randint(low, high, tuple(_shape_list(t)), generator=generator), kw)
 
 
 def scalar_tensor(value, **kw):
@@ -2403,7 +2428,7 @@ def histogramdd(t, bins=10, out=None):
     return out
 
 
-def normal(mean=0.0, std=1.0, size=None, **kw):
+def normal(mean=0.0, std=1.0, size=None, generator=None, **kw):
     """A normal sample. **With `std` at 0 it is the mean itself.**
 
     `dtype=` and `requires_grad=` were being swallowed by `**kw` — both times the
@@ -2413,13 +2438,14 @@ def normal(mean=0.0, std=1.0, size=None, **kw):
     _no_out(kw.get("out"))
     from ._base import tensor as _t
 
+    stream = _stream(generator)
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
         m = _np.asarray(wrap(mean).numpy(), dtype=_np.float64)
         s = _np.asarray(wrap(std).numpy(), dtype=_np.float64)
         m, s = _np.broadcast_arrays(m, s)
-        return _made(_t(_rng.normal(m, s).astype(_np.float32)), kw)
+        return _made(_t(stream.normal(m, s).astype(_np.float32)), kw)
     shape = () if size is None else tuple(size)
-    return _made(_t(_rng.normal(float(mean), float(std), shape).astype(_np.float32)), kw)
+    return _made(_t(stream.normal(float(mean), float(std), shape).astype(_np.float32)), kw)
 
 
 def bernoulli(t, p=None, *, generator=None, out=None):
@@ -2437,11 +2463,43 @@ def bernoulli(t, p=None, *, generator=None, out=None):
 
     if out is not None:
         raise NotImplementedError("`bernoulli(out=…)` is not carried across")
-    rng = generator.rng() if generator is not None else _rng
+    rng = _stream(generator)
     probs = (_np.full(tuple(int(v) for v in handle(wrap(t)).shape), float(p))
              if p is not None
              else _np.asarray(wrap(t).numpy(), dtype=_np.float64))
     return _t((rng.random(probs.shape) < probs).astype(_np.float32))
+
+
+def multinomial(probs, num_samples, replacement=True, *, generator=None, out=None):
+    """Draw indices in proportion to the weights.
+
+    **The name was not on this side at all**, so `multinomial` fell through to
+    borch.ts, which has no such name either, and came back *borch.ts does not have
+    `multinomial`* — a sentence about the far side for something the core has had
+    all along. Nothing asked, because no case did.
+
+    Drawn here rather than over there for `bernoulli`'s reason: the sampling is one
+    CPU pass over weights already coming down, and a WGSL kernel for it would be a
+    second copy of a distribution to keep in step.
+    """
+    _no_out(out)
+    from ._base import tensor as _t
+
+    from borch._ops import _multinomial_checks
+
+    stream = _stream(generator)
+    p = _np.asarray(wrap(probs).numpy(), dtype=_np.float64)
+    # **The core's four checks, borrowed rather than retyped.** Written again here
+    # they would be a second copy of torch's wording to keep in step, and the core's
+    # own copy had just been found accepting `replacement=False` and ignoring it.
+    _multinomial_checks(p, num_samples, replacement)
+    p = p / p.sum(axis=-1, keepdims=True)
+    if p.ndim == 1:
+        drawn = stream.choice(len(p), size=num_samples, replace=bool(replacement), p=p)
+        return _t(drawn.astype("int64"))
+    rows = [stream.choice(p.shape[-1], size=num_samples, replace=bool(replacement), p=row)
+            for row in p]
+    return _t(_np.asarray(rows, dtype=_np.int64))
 
 
 def bernoulli_(t, p=0.5, generator=None, **kw):
@@ -2458,7 +2516,7 @@ def bernoulli_(t, p=0.5, generator=None, **kw):
     from ._base import tensor as _t
 
     # As `bernoulli` above: the stream the caller asked for, not always the global one.
-    rng = generator.rng() if generator is not None else _rng
+    rng = _stream(generator)
     got = wrap(t)
     shape = tuple(int(v) for v in handle(got).shape)
     return _t((rng.random(shape) < p).astype(_np.float32))

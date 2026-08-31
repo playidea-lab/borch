@@ -414,8 +414,12 @@ SKIPPED = {
     "Stream": "device streams — there is one",
     "Event": "device events — there is one stream to measure",
     "get_device_module": "there is one device",
-    "get_default_device": "there is one device",
-    "set_default_device": "there is one device",
+    # `get_default_device` and `set_default_device` used to sit here under the same
+    # reason, and **"there is one device" is why they are easy, not why they are
+    # declined.** Every `device=` seat in this library already accepted `"cpu"` and
+    # refused the rest; the pair that names that directly was the only way to ask
+    # that was missing. `test_skipped_does_not_claim_what_we_actually_do` said so
+    # the moment they were written.
     "is_vulkan_available": "not a backend a browser chooses",
     "cudnn_is_acceptable": "there is no cuDNN",
     "AcceleratorError": "there is one accelerator",

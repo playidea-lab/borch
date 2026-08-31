@@ -191,19 +191,48 @@ _rng = _np.random.default_rng(0)
 
 
 class Generator:
-    """A container carrying a seed. `random_split(generator=...)` takes this —
-    without the split fixed there is no telling whether changing the model helped
-    or the split got lucky."""
+    """A stream of random numbers **of its own**, apart from the global one.
+
+    `random_split(generator=...)` takes this — without the split fixed there is no
+    telling whether changing the model helped or the split got lucky.
+
+    **It used to build a fresh `default_rng(seed)` on every `rng()` call**, which
+    made it a seed in a box rather than a generator: two draws from one generator
+    returned *the same numbers*. Nothing caught it because the one caller drew once.
+    Measured against torch, which advances — `rand(3, generator=g)` twice gives two
+    different triples, and re-seeding returns to the first.
+
+    So the stream is built once and kept. `manual_seed` rebuilds it, which is what
+    re-seeding means, and `initial_seed()` reports what it was last given.
+    """
 
     def __init__(self):
         self.seed = 0
+        self._rng = _np.random.default_rng(0)
 
     def manual_seed(self, seed):
         self.seed = seed
+        self._rng = _np.random.default_rng(seed)
         return self
 
+    def initial_seed(self):
+        """The seed this generator was last given. torch returns the number, not
+        the generator."""
+        return self.seed
+
     def rng(self):
-        return _np.random.default_rng(self.seed)
+        return self._rng
+
+
+def _stream(generator):
+    """The stream to draw from: the generator's own, or the global one.
+
+    **A generator must not disturb the global stream** (measured: seeding torch
+    globally, drawing through a generator, and drawing globally again gives what
+    the global seed said it would). Keeping them separate objects is the whole of
+    that rule.
+    """
+    return _rng if generator is None else generator.rng()
 
 
 def manual_seed(seed):
@@ -278,14 +307,20 @@ def set_rng_state(state):
     return None
 
 
-def randn(*shape, requires_grad=False):
+def randn(*shape, requires_grad=False, generator=None):
+    """**`generator=` was not a seat at all**, so `randn(3, generator=g)` — the line
+    every reproducible-sampling tutorial is written with — stopped with *unexpected
+    keyword argument*, while `multinomial` next door refused it by name and
+    `random_split` honoured it. Three answers to one question inside one library."""
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_rng.standard_normal(shape).astype(_DEFAULT_DTYPE), requires_grad)
+    return Tensor(_stream(generator).standard_normal(shape).astype(_DEFAULT_DTYPE),
+                  requires_grad)
 
 
-def rand(*shape, dtype=None, requires_grad=False, device=None):
+def rand(*shape, dtype=None, requires_grad=False, device=None, generator=None):
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return _made(_rng.random(shape).astype(_DEFAULT_DTYPE), dtype, requires_grad)
+    return _made(_stream(generator).random(shape).astype(_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
 def _out(result, out, name="op"):
@@ -386,25 +421,60 @@ def _no_out(kw):
         _unsupported("`out=` (writing into a tensor you made beforehand)")
 
 
-def randint(low, high, shape, dtype=None, requires_grad=False, *, out=None):
+def randint(low, high, shape, dtype=None, requires_grad=False, *, out=None,
+            generator=None):
     _no_out(out)
-    return _made(_rng.integers(low, high, shape).astype(_np.int64),
+    return _made(_stream(generator).integers(low, high, shape).astype(_np.int64),
                  dtype, requires_grad)
 
 
-def randperm(n, dtype=None, requires_grad=False, *, out=None):
+def randperm(n, dtype=None, requires_grad=False, *, out=None, generator=None):
     _no_out(out)
-    return _made(_rng.permutation(n).astype(_np.int64), dtype, requires_grad)
+    return _made(_stream(generator).permutation(n).astype(_np.int64),
+                 dtype, requires_grad)
 
 
 def multinomial(probs, num_samples, replacement=True, *, generator=None):
-    if generator is not None:
-        _unsupported("multinomial(generator=…)")
+    """**`generator=` was refused here and honoured one module over.**
+
+    `random_split(generator=…)` has taken one from the start, and it takes the same
+    class — so the refusal was not about a thing that did not exist but about a
+    stream this file was not reaching for. `_stream` is that reach.
+    """
+    stream = _stream(generator)
+    _multinomial_checks(probs.data, num_samples, replacement)
     p = probs.data / probs.data.sum(axis=-1, keepdims=True)
+    take = bool(replacement)
     if p.ndim == 1:
-        return Tensor(_rng.choice(len(p), size=num_samples, p=p).astype(_np.int64))
-    out = [_rng.choice(p.shape[-1], size=num_samples, p=row) for row in p]
+        return Tensor(stream.choice(len(p), size=num_samples, replace=take,
+                                    p=p).astype(_np.int64))
+    out = [stream.choice(p.shape[-1], size=num_samples, replace=take, p=row) for row in p]
     return Tensor(_np.asarray(out, dtype=_np.int64))
+
+
+def _multinomial_checks(data, num_samples, replacement):
+    """torch's four refusals, in torch's words, before anything is drawn.
+
+    **`replacement=False` was accepted and ignored.** `np.random.Generator.choice`
+    defaults to `replace=True`, so the argument reached nothing: measured, 184 of
+    200 draws of 4 from 4 weights came back with a repeat where torch has none, and
+    asking for more samples than there are weights — which torch refuses outright —
+    came back a full answer. Values that are plausible, an argument that reads as
+    honoured, and nothing raised anywhere.
+    """
+    if _np.ndim(data) not in (1, 2):
+        raise RuntimeError("prob_dist must be 1 or 2 dim")
+    if num_samples <= 0:
+        raise RuntimeError("cannot sample n_sample <= 0 samples")
+    if not _np.all(_np.isfinite(data)) or _np.any(data < 0):
+        raise RuntimeError(
+            "probability tensor contains either `inf`, `nan` or element < 0")
+    if _np.any(_np.sum(data, axis=-1) <= 0):
+        raise RuntimeError(
+            "invalid multinomial distribution (sum of probabilities <= 0)")
+    if not replacement and num_samples > _np.shape(data)[-1]:
+        raise RuntimeError(
+            "cannot sample n_sample > prob_dist.size(-1) samples without replacement")
 
 
 # ------------------------------------------------------------------- functions
@@ -3370,21 +3440,25 @@ def empty_like(t, dtype=None, requires_grad=False, *, out=None):
     return _made(_np.zeros_like(_wrap(t).data), dtype, requires_grad)
 
 
-def rand_like(t, dtype=None, requires_grad=False, *, out=None):
+def rand_like(t, dtype=None, requires_grad=False, *, out=None, generator=None):
     _no_out(out)
-    return _made(rand(*_wrap(t).data.shape).data, dtype, requires_grad)
+    return _made(rand(*_wrap(t).data.shape, generator=generator).data,
+                 dtype, requires_grad)
 
 
-def randn_like(t, dtype=None, requires_grad=False, *, out=None):
+def randn_like(t, dtype=None, requires_grad=False, *, out=None, generator=None):
     _no_out(out)
-    return _made(randn(*_wrap(t).data.shape).data, dtype, requires_grad)
+    return _made(randn(*_wrap(t).data.shape, generator=generator).data,
+                 dtype, requires_grad)
 
 
-def randint_like(t, low, high=None, dtype=None, requires_grad=False, *, out=None):
+def randint_like(t, low, high=None, dtype=None, requires_grad=False, *, out=None,
+                 generator=None):
     _no_out(out)
     if high is None:
         low, high = 0, low
-    return _made(randint(low, high, _wrap(t).data.shape).data, dtype, requires_grad)
+    return _made(randint(low, high, _wrap(t).data.shape, generator=generator).data,
+                 dtype, requires_grad)
 
 
 def scalar_tensor(value, dtype=None, requires_grad=False):
@@ -4532,12 +4606,11 @@ def resize_as_(input, the_template, memory_format=None):        # noqa: A002
     Its non-in-place twin `resize_as` really is `other` — the two do not share the
     name, which is the part nobody would guess.
 
-    `memory_format` is torch's second seat, **carried and refused** the way
-    `clone`'s is.
+    `memory_format` is torch's second seat, carried the way `clone`'s is — and
+    through the same shared rule, so the two cannot part again.
     """
-    if memory_format is not None:
-        _unsupported("Tensor.resize_as_(memory_format=…)")
     t, o = _wrap(input), _wrap(the_template)
+    t._memory_format("resize_as_", memory_format)
     flat = _np.asarray(t.data).reshape(-1)
     want = int(_np.prod(o.data.shape)) if o.data.shape else 1
     grown = _np.zeros(want, dtype=t.data.dtype)
@@ -9270,6 +9343,18 @@ class _Cuda(_Namespace):
         return False
 
     @staticmethod
+    def device_count():
+        """**Zero, which is torch's own answer on a machine without CUDA**
+        (measured — it returns 0 rather than raising, unlike `current_device`).
+
+        `if torch.cuda.device_count() > 1:` is the line every multi-GPU example
+        opens with, and it stopped here with `'_Cuda' object has no attribute
+        'device_count'` while `is_available()` beside it answered. One namespace
+        giving two kinds of answer to the same kind of question.
+        """
+        return 0
+
+    @staticmethod
     def manual_seed_all(seed):
         return None
 
@@ -9279,6 +9364,30 @@ class _Cuda(_Namespace):
 
 
 cuda = _Cuda()
+
+
+def get_default_device():
+    """The device new tensors land on. **There is one, and it is the CPU.**
+
+    torch returns a `device` object rather than a string (measured). Neither half
+    of this pair existed, and every `device=` seat in this library already accepts
+    `"cpu"` and refuses the rest — so the answer was being given all along under
+    every name but the one that asks for it directly.
+    """
+    return _device("cpu")
+
+
+def set_default_device(what=None):
+    """The other half. **`cpu` and `None` are accepted; anything else stops.**
+
+    Accepting a device that does not exist and then putting the tensor on the CPU
+    anyway is the shape this library refuses everywhere else — the values come out
+    right and the claim about where they are is false.
+    """
+    name = "cpu" if what is None else str(getattr(what, "type", what))
+    if name != "cpu":
+        _unsupported(f"set_default_device({name!r})")
+    return None
 
 
 # ── the in-place activations and the `upsample` aliases ─────────────────────
@@ -11264,7 +11373,8 @@ def nonzero_static(input, size, fill_value=-1):
     return Tensor(out)
 
 
-def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, *, out=None):
+def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, *, out=None,
+           generator=None):
     """A normal sample. **With `std` at 0 it is the mean itself** — the golden asks
     about that place.
 
@@ -11279,14 +11389,15 @@ def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, *, out
     `empty_strided` already refuses).
     """
     _no_out(out)
+    stream = _stream(generator)
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
         m = _np.asarray(_wrap(mean).data, dtype=_np.float64)
         s = _np.asarray(_wrap(std).data, dtype=_np.float64)
         m, s = _np.broadcast_arrays(m, s)
-        return _made(_np.asarray(_rng.normal(m, s)).astype(_DEFAULT_DTYPE),
+        return _made(_np.asarray(stream.normal(m, s)).astype(_DEFAULT_DTYPE),
                      dtype, requires_grad)
     shape = () if size is None else tuple(size)
-    return _made(_rng.normal(float(mean), float(std), shape).astype(_DEFAULT_DTYPE),
+    return _made(stream.normal(float(mean), float(std), shape).astype(_DEFAULT_DTYPE),
                  dtype, requires_grad)
 
 
@@ -11301,7 +11412,7 @@ def bernoulli(t, p=None, *, generator=None, out=None):
     """
     _no_out(out)
     t = _wrap(t)
-    rng = generator.rng() if generator is not None else _rng
+    rng = _stream(generator)
     probs = (_np.full(t.data.shape, float(p)) if p is not None
              else _np.asarray(t.data, dtype=_np.float64))
     return Tensor((rng.random(probs.shape) < probs).astype(t.data.dtype))

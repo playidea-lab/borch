@@ -544,14 +544,13 @@ class Tensor:
         return Tensor(self.data)
 
     def clone(self, memory_format=None):
-        """`memory_format` is torch's second seat — **carried and refused.**
+        """`memory_format` is torch's second seat.
 
-        There is one layout here, so honouring it is not possible and swallowing it
-        would answer for a request that was not met. Left out, torch's position
-        lands on nothing.
+        **It refused it with its own copy of the rule**, which is how it kept
+        refusing `contiguous_format` after `_memory_format` learned to accept it —
+        two seats, one of them updated. It goes through the shared one now.
         """
-        if memory_format is not None:
-            _unsupported("Tensor.clone(memory_format=…)")
+        self._memory_format("clone", memory_format)
         return self._make(self.data.copy(), (self,), lambda g: (g,))
 
     def numpy(self, *, force=False):
@@ -600,17 +599,24 @@ class Tensor:
         return self._make(out, (self,), lambda g: (g.astype(self.data.dtype),), "ToCopyBackward0")
 
     def _memory_format(self, name, memory_format):
-        """torch's `memory_format` on the dtype and device methods — **carried and
-        refused.**
+        """torch's `memory_format` on the dtype and device methods.
 
         Nine of them take it (`float`, `long`, `bool`, `double`, `int`, `cfloat`,
         `cpu`, `contiguous`, `is_contiguous`) and none of them had a seat for it, so
-        the position torch documents landed on nothing. There is one layout here;
-        honouring the argument is not possible and swallowing it would answer for a
-        request that was not met.
+        the position torch documents landed on nothing. The seat was added and
+        **refused everything that arrived in it**, saying there is one layout here
+        and honouring the argument is not possible.
+
+        That was half true. `contiguous_format` names row-major and
+        `preserve_format` names keep-what-you-have, and both are exactly what this
+        library does — so the refusal was refusing this library's own answer, and
+        `x.clone(memory_format=torch.contiguous_format)` stopped although nothing
+        about it was unavailable. `channels_last` and `channels_last_3d` really are
+        absent, and those two still stop.
         """
-        if memory_format is not None:
-            _unsupported(f"Tensor.{name}(memory_format=…)")
+        if memory_format is None or getattr(memory_format, "carried", False):
+            return
+        _unsupported(f"Tensor.{name}(memory_format={memory_format})")
 
     def float(self, memory_format=None):
         self._memory_format("float", memory_format)
@@ -2074,7 +2080,7 @@ Tensor.itemsize = property(lambda self: int(self.data.itemsize))
 Tensor.nbytes = property(lambda self: int(self.data.nbytes))
 Tensor.data_ptr = lambda self: int(self.data.__array_interface__["data"][0])
 Tensor.const_data_ptr = Tensor.data_ptr
-Tensor.layout = property(lambda self: _Layout())
+Tensor.layout = property(lambda self: strided)
 Tensor.output_nr = property(lambda self: 0)
 Tensor.volatile = property(lambda self: False)
 Tensor.name = property(lambda self: None)
@@ -2082,21 +2088,89 @@ Tensor.grad_dtype = property(lambda self: self.dtype)
 
 
 class _Layout:
-    """`torch.strided`. There is no other layout here — no sparse and no
-    mkldnn."""
+    """A layout, named. There is one storage here — `strided` — and the sparse
+    names exist so they can be *named*.
 
-    __slots__ = ()
+    **The value was here and the name was not.** `x.layout` printed
+    `torch.strided` all along while `borch.strided` was an `AttributeError`, so
+    `x.layout == torch.strided` — the way anybody actually asks — stopped with a
+    sentence about a missing module attribute, indistinguishable from a typo. A
+    library that answers a question has to offer the word the question is asked
+    with.
+
+    The sparse names are `_AbsentDtype`'s bargain one level up: naming
+    `sparse_coo` costs nothing and lets `x.layout == torch.sparse_coo` come back
+    `False`, which is the true answer. What is refused is *asking for* one — that
+    refusal lives at `to_sparse()` and `sparse_coo_tensor`, where the storage
+    would have to exist.
+    """
+
+    __slots__ = ("_name",)
+
+    def __init__(self, name):
+        self._name = name
 
     def __repr__(self):
-        return "torch.strided"
+        return f"torch.{self._name}"
 
     __str__ = __repr__
 
     def __eq__(self, other):
-        return repr(other) == "torch.strided"
+        return repr(other) == repr(self)
 
     def __hash__(self):
-        return hash("torch.strided")
+        return hash(repr(self))
+
+
+# The one this library's tensors are in. `Tensor.layout` hands back **this
+# object**, so `x.layout is borch.strided` is true as it is in torch (measured).
+strided = _Layout("strided")
+sparse_coo = _Layout("sparse_coo")
+sparse_csr = _Layout("sparse_csr")
+sparse_csc = _Layout("sparse_csc")
+sparse_bsr = _Layout("sparse_bsr")
+sparse_bsc = _Layout("sparse_bsc")
+
+
+class _MemoryFormat:
+    """`torch.contiguous_format` and its three siblings.
+
+    **Two of the four are what this library already does**, and all four were
+    refused. `_memory_format` said "there is one layout here; honouring the
+    argument is not possible" — true of `channels_last`, and false of
+    `contiguous_format` and `preserve_format`, which name row-major and
+    keep-what-you-have. Refusing those two refused this library's own answer, so a
+    line copied from torch asking for the layout it already has stopped.
+
+    `channels_last` and `channels_last_3d` are refused when passed, because NHWC
+    storage does not exist here and answering with NCHW would be answering a
+    request that was not met.
+    """
+
+    __slots__ = ("_name", "carried")
+
+    def __init__(self, name, carried):
+        self._name = name
+        # Whether this library can meet the request. Not "is it implemented" but
+        # "is what it asks for what already happens".
+        self.carried = carried
+
+    def __repr__(self):
+        return f"torch.{self._name}"
+
+    __str__ = __repr__
+
+    def __eq__(self, other):
+        return repr(other) == repr(self)
+
+    def __hash__(self):
+        return hash(repr(self))
+
+
+contiguous_format = _MemoryFormat("contiguous_format", True)
+preserve_format = _MemoryFormat("preserve_format", True)
+channels_last = _MemoryFormat("channels_last", False)
+channels_last_3d = _MemoryFormat("channels_last_3d", False)
 
 
 # ── the three names for transposition ───────────────────────────────────────

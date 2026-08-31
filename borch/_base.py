@@ -199,6 +199,13 @@ float16 = _AbsentDtype("float16", "float32")
 bfloat16 = _AbsentDtype("bfloat16", "float32")
 int16 = _AbsentDtype("int16", "int64")
 complex32 = _AbsentDtype("complex32", "complex64")
+# **`uint8` was the one narrow integer with no name at all**, and it is the one a
+# textbook writes most: an image is `uint8` before `ToTensor` divides it by 255,
+# and `read_image` hands one back. Without the name, `dtype=torch.uint8` stopped
+# with `module 'borch' has no attribute 'uint8'` while its four siblings said what
+# was missing. `int8` is its pair.
+uint8 = _AbsentDtype("uint8", "int64")
+int8 = _AbsentDtype("int8", "int64")
 half = float16
 short = int16
 chalf = complex32

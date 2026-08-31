@@ -45,7 +45,7 @@ from ._base import (
     BorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
     _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _resolve, _tensor_repr,
     _tensor_str, _unsupported, bool_, device, dtype, float32, float64, int64,
-    bfloat16, chalf, complex32, float16, half, int16, int32, long,
+    bfloat16, chalf, complex32, float16, half, int8, int16, int32, long, uint8,
     set_printoptions, short,
     # The complex dtype names. `complex128` and `cdouble` exist **as names
     # only** — trying to make one stops at the gate in `Tensor.__init__`.
@@ -57,6 +57,11 @@ from ._base import (
 from ._tensor import (
     Tensor, _CATEGORY, _DEFAULT_BY_CATEGORY, _DataDescriptor, _GradMode, _MinMax, _RANK,
     _category, _grad_mode, _no_bool_subtract, _promote, _scalar_category, _unbroadcast,
+    # **The words the questions are asked with.** `x.layout` and the
+    # `memory_format` seat both answered already; without these names the only way
+    # to ask was a string comparison against a `repr`.
+    channels_last, channels_last_3d, contiguous_format, preserve_format,
+    sparse_bsc, sparse_bsr, sparse_coo, sparse_csc, sparse_csr, strided,
 )
 from ._ops import _out                                   # noqa: E402
 from ._ops import (
@@ -129,10 +134,11 @@ from ._ops import (
     # Random state.
     get_rng_state, initial_seed, seed, set_rng_state,
     # Introspection.
-    can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
+    can_cast, finfo, get_default_device, get_default_dtype, iinfo, is_distributed,
+    is_floating_point,
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
     result_type,
-    set_default_dtype, typename,
+    set_default_device, set_default_dtype, typename,
     # Bitwise operations and integer maths. On `bool` they become logical
     # operations — torch looks at the dtype.
     bitwise_and, bitwise_left_shift, bitwise_not, bitwise_or,

@@ -685,7 +685,32 @@ NOT_PORTED = {
     # They land here for the reason already written above rather than a new one: five of
     # the six hand back a dtype as a value, and over there a dtype is a string. The sixth
     # is a refusal whose whole content is which of two functions you called.
-    "top::": (45, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
+    # 45 → 100. Fifty-five, in one shape: **the words the questions are asked with,
+    # and they are Python's words.** `torch.strided`, `torch.contiguous_format`,
+    # `torch.uint8`, `Generator` — over there a layout does not exist as a value, a
+    # memory format has no seat because there is one storage and nothing carries the
+    # argument, a dtype is a string, and randomness comes from a WGSL kernel seeded
+    # by `nn.manualSeed` rather than a stream object anyone can hold.
+    #
+    # `난수::generator::` 22 — `rand`/`randn`/`randint`/`randperm`/`normal`/
+    #                          `multinomial`/`bernoulli` each asked three ways (same
+    #                          seed, advancing, leaving the global stream alone),
+    #                          plus `initial_seed` and re-seeding. The stream is
+    #                          numpy's on both Python sides; borch.ts's is the
+    #                          shader's, so there is no object to pass.
+    # `난수::multinomial` 6  — the name is not in borch.ts at all; the binding draws
+    #                          it here for `bernoulli`'s reason (one CPU pass over
+    #                          weights already coming down).
+    # `살펴보기::layout::` 9 — a layout is a Python value; borch.ts has no vocabulary
+    #                          for one and `x.layout` is not a name over there.
+    # `살펴보기::형식::` 12  — `memory_format`. Every seat that takes it is a Python
+    #                          seat; borch.ts's `clone()` has no such parameter.
+    # the other 5           — `uint8`/`int8` as names without storage,
+    #                          `cuda.device_count`, `get_default_device`, and
+    #                          `clone(channels_last)`. `set_default_device` is not
+    #                          among them: torch's answer to it is to change the
+    #                          interpreter, so it cannot be a case at all.
+    "top::": (99, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
     # `spot::` was gone — 47 cases, all ported — then back with two, and gone again.
     #
     # The two were `unique(dim=)`, and the reason written here said it is a different

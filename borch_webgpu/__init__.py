@@ -165,12 +165,13 @@ from ._ops import (                                      # noqa: E402,F401
     set_default_dtype, typename,
 )
 from ._ops import (                                      # noqa: E402,F401
-    Generator, manual_seed, randint, randperm,
+    Generator, manual_seed, multinomial, randint, randperm,
 )
 from ._data import (                                     # noqa: E402,F401
     ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
     TensorDataset, WeightedRandomSampler, backend, cache_get, cache_put, cuda,
-    decode_cifar10, fetch_cached, random_split, utils,
+    decode_cifar10, fetch_cached, get_default_device, random_split,
+    set_default_device, utils,
 )
 from ._serialize import load, save                       # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
@@ -279,6 +280,26 @@ from math import e, inf, nan, pi                        # noqa: E402,F401
 # torch has it as plain `None` too — a marker that it means the same as
 # `x[:, None]`.
 newaxis = None
+
+# ── the words layouts and memory formats are named with ─────────────────────
+#
+# **The core's objects, not copies.** `x.layout` on this side hands back the
+# core's `strided`, so `x.layout is borch_webgpu.strided` is true the way torch's
+# is; a second set of instances here would read identically and compare false
+# under `is`. They are plain Python values with nothing to ask the GPU, which is
+# why they come from the core rather than through borch.ts — asking borch.ts
+# produced *borch.ts does not have `contiguousFormat`*, a sentence about the far
+# side for something neither side needed to hold.
+from borch._tensor import (                             # noqa: E402,F401
+    channels_last, channels_last_3d, contiguous_format, preserve_format,
+    sparse_bsc, sparse_bsr, sparse_coo, sparse_csc, sparse_csr, strided,
+)
+# The narrow dtypes that have no storage here. The core keeps the **names** so
+# `dtype=torch.uint8` says what is missing rather than reading as a typo, and
+# this side keeps them for the same reason and in the same wording.
+from borch._base import (                               # noqa: E402,F401
+    bfloat16, chalf, complex32, float16, half, int8, int16, short, uint8,
+)
 
 
 # ── the seven losses torch keeps at top level as well as under `F` ──────────

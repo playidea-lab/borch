@@ -5715,6 +5715,87 @@ def top_level_cases(inp=None):
 
     add("살펴보기::result_type(dtype,dtype)=거절", result_type_refuses_dtypes)
     add("살펴보기::get_default_dtype", lambda L: str(L.get_default_dtype()))
+
+    # ── the words the questions are asked with ────────────────────────────────
+    #
+    # `x.layout` printed `torch.strided` all along and `torch.strided` the **name**
+    # was an `AttributeError`, so `x.layout == torch.strided` — the way anybody
+    # actually asks — stopped with a sentence about a missing module attribute,
+    # indistinguishable from a typo. The `memory_format` seat was the same shape one
+    # step further on: it existed, refused everything, and two of the four values it
+    # refused name exactly what this library does.
+    for label in ("strided", "sparse_coo", "sparse_csr", "sparse_csc",
+                  "sparse_bsr", "sparse_bsc"):
+        add(f"살펴보기::layout::{label}", lambda L, n=label: str(getattr(L, n)))
+    add("살펴보기::layout::x.layout 은 strided 다",
+        lambda L: str(L.zeros(2).layout == L.strided))
+    # `is`, not only `==`. torch's `x.layout is torch.strided` is true, and the
+    # binding built a fresh object per call — reading identically and failing this.
+    add("살펴보기::layout::x.layout is strided",
+        lambda L: str(L.zeros(2).layout is L.strided))
+    add("살펴보기::layout::x.layout 은 sparse_coo 가 아니다",
+        lambda L: str(L.zeros(2).layout == L.sparse_coo))
+
+    for label in ("contiguous_format", "preserve_format", "channels_last",
+                  "channels_last_3d"):
+        add(f"살펴보기::형식::{label}", lambda L, n=label: str(getattr(L, n)))
+    # **The two this library already does.** Refusing them refused its own answer.
+    for label in ("contiguous_format", "preserve_format"):
+        add(f"살펴보기::형식::clone({label})",
+            lambda L, n=label: L.arange(6, dtype=L.float32).reshape(2, 3)
+            .clone(memory_format=getattr(L, n)))
+        add(f"살펴보기::형식::is_contiguous({label})",
+            lambda L, n=label: str(L.zeros(2, 3).is_contiguous(
+                memory_format=getattr(L, n))))
+        add(f"살펴보기::형식::contiguous({label})",
+            lambda L, n=label: L.arange(6, dtype=L.float32).reshape(2, 3)
+            .contiguous(memory_format=getattr(L, n)))
+    # And the two it does not. torch answers these; all three of ours stop.
+    # **Each at the rank it needs.** `channels_last` is NHWC and wants rank 4;
+    # `channels_last_3d` is NDHWC and wants rank 5 — asked at rank 4 torch stops
+    # too, and `refusal_case` needs torch to answer or it freezes a shared limit as
+    # our defect (it said so on the first run).
+    for label, rank in (("channels_last", (1, 2, 3, 4)),
+                        ("channels_last_3d", (1, 2, 3, 4, 5))):
+        cases.append((TOP_PREFIX + f"살펴보기::형식::clone({label})=우리는거절",
+                      refusal_case(lambda L, n=label, s=rank: L.zeros(*s)
+                                   .clone(memory_format=getattr(L, n)))))
+
+    # `uint8` was the one narrow integer with no name at all, and it is the one a
+    # textbook writes most — an image is `uint8` before `ToTensor` divides it by 255.
+    # Its four siblings said what was missing; this said `module has no attribute`,
+    # which is a typo's wording. **The name exists and the storage does not**, so
+    # torch answers and all three of ours stop.
+    for label in ("uint8", "int8"):
+        cases.append((TOP_PREFIX + f"살펴보기::{label} 은 이름뿐=우리는거절",
+                      refusal_case(lambda L, n=label:
+                                   L.tensor([1], dtype=getattr(L, n)))))
+
+    add("살펴보기::cuda.device_count", lambda L: str(L.cuda.device_count()))
+    add("살펴보기::get_default_device", lambda L: str(L.get_default_device()))
+    # **Neither `set_default_device` call is asked, and both were, once.**
+    #
+    # `refusal_case` and every case here run torch first, and torch's
+    # `set_default_device` changes the process rather than returning a value.
+    #
+    #   `'cuda'` — every tensor made afterwards goes to a device that is not on this
+    #     machine. Some 3,000 later rows became `AssertionError: Torch not compiled
+    #     with CUDA enabled`. Loud, and obvious within a minute.
+    #
+    #   `'cpu'` — **looks like a no-op and is not.** It installs a `DeviceContext`
+    #     torch-function mode on the global stack, and a mode on the stack makes
+    #     `has_torch_function_variadic` true everywhere after it, which sends
+    #     `F.l1_loss` down its override path — where `weight=` is dropped. Measured:
+    #     `l1_loss(x, y, reduction='none', weight=w)` gives `[[.5, 4, 9], [4, .25,
+    #     1]]` before the call and `[[.5, 2, 3], [1, .25, 1]]` after, the unweighted
+    #     answer, with no exception. Four `loss::weight::` rows turned red **and only
+    #     when another test had already dumped once in the same process** — green
+    #     alone, red in the suite, and nothing pointing at the cause.
+    #
+    # A case whose torch half changes the interpreter has no place in a shared table
+    # however harmless the argument reads. Ours is measured by hand instead: `'cpu'`
+    # passes and everything else stops with the core's wording, in both `_ops.py` and
+    # `_data.py`.
     add("살펴보기::finfo",
         lambda L: (f"{L.finfo(L.float32).eps:.9g} {L.finfo(L.float32).max:.9g} "
                    f"{L.finfo(L.float32).bits}"))
@@ -5744,6 +5825,100 @@ def top_level_cases(inp=None):
         return f"왕복={bool(L.allclose(first, second))} 씨앗={L.initial_seed()}"
 
     add("난수::상태 왕복", rng_round_trip)
+
+    # ── `generator=` — a stream of one's own ───────────────────────────────────
+    #
+    # **Three answers to one question inside one library.** `random_split` honoured
+    # it, `multinomial` refused it by name, and `rand`/`randn`/`randint`/`randperm`
+    # had no seat at all — on the binding two of them had a `**kw` bag, which took
+    # the argument and dropped it, so the call read exactly like torch's and the
+    # generator did nothing.
+    #
+    # **The values cannot be compared with torch** (numpy's stream is not torch's),
+    # so what is asked is the three properties that make a generator one: the same
+    # seed gives the same numbers, successive draws differ, and the global stream is
+    # left alone. Each is a `True`, which is comparable everywhere.
+    def fresh(L, seed=3):
+        g = L.Generator()
+        g.manual_seed(seed)
+        return g
+
+    DRAWS = (
+        ("rand", lambda L, g: L.rand(4, generator=g)),
+        ("randn", lambda L, g: L.randn(4, generator=g)),
+        ("randint", lambda L, g: L.randint(0, 100, (4,), generator=g)),
+        ("randperm", lambda L, g: L.randperm(8, generator=g)),
+        ("normal", lambda L, g: L.normal(0.0, 1.0, (4,), generator=g)),
+        ("multinomial", lambda L, g: L.multinomial(
+            L.tensor([0.1, 0.2, 0.3, 0.4]), 4, replacement=True, generator=g)),
+        ("bernoulli", lambda L, g: L.bernoulli(L.full((4,), 0.5), generator=g)),
+    )
+
+    def same_seed(L, draw):
+        return bool(L.equal(draw(L, fresh(L)), draw(L, fresh(L))))
+
+    def advances(L, draw):
+        g = fresh(L)
+        return not bool(L.equal(draw(L, g), draw(L, g)))
+
+    def leaves_global_alone(L, draw):
+        """**The point of a generator.** One that reached for the global stream
+        would pass both cases above and quietly change what the seeded run does."""
+        L.manual_seed(11)
+        want = L.rand(4)
+        L.manual_seed(11)
+        draw(L, fresh(L))
+        return bool(L.equal(want, L.rand(4)))
+
+    for name, draw in DRAWS:
+        add(f"난수::generator::{name}(같은 씨앗은 같은 값)",
+            lambda L, d=draw: str(same_seed(L, d)))
+        add(f"난수::generator::{name}(두 번 뽑으면 다르다)",
+            lambda L, d=draw: str(advances(L, d)))
+        add(f"난수::generator::{name}(전역을 안 건드린다)",
+            lambda L, d=draw: str(leaves_global_alone(L, d)))
+
+    add("난수::generator::initial_seed", lambda L: str(fresh(L, 7).initial_seed()))
+    # Re-seeding returns to the first draw, which is what re-seeding means and what
+    # a generator holding a fresh stream per call cannot tell you.
+    add("난수::generator::씨앗을 다시 심으면 처음으로", lambda L: str(bool(
+        (lambda g: L.equal(L.rand(4, generator=g),
+                           (g.manual_seed(3), L.rand(4, generator=g))[1]))(fresh(L)))))
+
+    # ── `multinomial(replacement=False)` — an argument that reached nothing ────
+    #
+    # `np.random.Generator.choice` defaults to `replace=True`, so the word was
+    # accepted and dropped: measured, 184 of 200 draws of 4 from 4 weights came back
+    # with a repeat where torch has none. Asked as **whether the four drawn indices
+    # are distinct**, which is the whole meaning of the argument and is a fact rather
+    # than a stream.
+    def without_replacement(L):
+        got = L.multinomial(L.tensor([1.0, 1.0, 1.0, 1.0]), 4, replacement=False)
+        drawn = [int(v) for v in got.reshape(-1).tolist()]
+        return f"서로 다른가={len(set(drawn)) == 4}"
+
+    add("난수::multinomial(replacement=False) 는 겹치지 않는다", without_replacement)
+
+    for label, fragment, call in (
+        ("무복원인데 더 많이", "without replacement",
+         lambda L: L.multinomial(L.tensor([1.0, 1.0]), 5, replacement=False)),
+        ("0개", "n_sample <= 0",
+         lambda L: L.multinomial(L.tensor([1.0, 1.0]), 0)),
+        ("음수 가중치", "element < 0",
+         lambda L: L.multinomial(L.tensor([-1.0, 1.0]), 1)),
+        ("전부 0", "sum of probabilities <= 0",
+         lambda L: L.multinomial(L.tensor([0.0, 0.0]), 1)),
+        ("3차원", "prob_dist must be 1 or 2 dim",
+         lambda L: L.multinomial(L.ones(2, 2, 2), 1)),
+    ):
+        def refuses(L, f=call, frag=fragment):
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                return frag if frag in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+
+        add(f"난수::multinomial 거절::{label}", refuses)
     return cases
 
 
