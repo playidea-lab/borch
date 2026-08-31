@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 374
+  "missing": 375
  },
  "modules": [
   {
@@ -11502,13 +11502,13 @@
       },
       {
        "name": "runningMean",
-       "signature": "readonly runningMean: Tensor",
-       "doc": "",
+       "signature": "readonly runningMean: Tensor | null",
+       "doc": "**Null under `trackRunningStats=false`**, which is torch's own answer there:\n`bn.running_mean is None`, `state_dict` holds `weight` and `bias` alone, and the\nlayer normalises by this batch in both modes.",
        "torch": "running_mean"
       },
       {
        "name": "runningVar",
-       "signature": "readonly runningVar: Tensor",
+       "signature": "readonly runningVar: Tensor | null",
        "doc": "",
        "torch": "running_var"
       },

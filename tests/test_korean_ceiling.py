@@ -298,7 +298,11 @@ CEILINGS = {
     # when nothing was refused. Every one is a key or a value in `golden.json`, so
     # both sides have to spell it the same; the `proj_size` and `relu` labels beside
     # them are ASCII and add nothing.
-    "borch-ts/test": 4283,
+    # 4283 → 4298. Fifteen, in `BatchNorm(추적없음)`'s four case names — the label
+    # itself, `state_dict 열쇠` and `running_mean 은 None`. Keys in `golden.json`, so
+    # both sides spell them the same; the `BatchNorm1d(N,C,L)` rows beside them are
+    # ASCII apart from the `열쇠` they do not carry.
+    "borch-ts/test": 4298,
 }
 
 

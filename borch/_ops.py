@@ -9410,6 +9410,12 @@ def batch_norm(input, running_mean=None, running_var=None, weight=None, bias=Non
                                           + momentum * unbiased)
         normed = centered / (var.reshape(shape) + eps) ** 0.5
     else:
+        # torch's own wording. **Without it this raised inside numpy** — `asarray(None)`
+        # gives a 0-d object array and the reshape fails with a message about shapes,
+        # a long way from the caller who left `track_running_stats` off and then asked
+        # for evaluation mode.
+        if running_mean is None or running_var is None:
+            raise RuntimeError("running_mean must be defined in evaluation mode")
         rm = _np.asarray(_raw(running_mean)).reshape(shape)
         rv = _np.sqrt(_np.asarray(_raw(running_var)) + eps).reshape(shape)
         normed = (input - Tensor(rm)) / Tensor(rv)

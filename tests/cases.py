@@ -8818,6 +8818,48 @@ def container_cases(inp=None):
                           lambda L, w=which: L.nn.BatchNorm2d(
                               3, **{w: ("cpu" if w == "device" else L.float32)}))))
 
+    # ── `track_running_stats=False`, refused on all three sides until today ──────
+    #
+    # The reason was that the forward pass reads the buffers in evaluation mode, so
+    # taking the flag and ignoring it leaves training right and evaluation quietly
+    # wrong. Both halves were true and neither was the whole thing: with the flag off
+    # there are **no buffers at all** — torch registers none, `running_mean` is `None`
+    # — and the layer normalises by this batch in **both** modes. So the two answers
+    # being equal is the claim, and it is asked as two rows rather than as a
+    # subtraction, because a layer that read the (absent) buffers in eval cannot
+    # produce a number to subtract.
+    _BN_TRS = np.arange(2 * 3 * 2 * 2, dtype=np.float32).reshape(2, 3, 2, 2) * 0.1 - 1.0
+
+    def _bn_untracked(L, mode):
+        m = L.nn.BatchNorm2d(3, track_running_stats=False)
+        getattr(m, mode)()
+        return m(L.tensor(_BN_TRS))
+
+    for _mode in ("train", "eval"):
+        cases.append((CONTAINER_PREFIX + f"BatchNorm(추적없음)/{_mode}",
+                      lambda L, m=_mode: _bn_untracked(L, m)))
+    cases.append((CONTAINER_PREFIX + "BatchNorm(추적없음)/state_dict 열쇠",
+                  lambda L: " ".join(sorted(
+                      L.nn.BatchNorm2d(3, track_running_stats=False).state_dict()))))
+    cases.append((CONTAINER_PREFIX + "BatchNorm(추적없음)/running_mean 은 None",
+                  lambda L: str(L.nn.BatchNorm2d(
+                      3, track_running_stats=False).running_mean is None)))
+    # **`BatchNorm1d` wrote its own copy of the formula and it was wrong at rank 3.**
+    # torch takes `(N, C)` and `(N, C, L)` and reduces over everything but the channel
+    # in both; the copy looped over `dim=0` alone, so this shape raised on the
+    # broadcast in evaluation and normalised over the wrong axes in training. It
+    # inherits `BatchNorm2d` now, and `batch_norm` does not examine the rank.
+    _BN_1D3 = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4) * 0.1 - 1.0
+
+    def _bn1d_rank3(L, mode):
+        m = L.nn.BatchNorm1d(3)
+        getattr(m, mode)()
+        return m(L.tensor(_BN_1D3))
+
+    for _mode in ("train", "eval"):
+        cases.append((CONTAINER_PREFIX + f"BatchNorm1d(N,C,L)/{_mode}",
+                      lambda L, m=_mode: _bn1d_rank3(L, m)))
+
     # Keys fitting is no use if **the values do not cross.** The buffer round trip is asked by value.
     def buffer_roundtrip(L):
         class Net(L.nn.Module):

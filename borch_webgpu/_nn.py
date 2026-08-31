@@ -1294,9 +1294,19 @@ class Module:
         """
         if name.startswith("_") or self._m is None:
             raise AttributeError(name)
-        got = getattr(self._m, camel(name), None)
+        # **A field that is there and null is not a field that is missing.** This read
+        # `getattr(…, default=None)` and raised on both, so `bn.running_mean` under
+        # `track_running_stats=False` — where torch answers `None` — came back as
+        # *the borch.ts layer does not have `running_mean`*. The property is declared
+        # over there and holds `null`; asking for it and catching the absence tells
+        # the two apart, which the default never could.
+        try:
+            got = getattr(self._m, camel(name))
+        except AttributeError:
+            raise AttributeError(
+                f"the borch.ts layer does not have `{name}`") from None
         if got is None:
-            raise AttributeError(f"the borch.ts layer does not have `{name}`")
+            return None
         if _ts.isTensor(got):
             return wrap(got)
         return got
@@ -2338,14 +2348,17 @@ def _batchnorm(name):
         for what, given in (("device", device), ("dtype", dtype)):
             if given is not None:
                 _unsupported(f"nn.{name}({what}=…)")
-        if not track_running_stats:
-            _unsupported("BatchNorm with track_running_stats=False")
+        # **`track_running_stats=False` was refused here and `True` was hard-wired
+        # into the call below**, which is the shape this file keeps finding: the seat
+        # existed, the value never crossed. borch.ts answers the flag now — no buffers
+        # and the batch's own statistics in both modes — so the argument goes over.
+        #
         # **`bias` sits eighth over there**, behind the `device` and `dtype` seats
         # borch.ts carries in order to refuse. It used to be handed over sixth, which
         # is `device` — and it only became wrong the day that class grew the pair, so
         # the two `None`s are what keep this call at the argument it means.
-        return _layer(name, n, eps, momentum, bool(affine), True, None, None,
-                      bool(bias))
+        return _layer(name, n, eps, momentum, bool(affine),
+                      bool(track_running_stats), None, None, bool(bias))
     make.__name__ = name
     return make
 

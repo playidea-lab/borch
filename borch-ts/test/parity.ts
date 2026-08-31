@@ -379,8 +379,11 @@ export async function report(): Promise<Report> {
   want("the global 0.25 constant is not soiled",
     (await Tensor.full([1], 0.25).item()) === 0.25);
 
+  // `runningVar` is nullable now — it is absent under `trackRunningStats=false` —
+  // and this layer is built at the default, where it is there.
   const bn = new nn.BatchNormND(1);
-  noGrad(() => { bn.runningVar.fill_(5); });
+  const bnVar = bn.runningVar!;
+  noGrad(() => { bnVar.fill_(5); });
   want("BatchNorm(1)'s running statistics do not overlap the global 1",
     (await Tensor.ones([1]).item()) === 1, `${await Tensor.ones([1]).item()}`);
 

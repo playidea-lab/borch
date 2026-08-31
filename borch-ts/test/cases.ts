@@ -3479,6 +3479,40 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
     out.set(`container::InstanceNorm(추적)/${stage}`, inormStage(stage));
   }
 
+  // ── `trackRunningStats=false`, refused here until today ────────────────────
+  //
+  // The refusal's reason was that the forward reads the running statistics in eval
+  // mode, so taking the flag and ignoring it leaves training right and evaluation
+  // quietly wrong. With the flag off there are **no running statistics at all** and
+  // the layer normalises by this batch in both modes, so the two rows below are equal
+  // — and they are asked as two rows rather than as a subtraction, because a layer
+  // that reached for the absent buffers in eval has no number to subtract.
+  const bnX = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i * 0.1 - 1.0), [2, 3, 2, 2]);
+  for (const mode of ["train", "eval"] as const) {
+    out.set(`container::BatchNorm(추적없음)/${mode}`, () => {
+      const m = new nn.BatchNorm2d(3, 1e-5, 0.1, true, false);
+      if (mode === "train") m.train(); else m.eval();
+      return m.call(bnX());
+    });
+  }
+  out.set("container::BatchNorm(추적없음)/state_dict 열쇠",
+    () => Object.keys(new nn.BatchNorm2d(3, 1e-5, 0.1, true, false).stateDict())
+      .sort().join(" "));
+  out.set("container::BatchNorm(추적없음)/running_mean 은 None",
+    () => String(new nn.BatchNorm2d(3, 1e-5, 0.1, true, false).runningMean === null
+      ? "True" : "False"));
+  // `BatchNorm1d` takes `(N, C)` and `(N, C, L)` alike — the rank is not consulted.
+  const bn1X = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i * 0.1 - 1.0), [2, 3, 4]);
+  for (const mode of ["train", "eval"] as const) {
+    out.set(`container::BatchNorm1d(N,C,L)/${mode}`, () => {
+      const m = new nn.BatchNorm1d(3);
+      if (mode === "train") m.train(); else m.eval();
+      return m.call(bn1X());
+    });
+  }
+
   // **Two seats, carried in order to refuse them.** `InstanceNorm` beside this class
   // and `LazyBatchNorm` — its own lazy spelling — both took `device` and `dtype`, and
   // the eager batch class took neither. That is not a short tail: torch declares

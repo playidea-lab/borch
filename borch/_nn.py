@@ -1244,24 +1244,33 @@ class BatchNorm2d(Module):
         """
         super().__init__()
         _no_device_dtype("BatchNorm2d", device, dtype)
-        if not track_running_stats:
-            # The forward pass reads the buffers in evaluation mode, so ignoring
-            # this would leave training right and evaluation quietly wrong — the
-            # shape `_InstanceNorm` next door already refuses for the same reason.
-            _unsupported(f"{type(self).__name__} with track_running_stats=False")
         self.num_features = num_features
         self.eps, self.momentum, self.affine = eps, momentum, affine
         # **Kept because the repr prints it**, and the repr is compared against
-        # torch's character for character. `track_running_stats=False` is refused
-        # above, so the only value this can hold is the one that was honoured.
+        # torch's character for character.
         self.track_running_stats = track_running_stats
         self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
                        if affine else None)
         self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
                      if affine and bias else None)
-        self.register_buffer("running_mean", _np.zeros(num_features, dtype=_DEFAULT_DTYPE))
-        self.register_buffer("running_var", _np.ones(num_features, dtype=_DEFAULT_DTYPE))
-        self.register_buffer("num_batches_tracked", 0)
+        # **`track_running_stats=False` was refused**, on the ground that the forward
+        # pass reads the buffers in evaluation mode so ignoring the flag would leave
+        # training right and evaluation quietly wrong. Both halves were true and
+        # neither was the whole thing: with the flag off there are **no buffers at
+        # all** — torch registers none, `state_dict` holds `weight` and `bias` alone
+        # and `running_mean` is `None` — and the layer normalises by this batch in
+        # both modes. Measured: training and evaluation give the same answer, which is
+        # the one thing the refusal was written to prevent going wrong.
+        if track_running_stats:
+            self.register_buffer("running_mean", _np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+            self.register_buffer("running_var", _np.ones(num_features, dtype=_DEFAULT_DTYPE))
+            self.register_buffer("num_batches_tracked", 0)
+        else:
+            # torch leaves the three attributes present and `None`, so
+            # `bn.running_mean is None` is the way to ask — an `AttributeError` there
+            # would be a different answer to the same question.
+            self.running_mean = self.running_var = None
+            self.num_batches_tracked = None
 
     def forward(self, x):
         # **`F.batch_norm` does the computation.** With the layer and the
@@ -1272,10 +1281,15 @@ class BatchNorm2d(Module):
         # The rank is not examined — everything but the channel axis is reduced,
         # so (N,C,H,W) and (N,C,D,H,W) run through the same code. `BatchNorm3d`
         # inherits it unchanged.
+        #
+        # **Without the buffers the batch's own statistics are used in both modes**,
+        # which is what `training=True` means to the function — there is nothing else
+        # to normalise by, and torch answers the same in `train()` and `eval()`.
         out = batch_norm(x, self.running_mean, self.running_var,
-                         self.weight, self.bias, self.training,
+                         self.weight, self.bias,
+                         self.training or not self.track_running_stats,
                          self.momentum, self.eps)
-        if self.training:
+        if self.training and self.track_running_stats:
             with no_grad():
                 self.num_batches_tracked = self.num_batches_tracked + 1
         return out
@@ -3165,43 +3179,19 @@ class NLLLoss(_WrittenLoss):
         return _reduce_ignoring(each, idx, self.ignore_index, self.reduction, row)
 
 
-class BatchNorm1d(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
-                 track_running_stats=True, device=None, dtype=None, *, bias=True):
-        """See `BatchNorm2d` on `affine` and `bias`."""
-        super().__init__()
-        _no_device_dtype("BatchNorm1d", device, dtype)
-        if not track_running_stats:
-            _unsupported("BatchNorm1d with track_running_stats=False")
-        self.num_features = num_features
-        self.eps, self.momentum, self.affine = eps, momentum, affine
-        self.track_running_stats = track_running_stats
-        self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
-                       if affine else None)
-        self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
-                     if affine and bias else None)
-        self.register_buffer("running_mean", _np.zeros(num_features, dtype=_DEFAULT_DTYPE))
-        self.register_buffer("running_var", _np.ones(num_features, dtype=_DEFAULT_DTYPE))
-        self.register_buffer("num_batches_tracked", 0)
+class BatchNorm1d(BatchNorm2d):
+    """**A second copy of the formula stood here and it was wrong at rank 3.**
 
-    def forward(self, x):
-        if self.training:
-            mean = x.mean(dim=0)
-            centered = x - mean
-            var = (centered * centered).mean(dim=0)
-            with no_grad():
-                self.running_mean = ((1 - self.momentum) * self.running_mean
-                                     + self.momentum * mean.data)
-                self.running_var = ((1 - self.momentum) * self.running_var
-                                    + self.momentum * x.data.var(axis=0, ddof=1))
-                self.num_batches_tracked = self.num_batches_tracked + 1
-            normed = centered / (var + self.eps) ** 0.5
-        else:
-            normed = ((x - Tensor(self.running_mean))
-                      / Tensor(_np.sqrt(self.running_var + self.eps)))
-        if self.weight is not None:
-            normed = normed * self.weight
-        return normed if self.bias is None else normed + self.bias
+    torch's `BatchNorm1d` takes `(N, C)` *and* `(N, C, L)`, reducing over every axis
+    but the channel in both. This wrote its own loop over `dim=0` alone, so `(2, 3, 4)`
+    raised on the broadcast in evaluation and normalised over the wrong axes in
+    training — a shape torch accepts, met with an error message about shapes.
+
+    It also carried its own `track_running_stats` refusal, its own buffer
+    registration and its own running-statistics update, three places to keep in step
+    with `BatchNorm2d`'s. `batch_norm` does not examine the rank, so inheriting is
+    both the fix and the removal of the copy.
+    """
 
 
 # ---- the 1-D and 3-D families

@@ -4685,7 +4685,8 @@ export function batchNorm(
   const b = bias ?? Tensor.zeros([channels]);
   if (!training) {
     if (!runningMean || !runningVar) {
-      throw new Error("batchNorm: eval mode needs running statistics");
+      // torch's own wording, so the three sides answer the same sentence.
+      throw new Error("running_mean must be defined in evaluation mode");
     }
     const centered = input.sub(runningMean.reshape(shape));
     const scaled = centered.div(
@@ -5060,8 +5061,13 @@ export function gumbelSoftmax(
 export class BatchNormND extends Module {
   readonly weight: Tensor | null;
   readonly bias: Tensor | null;
-  readonly runningMean: Tensor;
-  readonly runningVar: Tensor;
+  /**
+   * **Null under `trackRunningStats=false`**, which is torch's own answer there:
+   * `bn.running_mean is None`, `state_dict` holds `weight` and `bias` alone, and the
+   * layer normalises by this batch in both modes.
+   */
+  readonly runningMean: Tensor | null;
+  readonly runningVar: Tensor | null;
   /**
    * How many times it has passed through in training mode. **Not on the GPU — it is
    * just a number.**
@@ -5109,9 +5115,7 @@ export class BatchNormND extends Module {
     readonly numFeatures: number,
     private readonly eps = 1e-5,
     private readonly momentum = 0.1,
-    // **Kept because `describe` prints them.** `trackRunningStats=false` is refused
-    // below, so the only value it can hold is the one that was honoured — printing it
-    // is a statement about the layer rather than about the argument.
+    // **Kept because `describe` prints them.**
     private readonly affine = true,
     private readonly trackRunningStats = true,
     device?: null,
@@ -5120,21 +5124,25 @@ export class BatchNormND extends Module {
   ) {
     super();
     refuseDeviceDtype("BatchNorm", device, dtype);
-    if (!trackRunningStats) {
-      // The forward pass reads the running statistics in eval mode, so accepting
-      // this and ignoring it leaves training right and evaluation quietly wrong.
-      throw new Error(
-        "BatchNorm with trackRunningStats=false is not here yet.");
-    }
     this.weight = affine ? Tensor.owned([numFeatures], 1) : null;
     this.bias = affine && bias ? Tensor.owned([numFeatures], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
-    this.runningMean = Tensor.owned([numFeatures], 0);
-    this.runningVar = Tensor.owned([numFeatures], 1);
-    // The running statistics take no gradient, and **still have to survive the scope
-    // closing.**
-    keepAlive(this.runningMean);
-    keepAlive(this.runningVar);
+    // **`trackRunningStats=false` was refused here**, on the ground that the forward
+    // pass reads the running statistics in eval mode, so accepting the flag and
+    // ignoring it leaves training right and evaluation quietly wrong. Both halves
+    // were true and neither was the whole thing: with the flag off there are **no
+    // running statistics at all** — torch registers none — and the layer normalises
+    // by this batch in both modes, so training and evaluation give the same answer.
+    if (trackRunningStats) {
+      this.runningMean = Tensor.owned([numFeatures], 0);
+      this.runningVar = Tensor.owned([numFeatures], 1);
+      // The running statistics take no gradient, and **still have to survive the
+      // scope closing.**
+      keepAlive(this.runningMean);
+      keepAlive(this.runningVar);
+    } else {
+      this.runningMean = this.runningVar = null;
+    }
   }
 
   override ownParameters(): Record<string, Tensor> {
@@ -5156,6 +5164,10 @@ export class BatchNormND extends Module {
    */
   override namedBuffers(persistentOnly = false): Record<string, Tensor> {
     void persistentOnly;                      // no non-persistent buffer on this layer
+    // **Three keys or none.** torch registers no buffer under
+    // `track_running_stats=false`, so a `state_dict` written here would carry three
+    // keys torch's does not and would not load back into torch's layer.
+    if (!this.runningMean || !this.runningVar) return {};
     return {
       running_mean: this.runningMean,
       running_var: this.runningVar,
@@ -5184,13 +5196,18 @@ export class BatchNormND extends Module {
     const rest: Record<string, Tensor> = {};
     const handled: string[] = [];
     for (const [name, src] of Object.entries(values)) {
-      if (name === "running_mean") {
-        noGrad(() => this.runningMean.copyFrom(src));
+      // With no running statistics the three keys fall through to `rest` and come
+      // back as **unexpected**, which is what torch answers when a tracking layer's
+      // checkpoint is loaded into one built without.
+      if (name === "running_mean" && this.runningMean) {
+        const target = this.runningMean;
+        noGrad(() => target.copyFrom(src));
         handled.push(name);
-      } else if (name === "running_var") {
-        noGrad(() => this.runningVar.copyFrom(src));
+      } else if (name === "running_var" && this.runningVar) {
+        const target = this.runningVar;
+        noGrad(() => target.copyFrom(src));
         handled.push(name);
-      } else if (name === "num_batches_tracked") {
+      } else if (name === "num_batches_tracked" && this.runningMean) {
         // The given tensor is not captured as it is — when the scope closes that
         // buffer is recycled.
         const base = Tensor.owned([], 0);
@@ -5209,12 +5226,16 @@ export class BatchNormND extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    if (this.training) this.numBatchesTracked += 1;
+    if (this.training && this.trackRunningStats) this.numBatchesTracked += 1;
     // **`batchNorm` does the computation.** With the layer and the function each
     // written out, a day comes when they diverge, and the place they diverge is the
     // running statistics — so training is fine and evaluation alone is wrong.
+    //
+    // **Without the statistics the batch's own are used in both modes**, which is
+    // what `training` means to the function: there is nothing else to normalise by.
     return batchNorm(x, this.runningMean, this.runningVar, this.weight,
-      this.bias, this.training, this.momentum, this.eps);
+      this.bias, this.training || !this.trackRunningStats,
+      this.momentum, this.eps);
   }
 
   /** torch's `_BatchNorm.extra_repr`, shared by the instance norms next door. */
