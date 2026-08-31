@@ -144,6 +144,105 @@ def test_api_reference_is_not_stale():
             "  moment is exactly now.")
 
 
+REACHABLE = """
+import { readFileSync } from 'node:fs';
+const index = await import(process.env.INDEX);
+const doc = JSON.parse(readFileSync(process.env.API, 'utf8'));
+
+// Every name any import path arrives at, walking namespaces to the bottom —
+// `nn.functional` is a namespace inside a namespace and its 93 names reach through it.
+const reachable = new Set();
+const walk = (space, depth) => {
+  for (const [name, value] of Object.entries(space)) {
+    reachable.add(name);
+    if (depth > 0 && value && typeof value === 'object') walk(value, depth - 1);
+  }
+};
+walk(index, 3);
+
+// **A type is erased, so the emit cannot be asked about it.** `DType` is exported
+// from the index as `export type { DType }` and reaches an `import type` perfectly
+// well, while `Object.keys` of the module never sees it — the first draft of this
+// check called `dtype` unreachable for that reason alone. So the source of the index
+// is read for its type-only exports and they count as arriving.
+const src = readFileSync(process.env.INDEX_SRC, 'utf8');
+for (const block of src.matchAll(/export\s+type\s*\{([^}]*)\}/g)) {
+  for (const part of (block[1] ?? '').split(',')) {
+    const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+    if (name) reachable.add(name);
+  }
+}
+
+const missing = {};
+for (const mod of doc.modules) {
+  const names = mod.symbols.map((s) => s.name);
+  if (names.length && !names.some((n) => reachable.has(n))) missing[mod.name] = names;
+}
+console.log(JSON.stringify(missing));
+"""
+
+
+def test_every_documented_module_is_reachable_from_the_index():
+    """**A name the reference lists has to have an import path.**
+
+    `ops.ts` existed, `site/build_api.py` listed 159 names out of it, `site/vision.html`
+    described the section — and `index.ts` never exported the module. `import { ops }
+    from "borch-ts"` gave `undefined`, and it was not under `vision` either. It was
+    found by somebody writing a playground example with `nms`, which is the wrong way
+    round: the reference is generated from the declaration files and **never asks
+    whether a module is exported**, so every check on it stayed green while the
+    documented surface was unreachable.
+
+    That is the second half of one failure. The first was `ops` missing from the
+    generator's own module list, which put its golden cases on no name axis at all;
+    fixing that made the names visible to the reference and still not to a caller.
+    Neither half was being asked this question.
+
+    **It asks about the module, not about each name, and that is deliberate.** The
+    per-name form was written first and flagged seventeen modules. Most of what it
+    caught was one of two things it cannot tell apart: a `export type` is erased at
+    run time and unreachable to `Object.keys` while `import type` reaches it fine, and
+    a handful of names (`random`'s `gauss`, `rnn`'s `rnnApply`) are exported from their
+    file for their neighbours and are internal on purpose. Forcing those into the index
+    to satisfy a check would be worse than the hole it was written for. A module with
+    **no** reachable name is unambiguous — 0 of 159 for `ops` — and it is the shape the
+    failure actually took.
+
+    Namespaces are walked to the bottom: `nn.functional` is a namespace inside a
+    namespace and its 93 names reach through it. Members (`Tensor.mul`) reach through
+    their class and are not counted here.
+    """
+    if not API.exists():
+        pytest.fail("site/assets/api.json is missing — python3 site/build_api.py")
+    entry = ROOT / "borch-ts" / "dist" / "src" / "index.js"
+    if not entry.exists():
+        pytest.skip(f"no {entry.relative_to(ROOT)} — run npm run build:ts first")
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node")
+    stale = _stale_dist()
+    if stale:
+        pytest.fail(
+            "the bundle is older than the source, so this would judge an index that\n"
+            "no longer exists:\n\n  " + stale.replace("\n", "\n  "))
+
+    out = subprocess.run([node, "--input-type=module", "-e", REACHABLE],
+                         capture_output=True, text=True, cwd=ROOT,
+                         env={**os.environ, "API": str(API), "INDEX": entry.as_uri(),
+                              "INDEX_SRC": str(ROOT / "borch-ts" / "src" / "index.ts")})
+    assert out.returncode == 0, f"could not load the index:\n{out.stderr[-2000:]}"
+    missing = json.loads(out.stdout)
+
+    report = "\n".join(
+        f"  {mod} — {len(names)} name(s), first: {' '.join(sorted(names)[:4])}"
+        for mod, names in sorted(missing.items()))
+    assert not missing, (
+        "the API reference documents names no import reaches:\n" + report +
+        "\n\nEither export the module from `borch-ts/src/index.ts`, or take it out of\n"
+        "the list in `site/build_api.py` — a reference that lists an unreachable\n"
+        "surface beside a reachable one is worse than one that omits it.")
+
+
 def test_site_examples_name_only_real_modules():
     """The module list the site writes down for loading the Python binding has to match reality.
 

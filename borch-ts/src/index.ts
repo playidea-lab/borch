@@ -184,6 +184,22 @@ export * as linalg from "./linalg.js";
 export * as nn from "./nn.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";
+// The place `torchvision.ops` occupies — box geometry, the losses over it, and the v2
+// geometry for boxes, masks and keypoints.
+//
+// **It was documented and unreachable.** `ops.ts` existed, the API reference listed
+// 159 names out of it and the vision page described the section, and no import path
+// arrived at any of them: `import { ops } from "borch-ts"` gave `undefined`, and it
+// was not under `vision` either. The reference is generated from the declaration
+// files and never asked whether a module is exported, so nothing said so — it was
+// found by somebody trying to write a playground example with `nms`.
+//
+// This is the **second** half of one failure. The first was `ops` missing from that
+// generator's own module list, which put its eleven golden cases on no name axis at
+// all; adding it there made the names visible to the reference and still not to a
+// caller. `test_site.py` now asks that every module the reference documents is
+// reachable, which is the question neither half was being asked.
+export * as ops from "./ops.js";
 // The place `torchvision.transforms.v2.functional` occupies. It is a separate module
 // rather than a member of `vision` because it **imports** from it — nine new names and
 // the rest bound straight through, so a cycle would be the price of nesting a namespace
