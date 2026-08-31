@@ -372,7 +372,10 @@ NOT_PORTED = {
     # missing was the class a pipeline is built out of. The name axis is what said so:
     # it refuses to fold a capital-initial name onto a lowercase one, so the function's
     # presence could not excuse the class's absence.
-    "v2::": (17, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
+    # 17 → 19. The two `convert_bounding_box_format(inplace)` rows. They read **the
+    # tensor that was passed in**, which only means something where the label rides
+    # along with it — and a `BoundingBoxes` is the tv_tensor this row is about.
+    "v2::": (19, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
                         "to a buffer and cannot be subclassed to carry a label, so this "
                         "needs a mechanism that side does not have rather than a body "
                         "it has not been given"),

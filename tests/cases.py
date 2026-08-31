@@ -16507,6 +16507,23 @@ def v2_cases(inp=None):
         return L.tensor(np.ascontiguousarray(
             np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
 
+    def _converted_in_place(L, inplace):
+        """What the **caller's own boxes** hold after the call.
+
+        **The backend is chosen before the boxes are built**, and that ordering is the
+        whole of this helper. `_vision_v2(L)` rebinds the tv_tensor classes, so boxes
+        made ahead of it are of the class that was current a moment earlier — and the
+        first draft of this case, written inline, built them first and came back
+        `'Tensor' object has no attribute 'canvas_size'` from the browser. The rows
+        above avoid it by accident, because `_vision_v2(L).functional…(_boxes(L))`
+        evaluates the attribute chain before the argument.
+        """
+        v2 = _vision_v2(L)
+        given = _boxes(L)
+        v2.functional.convert_bounding_box_format(
+            given, new_format="XYWH", inplace=inplace)
+        return _values(L, given)
+
     def convert_case(target):
         """**The label goes with the numbers.** A conversion that returned a plain
         tensor would leave the next transform reading the same four numbers under the
@@ -16589,6 +16606,15 @@ def v2_cases(inp=None):
     cases += [
         (V2_PREFIX + "convert_bounding_box_format(XYWH)", convert_case("XYWH")),
         (V2_PREFIX + "convert_bounding_box_format(CXCYWH)", convert_case("CXCYWH")),
+        # **`inplace` was a seat the body never read.** torchvision writes the
+        # converted corners back into the tensor it was handed; here a copy came
+        # back and the original kept its old corners under its old format. The
+        # returned values were right either way, so the case has to read **the
+        # tensor that was passed in** — nothing about the answer can show it.
+        (V2_PREFIX + "convert_bounding_box_format(inplace)/원본이 바뀐다",
+         lambda L: _converted_in_place(L, True)),
+        (V2_PREFIX + "convert_bounding_box_format(inplace 아니면 안 바뀐다)",
+         lambda L: _converted_in_place(L, False)),
         (V2_PREFIX + "clamp_bounding_boxes(soft)", clamp_case("soft")),
         (V2_PREFIX + "clamp_bounding_boxes(hard, the same for these)",
          clamp_case("hard")),

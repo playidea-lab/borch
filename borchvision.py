@@ -4128,10 +4128,21 @@ def _tv_types(L):
             **Subclasses do not each write this** — the metadata names are declared once in
             `_METADATA` and copied by name. A subclass that grew a field and forgot to copy
             it would produce boxes whose format silently came from nowhere.
+
+            **`kwargs.get(name, getattr(like, name))` read `like` every time.** Python
+            evaluates a `get` default before the call, so the override never spared the
+            lookup: passing `format=` still asked `like` for its `format`, and passing
+            every field still asked `like` for every field. It only mattered once
+            `like` stopped being able to answer — a caller wrapping a tensor it had
+            just written into, on the binding, where a tensor is slotted and an
+            unknown name goes to borch.ts and comes back *'Tensor' object has no
+            attribute 'canvas_size'*. The override is honoured before the lookup now,
+            which is what it was always meant to be.
             """
             out = cls.__new__(cls, wrappee)
             for name in cls._METADATA:
-                setattr(out, name, kwargs.get(name, getattr(like, name)))
+                setattr(out, name,
+                        kwargs[name] if name in kwargs else getattr(like, name))
             return out
 
         def _same(self, values):
@@ -4937,6 +4948,13 @@ def convert_bounding_box_format(inpt, old_format=None, new_format=None,
     On a `BoundingBoxes` the old format is read off the boxes and passing it as well is
     refused — two sources for one fact is a place they can disagree. On a plain tensor
     there is nothing to read, so it must be given.
+
+    **`inplace` was a seat the body never read.** torchvision writes the converted
+    corners back into the tensor it was handed and hands the same object on; here a
+    copy came back and the original kept its old corners under its old format. The
+    values returned were right, so nothing downstream of the call could tell — only
+    code that goes on reading the boxes it passed in, which is the reason to ask for
+    in-place at all.
     """
     L = _backend()
     if new_format is None:
@@ -4960,8 +4978,24 @@ def convert_bounding_box_format(inpt, old_format=None, new_format=None,
             box_convert(_np.asarray(_to_numpy(inpt), dtype=_np.float32),
                         old_format.value.lower(), new_format.value.lower()),
             dtype=_np.float32)))
-    if isinstance(inpt, BoundingBoxes):
-        return BoundingBoxes.wrap(values, inpt, format=new_format)
+    # **The label is read off the boxes before anything is written**, not after.
+    # `wrap(values, like)` asks `like` for the fields it does not override, and under
+    # `inplace` the two are the same object — so it would be asking the thing being
+    # rebuilt to describe itself. On the binding a tensor is slotted and that read
+    # came back *'Tensor' object has no attribute 'canvas_size'*; on the core it
+    # happened to work, which is the worse half of the pair.
+    carried = ({name: getattr(inpt, name) for name in BoundingBoxes._METADATA}
+               if isinstance(inpt, BoundingBoxes) else {})
+    if inplace:
+        # **The corners go back into the caller's own tensor.** `copy_` is the one
+        # write that keeps the object identity torch's `inplace` promises; building
+        # a new tensor and returning it is what this did, and is what the argument
+        # asks it not to do.
+        inpt.copy_(values)
+        values = inpt
+    if carried:
+        return BoundingBoxes.wrap(values, inpt, **{**carried,
+                                                   "format": new_format})
     return values
 
 
