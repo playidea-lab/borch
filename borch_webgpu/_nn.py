@@ -482,16 +482,12 @@ def _interpolate(x, size=None, scale_factor=2, mode="nearest",
     borch.ts answer. It forwards to borch.ts's own `interpolate` now: one dispatch,
     one set of rules, and the five modes arrive without being spelled out again.
 
-    `antialias` is refused here rather than passed on, because the seat is Python's —
-    borch.ts has no such argument, so a word handed over would be discarded and the
-    aliased answer would come back under the filtered one's name.
+    `antialias` was refused here while borch.ts had no such argument; it takes one
+    now, and this hands the word over rather than stopping on it.
     """
-    if antialias:
-        raise RuntimeError(
-            "interpolate(antialias=True) — the widened filter it uses when shrinking "
-            "is not in the browser subset")
     return wrap(guarded(handle(x).interpolate, size, scale_factor, mode,
-                        bool(align_corners), recompute_scale_factor))
+                        bool(align_corners), recompute_scale_factor,
+                        bool(antialias)))
 
 
 def _upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None,

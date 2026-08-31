@@ -4629,6 +4629,53 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("fname::interpolate(bicubic, align=True) 의 기울기",
     interpGrad("bicubic", true));
 
+  // ── `antialias`, the last of `interpolate`'s seats ─────────────────────
+  //
+  // It widens the filter by the shrink factor and renormalises the weights, so every
+  // input cell reaches the output instead of being skipped. Enlarging, the scale is
+  // below one and the weights are the plain ones — which is why torch says the flag
+  // does nothing going up, and why the sizes include one.
+  //
+  // **Two things in torch's own implementation disagree with the rest of torch**, and
+  // both are asked rather than reasoned about: the anti-aliased `bicubic` uses
+  // `a = −0.5` where the plain one uses `−0.75`, and `alignCorners` reaches the scale
+  // but not the centre. Fitting either the other way parts by more than a tolerance.
+  for (const mode of ["bilinear", "bicubic"] as const) {
+    for (const ac of [false, true]) {
+      const tag = ac ? "True" : "False";
+      for (const s of interpSizes) {
+        out.set(
+          `fname::interpolate(${mode}, antialias, align=${tag}, size=(${s[0]}, ${s[1]}))`,
+          () => interpImg().interpolate(s, null, mode, ac, null, true));
+      }
+      // The caller's scale is read when `alignCorners` is off and not when it is on —
+      // the pair is what says so, and a size alone cannot.
+      out.set(`fname::interpolate(${mode}, antialias, align=${tag}, scale=1.5)`,
+        () => interpImg().interpolate(null, 1.5, mode, ac, null, true));
+    }
+    // A matrix multiply per axis, so the backward is the multiply's own — and that is
+    // when a wrong weight matrix goes unnoticed, the same weights being used back.
+    out.set(`fname::interpolate(${mode}, antialias) 의 기울기`, () => {
+      const x = interpImg();
+      x.requiresGrad = true;
+      x.interpolate([3, 7], null, mode, false, null, true)
+        .mul(Tensor.from(Array.from({ length: 21 }, (_, i) => i + 1), [1, 1, 3, 7]))
+        .sum().backward();
+      return gradOf(x, `interpolate/antialias/${mode}`);
+    });
+  }
+  // torch restricts the flag to the two smooth modes and refuses the rest by name.
+  // Unlike the unknown-`mode` case, this one compiles — `antialias` is a boolean and
+  // `"nearest"` is in the union — so it can be asked here.
+  out.set("fname::interpolate(nearest 에 antialias)=둘 다 거절", () => {
+    try {
+      interpImg().interpolate([2, 3], null, "nearest", false, null, true);
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
+
   // ── The spatial transformer ───────────────────────────────────────────
   //
   // The two traps are written at length on the Python side. Briefly: asked with squares

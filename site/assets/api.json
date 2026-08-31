@@ -5642,7 +5642,7 @@
       },
       {
        "name": "interpolate",
-       "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: InterpolateMode, alignCorners?: boolean, recomputeScaleFactor?: boolean | null): Tensor",
+       "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: InterpolateMode, alignCorners?: boolean, recomputeScaleFactor?: boolean | null, antialias?: boolean): Tensor",
        "doc": "**A fractional `scaleFactor` has to be floored, and was not.**\n\ntorch's output extent is `floor(in · scale)`. Multiplying without it gave\n`Upsample(scale_factor=1.5)` on a 3×4 input a shape of `[1, 1, 4.5, 6]` — a\nnon-integer dimension, which for `nearest` produced a tensor summing to zero and\n*did not throw*, and for `bilinear` blew up somewhere else entirely (`shape\n[4.5,1] does not match 5 elements`). At 2.3 it reached WebGPU as `Size (253) must\nbe a multiple of 4`.\n\nWhole factors were right, which is why this stood: 2 and 3 are what anybody tries.\n\n`recomputeScaleFactor` is torch's fourth answer to the same arithmetic. With it\non, torch works out the integer output size and then **derives the scale back\nfrom it** per axis, so a 3-high input at 1.5 samples at 4/3 rather than 1.5. Same\nshape, different values — measured on torch: sum 120 against 132.",
        "section": {
         "ko": "CTC",

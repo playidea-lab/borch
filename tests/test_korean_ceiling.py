@@ -279,7 +279,10 @@ CEILINGS = {
     # `배치 없이` suffixes, `grad::unfold(배치 없이)`, `fold(배치 없이)` and the two
     # `=거절 문구` — plus the `안 던졌다` verdict. All are keys or values in
     # `golden.json`, so both sides spell them the same.
-    "borch-ts/test": 4170,
+    # 4170 → 4191. Twenty-one, in `antialias`'s two gradient case names
+    # (`… 의 기울기`) and `interpolate(nearest 에 antialias)=둘 다 거절` with the two
+    # verdict strings it returns. All are keys or values in `golden.json`.
+    "borch-ts/test": 4191,
 }
 
 

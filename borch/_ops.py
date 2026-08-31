@@ -1573,10 +1573,15 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
     other by name alone puts the edges off — the interior is similar enough that
     the eye does not part them.
     """
-    if antialias:
-        _unsupported("interpolate(antialias=True) — the widened filter it uses when "
-                     "shrinking is not here")
     x = _wrap(input)
+    if antialias:
+        # torch's own restriction, and its wording.
+        if mode not in ("bilinear", "bicubic"):
+            raise RuntimeError(
+                "Anti-alias option is restricted to bilinear, bicubic, and lanczos "
+                "modes and requires a 4-D tensor as input")
+        return _interpolate_antialias(x, size, scale_factor, mode,
+                                      bool(align_corners), recompute_scale_factor)
     if mode == "bilinear":
         return _interpolate_bilinear(x, size, scale_factor, bool(align_corners),
                                      recompute_scale_factor)
@@ -1697,6 +1702,96 @@ def _bicubic_axis(size_in, size_out, align_corners, scale=None):
         return _np.arange(size_out) * ((size_in - 1) / (size_out - 1))
     step = (1.0 / scale) if scale else (size_in / size_out)
     return (_np.arange(size_out) + 0.5) * step - 0.5
+
+
+def _antialias_axis(size_in, size_out, radius, filt, align_corners, given=None):
+    """One axis of torch's anti-aliased resampling, as a `(size_out, size_in)` matrix.
+
+    The window is **widened by the shrink factor and the weights renormalised** —
+    that is the whole of what `antialias` means. Enlarging, the scale is below one,
+    the support stays at the kernel's own radius and the weights are the plain ones,
+    which is why torch says the flag does nothing when going up.
+
+    **Two things in here are torch disagreeing with itself, and both are measured
+    rather than reasoned.**
+
+    *The cubic constant is not the same one.* Plain `bicubic` uses `a = −0.75` and
+    this path uses `a = −0.5`. Fitted against torch: at `−0.75` the two part by 0.13
+    to 0.39 on a 4×5, and at `−0.5` they agree to float64 noise on every size tried.
+
+    *`align_corners` is half applied.* The scale becomes `(in−1)/(out−1)`, which is
+    the align-corners rule, while the centre stays `scale·(i + 0.5)`, which is the
+    other one. Taking the align-corners centre `scale·i` instead parts by 1.3 to 4.5.
+    Twenty combinations — two modes, both flags, five output sizes — agree with the
+    mixture and with nothing tidier.
+    """
+    if align_corners:
+        # **The caller's scale is not read here**, and that is measured: with
+        # `align_corners=True` the `scale_factor` cases agree with `(in−1)/(out−1)`
+        # alone. The align-corners rule pins both ends and has no room for one.
+        scale = ((size_in - 1) / (size_out - 1)) if size_out > 1 else 0.0
+    else:
+        scale = (1.0 / given) if given else (size_in / size_out)
+    wide = scale >= 1.0
+    support = radius * scale if wide else radius
+    inv = (1.0 / scale) if wide else 1.0
+    rows = _np.zeros((size_out, size_in))
+    for i in range(size_out):
+        centre = scale * (i + 0.5)
+        lo = max(int(centre - support + 0.5), 0)
+        span = min(int(centre + support + 0.5), size_in) - lo
+        taps = _np.array([filt((j + lo - centre + 0.5) * inv) for j in range(span)])
+        total = taps.sum()
+        rows[i, lo:lo + span] = taps / total if total else taps
+    return rows
+
+
+def _interpolate_antialias(x, size, scale_factor, mode, align_corners,
+                           recompute_scale_factor=None):
+    """`antialias=True` for `bilinear` and `bicubic`.
+
+    Both axes are a plain matrix multiply against the weight matrices above, so the
+    gradient is the multiply's own and nothing was written for it.
+    """
+    _, _, h, w = x.data.shape
+    keep = None
+    if size is not None:
+        oh, ow = _pair(size)
+    else:
+        oh, ow = _out_size((h, w), scale_factor)
+        if recompute_scale_factor is not True:
+            keep = (scale_factor if isinstance(scale_factor, (tuple, list))
+                    else (scale_factor, scale_factor))
+    # **`abs` is this module's own `abs`**, which takes a tensor — the builtin is
+    # shadowed here exactly as `any` is, and calling it on a float raised
+    # `'float' object has no attribute 'abs'`. Both kernels get the magnitude by hand.
+    radius, filt = ((1, _triangle_weight_aa) if mode == "bilinear"
+                    else (2, _cubic_weight_aa))
+    wy = _antialias_axis(h, oh, radius, filt, align_corners,
+                         keep and keep[0]).astype(x.data.dtype)
+    wx = _antialias_axis(w, ow, radius, filt, align_corners,
+                         keep and keep[1]).astype(x.data.dtype)
+    # `(o, h) · (n, c, h, w) · (w, p)` — the rows fold first, then the columns.
+    spread = _wrap(wy) @ x
+    return spread @ _wrap(wx.T)
+
+
+def _triangle_weight_aa(t):
+    """The bilinear kernel: one at the centre, zero a cell away."""
+    t = -t if t < 0 else t
+    return 1.0 - t if t < 1.0 else 0.0
+
+
+def _cubic_weight_aa(t):
+    """Keys' kernel at **`a = −0.5`**, which is the constant torch's anti-aliased path
+    uses where its plain `bicubic` uses `−0.75`. Measured, not chosen."""
+    t = -t if t < 0 else t
+    a = -0.5
+    if t <= 1:
+        return ((a + 2) * t - (a + 3)) * t * t + 1
+    if t < 2:
+        return ((t - 5) * t + 8) * t * a - 4 * a
+    return 0.0
 
 
 def _interpolate_bicubic(x, size, scale_factor, align_corners,

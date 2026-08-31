@@ -10659,7 +10659,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
               scaleFactor: number | null = null,
               mode: InterpolateMode = "nearest",
               alignCorners = false,
-              recomputeScaleFactor: boolean | null = null): Tensor {
+              recomputeScaleFactor: boolean | null = null,
+              antialias = false): Tensor {
     const h = this.shape[2] ?? 1;
     const w = this.shape[3] ?? 1;
     const pair = (v: number | readonly number[]): [number, number] =>
@@ -10667,6 +10668,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const scale = scaleFactor ?? 2;
     // torch's own rule, in one place so the two modes cannot part.
     const extent = (inp: number) => Math.floor(inp * scale);
+    if (antialias) {
+      if (mode !== "bilinear" && mode !== "bicubic") {
+        throw new RuntimeError(
+          "Anti-alias option is restricted to bilinear, bicubic, and lanczos modes "
+          + "and requires a 4-D tensor as input");
+      }
+      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
+      const given = size === null && !recomputeScaleFactor ? scale : null;
+      return this.interpolateAntialias(oh, ow, mode, alignCorners, given);
+    }
     if (mode === "nearest") {
       // `resizeNearest` maps `src = floor(o · in / out)`, which *is* recomputing the
       // scale from the output size — so nearest gives the same answer either way and
@@ -10707,6 +10718,70 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // recompute from, so that path is unchanged.
     const given = size === null && !recomputeScaleFactor ? scale : null;
     return this.interpolateBilinear(oh, ow, alignCorners, given);
+  }
+
+  /**
+   * `antialias=true` for `bilinear` and `bicubic` — the widened filter torch uses
+   * when shrinking.
+   *
+   * The window is **widened by the shrink factor and the weights renormalised**, which
+   * is the whole of what the flag means. Enlarging, the scale is below one, the
+   * support stays at the kernel's own radius, and the weights are the plain ones —
+   * which is why torch says the flag does nothing going up.
+   *
+   * **Two things here are torch disagreeing with itself, both measured rather than
+   * reasoned.** The cubic constant is `a = −0.5` where plain `bicubic` uses `−0.75`;
+   * fitted against torch, `−0.75` parts by 0.13 to 0.39 on a 4×5 and `−0.5` agrees to
+   * noise. And `alignCorners` is half applied: the scale becomes `(in−1)/(out−1)`,
+   * which is the align-corners rule, while the centre stays `scale·(i + 0.5)`, which
+   * is the other one — taking the align-corners centre parts by 1.3 to 4.5.
+   *
+   * Each axis is a matrix multiply against a `(out, in)` weight matrix, so the
+   * gradient is the multiply's own.
+   */
+  private interpolateAntialias(outH: number, outW: number,
+                               mode: "bilinear" | "bicubic",
+                               alignCorners: boolean,
+                               given: number | null): Tensor {
+    const radius = mode === "bilinear" ? 1 : 2;
+    const filt = mode === "bilinear"
+      ? (raw: number): number => {
+        const t = Math.abs(raw);
+        return t < 1 ? 1 - t : 0;
+      }
+      : (raw: number): number => {
+        const t = Math.abs(raw);
+        const a = -0.5;
+        if (t <= 1) return ((a + 2) * t - (a + 3)) * t * t + 1;
+        if (t < 2) return ((t - 5) * t + 8) * t * a - 4 * a;
+        return 0;
+      };
+    const axis = (sizeIn: number, sizeOut: number): Tensor => {
+      // The caller's scale is not read under `alignCorners` — measured: with it on,
+      // the `scaleFactor` cases agree with `(in−1)/(out−1)` alone.
+      const s = alignCorners
+        ? (sizeOut > 1 ? (sizeIn - 1) / (sizeOut - 1) : 0)
+        : (given === null ? sizeIn / sizeOut : 1 / given);
+      const wide = s >= 1;
+      const support = wide ? radius * s : radius;
+      const inv = wide ? 1 / s : 1;
+      const rows = new Float32Array(sizeOut * sizeIn);
+      for (let i = 0; i < sizeOut; i++) {
+        const centre = s * (i + 0.5);
+        const lo = Math.max(Math.trunc(centre - support + 0.5), 0);
+        const span = Math.min(Math.trunc(centre + support + 0.5), sizeIn) - lo;
+        const taps = Array.from({ length: span },
+                                (_, j) => filt((j + lo - centre + 0.5) * inv));
+        const total = taps.reduce((a, b) => a + b, 0);
+        for (let j = 0; j < span; j++) {
+          rows[i * sizeIn + lo + j] = total ? (taps[j] as number) / total : 0;
+        }
+      }
+      return Tensor.from(rows, [sizeOut, sizeIn]);
+    };
+    // `(o, h) · (n, c, h, w) · (w, p)` — the rows fold first, then the columns.
+    return axis(this.shape[2] ?? 1, outH).matmul(this)
+      .matmul(axis(this.shape[3] ?? 1, outW).transpose());
   }
 
   /**

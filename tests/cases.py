@@ -4681,6 +4681,51 @@ def functional_name_cases(inp=None):
         lambda L: _both_stop(L, lambda M: M.nn.functional.interpolate(
             M.tensor(_INTERP_IMG), size=(2, 3), mode="quadratic")))
 
+    # ── `antialias`, the last of `interpolate`'s seats ─────────────────
+    #
+    # It widens the filter by the shrink factor and renormalises the weights, so every
+    # input cell reaches the output instead of being skipped. Enlarging, the scale is
+    # below one and the weights are the plain ones — which is why torch says the flag
+    # does nothing going up, and why the sizes below include one.
+    #
+    # **Two things in torch's own implementation disagree with the rest of torch, and
+    # both are asked here rather than reasoned about.** The anti-aliased `bicubic` uses
+    # `a = −0.5` where the plain one uses `−0.75`, and `align_corners` is applied to
+    # the scale but not to the centre. Fitting either the other way parts by more than
+    # a tolerance: 0.13–0.39 for the constant and 1.3–4.5 for the centre.
+    for _mode in ("bilinear", "bicubic"):
+        for _ac in (False, True):
+            for _size in ((2, 3), (8, 10), (3, 7)):
+                add(f"interpolate({_mode}, antialias, align={_ac}, size={_size})",
+                    lambda L, m=_mode, a=_ac, s=_size: F(L).interpolate(
+                        L.tensor(_INTERP_IMG), size=s, mode=m,
+                        align_corners=a, antialias=True))
+            # **The caller's scale is read when `align_corners` is off and not when it
+            # is on** — the pair is what says so, and a size alone cannot.
+            add(f"interpolate({_mode}, antialias, align={_ac}, scale=1.5)",
+                lambda L, m=_mode, a=_ac: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), scale_factor=1.5, mode=m,
+                    align_corners=a, antialias=True))
+
+    def antialias_grad(L, mode):
+        """A matrix multiply per axis, so the backward is the multiply's own — and
+        that is when a wrong weight matrix goes unnoticed, the same wrong weights
+        being used coming back."""
+        x = L.tensor(_INTERP_IMG.copy(), requires_grad=True)
+        seed = np.arange(1., 22., dtype=np.float32).reshape(1, 1, 3, 7)
+        (F(L).interpolate(x, size=(3, 7), mode=mode, antialias=True)
+         * L.tensor(seed)).sum().backward()
+        return _grad_of(x, f"interpolate/antialias/{mode}")
+
+    add("interpolate(bilinear, antialias) 의 기울기",
+        lambda L: antialias_grad(L, "bilinear"))
+    add("interpolate(bicubic, antialias) 의 기울기",
+        lambda L: antialias_grad(L, "bicubic"))
+    # torch restricts the flag to the two smooth modes, and refuses the rest by name.
+    add("interpolate(nearest 에 antialias)=둘 다 거절",
+        lambda L: _both_stop(L, lambda M: M.nn.functional.interpolate(
+            M.tensor(_INTERP_IMG), size=(2, 3), mode="nearest", antialias=True)))
+
     # ── the three faces of `max` and `min` ──
     #
     # torch returns **different things** depending on the arguments: `max(x)` is one maximum over
