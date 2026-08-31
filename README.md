@@ -232,7 +232,7 @@ uv run --with pytest --with numpy --with torch --with torchvision --with scipy \
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **the binding passes 4351 golden cases**, and that is a surface check
+> is that **the binding passes 4372 golden cases**, and that is a surface check
 > rather than a line check. The two numbers are not written down as though they were
 > the same thing.
 >
@@ -780,11 +780,11 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **4351 golden cases** — every one in the table but eleven. Those eleven
+It passes **4372 golden cases** — every one in the table but eleven. Those eleven
 are the core's alone, for two reasons: five are complex eigenvalues and there is no
 complex dtype on this side, and six ask `lstsq` for its residuals, rank or singular
 values, which borch.ts does not return and so the binding cannot dress. The core
-covers 4309 cases, and the 53 *it* does not see are this side's alone (1-D and 3-D
+covers 4330 cases, and the 53 *it* does not see are this side's alone (1-D and 3-D
 convolutions, ranks 7 and 8), which it refuses on purpose.
 
 > That sentence read "nothing in the table is skipped on this side alone" until
@@ -805,8 +805,8 @@ convolutions, ranks 7 and 8), which it refuses on purpose.
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 3796 cases. **The remaining 566 are two
-things**: 566 deliberately not carried across, and 0 owed. The binding
+borch.ts itself has written TS bodies for 3804 cases. **The remaining 579 are two
+things**: 579 deliberately not carried across, and 0 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the declined ask about a Python
@@ -1506,8 +1506,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **4362 golden cases** compare all three implementations against **the same
-expected values.** The core covers 4309 cases, leaving out the 53 that are
+And **4383 golden cases** compare all three implementations against **the same
+expected values.** The core covers 4330 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are

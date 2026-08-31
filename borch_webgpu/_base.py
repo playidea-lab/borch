@@ -431,6 +431,13 @@ class Tensor:
 
     # The dtype-changing names. borch.ts takes them all as `to("float32")`.
     def to(self, dtype):
+        # **A dtype with no storage stops here too.** `float64` was caught below by
+        # name and its four siblings were not: the core's `int32` has no `.plain`,
+        # so `str(dtype)` gave `torch.int32`, the prefix came off, and borch.ts
+        # labelled a float32 buffer `int32`. `tensor()` had the same door and
+        # `_gate_dtype` closed it there; this is the other one, and
+        # `x.type("torch.IntTensor")` is what walked through it.
+        _gate_dtype(dtype)
         name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
         name = name.replace("torch.", "")
         # **Double precision stops here, and this is the one place it can** —
@@ -746,8 +753,28 @@ class Tensor:
     def bool(self):
         return self.to("bool")
 
-    def type(self, dtype=None):
-        return self.dtype if dtype is None else self.to(dtype)
+    def type(self, dtype=None, non_blocking=False):
+        """**Both halves were wrong, in opposite directions.**
+
+        With no argument it handed back `torch.float32`, the dtype's own `repr`,
+        where torch names the tensor type — `torch.FloatTensor`. And given one of
+        those names it passed the string to `to()`, which relabels: `x.type(
+        "torch.zzzTensor")` came back a tensor whose dtype printed
+        `torch.zzzTensor`, a label naming nothing, with no exception anywhere.
+
+        The core's two tables are used for both, so there is one vocabulary rather
+        than three. `non_blocking` is torch's seat and there is nothing asynchronous
+        to wait on.
+        """
+        from borch._tensor import (_TENSOR_TYPE_NAMES, _TYPE_NAME_OF,
+                                   _unknown_tensor_type)
+
+        if dtype is None:
+            plain = self.dtype.plain
+            return _TYPE_NAME_OF.get(plain, f"torch.{plain}Tensor")
+        if isinstance(dtype, str) and dtype.startswith("torch."):
+            dtype = _TENSOR_TYPE_NAMES.get(dtype) or _unknown_tensor_type(dtype)
+        return self.to(dtype)
 
     def tolist(self):
         return self.numpy().tolist()

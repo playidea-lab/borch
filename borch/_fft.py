@@ -525,6 +525,18 @@ def istft(input, n_fft, hop_length=None, win_length=None, window=None,   # noqa:
           return_complex=False):
     """The inverse of `stft`. **Divided by the overlapped window squared** —
     without that division the overlapped regions swell by the window weight.
+
+    **The two-sided path ran a forward transform.** `onesided=True` used `irfft`
+    and was right; the other branch called `fft`, so the function whose name is
+    *inverse* did the forward one — reconstructing `sin(0.3k)` gave
+    `[3.60, 0.97, 3.56, …]` where the waveform is `[0, 0.30, 0.56, …]`. No
+    exception, a plausible-looking wave, and the default path being correct is why
+    it went unseen.
+
+    **And `return_complex` was a seat the body never read.** torch's default is a
+    real waveform and this handed back `complex64` on that branch, so the dtype was
+    wrong as well as the values. Where the result is real by construction — the
+    onesided path — torch refuses to be asked for a complex one, in the words below.
     """
     from . import _ops
 
@@ -533,9 +545,12 @@ def istft(input, n_fft, hop_length=None, win_length=None, window=None,   # noqa:
     win_length = n_fft if win_length is None else int(win_length)
     if onesided is None:
         onesided = t.data.shape[-2] == n_fft // 2 + 1
+    if onesided and return_complex:
+        raise RuntimeError(
+            "Cannot have onesided output if window or input is complex")
     count = t.data.shape[-1]
     spec = _ops.swapaxes(t, -1, -2)                        # (…, frames, bins)
-    frames = irfft(spec, n=n_fft, dim=-1) if onesided else fft(spec, dim=-1)
+    frames = irfft(spec, n=n_fft, dim=-1) if onesided else ifft(spec, dim=-1)
     if normalized:
         frames = frames * _np.sqrt(n_fft)
     win = _window_of(window, n_fft, win_length, t)
@@ -561,4 +576,10 @@ def istft(input, n_fft, hop_length=None, win_length=None, window=None,   # noqa:
         out = _ops.narrow(out, -1, n_fft // 2, total - 2 * (n_fft // 2))
     if length is not None:
         out = _ops.narrow(out, -1, 0, int(length))
+    # **torch's default is a real waveform.** The two-sided path carries an
+    # imaginary part that is numerically zero for a real signal, and torch drops it
+    # unless asked; handing back `complex64` from `istft(spec, n)` makes every line
+    # after it — a plot, a loss, a `.numpy()` — meet a dtype it did not ask for.
+    if not return_complex and out.data.dtype.kind == "c":
+        out = out.real
     return out

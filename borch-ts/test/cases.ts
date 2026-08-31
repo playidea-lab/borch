@@ -1146,6 +1146,29 @@ function addFft(out: Map<string, Case>): void {
     stft(t, 8, { hopLength: 4, window: hann(), returnComplex: true }),
     8, { hopLength: 4, window: hann(), length: 16 }));
 
+  // **`returnComplex` was in the options type and nothing read it**, and the
+  // two-sided branch beside it ran `fft` where the inverse belongs — the function
+  // whose name is *inverse* did the forward one. Both defects were in the core as
+  // well, and both are invisible on the default path, which uses `irfft` and is
+  // right. The reconstruction itself cannot be asked here: the two-sided branch is
+  // complex all the way through the overlap-add and this library's kernels stop at
+  // complex on purpose, so that row is the Python side's.
+  // The Python side spells a dtype `torch.float32`; over here it is the bare name,
+  // and the golden is keyed by the string both must produce.
+  out.set(`${P}istft 의 형은 실수다`, () => `torch.${istft(
+    stft(sig(), 8, { hopLength: 4, window: hann(), returnComplex: true }),
+    8, { hopLength: 4, window: hann(), length: 16 }).dtype}`);
+  out.set(`${P}istft(onesided 인데 복소를 달라면 거절)`, () => {
+    try {
+      istft(stft(sig(), 8, { hopLength: 4, window: hann(), returnComplex: true }),
+            8, { hopLength: 4, window: hann(), length: 16, returnComplex: true });
+    } catch (e) {
+      return String(e).includes("Cannot have onesided output")
+        ? "문구대로" : `다른 문구 <${String(e).slice(0, 44)}>`;
+    }
+    return "안 던졌다";
+  });
+
   const refuses = (name: string, body: () => unknown): void => {
     out.set(`${P}${name}`, () => {
       try {
@@ -6773,6 +6796,61 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     const b = new optim.ExponentialLR(o, 0.9).start();
     return new optim.ChainedScheduler([a, b]);
   }, 6));
+
+  // ── the two chaining classes checked nothing about their schedulers ────────
+  //
+  // `SequentialLR(a, [ConstantLR(a), ConstantLR(b)])` was built without complaint
+  // and then, at the milestone, stepped `b`'s rate while `getLastLr` read `a`'s.
+  // The rate that trains and the rate that is printed part company, and nothing
+  // raises. torch checks it in both classes and neither of these did.
+  const schedulerRefuses = (fragment: string, body: () => void): string => {
+    try {
+      body();
+    } catch (err) {
+      const said = String(err);
+      return said.includes(fragment) ? "문구대로" : `다른 문구 <${said.slice(0, 50)}>`;
+    }
+    return "안 던졌다";
+  };
+  out.set("opt::SequentialLR(다른 optimizer)=거절",
+    () => schedulerRefuses("belong to the same optimizer", () => {
+      const a = new optim.SGD(model().parameters(), 0.2);
+      const b = new optim.SGD(model().parameters(), 0.2);
+      new optim.SequentialLR(a, [new optim.ConstantLR(a, 0.5, 2).start(),
+                                 new optim.ConstantLR(b, 0.1, 2).start()], [2]);
+    }));
+  out.set("opt::ChainedScheduler(다른 optimizer)=거절",
+    () => schedulerRefuses("belong to the same optimizer", () => {
+      const a = new optim.SGD(model().parameters(), 0.2);
+      const b = new optim.SGD(model().parameters(), 0.2);
+      new optim.ChainedScheduler([new optim.ConstantLR(a).start(),
+                                  new optim.ConstantLR(b).start()]);
+    }));
+  // One scheduler per interval and one interval more than there are milestones.
+  // Given two of each the last is never reached and `step` walks the wrong one.
+  out.set("opt::SequentialLR(milestone 개수가 안 맞으면)=거절",
+    () => schedulerRefuses("one more than the number of milestone", () => {
+      const o = new optim.SGD(model().parameters(), 0.2);
+      new optim.SequentialLR(o, [new optim.ConstantLR(o).start(),
+                                 new optim.ConstantLR(o).start()], [1, 2]);
+    }));
+  // **`last_epoch` was a seat the binding never read** — borch.ts's constructor has
+  // taken it all along and the word stopped one call short, so resuming put the
+  // chain back at its first interval however far it had got.
+  for (const lastEpoch of [-1, 0, 2]) {
+    out.set(`opt::SequentialLR(last_epoch=${lastEpoch})/자취`, () => {
+      const opt = new optim.SGD(model().parameters(), 0.2);
+      const sch = new optim.SequentialLR(
+        opt, [new optim.ConstantLR(opt, 0.5, 2).start(),
+              new optim.ExponentialLR(opt, 0.5).start()], [2], lastEpoch);
+      const seen: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        seen.push(opt.paramGroups[0]?.lr ?? 0);
+        sch.step();
+      }
+      return Tensor.from(seen, [5]);
+    });
+  }
 
   // ── Where the branches are asked about narrowly ─────────────────────────
   //

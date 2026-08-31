@@ -42,6 +42,39 @@ def _keep(out, source, dim, keepdim):
     return _np.reshape(out, shape)
 
 
+# torch's old tensor-type names, which `Tensor.type()` hands back and, until this
+# table existed, could not take. The three with no storage here are the same names
+# `_AbsentDtype` keeps for the same reason: `x.type("torch.HalfTensor")` should say
+# what is missing rather than read as a typo, and the gate on `.np` says it.
+def _tensor_type_names():
+    from ._base import (bfloat16, bool_, complex64, complex128, float16, float32,
+                        float64, int8, int16, int32, int64, uint8)
+
+    return {
+        "torch.FloatTensor": float32, "torch.DoubleTensor": float64,
+        "torch.HalfTensor": float16, "torch.BFloat16Tensor": bfloat16,
+        "torch.LongTensor": int64, "torch.IntTensor": int32,
+        "torch.ShortTensor": int16, "torch.CharTensor": int8,
+        "torch.ByteTensor": uint8, "torch.BoolTensor": bool_,
+        "torch.ComplexFloatTensor": complex64,
+        "torch.ComplexDoubleTensor": complex128,
+    }
+
+
+_TENSOR_TYPE_NAMES = _tensor_type_names()
+# The same table read the other way, keyed by the plain dtype name. `Tensor.type()`
+# with no argument answers from it, and **the binding answers from it too** — that
+# side had `type()` handing back `torch.float32` where torch says
+# `torch.FloatTensor`, so the two halves of one method disagreed there as well.
+_TYPE_NAME_OF = {dt.name: name for name, dt in _TENSOR_TYPE_NAMES.items()}
+
+
+def _unknown_tensor_type(said):
+    """torch's wording for a name that is not one of the twelve, and **its type** —
+    `ValueError`, where numpy raised `TypeError` for the same mistake."""
+    raise ValueError(f"invalid type: '{said}'")
+
+
 def _unbroadcast(grad, shape):
     """Undo the axes broadcasting stretched. A required step of
     backpropagation."""
@@ -674,6 +707,13 @@ class Tensor:
 
         `non_blocking` asks torch not to wait on an async device copy. Nothing here
         is asynchronous, so the copy has finished by the time this returns.
+
+        **The getter spoke a vocabulary the setter could not hear.** `x.type()`
+        hands back `torch.FloatTensor` and `x.type("torch.FloatTensor")` — feeding
+        that answer straight back, which is what every pre-2.0 tutorial writes —
+        went to numpy as a dtype string and came back *data type
+        'torch.FloatTensor' not understood*. One method, two halves, and they did
+        not agree about the words.
         """
         dt = dtype
         if dt is None:
@@ -683,6 +723,8 @@ class Tensor:
             if kind is None:
                 kind = _TYPE_NAMES.get(self.data.dtype.kind, "Float")
             return f"torch.{kind}Tensor"
+        if isinstance(dt, str) and dt.startswith("torch."):
+            dt = _TENSOR_TYPE_NAMES.get(dt) or _unknown_tensor_type(dt)
         target = dt.np if isinstance(dt, globals()["dtype"]) else dt
         if _np.dtype(target).kind != "f":
             return Tensor(self.data.astype(target))

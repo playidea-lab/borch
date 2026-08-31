@@ -742,15 +742,24 @@ class _LRScheduler:
         usually a single value, so it landed exactly there, and the symptom was
         a learning rate that never changed at the milestone — the second time
         this repository fell into that trap.
+
+        **`last_epoch` was a seat this body never read**, and borch.ts's constructor
+        has taken it all along — so resuming a run put the chain back at its first
+        interval however far it had got, and the argument that says otherwise
+        stopped at this line.
         """
         return _Sched(_ts.optim.SequentialLR.new(
             optimizer._o, _js.Array.of(*[s._s for s in schedulers]),
-            _js.Array.of(*[int(m) for m in milestones])))
+            _js.Array.of(*[int(m) for m in milestones]), int(last_epoch)))
 
     @staticmethod
     def ChainedScheduler(schedulers, optimizer=None):
+        """**`optimizer` was accepted and dropped here**, while borch.ts's
+        constructor takes it and refuses one that is not the schedulers' — so the
+        check existed one call away and the word never reached it."""
         return _Sched(_ts.optim.ChainedScheduler.new(
-            _js.Array.of(*[s._s for s in schedulers])))
+            _js.Array.of(*[s._s for s in schedulers]),
+            None if optimizer is None else optimizer._o))
 
 
 lr_scheduler = _LRScheduler()

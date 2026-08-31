@@ -492,7 +492,15 @@ NOT_PORTED = {
     # `Hardsigmoid`, `Hardswish`, `Mish`), and those seats are **absent rather than
     # declared-and-unmeasured** — the `pool::` row three screens down is what that
     # distinction costs when it goes the other way.
-    "fft::": (4, "파이썬 — the gradient helper is what makes the leaf"),
+    # 4 → 6. The two `istft(onesided=False)` rows. **The reconstruction cannot be
+    # asked over there**: that branch is complex the whole way through the
+    # overlap-add, and this library's kernels stop at complex on purpose — one guard
+    # on the buffer getter rather than 176 — so the case measures the Python sides'
+    # values against the waveform and this side's refusal, which is a Python-side
+    # verdict. The two halves that *can* be asked here — the dtype of the ordinary
+    # call, and the refusal when a onesided reconstruction is asked for a complex
+    # result — are asked, and both were seats nothing read.
+    "fft::": (6, "파이썬 — the gradient helper is what makes the leaf"),
     # **`opt::` has a row again, and its own comment above says the last three reasons
     # written here were each wrong in turn.** So this one names exactly what cannot
     # cross and nothing more.
@@ -545,7 +553,14 @@ NOT_PORTED = {
     # answering in `float32`. All three arrive at one gate now, and the rows are
     # here rather than portable for the reason the rest of this group is: they ask
     # about a Python signature, and borch.ts takes its dtypes as strings.
-    "dtype::": (88, "파이썬 — the factories' `dtype=`, the dtype aliases, `out=`"),
+    # 88 → 99. Eleven `형이름::` rows — `x.type()` and the twelve `torch.FloatTensor`
+    # names it takes and returns. **The old tensor-type vocabulary is Python's**: a
+    # dtype over there is one of four string literals, `"float32"` and not
+    # `torch.FloatTensor`, and there is no second name for it to disagree with. The
+    # disagreement is the whole content of these rows — the getter handed back
+    # `torch.FloatTensor` and the setter could not take it back, on the core, while
+    # the binding had it wrong the other way round in both halves.
+    "dtype::": (99, "파이썬 — the factories' `dtype=`, the dtype aliases, `out=`"),
     # This number jumping from 82 to 88 was caught **the day the check went in** — the
     # batch that turned `x.real` and `x.device` into properties grew the cases by six.
     # 88 → 116. Twenty predicates and eight unpaired in-place variants went in. Both are

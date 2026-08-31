@@ -2627,10 +2627,13 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,
 def istft(input, n_fft, hop_length=None, win_length=None, window=None,
           center=True, normalized=False, onesided=None, length=None,
           return_complex=False):
+    """**`return_complex` stopped at this line** — the seat was here, the options
+    object carried the name, and the word was never put in it. borch.ts reads it now
+    and the two-sided branch there was running a forward transform besides."""
     return wrap(guarded(
         _ts.istft, handle(input), int(n_fft),
         _stft_options(hop_length, win_length, window, center, None,
-                      normalized, onesided, None, length)))
+                      normalized, onesided, return_complex, length)))
 
 
 # **`torch.fft` is a namespace.** It is a module over in borch.ts too, so it can

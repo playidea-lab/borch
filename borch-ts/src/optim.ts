@@ -2273,6 +2273,31 @@ export class CyclicLR extends LRScheduler {
 }
 
 /**
+ * **Every scheduler in a chain has to be stepping the same optimizer.**
+ *
+ * torch checks it and neither of these two classes did, so `SequentialLR(a,
+ * [ConstantLR(a), ConstantLR(b)])` was built without complaint and then, at the
+ * milestone, stepped `b`'s learning rate while reporting `a`'s. The rate that
+ * trains and the rate that is printed part company, and nothing raises.
+ *
+ * torch's message embeds the optimizer's whole `repr`, which is a paragraph. The
+ * stable opening clause is what a search finds, and it is what the core says too.
+ */
+function sameOptimizer(
+  who: string, opt: Optimizer, schedulers: readonly LRScheduler[],
+): void {
+  for (const [at, sch] of schedulers.entries()) {
+    if (sch.optimizer !== opt) {
+      throw new Error(
+        `${who} expects all schedulers to belong to the same optimizer, but got `
+        + `scheduler ${sch.constructor.name} at index ${at} has `
+        + `${sch.optimizer.constructor.name}, which is different from `
+        + `${opt.constructor.name}.`);
+    }
+  }
+}
+
+/**
  * **Chains schedulers end to end.** On reaching a milestone it hands over
  * to the next.
  */
@@ -2285,6 +2310,17 @@ export class SequentialLR {
     private readonly milestones: readonly number[],
     lastEpoch = -1,
   ) {
+    sameOptimizer("SequentialLR", opt, schedulers);
+    // **torch counts them.** One scheduler per interval and one interval more than
+    // there are milestones; given two of each, the last scheduler is never reached
+    // and `step` walks the wrong one forever.
+    if (schedulers.length !== milestones.length + 1) {
+      throw new Error(
+        "Sequential Schedulers expects number of schedulers provided to be one "
+        + "more than the number of milestone points, but got number of schedulers "
+        + `${schedulers.length} and the number of milestones to be equal to `
+        + `${milestones.length}`);
+    }
     // **Its own epoch, and not passed down.** torch's `SequentialLR` takes
     // `last_epoch` and drives the child it hands over to; the children are built by
     // the caller and already carry their own. So this only resumes the switch point.
@@ -2343,6 +2379,11 @@ export class ChainedScheduler {
         "ChainedScheduler: the optimizer given is not the one the schedulers "
         + "are stepping.");
     }
+    // **The `opt` seat was checked and the schedulers were not.** Given none —
+    // which is the ordinary call — a mismatch among them went straight through,
+    // and then `getLastLr` reads the first one's rates while the others step
+    // somebody else's. The core had the same hole in both chaining classes.
+    sameOptimizer("ChainedScheduler", found, this.schedulers);
     this.optimizer = found;
   }
 

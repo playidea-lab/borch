@@ -1540,6 +1540,26 @@ class _Saves:
         return self
 
 
+def _one_optimizer(who, optimizer, schedulers):
+    """**Every scheduler in a chain has to be stepping the same optimizer.**
+
+    torch checks it and this did not, so `SequentialLR(a, [ConstantLR(a),
+    ConstantLR(b)])` was built without complaint and then, at the milestone, stepped
+    `b`'s learning rate while reporting `a`'s. The rate that trains and the rate that
+    is printed part company, and nothing raises.
+
+    torch's message embeds the whole optimizer `repr`, which is a paragraph. The
+    stable opening clause is what a search finds and what is matched here.
+    """
+    for at, sch in enumerate(schedulers):
+        if getattr(sch, "optimizer", optimizer) is not optimizer:
+            raise ValueError(
+                f"{who} expects all schedulers to belong to the same optimizer, "
+                f"but got scheduler {type(sch).__name__} at index {at} has "
+                f"{type(sch.optimizer).__name__}, which is different from "
+                f"{type(optimizer).__name__}.")
+
+
 class SequentialLR(_Saves):
     """**Chains schedulers.** At a milestone it hands over to the next one.
 
@@ -1552,7 +1572,21 @@ class SequentialLR(_Saves):
         self.optimizer = optimizer
         self.schedulers = list(schedulers)
         self.milestones = list(milestones)
-        self.last_epoch = 0
+        _one_optimizer("SequentialLR", optimizer, self.schedulers)
+        # **torch counts them.** One scheduler per interval and one interval more
+        # than there are milestones; given two of each, the last scheduler is never
+        # reached and `step` silently walks the wrong one forever.
+        if len(self.schedulers) != len(self.milestones) + 1:
+            raise ValueError(
+                "Sequential Schedulers expects number of schedulers provided to be "
+                "one more than the number of milestone points, but got number of "
+                f"schedulers {len(self.schedulers)} and the number of milestones to "
+                f"be equal to {len(self.milestones)}")
+        # **`last_epoch` was a seat the body never read**, so resuming a run put the
+        # chain back at its first interval however far it had got. Measured against
+        # torch: the attribute becomes `last_epoch + 1` and the whole trace shifts by
+        # that much, which is what resuming means.
+        self.last_epoch = last_epoch + 1
         # **At construction it returns to the first scheduler's value.** Each
         # scheduler changed the lr once as it was built, so left alone it starts
         # from the last one's value.
@@ -1597,6 +1631,11 @@ class ChainedScheduler(_Saves):
             raise ValueError(
                 "ChainedScheduler: the optimizer given is not the one the schedulers "
                 "are stepping.")
+        # **The `optimizer=` seat was checked and the schedulers were not.** Given
+        # none — which is the ordinary call — any mismatch among them went through,
+        # and `get_last_lr` then reads the first one's rates while the others step
+        # somebody else's. `SequentialLR` had the same hole.
+        _one_optimizer("ChainedScheduler", found, self.schedulers)
         self.optimizer = found
 
     def step(self):

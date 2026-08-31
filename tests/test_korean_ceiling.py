@@ -342,7 +342,11 @@ CEILINGS = {
     # `0 텐서=` in the two `zero_grad` verdicts (keys and values in `golden.json`),
     # plus the `norm::`/`opt::`/`container::` skip reasons in `run.py` naming what
     # each row is about.
-    "borch-ts/test": 4628,
+    # 4628 → 4690. Sixty-two: the `opt::SequentialLR/ChainedScheduler(…)=거절` and
+    # `(last_epoch=N)/자취` names, the two `fft::istft(…)` ones, and the `문구대로`/
+    # `안 던졌다` verdicts they return. Keys and values in `golden.json`, so both
+    # sides spell them the same.
+    "borch-ts/test": 4690,
 }
 
 

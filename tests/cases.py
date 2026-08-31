@@ -2047,6 +2047,75 @@ def fft_cases(inp=None):
                                       return_complex=True),
                                8, 4, window=hann(L), length=16))
 
+    # ── `istft`'s two-sided path ran a **forward** transform ──────────────────
+    #
+    # `onesided=True` used `irfft` and was right; the other branch called `fft`, so
+    # the function whose name is *inverse* did the forward one. Reconstructing
+    # `sin(0.3k)` gave `[3.60, 0.97, 3.56, …]` where the waveform is
+    # `[0, 0.30, 0.56, …]` — no exception, a plausible wave, and the default path
+    # being correct is why nothing said so. `return_complex` was a seat neither
+    # implementation read besides, so the dtype was wrong there too.
+    def two_sided(L, complex_out):
+        spec = L.stft(s(L), 8, 4, window=hann(L), onesided=False,
+                      return_complex=True)
+        return L.istft(spec, 8, 4, window=hann(L), onesided=False, length=16,
+                       return_complex=complex_out)
+
+    # **The verdict carries the measurement**, and it has to.
+    #
+    # Written with `_as_expected` alone this was undefended: that helper asks only
+    # *did it behave as documented* — succeed on torch and the core, refuse on the
+    # browser — so putting `fft` back where `ifft` belongs left all three answers
+    # unchanged and the plant passed. A verdict about behaviour cannot hold a value.
+    #
+    # So where it succeeds, the reconstruction is compared with the waveform that
+    # went in, and the verdict says which. torch and the core must reconstruct; the
+    # browser must refuse; anything else is a distinct word.
+    def two_sided_verdict(L, complex_out):
+        must_reject = hasattr(L, "backend")     # the browser side
+        try:
+            got = two_sided(L, complex_out)
+        except Exception as exc:                                # noqa: BLE001
+            return "기대대로" if must_reject else f"뜻밖의 거절 <{type(exc).__name__}>"
+        if must_reject:
+            return "뜻밖의 성공"
+        want = np.asarray(sig, dtype=np.float32)[:16]
+        flat = np.asarray([complex(v).real
+                           for v in got.reshape(-1).tolist()], dtype=np.float32)
+        if not np.allclose(flat, want, atol=1e-3):
+            return f"복원이 안 됐다 <{flat[:3].round(3).tolist()}>"
+        # **The dtype is in the same verdict**, because the values alone do not hold
+        # it: this branch reads `.real` off whatever comes back, so a complex answer
+        # where torch gives a real one compares equal. Written as a separate case it
+        # would have to be a string the browser cannot produce — it refuses here —
+        # so the one verdict carries both, and a wrong dtype is a different word.
+        wanted = "complex64" if complex_out else "float32"
+        return ("기대대로" if str(got.dtype).endswith(wanted)
+                else f"형이 다르다 <{got.dtype}>")
+
+    cases.append((FFT_PREFIX + "istft(onesided=False)=브라우저는복소를안먹는다",
+                  lambda L: two_sided_verdict(L, False)))
+    cases.append((FFT_PREFIX + "istft(onesided=False, 복소로)=브라우저는복소를안먹는다",
+                  lambda L: two_sided_verdict(L, True)))
+    # The dtype of the ordinary call, which is the half every caller meets: torch
+    # hands back a real waveform and this handed back `complex64` on that branch.
+    add("istft 의 형은 실수다",
+        lambda L: str(L.istft(L.stft(s(L), 8, 4, window=hann(L),
+                                     return_complex=True),
+                              8, 4, window=hann(L), length=16).dtype))
+    # Asking a onesided reconstruction for a complex result: the result is real by
+    # construction and torch refuses the request rather than dressing it.
+    def onesided_complex(L):
+        try:
+            L.istft(L.stft(s(L), 8, 4, window=hann(L), return_complex=True),
+                    8, 4, window=hann(L), length=16, return_complex=True)
+        except Exception as exc:                                # noqa: BLE001
+            return ("문구대로" if "Cannot have onesided output" in str(exc)
+                    else f"다른 문구 <{exc}>")
+        return "안 던졌다"
+
+    add("istft(onesided 인데 복소를 달라면 거절)", onesided_complex)
+
     # ── refusals ──
     def refuses(name, body):
         def run(L, f=body):
@@ -4194,6 +4263,72 @@ def opt_cases(inp=None):
 
     cases.append((OPT_PREFIX + "SequentialLR/자취", sequential))
     cases.append((OPT_PREFIX + "ChainedScheduler/자취", chained))
+
+    # ── the two chaining classes checked nothing about their schedulers ────────
+    #
+    # `SequentialLR(a, [ConstantLR(a), ConstantLR(b)])` was built without complaint
+    # and then, at the milestone, stepped `b`'s learning rate while `get_last_lr`
+    # read `a`'s. The rate that trains and the rate that is printed part company and
+    # nothing raises. torch checks it, in both classes.
+    def two_optimizers(L, which):
+        m = model_of(L)
+        a = L.optim.SGD(m.parameters(), lr=0.2)
+        b = L.optim.SGD(m.parameters(), lr=0.2)
+        S = L.optim.lr_scheduler
+        try:
+            if which == "SequentialLR":
+                S.SequentialLR(a, [S.ConstantLR(a, factor=0.5, total_iters=2),
+                                   S.ConstantLR(b, factor=0.1, total_iters=2)],
+                               milestones=[2])
+            else:
+                S.ChainedScheduler([S.ConstantLR(a), S.ConstantLR(b)])
+        except Exception as exc:                                # noqa: BLE001
+            return ("문구대로"
+                    if "belong to the same optimizer" in str(exc)
+                    else f"다른 문구 <{str(exc).splitlines()[0][:50]}>")
+        return "안 던졌다"
+
+    for _who in ("SequentialLR", "ChainedScheduler"):
+        cases.append((OPT_PREFIX + f"{_who}(다른 optimizer)=거절",
+                      lambda L, w=_who: two_optimizers(L, w)))
+
+    # One scheduler per interval and one interval more than there are milestones.
+    # Given two of each the last is never reached and `step` walks the wrong one.
+    def milestone_count(L):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.2)
+        S = L.optim.lr_scheduler
+        try:
+            S.SequentialLR(opt, [S.ConstantLR(opt), S.ConstantLR(opt)],
+                           milestones=[1, 2])
+        except Exception as exc:                                # noqa: BLE001
+            return ("문구대로" if "one more than the number of milestone" in str(exc)
+                    else f"다른 문구 <{str(exc).splitlines()[0][:50]}>")
+        return "안 던졌다"
+
+    cases.append((OPT_PREFIX + "SequentialLR(milestone 개수가 안 맞으면)=거절",
+                  milestone_count))
+
+    # **`last_epoch` was a seat neither side read**, so resuming put the chain back
+    # at its first interval however far it had got. Measured: the whole trace shifts
+    # by `last_epoch + 1`, which is what resuming means.
+    def sequential_resumed(L, last_epoch):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.2)
+        S = L.optim.lr_scheduler
+        sch = S.SequentialLR(
+            opt, [S.ConstantLR(opt, factor=0.5, total_iters=2),
+                  S.ExponentialLR(opt, gamma=0.5)],
+            milestones=[2], last_epoch=last_epoch)
+        seen = []
+        for _ in range(5):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            sch.step()
+        return L.tensor(np.array(seen, dtype=np.float32))
+
+    for _le in (-1, 0, 2):
+        cases.append((OPT_PREFIX + f"SequentialLR(last_epoch={_le})/자취",
+                      lambda L, e=_le: sequential_resumed(L, e)))
 
     # ── where a branch is asked in isolation ──
     #
@@ -14684,6 +14819,46 @@ def dtype_cases(inp=None):
     for name in ("half", "bfloat16", "chalf", "cdouble", "byte", "char",
                  "short", "int"):
         we_refuse(name, lambda L, n=name: getattr(L.tensor(floats), n)())
+
+    # ── `x.type()` — the getter spoke a vocabulary the setter could not hear ───
+    #
+    # It hands back `torch.FloatTensor` and could not take that answer back:
+    # `x.type("torch.FloatTensor")`, which is what every pre-2.0 tutorial writes,
+    # went to numpy as a dtype string and came back *data type 'torch.FloatTensor'
+    # not understood*. On the binding both halves were wrong the other way — the
+    # getter returned `torch.float32`, and the setter **relabelled**, so
+    # `x.type("torch.zzzTensor")` produced a tensor whose dtype printed
+    # `torch.zzzTensor`: a name for nothing, with no exception.
+    cases.append(("dtype::형이름::x.type() 은 텐서형 이름이다",
+                  lambda L: L.tensor(floats).type()))
+    cases.append(("dtype::형이름::int64 의 이름",
+                  lambda L: L.tensor(ints).type()))
+    cases.append(("dtype::형이름::불리언의 이름",
+                  lambda L: L.tensor(ints > 1).type()))
+    # **Round trip** — the answer fed straight back in, which is the whole point.
+    cases.append(("dtype::형이름::자기 이름을 다시 먹인다",
+                  lambda L: str(L.tensor(floats).type(
+                      L.tensor(floats).type()).dtype)))
+    for _name in ("torch.FloatTensor", "torch.LongTensor", "torch.BoolTensor"):
+        cases.append((f"dtype::형이름::type({_name})",
+                      lambda L, n=_name: str(L.tensor(floats).type(n).dtype)))
+    # The three whose storage is absent keep their names and say so, as their
+    # `dtype=` spellings do.
+    for _name in ("torch.DoubleTensor", "torch.IntTensor", "torch.HalfTensor"):
+        we_refuse(f"type({_name})",
+                  lambda L, n=_name: L.tensor(floats).type(n), group="형이름")
+    # A name that is not one of the twelve: torch's wording **and its type** —
+    # `ValueError`, where numpy raised `TypeError` for the same mistake.
+    def unknown_type_name(L):
+        try:
+            L.tensor(floats).type("torch.zzzTensor")
+        except Exception as exc:                                # noqa: BLE001
+            return (f"{type(exc).__name__} 문구대로"
+                    if "invalid type: 'torch.zzzTensor'" in str(exc)
+                    else f"다른 문구 <{type(exc).__name__}: {exc}>")
+        return "안 던졌다"
+
+    cases.append(("dtype::형이름::이름이 아닌 것", unknown_type_name))
 
     # ── the three asked — **an input producing false was measured first** ──
     #
