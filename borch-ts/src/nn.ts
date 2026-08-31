@@ -21,7 +21,8 @@ import { NotImplementedError, RuntimeError, ValueError } from "./errors.js";
 import { runningStats } from "./kernels.js";
 import { onSeed, uniform as uniform01, uniformArray } from "./random.js";
 import {
-  device, keepAlive, noGrad, type PadMode, type Reduction, Tensor,
+  device, type InterpolateMode, keepAlive, noGrad, type PadMode, type Reduction,
+  Tensor,
 } from "./tensor.js";
 
 /**
@@ -2600,7 +2601,7 @@ export class Upsample extends Module {
    */
   constructor(private readonly size: number | readonly number[] | null = null,
               private readonly scaleFactor: number | null = null,
-              private readonly mode: "nearest" | "bilinear" = "nearest",
+              private readonly mode: InterpolateMode = "nearest",
               private readonly alignCorners: boolean | null = null,
               private readonly recomputeScaleFactor: boolean | null = null) {
     super();

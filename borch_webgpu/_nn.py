@@ -466,34 +466,32 @@ def _triplet_with_distance(anchor, positive, negative, distance_function=None,
 
 
 def _interpolate(x, size=None, scale_factor=2, mode="nearest",
-                 align_corners=None):
-    """**A place that accepted `mode` and never used it.**
+                 align_corners=None, recompute_scale_factor=None,
+                 antialias=False):
+    """**A place that accepted `mode` and never used it**, and then a third copy of
+    the rules that did.
 
-    The general path forwards to `upsample`, which does nearest only, so asking
+    The general path forwarded to `upsample`, which does nearest only, so asking
     for bilinear produced nearest — not an exception but a quietly different
     value. `F.pad` was caught in the same shape once, and like that time it only
     surfaced once the golden gained a case asking for that branch.
+
+    The repair was to dispatch here, and that put a **third** implementation of the
+    same arithmetic in the repository — with its own limits nobody else had, such as
+    refusing a nearest `size=` that is not a whole multiple, which both the core and
+    borch.ts answer. It forwards to borch.ts's own `interpolate` now: one dispatch,
+    one set of rules, and the five modes arrive without being spelled out again.
+
+    `antialias` is refused here rather than passed on, because the seat is Python's —
+    borch.ts has no such argument, so a word handed over would be discarded and the
+    aliased answer would come back under the filtered one's name.
     """
-    h = handle(x)
-    if mode == "nearest":
-        # **A place that accepted `size` and never used it** — `upsample` over
-        # there takes a factor only. The same branch as the dropped `mode`, and
-        # quietly a different value in the same shape.
-        if size is not None:
-            oh, ow = (size, size) if isinstance(size, int) else tuple(size)
-            ih, iw = int(h.shape[2]), int(h.shape[3])
-            if oh % ih or ow % iw or oh // ih != ow // iw:
-                raise RuntimeError("interpolate(size=) — nearest upsampling by a non-integer factor")
-            scale_factor = oh // ih
-        return wrap(guarded(h.upsample, scale_factor))
-    if mode != "bilinear":
-        raise RuntimeError(f"interpolate(mode={mode!r}) — only nearest and bilinear are here")
-    if size is not None:
-        oh, ow = (size, size) if isinstance(size, int) else tuple(size)
-    else:
-        s = scale_factor if isinstance(scale_factor, int) else scale_factor[0]
-        oh, ow = int(h.shape[2] * s), int(h.shape[3] * s)
-    return wrap(guarded(h.interpolateBilinear, oh, ow, bool(align_corners)))
+    if antialias:
+        raise RuntimeError(
+            "interpolate(antialias=True) — the widened filter it uses when shrinking "
+            "is not in the browser subset")
+    return wrap(guarded(handle(x).interpolate, size, scale_factor, mode,
+                        bool(align_corners), recompute_scale_factor))
 
 
 def _upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None,

@@ -4575,6 +4575,60 @@ function addUnpool(out: Map<string, Case>): void {
   ebRefuses("sparse",
     () => nn.embeddingBag(ebIdx(), ebTable(), null, null, 2, false, "mean", true));
 
+  // ── `interpolate`'s other three modes ─────────────────────────────────
+  //
+  // `mode` was `"nearest" | "bilinear"` — a union, so anything else was a compile
+  // error rather than a wrong answer. Three of torch's rest were a short distance
+  // away: `area` is `adaptivePool("avg", …)` bit for bit, `nearest-exact` is nearest
+  // measured from the output cell's centre, and `bicubic` is Keys' kernel at torch's
+  // `a = −0.75`. `linear` and `trilinear` want a rank this function does not take.
+  //
+  // **The output size is asked three ways.** At a whole-number enlargement `nearest`,
+  // `nearest-exact` and `area` all agree, so a case asking only `scaleFactor: 2` would
+  // pass with the three wired to one body; the size that divides evenly into neither
+  // is what separates them.
+  const interpImg = () => Tensor.from(
+    Array.from({ length: 20 }, (_, i) => i + 1), [1, 1, 4, 5]);
+  const interpSizes: [number, number][] = [[2, 3], [8, 10], [3, 7]];
+  for (const mode of ["area", "nearest-exact"] as const) {
+    for (const s of interpSizes) {
+      out.set(`fname::interpolate(${mode}, size=(${s[0]}, ${s[1]}))`,
+        () => interpImg().interpolate(s, null, mode));
+    }
+    for (const sf of [0.5, 1.5]) {
+      out.set(`fname::interpolate(${mode}, scale=${sf})`,
+        () => interpImg().interpolate(null, sf, mode));
+    }
+  }
+  // `alignCorners` both ways: the two coordinate rules part at the edges and agree
+  // closely in the middle, which is the kind of difference only a value sees.
+  for (const ac of [false, true]) {
+    const tag = ac ? "True" : "False";
+    for (const s of interpSizes) {
+      out.set(`fname::interpolate(bicubic, align=${tag}, size=(${s[0]}, ${s[1]}))`,
+        () => interpImg().interpolate(s, null, "bicubic", ac));
+    }
+    out.set(`fname::interpolate(bicubic, align=${tag}, scale=1.5)`,
+      () => interpImg().interpolate(null, 1.5, "bicubic", ac));
+  }
+  // **The gradient is where a resampling is usually wrong**, and each of the three is
+  // a gather with constant weights, so nothing was written for the backward — which is
+  // exactly when a wrong forward index goes unnoticed, the same wrong index being used
+  // on the way back.
+  const interpGrad = (mode: "area" | "nearest-exact" | "bicubic", ac = false) => () => {
+    const x = interpImg();
+    x.requiresGrad = true;
+    x.interpolate([3, 7], null, mode, ac)
+      .mul(Tensor.from(Array.from({ length: 21 }, (_, i) => i + 1), [1, 1, 3, 7]))
+      .sum().backward();
+    return gradOf(x, `interpolate/${mode}`);
+  };
+  out.set("fname::interpolate(area) 의 기울기", interpGrad("area"));
+  out.set("fname::interpolate(nearest-exact) 의 기울기", interpGrad("nearest-exact"));
+  out.set("fname::interpolate(bicubic) 의 기울기", interpGrad("bicubic"));
+  out.set("fname::interpolate(bicubic, align=True) 의 기울기",
+    interpGrad("bicubic", true));
+
   // ── The spatial transformer ───────────────────────────────────────────
   //
   // The two traps are written at length on the Python side. Briefly: asked with squares

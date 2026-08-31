@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 371
+  "missing": 372
  },
  "modules": [
   {
@@ -81,6 +81,13 @@
      "doc": "How a loss folds. **Only `KLDivLoss` takes a fourth (`batchmean`).**",
      "members": [],
      "doc_ko": "손실이 접는 방식. **`KLDivLoss` 만 넷째(`batchmean`)를 더 받는다.**"
+    },
+    {
+     "kind": "type",
+     "name": "InterpolateMode",
+     "signature": "export type InterpolateMode = \"nearest\" | \"nearest-exact\" | \"area\" | \"bilinear\" | \"bicubic\"",
+     "doc": "How `interpolate` resamples. **torch's `linear` and `trilinear` are absent because\nthey want a rank this function does not take** — it is written for `[N, C, H, W]`,\nand those two are the 3-D and 5-D members of the same family. `nearest` and\n`nearest-exact` differ by half an output cell; `area` is adaptive average pooling\nunder another name.",
+     "members": []
     },
     {
      "kind": "type",
@@ -5635,7 +5642,7 @@
       },
       {
        "name": "interpolate",
-       "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean, recomputeScaleFactor?: boolean | null): Tensor",
+       "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: InterpolateMode, alignCorners?: boolean, recomputeScaleFactor?: boolean | null): Tensor",
        "doc": "**A fractional `scaleFactor` has to be floored, and was not.**\n\ntorch's output extent is `floor(in · scale)`. Multiplying without it gave\n`Upsample(scale_factor=1.5)` on a 3×4 input a shape of `[1, 1, 4.5, 6]` — a\nnon-integer dimension, which for `nearest` produced a tensor summing to zero and\n*did not throw*, and for `bilinear` blew up somewhere else entirely (`shape\n[4.5,1] does not match 5 elements`). At 2.3 it reached WebGPU as `Size (253) must\nbe a multiple of 4`.\n\nWhole factors were right, which is why this stood: 2 and 3 are what anybody tries.\n\n`recomputeScaleFactor` is torch's fourth answer to the same arithmetic. With it\non, torch works out the integer output size and then **derives the scale back\nfrom it** per axis, so a 3-high input at 1.5 samples at 4/3 rather than 1.5. Same\nshape, different values — measured on torch: sum 120 against 132.",
        "section": {
         "ko": "CTC",
@@ -7198,7 +7205,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 749,
+   "count": 750,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -9134,7 +9141,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean | null, recomputeScaleFactor?: boolean | null)",
+       "signature": "constructor(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: InterpolateMode, alignCorners?: boolean | null, recomputeScaleFactor?: boolean | null)",
        "doc": "**`recomputeScaleFactor` was missing and the kernel behaved as though it were\non.** With a fractional factor torch works out the integer output size and then\neither samples at the factor it was given (the default) or derives the scale back\nfrom that size (the flag). Same shape, different values — measured on torch at\n`scale_factor=1.5`: sums 120 and 132."
       },
       {
@@ -20266,5 +20273,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2744
+ "total": 2745
 }

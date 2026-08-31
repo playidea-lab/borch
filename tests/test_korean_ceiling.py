@@ -272,7 +272,10 @@ CEILINGS = {
     # `scale_grad_by_freq 는 값을 안 건드린다`, the two `=우리는거절` on the bag — and the
     # verdict strings those refusals return. All are keys or values in `golden.json`,
     # so both sides spell them the same.
-    "borch-ts/test": 4119,
+    # 4119 → 4140. Twenty-one, in `interpolate`'s four gradient case names
+    # (`… 의 기울기`) — keys in `golden.json` — and the reason written beside the
+    # `fname::` row in `run.py` for the mode a compile-time union cannot refuse.
+    "borch-ts/test": 4140,
 }
 
 

@@ -709,7 +709,12 @@ NOT_PORTED = {
     # in-place variant returns itself — all already correct. No hole came out here — **a
     # place that was merely never asked is not the same as a place that is wrong, and
     # asking is what separates the two.**
-    "fname::": (28, "별칭 — `F`'s in-place variants. The method side asks them already"),
+    # 28 → 29. `interpolate(mode 이 없는 이름)` asks that an unknown `mode` stops. On
+    # this side `mode` is a **compile-time union**, so `"quadratic"` is a type error and
+    # there is no runtime refusal to reach — the same shape as the `pad::` row below,
+    # where a surplus argument is not received rather than refused. The other four
+    # spellings the union carries are all asked, by value and by gradient.
+    "fname::": (29, "별칭 — `F`'s in-place variants. The method side asks them already"),
     # `bit::` used to be here — 24 cases, "alias — the method names of the bit
     # operations". **The point was that those names were not over there**, and the reason
     # called them aliases. They went in and all were ported, so the row is gone.

@@ -49,6 +49,16 @@ export type PadMode = "constant" | "reflect" | "replicate" | "circular";
 export type Reduction = "none" | "mean" | "sum";
 
 /**
+ * How `interpolate` resamples. **torch's `linear` and `trilinear` are absent because
+ * they want a rank this function does not take** — it is written for `[N, C, H, W]`,
+ * and those two are the 3-D and 5-D members of the same family. `nearest` and
+ * `nearest-exact` differ by half an output cell; `area` is adaptive average pooling
+ * under another name.
+ */
+export type InterpolateMode =
+  "nearest" | "nearest-exact" | "area" | "bilinear" | "bicubic";
+
+/**
  * SELU's fixed point. The value `alphaDropout` puts where it dropped comes from here.
  *
  * Filling with this number rather than 0 is what keeps SELU's self-normalisation —
@@ -10618,7 +10628,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   interpolate(size: number | readonly number[] | null = null,
               scaleFactor: number | null = null,
-              mode: "nearest" | "bilinear" = "nearest",
+              mode: InterpolateMode = "nearest",
               alignCorners = false,
               recomputeScaleFactor: boolean | null = null): Tensor {
     const h = this.shape[2] ?? 1;
@@ -10635,13 +10645,121 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
       return this.resizeNearest([oh, ow]);
     }
+    if (mode === "nearest-exact") {
+      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
+      return this.resizeNearestExact(oh, ow);
+    }
+    // **`area` is `adaptivePool("avg", …)` and nothing else.** Measured against torch
+    // on a shrink, an enlargement and a size dividing evenly into neither, the two
+    // agree bit for bit — so this names what is here rather than writing a second
+    // averaging, and the gradient comes with it.
+    if (mode === "area") {
+      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
+      return this.adaptivePool("avg", [oh, ow]);
+    }
     const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
+    if (mode === "bicubic") {
+      const given = size === null && !recomputeScaleFactor ? scale : null;
+      return this.interpolateBicubic(oh, ow, alignCorners, given);
+    }
+    // **The union protects TypeScript callers and not the binding.** `mode` reaching
+    // here is a string, and Python hands one over without a type to stop it — so
+    // everything unmatched fell through to bilinear and `mode="quadratic"` came back
+    // as a bilinear answer under its name. The golden case asking that both sides stop
+    // is what found it: `tsc` cannot, because in TypeScript the call does not compile.
+    if (mode !== "bilinear") {
+      throw new RuntimeError(
+        `interpolate(mode=${JSON.stringify(mode)}) is not one of nearest, `
+        + "nearest-exact, area, bilinear, bicubic");
+    }
     // **The default is the *given* scale; recomputing is what the flag turns on.**
     // The kernel had only the recomputed rule (`in / out`), so borch.ts answered as
     // though the flag were always set. A size rather than a factor has no scale to
     // recompute from, so that path is unchanged.
     const given = size === null && !recomputeScaleFactor ? scale : null;
     return this.interpolateBilinear(oh, ow, alignCorners, given);
+  }
+
+  /**
+   * `nearest-exact` — nearest measured from the **centre** of the output cell.
+   *
+   * `floor((o + 0.5)·in/out)` against `resizeNearest`'s `floor(o·in/out)`. Half a
+   * cell, which is nothing when enlarging by a whole number and is a different row
+   * entirely when shrinking: on a 4×5 to 2×3, `nearest` takes rows 0 and 2 and this
+   * takes 1 and 3. torch keeps both because the plain one is what everybody else had
+   * already shipped and is off by half.
+   *
+   * Built from `indexSelect` rather than a shader. The index rows are constants, so
+   * the gradient is the gather's own — an output cell reading the same input cell
+   * several times accumulates there, which is what `resizeNearest`'s kernel does by
+   * hand.
+   */
+  private resizeNearestExact(outH: number, outW: number): Tensor {
+    const h = this.shape[2] ?? 1;
+    const w = this.shape[3] ?? 1;
+    const pick = (sizeIn: number, sizeOut: number): Tensor => Tensor.from(
+      Array.from({ length: sizeOut }, (_, i) =>
+        Math.min(Math.floor(((i + 0.5) * sizeIn) / sizeOut), sizeIn - 1)),
+      [sizeOut], { dtype: "int64" });
+    return this.indexSelect(2, pick(h, outH)).indexSelect(3, pick(w, outW));
+  }
+
+  /**
+   * Cubic convolution over a 4×4 neighbourhood — torch's `bicubic`.
+   *
+   * **`a = −0.75`**, which is a choice rather than a derivation: the family of cubic
+   * kernels is parameterised by it, OpenCV uses −0.75 and Photoshop −0.5, and the
+   * edges come out visibly different. torch uses −0.75 and that is the whole reason
+   * this one does.
+   *
+   * The sixteen taps are gathers with constant indices times constant weights, so the
+   * gradient is the graph's and nothing had to be written for it. **The edges clamp**,
+   * which is torch's rule and what makes a window one cell outside the image safe.
+   * Nothing is clamped on the way out — cubic convolution overshoots, so an image in
+   * `[0, 1]` comes back slightly outside it, and torch does not clamp either.
+   */
+  private interpolateBicubic(outH: number, outW: number, alignCorners: boolean,
+                             given: number | null): Tensor {
+    const h = this.shape[2] ?? 1;
+    const w = this.shape[3] ?? 1;
+    const A = -0.75;
+    const cubic = (raw: number): number => {
+      const t = Math.abs(raw);
+      if (t <= 1) return ((A + 2) * t - (A + 3)) * t * t + 1;
+      if (t < 2) return ((t - 5) * t + 8) * t * A - 4 * A;
+      return 0;
+    };
+    // The same two rules the bilinear path uses: `alignCorners` pins both ends,
+    // otherwise the coordinate is measured from the centre of the output cell.
+    const coords = (sizeIn: number, sizeOut: number): number[] => {
+      if (alignCorners) {
+        if (sizeOut === 1) return [0];
+        return Array.from({ length: sizeOut },
+                          (_, i) => (i * (sizeIn - 1)) / (sizeOut - 1));
+      }
+      const step = given === null ? sizeIn / sizeOut : 1 / given;
+      return Array.from({ length: sizeOut }, (_, i) => (i + 0.5) * step - 0.5);
+    };
+    const ys = coords(h, outH);
+    const xs = coords(w, outW);
+    const clampRow = (base: number[], k: number, limit: number): Tensor =>
+      Tensor.from(base.map((v) =>
+        Math.min(Math.max(Math.floor(v) + k, 0), limit - 1)), [base.length],
+      { dtype: "int64" });
+
+    let out: Tensor | null = null;
+    for (let ky = -1; ky < 3; ky++) {
+      const wy = Tensor.from(
+        ys.map((v) => cubic(ky - (v - Math.floor(v)))), [1, 1, outH, 1]);
+      const rows = this.indexSelect(2, clampRow(ys, ky, h));
+      for (let kx = -1; kx < 3; kx++) {
+        const wx = Tensor.from(
+          xs.map((v) => cubic(kx - (v - Math.floor(v)))), [1, 1, 1, outW]);
+        const tap = rows.indexSelect(3, clampRow(xs, kx, w)).mul(wy).mul(wx);
+        out = out === null ? tap : out.add(tap);
+      }
+    }
+    return out ?? this;
   }
 
   /**

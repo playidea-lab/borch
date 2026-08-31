@@ -1580,14 +1580,26 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
     if mode == "bilinear":
         return _interpolate_bilinear(x, size, scale_factor, bool(align_corners),
                                      recompute_scale_factor)
-    if mode != "nearest":
-        _unsupported(f"interpolate(mode={mode!r}) — only nearest and bilinear are here")
+    if mode == "bicubic":
+        return _interpolate_bicubic(x, size, scale_factor, bool(align_corners),
+                                    recompute_scale_factor)
+    if mode not in ("nearest", "nearest-exact", "area"):
+        _unsupported(f"interpolate(mode={mode!r}) — nearest, nearest-exact, area, "
+                     "bilinear and bicubic are here; linear and trilinear want a "
+                     "rank this function does not take")
     xd = x.data
     n, c, h, w = xd.shape
     if size is not None:
         oh, ow = _pair(size)
     else:
         oh, ow = _out_size((h, w), scale_factor)
+    # **`area` is `adaptive_avg_pool2d` and nothing else.** Measured against torch on
+    # three output sizes — a shrink, an enlargement and one that divides evenly into
+    # neither — `F.interpolate(x, size, mode="area")` and `F.adaptive_avg_pool2d(x,
+    # size)` agree bit for bit. So this names what is already here rather than writing
+    # a second averaging, and the gradient comes with it.
+    if mode == "area":
+        return adaptive_avg_pool2d(x, (oh, ow))
     # **A source index per output cell, not a whole-number repeat.**
     #
     # This was `np.repeat` twice and it refused anything that was not an integer
@@ -1612,8 +1624,15 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
              else (scale_factor, scale_factor))
     sh = given[0] if use_given else (oh / h)
     sw = given[1] if use_given else (ow / w)
-    rows = _np.minimum((_np.arange(oh) / sh).astype(int), h - 1)
-    cols = _np.minimum((_np.arange(ow) / sw).astype(int), w - 1)
+    # **`nearest-exact` measures from the centre of the output cell and `nearest` does
+    # not.** `floor((i + 0.5) / s)` against `floor(i / s)` — half a cell, which is
+    # nothing when enlarging by a whole number and is a different row entirely when
+    # shrinking. torch keeps both because the plain one is the one everybody else
+    # already shipped and is off by half; measured on a 4×5 to 2×3, `nearest` takes
+    # rows 0 and 2 and `nearest-exact` takes 1 and 3.
+    half = 0.5 if mode == "nearest-exact" else 0.0
+    rows = _np.minimum(((_np.arange(oh) + half) / sh).astype(int), h - 1)
+    cols = _np.minimum(((_np.arange(ow) + half) / sw).astype(int), w - 1)
     out = xd[:, :, rows][:, :, :, cols]
 
     def back(g):
@@ -1646,6 +1665,97 @@ def _bilinear_axis(size_in, size_out, align_corners, scale=None):
     lo = _np.floor(src).astype(_np.intp)
     hi = _np.minimum(lo + 1, size_in - 1)
     return lo, hi, (src - lo)
+
+
+# torch's cubic convolution constant. **`a` is a choice, not a derivation** — the
+# family of cubic kernels is parameterised by it, OpenCV uses −0.75 and Photoshop
+# −0.5, and they give visibly different edges. torch uses −0.75, and reproducing
+# torch's numbers to float64 noise is what fixed it here rather than any argument
+# about which is better.
+_BICUBIC_A = -0.75
+
+
+def _cubic_weight(t):
+    """Keys' cubic convolution kernel at `t`, zero beyond two cells."""
+    t = _np.abs(t)
+    a = _BICUBIC_A
+    near = ((a + 2) * t - (a + 3)) * t * t + 1
+    far = ((t - 5) * t + 8) * t * a - 4 * a
+    return _np.where(t <= 1, near, _np.where(t < 2, far, 0.0))
+
+
+def _bicubic_axis(size_in, size_out, align_corners, scale=None):
+    """The continuous source coordinate for each output position.
+
+    The same two rules `_bilinear_axis` uses, which is the point: `align_corners`
+    pins both ends, and otherwise the coordinate is measured from the **centre** of
+    the output cell — `(i + 0.5)·s − 0.5`.
+    """
+    if align_corners:
+        if size_out == 1:
+            return _np.zeros(1)
+        return _np.arange(size_out) * ((size_in - 1) / (size_out - 1))
+    step = (1.0 / scale) if scale else (size_in / size_out)
+    return (_np.arange(size_out) + 0.5) * step - 0.5
+
+
+def _interpolate_bicubic(x, size, scale_factor, align_corners,
+                         recompute_scale_factor=None):
+    """Cubic convolution over a 4×4 neighbourhood.
+
+    **It was refused, and the refusal said only *not here*.** What it needed was one
+    constant and one kernel: with `a = −0.75` and coordinates taken the way the
+    bilinear path already takes them, this reproduces torch to float64 noise on six
+    combinations — three output sizes against both `align_corners`.
+
+    **The edges clamp rather than reflect or wrap**, which is torch's rule and the
+    reason a 4×4 window is safe one cell outside the image on either side.
+
+    Nothing is clamped on the way out: cubic convolution overshoots, so upsampling an
+    image in `[0, 1]` gives values slightly outside it. torch does not clamp either,
+    and a caller who wants pixels is expected to clamp.
+    """
+    n, c, h, w = x.data.shape
+    keep = None
+    if size is not None:
+        oh, ow = _pair(size)
+    else:
+        oh, ow = _out_size((h, w), scale_factor)
+        if recompute_scale_factor is not True:
+            keep = (scale_factor if isinstance(scale_factor, (tuple, list))
+                    else (scale_factor, scale_factor))
+    ys = _bicubic_axis(h, oh, align_corners, keep and keep[0])
+    xs = _bicubic_axis(w, ow, align_corners, keep and keep[1])
+    y0 = _np.floor(ys).astype(int)
+    x0 = _np.floor(xs).astype(int)
+    ty, tx = ys - y0, xs - x0
+
+    taps = []
+    for ky in range(-1, 3):
+        wy = _cubic_weight(ky - ty).astype(x.data.dtype)[:, None]
+        ry = _np.clip(y0 + ky, 0, h - 1)
+        for kx in range(-1, 3):
+            wx = _cubic_weight(kx - tx).astype(x.data.dtype)[None, :]
+            rx = _np.clip(x0 + kx, 0, w - 1)
+            taps.append((ry, rx, wy * wx))
+
+    out = _np.zeros((n, c, oh, ow), dtype=x.data.dtype)
+    for ry, rx, weight in taps:
+        out = out + x.data[:, :, ry][:, :, :, rx] * weight
+
+    def back(g):
+        gg = _np.asarray(g)
+        got = _np.zeros_like(x.data)
+        for ry, rx, weight in taps:
+            share = gg * weight
+            # A clamped edge reads the same row several times, so the shares
+            # **accumulate** rather than overwrite.
+            for i, yi in enumerate(ry):
+                _np.add.at(got[:, :, yi], (slice(None), slice(None), rx),
+                           share[:, :, i])
+        return (got,)
+
+    return x._make(out, (x,), back, "UpsampleBicubic2DBackward0")
 
 
 def _interpolate_bilinear(x, size, scale_factor, align_corners,

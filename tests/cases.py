@@ -4617,6 +4617,70 @@ def functional_name_cases(inp=None):
     add("upsample_bilinear 은 별명이 아니다",
         lambda L: str(upsample_corners_differ(L)))
 
+    # ── `interpolate`'s other three modes ──────────────────────────────
+    #
+    # `mode` was nearest and bilinear, and everything else stopped with *only nearest
+    # and bilinear are here*. Three of the rest were a short distance away:
+    #
+    #     area           `adaptive_avg_pool2d` under another name — bit for bit
+    #     nearest-exact  `floor((i + 0.5)·s)` where nearest has `floor(i·s)`
+    #     bicubic        Keys' cubic kernel at `a = −0.75`, which is torch's constant
+    #
+    # `linear` and `trilinear` are the 3-D and 5-D members of the same family and this
+    # function unpacks four axes, so they want a rank rather than a kernel.
+    #
+    # **The output size is asked three ways** — a shrink, an enlargement, and one that
+    # divides evenly into neither. The last is the one that separates the modes: at a
+    # whole-number enlargement `nearest` and `nearest-exact` agree exactly, and `area`
+    # agrees with `nearest` as well, so a case asking only `scale_factor=2` would pass
+    # with all three wired to the same body.
+    _INTERP_IMG = np.arange(1., 21., dtype=np.float32).reshape(1, 1, 4, 5)
+    for _mode in ("area", "nearest-exact"):
+        for _size in ((2, 3), (8, 10), (3, 7)):
+            add(f"interpolate({_mode}, size={_size})",
+                lambda L, m=_mode, s=_size: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), size=s, mode=m))
+        for _sf in (0.5, 1.5):
+            add(f"interpolate({_mode}, scale={_sf})",
+                lambda L, m=_mode, f=_sf: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), scale_factor=f, mode=m))
+    # **`align_corners` is asked both ways for bicubic**, because the two coordinate
+    # rules part at the edges and agree closely in the middle — the difference is the
+    # kind the eye does not see and a value comparison does.
+    for _ac in (False, True):
+        for _size in ((2, 3), (8, 10), (3, 7)):
+            add(f"interpolate(bicubic, align={_ac}, size={_size})",
+                lambda L, a=_ac, s=_size: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), size=s, mode="bicubic", align_corners=a))
+        add(f"interpolate(bicubic, align={_ac}, scale=1.5)",
+            lambda L, a=_ac: F(L).interpolate(
+                L.tensor(_INTERP_IMG), scale_factor=1.5, mode="bicubic",
+                align_corners=a))
+
+    def interp_grad(L, mode, align=False):
+        """**The gradient is where a resampling is usually wrong.** Each of the three
+        is a gather with constant weights, so nothing was written for the backward —
+        and that is exactly the situation where a wrong forward index goes unnoticed,
+        because the same wrong index is used on the way back and the two agree."""
+        x = L.tensor(_INTERP_IMG.copy(), requires_grad=True)
+        seed = np.arange(1., 22., dtype=np.float32).reshape(1, 1, 3, 7)
+        kw = {"align_corners": align} if mode == "bicubic" else {}
+        (F(L).interpolate(x, size=(3, 7), mode=mode, **kw)
+         * L.tensor(seed)).sum().backward()
+        return _grad_of(x, f"interpolate/{mode}")
+
+    add("interpolate(area) 의 기울기", lambda L: interp_grad(L, "area"))
+    add("interpolate(nearest-exact) 의 기울기",
+        lambda L: interp_grad(L, "nearest-exact"))
+    add("interpolate(bicubic) 의 기울기", lambda L: interp_grad(L, "bicubic"))
+    add("interpolate(bicubic, align=True) 의 기울기",
+        lambda L: interp_grad(L, "bicubic", True))
+    # **A mode torch does not have either.** Both sides stop; asked so that the
+    # widened `mode` list still has a floor under it.
+    add("interpolate(mode 이 없는 이름)=둘 다 거절",
+        lambda L: _both_stop(L, lambda M: M.nn.functional.interpolate(
+            M.tensor(_INTERP_IMG), size=(2, 3), mode="quadratic")))
+
     # ── the three faces of `max` and `min` ──
     #
     # torch returns **different things** depending on the arguments: `max(x)` is one maximum over
