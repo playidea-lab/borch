@@ -3043,9 +3043,6 @@ export class Embedding extends Module {
               device?: null, dtype?: null) {
     refuseDeviceDtype("Embedding", device, dtype);
     super();
-    if (scaleGradByFreq) {
-      throw new NotImplementedError("Embedding(scaleGradByFreq) is not carried across");
-    }
     if (sparse) {
       throw new NotImplementedError(
         "Embedding(sparse) is not carried across — there is no sparse gradient here");
@@ -3091,7 +3088,11 @@ export class Embedding extends Module {
       table = table.mul(keep)
         .add(table.detach().mul(Tensor.full([this.numEmbeddings, 1], 1).sub(keep)));
     }
-    return embedding(idx, table);
+    // **`scaleGradByFreq` was a constructor field the forward never read.** The
+    // constructor refused it, so the unread field was invisible; taking the refusal
+    // away without passing it here would leave a layer that prints
+    // `scale_grad_by_freq=true` in `describe()` and does not do it.
+    return embedding(idx, table, null, null, this.normType, this.scaleGradByFreq);
   }
 
   override describe(): string {
@@ -4608,19 +4609,19 @@ export function batchNorm(
  * leaves the forward identical to the bit and cuts the path back. Left in, a pad token
  * drifts toward whatever the loss wants and the mask stops meaning *ignore this*.
  *
- * `scale_grad_by_freq` and `sparse` are refused, by name, because the core refuses
- * them by name. Left out of the signature all five were surplus arguments and
- * JavaScript discards those — `embedding(idx, w, 0)` returned the un-padded answer
- * under the name of a padded one.
+ * `sparse` is refused, by name, because the core refuses it by name. Left out of the
+ * signature all five were surplus arguments and JavaScript discards those —
+ * `embedding(idx, w, 0)` returned the un-padded answer under the name of a padded one.
+ *
+ * `scaleGradByFreq` **divides each row's gradient by how often that index appears in
+ * this batch**, so a token seen three times does not pull three times as hard as one
+ * seen once. It is `padding_idx`'s trick with a fraction instead of a zero — see
+ * `scaleRowsByCount`.
  */
 export function embedding(input: Tensor, weight: Tensor,
                           paddingIdx: number | null = null,
                           maxNorm: number | null = null, normType = 2.0,
                           scaleGradByFreq = false, sparse = false): Tensor {
-  if (scaleGradByFreq) {
-    throw new RuntimeError(
-      "embedding(scale_grad_by_freq=true) is not in the browser subset.");
-  }
   if (sparse) {
     throw new RuntimeError(
       "embedding(sparse=true) — there is no sparse gradient here is not in the "
@@ -4628,9 +4629,40 @@ export function embedding(input: Tensor, weight: Tensor,
   }
   const dim = weight.shape[1] ?? 1;
   if (maxNorm !== null) renormRows(weight, input, maxNorm, normType);
-  const table = paddingIdx === null ? weight : detachRow(weight, paddingIdx);
+  let table = paddingIdx === null ? weight : detachRow(weight, paddingIdx);
+  if (scaleGradByFreq) table = scaleRowsByCount(table, input);
   const picked = table.indexSelect(0, input.reshape([input.size]));
   return picked.reshape([...input.shape, dim]);
+}
+
+/**
+ * The same table whose gradient is divided per row by how often that row is indexed.
+ *
+ * **The form is `w.detach() + (w − w.detach())·k`, and the reason is exactness.** The
+ * obvious alternative is `padding_idx`'s own trick with a fraction in place of the
+ * zero — `w·k + w.detach()·(1−k)` — and that one is not the identity in float32: the
+ * two products round apart, so at `k = 1/3` a row holding 15 comes back as 14.999999
+ * and one holding 27 as 26.999998. Here the bracket is elementwise zero, so the sum
+ * is `w` to the bit while the gradient still arrives scaled by `k`.
+ *
+ * **No check in this repository can tell the two apart**, and that is written down
+ * rather than left to be found: the perturbation is at the last float32 bit, about
+ * 1e-7 relative, and the golden compares at `rtol = 1e-4`. The inexact form was
+ * planted and passed every case. The exact one is still what to write — it costs
+ * nothing and it is right — but it is a choice the measurements do not defend.
+ *
+ * The counts are built with `indexAdd` rather than read back to the host, so this
+ * stays synchronous. A row nobody indexed has a count of zero and a gradient of zero;
+ * the divisor is floored at one there rather than dividing zero by zero into a `nan`
+ * that would poison every later step on that row.
+ */
+function scaleRowsByCount(weight: Tensor, input: Tensor): Tensor {
+  const rows = weight.shape[0] ?? 1;
+  const flat = input.reshape([input.size]);
+  const seen = Tensor.zeros([rows]).indexAdd(0, flat, Tensor.ones([flat.size]));
+  const k = Tensor.full([], 1)
+    .div(seen.binary("maximum", Tensor.full([], 1))).reshape([rows, 1]);
+  return weight.detach().add(weight.sub(weight.detach()).mul(k));
 }
 
 /**
@@ -4736,12 +4768,28 @@ export function embeddingBag(
   // `embeddingBag(idx, w, offsets, "sum")` handed a mode string to `maxNorm` — and
   // `maxNorm` rewrites the table, so the layer would have been rescaling its own
   // embeddings on every forward pass. The layer's call moved with it.
+  // **`scaleGradByFreq` is answered on `embedding` and refused here, because torch
+  // disagrees with itself.** `embeddingBag(mode: "sum")` is by definition
+  // `embedding(...).sum(1)`, and on torch 2.13.0 the two give different gradients
+  // under this flag: with `arange(12).reshape(4, 3)` and ids `[[0,1,1],[2,1,0]]` the
+  // plain path divides row 1 by three and row 2 by one — the documented rule — while
+  // the bag divides them by two and by three. Eight further probes found no rule
+  // reproducing the second. Copying an answer nobody can state a rule for would be a
+  // wrong number under an argument that reads as a tuning knob.
+  // **The wording is the one the golden reads.** These two said *is not carried
+  // across*, which nothing was asking; the moment a refusal case was written for them
+  // the binding reported the wrong-wording verdict, because that check freezes *is not
+  // in the browser subset* and the core's `_unsupported` produces exactly that. Two
+  // spellings of one refusal is one of them going unread.
   if (scaleGradByFreq) {
-    throw new NotImplementedError("embeddingBag(scaleGradByFreq) is not carried across");
+    throw new NotImplementedError(
+      "embeddingBag(scale_grad_by_freq=true) is not in the browser subset — torch's "
+      + "own bag disagrees with embedding(...).sum(1) under this flag");
   }
   if (sparse) {
     throw new NotImplementedError(
-      "embeddingBag(sparse) is not carried across — there is no sparse gradient here");
+      "embeddingBag(sparse=true) — there is no sparse gradient here is not in the "
+      + "browser subset.");
   }
   if (maxNorm !== null) renormRows(weight, input, maxNorm, normType);
   const dim = weight.shape[1] ?? 1;

@@ -1055,8 +1055,6 @@ class Embedding(Module):
                  sparse=False, _weight=None, _freeze=False, device=None, dtype=None):
         super().__init__()
         _no_device_dtype("Embedding", device, dtype)
-        if scale_grad_by_freq:
-            _unsupported("Embedding(scale_grad_by_freq=True)")
         if sparse:
             _unsupported("Embedding(sparse=True) — there is no sparse gradient here")
         if padding_idx is not None:
@@ -1092,8 +1090,13 @@ class Embedding(Module):
         # the same five is the shape this repository keeps finding, and the copy
         # here was the half that worked — so the fix ran the other way from
         # `nll_loss`'s: the function is the primitive, and the layer calls it.
+        # **`scale_grad_by_freq` was stored, printed by `__repr__`, and never read
+        # here.** The constructor refused it, so the unread field was invisible —
+        # taking the refusal away without adding it to this call would have made a
+        # layer that says `scale_grad_by_freq=True` and does not.
         return embedding(idx, self.weight, padding_idx=self.padding_idx,
-                         max_norm=self.max_norm, norm_type=self.norm_type)
+                         max_norm=self.max_norm, norm_type=self.norm_type,
+                         scale_grad_by_freq=self.scale_grad_by_freq)
 
     def __repr__(self):
         parts = [f"{self.num_embeddings}, {self.embedding_dim}"]

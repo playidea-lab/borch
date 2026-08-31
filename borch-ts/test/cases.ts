@@ -4506,10 +4506,74 @@ function addUnpool(out: Map<string, Case>): void {
       return "뜻밖의 성공";
     });
   };
-  emRefuses("scale_grad_by_freq",
-    () => nn.embedding(emIdx(), emTable(), null, null, 2, true));
   emRefuses("sparse",
     () => nn.embedding(emIdx(), emTable(), null, null, 2, false, true));
+
+  // **`scaleGradByFreq` divides each row's gradient by how often that index appears
+  // in this batch.** The fixture repeats index 1 three times and index 0 twice, so
+  // the three divisors are 2, 3 and 1 and no two rows share one — with each index
+  // appearing once the flag changes nothing and the case would pass with it ignored.
+  // Row 3 is never indexed: count zero, gradient zero, divisor floored at one.
+  const emFreqIdx = () => Tensor.from([0, 1, 1, 2, 1, 0], [2, 3], { dtype: "int64" });
+  const emFreqSeed = () => Tensor.from(
+    Array.from({ length: 18 }, (_, i) => i + 1), [2, 3, 3]);
+  const emFreq = (flag: boolean, pad: number | null = null) => () => {
+    const w = emTable();
+    w.requiresGrad = true;
+    nn.embedding(emFreqIdx(), w, pad, null, 2, flag).mul(emFreqSeed()).sum().backward();
+    return gradOf(w, "embedding/scale_grad_by_freq");
+  };
+  out.set("fname::embedding::scale_grad_by_freq 없이", emFreq(false));
+  out.set("fname::embedding::scale_grad_by_freq", emFreq(true));
+  // The padding row is zeroed as well as scaled, and zero over any count is zero — so
+  // the two are asked together to say that neither undoes the other.
+  out.set("fname::embedding::scale_grad_by_freq(padding_idx=1)", emFreq(true, 1));
+
+  // **The layer stored the flag, printed it in `describe()`, and never read it.** The
+  // constructor refused it, so the unread field could not be seen.
+  const emFreqLayer = (flag: boolean) => () => {
+    const e = new nn.Embedding(4, 3, null, null, 2, flag, false, emTable());
+    e.call(emFreqIdx()).mul(emFreqSeed()).sum().backward();
+    return gradOf(e.weight, "nn.Embedding/scale_grad_by_freq");
+  };
+  out.set("fname::embedding::Embedding(scale_grad_by_freq) 없이",
+    emFreqLayer(false));
+  out.set("fname::embedding::Embedding(scale_grad_by_freq)", emFreqLayer(true));
+
+  // **The flag touches the gradient and must leave the forward alone.** The scaling
+  // here puts the table through an expression that is the identity in value, so a
+  // wrong expression would move the values too, and nothing else looks at that.
+  //
+  // **What this cannot see is the last bit.** The obvious alternative expression,
+  // `w·k + w.detach()·(1−k)`, is not the identity in float32 — at `k = 1/3` a row
+  // holding 15 comes back as 14.999999 — and that is 1e-7 relative against a golden
+  // compared at `rtol = 1e-4`, so the wrong form was planted and passed. This table
+  // holds the values where the perturbation is largest anyway.
+  out.set("fname::embedding::scale_grad_by_freq 는 값을 안 건드린다",
+    () => nn.embedding(
+      emFreqIdx(),
+      Tensor.from([1, 2, 3, 15, 27, 45, 7, 8, 9, 0, 0, 0], [4, 3]),
+      null, null, 2, true));
+
+  // **torch disagrees with itself on the bag**, so this one stays a refusal:
+  // `embeddingBag(mode: "sum")` is `embedding(...).sum(1)` by definition, and under
+  // this flag the two give different gradients on torch 2.13.0.
+  const ebRefuses = (flag: string, body: () => unknown) => {
+    out.set(`fname::embedding_bag::${flag}=우리는거절`, () => {
+      try {
+        body();
+      } catch (err) {
+        return (err as Error).message.includes("is not in the browser subset")
+          ? "기대대로"
+          : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "뜻밖의 성공";
+    });
+  };
+  ebRefuses("scale_grad_by_freq",
+    () => nn.embeddingBag(ebIdx(), ebTable(), null, null, 2, true, "sum"));
+  ebRefuses("sparse",
+    () => nn.embeddingBag(ebIdx(), ebTable(), null, null, 2, false, "mean", true));
 
   // ── The spatial transformer ───────────────────────────────────────────
   //

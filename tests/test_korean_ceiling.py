@@ -268,7 +268,11 @@ CEILINGS = {
     # ASCII — `mse_loss 의 기울기` and `모양이 다르면 거절` — plus the verdict strings
     # `문구대로` and `안 던졌다` that the second one returns. All are keys or values in
     # `golden.json`, so both sides spell them the same.
-    "borch-ts/test": 4089,
+    # 4089 → 4119. Thirty, in `embedding`'s new case names — the two `없이` suffixes,
+    # `scale_grad_by_freq 는 값을 안 건드린다`, the two `=우리는거절` on the bag — and the
+    # verdict strings those refusals return. All are keys or values in `golden.json`,
+    # so both sides spell them the same.
+    "borch-ts/test": 4119,
 }
 
 

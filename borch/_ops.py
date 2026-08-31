@@ -5876,8 +5876,6 @@ def embedding(input, weight, padding_idx=None, max_norm=None,   # noqa: A002
     `max_norm` shortens rows **in the table itself** — a side effect on a parameter,
     which `_renorm_rows` explains at length and which no output comparison can see.
     """
-    if scale_grad_by_freq:
-        _unsupported("embedding(scale_grad_by_freq=True)")
     if sparse:
         _unsupported("embedding(sparse=True) — there is no sparse gradient here")
     ids = _wrap(input).data.astype(int)
@@ -5888,7 +5886,19 @@ def embedding(input, weight, padding_idx=None, max_norm=None,   # noqa: A002
 
     def back(g):
         gw = _np.zeros_like(weight.data)
-        _np.add.at(gw, ids.reshape(-1), _np.asarray(g).reshape(-1, dim))
+        flat = ids.reshape(-1)
+        _np.add.at(gw, flat, _np.asarray(g).reshape(-1, dim))
+        # **`scale_grad_by_freq` divides each row by how often that index appears in
+        # this batch**, so a token seen three times does not pull three times as hard
+        # as one seen once. Measured against torch: with ids `[[0,1,1],[2,1,0]]` row 0
+        # is halved and row 1 is divided by three.
+        #
+        # A row nobody indexed has a count of zero and a gradient of zero; the divisor
+        # is forced to one there rather than dividing zero by zero into a `nan` that
+        # would then poison every step the optimiser takes on that row.
+        if scale_grad_by_freq:
+            seen = _np.bincount(flat, minlength=gw.shape[0]).astype(gw.dtype)
+            gw = gw / _np.where(seen == 0, 1.0, seen)[:, None]
         # **The padding row learns nothing.** Left in, a pad token drifts toward
         # whatever the loss wants and the mask stops meaning "ignore this".
         if padding_idx is not None:
@@ -8964,8 +8974,24 @@ def embedding_bag(input, weight, offsets=None, max_norm=None, norm_type=2.0,
     right shape.
     """
     input, weight = _wrap(input), _wrap(weight)
+    # **`scale_grad_by_freq` is answered on `embedding` and refused here, because
+    # torch disagrees with itself.** `embedding_bag(mode="sum")` is by definition
+    # `embedding(...).sum(1)`, and on torch 2.13.0 the two give different gradients
+    # under this flag — with the table `arange(12).reshape(4, 3)` and ids
+    # `[[0,1,1],[2,1,0]]`:
+    #
+    #     embedding(scale=True).sum(1)   row1 ÷3, row2 ÷1   — the documented rule
+    #     embedding_bag(scale=True)      row1 ÷2, row2 ÷3
+    #
+    # Eight further probes found no rule reproducing the second: the divisor is the
+    # true frequency for some rows and something else for others, and running-max,
+    # previous-present-row and sorted-run-length all fit some probes and break
+    # others. `embedding`'s scaling is self-consistent and matches the documentation,
+    # so that one is implemented; copying an answer nobody can state a rule for would
+    # be a wrong number under an argument that reads as a tuning knob.
     if scale_grad_by_freq:
-        _unsupported("embedding_bag(scale_grad_by_freq=True)")
+        _unsupported("embedding_bag(scale_grad_by_freq=True) — torch's own bag "
+                     "disagrees with `embedding(...).sum(1)` under this flag")
     if sparse:
         _unsupported("embedding_bag(sparse=True) — there is no sparse gradient here")
     if max_norm is not None:

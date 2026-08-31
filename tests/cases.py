@@ -4728,6 +4728,21 @@ def functional_name_cases(inp=None):
 
     add("embedding_bag::grad", eb_grad)
 
+    # **`scale_grad_by_freq` is answered on `embedding` and refused here, because
+    # torch disagrees with itself.** `embedding_bag(mode="sum")` is by definition
+    # `embedding(...).sum(1)`, and on torch 2.13.0 the two give different gradients
+    # under this flag — the plain path divides by the index's frequency, which is the
+    # documented rule and what the core now does, while the bag divides by something
+    # eight probes found no rule for. So this is a `refusal_case`: torch answers and
+    # we stop, and the stop is the honest half.
+    cases.append((FNAME_PREFIX + "embedding_bag::scale_grad_by_freq=우리는거절",
+                  refusal_case(lambda L: F(L).embedding_bag(
+                      L.tensor(eb_idx), L.tensor(eb_table), mode="sum",
+                      scale_grad_by_freq=True))))
+    cases.append((FNAME_PREFIX + "embedding_bag::sparse=우리는거절",
+                  refusal_case(lambda L: F(L).embedding_bag(
+                      L.tensor(eb_idx), L.tensor(eb_table), sparse=True))))
+
     # ── embedding's five ───────────────────────────────────────────────
     #
     # `F.embedding` took two of seven while `nn.Embedding` beside it had all of
@@ -4766,10 +4781,65 @@ def functional_name_cases(inp=None):
     add("embedding::max_norm(안 본 줄은 그대로)",
         lambda L: em_norm(L, 1.0, 2.0)[3])
 
-    for _flag in ("scale_grad_by_freq", "sparse"):
-        cases.append((FNAME_PREFIX + f"embedding::{_flag}=우리는거절",
-                      refusal_case(lambda L, f=_flag: F(L).embedding(
-                          L.tensor(em_idx), L.tensor(em_table), **{f: True}))))
+    cases.append((FNAME_PREFIX + "embedding::sparse=우리는거절",
+                  refusal_case(lambda L: F(L).embedding(
+                      L.tensor(em_idx), L.tensor(em_table), sparse=True))))
+
+    # **`scale_grad_by_freq` divides each row's gradient by how often that index
+    # appears in this batch.** The fixture repeats index 1 three times and index 0
+    # twice, so the three divisors are 2, 3 and 1 and no two rows share one — with
+    # each index appearing once, or the same number of times, the flag changes
+    # nothing and the case would pass with it ignored. Row 3 is never indexed: its
+    # count is zero and its gradient is zero, and the divisor is floored at one so
+    # that nothing turns into a `nan`.
+    em_freq_idx = np.array([[0, 1, 1], [2, 1, 0]], dtype=np.int64)
+    em_freq_seed = np.arange(1.0, 19.0, dtype=np.float32).reshape(2, 3, 3)
+
+    def em_freq(L, flag, pad=None):
+        w = L.tensor(em_table.copy(), requires_grad=True)
+        (F(L).embedding(L.tensor(em_freq_idx), w, padding_idx=pad,
+                        scale_grad_by_freq=flag) * L.tensor(em_freq_seed)).sum().backward()
+        return _grad_of(w, "embedding/scale_grad_by_freq")
+
+    add("embedding::scale_grad_by_freq 없이", lambda L: em_freq(L, False))
+    add("embedding::scale_grad_by_freq", lambda L: em_freq(L, True))
+    # The padding row is zeroed as well as scaled, and zero over any count is zero —
+    # so the two are asked together to say that neither undoes the other.
+    add("embedding::scale_grad_by_freq(padding_idx=1)",
+        lambda L: em_freq(L, True, 1))
+
+    def em_freq_layer(L, flag):
+        """**The layer stored the flag, printed it, and never read it.** The
+        constructor refused it, so the unread field could not be seen; taking the
+        refusal away without threading it through `forward` would leave a layer that
+        says `scale_grad_by_freq=True` and does not do it."""
+        e = L.nn.Embedding(4, 3, _weight=L.tensor(em_table.copy()),
+                           scale_grad_by_freq=flag)
+        (e(L.tensor(em_freq_idx)) * L.tensor(em_freq_seed)).sum().backward()
+        return _grad_of(e.weight, "nn.Embedding/scale_grad_by_freq")
+
+    add("embedding::Embedding(scale_grad_by_freq) 없이",
+        lambda L: em_freq_layer(L, False))
+    add("embedding::Embedding(scale_grad_by_freq)",
+        lambda L: em_freq_layer(L, True))
+
+    # **The flag touches the gradient and must leave the forward alone**, which the
+    # gradient cases above cannot say. On borch.ts the scaling is done by putting the
+    # table through an expression that is the identity in value, so a wrong expression
+    # there would move the values as well as the gradient, and nothing else here looks.
+    #
+    # **What this cannot see is the last bit.** The obvious alternative expression,
+    # `w·k + w.detach()·(1−k)`, is not the identity in float32 — the two products round
+    # apart, and at `k = 1/3` a row holding 15 comes back as 14.999999. That is 1e-7
+    # relative and the golden compares at `rtol = 1e-4`, so the wrong form was planted
+    # and passed. This table holds the values where the perturbation is largest anyway,
+    # which costs nothing and means the case is at least pointed at the right place.
+    em_round = np.array([[1., 2., 3.], [15., 27., 45.],
+                         [7., 8., 9.], [0., 0., 0.]], dtype=np.float32)
+
+    add("embedding::scale_grad_by_freq 는 값을 안 건드린다",
+        lambda L: F(L).embedding(L.tensor(em_freq_idx), L.tensor(em_round),
+                                 scale_grad_by_freq=True))
 
     # ── gumbel_softmax ──
     #
