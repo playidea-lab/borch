@@ -174,7 +174,19 @@ def check(lib, path=DEFAULT_PATH, faults=None):
         if want.shape != got.shape:
             bad.append(f"{name}: shape {want.shape} vs {got.shape}")
         elif not np.allclose(want, got, atol=ATOL, rtol=RTOL):
-            bad.append(f"{name}: max diff {np.abs(want - got).max():.2e}")
+            # **A boolean answer cannot be subtracted**, and this line did it: numpy
+            # refuses `-` on booleans, so the first divergence in a boolean case
+            # raised a `TypeError` **inside the reporting** and took the whole run
+            # with it. The check had found the difference and could not say which
+            # case it was in — the one thing a comparison harness must not do.
+            #
+            # It went years unseen because no boolean case had ever diverged. The
+            # first one to try was `isclose(equal_nan)`, added the same day.
+            if want.dtype.kind == "b" or got.dtype.kind == "b":
+                wrong = int(np.count_nonzero(np.asarray(want) != np.asarray(got)))
+                bad.append(f"{name}: {wrong} of {want.size} booleans differ")
+            else:
+                bad.append(f"{name}: max diff {np.abs(want - got).max():.2e}")
     return bad, len(cases) - skipped
 
 

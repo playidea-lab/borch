@@ -6359,6 +6359,14 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
 
   add("F.rms_norm", (x) => x.rmsNorm(1), "img");
   out.set("norm::nn.RMSNorm", () => new nn.RMSNorm(4).call(inp.get("img")));
+  // **`eps` reached the kernel and not the binding's copy of the layer.** This
+  // class has carried it from the start — its own note records fixing exactly that
+  // — and the Python class beside it repeated the defect. Asked at an `eps` big
+  // enough to move the answer, because at the default the two agree.
+  out.set("norm::nn.RMSNorm(eps 를 크게)",
+    () => new nn.RMSNorm(4, 10.0).call(inp.get("img")));
+  out.set("norm::F.rms_norm(eps 를 크게)",
+    () => inp.get("img").rmsNorm(1, 10.0));
 
   // **`normalizedShape` is how many axes are folded.** Asked with a single axis alone the
   // answer equals "fold the last axis" and the rule is invisible — all three were written
@@ -7638,6 +7646,44 @@ function addNewFn(out: Map<string, Case>, inp: Inputs): void {
       x1().narrow(0, 3, 3).reshape([1, 3]))],
   ];
   for (const [name, fn] of table) out.set(`newfn::${name}`, fn);
+
+  // **`equalNan` was taken here and stopped at the binding's boundary.** This
+  // method has carried it from the start and `allclose` beside it forwarded it, so
+  // the check existed and the word never reached it — NaN against NaN came back
+  // `false` where torch says `true`. A fixture without a NaN cannot tell the two
+  // apart, which is why the `isclose` row above did not.
+  // ── the indices are `int64`, and six of the eight were float32 ─────────────
+  //
+  // A position is not a value, and `argReduceOver` says exactly that about its own
+  // output — which is why `max(dim)` and `min(dim)` were right while `sort`,
+  // `topk`, `kthvalue`, `median`, `cummax` and `cummin` handed back floats: those
+  // six build their index tensor in two other places, and both left the dtype at
+  // its default. It went unseen because the pair had no `repr` on either Python
+  // side, so the label was never on screen, and `gather` takes either.
+  const pairSrc = (): Tensor => Tensor.from([3, 1, 2, 0.5], [4]);
+  const indexKinds: [string, () => Tensor][] = [
+    ["topk", () => pairSrc().topk(2).indices],
+    ["sort", () => pairSrc().sort().indices],
+    ["max(dim)", () => pairSrc().max(0).indices],
+    ["min(dim)", () => pairSrc().min(0).indices],
+    ["median(dim)", () => pairSrc().median(0).indices],
+    ["kthvalue", () => pairSrc().kthvalue(2).indices],
+    ["cummax", () => pairSrc().cummax(0).indices],
+    ["cummin", () => pairSrc().cummin(0).indices],
+  ];
+  for (const [label, get] of indexKinds) {
+    // The Python side spells a dtype `torch.int64`; over here it is the bare name,
+    // and the golden is keyed by the string both must produce.
+    out.set(`top::살펴보기::짝::${label} 의 자리는 int64`, () => `torch.${get().dtype}`);
+  }
+
+  const nanTrio = (): Tensor => Tensor.from([1, NaN, 3], [3]);
+  out.set("newfn::isclose(equal_nan)", () => nanTrio().isclose(nanTrio(), 1e-5, 1e-8, true));
+  out.set("newfn::isclose(equal_nan 없이)", () => nanTrio().isclose(nanTrio()));
+  // Python's `True`, not JavaScript's `true` — the golden is keyed by the string.
+  out.set("newfn::allclose(equal_nan)",
+    async () => (await nanTrio().allclose(nanTrio(), 1e-5, 1e-8, true))
+      ? "True" : "False");
 }
 
 /** NaN and infinity into finite numbers. The fill value is handed over **expanded to the

@@ -915,6 +915,15 @@ def grad_cases(inp=None):
     for _how in ("lower", "higher", "midpoint", "nearest"):
         folds(f"quantile(0.3, {_how})",
               lambda L, x, h=_how: x.quantile(0.3, interpolation=h))
+    # **`dim` was a seat the binding never read**, and borch.ts refuses it by name —
+    # so the refusal sat one call away while `quantile(x, 0.5, dim=1)` came back the
+    # flattened scalar: one number where torch gives one per row, no exception, and
+    # nothing saying the axis had been dropped. The core folds it; the browser side
+    # stops, which is what `_as_expected` is for.
+    cases.append((ACT_PREFIX + "quantile(dim)=브라우저는거절",
+                  _as_expected(lambda L: L.quantile(
+                      L.tensor(np.array([[3.0, 1.0], [0.5, 4.0]], dtype=np.float32)),
+                      0.5, dim=1))))
     # Its derivative is `i1`. borch.ts was **flowing a zero** here, and its comment cited the
     # core's hole as its grounds — one side had copied the other. A gradient whose value is zero
     # and a gradient that is absent are different statements, and in the copying the second
@@ -3479,6 +3488,20 @@ def new_function_cases(inp=None):
     add("nan_to_num(값 지정)",
         lambda L: L.nan_to_num(L.tensor(withnan), nan=0.5, posinf=9.0, neginf=-9.0))
     add("isclose", lambda L: L.isclose(L.tensor(x1), L.tensor(x1 + 1e-9)))
+    # **`equal_nan` stopped at the binding's boundary.** borch.ts's `isclose` has
+    # taken it all along and `allclose` next door forwarded it, so the check existed
+    # and the word never reached it: NaN against NaN came back `False` where torch
+    # says `True`. A fixture without a NaN in it cannot tell the two apart, which is
+    # why the row above did not.
+    _nan_pair = np.array([1.0, np.nan, 3.0], dtype=np.float32)
+    add("isclose(equal_nan)",
+        lambda L: L.isclose(L.tensor(_nan_pair), L.tensor(_nan_pair),
+                            equal_nan=True))
+    add("isclose(equal_nan 없이)",
+        lambda L: L.isclose(L.tensor(_nan_pair), L.tensor(_nan_pair)))
+    add("allclose(equal_nan)",
+        lambda L: str(L.allclose(L.tensor(_nan_pair), L.tensor(_nan_pair),
+                                 equal_nan=True)))
     add("isreal", lambda L: L.isreal(L.tensor(withnan)))
     add("isposinf", lambda L: L.isposinf(L.tensor(withnan)))
     add("isneginf", lambda L: L.isneginf(L.tensor(withnan)))
@@ -5945,6 +5968,83 @@ def top_level_cases(inp=None):
         cases.append((TOP_PREFIX + f"살펴보기::장치::{name}(device='cuda') 는 양쪽 다 멈춘다",
                       lambda L, n=name: _both_stop(
                           L, lambda M, m=n: getattr(M, m)(2, 3, device="cuda"))))
+
+    # ── the pair-returning names had no `__repr__` ────────────────────────────
+    #
+    # `print(x.topk(3))` showed `<borch._tensor._MinMax object at 0x10f2a3b50>`
+    # where torch prints the values and the indices. Nine names came out that way
+    # while `mode` and `slogdet` beside them printed torch's form, because those go
+    # through `_named` and the pair class predates it.
+    #
+    # **The address is the part that bites**: it changes between two identical
+    # calls, so anything comparing the printed form of one against another sees a
+    # difference that is not there — a probe written while sweeping this very axis
+    # flipped between runs for exactly that.
+    _pair_src = np.array([3.0, 1.0, 2.0, 0.5], dtype=np.float32)
+    for _label, _call in (
+        ("topk", lambda L, t: L.topk(t, 2)),
+        ("sort", lambda L, t: L.sort(t)),
+        ("max(dim)", lambda L, t: L.max(t, 0)),
+        ("min(dim)", lambda L, t: L.min(t, 0)),
+        ("median(dim)", lambda L, t: L.median(t, 0)),
+        ("kthvalue", lambda L, t: L.kthvalue(t, 2)),
+        ("cummax", lambda L, t: L.cummax(t, 0)),
+        ("cummin", lambda L, t: L.cummin(t, 0)),
+        # **Its fields are `min` and `max`**, not `values` and `indices` — the one
+        # member of the family torch names differently, so it is asked separately.
+        ("aminmax", lambda L, t: L.aminmax(t)),
+    ):
+        add(f"살펴보기::짝::{_label} 의 repr",
+            lambda L, c=_call: repr(c(L, L.tensor(_pair_src))))
+    # **Two identical calls print the same.** The nine rows above would all pass on
+    # an implementation that printed an address, as long as it printed one *once*;
+    # this is the half that says the address is gone.
+    add("살펴보기::짝::두 번 찍으면 같다",
+        lambda L: str(repr(L.topk(L.tensor(_pair_src), 2))
+                      == repr(L.topk(L.tensor(_pair_src), 2))))
+    add("살펴보기::짝::len 은 둘", lambda L: str(len(L.topk(L.tensor(_pair_src), 2))))
+    # **The indices are `int64`, and six of the eight were float32.** The repr rows
+    # above found that by accident — the moment the address stopped hiding the
+    # values, `tensor([0., 2.])` was on screen beside torch's `tensor([0, 2])`. A
+    # position is not a value, and `max(dim)` beside them had it right all along.
+    #
+    # Asked by name as well, because a `repr` case is a poor place to keep a dtype:
+    # it holds it only as long as the numbers stay short enough to print.
+    for _label, _call in (
+        ("topk", lambda L, t: L.topk(t, 2)),
+        ("sort", lambda L, t: L.sort(t)),
+        ("max(dim)", lambda L, t: L.max(t, 0)),
+        ("min(dim)", lambda L, t: L.min(t, 0)),
+        ("median(dim)", lambda L, t: L.median(t, 0)),
+        ("kthvalue", lambda L, t: L.kthvalue(t, 2)),
+        ("cummax", lambda L, t: L.cummax(t, 0)),
+        ("cummin", lambda L, t: L.cummin(t, 0)),
+    ):
+        add(f"살펴보기::짝::{_label} 의 자리는 int64",
+            lambda L, c=_call: str(c(L, L.tensor(_pair_src)).indices.dtype))
+
+    # ── a sampler cannot fill an integer slot ─────────────────────────────────
+    #
+    # torch refuses `rand`/`randn` a non-floating dtype by naming the kernel that
+    # has no such overload; here the draw ran and the floats were cast into the
+    # requested cells, so `rand(3, dtype=int64)` came back all zeros — a plausible
+    # tensor and a sample of nothing.
+    for _name, _kernel in (("rand", "check_uniform_bounds"),
+                           ("randn", "normal_kernel_cpu")):
+        for _dt in ("int64", "bool"):
+            def _sampler_refuses(L, n=_name, k=_kernel, d=_dt):
+                try:
+                    getattr(L, n)(3, dtype=getattr(L, d if d != "bool" else "bool"))
+                except Exception as exc:                        # noqa: BLE001
+                    return (f"{k} 문구대로" if f'"{k}" not implemented' in str(exc)
+                            else f"다른 문구 <{str(exc).splitlines()[0][:44]}>")
+                return "안 던졌다"
+
+            add(f"살펴보기::표본::{_name}(dtype={_dt}) 는 거절", _sampler_refuses)
+    # And the floating one it does take, which is the half that says the gate is
+    # not simply refusing everything.
+    add("살펴보기::표본::randn(dtype=float32) 는 된다",
+        lambda L: str(L.randn(3, dtype=L.float32).dtype))
 
     add("살펴보기::cuda.device_count", lambda L: str(L.cuda.device_count()))
     add("살펴보기::get_default_device", lambda L: str(L.get_default_device()))
@@ -9247,6 +9347,15 @@ def norm_cases(inp=None):
     add("F.rms_norm", lambda L, x: L.nn.functional.rms_norm(x, (4,)), img)
     cases.append((NORM_PREFIX + "nn.RMSNorm",
                   lambda L: L.nn.RMSNorm(4)(L.tensor(img))))
+    # **`eps` was in the layer's signature and `forward` never handed it on**, on
+    # the binding — the kernel over there has carried it from the start, and
+    # borch.ts's own `RMSNorm` note records fixing exactly this defect in exactly
+    # this place, which the Python class beside it then repeated. Asked at an `eps`
+    # big enough to move the answer, because at the default the two agree.
+    cases.append((NORM_PREFIX + "nn.RMSNorm(eps 를 크게)",
+                  lambda L: L.nn.RMSNorm(4, eps=10.0)(L.tensor(img))))
+    cases.append((NORM_PREFIX + "F.rms_norm(eps 를 크게)",
+                  lambda L: L.nn.functional.rms_norm(L.tensor(img), (4,), eps=10.0)))
 
     # ── LayerNorm's `normalized_shape` is **how many axes are folded** ──
     #

@@ -1434,7 +1434,7 @@ class Tensor:
         return self._reduce(_np.mean, dim, keepdim, back,
                             "MeanBackward0" if dim is None else "MeanBackward1")
 
-    def _argreduce(self, np_fn, np_arg, dim, keepdim):
+    def _argreduce(self, np_fn, np_arg, dim, keepdim, kind="max"):
         if dim is None:
             # **With no axis there are no indices, and so the rule reverses.**
             # `max(dim=0)`, which gives indices, hands the whole gradient to the
@@ -1470,7 +1470,7 @@ class Tensor:
         # **The indices have to keep the axis too.** Keeping it on the values
         # alone makes `x.gather(1, m.indices)` stop on a rank mismatch or — worse
         # — pass by broadcasting. torch gives `(2, 1)` for both (measured).
-        return _MinMax(out, Tensor(_np.expand_dims(idx, d) if keepdim else idx))
+        return _MinMax(out, Tensor(_np.expand_dims(idx, d) if keepdim else idx), kind)
 
     def _elementwise_extreme(self, other, pick, name):
         """**A tie splits in half.** That is what torch does — the gradient of
@@ -1498,7 +1498,7 @@ class Tensor:
     def min(self, dim=None, keepdim=False):
         if isinstance(dim, Tensor):
             return self._elementwise_extreme(dim, _np.minimum, "MinimumBackward0")
-        return self._argreduce(_np.min, _np.argmin, dim, keepdim)
+        return self._argreduce(_np.min, _np.argmin, dim, keepdim, "min")
 
     def argmax(self, dim=None, keepdim=False):
         _refuses_bool(self.data, "argmax does not take booleans.",
@@ -1607,18 +1607,43 @@ class Tensor:
 
 
 class _MinMax:
-    """The (values, indices) `x.max(dim=0)` hands back. Real torch's shape."""
+    """The (values, indices) `x.max(dim=0)` hands back. Real torch's shape.
 
-    def __init__(self, values, indices):
+    **It had no `__repr__`**, so `print(x.topk(3))` showed
+    `<borch._tensor._MinMax object at 0x10f2a3b50>` where torch prints the values
+    and the indices. Nine names came out that way — `topk`, `sort`, `max(dim)`,
+    `min(dim)`, `median(dim)`, `kthvalue`, `cummax`, `cummin`, `aminmax` — while
+    `mode` and `slogdet` beside them printed torch's form, because those go through
+    `_named` and this class predates it.
+
+    The address is the part that bites: it changes between two identical calls, so
+    anything comparing the printed form of one of these against another sees a
+    difference that is not there. A probe written during this very sweep flipped
+    between runs for that reason.
+
+    `kind` is the function's name, because torch's is: it prints
+    `torch.return_types.topk(…)`, and which function you called is the first thing
+    the line tells you.
+    """
+
+    def __init__(self, values, indices, kind="max"):
         self.values = values
         self.indices = indices
+        self.kind = kind
 
     def __iter__(self):
         yield self.values
         yield self.indices
 
+    def __len__(self):
+        return 2
+
     def __getitem__(self, i):
         return (self.values, self.indices)[i]
+
+    def __repr__(self):
+        return (f"torch.return_types.{self.kind}(\n"
+                f"values={self.values!r},\nindices={self.indices!r})")
 
 
 

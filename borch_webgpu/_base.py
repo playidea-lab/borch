@@ -1377,18 +1377,37 @@ class _Pair:
     `AttributeError: numpy`.
     """
 
-    __slots__ = ("values", "indices")
+    __slots__ = ("values", "indices", "kind")
 
-    def __init__(self, obj):
+    def __init__(self, obj, kind="max"):
         self.values = wrap(obj.values)
         self.indices = wrap(obj.indices)
+        self.kind = kind
 
     def __iter__(self):
         yield self.values
         yield self.indices
 
+    def __len__(self):
+        return 2
+
     def __getitem__(self, i):
         return (self.values, self.indices)[i]
+
+    def __repr__(self):
+        """**It had none**, so `print(x.topk(3))` showed
+        `<borch_webgpu._base._Pair object at 0x1b3b710>` where torch prints the
+        values and the indices. The core's pair class carried the same gap, and the
+        address is the part that bites: it changes between two identical calls, so
+        anything comparing one printed form against another sees a difference that
+        is not there.
+
+        The name comes from the JS method that produced the pair — `settle` reads
+        `fn.name` off it. Threading a kind through every call site would be the
+        other way, and there are dozens of them; the function already knows what it
+        is called."""
+        return (f"torch.return_types.{self.kind}(\n"
+                f"values={self.values!r},\nindices={self.indices!r})")
 
     def __getattr__(self, name):
         """**Forwarded to the values side.** torch's `median()` called without a
@@ -1398,8 +1417,11 @@ class _Pair:
         return getattr(self.values, name)
 
 
-def settle(out):
+def settle(out, kind=None):
     """Shape what came back into something Python can use.
+
+    `kind` is the name of the borch.ts function that produced it, and it is only
+    used to print a `{values, indices}` pair the way torch does — see `_Pair`.
 
     **A promise is awaited here.** A few things in borch.ts are asynchronous —
     `unique`, `bincount`, `masked_select` and the rest, whose **result size
@@ -1422,7 +1444,7 @@ def settle(out):
     # A `{values, indices}` pair or an array of tensors leaves a proxy loose in
     # Python if it is passed straight through.
     if hasattr(out, "values") and hasattr(out, "indices"):
-        return _Pair(out)
+        return _Pair(out, kind or "max")
     if _js.Array.isArray(out):
         return [wrap(x) if _js.borch.isTensor(x) else x for x in out]
     # **The ones handing back several named slots** — `slogdet`'s
@@ -1493,11 +1515,19 @@ class _Fields:
 
 
 def guarded(fn, *args):
-    """Call it, and re-raise a JavaScript exception as torch's type."""
+    """Call it, and re-raise a JavaScript exception as torch's type.
+
+    **The function's own name is carried through**, because a `{values, indices}`
+    pair prints `torch.return_types.<name>(…)` and this is the one place that knows
+    which name was called. A JS function object holds its `name`, so nothing has to
+    be threaded through the dozens of call sites — `getattr(fn, "name", None)`
+    rather than `fn.name`, since a free function reached another way may not be a
+    JS proxy at all.
+    """
     from pyodide.ffi import JsException
 
     try:
-        return settle(fn(*args))
+        return settle(fn(*args), getattr(fn, "name", None))
     except JsException as exc:
         raise translate(exc) from None
 

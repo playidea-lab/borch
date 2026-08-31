@@ -8935,7 +8935,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       [this.buffer, values, indices],
       outer * inner,
     );
-    const idx = new Tensor(indices, this.shape);
+    // **`int64`, and it was defaulting to float32.** A position is not a value, and
+    // `argReduceOver` says exactly that about its own output — so `max(dim).indices`
+    // was int64 while `sort`, `topk`, `kthvalue`, `median`, `cummax` and `cummin`
+    // handed back floats. It went unseen because the pair had no `repr`: every one
+    // of them printed an object address, so the label was never on screen, and
+    // `gather` takes either.
+    const idx = new Tensor(indices, this.shape, { dtype: "int64" });
     return {
       values: this.gatherBack(values, this.shape, idx, axis, len, len),
       indices: idx,
@@ -9068,7 +9074,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       [this.buffer, values, indices],
       this.size,
     );
-    const idx = new Tensor(indices, this.shape);
+    // **`int64`, and it was defaulting to float32.** A position is not a value, and
+    // `argReduceOver` says exactly that about its own output — so `max(dim).indices`
+    // was int64 while `sort`, `topk`, `kthvalue`, `median`, `cummax` and `cummin`
+    // handed back floats. It went unseen because the pair had no `repr`: every one
+    // of them printed an object address, so the label was never on screen, and
+    // `gather` takes either.
+    const idx = new Tensor(indices, this.shape, { dtype: "int64" });
     return {
       values: this.gatherBack(values, this.shape, idx, axis, len, len),
       indices: idx,

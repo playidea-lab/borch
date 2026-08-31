@@ -2935,11 +2935,20 @@ class RMSNorm(Module):
         if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         self.dims = len(normalized_shape)
+        # **`eps` was taken here and never handed on.** `Tensor.rmsNorm(dims, eps)`
+        # over there has carried it from the start — borch.ts's own `RMSNorm` note
+        # records fixing exactly this defect in exactly this place — and this class
+        # is a second copy of the layer that repeated it. `RMSNorm(4, eps=10.0)` set
+        # nothing and answered as if it had.
+        self.eps = eps
         if elementwise_affine:
             self.weight = Parameter(_np.ones(normalized_shape, dtype=_np.float32))
 
     def forward(self, x):
-        out = wrap(handle(x).rmsNorm(self.dims))
+        # torch's `eps=None` means *use the dtype's epsilon*, and there is one dtype
+        # here — so `None` and the kernel's own default are the same answer, which is
+        # why it is passed straight through rather than filled in.
+        out = wrap(handle(x).rmsNorm(self.dims, self.eps))
         return out if getattr(self, "weight", None) is None else out * self.weight
 
 

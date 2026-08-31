@@ -42,6 +42,29 @@ _TYPE_NAMES = {"b": "Bool", "i": "Long", "u": "Long", "f": "Float",
                "c": "ComplexFloat"}
 
 
+def _needs_float_dtype(kernel, requested):
+    """**A sampler cannot fill an integer slot**, and torch says so by naming the
+    kernel that has no such overload.
+
+    `rand(3, dtype=torch.int64)` and `randn(3, dtype=torch.bool)` are refused there
+    — measured, and for the same three types on both — while here the draw ran and
+    `_made` cast the floats into the requested cells: `rand(dtype=int64)` came back
+    all zeros, which is a plausible tensor and not a sample of anything.
+
+    The three dtypes torch does accept are `float32`, `float64` and `complex64`; the
+    last two have no storage in this subset and are refused one gate further on.
+    """
+    if requested is None:
+        return
+    name = getattr(requested, "name", str(requested)).replace("torch.", "")
+    if name in ("float32", "float64", "complex64", "complex128", "float16",
+                "bfloat16", "complex32"):
+        return
+    shown = {"int64": "Long", "int32": "Int", "int16": "Short", "int8": "Char",
+             "uint8": "Byte", "bool": "Bool"}.get(name, name)
+    raise NotImplementedError(f'"{kernel}" not implemented for \'{shown}\'')
+
+
 def _only_cpu(what, requested):
     """One rule for every `device=` seat: **`cpu` is this library's device and
     everything else stops.**

@@ -24,7 +24,7 @@ from ._base import (
     _math,
     _needs_float,
     _np, _refuses_bool,
-    _only_cpu,
+    _needs_float_dtype, _only_cpu,
     _refuses_nonfloat_kernel, _requested_dtype, _resolve, _unsupported, Size,
     device as _device,
     dtype,
@@ -314,18 +314,26 @@ def set_rng_state(state):
     return None
 
 
-def randn(*shape, requires_grad=False, generator=None):
+def randn(*shape, dtype=None, requires_grad=False, device=None, generator=None):
     """**`generator=` was not a seat at all**, so `randn(3, generator=g)` — the line
     every reproducible-sampling tutorial is written with — stopped with *unexpected
     keyword argument*, while `multinomial` next door refused it by name and
-    `random_split` honoured it. Three answers to one question inside one library."""
+    `random_split` honoured it. Three answers to one question inside one library.
+
+    **`dtype=` and `device=` were missing too**, and `rand` beside it had both — so
+    `randn(3, dtype=torch.float32)` stopped on the keyword while the same line with
+    `rand` ran. Two factories one line apart, differing in what they would accept.
+    """
+    _only_cpu("randn", device)
+    _needs_float_dtype("normal_kernel_cpu", dtype)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_stream(generator).standard_normal(shape).astype(_DEFAULT_DTYPE),
-                  requires_grad)
+    return _made(_stream(generator).standard_normal(shape).astype(_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
 def rand(*shape, dtype=None, requires_grad=False, device=None, generator=None):
     _only_cpu("rand", device)
+    _needs_float_dtype("check_uniform_bounds", dtype)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
     return _made(_stream(generator).random(shape).astype(_DEFAULT_DTYPE),
                  dtype, requires_grad)
@@ -5063,7 +5071,8 @@ def median(t, dim=None, keepdim=False):
         picked = _np.expand_dims(picked, dim)
         take = _np.expand_dims(take, dim)
 
-    return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take))
+    return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take),
+                   "median")
 
 
 def norm(input, p=2, dim=None, keepdim=False, dtype=None):  # noqa: A002
@@ -5173,7 +5182,11 @@ def amin(input, dim=None, keepdim=False):
 
 
 def aminmax(input, dim=None, keepdim=False):
-    return _MinMax(amin(input, dim, keepdim), amax(input, dim, keepdim))
+    # **Its fields are `min` and `max`, not `values` and `indices`** — measured, and
+    # it is the one member of this family that names them differently. So it uses
+    # `_named` rather than `_MinMax`; the pair class would print the right numbers
+    # under two wrong names.
+    return _Aminmax(amin(input, dim, keepdim), amax(input, dim, keepdim))
 
 
 def _nan_mask(t):
@@ -5292,7 +5305,10 @@ def _cum_extreme(t, dim, pick, name):
         _np.add.at(z, _index_for(idx, dim, t.data.ndim), _np.asarray(g))
         return (z,)
 
-    return _MinMax(t._make(out, (t,), back, name), Tensor(idx.astype(_np.int64)))
+    # `name` is the backward node's (`CummaxBackward0`); the printed kind is the
+    # function's, which is that with the suffix off and lowercased.
+    return _MinMax(t._make(out, (t,), back, name), Tensor(idx.astype(_np.int64)),
+                   name.replace("Backward0", "").lower())
 
 
 def _index_for(idx, dim, ndim):
@@ -5354,7 +5370,7 @@ def kthvalue(input, k, dim=-1, keepdim=False):
         return (z,)
 
     return _MinMax(input._make(out, (input,), back, "KthvalueBackward0"),
-                   Tensor(at.astype(_np.int64)))
+                   Tensor(at.astype(_np.int64)), "kthvalue")
 
 
 def msort(input):
@@ -5647,7 +5663,7 @@ def topk(input, k, dim=-1, largest=True, sorted=True):
         raise RuntimeError("selected index k out of range")
     order = _order(input.data, dim, largest)
     idx = _np.take(order, _np.arange(k), axis=dim)
-    return _MinMax(_pick(input, idx, dim, "TopkBackward0"), Tensor(idx))
+    return _MinMax(_pick(input, idx, dim, "TopkBackward0"), Tensor(idx), "topk")
 
 
 def sort(input, dim=-1, descending=False, stable=False):
@@ -5659,7 +5675,7 @@ def sort(input, dim=-1, descending=False, stable=False):
     if input.data.ndim == 0:
         return _at_rank_0(input, lambda x: sort(x, 0, descending, stable))
     idx = _order(input.data, dim, descending)
-    return _MinMax(_pick(input, idx, dim, "SortBackward0"), Tensor(idx))
+    return _MinMax(_pick(input, idx, dim, "SortBackward0"), Tensor(idx), "sort")
 
 
 def argsort(input, dim=-1, descending=False, stable=False):
@@ -7721,7 +7737,11 @@ def _named(kind, *fields):
             return getattr(self, fields[i])
 
         def __repr__(self):
-            inner = ", ".join(f"{f}={getattr(self, f)!r}" for f in fields)
+            # **One field per line**, which is torch's layout — measured. Joined
+            # with `", "` the first line broke and the rest ran together, so the
+            # shape was nearly right and no two of these ever printed the same as
+            # torch's beyond the first field.
+            inner = ",\n".join(f"{f}={getattr(self, f)!r}" for f in fields)
             return f"torch.return_types.{kind}(\n{inner})"
 
     _R.__name__ = _R.__qualname__ = kind
@@ -7729,6 +7749,10 @@ def _named(kind, *fields):
 
 
 _Slogdet = _named("slogdet", "sign", "logabsdet")
+# **Its fields are `min` and `max`**, which is why it is not `_MinMax` — that class
+# names them `values` and `indices`, and this is the one member of the family torch
+# spells differently.
+_Aminmax = _named("aminmax", "min", "max")
 _QR = _named("linalg_qr", "Q", "R")
 _SVD = _named("linalg_svd", "U", "S", "Vh")
 # **`torch.svd` and `torch.linalg.svd` are two functions, and the third field is

@@ -730,7 +730,18 @@ NOT_PORTED = {
     # and handed back a CPU tensor for either; the rule is the layers' rule now. Over
     # there a factory has no `device` seat at all — there is one adapter and nothing
     # names it — so the word cannot be passed, let alone judged.
-    "top::": (107, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
+    # 107 → 123. Sixteen. **The eight `자리는 int64` rows were ported and belong
+    # over here** — that dtype was borch.ts's own defect and this is where it is
+    # asked. The sixteen left are Python's:
+    #
+    #   `짝::` 11 — nine `repr` rows plus *두 번 찍으면 같다* and *len 은 둘*. A pair
+    #     over there is a plain `{values, indices}` object; `torch.return_types.…`
+    #     is the Python surface's spelling, and the address that used to print in
+    #     its place was a Python object's.
+    #   `표본::` 5 — `rand`/`randn` refusing a non-floating `dtype=`. borch.ts's
+    #     factories have no `dtype` seat at all: there is one storage and nothing
+    #     names it, so there is no word to refuse.
+    "top::": (123, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
     # `spot::` was gone — 47 cases, all ported — then back with two, and gone again.
     #
     # The two were `unique(dim=)`, and the reason written here said it is a different
@@ -879,6 +890,11 @@ NOT_PORTED = {
     # refuse it, so there is no `device="cpu"` to accept over there and no `"cuda"`
     # to stop at. What each side does with the word is the whole content.
     "container::": (2, "파이썬 — 층의 `device=` 자리. TS carries the pair to refuse it"),
+    # `quantile(dim)` is a **verdict about which side you are on**: the core folds
+    # the axis and this one refuses by name, so the case asks *did each behave as
+    # documented*. Over here there is only one side, so there is nothing to tell
+    # apart — the refusal it would be checking is the one it is standing in.
+    "act::": (1, "파이썬 — `quantile(dim)` 는 어느 쪽인지에 대한 판정이다"),
     # 4 → 10. Six "resume training" cases arrived. **Those already tread on borch.ts** —
     # the binding's optimizers and schedulers call the ones over there as they are, so
     # those six running under `--lib borch_webgpu` are measuring borch.ts's `StepLR` and

@@ -1395,27 +1395,33 @@ def randn(*shape, out=None, requires_grad=False, dtype=None, device=None,
     docstring says the bags were removed for this reason; these two still had them.
     """
     _no_out(out)
-    from borch._base import _only_cpu
+    from borch._base import _needs_float_dtype
     from ._base import tensor as _t
 
-    _only_cpu("randn", device)
-    return _t(_stream(generator).standard_normal(tuple(_shaped(shape))).astype("float32"),
-              requires_grad=requires_grad)
+    _needs_float_dtype("normal_kernel_cpu", dtype)
+    return _made(_t(_stream(generator).standard_normal(
+        tuple(_shaped(shape))).astype("float32")),
+        {"dtype": dtype, "device": device, "requires_grad": requires_grad})
 
 
 def rand(*shape, out=None, requires_grad=False, dtype=None, device=None,
          generator=None):
-    """**These two do not go through `_made`**, so the `device=` rule it carries did
-    not reach them — `rand(2, device="cuda")` answered where `zeros` had stopped.
-    Two factories under one rule and one of them outside it is the shape this file
-    keeps finding."""
+    """**These two stood outside `_made`, and it cost two arguments.**
+
+    `device=` was the first: `rand(2, device="cuda")` answered where `zeros` had
+    stopped, because the rule lives in `_made` and these did not go through it. The
+    fix put `_only_cpu` here by hand — which left `dtype=` still unread, so
+    `rand(3, dtype=torch.int64)` came back float32. Patching one argument at the
+    door a shared seam already guards is how the second one survived; they go
+    through the seam now, and the next argument added to it reaches them too.
+    """
     _no_out(out)
-    from borch._base import _only_cpu
+    from borch._base import _needs_float_dtype
     from ._base import tensor as _t
 
-    _only_cpu("rand", device)
-    return _t(_stream(generator).random(tuple(_shaped(shape))).astype("float32"),
-              requires_grad=requires_grad)
+    _needs_float_dtype("check_uniform_bounds", dtype)
+    return _made(_t(_stream(generator).random(tuple(_shaped(shape))).astype("float32")),
+                 {"dtype": dtype, "device": device, "requires_grad": requires_grad})
 
 
 def _no_out(out):
@@ -1502,12 +1508,24 @@ def matrix_power(x, n):
     return guarded(h.matrixPower, n)
 
 
-def quantile(x, q, dim=None, out=None):
-    """`q` may be one number or a list — borch.ts always takes a list."""
+def quantile(x, q, dim=None, keepdim=False, *, interpolation="linear", out=None):
+    """`q` may be one number or a list — borch.ts always takes a list.
+
+    **`dim` was a seat this body never read, and borch.ts refuses it by name.** So
+    the refusal existed one call away and the word stopped here: `quantile(x, 0.5,
+    dim=1)` came back the flattened scalar — one number where torch gives one per
+    row, with no exception and no hint that the axis was ignored. Forwarding it
+    makes borch.ts's *quantile(dim) is not here yet — it flattens* reachable, which
+    is what the caller has to be told.
+
+    `keepdim` and `interpolation` were not seats at all, so torch's positions landed
+    on nothing; both cross now, and `interpolation` is a thing borch.ts does.
+    """
     _no_out(out)
     one = isinstance(q, (int, float))
     qs = [float(v) for v in ([q] if one else q)]
-    out = guarded(handle(x).quantile, _to_js(qs))
+    out = guarded(handle(x).quantile, _to_js(qs), dim, bool(keepdim),
+                  str(interpolation))
     # **One number gives a scalar.** That is what torch does — an axis appears
     # only when asked with a list. borch.ts is always a list, so it is folded
     # here.
@@ -2071,7 +2089,13 @@ def isreal(t):
 
 
 def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
-    return wrap(guarded(handle(wrap(a)).isclose, handle(wrap(b)), rtol, atol))
+    """**`equal_nan` stopped at this line.** borch.ts's `isclose` has taken it all
+    along and `allclose` next door forwards it, so the check existed and the word
+    never reached it: `isclose(nan, nan, equal_nan=True)` came back `False` where
+    torch says `True`. Two spellings of one question, one of them carrying the
+    argument."""
+    return wrap(guarded(handle(wrap(a)).isclose, handle(wrap(b)), rtol, atol,
+                        bool(equal_nan)))
 
 
 def isin(elements, test_elements):
@@ -3390,8 +3414,19 @@ class _MinMax:
         yield self.min
         yield self.max
 
+    def __len__(self):
+        return 2
+
     def __getitem__(self, i):
         return (self.min, self.max)[i]
+
+    def __repr__(self):
+        """**It had none**, like the `{values, indices}` pair next door and the
+        core's two — four classes, one gap. `aminmax` is the one member of this
+        family torch names `min` and `max` rather than `values` and `indices`, which
+        is why it is a class of its own and why the line has to be written twice."""
+        return (f"torch.return_types.aminmax(\n"
+                f"min={self.min!r},\nmax={self.max!r})")
 
 
 # **`torch.linalg` is a namespace.** Most of it exists as tensor methods, and the

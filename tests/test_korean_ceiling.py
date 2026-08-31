@@ -346,7 +346,11 @@ CEILINGS = {
     # `(last_epoch=N)/자취` names, the two `fft::istft(…)` ones, and the `문구대로`/
     # `안 던졌다` verdicts they return. Keys and values in `golden.json`, so both
     # sides spell them the same.
-    "borch-ts/test": 4690,
+    # 4690 → 4738. Forty-eight: the eight `살펴보기::짝::… 의 자리는 int64` names, the
+    # two `nn.RMSNorm/F.rms_norm(eps 를 크게)` ones, `isclose(equal_nan 없이)`, and the
+    # `top::`/`act::` skip reasons in `run.py` naming what each row is about. Keys in
+    # `golden.json`, so both sides spell them the same.
+    "borch-ts/test": 4738,
 }
 
 
