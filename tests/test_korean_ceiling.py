@@ -320,7 +320,10 @@ CEILINGS = {
     # 4430 → 4456. Twenty-six, in the pooling dilation case names — `자리::` on the
     # eleven `max_pool` rows, `grad::` on one, and the `avg_pool2d(dilation)=둘 다 거절`
     # with the `둘 다 멈춘다` verdict it returns. Keys or values in `golden.json`.
-    "borch-ts/test": 4456,
+    # 4456 → 4475. Nineteen, in the `torch.norm` case names — `dim 뒤집기`, `배치`,
+    # the `F.lp_pool*d(올림)` rows' `올림`, and the widened `linalg::` skip reason in
+    # `run.py`. Keys in `golden.json` except the last, which is a sentence.
+    "borch-ts/test": 4475,
 }
 
 

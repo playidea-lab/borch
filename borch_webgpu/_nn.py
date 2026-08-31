@@ -231,12 +231,15 @@ def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
 
 
 def _lp_pool(x, norm_type, kernel_size, stride=None, ceil_mode=False):
-    """`ceil_mode` was inside the `**kw` and went nowhere. borch.ts's `lpPool` has no
-    seat for it, so it is refused rather than swallowed."""
-    if ceil_mode:
-        from borch._base import _unsupported
-        _unsupported("lp_pool(ceil_mode=True) — not carried into the browser yet")
-    return wrap(handle(x).lpPool(norm_type, kernel_size, stride))
+    """**`ceil_mode` was refused here and the seat had been there for a while.**
+
+    It began inside a `**kw` and went nowhere; the refusal that replaced it said
+    borch.ts's `lpPool` had no seat for it, which was true when written. That function
+    grew a `ceilMode` the day the pooling shader did — the golden's two `LPPool`
+    ceiling cases are what drove it — and this door was not opened with it. A refusal
+    on a call path nothing exercised is exactly the kind that outlives its gap.
+    """
+    return wrap(handle(x).lpPool(norm_type, kernel_size, stride, bool(ceil_mode)))
 
 
 def _sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,

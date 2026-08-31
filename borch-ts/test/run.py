@@ -768,7 +768,12 @@ NOT_PORTED = {
     # body it has not been given; adding the field would be the port, and the four that
     # are asked already pin the batching itself. They are `linalg::lstsqfield::` in
     # `cases.py` and core-only for the same reason — the binding cannot reach them either.
-    "linalg::": (6, "없음 — `lstsq` 의 나머지 세 필드. TS 쪽은 해만 돌려준다"),
+    # 6 → 8. The two `torch.norm(nuc, …)=문구` rows freeze torch's own wording for a
+    # rank that is not 2 and an axis list that is not a pair. **Both checks are the
+    # binding's**, made before anything crosses — `matrixNorm` over here takes a pair
+    # by type, so a three-axis list is a compile error and a 1-D input reaches a
+    # different message from a different place. A Python-side rule, as `pad::` below.
+    "linalg::": (8, "없음 — `lstsq` 의 나머지 세 필드와, 파이썬 쪽에서 하는 두 검사"),
     "grad::": (12, "별칭 — a vjp is `backward(seed)`, and parity asks it already"),
     "cplx::": (10, "파이썬 — a complex `repr` belongs to Python's formatter"),
     # Five of the ten buffer cases were ported (registration, keeping one out of the

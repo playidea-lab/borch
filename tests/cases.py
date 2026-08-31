@@ -3505,6 +3505,19 @@ def pool_cases(inp=None):
                   lambda L: L.nn.LPPool1d(2, 3, 3, True)(L.tensor(seq))))
     cases.append((POOL_PREFIX + "nn.LPPool2d(올림)",
                   lambda L: L.nn.LPPool2d(2, 3, 3, True)(L.tensor(img))))
+    # **The layer honoured `ceil_mode` and the function refused it**, on the two sides
+    # that are not the core. The two rows above go through borch.ts's `LPPool*d` class
+    # and the three below through the binding's `F.lp_pool*d`, which checked the flag
+    # itself and stopped — with a reason that was true when written and had stopped
+    # being true the day `lpPool` grew the seat. A refusal on the call path nothing
+    # exercised is exactly the kind that outlives its gap, and these are the rows that
+    # exercise it.
+    cases.append((POOL_PREFIX + "F.lp_pool1d(올림)",
+                  lambda L: L.nn.functional.lp_pool1d(L.tensor(seq), 2, 3, 3, True)))
+    cases.append((POOL_PREFIX + "F.lp_pool2d(올림)",
+                  lambda L: L.nn.functional.lp_pool2d(L.tensor(img), 2, 3, 3, True)))
+    cases.append((POOL_PREFIX + "F.lp_pool3d(올림)",
+                  lambda L: L.nn.functional.lp_pool3d(L.tensor(vol), 2, 3, 3, True)))
 
     # **The backward divides by the same three things and none of the seven above
     # reaches it.** A cell in a short edge window was divided by fewer cells going
@@ -5938,8 +5951,8 @@ def unpool_cases(inp=None):
 
     # ── LPPool3d ───────────────────────────────────────────────────────
     small = grid(1, 1, 4, 4, 4) / 8
-    add("lp_pool3d", lambda L: F(L).lp_pool3d(L.tensor(small), 2, 2))
-    add("lp_pool3d(p=1)", lambda L: F(L).lp_pool3d(L.tensor(small), 1, 2))
+    add("lp_pool3d", lambda L: L.nn.functional.lp_pool3d(L.tensor(small), 2, 2))
+    add("lp_pool3d(p=1)", lambda L: L.nn.functional.lp_pool3d(L.tensor(small), 1, 2))
     add("층::LPPool3d", lambda L: L.nn.LPPool3d(2, 2)(L.tensor(small)))
 
     # ── fractional max pooling ──
@@ -12326,6 +12339,50 @@ def linalg_name_cases(inp=None):
                   lambda L: L.linalg.matrix_norm(L.tensor(mat))))
     cases.append((LINALG_PREFIX + "name2::matrix_norm(배치)",
                   lambda L: L.linalg.matrix_norm(L.tensor(_LA_BATCH))))
+    # ── `torch.norm`'s two words, which were a `ValueError` from `float()` ──
+    #
+    # `linalg.matrix_norm(ord="nuc")` above has been answered for a long time and
+    # **the top-level `torch.norm(A, "nuc")` had not** — it fell past every branch to
+    # `float(p)` and stopped inside a message about converting a string, naming
+    # neither the argument nor the function. `"fro"` went the same way on the core
+    # while the binding happened to catch it; two spellings of one gap, in two
+    # implementations, under a name the other three-quarters of which worked.
+    #
+    # torch's own rules, measured: `"fro"` is the elementwise 2-norm under another
+    # name — on a 2×3×4 it is 65.757, the root of the sum of all 24 squares, and not a
+    # per-matrix anything — while `"nuc"` is `matrix_norm`'s, over two axes and no
+    # more. The two refusals are the two checks torch makes, in torch's order: the
+    # rank first, so a 1-D is told *at least 2 dimensions* rather than *a 2-tuple*.
+    for _tag, _kw in (("nuc", {"p": "nuc"}),
+                      ("nuc, keepdim", {"p": "nuc", "keepdim": True}),
+                      ("nuc, dim 뒤집기", {"p": "nuc", "dim": (1, 0)}),
+                      ("fro", {"p": "fro"}),
+                      ("fro, keepdim", {"p": "fro", "keepdim": True})):
+        cases.append((LINALG_PREFIX + f"name2::torch.norm({_tag})",
+                      lambda L, k=_kw: L.norm(L.tensor(mat), **k)))
+    for _tag, _kw in (("nuc, dim=(0,1)", {"p": "nuc", "dim": (0, 1)}),
+                      ("nuc, dim=(1,2), keepdim",
+                       {"p": "nuc", "dim": (1, 2), "keepdim": True}),
+                      ("fro", {"p": "fro"}),
+                      ("fro, dim=(1,2)", {"p": "fro", "dim": (1, 2)})):
+        cases.append((LINALG_PREFIX + f"name2::torch.norm(배치, {_tag})",
+                      lambda L, k=_kw: L.norm(L.tensor(_LA_BATCH), **k)))
+    def norm_message(L, build):
+        """torch's wording, compared as a string. An invented one would pass a check
+        that only asks whether something was raised."""
+        try:
+            build(L)
+        except Exception as exc:                                # noqa: BLE001
+            return str(exc)
+        return "(거절 없음)"
+
+    for _tag, _fn in (
+            ("3차원에 dim 없이",
+             lambda L: L.norm(L.tensor(_LA_BATCH), p="nuc")),
+            ("1차원",
+             lambda L: L.norm(L.tensor(vec3), p="nuc"))):
+        cases.append((LINALG_PREFIX + f"name2::torch.norm(nuc, {_tag})=문구",
+                      lambda L, f=_fn: norm_message(L, f)))
     for tag, pv in (("기본", None), ("fro", "fro"), ("nuc", "nuc"), ("2", 2),
                     ("-2", -2), ("1", 1), ("inf", float("inf"))):
         cases.append((LINALG_PREFIX + f"name2::cond(p={tag})",

@@ -1630,23 +1630,55 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
     if kw.get("dtype") is not None:
         x = wrap(x).to(_dtype_to_make(kw["dtype"]))
     h = handle(x)
-    if dim is None and p == 2:
-        return guarded(h.norm)
+    rank = len(h.shape)
+
+    def _fold(t, how):
+        """One reduction over `dim`, **which may be several axes or none.**
+
+        borch.ts's `sumDim`/`amax`/`amin` take one axis, and this handed the tuple
+        straight through — `norm(x, dim=(1, 2))` reduced axis `(1, 2)`, which
+        JavaScript reads as neither and which came back the wrong rank. Folded one at
+        a time from the back, so the earlier indices stay valid, and squeezed at the
+        end when `keepdim` is off.
+
+        **With no `dim` and `keepdim` on, torch keeps every axis as a 1** — a 2×2 asked
+        for its Frobenius norm gives `(1, 1)` and not a scalar. That was the other
+        half of the same hole: the whole-tensor branch ignored the flag.
+        """
+        axes = (list(range(rank)) if dim is None
+                else [int(d) % rank for d in ((dim,) if isinstance(dim, int) else dim)])
+        out = t
+        for axis in sorted(axes, reverse=True):
+            out = how(out, axis)
+        if keepdim:
+            return out
+        return out
+
+    def _shape_after(t):
+        """`keepdim` off drops the folded axes; `_fold` already kept them."""
+        if keepdim:
+            return t
+        axes = {int(d) % rank for d in
+                (range(rank) if dim is None
+                 else ((dim,) if isinstance(dim, int) else dim))}
+        keep = [n for i, n in enumerate(handle(t).shape) if i not in axes]
+        return wrap(guarded(handle(t).reshape, _js_list([int(n) for n in keep])))
+
+    def _reduce(t, how):
+        return _shape_after(wrap(_fold(t, how)))
+
     if p == 2:
-        return guarded(handle(guarded(h.square).sumDim(dim, bool(keepdim))).sqrt)
+        return _reduce(guarded(h.square), lambda o, a: handle(o).sumDim(a, True)).sqrt()
     if p == 1:
-        got = guarded(h.abs)
-        return wrap(got.sum() if dim is None else got.sumDim(dim, bool(keepdim)))
+        return _reduce(guarded(h.abs), lambda o, a: handle(o).sumDim(a, True))
     if p == float("inf"):
-        got = guarded(h.abs)
-        return wrap(got.max() if dim is None else got.amax(dim, bool(keepdim)))
+        return _reduce(guarded(h.abs), lambda o, a: handle(o).amax(a, True))
     # The three below were opened alongside fixing the place where the core
     # quietly produced the 2-norm. Fixing the core alone makes **the three
     # diverge** — the golden asks all three implementations the same thing, so a
     # case only one of them can answer cannot go in at all.
     if p == float("-inf"):
-        got = guarded(h.abs)
-        return wrap(got.min() if dim is None else got.amin(dim, bool(keepdim)))
+        return _reduce(guarded(h.abs), lambda o, a: handle(o).amin(a, True))
     if p == 0:
         got = handle(x)
         return wrap(got.countNonzero() if dim is None
@@ -1654,12 +1686,28 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
     if p in (None, "fro"):
         return norm(x, 2, dim, keepdim)
     if p == "nuc":
-        raise NotImplementedError(
-            "norm('nuc') is not here yet — it is the sum of singular values and needs an "
-            "SVD. It is not approximated")
-    powed = handle(guarded(handle(guarded(h.abs)).powScalar, float(p)))
-    total = powed.sum() if dim is None else powed.sumDim(dim, bool(keepdim))
-    return wrap(handle(wrap(total)).powScalar(1.0 / float(p)))
+        # **The refusal said it needs an SVD, and borch.ts has had one.** `svdvals`
+        # and `matrixNorm` are both over there and both asynchronous, which is what
+        # `settle` exists for — `guarded` awaits through `run_sync`. The reason named
+        # a computation rather than a gap, and the computation was one call away.
+        #
+        # torch's two checks, in torch's order and with torch's wording: the rank
+        # first, then the count of axes. On a 1-D with no `dim` the axis list is one
+        # long and torch still says *at least 2 dimensions*.
+        axes = (tuple(range(rank)) if dim is None
+                else tuple(int(d) for d in
+                           ((dim,) if isinstance(dim, int) else dim)))
+        if rank < 2:
+            raise RuntimeError("linalg.matrix_norm: The input tensor A must have "
+                               "at least 2 dimensions.")
+        if len(axes) != 2:
+            raise RuntimeError("linalg.matrix_norm: dim must be a 2-tuple. Got "
+                               + " ".join(str(a) for a in axes))
+        return wrap(guarded(h.matrixNorm, "nuc", _js_list(list(axes)),
+                            bool(keepdim)))
+    powed = wrap(guarded(handle(guarded(h.abs)).powScalar, float(p)))
+    total = _reduce(handle(powed), lambda o, a: handle(o).sumDim(a, True))
+    return wrap(handle(total).powScalar(1.0 / float(p)))
 
 
 def transpose(x, dim0=None, dim1=None, **kw):

@@ -5005,6 +5005,29 @@ def norm(input, p=2, dim=None, keepdim=False, dtype=None):  # noqa: A002
         "A norm exists over the reals only — a square root does not fit in an "
         "integer cell. Call `.float()` first.",
         "linalg.vector_norm: Expected a floating point or complex tensor as input")
+    # **`p` may be a word, and both were a `ValueError` from `float()`.**
+    # `torch.norm(A, 'fro')` and `torch.norm(A, 'nuc')` are torch's own spellings —
+    # the first is the elementwise 2-norm under another name (measured: `'fro'` on a
+    # 2×3×4 gives 65.757, which is the root of the sum of all 24 squares) and the
+    # second is `matrix_norm`'s nuclear norm, the sum of the singular values.
+    #
+    # Neither reached a branch, so both fell to the last line and stopped inside
+    # `float('nuc')` — a message about converting a string, naming neither the
+    # argument nor the function.
+    if p == "fro":
+        return norm(input, 2, dim, keepdim)
+    if p == "nuc":
+        # torch's two checks, in torch's order and with torch's wording: the rank
+        # first, then the count of axes. On a 1-D with no `dim` the axis list is one
+        # long, and torch still says *at least 2 dimensions* rather than *a 2-tuple*.
+        axes = tuple(range(input.data.ndim)) if dim is None else tuple(dim)
+        if input.data.ndim < 2:
+            raise RuntimeError("linalg.matrix_norm: The input tensor A must have "
+                               "at least 2 dimensions.")
+        if len(axes) != 2:
+            raise RuntimeError("linalg.matrix_norm: dim must be a 2-tuple. Got "
+                               + " ".join(str(a) for a in axes))
+        return matrix_norm(input, "nuc", axes, keepdim)
     if p == 1:
         return input.abs().sum(dim=dim, keepdim=keepdim)
     if p == 2:

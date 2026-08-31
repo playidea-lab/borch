@@ -7375,6 +7375,15 @@ function addPool(out: Map<string, Case>, inp: Inputs): void {
   layer("AvgPool3d(올림)", () => new nn.AvgPool3d(3, 3, 0, true), "nd_vol", true);
   layer("LPPool1d(올림)", () => new nn.LPPool1d(2, 3, 3, true), "nd_seq", false);
   layer("LPPool2d(올림)", () => new nn.LPPool2d(2, 3, 3, true), "img", false);
+  // **The layer honoured `ceilMode` and the function refused it**, on the binding
+  // side — with a reason that was true when written and stopped being true the day
+  // `lpPool` grew the seat. Here the method takes it directly, so these three rows are
+  // what the Python `F.lp_pool*d(…, ceil_mode=True)` reaches.
+  for (const [rank, key] of [[1, "nd_seq"], [2, "img"], [3, "nd_vol"]] as
+       Array<[number, string]>) {
+    out.set(`pool::F.lp_pool${rank}d(올림)`,
+      () => inp.get(key).lpPool(2, 3, 3, true));
+  }
 }
 
 /**
@@ -9820,6 +9829,32 @@ function addLinalgNames(out: Map<string, Case>): void {
   out.set("linalg::name2::matrix_norm(기본)", async () => mat().matrixNorm());
   out.set("linalg::name2::matrix_norm(배치)",
     async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixNorm());
+
+  // ── `torch.norm`'s two words ────────────────────────────────────────────
+  //
+  // `matrixNorm(ord="nuc")` above has been here for a long time and the top-level
+  // `torch.norm(A, "nuc")` had not — the binding refused it as *needing an SVD*, a
+  // reason that named a computation this side already had. `"fro"` is the elementwise
+  // 2-norm under another name, so it is `vectorNorm`, not a per-matrix anything.
+  //
+  // These are the rows the Python `torch.norm` reaches through the binding, which
+  // does its own dispatch on `p`; the two shapes are what separate the words.
+  out.set("linalg::name2::torch.norm(nuc)", async () => mat().matrixNorm("nuc"));
+  out.set("linalg::name2::torch.norm(nuc, keepdim)",
+    async () => mat().matrixNorm("nuc", [-2, -1], true));
+  out.set("linalg::name2::torch.norm(nuc, dim 뒤집기)",
+    async () => mat().matrixNorm("nuc", [1, 0]));
+  out.set("linalg::name2::torch.norm(fro)", () => mat().vectorNorm(2));
+  out.set("linalg::name2::torch.norm(fro, keepdim)",
+    () => mat().vectorNorm(2).reshape([1, 1]));
+  out.set("linalg::name2::torch.norm(배치, nuc, dim=(0,1))",
+    async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixNorm("nuc", [0, 1]));
+  out.set("linalg::name2::torch.norm(배치, nuc, dim=(1,2), keepdim)",
+    async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixNorm("nuc", [1, 2], true));
+  out.set("linalg::name2::torch.norm(배치, fro)",
+    () => Tensor.from(LA_BATCH, [3, 2, 2]).vectorNorm(2));
+  out.set("linalg::name2::torch.norm(배치, fro, dim=(1,2))",
+    () => Tensor.from(LA_BATCH, [3, 2, 2]).square().sumDim(1).sumDim(1).sqrt());
 
   // ── the six seats `linalg` was short of ─────────────────────────────────
   //
