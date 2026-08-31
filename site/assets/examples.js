@@ -371,6 +371,116 @@ log("");
 log("이 수가 이상하게 낮으면 어댑터 이름을 보라 — 소프트웨어 래스터라이저면");
 log("그것은 이 라이브러리의 수가 아니라 그 래스터라이저의 수다.");` },
   },
+  {
+    id: "fft",
+    title: {
+      en: "7 · Signals — find the frequency that is in there",
+      ko: "7 · 신호 — 안에 들어 있는 주파수를 찾아낸다" },
+    blurb: {
+      en: "Two sine waves and noise go in; the spectrum says which two, with nothing fitted.",
+      ko: "사인파 둘과 잡음을 넣으면 스펙트럼이 그 둘을 말해준다. 맞춰보는 과정 없이." },
+    code: {
+      en: `await init();
+manualSeed(0);
+
+const N = 256, RATE = 256;                    // one second of samples
+const k = (v) => Tensor.full([], v);          // binary ops take tensors, not numbers
+const t = Tensor.arange(0, N).div(k(RATE));
+
+// 8 Hz loud, 40 Hz quiet, noise over both.
+const signal = t.mul(k(2 * Math.PI * 8)).sin()
+  .add(t.mul(k(2 * Math.PI * 40)).sin().mul(k(0.4)))
+  .add(Tensor.randn([N]).mul(k(0.3)));
+
+// rfft keeps the half that is not a mirror of the other half.
+const mags = Array.from(await fft.rfft(signal).abs().toArray());
+const hz = Array.from(await fft.rfftfreq(N, 1 / RATE).toArray());
+
+const top = mags.map((m, i) => [m, hz[i]]).sort((a, b) => b[0] - a[0]).slice(0, 2);
+log("the two strongest bins:");
+for (const [m, f] of top) log(\`  \${f.toFixed(1)} Hz   magnitude \${m.toFixed(1)}\`);
+log("");
+log("noise spreads across every bin and a tone does not, which is why it stands up.");
+for (let i = 0; i < 60; i++) plot("magnitude", mags[i]);`,
+      ko: `await init();
+manualSeed(0);
+
+const N = 256, RATE = 256;                    // 1 초치 표본
+const k = (v) => Tensor.full([], v);          // 이항 연산은 숫자가 아니라 텐서를 받는다
+const t = Tensor.arange(0, N).div(k(RATE));
+
+// 8 Hz 크게, 40 Hz 작게, 그 위에 잡음.
+const signal = t.mul(k(2 * Math.PI * 8)).sin()
+  .add(t.mul(k(2 * Math.PI * 40)).sin().mul(k(0.4)))
+  .add(Tensor.randn([N]).mul(k(0.3)));
+
+// rfft 는 나머지 절반의 거울상이 아닌 쪽만 남긴다.
+const mags = Array.from(await fft.rfft(signal).abs().toArray());
+const hz = Array.from(await fft.rfftfreq(N, 1 / RATE).toArray());
+
+const top = mags.map((m, i) => [m, hz[i]]).sort((a, b) => b[0] - a[0]).slice(0, 2);
+log("가장 센 두 칸:");
+for (const [m, f] of top) log(\`  \${f.toFixed(1)} Hz   크기 \${m.toFixed(1)}\`);
+log("");
+log("잡음은 모든 칸에 퍼지고 톤은 안 퍼진다. 그래서 톤만 솟는다.");
+for (let i = 0; i < 60; i++) plot("magnitude", mags[i]);` } },
+  {
+    id: "lstsq",
+    title: {
+      en: "8 · Least squares — the same line, with no training loop",
+      ko: "8 · 최소제곱 — 같은 직선을, 학습 루프 없이" },
+    blurb: {
+      en: "Example 3 walks to y = 3x + 2 by gradient descent. This one solves for it.",
+      ko: "3번은 경사하강으로 y = 3x + 2 에 걸어간다. 이건 풀어버린다." },
+    code: {
+      en: `await init();
+manualSeed(0);
+
+const k = (v) => Tensor.full([], v);
+const N = 64;
+const x = Tensor.randn([N, 1]);
+const y = x.mul(k(3)).add(k(2)).add(Tensor.randn([N, 1]).mul(k(0.1)));
+
+// A column of ones turns the intercept into one more coefficient.
+const A = Tensor.cat([x, Tensor.ones([N, 1])], 1);
+
+const solution = await linalg.lstsq(A, y);
+const [slope, intercept] = Array.from(await solution.toArray());
+log(\`slope \${slope.toFixed(4)}   intercept \${intercept.toFixed(4)}\`);
+log("3 and 2 — and no step size was chosen to get here.");
+log("");
+
+// The normal equations, written out, give the same thing.
+const At = A.t();
+const direct = await linalg.solve(At.mm(A), At.mm(y));
+log("through the normal equations:\\n" + await direct.repr());
+log("");
+const resid = y.sub(A.mm(solution));
+log("residual norm =", (await resid.mul(resid).sum().sqrt().item()).toFixed(4));`,
+      ko: `await init();
+manualSeed(0);
+
+const k = (v) => Tensor.full([], v);
+const N = 64;
+const x = Tensor.randn([N, 1]);
+const y = x.mul(k(3)).add(k(2)).add(Tensor.randn([N, 1]).mul(k(0.1)));
+
+// 1 로 채운 열을 붙이면 절편이 계수 하나가 된다.
+const A = Tensor.cat([x, Tensor.ones([N, 1])], 1);
+
+const solution = await linalg.lstsq(A, y);
+const [slope, intercept] = Array.from(await solution.toArray());
+log(\`기울기 \${slope.toFixed(4)}   절편 \${intercept.toFixed(4)}\`);
+log("3 과 2 다. 여기 오는 데 학습률을 고른 적이 없다.");
+log("");
+
+// 정규방정식을 직접 써도 같은 것이 나온다.
+const At = A.t();
+const direct = await linalg.solve(At.mm(A), At.mm(y));
+log("정규방정식으로:\\n" + await direct.repr());
+log("");
+const resid = y.sub(A.mm(solution));
+log("잔차 노름 =", (await resid.mul(resid).sum().sqrt().item()).toFixed(4));` } },
 ];
 
 /**
