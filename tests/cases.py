@@ -9382,6 +9382,65 @@ def train_cases(inp=None):
                   lambda L: attention(L, lambda LL: LL.nn.Transformer
                                       .generate_square_subsequent_mask(5))))
 
+    # ── the attention flags, refused on all three sides until today ────────────
+    #
+    # `add_bias_kv`, `add_zero_attn` and a `kdim`/`vdim` unlike the embedding stopped
+    # with their own names, and the refusal lived one layer down in
+    # `multi_head_attention_forward` beside `use_separate_proj_weight`, `static_k`
+    # and `static_v`. None of them needed a kernel:
+    #
+    #     project → concat bias_k/bias_v → split heads → static_k/static_v
+    #             → concat the zero step → scores
+    #
+    # **`bias_k` goes in after the projection**, not through `W_k` — measured, and
+    # the reading that puts it before agrees on nothing. **The zero step goes in
+    # after the heads are split**, which is the same position by value and a
+    # different one to write. Each concatenation grows the key axis by one, so each
+    # mask grows a column of zero, once per concatenation — which is why the masked
+    # rows below are asked as well as the plain ones.
+    _MHA_X = np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4) * 0.1 - 1.0
+
+    def _attn_flags(L, part, kdim=4, vdim=4, mask=None, **flags):
+        mod = L.nn.MultiheadAttention(4, 2, **flags, kdim=kdim, vdim=vdim)
+        mod.eval()
+        _ramp(L, mod)
+        q = L.tensor(_MHA_X)
+        k = L.tensor(np.arange(5 * 2 * kdim, dtype=np.float32)
+                     .reshape(5, 2, kdim) * 0.1 - 1.0)
+        v = L.tensor(np.arange(5 * 2 * vdim, dtype=np.float32)
+                     .reshape(5, 2, vdim) * 0.1 - 1.0)
+        extra = {}
+        if mask == "attn":
+            m = np.zeros((3, 5), dtype=np.float32)
+            m[0, 0] = -1e9
+            extra["attn_mask"] = L.tensor(m)
+        elif mask == "pad":
+            p = np.zeros((2, 5), dtype=bool)
+            p[0, 1] = True
+            extra["key_padding_mask"] = L.tensor(p)
+        got = mod(q, k, v, **extra)
+        return got[0] if part == "출력" else got[1]
+
+    _MHA_FLAGS = (
+        ("add_bias_kv", {"add_bias_kv": True}),
+        ("add_zero_attn", {"add_zero_attn": True}),
+        ("둘 다", {"add_bias_kv": True, "add_zero_attn": True}),
+        ("kdim, vdim", {"kdim": 6, "vdim": 7}),
+    )
+    for _lab, _kw in _MHA_FLAGS:
+        for _part in ("출력", "가중치"):
+            cases.append((f"seq::MultiheadAttention({_lab})/{_part}",
+                          lambda L, p=_part, w=_kw: _attn_flags(L, p, **w)))
+        cases.append((f"seq::MultiheadAttention({_lab})/state_dict 열쇠",
+                      lambda L, w=_kw: " ".join(sorted(
+                          L.nn.MultiheadAttention(4, 2, **w).state_dict()))))
+    # The masks, which the two concatenations have to grow a column of.
+    for _lab, _kw in _MHA_FLAGS[:3]:
+        for _m in ("attn", "pad"):
+            cases.append((f"seq::MultiheadAttention({_lab}, {_m} 마스크)",
+                          lambda L, w=_kw, m=_m: _attn_flags(
+                              L, "출력", mask=m, **w)))
+
     # ── The transformer ────────────────────────────────────────────────────
     #
     # **The weights are built from each parameter's own shape**, not read from a

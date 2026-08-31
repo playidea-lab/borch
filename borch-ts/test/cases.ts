@@ -1448,6 +1448,76 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
   out.set("seq::MultiheadAttention(인과 마스크)",
     () => attention(nn.MultiheadAttention.causalMask(5)));
 
+  // ── the attention flags, refused here until today ──────────────────────────
+  //
+  // The layer takes one tensor (`attend` is self-attention), so these go through
+  // `multiHeadAttentionForward` with the layer's own weights — which is exactly what
+  // the binding does, and what makes the three sides one computation.
+  //
+  //     project → concat biasK/biasV → split heads → staticK/staticV
+  //             → concat the zero step → scores
+  const mhaX = (len: number, width: number): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < len * 2 * width; i++) v.push(i * 0.1 - 1.0);
+    return Tensor.from(v, [len, 2, width]);
+  };
+  interface MhaFlags {
+    addBiasKv?: boolean;
+    addZeroAttn?: boolean;
+    kdim?: number;
+    vdim?: number;
+  }
+  const mhaBuild = (f: MhaFlags): nn.MultiheadAttention => {
+    const m = new nn.MultiheadAttention(
+      4, 2, 0, true, f.addBiasKv ?? false, f.addZeroAttn ?? false,
+      f.kdim ?? null, f.vdim ?? null, false);
+    m.eval();
+    return m;
+  };
+  const mhaRun = (f: MhaFlags, part: "출력" | "가중치",
+                  mask: "attn" | "pad" | null = null) => () => {
+    const m = ramp(mhaBuild(f));
+    const kd = f.kdim ?? 4, vd = f.vdim ?? 4;
+    let attnMask: Tensor | null = null;
+    let padMask: Tensor | null = null;
+    if (mask === "attn") {
+      const g: number[] = new Array(15).fill(0);
+      g[0] = -1e9;
+      attnMask = Tensor.from(g, [3, 5]);
+    } else if (mask === "pad") {
+      // The Python side hands a boolean mask; the binding turns it into the additive
+      // one this function takes, so the case carries the additive form here.
+      const g: number[] = new Array(10).fill(0);
+      g[1] = -Infinity;
+      padMask = Tensor.from(g, [2, 5]);
+    }
+    const got = nn.multiHeadAttentionForward(
+      mhaX(3, 4), mhaX(5, kd), mhaX(5, vd), 4, 2, m.inWeight, m.inBias,
+      m.biasK, m.biasV, m.addZeroAttn, 0, m.outWeight, m.outBias, false,
+      padMask, true, attnMask, !m.qkvSameEmbedDim, m.qWeight, m.kWeight,
+      m.vWeight);
+    return part === "출력" ? got.output : got.weights!;
+  };
+  const MHA_FLAGS: Array<[string, MhaFlags]> = [
+    ["add_bias_kv", { addBiasKv: true }],
+    ["add_zero_attn", { addZeroAttn: true }],
+    ["둘 다", { addBiasKv: true, addZeroAttn: true }],
+    ["kdim, vdim", { kdim: 6, vdim: 7 }],
+  ];
+  for (const [label, flags] of MHA_FLAGS) {
+    for (const part of ["출력", "가중치"] as const) {
+      out.set(`seq::MultiheadAttention(${label})/${part}`, mhaRun(flags, part));
+    }
+    out.set(`seq::MultiheadAttention(${label})/state_dict 열쇠`,
+      () => Object.keys(mhaBuild(flags).stateDict()).sort().join(" "));
+  }
+  for (const [label, flags] of MHA_FLAGS.slice(0, 3)) {
+    for (const mask of ["attn", "pad"] as const) {
+      out.set(`seq::MultiheadAttention(${label}, ${mask} 마스크)`,
+        mhaRun(flags, "출력", mask));
+    }
+  }
+
   // ── The transformer ──────────────────────────────────────────────────────
   //
   // **The weights come from each parameter's own shape**, by the same rule as

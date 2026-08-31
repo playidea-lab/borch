@@ -1920,43 +1920,61 @@ class MultiheadAttention(Module):
         0.1 — set `bias=0.1` here and nothing raised. Five arguments were missing
         from the middle and every one of them shifted what followed.
 
-        Four of the five are **refused rather than implemented**, and the refusal
-        already existed one layer down: `multi_head_attention_forward` names
-        `bias_k`, `add_zero_attn` and `use_separate_proj_weight` and stops. Carrying
-        the argument here means the refusal arrives with the right name attached
-        instead of the value landing on a different parameter — *an absent feature
-        beats a wrong answer* is this library's rule, and a wrong **position** is a
-        wrong answer wearing the shape of a feature.
+        Four of the five were **refused rather than implemented**, and the refusal
+        lived one layer down: `multi_head_attention_forward` named `bias_k`,
+        `add_zero_attn` and `use_separate_proj_weight` and stopped. Carrying the
+        argument here meant the refusal arrived with the right name attached instead
+        of the value landing on a different parameter.
 
-        `dropout` is the one that works: the function applies it while training.
+        **All four are answered now, and none of them needed a kernel.** `bias_k` and
+        `bias_v` are one more key and value step, concatenated **in the projected
+        space** — measured, not through `W_k` — and `add_zero_attn` is one more after
+        that, a zero step appended once the heads are split. Both grow the key axis by
+        one, so both masks grow a column. A key or value of a different width is three
+        separate projections instead of the bundled one, which is the same path
+        `use_separate_proj_weight` takes.
+
+        `dropout` is the one that always worked: the function applies it while
+        training.
         """
         super().__init__()
         _no_device_dtype("MultiheadAttention", device, dtype)
         if embed_dim % num_heads:
             raise ValueError(f"embed_dim({embed_dim}) is not divisible by num_heads({num_heads}).")
-        if add_bias_kv:
-            _unsupported("MultiheadAttention(add_bias_kv=True)")
-        if add_zero_attn:
-            _unsupported("MultiheadAttention(add_zero_attn=True)")
-        for name, given in (("kdim", kdim), ("vdim", vdim)):
-            # torch only takes the separate-projection path when these differ from
-            # `embed_dim`; passing the same number is the ordinary layer and is not
-            # a request for anything this cannot do.
-            if given is not None and given != embed_dim:
-                _unsupported(f"MultiheadAttention({name}={given}) — a key or value "
-                             "width unlike the embedding's")
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         self.dropout = dropout
         self.kdim = embed_dim if kdim is None else kdim
         self.vdim = embed_dim if vdim is None else vdim
+        self.add_zero_attn = add_zero_attn
         self.batch_first = batch_first
+        # torch's own test, and the name it gives it: the bundled projection is only
+        # possible when all three widths agree.
+        self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim
 
         bound = _math.sqrt(1.0 / embed_dim)
-        self.in_proj_weight = Parameter(
-            _rng.uniform(-bound, bound, (3 * embed_dim, embed_dim)).astype(_DEFAULT_DTYPE))
+
+        def drawn(shape):
+            return Parameter(
+                _rng.uniform(-bound, bound, shape).astype(_DEFAULT_DTYPE))
+
+        if self._qkv_same_embed_dim:
+            self.in_proj_weight = drawn((3 * embed_dim, embed_dim))
+            self.q_proj_weight = self.k_proj_weight = self.v_proj_weight = None
+        else:
+            # **Three weights and no bundle.** torch registers `in_proj_weight` as
+            # `None` here rather than dropping the name, and `state_dict` carries the
+            # other three — measured on a layer with `kdim=6, vdim=7`.
+            self.in_proj_weight = None
+            self.q_proj_weight = drawn((embed_dim, embed_dim))
+            self.k_proj_weight = drawn((embed_dim, self.kdim))
+            self.v_proj_weight = drawn((embed_dim, self.vdim))
         self.in_proj_bias = Parameter(_np.zeros(3 * embed_dim, dtype=_DEFAULT_DTYPE)) if bias else None
+        # `(1, 1, E)` — one step, broadcast across the batch. torch's shape exactly,
+        # and the `repeat(1, bsz, 1)` that widens it happens inside the function.
+        self.bias_k = drawn((1, 1, embed_dim)) if add_bias_kv else None
+        self.bias_v = drawn((1, 1, embed_dim)) if add_bias_kv else None
         self.out_proj = Linear(embed_dim, embed_dim, bias=bias)
 
     def forward(self, query, key=None, value=None, attn_mask=None, need_weights=True,
@@ -1970,10 +1988,15 @@ class MultiheadAttention(Module):
             query, key, value = (t.transpose(0, 1) for t in (query, key, value))
         out, weights = multi_head_attention_forward(
             query, key, value, self.embed_dim, self.num_heads,
-            self.in_proj_weight, self.in_proj_bias, None, None, False, self.dropout,
+            self.in_proj_weight, self.in_proj_bias, self.bias_k, self.bias_v,
+            self.add_zero_attn, self.dropout,
             self.out_proj.weight, self.out_proj.bias, self.training,
             key_padding_mask=key_padding_mask, need_weights=need_weights,
-            attn_mask=attn_mask, average_attn_weights=average_attn_weights)
+            attn_mask=attn_mask,
+            use_separate_proj_weight=not self._qkv_same_embed_dim,
+            q_proj_weight=self.q_proj_weight, k_proj_weight=self.k_proj_weight,
+            v_proj_weight=self.v_proj_weight,
+            average_attn_weights=average_attn_weights)
         if self.batch_first:
             out = out.transpose(0, 1)
         return out, weights
@@ -2031,19 +2054,21 @@ def multi_head_attention_forward(
     without the layer calls this name — torch's own `MultiheadAttention` calls it
     as well.
 
-    **What it does not do is refused loudly.** Quietly ignoring a rarely used
-    branch such as `bias_k`, `add_zero_attn` or `static_k` makes the values
-    plausibly different.
-    """
-    for name, given in (("bias_k", bias_k), ("bias_v", bias_v),
-                        ("static_k", static_k), ("static_v", static_v)):
-        if given is not None:
-            _unsupported(f"multi_head_attention_forward({name}=…)")
-    if add_zero_attn:
-        _unsupported("multi_head_attention_forward(add_zero_attn=True)")
-    if use_separate_proj_weight:
-        _unsupported("multi_head_attention_forward(use_separate_proj_weight=True)")
+    **`bias_k`, `add_zero_attn`, `use_separate_proj_weight`, `static_k` and
+    `static_v` were refused here**, on the ground that quietly ignoring a rarely used
+    branch makes the values plausibly different. That was the right refusal and the
+    branches are written now; each is a concatenation or a substitution and none of
+    them is a new kernel. The order they happen in is torch's and it matters:
 
+        project → concat bias_k/bias_v → split heads → static_k/static_v
+                → concat the zero step → scores
+
+    **`bias_k` goes in after the projection**, not through `W_k` — measured, and the
+    reading that puts it before agrees on nothing. **The zero step goes in after the
+    heads are split**, which is the same position by value and a different one to
+    write. Both grow the key axis by one, so `attn_mask` and `key_padding_mask` each
+    grow a column of zero (`False` for a boolean one), once per concatenation.
+    """
     query, key, value = _wrap(query), _wrap(key), _wrap(value)
     # Inside, everything is computed batch-first. It is flipped only on the way
     # in and on the way out.
@@ -2055,20 +2080,68 @@ def multi_head_attention_forward(
             f"was expecting embedding dimension of {embed_dim_to_check}, but got {E}")
     head_dim = E // num_heads
 
-    w, b = _wrap(in_proj_weight), None if in_proj_bias is None else _wrap(in_proj_bias)
+    b = None if in_proj_bias is None else _wrap(in_proj_bias)
 
-    def project(t, index):
-        piece = w[index * E:(index + 1) * E]
-        out = t @ piece.transpose(0, 1)
+    def biased(out, index):
         return out + b[index * E:(index + 1) * E] if b is not None else out
 
-    q = _split_heads(project(query, 0), B, T, num_heads, head_dim)
-    k = _split_heads(project(key, 1), B, S, num_heads, head_dim)
-    v = _split_heads(project(value, 2), B, S, num_heads, head_dim)
+    if use_separate_proj_weight:
+        # **Three weights, and `in_proj_bias` still split in three.** The bias stays
+        # bundled even here, which is the part a reading of the flag alone misses.
+        for name, given in (("q_proj_weight", q_proj_weight),
+                            ("k_proj_weight", k_proj_weight),
+                            ("v_proj_weight", v_proj_weight)):
+            if given is None:
+                raise AssertionError(f"use_separate_proj_weight is True but "
+                                     f"{name} is None")
+        qp = biased(query @ _wrap(q_proj_weight).transpose(0, 1), 0)
+        kp = biased(key @ _wrap(k_proj_weight).transpose(0, 1), 1)
+        vp = biased(value @ _wrap(v_proj_weight).transpose(0, 1), 2)
+    else:
+        w = _wrap(in_proj_weight)
+        qp = biased(query @ w[0:E].transpose(0, 1), 0)
+        kp = biased(key @ w[E:2 * E].transpose(0, 1), 1)
+        vp = biased(value @ w[2 * E:3 * E].transpose(0, 1), 2)
 
-    scores = (q @ k.transpose(-2, -1)) / _math.sqrt(head_dim)
     if is_causal and attn_mask is None:
         attn_mask = _np.triu(_np.ones((T, S), dtype=bool), k=1)
+
+    if bias_k is not None or bias_v is not None:
+        if bias_k is None or bias_v is None:
+            raise AssertionError("bias_k and bias_v must be given together")
+        # `(1, 1, E)` widened across the batch. Adding a zero block is the broadcast
+        # that keeps the gradient reaching the one row.
+        spread = zeros(B, 1, E)
+        kp = cat([kp, _wrap(bias_k).reshape(1, 1, E) + spread], dim=1)
+        vp = cat([vp, _wrap(bias_v).reshape(1, 1, E) + spread], dim=1)
+        S += 1
+        attn_mask = _pad_mask_column(attn_mask)
+        key_padding_mask = _pad_mask_column(key_padding_mask)
+
+    q = _split_heads(qp, B, T, num_heads, head_dim)
+    k = _split_heads(kp, B, S, num_heads, head_dim)
+    v = _split_heads(vp, B, S, num_heads, head_dim)
+
+    # **These arrive already projected and already split**, as `(N·heads, S, head)` —
+    # torch's shape, which this reshapes to the `(N, heads, S, head)` used inside.
+    for name, given in (("static_k", static_k), ("static_v", static_v)):
+        if given is not None:
+            got = _wrap(given)
+            reshaped = got.reshape(B, num_heads, -1, head_dim)
+            if name == "static_k":
+                k, S = reshaped, got.data.shape[1]
+            else:
+                v = reshaped
+
+    if add_zero_attn:
+        zero = zeros(B, num_heads, 1, head_dim)
+        k = cat([k, zero], dim=2)
+        v = cat([v, zero], dim=2)
+        S += 1
+        attn_mask = _pad_mask_column(attn_mask)
+        key_padding_mask = _pad_mask_column(key_padding_mask)
+
+    scores = (q @ k.transpose(-2, -1)) / _math.sqrt(head_dim)
     if attn_mask is not None:
         scores = _apply_mask(scores, attn_mask)
     if key_padding_mask is not None:
@@ -2092,6 +2165,26 @@ def multi_head_attention_forward(
 
 def _split_heads(t, B, T, heads, head_dim):
     return t.reshape(B, T, heads, head_dim).transpose(1, 2)      # (B, heads, T, head_dim)
+
+
+def _pad_mask_column(mask, n=1):
+    """One more key position, so the mask grows `n` columns that mask nothing.
+
+    **Zero for a float mask and `False` for a boolean one**, because the two are
+    applied differently — a float mask is added to the scores and a boolean one
+    selects what to fill with `-inf`. A `True` here would blind every query to the
+    step that was just added, which is the opposite of what adding it was for.
+
+    A float mask that carries a gradient keeps it: the concatenation goes through the
+    graph rather than through numpy.
+    """
+    if mask is None:
+        return None
+    if isinstance(mask, Tensor) and mask.data.dtype.kind != "b":
+        return cat([mask, zeros(*(mask.data.shape[:-1] + (n,)))], dim=-1)
+    arr = mask.data if isinstance(mask, Tensor) else _np.asarray(mask)
+    return _np.concatenate(
+        [arr, _np.zeros(arr.shape[:-1] + (n,), dtype=arr.dtype)], axis=-1)
 
 
 def _apply_mask(scores, mask):

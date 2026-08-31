@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 376
+  "missing": 379
  },
  "modules": [
   {
@@ -11729,8 +11729,8 @@
     {
      "kind": "function",
      "name": "multiHeadAttentionForward",
-     "signature": "export declare function multiHeadAttentionForward(query: Tensor, key: Tensor, value: Tensor, embedDimToCheck: number | null, numHeads: number, inProjWeight: Tensor, inProjBias: Tensor | null, biasK?: Tensor | null, biasV?: Tensor | null, addZeroAttn?: boolean, dropoutP?: number, outProjWeight?: Tensor, outProjBias?: Tensor | null, training?: boolean, keyPaddingMask?: Tensor | null, needWeights?: boolean, attnMask?: Tensor | null, useSeparateProjWeight?: boolean, qProjWeight?: Tensor | null, kProjWeight?: Tensor | null, vProjWeight?: Tensor | null, staticK?: Tensor | null, staticV?: Tensor | null, averageAttnWeights?: boolean, isCausal?: boolean): { output: Tensor; weights: Tensor | null; }",
-     "doc": "The function form of attention. Weights come from outside.\n\n**Input is `(L, N, E)` — length first.** torch's function of the same\nname is, and calling it with batch first quietly mixes the wrong axes.\n\n**The mask is an added float.** A boolean table is not accepted here —\n`-inf` is added so that softmax produces zero, rather than multiplying by\nzero, and multiplying after normalisation leaves the remaining slots not\nsumming back to 1. Turning booleans into floats happens where torch's\ncontract is imitated (the Python binding).",
+     "signature": "export declare function multiHeadAttentionForward(query: Tensor, key: Tensor, value: Tensor, embedDimToCheck: number | null, numHeads: number, inProjWeight: Tensor | null, inProjBias: Tensor | null, biasK?: Tensor | null, biasV?: Tensor | null, addZeroAttn?: boolean, dropoutP?: number, outProjWeight?: Tensor | null, outProjBias?: Tensor | null, training?: boolean, keyPaddingMask?: Tensor | null, needWeights?: boolean, attnMask?: Tensor | null, useSeparateProjWeight?: boolean, qProjWeight?: Tensor | null, kProjWeight?: Tensor | null, vProjWeight?: Tensor | null, staticK?: Tensor | null, staticV?: Tensor | null, averageAttnWeights?: boolean, isCausal?: boolean): { output: Tensor; weights: Tensor | null; }",
+     "doc": "The function form of attention. Weights come from outside.\n\n**Input is `(L, N, E)` — length first.** torch's function of the same\nname is, and calling it with batch first quietly mixes the wrong axes.\n\n**The mask is an added float.** A boolean table is not accepted here —\n`-inf` is added so that softmax produces zero, rather than multiplying by\nzero, and multiplying after normalisation leaves the remaining slots not\nsumming back to 1. Turning booleans into floats happens where torch's\ncontract is imitated (the Python binding).\n\n**`inProjWeight` is null under `useSeparateProjWeight`**, which is what torch hands\nover there — its own layer sets `in_proj_weight` to `None` when the three widths\ndiffer, and the three separate weights carry the projection instead.\n\n**`outProjWeight` used to default to `inProjWeight`** and cannot now that that one\nis nullable. Nobody relied on it: every caller gives an output projection, and a\nmissing one is a mistake worth naming rather than a square matrix silently borrowed\nfrom the input side.\n\n(Both of those belong here rather than beside the parameters they describe:\n`test_binding_arguments.py` reads this list by splitting on commas, so a comment\ninside it becomes two parameters and shifts every position after it.)",
      "members": [],
      "tags": [
       {
@@ -11739,7 +11739,7 @@
       }
      ],
      "torch": "multi_head_attention_forward",
-     "doc_ko": "어텐션의 함수 꼴. 가중치를 밖에서 받는다.\n\n**입력이 `(L, N, E)` 다 — 길이가 앞이다.** torch 의 같은 이름이 그렇고, 배치를\n앞에 두고 부르면 조용히 다른 축을 섞는다.\n\n**가림막은 더하는 실수다.** 참·거짓 표를 여기서 안 받는다 — `-inf` 를 더해\nsoftmax 가 0 을 내게 하는 것이지 0 을 곱하는 것이 아니고, 곱하면 이미 정규화한\n뒤라 남은 자리가 1 로 안 돌아간다. 참·거짓을 실수로 바꾸는 일은 torch 의 계약을\n흉내내는 자리(파이썬 결속)에서 한다."
+     "doc_ko": "어텐션의 함수 꼴. 가중치를 밖에서 받는다.\n\n**입력이 `(L, N, E)` 다 — 길이가 앞이다.** torch 의 같은 이름이 그렇고, 배치를\n앞에 두고 부르면 조용히 다른 축을 섞는다.\n\n**가림막은 더하는 실수다.** 참·거짓 표를 여기서 안 받는다 — `-inf` 를 더해\nsoftmax 가 0 을 내게 하는 것이지 0 을 곱하는 것이 아니고, 곱하면 이미 정규화한\n뒤라 남은 자리가 1 로 안 돌아간다. 참·거짓을 실수로 바꾸는 일은 torch 의 계약을\n흉내내는 자리(파이썬 결속)에서 한다.\n\n**`useSeparateProjWeight` 아래에서는 `inProjWeight` 가 null 이다.** torch 가\n거기서 그렇게 넘긴다 — 세 폭이 다르면 torch 의 층도 `in_proj_weight` 를 `None`\n으로 두고, 대신 분리된 세 가중치가 투영을 맡는다.\n\n**`outProjWeight` 의 기본값은 `inProjWeight` 였고**, 그쪽이 null 이 될 수 있는\n지금은 그럴 수 없다. 기대던 곳은 없다: 부르는 쪽은 모두 출력 투영을 준다. 없는\n것은 입력 쪽에서 말없이 빌려온 정사각 행렬보다 이름을 붙여 알릴 실수다.\n\n(둘 다 인자 옆이 아니라 여기 적는다: `test_binding_arguments.py` 가 이 목록을\n쉼표로 갈라 읽어서, 목록 안의 주석은 인자 두 개가 되고 뒤 자리를 전부 민다.)"
     },
     {
      "kind": "class",
@@ -11772,8 +11772,8 @@
       },
       {
        "name": "inWeight",
-       "signature": "readonly inWeight: Tensor",
-       "doc": "",
+       "signature": "readonly inWeight: Tensor | null",
+       "doc": "Null when the three widths differ — see the constructor.",
        "torch": "in_weight"
       },
       {
@@ -11795,9 +11795,51 @@
        "torch": "out_bias"
       },
       {
+       "name": "qWeight",
+       "signature": "readonly qWeight: Tensor | null",
+       "doc": "",
+       "torch": "q_weight"
+      },
+      {
+       "name": "kWeight",
+       "signature": "readonly kWeight: Tensor | null",
+       "doc": "",
+       "torch": "k_weight"
+      },
+      {
+       "name": "vWeight",
+       "signature": "readonly vWeight: Tensor | null",
+       "doc": "",
+       "torch": "v_weight"
+      },
+      {
+       "name": "biasK",
+       "signature": "readonly biasK: Tensor | null",
+       "doc": "",
+       "torch": "bias_k"
+      },
+      {
+       "name": "biasV",
+       "signature": "readonly biasV: Tensor | null",
+       "doc": "",
+       "torch": "bias_v"
+      },
+      {
+       "name": "addZeroAttn",
+       "signature": "readonly addZeroAttn: boolean",
+       "doc": "",
+       "torch": "add_zero_attn"
+      },
+      {
+       "name": "qkvSameEmbedDim",
+       "signature": "readonly qkvSameEmbedDim: boolean",
+       "doc": "torch's own name for the test that decides whether one bundle is possible.",
+       "torch": "qkv_same_embed_dim"
+      },
+      {
        "name": "constructor",
        "signature": "constructor(embedDim: number, numHeads: number, dropout?: number, bias?: boolean, addBiasKv?: boolean, addZeroAttn?: boolean, kdim?: number | null, vdim?: number | null, batchFirst?: boolean, device?: null, dtype?: null)",
-       "doc": "torch's eleven, of which three do work here and four are refused by name.\n\n**This took `(embedDim, numHeads)`, so seven arguments were missing from the\nmiddle and every one of them shifted what followed.** `new MultiheadAttention(64,\n8, 0.1)` — torch's own way of writing a dropout of 0.1 — reached nothing at all\nhere, and the core had the same list a shift earlier where `0.1` landed on\n`bias`. An absent feature beats a wrong answer, and **a wrong position is a wrong\nanswer wearing the shape of a feature.**\n\n`dropout`, `bias` and `batchFirst` work. `addBiasKv`, `addZeroAttn` and a\n`kdim`/`vdim` unlike the embedding stop with their own name — the refusal exists\na layer down in `multiHeadAttentionForward` already, and carrying the argument\nhere is what makes it arrive with the right name attached.\n\n**`batchFirst` defaults to `false`, which flips what this class used to do.** It\nread `(batch, len, E)` unconditionally, which is torch's `batch_first=True`, so\nthe default was the option torch does not take."
+       "doc": "torch's eleven, of which three do work here and four are refused by name.\n\n**This took `(embedDim, numHeads)`, so seven arguments were missing from the\nmiddle and every one of them shifted what followed.** `new MultiheadAttention(64,\n8, 0.1)` — torch's own way of writing a dropout of 0.1 — reached nothing at all\nhere, and the core had the same list a shift earlier where `0.1` landed on\n`bias`. An absent feature beats a wrong answer, and **a wrong position is a wrong\nanswer wearing the shape of a feature.**\n\n**`addBiasKv`, `addZeroAttn` and a `kdim`/`vdim` unlike the embedding stopped\nwith their own name, and all three are answered now.** `biasK` and `biasV` are\none more key and value step, concatenated in the projected space; `addZeroAttn`\nis one more zero step after that; and different widths are three separate\nprojections instead of the bundled one — which is the path\n`useSeparateProjWeight` takes in the function.\n\n**`batchFirst` defaults to `false`, which flips what this class used to do.** It\nread `(batch, len, E)` unconditionally, which is torch's `batch_first=True`, so\nthe default was the option torch does not take."
       },
       {
        "name": "ownParameters",
@@ -11813,7 +11855,7 @@
       {
        "name": "attend",
        "signature": "attend(x: Tensor, mask: Tensor | null): Tensor",
-       "doc": ""
+       "doc": "Self-attention: one tensor for query, key and value.\n\n**This wrote out its own attention and it is a call now.** A fourth copy of the\nsame arithmetic — the core has one, the function above has one, and the binding\nhad already stopped using this one after the two diverged by 1.26e-01 on the\ngolden's \"same answer as the layer\" case. Kept as a copy it would have been the\none place the new flags did not reach, since they are all written in the\nfunction."
       },
       {
        "name": "causalMask",
@@ -12112,7 +12154,7 @@
      ]
     }
    ],
-   "count": 823,
+   "count": 830,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -20342,5 +20384,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2758
+ "total": 2765
 }

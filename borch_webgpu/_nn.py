@@ -549,23 +549,13 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
     checking it turns a guard into decoration — the shape error still comes, but
     later and from somewhere else.
 
-    `q_proj_weight` and the other two only mean anything under
-    `use_separate_proj_weight`, and that branch is refused above. torch ignores
-    them when the flag is off; here they are refused instead, because there is no
-    arrangement of arguments in which this function can honour them. Refusing is
-    the only answer that stays true after the branch lands.
+    **The seven refusals here are gone with borch.ts's.** They said *not here yet*
+    for `bias_k`, `static_k`, the three separate projections and the two flags; each
+    of those is a concatenation or a substitution over there now, and this file was
+    only ever the door. The comment that stood here — *there is no arrangement of
+    arguments in which this function can honour them* — was about the door and not
+    about the room behind it.
     """
-    for name, given in (("bias_k", bias_k), ("bias_v", bias_v),
-                        ("static_k", static_k), ("static_v", static_v),
-                        ("q_proj_weight", q_proj_weight),
-                        ("k_proj_weight", k_proj_weight),
-                        ("v_proj_weight", v_proj_weight)):
-        if given is not None:
-            raise RuntimeError(
-                f"multi_head_attention_forward({name}=…) is not here yet.")
-    if add_zero_attn or use_separate_proj_weight:
-        raise RuntimeError(
-            "that branch of multi_head_attention_forward is not here yet.")
     width = int(handle(query).shape[-1])
     if embed_dim_to_check is not None and int(embed_dim_to_check) != width:
         raise RuntimeError(
@@ -585,13 +575,22 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
     # laid thirteen out in an order of its own, and the two lists happened to agree
     # only because both were wrong in the same way — the moment borch.ts followed
     # torch, `int(num_heads)` was landing on `embed_dim_to_check` and the masks on
-    # `bias_k`/`bias_v`. The refusals live over there now, so the four this function
-    # already refuses are passed as they arrived rather than re-checked here.
+    # `bias_k`/`bias_v`. Nothing is re-checked here; the arguments are passed as they
+    # arrived.
+    #
+    # **`in_proj_weight` goes through `_h` and not `handle`**, because it is `None`
+    # under separate projections — which is what torch's own layer holds there. A hard
+    # `handle(None)` would stop at the boundary rather than reach the branch that
+    # expects it.
+    #
+    # (That note is here rather than beside the argument: `test_binding_arguments.py`
+    # reads this call by splitting on commas, so a comment inside the parentheses
+    # becomes two arguments and shifts every position after it.)
     got = _ts.nn.multiHeadAttentionForward(
         handle(query), handle(key), handle(value),
         None if embed_dim_to_check is None else int(embed_dim_to_check),
         int(num_heads),
-        handle(in_proj_weight),
+        _h(in_proj_weight),
         handle(in_proj_bias) if in_proj_bias is not None else None,
         _h(bias_k), _h(bias_v), bool(add_zero_attn), float(dropout_p),
         handle(out_proj_weight),
@@ -3239,13 +3238,26 @@ class _Attention(Module):
         # transposed here before crossing.
         if self._batch_first:
             q, k, v = (_t(t, 0, 1) for t in (q, k, v))
+        # **Everything the layer holds crosses, including the empties.** Under
+        # `kdim`/`vdim` the bundle is `null` and the three separate weights are what
+        # exist; under `add_bias_kv` there are two more. Reading only `inWeight` and
+        # `outWeight` was right while the rest could not exist.
+        def held(name):
+            got = getattr(self._m, name, None)
+            return None if got is None else wrap(got)
+
         out, weights = _mha_forward(
             q, k, v, None, self._heads,
-            wrap(self._m.inWeight), wrap(self._m.inBias),
+            held("inWeight"), held("inBias"),
+            bias_k=held("biasK"), bias_v=held("biasV"),
+            add_zero_attn=bool(self._m.addZeroAttn),
             out_proj_weight=wrap(self._m.outWeight),
-            out_proj_bias=wrap(self._m.outBias),
+            out_proj_bias=held("outBias"),
             attn_mask=attn_mask, need_weights=need_weights,
             key_padding_mask=key_padding_mask,
+            use_separate_proj_weight=not self._m.qkvSameEmbedDim,
+            q_proj_weight=held("qWeight"), k_proj_weight=held("kWeight"),
+            v_proj_weight=held("vWeight"),
             average_attn_weights=average_attn_weights)
         return (_t(out, 0, 1) if self._batch_first else out), weights
 

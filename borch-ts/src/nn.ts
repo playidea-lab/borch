@@ -5651,6 +5651,19 @@ function slice(g: Tensor, k: number, H: number): Tensor {
  * summing back to 1. Turning booleans into floats happens where torch's
  * contract is imitated (the Python binding).
  *
+ * **`inProjWeight` is null under `useSeparateProjWeight`**, which is what torch hands
+ * over there — its own layer sets `in_proj_weight` to `None` when the three widths
+ * differ, and the three separate weights carry the projection instead.
+ *
+ * **`outProjWeight` used to default to `inProjWeight`** and cannot now that that one
+ * is nullable. Nobody relied on it: every caller gives an output projection, and a
+ * missing one is a mistake worth naming rather than a square matrix silently borrowed
+ * from the input side.
+ *
+ * (Both of those belong here rather than beside the parameters they describe:
+ * `test_binding_arguments.py` reads this list by splitting on commas, so a comment
+ * inside it becomes two parameters and shifts every position after it.)
+ *
  * @returns the output `(L, N, E)` and the weights. With `averageWeights`
  *   they are `(N, L, S)`, otherwise `(N, H, L, S)`, one per head.
  */
@@ -5660,13 +5673,13 @@ export function multiHeadAttentionForward(
   value: Tensor,
   embedDimToCheck: number | null,
   numHeads: number,
-  inProjWeight: Tensor,
+  inProjWeight: Tensor | null,
   inProjBias: Tensor | null,
   biasK: Tensor | null = null,
   biasV: Tensor | null = null,
   addZeroAttn = false,
   dropoutP = 0.0,
-  outProjWeight: Tensor = inProjWeight,
+  outProjWeight: Tensor | null = null,
   outProjBias: Tensor | null = null,
   training = true,
   keyPaddingMask: Tensor | null = null,
@@ -5687,22 +5700,16 @@ export function multiHeadAttentionForward(
   // the fourth argument on. Every one of the twelve that were missing sat *between*
   // ones that were present, so each shifted what followed.
   //
-  // Six are refused rather than implemented, which is the trade the core makes at the
-  // same place: quietly ignoring a branch like `biasK` or `staticK` makes the values
-  // plausibly different, and plausible is the one thing a comparison cannot catch.
-  for (const [what, given] of [["biasK", biasK], ["biasV", biasV],
-                               ["staticK", staticK], ["staticV", staticV],
-                               ["qProjWeight", qProjWeight],
-                               ["kProjWeight", kProjWeight],
-                               ["vProjWeight", vProjWeight]] as const) {
-    if (given != null) {
-      throw new NotImplementedError(`multiHeadAttentionForward(${what}=…)`);
-    }
-  }
-  for (const [what, on] of [["addZeroAttn", addZeroAttn],
-                            ["useSeparateProjWeight", useSeparateProjWeight]] as const) {
-    if (on) throw new NotImplementedError(`multiHeadAttentionForward(${what}=true)`);
-  }
+  // **Six were refused and all six are written now**, each a concatenation or a
+  // substitution rather than a kernel. The order they happen in is torch's and it
+  // matters:
+  //
+  //     project → concat biasK/biasV → split heads → staticK/staticV
+  //             → concat the zero step → scores
+  //
+  // `biasK` goes in **after** the projection, not through `W_k` — measured, and the
+  // reading that puts it before agrees on nothing. Both concatenations grow the key
+  // axis by one, so each mask grows a column of zero, once per concatenation.
   const inWeight = inProjWeight;
   const inBias = inProjBias;
   const outWeight = outProjWeight;
@@ -5727,28 +5734,72 @@ export function multiHeadAttentionForward(
   // the explicit one when both are given.
   if (isCausal && attnMask === null) attnMask = MultiheadAttention.causalMask(L);
 
-  /** Turns length-first into batch-first and projects. */
-  const project = (t: Tensor, len: number, slot: number): Tensor => {
-    const flat = t.permute([1, 0, 2]).reshape([N * len, E]);
-    const w = inWeight.narrow(0, slot * E, E);
+  /**
+   * Turns length-first into batch-first and projects.
+   *
+   * **`inProjBias` stays bundled even under separate weights**, split in three the
+   * same way — the part a reading of the flag alone misses.
+   */
+  const project = (t: Tensor, len: number, slot: number, width: number): Tensor => {
+    const flat = t.permute([1, 0, 2]).reshape([N * len, width]);
+    const w = useSeparateProjWeight
+      ? [qProjWeight, kProjWeight, vProjWeight][slot]
+      : inWeight?.narrow(0, slot * E, E);
+    if (!w) throw new Error(`useSeparateProjWeight is true but slot ${slot} is null`);
     const out = flat.linear(w);
     return (inBias ? out.add(inBias.narrow(0, slot * E, E)) : out)
       .reshape([N, len, E]);
   };
-  const q = project(query, L, 0);
-  const k = project(key, S, 1);
-  const v = project(value, S, 2);
+  const q = project(query, L, 0, query.shape[2] ?? E);
+  let k = project(key, S, 1, key.shape[2] ?? E);
+  let v = project(value, S, 2, value.shape[2] ?? E);
+
+  /** One more key position, so the mask grows a column that masks nothing. */
+  const grow = (m: Tensor | null): Tensor | null => m === null ? null
+    : Tensor.cat([m, Tensor.zeros([...m.shape.slice(0, -1), 1])], -1);
+
+  let src = S;
+  if (biasK || biasV) {
+    if (!biasK || !biasV) throw new Error("biasK and biasV must be given together");
+    // `(1, 1, E)` widened across the batch. Adding a zero block is the broadcast that
+    // keeps the gradient reaching the one row.
+    const spread = Tensor.zeros([N, 1, E]);
+    k = Tensor.cat([k, biasK.reshape([1, 1, E]).add(spread)], 1);
+    v = Tensor.cat([v, biasV.reshape([1, 1, E]).add(spread)], 1);
+    src += 1;
+    attnMask = grow(attnMask);
+    keyPaddingMask = grow(keyPaddingMask);
+  }
+  // **These arrive already projected and already split**, as `(N·heads, S, head)`.
+  // Inside here a key is `(N, S, E)` with the heads laid out along `E`, so the two
+  // shapes are the same numbers in a different arrangement.
+  const unsplit = (t: Tensor, len: number): Tensor =>
+    t.reshape([N, numHeads, len, head]).permute([0, 2, 1, 3]).reshape([N, len, E]);
+  if (staticK) {
+    src = staticK.shape[1] ?? src;
+    k = unsplit(staticK, src);
+  }
+  if (staticV) v = unsplit(staticV, staticV.shape[1] ?? src);
+  if (addZeroAttn) {
+    const zero = Tensor.zeros([N, 1, E]);
+    k = Tensor.cat([k, zero], 1);
+    v = Tensor.cat([v, zero], 1);
+    src += 1;
+    attnMask = grow(attnMask);
+    keyPaddingMask = grow(keyPaddingMask);
+  }
+  const S2 = src;
 
   const rows: Tensor[] = [];
   const allWeights: Tensor[] = [];
   for (let n = 0; n < N; n++) {
     const perHead: Tensor[] = [];
     const perHeadWeights: Tensor[] = [];
-    const pad = keyPaddingMask ? keyPaddingMask.select(0, n).reshape([1, S]) : null;
+    const pad = keyPaddingMask ? keyPaddingMask.select(0, n).reshape([1, S2]) : null;
     for (let h = 0; h < numHeads; h++) {
       const cut = (t: Tensor, len: number) =>
         t.select(0, n).narrow(1, h * head, head).reshape([len, head]);
-      let scores = cut(q, L).mm(cut(k, S).transpose()).binary("mul", scale);
+      let scores = cut(q, L).mm(cut(k, S2).transpose()).binary("mul", scale);
       if (attnMask) scores = scores.add(attnMask);
       if (pad) scores = scores.add(pad);
       // **Dropout on the attention, torch's way round.** The binding took
@@ -5761,13 +5812,14 @@ export function multiHeadAttentionForward(
       // what was attended to. At `dropoutP = 0` this is the identity, which is
       // why every existing golden case is untouched by it.
       const w = scores.softmax(1).dropout(dropoutP, training);
-      perHeadWeights.push(w.reshape([1, L, S]));
-      perHead.push(w.mm(cut(v, S)));
+      perHeadWeights.push(w.reshape([1, L, S2]));
+      perHead.push(w.mm(cut(v, S2)));
     }
     rows.push(Tensor.cat(perHead, 1));                 // (L, E)
-    allWeights.push(Tensor.cat(perHeadWeights, 0).reshape([1, numHeads, L, S]));
+    allWeights.push(Tensor.cat(perHeadWeights, 0).reshape([1, numHeads, L, S2]));
   }
   const merged = Tensor.stack(rows, 0).reshape([N * L, E]);
+  if (!outWeight) throw new Error("multiHeadAttentionForward needs outProjWeight");
   const projected = merged.linear(outWeight);
   const out = (outBias ? projected.add(outBias) : projected)
     .reshape([N, L, E]).permute([1, 0, 2]);
@@ -5781,10 +5833,19 @@ export function multiHeadAttentionForward(
 }
 
 export class MultiheadAttention extends Module {
-  readonly inWeight: Tensor;
+  /** Null when the three widths differ — see the constructor. */
+  readonly inWeight: Tensor | null;
   readonly inBias: Tensor | null;
   readonly outWeight: Tensor;
   readonly outBias: Tensor | null;
+  readonly qWeight: Tensor | null = null;
+  readonly kWeight: Tensor | null = null;
+  readonly vWeight: Tensor | null = null;
+  readonly biasK: Tensor | null = null;
+  readonly biasV: Tensor | null = null;
+  readonly addZeroAttn: boolean;
+  /** torch's own name for the test that decides whether one bundle is possible. */
+  readonly qkvSameEmbedDim: boolean;
 
   /**
    * torch's eleven, of which three do work here and four are refused by name.
@@ -5796,10 +5857,12 @@ export class MultiheadAttention extends Module {
    * `bias`. An absent feature beats a wrong answer, and **a wrong position is a wrong
    * answer wearing the shape of a feature.**
    *
-   * `dropout`, `bias` and `batchFirst` work. `addBiasKv`, `addZeroAttn` and a
-   * `kdim`/`vdim` unlike the embedding stop with their own name — the refusal exists
-   * a layer down in `multiHeadAttentionForward` already, and carrying the argument
-   * here is what makes it arrive with the right name attached.
+   * **`addBiasKv`, `addZeroAttn` and a `kdim`/`vdim` unlike the embedding stopped
+   * with their own name, and all three are answered now.** `biasK` and `biasV` are
+   * one more key and value step, concatenated in the projected space; `addZeroAttn`
+   * is one more zero step after that; and different widths are three separate
+   * projections instead of the bundled one — which is the path
+   * `useSeparateProjWeight` takes in the function.
    *
    * **`batchFirst` defaults to `false`, which flips what this class used to do.** It
    * read `(batch, len, E)` unconditionally, which is torch's `batch_first=True`, so
@@ -5820,35 +5883,46 @@ export class MultiheadAttention extends Module {
       throw new Error(
         `embed_dim(${embedDim}) is not divisible by num_heads(${numHeads}).`);
     }
-    for (const [what, on] of [["addBiasKv", addBiasKv],
-                              ["addZeroAttn", addZeroAttn]] as const) {
-      if (on) throw new NotImplementedError(`MultiheadAttention(${what}=true)`);
-    }
+    const kd = kdim ?? embedDim;
+    const vd = vdim ?? embedDim;
     // torch only takes the separate-projection path when these differ from
     // `embedDim`; the same number is the ordinary layer and asks for nothing.
-    for (const [what, given] of [["kdim", kdim], ["vdim", vdim]] as const) {
-      if (given !== null && given !== embedDim) {
-        throw new NotImplementedError(
-          `MultiheadAttention(${what}=${given}) — a key or value width unlike the `
-          + "embedding's");
-      }
-    }
+    this.qkvSameEmbedDim = kd === embedDim && vd === embedDim;
+    this.addZeroAttn = addZeroAttn;
     const bound = 1 / Math.sqrt(Math.max(1, embedDim));
-    this.inWeight = uniform([3 * embedDim, embedDim], bound);
+    if (this.qkvSameEmbedDim) {
+      this.inWeight = uniform([3 * embedDim, embedDim], bound);
+    } else {
+      // **Three weights and no bundle.** torch keeps `in_proj_weight` as `None` here
+      // and `state_dict` carries the other three instead — measured on a layer with
+      // `kdim = 6, vdim = 7`.
+      this.inWeight = null;
+      this.qWeight = uniform([embedDim, embedDim], bound);
+      this.kWeight = uniform([embedDim, kd], bound);
+      this.vWeight = uniform([embedDim, vd], bound);
+    }
     // torch's attention starts the bias at 0 — this is not a place where symmetry
     // needs breaking.
     this.inBias = bias ? Tensor.owned([3 * embedDim], 0) : null;
+    // `(1, 1, E)` — one step, widened across the batch inside the function.
+    this.biasK = addBiasKv ? uniform([1, 1, embedDim], bound) : null;
+    this.biasV = addBiasKv ? uniform([1, 1, embedDim], bound) : null;
     this.outWeight = uniform([embedDim, embedDim], bound);
     this.outBias = bias ? Tensor.owned([embedDim], 0) : null;
-    this.claim(...[this.inWeight, this.inBias, this.outWeight, this.outBias]
+    this.claim(...[this.inWeight, this.inBias, this.qWeight, this.kWeight,
+      this.vWeight, this.biasK, this.biasV, this.outWeight, this.outBias]
       .filter((t): t is Tensor => t !== null));
   }
 
   override ownParameters(): Record<string, Tensor> {
-    const out: Record<string, Tensor> = {
-      in_proj_weight: this.inWeight, "out_proj.weight": this.outWeight,
-    };
+    const out: Record<string, Tensor> = { "out_proj.weight": this.outWeight };
+    if (this.inWeight) out.in_proj_weight = this.inWeight;
+    if (this.qWeight) out.q_proj_weight = this.qWeight;
+    if (this.kWeight) out.k_proj_weight = this.kWeight;
+    if (this.vWeight) out.v_proj_weight = this.vWeight;
     if (this.inBias) out.in_proj_bias = this.inBias;
+    if (this.biasK) out.bias_k = this.biasK;
+    if (this.biasV) out.bias_v = this.biasV;
     if (this.outBias) out["out_proj.bias"] = this.outBias;
     return out;
   }
@@ -5857,43 +5931,26 @@ export class MultiheadAttention extends Module {
     return this.attend(x, null);
   }
 
+  /**
+   * Self-attention: one tensor for query, key and value.
+   *
+   * **This wrote out its own attention and it is a call now.** A fourth copy of the
+   * same arithmetic — the core has one, the function above has one, and the binding
+   * had already stopped using this one after the two diverged by 1.26e-01 on the
+   * golden's "same answer as the layer" case. Kept as a copy it would have been the
+   * one place the new flags did not reach, since they are all written in the
+   * function.
+   */
   attend(x: Tensor, mask: Tensor | null): Tensor {
     // **`batchFirst` decides which of the first two axes is which**, and torch's
-    // default is length first. Flipped here so the body below stays one shape.
-    const src = this.batchFirst ? x : x.swapaxes(0, 1);
-    const [batch = 1, len = 1] = src.shape;
-    const E = this.embedDim;
-    const head = E / this.numHeads;
-    const flat = src.reshape([batch * len, E]);
-    const inBias = this.inBias;
-    const projected = inBias ? flat.linear(this.inWeight).add(inBias)
-      : flat.linear(this.inWeight);
-    const parts = [0, 1, 2].map((k) => projected.narrow(1, k * E, E));
-    const scale = Tensor.full([], 1 / Math.sqrt(head));
-    const outs: Tensor[] = [];
-    for (let b = 0; b < batch; b++) {
-      const perHead: Tensor[] = [];
-      for (let h = 0; h < this.numHeads; h++) {
-        const take = (t: Tensor | undefined): Tensor => {
-          if (!t) throw new Error("attention: the projections are missing");
-          return t.reshape([batch, len, E]).select(0, b).narrow(1, h * head, head);
-        };
-        const q = take(parts[0]);
-        const k = take(parts[1]);
-        const v = take(parts[2]);
-        let scores = q.mm(k.transpose()).binary("mul", scale);
-        if (mask) scores = scores.add(mask);
-        // torch drops attention weights, not the values — and while training only.
-        perHead.push(scores.softmax(1).dropout(this.dropout, this.training).mm(v));
-      }
-      outs.push(Tensor.cat(perHead, 1));
-    }
-    const merged = Tensor.stack(outs, 0).reshape([batch * len, E]);
-    const outBias = this.outBias;
-    const out = outBias ? merged.linear(this.outWeight).add(outBias)
-      : merged.linear(this.outWeight);
-    const shaped = out.reshape([batch, len, E]);
-    return this.batchFirst ? shaped : shaped.swapaxes(0, 1);
+    // default is length first — which is what the function below always wants.
+    const src = this.batchFirst ? x.swapaxes(0, 1) : x;
+    const got = multiHeadAttentionForward(
+      src, src, src, this.embedDim, this.numHeads, this.inWeight, this.inBias,
+      this.biasK, this.biasV, this.addZeroAttn, this.dropout,
+      this.outWeight, this.outBias, this.training, null, false, mask,
+      !this.qkvSameEmbedDim, this.qWeight, this.kWeight, this.vWeight);
+    return this.batchFirst ? got.output.swapaxes(0, 1) : got.output;
   }
 
   /**

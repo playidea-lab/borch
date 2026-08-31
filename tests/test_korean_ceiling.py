@@ -305,7 +305,10 @@ CEILINGS = {
     # 4298 → 4312. Fourteen, in the top-level recurrent flags' case names — `양방향`,
     # `2층양방향`, `2층 dropout, 평가` and `proj_size 와 양방향`. Keys in `golden.json`,
     # so both sides spell them the same.
-    "borch-ts/test": 4312,
+    # 4312 → 4333. Twenty-one, in the attention flags' case names — `둘 다`,
+    # `출력`, `가중치`, `state_dict 열쇠` and the two `마스크` rows. Keys in
+    # `golden.json`; `add_bias_kv`, `add_zero_attn` and `kdim, vdim` are ASCII.
+    "borch-ts/test": 4333,
 }
 
 
