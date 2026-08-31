@@ -14,7 +14,7 @@ from ._base import (
 )
 from ._ops import (
     _Namespace, _default_softmax_dim, _gelu, _legacy_reduction, _pool_all,
-    _reduce, _refuse_loss_weight, _renorm_rows, _rng, _spread, _wrap,
+    _reduce, _renorm_rows, _rng, _spread, _weighted_reduce, _wrap,
     adaptive_avg_pool1d,
     adaptive_avg_pool2d, adaptive_avg_pool3d, adaptive_max_pool1d,
     adaptive_max_pool2d, adaptive_max_pool3d, avg_pool1d, avg_pool2d, avg_pool3d,
@@ -4232,11 +4232,18 @@ class _Functional(_Namespace):
     @staticmethod
     def mse_loss(input, target, size_average=None, reduce=None, reduction="mean",
                  weight=None):  # noqa: A002   # noqa: A002
-        """`weight` — the seat is torch's and the value is refused, for the reason
-        `_ops._refuse_loss_weight` gives."""
+        """`weight` — the seat is torch's, and it is answered now. See
+        `_ops._weighted_reduce`: `none` and `sum` scale each term, and this one's
+        `mean` divides by the sum of the weights, as `l1_loss` does and unlike
+        `huber_loss`.
+
+        **The unweighted call still goes through `MSELoss`**, so the layer stays
+        the one place the squaring is written."""
         reduction = _legacy_reduction(size_average, reduce, reduction)
-        _refuse_loss_weight("mse_loss", weight)
-        return MSELoss(reduction=reduction)(input, target)
+        if weight is None:
+            return MSELoss(reduction=reduction)(input, target)
+        diff = _wrap(input) - _wrap(target)
+        return _weighted_reduce(diff * diff, weight, reduction, "mse_loss", True)
 
     @staticmethod
     def binary_cross_entropy_with_logits(input, target, weight=None,   # noqa: A002

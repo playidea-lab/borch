@@ -325,11 +325,12 @@ _LOSSES = {
     # **torch's third seat is `reduction`, not `delta`.** It is the newest of
     # these and never carried the deprecated pair, so nothing shifted and the
     # order is simply torch's own — which the table had backwards.
+    # **`weight` stopped being a refusal and became a fourth outgoing seat.** borch.ts
+    # puts it after `reduction`, torch after `delta`, and the two tables here are
+    # exactly for that: `torch_order` says what arrives, `order` where it goes.
     "huber_loss": _loss(
-        "huberLoss", ("target", "delta", "reduction"),
-        ("target", "reduction", "delta", "weight"),
-        ("huber_loss", "torch's `mean` divides by the sum of the weights, so "
-                       "accepting it unused would change the loss")),
+        "huberLoss", ("target", "delta", "reduction", "weight"),
+        ("target", "reduction", "delta", "weight")),
     "kl_div": _loss(
         "klDiv", ("target", "reduction", "log_target"),
         ("target", *_DEPRECATED, "reduction", "log_target")),

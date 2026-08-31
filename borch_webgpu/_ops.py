@@ -238,8 +238,12 @@ _SIGNATURE = {
     # time, while the thirteen rare ones did from the start — the tutorials use
     # the default, so nobody asked.
     "smooth_l1_loss": ("target", "beta", "reduction"),
-    "l1_loss": ("target", "reduction"),
-    "mse_loss": ("target", "reduction"),
+    # **`weight` is at the end on these three**, which is where borch.ts puts it —
+    # torch's functional keeps it last too, after `reduction`, so the positions line
+    # up and only the two legacy flags in front of `reduction` are the binding's
+    # to absorb.
+    "l1_loss": ("target", "reduction", "weight"),
+    "mse_loss": ("target", "reduction", "weight"),
     "bce_with_logits": ("target", "reduction"),
     "binary_cross_entropy_with_logits": ("target", "reduction"),
     # **These two had `ignore_index` missing from the middle** and it did not raise.
@@ -254,7 +258,7 @@ _SIGNATURE = {
     # a *number* slot is invisible too when the number is only ever compared.
     "nll_loss": ("target", "ignore_index", "reduction"),
     "cross_entropy": ("target", "ignore_index", "reduction", "label_smoothing"),
-    "huber_loss": ("target", "delta", "reduction"),
+    "huber_loss": ("target", "delta", "reduction", "weight"),
     "interpolate": ("scale_factor",),
     # Boolean reductions and counting. **The dimension itself was missing for a
     # long time** — passing one had it quietly discarded and the whole tensor

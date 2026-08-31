@@ -1976,7 +1976,7 @@
       },
       {
        "name": "l1Loss",
-       "signature": "l1Loss(target: Tensor, reduction?: Reduction): Tensor",
+       "signature": "l1Loss(target: Tensor, reduction?: Reduction, weight?: Tensor): Tensor",
        "doc": "Absolute error.\n\n**`reduction` was missing here.** Thirteen rarely-used losses all took\nit and the four most used did not — the ones written later followed\ntorch's signature and the ones written first were never fixed. The\ntutorials use the default, so the table never asked either.",
        "torch": "l1_loss",
        "section": {
@@ -1987,7 +1987,7 @@
       },
       {
        "name": "mseLoss",
-       "signature": "mseLoss(target: Tensor, reduction?: Reduction): Tensor",
+       "signature": "mseLoss(target: Tensor, reduction?: Reduction, weight?: Tensor): Tensor",
        "doc": "Squared error.",
        "torch": "mse_loss",
        "section": {
@@ -2104,14 +2104,14 @@
       },
       {
        "name": "huberLoss",
-       "signature": "huberLoss(target: Tensor, delta?: number, reduction?: Reduction): Tensor",
-       "doc": "**It equals `smoothL1Loss` only at δ=1.**\n\nThe real relation is `huber(δ) = δ · smoothL1(β=δ)`. Measured at the\ndefaults alone, treating them as one function passes, so the golden\ncases ask with δ varied.",
+       "signature": "huberLoss(target: Tensor, delta?: number, reduction?: Reduction, weight?: Tensor): Tensor",
+       "doc": "**It equals `smoothL1Loss` only at δ=1.**\n\nThe real relation is `huber(δ) = δ · smoothL1(β=δ)`. Measured at the\ndefaults alone, treating them as one function passes, so the golden\ncases ask with δ varied.\n\n**`weight`'s `mean` divides by the count here** and by the sum of the weights on\n`l1Loss` and `mseLoss`. Measured, not inferred from the family.",
        "torch": "huber_loss",
        "section": {
         "ko": "Losses and distances",
         "en": "Losses and distances"
        },
-       "doc_ko": "**`smoothL1Loss` 와 δ=1 에서만 같다.**\n\n실제 관계는 `huber(δ) = δ · smoothL1(β=δ)` 다. 기본값으로만 재면 둘을 같은\n함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다."
+       "doc_ko": "**`smoothL1Loss` 와 δ=1 에서만 같다.**\n\n실제 관계는 `huber(δ) = δ · smoothL1(β=δ)` 다. 기본값으로만 재면 둘을 같은\n함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다.\n\n**`weight` 의 `mean` 은 여기서 개수로 나눈다.** `l1Loss` 와 `mseLoss` 는 가중치의\n합으로 나눈다 — 잰 것이지 계열에서 미루어 짐작한 것이 아니다."
       },
       {
        "name": "klDiv",

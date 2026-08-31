@@ -264,7 +264,11 @@ CEILINGS = {
     # `adjoint` and `left=False`, which are English.
     # 4063 → 4065. Two, in `tensorsolve(dims 없이, 2×3×2×3)` — a key in `golden.json`.
     # The six `dims=` names beside it are English.
-    "borch-ts/test": 4065,
+    # 4065 → 4089. Twenty-four, in the two `weight::` case names that are not pure
+    # ASCII — `mse_loss 의 기울기` and `모양이 다르면 거절` — plus the verdict strings
+    # `문구대로` and `안 던졌다` that the second one returns. All are keys or values in
+    # `golden.json`, so both sides spell them the same.
+    "borch-ts/test": 4089,
 }
 
 

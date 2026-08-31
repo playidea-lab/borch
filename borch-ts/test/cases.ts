@@ -5386,6 +5386,47 @@ function addLoss(out: Map<string, Case>): void {
     ];
     for (const [name, fn] of fns) out.set(`loss::reduction::${name}`, fn);
   }
+  // **`weight` on the three elementwise losses, which was a refusal nothing asked.**
+  // The core carried the seat and stopped the value, on the ground that `mean`
+  // divides by the sum of the weights rather than by the count — right, and also the
+  // specification. Measured:
+  //
+  //     none  w · ℓ                      all three
+  //     sum   Σ w · ℓ                    all three
+  //     mean  Σ w·ℓ / Σ w                `l1Loss` and `mseLoss`
+  //     mean  Σ w·ℓ / n                  `huberLoss`
+  //
+  // Its sum is 12 against 6 elements, so the two divisors are two different numbers
+  // and huber can be told from the other two — with all-ones, or with all-twos over
+  // twelve elements, the rules agree and nothing shows.
+  const lossW = () => Tensor.from([1, 2, 3, 4, 1, 1], [2, 3]);
+  for (const reduction of ["none", "sum", "mean"] as const) {
+    out.set(`loss::weight::l1_loss(${reduction})`,
+      () => x().l1Loss(y(), reduction, lossW()));
+    out.set(`loss::weight::mse_loss(${reduction})`,
+      () => x().mseLoss(y(), reduction, lossW()));
+    out.set(`loss::weight::huber_loss(${reduction})`,
+      () => x().huberLoss(y(), 1.0, reduction, lossW()));
+  }
+  // The backward carries the weight because it is a `mul` in the graph rather than a
+  // number applied afterwards — nothing had to be written for it, and nothing would
+  // say so if it had been dropped.
+  out.set("loss::weight::mse_loss 의 기울기", () => {
+    const p = x(true);
+    p.mseLoss(y(), "mean", lossW()).backward();
+    return gradOf(p, "mse_loss/weight");
+  });
+  // torch does not broadcast the weight: a `[6]` against a `[2, 3]` input raises.
+  out.set("loss::weight::모양이 다르면 거절", () => {
+    try {
+      x().l1Loss(y(), "mean", Tensor.from([1, 2, 3, 4, 1, 1], [6]));
+    } catch (err) {
+      return String(err).includes("must have the same size")
+        ? "문구대로" : `다른 문구 <${err}>`;
+    }
+    return "안 던졌다";
+  });
+
   // An unknown value is not swallowed into mean. `batchmean` exists **only** for
   // `klDiv`, so on another loss it is a wrong name.
   for (const bad of ["MEAN", "batchmean"]) {

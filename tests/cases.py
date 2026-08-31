@@ -7167,6 +7167,11 @@ LOSS_PREFIX = "loss::"
 # passes.
 _LOSS_X = np.array([[0.5, -1.0, 2.0], [1.5, 0.25, -0.5]], dtype=np.float32)
 _LOSS_Y = np.array([[1.0, 0.0, -1.0], [0.5, 1.0, 0.25]], dtype=np.float32)
+# **For the per-element `weight` the three elementwise losses take.** Its sum is 12
+# against 6 elements, so `Σw` and `n` are two different divisors — which is the whole
+# of what separates `l1`/`mse` from `huber` under `mean`. A weight of all ones, or of
+# all twos summing to 12 with 6 elements, would let the two rules agree.
+_LOSS_W = np.array([[1.0, 2.0, 3.0], [4.0, 1.0, 1.0]], dtype=np.float32)
 _LOSS_ANC = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
 _LOSS_POS = np.array([[2.0, 0.5], [1.5, 1.0]], dtype=np.float32)
 _LOSS_NEG = np.array([[1.1, 0.1], [0.2, 0.9]], dtype=np.float32)
@@ -7669,6 +7674,54 @@ def loss_cases(inp=None):
         ):
             add(f"reduction::{name}({reduction})",
                 lambda L, c=call, r=reduction: c(L, r))
+
+    # **`weight` on the three elementwise losses, which was a refusal nothing asked.**
+    # The seat was carried and the value stopped, on the ground that `mean` divides by
+    # the sum of the weights rather than by the count — a reason that was right and was
+    # also the specification. Measured on three weight vectors:
+    #
+    #     none  w · ℓ                      all three
+    #     sum   Σ w · ℓ                    all three
+    #     mean  Σ w·ℓ / Σ w                `l1_loss` and `mse_loss`
+    #     mean  Σ w·ℓ / n                  `huber_loss`
+    #
+    # **huber's divisor is the count and the other two are not**, so all three are asked
+    # under `mean` rather than one standing for the family. Assuming they agreed would
+    # put huber out by `Σw / n` — a factor of two on this fixture, with no exception.
+    for name, call in (
+            ("l1_loss", lambda L, r, w: F(L).l1_loss(
+                L.tensor(x), L.tensor(y), reduction=r, weight=w)),
+            ("mse_loss", lambda L, r, w: F(L).mse_loss(
+                L.tensor(x), L.tensor(y), reduction=r, weight=w)),
+            ("huber_loss", lambda L, r, w: F(L).huber_loss(
+                L.tensor(x), L.tensor(y), reduction=r, weight=w))):
+        for reduction in ("none", "sum", "mean"):
+            add(f"weight::{name}({reduction})",
+                lambda L, c=call, r=reduction: c(L, r, L.tensor(_LOSS_W)))
+
+    def loss_weight_grad(L):
+        """The backward carries the weight too — it is a `mul` in the graph rather
+        than a number applied afterwards, so nothing had to be written for it and
+        nothing would say so if it had been dropped."""
+        p = L.tensor(_LOSS_X.copy(), requires_grad=True)
+        F(L).mse_loss(p, L.tensor(y), reduction="mean",
+                      weight=L.tensor(_LOSS_W)).backward()
+        return _grad_of(p, "mse_loss/weight")
+
+    add("weight::mse_loss 의 기울기", loss_weight_grad)
+
+    # torch does not broadcast the weight: a `(6,)` against a `(2, 3)` input raises,
+    # and so does a `(3,)`. Both sides stop with torch's own wording.
+    def loss_weight_shape(L):
+        try:
+            F(L).l1_loss(L.tensor(x), L.tensor(y),
+                         weight=L.tensor(_LOSS_W.reshape(6)))
+        except Exception as exc:                                # noqa: BLE001
+            return ("문구대로" if "must have the same size" in str(exc)
+                    else f"다른 문구 <{exc}>")
+        return "안 던졌다"
+
+    add("weight::모양이 다르면 거절", loss_weight_shape)
 
     # **An unknown value is not swallowed into the mean.** It was `else: return mean()`, and then
     # a typo like `reduction="MEAN"` passes quietly and is trained on — the person believes what

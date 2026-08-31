@@ -4575,8 +4575,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * torch's signature and the ones written first were never fixed. The
    * tutorials use the default, so the table never asked either.
    */
-  l1Loss(target: Tensor, reduction: Reduction = "mean"): Tensor {
-    return this.sub(target).abs().reduceAs(reduction);
+  l1Loss(target: Tensor, reduction: Reduction = "mean",
+         weight?: Tensor): Tensor {
+    return this.sub(target).abs().weighTo(reduction, weight, true);
   }
 
   /**
@@ -4587,8 +4588,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Squared error.
    */
-  mseLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
-    return this.sub(target).square().reduceAs(reduction);
+  mseLoss(target: Tensor, reduction: Reduction = "mean",
+          weight?: Tensor): Tensor {
+    return this.sub(target).square().weighTo(reduction, weight, true);
   }
 
   /**
@@ -4765,19 +4767,51 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
+   * `reduceAs` with torch's per-element `weight` on the three losses that take one.
+   *
+   * Measured on three weight vectors:
+   *
+   *     none  w · ℓ                      all three
+   *     sum   Σ w · ℓ                    all three
+   *     mean  Σ w·ℓ / Σ w                `l1Loss` and `mseLoss`
+   *     mean  Σ w·ℓ / n                  `huberLoss`
+   *
+   * **`huberLoss` divides by the count and the other two do not**, which is why the
+   * divisor is a parameter rather than a rule — assuming the family agreed would
+   * make huber's `mean` wrong by `Σw / n` with no exception anywhere.
+   *
+   * The shapes must match exactly; torch does not broadcast here, and the wording of
+   * the refusal is torch's.
+   */
+  private weighTo(reduction: Reduction, weight: Tensor | undefined,
+                  meanOverWeights: boolean): Tensor {
+    if (weight === undefined) return this.reduceAs(reduction);
+    if (weight.shape.join() !== this.shape.join()) {
+      throw new RuntimeError("Weights and input must have the same size.");
+    }
+    const scaled = this.mul(weight);
+    if (reduction !== "mean" || !meanOverWeights) return scaled.reduceAs(reduction);
+    return scaled.sum().div(weight.sum());
+  }
+
+  /**
    * **It equals `smoothL1Loss` only at δ=1.**
    *
    * The real relation is `huber(δ) = δ · smoothL1(β=δ)`. Measured at the
    * defaults alone, treating them as one function passes, so the golden
    * cases ask with δ varied.
+   *
+   * **`weight`'s `mean` divides by the count here** and by the sum of the weights on
+   * `l1Loss` and `mseLoss`. Measured, not inferred from the family.
    */
-  huberLoss(target: Tensor, delta = 1.0, reduction: Reduction = "mean"): Tensor {
+  huberLoss(target: Tensor, delta = 1.0, reduction: Reduction = "mean",
+            weight?: Tensor): Tensor {
     const d = this.sub(target);
     const near = d.square().binary("mul", Tensor.full([], 0.5));
     const far = d.abs().binary("sub", Tensor.full([], 0.5 * delta))
       .binary("mul", Tensor.full([], delta));
     const isNear = d.abs().binary("lt", Tensor.full([], delta));
-    return near.where(isNear, far).reduceAs(reduction);
+    return near.where(isNear, far).weighTo(reduction, weight, false);
   }
 
   /**

@@ -5904,27 +5904,49 @@ def nll_loss(input, target, reduction="mean"):  # noqa: A002
     return _reduce(-picked, reduction)
 
 
-def _refuse_loss_weight(where_, weight):
-    """torch's `weight` on the elementwise losses. **The seat is taken and the value
-    is refused**, which is what `_WrittenLoss` decided for the classification losses
-    and the reason carries over unchanged: under `mean` torch divides by the sum of
-    the weights rather than by the sample count, so a `weight` accepted and unused
-    changes the number quietly and sends the reader after the learning rate.
+def _weighted_reduce(out, weight, reduction, where_, mean_over_weights):
+    """torch's `weight` on the elementwise losses.
 
-    Taking the seat is not a fiction — `F.l1_loss(a, b, 'sum', w)` lands on `weight`
-    in torch and now lands on `weight` here, where it says so by name. Left out, the
-    same call lands on nothing.
+    **The seat was taken and the value refused**, on the ground that under `mean`
+    torch divides by the sum of the weights rather than by the sample count, so a
+    `weight` accepted and unused changes the number quietly. That reason was right,
+    and it was also the specification — measured on three weight vectors:
+
+        none  w · ℓ                      all three
+        sum   Σ w · ℓ                    all three
+        mean  Σ w·ℓ / Σ w                `l1_loss` and `mse_loss`
+        mean  Σ w·ℓ / n                  `huber_loss`
+
+    **`huber_loss` divides by the count and the other two do not**, which is why
+    `mean_over_weights` is a parameter rather than a rule. Assuming the family
+    agreed would have made huber's `mean` wrong by a factor of `Σw / n` — 2.5 on a
+    weight vector of `[1, 2, 3, 4]`, and no exception anywhere.
+
+    The shapes must match exactly. torch does not broadcast here: a `(6,)` weight
+    against a `(2, 3)` input raises *Weights and input must have the same size*,
+    and so does a `(3,)` one, so the wording is taken from torch rather than
+    invented.
     """
-    if weight is not None:
-        _unsupported(f"{where_}(weight=…) — torch's `mean` divides by the sum of "
-                     "the weights, so accepting it unused would change the loss")
+    if weight is None:
+        return _reduce(out, reduction)
+    weight = _wrap(weight)
+    if tuple(weight.data.shape) != tuple(out.data.shape):
+        raise ValueError("Weights and input must have the same size.")
+    scaled = out * weight
+    if reduction != "mean":
+        return _reduce(scaled, reduction)
+    # `_reduce` is still asked for the divisor-free part so that an unknown
+    # `reduction` stops in exactly one place.
+    if not mean_over_weights:
+        return _reduce(scaled, "mean")
+    return scaled.sum() / weight.sum()
 
 
 def l1_loss(input, target, size_average=None, reduce=None, reduction="mean",
             weight=None):  # noqa: A002  # noqa: A002
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _refuse_loss_weight("l1_loss", weight)
-    return _reduce((_wrap(input) - _wrap(target)).abs(), reduction)
+    return _weighted_reduce((_wrap(input) - _wrap(target)).abs(), weight,
+                            reduction, "l1_loss", True)
 
 
 def smooth_l1_loss(input, target, size_average=None, reduce=None, reduction="mean",
@@ -6026,13 +6048,15 @@ def huber_loss(input, target, reduction="mean", delta=1.0,   # noqa: A002
     defaults only, treating the two as one function still passes, so the golden
     asks with δ changed.
 
-    `weight` — see `_refuse_loss_weight`.
+    `weight` — see `_weighted_reduce`. **This one's `mean` divides by the count**
+    where `l1_loss` and `mse_loss` divide by the sum of the weights; measured, not
+    inferred from the family.
     """
-    _refuse_loss_weight("huber_loss", weight)
     diff = _wrap(input) - _wrap(target)
     small = _np.abs(diff.data) < delta
-    return _reduce(where(Tensor(small), 0.5 * diff * diff,
-                         delta * (diff.abs() - 0.5 * delta)), reduction)
+    return _weighted_reduce(where(Tensor(small), 0.5 * diff * diff,
+                                  delta * (diff.abs() - 0.5 * delta)),
+                            weight, reduction, "huber_loss", False)
 
 
 def kl_div(input, target, size_average=None, reduce=None, reduction="mean",
