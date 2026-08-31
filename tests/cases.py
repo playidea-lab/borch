@@ -921,9 +921,16 @@ def grad_cases(inp=None):
     # nothing saying the axis had been dropped. The core folds it; the browser side
     # stops, which is what `_as_expected` is for.
     cases.append((ACT_PREFIX + "quantile(dim)=브라우저는거절",
-                  _as_expected(lambda L: L.quantile(
-                      L.tensor(np.array([[3.0, 1.0], [0.5, 4.0]], dtype=np.float32)),
-                      0.5, dim=1))))
+                  _as_expected(
+                      lambda L: L.quantile(
+                          L.tensor(np.array([[3.0, 1.0], [0.5, 4.0]],
+                                            dtype=np.float32)), 0.5, dim=1),
+                      # **The median of each row**, which is the whole content of
+                      # `dim`: `[2.0, 2.25]` and not the flattened `1.75` the binding
+                      # was handing back before the word reached borch.ts.
+                      holds=lambda out: np.allclose(
+                          np.asarray(to_numpy(out), dtype=np.float64).reshape(-1),
+                          [2.0, 2.25], atol=1e-6))))
     # Its derivative is `i1`. borch.ts was **flowing a zero** here, and its comment cited the
     # core's hole as its grounds — one side had copied the other. A gradient whose value is zero
     # and a gradient that is absent are different statements, and in the copying the second
@@ -2070,42 +2077,28 @@ def fft_cases(inp=None):
         return L.istft(spec, 8, 4, window=hann(L), onesided=False, length=16,
                        return_complex=complex_out)
 
-    # **The verdict carries the measurement**, and it has to.
-    #
-    # Written with `_as_expected` alone this was undefended: that helper asks only
+    # **The verdict carries the measurement**, and it has to. `_as_expected` asks
     # *did it behave as documented* — succeed on torch and the core, refuse on the
-    # browser — so putting `fft` back where `ifft` belongs left all three answers
-    # unchanged and the plant passed. A verdict about behaviour cannot hold a value.
+    # browser — and putting `fft` back where `ifft` belongs left all three answers
+    # unchanged, so the plant passed. That is why the helper now takes `holds`, and
+    # these two rows were what taught it.
     #
-    # So where it succeeds, the reconstruction is compared with the waveform that
-    # went in, and the verdict says which. torch and the core must reconstruct; the
-    # browser must refuse; anything else is a distinct word.
-    def two_sided_verdict(L, complex_out):
-        must_reject = hasattr(L, "backend")     # the browser side
-        try:
-            got = two_sided(L, complex_out)
-        except Exception as exc:                                # noqa: BLE001
-            return "기대대로" if must_reject else f"뜻밖의 거절 <{type(exc).__name__}>"
-        if must_reject:
-            return "뜻밖의 성공"
+    # **Both halves are in the one check**: the reconstruction against the waveform
+    # that went in, and the dtype. The values alone do not hold the dtype — the
+    # comparison reads `.real` off whatever comes back, so a complex answer where
+    # torch gives a real one compares equal.
+    def _reconstructs(got, complex_out):
         want = np.asarray(sig, dtype=np.float32)[:16]
-        flat = np.asarray([complex(v).real
-                           for v in got.reshape(-1).tolist()], dtype=np.float32)
-        if not np.allclose(flat, want, atol=1e-3):
-            return f"복원이 안 됐다 <{flat[:3].round(3).tolist()}>"
-        # **The dtype is in the same verdict**, because the values alone do not hold
-        # it: this branch reads `.real` off whatever comes back, so a complex answer
-        # where torch gives a real one compares equal. Written as a separate case it
-        # would have to be a string the browser cannot produce — it refuses here —
-        # so the one verdict carries both, and a wrong dtype is a different word.
+        flat = np.asarray([complex(v).real for v in got.reshape(-1).tolist()],
+                          dtype=np.float32)
         wanted = "complex64" if complex_out else "float32"
-        return ("기대대로" if str(got.dtype).endswith(wanted)
-                else f"형이 다르다 <{got.dtype}>")
+        return (np.allclose(flat, want, atol=1e-3)
+                and str(got.dtype).endswith(wanted))
 
-    cases.append((FFT_PREFIX + "istft(onesided=False)=브라우저는복소를안먹는다",
-                  lambda L: two_sided_verdict(L, False)))
-    cases.append((FFT_PREFIX + "istft(onesided=False, 복소로)=브라우저는복소를안먹는다",
-                  lambda L: two_sided_verdict(L, True)))
+    for _cx, _tag in ((False, ""), (True, ", 복소로")):
+        cases.append((FFT_PREFIX + f"istft(onesided=False{_tag})=브라우저는복소를안먹는다",
+                      _as_expected(lambda L, c=_cx: two_sided(L, c),
+                                   holds=lambda got, c=_cx: _reconstructs(got, c))))
     # The dtype of the ordinary call, which is the half every caller meets: torch
     # hands back a real waveform and this handed back `complex64` on that branch.
     add("istft 의 형은 실수다",
@@ -2993,8 +2986,14 @@ def constant_cases(inp=None):
     # This case was written as a value first and the binding came back red. Adding the five
     # constants very nearly became "you can write it like torch now".
     cases.append((CONST_PREFIX + "-inf 를 상수로 굽는 것은 브라우저가 거절한다",
-                  _as_expected(lambda L: L.clamp(L.tensor(inp["train_x"]),
-                                                 min=-L.inf))))
+                  _as_expected(
+                      lambda L: L.clamp(L.tensor(inp["train_x"]), min=-L.inf),
+                      # **Clamping at −∞ changes nothing**, so the values have to come
+                      # back as they went in. A version that clamped at the largest
+                      # negative float instead would succeed and be wrong here.
+                      holds=lambda out: np.allclose(
+                          np.asarray(to_numpy(out), dtype=np.float64),
+                          np.asarray(inp["train_x"], dtype=np.float64), atol=1e-6))))
 
     return cases
 
@@ -10669,7 +10668,7 @@ HIGH_RANKS = (6,)
 CEILING_RANKS = (7, 8)
 
 
-def _as_expected(fn):
+def _as_expected(fn, holds=None):
     """How to hold a place **torch manages and the browser implementation refuses** in the golden
     answers.
 
@@ -10683,17 +10682,51 @@ def _as_expected(fn):
     rank 7 and 8 produce values, and this device reported it as seven "unexpected successes". What
     was done then was to rewrite the limit **deliberately**, not to delete the cases. That it must
     not widen of its own accord is why this function exists.
+
+    ## `holds` — because a verdict about behaviour cannot hold a value
+
+    **A defect planted on the succeeding side passed this helper.** `istft`'s two-sided
+    branch ran a forward transform where the inverse belonged; the core reconstructed
+    `[3.60, 0.97, 3.56, …]` where the waveform was `[0, 0.30, 0.56, …]`, and every
+    verdict here stayed `기대대로` — torch succeeded, the core succeeded, the browser
+    refused, all as documented. *As documented* was never a statement about the number.
+
+    So `holds(out)` is asked wherever the call goes through, and it returns `True` when
+    the value is what it should be. It is not optional: a caller with nothing to check
+    passes `lambda _: True` and thereby says so in the source, which is a different
+    thing from a helper that quietly checks nothing.
     """
+    if holds is None:
+        raise TypeError(
+            "_as_expected(fn, holds) needs `holds` — what the value must be where the "
+            "call goes through.\n"
+            "  A verdict about behaviour cannot hold a value: a wrong answer on the "
+            "succeeding side\n"
+            "  reads as `기대대로` and the case passes. If there is genuinely nothing "
+            "to check, pass\n"
+            "  `lambda _: True` and say why in the case's comment.")
+
     def run(L):
         # The floor is a GPU buffer, so it is not shared out as views. There is no double
         # precision either. Those two reasons make the few places that gather here.
         must_reject = hasattr(L, "backend")
         try:
-            fn(L)
+            got = fn(L)
         except Exception as exc:                                # noqa: BLE001
             return "기대대로" if must_reject else f"뜻밖의 거절 <{type(exc).__name__}>"
-        return "뜻밖의 성공" if must_reject else "기대대로"
+        if must_reject:
+            return "뜻밖의 성공"
+        return "기대대로" if holds(got) else f"값이 틀리다 <{_short(got)}>"
     return run
+
+
+def _short(out):
+    """A value cut down to something a verdict can carry."""
+    try:
+        flat = np.asarray(to_numpy(out), dtype=np.float64).reshape(-1)[:3]
+        return " ".join(f"{v:.4g}" for v in flat)
+    except Exception:                                           # noqa: BLE001
+        return str(out)[:40]
 
 
 def _rank_ceiling_cases(ranks, inp):
@@ -13228,7 +13261,15 @@ def inplace_cases(inp=None):
         return a
 
     cases.append((INPLACE_PREFIX + "뷰 전파=브라우저는거절",
-                  _as_expected(view_propagates)))
+                  _as_expected(
+                      view_propagates,
+                      # **The write has to reach the original**, which is the whole
+                      # claim: `arange(4)` plus ten through a view is `[10, 11, 12,
+                      # 13]`. A version that wrote into the view alone succeeds and
+                      # comes back `[0, 1, 2, 3]` — the case's own subject, unchecked.
+                      holds=lambda out: np.allclose(
+                          np.asarray(to_numpy(out), dtype=np.float64).reshape(-1),
+                          [10.0, 11.0, 12.0, 13.0], atol=1e-6))))
 
     # **A second divergence from the same root.** With no views there is nowhere to become
     # non-contiguous, so `is_contiguous()` is always true in the browser. The core is false as
@@ -13717,13 +13758,22 @@ def inplace_cases(inp=None):
     # torch raises the conjugate **as a bit only**, so `numpy()` stops — it has to be resolved with
     # `resolve_conj()` for the value to be visible, and our side already stores it flipped, so that
     # call is the identity.
-    for label, call in (
-        ("H(복소수)", lambda L: L.tensor(cplx).H.resolve_conj()),
-        ("mT(복소수) 는 켤레를 안 한다", lambda L: L.tensor(cplx).mT.resolve_conj()),
-        ("mH(복소수) 는 켤레를 한다", lambda L: L.tensor(cplx).mH.resolve_conj()),
+    # **The conjugating half is what each holds**, and it is the difference the three
+    # names exist for — `H` and `mH` flip the sign of the imaginary part and `mT` does
+    # not. Written as a verdict alone, a version where all three conjugated (or none
+    # did) succeeds and reads as `기대대로`, which is the one thing these rows are for.
+    _cplx_t = np.array([[1 + 2j], [3 - 1j]], dtype=np.complex64)
+    for label, call, want in (
+        ("H(복소수)", lambda L: L.tensor(cplx).H.resolve_conj(), _cplx_t.conj()),
+        ("mT(복소수) 는 켤레를 안 한다",
+         lambda L: L.tensor(cplx).mT.resolve_conj(), _cplx_t),
+        ("mH(복소수) 는 켤레를 한다",
+         lambda L: L.tensor(cplx).mH.resolve_conj(), _cplx_t.conj()),
     ):
         cases.append((INPLACE_PREFIX + f"전치::{label}=브라우저는거절",
-                      _as_expected(call)))
+                      _as_expected(call, holds=lambda out, w=want: np.allclose(
+                          np.asarray(to_numpy(out)).reshape(-1),
+                          w.reshape(-1), atol=1e-6))))
 
     def h_needs_a_matrix(L):
         try:
