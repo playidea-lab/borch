@@ -10831,9 +10831,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   poolND(kind: "max" | "avg", kernel: number, stride?: number,
          padding = 0, ceilMode = false, countIncludePad = true,
-         divisorOverride: number | null = null): Tensor {
+         divisorOverride: number | null = null, dilation = 1): Tensor {
     const spatial = this.shape.length - 2;
     if (spatial < 1) throw new Error(`pooling: the shape does not match: [${this.shape}]`);
+    // **`dilation` belongs to the maximum alone.** torch's `avg_pool*d` has no such
+    // argument — passing one there is a `TypeError`, not a refusal — so accepting it
+    // here on the average would be a seat torch does not have.
+    if (dilation !== 1 && kind !== "max") {
+      throw new Error("avg_pool does not take a dilation");
+    }
     // **The maximum used to refuse what only the average implements**, on the ground
     // that its backward reads the input at each window position and a padded position
     // has none to read. The average had the answer one function away the whole time:
@@ -10848,10 +10854,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       inDims,
       kernel: new Array<number>(spatial).fill(kernel),
       stride: new Array<number>(spatial).fill(step),
-      outDims: inDims.map((d) => poolOut(d, padding, kernel, step, ceilMode)),
+      outDims: inDims.map((d) =>
+        poolOut(d, padding, kernel, step, ceilMode, dilation)),
       pad: new Array<number>(spatial).fill(padding),
       countIncludePad,
       divisorOverride,
+      dilation: new Array<number>(spatial).fill(dilation),
     };
     const key = poolNDKey(p);
     const outShape = [this.shape[0] ?? 1, this.shape[1] ?? 1, ...p.outDims];

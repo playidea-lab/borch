@@ -1977,9 +1977,13 @@ export function convOut(size: number, pad: number, kernel: number, stride: numbe
  * than in value and every comparison after it is against the wrong extent.
  */
 export function poolOut(size: number, pad: number, kernel: number, stride: number,
-                        ceilMode = false): number {
-  if (!ceilMode) return convOut(size, pad, kernel, stride);
-  let out = Math.ceil((size + 2 * pad - kernel) / stride) + 1;
+                        ceilMode = false, dilation = 1): number {
+  // **A dilated window covers `dil·(k−1)+1` cells and reads `k` of them.** The extent
+  // is what the output size is computed from, which is why it cannot be folded into
+  // the kernel size — the count of reads stays `k`.
+  const reach = dilation * (kernel - 1) + 1;
+  if (!ceilMode) return Math.floor((size + 2 * pad - reach) / stride) + 1;
+  let out = Math.ceil((size + 2 * pad - reach) / stride) + 1;
   if ((out - 1) * stride >= size + pad) out -= 1;
   return out;
 }
@@ -2407,6 +2411,12 @@ export interface PoolNDShape {
   readonly countIncludePad?: boolean;
   /** `torch`'s `divisor_override`. A fixed divisor, ignoring both counts. */
   readonly divisorOverride?: number | null;
+  /**
+   * Per axis, the gap between the cells one window reads. **Only the maximum takes
+   * it** — torch's `avg_pool*d` has no such argument at all, so offering one on the
+   * average would be a seat torch does not have.
+   */
+  readonly dilation?: readonly number[];
 }
 
 export function poolNDKey(p: PoolNDShape): string {
@@ -2420,7 +2430,8 @@ export function poolNDKey(p: PoolNDShape): string {
   // Nothing had gone wrong yet because nothing could ask for the ceiling — the field
   // was safe to leave out for exactly as long as the argument was missing.
   return [p.NC, p.inDims, p.kernel, p.stride, p.outDims,
-          p.pad ?? [], p.countIncludePad !== false, p.divisorOverride ?? "-"].join("|");
+          p.pad ?? [], p.countIncludePad !== false, p.divisorOverride ?? "-",
+          p.dilation ?? []].join("|");
 }
 
 export function poolNDForward(p: PoolNDShape, kind: "max" | "avg"): string {
@@ -2437,16 +2448,21 @@ export function poolNDForward(p: PoolNDShape, kind: "max" | "avg"): string {
   const close: string[] = [];
   const guards: string[] = [];
   const terms: string[] = [];
+  const dil = p.dilation ?? p.kernel.map(() => 1);
   for (const [d, size] of p.kernel.entries()) {
     const st = p.stride[d] ?? 1;
     const pd = pad[d] ?? 0;
     const dim = p.inDims[d] ?? 1;
+    const dl = dil[d] ?? 1;
     open.push(`    for (var k${d} = 0; k${d} < ${size}; k${d} = k${d} + 1) {`);
     close.push("    }");
     // **The same guard the average has had all along.** The window is laid out in
     // padded coordinates and the buffer holds the real ones, so the padding comes off
     // before the read and anything outside is not read at all.
-    guards.push(`      let a${d} = o${d} * ${st} + k${d} - ${pd};`);
+    //
+    // **`dilation` is the step between the cells one window reads**, so it multiplies
+    // the window index and nothing else. At 1 this is the line it has always been.
+    guards.push(`      let a${d} = o${d} * ${st} + k${d} * ${dl} - ${pd};`);
     guards.push(`      if (a${d} < 0 || a${d} >= ${dim}) { continue; }`);
     terms.push(`u32(a${d}) * ${inStride[d] ?? 1}u`);
   }
@@ -2565,14 +2581,20 @@ export function poolNDBackward(p: PoolNDShape, kind: "max" | "avg"): string {
   const close: string[] = [];
   const oTerms: string[] = [];
   const counts: string[] = [];
+  const dil = p.dilation ?? p.kernel.map(() => 1);
   for (const [d, size] of p.outDims.entries()) {
     const st = p.stride[d] ?? 1;
     const pd = pad[d] ?? 0;
     const dim = p.inDims[d] ?? 1;
     const ks = p.kernel[d] ?? 1;
+    const dl = dil[d] ?? 1;
     open.push(`    for (var o${d} = 0; o${d} < ${size}; o${d} = o${d} + 1) {`);
     open.push(`      let d${d} = i${d} - o${d} * ${st};`);
-    open.push(`      if (d${d} < 0 || d${d} >= ${ks}) { continue; }`);
+    // **A dilated window skips cells, so "inside the window" is not "inside the
+    // extent".** The offset has to be a multiple of the dilation as well as under the
+    // reach; at 1 both conditions collapse to the `d < kernel` this always had.
+    open.push(`      if (d${d} < 0 || d${d} > ${(ks - 1) * dl}`
+              + `${dl === 1 ? "" : ` || d${d} % ${dl} != 0`}) { continue; }`);
     close.push("    }");
     oTerms.push(`u32(o${d}) * ${outStride[d] ?? 1}u`);
     const lo = `(o${d} * ${st})`;
@@ -2603,14 +2625,17 @@ export function poolNDBackward(p: PoolNDShape, kind: "max" | "avg"): string {
     const st = p.stride[d] ?? 1;
     const pd = pad[d] ?? 0;
     const dim = p.inDims[d] ?? 1;
+    const dl = dil[d] ?? 1;
     kOpen.push(`        for (var m${d} = 0; m${d} < ${size}; m${d} = m${d} + 1) {`);
     kClose.push("        }");
-    kGuard.push(`          let b${d} = o${d} * ${st} + m${d} - ${pd};`);
+    kGuard.push(`          let b${d} = o${d} * ${st} + m${d} * ${dl} - ${pd};`);
     kGuard.push(`          if (b${d} < 0 || b${d} >= ${dim}) { continue; }`);
     kTerms.push(`u32(b${d}) * ${inStride[d] ?? 1}u`);
     // The tie-break runs over the window's own positions, so its ordering stays in
-    // window coordinates while the reads are in real ones.
-    kOrder.push(`u32(m${d}) * ${inStride[d] ?? 1}u`);
+    // window coordinates while the reads are in real ones. **Both sides of the
+    // comparison are offsets in padded coordinates** — `m·dilation` against `d` —
+    // because `d` is already the padded difference and `m` is not.
+    kOrder.push(`u32(m${d} * ${dl}) * ${inStride[d] ?? 1}u`);
     mineTerms.push(`u32(i${d} - ${pd}) * ${inStride[d] ?? 1}u`);
     mineOrder.push(`u32(d${d}) * ${inStride[d] ?? 1}u`);
   }

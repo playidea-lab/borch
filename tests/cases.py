@@ -5839,6 +5839,52 @@ def unpool_cases(inp=None):
 
     add("자리::grad::max_pool2d(padding)", grad_padded)
 
+    # ── the dilation, which the browser side refused ──────────────────────
+    #
+    # borch.ts's pooling shader had no step between the cells one window reads, so
+    # `dilation` was refused there and answered in the core — one of the places where
+    # the two implementations were not the same library. The step multiplies the
+    # window index and nothing else; at 1 the generated source is what it always was.
+    #
+    # **A dilated window covers `dil·(k−1)+1` cells and reads `k` of them**, which is
+    # why the output size cannot be found by widening the kernel: the extent grows and
+    # the count of reads does not.
+    #
+    # `avg_pool*d` has no such argument in torch at all — `F.avg_pool2d(x, 2,
+    # dilation=2)` is a `TypeError`, not a refusal — so the average is asked for the
+    # refusal instead.
+    _DIL = np.arange(1., 1 + 7 * 8, dtype=np.float32).reshape(1, 1, 7, 8)
+    for _tag, _kw in (("dilation", {"dilation": 2}),
+                      ("dilation, stride", {"dilation": 2, "stride": 2}),
+                      ("dilation, padding", {"dilation": 2, "padding": 1}),
+                      ("dilation, ceil", {"dilation": 2, "ceil_mode": True}),
+                      ("dilation=3", {"dilation": 3, "stride": 3})):
+        add(f"자리::max_pool2d({_tag})",
+            lambda L, k=_kw: F(L).max_pool2d(L.tensor(_DIL), 3, **k))
+        add(f"자리::MaxPool2d({_tag})",
+            lambda L, k=_kw: L.nn.MaxPool2d(3, **k)(L.tensor(_DIL)))
+    for _rank, _shape in ((1, (1, 3, 9)), (3, (2, 2, 5, 5, 5))):
+        _vol = (np.arange(int(np.prod(_shape)), dtype=np.float32) * 0.1
+                - 1.0).reshape(_shape)
+        add(f"자리::max_pool{_rank}d(dilation)",
+            lambda L, r=_rank, v=_vol: getattr(F(L), f"max_pool{r}d")(
+                L.tensor(v), 2, dilation=2))
+
+    def grad_dilated(L):
+        """**The gradient is where a wrong window shows.** Forward, a dilated window
+        reading the wrong cells is one plausible maximum among others; backward, the
+        whole window's gradient goes to whichever cell it decided had won."""
+        x = L.tensor(_DIL, requires_grad=True)
+        F(L).max_pool2d(x, 3, stride=2, padding=1, dilation=2).sum().backward()
+        return x.grad
+
+    add("자리::grad::max_pool2d(dilation)", grad_dilated)
+    # **torch's `avg_pool2d` does not take a dilation at all**, so both sides stop —
+    # ours by name and torch's with a `TypeError` about an unexpected keyword.
+    add("자리::avg_pool2d(dilation)=둘 다 거절",
+        lambda L: _both_stop(L, lambda M: M.nn.functional.avg_pool2d(
+            M.tensor(_DIL), 2, dilation=2)))
+
     # ── gradients ──
     def grad_pool(L):
         x = L.tensor(plane, requires_grad=True)

@@ -464,6 +464,15 @@ def positional(name, args, kw):
         if clash:
             raise TypeError(
                 f"{name}() got multiple values for argument '{clash[0]}'")
+        # **A keyword with no seat in the row was dropped without a word**, which is
+        # the same silence as a surplus positional in JavaScript and the thing this
+        # whole table exists to prevent. `avg_pool2d(x, 2, dilation=2)` — an argument
+        # torch does not have and answers with a `TypeError` — came back as an
+        # ordinary pooling here. torch's wording, so a caller meets the same sentence.
+        stray = [key for key in kw if key not in order]
+        if stray:
+            raise TypeError(
+                f"{name}() got an unexpected keyword argument '{sorted(stray)[0]}'")
         for i, key in enumerate(order):
             if key in kw:
                 while len(out) <= i:
@@ -2906,11 +2915,16 @@ def grid_sampler(x, grid, interpolation_mode=0, padding_mode=0,
 
 def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
                             ceil_mode=False):
+    """**The three window arguments go through and are refused one level down.**
+
+    They used to be checked here with a message of this file's own, which put two
+    spellings of one refusal in two places — and the one a caller met depended on
+    which name they had reached for. `_pool_with_indices` says why: the positions come
+    from the window-list machinery, where a window is `[start, end)` with no step.
+    """
     from . import _nn
-    if padding or dilation != 1 or ceil_mode:
-        raise RuntimeError(
-            "max_pool1d_with_indices(padding, dilation, ceil_mode) is not here yet.")
-    return _nn.functional.max_pool1d_with_indices(x, kernel_size, stride)
+    return _nn.functional.max_pool1d_with_indices(
+        x, kernel_size, stride, padding, dilation, ceil_mode)
 
 
 def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,

@@ -97,26 +97,52 @@ def _pool_fn(kind, adaptive):
              ceil_mode=False, count_include_pad=True, divisor_override=None):
         h = handle(x)
         if return_indices:
-            return _pool_with_indices(x, size, stride, adaptive)
+            # **`adaptive` by keyword.** Written as the fourth positional — which is
+            # where it used to be — it lands in `padding` the moment that seat exists,
+            # and a truthy padding switched the whole call to adaptive pooling: a
+            # different algorithm, a plausible answer, no exception. Eight golden rows
+            # caught it, which is the only reason this line reads as it does.
+            return _pool_with_indices(x, size, stride, padding, dilation,
+                                      ceil_mode, adaptive=adaptive)
         if adaptive:
             return wrap(h.adaptivePool(kind, size))
-        if dilation != 1:
-            from borch._base import _unsupported
-            _unsupported(f"{kind}_pool(dilation=…)")
+        # **`dilation` was refused here and the kernel takes it now.** The refusal's
+        # reason was that borch.ts's pooling shader had no step between the cells one
+        # window reads; it has one, and at 1 the generated source is the line it always
+        # was. **The average has no such argument in torch at all**, so passing one is
+        # a `TypeError` over there and borch.ts refuses it by name here.
         return wrap(h.poolND(kind, size, stride if stride is not None else size,
                              padding, ceil_mode, count_include_pad,
-                             divisor_override))
+                             divisor_override, dilation))
     return call
 
 
-def _pool_with_indices(x, size, stride=None, adaptive=False):
+def _pool_with_indices(x, size, stride=None, padding=0, dilation=1,
+                       ceil_mode=False, return_indices=True, *, adaptive=False):
     """Hands back the values together with **where each one won.** The index is
     a flat position inside the plane.
+
+    **torch's argument order, and `adaptive` is keyword-only behind it.** Written
+    with `adaptive` fourth — which is where it was — `F.max_pool2d_with_indices(x, 2,
+    None, 1)` handed the padding to it, and a truthy padding switched the whole call
+    to adaptive pooling: a different algorithm, a plausible answer, no exception.
 
     Over there it comes as `{values, indices}`, so it is read out by name and
     turned into a tuple — torch gives a tuple and textbook code unpacks it as
     `out, idx = ...`.
+
+    **The three window arguments are refused here and not on the plain path.** That
+    one goes through the pooling shader, which takes a padding, a dilation and a
+    ceiling; this one goes through the window-list machinery, where a window is
+    `[start, end)` per axis — no step between the cells it reads, and no room to hang
+    off an edge. Two paths, one of them carried across and one not, and the difference
+    is the shape of the thing that carries the positions.
     """
+    if padding or dilation != 1 or ceil_mode:
+        from borch._base import _unsupported
+
+        _unsupported("max_pool with return_indices and (padding, dilation, "
+                     "ceil_mode) — the window list has no step and no edge")
     h = handle(x)
     got = (h.adaptiveMaxPoolWithIndices(size) if adaptive
            else h.maxPoolWithIndices(size, stride if stride is not None else size))
@@ -761,6 +787,11 @@ _HAND_WRITTEN = {
     "triplet_margin_with_distance_loss": _triplet_with_distance,
     "scaled_dot_product_attention": _sdpa,
     "avg_pool1d": _pool_fn("avg", False),
+    # **`avg_pool2d` used to take the generic route** while its 1-D and 3-D siblings
+    # took this one — and that route's row is `("kernel_size", "stride")`, so torch's
+    # `padding`, `ceil_mode`, `count_include_pad` and `divisor_override` had no seat.
+    # Three names, two routes, and the odd one out was the one everybody calls.
+    "avg_pool2d": _pool_fn("avg", False),
     "avg_pool3d": _pool_fn("avg", False),
     "adaptive_avg_pool1d": _pool_fn("avg", True),
     # **The two-dimensional one was the gap in the middle.** 1-D and 3-D
@@ -2401,21 +2432,22 @@ def _max_pool_layer(name, wide=False):
     cases came back `<borch_webgpu._nn._Wrap object at …>` where torch prints
     `MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)`.
 
-    **`dilation` is the only one still refused**, and only the two-dimensional layer
-    has a seat for it — torch gives it to all three, and writing the same refusal in
-    three places would say the gap is three gaps. `padding` and `ceil_mode` are real
-    now: the maximum's kernel grew the guard the average had.
+    **All six are real now.** `dilation` was the last refused — the shader over there
+    had no step between the cells one window reads — and the kernel takes one; at 1 the
+    generated source is the line it always was. `padding` and `ceil_mode` went the same
+    way earlier, when the maximum's kernel grew the guard the average had.
 
-    `return_indices` keeps the Python path: it hands back a pair, and the layer that
-    consumes those positions reads them from here.
+    `return_indices` still keeps the Python path: it hands back a pair, and the layer
+    that consumes those positions reads them from here. **That path is where `padding`,
+    `dilation` and `ceil_mode` are still refused** — it goes through the window-list
+    machinery rather than the shader, and a window list is `[start, end)` per axis with
+    no step and no room to hang off an edge.
     """
     def make(kernel_size=2, stride=None, padding=0, dilation=1,
              return_indices=False, ceil_mode=False):
         if return_indices:
-            return _Wrap(lambda x: _pool_with_indices(x, kernel_size, stride))
-        if wide:
-            return _layer(name, kernel_size, stride, padding, dilation, False,
-                          ceil_mode)
+            return _Wrap(lambda x: _pool_with_indices(
+                x, kernel_size, stride, padding, dilation, ceil_mode))
         # **All six, in torch's order**, because that is the order over there now.
         # Written as four — kernel, stride, padding, ceil — `ceil_mode` landed in
         # `dilation`'s seat and every 1-D and 3-D max pool stopped with a refusal

@@ -317,7 +317,10 @@ CEILINGS = {
     # `이력이 밀려난다`, `평가 예산이 짧다`, `없는 line_search_fn`, `얽힌 이차형식`,
     # `(3변수)`, `처음이 모자란다` — and the `(거절 없음)` a refusal case returns when
     # nothing was refused. All keys or values in `golden.json`.
-    "borch-ts/test": 4430,
+    # 4430 → 4456. Twenty-six, in the pooling dilation case names — `자리::` on the
+    # eleven `max_pool` rows, `grad::` on one, and the `avg_pool2d(dilation)=둘 다 거절`
+    # with the `둘 다 멈춘다` verdict it returns. Keys or values in `golden.json`.
+    "borch-ts/test": 4456,
 }
 
 

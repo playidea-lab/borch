@@ -4236,6 +4236,58 @@ function addUnpool(out: Map<string, Case>): void {
     return gradOf(x, "maxPool padding");
   });
 
+  // ── the dilation, refused here until today ────────────────────────────────
+  //
+  // The shader had no step between the cells one window reads, and the core answered
+  // the argument — one of the places the two were not the same library. The step
+  // multiplies the window index and nothing else; at 1 the source is what it was.
+  // **A dilated window covers `dil·(k−1)+1` cells and reads `k` of them**, so the
+  // output size cannot be found by widening the kernel.
+  const dilPlane = (): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < 56; i++) v.push(i + 1);
+    return Tensor.from(v, [1, 1, 7, 8]);
+  };
+  const DIL: Array<[string, number, number, number, boolean]> = [
+    // tag, dilation, stride (0 = the kernel), padding, ceilMode
+    ["dilation", 2, 0, 0, false],
+    ["dilation, stride", 2, 2, 0, false],
+    ["dilation, padding", 2, 0, 1, false],
+    ["dilation, ceil", 2, 0, 0, true],
+    ["dilation=3", 3, 3, 0, false],
+  ];
+  for (const [tag, dil, stride, pad, ceil] of DIL) {
+    out.set(`unpool::자리::max_pool2d(${tag})`,
+      () => dilPlane().poolND("max", 3, stride || 3, pad, ceil, true, null, dil));
+    out.set(`unpool::자리::MaxPool2d(${tag})`,
+      () => new nn.MaxPool2d(3, stride || undefined, pad, dil, false, ceil)
+        .call(dilPlane()));
+  }
+  for (const [rank, dims] of [[1, [1, 3, 9]], [3, [2, 2, 5, 5, 5]]] as
+       Array<[number, number[]]>) {
+    out.set(`unpool::자리::max_pool${rank}d(dilation)`, () => {
+      const n = dims.reduce((a, b) => a * b, 1);
+      const v: number[] = [];
+      for (let i = 0; i < n; i++) v.push(i * 0.1 - 1.0);
+      return Tensor.from(v, dims).poolND("max", 2, 2, 0, false, true, null, 2);
+    });
+  }
+  out.set("unpool::자리::grad::max_pool2d(dilation)", () => {
+    const x = dilPlane();
+    x.requiresGrad = true;
+    x.poolND("max", 3, 2, 1, false, true, null, 2).sum().backward();
+    return gradOf(x, "maxPool dilation");
+  });
+  // torch's `avg_pool2d` has no dilation at all, and neither has this one.
+  out.set("unpool::자리::avg_pool2d(dilation)=둘 다 거절", () => {
+    try {
+      dilPlane().poolND("avg", 2, 2, 0, false, true, null, 2);
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
+
   out.set("unpool::grad::자리 판의 풀링", () => {
     const x = grid([1, 1, 4, 4]);
     x.requiresGrad = true;
