@@ -34,7 +34,7 @@ import { type Reduction, Tensor } from "./tensor.js";
 // call time — never while either module is still initialising, which is the case a
 // cycle actually breaks. The alternative was a third module for six lines, and a module
 // that is not in `site/build_api.py`'s list is a module nobody counts.
-import { legacyReduction, refuseWeight } from "./nn.js";
+import { legacyReduction } from "./nn.js";
 
 export function alphaDropout(input: Tensor, p = 0.5, training = false, perChannel = false): Tensor {
   return input.alphaDropout(p, training, perChannel);
@@ -92,9 +92,9 @@ export function crossEntropy(
   // `nn.ts` says the same about the classes: a rule that puts `sizeAverage` and
   // `reduce` side by side is right about twelve of them and wrong about this one,
   // `NLLLoss` and `PoissonNLLLoss`.
-  refuseWeight("cross_entropy", "weight", weight);
   reduction = legacyReduction(sizeAverage, reduce, reduction);
-  return input.crossEntropy(target, ignoreIndex, reduction, labelSmoothing);
+  return input.crossEntropy(target, ignoreIndex, reduction, labelSmoothing,
+                            weight);
 }
 
 export function dropout(input: Tensor, p = 0.5, training = true): Tensor {
@@ -152,9 +152,12 @@ export function l1Loss(
   input: Tensor, target: Tensor, sizeAverage: boolean | null = null,
   reduce: boolean | null = null, reduction: Reduction = "mean", weight?: Tensor,
 ): Tensor {
-  refuseWeight("l1_loss", "weight", weight);
+  // **This refused a `weight` the tensor method already had.** `Tensor.l1Loss` grew
+  // one the day `weighTo` was written and this wrapper was not touched, so the same
+  // loss answered by one spelling and refused by the other — the refusal outlived its
+  // gap by exactly as long as nobody called it from here.
   reduction = legacyReduction(sizeAverage, reduce, reduction);
-  return input.l1Loss(target, reduction);
+  return input.l1Loss(target, reduction, weight);
 }
 
 
@@ -199,9 +202,8 @@ export function mseLoss(
   input: Tensor, target: Tensor, sizeAverage: boolean | null = null,
   reduce: boolean | null = null, reduction: Reduction = "mean", weight?: Tensor,
 ): Tensor {
-  refuseWeight("mse_loss", "weight", weight);
-  reduction = legacyReduction(sizeAverage, reduce, reduction);
-  return input.mseLoss(target, reduction);
+  reduction = legacyReduction(sizeAverage, reduce, reduction);   // see `l1Loss`
+  return input.mseLoss(target, reduction, weight);
 }
 
 export function multiMarginLoss(
@@ -240,9 +242,8 @@ export function nllLoss(
   reduce: boolean | null = null, reduction: Reduction = "mean",
 ): Tensor {
   // `ignoreIndex` between the pair, as `crossEntropy` above and for the same reason.
-  refuseWeight("nll_loss", "weight", weight);
   reduction = legacyReduction(sizeAverage, reduce, reduction);
-  return input.nllLoss(target, ignoreIndex, reduction);
+  return input.nllLoss(target, ignoreIndex, reduction, weight);
 }
 
 export function normalize(input: Tensor, dim = 1, eps = 1e-12): Tensor {
@@ -576,9 +577,10 @@ export function fractionalMaxPool3dWithIndices(
  * `BCEWithLogitsLoss`, has taken all seven and refused two of them for as long as it
  * has existed; only the functional form was short.
  *
- * `weight` and `posWeight` are **refused rather than ignored**, which is what the
- * layer does and what this repository's rule says: an argument accepted and unused is
- * worse than one that is absent, because the caller cannot tell.
+ * `weight` and `posWeight` were **refused rather than ignored** — the rule being that
+ * an argument accepted and unused is worse than one that is absent, because the caller
+ * cannot tell. Both are answered now: `posWeight` scales the positive term alone and
+ * `weight` scales the whole element, and `mean` divides by the count under either.
  */
 export function binaryCrossEntropyWithLogits(
   input: Tensor,
@@ -589,9 +591,8 @@ export function binaryCrossEntropyWithLogits(
   reduction: Reduction = "mean",
   posWeight?: Tensor,
 ): Tensor {
-  refuseWeight("binary_cross_entropy_with_logits", "weight", weight);
-  refuseWeight("binary_cross_entropy_with_logits", "pos_weight", posWeight);
-  return input.bceWithLogits(target, legacyReduction(sizeAverage, reduce, reduction));
+  return input.bceWithLogits(
+    target, legacyReduction(sizeAverage, reduce, reduction), weight, posWeight);
 }
 
 /**
@@ -610,8 +611,8 @@ export function binaryCrossEntropy(
   reduce: boolean | null = null,
   reduction: Reduction = "mean",
 ): Tensor {
-  refuseWeight("binary_cross_entropy", "weight", weight);
-  return input.bce(target, legacyReduction(sizeAverage, reduce, reduction));
+  return input.bce(
+    target, legacyReduction(sizeAverage, reduce, reduction), weight);
 }
 
 // ── The adaptive family ───────────────────────────────────────────────────

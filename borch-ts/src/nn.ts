@@ -3862,23 +3862,14 @@ export function legacyReduction<R extends string>(
   return got;
 }
 
-/**
- * Class weights are **refused rather than absent**, at the position torch puts them.
- *
- * The core refuses them for a reason worth repeating here: torch's `mean` divides by
- * the **sum of the weights** rather than by the sample count, so a `weight` accepted
- * and ignored changes the loss value quietly and leads to choosing the wrong learning
- * rate. What it must not do is take the seat of something else —
- * `new CrossEntropyLoss(classWeights)` set the *reduction* to a tensor until the core
- * grew torch's order and the two sides came apart.
- */
-export function refuseWeight(layer: string, what: string, weight: unknown): void {
-  if (weight !== undefined && weight !== null) {
-    throw new Error(
-      `${layer}(${what}=…) is not in the browser subset. Use real PyTorch on your ` +
-      "own machine; imitating what is missing teaches the wrong thing.");
-  }
-}
+// **`refuseWeight` stood here and is gone.** It refused the class weight on six
+// entry points with a reason that was true when written — torch's `mean` divides by
+// the sum of the weights, so a weight accepted and ignored changes the loss quietly.
+// The way out of that was to divide by the sum of the weights, which is what
+// `reduceIgnoring` now does. Two of its six callers had already been overtaken: the
+// tensor methods behind `l1_loss` and `mse_loss` grew a `weight` and the wrappers went
+// on refusing one, so the same loss answered under one spelling and refused under the
+// other. A refusal helper is worth keeping only while something still refuses.
 
 /**
  * `torch.nn.BCELoss` — over **probabilities**, where `BCEWithLogitsLoss` takes
@@ -3891,14 +3882,15 @@ export function refuseWeight(layer: string, what: string, weight: unknown): void
  */
 export class BCELoss {
   readonly reduction: Reduction;
+  readonly weight: Tensor | undefined;
   constructor(weight?: Tensor, sizeAverage: boolean | null = null,
               reduce: boolean | null = null, reduction: Reduction = "mean") {
-    refuseWeight("BCELoss", "weight", weight);
+    this.weight = weight;
     this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
-    return x.bce(target, this.reduction);
+    return x.bce(target, this.reduction, this.weight);
   }
 
   call(x: Tensor, target: Tensor): Tensor {
@@ -3910,6 +3902,8 @@ export class BCELoss {
 
 export class BCEWithLogitsLoss {
   readonly reduction: Reduction;
+  readonly weight: Tensor | undefined;
+  readonly posWeight: Tensor | undefined;
   constructor(
     weight?: Tensor,
     sizeAverage: boolean | null = null,
@@ -3917,13 +3911,13 @@ export class BCEWithLogitsLoss {
     reduction: Reduction = "mean",
     posWeight?: Tensor,
   ) {
-    refuseWeight("BCEWithLogitsLoss", "weight", weight);
-    refuseWeight("BCEWithLogitsLoss", "posWeight", posWeight);
+    this.weight = weight;
+    this.posWeight = posWeight;
     this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
-    return x.bceWithLogits(target, this.reduction);
+    return x.bceWithLogits(target, this.reduction, this.weight, this.posWeight);
   }
 
   call(x: Tensor, target: Tensor): Tensor {
@@ -3935,6 +3929,7 @@ export class BCEWithLogitsLoss {
 
 export class NLLLoss {
   readonly reduction: Reduction;
+  readonly weight: Tensor | undefined;
   constructor(
     weight: Tensor | undefined = undefined,
     sizeAverage: boolean | null = null,
@@ -3942,12 +3937,12 @@ export class NLLLoss {
     reduce: boolean | null = null,
     reduction: Reduction = "mean",
   ) {
-    refuseWeight("NLLLoss", "weight", weight);
+    this.weight = weight;
     this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
-    return x.nllLoss(target, this.ignoreIndex, this.reduction);
+    return x.nllLoss(target, this.ignoreIndex, this.reduction, this.weight);
   }
 
   call(x: Tensor, target: Tensor): Tensor {
@@ -5804,6 +5799,7 @@ export class CrossEntropyLoss {
    * The order comes from torch, one class at a time.
    */
   readonly reduction: Reduction;
+  readonly weight: Tensor | undefined;
   constructor(
     weight: Tensor | undefined = undefined,
     sizeAverage: boolean | null = null,
@@ -5812,13 +5808,13 @@ export class CrossEntropyLoss {
     reduction: Reduction = "mean",
     readonly labelSmoothing = 0.0,
   ) {
-    refuseWeight("CrossEntropyLoss", "weight", weight);
+    this.weight = weight;
     this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(logits: Tensor, target: Tensor): Tensor {
     return logits.crossEntropy(target, this.ignoreIndex, this.reduction,
-                               this.labelSmoothing);
+                               this.labelSmoothing, this.weight);
   }
 
   call(logits: Tensor, target: Tensor): Tensor {

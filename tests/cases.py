@@ -7485,6 +7485,24 @@ _LOSS_HTGT = np.array([[1.0, -1.0], [-1.0, 1.0]], dtype=np.float32)
 _LOSS_COUNT = np.array([[1.0, 2.0, 0.0], [3.0, 0.5, 1.0]], dtype=np.float32)
 _LOSS_VAR = np.array([[1.0, 0.5, 2.0], [0.25, 1.5, 1.0]], dtype=np.float32)
 _LOSS_MM = np.array([[0.1, 0.2, 0.4], [0.8, 0.3, 0.1]], dtype=np.float32)
+# The class weights are unequal and none of them is 1: an equal weight makes `mean`'s
+# two denominators agree and the case would pass with the rule written either way.
+_CLS_W = np.array([0.5, 2.0, 3.0], dtype=np.float32)
+_CLS_LOGITS = np.array([[2., 1., .1], [.5, 2.5, .3], [1., .2, 3.]], dtype=np.float32)
+_CLS_T = np.array([0, 1, 2], dtype=np.int64)
+# The **middle** row is skipped, so a `none` that drops instead of zeroing changes the
+# order of what survives rather than only its length.
+_CLS_T_IGN = np.array([0, -100, 2], dtype=np.int64)
+# `_BCE_P` and `_BCE_T` are already taken further down this file and are a different
+# shape; naming these the obvious thing bound the lambdas to those instead, and the
+# dump said "target size (2, 3)" for a fixture written four wide.
+_BW_Z = np.array([-1.0, 0.5, 2.0, -0.25], dtype=np.float32)
+_BW_T = np.array([1.0, 0.0, 1.0, 0.0], dtype=np.float32)
+_BW_W = np.array([0.5, 1.5, 2.0, 0.25], dtype=np.float32)
+# A scalar `pos_weight` would broadcast even if it were being applied to the wrong
+# axis; four unequal entries pin it to the rows.
+_BW_PW = np.array([2.5, 0.5, 1.0, 3.0], dtype=np.float32)
+_BW_P = (1.0 / (1.0 + np.exp(-_BW_Z))).astype(np.float32)
 
 
 def loss_cases(inp=None):
@@ -7799,6 +7817,60 @@ def loss_cases(inp=None):
              L.tensor(np.log(np.array([[.7, .2, .1], [.1, .8, .1], [.2, .2, .6]],
                                       dtype=np.float32))),
              L.tensor(np.array([0, -100, 2], dtype=np.int64)))),
+        # ── the class weight, refused here until today ────────────────────────────
+        #
+        # The refusal's reason was that accepting `weight` and ignoring it changes the
+        # loss silently, which was true and is not a reason to keep refusing. **What
+        # it costs to get wrong is one division.** `mean` divides by the sum of the
+        # weights of the rows it kept, not by how many rows those were, and the two
+        # differ by whatever the weights average to — 1.0251 against 2.0501 on the
+        # `ignore_index` row below. Both are plausible numbers and only one is torch's,
+        # which is why `mean` is asked with the weight *and* the skip at once: either
+        # rule alone gives the right answer to the other's case.
+        *[(f"CrossEntropyLoss(weight, {red})",
+           lambda L, r=red: L.nn.CrossEntropyLoss(
+               weight=L.tensor(_CLS_W), reduction=r)(
+                   L.tensor(_CLS_LOGITS), L.tensor(_CLS_T)))
+          for red in ("mean", "sum", "none")],
+        ("CrossEntropyLoss(weight, ignore_index)",
+         lambda L: L.nn.CrossEntropyLoss(weight=L.tensor(_CLS_W), ignore_index=-100)(
+             L.tensor(_CLS_LOGITS), L.tensor(_CLS_T_IGN))),
+        # **The weight goes inside the spread, not around it.** Label smoothing sends
+        # ε to every class, and torch weights that share per class — the row is
+        # `(1−ε)·w[t]·nll + ε·mean_c(w_c·−log p_c)`. Scaling the whole smoothed row by
+        # `w[t]` instead is the reading that needs no new code and it is off in the
+        # second decimal, which is the distance nothing notices.
+        ("CrossEntropyLoss(weight, label_smoothing)",
+         lambda L: L.nn.CrossEntropyLoss(weight=L.tensor(_CLS_W),
+                                         label_smoothing=0.1)(
+             L.tensor(_CLS_LOGITS), L.tensor(_CLS_T))),
+        ("NLLLoss(weight, ignore_index)",
+         lambda L: L.nn.NLLLoss(weight=L.tensor(_CLS_W), ignore_index=-100)(
+             L.tensor(np.log(np.array([[.7, .2, .1], [.1, .8, .1], [.2, .2, .6]],
+                                      dtype=np.float32))),
+             L.tensor(_CLS_T_IGN))),
+        # **The binary pair divides by the count instead**, weights or no weights —
+        # measured, `weight=[0.5, 1.5, 2, 0.25]` over four rows gives 5.6076/4 and not
+        # 5.6076/4.25. So this file now holds two different rules called "weighted
+        # mean": `mse_loss`'s divides by the sum of the weights and this one does not,
+        # and a single shared helper for both would have to be wrong about one.
+        ("BCEWithLogitsLoss(pos_weight)",
+         lambda L: L.nn.BCEWithLogitsLoss(pos_weight=L.tensor(_BW_PW))(
+             L.tensor(_BW_Z), L.tensor(_BW_T))),
+        ("BCEWithLogitsLoss(weight)",
+         lambda L: L.nn.BCEWithLogitsLoss(weight=L.tensor(_BW_W))(
+             L.tensor(_BW_Z), L.tensor(_BW_T))),
+        # `pos_weight` scales the positive term alone, so the two multiply rather than
+        # collapsing: `w · −(pw·t·log σ + (1−t)·log(1−σ))`. Applying `pos_weight` to
+        # the whole safe form `relu(x) − x·t + log(1+e^−|x|)` scales the negative rows
+        # too and is wrong on exactly the targets that are 0.
+        ("BCEWithLogitsLoss(weight, pos_weight)",
+         lambda L: L.nn.BCEWithLogitsLoss(weight=L.tensor(_BW_W),
+                                          pos_weight=L.tensor(_BW_PW))(
+             L.tensor(_BW_Z), L.tensor(_BW_T))),
+        ("BCELoss(weight)",
+         lambda L: L.nn.BCELoss(weight=L.tensor(_BW_W))(
+             L.tensor(_BW_P), L.tensor(_BW_T))),
         # **The weighted form, added when borch.ts grew a `weight` it did not have.**
         # torch puts `weight` first and borch.ts took `reduction` there, so
         # `MultiLabelSoftMarginLoss('sum')` set the class weights in one library and
@@ -8729,11 +8801,10 @@ def container_cases(inp=None):
         cases.append((CONTAINER_PREFIX + f"InstanceNorm(추적)/{_stage}",
                       lambda L, s=_stage: instance_tracks(L, s)))
 
-    cases.append((CONTAINER_PREFIX + "CrossEntropyLoss(weight)=우리는거절",
-                  refusal_case(lambda L: L.nn.CrossEntropyLoss(weight=L.ones(3)))))
-    cases.append((CONTAINER_PREFIX + "BCEWithLogitsLoss(pos_weight)=우리는거절",
-                  refusal_case(
-                      lambda L: L.nn.BCEWithLogitsLoss(pos_weight=L.ones(3)))))
+    # **`CrossEntropyLoss(weight)` and `BCEWithLogitsLoss(pos_weight)` were two
+    # refusals here and are answered now** — the cases moved to `loss_cases`, where
+    # they ask for the number instead of the wording. A refusal case is worth keeping
+    # only while the refusal is; kept past that it freezes the gap in place.
 
     # **`device` and `dtype` are two seats, not one**, and BatchNorm had neither while
     # its own lazy spelling and `InstanceNorm` beside it both did. That is not a short

@@ -5543,6 +5543,20 @@ function addLoss(out: Map<string, Case>): void {
     () => F.multilabelMarginLoss(
       mm(), Tensor.from([-1, -1, -1, 0, 1, -1], [2, 3]), null, null, "none"));
 
+  // The class weights are unequal and none of them is 1: an equal weight makes the
+  // two candidate denominators agree, and the case would pass either way.
+  const clsW = () => Tensor.from([0.5, 2.0, 3.0], [3]);
+  const clsLogits = () =>
+    Tensor.from([2, 1, 0.1, 0.5, 2.5, 0.3, 1, 0.2, 3], [3, 3]);
+  const clsT = () => Tensor.from([0, 1, 2], [3], { dtype: "int64" });
+  const clsTIgn = () => Tensor.from([0, -100, 2], [3], { dtype: "int64" });
+  const bwZ = () => Tensor.from([-1.0, 0.5, 2.0, -0.25], [4]);
+  const bwT = () => Tensor.from([1, 0, 1, 0], [4]);
+  const bwW = () => Tensor.from([0.5, 1.5, 2.0, 0.25], [4]);
+  const bwPW = () => Tensor.from([2.5, 0.5, 1.0, 3.0], [4]);
+  const bwP = () => Tensor.from(
+    [-1.0, 0.5, 2.0, -0.25].map((v) => 1 / (1 + Math.exp(-v))), [4]);
+
   const layers: [string, () => Tensor][] = [
     // `delta` moved behind `reduction` to match torch. The Python case passes
     // `delta=0.5` by keyword, so its value never moved and the golden is unchanged —
@@ -5587,6 +5601,37 @@ function addLoss(out: Map<string, Case>): void {
       () => new nn.NLLLoss(undefined, null, -100).call(
         Tensor.from([0.7, 0.2, 0.1, 0.1, 0.8, 0.1, 0.2, 0.2, 0.6], [3, 3]).log(),
         Tensor.from([0, -100, 2], [3], { dtype: "int64" }))],
+    // ── the class weight ──────────────────────────────────────────────────
+    //
+    // Refused on both sides until today, with a reason that was true: `mean` divides
+    // by the sum of the weights, so a weight taken and dropped moves the loss
+    // quietly. Carried verbatim from `_CLS_*` and `_BW_*` in `tests/cases.py` —
+    // divergent values stop the comparison from being a comparison.
+    ...(["mean", "sum", "none"] as const).map((r) =>
+      [`CrossEntropyLoss(weight, ${r})`,
+        () => new nn.CrossEntropyLoss(clsW(), null, -100, null, r)
+          .call(clsLogits(), clsT())] as [string, () => Tensor]),
+    ["CrossEntropyLoss(weight, ignore_index)",
+      () => new nn.CrossEntropyLoss(clsW(), null, -100).call(
+        clsLogits(), clsTIgn())],
+    // The weight enters **inside** the spread: `(1−ε)·w[t]·nll + ε·mean_c(w_c·−log p_c)`.
+    ["CrossEntropyLoss(weight, label_smoothing)",
+      () => new nn.CrossEntropyLoss(clsW(), null, -100, null, "mean", 0.1)
+        .call(clsLogits(), clsT())],
+    ["NLLLoss(weight, ignore_index)",
+      () => new nn.NLLLoss(clsW(), null, -100).call(
+        Tensor.from([0.7, 0.2, 0.1, 0.1, 0.8, 0.1, 0.2, 0.2, 0.6], [3, 3]).log(),
+        clsTIgn())],
+    // The binary pair divides by the **count** instead, weights or no weights.
+    ["BCEWithLogitsLoss(pos_weight)",
+      () => new nn.BCEWithLogitsLoss(undefined, null, null, "mean", bwPW())
+        .call(bwZ(), bwT())],
+    ["BCEWithLogitsLoss(weight)",
+      () => new nn.BCEWithLogitsLoss(bwW()).call(bwZ(), bwT())],
+    ["BCEWithLogitsLoss(weight, pos_weight)",
+      () => new nn.BCEWithLogitsLoss(bwW(), null, null, "mean", bwPW())
+        .call(bwZ(), bwT())],
+    ["BCELoss(weight)", () => new nn.BCELoss(bwW()).call(bwP(), bwT())],
     ["MultiMarginLoss", () => new nn.MultiMarginLoss().call(mm(), mmt())],
     ["MultiLabelMarginLoss", () => new nn.MultiLabelMarginLoss()
       .call(Tensor.from([0.1, 0.2, 0.4, 0.8], [1, 4]),

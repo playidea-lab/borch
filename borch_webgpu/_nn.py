@@ -256,7 +256,7 @@ def _lay_out(order, args, kw):
     return laid
 
 
-def _loss(js_name, order, torch_order=None, refuse=None):
+def _loss(js_name, order, torch_order=None):
     """Read torch's call, then write **borch.ts's positional order.**
 
     **One table was doing both jobs and could not.** `order` named the incoming
@@ -277,15 +277,16 @@ def _loss(js_name, order, torch_order=None, refuse=None):
 
     So `torch_order` names what arrives and `order` names where it goes. When
     they are the same, one is enough.
+
+    **A third parameter, `refuse`, stood here and is gone.** It named the layer whose
+    class-weight refusal to raise, for the two entries that had one; both answer now,
+    and `weight` moved from *the seat that raises* to a seat in `order`.
     """
     names = order if torch_order is None else torch_order
 
     def call(x, *args, **kw):
         got = dict(zip(names, args))
         got.update(kw)
-        if refuse is not None:
-            who, *why = refuse if isinstance(refuse, tuple) else (refuse,)
-            _no_class_weights(who, got.get("weight"), got.get("pos_weight"), *why)
         if "reduction" in names:
             folded = _legacy_reduction(got.pop("size_average", None),
                                        got.pop("reduce", None),
@@ -312,16 +313,17 @@ _LOSSES = {
     # Its logits form was then left behind **from that same note**: the sentence
     # above was written, the one name it named was added, and the pair beside it
     # was not looked at. Four golden cases said so for as long as they existed.
+    # **`weight` and `pos_weight` were the `refuse=` seat and are outgoing seats now.**
+    # borch.ts puts them after `reduction` and torch puts `weight` before the
+    # deprecated pair, which is what the two tables are for.
     "binary_cross_entropy": _loss(
-        "bce", ("target", "reduction"),
-        ("target", "weight", *_DEPRECATED, "reduction"),
-        "BCELoss"),
+        "bce", ("target", "reduction", "weight"),
+        ("target", "weight", *_DEPRECATED, "reduction")),
     "binary_cross_entropy_with_logits": _loss(
-        "bceWithLogits", ("target", "reduction"),
+        "bceWithLogits", ("target", "reduction", "weight", "pos_weight"),
         # **`pos_weight` is last, after `reduction`** — the only loss torch puts
         # it there, and the core's layer carries the same note.
-        ("target", "weight", *_DEPRECATED, "reduction", "pos_weight"),
-        "BCEWithLogitsLoss"),
+        ("target", "weight", *_DEPRECATED, "reduction", "pos_weight")),
     # **torch's third seat is `reduction`, not `delta`.** It is the newest of
     # these and never carried the deprecated pair, so nothing shifted and the
     # order is simply torch's own — which the table had backwards.
@@ -2983,24 +2985,13 @@ def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None,
 #
 # The failure mode is worth more than the fix: a stale reason is worse than no reason,
 # because no reason invites a check. This one survived every sweep of the file.
-def _no_class_weights(who, weight, pos_weight, why="class weights"):
-    """**`weight` and `pos_weight` are not here.** Accepted and unused, the loss
-    quietly becomes a different one.
-
-    torch registers both as buffers and ships them in `state_dict`, and above all
-    changes the division in `mean` — dividing by **the sum of the weights**
-    rather than the sample count. Ignored, the value differs, and a learning rate
-    chosen against that value is wrong with it.
-
-    It used to stop with a `TypeError`, which is the same screen a typo produces
-    and does not say "this library does not have it".
-    """
-    from borch._base import _unsupported
-
-    if weight is not None:
-        _unsupported(f"{who}(weight=…) — {why}")
-    if pos_weight is not None:
-        _unsupported(f"{who}(pos_weight=…)")
+# **`_no_class_weights` stood here and is gone**, and it is the same shape of thing
+# as the stale paragraph above it. Its reason: `weight` and `pos_weight` accepted and
+# unused make the loss quietly a different one, because `mean` divides by the sum of
+# the weights rather than the sample count. That was true and it named the way out —
+# divide by the sum of the weights. borch.ts does exactly that now, so the four losses
+# below hand the tensors across instead of stopping, and nothing here implements the
+# arithmetic a second time.
 
 
 def _legacy_reduction(size_average, reduce, reduction):
@@ -3054,9 +3045,9 @@ def NLLLoss(weight=None, size_average=None, ignore_index=-100, reduce=None,
     """torch's order — and **the deprecated pair is not adjacent here**, with
     `ignore_index` between the two."""
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _no_class_weights("NLLLoss", weight, None)
+    w = handle(weight) if weight is not None else None
     return _Wrap(lambda a, b: wrap(
-        handle(a).nllLoss(handle(b), int(ignore_index), reduction)))
+        handle(a).nllLoss(handle(b), int(ignore_index), reduction, w)))
 
 
 def BCELoss(weight=None, size_average=None, reduce=None, reduction="mean"):
@@ -3064,24 +3055,26 @@ def BCELoss(weight=None, size_average=None, reduce=None, reduction="mean"):
     and offering it here would be an argument torch does not have. The core says the
     same at the same place."""
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _no_class_weights("BCELoss", weight, None)
-    return _Wrap(lambda a, b: wrap(handle(a).bce(handle(b), reduction)))
+    w = handle(weight) if weight is not None else None
+    return _Wrap(lambda a, b: wrap(handle(a).bce(handle(b), reduction, w)))
 
 
 def BCEWithLogitsLoss(weight=None, size_average=None, reduce=None,
                       reduction="mean", pos_weight=None):
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _no_class_weights("BCEWithLogitsLoss", weight, pos_weight)
-    return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b), reduction)))
+    w = handle(weight) if weight is not None else None
+    pw = handle(pos_weight) if pos_weight is not None else None
+    return _Wrap(lambda a, b: wrap(
+        handle(a).bceWithLogits(handle(b), reduction, w, pw)))
 
 
 def CrossEntropyLoss(weight=None, size_average=None, ignore_index=-100,
                      reduce=None, reduction="mean", label_smoothing=0.0):
     """torch's order — `ignore_index` sits between the deprecated pair."""
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _no_class_weights("CrossEntropyLoss", weight, None)
+    w = handle(weight) if weight is not None else None
     return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(
-        handle(b), int(ignore_index), reduction, float(label_smoothing))))
+        handle(b), int(ignore_index), reduction, float(label_smoothing), w)))
 
 
 class _Recurrent(Module):

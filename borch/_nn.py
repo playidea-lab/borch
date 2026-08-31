@@ -709,7 +709,7 @@ class ParameterDict(Module):
 # `CrossEntropyLoss` did not. What was written later followed torch's signature
 # and what was written first went unfixed. The golden did not see it because
 # tutorials use the default `mean` only.
-def _reduce_ignoring(each, idx, ignore_index, reduction):
+def _reduce_ignoring(each, idx, ignore_index, reduction, row_weight=None):
     """Fold `each`, leaving out the rows whose target is `ignore_index`.
 
     **torch treats the three reductions differently and the difference is easy to
@@ -726,15 +726,26 @@ def _reduce_ignoring(each, idx, ignore_index, reduction):
 
     The first version dropped for all three and was right about `mean` and `sum`.
     A case at `none` is what showed it, which is why the case exists.
+
+    **A class weight changes the denominator, and the two rules compose.** Given one,
+    `mean` divides by the sum of the *kept* rows' weights rather than by how many
+    there are — measured with weights `[1, 2, 3]` and targets `[0, 1, ignore, 2]`:
+    the sum is 6.1504 and torch's mean is 1.0251, which is 6.1504 / 6 and not
+    6.1504 / 3. Taking the weight and still dividing by the count is the version that
+    looks right, and it is wrong by whatever the weights happen to average to.
     """
-    if ignore_index is None or not (idx == ignore_index).any():
+    keep = idx != ignore_index if ignore_index is not None else _np.ones_like(idx, bool)
+    if row_weight is None and keep.all():
         return _reduce(each, reduction)
-    mask = _wrap((idx != ignore_index).astype(each.data.dtype))
-    zeroed = each * mask
+    zeroed = each * _wrap(keep.astype(each.data.dtype))
     if reduction == "none":
         return zeroed
     total = zeroed.sum()
-    return total if reduction == "sum" else total / int((idx != ignore_index).sum())
+    if reduction == "sum":
+        return total
+    if row_weight is None:
+        return total / int(keep.sum())
+    return total / (row_weight * _wrap(keep.astype(row_weight.data.dtype))).sum()
 
 
 class _WrittenLoss(Module):
@@ -781,10 +792,13 @@ class _WrittenLoss(Module):
         puts them differs per loss.
         """
         super().__init__()
-        if weight is not None:
-            _unsupported(f"{type(self).__name__}(weight=…) — class weights")
-        if pos_weight is not None:
-            _unsupported(f"{type(self).__name__}(pos_weight=…)")
+        # **`weight` and `pos_weight` were refused and are answered now.** The reason
+        # written here was that accepting one and ignoring it changes the number
+        # quietly — true, and the way out was to use it. What each means differs per
+        # loss and is written where it is used: a class weight on the classification
+        # losses, a per-element weight and a positive-term weight on `BCEWithLogits`.
+        self.weight = None if weight is None else _wrap(weight)
+        self.pos_weight = None if pos_weight is None else _wrap(pos_weight)
         self.reduction = _legacy_reduction(size_average, reduce, reduction)
         self.ignore_index = ignore_index
         self.label_smoothing = label_smoothing
@@ -813,8 +827,25 @@ class BCEWithLogitsLoss(_WrittenLoss):
     def forward(self, logits, target):
         # log(1+e^-|x|) + max(x,0) - x*t  — the form that stays safe at large values
         x, t = logits, target
-        return _reduce(relu(x) - x * t + (1 + (-(x.abs())).exp()).log(),
-                       self.reduction)
+        stable = relu(x) - x * t + (1 + (-(x.abs())).exp()).log()
+        if self.pos_weight is not None:
+            # **`pos_weight` scales the positive term only**, so the safe form has to
+            # be split back into its two halves rather than multiplied whole:
+            # `-(w·t·log σ(x) + (1−t)·log(1−σ(x)))`. Writing it as `w·stable` would
+            # also scale the negative term and change every row where `t = 0`.
+            logp = -(1 + (-x).exp()).log()          # log σ(x)
+            logq = -x - (1 + (-x).exp()).log()      # log(1−σ(x))
+            each = -(self.pos_weight * t * logp + (1 - t) * logq)
+        else:
+            each = stable
+        if self.weight is not None:
+            each = each * self.weight
+        # **`mean` divides by the count here and not by the sum of the weights** —
+        # measured: weights [0.5, 1.5, 2, 0.25] over four rows give 1.4019, which is
+        # the sum 5.6076 over 4 and not over 4.25. `mse_loss`'s weight divides by the
+        # sum, so the two spellings of "weighted mean" in this file are different
+        # numbers on purpose.
+        return _reduce(each, self.reduction)
 
 
 class BCELoss(_WrittenLoss):
@@ -863,8 +894,10 @@ class BCELoss(_WrittenLoss):
             denom = _np.maximum(pd * (1.0 - pd), 1e-12)
             return (gg * (pd - td) / denom, gg * (hi - lo))
 
-        return _reduce(p._make(out, (p, t), back, "BinaryCrossEntropyBackward0"),
-                       self.reduction)
+        each = p._make(out, (p, t), back, "BinaryCrossEntropyBackward0")
+        if self.weight is not None:
+            each = each * self.weight   # elementwise; `mean` still divides by count
+        return _reduce(each, self.reduction)
 
 
 class CrossEntropyLoss(_WrittenLoss):
@@ -912,12 +945,25 @@ class CrossEntropyLoss(_WrittenLoss):
         # it raises. Row 0 is a placeholder whose value never reaches the answer.
         safe = _np.where(idx == self.ignore_index, 0, idx)
         each = -logp[_np.arange(n), safe]
+        # The class weight scales each row by its target's weight, and `mean` then
+        # divides by the sum of those rather than by the count — `_reduce_ignoring`.
+        row = None if self.weight is None else self.weight[safe]
+        if row is not None:
+            each = each * row
         if self.label_smoothing:
             # torch spreads ε over every class: the target term keeps 1-ε and the
             # rest share ε/C, which is the mean of every class's log-probability.
+            #
+            # **With a class weight the spread term is weighted per class, not per
+            # row.** The target term is `(1−ε)·w[t]·nll` and the spread is
+            # `ε·mean_c(w_c·−logp_c)` — measured against torch at ε=0.1 with weights
+            # `[1, 2, 3]`: 0.449098, where scaling the whole smoothed row by `w[t]`
+            # gives 0.442829. Both are within a percent of each other and only one is
+            # torch's.
             e = self.label_smoothing
-            each = each * (1 - e) + (-logp).mean(dim=-1) * e
-        return _reduce_ignoring(each, idx, self.ignore_index, self.reduction)
+            spread = -logp if self.weight is None else -logp * self.weight
+            each = each * (1 - e) + spread.mean(dim=-1) * e
+        return _reduce_ignoring(each, idx, self.ignore_index, self.reduction, row)
 
 
 def _nn_unsupported(name):
@@ -3016,7 +3062,10 @@ class NLLLoss(_WrittenLoss):
         # the same reason: -100 is not an index.
         safe = _np.where(idx == self.ignore_index, 0, idx)
         each = nll_loss(log_probs, _wrap(safe), reduction="none")
-        return _reduce_ignoring(each, idx, self.ignore_index, self.reduction)
+        row = None if self.weight is None else self.weight[safe]
+        if row is not None:
+            each = each * row
+        return _reduce_ignoring(each, idx, self.ignore_index, self.reduction, row)
 
 
 class BatchNorm1d(Module):

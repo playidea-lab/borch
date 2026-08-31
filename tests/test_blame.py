@@ -195,6 +195,14 @@ ADDED_AFTER = frozenset({
     "opt::Adam(decoupled_weight_decay)/손실",
     "opt::RAdam(decoupled_weight_decay)/0.weight",
     "opt::RAdam(decoupled_weight_decay)/손실",
+    # The class weight, which was a refusal when the 94 were measured — the five
+    # cases below could not have been among them, because the call they make stopped
+    # before it reached the loss. Same era rule as the rows above.
+    "loss::층::CrossEntropyLoss(weight, mean)",
+    "loss::층::CrossEntropyLoss(weight, sum)",
+    "loss::층::CrossEntropyLoss(weight, none)",
+    "loss::층::CrossEntropyLoss(weight, ignore_index)",
+    "loss::층::CrossEntropyLoss(weight, label_smoothing)",
 })
 
 

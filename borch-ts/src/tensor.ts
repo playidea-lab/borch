@@ -4640,11 +4640,29 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `max(x,0) − x·y + log(1+exp(−|x|))` gives the same value without
    * overflow — that is why this function exists separately.
    */
-  bceWithLogits(target: Tensor, reduction: Reduction = "mean"): Tensor {
+  bceWithLogits(target: Tensor, reduction: Reduction = "mean",
+                weight?: Tensor, posWeight?: Tensor): Tensor {
     const zero = Tensor.full([], 0);
     const hinge = this.binary("maximum", zero);
     const stable = this.abs().neg().exp().unary("log1p");
-    return hinge.sub(this.mul(target)).add(stable).reduceAs(reduction);
+    let each = hinge.sub(this.mul(target)).add(stable);
+    if (posWeight !== undefined) {
+      // **`posWeight` scales the positive term alone**, so the stable form has to be
+      // split back into its two halves: `−(w·t·log σ(x) + (1−t)·log(1−σ(x)))`.
+      // Multiplying the stable form whole scales the negative term too and is wrong
+      // on every row whose target is 0 — which is half of a balanced batch.
+      const one = Tensor.full([], 1);
+      const softplus = this.neg().exp().unary("log1p");   // log(1+e^−x)
+      const logp = softplus.neg();                        // log σ(x)
+      const logq = this.neg().sub(softplus);              // log(1−σ(x))
+      each = posWeight.mul(target).mul(logp)
+        .add(one.sub(target).mul(logq)).neg();
+    }
+    if (weight !== undefined) each = each.mul(weight);
+    // **`mean` divides by the count here**, weights or no weights — unlike `l1Loss`
+    // and `mseLoss`, whose `weight` divides by the sum of the weights. Measured on
+    // both; a shared helper for the two rules would have to be wrong about one.
+    return each.reduceAs(reduction);
   }
 
   /**
@@ -4663,12 +4681,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Prefer `bceWithLogits` where you have logits: it is the numerically stable
    * path and this one is reached only when the probabilities are what you hold.
    */
-  bce(target: Tensor, reduction: Reduction = "mean"): Tensor {
+  bce(target: Tensor, reduction: Reduction = "mean", weight?: Tensor): Tensor {
     const floor = Tensor.full([], -100);
     const one = Tensor.full([], 1);
     const lo = this.unary("log").binary("maximum", floor);
     const hi = one.sub(this).unary("log").binary("maximum", floor);
-    return target.mul(lo).add(one.sub(target).mul(hi)).neg().reduceAs(reduction);
+    let each = target.mul(lo).add(one.sub(target).mul(hi)).neg();
+    if (weight !== undefined) each = each.mul(weight);  // `mean` still over the count
+    return each.reduceAs(reduction);
   }
 
   /**
@@ -5340,6 +5360,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   nllLoss(
     target: Tensor, ignoreIndex = -100, reduction: Reduction = "mean",
+    weight?: Tensor,
   ): Tensor {
     // **The per-sample values are made before folding.** Averaging as soon as they are
     // drawn leaves nowhere to build `reduction: "none"` — per-sample values cannot be
@@ -5350,9 +5371,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // reaches the answer. Same ordering the core needs, for the same reason.
     const keep = target.ne(Tensor.full([], ignoreIndex));
     const safe = target.mul(keep);
-    const each = this.gather(1, safe.reshape([target.size, 1]))
+    let each = this.gather(1, safe.reshape([target.size, 1]))
       .reshape([target.size]).neg().mul(keep.reshape([target.size]));
-    return each.reduceIgnoring(keep, reduction);
+    // The class weight is one number per **row**, drawn from the target the row
+    // points at — so it is a gather too, from the weight vector by the same indices.
+    const row = weight === undefined
+      ? undefined : weight.gather(0, safe.reshape([target.size]));
+    if (row !== undefined) each = each.mul(row);
+    return each.reduceIgnoring(keep, reduction, row);
   }
 
   /**
@@ -5360,21 +5386,32 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   crossEntropy(
     target: Tensor, ignoreIndex = -100, reduction: Reduction = "mean",
-    labelSmoothing = 0.0,
+    labelSmoothing = 0.0, weight?: Tensor,
   ): Tensor {
     const logp = this.logSoftmax(-1);
-    if (!labelSmoothing) return logp.nllLoss(target, ignoreIndex, reduction);
+    if (!labelSmoothing) {
+      return logp.nllLoss(target, ignoreIndex, reduction, weight);
+    }
     // torch spreads ε over every class: the target term keeps 1-ε and the rest
     // share ε/C, which is the mean of every class's log-probability.
     const keep = target.ne(Tensor.full([], ignoreIndex));
     const safe = target.mul(keep);
-    const picked = logp.gather(1, safe.reshape([target.size, 1]))
+    const row = weight === undefined
+      ? undefined : weight.gather(0, safe.reshape([target.size]));
+    let picked = logp.gather(1, safe.reshape([target.size, 1]))
       .reshape([target.size]).neg();
-    const spread = logp.neg().mean(logp.shape.length - 1);
+    if (row !== undefined) picked = picked.mul(row);
+    // **The weight goes inside the spread, not around it.** The spread is the mean
+    // over classes of `w_c · −log p_c`, so it is the *class* weight that enters here
+    // and not the row's — scaling the whole smoothed row by `w[target]` instead is
+    // the reading that needs no extra line, and it is wrong in the second decimal.
+    const spreadOf = weight === undefined
+      ? logp.neg() : logp.neg().mul(weight.reshape([1, weight.size]));
+    const spread = spreadOf.mean(logp.shape.length - 1);
     const each = picked.mul(Tensor.full([], 1 - labelSmoothing))
       .add(spread.mul(Tensor.full([], labelSmoothing)))
       .mul(keep.reshape([target.size]));
-    return each.reduceIgnoring(keep, reduction);
+    return each.reduceIgnoring(keep, reduction, row);
   }
 
   /**
@@ -5385,12 +5422,20 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * divide by the rows that remain, not by all of them — averaging with the zeros in
    * gives a number too small by exactly that ratio and nothing about it looks wrong.
    * `none` **keeps them as zeros**, because the shape is part of that answer.
+   *
+   * **A class weight replaces the denominator.** `mean` then divides by the sum of
+   * the kept rows' weights rather than by how many rows were kept — measured, a batch
+   * whose kept weights are `[0.5, 3]` and whose weighted sum is 6.1504 answers 1.0251,
+   * which is 6.1504/6 and not 6.1504/3. Both are ordinary-looking numbers.
    */
-  reduceIgnoring(keep: Tensor, reduction: Reduction): Tensor {
+  reduceIgnoring(keep: Tensor, reduction: Reduction,
+                 rowWeight?: Tensor): Tensor {
     if (reduction === "none") return this;
     const total = this.sum();
     if (reduction === "sum") return total;
-    return total.div(keep.reshape([keep.size]).sum());
+    const flat = keep.reshape([keep.size]);
+    if (rowWeight === undefined) return total.div(flat.sum());
+    return total.div(rowWeight.mul(flat).sum());
   }
 
   // ── Where the output size depends on the values ───────────────────────

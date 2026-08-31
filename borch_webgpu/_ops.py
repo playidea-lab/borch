@@ -244,8 +244,13 @@ _SIGNATURE = {
     # to absorb.
     "l1_loss": ("target", "reduction", "weight"),
     "mse_loss": ("target", "reduction", "weight"),
-    "bce_with_logits": ("target", "reduction"),
-    "binary_cross_entropy_with_logits": ("target", "reduction"),
+    # The same tail on the binary pair, now that borch.ts answers them: `weight`
+    # scales the whole element and `pos_weight` the positive term alone. Both were a
+    # refusal here and had no seat, so a caller who gave one by keyword met *does not
+    # take keyword arguments* rather than the refusal that was meant for them.
+    "bce_with_logits": ("target", "reduction", "weight", "pos_weight"),
+    "binary_cross_entropy_with_logits": ("target", "reduction", "weight",
+                                         "pos_weight"),
     # **These two had `ignore_index` missing from the middle** and it did not raise.
     # borch.ts is `nllLoss(target, ignoreIndex = -100, reduction = "mean")`, so
     # `nll_loss(x, t, reduction="none")` handed the string `"mean"`… no: it handed
@@ -256,8 +261,9 @@ _SIGNATURE = {
     # A slot whose type is wide enough to swallow the wrong value is the quietest of
     # the positional failures: a string into a string slot is invisible, a string into
     # a *number* slot is invisible too when the number is only ever compared.
-    "nll_loss": ("target", "ignore_index", "reduction"),
-    "cross_entropy": ("target", "ignore_index", "reduction", "label_smoothing"),
+    "nll_loss": ("target", "ignore_index", "reduction", "weight"),
+    "cross_entropy": ("target", "ignore_index", "reduction", "label_smoothing",
+                      "weight"),
     "huber_loss": ("target", "delta", "reduction", "weight"),
     "interpolate": ("scale_factor",),
     # Boolean reductions and counting. **The dimension itself was missing for a

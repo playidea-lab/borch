@@ -773,15 +773,14 @@ NOT_PORTED = {
     # the Python side. The two loss cases ask about a refusal, and in TypeScript passing an
     # argument that does not exist is a **compile error** rather than a refusal at run
     # time, so there is nowhere to ask it.
-    # 5 → 2. **The three `InstanceNorm` rows left when the refusal did.** They were
-    # here because the layer stopped on `track_running_stats=True`; it registers the
-    # buffers and reads them now, so `state_dict` keys, the training update and the
-    # evaluation path are all asked on this side too.
-    #
-    # The two left are the loss `weight`/`pos_weight` refusals, and they are a Python
-    # matter in the same way `pad::` below is: in TypeScript passing an argument that
-    # does not exist is a **compile error**, so there is nowhere to ask it.
-    "container::": (2, "파이썬 — 없는 인자를 넘기는 것이 TS 에선 컴파일 오류라 물을 자리가 없다"),
+    # 5 → 2 → 0. **The row is gone, and neither half of it left for the reason it
+    # was written.** The three `InstanceNorm` rows left when that layer stopped
+    # refusing `track_running_stats=True`. The two loss rows were the
+    # `weight`/`pos_weight` refusals, and the note here said they were a *Python
+    # matter* — that passing an argument which does not exist is a compile error in
+    # TypeScript, so there was nowhere to ask. The argument existed on both sides all
+    # along; what did not exist was the answer. Both sides answer now and the cases
+    # ask for the number under `loss::층::` instead of for the wording.
     # `torch.pi`, `inf`, `nan` and `newaxis` are **values at Python's top level**. borch.ts
     # is a bundle of classes rather than a module, and JS already has `Math.PI`, `Infinity`
     # and `null`, so there is nowhere to offer the same names again — `x[:, None]` is
