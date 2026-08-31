@@ -4216,7 +4216,8 @@ export class Tensor implements Node<Tensor> {
    */
   interpolateBilinear(outH: number, outW: number, alignCorners: boolean,
                       given: number | null = null): Tensor {
-    return this.interpolateLinear([outH, outW], alignCorners, given);
+    return this.interpolateLinear([outH, outW], alignCorners,
+                                  given === null ? null : [given, given]);
   }
 
   /**
@@ -4232,10 +4233,11 @@ export class Tensor implements Node<Tensor> {
    * this at one and three axes.
    */
   interpolateLinear(outDims: readonly number[], alignCorners: boolean,
-                    given: number | null = null): Tensor {
+                    given: readonly number[] | null = null): Tensor {
     const spatial = outDims.length;
     const axes = outDims.map((out, k) =>
-      bilinearAxis(this.shape[2 + k] ?? 1, out, alignCorners, given));
+      bilinearAxis(this.shape[2 + k] ?? 1, out, alignCorners,
+                   given === null ? null : (given[k] ?? null)));
     const one = Tensor.full([], 1);
     // The fraction for one axis, shaped so it broadcasts against the output: a 1 on
     // every axis but its own.
@@ -10910,7 +10912,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * shape, different values — measured on torch: sum 120 against 132.
    */
   interpolate(size: number | readonly number[] | null = null,
-              scaleFactor: number | null = null,
+              scaleFactor: number | readonly number[] | null = null,
               mode: InterpolateMode = "nearest",
               alignCorners = false,
               recomputeScaleFactor: boolean | null = null,
@@ -10945,16 +10947,23 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (mode === "bicubic" && rank !== 4) throw generic();
     const spatial = rank - 2;
     const inDims = this.shape.slice(2);
-    const scale = scaleFactor ?? 2;
+    // **One scale per axis.** torch takes `scale_factor=(2, 1.5)` and this held one
+    // number, so the second axis silently got the first one's factor — the shape came
+    // out wrong, which is the good direction, but only because the two axes of the
+    // fixtures differed.
+    const scales = typeof scaleFactor === "number" || scaleFactor === null
+      ? new Array<number>(spatial).fill(scaleFactor ?? 2)
+      : Array.from({ length: spatial },
+                   (_, k) => scaleFactor[k] ?? scaleFactor[0] ?? 2);
     // torch's own rule, in one place so the modes cannot part.
     const outDims = size === null
-      ? inDims.map((d) => Math.floor(d * scale))
+      ? inDims.map((d, k) => Math.floor(d * (scales[k] ?? 2)))
       : (typeof size === "number"
         ? new Array<number>(spatial).fill(size)
         : Array.from({ length: spatial }, (_, k) => size[k] ?? size[0] ?? 1));
     // **The default is the *given* scale; recomputing is what the flag turns on.**
     // A size rather than a factor has no scale to recompute from.
-    const given = size === null && !recomputeScaleFactor ? scale : null;
+    const given = size === null && !recomputeScaleFactor ? scales : null;
     if (antialias) {
       if (mode !== "bilinear" && mode !== "bicubic") {
         throw new RuntimeError(
@@ -10971,7 +10980,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       // they part (5 at 1.7 gives 8, and 8/5 is 1.6) the index map is built here
       // instead. One fused dispatch stays the common path.
       const sameScale = given === null
-        || outDims.every((out, k) => given === out / (inDims[k] ?? 1));
+        || outDims.every((out, k) => given[k] === out / (inDims[k] ?? 1));
       if (mode === "nearest" && sameScale) return this.resizeNearest(outDims);
       return this.resizeNearestAt(outDims, mode === "nearest-exact" ? 0.5 : 0,
                                   given);
@@ -11010,7 +11019,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   private interpolateAntialias(outH: number, outW: number,
                                mode: "bilinear" | "bicubic",
                                alignCorners: boolean,
-                               given: number | null): Tensor {
+                               given: readonly number[] | null): Tensor {
     const radius = mode === "bilinear" ? 1 : 2;
     const filt = mode === "bilinear"
       ? (raw: number): number => {
@@ -11024,12 +11033,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         if (t < 2) return ((t - 5) * t + 8) * t * a - 4 * a;
         return 0;
       };
-    const axis = (sizeIn: number, sizeOut: number): Tensor => {
+    const axis = (sizeIn: number, sizeOut: number, k: number): Tensor => {
       // The caller's scale is not read under `alignCorners` — measured: with it on,
       // the `scaleFactor` cases agree with `(in−1)/(out−1)` alone.
+      const per = given === null ? null : (given[k] ?? null);
       const s = alignCorners
         ? (sizeOut > 1 ? (sizeIn - 1) / (sizeOut - 1) : 0)
-        : (given === null ? sizeIn / sizeOut : 1 / given);
+        : (per === null ? sizeIn / sizeOut : 1 / per);
       const wide = s >= 1;
       const support = wide ? radius * s : radius;
       const inv = wide ? 1 / s : 1;
@@ -11048,8 +11058,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       return Tensor.from(rows, [sizeOut, sizeIn]);
     };
     // `(o, h) · (n, c, h, w) · (w, p)` — the rows fold first, then the columns.
-    return axis(this.shape[2] ?? 1, outH).matmul(this)
-      .matmul(axis(this.shape[3] ?? 1, outW).transpose());
+    return axis(this.shape[2] ?? 1, outH, 0).matmul(this)
+      .matmul(axis(this.shape[3] ?? 1, outW, 1).transpose());
   }
 
   /**
@@ -11081,11 +11091,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * only where they do agree.
    */
   private resizeNearestAt(outDims: readonly number[], half: number,
-                          given: number | null): Tensor {
+                          given: readonly number[] | null): Tensor {
     let out: Tensor = this;
     outDims.forEach((sizeOut, k) => {
       const sizeIn = this.shape[2 + k] ?? 1;
-      const step = given === null ? sizeOut / sizeIn : given;
+      const step = given === null ? sizeOut / sizeIn : (given[k] ?? 1);
       const at = Array.from({ length: sizeOut }, (_, i) =>
         Math.min(Math.floor((i + half) / step), sizeIn - 1));
       out = out.indexSelect(2 + k, Tensor.from(at, [sizeOut], { dtype: "int64" }));
@@ -11108,7 +11118,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `[0, 1]` comes back slightly outside it, and torch does not clamp either.
    */
   private interpolateBicubic(outH: number, outW: number, alignCorners: boolean,
-                             given: number | null): Tensor {
+                             given: readonly number[] | null): Tensor {
     const h = this.shape[2] ?? 1;
     const w = this.shape[3] ?? 1;
     const A = -0.75;
@@ -11120,17 +11130,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
     // The same two rules the bilinear path uses: `alignCorners` pins both ends,
     // otherwise the coordinate is measured from the centre of the output cell.
-    const coords = (sizeIn: number, sizeOut: number): number[] => {
+    const coords = (sizeIn: number, sizeOut: number, k: number): number[] => {
       if (alignCorners) {
         if (sizeOut === 1) return [0];
         return Array.from({ length: sizeOut },
                           (_, i) => (i * (sizeIn - 1)) / (sizeOut - 1));
       }
-      const step = given === null ? sizeIn / sizeOut : 1 / given;
+      const per = given === null ? null : (given[k] ?? null);
+      const step = per === null ? sizeIn / sizeOut : 1 / per;
       return Array.from({ length: sizeOut }, (_, i) => (i + 0.5) * step - 0.5);
     };
-    const ys = coords(h, outH);
-    const xs = coords(w, outW);
+    const ys = coords(h, outH, 0);
+    const xs = coords(w, outW, 1);
     const clampRow = (base: number[], k: number, limit: number): Tensor =>
       Tensor.from(base.map((v) =>
         Math.min(Math.max(Math.floor(v) + k, 0), limit - 1)), [base.length],

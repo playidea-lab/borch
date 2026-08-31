@@ -4972,6 +4972,18 @@ function addUnpool(out: Map<string, Case>): void {
     }
   }
 
+  // **One scale per axis.** `scaleFactor` held a single number here, so the second
+  // axis silently took the first one's factor. `(2, 1.5)` on a 4×5 gives 8×7 and one
+  // number would give 8×10 or 6×7 — loud, but only because the fixture's two axes
+  // differ, and every case above passes the same scale to both.
+  for (const mode of ["nearest", "nearest-exact", "area", "bilinear",
+                      "bicubic"] as const) {
+    out.set(`fname::interpolate(${mode}, 축마다 다른 배율)`,
+      () => interpImg().interpolate(null, [2, 1.5], mode, false));
+  }
+  out.set("fname::interpolate(bilinear, antialias, 축마다 다른 배율)",
+    () => interpImg().interpolate(null, [0.6, 0.4], "bilinear", false, null, true));
+
   // ── The spatial transformer ───────────────────────────────────────────
   //
   // The two traps are written at length on the Python side. Briefly: asked with squares

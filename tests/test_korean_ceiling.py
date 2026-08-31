@@ -311,7 +311,9 @@ CEILINGS = {
     # 4333 → 4362. Twenty-nine, in `interpolate`'s rank case names — `3차원`, `5차원`,
     # `… 의 기울기` and the `=둘 다 거절` rows with the `둘 다 멈춘다` verdict they
     # return. All keys or values in `golden.json`, so both sides spell them the same.
-    "borch-ts/test": 4362,
+    # 4362 → 4376. Fourteen, in the six `축마다 다른 배율` case names — one scale per
+    # axis. Keys in `golden.json`.
+    "borch-ts/test": 4376,
 }
 
 

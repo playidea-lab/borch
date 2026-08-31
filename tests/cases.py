@@ -4790,6 +4790,21 @@ def functional_name_cases(inp=None):
             M.tensor(_INTERP_IMG), scale_factor=2, mode="nearest",
             align_corners=True)))
 
+    # **One scale per axis.** torch takes `scale_factor=(2, 1.5)`; the browser side
+    # held a single number, so the second axis silently took the first one's factor.
+    # The shape came out wrong, which is the loud direction — but only because the
+    # fixture's two axes differ, and every case up to here passed the same scale to
+    # both. `(2, 1.5)` on a 4×5 gives 8×7, and one number would give 8×10 or 6×7.
+    for _mode in ("nearest", "nearest-exact", "area", "bilinear", "bicubic"):
+        add(f"interpolate({_mode}, 축마다 다른 배율)",
+            lambda L, m=_mode: F(L).interpolate(
+                L.tensor(_INTERP_IMG), scale_factor=(2, 1.5), mode=m,
+                **({"align_corners": False} if m in ("bilinear", "bicubic") else {})))
+    add("interpolate(bilinear, antialias, 축마다 다른 배율)",
+        lambda L: F(L).interpolate(
+            L.tensor(_INTERP_IMG), scale_factor=(0.6, 0.4), mode="bilinear",
+            align_corners=False, antialias=True))
+
     # ── `antialias`, the last of `interpolate`'s seats ─────────────────
     #
     # It widens the filter by the shrink factor and renormalises the weights, so every
