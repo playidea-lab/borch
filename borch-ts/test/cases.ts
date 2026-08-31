@@ -1472,6 +1472,90 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
     return Tensor.from(v, [2, 3, 4]);
   };
 
+  // ── the recurrent flags, refused on all three sides until today ───────────
+  //
+  // Carried verbatim from `tests/cases.py`: the input is `0.1·i − 1.0` over (5, 2, 3)
+  // and every parameter comes from `ramp` above, so nothing crosses the boundary and
+  // the two sides agree only if their `stateDict` keys **and shapes** do.
+  const rseq = (): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < 30; i++) v.push(i * 0.1 - 1.0);
+    return Tensor.from(v, [5, 2, 3]);
+  };
+  interface RNNFlags {
+    numLayers?: number;
+    bias?: boolean;
+    dropout?: number;
+    bidirectional?: boolean;
+    projSize?: number;
+    nonlinearity?: "tanh" | "relu";
+  }
+  const rnnBuild = (kind: nn.RNNKind, f: RNNFlags): nn.RNNBase => {
+    const {
+      numLayers = 1, bias = true, dropout = 0, bidirectional = false,
+      projSize = 0, nonlinearity = "tanh",
+    } = f;
+    // **The fourth seat is not the same argument on all three.** torch's `RNN` puts
+    // `nonlinearity` there and the other two put `bias`, so one call written for all
+    // three lands a string in `bias`, where it is true.
+    const m = kind === "RNN"
+      ? new nn.RNN(3, 4, numLayers, nonlinearity, bias, false, dropout, bidirectional)
+      : kind === "LSTM"
+        ? new nn.LSTM(3, 4, numLayers, bias, false, dropout, bidirectional, projSize)
+        : new nn.GRU(3, 4, numLayers, bias, false, dropout, bidirectional);
+    m.eval();
+    return m;
+  };
+  const RNN_FLAGS: Array<[string, RNNFlags, readonly nn.RNNKind[]]> = [
+    ["양방향", { bidirectional: true }, ["RNN", "LSTM", "GRU"]],
+    ["2층", { numLayers: 2 }, ["RNN", "LSTM", "GRU"]],
+    ["2층양방향", { numLayers: 2, bidirectional: true }, ["RNN", "LSTM", "GRU"]],
+    ["편향없음", { bias: false }, ["RNN", "LSTM", "GRU"]],
+    // `eval()` is what makes this deterministic and is also the claim: the dropout
+    // goes between the layers while training and is the identity afterwards.
+    ["dropout 은 평가에서 항등", { numLayers: 2, dropout: 0.5 },
+      ["RNN", "LSTM", "GRU"]],
+    ["proj_size", { projSize: 2 }, ["LSTM"]],
+    ["proj_size 와 양방향", { numLayers: 2, projSize: 2, bidirectional: true },
+      ["LSTM"]],
+    ["relu", { nonlinearity: "relu" }, ["RNN"]],
+  ];
+  for (const [label, flags, kinds] of RNN_FLAGS) {
+    for (const kind of kinds) {
+      const parts = kind === "LSTM"
+        ? ["출력", "상태", "셀"] : ["출력", "상태"];
+      for (const part of parts) {
+        out.set(`seq::${kind}(${label})/${part}`, () => {
+          const got = ramp(rnnBuild(kind, flags)).run(rseq());
+          return part === "출력" ? got.output
+            : part === "상태" ? got.hidden : got.cell;
+        });
+      }
+      out.set(`seq::${kind}(${label})/state_dict 열쇠`,
+        () => Object.keys(rnnBuild(kind, flags).stateDict()).sort().join(" "));
+    }
+  }
+  // The message alone, not the type: Python answers with `ValueError` and JavaScript
+  // with `RangeError`, and neither is the other's mistake.
+  const rnnRefuses = (build: () => unknown): string => {
+    try {
+      build();
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return "(거절 없음)";
+  };
+  // `RNN` and `GRU` have no `projSize` seat here, for the reason their classes give,
+  // so the refusal is asked through the base — which is where torch raises it too.
+  out.set("seq::거절::RNN(proj_size)",
+    () => rnnRefuses(() => new nn.RNNBase("RNN", 3, 4, 1, true, false, 0, false, 2)));
+  out.set("seq::거절::GRU(proj_size)",
+    () => rnnRefuses(() => new nn.RNNBase("GRU", 3, 4, 1, true, false, 0, false, 2)));
+  out.set("seq::거절::LSTM(proj_size=hidden)",
+    () => rnnRefuses(() => new nn.LSTM(3, 4, 1, true, false, 0, false, 4)));
+  out.set("seq::거절::LSTM(proj_size<0)",
+    () => rnnRefuses(() => new nn.LSTM(3, 4, 1, true, false, 0, false, -1)));
+
   const encoderLayer = (normFirst: boolean): Tensor => {
     const m = new nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, true, normFirst);
     m.eval();

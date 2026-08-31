@@ -292,7 +292,13 @@ CEILINGS = {
     # tags (`2x2 블록`, `교환`, `6x6 열 교환`), `(특이)` and `(영행렬)`, and the
     # `=둘 다 거절` with the two verdict strings it returns. All keys or values in
     # `golden.json`.
-    "borch-ts/test": 4260,
+    # 4260 → 4283. Twenty-three, in the recurrent flags' case names — the labels
+    # `양방향`, `2층`, `2층양방향`, `편향없음` and `dropout 은 평가에서 항등`, the parts
+    # `출력`/`상태`/`셀`, `state_dict 열쇠` and the `(거절 없음)` a refusal case returns
+    # when nothing was refused. Every one is a key or a value in `golden.json`, so
+    # both sides have to spell it the same; the `proj_size` and `relu` labels beside
+    # them are ASCII and add nothing.
+    "borch-ts/test": 4283,
 }
 
 

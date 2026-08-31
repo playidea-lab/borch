@@ -9292,6 +9292,95 @@ def train_cases(inp=None):
         mod.load_state_dict(filled)
         return mod
 
+    # ── the recurrent flags, refused on all three sides until today ───────────
+    #
+    # `num_layers`, `bias`, `dropout`, `bidirectional` and `proj_size` were each
+    # refused with the same reason on each side: the layer builds one unidirectional
+    # biased pass, so anything else has nowhere to go. That was true of the code and
+    # not of the problem — the reverse direction is the same recurrence over `flip(0)`
+    # turned back round, a stack is the loop run again, and the projection is one more
+    # matrix after `o · tanh(c)`. No kernel was missing on any side.
+    #
+    # **The weights come from each parameter's own shape**, so nothing crosses the
+    # boundary and the two sides agree only if their `state_dict` **keys and shapes**
+    # do — which is half of what these ask. A reverse direction whose parameters are
+    # not named `…_reverse` loads no checkpoint, and a second layer sized from
+    # `hidden_size` rather than from what the first one emits multiplies nothing.
+    _RNN_SEQ = np.arange(5 * 2 * 3, dtype=np.float32).reshape(5, 2, 3) * 0.1 - 1.0
+
+    def _rnn(L, kind, **kw):
+        mod = getattr(L.nn, kind)(3, 4, **kw)
+        mod.eval()
+        return _ramp(L, mod)
+
+    def _rnn_part(L, kind, part, **kw):
+        got = _rnn(L, kind, **kw)(L.tensor(_RNN_SEQ))
+        if part == "출력":
+            return got[0]
+        state = got[1]
+        if kind != "LSTM":
+            return state
+        # The LSTM's two halves come back at **different widths** under a projection —
+        # `h` is narrowed and `c` keeps the full hidden size — so both are asked.
+        return state[0] if part == "상태" else state[1]
+
+    _RNN_FLAGS = (
+        ("양방향", {"bidirectional": True}, ("RNN", "LSTM", "GRU")),
+        ("2층", {"num_layers": 2}, ("RNN", "LSTM", "GRU")),
+        ("2층양방향", {"num_layers": 2, "bidirectional": True},
+         ("RNN", "LSTM", "GRU")),
+        ("편향없음", {"bias": False}, ("RNN", "LSTM", "GRU")),
+        # **`eval` is what makes this deterministic**, and it is also the whole claim:
+        # dropout goes between the layers while training and is the identity after
+        # `eval()`. Asked in training the answer is a coin toss and no golden can hold
+        # it; asked here, a layer that drops in eval as well parts immediately.
+        ("dropout 은 평가에서 항등", {"num_layers": 2, "dropout": 0.5},
+         ("RNN", "LSTM", "GRU")),
+        ("proj_size", {"proj_size": 2}, ("LSTM",)),
+        ("proj_size 와 양방향",
+         {"num_layers": 2, "proj_size": 2, "bidirectional": True}, ("LSTM",)),
+        # `relu` was refused on the browser side with *this side computes tanh*, and
+        # the unary table had `relu` all along.
+        ("relu", {"nonlinearity": "relu"}, ("RNN",)),
+    )
+    for _lab, _kw, _kinds in _RNN_FLAGS:
+        for _k in _kinds:
+            for _part in ("출력", "상태") + (("셀",) if _k == "LSTM" else ()):
+                cases.append((f"seq::{_k}({_lab})/{_part}",
+                              lambda L, k=_k, p=_part, w=_kw: _rnn_part(L, k, p, **w)))
+
+    # The names a checkpoint crosses on. `_ramp` above already loads by them, so a
+    # missing `_reverse` would fail there too — but it would fail as *the wrong
+    # answer*, and this row says which name is missing.
+    for _lab, _kw, _kinds in _RNN_FLAGS:
+        for _k in _kinds:
+            cases.append((
+                f"seq::{_k}({_lab})/state_dict 열쇠",
+                lambda L, k=_k, w=_kw: " ".join(
+                    sorted(getattr(L.nn, k)(3, 4, **w).state_dict()))))
+
+    def _rnn_refuses(L, kind, **kw):
+        """The wording, which is torch's — four refusals that stay refusals.
+
+        **The message alone and not the exception's type.** Python answers these with
+        `ValueError` and JavaScript with `RangeError`, and neither is the other's
+        mistake — the two languages name the same refusal differently. Freezing the
+        type would make the browser side fail at a place where it agrees.
+        """
+        try:
+            getattr(L.nn, kind)(3, 4, **kw)
+        except Exception as exc:                                    # noqa: BLE001
+            return str(exc)
+        return "(거절 없음)"
+
+    for _name, _k, _kw in (
+            ("RNN(proj_size)", "RNN", {"proj_size": 2}),
+            ("GRU(proj_size)", "GRU", {"proj_size": 2}),
+            ("LSTM(proj_size=hidden)", "LSTM", {"proj_size": 4}),
+            ("LSTM(proj_size<0)", "LSTM", {"proj_size": -1})):
+        cases.append((f"seq::거절::{_name}",
+                      lambda L, k=_k, w=_kw: _rnn_refuses(L, k, **w)))
+
     _tseq = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4) * 0.1 - 1.0
 
     def _encoder_layer(L, norm_first=False):

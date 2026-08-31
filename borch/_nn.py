@@ -3,6 +3,7 @@
 import collections as _collections
 import inspect as _inspect
 import math as _math
+import warnings as _warnings
 
 import numpy as _np
 
@@ -1314,21 +1315,35 @@ class _RNNBase(Module):
         torch does too — the string is not decoration, it is what tells the base
         class which recurrence it is building.
 
-        `dropout`, `bidirectional` and `proj_size` are **refused when asked for**
-        rather than accepted and ignored. A bidirectional layer that silently runs
-        one direction returns a plausible number of the wrong shape's meaning.
+        `dropout`, `bidirectional` and `proj_size` were **refused when asked for**
+        rather than accepted and ignored, on the ground that a bidirectional layer
+        silently running one direction returns a plausible number of the wrong
+        shape's meaning. That was the right refusal and all three are answered now —
+        the reverse direction is the same recurrence over `flip(0)`, flipped back,
+        so nothing new is computed and only the bookkeeping is.
         """
         super().__init__()
         _no_device_dtype(type(self).__name__, device, dtype)
         if mode not in self.MODES:
             raise ValueError(f"Unrecognized RNN mode: {mode}")
         self.mode = mode
-        if dropout:
-            _unsupported(f"{type(self).__name__}(dropout={dropout})")
-        if bidirectional:
-            _unsupported(f"{type(self).__name__}(bidirectional=True)")
-        if proj_size:
-            _unsupported(f"{type(self).__name__}(proj_size={proj_size})")
+        # torch's own two messages, and its own order — negative before too-large, so
+        # `proj_size=-1` says "positive integer or zero" rather than "smaller than
+        # hidden_size", which is true of it as well and is not what torch says.
+        if proj_size < 0:
+            raise ValueError("proj_size should be a positive integer or zero "
+                             "to disable projections")
+        if proj_size >= hidden_size:
+            raise ValueError("proj_size has to be smaller than hidden_size")
+        # **The warning is torch's and it fires on the useless setting.** `dropout`
+        # goes *between* layers, so one layer has nowhere to put it; torch takes the
+        # argument, warns, and then never uses it.
+        if dropout and num_layers == 1:
+            _warnings.warn(
+                "dropout option adds dropout after all but last recurrent layer, "
+                "so non-zero dropout expects num_layers greater than 1, but got "
+                f"dropout={dropout} and num_layers={num_layers}",
+                UserWarning, stacklevel=3)
         self.dropout = dropout
         self.bidirectional = bidirectional
         self.proj_size = proj_size
@@ -1340,25 +1355,50 @@ class _RNNBase(Module):
 
         bound = 1.0 / _math.sqrt(hidden_size)
         g = self.gates
+        dirs = 2 if bidirectional else 1
+        # **What the next layer receives is not `hidden_size`.** With a projection it
+        # is `proj_size`, and with both directions it is twice that — measured, a
+        # two-layer bidirectional LSTM with `proj_size=2` has `weight_ih_l1` at
+        # (16, 4). Sizing the second layer from `hidden_size` builds a layer that
+        # loads no checkpoint and multiplies nothing.
+        carried = (proj_size or hidden_size) * dirs
         for layer in range(num_layers):
-            in_size = input_size if layer == 0 else hidden_size
-            setattr(self, f"weight_ih_l{layer}", Parameter(
-                _rng.uniform(-bound, bound, (g * hidden_size, in_size)).astype(_DEFAULT_DTYPE)))
-            setattr(self, f"weight_hh_l{layer}", Parameter(
-                _rng.uniform(-bound, bound, (g * hidden_size, hidden_size)).astype(_DEFAULT_DTYPE)))
-            if bias:
-                setattr(self, f"bias_ih_l{layer}", Parameter(
-                    _rng.uniform(-bound, bound, g * hidden_size).astype(_DEFAULT_DTYPE)))
-                setattr(self, f"bias_hh_l{layer}", Parameter(
-                    _rng.uniform(-bound, bound, g * hidden_size).astype(_DEFAULT_DTYPE)))
+            in_size = input_size if layer == 0 else carried
+            for d in range(dirs):
+                suffix = f"_l{layer}" + ("_reverse" if d else "")
+                setattr(self, "weight_ih" + suffix, Parameter(
+                    _rng.uniform(-bound, bound,
+                                 (g * hidden_size, in_size)).astype(_DEFAULT_DTYPE)))
+                setattr(self, "weight_hh" + suffix, Parameter(
+                    _rng.uniform(-bound, bound,
+                                 (g * hidden_size,
+                                  proj_size or hidden_size)).astype(_DEFAULT_DTYPE)))
+                if bias:
+                    setattr(self, "bias_ih" + suffix, Parameter(
+                        _rng.uniform(-bound, bound, g * hidden_size).astype(_DEFAULT_DTYPE)))
+                    setattr(self, "bias_hh" + suffix, Parameter(
+                        _rng.uniform(-bound, bound, g * hidden_size).astype(_DEFAULT_DTYPE)))
+                if proj_size:
+                    # `weight_hr` is (proj_size, hidden_size) — it comes **after** the
+                    # cell has produced its full-width `h`, and shrinks it.
+                    setattr(self, "weight_hr" + suffix, Parameter(
+                        _rng.uniform(-bound, bound,
+                                     (proj_size, hidden_size)).astype(_DEFAULT_DTYPE)))
 
-    def _weights(self, layer):
-        return (getattr(self, f"weight_ih_l{layer}"), getattr(self, f"weight_hh_l{layer}"),
-                getattr(self, f"bias_ih_l{layer}", None), getattr(self, f"bias_hh_l{layer}", None))
+    @property
+    def _dirs(self):
+        return 2 if self.bidirectional else 1
+
+    def _weights(self, layer, direction=0):
+        suffix = f"_l{layer}" + ("_reverse" if direction else "")
+        return (getattr(self, "weight_ih" + suffix), getattr(self, "weight_hh" + suffix),
+                getattr(self, "bias_ih" + suffix, None),
+                getattr(self, "bias_hh" + suffix, None),
+                getattr(self, "weight_hr" + suffix, None))
 
     def _run(self, x, init):
-        """(output, a list of per-layer final states). init is the function
-        supplying the per-layer initial state."""
+        """(output, a list of per-direction final states). `init` is the function
+        supplying the initial state for row `layer * directions + direction`."""
         if self.batch_first:
             x = x.transpose(0, 1)                       # (N,T,I) → (T,N,I)
         T, N = x.data.shape[0], x.data.shape[1]
@@ -1366,45 +1406,89 @@ class _RNNBase(Module):
         layer_input = x
         finals = []
         for layer in range(self.num_layers):
-            w_ih, w_hh, b_ih, b_hh = self._weights(layer)
-            pre = layer_input @ w_ih.transpose(0, 1)     # (T, N, gates*H) — independent of h
-            if self.has_bias:
-                pre = pre + b_ih
-            state = init(layer, N)
-            steps = []
-            for t in range(T):
-                state, out = self._step(pre[t], state, w_hh, b_hh)
-                steps.append(out)
-            layer_input = stack(steps)
-            finals.append(state)
+            pieces = []
+            for d in range(self._dirs):
+                w_ih, w_hh, b_ih, b_hh, w_hr = self._weights(layer, d)
+                # **The reverse direction is the same recurrence read backwards**, and
+                # its output is turned round again before the two are joined. Measured
+                # against torch by copying a bidirectional layer's two halves into two
+                # plain ones: `cat([fwd(x), rev(flip(x)).flip()], -1)` is the answer.
+                seq = layer_input if d == 0 else layer_input.flip(0)
+                pre = seq @ w_ih.transpose(0, 1)         # (T, N, gates*H) — no h in it
+                if self.has_bias:
+                    pre = pre + b_ih
+                state = init(layer * self._dirs + d, N)
+                steps = []
+                for t in range(T):
+                    state, out = self._step(pre[t], state, w_hh, b_hh, w_hr)
+                    steps.append(out)
+                piece = stack(steps)
+                pieces.append(piece if d == 0 else piece.flip(0))
+                finals.append(state)
+            # The two halves sit side by side in the feature axis, so `hn` for a
+            # direction is the *last step of that direction's own run* — the reverse
+            # one being step 0 of the sequence as given.
+            layer_input = pieces[0] if len(pieces) == 1 else cat(pieces, dim=-1)
+            if self.dropout and self.training and layer < self.num_layers - 1:
+                # **Between the layers and not after the last one.** Applied after the
+                # last as well, the layer's output is randomly zeroed on the way out
+                # and evaluation and training disagree about the answer's scale.
+                layer_input = dropout(layer_input, self.dropout, True)
 
         out = layer_input
         if self.batch_first:
             out = out.transpose(0, 1)
         return out, finals
 
-    def _step(self, pre_t, state, w_hh, b_hh):
+    def _step(self, pre_t, state, w_hh, b_hh, w_hr):
         raise NotImplementedError
 
     def __repr__(self):
+        # torch's order, one flag at a time. **`bias=False` was missing** — the layer
+        # printed `RNN(3, 4)` whether or not it had biases, which is the one thing a
+        # reader checks a `print(model)` for.
+        #
+        # **`proj_size` is second, not last.** It sits directly after `hidden_size`,
+        # ahead of `num_layers` — which is invisible when it is the only flag set, and
+        # the first version of this line put it at the end for exactly that reason.
+        # Only a layer carrying several at once can tell the two orders apart.
         return (f"{type(self).__name__}({self.input_size}, {self.hidden_size}"
+                + (f", proj_size={self.proj_size}" if self.proj_size else "")
                 + (f", num_layers={self.num_layers}" if self.num_layers > 1 else "")
-                + (", batch_first=True" if self.batch_first else "") + ")")
+                + ("" if self.has_bias else ", bias=False")
+                + (", batch_first=True" if self.batch_first else "")
+                + (f", dropout={self.dropout}" if self.dropout else "")
+                + (", bidirectional=True" if self.bidirectional else "") + ")")
 
 
 class RNN(_RNNBase):
     """h_t = tanh(W_ih·x_t + b_ih + W_hh·h_{t-1} + b_hh) — what chapter 29
     teaches."""
 
-    def __init__(self, *a, nonlinearity="tanh", **k):
+    def __init__(self, *a, nonlinearity=None, **k):
+        # **torch's fourth positional is `nonlinearity`, and it was keyword-only
+        # here.** Both classes are `(*args, **kwargs)`, so no signature check can see
+        # the difference — `RNN(3, 4, 2, "relu")` is torch's own spelling and it
+        # arrived in `bias`, where a non-empty string is true, so the layer built with
+        # biases and computed `tanh`. Neither the value nor the shape said anything.
+        if nonlinearity is None and len(a) > 3:
+            nonlinearity, a = a[3], a[:3] + a[4:]
+        nonlinearity = nonlinearity or "tanh"
         if nonlinearity not in ("tanh", "relu"):
             raise ValueError("nonlinearity must be 'tanh' or 'relu'.")
+        # **`proj_size` is an LSTM argument that lives on the base class.** torch
+        # takes it here and refuses it, with a message naming the two classes that
+        # cannot have it — the projection shrinks `h` and only the LSTM has an `h`
+        # separate from its cell state to shrink.
+        if k.get("proj_size"):
+            raise ValueError("proj_size argument is only supported for LSTM, "
+                             "not RNN or GRU")
         self.nonlinearity = nonlinearity
         # The mode carries the activation, which is why `RNN_TANH` and `RNN_RELU`
         # are two of torch's four modes and one class here.
         super().__init__(f"RNN_{nonlinearity.upper()}", *a, **k)
 
-    def _step(self, pre_t, h, w_hh, b_hh):
+    def _step(self, pre_t, h, w_hh, b_hh, w_hr=None):
         act = tanh if self.nonlinearity == "tanh" else relu
         z = pre_t + h @ w_hh.transpose(0, 1)
         if self.has_bias:
@@ -1414,9 +1498,10 @@ class RNN(_RNNBase):
 
     def forward(self, x, hx=None):
         if hx is None:
-            hx = zeros(self.num_layers, x.data.shape[1 if not self.batch_first else 0],
+            hx = zeros(self.num_layers * self._dirs,
+                       x.data.shape[0 if self.batch_first else 1],
                        self.hidden_size)
-        out, finals = self._run(x, lambda layer, n: hx[layer])
+        out, finals = self._run(x, lambda i, n: hx[i])
         return out, stack(finals)
 
 
@@ -1437,7 +1522,7 @@ class LSTM(_RNNBase):
     def __init__(self, *a, **k):
         super().__init__("LSTM", *a, **k)
 
-    def _step(self, pre_t, state, w_hh, b_hh):
+    def _step(self, pre_t, state, w_hh, b_hh, w_hr=None):
         h, c = state
         z = pre_t + h @ w_hh.transpose(0, 1)
         if self.has_bias:
@@ -1449,15 +1534,22 @@ class LSTM(_RNNBase):
         o = sigmoid(z[:, 3 * H:4 * H])
         c = f * c + i * g
         h = o * tanh(c)
+        if w_hr is not None:
+            # **The projection is the last thing, after `o · tanh(c)`.** `c` keeps its
+            # full width and only `h` is narrowed, which is why the two halves of the
+            # state come back at different widths — measured, `proj_size=2` on a
+            # hidden of 4 gives `h` at (1, 2, 2) and `c` at (1, 2, 4).
+            h = h @ w_hr.transpose(0, 1)
         return (h, c), h
 
     def forward(self, x, hx=None):
         batch = x.data.shape[0 if self.batch_first else 1]
+        rows = self.num_layers * self._dirs
         if hx is None:
-            zero = zeros(self.num_layers, batch, self.hidden_size)
-            hx = (zero, zeros(self.num_layers, batch, self.hidden_size))
+            hx = (zeros(rows, batch, self.proj_size or self.hidden_size),
+                  zeros(rows, batch, self.hidden_size))
         h0, c0 = hx
-        out, finals = self._run(x, lambda layer, n: (h0[layer], c0[layer]))
+        out, finals = self._run(x, lambda i, n: (h0[i], c0[i]))
         return out, (stack([h for h, _ in finals]), stack([c for _, c in finals]))
 
 
@@ -1475,9 +1567,13 @@ class GRU(_RNNBase):
     gates = 3
 
     def __init__(self, *a, **k):
+        # The same refusal as `RNN`'s, and torch's message names both classes.
+        if k.get("proj_size"):
+            raise ValueError("proj_size argument is only supported for LSTM, "
+                             "not RNN or GRU")
         super().__init__("GRU", *a, **k)
 
-    def _step(self, pre_t, h, w_hh, b_hh):
+    def _step(self, pre_t, h, w_hh, b_hh, w_hr=None):
         H = self.hidden_size
         hh = h @ w_hh.transpose(0, 1)
         if self.has_bias:
@@ -1490,9 +1586,10 @@ class GRU(_RNNBase):
 
     def forward(self, x, hx=None):
         if hx is None:
-            hx = zeros(self.num_layers, x.data.shape[0 if self.batch_first else 1],
+            hx = zeros(self.num_layers * self._dirs,
+                       x.data.shape[0 if self.batch_first else 1],
                        self.hidden_size)
-        out, finals = self._run(x, lambda layer, n: hx[layer])
+        out, finals = self._run(x, lambda i, n: hx[i])
         return out, stack(finals)
 
 

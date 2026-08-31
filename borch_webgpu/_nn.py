@@ -3122,8 +3122,7 @@ class _Recurrent(Module):
 
 
 def _recurrent(kind):
-    def make(input_size, hidden_size, num_layers=1, bias=True, batch_first=False,
-             dropout=0.0, bidirectional=False, proj_size=0, device=None, dtype=None):
+    def make(input_size, hidden_size, num_layers=1, *rest, **kw):
         """torch's ten. **This took two and swallowed the rest.**
 
         `GRU(3, 4, batch_first=True)` set nothing at all here and said nothing —
@@ -3131,23 +3130,50 @@ def _recurrent(kind):
         while the caller had written `(batch, length, …)`. The golden agreed only
         because every case passes the default.
 
-        Six are refused rather than implemented: borch.ts's `RNNBase` builds one
-        unidirectional layer with a bias, so anything else has nowhere to go. The
-        refusal names the argument, which is the difference between a feature that is
-        absent and an answer that is wrong.
+        **Five were refused and are forwarded now.** The reason was that borch.ts's
+        `RNNBase` builds one unidirectional biased layer, so anything else had nowhere
+        to go — true of that class, and that class is what changed.
+
+        **The fourth positional is not the same argument on all three.** torch's `RNN`
+        puts `nonlinearity` there and the other two put `bias`, which is why the tail
+        is read per kind rather than by one signature: written as one, `RNN(3, 4, 2,
+        "relu")` lands the string in `bias`, where it is true, and the layer computes
+        `tanh` with biases and says nothing.
         """
         from borch._base import _unsupported
 
-        for what, given in (("device", device), ("dtype", dtype)):
-            if given is not None:
+        names = (("nonlinearity", "bias", "batch_first", "dropout", "bidirectional",
+                  "device", "dtype") if kind == "RNN" else
+                 ("bias", "batch_first", "dropout", "bidirectional", "proj_size",
+                  "device", "dtype"))
+        got = dict(zip(names, rest))
+        clash = [n for n in got if n in kw]
+        if clash:
+            raise TypeError(f"{kind}() got multiple values for argument '{clash[0]}'")
+        got.update(kw)
+        # **The three validations are torch's and they are checked here rather than
+        # left to borch.ts.** Crossing the bridge turns a thrown `RangeError` into
+        # something with a different type and a decorated message, and the wording is
+        # what the cases freeze.
+        if kind != "LSTM" and got.get("proj_size"):
+            raise ValueError("proj_size argument is only supported for LSTM, "
+                             "not RNN or GRU")
+        if got.get("proj_size", 0) < 0:
+            raise ValueError("proj_size should be a positive integer or zero "
+                             "to disable projections")
+        if got.get("proj_size", 0) >= hidden_size:
+            raise ValueError("proj_size has to be smaller than hidden_size")
+        for what in ("device", "dtype"):
+            if got.get(what) is not None:
                 _unsupported(f"{kind}({what}=…) — one device, one precision")
-        for what, given, wanted in (("num_layers", num_layers, 1),
-                                    ("bias", bias, True),
-                                    ("dropout", dropout, 0.0),
-                                    ("bidirectional", bidirectional, False),
-                                    ("proj_size", proj_size, 0)):
-            if given != wanted:
-                _unsupported(f"{kind}({what}={given!r})")
+        bias = got.get("bias", True)
+        batch_first = got.get("batch_first", False)
+        dropout = got.get("dropout", 0.0)
+        bidirectional = got.get("bidirectional", False)
+        proj_size = got.get("proj_size", 0)
+        nonlinearity = got.get("nonlinearity", "tanh")
+        if nonlinearity not in ("tanh", "relu"):
+            raise ValueError("nonlinearity must be 'tanh' or 'relu'.")
         inp, hid = input_size, hidden_size
         # **`RNNBase` is the class's name now** — torch's, where borch.ts had
         # `Recurrent` alone. The alias still resolves at runtime, and
@@ -3160,7 +3186,15 @@ def _recurrent(kind):
         # recurrent case failed at once — six of six under one prefix, which is the
         # shape the runner calls *one cause rather than many*. The signature axis
         # could not have said so: it reads declarations, and this is a call.
-        return _Recurrent(_ts.nn.RNNBase.new(kind, inp, hid), batch_first)
+        # **`nonlinearity` is set after the fact and not passed**, because torch's
+        # `RNNBase` has no such seat — it carries the activation in the mode, and
+        # borch.ts follows. Given as a twelfth argument the class was one longer than
+        # torch's and the signature axis said so.
+        built = _ts.nn.RNNBase.new(kind, inp, hid, int(num_layers), bool(bias),
+                                   False, float(dropout), bool(bidirectional),
+                                   int(proj_size))
+        built.nonlinearity = nonlinearity
+        return _Recurrent(built, batch_first)
     return make
 
 

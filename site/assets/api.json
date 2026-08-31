@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 373
+  "missing": 374
  },
  "modules": [
   {
@@ -11586,7 +11586,7 @@
      "kind": "class",
      "name": "RNNBase",
      "signature": "export declare class RNNBase extends Module",
-     "doc": "What `RNN`, `LSTM` and `GRU` share — the weights and the time loop.\n\n**torch calls this `RNNBase`**, and the name was `Recurrent` alone, so the name\naxis counted the base class as a feature borch.ts does not have while `RNN\nextends` it two hundred lines down. `RNNBase` is the exported name now and\n`Recurrent` stays beside it, because `src/rnn.ts` and the golden's own comments\nrefer to it by that name and a rename that reaches into prose is how a comment\nstarts lying.",
+     "doc": "",
      "members": [
       {
        "name": "mode",
@@ -11599,39 +11599,58 @@
        "doc": ""
       },
       {
+       "name": "numLayers",
+       "signature": "readonly numLayers: number",
+       "doc": "",
+       "torch": "num_layers"
+      },
+      {
        "name": "batchFirst",
        "signature": "readonly batchFirst: boolean",
        "doc": "",
        "torch": "batch_first"
       },
       {
-       "name": "weightIh",
-       "signature": "readonly weightIh: Tensor",
-       "doc": "",
-       "torch": "weight_ih"
+       "name": "dropout",
+       "signature": "readonly dropout: number",
+       "doc": ""
       },
       {
-       "name": "weightHh",
-       "signature": "readonly weightHh: Tensor",
-       "doc": "",
-       "torch": "weight_hh"
+       "name": "bidirectional",
+       "signature": "readonly bidirectional: boolean",
+       "doc": ""
       },
       {
-       "name": "biasIh",
-       "signature": "readonly biasIh: Tensor",
+       "name": "projSize",
+       "signature": "readonly projSize: number",
        "doc": "",
-       "torch": "bias_ih"
+       "torch": "proj_size"
       },
       {
-       "name": "biasHh",
-       "signature": "readonly biasHh: Tensor",
+       "name": "slabs",
+       "signature": "readonly slabs: RNNSlab[]",
+       "doc": "Indexed `layer * directions + direction`, which is torch's own row order."
+      },
+      {
+       "name": "directions",
+       "signature": "readonly directions: number",
+       "doc": ""
+      },
+      {
+       "name": "outWidth",
+       "signature": "readonly outWidth: number",
        "doc": "",
-       "torch": "bias_hh"
+       "torch": "out_width"
+      },
+      {
+       "name": "nonlinearity",
+       "signature": "nonlinearity: \"tanh\" | \"relu\"",
+       "doc": "**Not a constructor seat, because torch's `RNNBase` has none.** torch carries the\nactivation in the mode — `RNN_TANH` and `RNN_RELU` are two of its four — and\n`RNN` is the only subclass that takes the word. Adding an twelfth argument here\nmade this class one longer than torch's, which the signature axis reads as a tail\nthat does not line up; `RNN` sets the field after `super()` instead."
       },
       {
        "name": "constructor",
        "signature": "constructor(mode: RNNKind, inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean, dropout?: number, bidirectional?: boolean, projSize?: number, device?: null, dtype?: null)",
-       "doc": "**`mode` comes first, as it does in torch.** It used to come last, so\n`new RNNBase(10, 20, \"LSTM\")` here was `RNNBase(\"LSTM\", 10, 20)` there — and the\nrow said nothing, because a name torch has at one end and we have at the other\ncannot be lined up, which puts it in the bucket that reports no detail."
+       "doc": "**`mode` comes first, as it does in torch.** It used to come last, so\n`new RNNBase(10, 20, \"LSTM\")` here was `RNNBase(\"LSTM\", 10, 20)` there — and the\nrow said nothing, because a name torch has at one end and we have at the other\ncannot be lined up, which puts it in the bucket that reports no detail.\n\n**`numLayers`, `bias`, `bidirectional` and `projSize` were refused here** with\nthe reason that this base builds one unidirectional biased layer, so anything\nelse had nowhere to go. That was true of the code and not of the problem: a\nsecond direction is the same recurrence over `flip(0)` turned back round, a\nstack is the loop run again on the last layer's output, and the projection is one\nmore matrix after `o · tanh(c)`. None of it needed a kernel that was not here."
       },
       {
        "name": "ownParameters",
@@ -11663,43 +11682,43 @@
      "kind": "class",
      "name": "RNN",
      "signature": "export declare class RNN extends RNNBase",
-     "doc": "`torch.nn.RNN` — one layer.\n\n**`nonlinearity` sits fourth and `batchFirst` sixth, which is torch's order and not\n`LSTM`'s.** This is the one of the three that takes an extra argument, so the same\nflag lives at a different index here than next door; writing all three alike would\nput `batchFirst` one seat early on exactly this class.",
+     "doc": "`torch.nn.RNN`, stacked as deep as `numLayers` says.\n\n**`nonlinearity` sits fourth and `batchFirst` sixth, which is torch's order and not\n`LSTM`'s.** This is the one of the three that takes an extra argument, so the same\nflag lives at a different index here than next door; writing all three alike would\nput `batchFirst` one seat early on exactly this class — and lands a string in\n`bias`, where it is true, so the layer builds with biases and computes `tanh`.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, nonlinearity?: \"tanh\" | \"relu\", bias?: boolean, batchFirst?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, nonlinearity?: \"tanh\" | \"relu\", bias?: boolean, batchFirst?: boolean, dropout?: number, bidirectional?: boolean)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.RNN` — 한 층.\n\n**`nonlinearity` 가 넷째, `batchFirst` 가 여섯째** — torch 의 순서이지 `LSTM` 의 순서가 아니다. 셋 중 이것만 인자가 하나 더 있어서 같은 플래그가 옆집과 다른 자리에 산다. 셋을 똑같이 쓰면 바로 이 클래스에서 `batchFirst` 가 한 칸 앞으로 간다."
+     "doc_ko": "`torch.nn.RNN` — `numLayers` 가 말하는 만큼 쌓는다.\n\n**`nonlinearity` 가 넷째, `batchFirst` 가 여섯째** — torch 의 순서이지 `LSTM` 의 순서가 아니다. 셋 중 이것만 인자가 하나 더 있어서 같은 플래그가 옆집과 다른 자리에 산다. 셋을 똑같이 쓰면 바로 이 클래스에서 `batchFirst` 가 한 칸 앞으로 가고, 문자열이 `bias` 에 앉는다 — 거기서는 참이므로 층은 편향을 달고 `tanh` 를 계산한다."
     },
     {
      "kind": "class",
      "name": "LSTM",
      "signature": "export declare class LSTM extends RNNBase",
-     "doc": "`torch.nn.LSTM` — one layer. It carries two states, so `cell` comes back alongside\n`hidden`.",
+     "doc": "`torch.nn.LSTM`. It carries two states, so `cell` comes back alongside `hidden`,\nand it is the one of the three that takes `projSize`.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean, dropout?: number, bidirectional?: boolean, projSize?: number)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.LSTM` — 한 층. 상태를 둘 나르므로 `cell` 이 `hidden` 과 함께 돌아온다."
+     "doc_ko": "`torch.nn.LSTM`. 상태를 둘 나르므로 `cell` 이 `hidden` 과 함께 돌아오고, 셋 중 `projSize` 를 받는 것은 이것뿐이다."
     },
     {
      "kind": "class",
      "name": "GRU",
      "signature": "export declare class GRU extends RNNBase",
-     "doc": "`torch.nn.GRU` — one layer.",
+     "doc": "`torch.nn.GRU`.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean, dropout?: number, bidirectional?: boolean)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.GRU` — 한 층."
+     "doc_ko": "`torch.nn.GRU`."
     },
     {
      "kind": "function",
@@ -12087,7 +12106,7 @@
      ]
     }
    ],
-   "count": 818,
+   "count": 822,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -20317,5 +20336,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2753
+ "total": 2757
 }

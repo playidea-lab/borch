@@ -5276,91 +5276,125 @@ export type RNNKind = "RNN" | "LSTM" | "GRU";
  * refer to it by that name and a rename that reaches into prose is how a comment
  * starts lying.
  */
+/** One layer in one direction. `hr` is present only under a projection. */
+interface RNNSlab {
+  ih: Tensor;
+  hh: Tensor;
+  bih?: Tensor;
+  bhh?: Tensor;
+  hr?: Tensor;
+}
+
 export class RNNBase extends Module {
-  readonly weightIh: Tensor;
-  readonly weightHh: Tensor;
-  readonly biasIh: Tensor;
-  readonly biasHh: Tensor;
+  /** Indexed `layer * directions + direction`, which is torch's own row order. */
+  readonly slabs: RNNSlab[] = [];
+  readonly directions: number;
+  readonly outWidth: number;
+  /**
+   * **Not a constructor seat, because torch's `RNNBase` has none.** torch carries the
+   * activation in the mode — `RNN_TANH` and `RNN_RELU` are two of its four — and
+   * `RNN` is the only subclass that takes the word. Adding an twelfth argument here
+   * made this class one longer than torch's, which the signature axis reads as a tail
+   * that does not line up; `RNN` sets the field after `super()` instead.
+   */
+  nonlinearity: "tanh" | "relu" = "tanh";
 
   /**
    * **`mode` comes first, as it does in torch.** It used to come last, so
    * `new RNNBase(10, 20, "LSTM")` here was `RNNBase("LSTM", 10, 20)` there — and the
    * row said nothing, because a name torch has at one end and we have at the other
    * cannot be lined up, which puts it in the bucket that reports no detail.
+   *
+   * **`numLayers`, `bias`, `bidirectional` and `projSize` were refused here** with
+   * the reason that this base builds one unidirectional biased layer, so anything
+   * else had nowhere to go. That was true of the code and not of the problem: a
+   * second direction is the same recurrence over `flip(0)` turned back round, a
+   * stack is the loop run again on the last layer's output, and the projection is one
+   * more matrix after `o · tanh(c)`. None of it needed a kernel that was not here.
    */
   constructor(
     readonly mode: RNNKind,
     inputSize: number,
     readonly hidden: number,
-    numLayers = 1,
+    readonly numLayers = 1,
     bias = true,
     readonly batchFirst = false,
-    dropout = 0,
-    bidirectional = false,
-    projSize = 0,
+    readonly dropout = 0,
+    readonly bidirectional = false,
+    readonly projSize = 0,
     device?: null,
     dtype?: null,
   ) {
     super();
     refuseDeviceDtype("RNNBase", device, dtype);
-    // **The three after `batchFirst` are a trailing tail, and a tail is not safe
-    // here.** Python raises on a surplus positional and JavaScript discards it, so
-    // `new RNNBase("LSTM", 2, 4, 1, true, false, 0, true)` built a one-directional net
-    // and said nothing about the `true`. Carried and refused for the same reason
-    // `numLayers` and `bias` below are: an argument that raises with its own name
-    // beats one the caller cannot tell went nowhere.
-    //
-    // `dropout` is the exception and it is torch's own: at one layer torch warns and
-    // ignores it, because the dropout goes *between* layers and there is no between.
-    // Refusing it would stop a line torch accepts.
-    if (dropout !== 0) {
+    // torch's own two messages, in torch's own order — negative before too-large, so
+    // that `projSize = -1` is told it must be positive rather than that it must be
+    // smaller than the hidden size, which is also true of it and is not what torch
+    // says.
+    if (projSize < 0) {
+      throw new RangeError(
+        "proj_size should be a positive integer or zero to disable projections");
+    }
+    if (projSize >= hidden) {
+      throw new RangeError("proj_size has to be smaller than hidden_size");
+    }
+    if (projSize !== 0 && mode !== "LSTM") {
+      throw new RangeError(
+        "proj_size argument is only supported for LSTM, not RNN or GRU");
+    }
+    // `dropout` goes *between* layers, so one layer has nowhere to put it. torch
+    // takes the argument, warns, and never uses it; refusing would stop a line torch
+    // accepts.
+    if (dropout !== 0 && numLayers === 1) {
       console.warn(
         "dropout option adds dropout after all but last recurrent layer, so "
         + `non-zero dropout expects num_layers greater than 1, but got dropout=${dropout} `
-        + "and num_layers=1");
+        + `and num_layers=${numLayers}`);
     }
-    if (bidirectional) {
-      throw new NotImplementedError(
-        "RNNBase(bidirectional=true) — a second set of weights and a reversed pass, "
-        + "neither of which is here");
-    }
-    if (projSize !== 0) {
-      throw new NotImplementedError(
-        `RNNBase(projSize=${projSize}) — the LSTM projection is not carried across`);
-    }
-    // **The seats between `hidden` and `batchFirst` exist so that `batchFirst` sits
-    // where torch has it.** Left out, a line copied from torch positionally puts
-    // `numLayers` into `batchFirst` and the net silently reads its axes the wrong way
-    // round — which is the defect `EmbeddingBag`'s `mode` comment, forty lines up,
-    // records having actually shipped.
-    //
-    // Accepted and refused rather than accepted and ignored. This base is one layer
-    // and always biased; taking the argument and dropping it is the shape the `**kw`
-    // sweep spent a day removing.
-    if (numLayers !== 1) {
-      throw new NotImplementedError(
-        `RNNBase(numLayers=${numLayers}) — this side stacks one layer`);
-    }
-    if (!bias) {
-      throw new NotImplementedError("RNNBase(bias=false) is not carried across");
-    }
+    this.directions = bidirectional ? 2 : 1;
+    this.outWidth = (projSize || hidden) * this.directions;
     const gates = mode === "LSTM" ? 4 : mode === "GRU" ? 3 : 1;
     const rows = hidden * gates;
-    // torch's recurrent nets take the bound from the hidden size — all four weights
-    // use the same bound.
+    // torch's recurrent nets take the bound from the hidden size — every weight,
+    // the projection included, uses the same one.
     const bound = 1 / Math.sqrt(Math.max(1, hidden));
-    this.weightIh = uniform([rows, inputSize], bound);
-    this.weightHh = uniform([rows, hidden], bound);
-    this.biasIh = uniform([rows], bound);
-    this.biasHh = uniform([rows], bound);
-    this.claim(this.weightIh, this.weightHh, this.biasIh, this.biasHh);
+    const carried = this.outWidth;
+    for (let layer = 0; layer < numLayers; layer++) {
+      // **What the next layer receives is not `hidden`.** Under a projection it is
+      // `projSize`, and with both directions twice that — measured against torch, a
+      // two-layer bidirectional LSTM with `projSize = 2` has `weight_ih_l1` at
+      // (16, 4). Sizing it from `hidden` builds a layer that loads no checkpoint.
+      const inSize = layer === 0 ? inputSize : carried;
+      for (let d = 0; d < this.directions; d++) {
+        const slab: RNNSlab = {
+          ih: uniform([rows, inSize], bound),
+          hh: uniform([rows, projSize || hidden], bound),
+        };
+        if (bias) {
+          slab.bih = uniform([rows], bound);
+          slab.bhh = uniform([rows], bound);
+        }
+        if (projSize) slab.hr = uniform([projSize, hidden], bound);
+        this.slabs.push(slab);
+        this.claim(...Object.values(slab));
+      }
+    }
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return {
-      weight_ih_l0: this.weightIh, weight_hh_l0: this.weightHh,
-      bias_ih_l0: this.biasIh, bias_hh_l0: this.biasHh,
-    };
+    const out: Record<string, Tensor> = {};
+    this.slabs.forEach((slab, i) => {
+      // torch's names: `weight_ih_l0`, and the reverse direction takes a `_reverse`
+      // tail. A checkpoint crosses on these and nothing else.
+      const tail = `_l${Math.floor(i / this.directions)}`
+        + (i % this.directions ? "_reverse" : "");
+      out["weight_ih" + tail] = slab.ih;
+      out["weight_hh" + tail] = slab.hh;
+      if (slab.bih) out["bias_ih" + tail] = slab.bih;
+      if (slab.bhh) out["bias_hh" + tail] = slab.bhh;
+      if (slab.hr) out["weight_hr" + tail] = slab.hr;
+    });
+    return out;
   }
 
   override forward(x: Tensor): Tensor {
@@ -5389,41 +5423,71 @@ export class RNNBase extends Module {
     const src = this.batchFirst ? x.swapaxes(0, 1) : x;
     const [steps = 0, batch = 0] = src.shape;
     const H = this.hidden;
-    let h = Tensor.zeros([batch, H]);
-    let c = Tensor.zeros([batch, H]);
-    const outs: Tensor[] = [];
-    for (let t = 0; t < steps; t++) {
-      const xt = src.select(0, t);
-      const gi = xt.linear(this.weightIh).add(this.biasIh);
-      const gh = h.linear(this.weightHh).add(this.biasHh);
-      if (this.mode === "RNN") {
-        h = gi.add(gh).unary("tanh");
-      } else if (this.mode === "LSTM") {
-        // torch's gate order is i, f, g, o. Wrong order makes the values plausibly wrong.
-        const g = gi.add(gh);
-        const i = slice(g, 0, H).unary("sigmoid");
-        const f = slice(g, 1, H).unary("sigmoid");
-        const gg = slice(g, 2, H).unary("tanh");
-        const o = slice(g, 3, H).unary("sigmoid");
-        c = f.mul(c).add(i.mul(gg));
-        h = o.mul(c.unary("tanh"));
-      } else {
-        // GRU adds only through r and z and **parts ways at the n gate** — the hidden
-        // side's share is multiplied by r and then added. Adding first and multiplying
-        // afterwards changes the value silently.
-        const r = slice(gi, 0, H).add(slice(gh, 0, H)).unary("sigmoid");
-        const z = slice(gi, 1, H).add(slice(gh, 1, H)).unary("sigmoid");
-        const n = slice(gi, 2, H).add(r.mul(slice(gh, 2, H))).unary("tanh");
-        const one = Tensor.full([], 1);
-        h = one.sub(z).mul(n).add(z.mul(h));
+    const finalH: Tensor[] = [];
+    const finalC: Tensor[] = [];
+    let layerInput = src;
+    for (let layer = 0; layer < this.numLayers; layer++) {
+      const halves: Tensor[] = [];
+      for (let d = 0; d < this.directions; d++) {
+        const slab = this.slabs[layer * this.directions + d]!;
+        // **The reverse direction is the same recurrence read backwards**, and its
+        // output is turned round again before the two are joined. Measured by copying
+        // a bidirectional layer's two halves into two plain ones:
+        // `cat([fwd(x), rev(flip(x)).flip()], -1)` is torch's answer exactly.
+        const seq = d === 0 ? layerInput : layerInput.flip(0);
+        let h = Tensor.zeros([batch, this.projSize || H]);
+        let c = Tensor.zeros([batch, H]);
+        const outs: Tensor[] = [];
+        for (let t = 0; t < steps; t++) {
+          const xt = seq.select(0, t);
+          let gi = xt.linear(slab.ih);
+          let gh = h.linear(slab.hh);
+          if (slab.bih) gi = gi.add(slab.bih);
+          if (slab.bhh) gh = gh.add(slab.bhh);
+          if (this.mode === "RNN") {
+            h = gi.add(gh).unary(this.nonlinearity === "relu" ? "relu" : "tanh");
+          } else if (this.mode === "LSTM") {
+            // torch's gate order is i, f, g, o. Wrong order makes the values plausibly wrong.
+            const g = gi.add(gh);
+            const i = slice(g, 0, H).unary("sigmoid");
+            const f = slice(g, 1, H).unary("sigmoid");
+            const gg = slice(g, 2, H).unary("tanh");
+            const o = slice(g, 3, H).unary("sigmoid");
+            c = f.mul(c).add(i.mul(gg));
+            h = o.mul(c.unary("tanh"));
+            // **The projection is the last thing, after `o · tanh(c)`.** `c` keeps its
+            // full width and only `h` narrows, which is why the two halves of the
+            // state come back at different widths.
+            if (slab.hr) h = h.linear(slab.hr);
+          } else {
+            // GRU adds only through r and z and **parts ways at the n gate** — the hidden
+            // side's share is multiplied by r and then added. Adding first and multiplying
+            // afterwards changes the value silently.
+            const r = slice(gi, 0, H).add(slice(gh, 0, H)).unary("sigmoid");
+            const z = slice(gi, 1, H).add(slice(gh, 1, H)).unary("sigmoid");
+            const n = slice(gi, 2, H).add(r.mul(slice(gh, 2, H))).unary("tanh");
+            const one = Tensor.full([], 1);
+            h = one.sub(z).mul(n).add(z.mul(h));
+          }
+          outs.push(h);
+        }
+        const piece = Tensor.stack(outs, 0);
+        halves.push(d === 0 ? piece : piece.flip(0));
+        finalH.push(h);
+        finalC.push(c);
       }
-      outs.push(h);
+      layerInput = halves.length === 1 ? halves[0]! : Tensor.cat(halves, -1);
+      // **Between the layers and not after the last one.** Applied after the last as
+      // well, the output is randomly zeroed on the way out and training and
+      // evaluation disagree about the answer's scale.
+      if (this.dropout && this.training && layer < this.numLayers - 1) {
+        layerInput = layerInput.dropout(this.dropout, true);
+      }
     }
-    const stacked = Tensor.stack(outs, 0);
     return {
-      output: this.batchFirst ? stacked.swapaxes(0, 1) : stacked,
-      hidden: h.reshape([1, batch, H]),
-      cell: c.reshape([1, batch, H]),
+      output: this.batchFirst ? layerInput.swapaxes(0, 1) : layerInput,
+      hidden: Tensor.stack(finalH, 0),
+      cell: Tensor.stack(finalC, 0),
     };
   }
 }
@@ -5438,10 +5502,11 @@ export class RNNBase extends Module {
  * was the name rather than the computation, and **a recurrent-network textbook opens
  * with `nn.LSTM(...)`**, so it stopped people on the first line.
  *
- * **It still does not take all of torch's arguments** — `bidirectional`, `dropout` and
- * `projSize` are absent, and the base here is one layer. Accepting an argument and not
- * using it is a lie, which is the line the core holds the same way at `InstanceNorm`'s
- * `track_running_stats`.
+ * **It takes all of torch's arguments now.** `numLayers`, `bias`, `dropout`,
+ * `bidirectional` and `projSize` were each refused with the reason that this base
+ * builds one unidirectional biased layer — true of the code, and the code was what
+ * changed. `RNN`'s `nonlinearity` went the same way: `relu` was refused on the ground
+ * that this side computes `tanh`, and the unary table has had `relu` all along.
  *
  * **`batchFirst` used to be absent under that same rule, and that was one step too
  * far.** It is not an argument this side cannot honour — it is a turn on the way in and
@@ -5464,41 +5529,47 @@ export const Recurrent = RNNBase;
 export type Recurrent = RNNBase;
 
 /**
- * `torch.nn.RNN` — one layer.
+ * `torch.nn.RNN`, stacked as deep as `numLayers` says.
  *
  * **`nonlinearity` sits fourth and `batchFirst` sixth, which is torch's order and not
  * `LSTM`'s.** This is the one of the three that takes an extra argument, so the same
  * flag lives at a different index here than next door; writing all three alike would
- * put `batchFirst` one seat early on exactly this class.
+ * put `batchFirst` one seat early on exactly this class — and lands a string in
+ * `bias`, where it is true, so the layer builds with biases and computes `tanh`.
  */
 export class RNN extends RNNBase {
   constructor(inputSize: number, hidden: number, numLayers = 1,
               nonlinearity: "tanh" | "relu" = "tanh", bias = true,
-              batchFirst = false) {
-    if (nonlinearity !== "tanh") {
-      throw new NotImplementedError(
-        `RNN(nonlinearity=${nonlinearity}) — this side computes tanh`);
-    }
-    super("RNN", inputSize, hidden, numLayers, bias, batchFirst);
+              batchFirst = false, dropout = 0, bidirectional = false) {
+    // **No `projSize` seat, because torch's `RNN` has none.** It is the base class's
+    // argument and torch refuses it here by name; offering the seat would be an
+    // argument torch does not have, and refusing it from a seat that exists is worse
+    // than not having one.
+    super("RNN", inputSize, hidden, numLayers, bias, batchFirst, dropout,
+          bidirectional);
+    this.nonlinearity = nonlinearity;
   }
 }
 
 /**
- * `torch.nn.LSTM` — one layer. It carries two states, so `cell` comes back alongside
- * `hidden`.
+ * `torch.nn.LSTM`. It carries two states, so `cell` comes back alongside `hidden`,
+ * and it is the one of the three that takes `projSize`.
  */
 export class LSTM extends RNNBase {
   constructor(inputSize: number, hidden: number, numLayers = 1, bias = true,
-              batchFirst = false) {
-    super("LSTM", inputSize, hidden, numLayers, bias, batchFirst);
+              batchFirst = false, dropout = 0, bidirectional = false,
+              projSize = 0) {
+    super("LSTM", inputSize, hidden, numLayers, bias, batchFirst, dropout,
+          bidirectional, projSize);
   }
 }
 
-/** `torch.nn.GRU` — one layer. */
+/** `torch.nn.GRU`. */
 export class GRU extends RNNBase {
   constructor(inputSize: number, hidden: number, numLayers = 1, bias = true,
-              batchFirst = false) {
-    super("GRU", inputSize, hidden, numLayers, bias, batchFirst);
+              batchFirst = false, dropout = 0, bidirectional = false) {
+    super("GRU", inputSize, hidden, numLayers, bias, batchFirst, dropout,
+          bidirectional);
   }
 }
 
