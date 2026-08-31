@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 380
+  "missing": 379
  },
  "modules": [
   {
@@ -13515,7 +13515,7 @@
      "kind": "class",
      "name": "LBFGS",
      "signature": "export declare class LBFGS extends Optimizer",
-     "doc": "A quasi-Newton method. **`step` takes a closure, and here it is async.**\n\n## Why this one is different\n\nEvery other optimizer walks one step from one set of gradients. This one loops\nup to `maxIter` times inside a single step, asking for the loss and the\ngradients again each time. **In torch too, this is the only name that takes a\nclosure** — the shape of the training loop is genuinely different.\n\nBeing async is a second mark on top of that. Each iteration **reads scalars to\nbranch** — the gradient threshold, the curvature `y·s`, the directional\nderivative `g·d`, the change in loss. They are all conditions of an `if` or a\n`break`, so they cannot stay on the GPU, and reading a value is async here.\n\n**There was one way to remove those reads, and the golden closed it.** Drop the\nearly termination and run a fixed `maxIter` and this becomes synchronous — but\none of the `opt::LBFGS` cases asks precisely whether it stops near the tolerance.\nWhat you get that way is not a synchronous LBFGS; it is **a different algorithm.**\n\n## It is slow, and that is a property of the algorithm\n\nOne `step()` costs something like a hundred GPU-to-host round trips (twenty\niterations × five scalars). Running a quasi-Newton method in a browser is that\nkind of work, not a flaw in this implementation. Use `Adam` for a large model;\nuse this name to solve **a small problem precisely.**\n\n**There is no line search.** Pass `lineSearchFn` and it stops loudly — taking a\nfixed step size quietly converges differently, and that difference shows up in\nthe curve, not in a value.",
+     "doc": "",
      "members": [
       {
        "name": "constructor",

@@ -1227,10 +1227,197 @@ export class Rprop extends Composed {
  * kind of work, not a flaw in this implementation. Use `Adam` for a large model;
  * use this name to solve **a small problem precisely.**
  *
- * **There is no line search.** Pass `lineSearchFn` and it stops loudly — taking a
- * fixed step size quietly converges differently, and that difference shows up in
- * the curve, not in a value.
+ * **`lineSearchFn` was refused** on the ground that taking a fixed step size
+ * quietly converges differently and the difference shows up in the curve rather
+ * than in a value. The reason was right and the way out was to write the search:
+ * `strongWolfe` below is torch's own, and the fixed step is what happens when the
+ * argument is left null.
  */
+/**
+ * The minimum of the cubic through two points with values **and slopes.**
+ *
+ * Two points and two derivatives determine a cubic, and its stationary point is
+ * where the next trial step goes. Where the discriminant is negative there is no
+ * real stationary point inside and the bisection is taken instead — which is what
+ * keeps the search from wandering off a flat or concave stretch.
+ *
+ * **Every operation is rounded back to float32** with `Math.fround`. torch's slopes
+ * are float32 tensors and the whole interpolation runs at that width; JavaScript has
+ * one number type, so the rounding has to be written.
+ *
+ * Measured, the width moves the answer 1.65e-04 on a coupled quadratic — **under the
+ * golden's threshold there**, so no case defends it. It is fidelity to torch's
+ * arithmetic, said plainly rather than implied by a green check. What the cases do
+ * defend is the structure: skipping the zoom, or keeping Armijo without the curvature
+ * test, moves them by units.
+ */
+function cubicInterpolate(x1: number, f1: number, g1: number,
+                          x2: number, f2: number, g2: number,
+                          bounds?: [number, number]): number {
+  const [lo, hi] = bounds ?? (x1 <= x2 ? [x1, x2] : [x2, x1]);
+  const f = Math.fround;
+  const d1 = f(f(g1 + g2) - (3 * (f1 - f2)) / (x1 - x2));
+  const square = f(f(d1 * d1) - f(g1 * g2));
+  if (square >= 0) {
+    const d2 = f(Math.sqrt(square));
+    const at = x1 <= x2
+      ? x2 - (x2 - x1) * f(f(f(g2 + d2) - d1) / f(f(g2 - g1) + f(2 * d2)))
+      : x1 - (x1 - x2) * f(f(f(g1 + d2) - d1) / f(f(g1 - g2) + f(2 * d2)));
+    return Math.min(Math.max(at, lo), hi);
+  }
+  return (lo + hi) / 2;
+}
+
+/** What one probe of the line search hands back. */
+interface Probe { loss: number; grad: Tensor }
+
+/**
+ * A step length satisfying the strong Wolfe conditions — torch's `lswolfe`.
+ *
+ * **Two phases.** The first brackets: it walks outwards from the initial step until
+ * it finds either a point satisfying both conditions or an interval that must contain
+ * one. The second zooms: it interpolates inside that interval, moving whichever end is
+ * worse, until the conditions hold.
+ *
+ * Armijo (`c1`) says the loss fell by enough for the distance travelled; the curvature
+ * condition (`c2`) says the slope flattened by enough. Either alone is satisfied by
+ * steps that are useless — Armijo by a step of nothing, curvature by a step past the
+ * minimum — which is why both are checked at every candidate.
+ *
+ * **`insufProgress` is not tidiness.** Cubic interpolation can land arbitrarily close
+ * to a bracket end and keep landing there, and the loop would spend its whole budget
+ * shrinking the bracket by nothing. Twice near the edge and the trial is moved a tenth
+ * of the bracket in from it.
+ */
+async function strongWolfe(
+  probe: (t: number) => Promise<Probe>,
+  t0: number, d: Tensor, f: number, g: Tensor, gtd: number,
+  c1 = 1e-4, c2 = 0.9, toleranceChange = 1e-9, maxLs = 25,
+): Promise<{ loss: number; grad: Tensor; t: number; evals: number }> {
+  const dNorm = await d.abs().max(0).values.item();
+  const slope = async (grad: Tensor) =>
+    Math.fround(await grad.mul(d).sum().item());
+  let t = t0;
+  let got = await probe(t);
+  let evals = 1;
+  let gtdNew = await slope(got.grad);
+
+  let tPrev = 0;
+  let fPrev = f;
+  let gPrev = g;
+  let gtdPrev = gtd;
+  let done = false;
+  let ls = 0;
+  let bracket: number[] = [];
+  let bracketF: number[] = [];
+  let bracketG: Tensor[] = [];
+  let bracketGtd: number[] = [];
+  while (ls < maxLs) {
+    if (got.loss > f + c1 * t * gtd || (ls > 1 && got.loss >= fPrev)) {
+      bracket = [tPrev, t];
+      bracketF = [fPrev, got.loss];
+      bracketG = [gPrev, got.grad];
+      bracketGtd = [gtdPrev, gtdNew];
+      break;
+    }
+    if (Math.abs(gtdNew) <= -c2 * gtd) {
+      bracket = [t];
+      bracketF = [got.loss];
+      bracketG = [got.grad];
+      bracketGtd = [gtdNew];
+      done = true;
+      break;
+    }
+    if (gtdNew >= 0) {
+      bracket = [tPrev, t];
+      bracketF = [fPrev, got.loss];
+      bracketG = [gPrev, got.grad];
+      bracketGtd = [gtdPrev, gtdNew];
+      break;
+    }
+    // Outwards: at least a hundredth past the last step and at most ten times it.
+    const minStep = t + 0.01 * (t - tPrev);
+    const maxStep = t * 10;
+    const was = t;
+    t = cubicInterpolate(tPrev, fPrev, gtdPrev, t, got.loss, gtdNew,
+                         [minStep, maxStep]);
+    tPrev = was;
+    fPrev = got.loss;
+    gPrev = got.grad;
+    gtdPrev = gtdNew;
+    got = await probe(t);
+    evals += 1;
+    gtdNew = await slope(got.grad);
+    ls += 1;
+  }
+  if (ls === maxLs) {
+    // **torch leaves its `bracket_gtd` unset on this path** and the zoom loop reads
+    // it — a latent unbound name its own source marks with a type-ignore. The two
+    // slopes at hand are the ones that belong there.
+    bracket = [0, t];
+    bracketF = [f, got.loss];
+    bracketG = [g, got.grad];
+    bracketGtd = [gtd, gtdNew];
+  }
+
+  let insufProgress = false;
+  let low = (bracketF[0] ?? 0) <= (bracketF[bracketF.length - 1] ?? 0) ? 0 : 1;
+  let high = low === 0 ? 1 : 0;
+  while (!done && ls < maxLs) {
+    if (Math.abs((bracket[1] ?? 0) - (bracket[0] ?? 0)) * dNorm < toleranceChange) {
+      break;
+    }
+    t = cubicInterpolate(bracket[0] ?? 0, bracketF[0] ?? 0, bracketGtd[0] ?? 0,
+                         bracket[1] ?? 0, bracketF[1] ?? 0, bracketGtd[1] ?? 0);
+    const top = Math.max(...bracket);
+    const bottom = Math.min(...bracket);
+    const eps = 0.1 * (top - bottom);
+    if (Math.min(top - t, t - bottom) < eps) {
+      if (insufProgress || t >= top || t <= bottom) {
+        t = Math.abs(t - top) < Math.abs(t - bottom) ? top - eps : bottom + eps;
+        insufProgress = false;
+      } else {
+        insufProgress = true;
+      }
+    } else {
+      insufProgress = false;
+    }
+
+    got = await probe(t);
+    evals += 1;
+    gtdNew = await slope(got.grad);
+    ls += 1;
+
+    if (got.loss > f + c1 * t * gtd || got.loss >= (bracketF[low] ?? 0)) {
+      bracket[high] = t;
+      bracketF[high] = got.loss;
+      bracketG[high] = got.grad;
+      bracketGtd[high] = gtdNew;
+      low = (bracketF[0] ?? 0) <= (bracketF[1] ?? 0) ? 0 : 1;
+      high = low === 0 ? 1 : 0;
+    } else {
+      if (Math.abs(gtdNew) <= -c2 * gtd) {
+        done = true;
+      } else if (gtdNew * ((bracket[high] ?? 0) - (bracket[low] ?? 0)) >= 0) {
+        bracket[high] = bracket[low] ?? 0;
+        bracketF[high] = bracketF[low] ?? 0;
+        bracketG[high] = bracketG[low] as Tensor;
+        bracketGtd[high] = bracketGtd[low] ?? 0;
+      }
+      bracket[low] = t;
+      bracketF[low] = got.loss;
+      bracketG[low] = got.grad;
+      bracketGtd[low] = gtdNew;
+    }
+  }
+  return {
+    loss: bracketF[low] ?? f,
+    grad: (bracketG[low] ?? g) as Tensor,
+    t: bracket[low] ?? t,
+    evals,
+  };
+}
+
 export class LBFGS extends Optimizer {
   private readonly history: {
     dirs: Tensor[]; stps: Tensor[]; ro: number[];
@@ -1250,14 +1437,9 @@ export class LBFGS extends Optimizer {
     private readonly toleranceGrad = 1e-7,
     private readonly toleranceChange = 1e-9,
     private readonly historySize = 100,
-    lineSearchFn: string | null = null,
+    private readonly lineSearchFn: string | null = null,
   ) {
     super(params, lr);
-    if (lineSearchFn !== null) {
-      throw new RuntimeError(
-        `LBFGS(lineSearchFn=${JSON.stringify(lineSearchFn)}) is not implemented — ` +
-        "taking a fixed step size instead would converge differently.");
-    }
     if (this.paramGroups.length !== 1) {
       throw new RuntimeError("LBFGS takes a single parameter group.");
     }
@@ -1294,6 +1476,35 @@ export class LBFGS extends Optimizer {
         at += p.size;
       }
     });
+  }
+
+  /** The parameters as they stand, so a probe can be undone. */
+  private cloneParam(): Tensor[] {
+    return this.params.map((p) => keepAlive(p.clone().detach()));
+  }
+
+  private setParam(saved: readonly Tensor[]): void {
+    noGrad(() => {
+      this.params.forEach((p, i) => p.copyFrom(saved[i] as Tensor));
+    });
+  }
+
+  /**
+   * The loss and gradient at `x + t·d`, **with the parameters put back.**
+   *
+   * The line search asks about several step lengths from one place, so every probe
+   * has to start from the same `x`; leaving the last probe's position in the
+   * parameters would make the next one a step from wherever it happened to land.
+   */
+  private async directionalEvaluate(
+    closure: () => Tensor, x: readonly Tensor[], t: number, d: Tensor,
+  ): Promise<{ loss: number; grad: Tensor }> {
+    this.setParam(x);
+    this.addStep(t, d);
+    const loss = await closure().item();
+    const grad = keepAlive(this.flatGrad());
+    this.setParam(x);
+    return { loss, grad };
   }
 
   /**
@@ -1364,15 +1575,49 @@ export class LBFGS extends Optimizer {
       const gtd = await flat.mul(this.d ?? flat).sum().item();
       if (gtd > -this.toleranceChange) break;
 
-      this.addStep(this.t, this.d ?? flat);
-      if (iter !== this.maxIter) {
-        // Nothing is measured again on the last iteration — as in torch.
-        loss = await closure().item();
-        flat = this.flatGrad();
-        evals += 1;
-        if (await flat.abs().max(0).values.item() <= this.toleranceGrad) break;
+      let lsEvals = 0;
+      let optCond = false;
+      if (this.lineSearchFn !== null) {
+        // **torch's wording, its kind, and its position.** Checked here rather than
+        // in the constructor, because that is where torch checks: a call whose
+        // gradient is already inside `toleranceGrad` returns before this loop, and
+        // torch never looks at the name at all.
+        if (this.lineSearchFn !== "strong_wolfe") {
+          throw new RuntimeError("only 'strong_wolfe' is supported");
+        }
+        const start = this.cloneParam();
+        const dir = this.d ?? flat;
+        // **The budget is what is left of `maxEval`**, not `maxLs`'s default — a
+        // search allowed more probes than the caller's evaluation budget spends it
+        // all inside one iteration.
+        const found = await strongWolfe(
+          (step) => this.directionalEvaluate(closure, start, step, dir),
+          this.t, dir, loss, flat, gtd, 1e-4, 0.9, this.toleranceChange,
+          this.maxEval - evals);
+        loss = found.loss;
+        flat = found.grad;
+        this.t = found.t;
+        lsEvals = found.evals;
+        this.addStep(this.t, dir);
+        optCond = await flat.abs().max(0).values.item() <= this.toleranceGrad;
+      } else {
+        this.addStep(this.t, this.d ?? flat);
+        if (iter !== this.maxIter) {
+          // Nothing is measured again on the last iteration — as in torch.
+          loss = await closure().item();
+          flat = this.flatGrad();
+          optCond = await flat.abs().max(0).values.item() <= this.toleranceGrad;
+          lsEvals = 1;
+        }
       }
-      if (iter === this.maxIter || evals >= this.maxEval) break;
+      evals += lsEvals;
+      // **torch's five checks in torch's order.** This used to break out of the
+      // re-measure block the moment the gradient was small, before the iteration and
+      // evaluation counts were compared — the same stopping place by luck, and not
+      // the same one to read.
+      if (iter === this.maxIter) break;
+      if (evals >= this.maxEval) break;
+      if (optCond) break;
       const moved = await (this.d ?? flat).mul(Tensor.full([], this.t)).abs().max(0).values.item();
       if (moved <= this.toleranceChange) break;
       if (Math.abs(loss - this.prevLoss) < this.toleranceChange) break;

@@ -4268,6 +4268,129 @@ def opt_cases(inp=None):
                   lambda L: lbfgs_real(L, steps=2, lr=0.3, max_iter=12,
                                        tolerance_change=1e-3)))
 
+    # ── the strong-Wolfe line search, refused on all three sides until today ──
+    #
+    # The refusal's reason was that taking a fixed step size converges differently
+    # and the difference shows in the curve rather than in a value. Right, and the
+    # way out was to write the search rather than to keep saying so.
+    #
+    # **The zoom phase needs a step that overshoots.** `sum(w·p²)` at these rates
+    # never reaches it: the bracketing satisfies the curvature condition on its first
+    # or second probe and returns, so a plant that skips the whole zoom agrees with
+    # every one of these. The rows below use `lr=2` on a coupled quadratic, where the
+    # first probe overshoots, the bracketing hands over an interval, and the zoom is
+    # what produces the step — the same plant moves those by a whole unit.
+    #
+    # **A note on the float32 scalars, which these do *not* defend.** torch's slopes
+    # are 0-d tensors, so its comparisons and its cubic interpolation run at that
+    # width, and this code follows. Measured, widening them to float64 moves the
+    # answer 1.65e-04 on the coupled quadratic — under this table's threshold there
+    # (1e-4 + 1e-4·1.13 ≈ 2.1e-04), so no case here separates the two. Written down
+    # rather than left implied: the choice is torch's arithmetic and the reason for it
+    # is fidelity, not a measurement these rows can hold.
+    #
+    # Two shapes were tried and dropped for being **chaotic rather than sensitive**:
+    # Rosenbrock at `lr=1, max_iter=8`, and a stiff quadratic (`[[8,3],[3,1.5]]`,
+    # κ ≈ 40). Both part from torch by 1e-03 with nothing wrong — they agree at the
+    # first step and amplify a one-ulp difference in the order a float32 reduction
+    # sums. A case that measures the reduction order will go red on a day nothing
+    # broke.
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/진짜 기울기",
+                  lambda L: lbfgs_real(L, lr=0.8,
+                                       line_search_fn="strong_wolfe")))
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/이력이 밀려난다",
+                  lambda L: lbfgs_real(L, steps=2, lr=0.5, max_iter=8,
+                                       history_size=2,
+                                       line_search_fn="strong_wolfe")))
+    # **The budget the search gets is what is left of `max_eval`.** Given `max_ls`'s
+    # own default it spends the caller's whole evaluation budget inside one
+    # iteration, and the trajectory parts from the second step onwards.
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/평가 예산이 짧다",
+                  lambda L: lbfgs_real(L, steps=3, lr=0.8, max_iter=5,
+                                       max_eval=6,
+                                       line_search_fn="strong_wolfe")))
+
+    def lbfgs_bad_name(L):
+        """**A name torch does not have, refused where torch refuses it.**
+
+        The check is inside the iteration loop and not at construction: a call whose
+        gradient is already inside `tolerance_grad` returns before the loop, and
+        torch never looks at the name. Refusing early stops a line torch accepts —
+        which is why this case starts from a point with a real gradient.
+        """
+        p = L.tensor(start.copy(), requires_grad=True)
+        w = L.tensor(curve)
+        opt = L.optim.LBFGS([p], line_search_fn="backtracking")
+        try:
+            def closure(pp=p, ww=w):
+                if pp.grad is not None:
+                    pp.grad = None
+                out = (pp * pp * ww).sum()
+                out.backward()
+                return out
+            opt.step(closure)
+        except Exception as exc:                                # noqa: BLE001
+            return str(exc)
+        return "(거절 없음)"
+
+    cases.append((OPT_PREFIX + "LBFGS(없는 line_search_fn)=문구",
+                  lbfgs_bad_name))
+
+    # **Coupled quadratics — the off-diagonal term is the point.** It makes the
+    # search direction cross the axes, which is where the step length stops being
+    # obvious, and it is what `sum(w·p²)` above cannot do.
+    _LB_A2 = np.array([[3.0, 0.5], [0.5, 2.0]], dtype=np.float32)
+    _LB_B2 = np.array([1.0, -2.0], dtype=np.float32)
+    _LB_X2 = np.array([2.5, -1.5], dtype=np.float32)
+    _LB_A3 = np.array([[4.0, 1.0, 0.5], [1.0, 3.0, -1.0], [0.5, -1.0, 2.0]],
+                      dtype=np.float32)
+    _LB_B3 = np.array([1.0, -2.0, 0.5], dtype=np.float32)
+    _LB_X3 = np.array([2.5, -1.5, 0.75], dtype=np.float32)
+
+    def lbfgs_shape(L, mat, vec, x0, steps=3, **args):
+        p = L.tensor(x0.copy(), requires_grad=True)
+        opt = L.optim.LBFGS([p], **args)
+        seen = []
+        for _ in range(steps):
+            def closure(pp=p, m=mat, b=vec):
+                if pp.grad is not None:
+                    pp.grad = None
+                out = (0.5 * (pp * (L.tensor(m) @ pp)).sum()
+                       + (L.tensor(b) * pp).sum())
+                out.backward()
+                return out
+            opt.step(closure)
+            seen.append(np.asarray(p.detach().numpy(), dtype=np.float32).copy())
+        return L.tensor(np.stack(seen))
+
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/얽힌 이차형식",
+                  lambda L: lbfgs_shape(L, _LB_A2, _LB_B2, _LB_X2, lr=2.0,
+                                        line_search_fn="strong_wolfe")))
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/얽힌 이차형식(3변수)",
+                  lambda L: lbfgs_shape(L, _LB_A3, _LB_B3, _LB_X3, lr=2.0,
+                                        line_search_fn="strong_wolfe")))
+    # **The other half of the bracketing: a first step that undershoots.** At
+    # `lr=0.1` the probe satisfies Armijo — the loss fell by plenty for how far it
+    # went — and fails the curvature condition, because the slope is still steep. The
+    # search has to walk *outwards* from there. A plant that keeps Armijo and drops
+    # the curvature test stops at that first probe and agrees with every case above,
+    # where the step overshoots and Armijo is what fails; here it parts by 2.7.
+    #
+    # `max_iter=2` on purpose. Left at 20 this shape converges over enough inner
+    # iterations that accumulated float32 noise moves the answer 4e-04 with nothing
+    # wrong — the chaotic direction again, measured rather than guessed.
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/처음이 모자란다",
+                  lambda L: lbfgs_shape(L, _LB_A2, _LB_B2, _LB_X2, lr=0.1,
+                                        max_iter=2,
+                                        line_search_fn="strong_wolfe")))
+    # The same shape without the search — **at a smaller rate, and that is the
+    # point.** A fixed step of 2 on this quadratic overshoots and the iteration
+    # becomes chaotic: torch and this core part by 3.5 with nothing wrong, both
+    # bouncing. The line search is what makes `lr=2` a sane setting at all, so the
+    # pair below differs by the flag *and* by the rate the flag makes possible.
+    cases.append((OPT_PREFIX + "LBFGS/얽힌 이차형식",
+                  lambda L: lbfgs_shape(L, _LB_A2, _LB_B2, _LB_X2, lr=0.8)))
+
     def scalar_param_keeps_constants(L):
         """**Training a single-element parameter must not change the constants.**
 

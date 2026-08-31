@@ -366,7 +366,11 @@ class LBFGS:
     two packages deliberately not importing each other, and the golden asks the
     same three cases of both so a divergence is caught.
 
-    No line search yet — `line_search_fn` is refused loudly.
+    **`line_search_fn` was refused here and the search is imported now.**
+    `borch._optim._strong_wolfe` is pure numpy scalar arithmetic over a flattened
+    gradient — no tensor of either library reaches it — so this file takes the core's
+    rather than writing a third copy of the bracketing and the zoom. The loop around
+    it is still this file's, for the reason above.
     """
 
     def __init__(self, params, lr=1.0, max_iter=20, max_eval=None,
@@ -411,11 +415,30 @@ class LBFGS:
                 h.copyFrom(handle(tensor(moved.reshape(shape))))
                 at += n
 
+    def _clone_param(self):
+        return [_np.asarray(p.numpy(), dtype=_np.float32).copy() for p in self._ps]
+
+    def _set_param(self, saved):
+        from ._ops import no_grad as _no_grad
+
+        with _no_grad():
+            for p, value in zip(self._ps, saved):
+                h = handle(p)
+                shape = [int(v) for v in h.shape]
+                h.copyFrom(handle(tensor(value.reshape(shape))))
+
+    def _directional_evaluate(self, closure, x, t, d):
+        """The loss and gradient at `x + t·d`, with the parameters put back."""
+        self._set_param(x)
+        self._add_step(t, d)
+        got = closure()
+        loss = float(got.item() if hasattr(got, "item") else got)
+        flat = self._flat_grad()
+        self._set_param(x)
+        return loss, flat
+
     def step(self, closure):
         group = self.param_groups[0]
-        if group["line_search_fn"] is not None:
-            raise RuntimeError(
-                f"LBFGS(line_search_fn={group['line_search_fn']!r}) is not here yet.")
         lr, max_iter = group["lr"], group["max_iter"]
         max_eval = group["max_eval"]
         tol_grad, tol_change = group["tolerance_grad"], group["tolerance_change"]
@@ -447,39 +470,62 @@ class LBFGS:
             else:
                 y = flat - prev_flat
                 s = d * t
-                ys = float(y @ s)
+                ys = y @ s
                 if ys > 1e-10:
                     if len(old_dirs) == history:
                         old_dirs.pop(0), old_stps.pop(0), ro.pop(0)
                     old_dirs.append(y)
                     old_stps.append(s)
                     ro.append(1.0 / ys)
-                    h_diag = ys / float(y @ y)
+                    h_diag = ys / (y @ y)
                 al = [0.0] * len(old_dirs)
                 q = -flat
                 for i in range(len(old_dirs) - 1, -1, -1):
-                    al[i] = float(old_stps[i] @ q) * ro[i]
+                    al[i] = (old_stps[i] @ q) * ro[i]
                     q = q - al[i] * old_dirs[i]
                 r = q * h_diag
                 for i in range(len(old_dirs)):
-                    be = float(old_dirs[i] @ r) * ro[i]
+                    be = (old_dirs[i] @ r) * ro[i]
                     r = r + old_stps[i] * (al[i] - be)
                 d = r
 
             prev_flat, prev_loss = flat.copy(), loss
             t = min(1.0, 1.0 / _np.abs(flat).sum()) * lr if st["n_iter"] == 1 else lr
-            if float(flat @ d) > -tol_change:
+            gtd = flat @ d
+            if gtd > -tol_change:
                 break
 
-            self._add_step(t, d)
-            if n_iter != max_iter:
-                got = closure()
-                loss = float(got.item() if hasattr(got, "item") else got)
-                flat = self._flat_grad()
-                evals += 1
-                if _np.abs(flat).max() <= tol_grad:
-                    break
-            if n_iter == max_iter or evals >= max_eval:
+            ls_evals = 0
+            opt_cond = False
+            if group["line_search_fn"] is not None:
+                # torch's wording, kind and **position** — inside the loop, so a call
+                # whose gradient is already inside `tolerance_grad` returns without
+                # ever looking at the name, as torch's does.
+                if group["line_search_fn"] != "strong_wolfe":
+                    raise RuntimeError("only 'strong_wolfe' is supported")
+                from borch._optim import _strong_wolfe
+
+                start = self._clone_param()
+                loss, flat, t, ls_evals = _strong_wolfe(
+                    lambda x, tt, dd: self._directional_evaluate(closure, x, tt, dd),
+                    start, t, d, loss, flat, gtd, max_ls=max_eval - evals)
+                self._add_step(t, d)
+                opt_cond = _np.abs(flat).max() <= tol_grad
+            else:
+                self._add_step(t, d)
+                if n_iter != max_iter:
+                    got = closure()
+                    loss = float(got.item() if hasattr(got, "item") else got)
+                    flat = self._flat_grad()
+                    opt_cond = _np.abs(flat).max() <= tol_grad
+                    ls_evals = 1
+            evals += ls_evals
+            # torch's five checks in torch's order.
+            if n_iter == max_iter:
+                break
+            if evals >= max_eval:
+                break
+            if opt_cond:
                 break
             if _np.abs(d * t).max() <= tol_change:
                 break

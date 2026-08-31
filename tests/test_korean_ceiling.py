@@ -313,7 +313,11 @@ CEILINGS = {
     # return. All keys or values in `golden.json`, so both sides spell them the same.
     # 4362 → 4376. Fourteen, in the six `축마다 다른 배율` case names — one scale per
     # axis. Keys in `golden.json`.
-    "borch-ts/test": 4376,
+    # 4376 → 4430. Fifty-four, in the strong-Wolfe case names — `진짜 기울기`,
+    # `이력이 밀려난다`, `평가 예산이 짧다`, `없는 line_search_fn`, `얽힌 이차형식`,
+    # `(3변수)`, `처음이 모자란다` — and the `(거절 없음)` a refusal case returns when
+    # nothing was refused. All keys or values in `golden.json`.
+    "borch-ts/test": 4430,
 }
 
 

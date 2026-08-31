@@ -6827,6 +6827,84 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   out.set("opt::LBFGS/문턱 근처에서 멈춘다",
     lbfgsReal(2, (ps) => new optim.LBFGS(ps, 0.3, 12, null, 1e-7, 1e-3)));
 
+  // ── the strong-Wolfe line search, refused here until today ────────────────
+  //
+  // Carried verbatim from `tests/cases.py`, whose comment records what these rows do
+  // and do not defend: the **structure** (skipping the zoom, or keeping Armijo
+  // without the curvature test, moves them by units) and not the float32 width, whose
+  // effect measures 1.65e-04 — under the threshold.
+  out.set("opt::LBFGS(strong_wolfe)/진짜 기울기",
+    lbfgsReal(3, (ps) => new optim.LBFGS(ps, 0.8, 20, null, 1e-7, 1e-9, 100,
+                                         "strong_wolfe")));
+  out.set("opt::LBFGS(strong_wolfe)/이력이 밀려난다",
+    lbfgsReal(2, (ps) => new optim.LBFGS(ps, 0.5, 8, null, 1e-7, 1e-9, 2,
+                                         "strong_wolfe")));
+  // The budget the search gets is what is left of `maxEval`.
+  out.set("opt::LBFGS(strong_wolfe)/평가 예산이 짧다",
+    lbfgsReal(3, (ps) => new optim.LBFGS(ps, 0.8, 5, 6, 1e-7, 1e-9, 100,
+                                         "strong_wolfe")));
+  // A name torch does not have, refused where torch refuses it — inside the loop,
+  // so a gradient already inside the tolerance never reaches the check.
+  out.set("opt::LBFGS(없는 line_search_fn)=문구", async () => {
+    const p = start();
+    const w = curve();
+    const opt = new optim.LBFGS([p], 1, 20, null, 1e-7, 1e-9, 100, "backtracking");
+    try {
+      await opt.step(() => {
+        p.grad = null;
+        const out = p.mul(p).mul(w).sum();
+        out.backward();
+        return out;
+      });
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return "(거절 없음)";
+  });
+
+  // **Coupled quadratics — the off-diagonal term is the point.** `sum(w·p²)` above
+  // is separable, so its search direction is always an axis and the zoom phase never
+  // runs; at `lr=2` on these the first probe overshoots and the zoom is what produces
+  // the step, and at `lr=0.1` it undershoots and the bracketing walks outwards.
+  const lbA2 = () => Tensor.from([3, 0.5, 0.5, 2], [2, 2]);
+  const lbB2 = () => Tensor.from([1, -2], [2]);
+  const lbA3 = () => Tensor.from([4, 1, 0.5, 1, 3, -1, 0.5, -1, 2], [3, 3]);
+  const lbB3 = () => Tensor.from([1, -2, 0.5], [3]);
+  const lbX2 = () => Tensor.from([2.5, -1.5], [2], { requiresGrad: true });
+  const lbX3 = () => Tensor.from([2.5, -1.5, 0.75], [3], { requiresGrad: true });
+  const lbfgsShape = (
+    x0: () => Tensor, mat: () => Tensor, vec: () => Tensor,
+    make: (ps: Tensor[]) => optim.LBFGS, steps = 3,
+  ) => async () => {
+    const p = x0();
+    const opt = make([p]);
+    const seen: Tensor[] = [];
+    for (let i = 0; i < steps; i++) {
+      await opt.step(() => {
+        p.grad = null;
+        const out = p.mul(mat().matmul(p)).sum().mul(Tensor.full([], 0.5))
+          .add(vec().mul(p).sum());
+        out.backward();
+        return out;
+      });
+      seen.push(p.detach().clone());
+    }
+    return Tensor.stack(seen);
+  };
+  out.set("opt::LBFGS(strong_wolfe)/얽힌 이차형식",
+    lbfgsShape(lbX2, lbA2, lbB2,
+      (ps) => new optim.LBFGS(ps, 2, 20, null, 1e-7, 1e-9, 100, "strong_wolfe")));
+  out.set("opt::LBFGS(strong_wolfe)/얽힌 이차형식(3변수)",
+    lbfgsShape(lbX3, lbA3, lbB3,
+      (ps) => new optim.LBFGS(ps, 2, 20, null, 1e-7, 1e-9, 100, "strong_wolfe")));
+  out.set("opt::LBFGS(strong_wolfe)/처음이 모자란다",
+    lbfgsShape(lbX2, lbA2, lbB2,
+      (ps) => new optim.LBFGS(ps, 0.1, 2, null, 1e-7, 1e-9, 100, "strong_wolfe")));
+  // The same shape without the search, at a rate a fixed step survives — `lr=2` with
+  // no search overshoots and the iteration goes chaotic.
+  out.set("opt::LBFGS/얽힌 이차형식",
+    lbfgsShape(lbX2, lbA2, lbB2, (ps) => new optim.LBFGS(ps, 0.8)));
+
   // **Different rise and fall, several cycles.** With equal widths and one cycle, neither
   // `stepSizeDown` nor `triangular2` is visible at all.
   out.set("opt::CyclicLR/자취",
