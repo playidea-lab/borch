@@ -1660,6 +1660,7 @@ def shape_index_cases(inp=None):
 
 CPLX_PREFIX = "cplx::"
 FFT_PREFIX = "fft::"
+SPECIAL_PREFIX = "special::"
 
 # **Cases the core alone sees.** Exactly the opposite direction from `WEBGPU_PREFIX`.
 #
@@ -1876,6 +1877,114 @@ def complex_cases(inp=None):
             return type(exc).__name__
 
     add("복소 손실의 backward 는 거절", refuses_complex_loss)
+    return cases
+
+
+def special_cases(inp=None):
+    """`torch.special` — **twenty names and no new arithmetic.**
+
+    Every one of these forwards to a function this library already had, so the value is
+    not what is in doubt: `borch.erf` has had a case since the beginning. What these ask
+    is **that the second spelling reaches the same body**, which is the only thing a
+    forwarding namespace can get wrong, and it can get it wrong in three ways:
+
+    * pointing at the wrong function — `expit` is `sigmoid`, `gammaln` is `lgamma`,
+      `psi` is `digamma` and `modified_bessel_i0` is `i0`, and none of the four is
+      guessable from the name. A pair swapped here computes a real number and returns
+      it, so nothing raises;
+    * losing an argument on the way through — `polygamma` is `(n, input)` in this
+      namespace and torch enforces that order (`special.polygamma(x, 1)` is a
+      `TypeError` there, measured), and `round`'s `decimals` is absent from torch's own
+      docstring while torch reads it (`round(0.34567, decimals=3)` → `0.346`, measured);
+    * accepting `out=` where torch does not. Eighteen of the twenty take it and
+      `softmax` and `log_softmax` do not — they take `dtype=` instead. Routed through
+      the binding's generic door they *would* pick `out=` up, so the pair is asked
+      about directly.
+
+    **The arguments are what the cases are for.** A bare `special.erf(x)` case would
+    pass with every one of those three mistakes in place, because the plain unary call
+    is the one shape all of them still get right.
+    """
+    x = np.array([[0.3, 0.7], [1.2, 2.5]], dtype=np.float32)
+    unit = np.array([0.2, 0.8], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((SPECIAL_PREFIX + name, fn))
+
+    # The eleven spelled the same in both places, plus the four that are not. Both
+    # groups are one line each; the point of listing the renames beside the rest is
+    # that from here they look identical, which is why a swap is invisible.
+    for name in ("digamma", "erf", "erfc", "exp2", "expm1", "i0", "log1p", "sinc",
+                 "psi", "gammaln", "expit", "modified_bessel_i0"):
+        add(name, lambda L, n=name: getattr(L.special, n)(L.tensor(x)))
+    # `erfinv` and `logit` want the open unit interval — outside it `erfinv` is ±inf
+    # and `logit` is undefined, and a case sitting on that is a case about infinity.
+    for name in ("erfinv", "logit"):
+        add(name, lambda L, n=name: getattr(L.special, n)(L.tensor(unit)))
+
+    # The arguments, which is where a forwarder actually fails.
+    add("logit(eps)", lambda L: L.special.logit(L.tensor(unit), eps=0.3))
+    add("round", lambda L: L.special.round(L.tensor(x)))
+    # **`decimals` is not in torch's docstring for this name and torch reads it.** The
+    # value has to move for the case to mean anything, so the input is chosen to round.
+    add("round(decimals)",
+        lambda L: L.special.round(L.tensor(np.array([0.34567, 1.98765, -2.55555],
+                                                    dtype=np.float32)), decimals=3))
+    add("polygamma", lambda L: L.special.polygamma(1, L.tensor(x)))
+    add("polygamma(n=2)", lambda L: L.special.polygamma(2, L.tensor(x)))
+    add("xlogy", lambda L: L.special.xlogy(L.tensor(x), L.tensor(x)))
+    add("xlogy(스칼라)", lambda L: L.special.xlogy(L.tensor(x), 2.0))
+    add("logsumexp", lambda L: L.special.logsumexp(L.tensor(x), 1))
+    add("logsumexp(keepdim)",
+        lambda L: L.special.logsumexp(L.tensor(x), 1, keepdim=True))
+    add("softmax", lambda L: L.special.softmax(L.tensor(x), 1))
+    add("log_softmax", lambda L: L.special.log_softmax(L.tensor(x), 1))
+    # **The two that must disagree with the top level.** `softmax(dim=0)` and
+    # `softmax(dim=1)` differ, so a forwarder that dropped `dim` would be caught here
+    # and nowhere above.
+    add("softmax(dim=0)", lambda L: L.special.softmax(L.tensor(x), 0))
+    add("log_softmax(dim=0)", lambda L: L.special.log_softmax(L.tensor(x), 0))
+
+    # **`out=` reaching the namespace.** `linalg` needed the same wiring and did not
+    # have it for a long time — `borch.qr(x, out=…)` worked while
+    # `borch.linalg.qr(x, out=…)` was a `TypeError`, for one function. The case asks
+    # for the value in the destination, so a wrapper that computes and discards fails.
+    # **The value in the destination and the identity of what came back are two
+    # questions**, and only the second one is about `out=`. The values case is
+    # deliberately equal to the plain `erf` case — that is the whole claim, that the
+    # answer did not change — and it is written into `test_case_names.DELIBERATE` and
+    # `test_inert_arguments.ATTESTED` under that reason, the way the six `inplace`
+    # rows above it are.
+    #
+    # Without the second row this pair says nothing a wrapper could fail: one that
+    # computed `erf` and threw the destination away would give the same numbers.
+    def into(L):
+        dest = L.zeros(2, 2)
+        L.special.erf(L.tensor(x), out=dest)
+        return dest
+
+    def into_id(L):
+        dest = L.zeros(2, 2)
+        back = L.special.erf(L.tensor(x), out=dest)
+        return f"같은 객체={back is dest}"
+
+    add("erf(out=)", into)
+    add("erf(out=)/같은 객체", into_id)
+
+    # **The two that were nearly missed.** `gammainc` and `gammaincc` are `igamma` and
+    # `igammac`, and the first sweep of this namespace put them in the thirty-seven
+    # *not* here — measured, they are the same function. Two arguments and a shape that
+    # is not the unary one, so they need their own case rather than the loop above.
+    a = np.array([0.5, 1.5, 2.5], dtype=np.float32)
+    z = np.array([0.3, 1.0, 2.0], dtype=np.float32)
+    add("gammainc", lambda L: L.special.gammainc(L.tensor(a), L.tensor(z)))
+    add("gammaincc", lambda L: L.special.gammaincc(L.tensor(a), L.tensor(z)))
+    # **They must sum to one**, which is a statement about the pair that neither case
+    # above makes: both could be the lower branch and both would still freeze fine.
+    add("gammainc+gammaincc",
+        lambda L: L.special.gammainc(L.tensor(a), L.tensor(z))
+        + L.special.gammaincc(L.tensor(a), L.tensor(z)))
     return cases
 
 
@@ -3492,6 +3601,17 @@ def new_function_cases(inp=None):
     # and the word never reached it: NaN against NaN came back `False` where torch
     # says `True`. A fixture without a NaN in it cannot tell the two apart, which is
     # why the row above did not.
+    #
+    # **This row parts on a software adapter and agrees on a real GPU** — measured the
+    # same hour, same build: `1 of 3 booleans differ` under SwiftShader, 4436/4436
+    # under `apple / metal-3`. borch.ts finds both NaNs with `x != x`, and WGSL does
+    # not promise NaN semantics — an implementation is allowed to fold that to false.
+    # So a headless run (`--headless` picks SwiftShader) reports this one red and
+    # nothing is wrong with the library.
+    #
+    # Written here rather than in a skip list because it is not a divergence to
+    # forgive: on the machines this ships to it is correct, and the next person to run
+    # headless should read this instead of hunting a bug that is the adapter's.
     _nan_pair = np.array([1.0, np.nan, 3.0], dtype=np.float32)
     add("isclose(equal_nan)",
         lambda L: L.isclose(L.tensor(_nan_pair), L.tensor(_nan_pair),
@@ -14809,6 +14929,7 @@ def golden_cases(inp=None):
             + scalar_cache_cases(inp) + constant_cases(inp)
             + top_linalg_cases(inp) + stat_cases(inp)
             + make_cases(inp) + complex_cases(inp) + fft_cases(inp)
+            + special_cases(inp)
             + keepdim_cases(inp) + rnn_top_cases(inp) + top_rest_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 

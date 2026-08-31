@@ -96,6 +96,11 @@ from ._ops import (
     split, sqrt, square, stack, svd, swapaxes, swapdims, tan, tanh, tensor, tile, topk,
     trace, tril, triu, trunc, unbind, unflatten, unfold, unique, unsqueeze, vsplit,
     where, xlogy, zeros, zeros_like,
+    # **`special` is twenty of the names already in this import list, under the
+    # second spelling torch gives them.** No arithmetic of its own — see `_Special`
+    # at the foot of `_ops.py`, which is where it has to be defined because half of
+    # what it forwards to is defined below `fft`.
+    special,
     # The ones torch offers under a second name — a name attached to what an
     # operator already does.
     add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,
@@ -838,6 +843,30 @@ for _name in _LINALG_TAKES_OUT:
     _fn = getattr(linalg, _name, None)
     if _fn is not None and callable(_fn):
         setattr(linalg, _name, _accepts_out(_fn, f"linalg.{_name}"))
+del _name
+
+
+# **And the same reaching `special`, for the same reason `linalg` needed it.** Its
+# members are bound from `_ops` directly, so the `globals()` walk above does not touch
+# them: without this, `borch.erf(x, out=…)` worked and `borch.special.erf(x, out=…)`
+# was a `TypeError`, for one function under two names.
+#
+# **Measured, not read.** Every one of the twenty was called in real torch with
+# `out=`; eighteen took it and `softmax` and `log_softmax` did not — they take `dtype=`
+# instead, which is a different keyword doing a different job. Reading the docstrings
+# would have got this wrong in the other direction too: `special.round`'s prose is
+# `round(input, *, out=None)` with no `decimals`, and torch **reads** a `decimals`
+# passed there (`round(0.34567, decimals=3)` → `0.346`, measured). That is one more
+# for this repository's tally of torch's own prose being short.
+_SPECIAL_TAKES_OUT = frozenset("""
+    digamma erf erfc erfinv exp2 expit expm1 gammainc gammaincc gammaln i0 log1p
+    logit logsumexp modified_bessel_i0 polygamma psi round sinc xlogy
+""".split())
+
+for _name in _SPECIAL_TAKES_OUT:
+    _fn = getattr(special, _name, None)
+    if _fn is not None and callable(_fn):
+        setattr(special, _name, _accepts_out(_fn, f"special.{_name}"))
 del _name
 
 

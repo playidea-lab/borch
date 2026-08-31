@@ -29,6 +29,10 @@ import { istft, stft } from "../src/fft.js";
 import * as nn from "../src/nn.js";
 import * as rnn from "../src/rnn.js";
 import { igamma, igammac, polygamma } from "../src/special.js";
+// **The namespace, not the kernels.** `special.ts` above holds the incomplete-gamma
+// and polygamma shaders; this is `torch.special`'s twenty-two forwarding names, which
+// is a different thing under a confusingly close file name — see its header.
+import * as special from "../src/special_names.js";
 import * as optim from "../src/optim.js";
 import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
@@ -569,6 +573,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addEdge(out);
   addComplex(out);
   addFft(out);
+  addSpecial(out);
   addKeepdim(out);
   addTopRest(out);
   return out;
@@ -972,6 +977,86 @@ function addArgs(out: Map<string, Case>): void {
  * middle twice. Both can be wrong **with the forward values perfectly fine**, so with only
  * value cases they pass green.
  */
+/**
+ * `torch.special` — `special::`.
+ *
+ * **Twenty-two names and no arithmetic of its own**, so the values are not what is in
+ * doubt: `erf` has had a case since the beginning. What this table asks is that the
+ * second spelling reaches the same body, and a forwarding namespace has exactly three
+ * ways to fail at that.
+ *
+ * *It can point at the wrong function.* `expit` is `sigmoid`, `gammaln` is `lgamma`,
+ * `psi` is `digamma`, `modifiedBesselI0` is `i0`, `gammainc` is `igamma`. Cross any pair
+ * and a real number comes back under the wrong name — nothing raises, and only a frozen
+ * answer says so.
+ *
+ * *It can lose an argument.* `polygamma` is `(n, input)` in this namespace and
+ * `x.polygamma(n)` as a method — the pair reversed — and `round`'s `decimals` is absent
+ * from torch's own docstring while torch reads it.
+ *
+ * *It can drop a dimension.* `softmax(x, 0)` and `softmax(x, 1)` differ, so a forwarder
+ * passing `dim` along wrongly is caught by having both.
+ *
+ * **A bare unary call would pass with all three mistakes in place**, which is why the
+ * arguments are half of this table.
+ */
+function addSpecial(out: Map<string, Case>): void {
+  const P = "special::";
+  const XS = [0.3, 0.7, 1.2, 2.5];
+  const UNIT = [0.2, 0.8];
+  const x = (): Tensor => Tensor.from(XS, [2, 2]);
+  const unit = (): Tensor => Tensor.from(UNIT, [2]);
+
+  // The eleven spelled the same, and the four that are not — from here they look
+  // identical, which is the point: a crossed pair is invisible in this list and shows
+  // up only in the frozen answer.
+  out.set(`${P}digamma`, () => special.digamma(x()));
+  out.set(`${P}erf`, () => special.erf(x()));
+  out.set(`${P}erfc`, () => special.erfc(x()));
+  out.set(`${P}exp2`, () => special.exp2(x()));
+  out.set(`${P}expm1`, () => special.expm1(x()));
+  out.set(`${P}i0`, () => special.i0(x()));
+  out.set(`${P}log1p`, () => special.log1p(x()));
+  out.set(`${P}sinc`, () => special.sinc(x()));
+  out.set(`${P}psi`, () => special.psi(x()));
+  out.set(`${P}gammaln`, () => special.gammaln(x()));
+  out.set(`${P}expit`, () => special.expit(x()));
+  out.set(`${P}modified_bessel_i0`, () => special.modifiedBesselI0(x()));
+
+  // **The open unit interval.** Outside it `erfinv` is ±∞ and `logit` is undefined, and
+  // a case standing there is a case about infinity rather than about forwarding.
+  out.set(`${P}erfinv`, () => special.erfinv(unit()));
+  out.set(`${P}logit`, () => special.logit(unit()));
+  out.set(`${P}logit(eps)`, () => special.logit(unit(), 0.3));
+
+  out.set(`${P}round`, () => special.round(x()));
+  // The input has to actually move under rounding or the case says nothing.
+  out.set(`${P}round(decimals)`,
+          () => special.round(Tensor.from([0.34567, 1.98765, -2.55555], [3]), 3));
+
+  out.set(`${P}polygamma`, () => special.polygamma(1, x()));
+  out.set(`${P}polygamma(n=2)`, () => special.polygamma(2, x()));
+  out.set(`${P}xlogy`, () => special.xlogy(x(), x()));
+  out.set(`${P}logsumexp`, () => special.logsumexp(x(), 1));
+  out.set(`${P}logsumexp(keepdim)`, () => special.logsumexp(x(), 1, true));
+  out.set(`${P}softmax`, () => special.softmax(x(), 1));
+  out.set(`${P}log_softmax`, () => special.logSoftmax(x(), 1));
+  out.set(`${P}softmax(dim=0)`, () => special.softmax(x(), 0));
+  out.set(`${P}log_softmax(dim=0)`, () => special.logSoftmax(x(), 0));
+
+  // **The two that were nearly counted as missing.** The first sweep of this namespace
+  // put `gammainc` and `gammaincc` among the names not here; they are `igamma` and
+  // `igammac`, which this library has had all along.
+  const a = (): Tensor => Tensor.from([0.5, 1.5, 2.5], [3]);
+  const z = (): Tensor => Tensor.from([0.3, 1.0, 2.0], [3]);
+  out.set(`${P}gammainc`, () => special.gammainc(a(), z()));
+  out.set(`${P}gammaincc`, () => special.gammaincc(a(), z()));
+  // They must sum to one — a statement about the pair that neither row above makes,
+  // since both could be the lower branch and both would still freeze cleanly.
+  out.set(`${P}gammainc+gammaincc`,
+          () => special.gammainc(a(), z()).add(special.gammaincc(a(), z())));
+}
+
 function addFft(out: Map<string, Case>): void {
   const P = "fft::";
   const XS = [1.0, -2.0, 0.5, 3.0, -1.0, 0.25];

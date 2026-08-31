@@ -52,6 +52,20 @@ GOLDEN = ROOT / "tests" / "golden.json"
 # Pairs where the argument names something the answer genuinely cannot depend on.
 # **Checked one at a time**, not assumed from the name.
 ATTESTED = {
+    # **`out=` is `inplace` under another name**, and it earns its place here for the
+    # same reason: a destination that changed the numbers would be the defect, so the
+    # values case equalling the plain `erf` case is the claim. What `out=` *does*
+    # change is where the answer landed, and `special::erf(out=)/같은 객체` beside
+    # this row is the case a wrapper that computes and discards the destination fails.
+    #
+    # It matters here more than for `inplace`: `special`'s twenty-two names get their
+    # `out=` from a loop over a written list in `borch/__init__.py`, so one wrapper
+    # covers all of them and one mistake would cover all of them too.
+    "special::erf(out=)":
+        "`out=` moves the destination and not the value — torch computes the same "
+        "answer and writes it where the caller asked. `special::erf(out=)/같은 객체` "
+        "is where the move itself is asked, and a wrapper that computed `erf` and "
+        "dropped the destination passes this row and fails that one",
     "act::nn.SELU(inplace)":
         "**`inplace` changes the identity, not the value.** In place the layer writes "
         "into the tensor it was handed and gives back the same object; the numbers are "

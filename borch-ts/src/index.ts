@@ -181,6 +181,11 @@ export * as fft from "./fft.js";
 // namespace decides is the shape of the call. The numerics live in `_linalg.ts`, which is
 // internal and takes flat `Float64Array`s rather than tensors.
 export * as linalg from "./linalg.js";
+// The place `torch.special` occupies — twenty-two names, every one of them a method
+// this library already has under torch's second spelling for it. **The module is
+// `special_names.ts` rather than `special.ts` because that name holds the kernels two
+// of these stand on**; the file says so at its head.
+export * as special from "./special_names.js";
 export * as nn from "./nn.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";

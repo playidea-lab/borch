@@ -3636,3 +3636,119 @@ class _Linalg:
 
 
 linalg = _Linalg()
+
+
+# ---------------------------------------------------------------- torch.special
+#
+# Twenty names, none of them arithmetic — every one is the second spelling torch
+# gives something this binding already answers to. The core's `_Special` carries the
+# reasoning; this side only has to route.
+#
+# **The name list is written out rather than forwarded blindly**, and that is the
+# whole of the care here. A `__getattr__` that passed anything through would make
+# `special.bessel_j0` resolve to `x.bessel_j0()` — a name torch has and this library
+# does not — and it would be **counted as present** by the survey while failing at
+# the first call. Thirty-six of this namespace's names are exactly that: real
+# arithmetic that is not here, declined by name in `tests/torch_gap.py`. Forwarding
+# without a list would quietly claim all thirty-six.
+class _Special:
+    """`torch.special`. Routing only — the bodies are the top-level ones.
+
+    **The first draft routed everything through the module's `__getattr__`, and one
+    browser run found three defects in it.** Worth keeping the account, because all
+    three came from the same wrong idea.
+
+    That door forwards a name to *the first argument's method* — torch's own
+    `torch.exp(x)` = `x.exp()` rule, and right for a unary op. It is wrong the moment
+    the first argument is not the tensor: `special.polygamma(1, x)` became
+    `(1).polygamma(x)` and reached the shader as `polygamma:NaN:1`, a WGSL parse error
+    six times over (`pow(y, NaN.0)`) and a `()` where a `(2, 2)` belonged. **This
+    module already has a correct `polygamma(n, input)`**, thirty lines up, and going
+    through the generic door deliberately stepped around it.
+
+    It is wrong a second way for keywords: the generic wrapper hands `**kwargs` to the
+    JS side, which takes positional arguments only, so `logit(x, eps=0.3)` and
+    `round(x, decimals=3)` both came back *does not take keyword arguments*.
+
+    So the ones carrying an argument are written out and forward positionally, and
+    only the plain unary ones are routed. **The unary door is safe for exactly the
+    reason the others were not** — there the first argument is the tensor, which is
+    what it assumes.
+    """
+
+    # The four torch spells differently here than at the top level. `expit` and
+    # `gammaln` are the statistics literature's names and resolve nowhere else.
+    _RENAMED = {"expit": "sigmoid", "gammaln": "lgamma", "psi": "digamma",
+                "modified_bessel_i0": "i0"}
+
+    # The unary ones, where routing is torch's rule rather than a guess.
+    _UNARY = frozenset("""
+        digamma erf erfc erfinv exp2 expit expm1 gammaln i0 log1p
+        modified_bessel_i0 psi sinc
+    """.split())
+
+    # ── the ones carrying an argument, written out ──────────────────────────
+
+    @staticmethod
+    def logit(input, eps=None, out=None):                       # noqa: A002
+        """`eps` clamps away from 0 and 1. **Positional through the door** — the JS
+        side takes no keywords."""
+        return __getattr__("logit")(input, eps, out=out)
+
+    @staticmethod
+    def round(input, decimals=0, out=None):                     # noqa: A002
+        """**`decimals` is missing from torch's docstring for this name and torch
+        reads it** (`round(0.34567, decimals=3)` → `0.346`, measured)."""
+        return __getattr__("round")(input, decimals, out=out)
+
+    @staticmethod
+    def logsumexp(input, dim, keepdim=False, out=None):         # noqa: A002
+        return __getattr__("logsumexp")(input, dim, keepdim, out=out)
+
+    @staticmethod
+    def xlogy(input, other, out=None):                          # noqa: A002
+        return __getattr__("xlogy")(input, other, out=out)
+
+    @staticmethod
+    def polygamma(n, input, out=None):                          # noqa: A002
+        """**`n` first, the tensor second** — torch's order, and the one the generic
+        door cannot honour because it sends the first argument to itself."""
+        return polygamma(n, input, out=out)
+
+    @staticmethod
+    def gammainc(input, other, out=None):                       # noqa: A002
+        """`igamma` under torch's `special` spelling — the same function."""
+        return igamma(input, other, out=out)
+
+    @staticmethod
+    def gammaincc(input, other, out=None):                      # noqa: A002
+        return igammac(input, other, out=out)
+
+    # **These two take `dtype=`, not `out=`.** Measured in real torch:
+    # `special.softmax(x, 1, out=…)` raises while the top-level `softmax` accepts one.
+    # Routed generically they would pick `out=` up from the core's `_TAKES_OUT` and
+    # accept a call torch refuses.
+    @staticmethod
+    def softmax(input, dim, dtype=None):                        # noqa: A002
+        return _resolve_name("softmax")(input, dim, dtype)
+
+    @staticmethod
+    def log_softmax(input, dim, dtype=None):                    # noqa: A002
+        return _resolve_name("log_softmax")(input, dim, dtype)
+
+    def __getattr__(self, name):
+        # **The list is written out rather than forwarded blindly.** A door that
+        # passed anything through would make `special.bessel_j0` resolve to
+        # `x.bessel_j0()` — a name torch has and this library does not — and it would
+        # be counted present by the survey while failing at the first call.
+        # Thirty-five of this namespace's names are exactly that.
+        if name not in self._UNARY:
+            raise AttributeError(
+                f"`special.{name}` is not in this subset. torch.special has 57 names "
+                "and 22 are here — the rest are Bessel, Airy, ndtr and the "
+                "orthogonal-polynomial families, which is arithmetic this library "
+                "does not carry. See tests/torch_gap.py.")
+        return __getattr__(self._RENAMED.get(name, name))
+
+
+special = _Special()

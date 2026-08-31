@@ -8,7 +8,7 @@ underneath.
 It used to belong to the TF.js implementation. That one was **5,307 lines**,
 because TF.js supplies 104 primitive operations and nothing else, so the
 autograd tape, `nn.Module` and the optimisers all had to be rebuilt in Python.
-This one is **10,337 lines** — borch.ts already has all of it, so Python's job
+This one is **10,984 lines** — borch.ts already has all of it, so Python's job
 is swapping names across.
 
 `_data.py` is nearly identical in both. It came over unchanged, sits on numpy
@@ -129,6 +129,11 @@ from ._ops import (                                      # noqa: E402,F401
     # Fourier. `fft` is a namespace; `stft` and `istft` are top level — the same
     # places torch puts them.
     fft, istft, stft,
+    # **`special` is twenty names this binding already answers to, under torch's
+    # second spelling for them.** A namespace rather than a passthrough, because
+    # thirty-six of that namespace's names are arithmetic we do not have and a
+    # passthrough would claim every one of them — see `_Special` in `_ops.py`.
+    special,
     # The eight top-level recurrent ones. The same computation as the layers
     # (`nn.LSTM`) but taking the weights as a list.
     gru, gru_cell, lstm, lstm_cell, rnn_relu, rnn_relu_cell, rnn_tanh,

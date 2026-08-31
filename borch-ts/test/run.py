@@ -638,6 +638,22 @@ NOT_PORTED = {
     # now. The two left are `asarray`, which takes a numpy array or a Python list, and TS
     # has neither.
     "make::": (2, "파이썬 — `asarray` takes an ndarray or a list; TS has neither"),
+    # **`torch.special` — 29 of its 32 cases are ported and these three are Python's.**
+    #
+    # Two are `out=`, which borch.ts declines everywhere: the axis records twenty-nine
+    # such rows already, all of them the same decision. A namespace of forwarders is
+    # where that decision costs least — `special`'s `out=` comes from one loop over a
+    # written list in `borch/__init__.py`, so nothing about it is specific to these
+    # names, and `special::erf(out=)/같은 객체` asks about the wrapper rather than
+    # about `erf`.
+    #
+    # The third is `xlogy(스칼라)`. borch.ts types it `xlogy(other: Tensor)` and Python
+    # takes a bare `2.0` — the same divergence as `make::` above, a Python affordance
+    # rather than a missing body. Written as a scalar tensor here it would freeze
+    # cleanly and **stop asking the thing it is named for**, which is worse than not
+    # asking: the name would claim a check nobody performs.
+    "special::": (3, "파이썬 — `out=` 두 건(borch.ts 전역 결정)과, "
+                     "`xlogy` 에 맨 스칼라를 넘기는 자리. TS 는 Tensor 를 받는다"),
     # **A question TypeScript cannot be asked.** Python refuses `ZeroPad2d(1, 9.0)`
     # with a `TypeError` because the constructor takes one argument; JavaScript keeps
     # no arity and simply does not receive the second. So the same case name would

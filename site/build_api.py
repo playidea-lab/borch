@@ -148,9 +148,19 @@ MODULES = [
       "en": "Acquiring the adapter, and asking it what it is doing."}),
     ("random", "random", {"ko": "난수의 씨앗.", "en": "Seeding the random draws."}),
     ("autograd", "autograd", {"ko": "기울기 스위치.", "en": "The gradient switch."}),
+    # **These two are a pair and the labels used to be one.** `special.ts` holds the
+    # incomplete-gamma and polygamma *kernels*, and its entry said "where
+    # `torch.special` would be" — true while nothing else claimed that place, and
+    # false the moment `special_names.ts` did. The kernels module is three exported
+    # functions; the namespace is twenty-two forwarders standing partly on it.
     ("special", "special",
-     {"ko": "특수함수. `torch.special` 자리.",
-      "en": "Special functions. Where `torch.special` would be."}),
+     {"ko": "불완전 감마·폴리감마 커널. 아래 `torch.special` 이름들이 여기 딛는다.",
+      "en": "The incomplete-gamma and polygamma kernels. The `torch.special` names "
+            "below stand partly on these."}),
+    ("special_names", "special",
+     {"ko": "`torch.special` 자리 — 스물두 이름, 전부 이미 있는 것의 두 번째 철자.",
+      "en": "Where `torch.special` would be — twenty-two names, every one the second "
+            "spelling of something this library already has."}),
     ("rnn", "rnn", {"ko": "순환 신경망 유틸.", "en": "Recurrent-network utilities."}),
     ("errors", "errors",
      {"ko": "예외 종류. torch 와 같은 이름을 쓴다.",

@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 382
+  "missing": 393
  },
  "modules": [
   {
@@ -20080,8 +20080,8 @@
    "name": "special",
    "title": "special",
    "blurb": {
-    "ko": "특수함수. `torch.special` 자리.",
-    "en": "Special functions. Where `torch.special` would be."
+    "ko": "불완전 감마·폴리감마 커널. 아래 `torch.special` 이름들이 여기 딛는다.",
+    "en": "The incomplete-gamma and polygamma kernels. The `torch.special` names below stand partly on these."
    },
    "doc": "Special functions — the incomplete gamma and the polygammas.\n\n**The reason these kernels live apart** is that `n` is a shader constant.\n`polygamma(n, x)` bakes a different shader per `n`, and the unary table\n(`UNARY` in `kernels.ts`) hangs one shader off one name, so it does not\nfit there.\n\nThe formulas are carried over from the core (numpy) unchanged — two\ncopies means a day when only one gets fixed. The core side was confirmed\nagainst torch for both values and gradients first; this is that carried\nacross.",
    "symbols": [
@@ -20110,6 +20110,174 @@
    ],
    "count": 3,
    "doc_ko": "특수 함수 — 불완전 감마와 폴리감마.\n\n**커널을 여기 따로 두는 이유**는 `n` 이 셰이더 상수이기 때문이다. `polygamma(n, x)`\n는 `n` 마다 다른 셰이더를 굽는데, 단항 표(`kernels.ts` 의 `UNARY`)는 이름 하나에\n셰이더 하나를 매다는 구조라 그 자리에 안 들어간다.\n\n식은 코어(numpy)의 것을 그대로 옮겼다 — 두 벌로 두면 한쪽만 고쳐지는 날이 온다.\n코어 쪽이 torch 와 값·기울기 모두 맞는 것을 먼저 확인했고, 여기는 그 옮김이다."
+  },
+  {
+   "name": "special_names",
+   "title": "special",
+   "blurb": {
+    "ko": "`torch.special` 자리 — 스물두 이름, 전부 이미 있는 것의 두 번째 철자.",
+    "en": "Where `torch.special` would be — twenty-two names, every one the second spelling of something this library already has."
+   },
+   "doc": "`torch.special` — the namespace, which is twenty-two names and no new arithmetic.\n\nEvery function here forwards to a method this library already has. torch spells a\nhandful of things twice, and this is the second spelling: `expit` is `sigmoid`,\n`gammaln` is `lgamma`, `psi` is `digamma`, `modified_bessel_i0` is `i0`, and\n`gammainc`/`gammaincc` are the regularised incomplete gammas next door in\n`special.ts`. None of the six is guessable from the name, which is the whole reason\nthe namespace is worth carrying: `special.expit(x)` is the line a paper's appendix\nwrites, and without this module it stopped on a namespace that was not there while\n`x.sigmoid()` sat one call away.\n\n**Why the file is not called `special.ts`.** That name is taken by the module holding\nthe incomplete-gamma and polygamma *kernels* — WGSL, and two of the names below stand\non it. Renaming that file would touch every importer for a cosmetic gain, so the\nawkward name is here instead of there, with this paragraph as the apology.\n\n**This is deliberately thin.** Writing the bodies again would be a second copy of\narithmetic that is already tested, which is the defect this repository keeps finding\n— a fix reaches one copy and the hand-written one is the copy it misses. If a line\nbelow is longer than `return x.something()`, it is because the argument order differs\nfrom the method's, and that is said where it happens.\n\nThe 35 names of `torch.special` that are **not** here are real arithmetic — the\nBessel, Airy, `ndtr` and orthogonal-polynomial families — and `tests/torch_gap.py`\ncarries each with its reason.",
+   "symbols": [
+    {
+     "kind": "function",
+     "name": "digamma",
+     "signature": "export declare function digamma(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "erf",
+     "signature": "export declare function erf(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "erfc",
+     "signature": "export declare function erfc(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "erfinv",
+     "signature": "export declare function erfinv(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "exp2",
+     "signature": "export declare function exp2(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "expm1",
+     "signature": "export declare function expm1(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "i0",
+     "signature": "export declare function i0(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "log1p",
+     "signature": "export declare function log1p(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "sinc",
+     "signature": "export declare function sinc(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "logit",
+     "signature": "export declare function logit(input: Tensor, eps?: number | null): Tensor",
+     "doc": "`eps` clamps the input away from 0 and 1 before the log — torch takes it here too.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "round",
+     "signature": "export declare function round(input: Tensor, decimals?: number): Tensor",
+     "doc": "**`decimals` is absent from torch's own docstring for this name and torch reads it.**\n`special.round(0.34567, decimals=3)` answers `0.346` (measured), while the prose says\n`round(input, *, out=None)`. Dropping the parameter to match the documentation would\ntake a working call away, so it is carried.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "expit",
+     "signature": "export declare function expit(input: Tensor): Tensor",
+     "doc": "The logistic sigmoid, under statistics' name for it.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "gammaln",
+     "signature": "export declare function gammaln(input: Tensor): Tensor",
+     "doc": "The log-gamma, under statistics' name for it.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "psi",
+     "signature": "export declare function psi(input: Tensor): Tensor",
+     "doc": "The digamma, under its classical name.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "modifiedBesselI0",
+     "signature": "export declare function modifiedBesselI0(input: Tensor): Tensor",
+     "doc": "The zeroth modified Bessel — the same function as `i0`, spelled out.",
+     "members": [],
+     "torch": "modified_bessel_i0"
+    },
+    {
+     "kind": "function",
+     "name": "polygamma",
+     "signature": "export declare function polygamma(n: number, input: Tensor): Tensor",
+     "doc": "**`(n, input)`, and that order is torch's.** `special.polygamma(x, 1)` is a\n`TypeError` there (measured), so taking them the other way round would accept a call\ntorch refuses. The method is `x.polygamma(n)`, which is the pair reversed — the one\nplace in this file where forwarding is not a straight pass-through.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "xlogy",
+     "signature": "export declare function xlogy(input: Tensor, other: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "logsumexp",
+     "signature": "export declare function logsumexp(input: Tensor, dim?: number, keepdim?: boolean): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "softmax",
+     "signature": "export declare function softmax(input: Tensor, dim?: number, dtype?: Parameters<Tensor[\"softmax\"]>[1]): Tensor",
+     "doc": "**`softmax` and `logSoftmax` take `dtype`, not a destination.** Eighteen of this\nnamespace's names accept `out=` in torch and these two do not — measured, where\n`special.softmax(x, 1, out=…)` raises and the top-level `softmax` does not.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "logSoftmax",
+     "signature": "export declare function logSoftmax(input: Tensor, dim?: number, dtype?: Parameters<Tensor[\"logSoftmax\"]>[1]): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "log_softmax"
+    },
+    {
+     "kind": "function",
+     "name": "gammainc",
+     "signature": "export declare function gammainc(input: Tensor, other: Tensor): Tensor",
+     "doc": "The regularised lower incomplete gamma `P(a, x)`.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "gammaincc",
+     "signature": "export declare function gammaincc(input: Tensor, other: Tensor): Tensor",
+     "doc": "The upper branch, `Q(a, x) = 1 − P(a, x)`.",
+     "members": []
+    }
+   ],
+   "count": 22
   },
   {
    "name": "rnn",
@@ -20414,5 +20582,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2767
+ "total": 2789
 }

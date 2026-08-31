@@ -350,7 +350,13 @@ CEILINGS = {
     # two `nn.RMSNorm/F.rms_norm(eps 를 크게)` ones, `isclose(equal_nan 없이)`, and the
     # `top::`/`act::` skip reasons in `run.py` naming what each row is about. Keys in
     # `golden.json`, so both sides spell them the same.
-    "borch-ts/test": 4738,
+    # 4738 → 4771. Thirty-three: the `special::` skip reason in `run.py`, which names
+    # the three of that namespace's thirty-two cases borch.ts does not ask — two are
+    # `out=` (declined everywhere over there) and one hands `xlogy` a bare scalar
+    # where TS types a `Tensor`. It is Korean because every other reason in that
+    # ledger is, and a row in a different language reads as a different kind of row.
+    # Nothing was added to `cases.ts`: the twenty-nine names ported are ASCII.
+    "borch-ts/test": 4771,
 }
 
 

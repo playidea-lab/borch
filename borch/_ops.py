@@ -12191,3 +12191,82 @@ Tensor.real = property(
 Tensor.imag = property(
     imag,
     doc="The imaginary part. **It stops on a real tensor** — torch does that.")
+
+
+# ================================================================ torch.special
+#
+# **Twenty names, no new arithmetic.** Every one of these is a function this library
+# already answers to, and `torch.special` is the second place torch spells it:
+# `special.expit` is `sigmoid`, `special.gammaln` is `lgamma`, `special.psi` is
+# `digamma`, `special.modified_bessel_i0` is `i0`. Measured before it was written —
+# each pair agrees to 1e-5 on the same input, which is how the list was built rather
+# than read off the docs.
+#
+# **This namespace sits at the end of the file because it can only be written here.**
+# `_Fft` is bound at line 9401 and `i0` is defined at 10120; a `_Special` written
+# beside `_Fft` cannot see half of what it forwards to. Placement is the dependency,
+# not a filing decision.
+#
+# **What the namespace is worth, given the names already exist**, is the line textbook
+# code writes. `torch.special.expit(x)` is what a paper's appendix says, and before
+# this it stopped on a namespace that was not there while `borch.sigmoid` sat one
+# import away — the failure mode this repository calls *an absent feature beats a
+# wrong answer*, inverted: a present feature under a name nobody looks up.
+#
+# **Why it is not a second copy.** Everything here is `staticmethod` over the existing
+# function object, so a fix to `logit` reaches `special.logit` because they are one
+# function. Writing the bodies again would be the defect this repository keeps
+# finding — *a third copy of a dispatch*.
+#
+# The 36 that are **not** here are real arithmetic (Bessel, Airy, `ndtr`, the
+# orthogonal-polynomial families, `zeta`), and `tests/torch_gap.py` carries that
+# number with its reason.
+
+class _Special(_Namespace):
+    """`torch.special`. Forwarding only — see the note above."""
+
+    # The eleven that are the same name in both places.
+    digamma = staticmethod(digamma)
+    erf = staticmethod(erf)
+    erfc = staticmethod(erfc)
+    erfinv = staticmethod(erfinv)
+    exp2 = staticmethod(exp2)
+    expm1 = staticmethod(expm1)
+    i0 = staticmethod(i0)
+    log1p = staticmethod(log1p)
+    logit = staticmethod(logit)
+    round = staticmethod(round)
+    sinc = staticmethod(sinc)
+
+    # **The four torch spells differently here than at the top level.** These are the
+    # reason the namespace is worth having at all: `expit` and `gammaln` are the names
+    # the statistics literature uses, and neither resolves anywhere else in torch.
+    expit = staticmethod(sigmoid)
+    gammaln = staticmethod(lgamma)
+    psi = staticmethod(digamma)
+    modified_bessel_i0 = staticmethod(i0)
+
+    # The five taking more than one argument. **`polygamma` is `(n, input)`** — that
+    # order is torch's and it is enforced there: `special.polygamma(x, 1)` is a
+    # `TypeError` in torch (measured), so getting it backwards here would accept a
+    # call torch rejects.
+    polygamma = staticmethod(polygamma)
+    xlogy = staticmethod(xlogy)
+    logsumexp = staticmethod(logsumexp)
+    softmax = staticmethod(softmax)
+    log_softmax = staticmethod(log_softmax)
+
+    # **These two arrived by asking the same question one more time.** The first pass
+    # counted twenty forwarders and called the other thirty-seven arithmetic we do not
+    # have. `gammainc` and `gammaincc` were in that thirty-seven, and they are
+    # `torch.igamma` and `torch.igammac` — the regularised incomplete gammas, which
+    # this library has had all along. Measured equal, not assumed.
+    #
+    # The pass that missed them is the same pass that had just caught `fft` being
+    # declined while built. Finding a blanket false does not make the next count
+    # careful; only counting again does.
+    gammainc = staticmethod(igamma)
+    gammaincc = staticmethod(igammac)
+
+
+special = _Special()
