@@ -11398,7 +11398,7 @@
     {
      "kind": "function",
      "name": "gridSample",
-     "signature": "export declare function gridSample(input: Tensor, grid: Tensor, mode?: \"bilinear\" | \"nearest\", paddingMode?: \"zeros\" | \"border\" | \"reflection\", alignCorners?: boolean): Tensor",
+     "signature": "export declare function gridSample(input: Tensor, grid: Tensor, mode?: \"bilinear\" | \"nearest\" | \"bicubic\", paddingMode?: \"zeros\" | \"border\" | \"reflection\", alignCorners?: boolean): Tensor",
      "doc": "Lifts values from where the grid points. The counterpart of `affineGrid`.\n\n**The positions are constants and the weights are tensors.** A floored\ninteger has no derivative and its remainder becomes the weight, so\nkeeping only the weights in the graph lets gradient flow to both the\ninput and the grid.",
      "members": [],
      "torch": "grid_sample",

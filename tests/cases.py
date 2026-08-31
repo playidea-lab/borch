@@ -5053,6 +5053,45 @@ def functional_name_cases(inp=None):
         lambda L: F(L).grid_sample(L.tensor(rect24), L.tensor(half_grid),
                                    align_corners=False))
 
+    # ── `bicubic`, the third mode ──────────────────────────────────────
+    #
+    # The refusal said *only bilinear and nearest are here*. It is the same Keys
+    # kernel `interpolate`'s plain `bicubic` uses, at `a = −0.75` — not the
+    # anti-aliased path's `−0.5`, which is the constant next door and the one a
+    # reader carrying it over would take.
+    #
+    # **The padding lands on the tap, not on the centre.** Bilinear clamps the
+    # continuous coordinate once and both its corners are inside; a 4×4 window steps
+    # one cell further, and clamping the centre and then masking gave `border` the
+    # same numbers as `zeros` — 6.04 where torch says 5.48, with the gradient to the
+    # grid zeroed at the edges too. So the out-of-range grid is asked under all three
+    # padding modes, which is the only place they part.
+    for pad in ("zeros", "border", "reflection"):
+        for ac in (False, True):
+            add(f"grid_sample(bicubic, padding={pad}, align={ac})",
+                lambda L, p=pad, a=ac: F(L).grid_sample(
+                    L.tensor(img3), L.tensor(out_grid), mode="bicubic",
+                    padding_mode=p, align_corners=a))
+    add("grid_sample(bicubic, 반 칸)",
+        lambda L: F(L).grid_sample(L.tensor(img3), L.tensor(half_grid),
+                                   mode="bicubic", align_corners=False))
+
+    def grid_bicubic_grad(L, which, pad):
+        """**The gradient has to reach the grid**, which is the path a spatial
+        transformer learns `theta` along. The cubic weights are written as tensor
+        expressions for that reason alone — computed as numpy constants the values
+        would all still be right and this would be zero."""
+        x = L.tensor(img3.copy(), requires_grad=True)
+        g = L.tensor(out_grid.copy(), requires_grad=True)
+        F(L).grid_sample(x, g, mode="bicubic", padding_mode=pad,
+                         align_corners=False).sum().backward()
+        return _grad_of(x if which == "input" else g, f"grid_sample/bicubic/{which}")
+
+    for _which in ("input", "grid"):
+        for _pad in ("zeros", "border", "reflection"):
+            add(f"grid_sample(bicubic, grad {_which}, padding={_pad})",
+                lambda L, w=_which, p=_pad: grid_bicubic_grad(L, w, p))
+
     planes33 = np.arange(2 * 2 * 3 * 3, dtype=np.float32).reshape(2, 2, 3, 3)
     add("grid_sample::여러 평면",
         lambda L: F(L).grid_sample(

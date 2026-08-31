@@ -4735,6 +4735,41 @@ function addUnpool(out: Map<string, Case>): void {
     return nn.gridSample(grid([2, 2, 3, 3]), g, "bilinear", "zeros", false);
   });
 
+  // ── `bicubic`, the third mode ─────────────────────────────────────────
+  //
+  // The same Keys kernel `interpolate`'s plain `bicubic` uses, at `a = −0.75` — not
+  // the anti-aliased path's `−0.5`, which is the constant next door.
+  //
+  // **The padding lands on the tap, not on the centre.** Bilinear clamps the
+  // continuous coordinate once and both its corners are inside; a 4×4 window steps
+  // one cell further, and clamping the centre and then masking gave `border` the same
+  // numbers as `zeros`. So the out-of-range grid is asked under all three modes.
+  const gridPads = ["zeros", "border", "reflection"] as const;
+  for (const pad of gridPads) {
+    for (const ac of [false, true]) {
+      out.set(
+        `fname::grid_sample(bicubic, padding=${pad}, align=${ac ? "True" : "False"})`,
+        () => nn.gridSample(img3(), outGrid(), "bicubic", pad, ac));
+    }
+  }
+  out.set("fname::grid_sample(bicubic, 반 칸)",
+    () => nn.gridSample(img3(), halfGrid(), "bicubic", "zeros", false));
+  // **The gradient has to reach the grid** — the path a spatial transformer learns
+  // `theta` along. The cubic weights are tensor expressions for that reason alone;
+  // as constants the values would all still be right and this would be zero.
+  for (const which of ["input", "grid"] as const) {
+    for (const pad of gridPads) {
+      out.set(`fname::grid_sample(bicubic, grad ${which}, padding=${pad})`, () => {
+        const x = img3();
+        const g = outGrid();
+        x.requiresGrad = true;
+        g.requiresGrad = true;
+        nn.gridSample(x, g, "bicubic", pad, false).sum().backward();
+        return gradOf(which === "input" ? x : g, `grid_sample/bicubic/${which}`);
+      });
+    }
+  }
+
   out.set("fname::grid_sample::grad(입력)", () => {
     const x = img3();
     x.requiresGrad = true;

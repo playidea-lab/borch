@@ -1776,6 +1776,51 @@ def _interpolate_antialias(x, size, scale_factor, mode, align_corners,
     return spread @ _wrap(wx.T)
 
 
+def _grid_pad_index(padding_mode, align_corners):
+    """How one tap index is brought back inside, for `grid_sample`'s bicubic window.
+
+    `None` means *leave it outside* — `zeros` wants the tap masked to zero, which is
+    what `pick` already does. The other two move it, and `pick`'s mask then never
+    fires because the moved index is in range.
+    """
+    if padding_mode == "border":
+        return lambda i, n: _np.clip(i, 0, n - 1)
+    if padding_mode == "reflection":
+        lo = 0.0 if align_corners else -0.5
+
+        def reflect(i, n):
+            hi = (n - 1.0) if align_corners else (n - 0.5)
+            if hi <= lo:
+                return _np.zeros_like(i)
+            span = 2.0 * (hi - lo)
+            t = _np.remainder(i - lo, span)
+            back = _np.minimum(t, span - t) + lo
+            return _np.clip(_np.rint(back), 0, n - 1).astype(int)
+
+        return reflect
+    return None
+
+
+def _pick_padded(pick, edge, iy, ix, h, w):
+    """One tap, with the padding applied to the index rather than to the centre."""
+    if edge is None:
+        return pick(iy, ix)
+    return pick(edge(iy, h), edge(ix, w))
+
+
+def _cubic_of(v):
+    """Keys' kernel at `a = −0.75` **as a tensor expression**, so the gradient flows
+    through it. The branch points are read off the values, which is where torch reads
+    them too — they are a measure-zero set and the polynomial is continuous across
+    them, so nothing turns on which side a boundary falls."""
+    t = v.abs()
+    a = _BICUBIC_A
+    near = ((a + 2) * t - (a + 3)) * t * t + 1
+    far = ((t - 5) * t + 8) * t * a - 4 * a
+    return where(Tensor(t.data <= 1), near,
+                 where(Tensor(t.data < 2), far, t * 0.0))
+
+
 def _triangle_weight_aa(t):
     """The bilinear kernel: one at the centre, zero a cell away."""
     t = -t if t < 0 else t
@@ -9054,13 +9099,18 @@ def grid_sample(input, grid, mode="bilinear", padding_mode="zeros",
     gy = grid[:, :, :, 1]
     sx = _grid_denorm(gx, w, align_corners)
     sy = _grid_denorm(gy, h, align_corners)
-    if padding_mode == "border":
-        sx, sy = clamp(sx, 0.0, w - 1.0), clamp(sy, 0.0, h - 1.0)
-    elif padding_mode == "reflection":
-        sx = _grid_reflect(sx, w, align_corners)
-        sy = _grid_reflect(sy, h, align_corners)
-    elif padding_mode != "zeros":
+    # **The centre is padded for the two-tap kernels and left alone for bicubic.**
+    # Clamping the centre puts both bilinear corners inside, which is the whole job
+    # there; a 4×4 window steps one cell further and needs the rule at the tap
+    # instead, so moving the centre as well would move it twice.
+    if padding_mode not in ("zeros", "border", "reflection"):
         _unsupported(f"grid_sample(padding_mode={padding_mode!r})")
+    if mode != "bicubic":
+        if padding_mode == "border":
+            sx, sy = clamp(sx, 0.0, w - 1.0), clamp(sy, 0.0, h - 1.0)
+        elif padding_mode == "reflection":
+            sx = _grid_reflect(sx, w, align_corners)
+            sy = _grid_reflect(sy, h, align_corners)
 
     flat = input.reshape(-1)
     batch = _np.arange(n).reshape(n, 1, 1, 1)
@@ -9082,14 +9132,39 @@ def grid_sample(input, grid, mode="bilinear", padding_mode="zeros",
         # torch rounds. Only a value comes out and there is no weight, so nothing
         # flows towards the grid.
         return pick(_np.rint(sy.data).astype(int), _np.rint(sx.data).astype(int))
-    if mode != "bilinear":
-        _unsupported(f"grid_sample(mode={mode!r}) — only bilinear and nearest are here")
+    if mode not in ("bilinear", "bicubic"):
+        _unsupported(f"grid_sample(mode={mode!r}) — bilinear, nearest and bicubic "
+                     "are here")
 
     x0 = _np.floor(sx.data).astype(int)
     y0 = _np.floor(sy.data).astype(int)
     wx = (sx - Tensor(x0.astype(input.data.dtype))).reshape(n, 1, oh, ow)
     wy = (sy - Tensor(y0.astype(input.data.dtype))).reshape(n, 1, oh, ow)
     one = 1.0
+    if mode == "bicubic":
+        # **The same Keys kernel as `interpolate`'s `bicubic`, at `a = −0.75`** — this
+        # is the plain path's constant, not the anti-aliased one's `−0.5`.
+        #
+        # The weights are written as tensor expressions in the fractional offset
+        # rather than computed in numpy, because **the gradient has to reach the
+        # grid**: that is the path by which a spatial transformer learns `theta`, and
+        # constants would silently cut it while every value case still passed.
+        #
+        # **The padding is applied per tap here, not to the centre.** Bilinear can
+        # clamp the continuous coordinate once and be done, because both corners of a
+        # clamped centre are inside; a 4×4 window steps one cell further and its outer
+        # taps land outside even so. Clamping the centre and then masking gave `border`
+        # the same numbers as `zeros` — 6.04 where torch says 5.48, with the gradient
+        # to the grid zeroed at the edges as well.
+        edge = _grid_pad_index(padding_mode, align_corners)
+        out = None
+        for ky in (-1, 0, 1, 2):
+            ty = _cubic_of(Tensor(float(ky)) - wy)
+            for kx in (-1, 0, 1, 2):
+                tap = _pick_padded(pick, edge, y0 + ky, x0 + kx, h, w)
+                out_ = tap * ty * _cubic_of(Tensor(float(kx)) - wx)
+                out = out_ if out is None else out + out_
+        return out
     return (pick(y0, x0) * (one - wy) * (one - wx)
             + pick(y0, x0 + 1) * (one - wy) * wx
             + pick(y0 + 1, x0) * wy * (one - wx)

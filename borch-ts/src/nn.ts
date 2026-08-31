@@ -4454,7 +4454,7 @@ function gridReflect(v: Tensor, n: number, alignCorners: boolean): Tensor {
 export function gridSample(
   input: Tensor,
   grid: Tensor,
-  mode: "bilinear" | "nearest" = "bilinear",
+  mode: "bilinear" | "nearest" | "bicubic" = "bilinear",
   paddingMode: "zeros" | "border" | "reflection" = "zeros",
   alignCorners = false,
 ): Tensor {
@@ -4469,12 +4469,18 @@ export function gridSample(
   const g2 = grid.reshape([N, cells, 2]);
   let sx = gridDenorm(g2.narrow(2, 0, 1).reshape([N, cells]), W, alignCorners);
   let sy = gridDenorm(g2.narrow(2, 1, 1).reshape([N, cells]), H, alignCorners);
-  if (paddingMode === "border") {
-    sx = sx.clamp(0, W - 1);
-    sy = sy.clamp(0, H - 1);
-  } else if (paddingMode === "reflection") {
-    sx = gridReflect(sx, W, alignCorners);
-    sy = gridReflect(sy, H, alignCorners);
+  // **The centre is padded for the two-tap kernels and left alone for bicubic.**
+  // Clamping the centre puts both bilinear corners inside, which is the whole job
+  // there; a 4×4 window steps one cell further and needs the rule at the tap instead,
+  // so moving the centre as well would move it twice.
+  if (mode !== "bicubic") {
+    if (paddingMode === "border") {
+      sx = sx.clamp(0, W - 1);
+      sy = sy.clamp(0, H - 1);
+    } else if (paddingMode === "reflection") {
+      sx = gridReflect(sx, W, alignCorners);
+      sy = gridReflect(sy, H, alignCorners);
+    }
   }
 
   // The starting index per plane. With `(N, C)` flattened in advance, each corner is
@@ -4511,6 +4517,44 @@ export function gridSample(
   const wx = sx.sub(x0).reshape([N, 1, cells]);
   const wy = sy.sub(y0).reshape([N, 1, cells]);
   const one = Tensor.full([], 1);
+  if (mode === "bicubic") {
+    // **The same Keys kernel as `interpolate`'s plain `bicubic`, at `a = −0.75`** —
+    // not the anti-aliased path's `−0.5`.
+    //
+    // The weights are tensor expressions in the fractional offset rather than
+    // constants, because **the gradient has to reach the grid**: that is the path by
+    // which a spatial transformer learns `theta`, and constants would cut it silently
+    // while every value case still passed.
+    const cubic = (v: Tensor): Tensor => {
+      const t = v.abs();
+      const a = -0.75;
+      const near = t.mul(Tensor.full([], a + 2)).sub(Tensor.full([], a + 3))
+        .mul(t).mul(t).add(one);
+      const far = t.sub(Tensor.full([], 5)).mul(t).add(Tensor.full([], 8))
+        .mul(t).mul(Tensor.full([], a)).sub(Tensor.full([], 4 * a));
+      return near.where(t.binary("le", one),
+                        far.where(t.binary("lt", Tensor.full([], 2)),
+                                  t.mul(Tensor.full([], 0))));
+    };
+    // The padding lands on the tap, not on the centre. `zeros` wants the tap masked,
+    // which `pick` already does; the other two move the index so the mask never fires.
+    const edge = (i: Tensor, n: number): Tensor => {
+      if (paddingMode === "border") return i.clamp(0, n - 1);
+      if (paddingMode === "reflection") return gridReflect(i, n, alignCorners).round();
+      return i;
+    };
+    let acc: Tensor | null = null;
+    for (let ky = -1; ky < 3; ky++) {
+      const ty = cubic(Tensor.full([], ky).sub(wy));
+      for (let kx = -1; kx < 3; kx++) {
+        const tap = pick(edge(y0.add(Tensor.full([], ky)), H),
+                         edge(x0.add(Tensor.full([], kx)), W));
+        const term = tap.mul(ty).mul(cubic(Tensor.full([], kx).sub(wx)));
+        acc = acc === null ? term : acc.add(term);
+      }
+    }
+    return shaped(acc ?? pick(y0, x0));
+  }
   const x1 = x0.add(one);
   const y1 = y0.add(one);
   const out = pick(y0, x0).mul(one.sub(wy)).mul(one.sub(wx))

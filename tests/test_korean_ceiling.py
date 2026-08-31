@@ -282,7 +282,9 @@ CEILINGS = {
     # 4170 → 4191. Twenty-one, in `antialias`'s two gradient case names
     # (`… 의 기울기`) and `interpolate(nearest 에 antialias)=둘 다 거절` with the two
     # verdict strings it returns. All are keys or values in `golden.json`.
-    "borch-ts/test": 4191,
+    # 4191 → 4193. Two, in `grid_sample(bicubic, 반 칸)` — a key in `golden.json`.
+    # The other twelve `bicubic` names are English.
+    "borch-ts/test": 4193,
 }
 
 
