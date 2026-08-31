@@ -1143,7 +1143,26 @@ class Tensor:
         shape = self.data.shape[:first] + (-1,) + self.data.shape[last + 1:]
         return self.reshape(shape)
 
+    @staticmethod
+    def _forward_step(idx):
+        """**numpy reverses on a negative step and torch refuses one.**
+
+        `x[::-1]` is a reversal in numpy and this class hands the key straight to
+        numpy, so it was a reversal here — with an answer, a shape and no error,
+        under a spelling torch stops at. That is the worst shape a divergence
+        takes: a line copied out of a numpy notebook runs, and the reader is left
+        believing torch reverses this way.
+
+        torch's own words, and its own type — `ValueError`, not `RuntimeError`,
+        because indexing is Python-level over there too (measured). A step of 0
+        needs no check: numpy and torch already stop with the same sentence.
+        """
+        for one in (idx if isinstance(idx, tuple) else (idx,)):
+            if isinstance(one, slice) and one.step is not None and one.step < 0:
+                raise ValueError("step must be greater than zero")
+
     def __getitem__(self, idx):
+        self._forward_step(idx)
         key = tuple(i.data if isinstance(i, Tensor) else i for i in idx) \
             if isinstance(idx, tuple) else (idx.data if isinstance(idx, Tensor) else idx)
         old = self.data.shape
@@ -1158,6 +1177,7 @@ class Tensor:
     def __setitem__(self, idx, value):
         if self.requires_grad and _grad_mode.enabled:
             raise RuntimeError("A tensor that requires grad cannot be assigned into in place.")
+        self._forward_step(idx)
         key = tuple(i.data if isinstance(i, Tensor) else i for i in idx) \
             if isinstance(idx, tuple) else (idx.data if isinstance(idx, Tensor) else idx)
         self.data[key] = value.data if isinstance(value, Tensor) else value

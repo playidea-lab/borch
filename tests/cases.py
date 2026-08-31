@@ -3301,6 +3301,63 @@ def index_cases(inp=None):
 
     refuses("scatter(reduce) 의 기울기", "derivative for aten::scatter is not implemented",
             scatter_reduce_backward)
+
+    # ── `x[a:b:step]` — the step in a slice, reading and writing ────────────────
+    #
+    # **The two halves disagreed about whether it exists.** Assignment refused it by
+    # name (*assigning into a strided slice is not here yet*) and reading dropped it
+    # on the floor: `x[::2]` narrowed from 0 to the end and handed back the whole
+    # axis, with a plausible shape, real values and no error anywhere. The refusal
+    # was the honest half.
+    #
+    # A cube, because a step has to be asked **per axis**: one written for the last
+    # axis alone and applied to all of them passes every case that steps one axis.
+    cube = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+
+    def stepped(name, run):
+        add(f"걸음::{name}", run)
+
+    stepped("x[::2]", lambda L: L.tensor(cube)[::2])
+    stepped("x[:, ::2]", lambda L: L.tensor(cube)[:, ::2])
+    stepped("x[..., 1::2]", lambda L: L.tensor(cube)[..., 1::2])
+    # Three axes at once, each with its own step, and a bounded slice among them —
+    # `1:3:2` is one cell, which is where an off-by-one in the count shows.
+    stepped("x[:, 1:3:2, ::3]", lambda L: L.tensor(cube)[:, 1:3:2, ::3])
+
+    def writes(name, put):
+        def run(L, f=put):
+            y = L.tensor(cube).clone()
+            f(L, y)
+            return y
+        stepped(name, run)
+
+    writes("x[:, ::2] = 0", lambda L, y: y.__setitem__((slice(None), slice(None, None, 2)), 0.0))
+    # **A tensor value, not a scalar.** A fill writes the same number everywhere, so
+    # a walk that visits the right cells in the wrong order passes it; a two-element
+    # value that alternates does not.
+    writes("x[..., 1::2] = 벡터",
+           lambda L, y: y.__setitem__((Ellipsis, slice(1, None, 2)),
+                                      L.tensor([-1.0, -2.0])))
+    # An integer axis mixed with two stepped ones — the integer contributes a span of
+    # one, and everything outside plane 1 has to be left alone.
+    writes("x[1, ::2, 1::2] = 9",
+           lambda L, y: y.__setitem__((1, slice(None, None, 2), slice(1, None, 2)), 9.0))
+
+    # **numpy reverses and torch refuses.** The core handed the key straight to numpy,
+    # so `x[::-1]` came back reversed, with a shape and no error, under a spelling
+    # torch stops at — the shape a divergence takes when a numpy notebook line runs.
+    for label, call in (
+        ("x[::-1]", lambda L: L.tensor(cube)[::-1]),
+        ("x[:, ::-2]", lambda L: L.tensor(cube)[:, ::-2]),
+        ("x[::-1] = 0",
+         lambda L: L.tensor(cube).clone().__setitem__(slice(None, None, -1), 0.0)),
+    ):
+        stepped(f"거꾸로::{label} 는 양쪽 다 멈춘다",
+                lambda L, f=call: _both_stop(L, f))
+    # A step of 0 needed no work — numpy and torch already stop with the same
+    # sentence. It is asked so that a future rewrite of the check cannot lose it.
+    stepped("걸음 0 은 양쪽 다 멈춘다",
+            lambda L: _both_stop(L, lambda M: M.tensor(cube)[::0]))
     return cases
 
 

@@ -86,6 +86,43 @@ def int64_name():
     return _DType("int64")
 
 
+def _forward_step(one):
+    """torch's rule for a slice's step, in torch's words.
+
+    **The core's `_forward_step` is the same sentence** — it had to reach numpy's
+    reversal, which is a real answer under a spelling torch stops at. Here nothing
+    reverses, so a negative step would have gone to `range(start, stop, -2)` and
+    come back empty: a tensor with a zero-length axis, no error, and the reading
+    that the slice simply selected nothing.
+    """
+    if one.step == 0:
+        raise ValueError("slice step cannot be zero")
+    if one.step is not None and one.step < 0:
+        raise ValueError("step must be greater than zero")
+
+
+def _expand_ellipsis(keys, rank):
+    """`...` becomes the full slices it stands for. `keys` is returned changed.
+
+    **Found by identity, never by `==`.** Written as `Ellipsis in keys`, the
+    membership test compares each key with `==`, and a key that is a tensor answers
+    that with a tensor comparison — over the boundary, into borch.ts, where it came
+    back as `other.isComplex is not a function`. Twenty-one `roi_align`,
+    `ps_roi_align` and `deform_conv2d` cases stopped with that sentence, which names
+    neither indexing nor an ellipsis. Every key here is compared by `is`.
+
+    `None` adds an axis rather than consuming one, so it does not count against what
+    `...` has left to stand for.
+    """
+    at = [i for i, k in enumerate(keys) if k is Ellipsis]
+    if len(at) > 1:
+        raise IndexError("an index can only have a single ellipsis ('...')")
+    if at:
+        named = sum(1 for k in keys if k is not Ellipsis and k is not None)
+        keys[at[0]:at[0] + 1] = [slice(None)] * max(0, rank - named)
+    return keys
+
+
 def _core_repr(shim):
     """Borrow the core's `_tensor_repr`. In a browser it lives under `/work`."""
     global _REPR
@@ -974,21 +1011,18 @@ class Tensor:
         return wrap(self._h.neg())
 
     def _spans(self, key):
-        """`key` as one `(start, stop)` per axis, in order, covering every axis.
+        """`key` as one `(start, stop, step)` per axis, in order, covering every axis.
 
-        Only basic indexing — integers, slices with step 1, and one `Ellipsis`.
-        An integer becomes a span of length one, which is what makes assignment
-        and slicing the same walk. Anything else is refused by name rather than
-        approximated, because a *nearly* right region is a wrong picture with no
-        error attached to it.
+        Only basic indexing — integers, slices and one `Ellipsis`. An integer
+        becomes a span of length one, which is what makes assignment and slicing the
+        same walk. Anything else is refused by name rather than approximated, because
+        a *nearly* right region is a wrong picture with no error attached to it.
+
+        **The step used to be refused here** and rides along now; `_take` says what
+        that refusal was standing on.
         """
-        keys = list(key) if isinstance(key, tuple) else [key]
-        if keys.count(Ellipsis) > 1:
-            raise IndexError("an index can only have a single ellipsis ('...')")
-        if Ellipsis in keys:
-            at = keys.index(Ellipsis)
-            named = len(keys) - 1
-            keys[at:at + 1] = [slice(None)] * (len(self.shape) - named)
+        keys = _expand_ellipsis(list(key) if isinstance(key, tuple) else [key],
+                                len(self.shape))
         keys += [slice(None)] * (len(self.shape) - len(keys))
         if len(keys) > len(self.shape):
             raise IndexError(
@@ -998,24 +1032,36 @@ class Tensor:
         for axis, k in enumerate(keys):
             n = self.shape[axis]
             if isinstance(k, slice):
-                if k.step not in (None, 1):
-                    raise NotImplementedError(
-                        "assigning into a strided slice is not here yet — "
-                        f"step {k.step} on dimension {axis}.")
-                start, stop, _ = k.indices(n)
-                spans.append((start, max(start, stop)))
+                _forward_step(k)
+                start, stop, step = k.indices(n)
+                spans.append((start, max(start, stop), step))
             elif isinstance(k, int):
                 at = k + n if k < 0 else k
                 if not 0 <= at < n:
                     raise IndexError(
                         f"index {k} is out of bounds for dimension {axis} "
                         f"with size {n}")
-                spans.append((at, at + 1))
+                spans.append((at, at + 1, 1))
             else:
                 raise NotImplementedError(
                     f"assigning with {type(k).__name__} is not here yet — "
                     "integers, slices and `...` are.")
         return spans
+
+    def _take(self, axis, start, stop, step):
+        """The region on one axis. A step of 1 is a `narrow`; anything else is the
+        strided positions, picked out by name.
+
+        **This is what the step refusal was standing on.** It read "assigning into a
+        strided slice is not here yet", and the reason was that the walk below is
+        `narrow` all the way down — a contiguous window, which cannot skip. It never
+        had to be: `arange` and `indexSelect` are both over there, and `sliceScatter`
+        has taken a step the whole time, which is the half that is harder to write.
+        """
+        if step == 1:
+            return wrap(self._h.narrow(axis, start, stop - start))
+        at = tensor(list(range(start, stop, step)), int64_name())
+        return wrap(self._h.indexSelect(axis, at._h))
 
     def __setitem__(self, key, value):
         """`x[0] = 1`, `img[..., y:y + h, x:x + w] = 0`.
@@ -1036,8 +1082,8 @@ class Tensor:
         self._refuse_inplace_on_leaf("__setitem__")
         spans = self._spans(key)
         region = self
-        for axis, (start, stop) in enumerate(spans):
-            region = wrap(region._h.narrow(axis, start, stop - start))
+        for axis, (start, stop, step) in enumerate(spans):
+            region = region._take(axis, start, stop, step)
         # **`value` is not always a number.** `borchvision.erase` is called both
         # ways — a scalar fill and a `(C, h, w)` patch — and `float(value)` on the
         # second turns into `only length-1 arrays can be converted to Python
@@ -1057,25 +1103,40 @@ class Tensor:
         def put(dst, axis):
             if axis == len(spans):
                 return src
-            start, stop = spans[axis]
-            inner = wrap(dst._h.narrow(axis, start, stop - start))
+            start, stop, step = spans[axis]
+            inner = dst._take(axis, start, stop, step)
             return wrap(dst._h.sliceScatter(
-                handle(put(inner, axis + 1)), axis, start, stop, 1))
+                handle(put(inner, axis + 1)), axis, start, stop, step))
 
         return self._write_back(put(self, 0))
 
     def __getitem__(self, key):
-        """`x[0]`, `x[1:3]`, `x[:, 1]`. The most common thing torch code does."""
-        keys = key if isinstance(key, tuple) else (key,)
+        """`x[0]`, `x[1:3]`, `x[:, 1]`. The most common thing torch code does.
+
+        **`...` was understood on the assignment side and not here.** `_spans`
+        expands it; this loop had no branch for it, so `x[..., 1::2]` fell through
+        to the integer branch and stopped with `'<' not supported between instances
+        of 'ellipsis' and 'int'` — an error about comparison, in code about
+        indexing, naming nothing the caller wrote. The two halves of the same
+        notation disagreed about whether it exists.
+        """
+        keys = _expand_ellipsis(list(key) if isinstance(key, tuple) else [key],
+                               len(self.shape))
         kinds = [isinstance(k, (Tensor, list, tuple)) for k in keys]
         if sum(kinds) > 1 and all(kinds):
             return self._gather_at(keys)
         out, axis = self, 0
         for k in keys:
             if isinstance(k, slice):
-                start = 0 if k.start is None else k.start
-                stop = out.shape[axis] if k.stop is None else k.stop
-                out = wrap(out._h.narrow(axis, start, stop - start))
+                # **The step was read and thrown away here.** `x[::2]` narrowed
+                # from 0 to the end and handed back the whole axis — the right
+                # shape for `x[:]`, under the spelling for every other row. No
+                # exception, no warning, and the values are all real, so nothing
+                # downstream can tell. It is `_take`'s walk now, the same one
+                # assignment uses, so the two cannot part again.
+                _forward_step(k)
+                start, stop, step = k.indices(out.shape[axis])
+                out = out._take(axis, start, max(start, stop), step)
                 axis += 1
             elif k is None:
                 # **`x[:, None]` inserts a dimension.** `torch.newaxis` is this

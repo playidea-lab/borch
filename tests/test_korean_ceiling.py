@@ -327,7 +327,10 @@ CEILINGS = {
     # on twelve `max_pool2d`/`MaxPool2d` rows, `셋 다` on three of them, and
     # `창이 있는 자리` on the unpool row. Keys in `golden.json`, so both sides spell
     # them the same.
-    "borch-ts/test": 4499,
+    # 4499 → 4503. Four, in the `index::` skip reason — `표기`, which names what the
+    # eleven `걸음::` cases are about (`x[a:b:step]` is Python's notation and borch.ts
+    # has no `[]`). A reason in `run.py`, not a case name.
+    "borch-ts/test": 4503,
 }
 
 

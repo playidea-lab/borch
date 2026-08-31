@@ -800,7 +800,14 @@ NOT_PORTED = {
     # left are **refusals** and a Python matter — torch takes the same thing under two
     # names, `right` (a boolean) and `side` (a word), and stops when the two disagree.
     # borch.ts knows `right` alone, so there is no partner to disagree with.
-    "index::": (2, "파이썬 — reconciling `side` with `right`. TS knows only one"),
+    # 2 → 13. Eleven `걸음::` cases arrived — `x[a:b:step]`, reading and writing, and
+    # the refusals on a negative and a zero step. **The notation is Python's**, the
+    # same reason written two rows up for `x[:, None]`: borch.ts has no `[]` and no
+    # `slice`, so a TS body would have to pick a spelling of my own rather than a name
+    # the two sides share. The ingredients underneath are asked already and by name —
+    # `spot::slice_scatter(step=2)` is the write, `indexSelect` and `arange` the read —
+    # and the binding's eleven rows run every one of them through borch.ts for real.
+    "index::": (13, "파이썬 — `side`/`right`, and `x[a:b:step]` 표기. TS has no `[]`"),
     # 4 → 10. Six "resume training" cases arrived. **Those already tread on borch.ts** —
     # the binding's optimizers and schedulers call the ones over there as they are, so
     # those six running under `--lib borch_webgpu` are measuring borch.ts's `StepLR` and
