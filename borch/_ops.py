@@ -24,6 +24,7 @@ from ._base import (
     _math,
     _needs_float,
     _np, _refuses_bool,
+    _only_cpu,
     _refuses_nonfloat_kernel, _requested_dtype, _resolve, _unsupported, Size,
     device as _device,
     dtype,
@@ -125,11 +126,17 @@ def _made(arr, dt=None, requires_grad=False):
 
 
 def zeros(*shape, dtype=None, requires_grad=False, device=None):
+    """**`device` was in the signature and the body never read it**, so
+    `zeros(2, device="cuda")` handed back a CPU tensor and said nothing. `_only_cpu`
+    is the rule now, and it is the layers' rule too — they had the opposite habit of
+    refusing `"cpu"` as well."""
+    _only_cpu("zeros", device)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
     return _made(_np.zeros(shape, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
 
 def ones(*shape, dtype=None, requires_grad=False, device=None):
+    _only_cpu("ones", device)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
     return _made(_np.ones(shape, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
@@ -318,6 +325,7 @@ def randn(*shape, requires_grad=False, generator=None):
 
 
 def rand(*shape, dtype=None, requires_grad=False, device=None, generator=None):
+    _only_cpu("rand", device)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
     return _made(_stream(generator).random(shape).astype(_DEFAULT_DTYPE),
                  dtype, requires_grad)
@@ -5804,7 +5812,7 @@ def einsum(equation, *operands):
 
 
 def empty(*shape, dtype=None, requires_grad=False, device=None):
-    return zeros(*shape, dtype=dtype, requires_grad=requires_grad)
+    return zeros(*shape, dtype=dtype, requires_grad=requires_grad, device=device)
 
 
 
@@ -6347,11 +6355,71 @@ def _pool_all(x):
     return x.mean(dim=2).mean(dim=2).reshape(x.data.shape[0], x.data.shape[1], 1, 1)
 
 
-def layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):
-    mean = input.mean(dim=-1, keepdim=True)
-    centered = input - mean
+def _layer_norm_checks(full, normalized_shape, weight_shape=None, bias_shape=None):
+    """torch's four refusals for `layer_norm`, in torch's words, before anything
+    is computed. Returns the shape as a tuple.
+
+    Shapes rather than tensors, so **the binding can borrow it** — over there the
+    values are on the GPU and only the shape is on this side. Written again there it
+    would be a second copy of four wordings to keep in step, and the copy is what
+    drifts.
+    """
+    # torch's own type refusal: the **function** wants a tuple where the layer
+    # happily takes an int (measured — `nn.LayerNorm(4)` is `(4,)`).
+    if isinstance(normalized_shape, int):
+        raise TypeError("layer_norm(): argument 'normalized_shape' (position 2) "
+                        "must be tuple of ints, not int")
+    shape = tuple(int(n) for n in normalized_shape)
+    if not shape:
+        raise RuntimeError(
+            "Expected normalized_shape to be at least 1-dimensional, i.e., "
+            "containing at least one element, but got normalized_shape = []")
+    dims = len(shape)
+    if tuple(full)[len(full) - dims:] != shape:
+        raise RuntimeError(
+            f"Given normalized_shape={list(shape)}, expected input with shape "
+            f"[*, {', '.join(str(n) for n in shape)}], but got input of "
+            f"size{list(full)}")
+    for who, got in (("weight", weight_shape), ("bias", bias_shape)):
+        if got is not None and tuple(got) != shape:
+            raise RuntimeError(
+                f"Expected {who} to be of same shape as normalized_shape, but got "
+                f"{who} of shape {list(got)} and normalized_shape = {list(shape)}")
+    return shape
+
+
+def layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):    # noqa: A002
+    """**`normalized_shape` was in the signature and the body never read it.**
+
+    It folded the last axis, always. With one axis that is the right answer, so
+    `layer_norm(x, (4,))` agreed with torch and every case asked it that way;
+    `layer_norm(x, (3, 4))` folds the last *two* axes as one block — mean and
+    variance over 12 cells, not 4 — and came back normalised over 4 with no
+    exception. A mismatched shape, an empty one and a bare `int` were all accepted
+    too, and torch stops at each.
+
+    **`nn.LayerNorm` had all of this right and this did not**, which is why nothing
+    said so: the golden asked the layer for the multi-axis case and the function for
+    the single-axis one. The arithmetic is here now and the layer calls it — the
+    same direction `embedding` below was pointed, and for the same reason, that a
+    function taking the caller's own weight tensor is the primitive.
+    """
+    full = tuple(int(n) for n in input.data.shape)
+    shape = _layer_norm_checks(
+        full, normalized_shape,
+        *[None if v is None else tuple(int(n) for n in v.data.shape)
+          for v in (weight, bias)])
+    dims = len(shape)
+    # The last `dims` axes are folded into one before the statistics are taken.
+    # Folded axis by axis the numbers differ — the mean of means is not the mean.
+    lead = full[:len(full) - dims]
+    flat = input.reshape(*lead, -1) if dims > 1 else input
+    mean = flat.mean(dim=-1, keepdim=True)
+    centered = flat - mean
     var = (centered * centered).mean(dim=-1, keepdim=True)
     out = centered / (var + eps) ** 0.5
+    if dims > 1:
+        out = out.reshape(*full)
     if weight is not None:
         out = out * weight
     return out + bias if bias is not None else out

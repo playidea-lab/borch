@@ -338,7 +338,11 @@ CEILINGS = {
     # 4587 → 4601. Fourteen, in the `top::` skip reason — `난수::generator::`,
     # `살펴보기::layout::`, `살펴보기::형식::`, which name the case groups the row
     # accounts for. A reason in `run.py`, not case names.
-    "borch-ts/test": 4601,
+    # 4601 → 4628. Twenty-seven: `norm::nn.LayerNorm… 는 F 와 같다` on two rows and
+    # `0 텐서=` in the two `zero_grad` verdicts (keys and values in `golden.json`),
+    # plus the `norm::`/`opt::`/`container::` skip reasons in `run.py` naming what
+    # each row is about.
+    "borch-ts/test": 4628,
 }
 
 

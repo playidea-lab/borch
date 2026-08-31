@@ -13142,10 +13142,16 @@
       },
       {
        "name": "zeroGrad",
-       "signature": "zeroGrad(): void",
-       "doc": "Empties the gradients. **It returns them to `null`** — filling with\nzeros blurs the leaf test.",
+       "signature": "zeroGrad(setToNone?: boolean): void",
+       "doc": "Empties the gradients.\n\n  The difference is invisible until something reads `grad` between two calls:\n  `null` has no shape and nothing to add into, and the argument is there\n  precisely so that a zeroed tensor is.",
+       "tags": [
+        {
+         "tag": "param",
+         "text": "setToNone torch's argument, and the default is `true`: the gradient is dropped rather than filled with zeros. **The seat did not exist here, and on both Python sides it existed and was never read** — so the ordinary call agreed everywhere and `setToNone = false` quietly did the other thing."
+        }
+       ],
        "torch": "zero_grad",
-       "doc_ko": "기울기를 비운다. **`null` 로 되돌린다** — 0 으로 채우면 잎 판정이 흐려진다."
+       "doc_ko": "기울기를 비운다.\n\n두 번의 호출 사이에서 `grad` 를 읽기 전까지는 차이가 보이지 않는다: `null` 은 모양도 없고 더할 곳도 없다. 인자가 있는 이유가 바로 0 으로 채운 텐서를 남기기 위해서다."
       },
       {
        "name": "step",

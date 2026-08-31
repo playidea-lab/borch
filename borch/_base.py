@@ -42,6 +42,26 @@ _TYPE_NAMES = {"b": "Bool", "i": "Long", "u": "Long", "f": "Float",
                "c": "ComplexFloat"}
 
 
+def _only_cpu(what, requested):
+    """One rule for every `device=` seat: **`cpu` is this library's device and
+    everything else stops.**
+
+    Two opposite mistakes lived under this one argument. The layers refused it
+    outright, so `nn.Linear(3, 2, device="cpu")` — a line naming the device the
+    tensor was going to be on anyway — stopped. And the factories read it not at
+    all, so `zeros(2, device="cuda")` handed back a CPU tensor with no exception:
+    the values right and the claim about where they are false. Neither habit could
+    be corrected without the other, because the argument had no rule.
+
+    `None` passes: it is the default and means "wherever things go".
+    """
+    if requested is None:
+        return
+    name = str(getattr(requested, "type", requested))
+    if name != "cpu":
+        _unsupported(f"{what}(device={name!r})")
+
+
 def _float_in(data):
     """The array a float-only function should compute on.
 

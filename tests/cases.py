@@ -4546,6 +4546,32 @@ def opt_cases(inp=None):
         cases.append((OPT_PREFIX + f"{_name}/이어서 학습하기",
                       lambda L, n=_name, a=_args: resume(L, n, a)))
 
+    # ── `zero_grad(set_to_none)` — a seat the body never read ─────────────────
+    #
+    # It always set `None`, which is torch's default, so the ordinary call agreed
+    # and `set_to_none=False` — what code written before torch 2.0 asks for —
+    # quietly did the other thing. The difference is invisible until a line reads
+    # `p.grad` between the two calls: `None` has no shape and no `.zero_()`, and the
+    # argument exists precisely so that it does.
+    #
+    # **The model's own `zero_grad` had no seat at all**, so one of the two spellings
+    # was a `TypeError` and the other accepted-and-ignored. Two ways to be wrong
+    # about one argument in one library, which is why both are asked here.
+    def _grad_after_zeroing(L, through, to_none):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.1)
+        L.nn.CrossEntropyLoss()(m(L.tensor(xin)), L.tensor(yin)).backward()
+        (opt if through == "opt" else m).zero_grad(set_to_none=to_none)
+        got = dict(m.named_parameters())["0.weight"].grad
+        # The **kind** of what is left, not a value — `None` and a zero tensor are
+        # what the flag chooses between, and only one of them has values at all.
+        return "None" if got is None else f"0 텐서={bool(float(got.abs().sum()) == 0.0)}"
+
+    for _through in ("opt", "model"):
+        for _flag in (True, False):
+            cases.append((OPT_PREFIX + f"zero_grad({_through}, set_to_none={_flag})",
+                          lambda L, t=_through, f=_flag: _grad_after_zeroing(L, t, f)))
+
     # **Did the three above really move anything?**
     #
     # The cases above can pass even when `load_state_dict` does nothing — they do if loaded and
@@ -5770,6 +5796,20 @@ def top_level_cases(inp=None):
         cases.append((TOP_PREFIX + f"살펴보기::{label} 은 이름뿐=우리는거절",
                       refusal_case(lambda L, n=label:
                                    L.tensor([1], dtype=getattr(L, n)))))
+
+    # ── `device=` on the factories, which read it not at all ──────────────────
+    #
+    # `zeros(2, device="cuda")` handed back a CPU tensor: the values right, the
+    # claim about where they are false, no exception. The same rule the layers use
+    # now, and they had the opposite habit — refusing `"cpu"`, this library's own
+    # device.
+    for name in ("zeros", "ones", "rand", "empty"):
+        add(f"살펴보기::장치::{name}(device='cpu') 는 만들어진다",
+            lambda L, n=name: " ".join(
+                str(int(v)) for v in getattr(L, n)(2, 3, device="cpu").shape))
+        cases.append((TOP_PREFIX + f"살펴보기::장치::{name}(device='cuda') 는 양쪽 다 멈춘다",
+                      lambda L, n=name: _both_stop(
+                          L, lambda M, m=n: getattr(M, m)(2, 3, device="cuda"))))
 
     add("살펴보기::cuda.device_count", lambda L: str(L.cuda.device_count()))
     add("살펴보기::get_default_device", lambda L: str(L.get_default_device()))
@@ -8977,6 +9017,60 @@ def norm_cases(inp=None):
             return _grad_of(x, n)
         cases.append((NORM_PREFIX + f"grad::{name}", grad))
 
+    # ── `F.layer_norm` folded the last axis whatever it was told ──────────────
+    #
+    # `normalized_shape` was in the signature and the body never read it. With one
+    # axis "fold the last axis" is the right answer, so every case asked it that way
+    # and agreed; `(3, 4)` folds the last **two** as one block — mean and variance
+    # over 12 cells rather than 4 — and came back normalised over 4, real numbers
+    # and no exception. **`nn.LayerNorm` had it right the whole time**, which is why
+    # nothing said so: the golden asked the layer for the multi-axis case and the
+    # function for the single-axis one, so neither ever met the other's question.
+    #
+    # Asked at all three depths, and both ways round: the function and the layer on
+    # the same input, so one of them being wrong cannot hide behind the other.
+    _ln = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    for _dims, _tag in (((4,), "(4,)"), ((3, 4), "(3, 4)"), ((2, 3, 4), "(2, 3, 4)")):
+        add(f"F.layer_norm{_tag}",
+            lambda L, x, d=_dims: L.nn.functional.layer_norm(x, d), _ln)
+    _lnw = np.arange(1, 13, dtype=np.float32).reshape(3, 4)
+    # **The affine pair, which the binding held a seat for and never read** — the
+    # answer came back unscaled and unshifted, which in a transformer block is the
+    # learned affine silently missing.
+    cases.append((NORM_PREFIX + "F.layer_norm(weight)",
+                  lambda L: L.nn.functional.layer_norm(
+                      L.tensor(_ln), (3, 4), L.tensor(_lnw))))
+    cases.append((NORM_PREFIX + "F.layer_norm(weight, bias)",
+                  lambda L: L.nn.functional.layer_norm(
+                      L.tensor(_ln), (3, 4), L.tensor(_lnw),
+                      L.tensor(_lnw * 0.0 + 2.0))))
+    # The layer, on the same input, so the two halves are compared with each other
+    # rather than each with itself.
+    for _dims, _tag in (((4,), "(4,)"), ((3, 4), "(3, 4)")):
+        cases.append((NORM_PREFIX + f"nn.LayerNorm{_tag} 는 F 와 같다",
+                      lambda L, d=_dims: L.nn.LayerNorm(d)(L.tensor(_ln))
+                      - L.nn.functional.layer_norm(L.tensor(_ln), d)))
+
+    for _label, _fragment, _call in (
+        ("모양이 안 맞으면", "expected input with shape",
+         lambda L: L.nn.functional.layer_norm(L.tensor(_ln), (5,))),
+        ("빈 모양", "at least 1-dimensional",
+         lambda L: L.nn.functional.layer_norm(L.tensor(_ln), ())),
+        # torch's **function** wants a tuple where its layer takes an int happily.
+        ("int 하나", "must be tuple of ints",
+         lambda L: L.nn.functional.layer_norm(L.tensor(_ln), 4)),
+        ("weight 모양이 틀리면", "same shape as normalized_shape",
+         lambda L: L.nn.functional.layer_norm(L.tensor(_ln), (3, 4), L.ones(4))),
+    ):
+        def _ln_refuses(L, f=_call, frag=_fragment):
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                return frag if frag in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+
+        cases.append((NORM_PREFIX + f"F.layer_norm 거절::{_label}", _ln_refuses))
+
     # ── GroupNorm. At one group it is LayerNorm, and at the channel count InstanceNorm. ──
     add("F.group_norm(1)", lambda L, x: L.nn.functional.group_norm(x, 1), img)
     add("F.group_norm(3)", lambda L, x: L.nn.functional.group_norm(x, 3), img)
@@ -9421,11 +9515,19 @@ def container_cases(inp=None):
     # argument is `device` there and was `bias` here — **a shift**, which returns a
     # layer rather than raising. What found it was the signature axis reading three
     # `unaligned` rows where the neighbours read `agree`.
-    for which in ("device", "dtype"):
-        cases.append((CONTAINER_PREFIX + f"BatchNorm({which})=우리는거절",
-                      refusal_case(
-                          lambda L, w=which: L.nn.BatchNorm2d(
-                              3, **{w: ("cpu" if w == "device" else L.float32)}))))
+    # **`device="cpu"` stopped here, and that was refusing our own device.** The
+    # seat is `_only_cpu` now — one rule shared with the factories, which had the
+    # opposite habit of reading the argument not at all — so the layer builds and
+    # the case asks for what it built. `dtype` still stops: a parameter here is
+    # float32 and `dtype=float64` is a request that cannot be met.
+    cases.append((CONTAINER_PREFIX + "BatchNorm(device='cpu') 는 만들어진다",
+                  lambda L: repr(L.nn.BatchNorm2d(3, device="cpu"))))
+    cases.append((CONTAINER_PREFIX + "BatchNorm(dtype)=우리는거절",
+                  refusal_case(lambda L: L.nn.BatchNorm2d(3, dtype=L.float32))))
+    # And the other half of the rule, which nothing asked before: a device that is
+    # not here. torch has no CUDA on this machine either, so both stop.
+    cases.append((CONTAINER_PREFIX + "BatchNorm(device='cuda') 는 양쪽 다 멈춘다",
+                  lambda L: _both_stop(L, lambda M: M.nn.BatchNorm2d(3, device="cuda"))))
 
     # ── `track_running_stats=False`, refused on all three sides until today ──────
     #

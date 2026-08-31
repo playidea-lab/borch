@@ -3588,20 +3588,23 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
   // the eager batch class took neither. That is not a short tail: torch declares
   // `bias` keyword-only after the pair, so a sixth positional argument is `device`
   // there and was `bias` here, and a shift returns a layer instead of raising.
-  for (const which of ["device", "dtype"]) {
-    out.set(`container::BatchNorm(${which})=우리는거절`, () => {
-      try {
-        new nn.BatchNorm2d(3, 1e-5, 0.1, true, true,
-          which === "device" ? ("cpu" as unknown as null) : null,
-          which === "dtype" ? ("float32" as unknown as null) : null);
-      } catch (err) {
-        const said = String(err);
-        return said.includes("is not in the browser subset")
-          ? "기대대로" : `다른 문구 <${said.slice(0, 44)}>`;
-      }
-      return "뜻밖의 성공";
-    });
-  }
+  //
+  // **The `device` half is asked on the Python side alone now.** Over there
+  // `device="cpu"` builds the layer — it names the device the parameters were going
+  // to be on anyway — and only a device that is not here stops. This class carries
+  // the pair to refuse both, so there is no `"cpu"` here to accept, and the two
+  // remaining rows sit in `run.py`'s ledger under `container::`.
+  out.set("container::BatchNorm(dtype)=우리는거절", () => {
+    try {
+      new nn.BatchNorm2d(3, 1e-5, 0.1, true, true, null,
+        "float32" as unknown as null);
+    } catch (err) {
+      const said = String(err);
+      return said.includes("is not in the browser subset")
+        ? "기대대로" : `다른 문구 <${said.slice(0, 44)}>`;
+    }
+    return "뜻밖의 성공";
+  });
 
   // `registerBuffer` is **syntax the user writes** rather than a layer. Every model
   // carrying a mask or a positional table uses it. borch.ts needs it too for the same model
@@ -6256,6 +6259,39 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
     });
   };
 
+  // **`layerNormOver` was here the whole time and the Python side did not use it.**
+  // `F.layer_norm` folded the last axis whatever `normalized_shape` said, because
+  // that argument was in the signature and the body never read it; the binding
+  // folded `layerNorm(-len(shape))`, which is one axis *that far from the end*.
+  // Both agree with this at one axis, which is every case that asked.
+  const ln = (grad = false): Tensor =>
+    Tensor.from(Array.from({ length: 24 }, (_, i) => i), [2, 3, 4],
+                grad ? { requiresGrad: true } : {});
+  for (const [tag, dims] of [["(4,)", 1], ["(3, 4)", 2], ["(2, 3, 4)", 3]] as
+       [string, number][]) {
+    out.set(`norm::F.layer_norm${tag}`, () => ln().layerNormOver(dims));
+    // The gradient too — a fold over the wrong axes has a plausible forward and a
+    // backward that trains the wrong thing.
+    out.set(`norm::grad::F.layer_norm${tag}`, () => {
+      const x = ln(true);
+      seeded(x.layerNormOver(dims)).backward();
+      return gradOf(x, `layerNormOver(${dims})`);
+    });
+  }
+  const lnw = (): Tensor =>
+    Tensor.from(Array.from({ length: 12 }, (_, i) => i + 1), [3, 4]);
+  out.set("norm::F.layer_norm(weight)", () => ln().layerNormOver(2).mul(lnw()));
+  out.set("norm::F.layer_norm(weight, bias)",
+    () => ln().layerNormOver(2).mul(lnw()).add(Tensor.full([3, 4], 2)));
+  // The layer beside the function, on one input — one of them being wrong cannot
+  // hide behind the other, which is exactly how this went unseen: the golden asked
+  // the layer for the multi-axis case and the function for the single-axis one.
+  for (const [tag, shape, dims] of [["(4,)", [4], 1], ["(3, 4)", [3, 4], 2]] as
+       [string, number[], number][]) {
+    out.set(`norm::nn.LayerNorm${tag} 는 F 와 같다`,
+      () => new nn.LayerNorm(shape).call(ln()).sub(ln().layerNormOver(dims)));
+  }
+
   add("F.group_norm(1)", (x) => x.groupNorm(1), "img");
   add("F.group_norm(3)", (x) => x.groupNorm(3), "img");
   const gn = (groups: number): nn.Module => new nn.GroupNorm(groups, 3);
@@ -6537,6 +6573,33 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     const make = (ps: Tensor[]): optim.Optimizer => new optim.Adam(ps, 0.05);
     return resume(make, true).sub(resume(make, false));
   });
+
+  // ── `zeroGrad(setToNone)` — the seat did not exist here at all ─────────────
+  //
+  // On both Python sides it existed and was never read, so the ordinary call
+  // agreed everywhere and `false` quietly did the other thing. It is invisible
+  // until something reads `grad` between two calls: `null` has no shape and
+  // nothing to add into, which is what the argument is for.
+  // The name carries Python's `True`/`False` — the golden is keyed by the string,
+  // and JavaScript prints a boolean in lower case.
+  for (const setToNone of [true, false]) {
+    out.set(`opt::zero_grad(opt, set_to_none=${setToNone ? "True" : "False"})`, async () => {
+      const m = model();
+      const opt = new optim.SGD(m.parameters(), 0.1);
+      new nn.CrossEntropyLoss()
+        .forward(m.forward(inp.get("train_x")), inp.get("train_y")).backward();
+      opt.zeroGrad(setToNone);
+      const w = m.namedParameters()["0.weight"];
+      const got = w?.grad ?? null;
+      // The **kind** of what is left, not a value — `null` and a zero tensor are
+      // what the flag chooses between, and only one of them has values at all.
+      // Reading a number back is asynchronous here, so the case awaits it; the
+      // Python side writes `True`/`False` and this must spell them the same way.
+      if (got === null) return "None";
+      const total = await got.abs().sum().item();
+      return `0 텐서=${total === 0 ? "True" : "False"}`;
+    });
+  }
 
   // **The scheduler has to resume too.** Restoring the optimiser alone and standing a new
   // scheduler up sends the learning rate **back to its first value** — a half-cooled run

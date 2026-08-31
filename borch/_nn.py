@@ -11,7 +11,7 @@ from ._tensor import (
     Tensor,
 )
 from ._base import (
-    _DEFAULT_DTYPE, _like_torch, _math, _np, _unsupported,
+    _DEFAULT_DTYPE, _like_torch, _math, _np, _only_cpu, _unsupported,
 )
 from ._ops import (
     _Namespace, _default_softmax_dim, _gelu, _legacy_reduction, _pool_all,
@@ -289,9 +289,20 @@ class Module:
                 _unsupported(f"device '{x}'")
         return self
 
-    def zero_grad(self):
+    def zero_grad(self, set_to_none=True):
+        """**torch's seat, which was not here at all**, so
+        `model.zero_grad(set_to_none=False)` stopped on an unexpected keyword while
+        `optimizer.zero_grad(set_to_none=False)` next door accepted it and ignored
+        it. Two ways to be wrong about one argument, in one library.
+
+        `False` leaves a zeroed tensor where `True` drops it — measured against
+        torch, where the difference is visible as `p.grad is None`.
+        """
         for p in self.parameters():
-            p.grad = None
+            if set_to_none or p.grad is None:
+                p.grad = None
+            else:
+                p.grad = Tensor(_np.zeros_like(p.grad.data))
 
     def state_dict(self):
         out = {name: Tensor(p.data.copy()) for name, p in self.named_parameters()}
@@ -975,12 +986,19 @@ def _nn_unsupported(name):
 
 def _no_device_dtype(name, device, dtype):
     """torch's `device=` and `dtype=` occupy the last two positions of nearly every
-    layer. **They are carried and refused rather than left out**: left out, a
-    positional call that reaches them lands on nothing and the two signatures part
-    at every layer that has them; carried, the position is torch's and the refusal
-    says which name it was."""
-    if device is not None:
-        _unsupported(f"nn.{name}(device=…)")
+    layer. **They are carried rather than left out**: left out, a positional call
+    that reaches them lands on nothing and the two signatures part at every layer
+    that has them.
+
+    **`device="cpu"` used to stop here**, which refused this library's own device —
+    the same shape as the `memory_format` seat that refused `contiguous_format`.
+    `_only_cpu` is the rule now, and it is the rule the factories use too; they had
+    the opposite habit, reading the argument not at all.
+
+    `dtype` still stops at anything: a layer's parameters are float32 here, and
+    `dtype=torch.float64` is a request that cannot be met.
+    """
+    _only_cpu(f"nn.{name}", device)
     if dtype is not None:
         _unsupported(f"nn.{name}(dtype=…)")
 
@@ -1194,32 +1212,31 @@ class LayerNorm(Module):
                 self.bias = Parameter(_np.zeros(shape, dtype=_DEFAULT_DTYPE))
 
     def forward(self, x):
-        dims = len(self.normalized_shape)
-        # The last `dims` axes are folded into one and the mean and variance
-        # come out together. Folded axis by axis the numbers differ — the mean of
-        # means is not the mean.
-        shape = tuple(int(n) for n in x.shape)
-        # **A mismatched shape stops.** Being lenient quietly folds the wrong
-        # axis.
-        if shape[len(shape) - dims:] != self.normalized_shape:
-            raise RuntimeError(_like_torch(
-                f"normalized_shape={list(self.normalized_shape)} but the input is "
-                f"{list(shape)}.",
-                f"Given normalized_shape={list(self.normalized_shape)}, expected "
-                f"input with shape [*, "
-                f"{', '.join(str(n) for n in self.normalized_shape)}]"))
-        lead = shape[:len(shape) - dims]
-        flat = x.reshape(*lead, -1) if dims > 1 else x
-        mean = flat.mean(dim=-1, keepdim=True)
-        centered = flat - mean
-        var = (centered * centered).mean(dim=-1, keepdim=True)
-        normed = centered / (var + self.eps) ** 0.5
-        if dims > 1:
-            normed = normed.reshape(*shape)
-        if not self.elementwise_affine:
-            return normed
-        out = normed * self.weight
-        return out + self.bias if hasattr(self, "bias") else out
+        """**It calls `F.layer_norm` rather than folding the axes itself.**
+
+        The arithmetic used to live here and the function beside it read
+        `normalized_shape` not at all — so this was right and that was wrong, and
+        the golden could not see it because it asked the layer for the multi-axis
+        case and the function for the single-axis one. Two copies, one of them
+        silently normalising over the wrong axes.
+
+        The refusals go with the arithmetic, so `F.layer_norm` carries them now.
+        Its wording is torch's verbatim; the sentence written here was torch's with
+        our own half in front of it, and only one of the two can be the one a search
+        finds.
+        """
+        # **The module-level `layer_norm`, not a late import.** Written as
+        # `from ._ops import layer_norm` inside this method it re-executed
+        # `borch._ops` whenever `sys.modules` had been cleared — which
+        # `tests/test_alias.py` does on purpose — and a re-executed `_ops` re-imports
+        # `_tensor`, so a **second `Tensor` class** appears and `isinstance` stops
+        # recognising the first. Four unrelated `fft::grad::` cases came back
+        # *element 0 does not require grad*, in a module neither of these two files
+        # names. It is imported at the top of this file already.
+        return layer_norm(x, self.normalized_shape,
+                          self.weight if self.elementwise_affine else None,
+                          self.bias if self.elementwise_affine else None,
+                          self.eps)
 
 
 class BatchNorm2d(Module):

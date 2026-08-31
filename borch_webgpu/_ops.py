@@ -709,7 +709,19 @@ def _made(out, kw):
     **Gathering it into one place is the point.** `zeros`, `ones`, `full`, `eye`
     and `linspace` each carried the same defect, and left as five copies the next
     fix reaches one of them.
+
+    **`device=` was the same defect one argument over**, and it is handled here for
+    the same reason. `zeros(2, device="cuda")` came back a tensor on the only device
+    there is, with no exception — the values right and the claim about where they
+    are false. The core's `_only_cpu` is the rule, so the two sides cannot part on
+    which devices exist.
     """
+    # Imported here rather than at the top: `_ops` is loaded while `borch` is still
+    # half initialised in Pyodide, and the note beside `_fft` records what a
+    # top-level import of the parent costs there.
+    from borch._base import _only_cpu
+
+    _only_cpu("factory", kw.get("device"))
     t = wrap(out)
     dt = kw.get("dtype")
     if dt is not None:
@@ -1383,17 +1395,25 @@ def randn(*shape, out=None, requires_grad=False, dtype=None, device=None,
     docstring says the bags were removed for this reason; these two still had them.
     """
     _no_out(out)
+    from borch._base import _only_cpu
     from ._base import tensor as _t
 
+    _only_cpu("randn", device)
     return _t(_stream(generator).standard_normal(tuple(_shaped(shape))).astype("float32"),
               requires_grad=requires_grad)
 
 
 def rand(*shape, out=None, requires_grad=False, dtype=None, device=None,
          generator=None):
+    """**These two do not go through `_made`**, so the `device=` rule it carries did
+    not reach them — `rand(2, device="cuda")` answered where `zeros` had stopped.
+    Two factories under one rule and one of them outside it is the shape this file
+    keeps finding."""
     _no_out(out)
+    from borch._base import _only_cpu
     from ._base import tensor as _t
 
+    _only_cpu("rand", device)
     return _t(_stream(generator).random(tuple(_shaped(shape))).astype("float32"),
               requires_grad=requires_grad)
 
@@ -3236,15 +3256,35 @@ def where(cond, a, b):
     return guarded(handle(a).where, handle(cond), handle(b))
 
 
-def layer_norm(x, shape=None, weight=None, bias=None, eps=1e-5, **kw):
-    """torch takes **the shape to normalise over** and borch.ts takes an axis.
+def layer_norm(x, normalized_shape=None, weight=None, bias=None, eps=1e-5):
+    """torch takes **the shape to normalise over** and borch.ts takes a count.
 
-    torch's rule counts from the back, as in `(length of the last axis,)`, so the
-    starting axis is as many from the end as the given shape is long. Forwarded
-    as-is it asks for axis 4 on a rank-2 tensor.
+    **Two things were wrong and one of them had no seat at all.**
+
+    `weight` and `bias` were in the signature and the body never read them, so
+    `F.layer_norm(x, shape, w, b)` came back unscaled and unshifted — real numbers,
+    the right shape, no exception, and a transformer block silently missing its
+    learned affine.
+
+    And the fold was `layerNorm(-len(shape))`, which folds **one axis, that far from
+    the end** — for `(3, 4)` it took the mean over axis −2 alone. torch folds the
+    last two *together*, which is `layerNormOver(2)` over there; the two agree at one
+    axis, which is every case that asked.
+
+    The refusals come from the core so there are not two copies of four wordings.
     """
-    dim = -len(shape) if isinstance(shape, (list, tuple)) and shape else -1
-    return guarded(handle(x).layerNorm, dim, kw.get("eps", eps))
+    from borch._ops import _layer_norm_checks
+
+    h = handle(x)
+    full = [int(n) for n in h.shape]
+    shape = _layer_norm_checks(
+        full, normalized_shape,
+        *[None if v is None else [int(n) for n in handle(v).shape]
+          for v in (weight, bias)])
+    out = wrap(guarded(h.layerNormOver, len(shape), eps))
+    if weight is not None:
+        out = out * weight
+    return out + bias if bias is not None else out
 
 
 def repeat_interleave(x, repeats, dim=None):

@@ -325,11 +325,21 @@ export abstract class Optimizer {
   }
 
   /**
-   * Empties the gradients. **It returns them to `null`** — filling with
-   * zeros blurs the leaf test.
+   * Empties the gradients.
+   *
+   * @param setToNone torch's argument, and the default is `true`: the gradient is
+   *   dropped rather than filled with zeros. **The seat did not exist here, and on
+   *   both Python sides it existed and was never read** — so the ordinary call
+   *   agreed everywhere and `setToNone = false` quietly did the other thing.
+   *
+   *   The difference is invisible until something reads `grad` between two calls:
+   *   `null` has no shape and nothing to add into, and the argument is there
+   *   precisely so that a zeroed tensor is.
    */
-  zeroGrad(): void {
-    for (const p of this.params) p.grad = null;
+  zeroGrad(setToNone = true): void {
+    for (const p of this.params) {
+      p.grad = (setToNone || p.grad === null) ? null : Tensor.zeros(p.shape);
+    }
   }
 
   step(): void {

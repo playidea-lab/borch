@@ -710,7 +710,12 @@ NOT_PORTED = {
     #                          `clone(channels_last)`. `set_default_device` is not
     #                          among them: torch's answer to it is to change the
     #                          interpreter, so it cannot be a case at all.
-    "top::": (99, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
+    # 99 → 107. Eight `살펴보기::장치::` rows — `zeros`/`ones`/`rand`/`empty` with
+    # `device="cpu"` and with `"cuda"`. The factories read the argument not at all
+    # and handed back a CPU tensor for either; the rule is the layers' rule now. Over
+    # there a factory has no `device` seat at all — there is one adapter and nothing
+    # names it — so the word cannot be passed, let alone judged.
+    "top::": (107, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
     # `spot::` was gone — 47 cases, all ported — then back with two, and gone again.
     #
     # The two were `unique(dim=)`, and the reason written here said it is a different
@@ -843,6 +848,22 @@ NOT_PORTED = {
     # `spot::slice_scatter(step=2)` is the write, `indexSelect` and `arange` the read —
     # and the binding's eleven rows run every one of them through borch.ts for real.
     "index::": (13, "파이썬 — `side`/`right`, and `x[a:b:step]` 표기. TS has no `[]`"),
+    # **`normalized_shape` is a Python-side argument.** borch.ts's `layerNormOver`
+    # takes *how many* axes to fold, which is the arithmetic; torch takes the shape
+    # itself, and the four refusals are about that shape — a bare `int` where a tuple
+    # is wanted, a shape that does not match the input's tail, an empty one, and a
+    # weight shaped unlike it. None of them can be asked of a function that takes a
+    # count. The ten value cases beside them **are** asked over there, which is the
+    # half that had been folding the wrong axes.
+    "norm::": (4, "파이썬 — `normalized_shape` 검사. TS takes a count, not a shape"),
+    # **The model's `zero_grad` is the Python surface's.** borch.ts has `zeroGrad` on
+    # the optimizer, and those two rows are asked over there; `Module` has none, and
+    # the two here ask what `model.zero_grad(set_to_none=…)` leaves behind.
+    "opt::": (2, "파이썬 — `model.zero_grad`. borch.ts has it on the optimizer only"),
+    # `device=` on a layer is a Python seat: borch.ts's classes take the pair only to
+    # refuse it, so there is no `device="cpu"` to accept over there and no `"cuda"`
+    # to stop at. What each side does with the word is the whole content.
+    "container::": (2, "파이썬 — 층의 `device=` 자리. TS carries the pair to refuse it"),
     # 4 → 10. Six "resume training" cases arrived. **Those already tread on borch.ts** —
     # the binding's optimizers and schedulers call the ones over there as they are, so
     # those six running under `--lib borch_webgpu` are measuring borch.ts's `StepLR` and

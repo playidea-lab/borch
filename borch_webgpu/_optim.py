@@ -19,8 +19,12 @@ class _Opt:
     def __init__(self, o):
         self._o = o
 
-    def zero_grad(self):
-        self._o.zeroGrad()
+    def zero_grad(self, set_to_none=True):
+        """**The seat was not here at all**, so `zero_grad(set_to_none=False)` — the
+        line pre-2.0 training loops are written with — stopped on an unexpected
+        keyword while the core next door accepted it and ignored it. borch.ts takes
+        it now, so this forwards rather than deciding again."""
+        self._o.zeroGrad(bool(set_to_none))
 
     def step(self):
         self._o.step()
@@ -387,8 +391,16 @@ class LBFGS:
         self._state = {}
 
     def zero_grad(self, set_to_none=True):
+        """**The seat was here and the body never read it** — the core's note on
+        the same method says what that costs. `False` leaves a zeroed tensor
+        behind, which is the whole reason the argument exists."""
+        from ._ops import zeros_like
+
         for p in self._ps:
-            p.grad = None
+            if set_to_none or p.grad is None:
+                p.grad = None
+            else:
+                p.grad = zeros_like(p.grad)
 
     def _flat_grad(self):
         parts = []

@@ -1642,6 +1642,29 @@ def _buffers_of(m, persistent_only=False):
     return m.named_buffers(persistent_only)
 
 
+def _zero_grad(owner, set_to_none=True):
+    """`model.zero_grad()` — **torch's, and no class on this side had it.**
+
+    It is the line a training loop opens with as often as the optimizer's, and it
+    stopped with `'Sequential' object has no attribute 'zero_grad'`. `set_to_none`
+    means here what it means there: `False` leaves a zeroed tensor where `True`
+    drops it, which is the difference anything reading `grad` between two calls
+    depends on.
+
+    **Written once and attached to the five classes that hold parameters.** They
+    share no base — `Module`, `_Wrap`, `Sequential` and the two `_Holder` families
+    each grew their own `parameters()` — so a method per class would be five copies
+    of one rule, and the list below is the one place naming who has it.
+    """
+    from ._ops import zeros_like
+
+    for p in owner.parameters():
+        if set_to_none or p.grad is None:
+            p.grad = None
+        else:
+            p.grad = zeros_like(p.grad)
+
+
 # ── containers ──────────────────────────────────────────────────────────────
 #
 # **This is where things go quietly wrong.** Put layers or parameters in a bare
@@ -1924,6 +1947,15 @@ class _ParameterDict(_ParamHolder):
     def update(self, params):
         self.params.update(dict(_ordered(params)))
         return self
+
+
+# **The five that hold parameters get `zero_grad`.** `_Holder` covers
+# `_ModuleList` and `_ModuleDict`, `_ParamHolder` the two parameter containers,
+# so naming the four bases plus `Sequential` reaches all of them. Attached rather
+# than written into each, for the reason in `_zero_grad`'s own docstring.
+for _owner in (Module, _Wrap, Sequential, _Holder, _ParamHolder):
+    _owner.zero_grad = _zero_grad
+del _owner
 
 
 def ModuleList(mods=()):
@@ -2376,17 +2408,20 @@ def _batchnorm(name):
     """
     def make(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True,
              device=None, dtype=None, *, bias=True):
-        from borch._base import _unsupported
+        from borch._base import _only_cpu, _unsupported
 
-        # **The pair is carried in order to refuse it**, and the note on
+        # **The pair is carried in order to answer it**, and the note on
         # `TransformerEncoderLayer` — *no layer in this file takes them* — is one
-        # exception shorter for it. Not taking them is not the same as refusing them:
-        # `BatchNorm2d(3, device="cpu")` came back *unexpected keyword argument*,
-        # which is the screen a typo gives and says nothing about this library. The
-        # core answers *is not in the browser subset* and now so does this.
-        for what, given in (("device", device), ("dtype", dtype)):
-            if given is not None:
-                _unsupported(f"nn.{name}({what}=…)")
+        # exception shorter for it. Not taking them is not the same as answering
+        # them: `BatchNorm2d(3, device="cpu")` came back *unexpected keyword
+        # argument*, which is the screen a typo gives.
+        #
+        # **And then it refused `"cpu"`**, which is this library's own device — the
+        # core did the same until `_only_cpu` gave the argument a rule instead of a
+        # habit. `dtype` still stops at anything: a parameter here is float32.
+        _only_cpu(f"nn.{name}", device)
+        if dtype is not None:
+            _unsupported(f"nn.{name}(dtype=…)")
         # **`track_running_stats=False` was refused here and `True` was hard-wired
         # into the call below**, which is the shape this file keeps finding: the seat
         # existed, the value never crossed. borch.ts answers the flag now — no buffers

@@ -116,8 +116,23 @@ class Optimizer:
         self.param_groups.append(group)
 
     def zero_grad(self, set_to_none=True):
+        """**`set_to_none` was in the signature and the body never read it.**
+
+        It always set `None`, which is torch's default, so the common call agreed
+        and `zero_grad(set_to_none=False)` — the older behaviour, and what code
+        written before torch 2.0 asks for — silently did the other thing. Nobody
+        sees it until a line reads `p.grad` between the two calls: `None` there has
+        no shape and no `.zero_()`, and `optimizer.zero_grad(set_to_none=False)`
+        exists precisely so that it does.
+
+        torch's rule is measured: `False` fills the existing gradient with zeros
+        and leaves a tensor behind; `True` drops it.
+        """
         for p in self.params:
-            p.grad = None
+            if set_to_none or p.grad is None:
+                p.grad = None
+            else:
+                p.grad = Tensor(_np.zeros_like(p.grad.data))
 
     def _state(self, p):
         return self.state.setdefault(id(p), {})
