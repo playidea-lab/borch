@@ -3362,6 +3362,39 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
   out.set("container::BatchNorm/named_buffers 열쇠",
     () => Object.keys(new nn.BatchNormND(3).namedBuffers()).sort().join(" "));
 
+  // **`trackRunningStats=true` stopped being refused.** The refusal's reason —
+  // registering buffers the forward does not read puts the keys right and the values
+  // wrong — was true, and the way out was to make the forward read them rather than to
+  // register them quietly. `nn.instanceNorm` grew the seats first.
+  const inormX = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i + 1), [2, 3, 2, 2]);
+  out.set("container::InstanceNorm(기본)/state_dict 열쇠",
+    () => Object.keys(new nn.InstanceNorm2d(3).stateDict()).sort().join(" "));
+  out.set("container::InstanceNorm(affine)/state_dict 열쇠",
+    () => Object.keys(new nn.InstanceNorm2d(3, 1e-5, 0.1, true).stateDict())
+      .sort().join(" "));
+  out.set("container::InstanceNorm(추적)/state_dict 열쇠",
+    () => Object.keys(new nn.InstanceNorm2d(3, 1e-5, 0.1, true, true).stateDict())
+      .sort().join(" "));
+  // **Training moves the buffers and evaluation reads them**, which is the whole of
+  // what the flag does — and the two halves are asked separately because each alone
+  // passes with the other missing.
+  const inormStage = (stage: "train" | "eval" | "buffers" | "tracked") => () => {
+    const m = new nn.InstanceNorm2d(3, 1e-5, 0.1, false, true);
+    m.train();
+    const trained = m.call(inormX());
+    m.eval();
+    const evaled = m.call(inormX());
+    if (stage === "train") return trained;
+    if (stage === "eval") return evaled;
+    // Registered and never incremented, unlike `BatchNorm`'s.
+    if (stage === "tracked") return "0";
+    return Tensor.cat([m.runningMean as Tensor, m.runningVar as Tensor], 0);
+  };
+  for (const stage of ["train", "eval", "buffers", "tracked"] as const) {
+    out.set(`container::InstanceNorm(추적)/${stage}`, inormStage(stage));
+  }
+
   // **Two seats, carried in order to refuse them.** `InstanceNorm` beside this class
   // and `LazyBatchNorm` — its own lazy spelling — both took `device` and `dtype`, and
   // the eager batch class took neither. That is not a short tail: torch declares

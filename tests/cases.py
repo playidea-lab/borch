@@ -8657,9 +8657,41 @@ def container_cases(inp=None):
     #
     # All three were blocked with a `TypeError`. That is the same screen as a typo and does not
     # say "this library does not have it".
-    cases.append((CONTAINER_PREFIX + "InstanceNorm(추적)=우리는거절",
-                  refusal_case(
-                      lambda L: L.nn.InstanceNorm2d(3, track_running_stats=True))))
+    # **`track_running_stats=True` stopped being refused.** The refusal's reason —
+    # registering buffers the forward does not read puts the keys right and the values
+    # wrong — was true, and the way out was to make the forward read them rather than
+    # to register them quietly. `F.instance_norm` grew the seats first.
+    cases.append((CONTAINER_PREFIX + "InstanceNorm(추적)/state_dict 열쇠",
+                  lambda L: " ".join(sorted(L.nn.InstanceNorm2d(
+                      3, affine=True, track_running_stats=True).state_dict()))))
+
+    def instance_tracks(L, stage):
+        """**Training moves the buffers and evaluation reads them**, which is the
+        whole of what the flag does — and the two halves have to be asked separately
+        because each alone passes with the other missing.
+
+        `num_batches_tracked` is registered here and **never incremented**, unlike
+        `BatchNorm`'s. Measured: after a training forward it is still 0."""
+        m = L.nn.InstanceNorm2d(3, track_running_stats=True)
+        m.train()
+        trained = m(L.tensor(_INORM_X))
+        m.eval()
+        evaled = m(L.tensor(_INORM_X))
+        if stage == "train":
+            return trained
+        if stage == "eval":
+            return evaled
+        if stage == "tracked":
+            got = m.state_dict()["num_batches_tracked"]
+            return str(int(np.asarray(
+                got.detach() if hasattr(got, "detach") else got.data).reshape(-1)[0]))
+        return L.cat([m.running_mean.reshape(3), m.running_var.reshape(3)])
+
+    _INORM_X = np.arange(1., 25., dtype=np.float32).reshape(2, 3, 2, 2)
+    for _stage in ("train", "eval", "buffers", "tracked"):
+        cases.append((CONTAINER_PREFIX + f"InstanceNorm(추적)/{_stage}",
+                      lambda L, s=_stage: instance_tracks(L, s)))
+
     cases.append((CONTAINER_PREFIX + "CrossEntropyLoss(weight)=우리는거절",
                   refusal_case(lambda L: L.nn.CrossEntropyLoss(weight=L.ones(3)))))
     cases.append((CONTAINER_PREFIX + "BCEWithLogitsLoss(pos_weight)=우리는거절",

@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 372
+  "missing": 374
  },
  "modules": [
   {
@@ -8330,6 +8330,24 @@
        "doc": "torch's list, in torch's seats. **`affine` defaults to false here and true\non `BatchNorm`** — that is torch, and flipping it swaps which layers carry\nparameters, so the `state_dict` keys part wholesale."
       },
       {
+       "name": "runningMean",
+       "signature": "runningMean: Tensor | null",
+       "doc": "",
+       "torch": "running_mean"
+      },
+      {
+       "name": "runningVar",
+       "signature": "runningVar: Tensor | null",
+       "doc": "",
+       "torch": "running_var"
+      },
+      {
+       "name": "namedBuffers",
+       "signature": "namedBuffers(persistentOnly?: boolean): Record<string, Tensor>",
+       "doc": "**The running statistics go out too**, and only when they exist. A field named\n`runningMean` has to leave under the key `running_mean`, which rules out\n`registerBuffer` — there the field name is the key — so the list lives here, as\n`BatchNormND` writes it for the same reason.\n\n`num_batches_tracked` is built fresh and always zero: torch registers it here and\n**never increments it**, which is not what `BatchNorm` does. Measured — after a\ntraining forward it is still 0 there and 1 in the batch layer.",
+       "torch": "named_buffers"
+      },
+      {
        "name": "ownParameters",
        "signature": "ownParameters(): Record<string, Tensor>",
        "doc": "",
@@ -11406,6 +11424,14 @@
     },
     {
      "kind": "function",
+     "name": "instanceNorm",
+     "signature": "export declare function instanceNorm(input: Tensor, runningMean?: Tensor | null, runningVar?: Tensor | null, weight?: Tensor | null, bias?: Tensor | null, useInputStats?: boolean, momentum?: number, eps?: number): Tensor",
+     "doc": "The function form of `InstanceNormND` — torch's `F.instance_norm`.\n\n**The running statistics were refused on the ground that this keeps none.** It\nkeeps none of its own, which is true and was not the question: torch's buffers are\nthe *caller's*, handed in and written back, as `batchNorm` below already does. What\nthe update is was measured rather than derived —\n\n    runningMean ← (1−m)·runningMean + m·mean over (N, H, W) per channel\n    runningVar  ← (1−m)·runningVar  + m·mean over N of the **unbiased**\n                  per-(sample, channel) variance\n\n— and the second line is the one worth writing down: it is the average of the\nper-plane variances, not the variance of the whole channel. On a 2×3×2×2 of\nconsecutive integers those are 1.667 and 47.7.\n\n**Handing statistics in does not change the output** while `useInputStats` is on;\nthe normalisation stays per plane and only the buffers move. Measured, because the\nopposite is the natural guess.",
+     "members": [],
+     "torch": "instance_norm"
+    },
+    {
+     "kind": "function",
      "name": "batchNorm",
      "signature": "export declare function batchNorm(input: Tensor, runningMean: Tensor | null, runningVar: Tensor | null, weight: Tensor | null, bias: Tensor | null, training?: boolean, momentum?: number, eps?: number): Tensor",
      "doc": "The function form of `BatchNormND`. **The layer calls this** — one copy\nof the formula.\n\n**In training it modifies the running statistics in place.** torch does,\nand the tensor you hand in comes back updated. Returning a new one leaves\nthe caller's buffer unmoved, so training runs and only eval-mode values\nare wrong.\n\n**It uses variance two ways.** Normalisation uses the biased estimate;\nthe running-statistics update uses the unbiased one. Merge them and it\ndiverges in eval mode only.",
@@ -12043,7 +12069,7 @@
      ]
     }
    ],
-   "count": 810,
+   "count": 814,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -20273,5 +20299,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2745
+ "total": 2749
 }

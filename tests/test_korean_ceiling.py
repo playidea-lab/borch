@@ -284,7 +284,11 @@ CEILINGS = {
     # verdict strings it returns. All are keys or values in `golden.json`.
     # 4191 → 4193. Two, in `grid_sample(bicubic, 반 칸)` — a key in `golden.json`.
     # The other twelve `bicubic` names are English.
-    "borch-ts/test": 4193,
+    # 4193 → 4230. Thirty-seven, in `InstanceNorm`'s three ported case names
+    # (`(기본)/state_dict 열쇠`, `(affine)/…`, `(추적)/…`) and the `container::` reason
+    # rewritten in `run.py` — that row is a Korean sentence and replacing it swapped
+    # one Korean string for a longer one rather than adding a new kind.
+    "borch-ts/test": 4230,
 }
 
 

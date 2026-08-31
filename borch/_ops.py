@@ -920,24 +920,61 @@ def instance_norm(input, running_mean=None, running_var=None, weight=None,   # n
 
     **torch's first three seats were missing**, so `F.instance_norm(x, None, None, w)`
     put the weight in `running_mean`'s place here and in `weight`'s there — the same
-    call, a different layer, no exception. The four running-statistics arguments are
-    torch's and the seats are carried; the tracking itself is refused, in the wording
-    `nn.InstanceNorm2d(track_running_stats=True)` already uses.
+    call, a different layer, no exception.
 
-    `use_input_stats=False` means *normalise by the stored statistics instead*, which
-    is the eval-time path and needs the buffers this does not keep. Accepting it and
-    normalising by the batch anyway would be the accepted-and-inert defect on the one
-    argument whose whole purpose is to change which numbers are used.
+    **The running statistics were refused on the ground that this keeps none.** It
+    keeps none of its own, which is true and was not the question: torch's buffers
+    are the *caller's*, handed in and written back, exactly as `batch_norm` next door
+    already does. What the update is was measured rather than derived —
+
+        running_mean ← (1−m)·running_mean + m·mean over (N, H, W) per channel
+        running_var  ← (1−m)·running_var  + m·mean over N of the **unbiased**
+                       per-(sample, channel) variance
+
+    — and the second line is the one worth writing down: it is the average of the
+    per-plane variances, not the variance of the whole channel. On a 2×3×2×2 of
+    consecutive integers those are 1.667 and 47.7, so nothing subtle separates them.
+
+    **Handing statistics in does not change the output** under `use_input_stats=True`;
+    the normalisation stays per plane and only the buffers move. Measured, because the
+    opposite is the natural guess.
+
+    `use_input_stats=False` normalises by the stored statistics instead, per channel,
+    and leaves them untouched. With none given torch stops, and the wording is torch's.
     """
-    if running_mean is not None or running_var is not None:
-        _unsupported("instance_norm(running_mean=…, running_var=…) — "
-                     "there are no running statistics here")
-    if not use_input_stats:
-        _unsupported("instance_norm(use_input_stats=False) — it normalises by the "
-                     "running statistics, which this does not keep")
-    del momentum          # only moves running statistics, and there are none
     input = _wrap(input)  # noqa: A001
+    if not use_input_stats and (running_mean is None or running_var is None):
+        raise RuntimeError("Expected running_mean and running_var to be defined when "
+                           "use_input_stats is false")
+    rank = input.data.ndim
+    shape = (1, -1) + (1,) * (rank - 2)
+    planes = tuple(range(2, rank))
+
+    if not use_input_stats:
+        rm = _np.asarray(_instance_raw(running_mean)).reshape(shape)
+        rv = _np.sqrt(_np.asarray(_instance_raw(running_var)) + eps).reshape(shape)
+        normed = (input - Tensor(rm)) / Tensor(rv)
+        if weight is not None:
+            normed = normed * _wrap(weight).reshape(shape)
+        if bias is not None:
+            normed = normed + _wrap(bias).reshape(shape)
+        return normed
+
+    if running_mean is not None:
+        with no_grad():
+            seen = input.data.mean(axis=(0, *planes))
+            spread = input.data.var(axis=planes, ddof=1).mean(axis=0)
+            _instance_raw(running_mean)[...] = (
+                (1 - momentum) * _instance_raw(running_mean) + momentum * seen)
+            _instance_raw(running_var)[...] = (
+                (1 - momentum) * _instance_raw(running_var) + momentum * spread)
     return group_norm(input, input.data.shape[1], weight, bias, eps)
+
+
+def _instance_raw(v):
+    """The array behind a buffer, whether it arrived wrapped or bare. `batch_norm`
+    keeps its own copy of this; the two are the same three lines."""
+    return v.data if isinstance(v, Tensor) else v
 
 
 def rms_norm(input, normalized_shape, weight=None, eps=None):

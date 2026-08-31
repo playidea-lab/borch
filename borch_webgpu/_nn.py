@@ -2800,65 +2800,39 @@ class GroupNorm(Module):
         return out if shift is None else out + shift.reshape(*shape)
 
 
-class _InstanceNorm(Module):
-    """Per sample and per channel. **The default is `affine=False`**, as it is
-    in torch.
+def _instancenorm(name):
+    """Per sample and per channel. **The default is `affine=False`**, as it is in
+    torch.
 
-    This used to be `lambda num_features=0, eps=1e-5, **kw: ...`. That `**kw`
-    swallowed `affine` and `track_running_stats` whole, so a layer built with
-    `affine=True` ran quietly **with no parameters at all** — the normalisation
-    happens, nothing is learned, and the loss falls because the remaining layers
-    compensate. No exception and no warning.
+    **It used to be a Python `Module` holding its own parameters**, and the reason
+    was sound at the time: an earlier `**kw` had swallowed `affine` whole, so a layer
+    built with `affine=True` ran with no parameters at all. Standing borch.ts's class
+    up instead fixes that as thoroughly and keeps one implementation — which is what
+    `track_running_stats` made necessary, because the buffers live over there and a
+    Python copy of them would be a third place the same arithmetic is written.
 
-    That is why it is a `Module` rather than a `_Wrap`. The weights have to
-    appear in `named_parameters`, and those names become `state_dict` keys.
+    The refusal that stood here said the `state_dict` keys would be right and the
+    values wrong. That was true of registering buffers nothing reads; borch.ts's
+    `instanceNorm` reads them now.
     """
+    def make(n=0, eps=1e-5, momentum=0.1, affine=False,
+             track_running_stats=False, device=None, dtype=None, *, bias=True):
+        from borch._base import _unsupported
 
-    def __init__(self, num_features=0, eps=1e-5, momentum=0.1, affine=False,
-                 track_running_stats=False, *, bias=True):
-        """See `GroupNorm` on `bias`."""
-        super().__init__()
-        if track_running_stats:
-            # Registering the buffers without the forward pass using them makes
-            # **the keys right and the values wrong.** Evaluation mode computes
-            # something else entirely there, so what does not work says so.
-            from borch._base import _unsupported
-            _unsupported("InstanceNorm with track_running_stats=True")
-        self.eps = eps
-        # As `GroupNorm` above — torch prints all six and this kept one.
-        self.num_features, self.momentum, self.affine = num_features, momentum, affine
-        self.track_running_stats = track_running_stats
-        self.weight = self.bias = None
-        if affine:
-            self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
-            if bias:
-                self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
-
-    def extra_repr(self):
-        from borch._nn import _norm_extra_repr
-        return _norm_extra_repr(self)
-
-    def forward(self, x):
-        h = handle(x)
-        out = wrap(h.instanceNorm(self.eps))
-        if getattr(self, "weight", None) is None:
-            return out
-        shape = [1, int(handle(self.weight).size)] + [1] * (len(h.shape) - 2)
-        return out * self.weight.reshape(*shape) + self.bias.reshape(*shape)
+        for what, given in (("device", device), ("dtype", dtype)):
+            if given is not None:
+                _unsupported(f"nn.{name}({what}=…)")
+        # `bias` sits eighth over there, behind the two seats borch.ts carries in
+        # order to refuse — the same shift `_batchnorm` writes out above.
+        return _layer(name, n, eps, momentum, bool(affine),
+                      bool(track_running_stats), None, None, bool(bias))
+    make.__name__ = name
+    return make
 
 
-class InstanceNorm1d(_InstanceNorm):
-    """**The per-dimension name is what torch prints.** All three were the one class
-    `_InstanceNorm`, so the repr announced a private name — and a reader who looks it
-    up finds nothing in torch."""
-
-
-class InstanceNorm2d(_InstanceNorm):
-    pass
-
-
-class InstanceNorm3d(_InstanceNorm):
-    pass
+InstanceNorm1d = _instancenorm("InstanceNorm1d")
+InstanceNorm2d = _instancenorm("InstanceNorm2d")
+InstanceNorm3d = _instancenorm("InstanceNorm3d")
 
 
 class RMSNorm(Module):

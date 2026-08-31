@@ -2456,17 +2456,26 @@ class _InstanceNorm(Module):
                        if affine else None)
         self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
                      if affine and bias else None)
-        # **An argument accepted and unused becomes a lie.**
+        # **The refusal here said an argument accepted and unused becomes a lie**,
+        # and it was right: registering the buffers without the forward pass reading
+        # them moves the fault to where the `state_dict` keys match and the values do
+        # not. The way out was never to register them quietly but to make the forward
+        # read them, which it does now — `F.instance_norm` grew the seats first.
         #
-        # Given `track_running_stats=True`, torch registers three running
-        # statistics and **actually uses them** in evaluation mode. This was
-        # quietly ignoring it — three `state_dict` keys vanish wholesale, and
-        # training is fine while evaluation alone produces different values.
-        # Registering the buffers without the forward pass using them only moves
-        # it to a later-discovered place where the keys match and the values are
-        # wrong. So **what does not work is said not to work.**
+        # **The buffers exist only when the flag is on.** torch registers none at the
+        # default, so `named_buffers()` is empty there and three keys appear when it
+        # is set; registering them always would put three keys into every checkpoint
+        # that torch does not have.
         if track_running_stats:
-            _unsupported("InstanceNorm with track_running_stats=True")
+            self.register_buffer("running_mean",
+                                 _np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+            self.register_buffer("running_var",
+                                 _np.ones(num_features, dtype=_DEFAULT_DTYPE))
+            # **It is registered and never incremented**, which is torch's behaviour
+            # and not `BatchNorm`'s — measured: after a training forward it is still
+            # 0 there and 1 here. Counting it would be the tidier thing and the wrong
+            # one.
+            self.register_buffer("num_batches_tracked", 0)
 
     def forward(self, x):
         # **By keyword.** `instance_norm` took torch's first three seats
@@ -2475,7 +2484,14 @@ class _InstanceNorm(Module):
         # on four golden rows. The second time in two commits that adding torch's
         # seats broke an internal positional call — which is the argument for
         # keywords at every one of them.
-        return instance_norm(x, weight=self.weight, bias=self.bias, eps=self.eps)
+        if not self.track_running_stats:
+            return instance_norm(x, weight=self.weight, bias=self.bias, eps=self.eps)
+        # Training normalises per plane and moves the buffers; evaluation normalises
+        # by the buffers and leaves them. That is the split the refusal was about.
+        return instance_norm(x, self.running_mean, self.running_var,
+                             weight=self.weight, bias=self.bias,
+                             use_input_stats=self.training,
+                             momentum=self.momentum, eps=self.eps)
 
 
 class InstanceNorm1d(_InstanceNorm):

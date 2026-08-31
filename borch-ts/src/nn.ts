@@ -1625,19 +1625,45 @@ export class InstanceNormND extends Module {
     // constructor of their own, so the emitted `.d.ts` has no argument list for them
     // and the axis reads `no argument list` rather than a disagreement.
     refuseDeviceDtype("InstanceNorm", device, dtype);
-    if (trackRunningStats) {
-      // torch registers three running statistics here and **reads them in eval
-      // mode**. Accepting this and ignoring it leaves training right and
-      // evaluation quietly wrong, and registering the buffers without the
-      // forward using them only moves the parting to where the keys match and
-      // the values do not. The core refuses at the same place for the same
-      // reason (`borch/_nn.py`, `_InstanceNorm`).
-      throw new Error(
-        "InstanceNorm with trackRunningStats=true is not here yet.");
-    }
     this.weight = affine ? Tensor.owned([numFeatures], 1) : null;
     this.bias = affine && bias ? Tensor.owned([numFeatures], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
+    // **The refusal here said an argument accepted and unused becomes a lie**, and
+    // it was right: registering the buffers without the forward reading them moves
+    // the fault to where the `state_dict` keys match and the values do not. The way
+    // out was never to register them quietly but to make the forward read them.
+    //
+    // **They exist only when the flag is on** — torch registers none at the default,
+    // so three keys appear when it is set and none otherwise.
+    if (trackRunningStats) {
+      this.runningMean = Tensor.owned([numFeatures], 0);
+      this.runningVar = Tensor.owned([numFeatures], 1);
+      keepAlive(this.runningMean);
+      keepAlive(this.runningVar);
+    }
+  }
+
+  runningMean: Tensor | null = null;
+  runningVar: Tensor | null = null;
+
+  /**
+   * **The running statistics go out too**, and only when they exist. A field named
+   * `runningMean` has to leave under the key `running_mean`, which rules out
+   * `registerBuffer` — there the field name is the key — so the list lives here, as
+   * `BatchNormND` writes it for the same reason.
+   *
+   * `num_batches_tracked` is built fresh and always zero: torch registers it here and
+   * **never increments it**, which is not what `BatchNorm` does. Measured — after a
+   * training forward it is still 0 there and 1 in the batch layer.
+   */
+  override namedBuffers(persistentOnly = false): Record<string, Tensor> {
+    void persistentOnly;                    // no non-persistent buffer on this layer
+    if (!this.runningMean || !this.runningVar) return {};
+    return {
+      running_mean: this.runningMean,
+      running_var: this.runningVar,
+      num_batches_tracked: Tensor.owned([], 0),
+    };
   }
 
   override ownParameters(): Record<string, Tensor> {
@@ -1648,12 +1674,12 @@ export class InstanceNormND extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    let out = x.instanceNorm(this.eps);
-    // Per channel, so the vector is broadcast along axis 1 and nowhere else.
-    const spread = [1, -1, ...x.shape.slice(2).map(() => 1)];
-    if (this.weight) out = out.mul(this.weight.reshape(spread));
-    if (this.bias) out = out.add(this.bias.reshape(spread));
-    return out;
+    // Training normalises per plane and moves the buffers; evaluation normalises by
+    // the buffers and leaves them. That is the split the refusal was about.
+    return instanceNorm(x, this.runningMean, this.runningVar,
+                        this.weight, this.bias,
+                        !this.trackRunningStats || this.training,
+                        this.momentum, this.eps);
   }
 
   /** The same wording as `BatchNormND`. **The two defaults are opposite** — a batch
@@ -4562,6 +4588,76 @@ export function gridSample(
     .add(pick(y1, x0).mul(wy).mul(one.sub(wx)))
     .add(pick(y1, x1).mul(wy).mul(wx));
   return shaped(out);
+}
+
+/**
+ * The function form of `InstanceNormND` — torch's `F.instance_norm`.
+ *
+ * **The running statistics were refused on the ground that this keeps none.** It
+ * keeps none of its own, which is true and was not the question: torch's buffers are
+ * the *caller's*, handed in and written back, as `batchNorm` below already does. What
+ * the update is was measured rather than derived —
+ *
+ *     runningMean ← (1−m)·runningMean + m·mean over (N, H, W) per channel
+ *     runningVar  ← (1−m)·runningVar  + m·mean over N of the **unbiased**
+ *                   per-(sample, channel) variance
+ *
+ * — and the second line is the one worth writing down: it is the average of the
+ * per-plane variances, not the variance of the whole channel. On a 2×3×2×2 of
+ * consecutive integers those are 1.667 and 47.7.
+ *
+ * **Handing statistics in does not change the output** while `useInputStats` is on;
+ * the normalisation stays per plane and only the buffers move. Measured, because the
+ * opposite is the natural guess.
+ */
+export function instanceNorm(
+  input: Tensor,
+  runningMean: Tensor | null = null,
+  runningVar: Tensor | null = null,
+  weight: Tensor | null = null,
+  bias: Tensor | null = null,
+  useInputStats = true,
+  momentum = 0.1,
+  eps = 1e-5,
+): Tensor {
+  const channels = input.shape[1] ?? 1;
+  const spatial = input.shape.length - 2;
+  const shape = [1, channels, ...new Array<number>(spatial).fill(1)];
+  const affine = (t: Tensor): Tensor => {
+    let out = t;
+    if (weight) out = out.mul(weight.reshape(shape));
+    if (bias) out = out.add(bias.reshape(shape));
+    return out;
+  };
+  if (!useInputStats) {
+    if (!runningMean || !runningVar) {
+      throw new RuntimeError("Expected running_mean and running_var to be defined "
+        + "when use_input_stats is false");
+    }
+    return affine(input.sub(runningMean.reshape(shape))
+      .div(runningVar.reshape(shape).binary("add", Tensor.full([], eps)).sqrt()));
+  }
+  if (runningMean && runningVar) {
+    noGrad(() => {
+      // Reduce every axis but the channel for the mean; for the variance reduce the
+      // spatial axes first — unbiased, per plane — and average over the batch after.
+      let seen = input;
+      for (let d = input.shape.length - 1; d >= 0; d--) {
+        if (d !== 1) seen = seen.mean(d, false);
+      }
+      let plane = input;
+      for (let d = input.shape.length - 1; d >= 2; d--) plane = plane.mean(d, true);
+      let sq = input.sub(plane).square();
+      for (let d = input.shape.length - 1; d >= 2; d--) sq = sq.mean(d, false);
+      const count = input.size / (channels * (input.shape[0] ?? 1));
+      const spread = sq.mul(Tensor.full([], count / (count - 1))).mean(0, false);
+      const keep = Tensor.full([], 1 - momentum);
+      const take = Tensor.full([], momentum);
+      runningMean.copy_(runningMean.mul(keep).add(seen.mul(take)));
+      runningVar.copy_(runningVar.mul(keep).add(spread.mul(take)));
+    });
+  }
+  return affine(input.instanceNorm(eps));
 }
 
 /**
