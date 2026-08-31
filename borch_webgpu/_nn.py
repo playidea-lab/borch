@@ -486,7 +486,17 @@ def _interpolate(x, size=None, scale_factor=2, mode="nearest",
 
     `antialias` was refused here while borch.ts had no such argument; it takes one
     now, and this hands the word over rather than stopping on it.
+
+    **`align_corners` is the one rule that has to be checked here.** borch.ts takes
+    it as a boolean, so the difference between *not given* and *given as false* is
+    lost at the boundary — and torch refuses the flag outright on the modes that have
+    no corners to align rather than picking one for you.
     """
+    if align_corners is not None and mode not in ("linear", "bilinear", "bicubic",
+                                                  "trilinear"):
+        raise ValueError("align_corners option can only be set with the "
+                         "interpolating modes: linear | bilinear | bicubic | "
+                         "trilinear")
     return wrap(guarded(handle(x).interpolate, size, scale_factor, mode,
                         bool(align_corners), recompute_scale_factor,
                         bool(antialias)))

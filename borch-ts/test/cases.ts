@@ -4897,6 +4897,81 @@ function addUnpool(out: Map<string, Case>): void {
     return "여기선 통과했다";
   });
 
+  // ── the ranks, which were an unpacking error on the Python side ────────────
+  //
+  // Carried verbatim from `tests/cases.py`. `linear` and `trilinear` were refused as
+  // wanting *a rank this function does not take*; they are one separable kernel at
+  // one and three axes, and `nearest`/`area` at those ranks were never refused at all
+  // — the core failed at them with an unpacking error and this side read
+  // `shape[2]`/`shape[3]` and answered about a rank it had not been given.
+  const rankImg = (dims: number[]): Tensor => {
+    const n = dims.reduce((a, b) => a * b, 1);
+    return Tensor.from(Array.from({ length: n }, (_, i) => i + 1), dims);
+  };
+  const RANKS: Array<[number, number[], "linear" | "trilinear"]> = [
+    [3, [2, 3, 5], "linear"],
+    [5, [2, 3, 2, 3, 4], "trilinear"],
+  ];
+  for (const [rank, dims, lin] of RANKS) {
+    for (const mode of ["nearest", "nearest-exact", "area"] as const) {
+      for (const sf of [2, 1.7, 0.5]) {
+        out.set(`fname::interpolate(${rank}차원 ${mode}, scale=${sf})`,
+          () => rankImg(dims).interpolate(null, sf, mode));
+      }
+      out.set(`fname::interpolate(${rank}차원 ${mode}, size=3)`,
+        () => rankImg(dims).interpolate(3, null, mode));
+    }
+    for (const ac of [false, true]) {
+      const tag = ac ? "True" : "False";
+      for (const sf of [2, 1.7]) {
+        out.set(`fname::interpolate(${lin}, align=${tag}, scale=${sf})`,
+          () => rankImg(dims).interpolate(null, sf, lin, ac));
+      }
+      out.set(`fname::interpolate(${lin}, align=${tag}, size=3)`,
+        () => rankImg(dims).interpolate(3, null, lin, ac));
+    }
+    for (const mode of [lin, "nearest", "area"] as const) {
+      out.set(`fname::interpolate(${rank}차원 ${mode}) 의 기울기`, () => {
+        const x = rankImg(dims);
+        x.requiresGrad = true;
+        const got = x.interpolate(null, 2, mode, false);
+        got.mul(got).sum().backward();
+        return gradOf(x, `interpolate/${mode}`);
+      });
+    }
+  }
+  // **`recomputeScaleFactor` reaches `nearest` too.** The kernel maps
+  // `floor(o·in/out)`, which is the *recomputed* rule, and the comment beside it said
+  // the flag made no difference here. It does whenever the flooring loses something:
+  // 5 at 1.7 gives 8, and 8/5 is 1.6.
+  for (const mode of ["nearest", "nearest-exact"] as const) {
+    for (const rsf of [true, false]) {
+      out.set(
+        `fname::interpolate(${mode}, scale=1.7, recompute=${rsf ? "True" : "False"})`,
+        () => interpImg().interpolate(null, 1.7, mode, false, rsf));
+    }
+  }
+  // The mode-against-rank refusals. `alignCorners` on a mode with no corners is a
+  // Python-side rule — borch.ts takes a boolean, so *not given* and *given as false*
+  // are the same word by the time they arrive.
+  for (const [rank, dims] of [[3, [2, 3, 5]], [4, [1, 1, 4, 5]],
+                              [5, [2, 3, 2, 3, 4]]] as Array<[number, number[]]>) {
+    for (const mode of ["linear", "bilinear", "bicubic", "trilinear"] as const) {
+      const fits = (rank === 3 && mode === "linear")
+        || (rank === 4 && (mode === "bilinear" || mode === "bicubic"))
+        || (rank === 5 && mode === "trilinear");
+      if (fits) continue;
+      out.set(`fname::interpolate(${rank}차원 ${mode})=둘 다 거절`, () => {
+        try {
+          rankImg(dims).interpolate(null, 2, mode);
+        } catch {
+          return "둘 다 멈춘다";
+        }
+        return "여기선 통과했다";
+      });
+    }
+  }
+
   // ── The spatial transformer ───────────────────────────────────────────
   //
   // The two traps are written at length on the Python side. Briefly: asked with squares

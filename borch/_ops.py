@@ -1589,6 +1589,49 @@ def _out_size(in_size, scale_factor):
     return tuple(int(_math.floor(n * float(sc))) for n, sc in zip(in_size, scales))
 
 
+# **The rank a mode needs, and torch's two ways of saying no.** Measured across the
+# whole 3×7 grid rather than reasoned from the names: `linear` wants 3-D, `bilinear`
+# and `bicubic` 4-D, `trilinear` 5-D, and `nearest`, `nearest-exact` and `area` take
+# any of the three. The mismatches are told apart — `bilinear` on a 3-D input names
+# both ranks, while `bicubic` on a 3-D input falls through to the generic sentence
+# instead, which reads oddly (it lists 3D among the supported ranks and then refuses
+# a 3D input) and is what torch says.
+_INTERP_RANK = {"linear": 3, "bilinear": 4, "trilinear": 5}
+_INTERP_MODES = ("nearest", "nearest-exact", "area", "linear", "bilinear",
+                 "bicubic", "trilinear")
+
+
+def _interp_generic(rank, mode):
+    """torch's sentence, whole. **It lists two modes this library does not have** —
+    `lanczos` is in the list and torch refuses it everywhere, and the sentence names
+    3D among the supported ranks while refusing a 3D input, which is how it reads
+    when `bicubic` reaches it. Copied rather than tidied: a message a caller can
+    search for in torch's issues is worth more than one that reads better."""
+    return NotImplementedError(
+        f"Input Error: Only 3D, 4D and 5D input Tensors supported (got {rank}D) "
+        "for the modes: nearest | linear | bilinear | bicubic | trilinear | "
+        f"lanczos | area | nearest-exact (got {mode})")
+
+
+def _interp_check(rank, mode):
+    if rank not in (3, 4, 5):
+        raise _interp_generic(rank, mode)
+    want = _INTERP_RANK.get(mode)
+    if want is not None and rank != want:
+        raise NotImplementedError(
+            f"Got {rank}D input, but {mode} mode needs {want}D input")
+    if mode == "bicubic" and rank != 4:
+        raise _interp_generic(rank, mode)
+
+
+def _spread_size(size, spatial):
+    """One number means the same length on every spatial axis; a list is used as it
+    is. `_pair` cannot serve here — it always makes two."""
+    if isinstance(size, (tuple, list)):
+        return tuple(int(v) for v in size)
+    return (int(size),) * spatial
+
+
 def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
                 align_corners=None, recompute_scale_factor=None, antialias=False):
     """Enlargement. Nearest and bilinear.
@@ -1611,6 +1654,20 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
     the eye does not part them.
     """
     x = _wrap(input)
+    if mode not in _INTERP_MODES:
+        _unsupported(f"interpolate(mode={mode!r}) — {' , '.join(_INTERP_MODES)} "
+                     "are here")
+    rank = x.data.ndim
+    _interp_check(rank, mode)
+    # torch's own wording. **It was accepted and ignored here**, so
+    # `interpolate(x, mode='nearest', align_corners=True)` returned the answer for
+    # `align_corners=False` under the name of the other one — and nearest has no
+    # corners to align, which is why torch refuses rather than picking.
+    if align_corners is not None and mode not in ("linear", "bilinear", "bicubic",
+                                                  "trilinear"):
+        raise ValueError("align_corners option can only be set with the "
+                         "interpolating modes: linear | bilinear | bicubic | "
+                         "trilinear")
     if antialias:
         # torch's own restriction, and its wording.
         if mode not in ("bilinear", "bicubic"):
@@ -1619,29 +1676,36 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
                 "modes and requires a 4-D tensor as input")
         return _interpolate_antialias(x, size, scale_factor, mode,
                                       bool(align_corners), recompute_scale_factor)
-    if mode == "bilinear":
-        return _interpolate_bilinear(x, size, scale_factor, bool(align_corners),
-                                     recompute_scale_factor)
     if mode == "bicubic":
         return _interpolate_bicubic(x, size, scale_factor, bool(align_corners),
                                     recompute_scale_factor)
-    if mode not in ("nearest", "nearest-exact", "area"):
-        _unsupported(f"interpolate(mode={mode!r}) — nearest, nearest-exact, area, "
-                     "bilinear and bicubic are here; linear and trilinear want a "
-                     "rank this function does not take")
     xd = x.data
-    n, c, h, w = xd.shape
-    if size is not None:
-        oh, ow = _pair(size)
-    else:
-        oh, ow = _out_size((h, w), scale_factor)
-    # **`area` is `adaptive_avg_pool2d` and nothing else.** Measured against torch on
-    # three output sizes — a shrink, an enlargement and one that divides evenly into
-    # neither — `F.interpolate(x, size, mode="area")` and `F.adaptive_avg_pool2d(x,
+    spatial = rank - 2
+    in_size = tuple(xd.shape[2:])
+    out_size = (_spread_size(size, spatial) if size is not None
+                else _out_size(in_size, scale_factor))
+    # **The caller's scale, not the one the output size implies**, and that is torch's
+    # default — `None` behaves as `False` here, which is the opposite of what the name
+    # suggests. They part once the floor has lost something: 5 at 1.7 gives 8, and
+    # 8 / 5 is 1.6.
+    keep = None
+    if size is None and recompute_scale_factor is not True:
+        keep = (tuple(scale_factor) if isinstance(scale_factor, (tuple, list))
+                else (scale_factor,) * spatial)
+    # **`area` is adaptive average pooling and nothing else.** Measured against torch
+    # on three output sizes — a shrink, an enlargement and one that divides evenly into
+    # neither — `F.interpolate(x, size, mode="area")` and `F.adaptive_avg_pool*d(x,
     # size)` agree bit for bit. So this names what is already here rather than writing
     # a second averaging, and the gradient comes with it.
     if mode == "area":
-        return adaptive_avg_pool2d(x, (oh, ow))
+        pool = (adaptive_avg_pool1d, adaptive_avg_pool2d,
+                adaptive_avg_pool3d)[spatial - 1]
+        return pool(x, out_size)
+    # **The three interpolating names are one separable kernel at three ranks.**
+    # `linear`, `bilinear` and `trilinear` differ only in how many axes they blend
+    # along; writing three is three places for the `align_corners` rule to drift.
+    if mode in ("linear", "bilinear", "trilinear"):
+        return _interpolate_linear(x, out_size, bool(align_corners), keep)
     # **A source index per output cell, not a whole-number repeat.**
     #
     # This was `np.repeat` twice and it refused anything that was not an integer
@@ -1661,11 +1725,7 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
     # default would do — and it was written the other way here first. Measured: with
     # `None`, torch agrees with `False` at every scale tried and with `True` at none
     # of them.
-    use_given = recompute_scale_factor is not True and size is None
-    given = (scale_factor if isinstance(scale_factor, (tuple, list))
-             else (scale_factor, scale_factor))
-    sh = given[0] if use_given else (oh / h)
-    sw = given[1] if use_given else (ow / w)
+    #
     # **`nearest-exact` measures from the centre of the output cell and `nearest` does
     # not.** `floor((i + 0.5) / s)` against `floor(i / s)` — half a cell, which is
     # nothing when enlarging by a whole number and is a different row entirely when
@@ -1673,17 +1733,103 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
     # already shipped and is off by half; measured on a 4×5 to 2×3, `nearest` takes
     # rows 0 and 2 and `nearest-exact` takes 1 and 3.
     half = 0.5 if mode == "nearest-exact" else 0.0
-    rows = _np.minimum(((_np.arange(oh) + half) / sh).astype(int), h - 1)
-    cols = _np.minimum(((_np.arange(ow) + half) / sw).astype(int), w - 1)
-    out = xd[:, :, rows][:, :, :, cols]
+    picks = []
+    for axis in range(spatial):
+        scale = (keep[axis] if keep is not None
+                 else out_size[axis] / in_size[axis])
+        picks.append(_np.minimum(
+            ((_np.arange(out_size[axis]) + half) / scale).astype(int),
+            in_size[axis] - 1))
+    out = _take_axes(xd, picks)
 
     def back(g):
-        g = _np.asarray(g)
-        gx = _np.zeros_like(xd)
-        _np.add.at(gx, (slice(None), slice(None), rows[:, None], cols[None, :]), g)
-        return (gx,)
+        return (_scatter_axes(_np.asarray(g), picks, xd.shape),)
 
     return x._make(out, (x,), back, "UpsampleBackward0")
+
+
+def _take_axes(arr, picks):
+    """One index map per spatial axis, applied one axis at a time.
+
+    **Sequential rather than one fancy index**, because the maps have different
+    lengths and numpy's advanced indexing would broadcast them against each other
+    instead of taking their product. Two axes could be written `a[:, :, r][:, :, :, c]`
+    by hand; three cannot without repeating the pattern a third time.
+    """
+    for axis, sel in enumerate(picks):
+        arr = _np.take(arr, sel, axis=2 + axis)
+    return arr
+
+
+def _scatter_axes(grad, picks, shape):
+    """`_take_axes` backwards — one axis at a time.
+
+    **The same source cell is read many times when enlarging**, so the shares are
+    accumulated with `add.at` rather than assigned. Assignment keeps the last write
+    and loses the rest, which at a whole-number enlargement leaves every gradient
+    smaller by the factor.
+
+    The axis order does not matter here, and a first draft of this said it did —
+    a take along one axis leaves the other axes' lengths alone, so the steps commute
+    both ways. Measured by running the whole loop the other way round: every case
+    agreed. A reason that sounds like a constraint and is not one is worse than none,
+    because it tells the next reader that something was checked.
+    """
+    for axis in reversed(range(len(picks))):
+        wide = list(grad.shape)
+        wide[2 + axis] = shape[2 + axis]
+        acc = _np.zeros(wide, dtype=grad.dtype)
+        _np.add.at(acc, (slice(None),) * (2 + axis) + (picks[axis],), grad)
+        grad = acc
+    return grad
+
+
+def _interpolate_linear(x, out_size, align_corners, keep):
+    """`linear`, `bilinear` and `trilinear` — **one separable kernel at three ranks.**
+
+    Each output cell is a weighted sum of the 2ⁿ input cells around it, the weight
+    being the product of one per-axis fraction. `_bilinear_axis` gives the two
+    neighbours and the fraction for one axis; everything here is the product over the
+    axes, which is what makes the three names one function.
+    """
+    xd = x.data
+    spatial = xd.ndim - 2
+    in_size = tuple(xd.shape[2:])
+    axes = [_bilinear_axis(in_size[a], out_size[a], align_corners,
+                           keep[a] if keep is not None else None)
+            for a in range(spatial)]
+
+    def weight(axis, side):
+        """The fraction for one axis, shaped to broadcast against the output."""
+        frac = axes[axis][2].astype(xd.dtype)
+        shaped = frac.reshape([1] * (2 + axis) + [-1]
+                              + [1] * (spatial - 1 - axis))
+        return shaped if side else (1 - shaped)
+
+    corners = list(_itertools.product((0, 1), repeat=spatial))
+
+    def share(side):
+        picks = [axes[a][1] if side[a] else axes[a][0] for a in range(spatial)]
+        w = weight(0, side[0])
+        for a in range(1, spatial):
+            w = w * weight(a, side[a])
+        return picks, w
+
+    out = None
+    for side in corners:
+        picks, w = share(side)
+        piece = _take_axes(xd, picks) * w
+        out = piece if out is None else out + piece
+
+    def back(g):
+        gg = _np.asarray(g)
+        acc = _np.zeros_like(xd)
+        for side in corners:
+            picks, w = share(side)
+            acc = acc + _scatter_axes(gg * w, picks, xd.shape)
+        return (acc,)
+
+    return x._make(out, (x,), back, "UpsampleBilinear2DBackward0")
 
 
 def _bilinear_axis(size_in, size_out, align_corners, scale=None):
@@ -1935,44 +2081,12 @@ def _interpolate_bicubic(x, size, scale_factor, align_corners,
     return x._make(out, (x,), back, "UpsampleBicubic2DBackward0")
 
 
-def _interpolate_bilinear(x, size, scale_factor, align_corners,
-                          recompute_scale_factor=None):
-    n, c, h, w = x.data.shape
-    keep = None
-    if size is not None:
-        oh, ow = _pair(size)
-    else:
-        oh, ow = _out_size((h, w), scale_factor)
-        if recompute_scale_factor is not True:
-            # **The caller's scale, not the one the output size implies**, and that
-            # is torch's default — `None` behaves as `False` here. They part once the
-            # floor has lost something: 5 at 1.7 gives 8, and 8 / 5 is 1.6.
-            keep = (scale_factor if isinstance(scale_factor, (tuple, list))
-                    else (scale_factor, scale_factor))
-    y0, y1, wy = _bilinear_axis(h, oh, align_corners, keep and keep[0])
-    x0, x1, wx = _bilinear_axis(w, ow, align_corners, keep and keep[1])
-    wy = wy.astype(x.data.dtype)[:, None]
-    wx = wx.astype(x.data.dtype)[None, :]
-
-    def blend(t):
-        top = t[:, :, y0][:, :, :, x0] * (1 - wx) + t[:, :, y0][:, :, :, x1] * wx
-        bot = t[:, :, y1][:, :, :, x0] * (1 - wx) + t[:, :, y1][:, :, :, x1] * wx
-        return top * (1 - wy) + bot * wy
-
-    def back(g):
-        gg = _np.asarray(g)
-        out = _np.zeros_like(x.data)
-        for ys, wgt_y in ((y0, 1 - wy), (y1, wy)):
-            for xs, wgt_x in ((x0, 1 - wx), (x1, wx)):
-                share = gg * wgt_y * wgt_x
-                # The same position is read several times, so the values are
-                # **accumulated.**
-                for i, yi in enumerate(ys):
-                    _np.add.at(out[:, :, yi], (slice(None), slice(None), xs),
-                               share[:, :, i])
-        return (out,)
-
-    return x._make(blend(x.data), (x,), back, "UpsampleBilinear2DBackward0")
+# **`_interpolate_bilinear` stood here and is gone.** It wrote the two-axis blend out
+# by hand — `t[:, :, y0][:, :, :, x0]` four times and a backward that looped rows one
+# at a time — and being two-axis by construction is what made `linear` and `trilinear`
+# read as *a rank this function does not take*. They are the same kernel over one and
+# three axes; `_interpolate_linear` above is that kernel, and `bilinear` is now its
+# two-axis case rather than a separate body.
 
 
 def _spread(v, n):

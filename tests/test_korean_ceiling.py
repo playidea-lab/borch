@@ -308,7 +308,10 @@ CEILINGS = {
     # 4312 → 4333. Twenty-one, in the attention flags' case names — `둘 다`,
     # `출력`, `가중치`, `state_dict 열쇠` and the two `마스크` rows. Keys in
     # `golden.json`; `add_bias_kv`, `add_zero_attn` and `kdim, vdim` are ASCII.
-    "borch-ts/test": 4333,
+    # 4333 → 4362. Twenty-nine, in `interpolate`'s rank case names — `3차원`, `5차원`,
+    # `… 의 기울기` and the `=둘 다 거절` rows with the `둘 다 멈춘다` verdict they
+    # return. All keys or values in `golden.json`, so both sides spell them the same.
+    "borch-ts/test": 4362,
 }
 
 

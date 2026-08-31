@@ -718,7 +718,12 @@ NOT_PORTED = {
     # there is no runtime refusal to reach — the same shape as the `pad::` row below,
     # where a surplus argument is not received rather than refused. The other four
     # spellings the union carries are all asked, by value and by gradient.
-    "fname::": (29, "별칭 — `F`'s in-place variants. The method side asks them already"),
+    # 29 → 30. `interpolate(nearest 에 align_corners)` asks that the flag is refused on
+    # a mode with no corners to align. torch tells *not given* from *given as false*;
+    # borch.ts takes a boolean, so the two are the same word by the time they arrive
+    # and there is nothing here to refuse. The binding raises it before crossing, and
+    # the case is asked there.
+    "fname::": (30, "별칭 — `F`'s in-place variants. The method side asks them already"),
     # `bit::` used to be here — 24 cases, "alias — the method names of the bit
     # operations". **The point was that those names were not over there**, and the reason
     # called them aliases. They went in and all were ported, so the row is gone.

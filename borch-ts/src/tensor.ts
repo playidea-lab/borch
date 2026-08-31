@@ -49,14 +49,18 @@ export type PadMode = "constant" | "reflect" | "replicate" | "circular";
 export type Reduction = "none" | "mean" | "sum";
 
 /**
- * How `interpolate` resamples. **torch's `linear` and `trilinear` are absent because
- * they want a rank this function does not take** — it is written for `[N, C, H, W]`,
- * and those two are the 3-D and 5-D members of the same family. `nearest` and
- * `nearest-exact` differ by half an output cell; `area` is adaptive average pooling
- * under another name.
+ * How `interpolate` resamples. **`linear` and `trilinear` were absent because they
+ * want a rank this function did not take** — it was written for `[N, C, H, W]`, and
+ * those two are the 3-D and 5-D members of the same family. They are one separable
+ * kernel at three ranks and `interpolateLinear` is now that kernel, so all three are
+ * here.
+ *
+ * `nearest` and `nearest-exact` differ by half an output cell; `area` is adaptive
+ * average pooling under another name. `bicubic` is 4-D alone, as it is in torch.
  */
 export type InterpolateMode =
-  "nearest" | "nearest-exact" | "area" | "bilinear" | "bicubic";
+  "nearest" | "nearest-exact" | "area"
+  | "linear" | "bilinear" | "bicubic" | "trilinear";
 
 /**
  * SELU's fixed point. The value `alphaDropout` puts where it dropped comes from here.
@@ -4212,22 +4216,49 @@ export class Tensor implements Node<Tensor> {
    */
   interpolateBilinear(outH: number, outW: number, alignCorners: boolean,
                       given: number | null = null): Tensor {
-    const h = this.shape[2] ?? 1;
-    const w = this.shape[3] ?? 1;
-    const ys = bilinearAxis(h, outH, alignCorners, given);
-    const xs = bilinearAxis(w, outW, alignCorners, given);
-    const pick = (t: Tensor, axis: number, at: number[]) =>
-      t.indexSelect(axis, Tensor.from(at, [at.length]));
-    const wy = Tensor.from(ys.frac, [outH, 1]);
-    const wx = Tensor.from(xs.frac, [1, outW]);
+    return this.interpolateLinear([outH, outW], alignCorners, given);
+  }
+
+  /**
+   * `linear`, `bilinear` and `trilinear` — **one separable kernel at three ranks.**
+   *
+   * Each output cell is a weighted sum of the 2ⁿ input cells around it, the weight
+   * being the product of one per-axis fraction. `bilinearAxis` gives the two
+   * neighbours and the fraction for one axis; everything here is the product over the
+   * axes, which is what makes the three names one function.
+   *
+   * **`interpolateBilinear` wrote the two-axis case out by hand**, and being two-axis
+   * by construction is what made `linear` and `trilinear` read as absent. They are
+   * this at one and three axes.
+   */
+  interpolateLinear(outDims: readonly number[], alignCorners: boolean,
+                    given: number | null = null): Tensor {
+    const spatial = outDims.length;
+    const axes = outDims.map((out, k) =>
+      bilinearAxis(this.shape[2 + k] ?? 1, out, alignCorners, given));
     const one = Tensor.full([], 1);
-    const corner = (yi: number[], xi: number[]) =>
-      pick(pick(this, 2, yi), 3, xi);
-    const top = corner(ys.lo, xs.lo).mul(one.sub(wx))
-      .add(corner(ys.lo, xs.hi).mul(wx));
-    const bottom = corner(ys.hi, xs.lo).mul(one.sub(wx))
-      .add(corner(ys.hi, xs.hi).mul(wx));
-    return top.mul(one.sub(wy)).add(bottom.mul(wy));
+    // The fraction for one axis, shaped so it broadcasts against the output: a 1 on
+    // every axis but its own.
+    const weights = axes.map((ax, k) => {
+      const shape = new Array<number>(spatial + 2).fill(1);
+      shape[2 + k] = outDims[k] ?? 1;
+      return Tensor.from(ax.frac, shape);
+    });
+    let out: Tensor | null = null;
+    for (let corner = 0; corner < (1 << spatial); corner++) {
+      let piece: Tensor = this;
+      let weight = one;
+      for (let k = 0; k < spatial; k++) {
+        const high = (corner >> k) & 1;
+        const at = high ? (axes[k]?.hi ?? []) : (axes[k]?.lo ?? []);
+        piece = piece.indexSelect(2 + k, Tensor.from(at, [at.length]));
+        const w = weights[k] ?? one;
+        weight = weight.mul(high ? w : one.sub(w));
+      }
+      const term = piece.mul(weight);
+      out = out === null ? term : out.add(term);
+    }
+    return out ?? this;
   }
 
   // ── Moving elements ───────────────────────────────────────────────────
@@ -10884,63 +10915,77 @@ fn gelu_tanh_grad(x: f32) -> f32 {
               alignCorners = false,
               recomputeScaleFactor: boolean | null = null,
               antialias = false): Tensor {
-    const h = this.shape[2] ?? 1;
-    const w = this.shape[3] ?? 1;
-    const pair = (v: number | readonly number[]): [number, number] =>
-      typeof v === "number" ? [v, v] : [v[0] ?? 1, v[1] ?? v[0] ?? 1];
+    // **The union protects TypeScript callers and not the binding.** `mode` reaching
+    // here is a string, and Python hands one over without a type to stop it — so
+    // everything unmatched fell through to bilinear and `mode="quadratic"` came back
+    // as a bilinear answer under its name. The golden case asking that both sides stop
+    // is what found it: `tsc` cannot, because in TypeScript the call does not compile.
+    const known = ["nearest", "nearest-exact", "area", "linear", "bilinear",
+                   "bicubic", "trilinear"];
+    if (!known.includes(mode)) {
+      throw new RuntimeError(
+        `interpolate(mode=${JSON.stringify(mode)}) is not one of ${known.join(", ")}`);
+    }
+    // **The rank a mode needs**, measured across the whole 3×7 grid rather than
+    // reasoned from the names. `bicubic` at a rank that is not 4 falls through to the
+    // generic sentence instead of the specific one, which reads oddly — it lists 3D
+    // among the supported ranks and then refuses a 3D input — and is what torch says.
+    const rank = this.shape.length;
+    const wants: Record<string, number> = { linear: 3, bilinear: 4, trilinear: 5 };
+    const generic = () => new RuntimeError(
+      `Input Error: Only 3D, 4D and 5D input Tensors supported (got ${rank}D) `
+      + "for the modes: nearest | linear | bilinear | bicubic | trilinear | "
+      + `lanczos | area | nearest-exact (got ${mode})`);
+    if (rank !== 3 && rank !== 4 && rank !== 5) throw generic();
+    const want = wants[mode];
+    if (want !== undefined && rank !== want) {
+      throw new RuntimeError(
+        `Got ${rank}D input, but ${mode} mode needs ${want}D input`);
+    }
+    if (mode === "bicubic" && rank !== 4) throw generic();
+    const spatial = rank - 2;
+    const inDims = this.shape.slice(2);
     const scale = scaleFactor ?? 2;
-    // torch's own rule, in one place so the two modes cannot part.
-    const extent = (inp: number) => Math.floor(inp * scale);
+    // torch's own rule, in one place so the modes cannot part.
+    const outDims = size === null
+      ? inDims.map((d) => Math.floor(d * scale))
+      : (typeof size === "number"
+        ? new Array<number>(spatial).fill(size)
+        : Array.from({ length: spatial }, (_, k) => size[k] ?? size[0] ?? 1));
+    // **The default is the *given* scale; recomputing is what the flag turns on.**
+    // A size rather than a factor has no scale to recompute from.
+    const given = size === null && !recomputeScaleFactor ? scale : null;
     if (antialias) {
       if (mode !== "bilinear" && mode !== "bicubic") {
         throw new RuntimeError(
           "Anti-alias option is restricted to bilinear, bicubic, and lanczos modes "
           + "and requires a 4-D tensor as input");
       }
-      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
-      const given = size === null && !recomputeScaleFactor ? scale : null;
-      return this.interpolateAntialias(oh, ow, mode, alignCorners, given);
+      return this.interpolateAntialias(outDims[0] ?? 1, outDims[1] ?? 1, mode,
+                                       alignCorners, given);
     }
-    if (mode === "nearest") {
-      // `resizeNearest` maps `src = floor(o · in / out)`, which *is* recomputing the
-      // scale from the output size — so nearest gives the same answer either way and
-      // torch says as much by ignoring the flag outside the fractional bilinear case.
-      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
-      return this.resizeNearest([oh, ow]);
-    }
-    if (mode === "nearest-exact") {
-      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
-      return this.resizeNearestExact(oh, ow);
+    if (mode === "nearest" || mode === "nearest-exact") {
+      // `resizeNearest`'s kernel maps `floor(o · in / out)`, which *is* the
+      // recomputed rule — so it is right exactly where the given scale and the
+      // recomputed one agree, which is every whole factor and every `size=`. Where
+      // they part (5 at 1.7 gives 8, and 8/5 is 1.6) the index map is built here
+      // instead. One fused dispatch stays the common path.
+      const sameScale = given === null
+        || outDims.every((out, k) => given === out / (inDims[k] ?? 1));
+      if (mode === "nearest" && sameScale) return this.resizeNearest(outDims);
+      return this.resizeNearestAt(outDims, mode === "nearest-exact" ? 0.5 : 0,
+                                  given);
     }
     // **`area` is `adaptivePool("avg", …)` and nothing else.** Measured against torch
     // on a shrink, an enlargement and a size dividing evenly into neither, the two
     // agree bit for bit — so this names what is here rather than writing a second
     // averaging, and the gradient comes with it.
-    if (mode === "area") {
-      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
-      return this.adaptivePool("avg", [oh, ow]);
-    }
-    const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
+    if (mode === "area") return this.adaptivePool("avg", outDims);
     if (mode === "bicubic") {
-      const given = size === null && !recomputeScaleFactor ? scale : null;
-      return this.interpolateBicubic(oh, ow, alignCorners, given);
+      return this.interpolateBicubic(outDims[0] ?? 1, outDims[1] ?? 1,
+                                     alignCorners, given);
     }
-    // **The union protects TypeScript callers and not the binding.** `mode` reaching
-    // here is a string, and Python hands one over without a type to stop it — so
-    // everything unmatched fell through to bilinear and `mode="quadratic"` came back
-    // as a bilinear answer under its name. The golden case asking that both sides stop
-    // is what found it: `tsc` cannot, because in TypeScript the call does not compile.
-    if (mode !== "bilinear") {
-      throw new RuntimeError(
-        `interpolate(mode=${JSON.stringify(mode)}) is not one of nearest, `
-        + "nearest-exact, area, bilinear, bicubic");
-    }
-    // **The default is the *given* scale; recomputing is what the flag turns on.**
-    // The kernel had only the recomputed rule (`in / out`), so borch.ts answered as
-    // though the flag were always set. A size rather than a factor has no scale to
-    // recompute from, so that path is unchanged.
-    const given = size === null && !recomputeScaleFactor ? scale : null;
-    return this.interpolateBilinear(oh, ow, alignCorners, given);
+    return this.interpolateLinear(outDims, alignCorners, given);
   }
 
   /**
@@ -11021,14 +11066,31 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * several times accumulates there, which is what `resizeNearest`'s kernel does by
    * hand.
    */
-  private resizeNearestExact(outH: number, outW: number): Tensor {
-    const h = this.shape[2] ?? 1;
-    const w = this.shape[3] ?? 1;
-    const pick = (sizeIn: number, sizeOut: number): Tensor => Tensor.from(
-      Array.from({ length: sizeOut }, (_, i) =>
-        Math.min(Math.floor(((i + 0.5) * sizeIn) / sizeOut), sizeIn - 1)),
-      [sizeOut], { dtype: "int64" });
-    return this.indexSelect(2, pick(h, outH)).indexSelect(3, pick(w, outW));
+  /**
+   * Nearest by index map, one axis at a time — **both nearest modes and any rank.**
+   *
+   * `half` is the whole difference between them: `nearest-exact` measures from the
+   * centre of the output cell (`floor((i + 0.5)/s)`) and `nearest` from its edge
+   * (`floor(i/s)`). Half a cell, which is nothing when enlarging by a whole number
+   * and is a different row entirely when shrinking.
+   *
+   * **`given` is the scale the caller asked for**, used when
+   * `recomputeScaleFactor` is off. `resizeNearest`'s kernel maps `floor(o·in/out)`,
+   * which *is* the recomputed rule — right whenever the two scales agree and wrong
+   * when the flooring has lost something, so `interpolate` reaches for that kernel
+   * only where they do agree.
+   */
+  private resizeNearestAt(outDims: readonly number[], half: number,
+                          given: number | null): Tensor {
+    let out: Tensor = this;
+    outDims.forEach((sizeOut, k) => {
+      const sizeIn = this.shape[2 + k] ?? 1;
+      const step = given === null ? sizeOut / sizeIn : given;
+      const at = Array.from({ length: sizeOut }, (_, i) =>
+        Math.min(Math.floor((i + half) / step), sizeIn - 1));
+      out = out.indexSelect(2 + k, Tensor.from(at, [sizeOut], { dtype: "int64" }));
+    });
+    return out;
   }
 
   /**

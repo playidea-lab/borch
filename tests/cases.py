@@ -4718,6 +4718,78 @@ def functional_name_cases(inp=None):
         lambda L: _both_stop(L, lambda M: M.nn.functional.interpolate(
             M.tensor(_INTERP_IMG), size=(2, 3), mode="quadratic")))
 
+    # ── the ranks, which were a `ValueError` from an unpacking ────────────────
+    #
+    # `linear` and `trilinear` were refused with *a rank this function does not
+    # take*, and the sentence was about the code: it unpacked `n, c, h, w`, so
+    # **`nearest` and `area` failed at ranks 3 and 5 too** — with *not enough values
+    # to unpack (expected 4, got 3)*, which names neither the library nor the
+    # argument. The three interpolating names are one separable kernel at one, two
+    # and three axes.
+    #
+    # **The mode-against-rank grid was measured whole rather than reasoned from the
+    # names.** `bicubic` at a rank that is not 4 does not get the specific sentence
+    # the other three get; it falls through to the generic one, which lists 3D among
+    # the supported ranks and then refuses a 3D input. Copied as torch says it.
+    _INTERP_3D = np.arange(1., 31., dtype=np.float32).reshape(2, 3, 5)
+    _INTERP_5D = np.arange(1., 145., dtype=np.float32).reshape(2, 3, 2, 3, 4)
+    for _rank, _img, _lin in ((3, _INTERP_3D, "linear"), (5, _INTERP_5D, "trilinear")):
+        for _mode in ("nearest", "nearest-exact", "area"):
+            for _sf in (2, 1.7, 0.5):
+                add(f"interpolate({_rank}차원 {_mode}, scale={_sf})",
+                    lambda L, a=_img, m=_mode, f=_sf: F(L).interpolate(
+                        L.tensor(a), scale_factor=f, mode=m))
+            add(f"interpolate({_rank}차원 {_mode}, size=3)",
+                lambda L, a=_img, m=_mode: F(L).interpolate(
+                    L.tensor(a), size=3, mode=m))
+        for _ac in (False, True):
+            for _sf in (2, 1.7):
+                add(f"interpolate({_lin}, align={_ac}, scale={_sf})",
+                    lambda L, a=_img, m=_lin, c=_ac, f=_sf: F(L).interpolate(
+                        L.tensor(a), scale_factor=f, mode=m, align_corners=c))
+            add(f"interpolate({_lin}, align={_ac}, size=3)",
+                lambda L, a=_img, m=_lin, c=_ac: F(L).interpolate(
+                    L.tensor(a), size=3, mode=m, align_corners=c))
+
+    def interp_rank_grad(L, img, mode, align=None):
+        x = L.tensor(img.copy(), requires_grad=True)
+        kw = {} if align is None else {"align_corners": align}
+        out = F(L).interpolate(x, scale_factor=2, mode=mode, **kw)
+        (out * out).sum().backward()
+        return _grad_of(x, f"interpolate/{mode}")
+
+    for _rank, _img, _lin in ((3, _INTERP_3D, "linear"), (5, _INTERP_5D, "trilinear")):
+        for _mode, _ac in ((_lin, False), ("nearest", None), ("area", None)):
+            add(f"interpolate({_rank}차원 {_mode}) 의 기울기",
+                lambda L, a=_img, m=_mode, c=_ac: interp_rank_grad(L, a, m, c))
+
+    # **`recompute_scale_factor` reaches `nearest` too**, and the browser side had it
+    # reaching neither nearest name — its kernel maps `floor(o·in/out)`, which is the
+    # *recomputed* rule, and the comment beside it said the flag made no difference to
+    # nearest. It does whenever the flooring loses something: 5 at 1.7 gives 8, and
+    # 8/5 is 1.6, so the two pick different source cells in the middle of the row.
+    for _mode in ("nearest", "nearest-exact"):
+        for _rsf in (True, False):
+            add(f"interpolate({_mode}, scale=1.7, recompute={_rsf})",
+                lambda L, m=_mode, r=_rsf: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), scale_factor=1.7, mode=m,
+                    recompute_scale_factor=r))
+
+    # The mode-against-rank refusals, and `align_corners` on a mode with no corners.
+    for _rank, _img in ((3, _INTERP_3D), (4, _INTERP_IMG), (5, _INTERP_5D)):
+        for _mode in ("linear", "bilinear", "bicubic", "trilinear"):
+            if (_rank, _mode) in ((3, "linear"), (4, "bilinear"), (4, "bicubic"),
+                                  (5, "trilinear")):
+                continue
+            add(f"interpolate({_rank}차원 {_mode})=둘 다 거절",
+                lambda L, a=_img, m=_mode: _both_stop(
+                    L, lambda M, b=a, n=m: M.nn.functional.interpolate(
+                        M.tensor(b), scale_factor=2, mode=n)))
+    add("interpolate(nearest 에 align_corners)=둘 다 거절",
+        lambda L: _both_stop(L, lambda M: M.nn.functional.interpolate(
+            M.tensor(_INTERP_IMG), scale_factor=2, mode="nearest",
+            align_corners=True)))
+
     # ── `antialias`, the last of `interpolate`'s seats ─────────────────
     #
     # It widens the filter by the shrink factor and renormalises the weights, so every
