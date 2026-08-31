@@ -9168,8 +9168,64 @@ function addLinalgEx(out: Map<string, Case>): void {
     async () => (await lin4().ldlFactorEx()).info);
   out.set("linalg::ex::ldl_solve", async () => {
     const got = await lin4().ldlFactor();
-    return got.LD.ldlSolve(Tensor.from(
+    return got.LD.ldlSolve(got.pivots, Tensor.from(
       [1.0, -2.0, 0.5, 0.25, -1.5, 3.0, 2.0, 0.5], [4, 2]));
+  });
+
+  // ── the pivoting, which was refused ───────────────────────────────────
+  //
+  // `ldlFactor` stopped on any matrix needing a swap, and the reason was accurate:
+  // torch uses LAPACK's Bunch–Kaufman and a factorisation without the swaps is a
+  // different one. **Both halves are asked**: the first fixture takes a 2×2 block
+  // over rows 0 and 1 (`pivots` comes back `[-3, -3, 3]`), the second a 1×1 pivot
+  // with a row swap. Writing the swap over rows instead of columns left ten of
+  // thirteen matrices agreeing, and the three that did not diverged first in their
+  // **pivot table**, two steps after the wrong line.
+  const ldlBlock = () => Tensor.from([0, 1, 2, 1, 0, 3, 2, 3, 0], [3, 3]);
+  const ldlSwap = () => Tensor.from(
+    [-0.31, 0.96, -1.07, 0.96, 0.29, 0.01, -1.07, 0.01, 0.69], [3, 3]);
+  // **A 6×6, because the column swap is empty on a 3×3.** The swap runs over the rows
+  // below `kp`, and on a 3×3 every pivot that is not the diagonal lands on the last
+  // row — dropping the swap entirely changes no answer there. Both plants passed
+  // against the two 3×3s.
+  const ldlWide = () => Tensor.from(
+    [-1.32, -0.52, 1.01, 0.32, 0.47, -0.27,
+      -0.52, 0.75, 0.92, -0.22, -1.44, -0.50,
+      1.01, 0.92, -1.73, 0.23, -0.71, -0.47,
+      0.32, -0.22, 0.23, -0.06, -0.79, -0.32,
+      0.47, -1.44, -0.71, -0.79, -0.17, -0.84,
+      -0.27, -0.50, -0.47, -0.32, -0.84, -1.09], [6, 6]);
+  const ldlPivoted: [string, () => Tensor, number][] = [
+    ["2x2 블록", ldlBlock, 3], ["교환", ldlSwap, 3], ["6x6 열 교환", ldlWide, 6],
+  ];
+  for (const [tag, make, n] of ldlPivoted) {
+    out.set(`linalg::ex::ldl_factor(${tag})/LD`,
+      async () => (await make().ldlFactor()).LD);
+    out.set(`linalg::ex::ldl_factor(${tag})/pivots`,
+      async () => (await make().ldlFactor()).pivots);
+    // The solve reads the pivot table too, and it did not — it took the packed
+    // matrix alone, right only while nothing was ever swapped.
+    out.set(`linalg::ex::ldl_solve(${tag})`, async () => {
+      const got = await make().ldlFactor();
+      return got.LD.ldlSolve(got.pivots, Tensor.from(
+        Array.from({ length: n * 2 }, (_, i) => i * 0.5 - 1), [n, 2]));
+    });
+  }
+  // **`info` stopped being a constant.** The only bad cases left are singular, and it
+  // is the first zero pivot counting from 1.
+  out.set("linalg::ex::ldl_factor_ex(특이)/info",
+    async () => (await Tensor.from([1, 1, 1, 1], [2, 2]).ldlFactorEx()).info);
+  out.set("linalg::ex::ldl_factor_ex(영행렬)/info",
+    async () => (await Tensor.zeros([2, 2]).ldlFactorEx()).info);
+  // torch's own `ldl_factor` breaks here with an internal assert rather than saying
+  // anything about the matrix, so what is asked is that both stop.
+  out.set("linalg::ex::ldl_factor(특이)=둘 다 거절", async () => {
+    try {
+      await Tensor.from([1, 1, 1, 1], [2, 2]).ldlFactor();
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
   });
 
   // **QR in reflector form.** `geqrf` stores them and `householderProduct` expands them

@@ -6945,99 +6945,247 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * A symmetric matrix as `L D Lᵀ`. **It does not pivot.**
+   * A symmetric matrix as `L D Lᵀ` — LAPACK's `dsytf2` on the lower triangle,
+   * **with pivoting.**
    *
-   * torch uses LAPACK's Bunch–Kaufman, which swaps positions when it has
-   * to. Here only the cases with nothing to swap (positive definite and the
-   * like) are handled, and a near-zero diagonal is refused loudly —
-   * carrying on quietly gives a different answer with and without swapping,
-   * and both are plausible.
+   * **This refused an indefinite matrix and the reason was accurate**: torch uses
+   * Bunch–Kaufman, which swaps where it needs to, and a factorisation without the
+   * swaps is a different one. So the way through was to write Bunch–Kaufman rather
+   * than to loosen a tolerance — there are many valid `L D Lᵀ` decompositions and
+   * only LAPACK's packing and swap table compare against torch's.
    *
-   * The answer is **packed into one plate** in torch's shape — the diagonal
-   * is `D` and below it is `L`.
+   * The pivot table is LAPACK's own: a positive `k+1` is a 1×1 pivot with row `k`
+   * swapped for row `pivots[k]−1`, and **a repeated negative pair is a 2×2 block**.
+   *
+   * **The swap is over columns, not rows**, and that one line is where the core's
+   * copy of this first went wrong: written as a row swap, ten of thirteen matrices
+   * still agreed, and the three that did not diverged first in their *pivot table*
+   * two steps later.
+   *
+   * Checked against torch on 470 symmetric matrices, ranks 1 to 8.
    */
   async ldlFactor(): Promise<{ LD: Tensor; pivots: Tensor }> {
+    const got = await this.ldlPacked();
+    if (got.info.some((v) => v !== 0)) {
+      const first = got.info.find((v) => v !== 0) ?? 0;
+      throw new RuntimeError(
+        `linalg.ldl_factor: the leading minor of order ${first} is singular — `
+        + "`ldlFactorEx` reports it in `info` instead of stopping");
+    }
+    return { LD: got.LD, pivots: got.pivots };
+  }
+
+  /** Bunch–Kaufman itself, with `info` rather than a refusal. */
+  private async ldlPacked():
+    Promise<{ LD: Tensor; pivots: Tensor; info: number[] }> {
     const v = await this.asBatch();
     const n = v.rows;
-    const outs = v.mats.map((mat) => {
-      const ld = new Float64Array(n * n);
-      for (let j = 0; j < n; j++) {
-        let d = mat[j * n + j] ?? 0;
-        for (let k = 0; k < j; k++) {
-          d -= (ld[j * n + k] ?? 0) ** 2 * (ld[k * n + k] ?? 0);
-        }
-        if (Math.abs(d) < 1e-12) {
-          throw new RuntimeError("ldl_factor — this symmetric matrix needs pivoting (it is indefinite)");
-        }
-        ld[j * n + j] = d;
-        for (let i = j + 1; i < n; i++) {
-          let s = 0;
-          for (let k = 0; k < j; k++) {
-            s += (ld[i * n + k] ?? 0) * (ld[k * n + k] ?? 0) * (ld[j * n + k] ?? 0);
-          }
-          ld[i * n + j] = ((mat[i * n + j] ?? 0) - s) / d;
-        }
-      }
-      return ld;
-    });
-    // The permutation is the identity counted from 1 — nothing was swapped.
+    const ALPHA = (1 + Math.sqrt(17)) / 8;
     const piv = new Float32Array(v.batch * n);
-    for (let b = 0; b < v.batch; b++) {
-      for (let i = 0; i < n; i++) piv[b * n + i] = i + 1;
-    }
+    const info: number[] = [];
+    const outs = v.mats.map((mat, plate) => {
+      const a = new Float64Array(n * n);
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j <= i; j++) a[i * n + j] = mat[i * n + j] ?? 0;
+      }
+      const at = (i: number, j: number): number => a[i * n + j] ?? 0;
+      let bad = 0;
+      let k = 0;
+      while (k < n) {
+        let step = 1;
+        const here = Math.abs(at(k, k));
+        let imax = -1;
+        let colmax = 0;
+        for (let i = k + 1; i < n; i++) {
+          if (Math.abs(at(i, k)) > colmax) { colmax = Math.abs(at(i, k)); imax = i; }
+        }
+        let kp: number;
+        if (Math.max(here, colmax) === 0 || here >= ALPHA * colmax) {
+          kp = k;
+        } else {
+          let rowmax = 0;
+          for (let j = k; j < imax; j++) rowmax = Math.max(rowmax, Math.abs(at(imax, j)));
+          for (let i = imax + 1; i < n; i++) {
+            rowmax = Math.max(rowmax, Math.abs(at(i, imax)));
+          }
+          if (here >= ALPHA * colmax * (colmax / rowmax)) kp = k;
+          else if (Math.abs(at(imax, imax)) >= ALPHA * rowmax) kp = imax;
+          else { kp = imax; step = 2; }
+        }
+        const kk = k + step - 1;
+        if (kp !== kk) {
+          for (let i = kp + 1; i < n; i++) {
+            const keep = at(i, kk);
+            a[i * n + kk] = at(i, kp);
+            a[i * n + kp] = keep;
+          }
+          for (let j = kk + 1; j < kp; j++) {
+            const keep = at(j, kk);
+            a[j * n + kk] = at(kp, j);
+            a[kp * n + j] = keep;
+          }
+          const keepDiag = at(kk, kk);
+          a[kk * n + kk] = at(kp, kp);
+          a[kp * n + kp] = keepDiag;
+          if (step === 2) {
+            const keepPair = at(kk, k);
+            a[kk * n + k] = at(kp, k);
+            a[kp * n + k] = keepPair;
+          }
+        }
+        if (step === 1) {
+          const d11 = at(k, k);
+          if (d11 === 0 && bad === 0) bad = k + 1;
+          if (d11 !== 0) {
+            for (let i = k + 1; i < n; i++) a[i * n + k] = at(i, k) / d11;
+            for (let j = k + 1; j < n; j++) {
+              for (let i = j; i < n; i++) {
+                a[i * n + j] = at(i, j) - d11 * at(i, k) * at(j, k);
+              }
+            }
+          }
+          // **`kp + 1`, not `k + 1`.** A 1×1 pivot still records where the row came
+          // from; writing the position instead is the identity whenever nothing
+          // swapped, so every unswapped matrix agreed and only the swapped ones
+          // parted — and they parted in the pivot table, not the values.
+          piv[plate * n + k] = kp + 1;
+        } else {
+          if (k < n - 2) {
+            const d21raw = at(k + 1, k);
+            const d11 = at(k + 1, k + 1) / d21raw;
+            const d22 = at(k, k) / d21raw;
+            const d21 = (1 / (d11 * d22 - 1)) / d21raw;
+            for (let j = k + 2; j < n; j++) {
+              const wk = d21 * (d11 * at(j, k) - at(j, k + 1));
+              const wkp1 = d21 * (d22 * at(j, k + 1) - at(j, k));
+              for (let i = j; i < n; i++) {
+                a[i * n + j] = at(i, j) - at(i, k) * wk - at(i, k + 1) * wkp1;
+              }
+              a[j * n + k] = wk;
+              a[j * n + k + 1] = wkp1;
+            }
+          }
+          piv[plate * n + k] = -(kp + 1);
+          piv[plate * n + k + 1] = -(kp + 1);
+        }
+        k += step;
+      }
+      info.push(bad);
+      return a;
+    });
     return {
       LD: Tensor.fromBatch(outs, this.shape),
       pivots: Tensor.from(piv, [...v.lead, n], { dtype: "int64" }),
+      info,
     };
   }
 
   /**
-   * `ldlFactor` **plus one `info`.** The same place as `luFactorEx`.
+   * `ldlFactor` **plus one `info`** — the first zero pivot, counting from 1.
    *
-   * **Here it is always 0** — meeting a bad position makes `ldlFactor`
-   * refuse on the spot, so nothing is left to report by number. The name is
-   * kept anyway: torch offers it, and without it the caller has to invent
-   * one of the three slots themselves — which the binding was actually
-   * doing (standing up `_Fields` by hand and slotting a 0 into `info`).
-   * Then the golden cases go through the binding and are green, and what is
-   * missing is only for whoever writes TypeScript.
+   * It used to be always 0, with the note that a bad position makes `ldlFactor`
+   * refuse on the spot. That was true while every such matrix was refused; now the
+   * only ones left are singular, and this is where they are reported rather than
+   * stopped. Measured against torch: `[[1,1],[1,1]]` gives 2 and a zero matrix 1.
    */
   async ldlFactorEx(): Promise<{ LD: Tensor; pivots: Tensor; info: Tensor }> {
     const v = await this.asBatch();
-    const got = await this.ldlFactor();
-    return { ...got, info: Tensor.zeros(v.lead).to("int64") };
+    const got = await this.ldlPacked();
+    return {
+      LD: got.LD,
+      pivots: got.pivots,
+      info: Tensor.from(got.info, v.lead, { dtype: "int64" }),
+    };
   }
 
   /**
-   * Solves using the factorisation `ldlFactor` produced. Three passes: `L y
-   * = b`, `D z = y`, `Lᵀ x = z`.
+   * Solves using the factorisation `ldlFactor` produced — LAPACK's `dsytrs`,
+   * **pivots and all.**
+   *
+   * `pivots` was not taken here at all, which was right only while nothing was ever
+   * swapped: the factorisation refused every matrix that needed it. With
+   * Bunch–Kaufman in place the old body was wrong on 47 of 80 random symmetric
+   * matrices and returned a plausible number every time.
+   *
+   * **Swap, eliminate, divide — in that order, one step at a time.** Written as
+   * *permute, then solve `L`, then solve `D`* it is still wrong, because `L` was
+   * built in the swapped order and the two do not commute; that version was wrong on
+   * 97 of 279. And **inside a 2×2 block the sub-diagonal entry belongs to `D`**, not
+   * to the unit triangle around it.
    */
-  async ldlSolve(b: Tensor): Promise<Tensor> {
+  async ldlSolve(pivots: Tensor, b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
     const n = v.rows;
     if (v.batch !== 1) throw new RuntimeError("ldl_solve: batching is not here yet");
     const ld = v.mats[0];
     if (!ld) throw new RuntimeError("ldl_solve: the factorization is empty");
+    const piv = Array.from(await pivots.toArray()).map((v2) => Math.round(v2));
     const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
     const rhs = LA.fromF32(await b.toArray());
-    const out = new Float64Array(n * width);
-    for (let c = 0; c < width; c++) {
-      const y = new Float64Array(n);
-      for (let i = 0; i < n; i++) {
-        let s = rhs[i * width + c] ?? 0;
-        for (let k = 0; k < i; k++) s -= (ld[i * n + k] ?? 0) * (y[k] ?? 0);
-        y[i] = s;
+    const x = Float64Array.from(rhs);
+    const at = (i: number, j: number): number => ld[i * n + j] ?? 0;
+    const row = (i: number, c: number): number => x[i * width + c] ?? 0;
+    const swap = (i: number, j: number): void => {
+      for (let c = 0; c < width; c++) {
+        const keep = row(i, c);
+        x[i * width + c] = row(j, c);
+        x[j * width + c] = keep;
       }
-      for (let i = 0; i < n; i++) y[i] = (y[i] ?? 0) / (ld[i * n + i] ?? 1);
-      for (let i = n - 1; i >= 0; i--) {
-        let s = y[i] ?? 0;
-        for (let k = i + 1; k < n; k++) {
-          s -= (ld[k * n + i] ?? 0) * (out[k * width + c] ?? 0);
+    };
+    let k = 0;
+    while (k < n) {
+      if ((piv[k] ?? 0) > 0) {
+        const kp = (piv[k] ?? 0) - 1;
+        if (kp !== k) swap(k, kp);
+        for (let i = k + 1; i < n; i++) {
+          for (let c = 0; c < width; c++) x[i * width + c] = row(i, c) - at(i, k) * row(k, c);
         }
-        out[i * width + c] = s;
+        for (let c = 0; c < width; c++) x[k * width + c] = row(k, c) / at(k, k);
+        k += 1;
+      } else {
+        const kp = -(piv[k] ?? 0) - 1;
+        if (kp !== k + 1) swap(k + 1, kp);
+        for (let i = k + 2; i < n; i++) {
+          for (let c = 0; c < width; c++) {
+            x[i * width + c] = row(i, c) - at(i, k) * row(k, c)
+              - at(i, k + 1) * row(k + 1, c);
+          }
+        }
+        const off = at(k + 1, k);
+        const top = at(k, k) / off;
+        const bot = at(k + 1, k + 1) / off;
+        const denom = top * bot - 1;
+        for (let c = 0; c < width; c++) {
+          const b0 = row(k, c) / off;
+          const b1 = row(k + 1, c) / off;
+          x[k * width + c] = (bot * b0 - b1) / denom;
+          x[(k + 1) * width + c] = (top * b1 - b0) / denom;
+        }
+        k += 2;
       }
     }
-    return Tensor.fromMat(out, b.shape);
+    // A 2×2 block is met at its **second** row on the way up, and both of its
+    // columns are applied before the pair steps past.
+    k = n - 1;
+    while (k >= 0) {
+      const back = (target: number, col: number): void => {
+        let s = row(target, col);
+        for (let i = k + 1; i < n; i++) s -= at(i, target) * row(i, col);
+        x[target * width + col] = s;
+      };
+      if ((piv[k] ?? 0) > 0) {
+        for (let c = 0; c < width; c++) back(k, c);
+        const kp = (piv[k] ?? 0) - 1;
+        if (kp !== k) swap(k, kp);
+        k -= 1;
+      } else {
+        for (let c = 0; c < width; c++) { back(k, c); back(k - 1, c); }
+        const kp = -(piv[k] ?? 0) - 1;
+        if (kp !== k) swap(k, kp);
+        k -= 2;
+      }
+    }
+    return Tensor.fromMat(x, b.shape);
   }
 
   /**

@@ -11308,6 +11308,71 @@ def linalg_struct_cases(inp=None):
 
     cases.append((LINALG_PREFIX + "ex::ldl_solve", ldl_solve))
 
+    # ── the pivoting, which was refused ────────────────────────────────
+    #
+    # `ldl_factor` stopped on any matrix needing a swap, and the reason was accurate:
+    # torch uses LAPACK's Bunch-Kaufman and a factorisation without the swaps is a
+    # different one. So the way through was to write Bunch-Kaufman — there are many
+    # valid `L D Lᵀ` decompositions and only LAPACK's packing and pivot table compare
+    # against torch's.
+    #
+    # **Both halves are asked, and both had to be.** The first fixture takes a 2×2
+    # block over rows 0 and 1 (`pivots` comes back `[-3, -3, 3]`); the second takes a
+    # 1×1 pivot with a row swap. Writing the swap over rows instead of columns left
+    # ten of thirteen matrices agreeing, and the three that did not diverged first in
+    # their **pivot table**, two steps after the wrong line.
+    _LDL_BLOCK = np.array([[0., 1., 2.], [1., 0., 3.], [2., 3., 0.]], dtype=np.float32)
+    _LDL_SWAP = np.array([[-0.31, 0.96, -1.07], [0.96, 0.29, 0.01],
+                          [-1.07, 0.01, 0.69]], dtype=np.float32)
+    # **A 6×6, because the column swap is empty on a 3×3.** The swap runs over the
+    # rows below `kp`, and on a 3×3 every pivot that is not the diagonal lands on the
+    # last row — so there is nothing below it and dropping the swap entirely changes
+    # no answer. Both plants passed against the two above. This one pivots to row 5
+    # at the first column with a 2×2 block after it, so the swap has somewhere to go;
+    # it was found by sampling until one parted rather than reasoned into existence.
+    _LDL_WIDE = np.array(
+        [[-1.32, -0.52, 1.01, 0.32, 0.47, -0.27],
+         [-0.52, 0.75, 0.92, -0.22, -1.44, -0.50],
+         [1.01, 0.92, -1.73, 0.23, -0.71, -0.47],
+         [0.32, -0.22, 0.23, -0.06, -0.79, -0.32],
+         [0.47, -1.44, -0.71, -0.79, -0.17, -0.84],
+         [-0.27, -0.50, -0.47, -0.32, -0.84, -1.09]], dtype=np.float32)
+    for _tag, _arr in (("2x2 블록", _LDL_BLOCK), ("교환", _LDL_SWAP),
+                       ("6x6 열 교환", _LDL_WIDE)):
+        for _field in ("LD", "pivots"):
+            cases.append((LINALG_PREFIX + f"ex::ldl_factor({_tag})/{_field}",
+                          lambda L, a=_arr, f=_field: getattr(
+                              L.linalg.ldl_factor(L.tensor(a)), f)))
+
+    def ldl_solve_pivoted(L, arr):
+        """**The solve reads the pivot table too**, and it did not — it took the
+        packed matrix alone, which was right only while nothing was ever swapped.
+        With the blocks in place the old body was wrong on 47 of 80 random symmetric
+        matrices and plausible on every one."""
+        f = L.linalg.ldl_factor(L.tensor(arr))
+        rhs = (np.arange(arr.shape[0] * 2, dtype=np.float32).reshape(-1, 2) * 0.5
+               - 1.0)
+        return L.linalg.ldl_solve(f.LD, f.pivots, L.tensor(rhs))
+
+    for _tag, _arr in (("2x2 블록", _LDL_BLOCK), ("교환", _LDL_SWAP),
+                       ("6x6 열 교환", _LDL_WIDE)):
+        cases.append((LINALG_PREFIX + f"ex::ldl_solve({_tag})",
+                      lambda L, a=_arr: ldl_solve_pivoted(L, a)))
+
+    # **`info` stopped being a constant.** It was hardcoded to 0 with the note *the
+    # bad cases are refused*, true while they were; the only ones left are singular
+    # and it is the first zero pivot, counting from 1.
+    for _tag, _arr in (("특이", np.array([[1., 1.], [1., 1.]], dtype=np.float32)),
+                       ("영행렬", np.zeros((2, 2), dtype=np.float32))):
+        cases.append((LINALG_PREFIX + f"ex::ldl_factor_ex({_tag})/info",
+                      lambda L, a=_arr: L.linalg.ldl_factor_ex(L.tensor(a)).info))
+    # **torch's own `ldl_factor` breaks here**, with *INTERNAL ASSERT FAILED … please
+    # report a bug to PyTorch* rather than anything about the matrix. So what is asked
+    # is that both stop, not that our wording matches one nobody would want to copy.
+    cases.append((LINALG_PREFIX + "ex::ldl_factor(특이)=둘 다 거절",
+                  lambda L: _both_stop(L, lambda M: M.linalg.ldl_factor(
+                      M.tensor(np.array([[1., 1.], [1., 1.]], dtype=np.float32))).LD)))
+
     # **QR in reflector form.** `geqrf` holds it and `householder_product` unfolds it into `Q`.
     #
     # **It has to be asked on a square too.** LAPACK does not reflect when everything below the

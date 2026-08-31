@@ -3338,7 +3338,10 @@ class _Linalg:
         return guarded(handle(a).ldlFactorEx)
 
     def ldl_solve(self, ld, pivots, b, hermitian=False):
-        return wrap(guarded(handle(ld).ldlSolve, handle(b)))
+        # **The pivots were not handed over**, which was safe only while the
+        # factorisation refused every matrix that needed a swap. They are the
+        # difference between a right answer and a plausible one now.
+        return wrap(guarded(handle(ld).ldlSolve, handle(pivots), handle(b)))
 
     def householder_product(self, a, tau):
         return wrap(guarded(handle(a).householderProduct, handle(tau)))

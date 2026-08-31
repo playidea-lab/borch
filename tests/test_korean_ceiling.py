@@ -288,7 +288,11 @@ CEILINGS = {
     # (`(기본)/state_dict 열쇠`, `(affine)/…`, `(추적)/…`) and the `container::` reason
     # rewritten in `run.py` — that row is a Korean sentence and replacing it swapped
     # one Korean string for a longer one rather than adding a new kind.
-    "borch-ts/test": 4230,
+    # 4230 → 4260. Thirty, in `ldl_factor`'s new case names — the three fixtures'
+    # tags (`2x2 블록`, `교환`, `6x6 열 교환`), `(특이)` and `(영행렬)`, and the
+    # `=둘 다 거절` with the two verdict strings it returns. All keys or values in
+    # `golden.json`.
+    "borch-ts/test": 4260,
 }
 
 
