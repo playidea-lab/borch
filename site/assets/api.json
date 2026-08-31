@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 375
+  "missing": 376
  },
  "modules": [
   {
@@ -11653,6 +11653,12 @@
        "doc": "**`mode` comes first, as it does in torch.** It used to come last, so\n`new RNNBase(10, 20, \"LSTM\")` here was `RNNBase(\"LSTM\", 10, 20)` there — and the\nrow said nothing, because a name torch has at one end and we have at the other\ncannot be lined up, which puts it in the bucket that reports no detail.\n\n**`numLayers`, `bias`, `bidirectional` and `projSize` were refused here** with\nthe reason that this base builds one unidirectional biased layer, so anything\nelse had nowhere to go. That was true of the code and not of the problem: a\nsecond direction is the same recurrence over `flip(0)` turned back round, a\nstack is the loop run again on the last layer's output, and the projection is one\nmore matrix after `o · tanh(c)`. None of it needed a kernel that was not here."
       },
       {
+       "name": "installFlat",
+       "signature": "installFlat(names: readonly string[], values: readonly Tensor[]): void",
+       "doc": "Replace the built weights with the ones a caller handed over, by name.\n\n`torch.lstm` and its siblings take **a flat list** and the gradient has to reach\nthe tensors in it, so this swaps the slabs' entries rather than copying values\ninto them — `loadStateDict` would copy, and then the caller's tensors would get\nno gradient at all.",
+       "torch": "install_flat"
+      },
+      {
        "name": "ownParameters",
        "signature": "ownParameters(): Record<string, Tensor>",
        "doc": "",
@@ -11665,7 +11671,7 @@
       },
       {
        "name": "run",
-       "signature": "run(x: Tensor): { output: Tensor; hidden: Tensor; cell: Tensor; }",
+       "signature": "run(x: Tensor, h0?: Tensor | null, c0?: Tensor | null): { output: Tensor; hidden: Tensor; cell: Tensor; }",
        "doc": "Produces the full output and the final state together.",
        "doc_ko": "출력 전체와 마지막 상태를 같이 낸다."
       }
@@ -12106,7 +12112,7 @@
      ]
     }
    ],
-   "count": 822,
+   "count": 823,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -20040,7 +20046,7 @@
     "ko": "순환 신경망 유틸.",
     "en": "Recurrent-network utilities."
    },
-   "doc": "The eight top-level recurrences — `torch.lstm`, `torch.gru`,\n`torch.rnn_tanh`, `torch.rnn_relu`, and their `_cell` counterparts.\n\n**The only difference from the layer (`nn.Recurrent`) is where the\nweights come from.** The layer holds its own; this side **receives them\nas a list.** torch offers both, and what the layer calls internally is\nthis side.\n\nSo the step equations live here in one copy. Two copies, here and in the\nlayer, means a day when **the gate order diverges**, and then the shape\nis right and only the values are wrong — this repository already shares\nthe equations between cell and layer for that same reason.\n\n## Gate order\n\nThe **row order** of `weight_ih` is the convention (measured):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (just one)\n\nChange it and only the values diverge; the shape stays.",
+   "doc": "The eight top-level recurrences — `torch.lstm`, `torch.gru`,\n`torch.rnn_tanh`, `torch.rnn_relu`, and their `_cell` counterparts.\n\n**The only difference from the layer (`nn.Recurrent`) is where the\nweights come from.** The layer holds its own; this side **receives them\nas a list.** torch offers both, and what the layer calls internally is\nthis side.\n\n**This claimed the step equations lived here in one copy, and there were two.**\n`nn.RNNBase.run` wrote out its own layer loop, and the day came the sentence warned\nabout: this side fell behind, refusing `bidirectional` and inter-layer `dropout` as\n*not here* while the layer one file away had both. `rnnApply` below stands up an\n`RNNBase` and fills its slots now, so the layer loop really is in one place; what\nstays here is `rnnStep`, which the four `_cell` names need and the layer does not\ncall.\n\n## Gate order\n\nThe **row order** of `weight_ih` is the convention (measured):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (just one)\n\nChange it and only the values diverge; the shape stays.",
    "symbols": [
     {
      "kind": "type",
@@ -20115,10 +20121,10 @@
      "kind": "function",
      "name": "rnnApply",
      "signature": "export declare function rnnApply(kind: RnnKind, input: Tensor, h0: Tensor, c0: Tensor | null, params: readonly Tensor[], options?: RnnOptions): { output: Tensor; hidden: Tensor; cell: Tensor; }",
-     "doc": "Several steps. `hx` is `(layer, batch, H)`.\n\n**Bidirectional and inter-layer dropout are refused.** Half-imitating\nsomething that is not there catches loudly for the first — the shape\ncomes out halved — but **dropout diverges with plausible values**\n(training with no regularisation applied). Both stop here.",
+     "doc": "Several steps. `hx` is `(layer · directions, batch, H)`.\n\n**This was a second layer loop and it is a call now.** The header above says the\nstep equations live here in one copy; they did not — `nn.RNNBase.run` wrote them\nout again, and this side then fell behind it: `bidirectional` and inter-layer\n`dropout` were refused here on the ground that they were not implemented, and by\nthen they were, one file away. So the whole of this function is standing up an\n`RNNBase` with the flags the caller gave, filling its named slots from the flat\nlist, and calling `run`.\n\n**`projSize` is read off the shapes**, because torch has no seat for it here:\n`weight_hh` is `(gates·H, proj or H)`, and torch infers it the same way.\n\n**`dropout` only crosses when it can act.** At one layer it has nowhere to go and\nthe layer warns about exactly that, while `torch._VF.lstm` does not (measured).",
      "members": [],
      "torch": "rnn_apply",
-     "doc_ko": "여러 걸음. `hx` 는 `(층, 배치, H)` 다.\n\n**양방향과 층간 드롭아웃은 거절한다.** 없는 것을 반쪽으로 흉내 내면, 앞쪽은 모양이\n절반이라 시끄럽게 걸리지만 **드롭아웃 쪽은 값이 그럴듯한 채로 갈린다**(정칙화가\n안 걸린 학습). 둘 다 여기서 멈춘다."
+     "doc_ko": "여러 걸음. `hx` 는 `(층 · 방향, 배치, H)` 다.\n\n**여기 층 루프가 한 벌 더 있었고 지금은 호출이다.** 위 머리말은 걸음 식이 여기\n한 벌만 있다고 말하지만 그렇지 않았다 — `nn.RNNBase.run` 이 따로 써 두었고,\n그러자 이쪽이 뒤처졌다: `bidirectional` 과 층간 `dropout` 을 구현이 없다는 이유로\n거절했는데 그때 이미 한 파일 건너에는 있었다. 그래서 이 함수가 하는 일은 전부\n호출자가 준 플래그로 `RNNBase` 를 세우고, 평평한 목록에서 이름 붙은 자리를 채우고,\n`run` 을 부르는 것이다.\n\n**`projSize` 는 모양에서 읽는다.** torch 도 여기에는 자리를 두지 않았다:\n`weight_hh` 가 `(gates·H, proj 또는 H)` 이고 torch 도 같은 식으로 알아낸다.\n\n**`dropout` 은 쓸모가 있을 때만 건넌다.** 한 층이면 갈 데가 없고 층은 바로 그것을\n경고하는데, `torch._VF.lstm` 은 경고하지 않는다(실측)."
     },
     {
      "kind": "function",
@@ -20185,7 +20191,7 @@
     }
    ],
    "count": 18,
-   "doc_ko": "최상위 순환 여덟 — `torch.lstm` · `torch.gru` · `torch.rnn_tanh` · `torch.rnn_relu`\n와 그 `_cell` 짝.\n\n**층(`nn.Recurrent`)과 다른 것은 가중치를 어디서 얻는가뿐이다.** 층은 자기가 들고\n있고 이쪽은 **목록으로 받는다.** torch 도 그 둘을 다 주고, 층이 안에서 부르는 것이\n이 함수 쪽이다.\n\n그래서 걸음 식을 여기 한 벌만 둔다. 층 쪽과 두 벌로 두면 **게이트 순서가 갈리는\n날**이 오고, 그때 모양은 같고 값만 틀린다 — 이 저장소가 셀과 층 사이에서 이미 그\n이유로 식을 공유하고 있다.\n\n## 게이트 순서\n\n`weight_ih` 의 **행 순서**가 규약이다(실측):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (하나)\n\n바꾸면 값만 갈리고 모양은 그대로다."
+   "doc_ko": "최상위 순환 여덟 — `torch.lstm` · `torch.gru` · `torch.rnn_tanh` · `torch.rnn_relu`\n와 그 `_cell` 짝.\n\n**층(`nn.Recurrent`)과 다른 것은 가중치를 어디서 얻는가뿐이다.** 층은 자기가 들고\n있고 이쪽은 **목록으로 받는다.** torch 도 그 둘을 다 주고, 층이 안에서 부르는 것이\n이 함수 쪽이다.\n\n**걸음 식을 여기 한 벌만 둔다고 적혀 있었고, 실제로는 두 벌이었다.**\n`nn.RNNBase.run` 이 자기 층 루프를 따로 써 두었고, 그 문장이 경고하던 날이 왔다 —\n이쪽이 뒤처져서 `bidirectional` 과 층간 `dropout` 을 *여기 없다* 며 거절하는 동안\n한 파일 건너 층에는 둘 다 있었다. 아래 `rnnApply` 는 이제 `RNNBase` 를 세우고\n자리를 채운다. 그래서 층 루프는 정말로 한 곳에 있고, 여기 남는 것은 `rnnStep` —\n네 개의 `_cell` 이 쓰고 층은 부르지 않는 것 — 뿐이다.\n\n## 게이트 순서\n\n`weight_ih` 의 **행 순서**가 규약이다(실측):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (하나)\n\n바꾸면 값만 갈리고 모양은 그대로다."
   },
   {
    "name": "errors",
@@ -20336,5 +20342,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2757
+ "total": 2758
 }

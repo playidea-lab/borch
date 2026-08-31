@@ -5402,6 +5402,33 @@ export class RNNBase extends Module {
     }
   }
 
+  /**
+   * Replace the built weights with the ones a caller handed over, by name.
+   *
+   * `torch.lstm` and its siblings take **a flat list** and the gradient has to reach
+   * the tensors in it, so this swaps the slabs' entries rather than copying values
+   * into them — `loadStateDict` would copy, and then the caller's tensors would get
+   * no gradient at all.
+   */
+  installFlat(names: readonly string[], values: readonly Tensor[]): void {
+    names.forEach((name, i) => {
+      const value = values[i];
+      if (!value) return;
+      const at = name.lastIndexOf("_l");
+      const tail = name.slice(at);
+      const rev = tail.endsWith("_reverse");
+      const layer = Number(tail.slice(2, rev ? tail.length - 8 : undefined));
+      const slab = this.slabs[layer * this.directions + (rev ? 1 : 0)];
+      if (!slab) return;
+      const field = name.slice(0, at);
+      if (field === "weight_ih") slab.ih = value;
+      else if (field === "weight_hh") slab.hh = value;
+      else if (field === "bias_ih") slab.bih = value;
+      else if (field === "bias_hh") slab.bhh = value;
+      else if (field === "weight_hr") slab.hr = value;
+    });
+  }
+
   override ownParameters(): Record<string, Tensor> {
     const out: Record<string, Tensor> = {};
     this.slabs.forEach((slab, i) => {
@@ -5425,7 +5452,9 @@ export class RNNBase extends Module {
   /**
    * Produces the full output and the final state together.
    */
-  run(x: Tensor): { output: Tensor; hidden: Tensor; cell: Tensor } {
+  run(
+    x: Tensor, h0: Tensor | null = null, c0: Tensor | null = null,
+  ): { output: Tensor; hidden: Tensor; cell: Tensor } {
     // **`batchFirst` is a turn on the way in and a turn on the way out**, and nothing
     // else — the loop is time-first either way. Turning only on the way in gives an
     // answer of the right rank carrying the wrong layout, and `(2, 5, 4)` where the
@@ -5456,8 +5485,13 @@ export class RNNBase extends Module {
         // a bidirectional layer's two halves into two plain ones:
         // `cat([fwd(x), rev(flip(x)).flip()], -1)` is torch's answer exactly.
         const seq = d === 0 ? layerInput : layerInput.flip(0);
-        let h = Tensor.zeros([batch, this.projSize || H]);
-        let c = Tensor.zeros([batch, H]);
+        // **The initial state is a row per direction**, indexed the way the weights
+        // are — `layer * directions + direction`. Given none, it is zero, which is
+        // what the layer's own `forward` wants; the top-level `torch.lstm` hands one
+        // in and it has to reach the right direction's loop.
+        const row = layer * this.directions + d;
+        let h = h0 ? h0.select(0, row) : Tensor.zeros([batch, this.projSize || H]);
+        let c = c0 ? c0.select(0, row) : Tensor.zeros([batch, H]);
         const outs: Tensor[] = [];
         for (let t = 0; t < steps; t++) {
           const xt = seq.select(0, t);

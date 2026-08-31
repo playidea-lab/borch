@@ -11213,4 +11213,71 @@ function addRnnTop(out: Map<string, Case>, inp: Inputs): void {
   out.set("rnntop::dropout=0 이면 돈다", () =>
     rnn.lstm(x(), [h1(), c1()], w("drop_w", 4),
       { dropout: 0, train: true })[0]);
+
+  // ── bidirectional, stacked and projected, refused here until today ──────────
+  //
+  // Carried verbatim from `tests/cases.py`: the input is `0.1·i − 1.0` over (5, 2, 3)
+  // and every weight is `0.1·((i mod 7) − 3)` down its own shape, so nothing crosses
+  // the boundary. **The flat list is `namedParameters()`'s order** — four per
+  // direction, the reverse one second, layers outermost, `weight_hr` last within a
+  // direction.
+  const rtGates: Record<string, number> = {
+    lstm: 4, gru: 3, rnn_tanh: 1, rnn_relu: 1,
+  };
+  const rtRamp = (shape: number[]): Tensor => {
+    const n = shape.reduce((a, b) => a * b, 1);
+    const flat: number[] = [];
+    for (let i = 0; i < n; i++) flat.push(0.1 * ((i % 7) - 3));
+    return Tensor.from(flat, shape);
+  };
+  const rtX = (): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < 30; i++) v.push(i * 0.1 - 1.0);
+    return Tensor.from(v, [5, 2, 3]);
+  };
+  const topFlag = (
+    name: string, part: number,
+    { layers = 1, bidirectional = false, dropout = 0, proj = 0 } = {},
+  ): Tensor => {
+    const gates = rtGates[name]!, hidden = 4, width = 3;
+    const dirs = bidirectional ? 2 : 1;
+    const real = proj || hidden;
+    const flat: Tensor[] = [];
+    for (let layer = 0; layer < layers; layer++) {
+      const inSize = layer === 0 ? width : real * dirs;
+      for (let d = 0; d < dirs; d++) {
+        flat.push(rtRamp([gates * hidden, inSize]));
+        flat.push(rtRamp([gates * hidden, real]));
+        flat.push(rtRamp([gates * hidden]));
+        flat.push(rtRamp([gates * hidden]));
+        if (proj) flat.push(rtRamp([proj, hidden]));
+      }
+    }
+    const rows = layers * dirs;
+    const opts = { numLayers: layers, dropout, bidirectional };
+    const h0 = Tensor.zeros([rows, 2, real]);
+    const got = name === "lstm"
+      ? rnn.lstm(rtX(), [h0, Tensor.zeros([rows, 2, hidden])], flat, opts)
+      : name === "gru" ? rnn.gru(rtX(), h0, flat, opts)
+        : name === "rnn_tanh" ? rnn.rnnTanh(rtX(), h0, flat, opts)
+          : rnn.rnnRelu(rtX(), h0, flat, opts);
+    return got[part]!;
+  };
+  for (const name of ["lstm", "gru", "rnn_tanh", "rnn_relu"]) {
+    for (let p = 0; p < (name === "lstm" ? 3 : 2); p++) {
+      out.set(`rnntop::${name}(양방향)[${p}]`,
+        () => topFlag(name, p, { bidirectional: true }));
+      out.set(`rnntop::${name}(2층양방향)[${p}]`,
+        () => topFlag(name, p, { layers: 2, bidirectional: true }));
+    }
+    // `train` is false, so the dropout is the identity — which is the claim.
+    out.set(`rnntop::${name}(2층 dropout, 평가)`,
+      () => topFlag(name, 0, { layers: 2, dropout: 0.5 }));
+  }
+  for (let p = 0; p < 3; p++) {
+    out.set(`rnntop::lstm(proj_size)[${p}]`,
+      () => topFlag("lstm", p, { proj: 2 }));
+    out.set(`rnntop::lstm(proj_size 와 양방향)[${p}]`,
+      () => topFlag("lstm", p, { layers: 2, proj: 2, bidirectional: true }));
+  }
 }

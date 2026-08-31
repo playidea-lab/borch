@@ -1778,43 +1778,67 @@ nn.RNNBase = _RNNBase
 def _install_weights(mod, params, num_layers, has_biases):
     """Plug a flat list of weights into the layer's named slots.
 
-    The order is **`[w_ih, w_hh, b_ih, b_hh]` per layer** (measured). With no bias
-    it is two per layer. They are not wrapped in `Parameter` — the gradient has
-    to reach the tensors the caller handed over, unchanged.
+    The order is **`named_parameters()`'s own** (measured against `torch._VF.lstm`
+    with a two-layer bidirectional net): `[w_ih, w_hh, b_ih, b_hh]` per *direction*,
+    the reverse one second, layers outermost, and `weight_hr` last within a direction
+    when there is a projection. With no bias it is two per direction.
+
+    They are not wrapped in `Parameter` — the gradient has to reach the tensors the
+    caller handed over, unchanged.
     """
-    per = 4 if has_biases else 2
-    want = per * num_layers
-    if len(params) != want:
-        raise RuntimeError(_like_torch(
-            f"expected {want} weights but got {len(params)} "
-            f"({num_layers} layers x {per}).",
-            "expected a tuple of tensors of the right length"))
+    dirs = 2 if mod.bidirectional else 1
+    slots = []
     for layer in range(num_layers):
-        chunk = params[layer * per:(layer + 1) * per]
-        setattr(mod, f"weight_ih_l{layer}", chunk[0])
-        setattr(mod, f"weight_hh_l{layer}", chunk[1])
-        if has_biases:
-            setattr(mod, f"bias_ih_l{layer}", chunk[2])
-            setattr(mod, f"bias_hh_l{layer}", chunk[3])
+        for d in range(dirs):
+            tail = f"_l{layer}" + ("_reverse" if d else "")
+            slots += ["weight_ih" + tail, "weight_hh" + tail]
+            if has_biases:
+                slots += ["bias_ih" + tail, "bias_hh" + tail]
+            if mod.proj_size:
+                slots.append("weight_hr" + tail)
+    if len(params) != len(slots):
+        per = len(slots) // (num_layers * dirs)
+        raise RuntimeError(_like_torch(
+            f"expected {len(slots)} weights but got {len(params)} "
+            f"({num_layers} layers x {dirs} directions x {per}).",
+            "expected a tuple of tensors of the right length"))
+    for name, value in zip(slots, params):
+        # **`setattr` on a name the layer does not have creates one**, and the layer
+        # then computes with its own freshly drawn weights while the caller's tensor
+        # sits on an attribute nobody reads. A plant that misspelled one of these came
+        # out as thirty-three wrong values with nothing pointing at the cause.
+        if not hasattr(mod, name):
+            raise RuntimeError(_like_torch(
+                f"the layer has no `{name}` to fill.",
+                "expected a tuple of tensors of the right length"))
+        setattr(mod, name, value)
 
 
 def _rnn_top(cls, x, hx, params, has_biases, num_layers, dropout, train,
              bidirectional, batch_first, **kw):
     """The body the four top-level recurrent ones share.
 
-    **Bidirectionality and inter-layer dropout are refused.** Our layers have
-    neither — handing back one direction here would be caught loudly because the
-    shape is half, and the dropout side would diverge with plausible values
-    (training with no regularisation applied). Both stop here.
+    **Bidirectionality and inter-layer dropout were refused here**, on the ground
+    that the layers had neither. They have both now, so the two arguments go through
+    to the layer instead of stopping.
+
+    **The projection is read off the shapes.** `torch._VF.lstm` has no `proj_size`
+    seat — `weight_hh` is `(gates·H, proj or H)`, and torch infers it from there.
+
+    **`dropout` only crosses when it can act.** At one layer it has nowhere to go —
+    the dropout is *between* layers — and the layer warns about exactly that, while
+    `torch._VF.lstm` does not (measured: no warning). Passing it anyway would put a
+    warning on a line torch takes silently.
     """
-    if bidirectional:
-        _unsupported("bidirectional recurrence (bidirectional=True)")
-    if train and dropout:
-        _unsupported(f"dropout between layers (dropout={dropout})")
     first = params[0]
     hidden = first.data.shape[0] // cls.gates
+    proj = params[1].data.shape[1]
+    extra = {"proj_size": proj} if proj != hidden else {}
     mod = cls(first.data.shape[1], hidden, num_layers, bias=bool(has_biases),
-              batch_first=bool(batch_first), **kw)
+              batch_first=bool(batch_first),
+              dropout=float(dropout) if num_layers > 1 else 0.0,
+              bidirectional=bool(bidirectional), **extra, **kw)
+    mod.train(bool(train))
     _install_weights(mod, params, num_layers, bool(has_biases))
     return mod(x, hx)
 

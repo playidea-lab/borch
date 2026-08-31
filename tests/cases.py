@@ -6707,6 +6707,72 @@ def rnn_top_cases(inp=None):
     # where torch runs too, rather than one where only our answer is frozen.
     add("dropout=0 이면 돈다",
         lambda L: try_lstm(L, dropout=0.0, train=True)[0])
+
+    # ── bidirectional, stacked and projected, refused here until today ────────
+    #
+    # `bidirectional` and inter-layer `dropout` stopped at this door on the ground
+    # that the layers underneath had neither. They have both now, so the arguments go
+    # through instead of stopping.
+    #
+    # **The flat parameter list is `named_parameters()`'s own order** — four per
+    # *direction*, the reverse one second, layers outermost, and `weight_hr` last
+    # within a direction under a projection. Measured against `torch._VF.lstm` with a
+    # two-layer bidirectional net rather than assumed from the one-direction case,
+    # where directions and layers cannot be told apart.
+    #
+    # **`proj_size` has no seat in these functions.** torch reads it off the shapes:
+    # `weight_hh` is `(gates·H, proj or H)`. A `proj_size` argument here would be one
+    # torch does not have, and inferring is what torch itself does.
+    _RT_X = np.arange(5 * 2 * 3, dtype=np.float32).reshape(5, 2, 3) * 0.1 - 1.0
+    _RT_GATES = {"lstm": 4, "gru": 3, "rnn_tanh": 1, "rnn_relu": 1}
+
+    def _rt_ramp(shape):
+        n = int(np.prod(shape))
+        return np.array([0.1 * ((i % 7) - 3) for i in range(n)],
+                        dtype=np.float32).reshape(shape)
+
+    def top_flag(L, name, part, layers=1, bidirectional=False, dropout=0.0,
+                 proj=0):
+        gates, hidden, width = _RT_GATES[name], 4, 3
+        dirs = 2 if bidirectional else 1
+        real = proj or hidden
+        flat = []
+        for layer in range(layers):
+            in_size = width if layer == 0 else real * dirs
+            for _ in range(dirs):
+                flat.append(_rt_ramp((gates * hidden, in_size)))
+                flat.append(_rt_ramp((gates * hidden, real)))
+                flat.append(_rt_ramp((gates * hidden,)))
+                flat.append(_rt_ramp((gates * hidden,)))
+                if proj:
+                    flat.append(_rt_ramp((proj, hidden)))
+        rows = layers * dirs
+        h0 = _np_zeros = np.zeros((rows, 2, real), dtype=np.float32)
+        hx = ((L.tensor(h0), L.tensor(np.zeros((rows, 2, hidden), np.float32)))
+              if name == "lstm" else L.tensor(_np_zeros))
+        got = getattr(L, name)(L.tensor(_RT_X), hx,
+                               [L.tensor(v) for v in flat], True, layers,
+                               dropout, False, bidirectional, False)
+        return got[part]
+
+    for _n in ("lstm", "gru", "rnn_tanh", "rnn_relu"):
+        for _p in range(3 if _n == "lstm" else 2):
+            add(f"{_n}(양방향)[{_p}]",
+                lambda L, n=_n, p=_p: top_flag(L, n, p, bidirectional=True))
+            add(f"{_n}(2층양방향)[{_p}]",
+                lambda L, n=_n, p=_p: top_flag(L, n, p, layers=2,
+                                               bidirectional=True))
+        # `train` is false here, so the dropout is the identity and the answer is the
+        # stack's — which is the claim: a dropout that acted outside training would
+        # part from it.
+        add(f"{_n}(2층 dropout, 평가)",
+            lambda L, n=_n: top_flag(L, n, 0, layers=2, dropout=0.5))
+    for _p in range(3):
+        add(f"lstm(proj_size)[{_p}]",
+            lambda L, p=_p: top_flag(L, "lstm", p, proj=2))
+        add(f"lstm(proj_size 와 양방향)[{_p}]",
+            lambda L, p=_p: top_flag(L, "lstm", p, layers=2, proj=2,
+                                     bidirectional=True))
     return cases
 
 

@@ -302,7 +302,10 @@ CEILINGS = {
     # itself, `state_dict 열쇠` and `running_mean 은 None`. Keys in `golden.json`, so
     # both sides spell them the same; the `BatchNorm1d(N,C,L)` rows beside them are
     # ASCII apart from the `열쇠` they do not carry.
-    "borch-ts/test": 4298,
+    # 4298 → 4312. Fourteen, in the top-level recurrent flags' case names — `양방향`,
+    # `2층양방향`, `2층 dropout, 평가` and `proj_size 와 양방향`. Keys in `golden.json`,
+    # so both sides spell them the same.
+    "borch-ts/test": 4312,
 }
 
 
