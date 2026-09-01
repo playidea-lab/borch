@@ -339,3 +339,83 @@ export function multigammaln(input: Tensor, p: number): Tensor {
   }
   return out;
 }
+
+// ── the fifteen that carry a kernel, and the one that carries a loop ─────────
+//
+// The unary fifteen are entries in `UNARY` in `kernels.ts`, where the shader and the
+// reason it is a shader rather than an arrangement both live. They are named here
+// because `torch.special` is where a caller looks for them.
+
+export function erfcx(input: Tensor): Tensor { return input.erfcx(); }
+export function logNdtr(input: Tensor): Tensor { return input.logNdtr(); }
+export function i0e(input: Tensor): Tensor { return input.i0e(); }
+export function i1(input: Tensor): Tensor { return input.i1(); }
+export function i1e(input: Tensor): Tensor { return input.i1e(); }
+
+/** `i1` under its spelled-out name — measured identical in torch, not inferred. */
+export function modifiedBesselI1(input: Tensor): Tensor { return input.i1(); }
+
+export function modifiedBesselK0(input: Tensor): Tensor {
+  return input.modifiedBesselK0();
+}
+export function modifiedBesselK1(input: Tensor): Tensor {
+  return input.modifiedBesselK1();
+}
+export function scaledModifiedBesselK0(input: Tensor): Tensor {
+  return input.scaledModifiedBesselK0();
+}
+export function scaledModifiedBesselK1(input: Tensor): Tensor {
+  return input.scaledModifiedBesselK1();
+}
+export function besselJ0(input: Tensor): Tensor { return input.besselJ0(); }
+export function besselJ1(input: Tensor): Tensor { return input.besselJ1(); }
+export function besselY0(input: Tensor): Tensor { return input.besselY0(); }
+export function besselY1(input: Tensor): Tensor { return input.besselY1(); }
+export function airyAi(input: Tensor): Tensor { return input.airyAi(); }
+
+/**
+ * The **Hurwitz** zeta, `ζ(x, q) = Σₖ (q+k)^(−x)` — not Riemann's alone.
+ *
+ * `q = 1` is Riemann's, and that is the case worth checking against something known:
+ * `ζ(2, 1)` is π²/6 and `ζ(4, 1)` is π⁴/90.
+ *
+ * **A loop over tensor operations rather than a kernel**, and that is a judgement rather
+ * than an oversight: the sum is nine terms plus four Bernoulli corrections, each an
+ * elementwise operation this class already has, and it takes two arguments — the `UNARY`
+ * table has no seat for a binary op and inventing one for a single name is a mechanism
+ * with one user. The arithmetic is Euler–Maclaurin, the same identity `polygamma` reads
+ * from the other end.
+ *
+ * **`x ≤ 1` is `nan` and `ζ(1, 1)` is `inf`** — measured in torch, not chosen. The
+ * series does not converge there, and returning the partial sum would be a plausible
+ * number in place of a refusal.
+ */
+export function zeta(input: Tensor, other: Tensor): Tensor {
+  const s = input;
+  const q = other;
+  const terms = 9;
+  let total = s.mul(k(0)).add(q.mul(k(0)));      // zeros, broadcast to both shapes
+  for (let i = 0; i < terms; i++) {
+    total = total.add(q.add(k(i)).pow(s.neg()));
+  }
+  const z = q.add(k(terms));
+  total = total
+    .add(z.pow(k(1).sub(s)).div(s.sub(k(1))))
+    .add(z.pow(s.neg()).mul(k(0.5)));
+  let rising = s;
+  let power = z.pow(s.neg().sub(k(1)));
+  const bernoulli = [1 / 6, -1 / 30, 1 / 42, -1 / 30];
+  for (let j = 1; j <= bernoulli.length; j++) {
+    const b = bernoulli[j - 1] as number;
+    let factorial = 1;
+    for (let m = 2; m <= 2 * j; m++) factorial *= m;
+    total = total.add(rising.mul(power).mul(k(b / factorial)));
+    rising = rising.mul(s.add(k(2 * j - 1))).mul(s.add(k(2 * j)));
+    power = power.div(z.mul(z));
+  }
+  const nan = k(0).div(k(0));
+  const infinite = k(1).div(k(0));
+  const converges = s.binary("gt", k(1));
+  const atOne = s.binary("eq", k(1)).mul(q.binary("gt", k(0)));
+  return total.where(converges, nan).where(atOne.binary("eq", k(0)), infinite);
+}

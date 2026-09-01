@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 406
+  "missing": 408
  },
  "modules": [
   {
@@ -6558,6 +6558,86 @@
        "doc": ""
       },
       {
+       "name": "erfcx",
+       "signature": "erfcx(): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "logNdtr",
+       "signature": "logNdtr(): Tensor",
+       "doc": "",
+       "torch": "log_ndtr"
+      },
+      {
+       "name": "i1",
+       "signature": "i1(): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "i0e",
+       "signature": "i0e(): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "i1e",
+       "signature": "i1e(): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "modifiedBesselK0",
+       "signature": "modifiedBesselK0(): Tensor",
+       "doc": "",
+       "torch": "modified_bessel_k0"
+      },
+      {
+       "name": "modifiedBesselK1",
+       "signature": "modifiedBesselK1(): Tensor",
+       "doc": "",
+       "torch": "modified_bessel_k1"
+      },
+      {
+       "name": "scaledModifiedBesselK0",
+       "signature": "scaledModifiedBesselK0(): Tensor",
+       "doc": "",
+       "torch": "scaled_modified_bessel_k0"
+      },
+      {
+       "name": "scaledModifiedBesselK1",
+       "signature": "scaledModifiedBesselK1(): Tensor",
+       "doc": "",
+       "torch": "scaled_modified_bessel_k1"
+      },
+      {
+       "name": "besselJ0",
+       "signature": "besselJ0(): Tensor",
+       "doc": "",
+       "torch": "bessel_j0"
+      },
+      {
+       "name": "besselJ1",
+       "signature": "besselJ1(): Tensor",
+       "doc": "",
+       "torch": "bessel_j1"
+      },
+      {
+       "name": "besselY0",
+       "signature": "besselY0(): Tensor",
+       "doc": "",
+       "torch": "bessel_y0"
+      },
+      {
+       "name": "besselY1",
+       "signature": "besselY1(): Tensor",
+       "doc": "",
+       "torch": "bessel_y1"
+      },
+      {
+       "name": "airyAi",
+       "signature": "airyAi(): Tensor",
+       "doc": "",
+       "torch": "airy_ai"
+      },
+      {
        "name": "frexpMantissa",
        "signature": "frexpMantissa(): Tensor",
        "doc": "",
@@ -7222,7 +7302,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 751,
+   "count": 765,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -20543,9 +20623,132 @@
      "signature": "export declare function multigammaln(input: Tensor, p: number): Tensor",
      "doc": "The multivariate log-gamma, `log Γ_p(x) = p(p−1)/4·log π + Σ log Γ(x + (1−i)/2)`.\n\nThe same function as `mvlgamma` at torch's top level — measured equal, same argument\norder, at p = 1, 2 and 3.",
      "members": []
+    },
+    {
+     "kind": "function",
+     "name": "erfcx",
+     "signature": "export declare function erfcx(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "logNdtr",
+     "signature": "export declare function logNdtr(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "log_ndtr"
+    },
+    {
+     "kind": "function",
+     "name": "i0e",
+     "signature": "export declare function i0e(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "i1",
+     "signature": "export declare function i1(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "i1e",
+     "signature": "export declare function i1e(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "modifiedBesselI1",
+     "signature": "export declare function modifiedBesselI1(input: Tensor): Tensor",
+     "doc": "`i1` under its spelled-out name — measured identical in torch, not inferred.",
+     "members": [],
+     "torch": "modified_bessel_i1"
+    },
+    {
+     "kind": "function",
+     "name": "modifiedBesselK0",
+     "signature": "export declare function modifiedBesselK0(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "modified_bessel_k0"
+    },
+    {
+     "kind": "function",
+     "name": "modifiedBesselK1",
+     "signature": "export declare function modifiedBesselK1(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "modified_bessel_k1"
+    },
+    {
+     "kind": "function",
+     "name": "scaledModifiedBesselK0",
+     "signature": "export declare function scaledModifiedBesselK0(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "scaled_modified_bessel_k0"
+    },
+    {
+     "kind": "function",
+     "name": "scaledModifiedBesselK1",
+     "signature": "export declare function scaledModifiedBesselK1(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "scaled_modified_bessel_k1"
+    },
+    {
+     "kind": "function",
+     "name": "besselJ0",
+     "signature": "export declare function besselJ0(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "bessel_j0"
+    },
+    {
+     "kind": "function",
+     "name": "besselJ1",
+     "signature": "export declare function besselJ1(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "bessel_j1"
+    },
+    {
+     "kind": "function",
+     "name": "besselY0",
+     "signature": "export declare function besselY0(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "bessel_y0"
+    },
+    {
+     "kind": "function",
+     "name": "besselY1",
+     "signature": "export declare function besselY1(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "bessel_y1"
+    },
+    {
+     "kind": "function",
+     "name": "airyAi",
+     "signature": "export declare function airyAi(input: Tensor): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "airy_ai"
+    },
+    {
+     "kind": "function",
+     "name": "zeta",
+     "signature": "export declare function zeta(input: Tensor, other: Tensor): Tensor",
+     "doc": "The **Hurwitz** zeta, `ζ(x, q) = Σₖ (q+k)^(−x)` — not Riemann's alone.\n\n`q = 1` is Riemann's, and that is the case worth checking against something known:\n`ζ(2, 1)` is π²/6 and `ζ(4, 1)` is π⁴/90.\n\n**A loop over tensor operations rather than a kernel**, and that is a judgement rather\nthan an oversight: the sum is nine terms plus four Bernoulli corrections, each an\nelementwise operation this class already has, and it takes two arguments — the `UNARY`\ntable has no seat for a binary op and inventing one for a single name is a mechanism\nwith one user. The arithmetic is Euler–Maclaurin, the same identity `polygamma` reads\nfrom the other end.\n\n**`x ≤ 1` is `nan` and `ζ(1, 1)` is `inf`** — measured in torch, not chosen. The\nseries does not converge there, and returning the partial sum would be a plausible\nnumber in place of a refusal.",
+     "members": []
     }
    ],
-   "count": 40
+   "count": 56
   },
   {
    "name": "rnn",
@@ -20850,5 +21053,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2829
+ "total": 2859
 }

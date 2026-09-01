@@ -269,15 +269,18 @@ FROZEN = {
     # `fft` comes in at zero, which is the answer that makes the omission cheap to have
     # had and worth fixing anyway: nothing was wrong and nothing was watching.
     "fft": 0,
-    # **34 → 16, and the number coming down is what this row was written to record.**
-    # The eighteen that left needed no shader — twelve orthogonal recurrences, which
-    # are `mul` and `sub` in a loop, and six compositions whose safe form is a
-    # composition. The sixteen left each exist *because* a composition breaks (`erfcx`
-    # is `inf` from x=10, `log_ndtr` from x=-6, `i0e` at x=90), so each wants a kernel
-    # rather than an arrangement of what is already there. Still not a type that would
-    # have to change first, which is what separates this row from
-    # `transforms.v2.functional`'s below.
-    "special": 16,
+    # **34 → 16 → 0**, and the row is kept at zero rather than deleted: a namespace off
+    # this table is a namespace nobody counts, which is how `fft` and `special` both
+    # came to be declined whole while most of their names were built.
+    #
+    # The eighteen that left first needed no shader — twelve orthogonal recurrences and
+    # six compositions whose safe form is a composition. The sixteen after them each
+    # exist *because* a composition breaks (`erfcx` is `inf` from x=10, `log_ndtr` from
+    # x=-6, `i0e` at x=90), and became fifteen entries in the `UNARY` table plus one
+    # loop for `zeta`. What separated this row from `transforms.v2.functional`'s below
+    # is what let it reach zero: a body somebody could write, not a type that would have
+    # to change first.
+    "special": 0,
     # **12 → 2, and the two that remain have reasons.** The ten were the samplers
     # and the two dataset shapes: `Sampler`, `SequentialSampler`, `RandomSampler`,
     # `SubsetRandomSampler`, `WeightedRandomSampler`, `BatchSampler`,

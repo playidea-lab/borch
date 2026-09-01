@@ -657,28 +657,21 @@ NOT_PORTED = {
     # rather than a missing body. Written as a scalar tensor here it would freeze
     # cleanly and **stop asking the thing it is named for**, which is worse than not
     # asking: the name would claim a check nobody performs.
-    # 3 → 75 → 19. **The debt was written down and then paid in one direction.**
+    # 3 → 75 → 19 → 3. **The debt was written down, sorted, and paid.**
     #
-    # `torch.special` splits three ways here. Twenty-three names forward to arithmetic
-    # borch.ts already has. **Eighteen more need no shader** — twelve orthogonal
-    # recurrences, which are `mul` and `sub` in a loop, and six compositions whose safe
-    # form is a composition (`ndtr` through `erfc`, `ndtri` through `erfinv`, `entr`,
-    # `xlog1py`, `sphericalBesselJ0`, `multigammaln`). Those went across and the number
-    # fell by fifty-six cases.
+    # `torch.special`'s fifty-six names are all asked on both sides now. The path went
+    # through three shapes of work rather than one, which is why the number moved in
+    # steps: twenty-three forward to arithmetic borch.ts already had; eighteen were
+    # arrangements of existing operations (twelve orthogonal recurrences, and six
+    # compositions whose *safe* form is a composition); fifteen needed a shader and one
+    # — `zeta` — a loop over tensor operations, since the `UNARY` table has no seat for
+    # a binary op and inventing one for a single name is a mechanism with one user.
     #
-    # **Sixteen are left and they are the ones that need a kernel**: `erfcx`,
-    # `log_ndtr`, `i0e`, `i1`, `i1e`, the `k`/`scaled_k` pair, `bessel_j0`/`j1`/`y0`/`y1`,
-    # `airy_ai`, `zeta`, `modified_bessel_i1`. Every one exists *because* the obvious
-    # composition breaks — writing them here as arrangements of existing ops would agree
-    # with the core at every ordinary input and hand back `inf` in the tail, which is
-    # what the core declined to do and is why they are worth a shader rather than a
-    # shortcut.
-    #
-    # Still `아직` and not `없음`: nothing about borch.ts's types stands in the way.
-    "special::": (19, "아직 — 커널이 필요한 열여섯이 코어에만 있다(erfcx·log_ndtr·"
-                      "i0e/i1/i1e·Bessel J/Y/K·Airy·zeta). 셰이더 없이 되는 열여덟은 "
-                      "옮겼다. 나머지 셋은 `out=` 둘과 `xlogy` 에 맨 스칼라를 넘기는 "
-                      "파이썬 자리"),
+    # **What is left is three Python affordances**, which is where this row started.
+    # Two are `out=`, borch.ts's global decision, and the third hands `xlogy` a bare
+    # scalar where TypeScript types a `Tensor`.
+    "special::": (3, "파이썬 — `out=` 두 건(borch.ts 전역 결정)과, "
+                     "`xlogy` 에 맨 스칼라를 넘기는 자리. TS 는 Tensor 를 받는다"),
     # **The thirty-three `*_video` kernels, and this row is a type rather than a
     # backlog.** The core's picture kernels count their axes from the end now, so
     # `(H, W, C)` and `(T, H, W, C)` name the same two and a video is an image with a

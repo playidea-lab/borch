@@ -12934,6 +12934,24 @@ export interface Tensor {
   bitwise_not(): Tensor;
   i0(): Tensor;
   i0_(): Tensor;
+  // **`torch.special`'s fifteen that need a kernel.** Declared here because the loop
+  // that attaches the `UNARY` table binds them at run time and this block is what makes
+  // them exist in the types — the paragraph below records sixty-five that existed at
+  // run time and not in the types for a long time, which is the same omission.
+  erfcx(): Tensor;
+  logNdtr(): Tensor;
+  i1(): Tensor;
+  i0e(): Tensor;
+  i1e(): Tensor;
+  modifiedBesselK0(): Tensor;
+  modifiedBesselK1(): Tensor;
+  scaledModifiedBesselK0(): Tensor;
+  scaledModifiedBesselK1(): Tensor;
+  besselJ0(): Tensor;
+  besselJ1(): Tensor;
+  besselY0(): Tensor;
+  besselY1(): Tensor;
+  airyAi(): Tensor;
   frexpMantissa(): Tensor;
   frexpExponent(): Tensor;
   // ── The in-place forms the table attaches ─────────────────────────────

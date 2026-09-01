@@ -6053,6 +6053,49 @@ function addLoss(out: Map<string, Case>): void {
             () => special.multigammaln(Tensor.from([2.5, 3.0, 4.5], [3]), p));
   }
 
+  // **The sixteen that carry a kernel, at the inputs the kernels exist for.**
+  // A middle-of-the-range value passes against the composition each of these replaces,
+  // so the numbers here are the ones where that composition is `inf` or `nan`:
+  // `erfc(x)·exp(x²)` from x=10, `log(ndtr(x))` from x=-6, `i0(x)·exp(-|x|)` at x=90.
+  // The `k` pair is asked either side of its seam at 10 — the first crossover tried was
+  // 2 and was worth two digits, on those two points and nowhere else.
+  const tails: [string, number[], (x: Tensor) => Tensor][] = [
+    ["erfcx", [-5, -1, 0, 1, 10, 26, 100], special.erfcx],
+    ["log_ndtr", [-40, -10, -6, -1, 0, 2], special.logNdtr],
+    ["i0e", [0, 1, 15, 50, 90, 200], special.i0e],
+    ["i1", [-5, -1, 0, 0.5, 2, 10], special.i1],
+    ["i1e", [-200, -1, 0, 1, 15, 90], special.i1e],
+    ["modified_bessel_i1", [-3, 0, 0.5, 2, 10], special.modifiedBesselI1],
+    ["modified_bessel_k0", [0.01, 0.5, 2, 9.9, 10, 10.1, 20],
+     special.modifiedBesselK0],
+    ["modified_bessel_k1", [0.01, 0.5, 2, 9.9, 10, 10.1, 20],
+     special.modifiedBesselK1],
+    ["scaled_modified_bessel_k0", [0.01, 0.5, 2, 9.9, 10.1, 80],
+     special.scaledModifiedBesselK0],
+    ["scaled_modified_bessel_k1", [0.01, 0.5, 2, 9.9, 10.1, 80],
+     special.scaledModifiedBesselK1],
+    // `J` and `Y` change method at 8. `Y` has a pole at 0 and is `nan` below it;
+    // `J₀` is even and `J₁` is odd, and a sign dropped there is invisible on the
+    // positive half alone.
+    ["bessel_j0", [-20, -8.1, -7.9, -1, 0, 2.4, 7.9, 8.1, 20], special.besselJ0],
+    ["bessel_j1", [-20, -8.1, -7.9, -1, 0, 2.4, 7.9, 8.1, 20], special.besselJ1],
+    ["bessel_y0", [0.001, 0.5, 2.4, 7.9, 8, 8.1, 20], special.besselY0],
+    ["bessel_y1", [0.001, 0.5, 2.4, 7.9, 8, 8.1, 20], special.besselY1],
+    // Airy's seam is at 8 too, and the negative side oscillates — the envelope and the
+    // phase are two ways to be wrong and only the negative arguments show the second.
+    ["airy_ai", [-30, -12, -8.1, -7.9, -1, 0, 1, 7.9, 8.1, 12], special.airyAi],
+  ];
+  for (const [name, xs, fn] of tails) {
+    out.set(`special::수학::${name}`,
+            () => fn(Tensor.from(xs, [xs.length])));
+  }
+
+  // `ζ(2,1)` is π²/6 and `ζ(4,1)` is π⁴/90, so two of these rows are checked by
+  // arithmetic as well as by torch. `x ≤ 1` is `nan` and `ζ(1,1)` is `inf`.
+  out.set("special::수학::zeta", () => special.zeta(
+    Tensor.from([2, 3, 4, 2.5, 1.5, 6, 10, 2, 1, 0.5], [10]),
+    Tensor.from([1, 1, 1, 2, 1, 3, 0.5, 10, 1, 1], [10])));
+
   // The layer, with the weight planted — its initialisation is not torch's.
   //
   // **Inside `noGrad`, because a parameter is a leaf that wants a gradient** and

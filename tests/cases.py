@@ -1692,22 +1692,22 @@ SPECIAL_PREFIX = "special::"
 # Python computes it instead, the name is still absent for anyone using borch.ts, and the golden
 # cases go green through the binding. This is written down so that cover is not built again.
 #
-# **`special::수학::` is the thirty-four that have bodies of their own.** The
-# twenty-three forwarders in that namespace run on all three sides — they point at
-# arithmetic the golden already held — and these do not: the Bessel and Airy
-# approximations, the twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin and the
-# nine tail-safe forms are numpy in `borch/_ops.py` and have no WGSL behind them.
+# **`special::수학::` was here and is not.** Its thirty-four names had bodies of their
+# own — the Bessel and Airy approximations, twelve orthogonal recurrences, `zeta`'s
+# Euler–Maclaurin and the nine tail-safe forms — and they were numpy in
+# `borch/_ops.py` with no WGSL behind them, so the cases could only be asked of the
+# core.
 #
-# **The binding refuses them by name rather than forwarding blindly**, which is why
-# they arrive here as `AttributeError: special.bessel_j0 is not in this subset` instead
-# of as a wrong number. That refusal is the design working: `_Special` over there holds
-# a written list precisely so a name torch has and this side lacks cannot resolve to
-# something plausible.
+# They went across in three passes, because the work was three shapes rather than one:
+# eighteen were arrangements of operations borch.ts already had, fifteen needed a
+# shader, and `zeta` needed a loop over tensor operations. **The prefix stays on the
+# case names** even though nothing skips on it now — the names are keys the two case
+# tables match on, and renaming them to mark a list they left would break the join to
+# say something a comment says better.
 #
-# The paragraph above about `linalg.eig` applies here word for word — the binding
-# *could* fill these in with numpy on the Python side and the cases would go green,
-# and the names would still be absent for anyone holding borch.ts. That is the cover
-# this list exists to refuse. `tests/ts_axis.py` carries the thirty-four by name.
+# The paragraph above about `linalg.eig` is why they were not simply filled in with
+# numpy on the Python side: the cases would have gone green and the names would still
+# have been absent for anyone holding borch.ts.
 #
 # **`linalg::lstsqfield::` is here for a smaller reason and a plainer one.** torch's
 # `linalg.lstsq` returns four fields; borch.ts returns the solution as a bare tensor,
@@ -1717,7 +1717,7 @@ SPECIAL_PREFIX = "special::"
 # Filling them in with numpy on the Python side is the cover the paragraph above
 # warns against: the names would still be absent for anyone holding borch.ts, and the
 # cases would go green. The solution itself is asked on both sides, batched.
-CORE_ONLY_PREFIXES = ("linalg::eig::", "linalg::lstsqfield::", "special::수학::")
+CORE_ONLY_PREFIXES = ("linalg::eig::", "linalg::lstsqfield::")
 
 
 def complex_cases(inp=None):
