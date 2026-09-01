@@ -6090,6 +6090,130 @@ def top_level_cases(inp=None):
 
     add("기울기 모드::inference_mode 안", inference)
 
+    # ── four more whose rows named what they are for ───────────────────────────
+    #
+    # `narrow_copy`'s row explained why **torch** has it: sparse tensors have no
+    # view-narrow. True, and not why this one was absent — on a dense tensor it is one
+    # line, and `torch.narrow_copy(x, 0, 1, 2)` is a line somebody writes that stopped
+    # here.
+    #
+    # **The copy is the whole of the difference**, and a fixture that never writes into
+    # the answer cannot see it: `narrow` hands back a view. So the case writes into what
+    # came back and looks at the input afterwards.
+    def narrow_copy_case(L):
+        base = L.tensor(np.ascontiguousarray(
+            np.arange(6, dtype=np.float32).reshape(2, 3)))
+        taken = L.narrow_copy(base, 1, 1, 2)
+        with L.no_grad():
+            taken.copy_(L.zeros_like(taken))
+        # **Whole numbers, written whole.** Python spells a float `0.0` and JavaScript
+        # spells it `0`; a case that carries the spelling compares the two languages'
+        # printers rather than the two libraries' answers.
+        return (" ".join(str(int(v)) for v in np.asarray(_as_numpy(taken)).ravel())
+                + " | "
+                + " ".join(str(int(v)) for v in np.asarray(_as_numpy(base)).ravel()))
+
+    cases.append((TOP_PREFIX + "narrow_copy(writing into it leaves the input alone)",
+                  narrow_copy_case))
+
+    # `segment_reduce`'s row read *for sparse and ragged bundles — outside the
+    # curriculum*, and the ragged half is the part that is here: a dense tensor and a
+    # list of run lengths. Measured, `[1, 2, 3, 4]` summed over runs of `[2, 2]` is
+    # `[3, 7]` with no sparse anything.
+    #
+    # **`lengths` and `offsets` are two spellings of one thing** and are both asked: a
+    # reader that took one for the other shifts every boundary by the first run's
+    # length, and on runs of equal size that is invisible — so the runs here are `[1, 3]`
+    # as well as `[2, 2]`.
+    _seg = np.array([1.0, 5.0, 3.0, 4.0], dtype=np.float32)
+    for _tag, _fn in (
+            ("sum", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "sum",
+                lengths=L.tensor(np.array([2, 2], dtype=np.int64)))),
+            ("mean, uneven runs", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "mean",
+                lengths=L.tensor(np.array([1, 3], dtype=np.int64)))),
+            ("max", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "max",
+                lengths=L.tensor(np.array([2, 2], dtype=np.int64)))),
+            ("min", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "min",
+                lengths=L.tensor(np.array([1, 3], dtype=np.int64)))),
+            ("prod", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "prod",
+                lengths=L.tensor(np.array([2, 2], dtype=np.int64)))),
+            ("offsets say the same thing", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "sum",
+                offsets=L.tensor(np.array([0, 1, 4], dtype=np.int64)))),
+            # **`initial` seeds each run**, so it is ten more per run and not ten
+            # more overall.
+            ("initial seeds every run", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(_seg)), "sum",
+                lengths=L.tensor(np.array([2, 2], dtype=np.int64)), initial=10.0)),
+            # A run table per row, where the boundaries differ between the rows.
+            ("a run table per row", lambda L: L.segment_reduce(
+                L.tensor(np.ascontiguousarray(
+                    np.arange(8, dtype=np.float32).reshape(2, 4))), "sum",
+                lengths=L.tensor(np.array([[2, 2], [1, 3]], dtype=np.int64)), axis=1)),
+    ):
+        cases.append((TOP_PREFIX + f"segment_reduce({_tag})", _fn))
+
+    # **The same thing spelled as a method.** torch keeps both `x.narrow_copy(…)` and
+    # `torch.narrow_copy(x, …)`, and the two spellings are separate seats — the function
+    # went in first and the method was absent for a while, which is a caller finding
+    # exactly half of what the docs show.
+    def narrow_copy_method(L):
+        base = L.tensor(np.arange(6, dtype=np.float32).reshape(2, 3))
+        return " ".join(str(int(v)) for v in
+                        np.asarray(_as_numpy(base.narrow_copy(1, 1, 2))).ravel())
+    cases.append((TOP_PREFIX + "narrow_copy(as a method)", narrow_copy_method))
+
+    # **Both answer False, and that is not a placeholder** — torch on any ordinary build
+    # answers the same. Absent, a caller's `if torch.is_vulkan_available():` stops here
+    # and runs there, which is the one direction this library cannot afford.
+    cases.append((TOP_PREFIX + "is_vulkan_available",
+                  lambda L: str(L.is_vulkan_available())))
+    cases.append((TOP_PREFIX + "cudnn_is_acceptable",
+                  lambda L: str(L.cudnn_is_acceptable(
+                      L.tensor(np.ascontiguousarray(
+                          np.zeros((2, 2), dtype=np.float32)))))))
+
+    # ── the eight `sym_*` helpers ──────────────────────────────────────────────
+    #
+    # Their row read *symbolic sizes — for graph capture*, which is what they are for.
+    # On ordinary numbers they are the branch that runs when nothing is being traced,
+    # and that is the whole point of them: code written once keeps working either way.
+    #
+    # **`sym_max` is not `max`, and the difference is a type.** It promotes to float if
+    # *either* argument is one — `max(7, 3.0)` is `7` and `sym_max(7, 3.0)` is `7.0`.
+    # So the pair is asked both ways round, with the larger on each side: written with
+    # the float always larger, a reader that returned the winning object unchanged
+    # agrees on every case.
+    for _tag, _fn in (
+            ("max(int, int)", lambda L: L.sym_max(3, 5)),
+            ("max(int, float) — the int wins", lambda L: L.sym_max(7, 3.0)),
+            ("max(int, float) — the float wins", lambda L: L.sym_max(3, 5.0)),
+            ("min(int, float) — the int wins", lambda L: L.sym_min(3, 5.0)),
+            ("min(int, int)", lambda L: L.sym_min(5, 3)),
+            ("float", lambda L: L.sym_float(3)),
+            # **Truncating toward zero**, which is `int`'s rule and not `floor`'s.
+            ("int(-3.7) truncates toward zero", lambda L: L.sym_int(-3.7)),
+            ("int(True)", lambda L: L.sym_int(True)),
+            ("not(False)", lambda L: L.sym_not(False)),
+            ("not(1) — anything truthy", lambda L: L.sym_not(1)),
+            ("sqrt", lambda L: L.sym_sqrt(9)),
+            # **Both spellings** — a list, and the values loose.
+            ("sum(loose)", lambda L: L.sym_sum(1, 2, 3)),
+            ("sum([list])", lambda L: L.sym_sum([1.5, 2])),
+            ("ite(True)", lambda L: L.sym_ite(True, 1, 2)),
+            ("ite(False) — the branches are anything",
+             lambda L: L.sym_ite(False, "a", "b")),
+    ):
+        # **The type is in the answer.** `7` and `7.0` compare equal, and the promotion
+        # is the only thing separating these from the builtins they look like.
+        cases.append((TOP_PREFIX + f"sym_{_tag}",
+                      lambda L, f=_fn: f"{f(L)!r} {type(f(L)).__name__}"))
+
     # ── introspection ──
     ints = np.array([1, 2], dtype=np.int64)
     checks = (
@@ -7216,6 +7340,46 @@ def data_loader_cases(inp=None):
                       ",".join(str(int(v)) for v in b)
                       for b in L.utils.data.DataLoader(items, 4, False, None, None, 0,
                                                        None, False, True))))
+    # **The row said *for distributed training — this is inside one tab*, which names
+    # what the class is for and not what it needs.** Given `num_replicas` and `rank` it
+    # never touches `torch.distributed`: it interleaves indices, pads to a whole
+    # multiple and slices by rank.
+    #
+    # **Every rank is asked, and their union is the answer.** Asked one rank at a time
+    # the interleave and a contiguous split look alike on the first one — rank 0 gets
+    # `[0, 2, 4]` one way and `[0, 1, 2]` the other, both of which start at zero and
+    # have the right length.
+    #
+    # Ten over three is where the padding shows: without `drop_last` the list is padded
+    # back to twelve from its own front, and with it the tail is cut to nine.
+    for _tag, _count, _reps, _drop in (("10 over 2", 10, 2, False),
+                                       ("10 over 3, padded", 10, 3, False),
+                                       ("10 over 3, dropped", 10, 3, True),
+                                       ("7 over 4, padded past its own length", 7, 4,
+                                        False)):
+        cases.append((
+            DATACONV_PREFIX + f"DistributedSampler({_tag})",
+            lambda L, n=_count, r=_reps, d=_drop: " | ".join(
+                ",".join(str(v) for v in L.utils.data.DistributedSampler(
+                    list(range(n)), num_replicas=r, rank=k, shuffle=False,
+                    drop_last=d))
+                for k in range(r))))
+    # **The refusal when the two numbers are absent**, which is the only place the
+    # distributed package would have come in.
+    def _refused(body):
+        def run(L):
+            try:
+                body(L)
+                return "예외가 안 났다"
+            except Exception as exc:                            # noqa: BLE001
+                return type(exc).__name__
+        return run
+
+    cases.append((DATACONV_PREFIX + "DistributedSampler(no ranks given)=거절",
+                  _refused(lambda L: L.utils.data.DistributedSampler(list(range(4))))))
+    cases.append((DATACONV_PREFIX + "DistributedSampler(rank out of range)=거절",
+                  _refused(lambda L: L.utils.data.DistributedSampler(
+                      list(range(4)), num_replicas=2, rank=2))))
     cases.append((DATACONV_PREFIX + "DataLoader(batch_sampler)",
                   lambda L: " | ".join(
                       ",".join(str(int(v)) for v in b)
@@ -15548,7 +15712,10 @@ def dtype_cases(inp=None):
     # **`coalesce`, `untyped_storage` and `int_repr` are no longer here.** All three were changed to
     # have the name and refuse with a reason — this check has to look at places where **the name
     # really is absent.** It uses the two `NOT_API` records as not being public API.
-    for name in ("narrow_copy", "unsafe_chunk"):
+    # `narrow_copy` was one of the two and **stopped being absent** — it is in the
+    # library now, so asking it here proved nothing about a missing name. `unsafe_split`
+    # takes its seat: still absent, and an internal by the same measure.
+    for name in ("unsafe_split", "unsafe_chunk"):
         cases.append((f"dtype::없는이름::{name}",
                       lambda L, n=name: missing_name(L, n)))
 

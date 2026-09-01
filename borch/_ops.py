@@ -7492,6 +7492,176 @@ def is_inference_mode_enabled():
 # The ones that **only ask** and change no value. Textbook code branches on them,
 # so without them the arithmetic is all right and it stops at that line.
 
+def narrow_copy(input, dim, start, length):   # noqa: A002
+    """`narrow` and then a copy — **a copy, which is the whole of the difference.**
+
+    Its row explained why *torch* has it: sparse tensors have no view-narrow. That is
+    true and it is not why this one was absent — on a dense tensor it is one line, and
+    `torch.narrow_copy(x, 0, 1, 2)` is a line somebody writes that stopped here.
+
+    **The copy is not decoration.** `narrow` hands back a view, so writing into it
+    reaches the original; this one does not. On a fixture that is never written to the
+    two are the same numbers, which is why the case writes into the answer and looks at
+    the input afterwards.
+
+    **A bad dimension is a `RuntimeError` here and an `IndexError` from `narrow`, and
+    that difference is torch's.** The two names are one operation and raise two types —
+    `narrow` checks in Python and `narrow_copy` reaches a `TORCH_CHECK` in C++ — so a
+    caller writing `except RuntimeError` catches one and not the other. Copied rather
+    than tidied, which is the rule for anything a caller can see; the *message* stays
+    ours, because torch's is a C++ assertion leaking through.
+    """
+    try:
+        taken = narrow(input, dim, start, length)
+    except IndexError as exc:
+        raise RuntimeError(str(exc)) from None
+    return taken.clone()
+
+
+def segment_reduce(data, reduce="sum", *, lengths=None, indices=None, offsets=None,
+                   axis=0, unsafe=False, initial=None):
+    """Reduce **runs of a tensor**, given where the runs end.
+
+    Its row read *for sparse and ragged bundles — outside the curriculum*, and the
+    ragged half is the part that is here: it takes a dense tensor and a list of run
+    lengths. Measured — `segment_reduce(tensor([1., 2., 3., 4.]), 'sum',
+    lengths=[2, 2])` answers `[3., 7.]` with no sparse anything.
+
+    **`lengths` and `offsets` are two spellings of one thing.** Lengths are how long
+    each run is; offsets are where each run starts, with one more entry than there are
+    runs. Reading one as the other quietly shifts every boundary by the first run's
+    length.
+
+    **`initial` seeds each run**, so `sum` with `initial=10` is ten more per run and not
+    ten more overall.
+    """
+    del indices, unsafe
+    if (lengths is None) == (offsets is None):
+        raise RuntimeError("segment_reduce(): Exactly one of lengths or offsets"
+                           " must be defined")
+    values = _wrap(data)
+    rank = len(values.data.shape)
+    axis = axis + rank if axis < 0 else axis
+    if lengths is not None:
+        edges = _np.asarray(_wrap(lengths).data, dtype=_np.int64)
+        bounds = _np.concatenate([_np.zeros(edges.shape[:-1] + (1,), dtype=_np.int64),
+                                  _np.cumsum(edges, axis=-1)], axis=-1)
+    else:
+        bounds = _np.asarray(_wrap(offsets).data, dtype=_np.int64)
+    if bounds.ndim > 1:
+        # **A run table per row.** torch allows it and the boundaries then differ per
+        # row, so the reduction cannot be one slice across the whole axis.
+        rows = [segment_reduce(values[i], reduce, offsets=bounds[i], axis=axis - 1,
+                               initial=initial)
+                for i in range(bounds.shape[0])]
+        return stack(rows, dim=0)
+    pieces = []
+    for i in range(len(bounds) - 1):
+        piece = narrow(values, axis, int(bounds[i]), int(bounds[i + 1] - bounds[i]))
+        if initial is not None:
+            seed = full(tuple(int(one) for one in piece.data.shape[:axis])
+                        + (1,) + tuple(int(one) for one in piece.data.shape[axis + 1:]),
+                        float(initial))
+            piece = cat([seed, piece], dim=axis)
+        pieces.append(_SEGMENT_REDUCERS[reduce](piece, axis))
+    return stack(pieces, dim=axis)
+
+
+_SEGMENT_REDUCERS = {
+    "sum": lambda t, axis: t.sum(dim=axis),
+    "prod": lambda t, axis: t.prod(dim=axis),
+    "mean": lambda t, axis: t.mean(dim=axis),
+    "max": lambda t, axis: t.max(dim=axis).values,
+    "min": lambda t, axis: t.min(dim=axis).values,
+}
+
+
+def is_vulkan_available(*args, **kw):
+    """**False, and it is not a placeholder.** A browser does not choose a Vulkan
+    backend, and torch on any ordinary build answers the same — measured. Absent, a
+    caller's `if torch.is_vulkan_available():` stops here and runs there, which is the
+    one direction this library cannot afford to be wrong in.
+
+    It **swallows arguments** because torch's does: the C binding parses none, so
+    `torch.is_vulkan_available(x, y)` is `False` too. Written `()`, this refused four
+    ranks torch accepts — louder than the original in a function whose whole job is to
+    be believed."""
+    del args, kw
+    return False
+
+
+def cudnn_is_acceptable(tensor):
+    """**False**, as torch answers on a build without cuDNN. As `is_vulkan_available`."""
+    del tensor
+    return False
+
+
+# ── the eight `sym_*` helpers ───────────────────────────────────────────────────
+#
+# **Their row read *symbolic sizes — for graph capture, and they do not sit on wasm*,
+# which is what they are for and not what they need.** Measured: `torch.sym_max(3, 5)`
+# answers `5` on ordinary numbers, with no tracing anywhere. That is the whole point of
+# them — code written once keeps working when nothing is being traced, and these are the
+# branch it takes then.
+#
+# **`sym_max` is not `max`.** It promotes to float if *either* argument is one, where
+# the builtin returns whichever object won: `max(7, 3.0)` is `7` and `sym_max(7, 3.0)`
+# is `7.0`. torch's own docstring says so, and it is the only place these eight differ
+# from the builtins they look like — so it is the only place a reader who reached for
+# `max` instead would be wrong, and they would be wrong in the type rather than the
+# value.
+
+
+def sym_max(a, b):
+    """The larger, **promoted to float if either side is one.**"""
+    out = a if a >= b else b
+    return float(out) if isinstance(a, float) or isinstance(b, float) else out
+
+
+def sym_min(a, b):
+    """The smaller, promoted as `sym_max` is."""
+    out = a if a <= b else b
+    return float(out) if isinstance(a, float) or isinstance(b, float) else out
+
+
+def sym_float(a):
+    """`float(a)`."""
+    return float(a)
+
+
+def sym_int(a):
+    """`int(a)` — **truncating toward zero**, as `int` does and as torch's does:
+    `sym_int(-3.7)` is `-3` and not `-4`."""
+    return int(a)
+
+
+def sym_not(a):
+    """`not a`."""
+    return not a
+
+
+def sym_sqrt(a):
+    """The square root, always a float."""
+    return _math.sqrt(a)
+
+
+def sym_sum(*args):
+    """`sum`, taking **either a list or the values loose** — `sym_sum([a, b])` and
+    `sym_sum(a, b)` are both torch's, which is why the signature is varargs and the one
+    argument is unpacked when it is a sequence."""
+    if len(args) == 1 and isinstance(args[0], (list, tuple)):
+        args = tuple(args[0])
+    return sum(args)
+
+
+def sym_ite(b, t, f):     # noqa: E741
+    """`t if b else f`. **The condition has to be a boolean**; the branches are
+    anything."""
+    if not isinstance(b, bool):
+        raise AssertionError(type(b))
+    return t if b else f
+
+
 def is_tensor(x):
     return isinstance(x, Tensor)
 

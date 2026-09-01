@@ -22,6 +22,8 @@
  * a comparison, so they were carried across verbatim.
  */
 
+import { cudnnIsAcceptable, isVulkanAvailable, narrowCopy, segmentReduce }
+  from "../src/index.js";
 import { type DType, dtypeName } from "../src/dtype.js";
 import { einsum } from "../src/einsum.js";
 import * as fft from "../src/fft.js";
@@ -2210,6 +2212,64 @@ function addOps(out: Map<string, Case>): void {
   // was the line that could not be written.
   out.set("v2::UniformTemporalSubsample(the transform around it)",
     flat(async () => new v2twins.UniformTemporalSubsample(3).apply(clip()) as Tensor));
+
+  // ── two whose Python rows named what they are for ───────────────────────────
+  //
+  // `narrow_copy`'s row explained why **torch** has it — sparse tensors have no
+  // view-narrow — which is true and is not why it was absent. On a dense tensor it is a
+  // narrow and a copy, and **the copy is the whole of the difference**: writing into a
+  // narrow reaches the original and writing into this does not. A fixture that never
+  // writes cannot tell them apart, so this one writes and then reads the input.
+  out.set("top::narrow_copy(writing into it leaves the input alone)", async () => {
+    const base = Tensor.from(
+      Array.from({ length: 6 }, (_, i) => i), [2, 3]);
+    const taken = narrowCopy(base, 1, 1, 2);
+    taken.copyFrom(Tensor.zeros([2, 2]));
+    const a = Array.from(await taken.toArray()).map((v) => String(Math.trunc(v)));
+    const b = Array.from(await base.toArray()).map((v) => String(Math.trunc(v)));
+    return `${a.join(" ")} | ${b.join(" ")}`;
+  });
+
+  // The same thing spelled as a method — torch keeps both, and the two are separate
+  // seats: the function went in first and the method was absent for a while.
+  out.set("top::narrow_copy(as a method)", async () => {
+    const base = Tensor.from(Array.from({ length: 6 }, (_, k) => k), [2, 3]);
+    return Array.from(await base.narrowCopy(1, 1, 2).toArray())
+      .map((v) => String(Math.trunc(v))).join(" ");
+  });
+
+  // `segment_reduce`'s row read *for sparse and ragged bundles*, and the ragged half is
+  // the part that is here: a dense tensor and a list of run lengths.
+  //
+  // **`lengths` and `offsets` are two spellings of one thing** and both are asked — a
+  // reader that took one for the other shifts every boundary by the first run's length,
+  // which on runs of equal size is invisible. So the uneven table is here beside the even
+  // one. The library's `segmentReduce` is what answers; a helper written in this file
+  // would have proved the helper.
+  const SEG = (): Tensor => Tensor.from([1, 5, 3, 4], [4]);
+  for (const [tag, kind, bounds] of [
+    ["sum", "sum", { lengths: [2, 2] }],
+    ["mean, uneven runs", "mean", { lengths: [1, 3] }],
+    ["max", "max", { lengths: [2, 2] }],
+    ["min", "min", { lengths: [1, 3] }],
+    ["prod", "prod", { lengths: [2, 2] }],
+    ["offsets say the same thing", "sum", { offsets: [0, 1, 4] }],
+    ["initial seeds every run", "sum", { lengths: [2, 2], initial: 10 }],
+  ] as const) {
+    out.set(`top::segment_reduce(${tag})`,
+      () => segmentReduce(SEG(), kind, bounds));
+  }
+  // A run table per row, where the boundaries differ between the rows.
+  out.set("top::segment_reduce(a run table per row)", () => segmentReduce(
+    Tensor.from(Array.from({ length: 8 }, (_, i) => i), [2, 4]),
+    "sum", { lengths: [[2, 2], [1, 3]], axis: 1 }));
+
+  // **Python spells a boolean `False` and JavaScript spells it `false`.** The golden was
+  // frozen from real torch, so its answer carries Python's lettering; rendered here the
+  // JavaScript way, the case would compare two spellings and never the two answers.
+  const asPython = (b: boolean): string => (b ? "True" : "False");
+  out.set("top::is_vulkan_available", () => asPython(isVulkanAvailable()));
+  out.set("top::cudnn_is_acceptable", () => asPython(cudnnIsAcceptable(SEG())));
 
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look

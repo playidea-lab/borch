@@ -332,7 +332,14 @@ class DistributedSampler(Sampler):
     def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
                  seed=0, drop_last=False):
         if num_replicas is None or rank is None:
-            raise RuntimeError(
+            # **`ValueError`, and the type is not ours to choose.** torch has both
+            # here — `RuntimeError` when the distributed package cannot be imported
+            # at all, and `ValueError` out of `get_world_size` when it can and no
+            # process group was started. On any ordinary install the second is the
+            # one a caller meets: measured, `DistributedSampler(range(10))` on a
+            # CPU-only build raises `ValueError`. Written `RuntimeError`, code that
+            # catches torch's actual error walks straight past this one.
+            raise ValueError(
                 "DistributedSampler needs num_replicas and rank given outright — "
                 "torch reads them from the process group when they are omitted, "
                 "and there is no process group here")

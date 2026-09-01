@@ -300,6 +300,20 @@ FROZEN = {
     # This axis counts names, so the feature read as absent while sitting three
     # lines above the loader that called it — a comment naming what something
     # *would* be called is not the name.
+    #
+    # 2 → 3 → 2. `DistributedSampler` went in and came out again in three days.
+    #
+    # The row said *borch.ts has no `utils.data` at all: a page loads its own data
+    # and there is nothing there to sample from*, and **that was not true when it was
+    # written** — `data.ts` already held `SequentialSampler`, `RandomSampler`,
+    # `WeightedRandomSampler` and `BatchSampler`, exported as `borch.data`. The
+    # sentence was about the class (it is not a network) and then reached for a claim
+    # about the namespace to finish, and the second half was never checked.
+    #
+    # What it actually needed was a **seeded local stream**: every rank has to draw
+    # the same permutation or the interleave stops being a partition, and borch.ts
+    # shuffles from one global. Thirty lines of MINSTD inside the class, and it
+    # crossed.
     "utils.data": 2,
     # **These two were not measured at all until now.** `ts_axis.py` left them out
     # because the golden's `vision::` cases were said to hold them name by name, and

@@ -410,6 +410,13 @@ SKIPPED = {
     # absent is not the hardware but **our decision that our shaders use f32 only.** Writing
     # cannot and will-not in the same sentence stops the next person reviewing it.
     #
+    # **And "so does this machine" is one machine.** CI runs on SwiftShader, which offers
+    # no `shader-f16` at all — that is not a counter-example to the sentence below, it is
+    # the sentence below: the feature is optional and machines differ. `platform_claims`
+    # asserted presence everywhere and went red on the first runner that disagreed with
+    # it; it abstains on a CPU adapter now, because only hardware can witness a claim
+    # about hardware.
+    #
     # **Why half precision is declined** (decided after measuring):
     #
     # - `shader-f16` is an **optional feature.** Machines that have it and machines that do
@@ -473,8 +480,6 @@ SKIPPED = {
     # refused the rest; the pair that names that directly was the only way to ask
     # that was missing. `test_skipped_does_not_claim_what_we_actually_do` said so
     # the moment they were written.
-    "is_vulkan_available": "not a backend a browser chooses",
-    "cudnn_is_acceptable": "there is no cuDNN",
     # ── five rows that read as a wall and are not ────────────────────────────
     #
     # These sat beside `Stream`, `Event` and `prepare_multiprocessing_environment`
@@ -544,7 +549,15 @@ SKIPPED = {
     # The other three groups each gained an instrument; this one is the group where an
     # instrument would be theatre, and the difference between the two is not visible
     # from a count of unwatched rows.
-    "cudnn_*": "an NVIDIA kernel — not in a browser",
+    # `cudnn_*` was one row, and the sentence under it was true of seven names and
+    # **false of the eighth**. `cudnn_is_acceptable` is not a kernel; it is the question
+    # *would cudnn take this tensor*, and here the answer is a plain `False` — the same
+    # `False` torch itself gives on any build without cudnn. So the glob narrowed and
+    # the eighth name moved out of the excuse and into the library.
+    "cudnn_affine_grid_generator": "an NVIDIA kernel — not in a browser",
+    "cudnn_batch_norm*": "an NVIDIA kernel — not in a browser",
+    "cudnn_convolution*": "an NVIDIA kernel — not in a browser",
+    "cudnn_grid_sampler*": "an NVIDIA kernel — not in a browser",
     "miopen_*": "an AMD kernel — not in a browser",
     "mkldnn_*": "an Intel kernel — not in a browser",
     "fbgemm_*": "a quantised GEMM kernel — it means something only on real hardware",
@@ -566,7 +579,6 @@ SKIPPED = {
     "hspmm": "sparse matrix products — outside the curriculum",
     "saddmm": "sparse matrix products — outside the curriculum",
     "sspaddmm": "sparse matrix products — outside the curriculum",
-    "segment_reduce": "for sparse and ragged bundles — outside the curriculum",
     "resize_as_sparse_": "sparse tensors only — as above",
 
     # ── torch.special's remaining 35 ─────────────────────────────────────────
@@ -639,7 +651,20 @@ SKIPPED = {
     # Symbolic sizes and graph capture. The same reason as `DELIBERATE`'s compile and
     # export, but the names do not match there.
     "Sym*": "symbolic sizes — for graph capture, and they do not sit on wasm",
-    "sym_*": "symbolic sizes — as above",
+    # **`sym_*` was one glob over sixteen names, and eight of them are not that.**
+    # `sym_max`, `sym_min`, `sym_float`, `sym_int`, `sym_not`, `sym_sqrt`, `sym_sum` and
+    # `sym_ite` answer on ordinary numbers with nothing being traced — measured,
+    # `torch.sym_max(3, 5)` is `5` — and that is what they are *for*: code written once
+    # keeps working when tracing is not happening, and these are the branch it takes
+    # then. They are in.
+    #
+    # What is left really is the machinery: two that constrain a symbolic range, one
+    # that mints a fresh size, and the three `Sym*` types themselves.
+    "sym_constrain_range": "constrains a symbolic range — there are no symbolic sizes "
+                           "here to constrain",
+    "sym_constrain_range_for_size": "constrains a symbolic range too, with the extra "
+                                    "rule that a size is not negative — and there are "
+                                    "no symbolic sizes here to constrain either way",
     # **Namespaced, because `linalg.cond` is a different function and we built it.** Bare,
     # this reason reached the condition number — which works, returns 14.93 on a 2×2, and
     # was being explained to any reader of this table as *a control-flow capture op*.
@@ -800,9 +825,6 @@ SKIPPED = {
     # The move matters beyond this name. `NOT_API` comes out of the denominator and
     # `SKIPPED` does not, so a wrong reason there is a wrong reason **that also
     # improves the number** — which is why that bin is now frozen by size below.
-    "narrow_copy": "`narrow` and then a copy. torch has it because sparse tensors have "
-                   "no view-narrow, and sparse is declined in the core, so what is "
-                   "left is `narrow(...).clone()`",
 
     "transforms.functional.to_pil_image": "there is no PIL here — as `ToPILImage`",
     "transforms.functional.pil_to_tensor": "it takes a PIL image and nothing here makes "

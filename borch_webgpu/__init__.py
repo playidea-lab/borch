@@ -119,6 +119,10 @@ from ._ops import (                                      # noqa: E402,F401
     unique_consecutive, unravel_index, vander,
     # **Sparse-only, so absent.** The name stays and stops where it is called.
     sspaddmm,
+    # Four whose core rows named what they are for rather than what they need.
+    # borch.ts keeps all four as module functions, so `__getattr__` — which asks
+    # `Tensor.prototype` — cannot reach them and each needs a line.
+    cudnn_is_acceptable, is_vulkan_available, narrow_copy, segment_reduce,
     # Top-level linear algebra. **Only the three whose names collide with the
     # `linalg` namespace are written out** — `__getattr__` passes the rest to the
     # first argument's method.
@@ -329,6 +333,22 @@ def _aten_reduction(value):
             or not 0 <= value <= 2):
         raise ValueError(f"reduction has to be 0, 1 or 2, but got {value!r}.")
     return ("none", "mean", "sum")[value]
+
+
+# ── the eight `sym_*` helpers, taken from the core ────────────────────────────
+#
+# **Arithmetic on ordinary numbers, so there is nothing here to do differently.** They
+# make no tensor and run no kernel; a second copy on this side would be a second place
+# for `sym_max`'s float promotion to drift, and that promotion is the only thing
+# separating these from the builtins they look like.
+#
+# The general forwarding rule sends an unknown name to borch.ts, which has none of these
+# — measured, fifteen golden cases said `borch.ts does not have symMax` after they went
+# into the core. A name that is Python arithmetic has no business crossing to the GPU
+# side to be refused there.
+from borch import (                                          # noqa: E402
+    sym_float, sym_int, sym_ite, sym_max, sym_min, sym_not, sym_sqrt, sym_sum,
+)
 
 
 def binary_cross_entropy_with_logits(self, target, weight=None, pos_weight=None,

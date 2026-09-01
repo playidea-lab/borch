@@ -58,6 +58,7 @@ PROBE = """() => new Promise((resolve) => {
     workerAnswered: null,
     opfsRoundTrip: null,
     adapterFeatures: null,
+    adapterName: null,
   };
   // **What the GPU actually offers**, which is what three declined rows rest on:
   // `scaled_mm`, `grouped_mm` and `scaled_grouped_mm` read *that hardware is not
@@ -69,6 +70,8 @@ PROBE = """() => new Promise((resolve) => {
     if (!navigator.gpu) return "no navigator.gpu";
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) return "no adapter";
+    out.adapterName = [adapter.info?.vendor, adapter.info?.architecture]
+      .filter(Boolean).join(" / ") || "(unnamed)";
     return [...adapter.features].sort().join(" ") || "(none)";
   })().then((v) => { out.adapterFeatures = v; },
             (e) => { out.adapterFeatures = "failed: " + e.message; });
@@ -114,6 +117,14 @@ PROBE = """() => new Promise((resolve) => {
 
   Promise.all([opfs, worker, features]).then(() => resolve(out));
 })"""
+
+
+def _is_software(name):
+    """Told apart by name, as `launch.is_software` does — imported there rather than
+    copied, so the two cannot drift into two lists of CPU renderers."""
+    sys.path.insert(0, str(ROOT / "tests" / "browser"))
+    from launch import is_software                                    # noqa: PLC0415
+    return is_software(name)
 
 
 def _claims(got):
@@ -162,18 +173,30 @@ def _claims(got):
          "appears the sentence is spent."),
 
         # **The opposite direction, and the only claim here asserted as a presence.**
+        #
+        # It went red in CI the first time another machine ran it, and **the red was
+        # the check disagreeing with its own last sentence.** That sentence says half
+        # precision is declined because `shader-f16` is *optional* and machines with
+        # it and without it diverge — and then the row asserted every machine has it.
+        # A runner that lacks it does not falsify that reason; it is the reason.
+        #
+        # What the row is really defending is *declined by choice, **not** by
+        # hardware*, and only **hardware** can witness that. SwiftShader is a CPU
+        # pretending to be a GPU; what it does not offer says nothing about what GPUs
+        # offer. So on a software adapter this reports and abstains, using the same
+        # `is_software` the benchmarks have refused to run under since the day a
+        # headless Linux box answered 845/845 as `google / swiftshader`.
         ("the GPU does have f16, so `autocast` is declined by choice",
-         isinstance(got["adapterFeatures"], str)
-         and "shader-f16" in got["adapterFeatures"],
-         f"`shader-f16` present: {'shader-f16' in (got['adapterFeatures'] or '')}",
+         None if _is_software(got.get("adapterName"))
+         else (isinstance(got["adapterFeatures"], str)
+               and "shader-f16" in got["adapterFeatures"]),
+         f"`shader-f16` present: {'shader-f16' in (got['adapterFeatures'] or '')}"
+         f" · adapter {got.get('adapterName')!r}",
          "`autocast`'s row says its absence is **a decision, not the hardware** and "
          "names `shader-f16` as the thing to re-measure. That sentence only holds "
-         "while the feature is actually there — were it to vanish, the row would be "
-         "right for a reason it does not give, which is the same defect as being "
-         "wrong. The note beside it says half precision is declined because the "
-         "feature is *optional* and machines with it and without it would diverge; "
-         "this measures one machine, and that is the point of running it in CI on "
-         "another."),
+         "while some real adapter actually has it — were it to vanish from hardware, "
+         "the row would be right for a reason it does not give, which is the same "
+         "defect as being wrong."),
     ]
 
 
@@ -236,17 +259,29 @@ def main():
 
     rows = _claims(got)
     print(f"platform claims behind {len(DEFENDS)} declined names — measured in /{PAGE}\n")
+    # **`None` is a third answer and prints as one.** A claim that only hardware can
+    # witness, measured on a CPU adapter, is neither held nor broken — and collapsing
+    # it into either is how a check comes to disagree with its own reason.
     for what, holds, seen, _ in rows:
-        print(f"  {'ok ' if holds else 'NO '} {what}\n        {seen}")
+        mark = "-- " if holds is None else ("ok " if holds else "NO ")
+        print(f"  {mark} {what}\n        {seen}")
     if stale is None:
         print("\n  -- whether these names are still declined was NOT checked --\n"
               "  `torch_gap.py` imports torch and this step does not install it. The\n"
               "  browser half above ran; the half that would catch a claim outliving\n"
               "  its row did not.")
 
-    broken = [(what, seen, sting) for what, holds, seen, sting in rows if not holds]
+    broken = [(what, seen, sting) for what, holds, seen, sting in rows
+              if holds is False]
+    abstained = [what for what, holds, *_ in rows if holds is None]
+    if abstained:
+        print(f"\n  -- {len(abstained)} not asked on this adapter --")
+        for what in abstained:
+            print(f"     {what}\n     a software adapter cannot witness a claim about "
+                  "hardware. Run it on a GPU.")
     if not broken and not stale:
-        print(f"\nall {len(rows)} hold — the reasons say what the browser says")
+        print(f"\n{len(rows) - len(abstained)} of {len(rows)} hold — "
+              "the reasons say what the browser says")
         print("  Not watched here: that a file is read whole, with no paging on touch "
               "and no\n  write-through. No probe sees an API that does not exist — "
               "`from_file`'s second\n  half is a person's to re-check.")

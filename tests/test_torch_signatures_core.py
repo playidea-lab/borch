@@ -700,7 +700,7 @@ JUDGED = {
     # a closure that calls the method, and `_forwards` had a bag to copy from. It
     # reads `Tensor.transpose(dim0, dim1)` now, one attribute away and fully spelled
     # the whole time.
-    "Tensor": (470, 509),
+    "Tensor": (471, 510),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a

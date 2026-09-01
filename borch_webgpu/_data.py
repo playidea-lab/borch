@@ -160,8 +160,10 @@ class DistributedSampler:
 
     **No distribution is involved**, which is why it is here: given the pair
     outright it is arithmetic over two integers. torch reads them from a process
-    group only when they are omitted, so omitting them raises here — with
-    torch's own no-distributed-package sentence, `RuntimeError`.
+    group only when they are omitted, so omitting them raises here — as
+    `ValueError`, which is what torch itself raises on an ordinary install:
+    `RuntimeError` is its answer when the distributed package cannot be imported
+    at all, and that is not the case a caller meets.
 
     The padding and the seeded shuffle are the core's; see `borch/_data.py` for
     why the shuffle must not come from the global stream.
@@ -170,7 +172,7 @@ class DistributedSampler:
     def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
                  seed=0, drop_last=False):
         if num_replicas is None or rank is None:
-            raise RuntimeError(
+            raise ValueError(
                 "DistributedSampler needs num_replicas and rank given outright — "
                 "torch reads them from the process group when they are omitted, "
                 "and there is no process group here")

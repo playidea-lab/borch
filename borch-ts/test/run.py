@@ -794,7 +794,16 @@ NOT_PORTED = {
     #   `표본::` 5 — `rand`/`randn` refusing a non-floating `dtype=`. borch.ts's
     #     factories have no `dtype` seat at all: there is one storage and nothing
     #     names it, so there is no word to refuse.
-    "top::": (123, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
+    # 123 → 138. The fifteen `sym_*` rows, which arrived with the branch that took
+    # them out of the gap ledger's excuses. They are **pure number arithmetic** and
+    # could be written here in a line each — what cannot cross is the *answer*:
+    # `sym_max(7, 3.0)` is `7.0` where `max` is `7`, and that difference is a Python
+    # type. JavaScript has one number, so the case would compare `7` against `7` and
+    # say nothing about the only rule separating those eight from the builtins they
+    # look like.
+    "top::": (138, "파이썬 — dtype introspection, the `device` object, with, integer "
+                        "enums, and the fifteen `sym_*` rows, whose whole content is "
+                        "a Python type JavaScript does not have"),
     # `spot::` was gone — 47 cases, all ported — then back with two, and gone again.
     #
     # The two were `unique(dim=)`, and the reason written here said it is a different
@@ -1131,9 +1140,13 @@ NOT_PORTED = {
     # the generator it was handed does not feel it. borch.ts has `manualSeed` and one
     # stream, so there is no second generator here to hand it; that is the decision at
     # the top of `data.ts` and these rows sit behind it with the other two.
-    "dataconv::": (15, "파이썬 — `default_convert`, `get_worker_info`, the eleven "
-                       "`generator` rows (one host stream), and `drop_last` given by "
-                       "position (borch.ts takes an options object)"),
+    "dataconv::": (21, "파이썬 — `default_convert`, `get_worker_info`, the eleven "
+                        "`generator` rows (one host stream), `drop_last` given by "
+                        "position (borch.ts takes an options object), and the six "
+                        "`DistributedSampler` rows. That last one is not a network — "
+                        "it interleaves indices and slices by rank — but borch.ts has "
+                        "no `utils.data` at all: a page loads its own data and there "
+                        "is nothing there to sample from"),
 }
 
 
