@@ -294,6 +294,94 @@ class BatchSampler(Sampler):
         return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
 
 
+class DistributedSampler(Sampler):
+    """Hands each of `num_replicas` workers a different slice of one dataset.
+
+    **It needs no distribution at all**, which is why it is here while the
+    collectives are not. Given `num_replicas` and `rank` outright it never asks a
+    process group anything — it reads that pair *from* one only when both are
+    omitted, so here both are required and the omission raises rather than
+    pretending there is a group of one. It raises `RuntimeError` because that is
+    the branch torch itself takes when there is no distributed package to ask:
+    *Requires distributed package to be available*. The `ValueError` a built
+    torch gives instead comes from the group being uninitialised, which is a
+    different sentence about a thing that exists.
+
+    Two properties are what make it worth having over slicing by hand.
+
+    **Every rank gets the same count.** Ten rows over three workers is not
+    4/3/3 — the tail is padded from the front until the count divides, so the
+    total becomes 12 and each rank takes 4, one of them twice. In torch a ragged
+    split hangs the training loop at the collective the shortest rank never
+    reaches; there is no collective here, so it would only skew the epoch, but
+    the arithmetic is torch's either way. `drop_last=True` throws the tail away
+    instead, and then ten over three is 3 each with the tenth row unseen.
+
+    **The shuffle is seeded, not random.** Every rank must draw the *same*
+    permutation or the ranks would overlap and miss rows between them, so the
+    order comes from `seed + epoch` rather than from the global stream that
+    `RandomSampler` next door uses. `set_epoch` is what moves it, and a loop
+    that forgets to call it trains on one order forever — torch is silent about
+    that too, and this reproduces the silence rather than improving on it.
+
+    **The permutation itself is not torch's**, because numpy's stream is not
+    torch's. What holds on both sides is the arithmetic above: the counts, the
+    padding, the stride, and the fact that the ranks together cover the dataset.
+    """
+
+    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
+                 seed=0, drop_last=False):
+        if num_replicas is None or rank is None:
+            raise RuntimeError(
+                "DistributedSampler needs num_replicas and rank given outright — "
+                "torch reads them from the process group when they are omitted, "
+                "and there is no process group here")
+        num_replicas, rank = int(num_replicas), int(rank)
+        if not 0 <= rank < num_replicas:
+            raise ValueError(f"Invalid rank {rank}, rank should be in the interval "
+                             f"[0, {num_replicas - 1}]")
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.epoch = 0
+        self.shuffle = shuffle
+        self.seed = seed
+        self.drop_last = drop_last
+        n = len(dataset)
+        if drop_last and n % num_replicas:
+            self.num_samples = _math.ceil((n - num_replicas) / num_replicas)
+        else:
+            self.num_samples = _math.ceil(n / num_replicas)
+        self.total_size = self.num_samples * num_replicas
+
+    def set_epoch(self, epoch):
+        """Moves the shuffle. Call it before each epoch, on every rank."""
+        self.epoch = int(epoch)
+
+    def __iter__(self):
+        n = len(self.dataset)
+        if self.shuffle:
+            # Seeded per epoch rather than drawn: the ranks agree only because
+            # they compute the same permutation from the same two numbers.
+            order = _np.random.default_rng(self.seed + self.epoch).permutation(n)
+            indices = order.tolist()
+        else:
+            indices = list(range(n))
+        if self.drop_last:
+            indices = indices[:self.total_size]
+        else:
+            pad = self.total_size - len(indices)
+            if pad <= len(indices):
+                indices += indices[:pad]
+            else:
+                # Fewer rows than ranks — one pass over the front is not enough.
+                indices += (indices * _math.ceil(pad / len(indices)))[:pad]
+        return iter(indices[self.rank:self.total_size:self.num_replicas])
+
+    def __len__(self):
+        return self.num_samples
+
+
 class IterableDataset(Dataset):
     """A dataset that is **streamed** rather than indexed.
 
@@ -425,6 +513,7 @@ class _UtilsData(_Namespace):
     Sampler = Sampler
     SubsetRandomSampler = SubsetRandomSampler
     BatchSampler = BatchSampler
+    DistributedSampler = DistributedSampler
     IterableDataset = IterableDataset
     ChainDataset = ChainDataset
     StackDataset = StackDataset

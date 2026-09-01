@@ -514,25 +514,19 @@ SKIPPED = {
                      "each replica normalises by its own batch and the model trains to "
                      "somewhere else",
 
-    # **And one that was in the wrong group entirely.**
+    # **And one that was in the wrong group entirely — it is built now.**
     #
-    # `DistributedSampler` needs no distribution at all. Given `num_replicas` and
-    # `rank` it never touches a process group — measured:
-    # `DistributedSampler(range(10), num_replicas=3, rank=1, shuffle=False)` answers
-    # `[1, 4, 7, 0]` with no `init_process_group` anywhere, and `drop_last=True` gives
-    # `[1, 4, 7]`. It reads the pair from the process group **only when they are
-    # omitted**.
+    # `DistributedSampler` sat under *this is one tab* and needs no distribution at
+    # all: given `num_replicas` and `rank` outright it touches no process group, and
+    # what is left is index arithmetic over two integers. It read the pair *from* a
+    # group only when both were omitted, which is the one thing a tab cannot do, and
+    # that single branch had been read as the whole class.
     #
-    # So it is index arithmetic over two integers, and the name it carries is what put
-    # it beside the other two. A row grouped by its name rather than by what it does —
-    # which is the same mistake as `multigammaln` being declined for an argument order
-    # nobody had checked.
-    "DistributedSampler": "**buildable, and grouped with the collectives by its name "
-                          "rather than by what it does.** Given `num_replicas` and "
-                          "`rank` it is index arithmetic over two integers and touches "
-                          "no process group — measured, `(range(10), num_replicas=3, "
-                          "rank=1, shuffle=False)` answers [1, 4, 7, 0] with nothing "
-                          "initialised. What is owed is the sampler, not the network",
+    # A row grouped by its name rather than by what it does — the same mistake as
+    # `multigammaln`, declined for an argument order nobody had checked. It is in
+    # `utils.data` now and agrees with torch by value on every non-shuffled split;
+    # the shuffled order is numpy's rather than torch's, so what the cases ask there
+    # is the property that the ranks together cover the dataset exactly once.
 
     # Vendor kernels. They mean something only where that hardware is.
     #

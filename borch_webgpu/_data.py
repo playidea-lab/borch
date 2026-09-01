@@ -9,6 +9,8 @@ batch is 3MB. Uploading per batch is cheaper and leaves the GPU memory for the
 model.
 """
 
+import math as _math
+
 import numpy as _np
 
 import js as _js
@@ -148,6 +150,68 @@ class WeightedRandomSampler:
         p = self.weights / self.weights.sum()
         return iter(rng.choice(len(p), size=self.num_samples,
                                replace=self.replacement, p=p).tolist())
+
+    def __len__(self):
+        return self.num_samples
+
+
+class DistributedSampler:
+    """Each of `num_replicas` workers takes a different slice of one dataset.
+
+    **No distribution is involved**, which is why it is here: given the pair
+    outright it is arithmetic over two integers. torch reads them from a process
+    group only when they are omitted, so omitting them raises here — with
+    torch's own no-distributed-package sentence, `RuntimeError`.
+
+    The padding and the seeded shuffle are the core's; see `borch/_data.py` for
+    why the shuffle must not come from the global stream.
+    """
+
+    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
+                 seed=0, drop_last=False):
+        if num_replicas is None or rank is None:
+            raise RuntimeError(
+                "DistributedSampler needs num_replicas and rank given outright — "
+                "torch reads them from the process group when they are omitted, "
+                "and there is no process group here")
+        num_replicas, rank = int(num_replicas), int(rank)
+        if not 0 <= rank < num_replicas:
+            raise ValueError(f"Invalid rank {rank}, rank should be in the interval "
+                             f"[0, {num_replicas - 1}]")
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.epoch = 0
+        self.shuffle = shuffle
+        self.seed = seed
+        self.drop_last = drop_last
+        n = len(dataset)
+        if drop_last and n % num_replicas:
+            self.num_samples = _math.ceil((n - num_replicas) / num_replicas)
+        else:
+            self.num_samples = _math.ceil(n / num_replicas)
+        self.total_size = self.num_samples * num_replicas
+
+    def set_epoch(self, epoch):
+        """Moves the shuffle. Call it before each epoch, on every rank."""
+        self.epoch = int(epoch)
+
+    def __iter__(self):
+        n = len(self.dataset)
+        if self.shuffle:
+            indices = _np.random.default_rng(
+                self.seed + self.epoch).permutation(n).tolist()
+        else:
+            indices = list(range(n))
+        if self.drop_last:
+            indices = indices[:self.total_size]
+        else:
+            pad = self.total_size - len(indices)
+            if pad <= len(indices):
+                indices += indices[:pad]
+            else:
+                indices += (indices * _math.ceil(pad / len(indices)))[:pad]
+        return iter(indices[self.rank:self.total_size:self.num_replicas])
 
     def __len__(self):
         return self.num_samples
@@ -317,6 +381,7 @@ class _UtilsData:
     ConcatDataset = ConcatDataset
     DataLoader = DataLoader
     BatchSampler = BatchSampler
+    DistributedSampler = DistributedSampler
     RandomSampler = RandomSampler
     SequentialSampler = SequentialSampler
     WeightedRandomSampler = WeightedRandomSampler
