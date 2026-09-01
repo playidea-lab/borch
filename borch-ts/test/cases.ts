@@ -10092,6 +10092,57 @@ function addLinalg(out: Map<string, Case>): void {
       return gradOf(leaf, `solve/${tag}`);
     });
   }
+
+  // ── seven seats the argument axis could not see until this week ────────────
+  //
+  // torch writes `linalg.solve(A, B, *, left=True, out=None)` with the namespace in
+  // front, and the reader that judges these matched the bare name — so `linalg` was
+  // judged on 5 of 42 rows and ten divergences sat inside the rest. These are the
+  // seven that closed. All ten are keyword-only in torch, so nothing was landing in
+  // a wrong seat; the calls simply did not run.
+  const rect = (): Tensor => Tensor.from([1, 2, 3, 4, 5, 6, 7, 8, 10], [3, 3]);
+  const rhs = (): Tensor => Tensor.from([9, 2, 8, 3], [2, 2]);
+
+  // `left=false` solves `X A = B`, which is a different matrix. Both are asked
+  // because a reader ignoring the word answers the first for both.
+  for (const left of [true, false]) {
+    out.set(`linalg::solve(left=${verdict(left)})`,
+      async () => linalg.solve(mat(), rhs(), left));
+    out.set(`linalg::solve_ex(left=${verdict(left)})/해`,
+      async () => (await linalg.solveEx(mat(), rhs(), left)).result);
+  }
+  out.set("linalg::solve(left=False, 벡터)=거절", async () => {
+    try {
+      await linalg.solve(mat(), vec(), false);
+    } catch (e) {
+      return (e as Error).name;
+    }
+    return "받았다";
+  });
+
+  // `driver=` names a cuSOLVER routine and torch refuses it off CUDA — the sentence
+  // is torch's, to its last clause, and `svdvals` answers the same one naming `svd`.
+  for (const name of ["svd", "svdvals"]) {
+    out.set(`linalg::${name}(driver)=거절`, async () => {
+      try {
+        if (name === "svd") await linalg.svd(rect(), true, "gesvd");
+        else await linalg.svdvals(rect(), "gesvd");
+      } catch (e) {
+        return `${(e as Error).name}: ${(e as Error).message}`;
+      }
+      return "받았다";
+    });
+    out.set(`linalg::${name}(driver=None)/특잇값`, async () =>
+      (name === "svd" ? (await linalg.svd(rect(), true, null)).s
+        : await linalg.svdvals(rect(), null)));
+  }
+
+  // `dtype=` had a seat on `linalg.norm` and not on the two it dispatches to.
+  out.set("linalg::vector_norm(dtype)",
+    () => linalg.vectorNorm(vec(), 2, undefined, false, "float32"));
+  out.set("linalg::matrix_norm(dtype)",
+    async () => linalg.matrixNorm(rect(), "fro", [-2, -1], false, "float32"));
+
   addLinalgStruct(out);
 }
 

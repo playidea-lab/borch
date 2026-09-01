@@ -84,15 +84,34 @@ export function qr(
   return a.qr(mode !== "complete");
 }
 
-/** `svd(A, full_matrices=True)` — the singular value decomposition. */
+/**
+ * `driver=` names a cuSOLVER routine, and **torch refuses it off CUDA** — measured,
+ * `torch.linalg.svd(M, driver='gesvd')` on a CPU tensor answers the sentence below,
+ * and `svdvals` answers the same one, naming `svd`, because it is one check.
+ *
+ * So the seat is carried and the refusal with it. Leaving the seat out stops the same
+ * call with the wrong sentence: *unexpected argument* reads as *this library is short*
+ * where the truth is that nobody gets this without CUDA.
+ */
+function noDriver(driver: string | null | undefined): void {
+  if (driver !== null && driver !== undefined) {
+    throw new RuntimeError(
+      "torch.linalg.svd: keyword argument `driver=` is only supported on CUDA "
+      + "inputs with cuSOLVER backend.");
+  }
+}
+
+/** `svd(A, full_matrices=True, *, driver=None)` — the singular value decomposition. */
 export function svd(
-  a: Tensor, fullMatrices = true,
+  a: Tensor, fullMatrices = true, driver?: string | null,
 ): Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
+  noDriver(driver);
   return a.linalgSvd(fullMatrices);
 }
 
-/** `svdvals(A)` — the singular values alone. */
-export function svdvals(a: Tensor): Promise<Tensor> {
+/** `svdvals(A, *, driver=None)` — the singular values alone. */
+export function svdvals(a: Tensor, driver?: string | null): Promise<Tensor> {
+  noDriver(driver);
   return a.svdvals();
 }
 
@@ -118,9 +137,24 @@ export function eigvalsh(input: Tensor, UPLO: "L" | "U" = "L"): Promise<Tensor> 
   return input.eigvalsh(UPLO);
 }
 
-/** `solve(A, B)` — solve `A x = B`. */
-export function solve(a: Tensor, b: Tensor): Promise<Tensor> {
-  return a.solve(b);
+/**
+ * `solve(A, B, *, left=True)` — solve `A X = B`.
+ *
+ * **`left=false` solves `X A = B` instead**, and it is one transpose away: `X A = B`
+ * is `Aᵀ Xᵀ = Bᵀ`, so the same solver answers both.
+ *
+ * **A vector is refused there**, as torch refuses it. With `left=true` a `B` one axis
+ * shorter is a batch of vectors; with `left=false` there is no reading of a vector that
+ * makes `X A = B`.
+ */
+export async function solve(a: Tensor, b: Tensor, left = true): Promise<Tensor> {
+  if (left) return a.solve(b);
+  if (b.shape.length === a.shape.length - 1) {
+    throw new RuntimeError(
+      "linalg.solve: Incompatible shapes of A and B for the equation XA = B "
+      + `(${a.shape.join("x")} and ${b.shape.join("x")})`);
+  }
+  return (await a.transpose(-2, -1).solve(b.transpose(-2, -1))).transpose(-2, -1);
 }
 
 /** `solve_triangular(A, B, upper, left=True, unitriangular=False)`. */
@@ -213,17 +247,59 @@ async function cutBites(input: Tensor, rcond: number): Promise<boolean> {
   return Array.from(await kept.toArray()).some((c) => c < k);
 }
 
-/** `matrix_norm(A, ord="fro", dim=(-2,-1), keepdim=False)`. */
+/**
+ * `dtype=` names the dtype the norm accumulates in. **There is one float here**, so
+ * the seat exists to say that rather than to widen anything: `"float32"` is what
+ * these compute in already, and anything else stops.
+ *
+ * Carried because `linalg.norm` next door has had it all along and these two, which
+ * it dispatches to, did not — so `vector_norm(x, dtype=…)` written from torch's
+ * documentation stopped here while the same word one name over was accepted.
+ */
+function noWiderDtype(dtype: string | null | undefined, who: string): void {
+  if (dtype !== null && dtype !== undefined && dtype !== "float32") {
+    throw new RuntimeError(
+      `linalg.${who}(dtype=${dtype}) is not in the browser subset — the shaders are `
+      + "f32, so there is no wider accumulator for a norm to use.");
+  }
+}
+
+/** `matrix_norm(A, ord="fro", dim=(-2,-1), keepdim=False, *, dtype=None)`. */
 export function matrixNorm(input: Tensor, ord: number | string = "fro",
                            dim: readonly [number, number] = [-2, -1],
-                           keepdim = false): Promise<Tensor> {
+                           keepdim = false,
+                           dtype?: string | null): Promise<Tensor> {
+  noWiderDtype(dtype, "matrix_norm");
   return input.matrixNorm(ord, dim, keepdim);
 }
 
-/** `vector_norm(x, ord=2, dim=None, keepdim=False)`. */
+/** `vector_norm(x, ord=2, dim=None, keepdim=False, *, dtype=None)`. */
 export function vectorNorm(input: Tensor, ord = 2, dim?: number,
-                           keepdim = false): Tensor {
+                           keepdim = false, dtype?: string | null): Tensor {
+  noWiderDtype(dtype, "vector_norm");
   return input.vectorNorm(ord, dim, keepdim);
+}
+
+/**
+ * `solve_ex(A, B, *, left=True, check_errors=False)` — `solve`'s non-throwing side.
+ *
+ * Here rather than on the tensor because `left` is: reached by method the word is
+ * received by JavaScript and dropped, and the answer to the other equation comes back
+ * under this one's name.
+ */
+export async function solveEx(
+  a: Tensor, b: Tensor, left = true,
+): Promise<{ result: Tensor; info: Tensor }> {
+  if (left) return a.solveEx(b);
+  // **`checkErrors` is not here and is not claimed**, on either side of the bridge.
+  // The method it wraps has no such argument, and the binding refuses a keyword it
+  // has no seat for rather than dropping it — so a caller who asks for it stops,
+  // which is what should happen while it is absent. Widening the row to name it
+  // would be the claim this file most wants not to make.
+  return {
+    result: await solve(a, b, false),
+    info: Tensor.from([0], []),
+  };
 }
 
 /**

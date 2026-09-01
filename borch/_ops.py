@@ -8309,7 +8309,7 @@ def inv_ex(A, check_errors=False):  # noqa: N803
 _SINGULAR_INFO = 2
 
 
-def solve(A, b):  # noqa: N803
+def solve(A, b, *, left=True):  # noqa: N803
     """Solve `A x = b`. More accurate and faster than building the inverse and
     multiplying.
 
@@ -8320,7 +8320,30 @@ def solve(A, b):  # noqa: N803
     reads a batch of vectors only when `b` is 1-D — given `A(3,2,2)` and `b(3,2)`
     it reads a matrix and throws about mismatched dimensions. torch keeps the old
     rule. So the axis is stood up here.
+
+    **`left=False` solves `X A = B` instead**, and it is one transpose away:
+    `X A = B` is `Aᵀ Xᵀ = Bᵀ`, so the same solver answers both. It was missing, and
+    a torch line written with it stopped here — the argument is keyword-only on
+    torch, so nothing was silently landing in the wrong seat; the call simply did
+    not run.
+
+    **A vector is refused there, as torch refuses it.** With `left=True` a `b` one
+    axis shorter is a batch of vectors; with `left=False` there is no reading of a
+    vector that makes `X A = B` — measured, torch answers *Incompatible shapes of A
+    and B for the equation XA = B*.
     """
+    if not left:
+        A = _mat(A, "solve")
+        bt = _wrap(b)
+        if bt.data.ndim == A.data.ndim - 1:
+            # **`RuntimeError`, not `LinAlgError`.** torch keeps `LinAlgError` for a
+            # matrix that cannot be solved and raises the plain one for a shape that
+            # cannot be read — measured, and the golden caught the confusion.
+            raise RuntimeError(
+                "linalg.solve: Incompatible shapes of A and B for the equation "
+                f"XA = B ({'x'.join(str(n) for n in A.data.shape)} and "
+                f"{'x'.join(str(n) for n in bt.data.shape)})")
+        return swapaxes(solve(swapaxes(A, -2, -1), swapaxes(bt, -2, -1)), -2, -1)
     A = _mat(A, "solve")
     _reject_singular(A.data, "solve")
     bt = _wrap(b)
@@ -8344,11 +8367,16 @@ def solve(A, b):  # noqa: N803
     return A._make(x, (A, bt), back, "SolveBackward0")
 
 
-def solve_ex(A, b, check_errors=False):  # noqa: N803
-    """`solve`'s non-throwing side."""
+def solve_ex(A, b, *, left=True, check_errors=False):  # noqa: N803
+    """`solve`'s non-throwing side.
+
+    **`left` comes before `check_errors`**, as it does in torch — both are
+    keyword-only there, so the order is what the argument axis reads rather than
+    something a caller can trip over.
+    """
     A = _mat(A, "solve_ex")
     try:
-        out = solve(A, b)
+        out = solve(A, b, left=left)
     except LinAlgError:
         if check_errors:
             raise
@@ -8539,7 +8567,32 @@ def svd(input, some=True, compute_uv=True):
         _np.swapaxes(vh, -1, -2))))
 
 
-def linalg_svd(A, full_matrices=True):  # noqa: N803
+def _no_driver(driver):
+    """`driver=` names a cuSOLVER routine, and **torch refuses it off CUDA.**
+
+    Measured: `torch.linalg.svd(M, driver='gesvd')` on a CPU tensor answers
+    *torch.linalg.svd: keyword argument `driver=` is only supported on CUDA inputs
+    with cuSOLVER backend.* — and `svdvals` answers with the same sentence, naming
+    `svd`, because it is the same check underneath.
+
+    **The sentence is torch's, to its last clause.** The first version of this
+    stopped at *on CUDA*, because it was transcribed from a probe that printed the
+    first seventy characters. A message that is nearly torch's is the kind a reader
+    searches for and does not find.
+
+    So the seat is carried and the refusal is carried with it. Accepting the word and
+    ignoring it would be the failure this repository names most often; leaving the seat
+    out stops a torch line that torch itself would also stop, but with the wrong
+    sentence — `unexpected keyword argument` reads as *this library is short* where the
+    truth is *nobody gets this without CUDA*.
+    """
+    if driver is not None:
+        raise RuntimeError(
+            "torch.linalg.svd: keyword argument `driver=` is only supported on CUDA "
+            "inputs with cuSOLVER backend.")
+
+
+def linalg_svd(A, full_matrices=True, *, driver=None):  # noqa: N803
     """`torch.linalg.svd` — **the other one.** It gives `Vh` and defaults to the
     full form, where `torch.svd` gives `V` and defaults to the reduced one.
 
@@ -8549,6 +8602,7 @@ def linalg_svd(A, full_matrices=True):  # noqa: N803
     and `vander` all diverge and the note about them sits in `__init__.py`, in a
     different file from the claim it contradicts.
     """
+    _no_driver(driver)
     A = _mat(A, "linalg.svd", square=False)
     u, s, vh = _svd_raw(A.data, full_matrices)
     k = s.shape[-1]
@@ -9377,8 +9431,12 @@ def diagonal_linalg(A, offset=0, dim1=-2, dim2=-1):  # noqa: N803
     return diagonal(A, offset=offset, dim1=dim1, dim2=dim2)
 
 
-def svdvals(A):  # noqa: N803
-    """The singular values alone. The middle of `svd`."""
+def svdvals(A, *, driver=None):  # noqa: N803
+    """The singular values alone. The middle of `svd`.
+
+    `driver=` is carried and refused, as it is on `svd` — torch's own message names
+    `svd` here too, because it is the same check underneath."""
+    _no_driver(driver)
     return linalg_svd(A, full_matrices=False).S
 
 
@@ -9387,14 +9445,22 @@ def eigvalsh(input, UPLO="L"):  # noqa: A002
     return eigh(input, UPLO=UPLO).eigenvalues
 
 
-def vector_norm(input, ord=2, dim=None, keepdim=False):  # noqa: A002
+def vector_norm(input, ord=2, dim=None, keepdim=False, *, dtype=None):  # noqa: A002
     """A norm measured over the elements as a vector. **Given a matrix it
     flattens the whole thing** — where it parts from `matrix_norm`.
 
     `ord=0` is the count of non-zeros and `±inf` are the largest and smallest
     absolute values — branches that must not go into the power formula, so they
     are written out separately.
+
+    **`dtype=` accumulates in that dtype**, as it does on `linalg.norm` next door,
+    which had the seat all along while these two did not. Here it can only be
+    `float32` — asking for `float64` stops with this library's standing sentence
+    about the dtype rather than quietly accumulating in something else, which is
+    what makes the seat worth having rather than worth pretending.
     """
+    if dtype is not None:
+        input = _wrap(_wrap(input).data.astype(_np_of(_requested_dtype(dtype))))
     x = _wrap(input).abs()
     rank = x.data.ndim
     if dim is None and rank > 1:
@@ -9451,7 +9517,7 @@ def _linalg_norm(input, ord=None, dim=None, keepdim=False, dtype=None):  # noqa:
     return vector_norm(x, ord=(2 if ord is None else ord), dim=dim, keepdim=keepdim)
 
 
-def matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False):  # noqa: A002
+def matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False, *, dtype=None):  # noqa: A002
     """A norm measured over the matrix. **A different number per branch.**
 
     The default is Frobenius; `2` is the largest singular value, `nuc` the sum of
@@ -9471,7 +9537,12 @@ def matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False):  # noqa: A002
     `keepdim` then puts the ones back **where the caller's axes were** and not where
     they were moved to: torch gives `(1, 1, 2)` for `dim=(0, 1)` and `(3, 1, 1)` for
     the default.
+
+    **`dtype=` accumulates in that dtype**, as on `vector_norm` — see the note there
+    on why `float64` stops rather than being accepted.
     """
+    if dtype is not None:
+        input = _wrap(_wrap(input).data.astype(_np_of(_requested_dtype(dtype))))
     x = _wrap(input)
     if tuple(dim) != (-2, -1):
         rank = len(x.shape)

@@ -12911,6 +12911,71 @@ def linalg_cases(inp=None):
 
     for who in ("a", "b"):
         cases.append((LINALG_PREFIX + f"grad::solve/{who}", solve_grad(who)))
+
+    # ── seven seats that were invisible until the reader could see them ────────
+    #
+    # `linalg`'s C functions were unreadable to the argument axis for a prefix —
+    # torch writes `linalg.solve(A, B, *, left=True, out=None)` and the reader
+    # matched the bare name — so the namespace was judged on 5 of 42 rows. Opened,
+    # ten divergences came out. These are the seven that are closed.
+    #
+    # **All ten are keyword-only in torch**, so nothing was landing in a wrong seat:
+    # `torch.linalg.solve(A, B, False)` is a `TypeError` over there too. What these
+    # cost was a torch line that stopped here — `left=False` and `driver=` and
+    # `dtype=` were simply not accepted.
+    rect = np.array([[1., 2., 3.], [4., 5., 6.], [7., 8., 10.]], dtype=np.float32)
+    rhs = np.array([[9., 2.], [8., 3.]], dtype=np.float32)
+
+    # **`left=False` solves `X A = B`**, which is a different matrix — measured on
+    # torch, `[[2, 0.2], [3, 1.4]]` becomes `[[3.2, -0.6], [2.6, 0.2]]`. Both are
+    # asked, because a reader that ignored the argument would answer the first for
+    # both and agree with half the table.
+    for _left in (True, False):
+        cases.append((LINALG_PREFIX + f"solve(left={_left})",
+                      lambda L, k=_left: L.linalg.solve(
+                          L.tensor(mat), L.tensor(rhs), left=k)))
+        cases.append((LINALG_PREFIX + f"solve_ex(left={_left})/해",
+                      lambda L, k=_left: L.linalg.solve_ex(
+                          L.tensor(mat), L.tensor(rhs), left=k)[0]))
+
+    # **A vector has no reading under `X A = B`**, and torch says so rather than
+    # broadcasting its way to a number.
+    def solve_vector_right(L):
+        try:
+            L.linalg.solve(L.tensor(mat), L.tensor(vec), left=False)
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+        return "받았다"
+
+    cases.append((LINALG_PREFIX + "solve(left=False, 벡터)=거절", solve_vector_right))
+
+    # **`driver=` is refused rather than ignored**, because torch refuses it: it
+    # names a cuSOLVER routine and there is no CUDA on either side of this
+    # comparison. `svdvals` answers with the same sentence, naming `svd`.
+    def driver_refused(name):
+        def run(L, n=name):
+            try:
+                getattr(L.linalg, n)(L.tensor(rect), driver="gesvd")
+            except Exception as exc:                            # noqa: BLE001
+                return f"{type(exc).__name__}: {exc}"
+            return "받았다"
+        return run
+
+    for _name in ("svd", "svdvals"):
+        cases.append((LINALG_PREFIX + f"{_name}(driver)=거절", driver_refused(_name)))
+        cases.append((LINALG_PREFIX + f"{_name}(driver=None)/특잇값",
+                      lambda L, n=_name: (
+                          L.linalg.svd(L.tensor(rect), driver=None).S if n == "svd"
+                          else L.linalg.svdvals(L.tensor(rect), driver=None))))
+
+    # **`dtype=` accumulates in that dtype.** `linalg.norm` had the seat and the two
+    # it dispatches to did not. Only `float32` is askable here — `float64` stops with
+    # this library's own sentence, which is a divergence by design and so is not
+    # frozen against torch.
+    cases.append((LINALG_PREFIX + "vector_norm(dtype)",
+                  lambda L: L.linalg.vector_norm(L.tensor(vec), dtype=L.float32)))
+    cases.append((LINALG_PREFIX + "matrix_norm(dtype)",
+                  lambda L: L.linalg.matrix_norm(L.tensor(rect), dtype=L.float32)))
     return cases
 
 

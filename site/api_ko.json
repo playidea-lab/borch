@@ -408,8 +408,8 @@
     "src": "31fc06fc3b58"
   },
   "linalg/matrixNorm": {
-    "src": "1000416d4040",
-    "ko": "`matrix_norm(A, ord=\"fro\", dim=(-2,-1), keepdim=False)`. `dim` 이 가리키는 두 축을 끝으로 옮겨서 계산하므로 축을 어떻게 부르든 산술은 하나다. `keepdim` 은 **부른 쪽의 축 자리에** 1 을 남긴다."
+    "ko": "`matrix_norm(A, ord=\"fro\", dim=(-2,-1), keepdim=False, *, dtype=None)`.",
+    "src": "6735218aa224"
   },
   "linalg/matrixPower": {
     "ko": "`matrix_power(A, n)` — `A` 를 자기 자신과 `n` 번 곱한 것.",
@@ -440,20 +440,20 @@
     "src": "f2c29556afd9"
   },
   "linalg/solve": {
-    "ko": "`solve(A, B)` — `A x = B` 를 푼다.",
-    "src": "78d93cf6261c"
+    "ko": "`solve(A, B, *, left=True)` — `A X = B` 를 푼다.\n\n**`left=false` 는 대신 `X A = B` 를 푼다.** 전치 한 번 거리다 — `X A = B` 는\n`Aᵀ Xᵀ = Bᵀ` 이므로 같은 솔버가 둘 다 답한다.\n\n**거기서 벡터는 거절한다.** torch 가 거절하기 때문이다. `left=true` 에서는 축이\n하나 짧은 `B` 가 벡터의 묶음이지만, `left=false` 에서는 `X A = B` 를 만드는\n벡터 해석이 없다.",
+    "src": "04f3f1b76042"
   },
   "linalg/solveTriangular": {
     "ko": "`solve_triangular(A, B, upper, left=True, unitriangular=False)`.",
     "src": "1052809cbcfc"
   },
   "linalg/svd": {
-    "ko": "`svd(A, full_matrices=True)` — 특잇값 분해.",
-    "src": "a179556f44a8"
+    "ko": "`svd(A, full_matrices=True, *, driver=None)` — 특잇값 분해.",
+    "src": "994ff6d1acd9"
   },
   "linalg/svdvals": {
-    "ko": "`svdvals(A)` — 특잇값만.",
-    "src": "0143f6ba8adf"
+    "ko": "`svdvals(A, *, driver=None)` — 특잇값만.",
+    "src": "9640c20cbdd7"
   },
   "linalg/tensorinv": {
     "ko": "`tensorinv(A, ind=2)` — `A` 를 축 `ind` 에서 행렬로 접은 것의 역.\n\n메서드 이름은 `tensorInv` 이고, 이것도 이미 있었다. 위의 `tensorsolve` 를 보라.",
@@ -468,8 +468,8 @@
     "src": "9e1505ba2765"
   },
   "linalg/vectorNorm": {
-    "ko": "`vector_norm(x, ord=2, dim=None, keepdim=False)`. `keepdim` 은 줄인 축을 길이 1 로 남긴다 — `dim` 이 없으면 모든 축을 1 로 남긴다.",
-    "src": "b5d3ca636b5a"
+    "ko": "`vector_norm(x, ord=2, dim=None, keepdim=False, *, dtype=None)`.",
+    "src": "8f838cb12a1e"
   },
   "nn/": {
     "ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다.",

@@ -172,11 +172,11 @@ _SIGNATURE = {
     # **`keepdim` was missing and the seat behind it existed.** borch.ts's `vectorNorm`
     # takes it third; left out of this row it was dropped on the way and the answer came
     # back a rank short — a shape, not an exception.
-    "vector_norm": ("ord", "dim", "keepdim"),
+    "linalg.vector_norm": ("ord", "dim", "keepdim", "dtype"),
     # **`dim` and `keepdim` were missing for the same reason `vector_norm`'s was**, and
     # `matrix_norm(A, "fro", (-2, -1), True)` came back a scalar where torch keeps the
     # two axes as ones.
-    "matrix_norm": ("ord", "dim", "keepdim"),
+    "linalg.matrix_norm": ("ord", "dim", "keepdim", "dtype"),
     "matrix_rank": ("tol",),
     # `linalg.norm` is routed to borch.ts's **namespace** function rather than the `norm`
     # method, so its row is torch's `linalg.norm` and not `torch.norm`'s. The two differ
@@ -189,6 +189,20 @@ _SIGNATURE = {
     "linalg.lu_solve": ("pivots", "b", "left", "adjoint"),
     "linalg.tensorsolve": ("b", "dims"),
     "linalg.lstsq": ("b", "rcond", "driver"),
+    # **Three more joined them the day the argument axis could read `linalg`.** They
+    # were reaching borch.ts by *method*, where `left` and `driver` are words
+    # JavaScript receives and drops — `solve(A, B, left=False)` would have answered
+    # `A X = B` under the name of the other equation. `svd`'s `full_matrices` is in
+    # the row too: it was travelling as a method argument and the move to the
+    # namespace is what makes it need a seat here.
+    "linalg.solve": ("b", "left"),
+    # **`check_errors` is not in this row, deliberately.** borch.ts's `solveEx` has no
+    # such argument, and the binding refuses a keyword it has no seat for rather than
+    # dropping it — so a caller asking for it stops, which is right while it is absent.
+    # Naming it here would let it through to be discarded.
+    "linalg.solve_ex": ("b", "left"),
+    "linalg.svd": ("full_matrices", "driver"),
+    "linalg.svdvals": ("driver",),
     "vander": ("N",),
     "vecdot": ("other", "dim"),
     "eigvalsh": ("UPLO",),
@@ -3628,6 +3642,21 @@ _VIA_NAMESPACE = {
     "lu_solve": "luSolve",
     "tensorsolve": "tensorsolve",
     "lstsq": "lstsq",
+    # **Three more, and they arrive for the reason the paragraph in `call` gives.**
+    # `solve` grew `left` and `svd`/`svdvals` grew `driver`, and both live in borch.ts's
+    # `linalg` namespace rather than on the tensor. Reached by method the word is
+    # received by JavaScript and dropped — `solve(A, B, left=False)` would answer
+    # `A X = B` under the name of the other equation, and `driver='gesvd'` would return
+    # a decomposition where torch refuses one.
+    "solve": "solve",
+    "solve_ex": "solveEx",
+    # And the two norms, whose `dtype` lives in the namespace function
+    # beside `linalg.norm`'s — the name that had the seat while these two,
+    # which it dispatches to, did not.
+    "vector_norm": "vectorNorm",
+    "matrix_norm": "matrixNorm",
+    "svd": "svd",
+    "svdvals": "svdvals",
 }
 
 

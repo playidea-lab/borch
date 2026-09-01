@@ -836,7 +836,6 @@ RENAMED = {
     # **The summary that started this was mine and it was wrong** — "torch writes `A`
     # in fifteen of them", read off the first docstring line of a handful and
     # generalised. The peer's probe found 9 and 15. A summary is a claim about every
-    # row, and this one had been checked against six.
     "linalg": 0,
     # Neither is short: `special`'s twenty declined tails are all `out=`, which is
     # borch.ts's global decision and counted in its own column rather than here.
@@ -1457,7 +1456,13 @@ SHORTER = {
     # `(3, 2, 2)` with `dim=(0, 1)`. And the core's `lstsq` applied `rcond` under
     # `driver="gels"`, which torch's does not read at all: 0.79 where torch says 3.50.
     # Every case before these asked the default, where neither branch runs.
-    "linalg": 0,
+    #
+    # **0 → 1, and the row is `solve_ex`'s `check_errors`.** The core has it and
+    # borch.ts does not: the method it wraps takes no such argument, and `check_errors`
+    # means *raise instead of reporting*, which is a behaviour rather than a word to
+    # pass along. It is short on purpose and stays visible here — the binding refuses
+    # the keyword rather than dropping it, so a caller asking for it stops today.
+    "linalg": 1,
     # Neither is short. `special`'s twenty missing tails are all `out=`, which this axis
     # counts in the `declined` column against `TAIL_NOT_IN_TS` rather than here — the
     # distinction being that a tail with a written reason is a decision and a tail

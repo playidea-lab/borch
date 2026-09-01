@@ -209,8 +209,15 @@ SHIFTED = {
     #                    `dtype, out`
     #
     # Written out rather than left as a number: the count says *five somethings*, and
-    # what the next person needs is which five. They are owed, not accepted.
-    "linalg": 5,
+    # what the next person needs is which five.
+    #
+    # **5 → 1, and the one left is `norm`.** `solve` and `solve_ex` take `left` now —
+    # it is one transpose, `X A = B` being `Aᵀ Xᵀ = Bᵀ` — and `svd` and `svdvals` take
+    # `driver` in order to refuse it, which is what torch does off CUDA. `norm`'s tail
+    # stays `dtype, out` against torch's `out, dtype` because `out` is appended by
+    # `_accepts_out` rather than declared, and both are keyword-only on torch, so the
+    # order is something this axis reads and no caller can trip over.
+    "linalg": 1,
     "utils.data": 0,
 }
 
@@ -440,7 +447,18 @@ UNALIGNED = {
     #   · `pinv`         — the same three against a single `rcond`
     #   · `lstsq`        — the other direction: the core carries an `out` torch's
     #                      documented list does not have
-    "linalg": 5,
+    #
+    # **5 → 3.** `matrix_norm` and `vector_norm` take `dtype` now — the seat
+    # `linalg.norm` next door had all along while the two it dispatches to did not.
+    # Here it can only be `float32`; asking for `float64` stops with this library's
+    # standing sentence rather than accumulating in something else.
+    #
+    # The three left are real work rather than a seat: `matrix_rank` and `pinv` want
+    # torch's `atol`/`rtol`/`hermitian` where the core has one `tol`/`rcond` (torch
+    # deprecated the single one), and `lstsq`'s is the other direction — the core has
+    # an `out` torch's *documented* list lacks while its runtime accepts one, which is
+    # this reader's standing caveat rather than a defect.
+    "linalg": 3,
     # 1 → 0. `DataLoader` had seven of torch's seventeen names **and two of them
     # in the wrong seats** — `collate_fn` is torch's seventh and `drop_last` its
     # ninth, where here they were sixth and seventh. `DataLoader(ds, 4, False,

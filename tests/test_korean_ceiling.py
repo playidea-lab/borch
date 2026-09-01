@@ -404,7 +404,11 @@ CEILINGS = {
     # Their value parts from torch — 1 here against the machine's core count — so the
     # golden asks only the part that holds on both sides, and the question has to be
     # spelled identically in the two tables or the row compares against nothing.
-    "borch-ts/test": 4905,
+    # 4905 → 4921. Sixteen, and all case names: the eleven `linalg::` rows that came
+    # out of the argument axis learning to read `linalg`'s docstrings. `거절` and
+    # `특잇값` and `벡터` are keys against `tests/cases.py` — the two tables spell them
+    # identically or the row reconciles against nothing.
+    "borch-ts/test": 4921,
 }
 
 
