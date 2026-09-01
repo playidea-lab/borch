@@ -20156,9 +20156,9 @@
       },
       {
        "name": "faults",
-       "signature": "faults: { count: number; first: string; }",
-       "doc": "Validation errors so far.\n\n**Whoever is measuring has to look at this.** An invalid command buffer\nthrows nothing and simply does no work, so the wall clock keeps running\nin that state and numbers come out — something that looks like a\nmeasurement comes out.",
-       "doc_ko": "지금까지 난 검증 오류.\n\n**재는 쪽이 이것을 봐야 한다.** 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도\n안 하므로, 그 상태에서도 벽시계는 돌고 수는 나온다 — 측정처럼 보이는 것이 나온다."
+       "signature": "faults: { count: number; first: string; outOfMemory: number; }",
+       "doc": "Errors the device reported and nobody caught.\n\n**Whoever is measuring has to look at this.** An invalid command buffer\nthrows nothing and simply does no work, so the wall clock keeps running\nin that state and numbers come out — something that looks like a\nmeasurement comes out.\n\n**`outOfMemory` is counted apart, because it is a different thing to be\ntold.** WebGPU raises `GPUOutOfMemoryError` for an allocation it could not\nmake and `GPUValidationError` for a command it would not run, and both\narrive here. Folded into one number they read as one fault, and the answer\nto *the model returns zeros* is different in the two cases: too large to\nfit is a smaller batch, and invalid is a bug in a kernel.\n\nThat distinction cost a day the last time it was needed. A batch too large\nto submit was returning zeros with **this counter at 0 throughout**, and\nruling out the allocation half was done by hand because the counter could\nnot say. It still cannot say *this was an allocation*; it can now say *this\nwas not*.\n\n`count` stays the total, so everything already reading it is unchanged.",
+       "doc_ko": "장치가 알렸고 아무도 잡지 않은 오류.\n\n**재는 쪽이 이것을 봐야 한다.** 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도\n안 하므로, 그 상태에서도 벽시계는 돌고 수는 나온다 — 측정처럼 보이는 것이 나온다.\n\n**`outOfMemory` 는 따로 센다. 듣는 사람에게 다른 이야기이기 때문이다.** WebGPU 는\n만들지 못한 할당에 `GPUOutOfMemoryError` 를, 돌리지 않은 명령에 `GPUValidationError`\n를 올리고 둘 다 여기로 온다. 한 숫자로 접으면 한 종류의 결함으로 읽히는데,\n*모델이 0 을 답한다* 에 대한 답은 둘이 다르다 — 넣기에 너무 크면 배치를 줄이는 것이고,\n무효하면 커널의 버그다.\n\n이 구분이 지난번에 하루를 먹었다. 제출하기에 너무 큰 배치가 0 을 답하는 동안\n**이 계수기는 내내 0 이었고**, 할당 쪽을 배제하는 일은 계수기가 말해줄 수 없어서\n손으로 했다. 지금도 *이건 할당이었다* 라고는 못 하고, *이건 아니었다* 라고는 한다.\n\n`count` 는 총계 그대로다. 이미 그것을 읽던 것들은 아무것도 바뀌지 않는다."
       },
       {
        "name": "dispatches",

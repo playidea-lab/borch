@@ -272,9 +272,22 @@ export class Device {
     device.addEventListener("uncapturederror", (event) => {
       seen.count += 1;
       const err = (event as GPUUncapturedErrorEvent).error;
+      // **The kind is read, not assumed.** Every one of these used to print as a
+      // *validation error*, which is the wording for a command the device would not
+      // run — and an allocation it could not make arrives on the same event. Calling
+      // the second one the first sends the reader looking for a bug in a kernel when
+      // what happened was that the memory was not there.
+      //
+      // `instanceof` against a global that may not exist: the class is in the WebGPU
+      // spec and Chrome has it, but a runtime that does not would throw here rather
+      // than in the code that made the error, which is the worst place to find out.
+      const isOom = typeof GPUOutOfMemoryError !== "undefined"
+        && err instanceof GPUOutOfMemoryError;
+      if (isOom) seen.outOfMemory += 1;
+      const kind = isOom ? "out-of-memory error" : "validation error";
       if (seen.first === "") seen.first = err.message;
       if (seen.count <= MAX_REPORTED_ERRORS) {
-        console.error(`[borch.ts] WebGPU validation error ${seen.count}: ${err.message}`);
+        console.error(`[borch.ts] WebGPU ${kind} ${seen.count}: ${err.message}`);
       } else if (seen.count === MAX_REPORTED_ERRORS + 1) {
         console.error(
           `[borch.ts] more than ${MAX_REPORTED_ERRORS} validation errors — ` +
@@ -315,14 +328,30 @@ export class Device {
   }
 
   /**
-   * Validation errors so far.
+   * Errors the device reported and nobody caught.
    *
    * **Whoever is measuring has to look at this.** An invalid command buffer
    * throws nothing and simply does no work, so the wall clock keeps running
    * in that state and numbers come out — something that looks like a
    * measurement comes out.
+   *
+   * **`outOfMemory` is counted apart, because it is a different thing to be
+   * told.** WebGPU raises `GPUOutOfMemoryError` for an allocation it could not
+   * make and `GPUValidationError` for a command it would not run, and both
+   * arrive here. Folded into one number they read as one fault, and the answer
+   * to *the model returns zeros* is different in the two cases: too large to
+   * fit is a smaller batch, and invalid is a bug in a kernel.
+   *
+   * That distinction cost a day the last time it was needed. A batch too large
+   * to submit was returning zeros with **this counter at 0 throughout**, and
+   * ruling out the allocation half was done by hand because the counter could
+   * not say. It still cannot say *this was an allocation*; it can now say *this
+   * was not*.
+   *
+   * `count` stays the total, so everything already reading it is unchanged.
    */
-  faults: { count: number; first: string } = { count: 0, first: "" };
+  faults: { count: number; first: string; outOfMemory: number } =
+    { count: 0, first: "", outOfMemory: 0 };
 
   /**
    * Dispatches issued so far.

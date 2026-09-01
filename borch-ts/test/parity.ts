@@ -1743,6 +1743,51 @@ export async function report(): Promise<Report> {
   // pass.
   want("no WebGPU validation fault", device().faults.count === 0,
     device().faults.first);
+  // **And none of them was an allocation, which is a different sentence.** The two
+  // arrive on one event and used to be counted as one number; folded, *the model
+  // returns zeros* sends the reader hunting for a wrong kernel when the answer may be
+  // that the memory was not there. Asked separately so the split is a thing this file
+  // reports rather than a field nobody reads.
+  want("and none of the faults was an allocation that could not be made",
+    device().faults.outOfMemory === 0,
+    `out of memory ${device().faults.outOfMemory} of ${device().faults.count}`);
+
+  // **Does the split actually split?** Both checks above pass while `outOfMemory` is a
+  // field nothing ever writes, so they say nothing about the branch that writes it. A
+  // real out-of-memory cannot be asked for on demand — it depends on the machine and on
+  // what else holds the GPU — so what is asked here is the wiring: an error of that
+  // class, delivered on the event the device delivers them on, has to land in the
+  // second counter and not only in the first.
+  //
+  // **This is last on purpose.** It leaves a fault behind, and the two checks above
+  // read zero.
+  {
+    const before = { ...device().faults };
+    // **Reaching past `private` on purpose.** The listener is on the `GPUDevice`, and
+    // the alternative is a public accessor added to the library so a test can use it —
+    // a name in the API index that exists for this file alone. `private` is a
+    // compile-time word; renaming the field makes `dispatchEvent` throw here, which is
+    // loud enough.
+    const raw = (device() as unknown as { device: GPUDevice }).device;
+    const oom = new GPUOutOfMemoryError("planted, not a real allocation failure");
+    raw.dispatchEvent(new GPUUncapturedErrorEvent("uncapturederror", { error: oom }));
+    // **Copied, not held.** `device().faults` is the live object the listener writes
+    // into, so a second reading of it is the same object as the first — written
+    // without the spread, this compared a counter against itself and read `2 → 2`.
+    const after = { ...device().faults };
+    want("an out-of-memory error lands in its own counter",
+      after.outOfMemory === before.outOfMemory + 1 && after.count === before.count + 1,
+      `count ${before.count}→${after.count}, outOfMemory `
+      + `${before.outOfMemory}→${after.outOfMemory}`);
+    const validation = new GPUValidationError("planted, not a real invalid command");
+    raw.dispatchEvent(
+      new GPUUncapturedErrorEvent("uncapturederror", { error: validation }));
+    const last = { ...device().faults };
+    want("and a validation error does not",
+      last.outOfMemory === after.outOfMemory && last.count === after.count + 1,
+      `count ${after.count}→${last.count}, outOfMemory `
+      + `${after.outOfMemory}→${last.outOfMemory}`);
+  }
 
   const failed = checks.filter((c) => !c.ok);
   const lines = checks.map((c) =>

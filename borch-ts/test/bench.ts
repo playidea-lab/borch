@@ -293,8 +293,16 @@ export async function runStep(
   // 2.27.
   const faults = device().faults;
   if (faults.count > 0) {
+    // **Which kind, because the next step differs.** An allocation that could not be
+    // made says the model or the batch is too large for this device; a command the
+    // device would not run says a kernel is wrong. Reported as one number, the reader
+    // starts by looking for the second and there may not be one.
+    const split = faults.outOfMemory > 0
+      ? `${faults.outOfMemory} out of memory, ${faults.count - faults.outOfMemory} `
+        + "validation"
+      : "all validation";
     throw new Error(
-      `${faults.count} WebGPU validation fault(s) — this is not a measurement.\n` +
+      `${faults.count} WebGPU fault(s) (${split}) — this is not a measurement.\n` +
         `first: ${faults.first}`,
     );
   }
