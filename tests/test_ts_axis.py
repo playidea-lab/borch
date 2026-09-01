@@ -401,7 +401,20 @@ FROZEN = {
     # 7 → 9. `get_num_frames` and `uniform_temporal_subsample` under their `_video`
     # spellings. The plain names are on both sides; the second spelling is a
     # tv_tensor-keyed alias, and there are no tv_tensor types over there to key it on.
-    "transforms.v2.functional": 9,
+    #
+    # 9 → 42. The other thirty-three `*_video` kernels, which the core gained the day
+    # its picture kernels started counting their axes from the end — `(H, W, C)` and
+    # `(T, H, W, C)` name the same two, so a video is an image with something in front
+    # of it and thirty-three names are aliases of what was already there.
+    #
+    # **This row rising is not work owed on that side, and the distinction matters
+    # here more than usual.** borch.ts's `Image` is `{data, height, width, channels,
+    # isByte}` — one picture by construction, with no axis a frame could go in. Every
+    # other row in this table is a body somebody could write; this one is a type that
+    # would have to change first, and the reasons in `ts_axis.DELIBERATE` say so per
+    # name rather than as a group, so the day `Image` gains a rank they come off one
+    # at a time.
+    "transforms.v2.functional": 42,
     # **Eighteen, and they are one decision rather than eighteen.** A dataset is an
     # address and a format; the address needs hosts that send a CORS header and
     # torchvision's do not, so what crossed is the decoders. Written per name because a

@@ -905,19 +905,18 @@ SKIPPED = {
     # The four rows that remain are the tv_tensor half, which is a different claim: those
     # kernels take a type this library does not have, rather than a plain tensor under a
     # second name.
-    "transforms.v2.functional.*_video": "**not that there is no video, but that there "
-        "is no N-D image kernel for a `_video` name to bind to.** In torchvision every "
-        "one of these is a single line — `def resize_video(video, …): return "
-        "resize_image(video, …)` — with no container, codec or decoder anywhere in it: "
-        "a video there is a tensor with one more leading axis and its image kernels "
-        "work over the leading axes. Measured, `resize_video` on a `(2, 3, 3, 4, 5)` "
-        "tensor answers `(2, 3, 3, 2, 3)`. It does not follow here, because this "
-        "file's image kernels are **v1's**: they take an `(H, W, C)` numpy array and "
-        "refuse a tensor with a message about `ToTensor`. Bound anyway, these would be "
-        "thirty-three names that accept a video and cannot take one, which is worse "
-        "than their absence. `get_num_frames` and `uniform_temporal_subsample` are not "
-        "among them and are in — they index along the frame axis and touch no picture "
-        "kernel",
+    # **This row covered thirty-four names and now covers one.** It said there was no
+    # N-D image kernel for a `_video` name to bind to, which was true and is not: the
+    # picture's axes are counted from the end now (`_picture_axes` in `borchvision.py`),
+    # so `(H, W, C)` and `(T, H, W, C)` name the same two and every kernel works over
+    # whatever is in front of them. The thirty-four are bound to the same objects their
+    # `*_image` twins are.
+    #
+    # What is left is the one whose reason was never about video.
+    "transforms.v2.functional.jpeg_video": "it encodes and decodes JPEG — as `jpeg`, "
+        "and numpy has no codec. The other thirty-four `*_video` names went in when "
+        "the image kernels started counting their axes from the end; this one never "
+        "waited on that",
     # **The `*_mask` row is gone too, and it was the sentence the box rows borrowed.**
     #
     # It read *a tv_tensor type, and the type system is declined in `v2`*. A mask is an

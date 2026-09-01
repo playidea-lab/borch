@@ -654,6 +654,22 @@ NOT_PORTED = {
     # asking: the name would claim a check nobody performs.
     "special::": (3, "파이썬 — `out=` 두 건(borch.ts 전역 결정)과, "
                      "`xlogy` 에 맨 스칼라를 넘기는 자리. TS 는 Tensor 를 받는다"),
+    # **The thirty-three `*_video` kernels, and this row is a type rather than a
+    # backlog.** The core's picture kernels count their axes from the end now, so
+    # `(H, W, C)` and `(T, H, W, C)` name the same two and a video is an image with a
+    # frame axis in front of it — thirty-three names became aliases of bodies that were
+    # already there.
+    #
+    # borch.ts's vision side has nowhere to put that axis. `Image` in `vision.ts` is
+    # `{ data: Float64Array, height, width, channels, isByte }`: one picture by
+    # construction, with no rank at all. So this is `v2::`'s shape and not a body
+    # somebody has not got round to — carrying the names across means giving `Image` a
+    # rank, which is a change to every transform in that file.
+    #
+    # Marked `없음` for that reason. Were it `아직` the split in the README would read as
+    # thirty-three pieces of work owed on that side, and it is one decision about a type.
+    "video::": (30, "없음 — borch.ts 의 `Image` 는 `{data, height, width, channels}` 라 "
+                    "프레임 축을 둘 자리가 없다. 코어는 축을 끝에서 세어 비디오를 그냥 받는다"),
     # **A question TypeScript cannot be asked.** Python refuses `ZeroPad2d(1, 9.0)`
     # with a `TypeError` because the constructor takes one argument; JavaScript keeps
     # no arity and simply does not receive the second. So the same case name would

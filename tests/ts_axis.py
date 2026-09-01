@@ -392,6 +392,30 @@ DELIBERATE: dict[str, str] = {
                  "get_num_frames_video", "get_size_bounding_boxes",
                  "get_size_keypoints", "get_size_mask", "is_pure_tensor",
                  "uniform_temporal_subsample_video")},
+    # **The thirty-three `*_video` kernels, and the reason is a type rather than a
+    # gap.** The core's picture kernels count their axes from the end now, so
+    # `(H, W, C)` and `(T, H, W, C)` name the same two and a video is an image with
+    # something in front of it. borch.ts's vision side does not take a ranked array at
+    # all: `Image` in `vision.ts` is `{ data: Float64Array, height, width, channels,
+    # isByte }` — one picture by construction, with nowhere to put a frame axis.
+    #
+    # So this is the `v2::` row's shape and not the `ops::` row's: a mechanism that
+    # side has not got, rather than a body it has not been given. Carrying the names
+    # across would mean giving `Image` a rank, which is a change to every transform in
+    # that file and not thirty-three aliases.
+    **{f"transforms.v2.functional::{n}_video":
+       "borch.ts's `Image` is `{data, height, width, channels}` — one picture by "
+       "construction, with no axis for frames. The core's kernels count from the end "
+       "and take a video for free; giving that side a rank is a change to the type, "
+       "not an alias"
+       for n in ("adjust_brightness", "adjust_contrast", "adjust_gamma", "adjust_hue",
+                 "adjust_saturation", "adjust_sharpness", "affine", "autocontrast",
+                 "center_crop", "crop", "elastic", "equalize", "erase", "five_crop",
+                 "gaussian_blur", "gaussian_noise", "get_dimensions",
+                 "get_num_channels", "get_size", "horizontal_flip", "invert",
+                 "normalize", "pad", "permute_channels", "perspective", "posterize",
+                 "resize", "resized_crop", "rotate", "solarize", "ten_crop",
+                 "to_dtype", "vertical_flip")},
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not

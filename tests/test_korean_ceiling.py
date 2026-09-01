@@ -356,7 +356,13 @@ CEILINGS = {
     # where TS types a `Tensor`. It is Korean because every other reason in that
     # ledger is, and a row in a different language reads as a different kind of row.
     # Nothing was added to `cases.ts`: the twenty-nine names ported are ASCII.
-    "borch-ts/test": 4771,
+    # 4771 → 4810. Thirty-nine: the `video::` skip reason in `run.py`. It is the one
+    # row in that ledger about a **type** rather than a backlog — borch.ts's `Image` is
+    # `{data, height, width, channels}` and has no axis a frame could go in — and it is
+    # Korean because every other reason there is, and a row in a different language
+    # reads as a different kind of row. `cases.ts` did not move: the thirty video case
+    # names are the core's and are not asked over there.
+    "borch-ts/test": 4810,
 }
 
 

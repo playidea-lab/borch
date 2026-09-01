@@ -14929,7 +14929,7 @@ def golden_cases(inp=None):
             + scalar_cache_cases(inp) + constant_cases(inp)
             + top_linalg_cases(inp) + stat_cases(inp)
             + make_cases(inp) + complex_cases(inp) + fft_cases(inp)
-            + special_cases(inp)
+            + special_cases(inp) + video_cases(inp)
             + keepdim_cases(inp) + rnn_top_cases(inp) + top_rest_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
@@ -17106,6 +17106,147 @@ def dataset_cases(inp=None):
 
 
 V2F_PREFIX = "v2f::"
+VIDEO_PREFIX = "video::"
+
+
+def video_cases(inp=None):
+    """The thirty-three `*_video` kernels — **one leading axis, and every kernel over it.**
+
+    These names are aliases of the `*_image` ones, which is the same shape as the
+    `*_image` aliases themselves and would ordinarily need almost no asking. It needs a
+    great deal of asking, because of what the measurements found on the way in.
+
+    **Handed a four-axis array before this, the kernels did not refuse.** Measured
+    against torchvision's own `*_video` on a `(2, 6, 7, 3)` array: four of twenty-one
+    agreed, six stopped with a shape mismatch, and **eleven answered wrong values with
+    no exception at all** — `horizontal_flip` differed in every one of 252 elements
+    because it flipped the height; `adjust_contrast`, `autocontrast` and `equalize`
+    reduced across the frames, pulling every frame toward the whole clip's average;
+    `resize` and `pad` moved the frame axis and left the width alone. So this table is
+    not asking whether an alias points at the right body. It is asking whether **a rank
+    the kernels already accepted is one they handle**, and the answer was no for eleven
+    of them the day before these names existed.
+
+    That is why every case here is a **video** rather than a picture: on a three-axis
+    array all eleven were and remain correct, so a case shaped like the rest of this
+    file cannot see the thing this table exists for.
+
+    **The two layouts are not the same and the case has to move between them.**
+    torchvision's video is `(T, C, H, W)` and this library's picture is `(H, W, C)`, so
+    a clip here is `(T, H, W, C)`. Written without the transpose the frozen answer would
+    be torchvision's for a differently-shaped input, which compares as a shape error
+    rather than as the wrong picture.
+    """
+    rng = np.random.default_rng(11)
+    clip = rng.random((2, 6, 7, 3)).astype(np.float32)
+    clip_u8 = (clip * 255).astype(np.uint8)
+    # One displacement shared by the frames, which is what `elastic_video` does.
+    warp = (rng.random((1, 6, 7, 2)).astype(np.float32) * 0.2 - 0.1)
+    cases = []
+
+    def on(video, call):
+        """The clip in each side's own layout, out as a float tensor."""
+        def run(L):
+            F = _vision_v2_functional(L)
+            if _is_real_torch(L):
+                given = L.tensor(np.ascontiguousarray(video.transpose(0, 3, 1, 2)))
+                out = _as_numpy(call(F, given, L).detach())
+                out = out.transpose(0, 2, 3, 1) if len(out.shape) == 4 else out
+            else:
+                out = _as_numpy(call(F, video, L))
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    def add(name, call, video=clip):
+        cases.append((VIDEO_PREFIX + name, on(video, call)))
+
+    # **The geometry — where the axes were read from the wrong end.**
+    add("resize", lambda F, v, L: F.resize_video(v, [3, 4]))
+    add("center_crop", lambda F, v, L: F.center_crop_video(v, [3, 4]))
+    add("crop", lambda F, v, L: F.crop_video(v, 1, 2, 3, 4))
+    add("resized_crop", lambda F, v, L: F.resized_crop_video(v, 1, 2, 3, 4, [3, 4]))
+    add("pad", lambda F, v, L: F.pad_video(v, [1, 2]))
+    add("horizontal_flip", lambda F, v, L: F.horizontal_flip_video(v))
+    add("vertical_flip", lambda F, v, L: F.vertical_flip_video(v))
+    # **The flips need an asymmetric clip to be caught at all.** Flipping the wrong axis
+    # keeps the shape, so only the values say so — and on a clip whose frames are equal
+    # even the values would agree. The random one above is neither.
+
+    # The resamplers, which all stand on one `grid_sample`.
+    add("rotate", lambda F, v, L: F.rotate_video(v, 30.0))
+    add("affine", lambda F, v, L: F.affine_video(v, 10.0, [1, 2], 1.1, [0.0, 0.0]))
+    add("perspective",
+        lambda F, v, L: F.perspective_video(v, [[0, 0], [6, 0], [6, 5], [0, 5]],
+                                            [[1, 1], [5, 0], [6, 4], [0, 5]]))
+    add("elastic", lambda F, v, L: F.elastic_video(
+        v, L.tensor(warp) if _is_real_torch(L) else warp))
+
+    # **The colour kernels that reduce.** Each of these takes a statistic over the
+    # picture, and each took it over the clip.
+    add("adjust_contrast", lambda F, v, L: F.adjust_contrast_video(v, 1.4))
+    add("autocontrast", lambda F, v, L: F.autocontrast_video(v))
+    add("adjust_saturation", lambda F, v, L: F.adjust_saturation_video(v, 1.4))
+    add("adjust_sharpness", lambda F, v, L: F.adjust_sharpness_video(v, 1.4))
+    add("gaussian_blur", lambda F, v, L: F.gaussian_blur_video(v, [3, 3]))
+    # **A clip whose frames differ is what makes these five cases mean anything.** With
+    # equal frames the whole-clip statistic and the per-frame one are the same number,
+    # and all five pass against the version that was wrong.
+
+    # The pointwise ones, which were already right — kept so that a later change to the
+    # axis rule cannot quietly break what it was written to fix.
+    add("adjust_brightness", lambda F, v, L: F.adjust_brightness_video(v, 1.4))
+    add("adjust_gamma", lambda F, v, L: F.adjust_gamma_video(v, 1.4))
+    add("adjust_hue", lambda F, v, L: F.adjust_hue_video(v, 0.1))
+    add("invert", lambda F, v, L: F.invert_video(v))
+    add("solarize", lambda F, v, L: F.solarize_video(v, 0.5))
+    add("permute_channels", lambda F, v, L: F.permute_channels_video(v, [2, 0, 1]))
+
+    # uint8, where the histogram lives.
+    add("equalize", lambda F, v, L: F.equalize_video(v), video=clip_u8)
+    add("posterize", lambda F, v, L: F.posterize_video(v, 3), video=clip_u8)
+
+    # **The two that were channel-first all along** and needed no change — `normalize`
+    # and `erase` take what `ToTensor` produces, so their leading axes already rode
+    # along. Asked here because *needed no change* is a claim, and an untested claim
+    # about which of two layouts a kernel wants is the one this file keeps finding
+    # wrong.
+    def chw(L, v):
+        return L.tensor(np.ascontiguousarray(v.transpose(0, 3, 1, 2)))
+
+    def normalized(L):
+        F = _vision_v2_functional(L)
+        given = chw(L, clip) if _is_real_torch(L) else clip.transpose(0, 3, 1, 2).copy()
+        out = _as_numpy(F.normalize_video(given, [0.5, 0.4, 0.3], [0.2, 0.3, 0.4]))
+        return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+
+    def erased(L):
+        F = _vision_v2_functional(L)
+        given = chw(L, clip) if _is_real_torch(L) else clip.transpose(0, 3, 1, 2).copy()
+        blank = (L.tensor(np.zeros((1, 1, 1), dtype=np.float32)) if _is_real_torch(L)
+                 else np.zeros((1, 1, 1), dtype=np.float32))
+        out = _as_numpy(F.erase_video(given, 1, 2, 3, 4, blank))
+        return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+
+    cases.append((VIDEO_PREFIX + "normalize", normalized))
+    cases.append((VIDEO_PREFIX + "erase", erased))
+
+    # The three that answer a list rather than a picture. Frozen as text, because
+    # `[3, 6, 7]` and `[7, 6, 3]` compare equal to nothing else.
+    def sized(L, name):
+        F = _vision_v2_functional(L)
+        given = (chw(L, clip) if _is_real_torch(L) else clip)
+        return str(getattr(F, name)(given))
+
+    for _name in ("get_dimensions_video", "get_num_channels_video", "get_size_video"):
+        cases.append((VIDEO_PREFIX + _name,
+                      lambda L, n=_name: sized(L, n)))
+
+    # **`get_num_frames` is the one that reads the axis the others ride over**, and it
+    # is the reason this whole family was reachable before the rest: it touches no
+    # picture kernel.
+    cases.append((VIDEO_PREFIX + "get_num_frames",
+                  lambda L: str(sized(L, "get_num_frames_video"))))
+    return cases
 
 
 def _vision_v2_functional(L):
