@@ -72,11 +72,11 @@
 <!-- ── Hero ───────────────────────────────────────────────────────── -->
 <section class="hero">
   <div class="wrap">
-    <p class="eyebrow">PyTorch-like ML · native to the Web</p>
-    <h1>Machine Learning,<br><span class="accent">native to the Web.</span></h1>
+    <h1>PyTorch's shape,<br><span class="accent">in a browser tab.</span></h1>
     <p class="sub lead">
-      A PyTorch-like TypeScript runtime on WebGPU. No Python, no server, no install —
-      build tensors and train models <strong>inside this tab</strong>.
+      A TypeScript runtime on WebGPU with hand-written WGSL and no dependencies. No Python,
+      no server, no install &mdash; and <strong>the values are held to real PyTorch's</strong>,
+      case by case.
     </p>
 
     <div class="cta-row">
@@ -84,7 +84,7 @@
       <a class="btn ghost" href="playground.html">Open the Playground →</a>
       <a class="btn ghost mono" href="#install">npm install borch-ts</a>
     </div>
-    <p class="install">Zero runtime dependencies · 371KB gzipped ES module (1356KB raw) · safetensors checkpoints</p>
+    <p class="install">Zero runtime dependencies · 412KB gzipped ES module (1495KB raw) · safetensors checkpoints</p>
 
     <div class="card" style="margin-top:2.4rem">
       <div class="card-head">
@@ -249,17 +249,6 @@
         <p class="small">A full editor in JavaScript or Python, with the loss curve, the
           dispatch count and the GPU memory a run held.</p>
       </a>
-    </div>
-
-    <p class="small muted" style="margin-top:1.6rem">
-      All four are the same runtime. A lesson block, a tutorial block and the
-      playground editor run identical code — the difference is how much of the page
-      is prose and how much is yours.
-    </p>
-    <p style="margin-top:1.6rem">
-      <a class="btn primary" href="learn/">Start the lessons →</a>
-      <a class="btn ghost" href="tutorials/">Or build something</a>
-      <a class="btn ghost" href="playground.html">Open Playground</a>
       <a class="tile" href="models.html" style="text-decoration:none">
         <span class="icon">◆</span>
         <h3>Models — the hub</h3>
@@ -273,6 +262,17 @@
         <p class="small">Transforms, v2, the geometry of boxes, masks and keypoints, and
           the dataset decoders — with the way each of them goes quietly wrong.</p>
       </a>
+    </div>
+
+    <p class="small muted" style="margin-top:1.6rem">
+      All four are the same runtime. A lesson block, a tutorial block and the
+      playground editor run identical code — the difference is how much of the page
+      is prose and how much is yours.
+    </p>
+    <p style="margin-top:1.6rem">
+      <a class="btn primary" href="learn/">Start the lessons →</a>
+      <a class="btn ghost" href="tutorials/">Or build something</a>
+      <a class="btn ghost" href="playground.html">Open Playground</a>
     </p>
   </div>
 </section>
@@ -363,11 +363,11 @@ for step in range(201):
         <tr><td><strong>Model I/O</strong></td><td><span class="state now">here</span></td>
             <td>safetensors — the Python borch, numpy and HF tools read the same file</td></tr>
         <tr><td>Model catalogue (<code>bimm</code>)</td><td><span class="state soon">partial</span></td>
-            <td><code>createModel(library, name, args)</code> builds; not published to npm yet</td></tr>
+            <td><code>createModel(library, name, args)</code> builds. On npm as <code>bimm-ts</code>; the catalogue is five families deep, not timm's hundreds</td></tr>
         <tr><td>Learn (interactive tutorials)</td><td><span class="state now">here</span></td>
             <td>Ten lessons and ten tutorials, every code block running in the page — tensors through ResNet and a Vision Transformer</td></tr>
         <tr><td>Hub (<code>borch-hub</code>)</td><td><span class="state soon">partial</span></td>
-            <td>Manifest, hash check, environment report. Weights do load in a browser — measured, <code>access-control-allow-origin: *</code> on a 44.7MB safetensors. Not published to npm yet</td></tr>
+            <td>Manifest, hash check, environment report. Weights do load in a browser — measured, <code>access-control-allow-origin: *</code> on a 44.7MB safetensors. On npm as <code>borch-hub</code>, and <a href="models.html">this site reads the catalogue, loads a model and verifies it</a> &mdash; the count is not written here because it moves</td></tr>
         <tr><td>Without WebGPU — Python mode on wasm</td><td><span class="state now">here</span></td>
             <td>Pyodide <strong>is</strong> wasm and the core is numpy, so <code>import borch as torch</code> trains with no adapter — measured in a browser with <code>navigator.gpu</code> removed: loss 17.2945 → 0.000001. What is missing then is <code>borch_webgpu</code>, and it says so by not being importable</td></tr>
         <tr><td>CUDA · distributed · mixed precision · torch.compile</td>
@@ -396,7 +396,7 @@ for step in range(201):
         <tr><td><strong>borch</strong></td><td><code>torch</code></td>
             <td>Tensors, autograd, modules, optimisers — the runtime everything else stands on</td></tr>
         <tr><td><strong>borchvision</strong></td><td><code>torchvision</code></td>
-            <td>Transforms, v2, box and mask geometry, dataset decoders — <a href="vision.html"><span data-count="_vision_total">657</span> names</a></td></tr>
+            <td>Transforms, v2, box and mask geometry, dataset decoders — <a href="vision.html"><span data-count="_vision_total">663</span> names</a></td></tr>
         <tr><td><strong>bimm</strong></td><td><code>timm</code></td>
             <td>The architecture catalog — ResNet, EfficientNet, MobileNet, ViT</td></tr>
         <tr><td><strong>borch-hub</strong></td><td>—</td>
@@ -465,11 +465,12 @@ for step in range(201):
     </table>
     </div>
     <p class="small muted" style="margin-top:.8rem">
-      On top of that, <strong>3796 golden cases</strong> hold all three implementations to the same expected values.
+      On top of that, <strong>4595 golden cases</strong> hold all three implementations to the same expected values.
       Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
-      identically on Apple Metal, and on <strong>NVIDIA</strong> too —
-      <code>agreeing 3758 / 3758 [nvidia / blackwell]</code> on an RTX 5080, in a real desktop
-      session rather than a virtual framebuffer. <strong>The training agrees as well</strong>:
+      on Apple Metal — <code data-measured="golden">agreeing 4512 / 4512 [apple / metal-3]</code> — and on
+      <strong>NVIDIA</strong> too: <code>3880 / 3880 [nvidia / blackwell]</code> on an RTX 5080, in a real desktop
+      session rather than a virtual framebuffer, measured on 2026-08-30 when the table held 3880 through the
+      binding. <strong>The training agrees as well</strong>:
       thirty steps of a small ResNet, its per-layer gradients, its batch-norm buffers and its
       eval, against torch — <code>64 values</code>, once through the Python binding and
       once through borch.ts's own API.

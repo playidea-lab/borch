@@ -52,13 +52,13 @@
     <p class="eyebrow">torchvision's seat</p>
     <h1>Images, boxes and datasets</h1>
     <p class="lead">
-      <strong><span data-count="_vision_total">657</span> of the library's <span data-count="_total">2710</span> names are the vision side.</strong> They are shaped
+      <strong><span data-count="_vision_total">663</span> of the library's <span data-count="_total">2823</span> names are the vision side.</strong> They are shaped
       like <code>torchvision</code> and they are here for one reason: training needs a place
       where an image becomes a tensor, and that place is where things go quietly wrong.
       Every section below names a way it does.
     </p>
 
-    <h2 id="transforms">transforms &mdash; <span data-count="vision">278</span> names</h2>
+    <h2 id="transforms">transforms &mdash; <span data-count="vision">279</span> names</h2>
     <p>
       Where <code>torchvision.transforms</code> would be. <strong>An image is an
       <code>(H, W, C)</code> array here, not a tensor.</strong> torchvision receives a PIL
@@ -72,7 +72,7 @@
       library read it &mdash; a difference no type checks and only a value comparison sees.
     </p>
 
-    <h2 id="v2">v2 &mdash; <span data-count="vision_v2">68</span> functional, <span data-count="vision_v2_twins">130</span> classes</h2>
+    <h2 id="v2">v2 &mdash; <span data-count="vision_v2">68</span> functional, <span data-count="vision_v2_twins">134</span> classes</h2>
     <p>
       v2 is torchvision's current recommended surface, and <strong>it is v1 with a different
       front.</strong> That was measured before any of it was written: on a plain image, v2's
@@ -88,7 +88,7 @@
       own order, and reading the wrong one gives you a transposed image that still trains.
     </p>
 
-    <h2 id="ops">ops &mdash; <span data-count="ops">163</span> names</h2>
+    <h2 id="ops">ops &mdash; <span data-count="ops">164</span> names</h2>
     <p>
       Box geometry and the losses built on it: <code>boxIou</code> and its generalized,
       distance and complete variants, the three IoU losses, <code>sigmoidFocalLoss</code>,

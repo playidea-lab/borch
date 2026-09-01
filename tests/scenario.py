@@ -96,13 +96,62 @@ layer = nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_
 enc = nn.TransformerEncoder(layer, 2)
 proj = nn.Linear(8, 20)
 mods = [emb, enc, proj]
-W4 = [rng.standard_normal(tuple(p.shape)).astype(np.float32) * 0.1 for m in mods for p in m.parameters()]
+# **0.5 rather than 0.1, and the scale is the whole of whether ④b can see anything.**
+# At 0.1 the scores are near zero, attention is nearly uniform, and the query/key path
+# carries almost none of the gradient — cutting it moved `in_proj_weight` by 3e-6 on
+# 0.011, which no tolerance can separate from float noise. At 0.5 the same cut moves it
+# by 0.18 on 4.15. A fixture too gentle to make a path matter is a fixture that cannot
+# check the path.
+W4 = [rng.standard_normal(tuple(p.shape)).astype(np.float32) * 0.5 for m in mods for p in m.parameters()]
 for p, w in zip([p for m in mods for p in m.parameters()], W4): p.data = torch.tensor(w.copy())
 tokens = torch.tensor(rng.integers(0, 20, (2, 6)).astype(np.int64))
 mask = nn.Transformer.generate_square_subsequent_mask(6)
 enc.eval()
 logits = proj(enc(emb(tokens), mask=mask))
 out["④ transformer logit sum"] = float(logits.sum().item())
+
+# ── ④b the same stack **trained**, which is the half this scenario was not asking
+#
+# Everything above ran forward only. That is exactly the shape of the first defect
+# this file ever found — BatchNorm's backward was wrong and survived a long time
+# "because only the forward was being compared: training ran, the loss came down,
+# and only the values differed."
+#
+# Four blocks were being compared both ways and the fifth, the largest, was not.
+# Attention's backward is where a mask, a softmax and three projections meet; a
+# forward sum agrees whatever the gradient does.
+o4 = optim.Adam([p for m in mods for p in m.parameters()], lr=0.01)
+target = torch.tensor(rng.integers(0, 20, (2, 6)).astype(np.int64))
+enc.train()
+for _ in range(8):
+    o4.zero_grad()
+    step = proj(enc(emb(tokens), mask=mask))
+    nn.CrossEntropyLoss()(step.reshape(-1, 20), target.reshape(-1)).backward()
+    o4.step()
+enc.eval()
+trained = proj(enc(emb(tokens), mask=mask))
+out["④b transformer loss after 8 steps"] = float(
+    nn.CrossEntropyLoss()(trained.reshape(-1, 20), target.reshape(-1)).item())
+# **The gradient itself, not only where it led**, and **not as one total.**
+#
+# The first version summed every encoder parameter's gradient. Cutting the graph at
+# the attention weights — `softmax(scores.detach())`, which leaves the forward pass
+# untouched and kills the query/key path — moved that total by 3e-5 on 1.56, inside
+# the comparison's own tolerance, and the loss after 8 steps by 2e-7. **An aggregate
+# agreed while a whole path was severed**, which is the failure this repository
+# writes the most checks against, performed by the check written to catch it.
+#
+# Two things were wrong and only one was the number reported. `in_proj_weight` is
+# where the query and key projections live, so the score path is most of its gradient
+# and none of `norm2`'s — and `norm2`'s was a hundred times larger, which is what
+# buried it. **But the fixture was the larger half**: see the scale above. With both
+# fixed the same cut fails on the trained loss alone, by 0.03 on 2.56.
+o4.zero_grad()
+nn.CrossEntropyLoss()(
+    proj(enc(emb(tokens), mask=mask)).reshape(-1, 20), target.reshape(-1)).backward()
+out["④b attention in_proj gradient"] = float(sum(
+    float(p.grad.abs().sum().item())
+    for name, p in enc.named_parameters() if name.endswith("in_proj_weight")))
 
 # ── ⑤ save and load
 import tempfile, os

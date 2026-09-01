@@ -52,6 +52,20 @@ GOLDEN = ROOT / "tests" / "golden.json"
 # Pairs where the argument names something the answer genuinely cannot depend on.
 # **Checked one at a time**, not assumed from the name.
 ATTESTED = {
+    # **`out=` is `inplace` under another name**, and it earns its place here for the
+    # same reason: a destination that changed the numbers would be the defect, so the
+    # values case equalling the plain `erf` case is the claim. What `out=` *does*
+    # change is where the answer landed, and `special::erf(out=)/같은 객체` beside
+    # this row is the case a wrapper that computes and discards the destination fails.
+    #
+    # It matters here more than for `inplace`: `special`'s twenty-two names get their
+    # `out=` from a loop over a written list in `borch/__init__.py`, so one wrapper
+    # covers all of them and one mistake would cover all of them too.
+    "special::erf(out=)":
+        "`out=` moves the destination and not the value — torch computes the same "
+        "answer and writes it where the caller asked. `special::erf(out=)/같은 객체` "
+        "is where the move itself is asked, and a wrapper that computed `erf` and "
+        "dropped the destination passes this row and fails that one",
     "act::nn.SELU(inplace)":
         "**`inplace` changes the identity, not the value.** In place the layer writes "
         "into the tensor it was handed and gives back the same object; the numbers are "
@@ -60,6 +74,16 @@ ATTESTED = {
         "computing the right values into a *new* tensor passes here and fails there. "
         "The other five activations escape this check only because their neighbour "
         "differs on some other argument, which is luck rather than a better case",
+    # **Five more of the same shape, and they arrived together.** These classes
+    # declared no constructor on the browser side, so the signature axis called them
+    # *unreadable* rather than short — `SELU` above had the seat and they did not, and
+    # nothing counted the difference. Each has a `/같은 객체` row beside it, which is
+    # the half that can fail.
+    **{f"act::nn.{_a}(inplace)":
+       "`inplace` changes the identity and not the value — see `act::nn.SELU(inplace)` "
+       "above, whose note is this one's. The `/같은 객체` row beside it is what a "
+       "version computing into a new tensor fails"
+       for _a in ("Hardsigmoid", "Hardswish", "Mish", "ReLU6", "SiLU")},
     "grad::sum(dim)":
         "the gradient of a sum is ones everywhere, whichever axis it was taken over",
     "grad::sort(내림차순)":

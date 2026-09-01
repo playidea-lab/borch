@@ -125,7 +125,7 @@ export async function runCode(code, hooks = {}) {
     const source = [
       `import * as borch from ${JSON.stringify(BORCH_URL)};`,
       // The names are spread out so the documentation's examples paste in as they are.
-      "const { init, Tensor, nn, optim, data, vision, fft, linalg, scope, keepAlive,",
+      "const { init, Tensor, nn, optim, data, vision, ops, fft, linalg, scope, keepAlive,",
       "        noGrad, manualSeed, einsum, slice, save, load, isAvailable, probe,",
       "        currentDevice, device, Device } = borch;",
       "const __pg = globalThis.__borch_playground__;",
@@ -271,9 +271,9 @@ const PYODIDE_DIR = new URL("../../vendor/pyodide/", import.meta.url).href;
  */
 const PACKAGES = {
   borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
-          "_data", "_rnn", "_serialize"],
+          "_data", "_rnn", "_serialize", "autograd"],
   borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data",
-                 "_serialize"],
+                 "_serialize", "autograd"],
 };
 
 let pyodide = null;

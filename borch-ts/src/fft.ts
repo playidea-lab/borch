@@ -43,6 +43,7 @@
  * ask about the two separately.
  */
 
+import { isComplexDType } from "./dtype.js";
 import { RuntimeError } from "./errors.js";
 import { device, makeNode, Tensor } from "./tensor.js";
 
@@ -557,14 +558,24 @@ export function istft(input: Tensor, nFft: number,
                       options: IstftOptions = {}): Tensor {
   const {
     hopLength = null, winLength = null, window = null, center = true,
-    normalized = false, onesided = null, length = null,
+    normalized = false, onesided = null, length = null, returnComplex = false,
   } = options;
   const hop = hopLength ?? Math.floor(nFft / 4);
   const bins = input.shape[input.shape.length - 2] ?? 0;
   const half = onesided ?? (bins === Math.floor(nFft / 2) + 1);
   const count = input.shape[input.shape.length - 1] ?? 0;
   const spec = swapLastTwo(input);                       // (…, frame, bin)
-  let frames = half ? irfft(spec, nFft, -1) : fft(spec, null, -1);
+  // **The two-sided path ran a forward transform.** `half` uses `irfft` and was
+  // right; the other branch called `fft`, so the function whose name is *inverse*
+  // did the forward one. Reconstructing `sin(0.3k)` gave `[3.60, 0.97, 3.56, …]`
+  // where the waveform is `[0, 0.30, 0.56, …]` — no exception, a plausible wave,
+  // and the default path being correct is why it went unseen. The core carried the
+  // same line.
+  if (half && returnComplex === true) {
+    throw new RuntimeError(
+      "Cannot have onesided output if window or input is complex");
+  }
+  let frames = half ? irfft(spec, nFft, -1) : ifft(spec, null, -1);
   if (normalized) frames = frames.mul(Tensor.full([], Math.sqrt(nFft)));
   const win = windowOf(window, nFft, winLength);
   frames = frames.mul(win);
@@ -597,6 +608,12 @@ export function istft(input: Tensor, nFft: number,
                      total - 2 * Math.floor(nFft / 2));
   }
   if (length !== null) out = out.narrow(-1, 0, length);
+  // **torch's default is a real waveform.** The two-sided path carries an imaginary
+  // part that is numerically zero for a real signal, and torch drops it unless
+  // asked; handing back a complex tensor from `istft(spec, n)` makes every line
+  // after it meet a dtype it did not ask for. `returnComplex` was in the options
+  // type and nothing read it.
+  if (returnComplex !== true && isComplexDType(out.dtype)) out = out.real();
   return out;
 }
 

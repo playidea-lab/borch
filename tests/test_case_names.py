@@ -60,6 +60,22 @@ DELIBERATE = {
         "tensor it was handed and gives back the same object, computing the numbers "
         "it would have computed anyway. `act::nn.SELU(inplace)/같은 객체` beside it "
         "is where that is asked.",
+    # **Five more of the same shape.** These classes declared no constructor on the
+    # browser side, so the signature axis reported them as unreadable rather than
+    # short and nobody asked. Each has a `/같은 객체` row beside it.
+    **{f"act::nn.{_a}(inplace)":
+       "as `act::nn.SELU(inplace)` above — `inplace` moves the identity and not the "
+       "value, and the `/같은 객체` row beside it is where that is asked."
+       for _a in ("Hardsigmoid", "Hardswish", "Mish", "ReLU6", "SiLU")},
+    # **`out=` is the same shape as `inplace` one namespace over.** It moves where the
+    # answer is written and not what the answer is, so equalling the plain `erf` case
+    # is the claim rather than a hole in it — a destination that changed the numbers
+    # would be the defect. `special::erf(out=)/같은 객체` beside it is where the part
+    # that does differ is asked.
+    "special::erf(out=)":
+        "`out=` changes the destination, not the value: torch's own `out=` computes "
+        "the same answer and writes it somewhere the caller chose. The "
+        "`/같은 객체` row beside it asks whether it was written there.",
     # being equal is the answer
     "act::nn.Identity(인자를 삼킨다)":
         "torch's Identity swallows any argument — it is a placeholder, so users change the "

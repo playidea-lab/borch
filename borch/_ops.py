@@ -1,6 +1,7 @@
 """A piece of borch, split out. __init__ gathers the public names."""
 
 import builtins as _builtins
+import inspect as _inspect
 import itertools as _itertools
 import math as _math
 
@@ -23,6 +24,7 @@ from ._base import (
     _math,
     _needs_float,
     _np, _refuses_bool,
+    _needs_float_dtype, _only_cpu,
     _refuses_nonfloat_kernel, _requested_dtype, _resolve, _unsupported, Size,
     device as _device,
     dtype,
@@ -124,11 +126,17 @@ def _made(arr, dt=None, requires_grad=False):
 
 
 def zeros(*shape, dtype=None, requires_grad=False, device=None):
+    """**`device` was in the signature and the body never read it**, so
+    `zeros(2, device="cuda")` handed back a CPU tensor and said nothing. `_only_cpu`
+    is the rule now, and it is the layers' rule too — they had the opposite habit of
+    refusing `"cpu"` as well."""
+    _only_cpu("zeros", device)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
     return _made(_np.zeros(shape, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
 
 def ones(*shape, dtype=None, requires_grad=False, device=None):
+    _only_cpu("ones", device)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
     return _made(_np.ones(shape, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
@@ -190,19 +198,48 @@ _rng = _np.random.default_rng(0)
 
 
 class Generator:
-    """A container carrying a seed. `random_split(generator=...)` takes this —
-    without the split fixed there is no telling whether changing the model helped
-    or the split got lucky."""
+    """A stream of random numbers **of its own**, apart from the global one.
+
+    `random_split(generator=...)` takes this — without the split fixed there is no
+    telling whether changing the model helped or the split got lucky.
+
+    **It used to build a fresh `default_rng(seed)` on every `rng()` call**, which
+    made it a seed in a box rather than a generator: two draws from one generator
+    returned *the same numbers*. Nothing caught it because the one caller drew once.
+    Measured against torch, which advances — `rand(3, generator=g)` twice gives two
+    different triples, and re-seeding returns to the first.
+
+    So the stream is built once and kept. `manual_seed` rebuilds it, which is what
+    re-seeding means, and `initial_seed()` reports what it was last given.
+    """
 
     def __init__(self):
         self.seed = 0
+        self._rng = _np.random.default_rng(0)
 
     def manual_seed(self, seed):
         self.seed = seed
+        self._rng = _np.random.default_rng(seed)
         return self
 
+    def initial_seed(self):
+        """The seed this generator was last given. torch returns the number, not
+        the generator."""
+        return self.seed
+
     def rng(self):
-        return _np.random.default_rng(self.seed)
+        return self._rng
+
+
+def _stream(generator):
+    """The stream to draw from: the generator's own, or the global one.
+
+    **A generator must not disturb the global stream** (measured: seeding torch
+    globally, drawing through a generator, and drawing globally again gives what
+    the global seed said it would). Keeping them separate objects is the whole of
+    that rule.
+    """
+    return _rng if generator is None else generator.rng()
 
 
 def manual_seed(seed):
@@ -277,14 +314,29 @@ def set_rng_state(state):
     return None
 
 
-def randn(*shape, requires_grad=False):
+def randn(*shape, dtype=None, requires_grad=False, device=None, generator=None):
+    """**`generator=` was not a seat at all**, so `randn(3, generator=g)` — the line
+    every reproducible-sampling tutorial is written with — stopped with *unexpected
+    keyword argument*, while `multinomial` next door refused it by name and
+    `random_split` honoured it. Three answers to one question inside one library.
+
+    **`dtype=` and `device=` were missing too**, and `rand` beside it had both — so
+    `randn(3, dtype=torch.float32)` stopped on the keyword while the same line with
+    `rand` ran. Two factories one line apart, differing in what they would accept.
+    """
+    _only_cpu("randn", device)
+    _needs_float_dtype("normal_kernel_cpu", dtype)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_rng.standard_normal(shape).astype(_DEFAULT_DTYPE), requires_grad)
+    return _made(_stream(generator).standard_normal(shape).astype(_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
-def rand(*shape, dtype=None, requires_grad=False, device=None):
+def rand(*shape, dtype=None, requires_grad=False, device=None, generator=None):
+    _only_cpu("rand", device)
+    _needs_float_dtype("check_uniform_bounds", dtype)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return _made(_rng.random(shape).astype(_DEFAULT_DTYPE), dtype, requires_grad)
+    return _made(_stream(generator).random(shape).astype(_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
 def _out(result, out, name="op"):
@@ -385,25 +437,60 @@ def _no_out(kw):
         _unsupported("`out=` (writing into a tensor you made beforehand)")
 
 
-def randint(low, high, shape, dtype=None, requires_grad=False, *, out=None):
+def randint(low, high, shape, dtype=None, requires_grad=False, *, out=None,
+            generator=None):
     _no_out(out)
-    return _made(_rng.integers(low, high, shape).astype(_np.int64),
+    return _made(_stream(generator).integers(low, high, shape).astype(_np.int64),
                  dtype, requires_grad)
 
 
-def randperm(n, dtype=None, requires_grad=False, *, out=None):
+def randperm(n, dtype=None, requires_grad=False, *, out=None, generator=None):
     _no_out(out)
-    return _made(_rng.permutation(n).astype(_np.int64), dtype, requires_grad)
+    return _made(_stream(generator).permutation(n).astype(_np.int64),
+                 dtype, requires_grad)
 
 
 def multinomial(probs, num_samples, replacement=True, *, generator=None):
-    if generator is not None:
-        _unsupported("multinomial(generator=…)")
+    """**`generator=` was refused here and honoured one module over.**
+
+    `random_split(generator=…)` has taken one from the start, and it takes the same
+    class — so the refusal was not about a thing that did not exist but about a
+    stream this file was not reaching for. `_stream` is that reach.
+    """
+    stream = _stream(generator)
+    _multinomial_checks(probs.data, num_samples, replacement)
     p = probs.data / probs.data.sum(axis=-1, keepdims=True)
+    take = bool(replacement)
     if p.ndim == 1:
-        return Tensor(_rng.choice(len(p), size=num_samples, p=p).astype(_np.int64))
-    out = [_rng.choice(p.shape[-1], size=num_samples, p=row) for row in p]
+        return Tensor(stream.choice(len(p), size=num_samples, replace=take,
+                                    p=p).astype(_np.int64))
+    out = [stream.choice(p.shape[-1], size=num_samples, replace=take, p=row) for row in p]
     return Tensor(_np.asarray(out, dtype=_np.int64))
+
+
+def _multinomial_checks(data, num_samples, replacement):
+    """torch's four refusals, in torch's words, before anything is drawn.
+
+    **`replacement=False` was accepted and ignored.** `np.random.Generator.choice`
+    defaults to `replace=True`, so the argument reached nothing: measured, 184 of
+    200 draws of 4 from 4 weights came back with a repeat where torch has none, and
+    asking for more samples than there are weights — which torch refuses outright —
+    came back a full answer. Values that are plausible, an argument that reads as
+    honoured, and nothing raised anywhere.
+    """
+    if _np.ndim(data) not in (1, 2):
+        raise RuntimeError("prob_dist must be 1 or 2 dim")
+    if num_samples <= 0:
+        raise RuntimeError("cannot sample n_sample <= 0 samples")
+    if not _np.all(_np.isfinite(data)) or _np.any(data < 0):
+        raise RuntimeError(
+            "probability tensor contains either `inf`, `nan` or element < 0")
+    if _np.any(_np.sum(data, axis=-1) <= 0):
+        raise RuntimeError(
+            "invalid multinomial distribution (sum of probabilities <= 0)")
+    if not replacement and num_samples > _np.shape(data)[-1]:
+        raise RuntimeError(
+            "cannot sample n_sample > prob_dist.size(-1) samples without replacement")
 
 
 # ------------------------------------------------------------------- functions
@@ -919,24 +1006,61 @@ def instance_norm(input, running_mean=None, running_var=None, weight=None,   # n
 
     **torch's first three seats were missing**, so `F.instance_norm(x, None, None, w)`
     put the weight in `running_mean`'s place here and in `weight`'s there — the same
-    call, a different layer, no exception. The four running-statistics arguments are
-    torch's and the seats are carried; the tracking itself is refused, in the wording
-    `nn.InstanceNorm2d(track_running_stats=True)` already uses.
+    call, a different layer, no exception.
 
-    `use_input_stats=False` means *normalise by the stored statistics instead*, which
-    is the eval-time path and needs the buffers this does not keep. Accepting it and
-    normalising by the batch anyway would be the accepted-and-inert defect on the one
-    argument whose whole purpose is to change which numbers are used.
+    **The running statistics were refused on the ground that this keeps none.** It
+    keeps none of its own, which is true and was not the question: torch's buffers
+    are the *caller's*, handed in and written back, exactly as `batch_norm` next door
+    already does. What the update is was measured rather than derived —
+
+        running_mean ← (1−m)·running_mean + m·mean over (N, H, W) per channel
+        running_var  ← (1−m)·running_var  + m·mean over N of the **unbiased**
+                       per-(sample, channel) variance
+
+    — and the second line is the one worth writing down: it is the average of the
+    per-plane variances, not the variance of the whole channel. On a 2×3×2×2 of
+    consecutive integers those are 1.667 and 47.7, so nothing subtle separates them.
+
+    **Handing statistics in does not change the output** under `use_input_stats=True`;
+    the normalisation stays per plane and only the buffers move. Measured, because the
+    opposite is the natural guess.
+
+    `use_input_stats=False` normalises by the stored statistics instead, per channel,
+    and leaves them untouched. With none given torch stops, and the wording is torch's.
     """
-    if running_mean is not None or running_var is not None:
-        _unsupported("instance_norm(running_mean=…, running_var=…) — "
-                     "there are no running statistics here")
-    if not use_input_stats:
-        _unsupported("instance_norm(use_input_stats=False) — it normalises by the "
-                     "running statistics, which this does not keep")
-    del momentum          # only moves running statistics, and there are none
     input = _wrap(input)  # noqa: A001
+    if not use_input_stats and (running_mean is None or running_var is None):
+        raise RuntimeError("Expected running_mean and running_var to be defined when "
+                           "use_input_stats is false")
+    rank = input.data.ndim
+    shape = (1, -1) + (1,) * (rank - 2)
+    planes = tuple(range(2, rank))
+
+    if not use_input_stats:
+        rm = _np.asarray(_instance_raw(running_mean)).reshape(shape)
+        rv = _np.sqrt(_np.asarray(_instance_raw(running_var)) + eps).reshape(shape)
+        normed = (input - Tensor(rm)) / Tensor(rv)
+        if weight is not None:
+            normed = normed * _wrap(weight).reshape(shape)
+        if bias is not None:
+            normed = normed + _wrap(bias).reshape(shape)
+        return normed
+
+    if running_mean is not None:
+        with no_grad():
+            seen = input.data.mean(axis=(0, *planes))
+            spread = input.data.var(axis=planes, ddof=1).mean(axis=0)
+            _instance_raw(running_mean)[...] = (
+                (1 - momentum) * _instance_raw(running_mean) + momentum * seen)
+            _instance_raw(running_var)[...] = (
+                (1 - momentum) * _instance_raw(running_var) + momentum * spread)
     return group_norm(input, input.data.shape[1], weight, bias, eps)
+
+
+def _instance_raw(v):
+    """The array behind a buffer, whether it arrived wrapped or bare. `batch_norm`
+    keeps its own copy of this; the two are the same three lines."""
+    return v.data if isinstance(v, Tensor) else v
 
 
 def rms_norm(input, normalized_shape, weight=None, eps=None):
@@ -1551,6 +1675,49 @@ def _out_size(in_size, scale_factor):
     return tuple(int(_math.floor(n * float(sc))) for n, sc in zip(in_size, scales))
 
 
+# **The rank a mode needs, and torch's two ways of saying no.** Measured across the
+# whole 3×7 grid rather than reasoned from the names: `linear` wants 3-D, `bilinear`
+# and `bicubic` 4-D, `trilinear` 5-D, and `nearest`, `nearest-exact` and `area` take
+# any of the three. The mismatches are told apart — `bilinear` on a 3-D input names
+# both ranks, while `bicubic` on a 3-D input falls through to the generic sentence
+# instead, which reads oddly (it lists 3D among the supported ranks and then refuses
+# a 3D input) and is what torch says.
+_INTERP_RANK = {"linear": 3, "bilinear": 4, "trilinear": 5}
+_INTERP_MODES = ("nearest", "nearest-exact", "area", "linear", "bilinear",
+                 "bicubic", "trilinear")
+
+
+def _interp_generic(rank, mode):
+    """torch's sentence, whole. **It lists two modes this library does not have** —
+    `lanczos` is in the list and torch refuses it everywhere, and the sentence names
+    3D among the supported ranks while refusing a 3D input, which is how it reads
+    when `bicubic` reaches it. Copied rather than tidied: a message a caller can
+    search for in torch's issues is worth more than one that reads better."""
+    return NotImplementedError(
+        f"Input Error: Only 3D, 4D and 5D input Tensors supported (got {rank}D) "
+        "for the modes: nearest | linear | bilinear | bicubic | trilinear | "
+        f"lanczos | area | nearest-exact (got {mode})")
+
+
+def _interp_check(rank, mode):
+    if rank not in (3, 4, 5):
+        raise _interp_generic(rank, mode)
+    want = _INTERP_RANK.get(mode)
+    if want is not None and rank != want:
+        raise NotImplementedError(
+            f"Got {rank}D input, but {mode} mode needs {want}D input")
+    if mode == "bicubic" and rank != 4:
+        raise _interp_generic(rank, mode)
+
+
+def _spread_size(size, spatial):
+    """One number means the same length on every spatial axis; a list is used as it
+    is. `_pair` cannot serve here — it always makes two."""
+    if isinstance(size, (tuple, list)):
+        return tuple(int(v) for v in size)
+    return (int(size),) * spatial
+
+
 def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
                 align_corners=None, recompute_scale_factor=None, antialias=False):
     """Enlargement. Nearest and bilinear.
@@ -1572,21 +1739,59 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
     other by name alone puts the edges off — the interior is similar enough that
     the eye does not part them.
     """
-    if antialias:
-        _unsupported("interpolate(antialias=True) — the widened filter it uses when "
-                     "shrinking is not here")
     x = _wrap(input)
-    if mode == "bilinear":
-        return _interpolate_bilinear(x, size, scale_factor, bool(align_corners),
-                                     recompute_scale_factor)
-    if mode != "nearest":
-        _unsupported(f"interpolate(mode={mode!r}) — only nearest and bilinear are here")
+    if mode not in _INTERP_MODES:
+        _unsupported(f"interpolate(mode={mode!r}) — {' , '.join(_INTERP_MODES)} "
+                     "are here")
+    rank = x.data.ndim
+    _interp_check(rank, mode)
+    # torch's own wording. **It was accepted and ignored here**, so
+    # `interpolate(x, mode='nearest', align_corners=True)` returned the answer for
+    # `align_corners=False` under the name of the other one — and nearest has no
+    # corners to align, which is why torch refuses rather than picking.
+    if align_corners is not None and mode not in ("linear", "bilinear", "bicubic",
+                                                  "trilinear"):
+        raise ValueError("align_corners option can only be set with the "
+                         "interpolating modes: linear | bilinear | bicubic | "
+                         "trilinear")
+    if antialias:
+        # torch's own restriction, and its wording.
+        if mode not in ("bilinear", "bicubic"):
+            raise RuntimeError(
+                "Anti-alias option is restricted to bilinear, bicubic, and lanczos "
+                "modes and requires a 4-D tensor as input")
+        return _interpolate_antialias(x, size, scale_factor, mode,
+                                      bool(align_corners), recompute_scale_factor)
+    if mode == "bicubic":
+        return _interpolate_bicubic(x, size, scale_factor, bool(align_corners),
+                                    recompute_scale_factor)
     xd = x.data
-    n, c, h, w = xd.shape
-    if size is not None:
-        oh, ow = _pair(size)
-    else:
-        oh, ow = _out_size((h, w), scale_factor)
+    spatial = rank - 2
+    in_size = tuple(xd.shape[2:])
+    out_size = (_spread_size(size, spatial) if size is not None
+                else _out_size(in_size, scale_factor))
+    # **The caller's scale, not the one the output size implies**, and that is torch's
+    # default — `None` behaves as `False` here, which is the opposite of what the name
+    # suggests. They part once the floor has lost something: 5 at 1.7 gives 8, and
+    # 8 / 5 is 1.6.
+    keep = None
+    if size is None and recompute_scale_factor is not True:
+        keep = (tuple(scale_factor) if isinstance(scale_factor, (tuple, list))
+                else (scale_factor,) * spatial)
+    # **`area` is adaptive average pooling and nothing else.** Measured against torch
+    # on three output sizes — a shrink, an enlargement and one that divides evenly into
+    # neither — `F.interpolate(x, size, mode="area")` and `F.adaptive_avg_pool*d(x,
+    # size)` agree bit for bit. So this names what is already here rather than writing
+    # a second averaging, and the gradient comes with it.
+    if mode == "area":
+        pool = (adaptive_avg_pool1d, adaptive_avg_pool2d,
+                adaptive_avg_pool3d)[spatial - 1]
+        return pool(x, out_size)
+    # **The three interpolating names are one separable kernel at three ranks.**
+    # `linear`, `bilinear` and `trilinear` differ only in how many axes they blend
+    # along; writing three is three places for the `align_corners` rule to drift.
+    if mode in ("linear", "bilinear", "trilinear"):
+        return _interpolate_linear(x, out_size, bool(align_corners), keep)
     # **A source index per output cell, not a whole-number repeat.**
     #
     # This was `np.repeat` twice and it refused anything that was not an integer
@@ -1606,22 +1811,111 @@ def interpolate(input, size=None, scale_factor=2, mode="nearest",   # noqa: A002
     # default would do — and it was written the other way here first. Measured: with
     # `None`, torch agrees with `False` at every scale tried and with `True` at none
     # of them.
-    use_given = recompute_scale_factor is not True and size is None
-    given = (scale_factor if isinstance(scale_factor, (tuple, list))
-             else (scale_factor, scale_factor))
-    sh = given[0] if use_given else (oh / h)
-    sw = given[1] if use_given else (ow / w)
-    rows = _np.minimum((_np.arange(oh) / sh).astype(int), h - 1)
-    cols = _np.minimum((_np.arange(ow) / sw).astype(int), w - 1)
-    out = xd[:, :, rows][:, :, :, cols]
+    #
+    # **`nearest-exact` measures from the centre of the output cell and `nearest` does
+    # not.** `floor((i + 0.5) / s)` against `floor(i / s)` — half a cell, which is
+    # nothing when enlarging by a whole number and is a different row entirely when
+    # shrinking. torch keeps both because the plain one is the one everybody else
+    # already shipped and is off by half; measured on a 4×5 to 2×3, `nearest` takes
+    # rows 0 and 2 and `nearest-exact` takes 1 and 3.
+    half = 0.5 if mode == "nearest-exact" else 0.0
+    picks = []
+    for axis in range(spatial):
+        scale = (keep[axis] if keep is not None
+                 else out_size[axis] / in_size[axis])
+        picks.append(_np.minimum(
+            ((_np.arange(out_size[axis]) + half) / scale).astype(int),
+            in_size[axis] - 1))
+    out = _take_axes(xd, picks)
 
     def back(g):
-        g = _np.asarray(g)
-        gx = _np.zeros_like(xd)
-        _np.add.at(gx, (slice(None), slice(None), rows[:, None], cols[None, :]), g)
-        return (gx,)
+        return (_scatter_axes(_np.asarray(g), picks, xd.shape),)
 
     return x._make(out, (x,), back, "UpsampleBackward0")
+
+
+def _take_axes(arr, picks):
+    """One index map per spatial axis, applied one axis at a time.
+
+    **Sequential rather than one fancy index**, because the maps have different
+    lengths and numpy's advanced indexing would broadcast them against each other
+    instead of taking their product. Two axes could be written `a[:, :, r][:, :, :, c]`
+    by hand; three cannot without repeating the pattern a third time.
+    """
+    for axis, sel in enumerate(picks):
+        arr = _np.take(arr, sel, axis=2 + axis)
+    return arr
+
+
+def _scatter_axes(grad, picks, shape):
+    """`_take_axes` backwards — one axis at a time.
+
+    **The same source cell is read many times when enlarging**, so the shares are
+    accumulated with `add.at` rather than assigned. Assignment keeps the last write
+    and loses the rest, which at a whole-number enlargement leaves every gradient
+    smaller by the factor.
+
+    The axis order does not matter here, and a first draft of this said it did —
+    a take along one axis leaves the other axes' lengths alone, so the steps commute
+    both ways. Measured by running the whole loop the other way round: every case
+    agreed. A reason that sounds like a constraint and is not one is worse than none,
+    because it tells the next reader that something was checked.
+    """
+    for axis in reversed(range(len(picks))):
+        wide = list(grad.shape)
+        wide[2 + axis] = shape[2 + axis]
+        acc = _np.zeros(wide, dtype=grad.dtype)
+        _np.add.at(acc, (slice(None),) * (2 + axis) + (picks[axis],), grad)
+        grad = acc
+    return grad
+
+
+def _interpolate_linear(x, out_size, align_corners, keep):
+    """`linear`, `bilinear` and `trilinear` — **one separable kernel at three ranks.**
+
+    Each output cell is a weighted sum of the 2ⁿ input cells around it, the weight
+    being the product of one per-axis fraction. `_bilinear_axis` gives the two
+    neighbours and the fraction for one axis; everything here is the product over the
+    axes, which is what makes the three names one function.
+    """
+    xd = x.data
+    spatial = xd.ndim - 2
+    in_size = tuple(xd.shape[2:])
+    axes = [_bilinear_axis(in_size[a], out_size[a], align_corners,
+                           keep[a] if keep is not None else None)
+            for a in range(spatial)]
+
+    def weight(axis, side):
+        """The fraction for one axis, shaped to broadcast against the output."""
+        frac = axes[axis][2].astype(xd.dtype)
+        shaped = frac.reshape([1] * (2 + axis) + [-1]
+                              + [1] * (spatial - 1 - axis))
+        return shaped if side else (1 - shaped)
+
+    corners = list(_itertools.product((0, 1), repeat=spatial))
+
+    def share(side):
+        picks = [axes[a][1] if side[a] else axes[a][0] for a in range(spatial)]
+        w = weight(0, side[0])
+        for a in range(1, spatial):
+            w = w * weight(a, side[a])
+        return picks, w
+
+    out = None
+    for side in corners:
+        picks, w = share(side)
+        piece = _take_axes(xd, picks) * w
+        out = piece if out is None else out + piece
+
+    def back(g):
+        gg = _np.asarray(g)
+        acc = _np.zeros_like(xd)
+        for side in corners:
+            picks, w = share(side)
+            acc = acc + _scatter_axes(gg * w, picks, xd.shape)
+        return (acc,)
+
+    return x._make(out, (x,), back, "UpsampleBilinear2DBackward0")
 
 
 def _bilinear_axis(size_in, size_out, align_corners, scale=None):
@@ -1647,8 +1941,189 @@ def _bilinear_axis(size_in, size_out, align_corners, scale=None):
     return lo, hi, (src - lo)
 
 
-def _interpolate_bilinear(x, size, scale_factor, align_corners,
-                          recompute_scale_factor=None):
+# torch's cubic convolution constant. **`a` is a choice, not a derivation** — the
+# family of cubic kernels is parameterised by it, OpenCV uses −0.75 and Photoshop
+# −0.5, and they give visibly different edges. torch uses −0.75, and reproducing
+# torch's numbers to float64 noise is what fixed it here rather than any argument
+# about which is better.
+_BICUBIC_A = -0.75
+
+
+def _cubic_weight(t):
+    """Keys' cubic convolution kernel at `t`, zero beyond two cells."""
+    t = _np.abs(t)
+    a = _BICUBIC_A
+    near = ((a + 2) * t - (a + 3)) * t * t + 1
+    far = ((t - 5) * t + 8) * t * a - 4 * a
+    return _np.where(t <= 1, near, _np.where(t < 2, far, 0.0))
+
+
+def _bicubic_axis(size_in, size_out, align_corners, scale=None):
+    """The continuous source coordinate for each output position.
+
+    The same two rules `_bilinear_axis` uses, which is the point: `align_corners`
+    pins both ends, and otherwise the coordinate is measured from the **centre** of
+    the output cell — `(i + 0.5)·s − 0.5`.
+    """
+    if align_corners:
+        if size_out == 1:
+            return _np.zeros(1)
+        return _np.arange(size_out) * ((size_in - 1) / (size_out - 1))
+    step = (1.0 / scale) if scale else (size_in / size_out)
+    return (_np.arange(size_out) + 0.5) * step - 0.5
+
+
+def _antialias_axis(size_in, size_out, radius, filt, align_corners, given=None):
+    """One axis of torch's anti-aliased resampling, as a `(size_out, size_in)` matrix.
+
+    The window is **widened by the shrink factor and the weights renormalised** —
+    that is the whole of what `antialias` means. Enlarging, the scale is below one,
+    the support stays at the kernel's own radius and the weights are the plain ones,
+    which is why torch says the flag does nothing when going up.
+
+    **Two things in here are torch disagreeing with itself, and both are measured
+    rather than reasoned.**
+
+    *The cubic constant is not the same one.* Plain `bicubic` uses `a = −0.75` and
+    this path uses `a = −0.5`. Fitted against torch: at `−0.75` the two part by 0.13
+    to 0.39 on a 4×5, and at `−0.5` they agree to float64 noise on every size tried.
+
+    *`align_corners` is half applied.* The scale becomes `(in−1)/(out−1)`, which is
+    the align-corners rule, while the centre stays `scale·(i + 0.5)`, which is the
+    other one. Taking the align-corners centre `scale·i` instead parts by 1.3 to 4.5.
+    Twenty combinations — two modes, both flags, five output sizes — agree with the
+    mixture and with nothing tidier.
+    """
+    if align_corners:
+        # **The caller's scale is not read here**, and that is measured: with
+        # `align_corners=True` the `scale_factor` cases agree with `(in−1)/(out−1)`
+        # alone. The align-corners rule pins both ends and has no room for one.
+        scale = ((size_in - 1) / (size_out - 1)) if size_out > 1 else 0.0
+    else:
+        scale = (1.0 / given) if given else (size_in / size_out)
+    wide = scale >= 1.0
+    support = radius * scale if wide else radius
+    inv = (1.0 / scale) if wide else 1.0
+    rows = _np.zeros((size_out, size_in))
+    for i in range(size_out):
+        centre = scale * (i + 0.5)
+        lo = max(int(centre - support + 0.5), 0)
+        span = min(int(centre + support + 0.5), size_in) - lo
+        taps = _np.array([filt((j + lo - centre + 0.5) * inv) for j in range(span)])
+        total = taps.sum()
+        rows[i, lo:lo + span] = taps / total if total else taps
+    return rows
+
+
+def _interpolate_antialias(x, size, scale_factor, mode, align_corners,
+                           recompute_scale_factor=None):
+    """`antialias=True` for `bilinear` and `bicubic`.
+
+    Both axes are a plain matrix multiply against the weight matrices above, so the
+    gradient is the multiply's own and nothing was written for it.
+    """
+    _, _, h, w = x.data.shape
+    keep = None
+    if size is not None:
+        oh, ow = _pair(size)
+    else:
+        oh, ow = _out_size((h, w), scale_factor)
+        if recompute_scale_factor is not True:
+            keep = (scale_factor if isinstance(scale_factor, (tuple, list))
+                    else (scale_factor, scale_factor))
+    # **`abs` is this module's own `abs`**, which takes a tensor — the builtin is
+    # shadowed here exactly as `any` is, and calling it on a float raised
+    # `'float' object has no attribute 'abs'`. Both kernels get the magnitude by hand.
+    radius, filt = ((1, _triangle_weight_aa) if mode == "bilinear"
+                    else (2, _cubic_weight_aa))
+    wy = _antialias_axis(h, oh, radius, filt, align_corners,
+                         keep and keep[0]).astype(x.data.dtype)
+    wx = _antialias_axis(w, ow, radius, filt, align_corners,
+                         keep and keep[1]).astype(x.data.dtype)
+    # `(o, h) · (n, c, h, w) · (w, p)` — the rows fold first, then the columns.
+    spread = _wrap(wy) @ x
+    return spread @ _wrap(wx.T)
+
+
+def _grid_pad_index(padding_mode, align_corners):
+    """How one tap index is brought back inside, for `grid_sample`'s bicubic window.
+
+    `None` means *leave it outside* — `zeros` wants the tap masked to zero, which is
+    what `pick` already does. The other two move it, and `pick`'s mask then never
+    fires because the moved index is in range.
+    """
+    if padding_mode == "border":
+        return lambda i, n: _np.clip(i, 0, n - 1)
+    if padding_mode == "reflection":
+        lo = 0.0 if align_corners else -0.5
+
+        def reflect(i, n):
+            hi = (n - 1.0) if align_corners else (n - 0.5)
+            if hi <= lo:
+                return _np.zeros_like(i)
+            span = 2.0 * (hi - lo)
+            t = _np.remainder(i - lo, span)
+            back = _np.minimum(t, span - t) + lo
+            return _np.clip(_np.rint(back), 0, n - 1).astype(int)
+
+        return reflect
+    return None
+
+
+def _pick_padded(pick, edge, iy, ix, h, w):
+    """One tap, with the padding applied to the index rather than to the centre."""
+    if edge is None:
+        return pick(iy, ix)
+    return pick(edge(iy, h), edge(ix, w))
+
+
+def _cubic_of(v):
+    """Keys' kernel at `a = −0.75` **as a tensor expression**, so the gradient flows
+    through it. The branch points are read off the values, which is where torch reads
+    them too — they are a measure-zero set and the polynomial is continuous across
+    them, so nothing turns on which side a boundary falls."""
+    t = v.abs()
+    a = _BICUBIC_A
+    near = ((a + 2) * t - (a + 3)) * t * t + 1
+    far = ((t - 5) * t + 8) * t * a - 4 * a
+    return where(Tensor(t.data <= 1), near,
+                 where(Tensor(t.data < 2), far, t * 0.0))
+
+
+def _triangle_weight_aa(t):
+    """The bilinear kernel: one at the centre, zero a cell away."""
+    t = -t if t < 0 else t
+    return 1.0 - t if t < 1.0 else 0.0
+
+
+def _cubic_weight_aa(t):
+    """Keys' kernel at **`a = −0.5`**, which is the constant torch's anti-aliased path
+    uses where its plain `bicubic` uses `−0.75`. Measured, not chosen."""
+    t = -t if t < 0 else t
+    a = -0.5
+    if t <= 1:
+        return ((a + 2) * t - (a + 3)) * t * t + 1
+    if t < 2:
+        return ((t - 5) * t + 8) * t * a - 4 * a
+    return 0.0
+
+
+def _interpolate_bicubic(x, size, scale_factor, align_corners,
+                         recompute_scale_factor=None):
+    """Cubic convolution over a 4×4 neighbourhood.
+
+    **It was refused, and the refusal said only *not here*.** What it needed was one
+    constant and one kernel: with `a = −0.75` and coordinates taken the way the
+    bilinear path already takes them, this reproduces torch to float64 noise on six
+    combinations — three output sizes against both `align_corners`.
+
+    **The edges clamp rather than reflect or wrap**, which is torch's rule and the
+    reason a 4×4 window is safe one cell outside the image on either side.
+
+    Nothing is clamped on the way out: cubic convolution overshoots, so upsampling an
+    image in `[0, 1]` gives values slightly outside it. torch does not clamp either,
+    and a caller who wants pixels is expected to clamp.
+    """
     n, c, h, w = x.data.shape
     keep = None
     if size is not None:
@@ -1656,35 +2131,48 @@ def _interpolate_bilinear(x, size, scale_factor, align_corners,
     else:
         oh, ow = _out_size((h, w), scale_factor)
         if recompute_scale_factor is not True:
-            # **The caller's scale, not the one the output size implies**, and that
-            # is torch's default — `None` behaves as `False` here. They part once the
-            # floor has lost something: 5 at 1.7 gives 8, and 8 / 5 is 1.6.
             keep = (scale_factor if isinstance(scale_factor, (tuple, list))
                     else (scale_factor, scale_factor))
-    y0, y1, wy = _bilinear_axis(h, oh, align_corners, keep and keep[0])
-    x0, x1, wx = _bilinear_axis(w, ow, align_corners, keep and keep[1])
-    wy = wy.astype(x.data.dtype)[:, None]
-    wx = wx.astype(x.data.dtype)[None, :]
+    ys = _bicubic_axis(h, oh, align_corners, keep and keep[0])
+    xs = _bicubic_axis(w, ow, align_corners, keep and keep[1])
+    y0 = _np.floor(ys).astype(int)
+    x0 = _np.floor(xs).astype(int)
+    ty, tx = ys - y0, xs - x0
 
-    def blend(t):
-        top = t[:, :, y0][:, :, :, x0] * (1 - wx) + t[:, :, y0][:, :, :, x1] * wx
-        bot = t[:, :, y1][:, :, :, x0] * (1 - wx) + t[:, :, y1][:, :, :, x1] * wx
-        return top * (1 - wy) + bot * wy
+    taps = []
+    for ky in range(-1, 3):
+        wy = _cubic_weight(ky - ty).astype(x.data.dtype)[:, None]
+        ry = _np.clip(y0 + ky, 0, h - 1)
+        for kx in range(-1, 3):
+            wx = _cubic_weight(kx - tx).astype(x.data.dtype)[None, :]
+            rx = _np.clip(x0 + kx, 0, w - 1)
+            taps.append((ry, rx, wy * wx))
+
+    out = _np.zeros((n, c, oh, ow), dtype=x.data.dtype)
+    for ry, rx, weight in taps:
+        out = out + x.data[:, :, ry][:, :, :, rx] * weight
 
     def back(g):
         gg = _np.asarray(g)
-        out = _np.zeros_like(x.data)
-        for ys, wgt_y in ((y0, 1 - wy), (y1, wy)):
-            for xs, wgt_x in ((x0, 1 - wx), (x1, wx)):
-                share = gg * wgt_y * wgt_x
-                # The same position is read several times, so the values are
-                # **accumulated.**
-                for i, yi in enumerate(ys):
-                    _np.add.at(out[:, :, yi], (slice(None), slice(None), xs),
-                               share[:, :, i])
-        return (out,)
+        got = _np.zeros_like(x.data)
+        for ry, rx, weight in taps:
+            share = gg * weight
+            # A clamped edge reads the same row several times, so the shares
+            # **accumulate** rather than overwrite.
+            for i, yi in enumerate(ry):
+                _np.add.at(got[:, :, yi], (slice(None), slice(None), rx),
+                           share[:, :, i])
+        return (got,)
 
-    return x._make(blend(x.data), (x,), back, "UpsampleBilinear2DBackward0")
+    return x._make(out, (x,), back, "UpsampleBicubic2DBackward0")
+
+
+# **`_interpolate_bilinear` stood here and is gone.** It wrote the two-axis blend out
+# by hand — `t[:, :, y0][:, :, :, x0]` four times and a backward that looped rows one
+# at a time — and being two-axis by construction is what made `linear` and `trilinear`
+# read as *a rank this function does not take*. They are the same kernel over one and
+# three axes; `_interpolate_linear` above is that kernel, and `bilinear` is now its
+# two-axis case rather than a separate body.
 
 
 def _spread(v, n):
@@ -2581,7 +3069,7 @@ _INPLACE_UNARY = ("abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh", "sig
 # only against us.
 _INPLACE_MORE = (
     "absolute", "acosh", "arccos", "arccosh", "arcsin", "arcsinh", "arctan",
-    "arctanh", "asinh", "atanh", "deg2rad", "erfc", "exp2", "fix", "logit",
+    "arctanh", "asinh", "atanh", "deg2rad", "erfc", "exp2", "fix",
     "negative", "rad2deg", "sgn", "sinc",
 )
 # The ones taking one more argument. Only the argument count differs.
@@ -2596,6 +3084,18 @@ _INPLACE_ARGS = (
     # operation took different arguments — which is what `div_` had against `div`
     # with `rounding_mode`, found in the same run.
     "round",
+    # **`logit` moved here for the same reason, and it took a new instrument to
+    # see.** `logit_` was nullary while `logit` takes `eps`, so `x.logit_(eps=1e-6)`
+    # — which torch computes — stopped with *takes 1 positional argument but 2 were
+    # given*. It stayed because the method's declared signature was `(*args, **kw)`
+    # and every check that reads one went blind: the signature axis filed it as *no
+    # python signature*, one of ninety-seven `Tensor` rows in that bucket.
+    #
+    # `relu_` is the opposite case and stays nullary: its partner's extra argument
+    # is `inplace`, which **torch's method does not take either** (measured —
+    # `TensorBase.relu_() takes no keyword arguments`). Two names in one list with
+    # opposite answers, and only asking torch tells them apart.
+    "logit",
     "cumprod", "cumsum", "index_add", "index_copy", "index_fill", "ldexp",
     "masked_fill", "scatter", "scatter_add", "squeeze", "swapaxes", "swapdims",
     "transpose", "tril", "triu", "unsqueeze",
@@ -2608,21 +3108,81 @@ def _make_inplace(name, arity="nullary"):
     # not have it the method is called. Either way that does the computation and
     # this only writes back — two copies eventually diverge.
     fn = globals().get(name)
+    # **When there is no module form, the method is the source and also the thing to
+    # read.** The closure below is a bag, so `_forwards` had nothing to copy and
+    # `transpose_` stayed `(self, *args, **kw)` while `Tensor.transpose(dim0, dim1)`
+    # sat one attribute away, fully spelled. `reads` carries the readable one past
+    # the wrapper.
+    reads = fn
     if fn is None:
+        reads = getattr(Tensor, name, None)
+
         def fn(t, *a, **k):
             return getattr(t, name)(*a, **k)
 
     if arity == "nullary":
         def method(self):
             return self._inplace(lambda: fn(self), name + "_")
+        # **It takes nothing, and it was declaring otherwise.** `inspect.signature`
+        # follows `__wrapped__`, and some of the partners carry one — `relu_` read
+        # back as `(x, *args, **kw)`, promising to take anything while the body
+        # takes `self` alone. Over-promising is the same failure as the
+        # under-declaring below, pointing the other way, and both end in the axis's
+        # *no python signature* bucket.
+        method.__signature__ = _inspect.Signature(
+            [_inspect.Parameter("self", _inspect.Parameter.POSITIONAL_OR_KEYWORD)])
     else:
         def method(self, *args, **kw):
             return self._inplace(lambda: fn(self, *args, **kw), name + "_")
+        # **Only the forwarding branch may claim the forwarded list.** A nullary
+        # method takes `(self)` and already reads as that; attaching its partner's
+        # signature would declare arguments the method cannot accept, which is a
+        # worse lie than the `(*args, **kw)` it replaces — `relu_` is exactly that
+        # shape, and this line is why it is not.
+        #
+        # **The receiver comes off when the source is a method.** A module function
+        # takes the tensor first and so does the wrapper, so the lists line up; a
+        # method's first parameter is already `self` and copying it whole would
+        # declare it twice.
+        _forwards(method, reads, drop=reads is not fn)
 
     method.__name__ = name + "_"
     method.__doc__ = (f"`{name}` in place. `{name}` does the arithmetic and this "
                       "only writes the result back.")
     return method
+
+
+def _forwards(method, fn, drop=False):
+    """Say what the forwarder forwards, so `inspect.signature` can read it.
+
+    **A `(*args, **kw)` wrapper is a signature nothing can compare.** `add_` takes
+    exactly what `add` takes — that is what "in place" means here — and the wrapper
+    was declaring neither. `tests/ts_signatures.py` files such a row as *no python
+    signature*, which is the wording for **could not be measured**: ninety-seven
+    `Tensor` rows sat in that bucket, and a bucket that large reads as a limit of
+    Python rather than as a thing to fix.
+
+    It is not Python's limit. torch's C methods genuinely have no signature and this
+    one has one — it is sitting on the function next door.
+
+    The receiver is renamed to `self`, because that is what the axis strips. Where
+    the wrapped function is itself variadic (a handful reach a method by name and
+    have nothing to copy) nothing is attached and the row stays honestly unread.
+    """
+    try:
+        got = _inspect.signature(fn)
+    except (TypeError, ValueError):
+        return
+    params = list(got.parameters.values())
+    if not params or any(p.kind is p.VAR_POSITIONAL for p in params):
+        return
+    if drop:
+        params = params[1:]
+    first = params[0].replace(name="self", kind=_inspect.Parameter.POSITIONAL_OR_KEYWORD) \
+        if not drop else _inspect.Parameter(
+            "self", _inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    method.__signature__ = got.replace(
+        parameters=[first] + (params[1:] if not drop else params))
 
 
 # **They are attached at the end of this file.** Attached here, the functions
@@ -2896,21 +3456,25 @@ def empty_like(t, dtype=None, requires_grad=False, *, out=None):
     return _made(_np.zeros_like(_wrap(t).data), dtype, requires_grad)
 
 
-def rand_like(t, dtype=None, requires_grad=False, *, out=None):
+def rand_like(t, dtype=None, requires_grad=False, *, out=None, generator=None):
     _no_out(out)
-    return _made(rand(*_wrap(t).data.shape).data, dtype, requires_grad)
+    return _made(rand(*_wrap(t).data.shape, generator=generator).data,
+                 dtype, requires_grad)
 
 
-def randn_like(t, dtype=None, requires_grad=False, *, out=None):
+def randn_like(t, dtype=None, requires_grad=False, *, out=None, generator=None):
     _no_out(out)
-    return _made(randn(*_wrap(t).data.shape).data, dtype, requires_grad)
+    return _made(randn(*_wrap(t).data.shape, generator=generator).data,
+                 dtype, requires_grad)
 
 
-def randint_like(t, low, high=None, dtype=None, requires_grad=False, *, out=None):
+def randint_like(t, low, high=None, dtype=None, requires_grad=False, *, out=None,
+                 generator=None):
     _no_out(out)
     if high is None:
         low, high = 0, low
-    return _made(randint(low, high, _wrap(t).data.shape).data, dtype, requires_grad)
+    return _made(randint(low, high, _wrap(t).data.shape, generator=generator).data,
+                 dtype, requires_grad)
 
 
 def scalar_tensor(value, dtype=None, requires_grad=False):
@@ -3073,13 +3637,39 @@ def vdot(input, other):
 
 def kron(input, other):
     """The Kronecker product. One side is stretched, multiplied and folded back
-    — no new kernel needed."""
+    — no new kernel needed.
+
+    **Any rank, and the 1-D line was already the general one.** It read
+    `a.reshape(n, 1) * b.reshape(1, m)` and then refused everything above one axis;
+    what that line does is interleave the two shapes and let broadcasting do the
+    product, which is `kron`'s definition at every rank:
+
+        out[(i, k), (j, l), …] = a[i, j, …] · b[k, l, …]
+
+    So `a` becomes `(a0, 1, a1, 1, …)`, `b` becomes `(1, b0, 1, b1, …)`, and the
+    result folds each pair back into one axis. **The shorter operand is padded at
+    the front**, which is numpy's rule and torch's — measured against both on
+    1×1, 2×2, 2×1, 1×2, 3×3, 2×3 and 0×2.
+
+    Written this way it stays inside operations that already carry a gradient, so
+    the backward is right by construction rather than by a second derivation. That
+    is what the original line's *no new kernel needed* was for, and the refusal
+    below it was hiding how far it already reached.
+    """
     input, other = _wrap(input), _wrap(other)
     ash, bsh = input.data.shape, other.data.shape
-    if len(ash) != 1 or len(bsh) != 1:
-        _unsupported("kron (anything but 1-D)")
-    out = input.reshape(ash[0], 1) * other.reshape(1, bsh[0])
-    return out.reshape(ash[0] * bsh[0])
+    rank = max(len(ash), len(bsh))
+    # numpy pads the shorter shape with leading 1s — `kron([[1, 2]], b3d)` is
+    # `(1, 1, 2)` against `(2, 2, 2)` and comes out `(2, 2, 4)`.
+    ash = (1,) * (rank - len(ash)) + tuple(ash)
+    bsh = (1,) * (rank - len(bsh)) + tuple(bsh)
+    a_spread, b_spread, folded = [], [], []
+    for a_dim, b_dim in zip(ash, bsh):
+        a_spread += [a_dim, 1]
+        b_spread += [1, b_dim]
+        folded.append(a_dim * b_dim)
+    out = input.reshape(*a_spread) * other.reshape(*b_spread)
+    return out.reshape(*folded) if folded else out
 
 
 def cross(input, other, dim=-1):
@@ -4012,15 +4602,31 @@ def dequantize(input):                                          # noqa: A002
     return Tensor(_float_in(_np.asarray(_wrap(input).data).copy()))
 
 
-def resize_as_(input, other):                                   # noqa: A002
-    """Change **in place** to `other`'s shape.
+def resize_as_(input, the_template, memory_format=None):        # noqa: A002
+    """Change **in place** to `the_template`'s shape.
 
     **The values in the added cells are undefined** — torch does not initialise
     them either (measured). So the golden asks about **the shape only.** Pinning
     the values would mount that implementation's accident as the
     specification.
+
+    **The argument is `the_template`, and finding that out took a call.** This was
+    `other`, which is what the rest of the family takes and what torch's own
+    docstring for *this* one says — `resize_as_(tensor)`. Both are wrong:
+    `x.resize_as_(the_template=y)` is the call torch accepts, and it refuses both
+    `tensor=` and `other=` (measured, all three). A docstring disagreeing with the
+    registration is not unusual here; a docstring disagreeing with it while the
+    plausible guess is also wrong is why `test_torch_names.py` calls rather than
+    reads.
+
+    Its non-in-place twin `resize_as` really is `other` — the two do not share the
+    name, which is the part nobody would guess.
+
+    `memory_format` is torch's second seat, carried the way `clone`'s is — and
+    through the same shared rule, so the two cannot part again.
     """
-    t, o = _wrap(input), _wrap(other)
+    t, o = _wrap(input), _wrap(the_template)
+    t._memory_format("resize_as_", memory_format)
     flat = _np.asarray(t.data).reshape(-1)
     want = int(_np.prod(o.data.shape)) if o.data.shape else 1
     grown = _np.zeros(want, dtype=t.data.dtype)
@@ -4118,13 +4724,26 @@ def _in_bounds(idx, size, dim, kind=RuntimeError):
             f"with size {size}")
 
 
-def scatter(input, dim, index, src):
+def scatter(input, dim, index, src, reduce=None):
     """**Overwrites** at the positions the indices point at. On a collision the
     last write survives.
 
     It parts from `scatter_add` at colliding indices only — measured with
     non-colliding indices the two functions look identical. So the golden asks
     with indices where 0 appears twice.
+
+    **`reduce` is torch's deprecated overload and it is carried anyway.** torch
+    warns that `scatter_reduce` replaces it and still answers `'add'` and
+    `'multiply'`, refusing every other word — so a call written against torch
+    runs here. Given, it accumulates *onto what is already there* rather than
+    overwriting: `[[1,2]].scatter(0, [[0,0]], [[3,5]], reduce='add')` is
+    `1+3+5`, not `3+5` (measured).
+
+    **And it refuses to differentiate, because torch does** — `derivative for
+    aten::scatter is not implemented` the moment `reduce` is given, for both
+    operands. Computing a slope torch will not compute is the failure this
+    repository keeps finding from the other side: the number comes out, nothing
+    says it is ours alone, and it is wrong only in training.
     """
     input = _wrap(input)
     idx = _as_index(index)
@@ -4133,6 +4752,31 @@ def scatter(input, dim, index, src):
     scalar = not isinstance(src, Tensor)
     values = (_np.full(idx.shape, src, dtype=input.data.dtype) if scalar
               else _wrap(src).data)
+    if reduce is not None:
+        if reduce not in ("add", "multiply"):
+            raise RuntimeError(_like_torch(
+                f"scatter's `reduce` takes 'add' or 'multiply'; got {reduce!r}. "
+                "The wider set ('sum', 'prod', 'mean', 'amax', 'amin') belongs to "
+                "`scatter_reduce`, which is the replacement torch points at.",
+                "reduce argument must be either add or multiply."))
+        # Colliding indices accumulate here, so `put_along_axis` is not it — the
+        # same reason `scatter_add` reaches for `add.at`.
+        grid = _np.indices(idx.shape)
+        where = list(grid)
+        where[dim] = idx
+        (_np.add if reduce == "add" else _np.multiply).at(out, tuple(where), values)
+
+        def refuse(g):
+            # `RuntimeError`, not `NotImplementedError`, because that is what torch
+            # raises — and `NotImplementedError` *is* a `RuntimeError`, so an
+            # `except` clause would not have told them apart. Only the name does.
+            raise RuntimeError(_like_torch(
+                "scatter with `reduce` has no gradient — torch does not define one "
+                "either, and a slope invented here would be wrong only in training.",
+                "derivative for aten::scatter is not implemented"))
+
+        parents = (input,) if scalar else (input, _wrap(src))
+        return input._make(out, parents, refuse, "ScatterBackward0")
     _np.put_along_axis(out, idx, values, axis=dim)
 
     def back(g):
@@ -4427,7 +5071,8 @@ def median(t, dim=None, keepdim=False):
         picked = _np.expand_dims(picked, dim)
         take = _np.expand_dims(take, dim)
 
-    return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take))
+    return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take),
+                   "median")
 
 
 def norm(input, p=2, dim=None, keepdim=False, dtype=None):  # noqa: A002
@@ -4450,6 +5095,29 @@ def norm(input, p=2, dim=None, keepdim=False, dtype=None):  # noqa: A002
         "A norm exists over the reals only — a square root does not fit in an "
         "integer cell. Call `.float()` first.",
         "linalg.vector_norm: Expected a floating point or complex tensor as input")
+    # **`p` may be a word, and both were a `ValueError` from `float()`.**
+    # `torch.norm(A, 'fro')` and `torch.norm(A, 'nuc')` are torch's own spellings —
+    # the first is the elementwise 2-norm under another name (measured: `'fro'` on a
+    # 2×3×4 gives 65.757, which is the root of the sum of all 24 squares) and the
+    # second is `matrix_norm`'s nuclear norm, the sum of the singular values.
+    #
+    # Neither reached a branch, so both fell to the last line and stopped inside
+    # `float('nuc')` — a message about converting a string, naming neither the
+    # argument nor the function.
+    if p == "fro":
+        return norm(input, 2, dim, keepdim)
+    if p == "nuc":
+        # torch's two checks, in torch's order and with torch's wording: the rank
+        # first, then the count of axes. On a 1-D with no `dim` the axis list is one
+        # long, and torch still says *at least 2 dimensions* rather than *a 2-tuple*.
+        axes = tuple(range(input.data.ndim)) if dim is None else tuple(dim)
+        if input.data.ndim < 2:
+            raise RuntimeError("linalg.matrix_norm: The input tensor A must have "
+                               "at least 2 dimensions.")
+        if len(axes) != 2:
+            raise RuntimeError("linalg.matrix_norm: dim must be a 2-tuple. Got "
+                               + " ".join(str(a) for a in axes))
+        return matrix_norm(input, "nuc", axes, keepdim)
     if p == 1:
         return input.abs().sum(dim=dim, keepdim=keepdim)
     if p == 2:
@@ -4514,7 +5182,11 @@ def amin(input, dim=None, keepdim=False):
 
 
 def aminmax(input, dim=None, keepdim=False):
-    return _MinMax(amin(input, dim, keepdim), amax(input, dim, keepdim))
+    # **Its fields are `min` and `max`, not `values` and `indices`** — measured, and
+    # it is the one member of this family that names them differently. So it uses
+    # `_named` rather than `_MinMax`; the pair class would print the right numbers
+    # under two wrong names.
+    return _Aminmax(amin(input, dim, keepdim), amax(input, dim, keepdim))
 
 
 def _nan_mask(t):
@@ -4633,7 +5305,10 @@ def _cum_extreme(t, dim, pick, name):
         _np.add.at(z, _index_for(idx, dim, t.data.ndim), _np.asarray(g))
         return (z,)
 
-    return _MinMax(t._make(out, (t,), back, name), Tensor(idx.astype(_np.int64)))
+    # `name` is the backward node's (`CummaxBackward0`); the printed kind is the
+    # function's, which is that with the suffix off and lowercased.
+    return _MinMax(t._make(out, (t,), back, name), Tensor(idx.astype(_np.int64)),
+                   name.replace("Backward0", "").lower())
 
 
 def _index_for(idx, dim, ndim):
@@ -4695,7 +5370,7 @@ def kthvalue(input, k, dim=-1, keepdim=False):
         return (z,)
 
     return _MinMax(input._make(out, (input,), back, "KthvalueBackward0"),
-                   Tensor(at.astype(_np.int64)))
+                   Tensor(at.astype(_np.int64)), "kthvalue")
 
 
 def msort(input):
@@ -4988,7 +5663,7 @@ def topk(input, k, dim=-1, largest=True, sorted=True):
         raise RuntimeError("selected index k out of range")
     order = _order(input.data, dim, largest)
     idx = _np.take(order, _np.arange(k), axis=dim)
-    return _MinMax(_pick(input, idx, dim, "TopkBackward0"), Tensor(idx))
+    return _MinMax(_pick(input, idx, dim, "TopkBackward0"), Tensor(idx), "topk")
 
 
 def sort(input, dim=-1, descending=False, stable=False):
@@ -5000,7 +5675,7 @@ def sort(input, dim=-1, descending=False, stable=False):
     if input.data.ndim == 0:
         return _at_rank_0(input, lambda x: sort(x, 0, descending, stable))
     idx = _order(input.data, dim, descending)
-    return _MinMax(_pick(input, idx, dim, "SortBackward0"), Tensor(idx))
+    return _MinMax(_pick(input, idx, dim, "SortBackward0"), Tensor(idx), "sort")
 
 
 def argsort(input, dim=-1, descending=False, stable=False):
@@ -5153,7 +5828,7 @@ def einsum(equation, *operands):
 
 
 def empty(*shape, dtype=None, requires_grad=False, device=None):
-    return zeros(*shape, dtype=dtype, requires_grad=requires_grad)
+    return zeros(*shape, dtype=dtype, requires_grad=requires_grad, device=device)
 
 
 
@@ -5696,11 +6371,71 @@ def _pool_all(x):
     return x.mean(dim=2).mean(dim=2).reshape(x.data.shape[0], x.data.shape[1], 1, 1)
 
 
-def layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):
-    mean = input.mean(dim=-1, keepdim=True)
-    centered = input - mean
+def _layer_norm_checks(full, normalized_shape, weight_shape=None, bias_shape=None):
+    """torch's four refusals for `layer_norm`, in torch's words, before anything
+    is computed. Returns the shape as a tuple.
+
+    Shapes rather than tensors, so **the binding can borrow it** — over there the
+    values are on the GPU and only the shape is on this side. Written again there it
+    would be a second copy of four wordings to keep in step, and the copy is what
+    drifts.
+    """
+    # torch's own type refusal: the **function** wants a tuple where the layer
+    # happily takes an int (measured — `nn.LayerNorm(4)` is `(4,)`).
+    if isinstance(normalized_shape, int):
+        raise TypeError("layer_norm(): argument 'normalized_shape' (position 2) "
+                        "must be tuple of ints, not int")
+    shape = tuple(int(n) for n in normalized_shape)
+    if not shape:
+        raise RuntimeError(
+            "Expected normalized_shape to be at least 1-dimensional, i.e., "
+            "containing at least one element, but got normalized_shape = []")
+    dims = len(shape)
+    if tuple(full)[len(full) - dims:] != shape:
+        raise RuntimeError(
+            f"Given normalized_shape={list(shape)}, expected input with shape "
+            f"[*, {', '.join(str(n) for n in shape)}], but got input of "
+            f"size{list(full)}")
+    for who, got in (("weight", weight_shape), ("bias", bias_shape)):
+        if got is not None and tuple(got) != shape:
+            raise RuntimeError(
+                f"Expected {who} to be of same shape as normalized_shape, but got "
+                f"{who} of shape {list(got)} and normalized_shape = {list(shape)}")
+    return shape
+
+
+def layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):    # noqa: A002
+    """**`normalized_shape` was in the signature and the body never read it.**
+
+    It folded the last axis, always. With one axis that is the right answer, so
+    `layer_norm(x, (4,))` agreed with torch and every case asked it that way;
+    `layer_norm(x, (3, 4))` folds the last *two* axes as one block — mean and
+    variance over 12 cells, not 4 — and came back normalised over 4 with no
+    exception. A mismatched shape, an empty one and a bare `int` were all accepted
+    too, and torch stops at each.
+
+    **`nn.LayerNorm` had all of this right and this did not**, which is why nothing
+    said so: the golden asked the layer for the multi-axis case and the function for
+    the single-axis one. The arithmetic is here now and the layer calls it — the
+    same direction `embedding` below was pointed, and for the same reason, that a
+    function taking the caller's own weight tensor is the primitive.
+    """
+    full = tuple(int(n) for n in input.data.shape)
+    shape = _layer_norm_checks(
+        full, normalized_shape,
+        *[None if v is None else tuple(int(n) for n in v.data.shape)
+          for v in (weight, bias)])
+    dims = len(shape)
+    # The last `dims` axes are folded into one before the statistics are taken.
+    # Folded axis by axis the numbers differ — the mean of means is not the mean.
+    lead = full[:len(full) - dims]
+    flat = input.reshape(*lead, -1) if dims > 1 else input
+    mean = flat.mean(dim=-1, keepdim=True)
+    centered = flat - mean
     var = (centered * centered).mean(dim=-1, keepdim=True)
     out = centered / (var + eps) ** 0.5
+    if dims > 1:
+        out = out.reshape(*full)
     if weight is not None:
         out = out * weight
     return out + bias if bias is not None else out
@@ -5722,8 +6457,6 @@ def embedding(input, weight, padding_idx=None, max_norm=None,   # noqa: A002
     `max_norm` shortens rows **in the table itself** — a side effect on a parameter,
     which `_renorm_rows` explains at length and which no output comparison can see.
     """
-    if scale_grad_by_freq:
-        _unsupported("embedding(scale_grad_by_freq=True)")
     if sparse:
         _unsupported("embedding(sparse=True) — there is no sparse gradient here")
     ids = _wrap(input).data.astype(int)
@@ -5734,7 +6467,19 @@ def embedding(input, weight, padding_idx=None, max_norm=None,   # noqa: A002
 
     def back(g):
         gw = _np.zeros_like(weight.data)
-        _np.add.at(gw, ids.reshape(-1), _np.asarray(g).reshape(-1, dim))
+        flat = ids.reshape(-1)
+        _np.add.at(gw, flat, _np.asarray(g).reshape(-1, dim))
+        # **`scale_grad_by_freq` divides each row by how often that index appears in
+        # this batch**, so a token seen three times does not pull three times as hard
+        # as one seen once. Measured against torch: with ids `[[0,1,1],[2,1,0]]` row 0
+        # is halved and row 1 is divided by three.
+        #
+        # A row nobody indexed has a count of zero and a gradient of zero; the divisor
+        # is forced to one there rather than dividing zero by zero into a `nan` that
+        # would then poison every step the optimiser takes on that row.
+        if scale_grad_by_freq:
+            seen = _np.bincount(flat, minlength=gw.shape[0]).astype(gw.dtype)
+            gw = gw / _np.where(seen == 0, 1.0, seen)[:, None]
         # **The padding row learns nothing.** Left in, a pad token drifts toward
         # whatever the loss wants and the mask stops meaning "ignore this".
         if padding_idx is not None:
@@ -5750,27 +6495,49 @@ def nll_loss(input, target, reduction="mean"):  # noqa: A002
     return _reduce(-picked, reduction)
 
 
-def _refuse_loss_weight(where_, weight):
-    """torch's `weight` on the elementwise losses. **The seat is taken and the value
-    is refused**, which is what `_WrittenLoss` decided for the classification losses
-    and the reason carries over unchanged: under `mean` torch divides by the sum of
-    the weights rather than by the sample count, so a `weight` accepted and unused
-    changes the number quietly and sends the reader after the learning rate.
+def _weighted_reduce(out, weight, reduction, where_, mean_over_weights):
+    """torch's `weight` on the elementwise losses.
 
-    Taking the seat is not a fiction — `F.l1_loss(a, b, 'sum', w)` lands on `weight`
-    in torch and now lands on `weight` here, where it says so by name. Left out, the
-    same call lands on nothing.
+    **The seat was taken and the value refused**, on the ground that under `mean`
+    torch divides by the sum of the weights rather than by the sample count, so a
+    `weight` accepted and unused changes the number quietly. That reason was right,
+    and it was also the specification — measured on three weight vectors:
+
+        none  w · ℓ                      all three
+        sum   Σ w · ℓ                    all three
+        mean  Σ w·ℓ / Σ w                `l1_loss` and `mse_loss`
+        mean  Σ w·ℓ / n                  `huber_loss`
+
+    **`huber_loss` divides by the count and the other two do not**, which is why
+    `mean_over_weights` is a parameter rather than a rule. Assuming the family
+    agreed would have made huber's `mean` wrong by a factor of `Σw / n` — 2.5 on a
+    weight vector of `[1, 2, 3, 4]`, and no exception anywhere.
+
+    The shapes must match exactly. torch does not broadcast here: a `(6,)` weight
+    against a `(2, 3)` input raises *Weights and input must have the same size*,
+    and so does a `(3,)` one, so the wording is taken from torch rather than
+    invented.
     """
-    if weight is not None:
-        _unsupported(f"{where_}(weight=…) — torch's `mean` divides by the sum of "
-                     "the weights, so accepting it unused would change the loss")
+    if weight is None:
+        return _reduce(out, reduction)
+    weight = _wrap(weight)
+    if tuple(weight.data.shape) != tuple(out.data.shape):
+        raise ValueError("Weights and input must have the same size.")
+    scaled = out * weight
+    if reduction != "mean":
+        return _reduce(scaled, reduction)
+    # `_reduce` is still asked for the divisor-free part so that an unknown
+    # `reduction` stops in exactly one place.
+    if not mean_over_weights:
+        return _reduce(scaled, "mean")
+    return scaled.sum() / weight.sum()
 
 
 def l1_loss(input, target, size_average=None, reduce=None, reduction="mean",
             weight=None):  # noqa: A002  # noqa: A002
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _refuse_loss_weight("l1_loss", weight)
-    return _reduce((_wrap(input) - _wrap(target)).abs(), reduction)
+    return _weighted_reduce((_wrap(input) - _wrap(target)).abs(), weight,
+                            reduction, "l1_loss", True)
 
 
 def smooth_l1_loss(input, target, size_average=None, reduce=None, reduction="mean",
@@ -5872,13 +6639,15 @@ def huber_loss(input, target, reduction="mean", delta=1.0,   # noqa: A002
     defaults only, treating the two as one function still passes, so the golden
     asks with δ changed.
 
-    `weight` — see `_refuse_loss_weight`.
+    `weight` — see `_weighted_reduce`. **This one's `mean` divides by the count**
+    where `l1_loss` and `mse_loss` divide by the sum of the weights; measured, not
+    inferred from the family.
     """
-    _refuse_loss_weight("huber_loss", weight)
     diff = _wrap(input) - _wrap(target)
     small = _np.abs(diff.data) < delta
-    return _reduce(where(Tensor(small), 0.5 * diff * diff,
-                         delta * (diff.abs() - 0.5 * delta)), reduction)
+    return _weighted_reduce(where(Tensor(small), 0.5 * diff * diff,
+                                  delta * (diff.abs() - 0.5 * delta)),
+                            weight, reduction, "huber_loss", False)
 
 
 def kl_div(input, target, size_average=None, reduce=None, reduction="mean",
@@ -6158,8 +6927,18 @@ def unfold_im2col(input, kernel_size, dilation=1, padding=0, stride=1):  # noqa:
     names are kept apart and this is attached to `F.unfold` alone.
     """
     t = _mat(input, "unfold", square=False)
+    # **torch takes 3-D as one unbatched sample**, and the refusal here said *anything
+    # but 4-D* — half right. Measured: `(2, 3, 4)` with a 2×2 kernel comes back as
+    # `(8, 6)`, which is `(C·kh·kw, L)` with no batch axis, and 5-D is refused with the
+    # message repeated below.
+    if t.data.ndim == 3:
+        got = unfold_im2col(t.reshape(1, *t.data.shape), kernel_size, dilation,
+                            padding, stride)
+        return got.reshape(*got.data.shape[1:])
     if t.data.ndim != 4:
-        _unsupported("unfold (anything but 4-D)")
+        raise RuntimeError(
+            "Expected 3D or 4D (batch mode) tensor with possibly 0 batch size and "
+            f"other non-zero dimensions for input, but got: {list(t.data.shape)}")
     kernel, dil = _pair(kernel_size), _pair(dilation)
     pad_, strd = _pair(padding), _pair(stride)
     padded = pad(t, (pad_[1], pad_[1], pad_[0], pad_[0]))
@@ -6173,6 +6952,17 @@ def fold(input, output_size, kernel_size, dilation=1, padding=0, stride=1):
     """Fold what was spread back. **Overlaps are added** — that is what this
     function means."""
     t = _wrap(input)
+    # **The unbatched form is 2-D here, one rank below `unfold`'s**, because this side
+    # has already folded the channel and the kernel into one axis. Measured: `(8, 6)`
+    # comes back as `(2, 3, 4)` and 4-D is refused.
+    if t.data.ndim == 2:
+        got = fold(t.reshape(1, *t.data.shape), output_size, kernel_size,
+                   dilation, padding, stride)
+        return got.reshape(*got.data.shape[1:])
+    if t.data.ndim != 3:
+        raise RuntimeError(
+            "Expected 2D or 3D (batch mode) tensor for input with possibly 0 batch "
+            f"size and non-zero dimensions for input, but got: {list(t.data.shape)}")
     kernel, dil = _pair(kernel_size), _pair(dilation)
     pad_, strd = _pair(padding), _pair(stride)
     out_h, out_w = _pair(output_size)
@@ -7117,7 +7907,11 @@ def _named(kind, *fields):
             return getattr(self, fields[i])
 
         def __repr__(self):
-            inner = ", ".join(f"{f}={getattr(self, f)!r}" for f in fields)
+            # **One field per line**, which is torch's layout — measured. Joined
+            # with `", "` the first line broke and the rest ran together, so the
+            # shape was nearly right and no two of these ever printed the same as
+            # torch's beyond the first field.
+            inner = ",\n".join(f"{f}={getattr(self, f)!r}" for f in fields)
             return f"torch.return_types.{kind}(\n{inner})"
 
     _R.__name__ = _R.__qualname__ = kind
@@ -7125,6 +7919,10 @@ def _named(kind, *fields):
 
 
 _Slogdet = _named("slogdet", "sign", "logabsdet")
+# **Its fields are `min` and `max`**, which is why it is not `_MinMax` — that class
+# names them `values` and `indices`, and this is the one member of the family torch
+# spells differently.
+_Aminmax = _named("aminmax", "min", "max")
 _QR = _named("linalg_qr", "Q", "R")
 _SVD = _named("linalg_svd", "U", "S", "Vh")
 # **`torch.svd` and `torch.linalg.svd` are two functions, and the third field is
@@ -7793,6 +8591,29 @@ def lstsq(input, b, rcond=None, *, driver=None):  # noqa: A002
     `rcond` sets the cutoff below which a singular value counts as zero, which is
     numpy's own `rcond` and is what moves `rank`. Under `gels` there is no rank
     estimate to move.
+
+    **The table above is about the other three fields. `solution` has its own
+    story, and it was wrong in two places.** numpy exposes one path, the SVD one,
+    which is `gelsd`. At full rank all four of torch's drivers agree to float
+    noise and nothing shows. Once `rcond` actually cuts a singular value they
+    separate, measured on `[[1,1],[1,2],[1,3],[1,4]]` against `[6,5,7,10]` with
+    `rcond=0.9`:
+
+        gels             3.500, 1.400   — the cutoff is not applied at all
+        gelsy (default)  0.770, 2.310   — a rank-revealing QR
+        gelsd, gelss     0.790, 2.322   — the SVD, which is numpy's
+
+    So `gels` now passes `rcond=None` down: torch's `gels` assumes full rank and
+    has no cutoff to apply, and applying one was **a wrong number under an
+    argument that reads as a tuning knob** — 3.5 against 0.79, which is not a
+    tolerance away from anything.
+
+    And `gelsy` — *the default*, so this is what an unadorned call gets — is
+    refused when the cutoff bites. There is no pivoted QR in numpy to produce it
+    with; the alternative is handing back the SVD's answer under the name of a
+    different algorithm, and the two differ by 2.5% here. At full rank the
+    cutoff changes nothing and the call goes through, which is every ordinary
+    use of it.
     """
     if driver is not None and driver not in _LSTSQ_DRIVERS:
         raise RuntimeError(
@@ -7800,9 +8621,78 @@ def lstsq(input, b, rcond=None, *, driver=None):  # noqa: A002
             "(gels, gelsy, gelsd, gelss)")
     driver = driver or "gelsy"
     input, bt = _mat(input, "lstsq", square=False), _wrap(b)
-    if input.data.ndim != 2:
-        _unsupported("lstsq (batched)")
-    sol, res, rank, sv = _np.linalg.lstsq(input.data, bt.data, rcond=rcond)
+    lead, vector = _lstsq_batch(input.data.shape, bt.data.shape)
+    if lead is None:
+        return _lstsq_one(input.data, bt.data, driver, rcond)
+    a_all = _np.broadcast_to(input.data, (*lead, *input.data.shape[-2:]))
+    b_tail = bt.data.shape[-1:] if vector else bt.data.shape[-2:]
+    b_all = _np.broadcast_to(bt.data, (*lead, *b_tail))
+    parts = [_lstsq_one(a_all[at], b_all[at], driver, rcond)
+             for at in _np.ndindex(*lead)]
+    # **An empty field stays empty rather than becoming a stack of empties.** torch
+    # gives `rank` as `(0,)` under `gels` whether or not there is a batch, and
+    # stacking would turn the absence into a shape.
+    def stacked(get):
+        rows = [_np.asarray(get(p).data) for p in parts]
+        if rows[0].size == 0 and rows[0].ndim == 1:
+            return rows[0]
+        return _np.stack(rows).reshape(*lead, *rows[0].shape)
+    return _Lstsq(Tensor(stacked(lambda p: p.solution)),
+                  Tensor(stacked(lambda p: p.residuals)),
+                  Tensor(stacked(lambda p: p.rank)),
+                  Tensor(stacked(lambda p: p.singular_values)))
+
+
+def _lstsq_batch(a, b):
+    """Which of the two readings of the right-hand side torch takes, and what the
+    batch shape is. `(None, False)` means there is no batch and numpy's own
+    two-dimensional path answers it.
+
+    **The two readings do not broadcast the same way, and that is measured rather
+    than assumed.** Against a `(2, 4, 2)` matrix torch takes `(2, 4)` as a batch of
+    vectors and refuses `(1, 4)`, which broadcasts perfectly well — so the vector
+    reading wants the leading dimensions *equal*. The matrix reading does
+    broadcast: `(1, 4, 1)` is accepted and stretched to two.
+
+    A shape neither reading accepts is refused here rather than answered, because
+    numpy would happily answer several of them and torch does not.
+
+    **Which refusal is a difference, and it is deliberate.** Ten right-hand-side
+    shapes were put to torch against `(2, 4, 2)`; both sides accept the same three
+    and refuse the same seven. On three of the seven — `(4, 1)`, `(4, 2)` and
+    `(3, 4, 1)` — torch names a broadcast failure and this names the size. Trying to
+    reproduce the choice: torch reports the broadcast for those three and the size
+    for `(1, 4)`, whose leading dimensions *do* broadcast, and for `(3, 4)`, whose do
+    not. No rule separates the five, because the two messages come from different
+    places inside torch rather than from one decision. **Refusing is what matters
+    and that agrees**; the wording of a refusal on a malformed shape does not.
+    """
+    if len(b) == len(a) and b[-2] == a[-2]:
+        return (_np.broadcast_shapes(a[:-2], b[:-2]) or None), False
+    if len(b) == len(a) - 1 and tuple(b[:-1]) == tuple(a[:-2]):
+        return (tuple(a[:-2]) or None), True
+    if len(b) < len(a) - 1:
+        raise RuntimeError(
+            "torch.linalg.lstsq: input.dim() must be greater or equal to "
+            "other.dim() and (input.dim() - other.dim()) <= 1")
+    raise RuntimeError(
+        "torch.linalg.lstsq: input.size(-2) should match other.size(-2)")
+
+
+def _lstsq_one(a, b, driver, rcond):
+    """One matrix's least squares. The batched path above calls this per matrix —
+    numpy's `lstsq` is two-dimensional and has no batch of its own."""
+    # `gels` has no rank estimate, so it has no cutoff — torch's does not read
+    # `rcond` at all and neither does this.
+    cut = None if driver == "gels" else rcond
+    sol, res, rank, sv = _np.linalg.lstsq(a, b, rcond=cut)
+    if driver == "gelsy" and rank < min(a.shape):
+        # The sentence has to stay a noun phrase — `_unsupported` finishes it with
+        # *is not in the browser subset*, which is the wording the golden matches on.
+        # The why is in the docstring above; `driver="gelsd"` is the way through.
+        _unsupported(f'lstsq(rcond={rcond}, driver="gelsy") on a cut that leaves '
+                     "the matrix rank-deficient, where a pivoted QR and the SVD "
+                     "part and only the SVD is here")
     empty_f = _np.zeros(0, dtype=sol.dtype)
     if driver == "gelsy":
         res = empty_f
@@ -7879,74 +8769,233 @@ def lu_factor_ex(A, pivot=True, check_errors=False):  # noqa: N803
                        Tensor(info.reshape(shape) if shape else info[0]))
 
 
-def _ldl_pack(data):
-    """`L D Lᵀ` for a symmetric matrix. **It does not pivot.**
+# Bunch-Kaufman's threshold. **It is a constant of the method, not a tolerance** —
+# the value that bounds the growth factor while keeping the 1×1 pivot whenever it is
+# safe. LAPACK, torch and this all use it.
+_BK_ALPHA = (1.0 + 17.0 ** 0.5) / 8.0
 
-    torch uses LAPACK's Bunch-Kaufman, which swaps where it needs to. This handles
-    only the cases with nothing to swap, such as positive definite ones, and
-    **refuses loudly** when a diagonal entry comes near 0 — carrying on quietly,
-    the swapped and unswapped versions give different answers and both are
-    plausible.
 
-    The answer is **packed into one matrix** in torch's shape — `D` on the diagonal
-    and `L` below it.
+def _ldl_one(mat):
+    """LAPACK's `dsytf2` on the lower triangle: `L D Lᵀ` **with pivoting.**
+
+    **This refused an indefinite matrix and the reason was accurate** — torch uses
+    Bunch-Kaufman, which swaps where it needs to, and a factorisation without the
+    swaps is a different one. So the way through was to write Bunch-Kaufman rather
+    than to loosen anything: there are many valid `L D Lᵀ` decompositions and only
+    LAPACK's packing and swap table compare against torch's.
+
+    The pivot table is LAPACK's own: a positive `k+1` is a 1×1 pivot with row `k`
+    swapped for row `ipiv[k]−1`, and **a repeated negative pair is a 2×2 block**.
+    torch hands that straight through, so `[-3, -3, 3]` on a 3×3 is a block over the
+    first two rows.
+
+    **The swap is over columns, not rows**, and that one line is where this first
+    went wrong: written as a row swap, ten of thirteen matrices still agreed — the
+    three that did not were the ones whose later pivot search read a corrupted entry,
+    so the first symptom was a *pivot table* diverging two steps further on.
+
+    Checked against torch on 470 symmetric matrices, ranks 1 to 8, definite,
+    indefinite and hollow: every packed entry and every pivot code.
     """
+    a = _np.tril(mat.astype(_np.float64))
+    n = a.shape[0]
+    ipiv = _np.zeros(n, dtype=_np.int32)
+    # **`info` is the first zero pivot, counting from 1**, which is what LAPACK
+    # reports and `ldl_factor_ex` hands back. It used to be hardcoded to 0 with the
+    # note *the bad cases are refused* — true while they were.
+    info = 0
+    k = 0
+    while k < n:
+        step = 1
+        # **`abs` is a tensor function in this file** — the module scope shadows the
+        # builtin, so `_np.abs` is this file's rule and it has been stepped on here
+        # before.
+        here = _np.abs(a[k, k])
+        if k < n - 1:
+            imax = k + 1 + int(_np.argmax(_np.abs(a[k + 1:, k])))
+            colmax = _np.abs(a[imax, k])
+        else:
+            imax, colmax = -1, 0.0
+        if max(here, colmax) == 0.0 or here >= _BK_ALPHA * colmax:
+            kp = k
+        else:
+            rowmax = max((_np.abs(a[imax, j]) for j in range(k, imax)), default=0.0)
+            if imax < n - 1:
+                jmax = imax + 1 + int(_np.argmax(_np.abs(a[imax + 1:, imax])))
+                rowmax = max(rowmax, _np.abs(a[jmax, imax]))
+            if here >= _BK_ALPHA * colmax * (colmax / rowmax):
+                kp = k
+            elif _np.abs(a[imax, imax]) >= _BK_ALPHA * rowmax:
+                kp = imax
+            else:
+                kp, step = imax, 2
+        kk = k + step - 1
+        if kp != kk:
+            if kp + 1 < n:
+                keep = a[kp + 1:, kk].copy()
+                a[kp + 1:, kk] = a[kp + 1:, kp]
+                a[kp + 1:, kp] = keep
+            for j in range(kk + 1, kp):
+                a[j, kk], a[kp, j] = a[kp, j], a[j, kk]
+            a[kk, kk], a[kp, kp] = a[kp, kp], a[kk, kk]
+            if step == 2:
+                a[kk, k], a[kp, k] = a[kp, k], a[kk, k]
+        if step == 1:
+            d11 = a[k, k]
+            if d11 == 0.0 and info == 0:
+                info = k + 1
+            if d11 != 0.0 and k < n - 1:
+                a[k + 1:, k] /= d11
+                a[k + 1:, k + 1:] = _np.tril(
+                    a[k + 1:, k + 1:] - d11 * _np.outer(a[k + 1:, k], a[k + 1:, k]))
+            ipiv[k] = kp + 1
+        else:
+            if k < n - 2:
+                d21 = a[k + 1, k]
+                d11 = a[k + 1, k + 1] / d21
+                d22 = a[k, k] / d21
+                d21 = (1.0 / (d11 * d22 - 1.0)) / d21
+                for j in range(k + 2, n):
+                    wk = d21 * (d11 * a[j, k] - a[j, k + 1])
+                    wkp1 = d21 * (d22 * a[j, k + 1] - a[j, k])
+                    a[j:, j] -= a[j:, k] * wk + a[j:, k + 1] * wkp1
+                    a[j, k], a[j, k + 1] = wk, wkp1
+            ipiv[k] = ipiv[k + 1] = -(kp + 1)
+        k += step
+    return a, ipiv, info
+
+
+def _ldl_pack(data):
+    """`_ldl_one` over a batch. The answer is **packed into one matrix** in torch's
+    shape — `D` on the diagonal and `L` below it."""
     a = data.astype(_np.float64)
     n = a.shape[-1]
-    flat = a.reshape(-1, n, n).copy()
-    out = _np.zeros_like(flat)
+    flat = a.reshape(-1, n, n)
+    outs, pivs, infos = [], [], []
     for b in range(flat.shape[0]):
-        mat, ld = flat[b], out[b]
-        for j in range(n):
-            d = mat[j, j] - sum(ld[j, k] ** 2 * ld[k, k] for k in range(j))
-            # **`abs` is a tensor function in this file** — the module scope
-            # shadows the builtin. That place was stepped on again here, and
-            # calling `_np.abs` is this file's rule.
-            if _np.abs(d) < 1e-12:
-                _unsupported("ldl_factor — a symmetric matrix that needs pivoting (indefinite)")
-            ld[j, j] = d
-            for i in range(j + 1, n):
-                s = sum(ld[i, k] * ld[k, k] * ld[j, k] for k in range(j))
-                ld[i, j] = (mat[i, j] - s) / d
-    # The swap table is the identity counting from 1 — nothing was swapped.
-    piv = _np.tile(_np.arange(1, n + 1, dtype=_np.int32), flat.shape[0], )
-    return out.reshape(a.shape), piv.reshape(data.shape[:-2] + (n,))
+        ld, piv, info = _ldl_one(flat[b])
+        outs.append(ld)
+        pivs.append(piv)
+        infos.append(info)
+    return (_np.stack(outs).reshape(a.shape),
+            _np.stack(pivs).reshape(data.shape[:-2] + (n,)),
+            _np.array(infos, dtype=_np.int32))
 
 
 def ldl_factor(input, hermitian=False):  # noqa: A002
-    """A symmetric matrix as `L D Lᵀ`. It gives the packed `LD` and the swap
-    table."""
+    """A symmetric matrix as `L D Lᵀ`. It gives the packed `LD` and the swap table.
+
+    **A zero pivot stops here**, which is the one place this and torch part on
+    purpose: torch's `ldl_factor` meets a singular matrix and raises
+    *INTERNAL ASSERT FAILED … please report a bug to PyTorch* rather than saying
+    anything about the matrix. Both stop, and the golden asks for that rather than
+    for a wording nobody would want to copy.
+    """
     input = _mat(input, "ldl_factor")
-    ld, piv = _ldl_pack(input.data)
+    ld, piv, info = _ldl_pack(input.data)
+    if int(info.max()) != 0:
+        raise RuntimeError(
+            f"linalg.ldl_factor: the leading minor of order {int(info.max())} is "
+            "singular — `ldl_factor_ex` reports it in `info` instead of stopping")
     return _LdlFactor(Tensor(ld.astype(input.data.dtype)), Tensor(piv))
 
 
 def ldl_factor_ex(input, hermitian=False, check_errors=False):  # noqa: A002
-    """`ldl_factor` with `info` attached. It is always 0 here — the bad cases are
-    refused."""
+    """`ldl_factor` with `info` attached — **the first zero pivot, counting from 1.**
+
+    It used to be hardcoded to 0, with the note *the bad cases are refused*, which
+    was true while they were. Measured against torch: `[[1,1],[1,1]]` gives 2 and a
+    zero matrix gives 1.
+    """
     input = _mat(input, "ldl_factor_ex")
-    ld, piv = _ldl_pack(input.data)
+    ld, piv, info = _ldl_pack(input.data)
     shape = input.data.shape[:-2]
-    zero = _np.zeros(shape, dtype=_np.int32) if shape else _np.int32(0)
-    return _LdlFactorEx(Tensor(ld.astype(input.data.dtype)), Tensor(piv), Tensor(zero))
+    got = info.reshape(shape) if shape else _np.int32(info[0])
+    return _LdlFactorEx(Tensor(ld.astype(input.data.dtype)), Tensor(piv), Tensor(got))
+
+
+def _ldl_solve_one(packed, piv, rhs):
+    """`P L D Lᵀ Pᵀ x = b` with LAPACK's pivot table, which is `dsytrs`.
+
+    **The old body read the packed matrix and ignored the table**, which was right
+    only while nothing was ever swapped — the factorisation refused everything else.
+    With Bunch-Kaufman in place it was wrong on 47 of 80 random symmetric matrices
+    and returned a plausible number every time.
+
+    Three parts, and the pivots enter in two of them. The swaps are applied to `b`
+    going in and undone coming out; `D` is block diagonal, so a 2×2 block is a 2×2
+    solve rather than a division.
+    """
+    n = packed.shape[0]
+    x = rhs.copy()
+
+    # Forward: swap, eliminate, divide — **in that order, one step at a time.**
+    # Written as *permute, then solve `L`, then solve `D`* it is wrong, because `L`
+    # was built in the swapped order and the two do not commute. That version was
+    # wrong on 97 of 279 random matrices and plausible on every one of them.
+    k = 0
+    while k < n:
+        if piv[k] > 0:
+            kp = int(piv[k]) - 1
+            if kp != k:
+                x[[k, kp]] = x[[kp, k]]
+            if k < n - 1:
+                x[k + 1:] -= _np.outer(packed[k + 1:, k], x[k])
+            x[k] = x[k] / packed[k, k]
+            k += 1
+        else:
+            kp = -int(piv[k]) - 1
+            if kp != k + 1:
+                x[[k + 1, kp]] = x[[kp, k + 1]]
+            if k < n - 2:
+                x[k + 2:] -= _np.outer(packed[k + 2:, k], x[k])
+                x[k + 2:] -= _np.outer(packed[k + 2:, k + 1], x[k + 1])
+            # **The block's off-diagonal is part of `D`**, not of the unit triangle
+            # around it. Divided through by it, as LAPACK does.
+            off = packed[k + 1, k]
+            top = packed[k, k] / off
+            bot = packed[k + 1, k + 1] / off
+            denom = top * bot - 1.0
+            b0, b1 = x[k] / off, x[k + 1] / off
+            x[k] = (bot * b0 - b1) / denom
+            x[k + 1] = (top * b1 - b0) / denom
+            k += 2
+
+    # Back: `Lᵀ`, then the swap undone, walking up. A 2×2 block is met at its **second**
+    # row and both of its columns are applied before the pair steps past.
+    k = n - 1
+    while k >= 0:
+        if piv[k] > 0:
+            if k < n - 1:
+                x[k] -= packed[k + 1:, k] @ x[k + 1:]
+            kp = int(piv[k]) - 1
+            if kp != k:
+                x[[k, kp]] = x[[kp, k]]
+            k -= 1
+        else:
+            if k < n - 1:
+                x[k] -= packed[k + 1:, k] @ x[k + 1:]
+                x[k - 1] -= packed[k + 1:, k - 1] @ x[k + 1:]
+            kp = -int(piv[k]) - 1
+            if kp != k:
+                x[[k, kp]] = x[[kp, k]]
+            k -= 2
+    return x
 
 
 def ldl_solve(LD, pivots, b, hermitian=False):  # noqa: N803
-    """Solve using the factorisation `ldl_factor` produced. Three steps:
-    `L y = b`, `D z = y`, `Lᵀ x = z`."""
+    """Solve using the factorisation `ldl_factor` produced — `dsytrs`, pivots and
+    all."""
     LD = _mat(LD, "ldl_solve")
     packed = _np.asarray(LD.data, dtype=_np.float64)
+    piv = _np.asarray(_wrap(pivots).data).astype(int)
     rhs = _np.asarray(_wrap(b).data, dtype=_np.float64)
     n = packed.shape[-1]
     flat_ld = packed.reshape(-1, n, n)
-    single = rhs.ndim == 2
-    flat_b = rhs.reshape(-1, n, rhs.shape[-1]) if single else rhs.reshape(-1, n, rhs.shape[-1])
-    outs = []
-    for i in range(flat_ld.shape[0]):
-        low = _np.tril(flat_ld[i], -1) + _np.eye(n)
-        diag = _np.diagonal(flat_ld[i]).copy()
-        y = _np.linalg.solve(low, flat_b[i])
-        outs.append(_np.linalg.solve(low.T, y / diag[:, None]))
+    flat_piv = piv.reshape(-1, n)
+    flat_b = rhs.reshape(-1, n, rhs.shape[-1])
+    outs = [_ldl_solve_one(flat_ld[i], flat_piv[i], flat_b[i])
+            for i in range(flat_ld.shape[0])]
     got = _np.stack(outs).reshape(rhs.shape)
     return Tensor(got.astype(_wrap(b).data.dtype))
 
@@ -8053,22 +9102,66 @@ def lu(A, pivot=True):  # noqa: N803
 
 
 def lu_solve(LU, pivots, b, left=True, adjoint=False):  # noqa: N803
-    """Solve `A x = b` with what `lu_factor` produced."""
+    """Solve `A x = b` with what `lu_factor` produced.
+
+    **The permutation is per matrix and it goes on the rows.** It used to be built
+    once from `pivots.reshape(-1)` — the whole batch flattened, so every matrix got
+    the first one's pivots and only the first `n` of them — and applied as
+    `rhs[order]`, which indexes **axis 0**. On a batch that is the batch axis, so the
+    right-hand sides were permuted between matrices.
+
+    Both faults were invisible at 2×2, because two pivots that do not swap give the
+    identity and permuting anything by the identity is harmless. At 3×3 the pivot
+    value 3 ran off the end of a batch of 2 and it raised
+    `IndexError: index 2 is out of bounds for axis 0 with size 2` — numpy's words
+    about the wrong axis entirely. **And at 2×2 with a real swap it did not raise:**
+    `[[1,2],[3,4]]` needs one, and the second matrix came back `[0.222, -0.111]`
+    where the answer is `[-0.111, 0.556]`. A plausible number and no exception,
+    which is what the existing case could not see by asking one matrix.
+    """
     lu_t, piv_t, bt = _wrap(LU), _wrap(pivots), _wrap(b)
-    if not left or adjoint:
-        _unsupported("lu_solve(left=False or adjoint=True)")
     n = lu_t.data.shape[-1]
     low = _np.tril(lu_t.data.astype(_np.float64), -1) + _np.eye(n)
     up = _np.triu(lu_t.data.astype(_np.float64))
     rhs = bt.data.astype(_np.float64).copy()
-    order = _np.arange(n)
-    for col in range(piv_t.data.shape[-1]):
-        src = int(_np.asarray(piv_t.data).reshape(-1)[col]) - 1
-        if src != col:
-            order[[col, src]] = order[[src, col]]
-    rhs = rhs[order]
-    y = _np.linalg.solve(low, rhs)
-    return Tensor(_np.linalg.solve(up, y).astype(bt.data.dtype))
+    piv = _np.asarray(piv_t.data).astype(int)
+    lead = piv.shape[:-1]
+    order = _np.broadcast_to(_np.arange(n), (*lead, n)).copy()
+    for at in (_np.ndindex(*lead) if lead else [()]):
+        row = order[at]
+        for col in range(piv.shape[-1]):
+            src = int(piv[at][col]) - 1
+            if src != col:
+                row[[col, src]] = row[[src, col]]
+    if left:
+        got = _lu_apply(low, up, order, rhs, adjoint)
+    else:
+        # `X A = B` is `Aᵀ Xᵀ = Bᵀ`, so the right-hand solve is the left one on the
+        # transposed sides with the adjoint flipped. Real storage only, so the
+        # conjugate half of torch's `Aᴴ` is a transpose.
+        got = _np.swapaxes(
+            _lu_apply(low, up, order, _np.swapaxes(rhs, -1, -2), not adjoint), -1, -2)
+    return Tensor(got.astype(bt.data.dtype))
+
+
+def _lu_apply(low, up, order, rhs, adjoint):
+    """One of the two left-hand solves against a factorisation already unpacked.
+
+    `A = P L U`, so `A x = b` permutes `b` onto `L U x = Pᵀ b` and runs forward then
+    back. **The adjoint runs the whole thing in reverse**: `Aᵀ = Uᵀ Lᵀ Pᵀ`, so `Uᵀ`
+    goes first, `Lᵀ` second, and the permutation lands on the *answer* rather than on
+    the right-hand side — `Pᵀ x = z` means `x = P z`, which is a scatter where the
+    forward direction is a gather. The inverse permutation is `argsort`.
+    """
+    # **Broadcast to the right-hand side's own leading shape.** torch takes a batch
+    # of matrices against a single `b` as well as against a matching batch.
+    take = _np.broadcast_to(order, (*rhs.shape[:-1],))
+    if not adjoint:
+        moved = _np.take_along_axis(rhs, take[..., None], axis=-2)
+        return _np.linalg.solve(up, _np.linalg.solve(low, moved))
+    w = _np.linalg.solve(_np.swapaxes(up, -1, -2), rhs)
+    z = _np.linalg.solve(_np.swapaxes(low, -1, -2), w)
+    return _np.take_along_axis(z, _np.argsort(take, axis=-1)[..., None], axis=-2)
 
 
 # ---- the composite layers
@@ -8111,8 +9204,16 @@ def vector_norm(input, ord=2, dim=None, keepdim=False):  # noqa: A002
     are written out separately.
     """
     x = _wrap(input).abs()
-    if dim is None and x.data.ndim > 1:
+    rank = x.data.ndim
+    if dim is None and rank > 1:
+        # **The rank is remembered before the flatten.** With no `dim` torch reduces
+        # everything and, asked to keep, hands back **all ones** rather than a scalar
+        # (measured). Flattened first, the reduction below keeps one axis instead of
+        # `rank` of them, and the answer comes back a rank short — right value, wrong
+        # shape, which broadcasts differently and surfaces somewhere else.
         x = x.reshape(-1)
+        if keepdim:
+            return vector_norm(x, ord, None, False).reshape((1,) * rank)
     if ord == _np.inf:
         return amax(x, dim=dim, keepdim=keepdim)
     if ord == -_np.inf:
@@ -8131,6 +9232,33 @@ def vector_norm(input, ord=2, dim=None, keepdim=False):  # noqa: A002
 _SPECTRAL = ("nuc", 2, -2)
 
 
+def _linalg_norm(input, ord=None, dim=None, keepdim=False, dtype=None):  # noqa: A002
+    """`torch.linalg.norm` — **which is not `torch.norm`, and was bound to it.**
+
+    The two have the same seats and different meanings. `linalg.norm` dispatches: with
+    an `ord` and no `dim` on a matrix it is `matrix_norm`, which for `ord=2` is the
+    largest singular value; everything else is `vector_norm`. `torch.norm` is the
+    elementwise p-norm throughout.
+
+    On `[[1..9]]` that is 16.848 against 16.882 — near enough to read as rounding and
+    produced by a different formula. Bound to the wrong one, `linalg.norm(A, 2)`
+    answered a question nobody asked and nothing said so; the golden case written the
+    same afternoon caught it here and in borch.ts at once.
+
+    torch spells the order `ord` here and `p` at the top level, which is the other half
+    of why one was mistaken for the other.
+    """
+    x = _wrap(input)
+    if dtype is not None:
+        x = _wrap(x.data.astype(_np_of(_requested_dtype(dtype))))
+    if dim is None and ord is not None and x.data.ndim == 2:
+        return matrix_norm(x, ord=ord, keepdim=keepdim)
+    if isinstance(dim, (tuple, list)) and len(dim) == 2:
+        return matrix_norm(x, ord=("fro" if ord is None else ord), dim=tuple(dim),
+                           keepdim=keepdim)
+    return vector_norm(x, ord=(2 if ord is None else ord), dim=dim, keepdim=keepdim)
+
+
 def matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False):  # noqa: A002
     """A norm measured over the matrix. **A different number per branch.**
 
@@ -8138,10 +9266,29 @@ def matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False):  # noqa: A002
     the singular values, `1` the largest column-wise sum of absolute values, and
     `inf` the row-wise one. Given a rank-1 matrix the first three happen to
     coincide and cannot be told apart, so the golden asks at rank 2.
+
+    **The two axes move together.** They used to move one at a time —
+    `movedim(dim[0], -2).movedim(dim[1], -1)` — and the first move shifts where the
+    second one's axis sits, so `dim[1]` named whatever had slid into that index. On a
+    `(3, 2, 2)` with `dim=(0, 1)` it reduced axes 1 and 0 of the *moved* tensor, which
+    are the original 2 and 0: **5.568 where torch says 5.916.** Not an exception and
+    not a wrong shape — a plausible norm of a different pair of axes.
+
+    Nothing saw it because every case asked the default, where the branch does not run.
+
+    `keepdim` then puts the ones back **where the caller's axes were** and not where
+    they were moved to: torch gives `(1, 1, 2)` for `dim=(0, 1)` and `(3, 1, 1)` for
+    the default.
     """
     x = _wrap(input)
-    if dim != (-2, -1):
-        x = x.movedim(dim[0], -2).movedim(dim[1], -1)
+    if tuple(dim) != (-2, -1):
+        rank = len(x.shape)
+        at = tuple(d % rank for d in dim)
+        x = x.movedim(tuple(dim), (-2, -1))
+        if keepdim:
+            flat = matrix_norm(x, ord, (-2, -1), False)
+            return flat.reshape(tuple(1 if i in at else n
+                                      for i, n in enumerate(_wrap(input).shape)))
     if ord in _SPECTRAL:
         s = svdvals(x)
         if ord == "nuc":
@@ -8227,13 +9374,19 @@ def solve_triangular(input, b, upper, left=True, unitriangular=False):  # noqa: 
 
 
 def tensorsolve(input, b, dims=None):  # noqa: A002
-    """Fold the tensor into input matrix, solve, and spread it back."""
+    """Fold the tensor into input matrix, solve, and spread it back.
+
+    **`dims` moves those axes of `A` to the end before the fold**, so it changes
+    which axes become the matrix and therefore the shape of the answer as well as
+    its values. It was refused; what the refusal did not say is that numpy's
+    `tensorsolve` already takes it, under the name `axes`. Measured across six
+    settings on a `(2, 3, 2, 3)` — `None`, `(0, 1)`, `(1, 0)`, `(0,)`, `(2, 3)`,
+    `(3,)` — torch and numpy agree on every one, shape included.
+    """
     at, bt = _wrap(input), _wrap(b)
-    if dims is not None:
-        _unsupported("tensorsolve(dims)")
-    n = bt.data.size
-    out = _np.linalg.solve(at.data.reshape(n, -1), bt.data.reshape(n))
-    return Tensor(out.reshape(at.data.shape[bt.data.ndim:]))
+    out = _np.linalg.tensorsolve(at.data, bt.data,
+                                 axes=None if dims is None else tuple(dims))
+    return Tensor(out)
 
 
 def tensorinv(input, ind=2):  # noqa: A002
@@ -8392,7 +9545,7 @@ class _Linalg(_Namespace):
     ldl_factor_ex = staticmethod(ldl_factor_ex)
     ldl_solve = staticmethod(ldl_solve)
     householder_product = staticmethod(householder_product)
-    norm = staticmethod(norm)
+    norm = staticmethod(_linalg_norm)
     # The composite layers.
     matmul = staticmethod(matmul)
     vecdot = staticmethod(vecdot)
@@ -8452,6 +9605,18 @@ class _Cuda(_Namespace):
         return False
 
     @staticmethod
+    def device_count():
+        """**Zero, which is torch's own answer on a machine without CUDA**
+        (measured — it returns 0 rather than raising, unlike `current_device`).
+
+        `if torch.cuda.device_count() > 1:` is the line every multi-GPU example
+        opens with, and it stopped here with `'_Cuda' object has no attribute
+        'device_count'` while `is_available()` beside it answered. One namespace
+        giving two kinds of answer to the same kind of question.
+        """
+        return 0
+
+    @staticmethod
     def manual_seed_all(seed):
         return None
 
@@ -8461,6 +9626,30 @@ class _Cuda(_Namespace):
 
 
 cuda = _Cuda()
+
+
+def get_default_device():
+    """The device new tensors land on. **There is one, and it is the CPU.**
+
+    torch returns a `device` object rather than a string (measured). Neither half
+    of this pair existed, and every `device=` seat in this library already accepts
+    `"cpu"` and refuses the rest — so the answer was being given all along under
+    every name but the one that asks for it directly.
+    """
+    return _device("cpu")
+
+
+def set_default_device(what=None):
+    """The other half. **`cpu` and `None` are accepted; anything else stops.**
+
+    Accepting a device that does not exist and then putting the tensor on the CPU
+    anyway is the shape this library refuses everywhere else — the values come out
+    right and the claim about where they are is false.
+    """
+    name = "cpu" if what is None else str(getattr(what, "type", what))
+    if name != "cpu":
+        _unsupported(f"set_default_device({name!r})")
+    return None
 
 
 # ── the in-place activations and the `upsample` aliases ─────────────────────
@@ -8614,13 +9803,18 @@ def grid_sample(input, grid, mode="bilinear", padding_mode="zeros",
     gy = grid[:, :, :, 1]
     sx = _grid_denorm(gx, w, align_corners)
     sy = _grid_denorm(gy, h, align_corners)
-    if padding_mode == "border":
-        sx, sy = clamp(sx, 0.0, w - 1.0), clamp(sy, 0.0, h - 1.0)
-    elif padding_mode == "reflection":
-        sx = _grid_reflect(sx, w, align_corners)
-        sy = _grid_reflect(sy, h, align_corners)
-    elif padding_mode != "zeros":
+    # **The centre is padded for the two-tap kernels and left alone for bicubic.**
+    # Clamping the centre puts both bilinear corners inside, which is the whole job
+    # there; a 4×4 window steps one cell further and needs the rule at the tap
+    # instead, so moving the centre as well would move it twice.
+    if padding_mode not in ("zeros", "border", "reflection"):
         _unsupported(f"grid_sample(padding_mode={padding_mode!r})")
+    if mode != "bicubic":
+        if padding_mode == "border":
+            sx, sy = clamp(sx, 0.0, w - 1.0), clamp(sy, 0.0, h - 1.0)
+        elif padding_mode == "reflection":
+            sx = _grid_reflect(sx, w, align_corners)
+            sy = _grid_reflect(sy, h, align_corners)
 
     flat = input.reshape(-1)
     batch = _np.arange(n).reshape(n, 1, 1, 1)
@@ -8642,14 +9836,39 @@ def grid_sample(input, grid, mode="bilinear", padding_mode="zeros",
         # torch rounds. Only a value comes out and there is no weight, so nothing
         # flows towards the grid.
         return pick(_np.rint(sy.data).astype(int), _np.rint(sx.data).astype(int))
-    if mode != "bilinear":
-        _unsupported(f"grid_sample(mode={mode!r}) — only bilinear and nearest are here")
+    if mode not in ("bilinear", "bicubic"):
+        _unsupported(f"grid_sample(mode={mode!r}) — bilinear, nearest and bicubic "
+                     "are here")
 
     x0 = _np.floor(sx.data).astype(int)
     y0 = _np.floor(sy.data).astype(int)
     wx = (sx - Tensor(x0.astype(input.data.dtype))).reshape(n, 1, oh, ow)
     wy = (sy - Tensor(y0.astype(input.data.dtype))).reshape(n, 1, oh, ow)
     one = 1.0
+    if mode == "bicubic":
+        # **The same Keys kernel as `interpolate`'s `bicubic`, at `a = −0.75`** — this
+        # is the plain path's constant, not the anti-aliased one's `−0.5`.
+        #
+        # The weights are written as tensor expressions in the fractional offset
+        # rather than computed in numpy, because **the gradient has to reach the
+        # grid**: that is the path by which a spatial transformer learns `theta`, and
+        # constants would silently cut it while every value case still passed.
+        #
+        # **The padding is applied per tap here, not to the centre.** Bilinear can
+        # clamp the continuous coordinate once and be done, because both corners of a
+        # clamped centre are inside; a 4×4 window steps one cell further and its outer
+        # taps land outside even so. Clamping the centre and then masking gave `border`
+        # the same numbers as `zeros` — 6.04 where torch says 5.48, with the gradient
+        # to the grid zeroed at the edges as well.
+        edge = _grid_pad_index(padding_mode, align_corners)
+        out = None
+        for ky in (-1, 0, 1, 2):
+            ty = _cubic_of(Tensor(float(ky)) - wy)
+            for kx in (-1, 0, 1, 2):
+                tap = _pick_padded(pick, edge, y0 + ky, x0 + kx, h, w)
+                out_ = tap * ty * _cubic_of(Tensor(float(kx)) - wx)
+                out = out_ if out is None else out + out_
+        return out
     return (pick(y0, x0) * (one - wy) * (one - wx)
             + pick(y0, x0 + 1) * (one - wy) * wx
             + pick(y0 + 1, x0) * wy * (one - wx)
@@ -8699,6 +9918,12 @@ def batch_norm(input, running_mean=None, running_var=None, weight=None, bias=Non
                                           + momentum * unbiased)
         normed = centered / (var.reshape(shape) + eps) ** 0.5
     else:
+        # torch's own wording. **Without it this raised inside numpy** — `asarray(None)`
+        # gives a 0-d object array and the reshape fails with a message about shapes,
+        # a long way from the caller who left `track_running_stats` off and then asked
+        # for evaluation mode.
+        if running_mean is None or running_var is None:
+            raise RuntimeError("running_mean must be defined in evaluation mode")
         rm = _np.asarray(_raw(running_mean)).reshape(shape)
         rv = _np.sqrt(_np.asarray(_raw(running_var)) + eps).reshape(shape)
         normed = (input - Tensor(rm)) / Tensor(rv)
@@ -8760,8 +9985,24 @@ def embedding_bag(input, weight, offsets=None, max_norm=None, norm_type=2.0,
     right shape.
     """
     input, weight = _wrap(input), _wrap(weight)
+    # **`scale_grad_by_freq` is answered on `embedding` and refused here, because
+    # torch disagrees with itself.** `embedding_bag(mode="sum")` is by definition
+    # `embedding(...).sum(1)`, and on torch 2.13.0 the two give different gradients
+    # under this flag — with the table `arange(12).reshape(4, 3)` and ids
+    # `[[0,1,1],[2,1,0]]`:
+    #
+    #     embedding(scale=True).sum(1)   row1 ÷3, row2 ÷1   — the documented rule
+    #     embedding_bag(scale=True)      row1 ÷2, row2 ÷3
+    #
+    # Eight further probes found no rule reproducing the second: the divisor is the
+    # true frequency for some rows and something else for others, and running-max,
+    # previous-present-row and sorted-run-length all fit some probes and break
+    # others. `embedding`'s scaling is self-consistent and matches the documentation,
+    # so that one is implemented; copying an answer nobody can state a rule for would
+    # be a wrong number under an argument that reads as a tuning knob.
     if scale_grad_by_freq:
-        _unsupported("embedding_bag(scale_grad_by_freq=True)")
+        _unsupported("embedding_bag(scale_grad_by_freq=True) — torch's own bag "
+                     "disagrees with `embedding(...).sum(1)` under this flag")
     if sparse:
         _unsupported("embedding_bag(sparse=True) — there is no sparse gradient here")
     if max_norm is not None:
@@ -9060,6 +10301,730 @@ def i0(input):
 def i0_(x):
     x = _wrap(x)
     return x._inplace(lambda: i0(x), "i0_")
+
+
+# ── the orthogonal polynomials — twelve names, one recurrence ────────────────
+#
+# **They are twelve names and one engine**, and writing them out twelve times is the
+# defect this repository keeps finding. Each family differs in three places only: the
+# first term, the second term, and the coefficients of the three-term step.
+#
+# **Every convention here was measured rather than looked up.** The textbooks agree
+# about the recurrences and say nothing about the two things that actually vary between
+# implementations:
+#
+# * **The argument order is `(x, n)`**, the tensor first. Given `(n, x)` torch answers
+#   the constant 1 — it broadcasts the integer as the input and reads the tensor as an
+#   order — so a pair swapped here returns a real array and raises nothing.
+# * **Nothing is clipped to the orthogonality interval.** Chebyshev's `T` is defined on
+#   [-1, 1] and torch evaluates the polynomial anywhere: `T₃(2)` is 26 and `T₃(-1.5)` is
+#   -9 (measured). An implementation that clamped, or answered NaN outside, would agree
+#   on every textbook input and part on the ones a test sweep produces.
+# * **A negative order is 0**, not an error and not `T₋ₙ = Tₙ` (measured at n = -1).
+#
+# The shifted four are the plain four at `2x − 1`. Checked, not assumed: shifted `T₂` at
+# -1.5 is 31, which is `T₂(-4)`.
+
+def _orthogonal(x, n, first, second, step):
+    """The three-term recurrence, given its two starting terms and its step.
+
+    `step(k, prev, prev2, xv)` is `p_k` from `p_{k-1}` and `p_{k-2}`.
+    """
+    x = _wrap(x)
+    n = int(n)
+    xv = _float_in(_np.asarray(x.data))
+    if n < 0:
+        return x._make(_np.zeros_like(xv), (), None)
+    out = first(xv)
+    if n == 0:
+        return x._make(out, (), None)
+    prev2, prev = out, second(xv)
+    for k in range(2, n + 1):
+        prev2, prev = prev, step(k, prev, prev2, xv)
+    return x._make(prev, (), None)
+
+
+def _chebyshev(kind, shifted):
+    """One Chebyshev family. `kind` sets the second term; all four share the step."""
+    def build(x, n):
+        def second(xv):
+            xx = 2.0 * xv - 1.0 if shifted else xv
+            return {"t": xx, "u": 2.0 * xx, "v": 2.0 * xx - 1.0,
+                    "w": 2.0 * xx + 1.0}[kind]
+
+        def step(_k, prev, prev2, xv):
+            xx = 2.0 * xv - 1.0 if shifted else xv
+            return 2.0 * xx * prev - prev2
+
+        return _orthogonal(x, n, _np.ones_like, second, step)
+    return build
+
+
+chebyshev_polynomial_t = _chebyshev("t", False)
+chebyshev_polynomial_u = _chebyshev("u", False)
+chebyshev_polynomial_v = _chebyshev("v", False)
+chebyshev_polynomial_w = _chebyshev("w", False)
+shifted_chebyshev_polynomial_t = _chebyshev("t", True)
+shifted_chebyshev_polynomial_u = _chebyshev("u", True)
+shifted_chebyshev_polynomial_v = _chebyshev("v", True)
+shifted_chebyshev_polynomial_w = _chebyshev("w", True)
+
+
+def hermite_polynomial_h(input, n):                             # noqa: A002
+    """The **physicists'** Hermite — `H(k) = 2x·H(k−1) − 2(k−1)·H(k−2)`."""
+    return _orthogonal(input, n, _np.ones_like, lambda xv: 2.0 * xv,
+                       lambda k, p, p2, xv: 2.0 * xv * p - 2.0 * (k - 1) * p2)
+
+
+def hermite_polynomial_he(input, n):                            # noqa: A002
+    """The **probabilists'** Hermite — `He(k) = x·He(k−1) − (k−1)·He(k−2)`.
+
+    The two differ by more than a scale factor in the middle of the recurrence, which
+    is why they are two functions rather than one with a flag: `H₂(-1.5)` is 7 and
+    `He₂(-1.5)` is 1.25 (measured), and no constant relates the pair term by term.
+    """
+    return _orthogonal(input, n, _np.ones_like, lambda xv: xv,
+                       lambda k, p, p2, xv: xv * p - (k - 1) * p2)
+
+
+def laguerre_polynomial_l(input, n):                            # noqa: A002
+    """`L(k) = ((2k−1−x)·L(k−1) − (k−1)·L(k−2)) / k`."""
+    return _orthogonal(input, n, _np.ones_like, lambda xv: 1.0 - xv,
+                       lambda k, p, p2, xv: ((2 * k - 1 - xv) * p - (k - 1) * p2) / k)
+
+
+def legendre_polynomial_p(input, n):                            # noqa: A002
+    """`P(k) = ((2k−1)·x·P(k−1) − (k−1)·P(k−2)) / k`."""
+    return _orthogonal(input, n, _np.ones_like, lambda xv: xv,
+                       lambda k, p, p2, xv: ((2 * k - 1) * xv * p - (k - 1) * p2) / k)
+
+
+# ── the nine that exist because the obvious composition breaks ───────────────
+#
+# Every one of these is `f(x)` written out of pieces this library already has, and every
+# one of them is right in the middle and useless at the end — which is the range the
+# name is reached for. The break points below were measured before any of this was
+# written, and they are why the composition is not what is here:
+#
+#     erfc(x)·exp(x²)      inf from x=10,  nan by x=26   (true: 0.056141, 0.0216836)
+#     log(ndtr(x))         -inf from x=-6                (true: -20.7368, -804.608)
+#     i0(x)·exp(-|x|)      inf at x=90,    nan at 200    (true: 0.042111, 0.0282272)
+#     xlogy(x, 1+y)        0 at y=1e-12                  (true: 1e-12)
+#     -x·log(x)            nan at x=0 and x<0            (true: 0 and -inf)
+#
+# Built as compositions they would agree with torch at every ordinary input and hand
+# back `inf` in the tail — a wrong answer that passes its own tests, which is worse than
+# an absent one.
+
+def _erfcx64(x):
+    """`erfc(x)·exp(x²)` without ever forming either factor at full size.
+
+    Small `x` goes through `erfc` directly, which is exact there and where the scaling
+    is nearly 1. From `x ≥ 4` it is the continued fraction
+    `1/(√π · (x + 1/(2x + 2/(x + 3/(2x + …)))))`, evaluated backwards, which has no
+    exponential in it at all — that is the whole point.
+    """
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    # **The split is on `|x|`, not on `x`.** Written `x >= 4` the small branch took
+    # every negative argument and the reflection below was then applied on top of an
+    # answer that was already right — `erfcx(-2)` came back 0.255 against torch's
+    # 108.941. Below 4 in magnitude nothing overflows either way: `exp(16)` is 8.9e6
+    # and `erfc(-4)` is very nearly 2, so the plain product is exact and needs no
+    # reflection at all.
+    small = _np.abs(x) < 4.0
+    if _np.any(small):
+        xs = x[small]
+        out[small] = _np.asarray(erfc(Tensor(xs)).data) * _np.exp(xs * xs)
+    big = ~small
+    if _np.any(big):
+        # The continued fraction is for positive argument, so it runs on `|x|` and the
+        # negative side is reflected: `erfcx(-t) = 2·exp(t²) − erfcx(t)`. That overflows
+        # honestly for large `t` and torch answers `inf` there too.
+        xb = _np.abs(x[big])
+        frac = _np.zeros_like(xb)
+        for k in range(60, 0, -1):
+            frac = (k / 2.0) / (xb + frac)
+        got = 1.0 / (_math.sqrt(_math.pi) * (xb + frac))
+        with _np.errstate(over="ignore"):
+            out[big] = _np.where(x[big] < 0, 2.0 * _np.exp(xb * xb) - got, got)
+    return out
+
+
+def erfcx(input):                                               # noqa: A002
+    """The scaled complementary error function, `erfc(x)·exp(x²)`.
+
+    **The scaling is the whole function.** Without it this is `erfc`, which is already
+    here; with it the answer stays around `1/(x√π)` out to where `erfc` itself has
+    underflowed to zero and `exp(x²)` has overflowed to infinity.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_erfcx64(data).astype(data.dtype), (), None)
+
+
+def ndtr(input):                                                # noqa: A002
+    """The standard normal CDF.
+
+    **`erfc(-x/√2)/2` and not `(1 + erf(x/√2))/2`.** The two are the same formula and
+    not the same arithmetic: in the left tail the second one is `1` plus something very
+    close to `-1`, and the digits that matter cancel away. The first never forms the
+    difference.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    half = _np.asarray(erfc(Tensor(-data / _math.sqrt(2.0))).data) * 0.5
+    return input._make(half.astype(data.dtype), (), None)
+
+
+def log_ndtr(input):                                            # noqa: A002
+    """`log(ndtr(x))`, and **the left tail is the only reason the name exists.**
+
+    `ndtr` underflows to exactly 0 below about x = -38, and its logarithm is then `-inf`
+    where the true value is around -725. Measured against torch before this was written:
+    the plain composition is already `-inf` at x = -6, where the answer is -20.7368.
+
+    Below the cut it is the asymptotic `-x²/2 − log(-x√(2π)) + log(1 − 1/x² + 3/x⁴ …)`,
+    which is the same series `erfcx` sums and is written out here because the two are
+    reached at different scales.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    out = _np.empty_like(data, dtype=_np.float64)
+    x = _np.asarray(data, dtype=_np.float64)
+    low = x < -1.0
+    if _np.any(~low):
+        out[~low] = _np.log(_np.asarray(
+            erfc(Tensor(-x[~low] / _math.sqrt(2.0))).data) * 0.5)
+    if _np.any(low):
+        # `ndtr(x) = erfcx(-x/√2)·exp(-x²/2)/2`, so its logarithm is a sum rather than
+        # the logarithm of a product that has already underflowed.
+        t = -x[low] / _math.sqrt(2.0)
+        out[low] = _np.log(_erfcx64(t) * 0.5) - x[low] * x[low] * 0.5
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def ndtri(input):                                               # noqa: A002
+    """The normal quantile — `√2 · erfinv(2u − 1)`.
+
+    Safe as a composition, unlike its four neighbours: `erfinv` is already accurate
+    across the open unit interval and `2u − 1` loses nothing that `erfinv` then needs.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    out = _np.asarray(erfinv(Tensor(2.0 * data - 1.0)).data) * _math.sqrt(2.0)
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def entr(input):                                                # noqa: A002
+    """`-x·log(x)`, **with the two boundaries an entropy is actually evaluated at.**
+
+    `entr(0)` is 0 and `entr(x < 0)` is `-inf`. The plain expression is `nan` at both
+    (measured), and both are exactly where a probability vector puts its mass when a
+    class is impossible.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    x = _np.asarray(data, dtype=_np.float64)
+    out = _np.full_like(x, -_np.inf)
+    pos = x > 0
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        out[pos] = -x[pos] * _np.log(x[pos])
+    out[x == 0] = 0.0
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def xlog1py(input, other):                                      # noqa: A002
+    """`x·log1p(y)`, with `0·anything` defined as 0.
+
+    **Not `xlogy(x, 1 + y)`**, which is the same formula and different arithmetic: the
+    `1 + y` rounds a small `y` away before the logarithm sees it. Measured at y = 1e-12,
+    torch answers 1e-12 and the composition answers 0 — the whole of what the name is
+    for, gone.
+    """
+    # Written through `_binary` for the reason `xlogy` next door is: the broadcasting,
+    # the dtype promotion and the gradient all live there, and a hand-rolled pair is a
+    # second copy of three things that are already right.
+    #
+    # `0 · -inf` is `nan` in floating point and 0 here — torch's rule, and the one that
+    # makes a zero-weighted term drop out instead of poisoning the sum.
+    input = _wrap(input)
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        return input._binary(
+            other,
+            lambda x, y: _np.where(x == 0, 0.0, x * _np.log1p(y)),
+            lambda g, x, y: g * _np.where(x == 0, 0.0, _np.log1p(y)),
+            lambda g, x, y: g * _np.where(x == 0, 0.0, x / (1.0 + y)),
+            "Xlog1pyBackward0")
+
+
+def i0e(input):                                                 # noqa: A002
+    """`i0(x)·exp(-|x|)`, **which is where `i0` itself has already overflowed.**
+
+    `i0(90)` is about 4e37 and `i0(200)` is past float64's ceiling, so the composition
+    is `inf` and then `nan` (measured) while the true answers are 0.042111 and 0.0282272
+    — the scaled function is bounded by 1 everywhere.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_i0e64(data).astype(data.dtype), (), None)
+
+
+def i1(input):                                                  # noqa: A002
+    """The order-1 modified Bessel function.
+
+    **`_i1` was already here as `i0`'s derivative** and had no public name — the
+    arithmetic has been checked by every `i0` gradient case since it was written. This
+    is that function under the name torch gives it.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_i1(data).astype(data.dtype), (), None)
+
+
+def i1e(input):                                                 # noqa: A002
+    """`i1(x)·exp(-|x|)`, as `i0e` is to `i0`."""
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_i1e64(data).astype(data.dtype), (), None)
+
+
+def _bessel_i_scaled(x, order):
+    """`iₙ(x)·exp(-|x|)` by the ascending series below the crossover and the asymptotic
+    above it.
+
+    **The series is written in the scaled form from the start.** Summing `iₙ` and then
+    multiplying by `exp(-|x|)` is the composition this whole block exists to avoid: the
+    sum overflows long before the product would have been small.
+    """
+    x = _np.abs(_np.asarray(x, dtype=_np.float64))
+    out = _np.empty_like(x)
+    small = x < 15.0
+    if _np.any(small):
+        xs = x[small]
+        half = xs / 2.0
+        # Leading term: (x/2)^order / order!  — scaled by exp(-x) up front.
+        term = (half ** order) / _math.factorial(order) * _np.exp(-xs)
+        total = term.copy()
+        for k in range(1, 200):
+            term = term * (half * half) / (k * (k + order))
+            total = total + term
+            if _np.all(term <= _np.abs(total) * 1e-17):
+                break
+        out[small] = total
+    if _np.any(~small):
+        # Hankel's asymptotic for the scaled function: 1/√(2πx) · (1 − (μ−1)/(8x) + …),
+        # with μ = 4·order².
+        xb = x[~small]
+        mu = 4.0 * order * order
+        series = _np.ones_like(xb)
+        term = _np.ones_like(xb)
+        for k in range(1, 9):
+            term = term * -(mu - (2 * k - 1) ** 2) / (8.0 * xb * k)
+            series = series + term
+        out[~small] = series / _np.sqrt(2.0 * _math.pi * xb)
+    return out
+
+
+def _i0e64(x):
+    return _bessel_i_scaled(x, 0)
+
+
+def _i1e64(x):
+    """`i1` is odd, so the sign follows the argument where `i0` has none."""
+    return _np.sign(_np.asarray(x, dtype=_np.float64)) * _bessel_i_scaled(x, 1)
+
+
+# ── the first- and second-kind Bessel functions ──────────────────────────────
+#
+# **These are rational approximations, not series**, and that is why they are written
+# out as coefficient tables rather than derived. The ascending series for `J₀`
+# alternates and cancels catastrophically past x ≈ 8 — the terms reach 10⁴ before they
+# turn over, and the answer is under 1 — so the large-argument side has to be the
+# asymptotic form, and the two have to meet without a step at the seam.
+#
+# The tables are the standard minimax ones (Abramowitz & Stegun 9.4), good to about
+# 1e-8 absolute, which is four orders inside the golden's 1e-4. They are transcribed
+# rather than invented, and **the transcription is what the measurements check**: a
+# mistyped digit in a minimax coefficient does not blow up, it shifts the answer in the
+# fifth place, which is exactly the size of error a value comparison against torch sees
+# and a reader does not.
+
+_BESSEL_PI_2 = 0.636619772                  # 2/π, as the tables spell it
+
+
+def _poly(y, coefficients):
+    """Horner, outermost coefficient last — the order the tables are written in."""
+    out = _np.full_like(y, coefficients[-1])
+    for c in reversed(coefficients[:-1]):
+        out = c + y * out
+    return out
+
+
+def _bessel_j0(x):
+    x = _np.asarray(x, dtype=_np.float64)
+    ax = _np.abs(x)
+    out = _np.empty_like(ax)
+    near = ax < 8.0
+    if _np.any(near):
+        y = ax[near] ** 2
+        p = _poly(y, [57568490574.0, -13362590354.0, 651619640.7,
+                      -11214424.18, 77392.33017, -184.9052456])
+        q = _poly(y, [57568490411.0, 1029532985.0, 9494680.718,
+                      59272.64853, 267.8532712, 1.0])
+        out[near] = p / q
+    far = ~near
+    if _np.any(far):
+        z = 8.0 / ax[far]
+        y = z * z
+        xx = ax[far] - 0.785398164
+        p1 = _poly(y, [1.0, -0.1098628627e-2, 0.2734510407e-4,
+                       -0.2073370639e-5, 0.2093887211e-6])
+        q1 = _poly(y, [-0.1562499995e-1, 0.1430488765e-3, -0.6911147651e-5,
+                       0.7621095161e-6, -0.934935152e-7])
+        out[far] = _np.sqrt(_BESSEL_PI_2 / ax[far]) * (
+            _np.cos(xx) * p1 - z * _np.sin(xx) * q1)
+    return out
+
+
+def _bessel_j1(x):
+    x = _np.asarray(x, dtype=_np.float64)
+    ax = _np.abs(x)
+    out = _np.empty_like(ax)
+    near = ax < 8.0
+    if _np.any(near):
+        y = ax[near] ** 2
+        p = ax[near] * _poly(y, [72362614232.0, -7895059235.0, 242396853.1,
+                                 -2972611.439, 15704.48260, -30.16036606])
+        q = _poly(y, [144725228442.0, 2300535178.0, 18583304.74,
+                      99447.43394, 376.9991397, 1.0])
+        out[near] = p / q
+    far = ~near
+    if _np.any(far):
+        z = 8.0 / ax[far]
+        y = z * z
+        xx = ax[far] - 2.356194491
+        p1 = _poly(y, [1.0, 0.183105e-2, -0.3516396496e-4,
+                       0.2457520174e-5, -0.240337019e-6])
+        q1 = _poly(y, [0.04687499995, -0.2002690873e-3, 0.8449199096e-5,
+                       -0.88228987e-6, 0.105787412e-6])
+        out[far] = _np.sqrt(_BESSEL_PI_2 / ax[far]) * (
+            _np.cos(xx) * p1 - z * _np.sin(xx) * q1)
+    # **`J₁` is odd** where `J₀` is even, so the sign of the argument comes back.
+    return _np.where(x < 0, -out, out)
+
+
+def _bessel_y0(x):
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    near = (x < 8.0) & (x > 0)
+    if _np.any(near):
+        xs = x[near]
+        y = xs * xs
+        p = _poly(y, [-2957821389.0, 7062834065.0, -512359803.6,
+                      10879881.29, -86327.92757, 228.4622733])
+        q = _poly(y, [40076544269.0, 745249964.8, 7189466.438,
+                      47447.26470, 226.1030244, 1.0])
+        out[near] = p / q + _BESSEL_PI_2 * _bessel_j0(xs) * _np.log(xs)
+    far = x >= 8.0
+    if _np.any(far):
+        z = 8.0 / x[far]
+        y = z * z
+        xx = x[far] - 0.785398164
+        p1 = _poly(y, [1.0, -0.1098628627e-2, 0.2734510407e-4,
+                       -0.2073370639e-5, 0.2093887211e-6])
+        q1 = _poly(y, [-0.1562499995e-1, 0.1430488765e-3, -0.6911147651e-5,
+                       0.7621095161e-6, -0.934935152e-7])
+        out[far] = _np.sqrt(_BESSEL_PI_2 / x[far]) * (
+            _np.sin(xx) * p1 + z * _np.cos(xx) * q1)
+    # `Y` has a logarithmic pole at 0 and is undefined below it — torch's answers.
+    out = _np.where(x == 0, -_np.inf, out)
+    return _np.where(x < 0, _np.nan, out)
+
+
+def _bessel_y1(x):
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    near = (x < 8.0) & (x > 0)
+    if _np.any(near):
+        xs = x[near]
+        y = xs * xs
+        p = xs * _poly(y, [-4900604943000.0, 1275274390000.0, -51534381390.0,
+                           734926455.1, -4237922.726, 8511.937935])
+        q = _poly(y, [24995805700000.0, 424441966400.0, 3733650367.0,
+                      22459040.02, 102042.605, 354.9632885, 1.0])
+        out[near] = p / q + _BESSEL_PI_2 * (
+            _bessel_j1(xs) * _np.log(xs) - 1.0 / xs)
+    far = x >= 8.0
+    if _np.any(far):
+        z = 8.0 / x[far]
+        y = z * z
+        xx = x[far] - 2.356194491
+        p1 = _poly(y, [1.0, 0.183105e-2, -0.3516396496e-4,
+                       0.2457520174e-5, -0.240337019e-6])
+        q1 = _poly(y, [0.04687499995, -0.2002690873e-3, 0.8449199096e-5,
+                       -0.88228987e-6, 0.105787412e-6])
+        out[far] = _np.sqrt(_BESSEL_PI_2 / x[far]) * (
+            _np.sin(xx) * p1 + z * _np.cos(xx) * q1)
+    out = _np.where(x == 0, -_np.inf, out)
+    return _np.where(x < 0, _np.nan, out)
+
+
+def _bessel(fn, name):
+    """One unary Bessel name over `fn`, in the caller's dtype."""
+    def call(input):                                            # noqa: A002
+        t = _wrap(input)
+        data = _float_in(_np.asarray(t.data))
+        with _np.errstate(divide="ignore", invalid="ignore"):
+            out = fn(data)
+        return t._make(out.astype(data.dtype), (), None)
+    call.__name__ = name
+    return call
+
+
+bessel_j0 = _bessel(_bessel_j0, "bessel_j0")
+bessel_j1 = _bessel(_bessel_j1, "bessel_j1")
+bessel_y0 = _bessel(_bessel_y0, "bessel_y0")
+bessel_y1 = _bessel(_bessel_y1, "bessel_y1")
+
+
+def _airy_u(k):
+    """The asymptotic series' coefficients, `uₖ = Γ(3k+½)/(54ᵏ k! Γ(k+½))`.
+
+    Built by the recurrence `uₖ = uₖ₋₁·(6k−5)(6k−3)(6k−1)/(216k(2k−1))`, which is the
+    same numbers without the two gamma functions — `u₁` is 5/72 either way, and that is
+    what pinned the form.
+    """
+    out, u = [1.0], 1.0
+    for k in range(1, 12):
+        u = u * (6 * k - 5) * (6 * k - 3) * (6 * k - 1) / (216.0 * k * (2 * k - 1))
+        out.append(u)
+    return out
+
+
+_AIRY_U = _airy_u(0)
+# Ai(0) and −Ai′(0), which are `3^(−2/3)/Γ(2/3)` and `3^(−1/3)/Γ(1/3)`. Checked against
+# torch to ten digits before the series was written — a normalisation constant that is
+# wrong in the fourth place produces a curve of exactly the right shape.
+_AIRY_C1 = 0.355028053887817239
+_AIRY_C2 = 0.258819403792806798
+
+
+def _airy_ai(x):
+    """The Airy function of the first kind.
+
+    **Two regimes, and the seam is where cancellation starts costing digits.** The
+    ascending series converges for every argument, and past |x| ≈ 8 its largest term is
+    a hundred times the answer, so the digits go. Beyond that it is the standard
+    asymptotic — exponential decay for positive `x`, an oscillation with an `x^(−1/4)`
+    envelope for negative.
+    """
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    near = _np.abs(x) <= 8.0
+    if _np.any(near):
+        # `Ai = c₁·f − c₂·g`, with f and g the two power series in x³.
+        xs = x[near]
+        cube = xs ** 3
+        f = _np.ones_like(xs)
+        term = _np.ones_like(xs)
+        for k in range(1, 30):
+            term = term * cube / ((3 * k) * (3 * k - 1))
+            f = f + term
+        g = xs.copy()
+        term = xs.copy()
+        for k in range(1, 30):
+            term = term * cube / ((3 * k + 1) * (3 * k))
+            g = g + term
+        out[near] = _AIRY_C1 * f - _AIRY_C2 * g
+    far = ~near
+    if _np.any(far):
+        xf = x[far]
+        ax = _np.abs(xf)
+        zeta_ = (2.0 / 3.0) * ax ** 1.5
+        pos = xf > 0
+        # Positive: `exp(-ζ)/(2√π x^¼) · Σ (−1)ᵏ uₖ/ζᵏ`.
+        series = _np.zeros_like(ax)
+        for k, u in enumerate(_AIRY_U):
+            series = series + ((-1) ** k) * u / zeta_ ** k
+        grow = _np.exp(-zeta_) / (2.0 * _math.sqrt(_math.pi) * ax ** 0.25) * series
+        # Negative: the oscillation, split into even and odd coefficients.
+        even = _np.zeros_like(ax)
+        odd = _np.zeros_like(ax)
+        for k in range(len(_AIRY_U) // 2):
+            even = even + ((-1) ** k) * _AIRY_U[2 * k] / zeta_ ** (2 * k)
+            odd = odd + ((-1) ** k) * _AIRY_U[2 * k + 1] / zeta_ ** (2 * k + 1)
+        phase = zeta_ + _math.pi / 4.0
+        wave = (_np.sin(phase) * even - _np.cos(phase) * odd) / (
+            _math.sqrt(_math.pi) * ax ** 0.25)
+        out[far] = _np.where(pos, grow, wave)
+    return out
+
+
+def airy_ai(input):                                             # noqa: A002
+    """The Airy function `Ai(x)` — the solution of `y″ = xy` that decays to the right.
+
+    `Ai(0)` is `3^(−2/3)/Γ(2/3)` = 0.3550280539, matched to ten digits.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    with _np.errstate(over="ignore", invalid="ignore"):
+        out = _airy_ai(data)
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def zeta(input, other):                                         # noqa: A002
+    """The **Hurwitz** zeta, `ζ(x, q) = Σₖ (q+k)^(−x)` — not Riemann's alone.
+
+    `q = 1` is Riemann's, and that is the case worth checking against something known:
+    `ζ(2, 1)` is π²/6 = 1.644934067 and `ζ(4, 1)` is π⁴/90 = 1.082323234, both matched
+    to ten digits.
+
+    **The method is `polygamma`'s** and the two are the same identity read in opposite
+    directions — torch derives its polygamma from zeta, and this library already had
+    the Euler–Maclaurin engine on the other side. Sum the first few terms directly,
+    then take the tail as an integral plus its correction:
+
+        ζ(x, q) = Σ_{k<N} (q+k)^(−x) + (q+N)^(1−x)/(x−1) + (q+N)^(−x)/2
+                  + Σⱼ B₂ⱼ/(2j)! · (x)₂ⱼ₋₁ · (q+N)^(−x−2j+1)
+
+    **`x ≤ 1` is `nan`, and `ζ(1, 1)` is `inf`** — measured, not chosen: the series
+    does not converge there and torch says so rather than returning a partial sum.
+    """
+    a = _wrap(input)
+    b = _wrap(other)
+    s = _np.asarray(_float_in(_np.asarray(a.data)), dtype=_np.float64)
+    q = _np.asarray(_float_in(_np.asarray(b.data)), dtype=_np.float64)
+    s, q = _np.broadcast_arrays(s, q)
+    with _np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        total = _np.zeros_like(s)
+        terms = 9
+        for k in range(terms):
+            total = total + (q + k) ** (-s)
+        z = q + terms
+        total = total + z ** (1.0 - s) / (s - 1.0) + 0.5 * z ** (-s)
+        # B₂, B₄, B₆, B₈ over their factorials, with the rising factorial of `s`.
+        rising = s.copy()
+        power = z ** (-s - 1.0)
+        for j, bern in enumerate((1 / 6, -1 / 30, 1 / 42, -1 / 30), start=1):
+            total = total + bern / _math.factorial(2 * j) * rising * power
+            rising = rising * (s + 2 * j - 1) * (s + 2 * j)
+            power = power / (z * z)
+        out = _np.where(s > 1.0, total, _np.nan)
+        out = _np.where((s == 1.0) & (q > 0), _np.inf, out)
+    dtype = _np.asarray(_float_in(_np.asarray(a.data))).dtype
+    return a._make(out.astype(dtype), (), None)
+
+
+def spherical_bessel_j0(input):                                 # noqa: A002
+    """`sin(x)/x`, and **1 at the origin** rather than the `nan` the quotient gives.
+
+    Measured equal to torch across the sign, including at 0 — it is not an
+    approximation of anything, which is why it sits with the Bessel family in torch's
+    namespace and with the one-liners here.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    x = _np.asarray(data, dtype=_np.float64)
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        out = _np.where(x == 0, 1.0, _np.sin(x) / _np.where(x == 0, 1.0, x))
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def _bessel_k_scaled(x, order):
+    """`kₙ(x)·exp(x)` — the scaled second-kind modified Bessel.
+
+    **Scaled from the start, for `i0e`'s reason inverted.** `k₀(20)` is 5.74e-10 and
+    `k₀(800)` is under float64's floor, so a composition that formed `kₙ` and then
+    multiplied would be exactly 0 where the scaled function is still 0.044.
+
+    Below 2 it is the series through `i₀`/`i₁` and a logarithm — the standard pairing,
+    written out because the two pieces need different expansions. Above it the
+    asymptotic `√(π/2x)·(1 + (μ−1)/(8x) + …)` with `μ = 4n²`.
+    """
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    # **The crossover is 10, and it was 2 first.** Two is where the textbooks split the
+    # *unscaled* pair, and the asymptotic there is worth about two digits: measured
+    # against torch, `k₀(2)` came back 0.0906 against 0.1139 and `k₀(2.1)` 0.0889
+    # against 0.1008 — 200 times the golden's tolerance, on the two points either side
+    # of the seam and nowhere else. The series below converges perfectly well out to 10
+    # (`(x/2)²ᵏ/(k!)²` at x=10 is 25ᵏ/(k!)², which turns over by k=5), so the seam
+    # moves rather than the method.
+    small = x < 10.0
+    if _np.any(small):
+        xs = x[small]
+        half = xs / 2.0
+        # `k₀(x) = -(log(x/2) + γ)·i₀(x) + Σ …`, and `k₁` from its own series. Both are
+        # summed unscaled here (they are small arguments, so nothing overflows) and the
+        # `exp(x)` goes on at the end.
+        euler = 0.5772156649015328606
+        term = _np.ones_like(xs)
+        k0 = _np.zeros_like(xs)
+        i0v = _np.ones_like(xs)
+        harmonic = _np.zeros_like(xs)
+        for k in range(1, 60):
+            term = term * (half * half) / (k * k)
+            harmonic = harmonic + 1.0 / k
+            i0v = i0v + term
+            k0 = k0 + term * harmonic
+        k0 = k0 - (_np.log(half) + euler) * i0v
+        if order == 0:
+            out[small] = k0 * _np.exp(xs)
+        else:
+            # `k₁(x) = 1/x + log(x/2)·i₁(x) − …`, taken through the Wronskian instead:
+            # `i₀·k₁ + i₁·k₀ = 1/x`, which is exact and needs no second series.
+            i1v = _i1(xs)
+            out[small] = ((1.0 / xs - i1v * k0) / i0v) * _np.exp(xs)
+    big = ~small
+    if _np.any(big):
+        xb = x[big]
+        mu = 4.0 * order * order
+        series = _np.ones_like(xb)
+        term = _np.ones_like(xb)
+        for k in range(1, 12):
+            term = term * (mu - (2 * k - 1) ** 2) / (8.0 * xb * k)
+            series = series + term
+        out[big] = _np.sqrt(_math.pi / (2.0 * xb)) * series
+    return out
+
+
+def scaled_modified_bessel_k0(input):                           # noqa: A002
+    """`k₀(x)·exp(x)`. Measured against torch: the pair is exactly that product."""
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_bessel_k_scaled(data, 0).astype(data.dtype), (), None)
+
+
+def scaled_modified_bessel_k1(input):                           # noqa: A002
+    """`k₁(x)·exp(x)`."""
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_bessel_k_scaled(data, 1).astype(data.dtype), (), None)
+
+
+def modified_bessel_k0(input):                                  # noqa: A002
+    """`k₀(x)`, computed scaled and then unscaled — **not the other way round.**
+
+    Under about x = 750 the two orders agree; past it `exp(-x)` underflows to 0 and so
+    does `k₀`, which is torch's answer there as well.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    x = _np.asarray(data, dtype=_np.float64)
+    with _np.errstate(under="ignore"):
+        out = _bessel_k_scaled(x, 0) * _np.exp(-x)
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def modified_bessel_k1(input):                                  # noqa: A002
+    """`k₁(x)`, as `modified_bessel_k0`."""
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    x = _np.asarray(data, dtype=_np.float64)
+    with _np.errstate(under="ignore"):
+        out = _bessel_k_scaled(x, 1) * _np.exp(-x)
+    return input._make(out.astype(data.dtype), (), None)
 
 
 def mvlgamma(input, p):
@@ -10041,7 +12006,7 @@ def _full_q(a, tau):
     return q
 
 
-def lobpcg(a, k=1, B=None, X=None, n=None, iK=None, niter=None, tol=None,
+def lobpcg(a, k=None, B=None, X=None, n=None, iK=None, niter=None, tol=None,
            largest=True, method=None, tracker=None, ortho_iparams=None,
            ortho_fparams=None, ortho_bparams=None):
     """The `k` **extreme eigenpairs** of a symmetric matrix.
@@ -10055,14 +12020,44 @@ def lobpcg(a, k=1, B=None, X=None, n=None, iK=None, niter=None, tol=None,
 
     **`largest` sets the order too** — true gives largest first and false smallest
     first (measured).
+
+    **`B` is the generalised problem `A x = λ B x`, and it was refused.** With `B`
+    symmetric positive definite it reduces to a standard one in four lines: `B = L Lᵀ`,
+    then the eigenvalues of `L⁻¹ A L⁻ᵀ` are the generalised ones and `x = L⁻ᵀ y` are
+    the generalised vectors. Nothing iterative and no new dependency.
+
+    **Those vectors come out `B`-orthonormal**, not unit length — `xᵀBx = 1` and
+    `xᵀx = 0.996` on the fixture. That falls out of the reduction (`xᵀBx = yᵀy`) and
+    it is also what torch returns, measured. Normalising them would look tidier and
+    disagree.
+
+    **`X` is a starting basis and this has nothing to start.** What it does change is
+    the count: given `X` and no `k`, torch takes `k` from `X`'s columns, and that is
+    read here. The converged eigenvalues do not depend on it — measured, torch with
+    and without `X` agrees to 5e-6, which is the same distance its own answer moves
+    with the seed.
     """
-    if B is not None or X is not None:
-        _unsupported("lobpcg(B= or X=) — the generalised eigenvalue problem")
-    vals, vecs = eigh(_wrap(a))
+    # **`k` defaulted to 1 here and to `None` in torch**, which was invisible while
+    # nothing read `X`: with neither given both mean one pair. Given `X` and no `k`,
+    # torch takes the count from `X`'s columns, and a default of 1 makes that
+    # unreachable — the argument would be received and the answer would be one pair
+    # wide whatever was handed in.
+    if k is None:
+        k = 1 if X is None else int(_np.asarray(_wrap(X).data).shape[-1])
+    if B is None:
+        vals, vecs = eigh(_wrap(a))
+        vals, vecs = _np.asarray(vals.data), _np.asarray(vecs.data)
+    else:
+        mat = _np.asarray(_wrap(a).data, dtype=_np.float64)
+        low = _np.linalg.cholesky(_np.asarray(_wrap(B).data, dtype=_np.float64))
+        inner = _np.linalg.solve(low, _np.linalg.solve(low, mat).T).T
+        vals, y = _np.linalg.eigh((inner + inner.T) / 2.0)
+        vecs = _np.linalg.solve(low.T, y)
+        vals = vals.astype(mat.dtype)
+        vecs = vecs.astype(mat.dtype)
     order = slice(None, None, -1) if largest else slice(None)
-    idx = _np.arange(vals.data.shape[-1])[order][:k]
-    return _Lobpcg(Tensor(_np.asarray(vals.data)[idx]),
-                   Tensor(_np.asarray(vecs.data)[:, idx]))
+    idx = _np.arange(vals.shape[-1])[order][:k]
+    return _Lobpcg(Tensor(vals[idx]), Tensor(vecs[:, idx]))
 
 
 def svd_lowrank(a, q=6, niter=2, M=None):
@@ -10364,7 +12359,8 @@ def nonzero_static(input, size, fill_value=-1):
     return Tensor(out)
 
 
-def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, *, out=None):
+def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, *, out=None,
+           generator=None):
     """A normal sample. **With `std` at 0 it is the mean itself** — the golden asks
     about that place.
 
@@ -10379,14 +12375,15 @@ def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, *, out
     `empty_strided` already refuses).
     """
     _no_out(out)
+    stream = _stream(generator)
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
         m = _np.asarray(_wrap(mean).data, dtype=_np.float64)
         s = _np.asarray(_wrap(std).data, dtype=_np.float64)
         m, s = _np.broadcast_arrays(m, s)
-        return _made(_np.asarray(_rng.normal(m, s)).astype(_DEFAULT_DTYPE),
+        return _made(_np.asarray(stream.normal(m, s)).astype(_DEFAULT_DTYPE),
                      dtype, requires_grad)
     shape = () if size is None else tuple(size)
-    return _made(_rng.normal(float(mean), float(std), shape).astype(_DEFAULT_DTYPE),
+    return _made(stream.normal(float(mean), float(std), shape).astype(_DEFAULT_DTYPE),
                  dtype, requires_grad)
 
 
@@ -10401,7 +12398,7 @@ def bernoulli(t, p=None, *, generator=None, out=None):
     """
     _no_out(out)
     t = _wrap(t)
-    rng = generator.rng() if generator is not None else _rng
+    rng = _stream(generator)
     probs = (_np.full(t.data.shape, float(p)) if p is not None
              else _np.asarray(t.data, dtype=_np.float64))
     return Tensor((rng.random(probs.shape) < probs).astype(t.data.dtype))
@@ -11088,3 +13085,138 @@ Tensor.real = property(
 Tensor.imag = property(
     imag,
     doc="The imaginary part. **It stops on a real tensor** — torch does that.")
+
+
+# ================================================================ torch.special
+#
+# **Twenty names, no new arithmetic.** Every one of these is a function this library
+# already answers to, and `torch.special` is the second place torch spells it:
+# `special.expit` is `sigmoid`, `special.gammaln` is `lgamma`, `special.psi` is
+# `digamma`, `special.modified_bessel_i0` is `i0`. Measured before it was written —
+# each pair agrees to 1e-5 on the same input, which is how the list was built rather
+# than read off the docs.
+#
+# **This namespace sits at the end of the file because it can only be written here.**
+# `_Fft` is bound at line 9401 and `i0` is defined at 10120; a `_Special` written
+# beside `_Fft` cannot see half of what it forwards to. Placement is the dependency,
+# not a filing decision.
+#
+# **What the namespace is worth, given the names already exist**, is the line textbook
+# code writes. `torch.special.expit(x)` is what a paper's appendix says, and before
+# this it stopped on a namespace that was not there while `borch.sigmoid` sat one
+# import away — the failure mode this repository calls *an absent feature beats a
+# wrong answer*, inverted: a present feature under a name nobody looks up.
+#
+# **Why it is not a second copy.** Everything here is `staticmethod` over the existing
+# function object, so a fix to `logit` reaches `special.logit` because they are one
+# function. Writing the bodies again would be the defect this repository keeps
+# finding — *a third copy of a dispatch*.
+#
+# The 36 that are **not** here are real arithmetic (Bessel, Airy, `ndtr`, the
+# orthogonal-polynomial families, `zeta`), and `tests/torch_gap.py` carries that
+# number with its reason.
+
+class _Special(_Namespace):
+    """`torch.special`. Forwarding only — see the note above."""
+
+    # The eleven that are the same name in both places.
+    digamma = staticmethod(digamma)
+    erf = staticmethod(erf)
+    erfc = staticmethod(erfc)
+    erfinv = staticmethod(erfinv)
+    exp2 = staticmethod(exp2)
+    expm1 = staticmethod(expm1)
+    i0 = staticmethod(i0)
+    log1p = staticmethod(log1p)
+    logit = staticmethod(logit)
+    round = staticmethod(round)
+    sinc = staticmethod(sinc)
+
+    # **The four torch spells differently here than at the top level.** These are the
+    # reason the namespace is worth having at all: `expit` and `gammaln` are the names
+    # the statistics literature uses, and neither resolves anywhere else in torch.
+    expit = staticmethod(sigmoid)
+    gammaln = staticmethod(lgamma)
+    psi = staticmethod(digamma)
+    modified_bessel_i0 = staticmethod(i0)
+
+    # The five taking more than one argument. **`polygamma` is `(n, input)`** — that
+    # order is torch's and it is enforced there: `special.polygamma(x, 1)` is a
+    # `TypeError` in torch (measured), so getting it backwards here would accept a
+    # call torch rejects.
+    polygamma = staticmethod(polygamma)
+    xlogy = staticmethod(xlogy)
+    logsumexp = staticmethod(logsumexp)
+    softmax = staticmethod(softmax)
+    log_softmax = staticmethod(log_softmax)
+
+    # **These two arrived by asking the same question one more time.** The first pass
+    # counted twenty forwarders and called the other thirty-seven arithmetic we do not
+    # have. `gammainc` and `gammaincc` were in that thirty-seven, and they are
+    # `torch.igamma` and `torch.igammac` — the regularised incomplete gammas, which
+    # this library has had all along. Measured equal, not assumed.
+    #
+    # The pass that missed them is the same pass that had just caught `fft` being
+    # declined while built. Finding a blanket false does not make the next count
+    # careful; only counting again does.
+    gammainc = staticmethod(igamma)
+    gammaincc = staticmethod(igammac)
+
+    # **`multigammaln` is `mvlgamma`, and the row that declined it guessed wrong.**
+    # It read *the two disagree on argument order and that wants checking rather than
+    # guessing* — measured, `multigammaln(x, p)` and `mvlgamma(x, p)` agree exactly at
+    # p = 1, 2 and 3, same order, same values. A sentence that says *this wants
+    # measuring* and is then filed under *declined* is a deferral with the word
+    # "measure" in it, which is the shape three other rows here have already been
+    # caught in.
+    multigammaln = staticmethod(mvlgamma)
+
+    # ── the twenty-one that are arithmetic ───────────────────────────────────
+    #
+    # Twelve orthogonal polynomials (one recurrence engine, twelve starting pairs), and
+    # nine that exist because the obvious composition of what this library already had
+    # is `inf` or `nan` exactly where the name is reached for. Both groups are in
+    # `_ops.py` above with the break points measured beside them.
+    chebyshev_polynomial_t = staticmethod(chebyshev_polynomial_t)
+    chebyshev_polynomial_u = staticmethod(chebyshev_polynomial_u)
+    chebyshev_polynomial_v = staticmethod(chebyshev_polynomial_v)
+    chebyshev_polynomial_w = staticmethod(chebyshev_polynomial_w)
+    shifted_chebyshev_polynomial_t = staticmethod(shifted_chebyshev_polynomial_t)
+    shifted_chebyshev_polynomial_u = staticmethod(shifted_chebyshev_polynomial_u)
+    shifted_chebyshev_polynomial_v = staticmethod(shifted_chebyshev_polynomial_v)
+    shifted_chebyshev_polynomial_w = staticmethod(shifted_chebyshev_polynomial_w)
+    hermite_polynomial_h = staticmethod(hermite_polynomial_h)
+    hermite_polynomial_he = staticmethod(hermite_polynomial_he)
+    laguerre_polynomial_l = staticmethod(laguerre_polynomial_l)
+    legendre_polynomial_p = staticmethod(legendre_polynomial_p)
+
+    erfcx = staticmethod(erfcx)
+    ndtr = staticmethod(ndtr)
+    ndtri = staticmethod(ndtri)
+    log_ndtr = staticmethod(log_ndtr)
+    entr = staticmethod(entr)
+    xlog1py = staticmethod(xlog1py)
+    i0e = staticmethod(i0e)
+    i1 = staticmethod(i1)
+    i1e = staticmethod(i1e)
+
+    # **`modified_bessel_i1` is `i1`** — measured identical, not inferred from the
+    # names. The row that declined it said *`i0` is here and `i1` is a different
+    # series, not a step from it*, which was true and was about the wrong pair: the
+    # series it names is the one `i1` needed, and once that existed this name was a
+    # second spelling of it.
+    modified_bessel_i1 = staticmethod(i1)
+    spherical_bessel_j0 = staticmethod(spherical_bessel_j0)
+    modified_bessel_k0 = staticmethod(modified_bessel_k0)
+    modified_bessel_k1 = staticmethod(modified_bessel_k1)
+    scaled_modified_bessel_k0 = staticmethod(scaled_modified_bessel_k0)
+    scaled_modified_bessel_k1 = staticmethod(scaled_modified_bessel_k1)
+    zeta = staticmethod(zeta)
+    bessel_j0 = staticmethod(bessel_j0)
+    bessel_j1 = staticmethod(bessel_j1)
+    bessel_y0 = staticmethod(bessel_y0)
+    bessel_y1 = staticmethod(bessel_y1)
+    airy_ai = staticmethod(airy_ai)
+
+
+special = _Special()

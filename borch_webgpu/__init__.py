@@ -8,7 +8,7 @@ underneath.
 It used to belong to the TF.js implementation. That one was **5,307 lines**,
 because TF.js supplies 104 primitive operations and nothing else, so the
 autograd tape, `nn.Module` and the optimisers all had to be rebuilt in Python.
-This one is **9,770 lines** — borch.ts already has all of it, so Python's job
+This one is **10,984 lines** — borch.ts already has all of it, so Python's job
 is swapping names across.
 
 `_data.py` is nearly identical in both. It came over unchanged, sits on numpy
@@ -133,6 +133,11 @@ from ._ops import (                                      # noqa: E402,F401
     # Fourier. `fft` is a namespace; `stft` and `istft` are top level — the same
     # places torch puts them.
     fft, istft, stft,
+    # **`special` is twenty names this binding already answers to, under torch's
+    # second spelling for them.** A namespace rather than a passthrough, because
+    # thirty-six of that namespace's names are arithmetic we do not have and a
+    # passthrough would claim every one of them — see `_Special` in `_ops.py`.
+    special,
     # The eight top-level recurrent ones. The same computation as the layers
     # (`nn.LSTM`) but taking the weights as a list.
     gru, gru_cell, lstm, lstm_cell, rnn_relu, rnn_relu_cell, rnn_tanh,
@@ -169,16 +174,22 @@ from ._ops import (                                      # noqa: E402,F401
     set_default_dtype, typename,
 )
 from ._ops import (                                      # noqa: E402,F401
-    Generator, manual_seed, randint, randperm,
+    Generator, manual_seed, multinomial, randint, randperm,
 )
 from ._data import (                                     # noqa: E402,F401
     ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
     TensorDataset, WeightedRandomSampler, backend, cache_get, cache_put, cuda,
-    decode_cifar10, fetch_cached, random_split, utils,
+    decode_cifar10, fetch_cached, get_default_device, random_split,
+    set_default_device, utils,
 )
 from ._serialize import load, save                       # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
+# **Named here or `borch_webgpu.autograd` is an `AttributeError`.** A submodule is
+# not pulled in by importing the package, and `_ops.__getattr__` above answers
+# unknown names — so the miss would come out as this library's *not in the browser
+# subset* wording for a module that is right there on disk.
+from . import autograd                                   # noqa: E402,F401
 
 # In borch.ts a dtype is a label over float32 storage. It stays a label here
 # too, but the name shown is torch's — the golden froze `torch.float32` as the
@@ -278,6 +289,26 @@ from math import e, inf, nan, pi                        # noqa: E402,F401
 # torch has it as plain `None` too — a marker that it means the same as
 # `x[:, None]`.
 newaxis = None
+
+# ── the words layouts and memory formats are named with ─────────────────────
+#
+# **The core's objects, not copies.** `x.layout` on this side hands back the
+# core's `strided`, so `x.layout is borch_webgpu.strided` is true the way torch's
+# is; a second set of instances here would read identically and compare false
+# under `is`. They are plain Python values with nothing to ask the GPU, which is
+# why they come from the core rather than through borch.ts — asking borch.ts
+# produced *borch.ts does not have `contiguousFormat`*, a sentence about the far
+# side for something neither side needed to hold.
+from borch._tensor import (                             # noqa: E402,F401
+    channels_last, channels_last_3d, contiguous_format, preserve_format,
+    sparse_bsc, sparse_bsr, sparse_coo, sparse_csc, sparse_csr, strided,
+)
+# The narrow dtypes that have no storage here. The core keeps the **names** so
+# `dtype=torch.uint8` says what is missing rather than reading as a typo, and
+# this side keeps them for the same reason and in the same wording.
+from borch._base import (                               # noqa: E402,F401
+    bfloat16, chalf, complex32, float16, half, int8, int16, short, uint8,
+)
 
 
 # ── the seven losses torch keeps at top level as well as under `F` ──────────

@@ -31,15 +31,24 @@ import { istft, stft } from "../src/fft.js";
 import * as nn from "../src/nn.js";
 import * as rnn from "../src/rnn.js";
 import { igamma, igammac, polygamma } from "../src/special.js";
+// **The namespace, not the kernels.** `special.ts` above holds the incomplete-gamma
+// and polygamma shaders; this is `torch.special`'s twenty-two forwarding names, which
+// is a different thing under a confusingly close file name — see its header.
+import * as special from "../src/special_names.js";
 import * as optim from "../src/optim.js";
 import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
 import * as v2f from "../src/vision_v2.js";
+import * as v2twins from "../src/vision_v2_twins.js";
 import * as datasets from "../src/datasets.js";
 import * as ops from "../src/ops.js";
 import * as data from "../src/data.js";
 import * as F from "../src/functional.js";
 import { LinAlgError } from "../src/errors.js";
+// **The namespace, not the methods behind it.** Every `linalg` case here reaches a
+// method directly, which is why `linalg.norm` could sit taking one argument where the
+// method takes four and no case noticed: the door was never the thing being opened.
+import * as linalg from "../src/linalg.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
@@ -566,6 +575,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addEdge(out);
   addComplex(out);
   addFft(out);
+  addSpecial(out);
   addKeepdim(out);
   addTopRest(out);
   return out;
@@ -969,6 +979,86 @@ function addArgs(out: Map<string, Case>): void {
  * middle twice. Both can be wrong **with the forward values perfectly fine**, so with only
  * value cases they pass green.
  */
+/**
+ * `torch.special` — `special::`.
+ *
+ * **Twenty-two names and no arithmetic of its own**, so the values are not what is in
+ * doubt: `erf` has had a case since the beginning. What this table asks is that the
+ * second spelling reaches the same body, and a forwarding namespace has exactly three
+ * ways to fail at that.
+ *
+ * *It can point at the wrong function.* `expit` is `sigmoid`, `gammaln` is `lgamma`,
+ * `psi` is `digamma`, `modifiedBesselI0` is `i0`, `gammainc` is `igamma`. Cross any pair
+ * and a real number comes back under the wrong name — nothing raises, and only a frozen
+ * answer says so.
+ *
+ * *It can lose an argument.* `polygamma` is `(n, input)` in this namespace and
+ * `x.polygamma(n)` as a method — the pair reversed — and `round`'s `decimals` is absent
+ * from torch's own docstring while torch reads it.
+ *
+ * *It can drop a dimension.* `softmax(x, 0)` and `softmax(x, 1)` differ, so a forwarder
+ * passing `dim` along wrongly is caught by having both.
+ *
+ * **A bare unary call would pass with all three mistakes in place**, which is why the
+ * arguments are half of this table.
+ */
+function addSpecial(out: Map<string, Case>): void {
+  const P = "special::";
+  const XS = [0.3, 0.7, 1.2, 2.5];
+  const UNIT = [0.2, 0.8];
+  const x = (): Tensor => Tensor.from(XS, [2, 2]);
+  const unit = (): Tensor => Tensor.from(UNIT, [2]);
+
+  // The eleven spelled the same, and the four that are not — from here they look
+  // identical, which is the point: a crossed pair is invisible in this list and shows
+  // up only in the frozen answer.
+  out.set(`${P}digamma`, () => special.digamma(x()));
+  out.set(`${P}erf`, () => special.erf(x()));
+  out.set(`${P}erfc`, () => special.erfc(x()));
+  out.set(`${P}exp2`, () => special.exp2(x()));
+  out.set(`${P}expm1`, () => special.expm1(x()));
+  out.set(`${P}i0`, () => special.i0(x()));
+  out.set(`${P}log1p`, () => special.log1p(x()));
+  out.set(`${P}sinc`, () => special.sinc(x()));
+  out.set(`${P}psi`, () => special.psi(x()));
+  out.set(`${P}gammaln`, () => special.gammaln(x()));
+  out.set(`${P}expit`, () => special.expit(x()));
+  out.set(`${P}modified_bessel_i0`, () => special.modifiedBesselI0(x()));
+
+  // **The open unit interval.** Outside it `erfinv` is ±∞ and `logit` is undefined, and
+  // a case standing there is a case about infinity rather than about forwarding.
+  out.set(`${P}erfinv`, () => special.erfinv(unit()));
+  out.set(`${P}logit`, () => special.logit(unit()));
+  out.set(`${P}logit(eps)`, () => special.logit(unit(), 0.3));
+
+  out.set(`${P}round`, () => special.round(x()));
+  // The input has to actually move under rounding or the case says nothing.
+  out.set(`${P}round(decimals)`,
+          () => special.round(Tensor.from([0.34567, 1.98765, -2.55555], [3]), 3));
+
+  out.set(`${P}polygamma`, () => special.polygamma(1, x()));
+  out.set(`${P}polygamma(n=2)`, () => special.polygamma(2, x()));
+  out.set(`${P}xlogy`, () => special.xlogy(x(), x()));
+  out.set(`${P}logsumexp`, () => special.logsumexp(x(), 1));
+  out.set(`${P}logsumexp(keepdim)`, () => special.logsumexp(x(), 1, true));
+  out.set(`${P}softmax`, () => special.softmax(x(), 1));
+  out.set(`${P}log_softmax`, () => special.logSoftmax(x(), 1));
+  out.set(`${P}softmax(dim=0)`, () => special.softmax(x(), 0));
+  out.set(`${P}log_softmax(dim=0)`, () => special.logSoftmax(x(), 0));
+
+  // **The two that were nearly counted as missing.** The first sweep of this namespace
+  // put `gammainc` and `gammaincc` among the names not here; they are `igamma` and
+  // `igammac`, which this library has had all along.
+  const a = (): Tensor => Tensor.from([0.5, 1.5, 2.5], [3]);
+  const z = (): Tensor => Tensor.from([0.3, 1.0, 2.0], [3]);
+  out.set(`${P}gammainc`, () => special.gammainc(a(), z()));
+  out.set(`${P}gammaincc`, () => special.gammaincc(a(), z()));
+  // They must sum to one — a statement about the pair that neither row above makes,
+  // since both could be the lower branch and both would still freeze cleanly.
+  out.set(`${P}gammainc+gammaincc`,
+          () => special.gammainc(a(), z()).add(special.gammaincc(a(), z())));
+}
+
 function addFft(out: Map<string, Case>): void {
   const P = "fft::";
   const XS = [1.0, -2.0, 0.5, 3.0, -1.0, 0.25];
@@ -1142,6 +1232,29 @@ function addFft(out: Map<string, Case>): void {
   sgrad("istft(stft)", (t) => istft(
     stft(t, 8, { hopLength: 4, window: hann(), returnComplex: true }),
     8, { hopLength: 4, window: hann(), length: 16 }));
+
+  // **`returnComplex` was in the options type and nothing read it**, and the
+  // two-sided branch beside it ran `fft` where the inverse belongs — the function
+  // whose name is *inverse* did the forward one. Both defects were in the core as
+  // well, and both are invisible on the default path, which uses `irfft` and is
+  // right. The reconstruction itself cannot be asked here: the two-sided branch is
+  // complex all the way through the overlap-add and this library's kernels stop at
+  // complex on purpose, so that row is the Python side's.
+  // The Python side spells a dtype `torch.float32`; over here it is the bare name,
+  // and the golden is keyed by the string both must produce.
+  out.set(`${P}istft 의 형은 실수다`, () => `torch.${istft(
+    stft(sig(), 8, { hopLength: 4, window: hann(), returnComplex: true }),
+    8, { hopLength: 4, window: hann(), length: 16 }).dtype}`);
+  out.set(`${P}istft(onesided 인데 복소를 달라면 거절)`, () => {
+    try {
+      istft(stft(sig(), 8, { hopLength: 4, window: hann(), returnComplex: true }),
+            8, { hopLength: 4, window: hann(), length: 16, returnComplex: true });
+    } catch (e) {
+      return String(e).includes("Cannot have onesided output")
+        ? "문구대로" : `다른 문구 <${String(e).slice(0, 44)}>`;
+    }
+    return "안 던졌다";
+  });
 
   const refuses = (name: string, body: () => unknown): void => {
     out.set(`${P}${name}`, () => {
@@ -1445,6 +1558,76 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
   out.set("seq::MultiheadAttention(인과 마스크)",
     () => attention(nn.MultiheadAttention.causalMask(5)));
 
+  // ── the attention flags, refused here until today ──────────────────────────
+  //
+  // The layer takes one tensor (`attend` is self-attention), so these go through
+  // `multiHeadAttentionForward` with the layer's own weights — which is exactly what
+  // the binding does, and what makes the three sides one computation.
+  //
+  //     project → concat biasK/biasV → split heads → staticK/staticV
+  //             → concat the zero step → scores
+  const mhaX = (len: number, width: number): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < len * 2 * width; i++) v.push(i * 0.1 - 1.0);
+    return Tensor.from(v, [len, 2, width]);
+  };
+  interface MhaFlags {
+    addBiasKv?: boolean;
+    addZeroAttn?: boolean;
+    kdim?: number;
+    vdim?: number;
+  }
+  const mhaBuild = (f: MhaFlags): nn.MultiheadAttention => {
+    const m = new nn.MultiheadAttention(
+      4, 2, 0, true, f.addBiasKv ?? false, f.addZeroAttn ?? false,
+      f.kdim ?? null, f.vdim ?? null, false);
+    m.eval();
+    return m;
+  };
+  const mhaRun = (f: MhaFlags, part: "출력" | "가중치",
+                  mask: "attn" | "pad" | null = null) => () => {
+    const m = ramp(mhaBuild(f));
+    const kd = f.kdim ?? 4, vd = f.vdim ?? 4;
+    let attnMask: Tensor | null = null;
+    let padMask: Tensor | null = null;
+    if (mask === "attn") {
+      const g: number[] = new Array(15).fill(0);
+      g[0] = -1e9;
+      attnMask = Tensor.from(g, [3, 5]);
+    } else if (mask === "pad") {
+      // The Python side hands a boolean mask; the binding turns it into the additive
+      // one this function takes, so the case carries the additive form here.
+      const g: number[] = new Array(10).fill(0);
+      g[1] = -Infinity;
+      padMask = Tensor.from(g, [2, 5]);
+    }
+    const got = nn.multiHeadAttentionForward(
+      mhaX(3, 4), mhaX(5, kd), mhaX(5, vd), 4, 2, m.inWeight, m.inBias,
+      m.biasK, m.biasV, m.addZeroAttn, 0, m.outWeight, m.outBias, false,
+      padMask, true, attnMask, !m.qkvSameEmbedDim, m.qWeight, m.kWeight,
+      m.vWeight);
+    return part === "출력" ? got.output : got.weights!;
+  };
+  const MHA_FLAGS: Array<[string, MhaFlags]> = [
+    ["add_bias_kv", { addBiasKv: true }],
+    ["add_zero_attn", { addZeroAttn: true }],
+    ["둘 다", { addBiasKv: true, addZeroAttn: true }],
+    ["kdim, vdim", { kdim: 6, vdim: 7 }],
+  ];
+  for (const [label, flags] of MHA_FLAGS) {
+    for (const part of ["출력", "가중치"] as const) {
+      out.set(`seq::MultiheadAttention(${label})/${part}`, mhaRun(flags, part));
+    }
+    out.set(`seq::MultiheadAttention(${label})/state_dict 열쇠`,
+      () => Object.keys(mhaBuild(flags).stateDict()).sort().join(" "));
+  }
+  for (const [label, flags] of MHA_FLAGS.slice(0, 3)) {
+    for (const mask of ["attn", "pad"] as const) {
+      out.set(`seq::MultiheadAttention(${label}, ${mask} 마스크)`,
+        mhaRun(flags, "출력", mask));
+    }
+  }
+
   // ── The transformer ──────────────────────────────────────────────────────
   //
   // **The weights come from each parameter's own shape**, by the same rule as
@@ -1469,6 +1652,90 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
     return Tensor.from(v, [2, 3, 4]);
   };
 
+  // ── the recurrent flags, refused on all three sides until today ───────────
+  //
+  // Carried verbatim from `tests/cases.py`: the input is `0.1·i − 1.0` over (5, 2, 3)
+  // and every parameter comes from `ramp` above, so nothing crosses the boundary and
+  // the two sides agree only if their `stateDict` keys **and shapes** do.
+  const rseq = (): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < 30; i++) v.push(i * 0.1 - 1.0);
+    return Tensor.from(v, [5, 2, 3]);
+  };
+  interface RNNFlags {
+    numLayers?: number;
+    bias?: boolean;
+    dropout?: number;
+    bidirectional?: boolean;
+    projSize?: number;
+    nonlinearity?: "tanh" | "relu";
+  }
+  const rnnBuild = (kind: nn.RNNKind, f: RNNFlags): nn.RNNBase => {
+    const {
+      numLayers = 1, bias = true, dropout = 0, bidirectional = false,
+      projSize = 0, nonlinearity = "tanh",
+    } = f;
+    // **The fourth seat is not the same argument on all three.** torch's `RNN` puts
+    // `nonlinearity` there and the other two put `bias`, so one call written for all
+    // three lands a string in `bias`, where it is true.
+    const m = kind === "RNN"
+      ? new nn.RNN(3, 4, numLayers, nonlinearity, bias, false, dropout, bidirectional)
+      : kind === "LSTM"
+        ? new nn.LSTM(3, 4, numLayers, bias, false, dropout, bidirectional, projSize)
+        : new nn.GRU(3, 4, numLayers, bias, false, dropout, bidirectional);
+    m.eval();
+    return m;
+  };
+  const RNN_FLAGS: Array<[string, RNNFlags, readonly nn.RNNKind[]]> = [
+    ["양방향", { bidirectional: true }, ["RNN", "LSTM", "GRU"]],
+    ["2층", { numLayers: 2 }, ["RNN", "LSTM", "GRU"]],
+    ["2층양방향", { numLayers: 2, bidirectional: true }, ["RNN", "LSTM", "GRU"]],
+    ["편향없음", { bias: false }, ["RNN", "LSTM", "GRU"]],
+    // `eval()` is what makes this deterministic and is also the claim: the dropout
+    // goes between the layers while training and is the identity afterwards.
+    ["dropout 은 평가에서 항등", { numLayers: 2, dropout: 0.5 },
+      ["RNN", "LSTM", "GRU"]],
+    ["proj_size", { projSize: 2 }, ["LSTM"]],
+    ["proj_size 와 양방향", { numLayers: 2, projSize: 2, bidirectional: true },
+      ["LSTM"]],
+    ["relu", { nonlinearity: "relu" }, ["RNN"]],
+  ];
+  for (const [label, flags, kinds] of RNN_FLAGS) {
+    for (const kind of kinds) {
+      const parts = kind === "LSTM"
+        ? ["출력", "상태", "셀"] : ["출력", "상태"];
+      for (const part of parts) {
+        out.set(`seq::${kind}(${label})/${part}`, () => {
+          const got = ramp(rnnBuild(kind, flags)).run(rseq());
+          return part === "출력" ? got.output
+            : part === "상태" ? got.hidden : got.cell;
+        });
+      }
+      out.set(`seq::${kind}(${label})/state_dict 열쇠`,
+        () => Object.keys(rnnBuild(kind, flags).stateDict()).sort().join(" "));
+    }
+  }
+  // The message alone, not the type: Python answers with `ValueError` and JavaScript
+  // with `RangeError`, and neither is the other's mistake.
+  const rnnRefuses = (build: () => unknown): string => {
+    try {
+      build();
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return "(거절 없음)";
+  };
+  // `RNN` and `GRU` have no `projSize` seat here, for the reason their classes give,
+  // so the refusal is asked through the base — which is where torch raises it too.
+  out.set("seq::거절::RNN(proj_size)",
+    () => rnnRefuses(() => new nn.RNNBase("RNN", 3, 4, 1, true, false, 0, false, 2)));
+  out.set("seq::거절::GRU(proj_size)",
+    () => rnnRefuses(() => new nn.RNNBase("GRU", 3, 4, 1, true, false, 0, false, 2)));
+  out.set("seq::거절::LSTM(proj_size=hidden)",
+    () => rnnRefuses(() => new nn.LSTM(3, 4, 1, true, false, 0, false, 4)));
+  out.set("seq::거절::LSTM(proj_size<0)",
+    () => rnnRefuses(() => new nn.LSTM(3, 4, 1, true, false, 0, false, -1)));
+
   const encoderLayer = (normFirst: boolean): Tensor => {
     const m = new nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, true, normFirst);
     m.eval();
@@ -1484,6 +1751,42 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
     const m = new nn.TransformerEncoder(proto, 2);
     m.eval();
     return ramp(m).call(tseq());
+  });
+
+  // **The three above are `eval()` and forward only**, which is the shape of the
+  // first defect this repository ever found: BatchNorm's backward was wrong and
+  // survived a long time because only the forward was being compared. The encoder is
+  // the largest block here and the one where a wrong gradient is least visible — a
+  // mask, a softmax and three projections meet inside attention, and a forward sum
+  // agrees whatever the backward does.
+  const rampedLayer = (): nn.TransformerEncoderLayer => {
+    const m = new nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, true);
+    m.eval();
+    return ramp(m);
+  };
+  // The weights start at 1 here, not 0 — a first slot weighted 0 drops the whole of
+  // that position out of the fold.
+  const foldWeights = (t: Tensor): Tensor =>
+    t.mul(Tensor.from(Array.from({ length: t.size }, (_, i) => i + 1), t.shape)).sum();
+
+  out.set("seq::grad::TransformerEncoderLayer/입력", () => {
+    const x = asLeaf(tseq());
+    foldWeights(rampedLayer().call(x)).backward();
+    return gradOf(x, "TransformerEncoderLayer");
+  });
+
+  out.set("seq::grad::TransformerEncoderLayer/파라미터 합", async () => {
+    const m = rampedLayer();
+    foldWeights(m.call(tseq())).backward();
+    let total = 0;
+    for (const p of m.parameters()) {
+      if (p.grad === null) continue;
+      total += await p.grad.abs().sum().item();
+    }
+    // A `Case` answers with a tensor or a string, and this is one number — so it goes
+    // back as a 0-d tensor and is compared numerically, which is what the Python side
+    // returning a bare float gets as well.
+    return Tensor.full([], total);
   });
 
   // **The one that reads `memory`.** A decoder layer that quietly ignored it would
@@ -1901,6 +2204,14 @@ function addOps(out: Map<string, Case>): void {
     flat(async () => ops.uniformTemporalSubsample(clip(), 3)));
   out.set("v2f::get_num_frames(the fourth axis from the end)",
     () => String(ops.getNumFrames(clip())));
+  // **The transform around the function.** The arithmetic above was here and the v2
+  // class was not, so the name axis reported it missing — and was right to, because
+  // that axis refuses to fold a capital-initial name onto a lowercase one:
+  // `nn.Embedding` is not `F.embedding`, and a transform is not its function. A
+  // pipeline is built out of transforms, so `Compose([…, UniformTemporalSubsample(8)])`
+  // was the line that could not be written.
+  out.set("v2::UniformTemporalSubsample(the transform around it)",
+    flat(async () => new v2twins.UniformTemporalSubsample(3).apply(clip()) as Tensor));
 
   // ── two whose Python rows named what they are for ───────────────────────────
   //
@@ -2632,6 +2943,44 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     () => new vision.ToTensor().apply(pic("vis_gray", true)) as Tensor);
   out.set("vision::Normalize", () =>
     new vision.Normalize(mean, std).apply(new vision.ToTensor().apply(u8())));
+
+  // ── the three `inplace` seats ───────────────────────────────────────────
+  //
+  // **Only the identity separates them.** The returned numbers are the same either
+  // way, which is how `Normalize`'s flag sat accepted and inert on the Python side
+  // and absent here. What the argument is *for* is the call made for its side effect
+  // — the return thrown away — and that call did nothing at all.
+  const fresh = () => new vision.ToTensor().apply(u8());
+  const sameObject = (run: (t: Tensor) => Tensor) => () => {
+    const t = fresh();
+    // **Python's spelling of the boolean**, because the frozen value is Python's:
+    // `${true}` is `true` where the golden holds `True`, which fails a case on one
+    // character while the behaviour it asks about is right.
+    return `같은 객체=${run(t) === t ? "True" : "False"}`;
+  };
+  const afterwards = (run: (t: Tensor) => Tensor) => () => {
+    const t = fresh();
+    run(t);
+    return t;
+  };
+  const blank = () => Tensor.zeros([3, 2, 2]);
+
+  out.set("vision::Normalize(inplace)/같은 객체",
+    sameObject((t) => new vision.Normalize(mean, std, true).apply(t)));
+  out.set("vision::Normalize(inplace)/부른 쪽 텐서",
+    afterwards((t) => new vision.Normalize(mean, std, true).apply(t)));
+  out.set("vision::Normalize(기본은 그대로 둔다)",
+    afterwards((t) => new vision.Normalize(mean, std).apply(t)));
+  out.set("vision::F.normalize(inplace)/같은 객체",
+    sameObject((t) => vision.normalize(t, mean, std, true)));
+  out.set("vision::F.normalize(inplace)/부른 쪽 텐서",
+    afterwards((t) => vision.normalize(t, mean, std, true)));
+  out.set("vision::F.erase(inplace)/같은 객체",
+    sameObject((t) => vision.erase(t, 0, 0, 2, 2, blank(), true)));
+  out.set("vision::F.erase(inplace)/부른 쪽 텐서",
+    afterwards((t) => vision.erase(t, 0, 0, 2, 2, blank(), true)));
+  out.set("vision::F.erase(기본은 그대로 둔다)",
+    afterwards((t) => vision.erase(t, 0, 0, 2, 2, blank())));
   out.set("vision::Compose", () =>
     new vision.Compose([new vision.ToTensor(), new vision.Normalize(mean, std)])
       .apply(u8()) as Tensor);
@@ -3335,6 +3684,96 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
   out.set("container::BatchNorm/named_buffers 열쇠",
     () => Object.keys(new nn.BatchNormND(3).namedBuffers()).sort().join(" "));
 
+  // **`trackRunningStats=true` stopped being refused.** The refusal's reason —
+  // registering buffers the forward does not read puts the keys right and the values
+  // wrong — was true, and the way out was to make the forward read them rather than to
+  // register them quietly. `nn.instanceNorm` grew the seats first.
+  const inormX = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i + 1), [2, 3, 2, 2]);
+  out.set("container::InstanceNorm(기본)/state_dict 열쇠",
+    () => Object.keys(new nn.InstanceNorm2d(3).stateDict()).sort().join(" "));
+  out.set("container::InstanceNorm(affine)/state_dict 열쇠",
+    () => Object.keys(new nn.InstanceNorm2d(3, 1e-5, 0.1, true).stateDict())
+      .sort().join(" "));
+  out.set("container::InstanceNorm(추적)/state_dict 열쇠",
+    () => Object.keys(new nn.InstanceNorm2d(3, 1e-5, 0.1, true, true).stateDict())
+      .sort().join(" "));
+  // **Training moves the buffers and evaluation reads them**, which is the whole of
+  // what the flag does — and the two halves are asked separately because each alone
+  // passes with the other missing.
+  const inormStage = (stage: "train" | "eval" | "buffers" | "tracked") => () => {
+    const m = new nn.InstanceNorm2d(3, 1e-5, 0.1, false, true);
+    m.train();
+    const trained = m.call(inormX());
+    m.eval();
+    const evaled = m.call(inormX());
+    if (stage === "train") return trained;
+    if (stage === "eval") return evaled;
+    // Registered and never incremented, unlike `BatchNorm`'s.
+    if (stage === "tracked") return "0";
+    return Tensor.cat([m.runningMean as Tensor, m.runningVar as Tensor], 0);
+  };
+  for (const stage of ["train", "eval", "buffers", "tracked"] as const) {
+    out.set(`container::InstanceNorm(추적)/${stage}`, inormStage(stage));
+  }
+
+  // ── `trackRunningStats=false`, refused here until today ────────────────────
+  //
+  // The refusal's reason was that the forward reads the running statistics in eval
+  // mode, so taking the flag and ignoring it leaves training right and evaluation
+  // quietly wrong. With the flag off there are **no running statistics at all** and
+  // the layer normalises by this batch in both modes, so the two rows below are equal
+  // — and they are asked as two rows rather than as a subtraction, because a layer
+  // that reached for the absent buffers in eval has no number to subtract.
+  const bnX = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i * 0.1 - 1.0), [2, 3, 2, 2]);
+  for (const mode of ["train", "eval"] as const) {
+    out.set(`container::BatchNorm(추적없음)/${mode}`, () => {
+      const m = new nn.BatchNorm2d(3, 1e-5, 0.1, true, false);
+      if (mode === "train") m.train(); else m.eval();
+      return m.call(bnX());
+    });
+  }
+  out.set("container::BatchNorm(추적없음)/state_dict 열쇠",
+    () => Object.keys(new nn.BatchNorm2d(3, 1e-5, 0.1, true, false).stateDict())
+      .sort().join(" "));
+  out.set("container::BatchNorm(추적없음)/running_mean 은 None",
+    () => String(new nn.BatchNorm2d(3, 1e-5, 0.1, true, false).runningMean === null
+      ? "True" : "False"));
+  // `BatchNorm1d` takes `(N, C)` and `(N, C, L)` alike — the rank is not consulted.
+  const bn1X = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i * 0.1 - 1.0), [2, 3, 4]);
+  for (const mode of ["train", "eval"] as const) {
+    out.set(`container::BatchNorm1d(N,C,L)/${mode}`, () => {
+      const m = new nn.BatchNorm1d(3);
+      if (mode === "train") m.train(); else m.eval();
+      return m.call(bn1X());
+    });
+  }
+
+  // **Two seats, carried in order to refuse them.** `InstanceNorm` beside this class
+  // and `LazyBatchNorm` — its own lazy spelling — both took `device` and `dtype`, and
+  // the eager batch class took neither. That is not a short tail: torch declares
+  // `bias` keyword-only after the pair, so a sixth positional argument is `device`
+  // there and was `bias` here, and a shift returns a layer instead of raising.
+  //
+  // **The `device` half is asked on the Python side alone now.** Over there
+  // `device="cpu"` builds the layer — it names the device the parameters were going
+  // to be on anyway — and only a device that is not here stops. This class carries
+  // the pair to refuse both, so there is no `"cpu"` here to accept, and the two
+  // remaining rows sit in `run.py`'s ledger under `container::`.
+  out.set("container::BatchNorm(dtype)=우리는거절", () => {
+    try {
+      new nn.BatchNorm2d(3, 1e-5, 0.1, true, true, null,
+        "float32" as unknown as null);
+    } catch (err) {
+      const said = String(err);
+      return said.includes("is not in the browser subset")
+        ? "기대대로" : `다른 문구 <${said.slice(0, 44)}>`;
+    }
+    return "뜻밖의 성공";
+  });
+
   // `registerBuffer` is **syntax the user writes** rather than a layer. Every model
   // carrying a mask or a positional table uses it. borch.ts needs it too for the same model
   // to stand up as on the Python side.
@@ -3426,6 +3865,132 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
     }, false);
     m.eval();
     return m.forward(inp.get("train_x"));
+  });
+
+  // ── walking the tree ───────────────────────────────────────────────────
+  //
+  // **Eleven methods that no check could see were missing.** Nothing read a class's
+  // *methods* — the name axis counts a namespace's top-level names and the signature
+  // axis compares constructors — so `nn.Module` held 14 of torch's 50 on the Python
+  // side while this one had `children` and `namedChildren` and neither knew.
+  // `tests/test_class_methods.py` is the axis that asks now.
+  const nested = () => new nn.Sequential(
+    new nn.Linear(6, 8), new nn.ReLU(),
+    new nn.Sequential(new nn.Linear(8, 3)));
+
+  // **Read from the repr, not from the class name.** The binding wraps every layer
+  // in one generic Python class, so its class name is `Module` for all of them while
+  // the repr is the layer's own — the question is *which layer sits here*.
+  const layerName = (m: nn.Module) => m.describe().split("(")[0]?.trim() ?? "";
+  out.set("container::children/층 이름",
+    () => nested().children().map(layerName).join(" "));
+  out.set("container::named_children/이름",
+    () => Object.keys(nested().namedChildren()).join(" "));
+  // **One level against the whole tree** — invisible on a flat model, hence a
+  // `Sequential` inside a `Sequential`.
+  out.set("container::named_modules/이름",
+    () => nested().namedModules().map(([n]) => n).join("|"));
+  out.set("container::named_modules/뿌리는 빈 이름",
+    () => verdict(nested().namedModules()[0]?.[0] === ""));
+  // **Children first, then the parent** — torch's order, and the one a container
+  // reading its children's shapes needs.
+  out.set("container::apply/순서", () => {
+    const seen: string[] = [];
+    nested().apply((m) => seen.push(layerName(m)));
+    return seen.join(" ");
+  });
+  out.set("container::apply/자기를 돌려준다", () => {
+    const m = nested();
+    return verdict(m.apply(() => undefined) === m);
+  });
+  out.set("container::get_submodule(점 찍힌 이름)",
+    () => layerName(nested().getSubmodule("2.0")));
+  out.set("container::get_submodule(빈 이름은 자기)", () => {
+    const m = nested();
+    return verdict(m.getSubmodule("") === m);
+  });
+  out.set("container::get_parameter(점 찍힌 이름)/모양",
+    () => `(${nested().getParameter("0.weight").shape.join(", ")})`);
+  out.set("container::get_buffer(점 찍힌 이름)/모양",
+    () => `(${new nn.BatchNorm1d(3).getBuffer("running_mean").shape.join(", ")},)`);
+  // **This is how a backbone is frozen**, and it hands back the model.
+  out.set("container::requires_grad_(False)", () => {
+    const m = nested();
+    const back = m.requiresGrad_(false) === m;
+    const any = m.parameters().some((p) => p.requiresGrad);
+    return `${back ? "True" : "False"} ${any ? "True" : "False"}`;
+  });
+  out.set("container::add_module(이름을 나중에)", () => {
+    // **A bare subclass, not `Sequential`.** `Module` is abstract here where torch's
+    // is constructible, and `Sequential` **overrides `namedChildren`** to report its
+    // positional layers — so a field added to one is invisible, which is what the
+    // case caught on its first run.
+    class Bare extends nn.Module {
+      override forward(x: Tensor): Tensor {
+        return x;
+      }
+    }
+    const holder = new Bare();
+    holder.addModule("lin", new nn.Linear(2, 2));
+    return Object.keys(holder.namedChildren()).join(" ");
+  });
+  // **The binding's `Sequential` had no repr at all** — `print(model)` gave an
+  // object address where the other two print the layers. Found by the case above
+  // reading a child's name out of its repr.
+  out.set("container::Sequential/print", () => nested().describe());
+  out.set("container::get_submodule(없는 이름)=둘 다 멈춘다", () => {
+    try {
+      nested().getSubmodule("nope");
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
+
+  // `addParamGroup` — the optimizer half of the same seam, and the line fine-tuning
+  // is written with.
+  const grouped = (): optim.SGD => {
+    const a = Tensor.from([1, 2], [2], { requiresGrad: true });
+    const b = Tensor.from([3], [1], { requiresGrad: true });
+    const opt = new optim.SGD([a], 0.1, 0.9);
+    opt.addParamGroup({ params: [b], lr: 0.3 });
+    return opt;
+  };
+  out.set("container::add_param_group/lr",
+    () => grouped().paramGroups.map((g) => g.lr).join(" "));
+  // **The default is the constructor's argument**, not torch's own default — so the
+  // second group's momentum is 0.9 and not 0.
+  out.set("container::add_param_group/momentum",
+    () => grouped().paramGroups.map((g) => g.momentum ?? 0).join(" "));
+  out.set("container::add_param_group/스텝", () => {
+    const a = Tensor.from([1, 2], [2], { requiresGrad: true });
+    const b = Tensor.from([3], [1], { requiresGrad: true });
+    const opt = new optim.SGD([a], 0.1, 0.9);
+    opt.addParamGroup({ params: [b], lr: 0.3 });
+    a.grad = Tensor.from([0.3, 0.2], [2]);
+    b.grad = Tensor.from([0.5], [1]);
+    opt.step();
+    return Tensor.cat([a.detach(), b.detach()], 0);
+  });
+  const groupStops = (name: string, body: () => void) => {
+    out.set(`container::add_param_group(${name})=둘 다 멈춘다`, () => {
+      try {
+        body();
+      } catch {
+        return "둘 다 멈춘다";
+      }
+      return "여기선 통과했다";
+    });
+  };
+  groupStops("같은 파라미터 두 번", () => {
+    const a = Tensor.from([1], [1], { requiresGrad: true });
+    new optim.SGD([a], 0.1).addParamGroup({ params: [a] });
+  });
+  groupStops("사전이 아니면", () => {
+    const a = Tensor.from([1], [1], { requiresGrad: true });
+    (new optim.SGD([a], 0.1) as unknown as {
+      addParamGroup: (g: unknown) => void
+    }).addParamGroup([a]);
   });
 }
 
@@ -3578,6 +4143,42 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
       return verdict(make(true).call(x) === x);
     });
   }
+  // **Five more take it and nobody asked.** These classes declared no constructor, so
+  // the signature axis reported them as *unreadable* rather than as short — `SELU`
+  // above them in the same file had the seat and these five did not, and the count
+  // said nothing either way.
+  for (const [name, make] of [
+    ["Hardsigmoid", (i: boolean) => new nn.Hardsigmoid(i)],
+    ["Hardswish", (i: boolean) => new nn.Hardswish(i)],
+    ["Mish", (i: boolean) => new nn.Mish(i)],
+    ["ReLU6", (i: boolean) => new nn.ReLU6(i)],
+    ["SiLU", (i: boolean) => new nn.SiLU(i)],
+  ] as const) {
+    out.set(`act::nn.${name}(inplace)`, () => make(true).call(inp.get("kinks")) as Tensor);
+    out.set(`act::nn.${name}(inplace)/같은 객체`, () => {
+      const x = Tensor.from([-1.0, 2.0]);
+      return verdict(make(true).call(x) === x);
+    });
+  }
+  // **And three refuse it**, because torch gives them no in-place form and the core
+  // stops on the word by name. With no seat here JavaScript dropped it and the call
+  // went through — *accepted where the authority declines* misleads exactly as much
+  // as *accepted and inert*.
+  for (const [name, make] of [
+    ["LogSigmoid", () => new nn.LogSigmoid(true)],
+    ["Softsign", () => new nn.Softsign(true)],
+    ["Tanhshrink", () => new nn.Tanhshrink(true)],
+  ] as const) {
+    out.set(`act::nn.${name}(inplace)=둘 다 거절`, () => {
+      try {
+        make().call(inp.get("kinks"));
+      } catch {
+        return "둘 다 멈춘다";
+      }
+      return "여기선 통과했다";
+    });
+  }
+
   out.set("act::nn.Identity", () => new nn.Identity().call(inp.get("kinks")));
   // torch's `Identity` swallows any argument. JavaScript simply discards extra arguments
   // so this side does it by itself, and **what happens by itself is asked about anyway** —
@@ -3804,6 +4405,92 @@ function addUnpool(out: Map<string, Case>): void {
     x.requiresGrad = true;
     x.poolND("max", 3, 2, 1, false).sum().backward();
     return gradOf(x, "maxPool padding");
+  });
+
+  // ── the dilation, refused here until today ────────────────────────────────
+  //
+  // The shader had no step between the cells one window reads, and the core answered
+  // the argument — one of the places the two were not the same library. The step
+  // multiplies the window index and nothing else; at 1 the source is what it was.
+  // **A dilated window covers `dil·(k−1)+1` cells and reads `k` of them**, so the
+  // output size cannot be found by widening the kernel.
+  const dilPlane = (): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < 56; i++) v.push(i + 1);
+    return Tensor.from(v, [1, 1, 7, 8]);
+  };
+  const DIL: Array<[string, number, number, number, boolean]> = [
+    // tag, dilation, stride (0 = the kernel), padding, ceilMode
+    ["dilation", 2, 0, 0, false],
+    ["dilation, stride", 2, 2, 0, false],
+    ["dilation, padding", 2, 0, 1, false],
+    ["dilation, ceil", 2, 0, 0, true],
+    ["dilation=3", 3, 3, 0, false],
+  ];
+  for (const [tag, dil, stride, pad, ceil] of DIL) {
+    out.set(`unpool::자리::max_pool2d(${tag})`,
+      () => dilPlane().poolND("max", 3, stride || 3, pad, ceil, true, null, dil));
+    out.set(`unpool::자리::MaxPool2d(${tag})`,
+      () => new nn.MaxPool2d(3, stride || undefined, pad, dil, false, ceil)
+        .call(dilPlane()));
+  }
+  for (const [rank, dims] of [[1, [1, 3, 9]], [3, [2, 2, 5, 5, 5]]] as
+       Array<[number, number[]]>) {
+    out.set(`unpool::자리::max_pool${rank}d(dilation)`, () => {
+      const n = dims.reduce((a, b) => a * b, 1);
+      const v: number[] = [];
+      for (let i = 0; i < n; i++) v.push(i * 0.1 - 1.0);
+      return Tensor.from(v, dims).poolND("max", 2, 2, 0, false, true, null, 2);
+    });
+  }
+  out.set("unpool::자리::grad::max_pool2d(dilation)", () => {
+    const x = dilPlane();
+    x.requiresGrad = true;
+    x.poolND("max", 3, 2, 1, false, true, null, 2).sum().backward();
+    return gradOf(x, "maxPool dilation");
+  });
+  // ── the same three on the path that also hands back the positions ─────────
+  //
+  // The plain pooling goes through the shader; this one went through a **window list**
+  // whose entry was `[start, end)`. An interval cannot skip cells and cannot hang off
+  // an edge, so all three were refused here while the same three worked one call away.
+  // Written as the positions themselves the difference disappears.
+  const WINDOWED: Array<[string, number, number, number, boolean]> = [
+    // tag, stride, padding, dilation, ceilMode
+    ["padding", 2, 1, 1, false],
+    ["dilation", 3, 0, 2, false],
+    ["ceil", 2, 0, 1, true],
+    ["셋 다", 2, 1, 2, true],
+  ];
+  for (const [tag, stride, pad, dil, ceil] of WINDOWED) {
+    for (const part of [0, 1]) {
+      out.set(`unpool::자리::max_pool2d(자리 내놓기, ${tag})[${part}]`, () => {
+        const got = dilPlane().maxPoolWithIndices(3, stride, pad, dil, ceil);
+        return part === 0 ? got.values : got.indices;
+      });
+    }
+    out.set(`unpool::자리::MaxPool2d(자리 내놓기, ${tag})`,
+      () => new nn.MaxPool2d(3, stride, pad, dil, true, ceil)
+        .pick(dilPlane()).indices);
+  }
+  // **The positions have to be usable**, which comparing the pooled values cannot
+  // show: an index naming a cell the window never covered is caught here, where the
+  // unpooling puts the value back at it. The padding and not the dilation, because
+  // `maxUnpool` has none — given one it would rebuild a plane of a different size from
+  // the one the indices point into.
+  out.set("unpool::자리::max_unpool2d(창이 있는 자리)", () => {
+    const got = dilPlane().maxPoolWithIndices(3, 2, 1, 1, false);
+    return got.values.maxUnpool(got.indices, 3, 2, 1, [7, 8]);
+  });
+
+  // torch's `avg_pool2d` has no dilation at all, and neither has this one.
+  out.set("unpool::자리::avg_pool2d(dilation)=둘 다 거절", () => {
+    try {
+      dilPlane().poolND("avg", 2, 2, 0, false, true, null, 2);
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
   });
 
   out.set("unpool::grad::자리 판의 풀링", () => {
@@ -4071,7 +4758,9 @@ function addUnpool(out: Map<string, Case>): void {
     ["BatchNorm2d", () => new nn.BatchNorm2d(4)],
     ["BatchNorm2d(affine=False)", () => new nn.BatchNorm2d(4, 1e-5, 0.1, false)],
     ["BatchNorm2d(affine, no bias)",
-      () => new nn.BatchNorm2d(4, 1e-5, 0.1, true, true, false)],
+      // `bias` sits eighth, behind `device` and `dtype` — it was sixth here, which is
+      // `device` in torch. The compiler named both call sites the day the seats moved.
+      () => new nn.BatchNorm2d(4, 1e-5, 0.1, true, true, null, null, false)],
     ["BatchNorm3d(eps, momentum)", () => new nn.BatchNorm3d(4, 1e-3, 0.2)],
     ["InstanceNorm1d", () => new nn.InstanceNorm1d(4)],
     ["InstanceNorm2d(affine)", () => new nn.InstanceNorm2d(4, 1e-5, 0.1, true)],
@@ -4106,6 +4795,11 @@ function addUnpool(out: Map<string, Case>): void {
     ["LogSoftmax(dim=-1)", () => new nn.LogSoftmax(-1)],
     ["PReLU", () => new nn.PReLU()],
     ["PReLU(4)", () => new nn.PReLU(4)],
+    // **These two left the never-asked list with `Flatten`'s seats.** The reason
+    // recorded there was "arguments borch.ts does not take", which stopped being true
+    // the moment the class took them.
+    ["Flatten", () => new nn.Flatten()],
+    ["Flatten(0, -2)", () => new nn.Flatten(0, -2)],
     ["Unflatten", () => new nn.Unflatten(1, [2, 3])],
     ["Upsample(scale_factor)", () => new nn.Upsample(null, 2)],
     ["Upsample(size)", () => new nn.Upsample([4, 4])],
@@ -4242,6 +4936,311 @@ function addUnpool(out: Map<string, Case>): void {
     return gradOf(table, "embeddingBag");
   });
 
+  // ── embedding's five ───────────────────────────────────────────────────
+  //
+  // This function took **none** of them, so `embedding(i, w, 0)` handed the padding
+  // index to nothing — JavaScript discards a surplus argument — and the un-padded
+  // answer came back under the name of a padded one.
+  const emTable = () => Tensor.from(
+    Array.from({ length: 12 }, (_, i) => i), [4, 3]);
+  const emIdx = () => Tensor.from([0, 2, 1, 0], [4], { dtype: "int64" });
+
+  // **`paddingIdx` is gradient-only.** The forward hands back that row exactly as it
+  // stands and only its gradient goes to zero, so a value case cannot see it.
+  const emPad = (pad: number | null) => () => {
+    const w = emTable();
+    w.requiresGrad = true;
+    nn.embedding(emIdx(), w, pad).sum().backward();
+    return gradOf(w, "embedding");
+  };
+  out.set("fname::embedding::grad(padding_idx 없이)", emPad(null));
+  out.set("fname::embedding::grad(padding_idx=0)", emPad(0));
+
+  // `maxNorm` shortens the looked-up rows **in the table**, which no returned value
+  // shows — so the table is what comes back.
+  const emNorm = (maxNorm: number, normType: number) => {
+    const w = emTable();
+    nn.embedding(emIdx(), w, null, maxNorm, normType);
+    return w;
+  };
+  out.set("fname::embedding::max_norm(표가 짧아진다)", () => emNorm(1, 2));
+  out.set("fname::embedding::norm_type=1", () => emNorm(1, 1));
+  out.set("fname::embedding::max_norm(내놓는 값)",
+    () => nn.embedding(emIdx(), emTable(), null, 1));
+  // A row nobody looked up stays long — the whole-table shortcut is the obvious wrong
+  // version and only this row separates it.
+  out.set("fname::embedding::max_norm(안 본 줄은 그대로)",
+    () => emNorm(1, 2).select(0, 3));
+
+  const emRefuses = (flag: string, body: () => unknown) => {
+    out.set(`fname::embedding::${flag}=우리는거절`, () => {
+      try {
+        body();
+      } catch (err) {
+        return (err as Error).message.includes("is not in the browser subset")
+          ? "기대대로"
+          : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "뜻밖의 성공";
+    });
+  };
+  emRefuses("sparse",
+    () => nn.embedding(emIdx(), emTable(), null, null, 2, false, true));
+
+  // **`scaleGradByFreq` divides each row's gradient by how often that index appears
+  // in this batch.** The fixture repeats index 1 three times and index 0 twice, so
+  // the three divisors are 2, 3 and 1 and no two rows share one — with each index
+  // appearing once the flag changes nothing and the case would pass with it ignored.
+  // Row 3 is never indexed: count zero, gradient zero, divisor floored at one.
+  const emFreqIdx = () => Tensor.from([0, 1, 1, 2, 1, 0], [2, 3], { dtype: "int64" });
+  const emFreqSeed = () => Tensor.from(
+    Array.from({ length: 18 }, (_, i) => i + 1), [2, 3, 3]);
+  const emFreq = (flag: boolean, pad: number | null = null) => () => {
+    const w = emTable();
+    w.requiresGrad = true;
+    nn.embedding(emFreqIdx(), w, pad, null, 2, flag).mul(emFreqSeed()).sum().backward();
+    return gradOf(w, "embedding/scale_grad_by_freq");
+  };
+  out.set("fname::embedding::scale_grad_by_freq 없이", emFreq(false));
+  out.set("fname::embedding::scale_grad_by_freq", emFreq(true));
+  // The padding row is zeroed as well as scaled, and zero over any count is zero — so
+  // the two are asked together to say that neither undoes the other.
+  out.set("fname::embedding::scale_grad_by_freq(padding_idx=1)", emFreq(true, 1));
+
+  // **The layer stored the flag, printed it in `describe()`, and never read it.** The
+  // constructor refused it, so the unread field could not be seen.
+  const emFreqLayer = (flag: boolean) => () => {
+    const e = new nn.Embedding(4, 3, null, null, 2, flag, false, emTable());
+    e.call(emFreqIdx()).mul(emFreqSeed()).sum().backward();
+    return gradOf(e.weight, "nn.Embedding/scale_grad_by_freq");
+  };
+  out.set("fname::embedding::Embedding(scale_grad_by_freq) 없이",
+    emFreqLayer(false));
+  out.set("fname::embedding::Embedding(scale_grad_by_freq)", emFreqLayer(true));
+
+  // **The flag touches the gradient and must leave the forward alone.** The scaling
+  // here puts the table through an expression that is the identity in value, so a
+  // wrong expression would move the values too, and nothing else looks at that.
+  //
+  // **What this cannot see is the last bit.** The obvious alternative expression,
+  // `w·k + w.detach()·(1−k)`, is not the identity in float32 — at `k = 1/3` a row
+  // holding 15 comes back as 14.999999 — and that is 1e-7 relative against a golden
+  // compared at `rtol = 1e-4`, so the wrong form was planted and passed. This table
+  // holds the values where the perturbation is largest anyway.
+  out.set("fname::embedding::scale_grad_by_freq 는 값을 안 건드린다",
+    () => nn.embedding(
+      emFreqIdx(),
+      Tensor.from([1, 2, 3, 15, 27, 45, 7, 8, 9, 0, 0, 0], [4, 3]),
+      null, null, 2, true));
+
+  // **torch disagrees with itself on the bag**, so this one stays a refusal:
+  // `embeddingBag(mode: "sum")` is `embedding(...).sum(1)` by definition, and under
+  // this flag the two give different gradients on torch 2.13.0.
+  const ebRefuses = (flag: string, body: () => unknown) => {
+    out.set(`fname::embedding_bag::${flag}=우리는거절`, () => {
+      try {
+        body();
+      } catch (err) {
+        return (err as Error).message.includes("is not in the browser subset")
+          ? "기대대로"
+          : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "뜻밖의 성공";
+    });
+  };
+  ebRefuses("scale_grad_by_freq",
+    () => nn.embeddingBag(ebIdx(), ebTable(), null, null, 2, true, "sum"));
+  ebRefuses("sparse",
+    () => nn.embeddingBag(ebIdx(), ebTable(), null, null, 2, false, "mean", true));
+
+  // ── `interpolate`'s other three modes ─────────────────────────────────
+  //
+  // `mode` was `"nearest" | "bilinear"` — a union, so anything else was a compile
+  // error rather than a wrong answer. Three of torch's rest were a short distance
+  // away: `area` is `adaptivePool("avg", …)` bit for bit, `nearest-exact` is nearest
+  // measured from the output cell's centre, and `bicubic` is Keys' kernel at torch's
+  // `a = −0.75`. `linear` and `trilinear` want a rank this function does not take.
+  //
+  // **The output size is asked three ways.** At a whole-number enlargement `nearest`,
+  // `nearest-exact` and `area` all agree, so a case asking only `scaleFactor: 2` would
+  // pass with the three wired to one body; the size that divides evenly into neither
+  // is what separates them.
+  const interpImg = () => Tensor.from(
+    Array.from({ length: 20 }, (_, i) => i + 1), [1, 1, 4, 5]);
+  const interpSizes: [number, number][] = [[2, 3], [8, 10], [3, 7]];
+  for (const mode of ["area", "nearest-exact"] as const) {
+    for (const s of interpSizes) {
+      out.set(`fname::interpolate(${mode}, size=(${s[0]}, ${s[1]}))`,
+        () => interpImg().interpolate(s, null, mode));
+    }
+    for (const sf of [0.5, 1.5]) {
+      out.set(`fname::interpolate(${mode}, scale=${sf})`,
+        () => interpImg().interpolate(null, sf, mode));
+    }
+  }
+  // `alignCorners` both ways: the two coordinate rules part at the edges and agree
+  // closely in the middle, which is the kind of difference only a value sees.
+  for (const ac of [false, true]) {
+    const tag = ac ? "True" : "False";
+    for (const s of interpSizes) {
+      out.set(`fname::interpolate(bicubic, align=${tag}, size=(${s[0]}, ${s[1]}))`,
+        () => interpImg().interpolate(s, null, "bicubic", ac));
+    }
+    out.set(`fname::interpolate(bicubic, align=${tag}, scale=1.5)`,
+      () => interpImg().interpolate(null, 1.5, "bicubic", ac));
+  }
+  // **The gradient is where a resampling is usually wrong**, and each of the three is
+  // a gather with constant weights, so nothing was written for the backward — which is
+  // exactly when a wrong forward index goes unnoticed, the same wrong index being used
+  // on the way back.
+  const interpGrad = (mode: "area" | "nearest-exact" | "bicubic", ac = false) => () => {
+    const x = interpImg();
+    x.requiresGrad = true;
+    x.interpolate([3, 7], null, mode, ac)
+      .mul(Tensor.from(Array.from({ length: 21 }, (_, i) => i + 1), [1, 1, 3, 7]))
+      .sum().backward();
+    return gradOf(x, `interpolate/${mode}`);
+  };
+  out.set("fname::interpolate(area) 의 기울기", interpGrad("area"));
+  out.set("fname::interpolate(nearest-exact) 의 기울기", interpGrad("nearest-exact"));
+  out.set("fname::interpolate(bicubic) 의 기울기", interpGrad("bicubic"));
+  out.set("fname::interpolate(bicubic, align=True) 의 기울기",
+    interpGrad("bicubic", true));
+
+  // ── `antialias`, the last of `interpolate`'s seats ─────────────────────
+  //
+  // It widens the filter by the shrink factor and renormalises the weights, so every
+  // input cell reaches the output instead of being skipped. Enlarging, the scale is
+  // below one and the weights are the plain ones — which is why torch says the flag
+  // does nothing going up, and why the sizes include one.
+  //
+  // **Two things in torch's own implementation disagree with the rest of torch**, and
+  // both are asked rather than reasoned about: the anti-aliased `bicubic` uses
+  // `a = −0.5` where the plain one uses `−0.75`, and `alignCorners` reaches the scale
+  // but not the centre. Fitting either the other way parts by more than a tolerance.
+  for (const mode of ["bilinear", "bicubic"] as const) {
+    for (const ac of [false, true]) {
+      const tag = ac ? "True" : "False";
+      for (const s of interpSizes) {
+        out.set(
+          `fname::interpolate(${mode}, antialias, align=${tag}, size=(${s[0]}, ${s[1]}))`,
+          () => interpImg().interpolate(s, null, mode, ac, null, true));
+      }
+      // The caller's scale is read when `alignCorners` is off and not when it is on —
+      // the pair is what says so, and a size alone cannot.
+      out.set(`fname::interpolate(${mode}, antialias, align=${tag}, scale=1.5)`,
+        () => interpImg().interpolate(null, 1.5, mode, ac, null, true));
+    }
+    // A matrix multiply per axis, so the backward is the multiply's own — and that is
+    // when a wrong weight matrix goes unnoticed, the same weights being used back.
+    out.set(`fname::interpolate(${mode}, antialias) 의 기울기`, () => {
+      const x = interpImg();
+      x.requiresGrad = true;
+      x.interpolate([3, 7], null, mode, false, null, true)
+        .mul(Tensor.from(Array.from({ length: 21 }, (_, i) => i + 1), [1, 1, 3, 7]))
+        .sum().backward();
+      return gradOf(x, `interpolate/antialias/${mode}`);
+    });
+  }
+  // torch restricts the flag to the two smooth modes and refuses the rest by name.
+  // Unlike the unknown-`mode` case, this one compiles — `antialias` is a boolean and
+  // `"nearest"` is in the union — so it can be asked here.
+  out.set("fname::interpolate(nearest 에 antialias)=둘 다 거절", () => {
+    try {
+      interpImg().interpolate([2, 3], null, "nearest", false, null, true);
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
+
+  // ── the ranks, which were an unpacking error on the Python side ────────────
+  //
+  // Carried verbatim from `tests/cases.py`. `linear` and `trilinear` were refused as
+  // wanting *a rank this function does not take*; they are one separable kernel at
+  // one and three axes, and `nearest`/`area` at those ranks were never refused at all
+  // — the core failed at them with an unpacking error and this side read
+  // `shape[2]`/`shape[3]` and answered about a rank it had not been given.
+  const rankImg = (dims: number[]): Tensor => {
+    const n = dims.reduce((a, b) => a * b, 1);
+    return Tensor.from(Array.from({ length: n }, (_, i) => i + 1), dims);
+  };
+  const RANKS: Array<[number, number[], "linear" | "trilinear"]> = [
+    [3, [2, 3, 5], "linear"],
+    [5, [2, 3, 2, 3, 4], "trilinear"],
+  ];
+  for (const [rank, dims, lin] of RANKS) {
+    for (const mode of ["nearest", "nearest-exact", "area"] as const) {
+      for (const sf of [2, 1.7, 0.5]) {
+        out.set(`fname::interpolate(${rank}차원 ${mode}, scale=${sf})`,
+          () => rankImg(dims).interpolate(null, sf, mode));
+      }
+      out.set(`fname::interpolate(${rank}차원 ${mode}, size=3)`,
+        () => rankImg(dims).interpolate(3, null, mode));
+    }
+    for (const ac of [false, true]) {
+      const tag = ac ? "True" : "False";
+      for (const sf of [2, 1.7]) {
+        out.set(`fname::interpolate(${lin}, align=${tag}, scale=${sf})`,
+          () => rankImg(dims).interpolate(null, sf, lin, ac));
+      }
+      out.set(`fname::interpolate(${lin}, align=${tag}, size=3)`,
+        () => rankImg(dims).interpolate(3, null, lin, ac));
+    }
+    for (const mode of [lin, "nearest", "area"] as const) {
+      out.set(`fname::interpolate(${rank}차원 ${mode}) 의 기울기`, () => {
+        const x = rankImg(dims);
+        x.requiresGrad = true;
+        const got = x.interpolate(null, 2, mode, false);
+        got.mul(got).sum().backward();
+        return gradOf(x, `interpolate/${mode}`);
+      });
+    }
+  }
+  // **`recomputeScaleFactor` reaches `nearest` too.** The kernel maps
+  // `floor(o·in/out)`, which is the *recomputed* rule, and the comment beside it said
+  // the flag made no difference here. It does whenever the flooring loses something:
+  // 5 at 1.7 gives 8, and 8/5 is 1.6.
+  for (const mode of ["nearest", "nearest-exact"] as const) {
+    for (const rsf of [true, false]) {
+      out.set(
+        `fname::interpolate(${mode}, scale=1.7, recompute=${rsf ? "True" : "False"})`,
+        () => interpImg().interpolate(null, 1.7, mode, false, rsf));
+    }
+  }
+  // The mode-against-rank refusals. `alignCorners` on a mode with no corners is a
+  // Python-side rule — borch.ts takes a boolean, so *not given* and *given as false*
+  // are the same word by the time they arrive.
+  for (const [rank, dims] of [[3, [2, 3, 5]], [4, [1, 1, 4, 5]],
+                              [5, [2, 3, 2, 3, 4]]] as Array<[number, number[]]>) {
+    for (const mode of ["linear", "bilinear", "bicubic", "trilinear"] as const) {
+      const fits = (rank === 3 && mode === "linear")
+        || (rank === 4 && (mode === "bilinear" || mode === "bicubic"))
+        || (rank === 5 && mode === "trilinear");
+      if (fits) continue;
+      out.set(`fname::interpolate(${rank}차원 ${mode})=둘 다 거절`, () => {
+        try {
+          rankImg(dims).interpolate(null, 2, mode);
+        } catch {
+          return "둘 다 멈춘다";
+        }
+        return "여기선 통과했다";
+      });
+    }
+  }
+
+  // **One scale per axis.** `scaleFactor` held a single number here, so the second
+  // axis silently took the first one's factor. `(2, 1.5)` on a 4×5 gives 8×7 and one
+  // number would give 8×10 or 6×7 — loud, but only because the fixture's two axes
+  // differ, and every case above passes the same scale to both.
+  for (const mode of ["nearest", "nearest-exact", "area", "bilinear",
+                      "bicubic"] as const) {
+    out.set(`fname::interpolate(${mode}, 축마다 다른 배율)`,
+      () => interpImg().interpolate(null, [2, 1.5], mode, false));
+  }
+  out.set("fname::interpolate(bilinear, antialias, 축마다 다른 배율)",
+    () => interpImg().interpolate(null, [0.6, 0.4], "bilinear", false, null, true));
+
   // ── The spatial transformer ───────────────────────────────────────────
   //
   // The two traps are written at length on the Python side. Briefly: asked with squares
@@ -4300,6 +5299,41 @@ function addUnpool(out: Map<string, Case>): void {
     const g = Tensor.cat([outGrid(), outGrid()], 0);
     return nn.gridSample(grid([2, 2, 3, 3]), g, "bilinear", "zeros", false);
   });
+
+  // ── `bicubic`, the third mode ─────────────────────────────────────────
+  //
+  // The same Keys kernel `interpolate`'s plain `bicubic` uses, at `a = −0.75` — not
+  // the anti-aliased path's `−0.5`, which is the constant next door.
+  //
+  // **The padding lands on the tap, not on the centre.** Bilinear clamps the
+  // continuous coordinate once and both its corners are inside; a 4×4 window steps
+  // one cell further, and clamping the centre and then masking gave `border` the same
+  // numbers as `zeros`. So the out-of-range grid is asked under all three modes.
+  const gridPads = ["zeros", "border", "reflection"] as const;
+  for (const pad of gridPads) {
+    for (const ac of [false, true]) {
+      out.set(
+        `fname::grid_sample(bicubic, padding=${pad}, align=${ac ? "True" : "False"})`,
+        () => nn.gridSample(img3(), outGrid(), "bicubic", pad, ac));
+    }
+  }
+  out.set("fname::grid_sample(bicubic, 반 칸)",
+    () => nn.gridSample(img3(), halfGrid(), "bicubic", "zeros", false));
+  // **The gradient has to reach the grid** — the path a spatial transformer learns
+  // `theta` along. The cubic weights are tensor expressions for that reason alone;
+  // as constants the values would all still be right and this would be zero.
+  for (const which of ["input", "grid"] as const) {
+    for (const pad of gridPads) {
+      out.set(`fname::grid_sample(bicubic, grad ${which}, padding=${pad})`, () => {
+        const x = img3();
+        const g = outGrid();
+        x.requiresGrad = true;
+        g.requiresGrad = true;
+        nn.gridSample(x, g, "bicubic", pad, false).sum().backward();
+        return gradOf(which === "input" ? x : g, `grid_sample/bicubic/${which}`);
+      });
+    }
+  }
 
   out.set("fname::grid_sample::grad(입력)", () => {
     const x = img3();
@@ -4449,6 +5483,51 @@ function addMisc(out: Map<string, Case>): void {
     seeded(x.unfoldIm2col(2)).backward();
     return gradOf(x, "unfold");
   });
+
+  // ── the unbatched rank, which the refusal had half right ──────────────
+  //
+  // The core said *anything but 4-D*, and torch takes 3-D as one unbatched sample:
+  // `(C, H, W)` comes back as `(C·kh·kw, L)` with no batch axis. `fold`'s unbatched
+  // form is one rank lower again — 2-D, because the channel and the kernel are already
+  // one axis there — and the pair is asked together because taking them for the same
+  // number is the mistake available.
+  const uf3d = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]);
+  const ufOpts: [string, [number, number, number]][] = [
+    ["기본", [1, 0, 1]], ["stride=2", [1, 0, 2]],
+    ["padding=1", [1, 1, 1]], ["dilation=2", [2, 0, 1]],
+  ];
+  for (const [tag, [dil, pad, stride]] of ufOpts) {
+    out.set(`misc::unfold(배치 없이, ${tag})`,
+      () => uf3d().unfoldIm2col(2, dil, pad, stride));
+  }
+  out.set("misc::fold(배치 없이)",
+    () => uf3d().unfoldIm2col(2).fold([3, 4], 2));
+  // The unbatched path goes through the batched one and reshapes, so the gradient has
+  // to come back out of that reshape with the batch axis gone — a value case cannot
+  // see a gradient that kept it.
+  out.set("misc::grad::unfold(배치 없이)", () => {
+    const x = uf3d();
+    x.requiresGrad = true;
+    seeded(x.unfoldIm2col(2)).backward();
+    return gradOf(x, "unfold/unbatched");
+  });
+  // torch's wording, compared as a string — an invented message would pass a check
+  // that only asks whether something was raised.
+  const rankRefusal = (name: string, body: () => unknown) => {
+    out.set(`misc::${name}=거절 문구`, () => {
+      try {
+        body();
+      } catch (err) {
+        const head = (err as Error).message.split(",")[0] ?? "";
+        return head.startsWith("Expected")
+          ? head : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "안 던졌다";
+    });
+  };
+  rankRefusal("unfold(5차원)", () => Tensor.zeros([2, 3, 4, 5, 6]).unfoldIm2col(2));
+  rankRefusal("fold(4차원)", () => Tensor.zeros([2, 3, 8, 6]).fold([3, 4], 2));
 
   const w = Array.from({ length: 24 }, (_, i) => i / 10);
   const bias = [0.5, -0.25];
@@ -4601,6 +5680,15 @@ function addShuffle(out: Map<string, Case>): void {
     ["층::PixelShuffle", () => new nn.PixelShuffle(2).call(pix())],
     ["층::PixelUnshuffle", () => new nn.PixelUnshuffle(2).call(flat())],
     ["층::ChannelShuffle", () => new nn.ChannelShuffle(2).call(chan())],
+    // **`Flatten`'s two seats, hidden by their own defaults.** torch's are `1` and
+    // `-1` — keep the batch axis, fold the rest — which is what this did with no
+    // arguments at all, so every case using the default passed while `Flatten(0)`
+    // and `Flatten(1, 2)` were words JavaScript dropped.
+    ["층::Flatten기본", () => new nn.Flatten().call(pix())],
+    ["층::Flatten(0, -1)", () => new nn.Flatten(0, -1).call(pix())],
+    ["층::Flatten(1, 2)", () => new nn.Flatten(1, 2).call(pix())],
+    ["층::Flatten(2, 3)", () => new nn.Flatten(2, 3).call(pix())],
+    ["층::Flatten(0, 1)", () => new nn.Flatten(0, 1).call(pix())],
   ];
   for (const [name, fn] of value) out.set(`shuffle::${name}`, fn);
 
@@ -4924,6 +6012,81 @@ function addLoss(out: Map<string, Case>): void {
   ];
   for (const [name, fn] of value) out.set(`loss::${name}`, fn);
 
+  // ── `linearCrossEntropy`, which is a fusion and not a formula ────────────
+  //
+  // It equals `crossEntropy(linear(x, w, b), t)` and the cases are about the arguments
+  // arriving on the right side of that. **`ignoreIndex` is the one a lazy port loses**:
+  // torch's default here is `null`, `crossEntropy`'s is `-100`, and `null` is measured
+  // to *mean* -100 — so passing it through is the same answer on every target that
+  // holds no -100 and a different one on the targets the argument exists for.
+  const lceX = [0.5, -1.2, 0.3, 2.0, -0.7,
+                1.1, 0.4, -0.9, 0.2, 1.5,
+                -0.3, 0.8, 1.7, -1.1, 0.6,
+                2.2, -0.5, 0.1, 0.9, -1.4,
+                0.7, 1.3, -0.2, -0.8, 0.4,
+                -1.0, 0.2, 0.9, 1.6, -0.3];
+  const lceW = [0.3, -0.7, 1.1, 0.2, -0.4,
+                -1.2, 0.5, 0.8, -0.9, 1.3,
+                0.6, 1.0, -0.3, 0.7, -1.1,
+                -0.8, -0.2, 0.4, 1.5, 0.9];
+  const lceB = [0.2, -0.5, 0.9, -0.1];
+  const lceCw = [0.7, 1.4, 0.9, 1.1];
+  const lx = (): Tensor => Tensor.from(lceX, [6, 5]);
+  const lw = (): Tensor => Tensor.from(lceW, [4, 5]);
+  const lt = (): Tensor => Tensor.from([0, 1, 2, 3, 0, 1], [6], { dtype: "int64" });
+
+  const lce: [string, () => Tensor][] = [
+    ["기본", () => F.linearCrossEntropy(lx(), lw(), lt())],
+    ["linear_bias",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), Tensor.from(lceB, [4]))],
+    ["weight", () => F.linearCrossEntropy(lx(), lw(), lt(), undefined,
+                                          Tensor.from(lceCw, [4]))],
+    ["reduction=sum",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "sum")],
+    ["reduction=none",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "none")],
+    ["label_smoothing",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "mean",
+                                 null, 0.1)],
+    ["ignore_index",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "mean", 1)],
+    ["전부",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), Tensor.from(lceB, [4]),
+                                 Tensor.from(lceCw, [4]), "sum", 2, 0.1)],
+    ["options",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "mean",
+                                 null, 0.0,
+                                 new nn.LinearCrossEntropyOptions(false, 2))],
+    // The target that actually holds -100. Without it the pair above says nothing
+    // about the default, because *ignore nothing* and *ignore class -100* agree
+    // everywhere else.
+    ["기본이 -100 을 건너뛴다",
+      () => F.linearCrossEntropy(
+        lx(), lw(),
+        Tensor.from([0, -100, 2, 3, -100, 1], [6], { dtype: "int64" }))],
+  ];
+  for (const [name, fn] of lce) out.set(`loss::linear_cross_entropy(${name})`, fn);
+
+  // The layer, with the weight planted — its initialisation is not torch's.
+  //
+  // **Inside `noGrad`, because a parameter is a leaf that wants a gradient** and
+  // writing into one is refused: *a leaf Variable that requires grad is being used in
+  // an in-place operation*. Every other planted case in this file goes through the same
+  // door; these two did not at first and said so on the first run.
+  out.set("loss::nn.LinearCrossEntropyLoss", () => {
+    const m = new nn.LinearCrossEntropyLoss(5, 4);
+    noGrad(() => m.linear.weight.copyFrom(lw()));
+    return m.call(lx(), lt());
+  });
+  out.set("loss::nn.LinearCrossEntropyLoss(bias)", () => {
+    const m = new nn.LinearCrossEntropyLoss(5, 4, [], true);
+    noGrad(() => {
+      m.linear.weight.copyFrom(lw());
+      if (m.linear.bias) m.linear.bias.copyFrom(Tensor.from(lceB, [4]));
+    });
+    return m.call(lx(), lt());
+  });
+
   // **torch's deprecated pair, and it beats `reduction`.** The last two read wrongly
   // at a glance and are the point: all three given folds to the *mean*, and the
   // positional string lands on `sizeAverage`, which is truthy, so it folds there too.
@@ -4987,6 +6150,20 @@ function addLoss(out: Map<string, Case>): void {
     () => F.multilabelMarginLoss(
       mm(), Tensor.from([-1, -1, -1, 0, 1, -1], [2, 3]), null, null, "none"));
 
+  // The class weights are unequal and none of them is 1: an equal weight makes the
+  // two candidate denominators agree, and the case would pass either way.
+  const clsW = () => Tensor.from([0.5, 2.0, 3.0], [3]);
+  const clsLogits = () =>
+    Tensor.from([2, 1, 0.1, 0.5, 2.5, 0.3, 1, 0.2, 3], [3, 3]);
+  const clsT = () => Tensor.from([0, 1, 2], [3], { dtype: "int64" });
+  const clsTIgn = () => Tensor.from([0, -100, 2], [3], { dtype: "int64" });
+  const bwZ = () => Tensor.from([-1.0, 0.5, 2.0, -0.25], [4]);
+  const bwT = () => Tensor.from([1, 0, 1, 0], [4]);
+  const bwW = () => Tensor.from([0.5, 1.5, 2.0, 0.25], [4]);
+  const bwPW = () => Tensor.from([2.5, 0.5, 1.0, 3.0], [4]);
+  const bwP = () => Tensor.from(
+    [-1.0, 0.5, 2.0, -0.25].map((v) => 1 / (1 + Math.exp(-v))), [4]);
+
   const layers: [string, () => Tensor][] = [
     // `delta` moved behind `reduction` to match torch. The Python case passes
     // `delta=0.5` by keyword, so its value never moved and the golden is unchanged —
@@ -5031,6 +6208,37 @@ function addLoss(out: Map<string, Case>): void {
       () => new nn.NLLLoss(undefined, null, -100).call(
         Tensor.from([0.7, 0.2, 0.1, 0.1, 0.8, 0.1, 0.2, 0.2, 0.6], [3, 3]).log(),
         Tensor.from([0, -100, 2], [3], { dtype: "int64" }))],
+    // ── the class weight ──────────────────────────────────────────────────
+    //
+    // Refused on both sides until today, with a reason that was true: `mean` divides
+    // by the sum of the weights, so a weight taken and dropped moves the loss
+    // quietly. Carried verbatim from `_CLS_*` and `_BW_*` in `tests/cases.py` —
+    // divergent values stop the comparison from being a comparison.
+    ...(["mean", "sum", "none"] as const).map((r) =>
+      [`CrossEntropyLoss(weight, ${r})`,
+        () => new nn.CrossEntropyLoss(clsW(), null, -100, null, r)
+          .call(clsLogits(), clsT())] as [string, () => Tensor]),
+    ["CrossEntropyLoss(weight, ignore_index)",
+      () => new nn.CrossEntropyLoss(clsW(), null, -100).call(
+        clsLogits(), clsTIgn())],
+    // The weight enters **inside** the spread: `(1−ε)·w[t]·nll + ε·mean_c(w_c·−log p_c)`.
+    ["CrossEntropyLoss(weight, label_smoothing)",
+      () => new nn.CrossEntropyLoss(clsW(), null, -100, null, "mean", 0.1)
+        .call(clsLogits(), clsT())],
+    ["NLLLoss(weight, ignore_index)",
+      () => new nn.NLLLoss(clsW(), null, -100).call(
+        Tensor.from([0.7, 0.2, 0.1, 0.1, 0.8, 0.1, 0.2, 0.2, 0.6], [3, 3]).log(),
+        clsTIgn())],
+    // The binary pair divides by the **count** instead, weights or no weights.
+    ["BCEWithLogitsLoss(pos_weight)",
+      () => new nn.BCEWithLogitsLoss(undefined, null, null, "mean", bwPW())
+        .call(bwZ(), bwT())],
+    ["BCEWithLogitsLoss(weight)",
+      () => new nn.BCEWithLogitsLoss(bwW()).call(bwZ(), bwT())],
+    ["BCEWithLogitsLoss(weight, pos_weight)",
+      () => new nn.BCEWithLogitsLoss(bwW(), null, null, "mean", bwPW())
+        .call(bwZ(), bwT())],
+    ["BCELoss(weight)", () => new nn.BCELoss(bwW()).call(bwP(), bwT())],
     ["MultiMarginLoss", () => new nn.MultiMarginLoss().call(mm(), mmt())],
     ["MultiLabelMarginLoss", () => new nn.MultiLabelMarginLoss()
       .call(Tensor.from([0.1, 0.2, 0.4, 0.8], [1, 4]),
@@ -5108,6 +6316,47 @@ function addLoss(out: Map<string, Case>): void {
     ];
     for (const [name, fn] of fns) out.set(`loss::reduction::${name}`, fn);
   }
+  // **`weight` on the three elementwise losses, which was a refusal nothing asked.**
+  // The core carried the seat and stopped the value, on the ground that `mean`
+  // divides by the sum of the weights rather than by the count — right, and also the
+  // specification. Measured:
+  //
+  //     none  w · ℓ                      all three
+  //     sum   Σ w · ℓ                    all three
+  //     mean  Σ w·ℓ / Σ w                `l1Loss` and `mseLoss`
+  //     mean  Σ w·ℓ / n                  `huberLoss`
+  //
+  // Its sum is 12 against 6 elements, so the two divisors are two different numbers
+  // and huber can be told from the other two — with all-ones, or with all-twos over
+  // twelve elements, the rules agree and nothing shows.
+  const lossW = () => Tensor.from([1, 2, 3, 4, 1, 1], [2, 3]);
+  for (const reduction of ["none", "sum", "mean"] as const) {
+    out.set(`loss::weight::l1_loss(${reduction})`,
+      () => x().l1Loss(y(), reduction, lossW()));
+    out.set(`loss::weight::mse_loss(${reduction})`,
+      () => x().mseLoss(y(), reduction, lossW()));
+    out.set(`loss::weight::huber_loss(${reduction})`,
+      () => x().huberLoss(y(), 1.0, reduction, lossW()));
+  }
+  // The backward carries the weight because it is a `mul` in the graph rather than a
+  // number applied afterwards — nothing had to be written for it, and nothing would
+  // say so if it had been dropped.
+  out.set("loss::weight::mse_loss 의 기울기", () => {
+    const p = x(true);
+    p.mseLoss(y(), "mean", lossW()).backward();
+    return gradOf(p, "mse_loss/weight");
+  });
+  // torch does not broadcast the weight: a `[6]` against a `[2, 3]` input raises.
+  out.set("loss::weight::모양이 다르면 거절", () => {
+    try {
+      x().l1Loss(y(), "mean", Tensor.from([1, 2, 3, 4, 1, 1], [6]));
+    } catch (err) {
+      return String(err).includes("must have the same size")
+        ? "문구대로" : `다른 문구 <${err}>`;
+    }
+    return "안 던졌다";
+  });
+
   // An unknown value is not swallowed into mean. `batchmean` exists **only** for
   // `klDiv`, so on another loss it is a wrong name.
   for (const bad of ["MEAN", "batchmean"]) {
@@ -5253,6 +6502,39 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
     });
   };
 
+  // **`layerNormOver` was here the whole time and the Python side did not use it.**
+  // `F.layer_norm` folded the last axis whatever `normalized_shape` said, because
+  // that argument was in the signature and the body never read it; the binding
+  // folded `layerNorm(-len(shape))`, which is one axis *that far from the end*.
+  // Both agree with this at one axis, which is every case that asked.
+  const ln = (grad = false): Tensor =>
+    Tensor.from(Array.from({ length: 24 }, (_, i) => i), [2, 3, 4],
+                grad ? { requiresGrad: true } : {});
+  for (const [tag, dims] of [["(4,)", 1], ["(3, 4)", 2], ["(2, 3, 4)", 3]] as
+       [string, number][]) {
+    out.set(`norm::F.layer_norm${tag}`, () => ln().layerNormOver(dims));
+    // The gradient too — a fold over the wrong axes has a plausible forward and a
+    // backward that trains the wrong thing.
+    out.set(`norm::grad::F.layer_norm${tag}`, () => {
+      const x = ln(true);
+      seeded(x.layerNormOver(dims)).backward();
+      return gradOf(x, `layerNormOver(${dims})`);
+    });
+  }
+  const lnw = (): Tensor =>
+    Tensor.from(Array.from({ length: 12 }, (_, i) => i + 1), [3, 4]);
+  out.set("norm::F.layer_norm(weight)", () => ln().layerNormOver(2).mul(lnw()));
+  out.set("norm::F.layer_norm(weight, bias)",
+    () => ln().layerNormOver(2).mul(lnw()).add(Tensor.full([3, 4], 2)));
+  // The layer beside the function, on one input — one of them being wrong cannot
+  // hide behind the other, which is exactly how this went unseen: the golden asked
+  // the layer for the multi-axis case and the function for the single-axis one.
+  for (const [tag, shape, dims] of [["(4,)", [4], 1], ["(3, 4)", [3, 4], 2]] as
+       [string, number[], number][]) {
+    out.set(`norm::nn.LayerNorm${tag} 는 F 와 같다`,
+      () => new nn.LayerNorm(shape).call(ln()).sub(ln().layerNormOver(dims)));
+  }
+
   add("F.group_norm(1)", (x) => x.groupNorm(1), "img");
   add("F.group_norm(3)", (x) => x.groupNorm(3), "img");
   const gn = (groups: number): nn.Module => new nn.GroupNorm(groups, 3);
@@ -5281,7 +6563,7 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
       () => Object.keys(new nn.GroupNorm(3, 3, 1e-5, affine, null, null, bias)
         .namedParameters()).join(" "));
     out.set(`norm::nn.BatchNorm2d(${flag})/파라미터 이름`,
-      () => Object.keys(new nn.BatchNormND(3, 1e-5, 0.1, affine, true, bias)
+      () => Object.keys(new nn.BatchNormND(3, 1e-5, 0.1, affine, true, null, null, bias)
         .namedParameters()).join(" "));
   }
 
@@ -5297,6 +6579,14 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
 
   add("F.rms_norm", (x) => x.rmsNorm(1), "img");
   out.set("norm::nn.RMSNorm", () => new nn.RMSNorm(4).call(inp.get("img")));
+  // **`eps` reached the kernel and not the binding's copy of the layer.** This
+  // class has carried it from the start — its own note records fixing exactly that
+  // — and the Python class beside it repeated the defect. Asked at an `eps` big
+  // enough to move the answer, because at the default the two agree.
+  out.set("norm::nn.RMSNorm(eps 를 크게)",
+    () => new nn.RMSNorm(4, 10.0).call(inp.get("img")));
+  out.set("norm::F.rms_norm(eps 를 크게)",
+    () => inp.get("img").rmsNorm(1, 10.0));
 
   // **`normalizedShape` is how many axes are folded.** Asked with a single axis alone the
   // answer equals "fold the last axis" and the rule is invisible — all three were written
@@ -5464,6 +6754,13 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
       (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0.9)],
     ["NAdam(decoupled_weight_decay)",
       (ps) => new optim.NAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, 4e-3, true)],
+    // **The same flag on the other two torch gives it to.** Absent here the word was
+    // taken and discarded, and the coupled answer came back under the decoupled name.
+    ["Adam(decoupled_weight_decay)",
+      (ps) => new optim.Adam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, false,
+        { decoupledWeightDecay: true })],
+    ["RAdam(decoupled_weight_decay)",
+      (ps) => new optim.RAdam(ps, 0.05, [0.9, 0.999], 1e-8, 0.1, true)],
     // **A default is the one value a case cannot check by using it**, because every
     // row above names its own rate. So this one names none: `new SGD(params)` is the
     // line a first tutorial writes, and until `lr` had torch's default it stopped
@@ -5527,6 +6824,33 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     const make = (ps: Tensor[]): optim.Optimizer => new optim.Adam(ps, 0.05);
     return resume(make, true).sub(resume(make, false));
   });
+
+  // ── `zeroGrad(setToNone)` — the seat did not exist here at all ─────────────
+  //
+  // On both Python sides it existed and was never read, so the ordinary call
+  // agreed everywhere and `false` quietly did the other thing. It is invisible
+  // until something reads `grad` between two calls: `null` has no shape and
+  // nothing to add into, which is what the argument is for.
+  // The name carries Python's `True`/`False` — the golden is keyed by the string,
+  // and JavaScript prints a boolean in lower case.
+  for (const setToNone of [true, false]) {
+    out.set(`opt::zero_grad(opt, set_to_none=${setToNone ? "True" : "False"})`, async () => {
+      const m = model();
+      const opt = new optim.SGD(m.parameters(), 0.1);
+      new nn.CrossEntropyLoss()
+        .forward(m.forward(inp.get("train_x")), inp.get("train_y")).backward();
+      opt.zeroGrad(setToNone);
+      const w = m.namedParameters()["0.weight"];
+      const got = w?.grad ?? null;
+      // The **kind** of what is left, not a value — `null` and a zero tensor are
+      // what the flag chooses between, and only one of them has values at all.
+      // Reading a number back is asynchronous here, so the case awaits it; the
+      // Python side writes `True`/`False` and this must spell them the same way.
+      if (got === null) return "None";
+      const total = await got.abs().sum().item();
+      return `0 텐서=${total === 0 ? "True" : "False"}`;
+    });
+  }
 
   // **The scheduler has to resume too.** Restoring the optimiser alone and standing a new
   // scheduler up sends the learning rate **back to its first value** — a half-cooled run
@@ -5701,6 +7025,61 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     return new optim.ChainedScheduler([a, b]);
   }, 6));
 
+  // ── the two chaining classes checked nothing about their schedulers ────────
+  //
+  // `SequentialLR(a, [ConstantLR(a), ConstantLR(b)])` was built without complaint
+  // and then, at the milestone, stepped `b`'s rate while `getLastLr` read `a`'s.
+  // The rate that trains and the rate that is printed part company, and nothing
+  // raises. torch checks it in both classes and neither of these did.
+  const schedulerRefuses = (fragment: string, body: () => void): string => {
+    try {
+      body();
+    } catch (err) {
+      const said = String(err);
+      return said.includes(fragment) ? "문구대로" : `다른 문구 <${said.slice(0, 50)}>`;
+    }
+    return "안 던졌다";
+  };
+  out.set("opt::SequentialLR(다른 optimizer)=거절",
+    () => schedulerRefuses("belong to the same optimizer", () => {
+      const a = new optim.SGD(model().parameters(), 0.2);
+      const b = new optim.SGD(model().parameters(), 0.2);
+      new optim.SequentialLR(a, [new optim.ConstantLR(a, 0.5, 2).start(),
+                                 new optim.ConstantLR(b, 0.1, 2).start()], [2]);
+    }));
+  out.set("opt::ChainedScheduler(다른 optimizer)=거절",
+    () => schedulerRefuses("belong to the same optimizer", () => {
+      const a = new optim.SGD(model().parameters(), 0.2);
+      const b = new optim.SGD(model().parameters(), 0.2);
+      new optim.ChainedScheduler([new optim.ConstantLR(a).start(),
+                                  new optim.ConstantLR(b).start()]);
+    }));
+  // One scheduler per interval and one interval more than there are milestones.
+  // Given two of each the last is never reached and `step` walks the wrong one.
+  out.set("opt::SequentialLR(milestone 개수가 안 맞으면)=거절",
+    () => schedulerRefuses("one more than the number of milestone", () => {
+      const o = new optim.SGD(model().parameters(), 0.2);
+      new optim.SequentialLR(o, [new optim.ConstantLR(o).start(),
+                                 new optim.ConstantLR(o).start()], [1, 2]);
+    }));
+  // **`last_epoch` was a seat the binding never read** — borch.ts's constructor has
+  // taken it all along and the word stopped one call short, so resuming put the
+  // chain back at its first interval however far it had got.
+  for (const lastEpoch of [-1, 0, 2]) {
+    out.set(`opt::SequentialLR(last_epoch=${lastEpoch})/자취`, () => {
+      const opt = new optim.SGD(model().parameters(), 0.2);
+      const sch = new optim.SequentialLR(
+        opt, [new optim.ConstantLR(opt, 0.5, 2).start(),
+              new optim.ExponentialLR(opt, 0.5).start()], [2], lastEpoch);
+      const seen: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        seen.push(opt.paramGroups[0]?.lr ?? 0);
+        sch.step();
+      }
+      return Tensor.from(seen, [5]);
+    });
+  }
+
   // ── Where the branches are asked about narrowly ─────────────────────────
   //
   // The model training above passes as long as the optimiser is **roughly right.** The
@@ -5735,6 +7114,46 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     return Tensor.cat(seen, 0);
   };
   const flip = (i: number) => Tensor.from(flipGrads[i] ?? [0, 0, 0], [3]);
+
+  // ── the four words every `torch.optim.*` carries and none of the three of us compute ──
+  //
+  // **torch draws the line, not us.** `foreach` and `fused` pick a kernel: measured on both
+  // classes, torch returns the very same numbers with them on, so ours take the word and
+  // ignore it. `capturable` and `differentiable` change what a step means, and torch itself
+  // stops on both without CUDA, so ours stop too. The verdict is the category and not the
+  // wording — torch's own two classes refuse `capturable` with different exception types,
+  // and asking for a phrase would freeze which torch build froze the file.
+  const carries = (
+    make: (ps: Tensor[], o: optim.OptimizerOptions) => optim.Optimizer,
+    word: keyof optim.OptimizerOptions,
+  ) => async () => {
+    const stepOnce = (o: optim.OptimizerOptions) => {
+      const p = start();
+      const opt = make([p], o);
+      opt.zeroGrad();
+      p.grad = Tensor.from([0.3, 0.2, -0.4], [3]);
+      opt.step();
+      return p.detach();
+    };
+    const plain = stepOnce({});
+    let got: Tensor;
+    try {
+      got = stepOnce({ [word]: true });
+    } catch {
+      return "거절";
+    }
+    return await got.sub(plain).abs().amax().item() === 0
+      ? "받고 값이 같다" : "받는데 값이 다르다";
+  };
+
+  for (const word of ["foreach", "fused", "capturable", "differentiable"] as const) {
+    out.set(`opt::낱말::SGD(${word})`,
+      carries((ps, o) => new optim.SGD(ps, 0.1, 0, 0, 0, false, o), word));
+    out.set(`opt::낱말::Adam(${word})`,
+      carries(
+        (ps, o) => new optim.Adam(ps, 0.1, [0.9, 0.999], 1e-8, 0, false, o),
+        word));
+  }
 
   out.set("opt::ASGD/기본값", walk((ps) => new optim.ASGD(ps), ramp));
   out.set("opt::ASGD/lambd",
@@ -5863,6 +7282,84 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   out.set("opt::LBFGS/문턱 근처에서 멈춘다",
     lbfgsReal(2, (ps) => new optim.LBFGS(ps, 0.3, 12, null, 1e-7, 1e-3)));
 
+  // ── the strong-Wolfe line search, refused here until today ────────────────
+  //
+  // Carried verbatim from `tests/cases.py`, whose comment records what these rows do
+  // and do not defend: the **structure** (skipping the zoom, or keeping Armijo
+  // without the curvature test, moves them by units) and not the float32 width, whose
+  // effect measures 1.65e-04 — under the threshold.
+  out.set("opt::LBFGS(strong_wolfe)/진짜 기울기",
+    lbfgsReal(3, (ps) => new optim.LBFGS(ps, 0.8, 20, null, 1e-7, 1e-9, 100,
+                                         "strong_wolfe")));
+  out.set("opt::LBFGS(strong_wolfe)/이력이 밀려난다",
+    lbfgsReal(2, (ps) => new optim.LBFGS(ps, 0.5, 8, null, 1e-7, 1e-9, 2,
+                                         "strong_wolfe")));
+  // The budget the search gets is what is left of `maxEval`.
+  out.set("opt::LBFGS(strong_wolfe)/평가 예산이 짧다",
+    lbfgsReal(3, (ps) => new optim.LBFGS(ps, 0.8, 5, 6, 1e-7, 1e-9, 100,
+                                         "strong_wolfe")));
+  // A name torch does not have, refused where torch refuses it — inside the loop,
+  // so a gradient already inside the tolerance never reaches the check.
+  out.set("opt::LBFGS(없는 line_search_fn)=문구", async () => {
+    const p = start();
+    const w = curve();
+    const opt = new optim.LBFGS([p], 1, 20, null, 1e-7, 1e-9, 100, "backtracking");
+    try {
+      await opt.step(() => {
+        p.grad = null;
+        const out = p.mul(p).mul(w).sum();
+        out.backward();
+        return out;
+      });
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return "(거절 없음)";
+  });
+
+  // **Coupled quadratics — the off-diagonal term is the point.** `sum(w·p²)` above
+  // is separable, so its search direction is always an axis and the zoom phase never
+  // runs; at `lr=2` on these the first probe overshoots and the zoom is what produces
+  // the step, and at `lr=0.1` it undershoots and the bracketing walks outwards.
+  const lbA2 = () => Tensor.from([3, 0.5, 0.5, 2], [2, 2]);
+  const lbB2 = () => Tensor.from([1, -2], [2]);
+  const lbA3 = () => Tensor.from([4, 1, 0.5, 1, 3, -1, 0.5, -1, 2], [3, 3]);
+  const lbB3 = () => Tensor.from([1, -2, 0.5], [3]);
+  const lbX2 = () => Tensor.from([2.5, -1.5], [2], { requiresGrad: true });
+  const lbX3 = () => Tensor.from([2.5, -1.5, 0.75], [3], { requiresGrad: true });
+  const lbfgsShape = (
+    x0: () => Tensor, mat: () => Tensor, vec: () => Tensor,
+    make: (ps: Tensor[]) => optim.LBFGS, steps = 3,
+  ) => async () => {
+    const p = x0();
+    const opt = make([p]);
+    const seen: Tensor[] = [];
+    for (let i = 0; i < steps; i++) {
+      await opt.step(() => {
+        p.grad = null;
+        const out = p.mul(mat().matmul(p)).sum().mul(Tensor.full([], 0.5))
+          .add(vec().mul(p).sum());
+        out.backward();
+        return out;
+      });
+      seen.push(p.detach().clone());
+    }
+    return Tensor.stack(seen);
+  };
+  out.set("opt::LBFGS(strong_wolfe)/얽힌 이차형식",
+    lbfgsShape(lbX2, lbA2, lbB2,
+      (ps) => new optim.LBFGS(ps, 2, 20, null, 1e-7, 1e-9, 100, "strong_wolfe")));
+  out.set("opt::LBFGS(strong_wolfe)/얽힌 이차형식(3변수)",
+    lbfgsShape(lbX3, lbA3, lbB3,
+      (ps) => new optim.LBFGS(ps, 2, 20, null, 1e-7, 1e-9, 100, "strong_wolfe")));
+  out.set("opt::LBFGS(strong_wolfe)/처음이 모자란다",
+    lbfgsShape(lbX2, lbA2, lbB2,
+      (ps) => new optim.LBFGS(ps, 0.1, 2, null, 1e-7, 1e-9, 100, "strong_wolfe")));
+  // The same shape without the search, at a rate a fixed step survives — `lr=2` with
+  // no search overshoots and the iteration goes chaotic.
+  out.set("opt::LBFGS/얽힌 이차형식",
+    lbfgsShape(lbX2, lbA2, lbB2, (ps) => new optim.LBFGS(ps, 0.8)));
+
   // **Different rise and fall, several cycles.** With equal widths and one cycle, neither
   // `stepSizeDown` nor `triangular2` is visible at all.
   out.set("opt::CyclicLR/자취",
@@ -5876,6 +7373,78 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   out.set("opt::CyclicLR(exp_range)/자취",
     () => trace((o) => new optim.CyclicLR(
       o, 0.01, 0.1, 3, null, "exp_range", 0.9).start(), 14));
+
+  // ── the six seats `CyclicLR` was short of ──────────────────────────────
+  //
+  // **`scaleMode` alone does nothing, and that is torch's rule** — the branch that
+  // derives a curve from `mode` sets both, so a `scaleMode` beside a bare `mode` is
+  // overwritten. This one let it win and `triangular2` halved by step: 0.04 where
+  // torch says 0.07 at the third entry, caught the first time the case ran.
+  out.set("opt::CyclicLR(scale_mode 만으로는 안 바뀐다)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular2", 1.0, null, "iterations").start(), 14));
+  // `scaleFn` **overrides** the mode's own curve — a version multiplying the two
+  // together passes every case above and fails this one.
+  out.set("opt::CyclicLR(scale_fn)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular2", 1.0, () => 0.5).start(), 14));
+  // **Together they act**, which is what makes the pair worth a seat.
+  out.set("opt::CyclicLR(scale_fn, iterations)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular", 1.0,
+      (i) => 1 / (1 + i), "iterations").start(), 14));
+  out.set("opt::CyclicLR(scale_fn, cycle)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular", 1.0,
+      (c) => 1 / (1 + c), "cycle").start(), 14));
+
+  // **`cycleMomentum` is the one of the six that changes trained values**, and no
+  // `자취` case can see it: those compare the printed learning rate and this moves
+  // the momentum, against the rate. torch's default is on.
+  const cyclicMomentum = (
+    base = 0.8, max = 0.9, on = true,
+  ): { param: Tensor; trail: Tensor } => {
+    const p = Tensor.from([1, -2, 0.5], [3], { requiresGrad: true });
+    const opt = new optim.SGD([p], 0.1, 0.9);
+    const sch = new optim.CyclicLR(
+      opt, 0.01, 0.1, 3, null, "triangular", 1.0, null, null, on, base, max,
+    ).start();
+    const seen: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      opt.zeroGrad();
+      p.grad = Tensor.from([0.3, 0.2, -0.4], [3]);
+      opt.step();
+      sch.step();
+      seen.push(opt.paramGroups[0]?.momentum ?? 0);
+    }
+    return { param: p.detach(), trail: Tensor.from(seen, [8]) };
+  };
+  out.set("opt::CyclicLR/momentum 자취", () => cyclicMomentum().trail);
+  out.set("opt::CyclicLR/momentum 이 값을 바꾼다", () => cyclicMomentum().param);
+  out.set("opt::CyclicLR(cycle_momentum=False)/자취",
+    () => cyclicMomentum(0.8, 0.9, false).trail);
+  out.set("opt::CyclicLR(base/max_momentum)",
+    () => cyclicMomentum(0.7, 0.95).trail);
+
+  // `lastEpoch` resumes mid-schedule. **The Python case sets `initial_lr` equal to
+  // `base_lr` on purpose** — torch assigns its own `base_lrs` after the base class
+  // has already taken one step, so the first value after a resume is measured from
+  // `initial_lr`; equal, that ordering cannot show. Nothing here carries an
+  // `initialLr` before the scheduler stamps one, so this side has no such seam.
+  out.set("opt::CyclicLR(last_epoch)/자취", () => {
+    const p = Tensor.from([0, 0, 0], [3], { requiresGrad: true });
+    const opt = new optim.SGD([p], 0.1);
+    const sch = new optim.CyclicLR(
+      opt, 0.01, 0.1, 3, null, "triangular", 1.0, null, null, false, 0.8, 0.9, 4,
+    ).start();
+    const seen: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      seen.push(opt.paramGroups[0]?.lr ?? 0);
+      opt.step();
+      sch.step();
+    }
+    return Tensor.from(seen, [6]);
+  });
 }
 
 /**
@@ -6035,6 +7604,22 @@ function addModFn(out: Map<string, Case>, inp: Inputs): void {
   ];
   for (const [name, fn] of table) out.set(`modfn::${name}`, fn);
 
+  // **Two of torch's rules that were absent on both sides.** Several axes at once,
+  // and an axis whose length is not 1 left alone rather than refused — refusing looks
+  // like the safer answer and is not, because it is torch's own answer being refused.
+  const boxed = (): Tensor => inp.get("x1").reshape([1, 6, 1]);
+  for (const [name, call] of [
+    ["squeeze(0, 2)", (t: Tensor) => t.squeeze(0, 2)],
+    // borch.ts has no tuple spelling — JavaScript spreads instead, and the golden
+    // answer is the shape, which is the same either way.
+    ["squeeze((0, 2))", (t: Tensor) => t.squeeze(0, 2)],
+    ["squeeze(0, 1)", (t: Tensor) => t.squeeze(0, 1)],
+    ["squeeze(길이가 1 이 아닌 축)", (t: Tensor) => t.squeeze(1)],
+  ] as [string, (t: Tensor) => Tensor][]) {
+    out.set(`modfn::모양::${name}`, () => `(${call(boxed()).shape.join(", ")}${
+      call(boxed()).shape.length === 1 ? "," : ""})`);
+  }
+
   out.set("modfn::relu_(원본이 바뀐다)", () => {
     const t = inp.get("x1").clone();
     t.inplaceUnary("relu");
@@ -6193,6 +7778,15 @@ function addPool(out: Map<string, Case>, inp: Inputs): void {
   layer("AvgPool3d(올림)", () => new nn.AvgPool3d(3, 3, 0, true), "nd_vol", true);
   layer("LPPool1d(올림)", () => new nn.LPPool1d(2, 3, 3, true), "nd_seq", false);
   layer("LPPool2d(올림)", () => new nn.LPPool2d(2, 3, 3, true), "img", false);
+  // **The layer honoured `ceilMode` and the function refused it**, on the binding
+  // side — with a reason that was true when written and stopped being true the day
+  // `lpPool` grew the seat. Here the method takes it directly, so these three rows are
+  // what the Python `F.lp_pool*d(…, ceil_mode=True)` reaches.
+  for (const [rank, key] of [[1, "nd_seq"], [2, "img"], [3, "nd_vol"]] as
+       Array<[number, string]>) {
+    out.set(`pool::F.lp_pool${rank}d(올림)`,
+      () => inp.get(key).lpPool(2, 3, 3, true));
+  }
 }
 
 /**
@@ -6272,6 +7866,44 @@ function addNewFn(out: Map<string, Case>, inp: Inputs): void {
       x1().narrow(0, 3, 3).reshape([1, 3]))],
   ];
   for (const [name, fn] of table) out.set(`newfn::${name}`, fn);
+
+  // **`equalNan` was taken here and stopped at the binding's boundary.** This
+  // method has carried it from the start and `allclose` beside it forwarded it, so
+  // the check existed and the word never reached it — NaN against NaN came back
+  // `false` where torch says `true`. A fixture without a NaN cannot tell the two
+  // apart, which is why the `isclose` row above did not.
+  // ── the indices are `int64`, and six of the eight were float32 ─────────────
+  //
+  // A position is not a value, and `argReduceOver` says exactly that about its own
+  // output — which is why `max(dim)` and `min(dim)` were right while `sort`,
+  // `topk`, `kthvalue`, `median`, `cummax` and `cummin` handed back floats: those
+  // six build their index tensor in two other places, and both left the dtype at
+  // its default. It went unseen because the pair had no `repr` on either Python
+  // side, so the label was never on screen, and `gather` takes either.
+  const pairSrc = (): Tensor => Tensor.from([3, 1, 2, 0.5], [4]);
+  const indexKinds: [string, () => Tensor][] = [
+    ["topk", () => pairSrc().topk(2).indices],
+    ["sort", () => pairSrc().sort().indices],
+    ["max(dim)", () => pairSrc().max(0).indices],
+    ["min(dim)", () => pairSrc().min(0).indices],
+    ["median(dim)", () => pairSrc().median(0).indices],
+    ["kthvalue", () => pairSrc().kthvalue(2).indices],
+    ["cummax", () => pairSrc().cummax(0).indices],
+    ["cummin", () => pairSrc().cummin(0).indices],
+  ];
+  for (const [label, get] of indexKinds) {
+    // The Python side spells a dtype `torch.int64`; over here it is the bare name,
+    // and the golden is keyed by the string both must produce.
+    out.set(`top::살펴보기::짝::${label} 의 자리는 int64`, () => `torch.${get().dtype}`);
+  }
+
+  const nanTrio = (): Tensor => Tensor.from([1, NaN, 3], [3]);
+  out.set("newfn::isclose(equal_nan)", () => nanTrio().isclose(nanTrio(), 1e-5, 1e-8, true));
+  out.set("newfn::isclose(equal_nan 없이)", () => nanTrio().isclose(nanTrio()));
+  // Python's `True`, not JavaScript's `true` — the golden is keyed by the string.
+  out.set("newfn::allclose(equal_nan)",
+    async () => (await nanTrio().allclose(nanTrio(), 1e-5, 1e-8, true))
+      ? "True" : "False");
 }
 
 /** NaN and infinity into finite numbers. The fill value is handed over **expanded to the
@@ -6349,6 +7981,47 @@ function addIndex(out: Map<string, Case>, inp: Inputs): void {
     const s = src(true);
     seeded(base().scatterAdd(1, dup(), s)).backward();
     return gradOf(s, "scatter_add");
+  });
+
+  // ── `reduce`, torch's deprecated overload ──
+  //
+  // **Asked on a non-zero base.** `reduce` combines onto what is already there, so
+  // started from `base()` (zeros) `add` would be `scatterAdd` and the case would
+  // pass with nothing implemented. `x2` is the base and `dup` repeats an index, so
+  // the collisions accumulate here too.
+  for (const red of ["add", "multiply"]) {
+    out.set(`index::scatter(reduce=${red})`,
+      () => inp.get("x2").scatter(1, dup(), src(), red));
+    out.set(`index::제자리::scatter_(reduce=${red})`,
+      () => inp.get("x2").clone().scatter_(1, dup(), src(), red));
+  }
+
+  out.set("index::거절::scatter(reduce=sum)", () => {
+    try {
+      inp.get("x2").scatter(1, dup(), src(), "sum");
+    } catch (e) {
+      const said = String(e);
+      return said.includes("must be either add or multiply")
+        ? "must be either add or multiply" : `다른 문구 <${said.slice(0, 44)}>`;
+    }
+    return "안 던졌다";
+  });
+
+  // **The forward is not where it stops.** torch hands back a tensor that carries
+  // `requiresGrad`, and only `backward()` raises — so the refusal lives in the node,
+  // not in the call. Written the other way it would read the same to any check that
+  // only calls the function, and would take away a value torch returns.
+  out.set("index::거절::scatter(reduce) 의 기울기", () => {
+    const s = src(true);
+    try {
+      seeded(inp.get("x2").scatter(1, dup(), s, "add")).backward();
+    } catch (e) {
+      const said = String(e);
+      return said.includes("derivative for aten::scatter is not implemented")
+        ? "derivative for aten::scatter is not implemented"
+        : `다른 문구 <${said.slice(0, 44)}>`;
+    }
+    return "안 던졌다";
   });
 
   // Finding a position inside something sorted.
@@ -6970,6 +8643,11 @@ function addRecent(out: Map<string, Case>): void {
     ["clamp_min_", plain4, (x) => x.clampMin_(3)],
     ["digamma_", pos4, (x) => x.digamma_()],
     ["divide_", plain4, (x) => x.divide_(2)],
+    // **An alias narrower than what it aliases drops an argument in silence.** `div_`
+    // one line up carries `roundingMode` and `divide_` did not, so this call handed
+    // the mode to nothing and returned the true quotient — a number, and a plausible
+    // one.
+    ["divide_(rounding_mode)", plain4, (x) => x.divide_(2, "floor")],
     ["erfinv_", () => Tensor.from([0.0, 0.3, -0.2, 0.4], [4]), (x) => x.erfinv_()],
     ["floor_divide_", plain4, (x) => x.floorDivide_(2)],
     ["fmod_", plain4, (x) => x.fmod_(2)],
@@ -8147,6 +9825,9 @@ const LA_BATCH = [4, 1, 2, 3, 2, 0, 1, 5, 3, -1, 1, 2];
 const LA_BATCH_SYM = [4, 1, 1, 3, 9, 2, 2, 5, 2, 0.5, 0.5, 1];
 const LA_BATCH_VEC = [1, 2, 3, 1, 0, 4];
 const LA_BATCH_RHS = [1, 0, 2, 1, 0, 3, 1, 1, 2, 2, 0, 1];
+// Rank 2 by construction — the second row is twice the first — so `matrix_rank(3.0)`
+// cuts it to 1 and the tolerance is asked where it changes the answer.
+const LA_RANK2 = [1, 2, 3, 2, 4, 6, 1, 0, 1];
 const LA_RECT = [1, 2, 3, 4, 5, 7];
 const LA_SYM3 = [4, 1, 0, 1, 3, 1, 0, 1, 2];
 const LA_PIVOT = [1, 2, 3, 4];
@@ -8247,6 +9928,54 @@ function addLinalgStruct(out: Map<string, Case>): void {
     return f.LU.luSolveFactored(f.pivots, Tensor.from([1, 2], [2, 1]));
   });
 
+  // **A batch whose first matrix swaps a row and whose second does not.** This side
+  // refused a batch outright until now, which was honest and also meant this case
+  // could not be written — and the core, which did answer, answered wrongly: one
+  // permutation shared across the batch and applied to the batch axis. A refusal on
+  // one side and a wrong number on the other is a pair no golden row can hold.
+  out.set("linalg::batch::lu_solve(한쪽만 교환)", async () => {
+    const a = Tensor.from([1, 2, 3, 4, 5, 1, 1, 2], [2, 2, 2]);
+    const f = await a.luFactor();
+    return f.LU.luSolveFactored(f.pivots, Tensor.from([1, 0, 0, 1], [2, 2, 1]));
+  });
+
+  // **`left` and `adjoint`, which were carried here in order to refuse.** The refusal
+  // said each solves a different system than the one these factors were made for —
+  // true, and also the reason it could be closed: `Aᵀ = Uᵀ Lᵀ Pᵀ` is the same three
+  // pieces in the other order with the permutation on the answer, and `X A = B` is
+  // `Aᵀ Xᵀ = Bᵀ`. The matrix is unsymmetric because a symmetric one is its own
+  // transpose and would pass with the flag ignored.
+  // Its permutation is a three-cycle on purpose: a single row swap is its own
+  // inverse, and the adjoint's scatter and the forward's gather agree under one.
+  const asym3 = () => Tensor.from([4, 2, -3, 9, -1, -5, 7, -6, 7], [3, 3]);
+  const asymRhs = () => Tensor.from([5, 1, -2, 3, 9, 0], [3, 2]);
+  const asymRhsT = () => Tensor.from([5, -2, 9, 1, 3, 0], [2, 3]);
+  const luModes: [string, boolean, boolean, () => Tensor][] = [
+    ["adjoint", true, true, asymRhs],
+    ["left=False", false, false, asymRhsT],
+    ["left=False, adjoint", false, true, asymRhsT],
+  ];
+  for (const [tag, left, adjoint, rhs] of luModes) {
+    out.set(`linalg::batch::lu_solve(${tag})`, async () => {
+      const f = await asym3().luFactor();
+      return linalg.luSolve(f.LU, f.pivots, rhs(), left, adjoint);
+    });
+  }
+  // **The adjoint's permutation goes on the answer, and this is where that shows.**
+  // The first matrix swaps and the second does not, so a permutation built once for
+  // the batch parts from a per-matrix one here too. Forward the swaps are `Pᵀ`; the
+  // adjoint wants `P`, which is the same swaps in reverse order.
+  out.set("linalg::batch::lu_solve(adjoint, 한쪽만 교환)", async () => {
+    const f = await Tensor.from([1, 2, 3, 4, 5, 1, 1, 2], [2, 2, 2]).luFactor();
+    return linalg.luSolve(f.LU, f.pivots,
+                          Tensor.from([1, 0, 0, 1], [2, 2, 1]), true, true);
+  });
+  out.set("linalg::batch::lu_solve(left=False, 한쪽만 교환)", async () => {
+    const f = await Tensor.from([1, 2, 3, 4, 5, 1, 1, 2], [2, 2, 2]).luFactor();
+    return linalg.luSolve(f.LU, f.pivots,
+                          Tensor.from([1, 0, 0, 1], [2, 1, 2]), false, false);
+  });
+
   out.set("linalg::ex::inv(특이)가 던지는 것", async () => {
     try {
       await Tensor.from(LA_SINGULAR, [2, 2]).inverse();
@@ -8339,8 +10068,64 @@ function addLinalgEx(out: Map<string, Case>): void {
     async () => (await lin4().ldlFactorEx()).info);
   out.set("linalg::ex::ldl_solve", async () => {
     const got = await lin4().ldlFactor();
-    return got.LD.ldlSolve(Tensor.from(
+    return got.LD.ldlSolve(got.pivots, Tensor.from(
       [1.0, -2.0, 0.5, 0.25, -1.5, 3.0, 2.0, 0.5], [4, 2]));
+  });
+
+  // ── the pivoting, which was refused ───────────────────────────────────
+  //
+  // `ldlFactor` stopped on any matrix needing a swap, and the reason was accurate:
+  // torch uses LAPACK's Bunch–Kaufman and a factorisation without the swaps is a
+  // different one. **Both halves are asked**: the first fixture takes a 2×2 block
+  // over rows 0 and 1 (`pivots` comes back `[-3, -3, 3]`), the second a 1×1 pivot
+  // with a row swap. Writing the swap over rows instead of columns left ten of
+  // thirteen matrices agreeing, and the three that did not diverged first in their
+  // **pivot table**, two steps after the wrong line.
+  const ldlBlock = () => Tensor.from([0, 1, 2, 1, 0, 3, 2, 3, 0], [3, 3]);
+  const ldlSwap = () => Tensor.from(
+    [-0.31, 0.96, -1.07, 0.96, 0.29, 0.01, -1.07, 0.01, 0.69], [3, 3]);
+  // **A 6×6, because the column swap is empty on a 3×3.** The swap runs over the rows
+  // below `kp`, and on a 3×3 every pivot that is not the diagonal lands on the last
+  // row — dropping the swap entirely changes no answer there. Both plants passed
+  // against the two 3×3s.
+  const ldlWide = () => Tensor.from(
+    [-1.32, -0.52, 1.01, 0.32, 0.47, -0.27,
+      -0.52, 0.75, 0.92, -0.22, -1.44, -0.50,
+      1.01, 0.92, -1.73, 0.23, -0.71, -0.47,
+      0.32, -0.22, 0.23, -0.06, -0.79, -0.32,
+      0.47, -1.44, -0.71, -0.79, -0.17, -0.84,
+      -0.27, -0.50, -0.47, -0.32, -0.84, -1.09], [6, 6]);
+  const ldlPivoted: [string, () => Tensor, number][] = [
+    ["2x2 블록", ldlBlock, 3], ["교환", ldlSwap, 3], ["6x6 열 교환", ldlWide, 6],
+  ];
+  for (const [tag, make, n] of ldlPivoted) {
+    out.set(`linalg::ex::ldl_factor(${tag})/LD`,
+      async () => (await make().ldlFactor()).LD);
+    out.set(`linalg::ex::ldl_factor(${tag})/pivots`,
+      async () => (await make().ldlFactor()).pivots);
+    // The solve reads the pivot table too, and it did not — it took the packed
+    // matrix alone, right only while nothing was ever swapped.
+    out.set(`linalg::ex::ldl_solve(${tag})`, async () => {
+      const got = await make().ldlFactor();
+      return got.LD.ldlSolve(got.pivots, Tensor.from(
+        Array.from({ length: n * 2 }, (_, i) => i * 0.5 - 1), [n, 2]));
+    });
+  }
+  // **`info` stopped being a constant.** The only bad cases left are singular, and it
+  // is the first zero pivot counting from 1.
+  out.set("linalg::ex::ldl_factor_ex(특이)/info",
+    async () => (await Tensor.from([1, 1, 1, 1], [2, 2]).ldlFactorEx()).info);
+  out.set("linalg::ex::ldl_factor_ex(영행렬)/info",
+    async () => (await Tensor.zeros([2, 2]).ldlFactorEx()).info);
+  // torch's own `ldl_factor` breaks here with an internal assert rather than saying
+  // anything about the matrix, so what is asked is that both stop.
+  out.set("linalg::ex::ldl_factor(특이)=둘 다 거절", async () => {
+    try {
+      await Tensor.from([1, 1, 1, 1], [2, 2]).ldlFactor();
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
   });
 
   // **QR in reflector form.** `geqrf` stores them and `householderProduct` expands them
@@ -8377,6 +10162,15 @@ function addLinalgNames(out: Map<string, Case>): void {
   const rect = () => Tensor.from(LA_RECT, [3, 2]);
   const vec3 = () => Tensor.from([3, -4, 0], [3]);
   const upper = () => Tensor.from([2, 1, 0, 3], [2, 2]);
+  // `tensorsolve(dims)`'s fixture, built the way `tests/cases.py` builds it: a ramp
+  // with the folded diagonal raised so every reordering asked stays invertible. The
+  // arithmetic runs on tensors rather than in JS so the rounding is float32 on both
+  // sides. 2×3×2×3 rather than a cube, because a cube hides what `dims` does to the
+  // answer's shape.
+  const t6 = () => Tensor.from(Array.from({ length: 36 }, (_, i) => i), [2, 3, 2, 3])
+    .mul(Tensor.full([], 0.1))
+    .add(Tensor.eye(6).reshape([2, 3, 2, 3]).mul(Tensor.full([], 5)));
+  const b6 = () => Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
   const cube = () => Tensor.arange(24).reshape([2, 3, 4]);
   // Putting 99 in the upper triangle must not change the answer — the place asking whether
   // it reads the lower triangle alone.
@@ -8415,6 +10209,15 @@ function addLinalgNames(out: Map<string, Case>): void {
     ["name2::vector_norm", async () => vec3().vectorNorm()],
     ["name2::vector_norm(행렬을 통째로)", async () => mat().vectorNorm()],
     ["name2::vector_norm(dim)", async () => mat().vectorNorm(2, 1)],
+    // `keepdim` keeps the reduced axis at length 1; with no `dim` torch keeps every
+    // axis rather than handing back a scalar. Both branches are asked because they are
+    // written apart — one threads the flag through the reduction, the other reshapes.
+    ["name2::vector_norm(dim, keepdim)", async () => mat().vectorNorm(2, 1, true)],
+    ["name2::vector_norm(keepdim, no dim)",
+      async () => mat().vectorNorm(2, undefined, true)],
+    ["name2::norm(ord)", async () => linalg.norm(mat(), 2)],
+    ["name2::norm(ord, dim)", async () => linalg.norm(mat(), 2, 1)],
+    ["name2::norm(ord, dim, keepdim)", async () => linalg.norm(mat(), 2, 1, true)],
 
     ["name2::multi_dot", async () => mat().mm(mat()).mm(mat())],
     ["name2::multi_dot(둘)", async () => mat().mm(mat())],
@@ -8430,6 +10233,17 @@ function addLinalgNames(out: Map<string, Case>): void {
     ["name2::tensorsolve", async () => Tensor.eye(4).reshape([2, 2, 2, 2])
       .tensorSolve(Tensor.from([1, 2, 3, 4], [2, 2]))],
     ["name2::tensorinv", async () => Tensor.eye(4).reshape([2, 2, 2, 2]).tensorInv(2)],
+    // **`dims` was refused here and it is a permute away.** It moves those axes to
+    // the end before the fold, in the order given, so it changes which axes become
+    // the matrix — the values and the answer's *shape*. The fixture is 2×3×2×3
+    // rather than the cubic one above, because a cube hides the shape half.
+    ["name2::tensorsolve(dims 없이, 2×3×2×3)",
+      async () => t6().tensorSolve(b6())],
+    ...(([["(0, 1)", [0, 1]], ["(1, 0)", [1, 0]], ["(0,)", [0]], ["(2, 3)", [2, 3]],
+          ["(3,)", [3]], ["(1, 2)", [1, 2]]] as [string, number[]][])
+      .map(([tag, dims]): [string, () => Promise<Tensor>] =>
+        [`name2::tensorsolve(dims=${tag})`,
+          async () => linalg.tensorsolve(t6(), b6(), dims)])),
 
     ["name2::matrix_exp(멱영)",
       async () => Tensor.from([0, 1, 0, 0], [2, 2]).matrixExp()],
@@ -8456,6 +10270,158 @@ function addLinalgNames(out: Map<string, Case>): void {
   out.set("linalg::name2::matrix_norm(기본)", async () => mat().matrixNorm());
   out.set("linalg::name2::matrix_norm(배치)",
     async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixNorm());
+
+  // ── `torch.norm`'s two words ────────────────────────────────────────────
+  //
+  // `matrixNorm(ord="nuc")` above has been here for a long time and the top-level
+  // `torch.norm(A, "nuc")` had not — the binding refused it as *needing an SVD*, a
+  // reason that named a computation this side already had. `"fro"` is the elementwise
+  // 2-norm under another name, so it is `vectorNorm`, not a per-matrix anything.
+  //
+  // These are the rows the Python `torch.norm` reaches through the binding, which
+  // does its own dispatch on `p`; the two shapes are what separate the words.
+  out.set("linalg::name2::torch.norm(nuc)", async () => mat().matrixNorm("nuc"));
+  out.set("linalg::name2::torch.norm(nuc, keepdim)",
+    async () => mat().matrixNorm("nuc", [-2, -1], true));
+  out.set("linalg::name2::torch.norm(nuc, dim 뒤집기)",
+    async () => mat().matrixNorm("nuc", [1, 0]));
+  out.set("linalg::name2::torch.norm(fro)", () => mat().vectorNorm(2));
+  out.set("linalg::name2::torch.norm(fro, keepdim)",
+    () => mat().vectorNorm(2).reshape([1, 1]));
+  out.set("linalg::name2::torch.norm(배치, nuc, dim=(0,1))",
+    async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixNorm("nuc", [0, 1]));
+  out.set("linalg::name2::torch.norm(배치, nuc, dim=(1,2), keepdim)",
+    async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixNorm("nuc", [1, 2], true));
+  out.set("linalg::name2::torch.norm(배치, fro)",
+    () => Tensor.from(LA_BATCH, [3, 2, 2]).vectorNorm(2));
+  out.set("linalg::name2::torch.norm(배치, fro, dim=(1,2))",
+    () => Tensor.from(LA_BATCH, [3, 2, 2]).square().sumDim(1).sumDim(1).sqrt());
+
+  // ── the six seats `linalg` was short of ─────────────────────────────────
+  //
+  // Each was an argument **JavaScript received and dropped**, so the default answer
+  // came back under the name of a computation nobody ran. Three of them are computed
+  // here and three refused; both halves are asked, because a seat that only ever
+  // refuses and a seat that is not there look the same to a caller who never passes
+  // the argument.
+  out.set("linalg::name2::matrix_norm(dim)",
+    async () => linalg.matrixNorm(Tensor.from(LA_BATCH, [3, 2, 2]), "fro", [0, 1]));
+  out.set("linalg::name2::matrix_norm(keepdim)",
+    async () => linalg.matrixNorm(mat(), "fro", [-2, -1], true));
+  out.set("linalg::name2::matrix_rank(tol)",
+    async () => linalg.matrixRank(Tensor.from(LA_RANK2, [3, 3]), 3.0));
+  // **`pinv`'s cut-off stopped being a refusal here** — the solver takes one now, and
+  // the core has matched torch on it from the start.
+  out.set("linalg::name2::pinv(rcond)",
+    async () => linalg.pinv(Tensor.from(LA_RANK2, [3, 3]), 0.5));
+
+  // **Where torch's four drivers separate.** At full rank all four agree to float
+  // noise; with `rcond=0.9` on this fixture `gels` gives 3.50/1.40, `gelsy` 0.77/2.31
+  // and `gelsd`/`gelss` 0.79/2.32. This is the SVD, so `gels` takes no cutoff and
+  // `gelsd` is exact, while `gelsy` — *the default* — is refused where the cutoff
+  // bites, there being no pivoted QR here to produce its answer with.
+  const tall = () => Tensor.from([1, 1, 1, 2, 1, 3, 1, 4], [4, 2]);
+  const tallRhs = () => Tensor.from([6, 5, 7, 10], [4, 1]);
+  for (const drv of ["gels", "gelsd", "gelss"] as const) {
+    out.set(`linalg::name2::lstsq(rcond, ${drv})`,
+      async () => linalg.lstsq(tall(), tallRhs(), 0.9, drv));
+  }
+  out.set("linalg::name2::lstsq(rcond 이 안 자를 때)",
+    async () => linalg.lstsq(tall(), tallRhs(), 1e-6));
+
+  // **A batch, which was refused here until `pinverse`'s own batching was noticed.**
+  // The second matrix is not the first, so a solve that computes one and stretches it
+  // agrees with a batch of copies and with nothing else. The free function gives the
+  // solution only — the other three fields are the core's `_Lstsq`, which has no seat
+  // on this side — so those cases stay Python's.
+  const batchTall = () => Tensor.from(
+    [1, 1, 1, 2, 1, 3, 1, 4, 2, 0, 0, 1, 1, 1, 3, 2], [2, 4, 2]);
+  const batchRhs = () => Tensor.from(
+    [6, 1, 5, 2, 7, 3, 10, 4, 1, 0, 2, 1, 3, 2, 4, 3], [2, 4, 2]);
+  out.set("linalg::batch::lstsq(gelsd).solution",
+    async () => linalg.lstsq(
+      batchTall(), Tensor.from([6, 5, 7, 10, 1, 2, 3, 4], [2, 4]),
+      undefined, "gelsd"));
+  out.set("linalg::batch::lstsq(행렬 우변)",
+    async () => linalg.lstsq(batchTall(), batchRhs(), undefined, "gelsd"));
+  // The matrix reading broadcasts its leading dimensions and the vector reading does
+  // not — the pair is what tells the two apart.
+  out.set("linalg::batch::lstsq(우변 하나를 늘린다)",
+    async () => linalg.lstsq(
+      batchTall(), Tensor.from([6, 1, 5, 2, 7, 3, 10, 4], [1, 4, 2]),
+      undefined, "gelsd"));
+  // **The cut-off is per matrix.** Singular values 10/9.5 and 1/0.95 — at `rcond=0.9`
+  // neither matrix loses one, so `gelsy` goes through. Scale the batch against one
+  // shared largest and the second keeps nothing and the call is refused where torch
+  // answers, which is why this pair is *un*refused rather than refused.
+  out.set("linalg::batch::lstsq(잘림은 행렬마다 본다)",
+    async () => linalg.lstsq(
+      Tensor.from([10, 0, 0, 9.5, 0, 0, 0, 0, 1, 0, 0, 0.95, 0, 0, 0, 0], [2, 4, 2]),
+      Tensor.from([6, 5, 7, 10, 1, 2, 3, 4], [2, 4]), 0.9));
+  // Both matrices lose a singular value here, so `gelsy` is refused — the wording is
+  // the one `refusal_case` freezes. `laRefuses` below writes a `name2::` prefix, so
+  // this one is spelled out rather than borrowed.
+  out.set("linalg::batch::lstsq(둘 다 잘리면)=우리는거절", async () => {
+    try {
+      await linalg.lstsq(batchTall(),
+                         Tensor.from([6, 5, 7, 10, 1, 2, 3, 4], [2, 4]), 0.9);
+    } catch (err) {
+      return (err as Error).message.includes("is not in the browser subset")
+        ? "기대대로"
+        : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+    }
+    return "뜻밖의 성공";
+  });
+  // **A batch of one, because two is the number that hid a defect.** The rank bound is
+  // `min(m, n)`; written as `Math.min(...shape)` over a `[2, 4, 2]` batch it comes to 2
+  // either way and the plant survived the case above untouched. At `[1, 4, 2]` the same
+  // expression gives 1, the bitten matrix keeps 1, and `1 < 1` is false — the refusal
+  // vanishes and torch's answer comes back from an algorithm nobody ran.
+  out.set("linalg::batch::lstsq(하나짜리 배치도 잘린다)=우리는거절", async () => {
+    try {
+      await linalg.lstsq(Tensor.from([1, 1, 1, 2, 1, 3, 1, 4], [1, 4, 2]),
+                         Tensor.from([6, 5, 7, 10], [1, 4]), 0.9);
+    } catch (err) {
+      return (err as Error).message.includes("is not in the browser subset")
+        ? "기대대로"
+        : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+    }
+    return "뜻밖의 성공";
+  });
+  out.set("linalg::batch::lstsq(벡터 우변은 안 늘어난다)=둘 다 거절", async () => {
+    try {
+      await linalg.lstsq(batchTall(), Tensor.from([6, 5, 7, 10], [1, 4]),
+                         undefined, "gelsd");
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
+
+  const laRefuses = (name: string, body: () => unknown) => {
+    out.set(`linalg::name2::${name}=우리는거절`, async () => {
+      try {
+        await body();
+      } catch (err) {
+        return (err as Error).message.includes("is not in the browser subset")
+          ? "기대대로"
+          : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "뜻밖의 성공";
+    });
+  };
+  laRefuses("lstsq(기본 driver 가 자르면)",
+    () => linalg.lstsq(tall(), tallRhs(), 0.9));
+  // **torch refuses this one too** — *LU without pivoting is not implemented on the
+  // CPU* — so what is asked is that both stop, not that this one does.
+  out.set("linalg::name2::lu(pivot=False)=둘 다 거절", async () => {
+    try {
+      await linalg.lu(mat(), false);
+    } catch {
+      return "둘 다 멈춘다";
+    }
+    return "여기선 통과했다";
+  });
   for (const [tag, pv] of [["기본", null], ["fro", "fro"], ["nuc", "nuc"], ["2", 2],
     ["-2", -2], ["1", 1], ["inf", Infinity]] as const) {
     out.set(`linalg::name2::cond(p=${tag})`, async () => mat().cond(pv));
@@ -8588,6 +10554,31 @@ function addInplace(out: Map<string, Case>): void {
   // **Chaining is the real test.** Only what it returns being itself keeps the chain.
   each("이어 부르기", (x) => x.mul_(2).add_(1).clamp_(0, 10));
 
+  // ── the seats the in-place halves were short of ──
+  //
+  // **In place means the same arithmetic written back**, so the two spellings of one
+  // operation take one list — and these took different ones. `round` and `logit` were
+  // given their argument by hand after the `UNARY` table (which cannot give one) and
+  // `round_`/`logit_` were left with the table's empty signature, so `x.round_(2)`
+  // was a word JavaScript dropped and the answer came back rounded to whole numbers.
+  //
+  // The Python side had it too — `logit_` was built nullary there — so **both
+  // libraries agreed by being wrong the same way**, which is the one arrangement the
+  // golden cannot catch on its own. What found it was teaching the core's generated
+  // forwarders to declare what they forward; until then the signature axis filed
+  // ninety-seven `Tensor` rows as *no python signature*.
+  each("round_(decimals)", (x) => x.round_(1), [1.234, 4.567, 9.876, 2.345]);
+  each("logit_(eps)", (x) => x.logit_(0.1), [0.0, 0.2, 0.5, 1.0]);
+  each("cumsum_(dim)", (x) => x.cumsum_(0));
+  each("cumprod_(dim)", (x) => x.cumprod_(0));
+  // torch calls it `values`; this side called it `other`. JavaScript has no keyword
+  // arguments, so only the axis can see that — the value is asked here all the same.
+  out.set("inplace::heaviside_(values 라는 이름)", () => {
+    const x = Tensor.from([-1, 0, 1, 0], [4]);
+    x.heaviside_(Tensor.from([1, 1, 1, 1], [4]));
+    return x;
+  });
+
   for (const name of ["abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh",
     "sigmoid", "relu", "erf", "floor", "ceil", "round", "sign", "reciprocal",
     "square", "trunc", "frac", "neg", "rsqrt", "log2", "log10", "expm1",
@@ -8632,6 +10623,190 @@ function addInplace(out: Map<string, Case>): void {
     return x;
   });
 
+  // ── keeping a derived tensor's gradient (`inplace::기울기::`) ──
+  //
+  // `retainGrad()` and `backward(…, inputs)` are **one mechanism**: a node that is
+  // not a leaf being able to hold a `grad`. This side wrote into leaves only, so
+  // `retain_grad` in the binding raised the flag and did nothing, and the Python
+  // case table said in as many words that the value "cannot be asked together".
+  // It can now, and these are that question.
+  const WIDE = [0, 1, 2, 3, 4, 5];
+  const wide = (): Tensor => Tensor.from(WIDE, [2, 3], { requiresGrad: true });
+
+  out.set("inplace::기울기::retain_grad 가 값을 정말 남긴다", () => {
+    const x = wide();
+    const m = x.mul(Tensor.full([], 3));
+    m.retainGrad();
+    m.mul(m).sum().backward();
+    return gradOf(m, "retain_grad");
+  });
+
+  out.set("inplace::기울기::backward(inputs) 는 중간 노드도 채운다", () => {
+    const x = wide();
+    const m = x.mul(Tensor.full([], 3));
+    m.mul(m).sum().backward(undefined, false, false, [m]);
+    return gradOf(m, "inputs");
+  });
+
+  out.set("inplace::기울기::backward(inputs) 는 안 부른 잎을 안 건드린다", () => {
+    const a = wide();
+    const b = wide();
+    a.mul(b).sum().backward(undefined, false, false, [a]);
+    return `a=${a.grad === null ? "없다" : "있다"} b=${b.grad === null ? "없다" : "있다"}`;
+  });
+
+  out.set("inplace::기울기::backward(inputs) 로 부른 잎의 값", () => {
+    const a = wide();
+    a.mul(wide()).sum().backward(undefined, false, false, [a]);
+    return gradOf(a, "a");
+  });
+
+  // **The two rules do not cancel** — `inputs` adds retention, it does not take it
+  // away from a node that asked for it.
+  out.set("inplace::기울기::retain_grad 는 inputs 밖에서도 남는다", () => {
+    const x = wide();
+    const m = x.mul(Tensor.full([], 3));
+    m.retainGrad();
+    m.mul(m).sum().backward(undefined, false, false, [x]);
+    gradOf(x, "x");
+    return gradOf(m, "m");
+  });
+
+  // ── `Tensor.grad` — the gradient handed back, not stored ───────────────────
+  //
+  // The tape's own walk with the accumulation left off. **It was absent from all
+  // three** and nobody had written a reason; on the Python side the miss came out
+  // as `AttributeError: module 'borch' has no attribute 'autograd'`, which names
+  // neither gradients nor what is missing.
+  const gradTaken = (t: Tensor | null): Tensor =>
+    t === null ? Tensor.full([], -999) : t;
+
+  out.set("inplace::기울기::autograd.grad", () => {
+    const x = wide();
+    return gradTaken(Tensor.grad(x.mul(x).sum(), x)[0] ?? null);
+  });
+
+  // **The whole reason the function exists.** Asked by the returned value alone,
+  // an implementation that also accumulated would pass.
+  out.set("inplace::기울기::autograd.grad 는 .grad 를 안 건드린다", () => {
+    const x = wide();
+    Tensor.grad(x.mul(x).sum(), x);
+    return `grad=${x.grad === null ? "None" : "있다"}`;
+  });
+
+  out.set("inplace::기울기::autograd.grad(입력 둘)", () => {
+    const a = wide();
+    const b = wide();
+    const got = Tensor.grad(a.mul(b).sum(), [a, b]);
+    return Tensor.stack([gradTaken(got[0] ?? null), gradTaken(got[1] ?? null)]);
+  });
+
+  // **Not only a leaf** — torch differentiates against an intermediate, which is
+  // how a saliency map is taken against an activation.
+  out.set("inplace::기울기::autograd.grad(중간 텐서)", () => {
+    const m = wide().mul(Tensor.full([], 3));
+    return gradTaken(Tensor.grad(m.mul(m).sum(), m)[0] ?? null);
+  });
+
+  // Several outputs are seeded together and their gradients **sum where the graphs
+  // meet** (measured: `2x + 5`). A walk written for one root gives one of the two
+  // halves and looks entirely reasonable.
+  out.set("inplace::기울기::autograd.grad(출력 둘)", () => {
+    const x = wide();
+    return gradTaken(
+      Tensor.grad([x.mul(x).sum(), x.mul(Tensor.full([], 5)).sum()], x)[0] ?? null);
+  });
+
+  out.set("inplace::기울기::autograd.grad(grad_outputs)", () => {
+    const x = wide();
+    return gradTaken(
+      Tensor.grad(x.mul(Tensor.full([], 2)), x, Tensor.ones([2, 3]))[0] ?? null);
+  });
+
+  out.set("inplace::기울기::autograd.grad(allow_unused)", () => {
+    const a = wide();
+    const b = wide();
+    const got = Tensor.grad(a.mul(Tensor.full([], 2)).sum(), [a, b],
+                            undefined, false, true);
+    return `둘째=${got[1] === null ? "None" : "있다"} 첫째=${
+      got[0] ? "있다" : "None"}`;
+  });
+
+  // Zeros rather than null — and measured: torch does **not** ask for
+  // `allow_unused` alongside it, though the documentation reads as though it would.
+  out.set("inplace::기울기::autograd.grad(materialize_grads)", () => {
+    const a = wide();
+    const b = wide();
+    const got = Tensor.grad(a.mul(Tensor.full([], 2)).sum(), [a, b],
+                            undefined, false, false, true);
+    return Tensor.stack([gradTaken(got[0] ?? null), gradTaken(got[1] ?? null)]);
+  });
+
+  // It releases the graph by default, as `backward()` does. **The two walks are
+  // summed** — the second one alone is `2x`, the same answer the plain case gives,
+  // so the name would hang an argument that changed nothing.
+  out.set("inplace::기울기::autograd.grad(retain_graph)", () => {
+    const x = wide();
+    const y = x.mul(x).sum();
+    const first = gradTaken(Tensor.grad(y, x, undefined, true)[0] ?? null);
+    return first.add(gradTaken(Tensor.grad(y, x)[0] ?? null));
+  });
+
+  // The pair to the case two above: one fills `grad` and one must not.
+  out.set("inplace::기울기::autograd.backward 는 쌓는다", () => {
+    const x = wide();
+    x.mul(x).sum().backward();
+    return gradOf(x, "autograd.backward");
+  });
+
+  const refusesBackward = (name: string, fragment: string, body: () => void) => {
+    out.set(`inplace::기울기::거절::${name}`, () => {
+      try {
+        body();
+      } catch (err) {
+        const said = String(err);
+        return said.includes(fragment)
+          ? fragment : `다른 문구 <${said.slice(0, 44)}>`;
+      }
+      return "안 던졌다";
+    });
+  };
+
+  // Empty stops ahead of every other refusal, which is torch's order.
+  refusesBackward("빈 inputs", "cannot be empty",
+    () => wide().mul(Tensor.full([], 2)).sum().backward(undefined, false, false, []));
+  refusesBackward("grad 없는 것을 inputs 에", "requires_grad=False",
+    () => wide().mul(Tensor.full([], 2)).sum()
+      .backward(undefined, false, false, [Tensor.from(WIDE, [2, 3])]));
+
+  refusesBackward("autograd.grad(안 쓰인 입력)", "not have been used in the graph",
+    () => { Tensor.grad(wide().mul(Tensor.full([], 2)).sum(), [wide()]); });
+  refusesBackward("autograd.grad(빈 inputs)", "cannot be empty",
+    () => { Tensor.grad(wide().mul(Tensor.full([], 2)).sum(), []); });
+  refusesBackward("autograd.grad(grad 없는 입력)", "does not require grad",
+    () => {
+      Tensor.grad(wide().mul(Tensor.full([], 2)).sum(), Tensor.from(WIDE, [2, 3]));
+    });
+  refusesBackward("autograd.grad(씨앗 없는 벡터 출력)", "only for scalar outputs",
+    () => { Tensor.grad(wide().mul(Tensor.full([], 2)), wide()); });
+  refusesBackward("autograd.grad(모양이 틀린 grad_outputs)", "Mismatch in shape",
+    () => {
+      const x = wide();
+      Tensor.grad(x.mul(Tensor.full([], 2)), x, Tensor.ones([9]));
+    });
+
+  // torch computes this one; all three of ours refuse in the specified words.
+  out.set("inplace::기울기::backward(create_graph)=우리는거절", () => {
+    try {
+      wide().mul(Tensor.full([], 2)).sum().backward(undefined, false, true);
+    } catch (err) {
+      const said = String(err);
+      return said.includes("is not in the browser subset")
+        ? "기대대로" : `다른 문구 <${said.slice(0, 44)}>`;
+    }
+    return "뜻밖의 성공";
+  });
+
   // ── One computation under two names (`method2::`) ───────────────────
   //
   // `torch.add(x, y)` and `x.add(y)`. This repository had the loop in one direction only,
@@ -8646,6 +10821,9 @@ function addInplace(out: Map<string, Case>): void {
   const m2sym = (): Tensor => Tensor.from([4, 1, 1, 3], [2, 2]);
   const m2neg = (): Tensor => Tensor.from([-1, 2, -3, 0.5], [2, 2]);
   const vec3a = (): Tensor => Tensor.from([1, 2, 3], [3]);
+  // `kron`'s two-dimensional pair, carried verbatim from `tests/cases.py`.
+  const k2a = (): Tensor => Tensor.from([1, 2, 3, 4], [2, 2]);
+  const k2b = (): Tensor => Tensor.from([0, 5, 6, 7], [2, 2]);
   const vec3b = (): Tensor => Tensor.from([4, 5, 6], [3]);
 
   const named: [string, () => Tensor][] = [
@@ -8680,6 +10858,27 @@ function addInplace(out: Map<string, Case>): void {
     ["cross", () => vec3a().cross(vec3b())],
     ["vdot", () => vec3a().vdot(vec3b())],
     ["kron", () => vec3a().kron(Tensor.from([4, 5], [2]))],
+    // **Above one axis, where it used to refuse.** A 1-D case cannot tell the
+    // general rule from a one-axis version that is wrong above it — both agree on
+    // vectors, which is why the value that was quietly wrong in the binding got as
+    // far as it did. These make the interleaving visible: two squares, a mixed rank
+    // (the shorter is padded at the *front*), and a rectangle whose axes all differ.
+    ["kron(2차원)", () => k2a().kron(k2b())],
+    ["kron(2차원 × 1차원)", () => k2a().kron(Tensor.from([5, 6], [2]))],
+    ["kron(직사각)", () => Tensor.from([1, 2, 3], [1, 3])
+      .kron(Tensor.from([4, 5], [2, 1]))],
+    // **The backward is what the general form had to keep.** It is `reshape` and
+    // `mul`, both of which already carry one, so a wrong interleaving shows here as
+    // much as in the value. Both gradients come back as one tensor.
+    ["kron(2차원)의 기울기", () => {
+      const a = asLeaf(k2a());
+      const b = asLeaf(k2b());
+      const out = a.kron(b);
+      out.mul(Tensor.from(
+        Array.from({ length: out.size }, (_, i) => i + 1), out.shape)).sum().backward();
+      return Tensor.cat([
+        gradOf(a, "kron/a").reshape([4]), gradOf(b, "kron/b").reshape([4])]);
+    }],
     ["broadcast_to", () => Tensor.from([1, 2], [2]).broadcastTo([3, 2])],
     ["prelu", () => m2neg().prelu(Tensor.from([0.25], [1]))],
   ];
@@ -8784,6 +10983,22 @@ function addInplace(out: Map<string, Case>): void {
     const x = rect();
     x.transpose_();
     return x;
+  });
+
+  // **Rank 3, where a dropped pair of axes shows.** Every case above is 2-D, and at
+  // 2-D `transpose_(0, 1)` and `transpose_()` are the same answer — which is why
+  // `transpose_()` taking no axes at all passed all of them.
+  out.set("method2::제자리::transpose_(1, 2) 는 3차원에서", () => {
+    const x = Tensor.from([...Array(24).keys()], [2, 3, 4]);
+    x.transpose_(1, 2);
+    return x.reshape([-1]).at([[0, 1, 2, 3, 4, 5]]).toArray()
+      .then((v) => `(${x.shape.join(", ")}) [${[...v].map((n) => `${n}.0`).join(", ")}]`);
+  });
+
+  out.set("method2::제자리::squeeze_(0, 2)", () => {
+    const x = Tensor.from([...Array(6).keys()], [1, 6, 1]);
+    x.squeeze_(0, 2);
+    return `(${x.shape.join(", ")},)`;
   });
 
   // The answer's spelling is Python's `str(True)` — the golden was frozen by Python, so
@@ -9864,4 +12079,71 @@ function addRnnTop(out: Map<string, Case>, inp: Inputs): void {
   out.set("rnntop::dropout=0 이면 돈다", () =>
     rnn.lstm(x(), [h1(), c1()], w("drop_w", 4),
       { dropout: 0, train: true })[0]);
+
+  // ── bidirectional, stacked and projected, refused here until today ──────────
+  //
+  // Carried verbatim from `tests/cases.py`: the input is `0.1·i − 1.0` over (5, 2, 3)
+  // and every weight is `0.1·((i mod 7) − 3)` down its own shape, so nothing crosses
+  // the boundary. **The flat list is `namedParameters()`'s order** — four per
+  // direction, the reverse one second, layers outermost, `weight_hr` last within a
+  // direction.
+  const rtGates: Record<string, number> = {
+    lstm: 4, gru: 3, rnn_tanh: 1, rnn_relu: 1,
+  };
+  const rtRamp = (shape: number[]): Tensor => {
+    const n = shape.reduce((a, b) => a * b, 1);
+    const flat: number[] = [];
+    for (let i = 0; i < n; i++) flat.push(0.1 * ((i % 7) - 3));
+    return Tensor.from(flat, shape);
+  };
+  const rtX = (): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < 30; i++) v.push(i * 0.1 - 1.0);
+    return Tensor.from(v, [5, 2, 3]);
+  };
+  const topFlag = (
+    name: string, part: number,
+    { layers = 1, bidirectional = false, dropout = 0, proj = 0 } = {},
+  ): Tensor => {
+    const gates = rtGates[name]!, hidden = 4, width = 3;
+    const dirs = bidirectional ? 2 : 1;
+    const real = proj || hidden;
+    const flat: Tensor[] = [];
+    for (let layer = 0; layer < layers; layer++) {
+      const inSize = layer === 0 ? width : real * dirs;
+      for (let d = 0; d < dirs; d++) {
+        flat.push(rtRamp([gates * hidden, inSize]));
+        flat.push(rtRamp([gates * hidden, real]));
+        flat.push(rtRamp([gates * hidden]));
+        flat.push(rtRamp([gates * hidden]));
+        if (proj) flat.push(rtRamp([proj, hidden]));
+      }
+    }
+    const rows = layers * dirs;
+    const opts = { numLayers: layers, dropout, bidirectional };
+    const h0 = Tensor.zeros([rows, 2, real]);
+    const got = name === "lstm"
+      ? rnn.lstm(rtX(), [h0, Tensor.zeros([rows, 2, hidden])], flat, opts)
+      : name === "gru" ? rnn.gru(rtX(), h0, flat, opts)
+        : name === "rnn_tanh" ? rnn.rnnTanh(rtX(), h0, flat, opts)
+          : rnn.rnnRelu(rtX(), h0, flat, opts);
+    return got[part]!;
+  };
+  for (const name of ["lstm", "gru", "rnn_tanh", "rnn_relu"]) {
+    for (let p = 0; p < (name === "lstm" ? 3 : 2); p++) {
+      out.set(`rnntop::${name}(양방향)[${p}]`,
+        () => topFlag(name, p, { bidirectional: true }));
+      out.set(`rnntop::${name}(2층양방향)[${p}]`,
+        () => topFlag(name, p, { layers: 2, bidirectional: true }));
+    }
+    // `train` is false, so the dropout is the identity — which is the claim.
+    out.set(`rnntop::${name}(2층 dropout, 평가)`,
+      () => topFlag(name, 0, { layers: 2, dropout: 0.5 }));
+  }
+  for (let p = 0; p < 3; p++) {
+    out.set(`rnntop::lstm(proj_size)[${p}]`,
+      () => topFlag("lstm", p, { proj: 2 }));
+    out.set(`rnntop::lstm(proj_size 와 양방향)[${p}]`,
+      () => topFlag("lstm", p, { layers: 2, proj: 2, bidirectional: true }));
+  }
 }

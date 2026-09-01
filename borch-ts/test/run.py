@@ -366,7 +366,16 @@ NOT_PORTED = {
                        "tv_tensor, or ask whether a tensor is one. As `v2::` below: "
                        "borch.ts's `Tensor` is a handle to a buffer and cannot be "
                        "subclassed to carry a label"),
-    "v2::": (18, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
+    # **18 → 17: `UniformTemporalSubsample` is written.** It was in this row and did
+    # not belong to it — the transform touches no tv_tensor mark at all, and the
+    # arithmetic had been in `ops.uniformTemporalSubsample` the whole time. What was
+    # missing was the class a pipeline is built out of. The name axis is what said so:
+    # it refuses to fold a capital-initial name onto a lowercase one, so the function's
+    # presence could not excuse the class's absence.
+    # 17 → 19. The two `convert_bounding_box_format(inplace)` rows. They read **the
+    # tensor that was passed in**, which only means something where the label rides
+    # along with it — and a `BoundingBoxes` is the tv_tensor this row is about.
+    "v2::": (19, "없음 — the tv_tensor dispatch. borch.ts's `Tensor` is a handle "
                         "to a buffer and cannot be subclassed to carry a label, so this "
                         "needs a mechanism that side does not have rather than a body "
                         "it has not been given"),
@@ -381,7 +390,12 @@ NOT_PORTED = {
     # torch has. The integer reduction is the same — `F`'s takes the word, and a second
     # spelling that takes a number is a Python-side fact about two bindings of one
     # library.
-    "loss::": (18, "파이썬 — torch keeps these seven at top level as well as "
+    # 18 → 19. `nn.LinearCrossEntropyLoss/이름`, which freezes the parameter names as
+    # text — `['linear.weight']`, the key a checkpoint is written with. The layer and
+    # the eleven functional rows beside it are ported; this one asks a `state_dict`
+    # spelling, and borch.ts names its own through `ownParameters`, which is a
+    # different question from the one the case is named for.
+    "loss::": (19, "파이썬 — torch keeps these seven at top level as well as "
                          "under `F`, with an integer reduction and a different default. "
                          "borch.ts has one namespace, so there is no second place to "
                          "put them"),
@@ -406,9 +420,12 @@ NOT_PORTED = {
     # being read after its cause is gone; this one lasted about an hour, and only
     # because the same change that ended it was made by someone who then read this
     # line.
-    "unpool::": (4, "없음 — two ask about arguments borch.ts does not take "
-                        "(MaxPool2d's `dilation`, which no pooling kernel here "
-                        "dilates, and Flatten's two) and two about "
+    # **4 → 2: `Flatten`'s two are written.** The row said "arguments borch.ts does not
+    # take", and that stopped being true the moment the class took them — which is the
+    # `AvgPool2d` lesson one paragraph up, happening again to the line that records it.
+    # The class declared no constructor, so the signature axis called it *unreadable*
+    # rather than short and this reason was the only place the gap was written down.
+    "unpool::": (2, "없음 — two ask about "
                         "`AdaptiveAvgPool2d`, which is not a name over there. "
                         "**The maximum's padding and ceilMode left this row** with "
                         "AvgPool2d's: they were refused on the ground that the "
@@ -483,7 +500,15 @@ NOT_PORTED = {
     # `Hardsigmoid`, `Hardswish`, `Mish`), and those seats are **absent rather than
     # declared-and-unmeasured** — the `pool::` row three screens down is what that
     # distinction costs when it goes the other way.
-    "fft::": (4, "파이썬 — the gradient helper is what makes the leaf"),
+    # 4 → 6. The two `istft(onesided=False)` rows. **The reconstruction cannot be
+    # asked over there**: that branch is complex the whole way through the
+    # overlap-add, and this library's kernels stop at complex on purpose — one guard
+    # on the buffer getter rather than 176 — so the case measures the Python sides'
+    # values against the waveform and this side's refusal, which is a Python-side
+    # verdict. The two halves that *can* be asked here — the dtype of the ordinary
+    # call, and the refusal when a onesided reconstruction is asked for a complex
+    # result — are asked, and both were seats nothing read.
+    "fft::": (6, "파이썬 — the gradient helper is what makes the leaf"),
     # **`opt::` has a row again, and its own comment above says the last three reasons
     # written here were each wrong in turn.** So this one names exactly what cannot
     # cross and nothing more.
@@ -536,7 +561,14 @@ NOT_PORTED = {
     # answering in `float32`. All three arrive at one gate now, and the rows are
     # here rather than portable for the reason the rest of this group is: they ask
     # about a Python signature, and borch.ts takes its dtypes as strings.
-    "dtype::": (88, "파이썬 — the factories' `dtype=`, the dtype aliases, `out=`"),
+    # 88 → 99. Eleven `형이름::` rows — `x.type()` and the twelve `torch.FloatTensor`
+    # names it takes and returns. **The old tensor-type vocabulary is Python's**: a
+    # dtype over there is one of four string literals, `"float32"` and not
+    # `torch.FloatTensor`, and there is no second name for it to disagree with. The
+    # disagreement is the whole content of these rows — the getter handed back
+    # `torch.FloatTensor` and the setter could not take it back, on the core, while
+    # the binding had it wrong the other way round in both halves.
+    "dtype::": (99, "파이썬 — the factories' `dtype=`, the dtype aliases, `out=`"),
     # This number jumping from 82 to 88 was caught **the day the check went in** — the
     # batch that turned `x.real` and `x.device` into properties grew the cases by six.
     # 88 → 116. Twenty predicates and eight unpaired in-place variants went in. Both are
@@ -574,7 +606,20 @@ NOT_PORTED = {
     #
     # The remaining 97 really are python: `술어::` 23 (`is_cuda`, `is_mps`), `저장::` 10
     # (`stride`, `layout`), the ungrouped 47 (copy semantics, `from_numpy`), `희소::` 5.
-    "inplace::": (96, "파이썬 — views, sharing, properties, predicates, storage"),
+    # 96 → 97: `resize_as_(the_template …)`. borch.ts has no `resizeAs_` at all — that
+    # family re-aims storage a borch.ts tensor owns, and the name axis says so — so the
+    # case asks a keyword the core alone can be asked about.
+    # 97 → 101. Four `autograd.grad` cases. The other fifteen were ported and run
+    # against `Tensor.grad`; these four are **Python seats over there is no seat
+    # for**. Three are arguments `Tensor.grad` deliberately does not take —
+    # `create_graph` (`backward` already refuses it, and a second seat is a second
+    # wording to keep in step), `is_grads_batched` (it wants `vmap`) and
+    # `only_inputs=False` (a branch torch removed from itself). The fourth asks for
+    # the **exception's class name**, and Python classes are the binding's own
+    # surface: the unused-input refusal is a `RuntimeError` in torch and arrived as
+    # an `IndexError` here, because `translate`'s guess read the word "index" in the
+    # wording. That is what the case pins, and it cannot be pinned from TS.
+    "inplace::": (101, "파이썬 — views, sharing, properties, predicates, storage"),
     # `method2::` used to be here — 60 cases, "alias — Python's second name, as
     # `multiply` = `mul`". Some of them were aliases, and **nine had no name over there at
     # all** (`fmax`, `vdot`, `moveaxis`, `t`, `broadcast_to`, four comparisons). They went
@@ -598,6 +643,52 @@ NOT_PORTED = {
     # now. The two left are `asarray`, which takes a numpy array or a Python list, and TS
     # has neither.
     "make::": (2, "파이썬 — `asarray` takes an ndarray or a list; TS has neither"),
+    # **`torch.special` — 29 of its 32 cases are ported and these three are Python's.**
+    #
+    # Two are `out=`, which borch.ts declines everywhere: the axis records twenty-nine
+    # such rows already, all of them the same decision. A namespace of forwarders is
+    # where that decision costs least — `special`'s `out=` comes from one loop over a
+    # written list in `borch/__init__.py`, so nothing about it is specific to these
+    # names, and `special::erf(out=)/같은 객체` asks about the wrapper rather than
+    # about `erf`.
+    #
+    # The third is `xlogy(스칼라)`. borch.ts types it `xlogy(other: Tensor)` and Python
+    # takes a bare `2.0` — the same divergence as `make::` above, a Python affordance
+    # rather than a missing body. Written as a scalar tensor here it would freeze
+    # cleanly and **stop asking the thing it is named for**, which is worse than not
+    # asking: the name would claim a check nobody performs.
+    # 3 → 75. **The three were Python's affordances; the seventy-two are bodies.**
+    # `torch.special` splits in two here: twenty-three names forward to arithmetic
+    # borch.ts already has and are asked on both sides, and thirty-four have bodies of
+    # their own — the Bessel and Airy approximations, twelve orthogonal recurrences,
+    # `zeta`'s Euler–Maclaurin, and the nine written in a tail-safe form because the
+    # obvious composition is `inf` where the name is reached for. Those are numpy in
+    # `borch/_ops.py` with no WGSL behind them, and their cases carry the
+    # `special::수학::` prefix so the golden's core-only list can name them too.
+    #
+    # **Marked `아직` rather than `없음`**, which is the opposite of the `video::` row
+    # above: nothing about borch.ts's types stands in the way, so this is work owed on
+    # that side and the README's split should read it that way. `tests/ts_axis.py`
+    # carries the thirty-four by name, so they come off one at a time.
+    "special::": (75, "아직 — 산술 서른넷이 코어에만 있다(Bessel·Airy·직교다항식 열둘·"
+                      "zeta·꼬리에서 안전한 형태 아홉). 나머지 셋은 `out=` 둘과 "
+                      "`xlogy` 에 맨 스칼라를 넘기는 파이썬 자리"),
+    # **The thirty-three `*_video` kernels, and this row is a type rather than a
+    # backlog.** The core's picture kernels count their axes from the end now, so
+    # `(H, W, C)` and `(T, H, W, C)` name the same two and a video is an image with a
+    # frame axis in front of it — thirty-three names became aliases of bodies that were
+    # already there.
+    #
+    # borch.ts's vision side has nowhere to put that axis. `Image` in `vision.ts` is
+    # `{ data: Float64Array, height, width, channels, isByte }`: one picture by
+    # construction, with no rank at all. So this is `v2::`'s shape and not a body
+    # somebody has not got round to — carrying the names across means giving `Image` a
+    # rank, which is a change to every transform in that file.
+    #
+    # Marked `없음` for that reason. Were it `아직` the split in the README would read as
+    # thirty-three pieces of work owed on that side, and it is one decision about a type.
+    "video::": (30, "없음 — borch.ts 의 `Image` 는 `{data, height, width, channels}` 라 "
+                    "프레임 축을 둘 자리가 없다. 코어는 축을 끝에서 세어 비디오를 그냥 받는다"),
     # **A question TypeScript cannot be asked.** Python refuses `ZeroPad2d(1, 9.0)`
     # with a `TypeError` because the constructor takes one argument; JavaScript keeps
     # no arity and simply does not receive the second. So the same case name would
@@ -663,14 +754,57 @@ NOT_PORTED = {
     # They land here for the reason already written above rather than a new one: five of
     # the six hand back a dtype as a value, and over there a dtype is a string. The sixth
     # is a refusal whose whole content is which of two functions you called.
-    "top::": (60, "파이썬 — dtype introspection, the `device` object, with, integer "
-                        "enums, and the fifteen `sym_*` rows. Those last are pure "
-                        "number arithmetic and could be written here in a line each — "
-                        "what cannot cross is the **answer**: `sym_max(7, 3.0)` is "
-                        "`7.0` where `max` is `7`, and that difference is a Python "
-                        "type. JavaScript has one number, so the case would compare "
-                        "`7` against `7` and say nothing about the only rule that "
-                        "separates these eight from the builtins they look like"),
+    # 45 → 100. Fifty-five, in one shape: **the words the questions are asked with,
+    # and they are Python's words.** `torch.strided`, `torch.contiguous_format`,
+    # `torch.uint8`, `Generator` — over there a layout does not exist as a value, a
+    # memory format has no seat because there is one storage and nothing carries the
+    # argument, a dtype is a string, and randomness comes from a WGSL kernel seeded
+    # by `nn.manualSeed` rather than a stream object anyone can hold.
+    #
+    # `난수::generator::` 22 — `rand`/`randn`/`randint`/`randperm`/`normal`/
+    #                          `multinomial`/`bernoulli` each asked three ways (same
+    #                          seed, advancing, leaving the global stream alone),
+    #                          plus `initial_seed` and re-seeding. The stream is
+    #                          numpy's on both Python sides; borch.ts's is the
+    #                          shader's, so there is no object to pass.
+    # `난수::multinomial` 6  — the name is not in borch.ts at all; the binding draws
+    #                          it here for `bernoulli`'s reason (one CPU pass over
+    #                          weights already coming down).
+    # `살펴보기::layout::` 9 — a layout is a Python value; borch.ts has no vocabulary
+    #                          for one and `x.layout` is not a name over there.
+    # `살펴보기::형식::` 12  — `memory_format`. Every seat that takes it is a Python
+    #                          seat; borch.ts's `clone()` has no such parameter.
+    # the other 5           — `uint8`/`int8` as names without storage,
+    #                          `cuda.device_count`, `get_default_device`, and
+    #                          `clone(channels_last)`. `set_default_device` is not
+    #                          among them: torch's answer to it is to change the
+    #                          interpreter, so it cannot be a case at all.
+    # 99 → 107. Eight `살펴보기::장치::` rows — `zeros`/`ones`/`rand`/`empty` with
+    # `device="cpu"` and with `"cuda"`. The factories read the argument not at all
+    # and handed back a CPU tensor for either; the rule is the layers' rule now. Over
+    # there a factory has no `device` seat at all — there is one adapter and nothing
+    # names it — so the word cannot be passed, let alone judged.
+    # 107 → 123. Sixteen. **The eight `자리는 int64` rows were ported and belong
+    # over here** — that dtype was borch.ts's own defect and this is where it is
+    # asked. The sixteen left are Python's:
+    #
+    #   `짝::` 11 — nine `repr` rows plus *두 번 찍으면 같다* and *len 은 둘*. A pair
+    #     over there is a plain `{values, indices}` object; `torch.return_types.…`
+    #     is the Python surface's spelling, and the address that used to print in
+    #     its place was a Python object's.
+    #   `표본::` 5 — `rand`/`randn` refusing a non-floating `dtype=`. borch.ts's
+    #     factories have no `dtype` seat at all: there is one storage and nothing
+    #     names it, so there is no word to refuse.
+    # 123 → 138. The fifteen `sym_*` rows, which arrived with the branch that took
+    # them out of the gap ledger's excuses. They are **pure number arithmetic** and
+    # could be written here in a line each — what cannot cross is the *answer*:
+    # `sym_max(7, 3.0)` is `7.0` where `max` is `7`, and that difference is a Python
+    # type. JavaScript has one number, so the case would compare `7` against `7` and
+    # say nothing about the only rule separating those eight from the builtins they
+    # look like.
+    "top::": (138, "파이썬 — dtype introspection, the `device` object, with, integer "
+                        "enums, and the fifteen `sym_*` rows, whose whole content is "
+                        "a Python type JavaScript does not have"),
     # `spot::` was gone — 47 cases, all ported — then back with two, and gone again.
     #
     # The two were `unique(dim=)`, and the reason written here said it is a different
@@ -685,7 +819,11 @@ NOT_PORTED = {
     # against numpy at fourteen shape-and-axis pairs before the browser saw it, because
     # gathering a slice out of a flat row-major buffer is where this goes wrong and a
     # golden run costs ten minutes to say so.
-    "toplin::": (42, "별칭 — a top-level second name, as `lu` = `linalg.lu_factor`"),
+    # 42 → 48. Six `lobpcg` rows: `B` is the generalised problem and `X` sets `k` from
+    # its columns, both of which used to be refused. The reason on this row is
+    # unchanged and still the right one — `torch.lobpcg` is a second name for what the
+    # method already answers, and the method side asks the same six through parity.
+    "toplin::": (48, "별칭 — a top-level second name, as `lu` = `linalg.lu_factor`"),
     # `stat::` used to be here — 42 cases. 31 of them had simply never been asked, and the
     # other 11 could not be ported because **the name was not over there**, so those five
     # went into borch.ts.
@@ -704,7 +842,17 @@ NOT_PORTED = {
     # in-place variant returns itself — all already correct. No hole came out here — **a
     # place that was merely never asked is not the same as a place that is wrong, and
     # asking is what separates the two.**
-    "fname::": (28, "별칭 — `F`'s in-place variants. The method side asks them already"),
+    # 28 → 29. `interpolate(mode 이 없는 이름)` asks that an unknown `mode` stops. On
+    # this side `mode` is a **compile-time union**, so `"quadratic"` is a type error and
+    # there is no runtime refusal to reach — the same shape as the `pad::` row below,
+    # where a surplus argument is not received rather than refused. The other four
+    # spellings the union carries are all asked, by value and by gradient.
+    # 29 → 30. `interpolate(nearest 에 align_corners)` asks that the flag is refused on
+    # a mode with no corners to align. torch tells *not given* from *given as false*;
+    # borch.ts takes a boolean, so the two are the same word by the time they arrive
+    # and there is nothing here to refuse. The binding raises it before crossing, and
+    # the case is asked there.
+    "fname::": (30, "별칭 — `F`'s in-place variants. The method side asks them already"),
     # `bit::` used to be here — 24 cases, "alias — the method names of the bit
     # operations". **The point was that those names were not over there**, and the reason
     # called them aliases. They went in and all were ported, so the row is gone.
@@ -740,6 +888,21 @@ NOT_PORTED = {
     # `linalg::` used to be here — 17 cases. Sixteen had simply never been asked, and one
     # (`ldl_factor_ex`) could not be asked because the binding was standing three of its
     # slots up by hand.
+    # 0 → 6. `lstsq` learned a batch, and four of its ten new cases were ported. **The six
+    # left all ask for a field the TypeScript function does not return.** torch's `lstsq`
+    # hands back a named tuple of four — solution, residuals, rank, singular values — and
+    # `linalg.lstsq` over there returns the solution as a bare tensor, because the SVD it
+    # is built from is `pinverse` and the other three would have to be computed a second
+    # time to be handed over. So this is a shape the function does not have rather than a
+    # body it has not been given; adding the field would be the port, and the four that
+    # are asked already pin the batching itself. They are `linalg::lstsqfield::` in
+    # `cases.py` and core-only for the same reason — the binding cannot reach them either.
+    # 6 → 8. The two `torch.norm(nuc, …)=문구` rows freeze torch's own wording for a
+    # rank that is not 2 and an axis list that is not a pair. **Both checks are the
+    # binding's**, made before anything crosses — `matrixNorm` over here takes a pair
+    # by type, so a three-axis list is a compile error and a 1-D input reaches a
+    # different message from a different place. A Python-side rule, as `pad::` below.
+    "linalg::": (8, "없음 — `lstsq` 의 나머지 세 필드와, 파이썬 쪽에서 하는 두 검사"),
     "grad::": (12, "별칭 — a vjp is `backward(seed)`, and parity asks it already"),
     "cplx::": (10, "파이썬 — a complex `repr` belongs to Python's formatter"),
     # Five of the ten buffer cases were ported (registration, keeping one out of the
@@ -749,8 +912,14 @@ NOT_PORTED = {
     # the Python side. The two loss cases ask about a refusal, and in TypeScript passing an
     # argument that does not exist is a **compile error** rather than a refusal at run
     # time, so there is nowhere to ask it.
-    "container::": (5, "파이썬 — the binding stands the InstanceNorm layer up, and the "
-                       "refusal is a Python argument"),
+    # 5 → 2 → 0. **The row is gone, and neither half of it left for the reason it
+    # was written.** The three `InstanceNorm` rows left when that layer stopped
+    # refusing `track_running_stats=True`. The two loss rows were the
+    # `weight`/`pos_weight` refusals, and the note here said they were a *Python
+    # matter* — that passing an argument which does not exist is a compile error in
+    # TypeScript, so there was nowhere to ask. The argument existed on both sides all
+    # along; what did not exist was the answer. Both sides answer now and the cases
+    # ask for the number under `loss::층::` instead of for the wording.
     # `torch.pi`, `inf`, `nan` and `newaxis` are **values at Python's top level**. borch.ts
     # is a bundle of classes rather than a module, and JS already has `Math.PI`, `Infinity`
     # and `null`, so there is nowhere to offer the same names again — `x[:, None]` is
@@ -760,7 +929,35 @@ NOT_PORTED = {
     # left are **refusals** and a Python matter — torch takes the same thing under two
     # names, `right` (a boolean) and `side` (a word), and stops when the two disagree.
     # borch.ts knows `right` alone, so there is no partner to disagree with.
-    "index::": (2, "파이썬 — reconciling `side` with `right`. TS knows only one"),
+    # 2 → 13. Eleven `걸음::` cases arrived — `x[a:b:step]`, reading and writing, and
+    # the refusals on a negative and a zero step. **The notation is Python's**, the
+    # same reason written two rows up for `x[:, None]`: borch.ts has no `[]` and no
+    # `slice`, so a TS body would have to pick a spelling of my own rather than a name
+    # the two sides share. The ingredients underneath are asked already and by name —
+    # `spot::slice_scatter(step=2)` is the write, `indexSelect` and `arange` the read —
+    # and the binding's eleven rows run every one of them through borch.ts for real.
+    "index::": (13, "파이썬 — `side`/`right`, and `x[a:b:step]` 표기. TS has no `[]`"),
+    # **`normalized_shape` is a Python-side argument.** borch.ts's `layerNormOver`
+    # takes *how many* axes to fold, which is the arithmetic; torch takes the shape
+    # itself, and the four refusals are about that shape — a bare `int` where a tuple
+    # is wanted, a shape that does not match the input's tail, an empty one, and a
+    # weight shaped unlike it. None of them can be asked of a function that takes a
+    # count. The ten value cases beside them **are** asked over there, which is the
+    # half that had been folding the wrong axes.
+    "norm::": (4, "파이썬 — `normalized_shape` 검사. TS takes a count, not a shape"),
+    # **The model's `zero_grad` is the Python surface's.** borch.ts has `zeroGrad` on
+    # the optimizer, and those two rows are asked over there; `Module` has none, and
+    # the two here ask what `model.zero_grad(set_to_none=…)` leaves behind.
+    "opt::": (2, "파이썬 — `model.zero_grad`. borch.ts has it on the optimizer only"),
+    # `device=` on a layer is a Python seat: borch.ts's classes take the pair only to
+    # refuse it, so there is no `device="cpu"` to accept over there and no `"cuda"`
+    # to stop at. What each side does with the word is the whole content.
+    "container::": (2, "파이썬 — 층의 `device=` 자리. TS carries the pair to refuse it"),
+    # `quantile(dim)` is a **verdict about which side you are on**: the core folds
+    # the axis and this one refuses by name, so the case asks *did each behave as
+    # documented*. Over here there is only one side, so there is nothing to tell
+    # apart — the refusal it would be checking is the one it is standing in.
+    "act::": (1, "파이썬 — `quantile(dim)` 는 어느 쪽인지에 대한 판정이다"),
     # 4 → 10. Six "resume training" cases arrived. **Those already tread on borch.ts** —
     # the binding's optimizers and schedulers call the ones over there as they are, so
     # those six running under `--lib borch_webgpu` are measuring borch.ts's `StepLR` and

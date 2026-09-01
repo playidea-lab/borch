@@ -42,6 +42,7 @@
  */
 
 import { RuntimeError } from "./errors.js";
+import type { DType } from "./dtype.js";
 import { Tensor } from "./tensor.js";
 
 // ── Forwarded, receiver unchanged ───────────────────────────────────────
@@ -61,9 +62,9 @@ export function matrixPower(input: Tensor, n: number): Tensor {
   return input.matrixPower(n);
 }
 
-/** `matrix_rank(A)` — how many singular values are above the tolerance. */
-export function matrixRank(input: Tensor): Promise<Tensor> {
-  return input.matrixRank();
+/** `matrix_rank(A, tol=None)` — how many singular values are above the tolerance. */
+export function matrixRank(input: Tensor, tol?: number): Promise<Tensor> {
+  return input.matrixRank(tol);
 }
 
 /** `matrix_exp(A)` — the matrix exponential. */
@@ -129,24 +130,129 @@ export function solveTriangular(
   return input.solveTriangular(b, upper, left, unitriangular);
 }
 
-/** `lstsq(A, B)` — the least-squares solution. */
-export function lstsq(input: Tensor, b: Tensor): Promise<Tensor> {
-  return input.lstsq(b);
+/**
+ * `lstsq(A, B, rcond=None, *, driver=None)` — the least-squares solution.
+ *
+ * The last two used to be absent, so `rcond` was **received by JavaScript and
+ * discarded** — a cutoff that reads as a tuning knob and moved nothing.
+ *
+ * **The four drivers are four algorithms and this is one of them.** The
+ * pseudoinverse is the SVD, which is `gelsd`. At full rank all four of torch's
+ * agree to float noise; once the cutoff bites they separate, measured on
+ * `[[1,1],[1,2],[1,3],[1,4]]` against `[6,5,7,10]` with `rcond=0.9`: `gels`
+ * 3.500/1.400, `gelsy` 0.770/2.310, `gelsd` and `gelss` 0.790/2.322.
+ *
+ * So `gels` takes no cutoff — torch's assumes full rank and never reads `rcond` —
+ * and `gelsy`, *the default*, is refused where the cutoff would change the answer,
+ * because it solves with a pivoted QR there and handing back the SVD's numbers
+ * under its name is a wrong answer with nothing attached to it. The core refuses
+ * the same call for the same reason.
+ *
+ * The arithmetic is here rather than on `Tensor.lstsq`, which torch removed and
+ * the core keeps as a one-argument tombstone.
+ *
+ * **A batch is answered now, and the refusal that stood here was one line from
+ * the answer.** It read `input.shape.length !== 2` and threw — while `pinverse`
+ * one line below has batched all along, and `matmul` batches too. What was
+ * genuinely missing was smaller than the refusal: the cut-off test compared one
+ * count against `Math.min(...input.shape)`, which on a batch is the batch size.
+ *
+ * **The two readings of `B` do not broadcast the same way** — measured on torch,
+ * and the core carries the same rule with the same measurement written out. A
+ * right-hand side one dimension shorter is a vector per matrix and its leading
+ * dimensions must *equal* the matrix's; one of equal rank is `(*, m, k)` and its
+ * leading dimensions broadcast.
+ */
+export async function lstsq(input: Tensor, b: Tensor, rcond?: number,
+                            driver = "gelsy"): Promise<Tensor> {
+  if (!["gels", "gelsy", "gelsd", "gelss"].includes(driver)) {
+    throw new RuntimeError(
+      "lstsq: parameter `driver` should be one of (gels, gelsy, gelsd, gelss)");
+  }
+  const rank = input.shape.length;
+  const lead = input.shape.slice(0, -2);
+  const vector = b.shape.length === rank - 1
+    && b.shape.slice(0, -1).join() === lead.join();
+  const matrix = b.shape.length === rank && b.shape[rank - 2] === input.shape[rank - 2];
+  if (!vector && !matrix) {
+    throw new RuntimeError(b.shape.length < rank - 1
+      ? "lstsq: input.dim() must be greater or equal to other.dim() and "
+        + "(input.dim() - other.dim()) <= 1"
+      : "lstsq: input.size(-2) should match other.size(-2)");
+  }
+  const cut = driver === "gels" ? undefined : rcond;
+  if (driver === "gelsy" && cut !== undefined && await cutBites(input, cut)) {
+    throw new RuntimeError(
+      `lstsq(rcond=${rcond}, driver="gelsy") on a cut that leaves the matrix `
+      + "rank-deficient is not in the browser subset — a pivoted QR and the SVD "
+      + 'part there and only the SVD is here. Ask for driver="gelsd" on purpose.');
+  }
+  // The least-squares solution **is** the pseudoinverse applied to `B`, and that
+  // one takes the cut-off — so this composes two public pieces rather than opening
+  // the matrix a second time. `Tensor.lstsq` next door is the same thing without a
+  // cut-off, which is what torch's removed method computed.
+  const p = await input.pinverse(cut);
+  return vector ? p.matmul(b.unsqueeze(-1)).squeeze(-1) : p.matmul(b);
 }
 
-/** `matrix_norm(A, ord="fro")`. */
-export function matrixNorm(input: Tensor, ord: number | string = "fro"): Promise<Tensor> {
-  return input.matrixNorm(ord);
+/**
+ * Does this cut-off drop a singular value? `lstsq`'s default driver hinges on it.
+ *
+ * **Any matrix in the batch is enough**, which is what the core does by refusing
+ * inside its per-matrix loop. The comparison is per matrix: the largest singular
+ * value is taken along the last axis and kept there, so each row scales by its own.
+ */
+async function cutBites(input: Tensor, rcond: number): Promise<boolean> {
+  const s = await input.svdvals();
+  const kept = s.gt(s.amax(-1, true).mul(Tensor.full([], rcond))).sum(-1, false);
+  // `Math.min(...input.shape)` here is a defect a batch hides: over `[2, 4, 2]` it
+  // gives 2, which is also `min(m, n)`, and over `[1, 4, 2]` it gives 1 and the
+  // refusal disappears. The two trailing dimensions are the matrix.
+  const k = Math.min(input.shape[input.shape.length - 2] as number,
+                     input.shape[input.shape.length - 1] as number);
+  return Array.from(await kept.toArray()).some((c) => c < k);
 }
 
-/** `vector_norm(x, ord=2, dim=None)`. */
-export function vectorNorm(input: Tensor, ord = 2, dim?: number): Tensor {
-  return input.vectorNorm(ord, dim);
+/** `matrix_norm(A, ord="fro", dim=(-2,-1), keepdim=False)`. */
+export function matrixNorm(input: Tensor, ord: number | string = "fro",
+                           dim: readonly [number, number] = [-2, -1],
+                           keepdim = false): Promise<Tensor> {
+  return input.matrixNorm(ord, dim, keepdim);
 }
 
-/** `norm(A)` — the Frobenius norm of the whole tensor. */
-export function norm(input: Tensor): Tensor {
-  return input.norm();
+/** `vector_norm(x, ord=2, dim=None, keepdim=False)`. */
+export function vectorNorm(input: Tensor, ord = 2, dim?: number,
+                           keepdim = false): Tensor {
+  return input.vectorNorm(ord, dim, keepdim);
+}
+
+/**
+ * `norm(A, ord=None, dim=None, keepdim=False, dtype=None)`.
+ *
+ * **All four were missing and the method had all four.** This read `norm(input)` and
+ * called `input.norm()`, so `linalg.norm(x, 2, 1)` — the line a torch tutorial writes —
+ * threw away the order and the axis and returned the Frobenius norm of everything.
+ * JavaScript discards surplus arguments without a word, so it was not an error but a
+ * different number, of a different rank, that flows on and breaks somewhere unrelated.
+ *
+ * torch spells the first one `ord`; the method spells it `p`. Nothing else differs.
+ */
+export async function norm(input: Tensor, ord?: number, dim?: number,
+                           keepdim = false, dtype?: DType): Promise<Tensor> {
+  const x = dtype === undefined ? input : input.to(dtype);
+  // **It dispatches, and forwarding to `Tensor.norm` was wrong.** The seats line up and
+  // the meanings do not: with an `ord` and no `dim` on a matrix torch takes the
+  // *largest singular value*, where the method takes the elementwise p-norm. Measured on
+  // `[[1..9]]`: 16.848 against 16.882 — close enough to read as rounding and produced by
+  // a different formula. The golden case added with this caught it on its first run.
+  if (dim === undefined && ord !== undefined && x.shape.length === 2) {
+    const m = await x.matrixNorm(ord);
+    return keepdim ? m.reshape([1, 1]) : m;
+  }
+  // Everything else is a vector norm: no `ord` means the whole thing flattened, and an
+  // `ord` with a `dim` means along that axis. torch's two-axis `dim` reaches
+  // `matrix_norm` as well; borch.ts takes a single axis, so that spelling does not arise.
+  return x.vectorNorm(ord ?? 2, dim, keepdim);
 }
 
 /** `cond(A, p=None)` — the condition number. */
@@ -169,8 +275,22 @@ export function luFactor(a: Tensor): Promise<{ LU: Tensor; pivots: Tensor }> {
   return a.luFactor();
 }
 
-/** `lu(A)` — the LU decomposition, expanded into `P`, `L` and `U`. */
-export function lu(A: Tensor): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+/**
+ * `lu(A, *, pivot=True)` — the LU decomposition, expanded into `P`, `L` and `U`.
+ *
+ * **`pivot` is carried in order to refuse it**, which is what the core does with the
+ * same argument. Without pivoting the factorisation is a different one and exists only
+ * where no pivot is ever needed; there is no such path here. Left out of the signature
+ * the word would be discarded by JavaScript and the pivoted answer returned under its
+ * name — a wrong factorisation that looks like a right one.
+ */
+export function lu(A: Tensor,
+                   pivot = true): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+  if (!pivot) {
+    throw new RuntimeError(
+      "lu(pivot=false) is not in the browser subset — the factorisation without "
+      + "pivoting is a different one and only the pivoted answer is computed here.");
+  }
   return A.lu();
 }
 
@@ -187,8 +307,13 @@ export function inv(a: Tensor): Promise<Tensor> {
 }
 
 /** `pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`. */
-export function pinv(input: Tensor): Promise<Tensor> {
-  return input.pinverse();
+export function pinv(input: Tensor, rcond?: number): Promise<Tensor> {
+  // **Carried in order to refuse, and now carried in order to compute.** The seat had
+  // to exist here for `pinverse`'s stop to be reachable at all — left out, the door was
+  // narrower than the room behind it and `linalg.pinv(a, 1e-6)` discarded the number in
+  // silence. `pinverse` takes the cut-off now, so the same seat delivers it, and the
+  // core has been giving torch's answer for this all along.
+  return input.pinverse(rcond);
 }
 
 /** `matmul(A, B)` — matrix multiplication. The method is `mm`. */
@@ -204,9 +329,17 @@ export function matmul(input: Tensor, other: Tensor): Tensor {
  * **The factors come first here and the method is received by `B`.** Forwarding this one
  * positionally would swap `LU` and `B`, and with square matrices nothing about the call
  * would look wrong.
+ *
+ * **`left` and `adjoint` were carried in order to refuse, and now they answer.** The
+ * refusal said each solves a different system than the one these factors were made
+ * for, which was true and was also the reason it could be closed: `A = P L U` gives
+ * `Aᵀ = Uᵀ Lᵀ Pᵀ`, so the adjoint is the same three pieces in the other order, and
+ * `X A = B` is `Aᵀ Xᵀ = Bᵀ` — the right-hand solve is the left one with the sides
+ * transposed and the flag flipped. All four combinations are measured against torch.
  */
-export function luSolve(LU: Tensor, pivots: Tensor, b: Tensor): Promise<Tensor> {
-  return LU.luSolveFactored(pivots, b);
+export function luSolve(LU: Tensor, pivots: Tensor, b: Tensor,
+                        left = true, adjoint = false): Promise<Tensor> {
+  return LU.luSolveFactored(pivots, b, left, adjoint);
 }
 
 /**
@@ -287,8 +420,13 @@ export function multiDot(tensors: readonly Tensor[]): Tensor {
  * declarations colliding on one lookup key — the collision check another session added
  * this morning, after a normaliser folded `eq_` onto `eq`.
  */
-export function tensorsolve(input: Tensor, b: Tensor): Promise<Tensor> {
-  return input.tensorSolve(b);
+export function tensorsolve(input: Tensor, b: Tensor,
+                            dims?: readonly number[]): Promise<Tensor> {
+  // **`dims` was carried in order to refuse and now it answers.** It moves the named
+  // axes of `A` to the end before the fold, so the matrix that gets solved is a
+  // different one and so is the answer's shape — which is a permute away, and the
+  // permute was already here.
+  return input.tensorSolve(b, dims);
 }
 
 /**

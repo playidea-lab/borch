@@ -50,6 +50,32 @@ export function onSeed(reset: (seed: number) => void): void {
 }
 
 /**
+ * `generator=` — **carried in order to refuse it**, wherever torch takes one.
+ *
+ * There is one stream in this file and a `Generator` is a second one. torch's
+ * argument names a stream to draw from; here there is only the stream above, and
+ * the honest answer is to say so rather than to accept the object and draw from
+ * the global one anyway.
+ *
+ * **Accepting it is the failure this exists to stop, and it is silent twice
+ * over.** JavaScript discards a surplus argument without a word, so
+ * `x.bernoulli_(0.5, g)` ran and ignored `g`; and what it produces is a *random
+ * number*, so nothing downstream looks wrong. Somebody running five seeds to
+ * measure variance would get five streams that were never separate.
+ *
+ * `null` and `undefined` both pass: torch's default is `None`, and the Python
+ * binding cannot send `undefined`.
+ */
+export function refuseGenerator(who: string, generator: unknown): void {
+  if (generator !== undefined && generator !== null) {
+    throw new Error(
+      `${who}(generator=…) is not in the browser subset — there is one stream here, `
+      + "and `manualSeed` rewinds it. A Generator is a second stream, and drawing "
+      + "from the global one while holding your object would be worse than stopping.");
+  }
+}
+
+/**
  * One sample from the uniform distribution on `[0, 1)`.
  */
 export function uniform(): number {

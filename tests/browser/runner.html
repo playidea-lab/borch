@@ -45,10 +45,10 @@ window.GOLDEN_RESULT = null;
 // loading quietly.
 const PACKAGES = {
   borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
-          "_data", "_rnn", "_serialize"],
+          "_data", "_rnn", "_serialize", "autograd"],
   // The thin binding over borch.ts. This name used to be the TF.js edition.
   borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data",
-                 "_serialize"],
+                 "_serialize", "autograd"],
 };
 const FILES = [
   ["/borchvision.py", "/work/borchvision.py"],

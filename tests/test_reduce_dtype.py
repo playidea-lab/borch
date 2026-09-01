@@ -94,13 +94,27 @@ def name_of(out):
     Both carry `.values` and `.indices`, but **an ordinary tensor carries `.values` too** (for
     sparsity) — separating on that reads every tensor as a tuple. Measured that way once,
     twenty-five places appeared to diverge.
+
+    **The middle branch used to be a list of our class names**, and it broke the day one of
+    them was renamed: `aminmax` moved from `_MinMax` to a class named after the function, and
+    two rows here started reporting `aminmax` where a dtype belonged. A check that knows our
+    internal class names goes stale every time one moves, and it goes stale *silently* — the
+    name simply stops matching and the fallback answers something plausible.
+
+    So the question asked is about the object rather than its name: a tensor is the thing with
+    a `dtype`, and what is left over and can be walked is a bundle. That is the same
+    discrimination as before — a tensor is iterable and so cannot be told apart *by*
+    iterability — but taken in the order that makes it decidable.
     """
     if isinstance(out, tuple) or hasattr(out, "_fields"):
         return " + ".join(name_of(x) for x in tuple(out))
-    if type(out).__name__ in ("_MinMax", "mode", "_Mode"):
-        return f"{name_of(out.values)} + {name_of(out.indices)}"
-    return str(out.dtype).replace("torch.", "") if hasattr(out, "dtype") \
-        else type(out).__name__
+    if hasattr(out, "dtype"):
+        return str(out.dtype).replace("torch.", "")
+    try:
+        parts = list(out)
+    except TypeError:
+        return type(out).__name__
+    return " + ".join(name_of(x) for x in parts)
 
 
 def answer(lib, values, as_int, fn):

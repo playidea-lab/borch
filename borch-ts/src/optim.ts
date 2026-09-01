@@ -49,6 +49,12 @@ export interface ParamGroup {
    * value given when the optimizer was built.
    */
   weightDecay?: number;
+  /**
+   * **Present only on the optimizers that have one**, which is the condition
+   * `CyclicLR` reads: torch writes a cycling momentum into a group only where the
+   * key already exists, and this key existing is what says so.
+   */
+  momentum?: number;
 }
 
 /**
@@ -69,6 +75,66 @@ export type ParamsArg = readonly Tensor[] | readonly ParamGroupInit[];
 
 function isGroups(arg: ParamsArg): arg is readonly ParamGroupInit[] {
   return arg.length > 0 && !(arg[0] instanceof Tensor);
+}
+
+/**
+ * The keyword-only group every `torch.optim.*` carries, spelled as an object.
+ *
+ * **All five seats exist so that four of them can be answered.** Left out, they were
+ * surplus properties on an object literal — TypeScript rejects those at the call site,
+ * and JavaScript and the Python binding do not: `new SGD(p, 0.1, 0.9, 0, 1e-4, false,
+ * { fused: true })` was accepted and the word discarded. Present, each one gets the
+ * answer the core already gives, and the two libraries stop differing about a question
+ * neither of them computes.
+ */
+export interface OptimizerOptions {
+  maximize?: boolean;
+  /** A hint about batching the update, not a different answer. Accepted and unused. */
+  foreach?: boolean;
+  /** The same. torch fuses on CUDA; there is one kernel here and it is the same number. */
+  fused?: boolean;
+  capturable?: boolean;
+  differentiable?: boolean;
+}
+
+/**
+ * `Adam`'s options, and **only `Adam`'s.**
+ *
+ * torch gives `decoupled_weight_decay` to three optimizers and declares it
+ * differently in each: keyword-only on `Adam`, positional on `NAdam` and `RAdam`.
+ * So it cannot live in `OptimizerOptions` — put there it appears in every
+ * optimizer's object, and the two that take it positionally then read as having
+ * moved it. The signature axis said exactly that the moment it was tried.
+ *
+ * A seventh positional seat on `Adam` was the other place it sat, and that made
+ * `Adam`'s positional list one longer than torch's. Neither of the two easy homes
+ * was right; this is the third.
+ */
+export interface AdamOptions extends OptimizerOptions {
+  decoupledWeightDecay?: boolean;
+}
+
+/**
+ * Stops on the two that would change the answer, and lets the two hints through.
+ *
+ * **The split is the core's, measured rather than chosen** — `borch.optim.SGD(...,
+ * foreach=True)` and `fused=True` are accepted there and change no value, while
+ * `differentiable=True` and `capturable=True` raise with a reason. Two surfaces of one
+ * library answering the same question differently is the divergence this repository
+ * exists to find, so this is the same rule written once more rather than a second
+ * opinion.
+ */
+function refuseUncarried(who: string, opts: OptimizerOptions): void {
+  if (opts.differentiable) {
+    throw new Error(
+      `${who}(differentiable=true) is not here — the step edits its parameters in `
+      + "place, so there is no graph through it to differentiate a second time.");
+  }
+  if (opts.capturable) {
+    throw new Error(
+      `${who}(capturable=true) needs a CUDA-like device to capture a graph on; `
+      + "WebGPU has no equivalent and torch asserts on the same thing without one.");
+  }
 }
 
 export abstract class Optimizer {
@@ -115,22 +181,46 @@ export abstract class Optimizer {
   constructor(
     params: ParamsArg,
     private readonly defaultLr: number,
-    { maximize = false }: { maximize?: boolean } = {},
+    opts: OptimizerOptions = {},
   ) {
-    this.maximize = maximize;
+    refuseUncarried(new.target?.name ?? "Optimizer", opts);
+    this.maximize = opts.maximize ?? false;
     const groups: readonly ParamGroupInit[] = isGroups(params)
       ? params
       : [{ params: params as readonly Tensor[] }];
     for (const g of groups) this.attach(g);
   }
 
+  /**
+   * What `publishMomentum` last published, so a group added **later** inherits it.
+   *
+   * torch fills a new group's missing keys from `defaults`, which is the
+   * constructor's arguments — measured: `SGD(p, momentum=0.9)` then
+   * `add_param_group({"params": q, "lr": 0.3})` gives the second group a momentum of
+   * 0.9 and not of 0. Without this the later group stepped with no momentum at all,
+   * which is a slower curve and no error.
+   */
+  private publishedMomentum: number | undefined;
+
   /** Attaches one group and appends it to the flat list. */
   private attach(init: ParamGroupInit): ParamGroup {
     const index = this.paramGroups.length;
+    // **A parameter in two groups would be stepped twice.** torch refuses it by
+    // name and so does the core; without the check the second step reads a value
+    // the first one just moved.
+    const seen = new Set(this.params);
+    for (const p of init.params) {
+      if (seen.has(p)) {
+        throw new RuntimeError(
+          "some parameters appear in more than one parameter group");
+      }
+    }
     const group: ParamGroup = {
       params: [...init.params],
       lr: init.lr ?? this.defaultLr,
       ...(init.weightDecay === undefined ? {} : { weightDecay: init.weightDecay }),
+      ...(this.publishedMomentum === undefined
+        ? {} : { momentum: this.publishedMomentum }),
     };
     this.paramGroups.push(group);
     for (const p of group.params) {
@@ -212,11 +302,44 @@ export abstract class Optimizer {
   }
 
   /**
-   * Empties the gradients. **It returns them to `null`** — filling with
-   * zeros blurs the leaf test.
+   * The momentum of the group being stepped. **A scheduler can move it** — that is
+   * what `CyclicLR(cycle_momentum=True)` does, and it changes the trained values by
+   * about 7% over eight steps, not the schedule that is printed.
+   *
+   * The value goes into the pipeline key like the learning rate already does, and the
+   * learning rate is moved every step by every scheduler here — so a momentum that
+   * moves costs the same kind of shader cache and no new kind.
    */
-  zeroGrad(): void {
-    for (const p of this.params) p.grad = null;
+  protected momentumOf(fallback: number): number {
+    return this.paramGroups[this.currentGroup]?.momentum ?? fallback;
+  }
+
+  /**
+   * Publishes a momentum onto every group. Called by the optimizers that have one,
+   * so `CyclicLR` can tell them from the ones that do not — torch's own test is
+   * whether the key is in the group.
+   */
+  protected publishMomentum(value: number): void {
+    this.publishedMomentum = value;
+    for (const g of this.paramGroups) g.momentum = value;
+  }
+
+  /**
+   * Empties the gradients.
+   *
+   * @param setToNone torch's argument, and the default is `true`: the gradient is
+   *   dropped rather than filled with zeros. **The seat did not exist here, and on
+   *   both Python sides it existed and was never read** — so the ordinary call
+   *   agreed everywhere and `setToNone = false` quietly did the other thing.
+   *
+   *   The difference is invisible until something reads `grad` between two calls:
+   *   `null` has no shape and nothing to add into, and the argument is there
+   *   precisely so that a zeroed tensor is.
+   */
+  zeroGrad(setToNone = true): void {
+    for (const p of this.params) {
+      p.grad = (setToNone || p.grad === null) ? null : Tensor.zeros(p.shape);
+    }
   }
 
   step(): void {
@@ -355,7 +478,7 @@ export class SGD extends Optimizer {
     private readonly dampening = 0,
     private readonly weightDecay = 0,
     private readonly nesterov = false,
-    opts: { maximize?: boolean } = {},
+    opts: OptimizerOptions = {},
   ) {
     super(params, lr, opts);
     if (nesterov && (momentum <= 0 || dampening !== 0)) {
@@ -371,6 +494,10 @@ export class SGD extends Optimizer {
     // `0·momentum + grad` is the same number as torch's `buf = grad.clone()`.
     this.buffers = momentum === 0 ? []
       : this.state(this.params);
+    // **The groups carry it so a scheduler can move it.** torch writes a cycling
+    // momentum only into groups that already have the key, and having it is what
+    // says this optimizer has a momentum at all.
+    if (momentum !== 0) this.publishMomentum(momentum);
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -394,11 +521,14 @@ export class SGD extends Optimizer {
     // handed `update` a negated gradient, so baking the flag in as well would
     // negate twice and quietly turn ascent back into descent. `sgdStep` still
     // takes the argument for callers outside this class; here it stays false.
+    // **Read from the group, not from the field** — `CyclicLR(cycle_momentum=true)`
+    // moves it every step, and the field is what the caller first said.
+    const mom = this.momentumOf(this.momentum);
     d.run1d(
       d.pipeline(
-        `sgd:${n}:${this.lr}:${this.momentum}:${decay}:${this.dampening}:` +
+        `sgd:${n}:${this.lr}:${mom}:${decay}:${this.dampening}:` +
         `${this.nesterov}:${first}`,
-        () => sgdStep(n, this.lr, this.momentum, decay, this.dampening,
+        () => sgdStep(n, this.lr, mom, decay, this.dampening,
                       this.nesterov, false, first)),
       buffers,
       n,
@@ -424,8 +554,15 @@ export class Adam extends Optimizer {
    * **`AdamW` is this class with the decay moved.** Coupled, it goes onto the
    * gradient before the moments see it; decoupled, onto the weights after the
    * update. That one placement is the whole difference between the two names.
+   *
+   * torch reaches the same placement a second way — `Adam(decoupled_weight_decay=
+   * True)` — so this is no longer a per-class constant. Left out of the signature
+   * the word was a surplus argument and JavaScript discards those: the call was
+   * accepted and the **coupled** answer came back, 0.781 against 0.800 on the
+   * second step of a plain descent, which is a training curve that is merely
+   * slightly wrong.
    */
-  protected readonly decoupled: boolean = false;
+  protected decoupled: boolean = false;
 
   private readonly beta1: number;
   private readonly beta2: number;
@@ -447,9 +584,12 @@ export class Adam extends Optimizer {
     private readonly eps = 1e-8,
     private readonly weightDecay = 0,
     private readonly amsgrad = false,
-    opts: { maximize?: boolean } = {},
+    opts: AdamOptions = {},
   ) {
     super(params, lr, opts);
+    // `AdamW` sets the field to `true` in its own body, which runs after this; a
+    // subclass that pins the placement is not asked what the caller wanted.
+    if (opts.decoupledWeightDecay) this.decoupled = true;
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
     this.second = this.state(this.params);
@@ -547,9 +687,14 @@ export class AdamW extends Adam {
     eps = 1e-8,
     weightDecay = 0.01,
     amsgrad = false,
-    opts: { maximize?: boolean } = {},
+    opts: AdamOptions = {},
   ) {
-    super(params, lr, betas, eps, weightDecay, amsgrad, opts);
+    // **In the options object, where torch declares it.** `AdamW` is the decoupled
+    // placement by definition, so it pins what `Adam` asks for — and it pins it
+    // *after* the caller's, because a caller who writes `AdamW(…, {
+    // decoupledWeightDecay: false })` is asking for something this class is not.
+    super(params, lr, betas, eps, weightDecay, amsgrad,
+      { ...opts, decoupledWeightDecay: true });
   }
 }
 
@@ -568,7 +713,7 @@ export class RMSprop extends Optimizer {
     private readonly weightDecay = 0,
     private readonly momentum = 0,
     private readonly centered = false,
-    opts: { maximize?: boolean } = {},
+    opts: OptimizerOptions = {},
   ) {
     super(params, lr, opts);
     this.squares = this.state(this.params);
@@ -577,6 +722,9 @@ export class RMSprop extends Optimizer {
     // same order below — centred first, momentum second.
     this.gradAvgs = centered ? this.state(this.params) : [];
     this.buffers = momentum !== 0 ? this.state(this.params) : [];
+    // As `SGD`: the groups carry it so `CyclicLR` can move it, and having the key is
+    // what tells that scheduler this optimizer has a momentum.
+    if (momentum !== 0) this.publishMomentum(momentum);
   }
 
   protected override update(index: number, param: Tensor, g: Tensor): void {
@@ -601,11 +749,12 @@ export class RMSprop extends Optimizer {
       if (!b) throw new Error(`RMSprop: no momentum buffer for parameter ${index}`);
       buffers.push(b.buffer);
     }
+    const mom = this.momentumOf(this.momentum);
     d.run1d(
       d.pipeline(
-        `rms:${n}:${this.lr}:${this.alpha}:${this.eps}:${this.momentum}:${this.centered}`,
+        `rms:${n}:${this.lr}:${this.alpha}:${this.eps}:${mom}:${this.centered}`,
         () => rmspropStep(n, this.lr, this.alpha, this.eps,
-                          this.momentum, this.centered)),
+                          mom, this.centered)),
       buffers,
       n,
     );
@@ -640,7 +789,7 @@ abstract class Composed extends Optimizer {
    */
   constructor(params: ParamsArg, lr: number,
               protected readonly weightDecay = 0,
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, opts);
   }
 
@@ -683,7 +832,7 @@ export class Adagrad extends Composed {
   constructor(params: ParamsArg, lr = 0.01, private readonly lrDecay = 0,
               weightDecay = 0, initialAccumulatorValue = 0,
               private readonly eps = 1e-10,
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     // **`initialAccumulatorValue` sits fifth, before `eps`** — torch's order, and
     // this is the second argument inserted into this constructor's middle rather
@@ -725,7 +874,7 @@ export class Adadelta extends Composed {
 
   constructor(params: ParamsArg, lr = 1.0, private readonly rho = 0.9,
               private readonly eps = 1e-6, weightDecay = 0,
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     this.squares = this.state(this.params);
     this.deltas = this.state(this.params);
@@ -760,7 +909,7 @@ export class Adamax extends Composed {
   constructor(params: ParamsArg, lr = 2e-3,
               betas: readonly [number, number] = [0.9, 0.999],
               private readonly eps = 1e-8,
-              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+              weightDecay = 0, opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
@@ -822,7 +971,7 @@ export class NAdam extends Composed {
               private readonly eps = 1e-8,
               weightDecay = 0, private readonly momentumDecay = 4e-3,
               private readonly decoupledWeightDecay = false,
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
@@ -896,7 +1045,9 @@ export class RAdam extends Composed {
   constructor(params: ParamsArg, lr = 1e-3,
               betas: readonly [number, number] = [0.9, 0.999],
               private readonly eps = 1e-8,
-              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+              weightDecay = 0,
+              private readonly decoupledWeightDecay = false,
+              opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.beta1, this.beta2] = betas;
     this.first = this.state(this.params);
@@ -917,7 +1068,17 @@ export class RAdam extends Composed {
   }
 
   protected override update(index: number, param: Tensor, g: Tensor): void {
-    const grad = this.decayed(param, g);
+    // **Decoupled, the decay shrinks the weight and never reaches the moments.**
+    // `p·(1 − lr·λ)` first and then an ordinary step is the same number as
+    // subtracting `lr·λ·p` after it, and the moments come from the gradient, so
+    // shrinking in advance does not disturb them — the same rewriting `Adam` uses.
+    // The difference is small on one step (0.92040 against 0.92021 here) and it is
+    // a different training curve, which is the kind that reads as a seed.
+    const wd = this.grouped(this.weightDecay);
+    if (this.decoupledWeightDecay && wd !== 0) {
+      noGrad(() => param.copyFrom(param.mul(this.k(1 - this.lr * wd))));
+    }
+    const grad = this.decoupledWeightDecay ? g : this.decayed(param, g);
     const m = this.at(this.first, index, "RAdam");
     const v = this.at(this.second, index, "RAdam");
     const t = this.stepCount;
@@ -957,7 +1118,7 @@ export class ASGD extends Composed {
 
   constructor(params: ParamsArg, lr = 1e-2, private readonly lambd = 1e-4,
               private readonly alpha = 0.75, private readonly t0 = 1e6,
-              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+              weightDecay = 0, opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     this.ax = this.state(this.params);
     this.eta = lr;
@@ -1016,7 +1177,7 @@ export class Rprop extends Composed {
   constructor(params: ParamsArg, lr = 1e-2,
               etas: readonly [number, number] = [0.5, 1.2],
               stepSizes: readonly [number, number] = [1e-6, 50],
-              opts: { maximize?: boolean } = {}) {
+              opts: OptimizerOptions = {}) {
     super(params, lr, 0, opts);
     [this.etaMinus, this.etaPlus] = etas;
     [this.sizeMin, this.sizeMax] = stepSizes;
@@ -1076,10 +1237,197 @@ export class Rprop extends Composed {
  * kind of work, not a flaw in this implementation. Use `Adam` for a large model;
  * use this name to solve **a small problem precisely.**
  *
- * **There is no line search.** Pass `lineSearchFn` and it stops loudly — taking a
- * fixed step size quietly converges differently, and that difference shows up in
- * the curve, not in a value.
+ * **`lineSearchFn` was refused** on the ground that taking a fixed step size
+ * quietly converges differently and the difference shows up in the curve rather
+ * than in a value. The reason was right and the way out was to write the search:
+ * `strongWolfe` below is torch's own, and the fixed step is what happens when the
+ * argument is left null.
  */
+/**
+ * The minimum of the cubic through two points with values **and slopes.**
+ *
+ * Two points and two derivatives determine a cubic, and its stationary point is
+ * where the next trial step goes. Where the discriminant is negative there is no
+ * real stationary point inside and the bisection is taken instead — which is what
+ * keeps the search from wandering off a flat or concave stretch.
+ *
+ * **Every operation is rounded back to float32** with `Math.fround`. torch's slopes
+ * are float32 tensors and the whole interpolation runs at that width; JavaScript has
+ * one number type, so the rounding has to be written.
+ *
+ * Measured, the width moves the answer 1.65e-04 on a coupled quadratic — **under the
+ * golden's threshold there**, so no case defends it. It is fidelity to torch's
+ * arithmetic, said plainly rather than implied by a green check. What the cases do
+ * defend is the structure: skipping the zoom, or keeping Armijo without the curvature
+ * test, moves them by units.
+ */
+function cubicInterpolate(x1: number, f1: number, g1: number,
+                          x2: number, f2: number, g2: number,
+                          bounds?: [number, number]): number {
+  const [lo, hi] = bounds ?? (x1 <= x2 ? [x1, x2] : [x2, x1]);
+  const f = Math.fround;
+  const d1 = f(f(g1 + g2) - (3 * (f1 - f2)) / (x1 - x2));
+  const square = f(f(d1 * d1) - f(g1 * g2));
+  if (square >= 0) {
+    const d2 = f(Math.sqrt(square));
+    const at = x1 <= x2
+      ? x2 - (x2 - x1) * f(f(f(g2 + d2) - d1) / f(f(g2 - g1) + f(2 * d2)))
+      : x1 - (x1 - x2) * f(f(f(g1 + d2) - d1) / f(f(g1 - g2) + f(2 * d2)));
+    return Math.min(Math.max(at, lo), hi);
+  }
+  return (lo + hi) / 2;
+}
+
+/** What one probe of the line search hands back. */
+interface Probe { loss: number; grad: Tensor }
+
+/**
+ * A step length satisfying the strong Wolfe conditions — torch's `lswolfe`.
+ *
+ * **Two phases.** The first brackets: it walks outwards from the initial step until
+ * it finds either a point satisfying both conditions or an interval that must contain
+ * one. The second zooms: it interpolates inside that interval, moving whichever end is
+ * worse, until the conditions hold.
+ *
+ * Armijo (`c1`) says the loss fell by enough for the distance travelled; the curvature
+ * condition (`c2`) says the slope flattened by enough. Either alone is satisfied by
+ * steps that are useless — Armijo by a step of nothing, curvature by a step past the
+ * minimum — which is why both are checked at every candidate.
+ *
+ * **`insufProgress` is not tidiness.** Cubic interpolation can land arbitrarily close
+ * to a bracket end and keep landing there, and the loop would spend its whole budget
+ * shrinking the bracket by nothing. Twice near the edge and the trial is moved a tenth
+ * of the bracket in from it.
+ */
+async function strongWolfe(
+  probe: (t: number) => Promise<Probe>,
+  t0: number, d: Tensor, f: number, g: Tensor, gtd: number,
+  c1 = 1e-4, c2 = 0.9, toleranceChange = 1e-9, maxLs = 25,
+): Promise<{ loss: number; grad: Tensor; t: number; evals: number }> {
+  const dNorm = await d.abs().max(0).values.item();
+  const slope = async (grad: Tensor) =>
+    Math.fround(await grad.mul(d).sum().item());
+  let t = t0;
+  let got = await probe(t);
+  let evals = 1;
+  let gtdNew = await slope(got.grad);
+
+  let tPrev = 0;
+  let fPrev = f;
+  let gPrev = g;
+  let gtdPrev = gtd;
+  let done = false;
+  let ls = 0;
+  let bracket: number[] = [];
+  let bracketF: number[] = [];
+  let bracketG: Tensor[] = [];
+  let bracketGtd: number[] = [];
+  while (ls < maxLs) {
+    if (got.loss > f + c1 * t * gtd || (ls > 1 && got.loss >= fPrev)) {
+      bracket = [tPrev, t];
+      bracketF = [fPrev, got.loss];
+      bracketG = [gPrev, got.grad];
+      bracketGtd = [gtdPrev, gtdNew];
+      break;
+    }
+    if (Math.abs(gtdNew) <= -c2 * gtd) {
+      bracket = [t];
+      bracketF = [got.loss];
+      bracketG = [got.grad];
+      bracketGtd = [gtdNew];
+      done = true;
+      break;
+    }
+    if (gtdNew >= 0) {
+      bracket = [tPrev, t];
+      bracketF = [fPrev, got.loss];
+      bracketG = [gPrev, got.grad];
+      bracketGtd = [gtdPrev, gtdNew];
+      break;
+    }
+    // Outwards: at least a hundredth past the last step and at most ten times it.
+    const minStep = t + 0.01 * (t - tPrev);
+    const maxStep = t * 10;
+    const was = t;
+    t = cubicInterpolate(tPrev, fPrev, gtdPrev, t, got.loss, gtdNew,
+                         [minStep, maxStep]);
+    tPrev = was;
+    fPrev = got.loss;
+    gPrev = got.grad;
+    gtdPrev = gtdNew;
+    got = await probe(t);
+    evals += 1;
+    gtdNew = await slope(got.grad);
+    ls += 1;
+  }
+  if (ls === maxLs) {
+    // **torch leaves its `bracket_gtd` unset on this path** and the zoom loop reads
+    // it — a latent unbound name its own source marks with a type-ignore. The two
+    // slopes at hand are the ones that belong there.
+    bracket = [0, t];
+    bracketF = [f, got.loss];
+    bracketG = [g, got.grad];
+    bracketGtd = [gtd, gtdNew];
+  }
+
+  let insufProgress = false;
+  let low = (bracketF[0] ?? 0) <= (bracketF[bracketF.length - 1] ?? 0) ? 0 : 1;
+  let high = low === 0 ? 1 : 0;
+  while (!done && ls < maxLs) {
+    if (Math.abs((bracket[1] ?? 0) - (bracket[0] ?? 0)) * dNorm < toleranceChange) {
+      break;
+    }
+    t = cubicInterpolate(bracket[0] ?? 0, bracketF[0] ?? 0, bracketGtd[0] ?? 0,
+                         bracket[1] ?? 0, bracketF[1] ?? 0, bracketGtd[1] ?? 0);
+    const top = Math.max(...bracket);
+    const bottom = Math.min(...bracket);
+    const eps = 0.1 * (top - bottom);
+    if (Math.min(top - t, t - bottom) < eps) {
+      if (insufProgress || t >= top || t <= bottom) {
+        t = Math.abs(t - top) < Math.abs(t - bottom) ? top - eps : bottom + eps;
+        insufProgress = false;
+      } else {
+        insufProgress = true;
+      }
+    } else {
+      insufProgress = false;
+    }
+
+    got = await probe(t);
+    evals += 1;
+    gtdNew = await slope(got.grad);
+    ls += 1;
+
+    if (got.loss > f + c1 * t * gtd || got.loss >= (bracketF[low] ?? 0)) {
+      bracket[high] = t;
+      bracketF[high] = got.loss;
+      bracketG[high] = got.grad;
+      bracketGtd[high] = gtdNew;
+      low = (bracketF[0] ?? 0) <= (bracketF[1] ?? 0) ? 0 : 1;
+      high = low === 0 ? 1 : 0;
+    } else {
+      if (Math.abs(gtdNew) <= -c2 * gtd) {
+        done = true;
+      } else if (gtdNew * ((bracket[high] ?? 0) - (bracket[low] ?? 0)) >= 0) {
+        bracket[high] = bracket[low] ?? 0;
+        bracketF[high] = bracketF[low] ?? 0;
+        bracketG[high] = bracketG[low] as Tensor;
+        bracketGtd[high] = bracketGtd[low] ?? 0;
+      }
+      bracket[low] = t;
+      bracketF[low] = got.loss;
+      bracketG[low] = got.grad;
+      bracketGtd[low] = gtdNew;
+    }
+  }
+  return {
+    loss: bracketF[low] ?? f,
+    grad: (bracketG[low] ?? g) as Tensor,
+    t: bracket[low] ?? t,
+    evals,
+  };
+}
+
 export class LBFGS extends Optimizer {
   private readonly history: {
     dirs: Tensor[]; stps: Tensor[]; ro: number[];
@@ -1099,14 +1447,9 @@ export class LBFGS extends Optimizer {
     private readonly toleranceGrad = 1e-7,
     private readonly toleranceChange = 1e-9,
     private readonly historySize = 100,
-    lineSearchFn: string | null = null,
+    private readonly lineSearchFn: string | null = null,
   ) {
     super(params, lr);
-    if (lineSearchFn !== null) {
-      throw new RuntimeError(
-        `LBFGS(lineSearchFn=${JSON.stringify(lineSearchFn)}) is not implemented — ` +
-        "taking a fixed step size instead would converge differently.");
-    }
     if (this.paramGroups.length !== 1) {
       throw new RuntimeError("LBFGS takes a single parameter group.");
     }
@@ -1143,6 +1486,35 @@ export class LBFGS extends Optimizer {
         at += p.size;
       }
     });
+  }
+
+  /** The parameters as they stand, so a probe can be undone. */
+  private cloneParam(): Tensor[] {
+    return this.params.map((p) => keepAlive(p.clone().detach()));
+  }
+
+  private setParam(saved: readonly Tensor[]): void {
+    noGrad(() => {
+      this.params.forEach((p, i) => p.copyFrom(saved[i] as Tensor));
+    });
+  }
+
+  /**
+   * The loss and gradient at `x + t·d`, **with the parameters put back.**
+   *
+   * The line search asks about several step lengths from one place, so every probe
+   * has to start from the same `x`; leaving the last probe's position in the
+   * parameters would make the next one a step from wherever it happened to land.
+   */
+  private async directionalEvaluate(
+    closure: () => Tensor, x: readonly Tensor[], t: number, d: Tensor,
+  ): Promise<{ loss: number; grad: Tensor }> {
+    this.setParam(x);
+    this.addStep(t, d);
+    const loss = await closure().item();
+    const grad = keepAlive(this.flatGrad());
+    this.setParam(x);
+    return { loss, grad };
   }
 
   /**
@@ -1213,15 +1585,49 @@ export class LBFGS extends Optimizer {
       const gtd = await flat.mul(this.d ?? flat).sum().item();
       if (gtd > -this.toleranceChange) break;
 
-      this.addStep(this.t, this.d ?? flat);
-      if (iter !== this.maxIter) {
-        // Nothing is measured again on the last iteration — as in torch.
-        loss = await closure().item();
-        flat = this.flatGrad();
-        evals += 1;
-        if (await flat.abs().max(0).values.item() <= this.toleranceGrad) break;
+      let lsEvals = 0;
+      let optCond = false;
+      if (this.lineSearchFn !== null) {
+        // **torch's wording, its kind, and its position.** Checked here rather than
+        // in the constructor, because that is where torch checks: a call whose
+        // gradient is already inside `toleranceGrad` returns before this loop, and
+        // torch never looks at the name at all.
+        if (this.lineSearchFn !== "strong_wolfe") {
+          throw new RuntimeError("only 'strong_wolfe' is supported");
+        }
+        const start = this.cloneParam();
+        const dir = this.d ?? flat;
+        // **The budget is what is left of `maxEval`**, not `maxLs`'s default — a
+        // search allowed more probes than the caller's evaluation budget spends it
+        // all inside one iteration.
+        const found = await strongWolfe(
+          (step) => this.directionalEvaluate(closure, start, step, dir),
+          this.t, dir, loss, flat, gtd, 1e-4, 0.9, this.toleranceChange,
+          this.maxEval - evals);
+        loss = found.loss;
+        flat = found.grad;
+        this.t = found.t;
+        lsEvals = found.evals;
+        this.addStep(this.t, dir);
+        optCond = await flat.abs().max(0).values.item() <= this.toleranceGrad;
+      } else {
+        this.addStep(this.t, this.d ?? flat);
+        if (iter !== this.maxIter) {
+          // Nothing is measured again on the last iteration — as in torch.
+          loss = await closure().item();
+          flat = this.flatGrad();
+          optCond = await flat.abs().max(0).values.item() <= this.toleranceGrad;
+          lsEvals = 1;
+        }
       }
-      if (iter === this.maxIter || evals >= this.maxEval) break;
+      evals += lsEvals;
+      // **torch's five checks in torch's order.** This used to break out of the
+      // re-measure block the moment the gradient was small, before the iteration and
+      // evaluation counts were compared — the same stopping place by luck, and not
+      // the same one to read.
+      if (iter === this.maxIter) break;
+      if (evals >= this.maxEval) break;
+      if (optCond) break;
       const moved = await (this.d ?? flat).mul(Tensor.full([], this.t)).abs().max(0).values.item();
       if (moved <= this.toleranceChange) break;
       if (Math.abs(loss - this.prevLoss) < this.toleranceChange) break;
@@ -1253,7 +1659,7 @@ export class Adafactor extends Composed {
   constructor(params: ParamsArg, lr = 1e-2, private readonly beta2Decay = -0.8,
               eps: readonly [number | null, number] = [null, 1e-3],
               private readonly d = 1.0,
-              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+              weightDecay = 0, opts: OptimizerOptions = {}) {
     super(params, lr, weightDecay, opts);
     [this.eps1, this.eps2] = eps;
     this.extendState(this.params);
@@ -1804,34 +2210,90 @@ export class CyclicLR extends LRScheduler {
     stepSizeDown: number | null = null,
     private readonly mode: "triangular" | "triangular2" | "exp_range" = "triangular",
     private readonly gamma = 1.0,
-    // **No `lastEpoch` here, and the omission is deliberate.**
+    // **The tail was left out and the omission was deliberate while the middle was
+    // missing.** Appending `lastEpoch` alone would have put it in `scale_fn`'s seat,
+    // so a caller writing torch's line hands a function to a number — a shifted seat
+    // is a wrong answer where a missing tail is only a missing feature.
     //
-    // torch's list continues `scale_fn, scale_mode, cycle_momentum, base_momentum,
-    // max_momentum, last_epoch`, and this one stops at `gamma`. Appending `lastEpoch`
-    // — which is what the other fourteen took — puts it in **`scale_fn`'s seat**, so a
-    // caller writing torch's line hands a function to a number. `ts_signatures.py`
-    // reported it as `shifted` the moment it was added, which is the column that
-    // matters: a missing tail is a missing feature, a shifted seat is a wrong answer.
-    //
-    // The tail cannot be closed here until the middle is. `scale_fn` changes the curve
-    // and accepting it unused would be worse than its absence, so it wants writing
-    // rather than declaring.
+    // The middle is written now, so the tail closes with it. `scale_fn` overrides the
+    // curve, and `scale_mode` says whether it is handed the cycle number or the step
+    // count — `exp_range` is the one mode that counts by step, which is where the
+    // three modes diverge.
+    private readonly scaleFn: ((x: number) => number) | null = null,
+    private readonly scaleMode: "cycle" | "iterations" | null = null,
+    // **`cycleMomentum` is the one of the six that changes trained values**, and its
+    // torch default is `true`. It moves the momentum against the learning rate — low
+    // where the rate is high — which came out 7% apart over eight SGD steps and is
+    // invisible to every trace case, those comparing the printed schedule alone.
+    private readonly cycleMomentum = true,
+    private readonly baseMomentum = 0.8,
+    private readonly maxMomentum = 0.9,
+    lastEpoch = -1,
   ) {
-    super(opt);
+    super(opt, lastEpoch);
     this.down = stepSizeDown ?? this.stepSizeUp;
   }
 
-  protected override compute(epoch: number): number {
+  /** The triangle, scaled — shared by the rate and by the momentum going the other way. */
+  private shape(epoch: number): number {
     const total = this.stepSizeUp + this.down;
     const ratio = this.stepSizeUp / total;
     const cycle = Math.floor(1 + epoch / total);
     const x = 1 + epoch / total - cycle;
     // The climbing stretch and the descending stretch have different slopes.
     const rise = x <= ratio ? x / ratio : (x - 1) / (ratio - 1);
-    const scale = this.mode === "triangular2"
-      ? 1 / 2 ** (cycle - 1)
-      : this.mode === "exp_range" ? this.gamma ** epoch : 1;
-    return this.baseLr + (this.maxLr - this.baseLr) * rise * scale;
+    // **`scaleMode` only applies when a `scaleFn` was given**, which is torch's own
+    // rule and the core's: the mode-derived branch sets *both*, so a `scale_mode`
+    // passed beside a bare `mode` is overwritten and does nothing. Letting it win
+    // instead made `triangular2` halve by step rather than by cycle — 0.04 where
+    // torch says 0.07 at the third entry, caught by the case written for the seat.
+    const fn = this.scaleFn;
+    if (fn === null) {
+      const scale = this.mode === "triangular2"
+        ? 1 / 2 ** (cycle - 1)
+        : this.mode === "exp_range" ? this.gamma ** epoch : 1;
+      return rise * scale;
+    }
+    return rise * fn(this.scaleMode === "iterations" ? epoch : cycle);
+  }
+
+  protected override compute(epoch: number): number {
+    const shape = this.shape(epoch);
+    if (this.cycleMomentum) {
+      // **Written into the groups that have one**, which is torch's own test — it
+      // writes only where the key is already there, and only the optimizers with a
+      // momentum publish it.
+      const span = (this.maxMomentum - this.baseMomentum) * shape;
+      for (const g of this.opt.paramGroups) {
+        if (g.momentum !== undefined) g.momentum = this.maxMomentum - span;
+      }
+    }
+    return this.baseLr + (this.maxLr - this.baseLr) * shape;
+  }
+}
+
+/**
+ * **Every scheduler in a chain has to be stepping the same optimizer.**
+ *
+ * torch checks it and neither of these two classes did, so `SequentialLR(a,
+ * [ConstantLR(a), ConstantLR(b)])` was built without complaint and then, at the
+ * milestone, stepped `b`'s learning rate while reporting `a`'s. The rate that
+ * trains and the rate that is printed part company, and nothing raises.
+ *
+ * torch's message embeds the optimizer's whole `repr`, which is a paragraph. The
+ * stable opening clause is what a search finds, and it is what the core says too.
+ */
+function sameOptimizer(
+  who: string, opt: Optimizer, schedulers: readonly LRScheduler[],
+): void {
+  for (const [at, sch] of schedulers.entries()) {
+    if (sch.optimizer !== opt) {
+      throw new Error(
+        `${who} expects all schedulers to belong to the same optimizer, but got `
+        + `scheduler ${sch.constructor.name} at index ${at} has `
+        + `${sch.optimizer.constructor.name}, which is different from `
+        + `${opt.constructor.name}.`);
+    }
   }
 }
 
@@ -1848,6 +2310,17 @@ export class SequentialLR {
     private readonly milestones: readonly number[],
     lastEpoch = -1,
   ) {
+    sameOptimizer("SequentialLR", opt, schedulers);
+    // **torch counts them.** One scheduler per interval and one interval more than
+    // there are milestones; given two of each, the last scheduler is never reached
+    // and `step` walks the wrong one forever.
+    if (schedulers.length !== milestones.length + 1) {
+      throw new Error(
+        "Sequential Schedulers expects number of schedulers provided to be one "
+        + "more than the number of milestone points, but got number of schedulers "
+        + `${schedulers.length} and the number of milestones to be equal to `
+        + `${milestones.length}`);
+    }
     // **Its own epoch, and not passed down.** torch's `SequentialLR` takes
     // `last_epoch` and drives the child it hands over to; the children are built by
     // the caller and already carry their own. So this only resumes the switch point.
@@ -1906,6 +2379,11 @@ export class ChainedScheduler {
         "ChainedScheduler: the optimizer given is not the one the schedulers "
         + "are stepping.");
     }
+    // **The `opt` seat was checked and the schedulers were not.** Given none —
+    // which is the ordinary call — a mismatch among them went straight through,
+    // and then `getLastLr` reads the first one's rates while the others step
+    // somebody else's. The core had the same hole in both chaining classes.
+    sameOptimizer("ChainedScheduler", found, this.schedulers);
     this.optimizer = found;
   }
 

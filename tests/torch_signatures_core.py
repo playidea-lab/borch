@@ -246,8 +246,49 @@ DEPRECATED_IN = ("nn", "nn.functional")
 # adding a parameter torch refuses; this one tempts **removing one torch accepts**,
 # which is the worse of the two — the first only widens the surface, the second takes
 # a working call away.
+#
+# **`Tensor.logit_` is the third of that kind, and it arrived by the row appearing.**
+# Its docstring is `logit_() -> Tensor`, and `torch.tensor([0., .2]).logit_(eps=0.1)`
+# returns the clamped answer (measured). The core was nullary there to match the
+# prose, which meant `x.logit_(eps=…)` stopped in this library and computed in torch
+# — the argument was given a seat, and then this row is what the prose had left.
+#
+# **`Tensor.scatter` is the fourth, and its own in-place twin is the witness.**
+# `scatter_`'s docstring lists `reduce`; `scatter`'s does not, and both accept it
+# (`x.scatter(0, i, s, reduce='add')` computes — measured). One argument, two
+# docstrings, one of them short: prose is not the function, said again by a pair
+# that disagrees with itself.
+
+# **Fifteen more arrived at once, and they arrived because the core stopped hiding.**
+# `borch/__init__.py` learned to copy each generated forwarder's partner signature onto
+# it, which moved 56 `Tensor` rows out of *cannot be judged*. Fifteen of them then
+# disagreed with torch's prose, and **every one of the fifteen was the prose being
+# wrong** — checked by calling, not by reading:
+#
+#   · `bitwise_and_`, `bitwise_or_`, `bitwise_xor_`, `logical_and_`, `logical_or_`,
+#     `logical_xor_` — documented `()` and every one accepts `other=` (measured);
+#   · `mul_`, `multiply_`, `div_`, `divide_`, `floor_divide_`, `true_divide_` —
+#     documented `value`, and `x.mul_(value=2)` raises *missing 1 required positional
+#     argument: "other"*, which is torch naming its own registration;
+#   · `fmod_`, `remainder_` — documented `divisor`, and `divisor=` raises while
+#     `other=` computes;
+#   · `type_as` — documented `tensor`, accepts `other=` and refuses `tensor=`.
+#
+# `resize_as_` is **not** in this list and is the reason the others are trustworthy.
+# Its docstring says `tensor`; the plausible repair is `other`, which is what the whole
+# family takes and what its own non-in-place twin takes. torch refuses both: the name
+# is `the_template`. The core was fixed rather than excused, and it took a call to know
+# which of the two to do — `test_torch_names.py` calls for exactly this reason.
 TORCH_DOC_IS_WRONG = {"Tensor::atanh_", "Tensor::arctanh_",
-                      "Tensor::softmax", "Tensor::log_softmax"}
+                      "Tensor::softmax", "Tensor::log_softmax", "Tensor::logit_",
+                      "Tensor::scatter",
+                      "Tensor::bitwise_and_", "Tensor::bitwise_or_",
+                      "Tensor::bitwise_xor_", "Tensor::logical_and_",
+                      "Tensor::logical_or_", "Tensor::logical_xor_",
+                      "Tensor::mul_", "Tensor::multiply_", "Tensor::div_",
+                      "Tensor::divide_", "Tensor::floor_divide_",
+                      "Tensor::true_divide_", "Tensor::fmod_",
+                      "Tensor::remainder_", "Tensor::type_as"}
 
 
 def _spaces():

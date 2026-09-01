@@ -97,29 +97,51 @@ def _pool_fn(kind, adaptive):
              ceil_mode=False, count_include_pad=True, divisor_override=None):
         h = handle(x)
         if return_indices:
-            return _pool_with_indices(x, size, stride, adaptive)
+            # **`adaptive` by keyword.** Written as the fourth positional — which is
+            # where it used to be — it lands in `padding` the moment that seat exists,
+            # and a truthy padding switched the whole call to adaptive pooling: a
+            # different algorithm, a plausible answer, no exception. Eight golden rows
+            # caught it, which is the only reason this line reads as it does.
+            return _pool_with_indices(x, size, stride, padding, dilation,
+                                      ceil_mode, adaptive=adaptive)
         if adaptive:
             return wrap(h.adaptivePool(kind, size))
-        if dilation != 1:
-            from borch._base import _unsupported
-            _unsupported(f"{kind}_pool(dilation=…)")
+        # **`dilation` was refused here and the kernel takes it now.** The refusal's
+        # reason was that borch.ts's pooling shader had no step between the cells one
+        # window reads; it has one, and at 1 the generated source is the line it always
+        # was. **The average has no such argument in torch at all**, so passing one is
+        # a `TypeError` over there and borch.ts refuses it by name here.
         return wrap(h.poolND(kind, size, stride if stride is not None else size,
                              padding, ceil_mode, count_include_pad,
-                             divisor_override))
+                             divisor_override, dilation))
     return call
 
 
-def _pool_with_indices(x, size, stride=None, adaptive=False):
+def _pool_with_indices(x, size, stride=None, padding=0, dilation=1,
+                       ceil_mode=False, return_indices=True, *, adaptive=False):
     """Hands back the values together with **where each one won.** The index is
     a flat position inside the plane.
+
+    **torch's argument order, and `adaptive` is keyword-only behind it.** Written
+    with `adaptive` fourth — which is where it was — `F.max_pool2d_with_indices(x, 2,
+    None, 1)` handed the padding to it, and a truthy padding switched the whole call
+    to adaptive pooling: a different algorithm, a plausible answer, no exception.
 
     Over there it comes as `{values, indices}`, so it is read out by name and
     turned into a tuple — torch gives a tuple and textbook code unpacks it as
     `out, idx = ...`.
+
+    **The three window arguments were refused here and not on the plain path**, and
+    the difference was the shape of the thing that carries the positions: that one
+    goes through the pooling shader, which takes a padding, a dilation and a ceiling,
+    while this one went through a window list whose entry was `[start, end)` — an
+    interval, with no step between the cells it reads and no room to hang off an edge.
+    A list of positions is both, so the refusal is gone with the interval.
     """
     h = handle(x)
     got = (h.adaptiveMaxPoolWithIndices(size) if adaptive
-           else h.maxPoolWithIndices(size, stride if stride is not None else size))
+           else h.maxPoolWithIndices(size, stride if stride is not None else size,
+                                     padding, dilation, bool(ceil_mode)))
     return wrap(got.values), wrap(got.indices)
 
 
@@ -205,12 +227,15 @@ def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
 
 
 def _lp_pool(x, norm_type, kernel_size, stride=None, ceil_mode=False):
-    """`ceil_mode` was inside the `**kw` and went nowhere. borch.ts's `lpPool` has no
-    seat for it, so it is refused rather than swallowed."""
-    if ceil_mode:
-        from borch._base import _unsupported
-        _unsupported("lp_pool(ceil_mode=True) — not carried into the browser yet")
-    return wrap(handle(x).lpPool(norm_type, kernel_size, stride))
+    """**`ceil_mode` was refused here and the seat had been there for a while.**
+
+    It began inside a `**kw` and went nowhere; the refusal that replaced it said
+    borch.ts's `lpPool` had no seat for it, which was true when written. That function
+    grew a `ceilMode` the day the pooling shader did — the golden's two `LPPool`
+    ceiling cases are what drove it — and this door was not opened with it. A refusal
+    on a call path nothing exercised is exactly the kind that outlives its gap.
+    """
+    return wrap(handle(x).lpPool(norm_type, kernel_size, stride, bool(ceil_mode)))
 
 
 def _sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
@@ -256,7 +281,7 @@ def _lay_out(order, args, kw):
     return laid
 
 
-def _loss(js_name, order, torch_order=None, refuse=None):
+def _loss(js_name, order, torch_order=None):
     """Read torch's call, then write **borch.ts's positional order.**
 
     **One table was doing both jobs and could not.** `order` named the incoming
@@ -277,15 +302,16 @@ def _loss(js_name, order, torch_order=None, refuse=None):
 
     So `torch_order` names what arrives and `order` names where it goes. When
     they are the same, one is enough.
+
+    **A third parameter, `refuse`, stood here and is gone.** It named the layer whose
+    class-weight refusal to raise, for the two entries that had one; both answer now,
+    and `weight` moved from *the seat that raises* to a seat in `order`.
     """
     names = order if torch_order is None else torch_order
 
     def call(x, *args, **kw):
         got = dict(zip(names, args))
         got.update(kw)
-        if refuse is not None:
-            who, *why = refuse if isinstance(refuse, tuple) else (refuse,)
-            _no_class_weights(who, got.get("weight"), got.get("pos_weight"), *why)
         if "reduction" in names:
             folded = _legacy_reduction(got.pop("size_average", None),
                                        got.pop("reduce", None),
@@ -312,24 +338,26 @@ _LOSSES = {
     # Its logits form was then left behind **from that same note**: the sentence
     # above was written, the one name it named was added, and the pair beside it
     # was not looked at. Four golden cases said so for as long as they existed.
+    # **`weight` and `pos_weight` were the `refuse=` seat and are outgoing seats now.**
+    # borch.ts puts them after `reduction` and torch puts `weight` before the
+    # deprecated pair, which is what the two tables are for.
     "binary_cross_entropy": _loss(
-        "bce", ("target", "reduction"),
-        ("target", "weight", *_DEPRECATED, "reduction"),
-        "BCELoss"),
+        "bce", ("target", "reduction", "weight"),
+        ("target", "weight", *_DEPRECATED, "reduction")),
     "binary_cross_entropy_with_logits": _loss(
-        "bceWithLogits", ("target", "reduction"),
+        "bceWithLogits", ("target", "reduction", "weight", "pos_weight"),
         # **`pos_weight` is last, after `reduction`** — the only loss torch puts
         # it there, and the core's layer carries the same note.
-        ("target", "weight", *_DEPRECATED, "reduction", "pos_weight"),
-        "BCEWithLogitsLoss"),
+        ("target", "weight", *_DEPRECATED, "reduction", "pos_weight")),
     # **torch's third seat is `reduction`, not `delta`.** It is the newest of
     # these and never carried the deprecated pair, so nothing shifted and the
     # order is simply torch's own — which the table had backwards.
+    # **`weight` stopped being a refusal and became a fourth outgoing seat.** borch.ts
+    # puts it after `reduction`, torch after `delta`, and the two tables here are
+    # exactly for that: `torch_order` says what arrives, `order` where it goes.
     "huber_loss": _loss(
-        "huberLoss", ("target", "delta", "reduction"),
-        ("target", "reduction", "delta", "weight"),
-        ("huber_loss", "torch's `mean` divides by the sum of the weights, so "
-                       "accepting it unused would change the loss")),
+        "huberLoss", ("target", "delta", "reduction", "weight"),
+        ("target", "reduction", "delta", "weight")),
     "kl_div": _loss(
         "klDiv", ("target", "reduction", "log_target"),
         ("target", *_DEPRECATED, "reduction", "log_target")),
@@ -465,34 +493,38 @@ def _triplet_with_distance(anchor, positive, negative, distance_function=None,
 
 
 def _interpolate(x, size=None, scale_factor=2, mode="nearest",
-                 align_corners=None):
-    """**A place that accepted `mode` and never used it.**
+                 align_corners=None, recompute_scale_factor=None,
+                 antialias=False):
+    """**A place that accepted `mode` and never used it**, and then a third copy of
+    the rules that did.
 
-    The general path forwards to `upsample`, which does nearest only, so asking
+    The general path forwarded to `upsample`, which does nearest only, so asking
     for bilinear produced nearest — not an exception but a quietly different
     value. `F.pad` was caught in the same shape once, and like that time it only
     surfaced once the golden gained a case asking for that branch.
+
+    The repair was to dispatch here, and that put a **third** implementation of the
+    same arithmetic in the repository — with its own limits nobody else had, such as
+    refusing a nearest `size=` that is not a whole multiple, which both the core and
+    borch.ts answer. It forwards to borch.ts's own `interpolate` now: one dispatch,
+    one set of rules, and the five modes arrive without being spelled out again.
+
+    `antialias` was refused here while borch.ts had no such argument; it takes one
+    now, and this hands the word over rather than stopping on it.
+
+    **`align_corners` is the one rule that has to be checked here.** borch.ts takes
+    it as a boolean, so the difference between *not given* and *given as false* is
+    lost at the boundary — and torch refuses the flag outright on the modes that have
+    no corners to align rather than picking one for you.
     """
-    h = handle(x)
-    if mode == "nearest":
-        # **A place that accepted `size` and never used it** — `upsample` over
-        # there takes a factor only. The same branch as the dropped `mode`, and
-        # quietly a different value in the same shape.
-        if size is not None:
-            oh, ow = (size, size) if isinstance(size, int) else tuple(size)
-            ih, iw = int(h.shape[2]), int(h.shape[3])
-            if oh % ih or ow % iw or oh // ih != ow // iw:
-                raise RuntimeError("interpolate(size=) — nearest upsampling by a non-integer factor")
-            scale_factor = oh // ih
-        return wrap(guarded(h.upsample, scale_factor))
-    if mode != "bilinear":
-        raise RuntimeError(f"interpolate(mode={mode!r}) — only nearest and bilinear are here")
-    if size is not None:
-        oh, ow = (size, size) if isinstance(size, int) else tuple(size)
-    else:
-        s = scale_factor if isinstance(scale_factor, int) else scale_factor[0]
-        oh, ow = int(h.shape[2] * s), int(h.shape[3] * s)
-    return wrap(guarded(h.interpolateBilinear, oh, ow, bool(align_corners)))
+    if align_corners is not None and mode not in ("linear", "bilinear", "bicubic",
+                                                  "trilinear"):
+        raise ValueError("align_corners option can only be set with the "
+                         "interpolating modes: linear | bilinear | bicubic | "
+                         "trilinear")
+    return wrap(guarded(handle(x).interpolate, size, scale_factor, mode,
+                        bool(align_corners), recompute_scale_factor,
+                        bool(antialias)))
 
 
 def _upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None,
@@ -552,23 +584,13 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
     checking it turns a guard into decoration — the shape error still comes, but
     later and from somewhere else.
 
-    `q_proj_weight` and the other two only mean anything under
-    `use_separate_proj_weight`, and that branch is refused above. torch ignores
-    them when the flag is off; here they are refused instead, because there is no
-    arrangement of arguments in which this function can honour them. Refusing is
-    the only answer that stays true after the branch lands.
+    **The seven refusals here are gone with borch.ts's.** They said *not here yet*
+    for `bias_k`, `static_k`, the three separate projections and the two flags; each
+    of those is a concatenation or a substitution over there now, and this file was
+    only ever the door. The comment that stood here — *there is no arrangement of
+    arguments in which this function can honour them* — was about the door and not
+    about the room behind it.
     """
-    for name, given in (("bias_k", bias_k), ("bias_v", bias_v),
-                        ("static_k", static_k), ("static_v", static_v),
-                        ("q_proj_weight", q_proj_weight),
-                        ("k_proj_weight", k_proj_weight),
-                        ("v_proj_weight", v_proj_weight)):
-        if given is not None:
-            raise RuntimeError(
-                f"multi_head_attention_forward({name}=…) is not here yet.")
-    if add_zero_attn or use_separate_proj_weight:
-        raise RuntimeError(
-            "that branch of multi_head_attention_forward is not here yet.")
     width = int(handle(query).shape[-1])
     if embed_dim_to_check is not None and int(embed_dim_to_check) != width:
         raise RuntimeError(
@@ -588,13 +610,22 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
     # laid thirteen out in an order of its own, and the two lists happened to agree
     # only because both were wrong in the same way — the moment borch.ts followed
     # torch, `int(num_heads)` was landing on `embed_dim_to_check` and the masks on
-    # `bias_k`/`bias_v`. The refusals live over there now, so the four this function
-    # already refuses are passed as they arrived rather than re-checked here.
+    # `bias_k`/`bias_v`. Nothing is re-checked here; the arguments are passed as they
+    # arrived.
+    #
+    # **`in_proj_weight` goes through `_h` and not `handle`**, because it is `None`
+    # under separate projections — which is what torch's own layer holds there. A hard
+    # `handle(None)` would stop at the boundary rather than reach the branch that
+    # expects it.
+    #
+    # (That note is here rather than beside the argument: `test_binding_arguments.py`
+    # reads this call by splitting on commas, so a comment inside the parentheses
+    # becomes two arguments and shifts every position after it.)
     got = _ts.nn.multiHeadAttentionForward(
         handle(query), handle(key), handle(value),
         None if embed_dim_to_check is None else int(embed_dim_to_check),
         int(num_heads),
-        handle(in_proj_weight),
+        _h(in_proj_weight),
         handle(in_proj_bias) if in_proj_bias is not None else None,
         _h(bias_k), _h(bias_v), bool(add_zero_attn), float(dropout_p),
         handle(out_proj_weight),
@@ -683,8 +714,12 @@ def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
     if float(eps) != 1e-10:
         _warnings.warn("`eps` parameter is deprecated and has no effect.",
                        stacklevel=2)
+    # **The trailing `None` was borch.ts's own sixth seat and it has gone.** That seat
+    # took the Gumbel draw so a caller could reproduce the answer; torch has no such
+    # argument, and `manual_seed` gives reproducibility on all three sides. Five
+    # arguments now, which is torch's list.
     return wrap(_ts.nn.gumbelSoftmax(handle(logits), float(tau), bool(hard),
-                                     float(eps), int(dim), None))
+                                     float(eps), int(dim)))
 
 
 def _functional_inplace(name):
@@ -728,7 +763,30 @@ def _bilinear(x1, x2, weight, bias=None):
                         handle(bias) if bias is not None else None))
 
 
+def _linear_cross_entropy(input, linear_weight, target, *,   # noqa: A002
+                          linear_bias=None, weight=None, reduction="mean",
+                          ignore_index=None, label_smoothing=0.0, options=None):
+    """**The generic door cannot carry this one**, and the reason is the same shape as
+    `special.polygamma`'s: it forwards to the first argument's method, and borch.ts has
+    this as a module function taking three tensors rather than a method on one.
+
+    `ignore_index` defaults to `None` here and to `-100` on `crossEntropy`, and `None`
+    is measured to *mean* -100 — so it is mapped rather than passed through. Handed
+    straight over it would mean *ignore nothing*, which agrees on every target that
+    holds no -100 and differs on the ones this argument exists for.
+    """
+    _ = options                     # no field of it moves a value (measured)
+    return wrap(guarded(
+        _ts.nn.functional.linearCrossEntropy,
+        handle(input), handle(linear_weight), handle(target),
+        handle(linear_bias) if linear_bias is not None else None,
+        handle(weight) if weight is not None else None,
+        reduction, -100 if ignore_index is None else int(ignore_index),
+        float(label_smoothing), None))
+
+
 _HAND_WRITTEN = {
+    "linear_cross_entropy": _linear_cross_entropy,
     "interpolate": _interpolate,
     "multi_head_attention_forward": _mha_forward,
     "affine_grid": _affine_grid,
@@ -751,6 +809,11 @@ _HAND_WRITTEN = {
     "triplet_margin_with_distance_loss": _triplet_with_distance,
     "scaled_dot_product_attention": _sdpa,
     "avg_pool1d": _pool_fn("avg", False),
+    # **`avg_pool2d` used to take the generic route** while its 1-D and 3-D siblings
+    # took this one — and that route's row is `("kernel_size", "stride")`, so torch's
+    # `padding`, `ceil_mode`, `count_include_pad` and `divisor_override` had no seat.
+    # Three names, two routes, and the odd one out was the one everybody calls.
+    "avg_pool2d": _pool_fn("avg", False),
     "avg_pool3d": _pool_fn("avg", False),
     "adaptive_avg_pool1d": _pool_fn("avg", True),
     # **The two-dimensional one was the gap in the middle.** 1-D and 3-D
@@ -803,7 +866,8 @@ _HAND_WRITTEN = {
 functional = _Functional()
 
 
-def embedding(idx, table):
+def embedding(idx, table, padding_idx=None, max_norm=None, norm_type=2.0,
+              scale_grad_by_freq=False, sparse=False):
     """`F.embedding(indices, table)` — pick rows out of the table by index.
 
     **The definition itself.** The same work `index_select` does, and the
@@ -814,8 +878,16 @@ def embedding(idx, table):
     **The naming moved over there.** While these three lines lived here, borch.ts
     had no such name, and the golden goes through this function, so the table was
     green.
+
+    **torch's five arrived with borch.ts's.** They were absent from both, so
+    `F.embedding(i, w, 0)` handed a padding index to nothing — JavaScript discards
+    a surplus argument — and the un-padded answer came back under the name of a
+    padded one. Two of the five are refused on the far side; that refusal is
+    reachable only because the seats exist here to carry the word to it.
     """
-    return wrap(_ts.nn.functional.embedding(handle(idx), handle(table)))
+    return wrap(_ts.nn.functional.embedding(
+        handle(idx), handle(table), padding_idx, max_norm, norm_type,
+        scale_grad_by_freq, sparse))
 
 
 class Transformer:
@@ -1186,6 +1258,94 @@ class Module:
                 continue
             yield from inner()
 
+    # ── walking the tree ──────────────────────────────────────────────────
+    #
+    # **Ten methods no check could see were missing.** Nothing read a class's
+    # *methods* — the name axis counts a namespace's top-level names, the signature
+    # axis compares constructors — so `nn.Module` held 14 of torch's 50 while
+    # borch.ts had `children` and `namedChildren` all along.
+    # `tests/test_class_methods.py` is the axis that asks now.
+
+    def named_children(self):
+        """The immediate children — **one level.** A `Tensor` attribute is not a
+        child; only what walks like a module is."""
+        for name, value in self._children():
+            if not isinstance(value, Tensor):
+                yield (name, value)
+
+    def children(self):
+        for _, m in self.named_children():
+            yield m
+
+    def named_modules(self, memo=None, prefix="", remove_duplicate=True):
+        """The whole tree with dotted names, **this one first and named `""`.**"""
+        memo = set() if memo is None else memo
+        if id(self) in memo:
+            return
+        if remove_duplicate:
+            memo.add(id(self))
+        yield (prefix, self)
+        for name, child in self.named_children():
+            walk = getattr(child, "named_modules", None)
+            below = f"{prefix}.{name}" if prefix else name
+            if walk is None:
+                yield (below, child)
+                continue
+            yield from walk(memo, below, remove_duplicate)
+
+    def apply(self, fn):
+        """`fn` on every module, **children first**, then this one. Returns `self`."""
+        for _, child in self.named_children():
+            inner = getattr(child, "apply", None)
+            if inner is None:
+                fn(child)
+            else:
+                inner(fn)
+        fn(self)
+        return self
+
+    def add_module(self, name, module):
+        setattr(self, name, module)
+
+    register_module = add_module
+
+    def register_parameter(self, name, param):
+        setattr(self, name, param)
+
+    def get_submodule(self, target):
+        """One module by its dotted name — the shape of a checkpoint key."""
+        if target == "":
+            return self
+        at = self
+        for part in target.split("."):
+            found = dict(at.named_children()).get(part)
+            if found is None:
+                raise AttributeError(
+                    f"{type(at).__name__} has no attribute `{part}`")
+            at = found
+        return at
+
+    def _dotted(self, target, bank, what):
+        head, _, leaf = target.rpartition(".")
+        owner = self.get_submodule(head)
+        held = dict(bank(owner))
+        if leaf not in held:
+            raise AttributeError(
+                f"{type(owner).__name__} has no {what} named `{leaf}`")
+        return held[leaf]
+
+    def get_parameter(self, target):
+        return self._dotted(target, lambda m: m.named_parameters(), "parameter")
+
+    def get_buffer(self, target):
+        return self._dotted(target, lambda m: m.named_buffers(), "buffer")
+
+    def requires_grad_(self, requires_grad=True):
+        """Freeze or unfreeze the whole tree, handing back the model."""
+        for p in self.parameters():
+            p.requires_grad = requires_grad
+        return self
+
     def __getattr__(self, name):
         """Forward what the layer holds, such as `bn.weight`.
 
@@ -1196,11 +1356,35 @@ class Module:
         """
         if name.startswith("_") or self._m is None:
             raise AttributeError(name)
-        got = getattr(self._m, camel(name), None)
+        # **A field that is there and null is not a field that is missing.** This read
+        # `getattr(…, default=None)` and raised on both, so `bn.running_mean` under
+        # `track_running_stats=False` — where torch answers `None` — came back as
+        # *the borch.ts layer does not have `running_mean`*. The property is declared
+        # over there and holds `null`; asking for it and catching the absence tells
+        # the two apart, which the default never could.
+        try:
+            got = getattr(self._m, camel(name))
+        except AttributeError:
+            raise AttributeError(
+                f"the borch.ts layer does not have `{name}`") from None
         if got is None:
-            raise AttributeError(f"the borch.ts layer does not have `{name}`")
+            return None
         if _ts.isTensor(got):
             return wrap(got)
+        # **A submodule came back as the raw borch.ts object**, so `model.fc.weight` was
+        # reachable and unusable: the tensor behind it never went through `wrap`, and
+        # `copy_` on it stopped at `size mismatch: [4,5] <- [torch.Size([4, 5])]` —
+        # a borch.ts message holding a stringified Python argument, which is what a raw
+        # handle receiving a wrapped value looks like.
+        #
+        # Found through `LinearCrossEntropyLoss`, which is the first layer here to own
+        # a named child; every layer before it held tensors alone, so the branch had
+        # nothing to be wrong about. **`forward` is the mark**, and duck-typing rather
+        # than a class check is deliberate: borch.ts's layers do not share a base this
+        # side can see, and asking for the one method they all have is the question
+        # that survives that.
+        if callable(getattr(got, "forward", None)):
+            return Module(got)
         return got
 
 
@@ -1318,6 +1502,26 @@ class Sequential:
     def forward(self, x):
         return self(x)
 
+    def __repr__(self):
+        """torch's block, and **this class had none.**
+
+        `print(model)` — the first line anybody writes after building one — showed
+        `<borch_webgpu._nn.Sequential object at 0x…>`, an address where the other two
+        implementations print the layers. Found by a case reading a child's name out
+        of its repr, which is a question about the walk and answered this one instead.
+
+        Children indent by two, and a child that is itself a block indents its own
+        lines again — that recursion is the whole of torch's rule.
+        """
+        if not self.layers:
+            return f"{type(self).__name__}()"
+        rows = []
+        for i, layer in enumerate(self.layers):
+            body = repr(layer).split("\n")
+            head = f"  ({i}): {body[0]}"
+            rows.append("\n".join([head] + [f"  {line}" for line in body[1:]]))
+        return f"{type(self).__name__}(\n" + "\n".join(rows) + "\n)"
+
     def parameters(self):
         return [p for m in self.layers for p in _params_of(m)]
 
@@ -1364,6 +1568,90 @@ class Sequential:
                 continue
             yield from inner()
 
+    # ── walking the tree ──────────────────────────────────────────────────
+    #
+    # **This class does not inherit `Module`**, so the ten written there do not
+    # reach it — and `Sequential` is what every golden case walking a tree is built
+    # from. The names are positional, as `state_dict`'s already are.
+    #
+    # `modules` above is what these were missing beside: it existed and the nine
+    # torch spells out did not, in the same class, on the same walk.
+
+    def named_children(self):
+        return [(str(i), m) for i, m in enumerate(self.layers)]
+
+    def children(self):
+        return list(self.layers)
+
+    def named_modules(self, memo=None, prefix="", remove_duplicate=True):
+        memo = set() if memo is None else memo
+        if id(self) in memo:
+            return
+        if remove_duplicate:
+            memo.add(id(self))
+        yield (prefix, self)
+        for name, child in self.named_children():
+            walk = getattr(child, "named_modules", None)
+            below = f"{prefix}.{name}" if prefix else name
+            if walk is None:
+                yield (below, child)
+                continue
+            yield from walk(memo, below, remove_duplicate)
+
+    def apply(self, fn):
+        for m in self.layers:
+            inner = getattr(m, "apply", None)
+            if inner is None:
+                fn(m)
+            else:
+                inner(fn)
+        fn(self)
+        return self
+
+    def add_module(self, name, module):
+        """**Appended, not attached by name.** `Sequential`'s names are positions,
+        so a name that is not the next index would make `state_dict`'s keys and the
+        list disagree — torch's `Sequential.add_module` has the same rule."""
+        if name != str(len(self.layers)):
+            raise KeyError(
+                f"Sequential names its children by position — `{name}` is not "
+                f"`{len(self.layers)}`")
+        self.layers.append(module)
+
+    register_module = add_module
+
+    def get_submodule(self, target):
+        if target == "":
+            return self
+        at = self
+        for part in target.split("."):
+            found = dict(at.named_children()).get(part)
+            if found is None:
+                raise AttributeError(
+                    f"{type(at).__name__} has no attribute `{part}`")
+            at = found
+        return at
+
+    def _dotted(self, target, bank, what):
+        head, _, leaf = target.rpartition(".")
+        owner = self.get_submodule(head)
+        held = dict(bank(owner))
+        if leaf not in held:
+            raise AttributeError(
+                f"{type(owner).__name__} has no {what} named `{leaf}`")
+        return held[leaf]
+
+    def get_parameter(self, target):
+        return self._dotted(target, lambda m: m.named_parameters(), "parameter")
+
+    def get_buffer(self, target):
+        return self._dotted(target, lambda m: m.named_buffers(), "buffer")
+
+    def requires_grad_(self, requires_grad=True):
+        for p in self.parameters():
+            p.requires_grad = requires_grad
+        return self
+
 
 def _params_of(m):
     return m.parameters() if hasattr(m, "parameters") else []
@@ -1389,6 +1677,29 @@ def _buffers_of(m, persistent_only=False):
     if not hasattr(m, "named_buffers"):
         return []
     return m.named_buffers(persistent_only)
+
+
+def _zero_grad(owner, set_to_none=True):
+    """`model.zero_grad()` — **torch's, and no class on this side had it.**
+
+    It is the line a training loop opens with as often as the optimizer's, and it
+    stopped with `'Sequential' object has no attribute 'zero_grad'`. `set_to_none`
+    means here what it means there: `False` leaves a zeroed tensor where `True`
+    drops it, which is the difference anything reading `grad` between two calls
+    depends on.
+
+    **Written once and attached to the five classes that hold parameters.** They
+    share no base — `Module`, `_Wrap`, `Sequential` and the two `_Holder` families
+    each grew their own `parameters()` — so a method per class would be five copies
+    of one rule, and the list below is the one place naming who has it.
+    """
+    from ._ops import zeros_like
+
+    for p in owner.parameters():
+        if set_to_none or p.grad is None:
+            p.grad = None
+        else:
+            p.grad = zeros_like(p.grad)
 
 
 # ── containers ──────────────────────────────────────────────────────────────
@@ -1673,6 +1984,15 @@ class _ParameterDict(_ParamHolder):
     def update(self, params):
         self.params.update(dict(_ordered(params)))
         return self
+
+
+# **The five that hold parameters get `zero_grad`.** `_Holder` covers
+# `_ModuleList` and `_ModuleDict`, `_ParamHolder` the two parameter containers,
+# so naming the four bases plus `Sequential` reaches all of them. Attached rather
+# than written into each, for the reason in `_zero_grad`'s own docstring.
+for _owner in (Module, _Wrap, Sequential, _Holder, _ParamHolder):
+    _owner.zero_grad = _zero_grad
+del _owner
 
 
 def ModuleList(mods=()):
@@ -2123,12 +2443,33 @@ def _batchnorm(name):
     `BatchNorm1d`, `2d` and `3d` are empty subclasses over there and `describe` reads
     `this.constructor.name`, so standing the right one up is the whole fix.
     """
-    def make(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True, *,
-             bias=True):
-        if not track_running_stats:
-            from borch._base import _unsupported
-            _unsupported("BatchNorm with track_running_stats=False")
-        return _layer(name, n, eps, momentum, bool(affine), True, bool(bias))
+    def make(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True,
+             device=None, dtype=None, *, bias=True):
+        from borch._base import _only_cpu, _unsupported
+
+        # **The pair is carried in order to answer it**, and the note on
+        # `TransformerEncoderLayer` — *no layer in this file takes them* — is one
+        # exception shorter for it. Not taking them is not the same as answering
+        # them: `BatchNorm2d(3, device="cpu")` came back *unexpected keyword
+        # argument*, which is the screen a typo gives.
+        #
+        # **And then it refused `"cpu"`**, which is this library's own device — the
+        # core did the same until `_only_cpu` gave the argument a rule instead of a
+        # habit. `dtype` still stops at anything: a parameter here is float32.
+        _only_cpu(f"nn.{name}", device)
+        if dtype is not None:
+            _unsupported(f"nn.{name}(dtype=…)")
+        # **`track_running_stats=False` was refused here and `True` was hard-wired
+        # into the call below**, which is the shape this file keeps finding: the seat
+        # existed, the value never crossed. borch.ts answers the flag now — no buffers
+        # and the batch's own statistics in both modes — so the argument goes over.
+        #
+        # **`bias` sits eighth over there**, behind the `device` and `dtype` seats
+        # borch.ts carries in order to refuse. It used to be handed over sixth, which
+        # is `device` — and it only became wrong the day that class grew the pair, so
+        # the two `None`s are what keep this call at the argument it means.
+        return _layer(name, n, eps, momentum, bool(affine),
+                      bool(track_running_stats), None, None, bool(bias))
     make.__name__ = name
     return make
 
@@ -2162,21 +2503,21 @@ def _max_pool_layer(name, wide=False):
     cases came back `<borch_webgpu._nn._Wrap object at …>` where torch prints
     `MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)`.
 
-    **`dilation` is the only one still refused**, and only the two-dimensional layer
-    has a seat for it — torch gives it to all three, and writing the same refusal in
-    three places would say the gap is three gaps. `padding` and `ceil_mode` are real
-    now: the maximum's kernel grew the guard the average had.
+    **All six are real now.** `dilation` was the last refused — the shader over there
+    had no step between the cells one window reads — and the kernel takes one; at 1 the
+    generated source is the line it always was. `padding` and `ceil_mode` went the same
+    way earlier, when the maximum's kernel grew the guard the average had.
 
-    `return_indices` keeps the Python path: it hands back a pair, and the layer that
-    consumes those positions reads them from here.
+    `return_indices` still keeps the Python path: it hands back a pair, and the layer
+    that consumes those positions reads them from here. That path used to refuse the
+    same three, because its window was an interval rather than a list of positions;
+    `_pool_with_indices` says what changed.
     """
     def make(kernel_size=2, stride=None, padding=0, dilation=1,
              return_indices=False, ceil_mode=False):
         if return_indices:
-            return _Wrap(lambda x: _pool_with_indices(x, kernel_size, stride))
-        if wide:
-            return _layer(name, kernel_size, stride, padding, dilation, False,
-                          ceil_mode)
+            return _Wrap(lambda x: _pool_with_indices(
+                x, kernel_size, stride, padding, dilation, ceil_mode))
         # **All six, in torch's order**, because that is the order over there now.
         # Written as four — kernel, stride, padding, ceil — `ceil_mode` landed in
         # `dilation`'s seat and every 1-D and 3-D max pool stopped with a refusal
@@ -2413,8 +2754,11 @@ def ELU(alpha=1.0, inplace=False):
     return _maybe_in_place(_layer("ELU", alpha), inplace)
 
 
-def SiLU():
-    return _layer("SiLU")
+# **`SiLU` sat here alone and took no `inplace`**, while its four siblings below —
+# `Hardsigmoid`, `Hardswish`, `Mish`, `ReLU6` — share `_unary_layer` and have one.
+# torch gives it one and so does the core, so `nn.SiLU(inplace=True)` stopped on an
+# argument count in the binding alone. Moved down to join them rather than given a
+# sixth spelling of the same three lines.
 
 
 def GELU(approximate="none"):
@@ -2468,6 +2812,7 @@ Hardswish = _unary_layer("hardswish")
 Mish = _unary_layer("mish")
 ReLU6 = _unary_layer("relu6")
 SELU = _unary_layer("selu")
+SiLU = _unary_layer("silu")
 
 
 # **These three take no `inplace` and torch gives them none either.** Sharing
@@ -2581,65 +2926,39 @@ class GroupNorm(Module):
         return out if shift is None else out + shift.reshape(*shape)
 
 
-class _InstanceNorm(Module):
-    """Per sample and per channel. **The default is `affine=False`**, as it is
-    in torch.
+def _instancenorm(name):
+    """Per sample and per channel. **The default is `affine=False`**, as it is in
+    torch.
 
-    This used to be `lambda num_features=0, eps=1e-5, **kw: ...`. That `**kw`
-    swallowed `affine` and `track_running_stats` whole, so a layer built with
-    `affine=True` ran quietly **with no parameters at all** — the normalisation
-    happens, nothing is learned, and the loss falls because the remaining layers
-    compensate. No exception and no warning.
+    **It used to be a Python `Module` holding its own parameters**, and the reason
+    was sound at the time: an earlier `**kw` had swallowed `affine` whole, so a layer
+    built with `affine=True` ran with no parameters at all. Standing borch.ts's class
+    up instead fixes that as thoroughly and keeps one implementation — which is what
+    `track_running_stats` made necessary, because the buffers live over there and a
+    Python copy of them would be a third place the same arithmetic is written.
 
-    That is why it is a `Module` rather than a `_Wrap`. The weights have to
-    appear in `named_parameters`, and those names become `state_dict` keys.
+    The refusal that stood here said the `state_dict` keys would be right and the
+    values wrong. That was true of registering buffers nothing reads; borch.ts's
+    `instanceNorm` reads them now.
     """
+    def make(n=0, eps=1e-5, momentum=0.1, affine=False,
+             track_running_stats=False, device=None, dtype=None, *, bias=True):
+        from borch._base import _unsupported
 
-    def __init__(self, num_features=0, eps=1e-5, momentum=0.1, affine=False,
-                 track_running_stats=False, *, bias=True):
-        """See `GroupNorm` on `bias`."""
-        super().__init__()
-        if track_running_stats:
-            # Registering the buffers without the forward pass using them makes
-            # **the keys right and the values wrong.** Evaluation mode computes
-            # something else entirely there, so what does not work says so.
-            from borch._base import _unsupported
-            _unsupported("InstanceNorm with track_running_stats=True")
-        self.eps = eps
-        # As `GroupNorm` above — torch prints all six and this kept one.
-        self.num_features, self.momentum, self.affine = num_features, momentum, affine
-        self.track_running_stats = track_running_stats
-        self.weight = self.bias = None
-        if affine:
-            self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
-            if bias:
-                self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
-
-    def extra_repr(self):
-        from borch._nn import _norm_extra_repr
-        return _norm_extra_repr(self)
-
-    def forward(self, x):
-        h = handle(x)
-        out = wrap(h.instanceNorm(self.eps))
-        if getattr(self, "weight", None) is None:
-            return out
-        shape = [1, int(handle(self.weight).size)] + [1] * (len(h.shape) - 2)
-        return out * self.weight.reshape(*shape) + self.bias.reshape(*shape)
+        for what, given in (("device", device), ("dtype", dtype)):
+            if given is not None:
+                _unsupported(f"nn.{name}({what}=…)")
+        # `bias` sits eighth over there, behind the two seats borch.ts carries in
+        # order to refuse — the same shift `_batchnorm` writes out above.
+        return _layer(name, n, eps, momentum, bool(affine),
+                      bool(track_running_stats), None, None, bool(bias))
+    make.__name__ = name
+    return make
 
 
-class InstanceNorm1d(_InstanceNorm):
-    """**The per-dimension name is what torch prints.** All three were the one class
-    `_InstanceNorm`, so the repr announced a private name — and a reader who looks it
-    up finds nothing in torch."""
-
-
-class InstanceNorm2d(_InstanceNorm):
-    pass
-
-
-class InstanceNorm3d(_InstanceNorm):
-    pass
+InstanceNorm1d = _instancenorm("InstanceNorm1d")
+InstanceNorm2d = _instancenorm("InstanceNorm2d")
+InstanceNorm3d = _instancenorm("InstanceNorm3d")
 
 
 class RMSNorm(Module):
@@ -2653,11 +2972,20 @@ class RMSNorm(Module):
         if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         self.dims = len(normalized_shape)
+        # **`eps` was taken here and never handed on.** `Tensor.rmsNorm(dims, eps)`
+        # over there has carried it from the start — borch.ts's own `RMSNorm` note
+        # records fixing exactly this defect in exactly this place — and this class
+        # is a second copy of the layer that repeated it. `RMSNorm(4, eps=10.0)` set
+        # nothing and answered as if it had.
+        self.eps = eps
         if elementwise_affine:
             self.weight = Parameter(_np.ones(normalized_shape, dtype=_np.float32))
 
     def forward(self, x):
-        out = wrap(handle(x).rmsNorm(self.dims))
+        # torch's `eps=None` means *use the dtype's epsilon*, and there is one dtype
+        # here — so `None` and the kernel's own default are the same answer, which is
+        # why it is passed straight through rather than filled in.
+        out = wrap(handle(x).rmsNorm(self.dims, self.eps))
         return out if getattr(self, "weight", None) is None else out * self.weight
 
 
@@ -2790,24 +3118,13 @@ def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None,
 #
 # The failure mode is worth more than the fix: a stale reason is worse than no reason,
 # because no reason invites a check. This one survived every sweep of the file.
-def _no_class_weights(who, weight, pos_weight, why="class weights"):
-    """**`weight` and `pos_weight` are not here.** Accepted and unused, the loss
-    quietly becomes a different one.
-
-    torch registers both as buffers and ships them in `state_dict`, and above all
-    changes the division in `mean` — dividing by **the sum of the weights**
-    rather than the sample count. Ignored, the value differs, and a learning rate
-    chosen against that value is wrong with it.
-
-    It used to stop with a `TypeError`, which is the same screen a typo produces
-    and does not say "this library does not have it".
-    """
-    from borch._base import _unsupported
-
-    if weight is not None:
-        _unsupported(f"{who}(weight=…) — {why}")
-    if pos_weight is not None:
-        _unsupported(f"{who}(pos_weight=…)")
+# **`_no_class_weights` stood here and is gone**, and it is the same shape of thing
+# as the stale paragraph above it. Its reason: `weight` and `pos_weight` accepted and
+# unused make the loss quietly a different one, because `mean` divides by the sum of
+# the weights rather than the sample count. That was true and it named the way out —
+# divide by the sum of the weights. borch.ts does exactly that now, so the four losses
+# below hand the tensors across instead of stopping, and nothing here implements the
+# arithmetic a second time.
 
 
 def _legacy_reduction(size_average, reduce, reduction):
@@ -2861,9 +3178,9 @@ def NLLLoss(weight=None, size_average=None, ignore_index=-100, reduce=None,
     """torch's order — and **the deprecated pair is not adjacent here**, with
     `ignore_index` between the two."""
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _no_class_weights("NLLLoss", weight, None)
+    w = handle(weight) if weight is not None else None
     return _Wrap(lambda a, b: wrap(
-        handle(a).nllLoss(handle(b), int(ignore_index), reduction)))
+        handle(a).nllLoss(handle(b), int(ignore_index), reduction, w)))
 
 
 def BCELoss(weight=None, size_average=None, reduce=None, reduction="mean"):
@@ -2871,24 +3188,87 @@ def BCELoss(weight=None, size_average=None, reduce=None, reduction="mean"):
     and offering it here would be an argument torch does not have. The core says the
     same at the same place."""
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _no_class_weights("BCELoss", weight, None)
-    return _Wrap(lambda a, b: wrap(handle(a).bce(handle(b), reduction)))
+    w = handle(weight) if weight is not None else None
+    return _Wrap(lambda a, b: wrap(handle(a).bce(handle(b), reduction, w)))
 
 
 def BCEWithLogitsLoss(weight=None, size_average=None, reduce=None,
                       reduction="mean", pos_weight=None):
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _no_class_weights("BCEWithLogitsLoss", weight, pos_weight)
-    return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b), reduction)))
+    w = handle(weight) if weight is not None else None
+    pw = handle(pos_weight) if pos_weight is not None else None
+    return _Wrap(lambda a, b: wrap(
+        handle(a).bceWithLogits(handle(b), reduction, w, pw)))
 
 
 def CrossEntropyLoss(weight=None, size_average=None, ignore_index=-100,
                      reduce=None, reduction="mean", label_smoothing=0.0):
     """torch's order — `ignore_index` sits between the deprecated pair."""
     reduction = _legacy_reduction(size_average, reduce, reduction)
-    _no_class_weights("CrossEntropyLoss", weight, None)
+    w = handle(weight) if weight is not None else None
     return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(
-        handle(b), int(ignore_index), reduction, float(label_smoothing))))
+        handle(b), int(ignore_index), reduction, float(label_smoothing), w)))
+
+
+class LinearCrossEntropyOptions:
+    """torch's chunking configuration, held and read by nothing.
+
+    Every field is a memory strategy. Measured in real torch, four of them answer
+    within 4.8e-7 of the default — float32 noise — so accepting it and ignoring it give
+    the same number, which is what makes carrying it honest rather than the
+    *accepted and never read* defect. The core's class says the same at more length.
+    """
+
+    def __init__(self, allow_retain_graph=False, batch_chunk_size=None,
+                 chunking_method="auto", acc_policy="auto", acc_dtype=None):
+        self.allow_retain_graph = allow_retain_graph
+        self.batch_chunk_size = batch_chunk_size
+        self.chunking_method = chunking_method
+        self.acc_policy = acc_policy
+        self.acc_dtype = acc_dtype
+
+    def __repr__(self):
+        return (f"{type(self).__name__}("
+                f"allow_retain_graph={self.allow_retain_graph}, "
+                f"batch_chunk_size={self.batch_chunk_size}, "
+                f"chunking_method={self.chunking_method!r}, "
+                f"acc_policy={self.acc_policy!r}, acc_dtype={self.acc_dtype})")
+
+
+def LinearCrossEntropyLoss(in_features, num_classes, *, out_features=(),
+                           bias=False, device=None, dtype=None, reduction="mean",
+                           weight=None, ignore_index=None, label_smoothing=0.0,
+                           options=None):
+    """A `Linear` and a cross entropy, fused — **and the fusion is about memory.**
+
+    borch.ts carries the class, so this forwards to it rather than assembling the pair
+    in Python. Assembled here the golden would go green and the name would not exist
+    for anyone holding borch.ts, which is the seam this repository has fallen into
+    seven times.
+
+    `out_features` is refused over there for the reason the core gives: torch reads the
+    logits as `(N, C, *out_features)` and neither implementation's cross entropy takes
+    a target of that rank.
+    """
+    from borch._base import _only_cpu, _unsupported
+
+    # **The pair is carried in order to answer it.** Not taking them is not the same as
+    # answering them — `LinearCrossEntropyLoss(5, 4, device="cpu")` would come back
+    # *unexpected keyword argument*, which is the screen a typo gives.
+    _only_cpu("nn.LinearCrossEntropyLoss", device)
+    if dtype is not None:
+        _unsupported("nn.LinearCrossEntropyLoss(dtype=…)")
+    # **`out_features` and `options` go across rather than being written as constants.**
+    # Hard-wired here they were two seats that took a value and sent something else,
+    # which `test_binding_arguments.py` caught by reading the call — the shape that file
+    # exists for. `out_features` is refused over there and `options` is inert on both
+    # sides, and neither of those is a reason for the value not to travel.
+    return Module(_ts.nn.LinearCrossEntropyLoss.new(
+        int(in_features), int(num_classes), _js_list([int(v) for v in out_features]),
+        bool(bias), None, None,
+        reduction, handle(weight) if weight is not None else None,
+        None if ignore_index is None else int(ignore_index),
+        float(label_smoothing), options))
 
 
 class _Recurrent(Module):
@@ -2936,8 +3316,7 @@ class _Recurrent(Module):
 
 
 def _recurrent(kind):
-    def make(input_size, hidden_size, num_layers=1, bias=True, batch_first=False,
-             dropout=0.0, bidirectional=False, proj_size=0, device=None, dtype=None):
+    def make(input_size, hidden_size, num_layers=1, *rest, **kw):
         """torch's ten. **This took two and swallowed the rest.**
 
         `GRU(3, 4, batch_first=True)` set nothing at all here and said nothing —
@@ -2945,23 +3324,50 @@ def _recurrent(kind):
         while the caller had written `(batch, length, …)`. The golden agreed only
         because every case passes the default.
 
-        Six are refused rather than implemented: borch.ts's `RNNBase` builds one
-        unidirectional layer with a bias, so anything else has nowhere to go. The
-        refusal names the argument, which is the difference between a feature that is
-        absent and an answer that is wrong.
+        **Five were refused and are forwarded now.** The reason was that borch.ts's
+        `RNNBase` builds one unidirectional biased layer, so anything else had nowhere
+        to go — true of that class, and that class is what changed.
+
+        **The fourth positional is not the same argument on all three.** torch's `RNN`
+        puts `nonlinearity` there and the other two put `bias`, which is why the tail
+        is read per kind rather than by one signature: written as one, `RNN(3, 4, 2,
+        "relu")` lands the string in `bias`, where it is true, and the layer computes
+        `tanh` with biases and says nothing.
         """
         from borch._base import _unsupported
 
-        for what, given in (("device", device), ("dtype", dtype)):
-            if given is not None:
+        names = (("nonlinearity", "bias", "batch_first", "dropout", "bidirectional",
+                  "device", "dtype") if kind == "RNN" else
+                 ("bias", "batch_first", "dropout", "bidirectional", "proj_size",
+                  "device", "dtype"))
+        got = dict(zip(names, rest))
+        clash = [n for n in got if n in kw]
+        if clash:
+            raise TypeError(f"{kind}() got multiple values for argument '{clash[0]}'")
+        got.update(kw)
+        # **The three validations are torch's and they are checked here rather than
+        # left to borch.ts.** Crossing the bridge turns a thrown `RangeError` into
+        # something with a different type and a decorated message, and the wording is
+        # what the cases freeze.
+        if kind != "LSTM" and got.get("proj_size"):
+            raise ValueError("proj_size argument is only supported for LSTM, "
+                             "not RNN or GRU")
+        if got.get("proj_size", 0) < 0:
+            raise ValueError("proj_size should be a positive integer or zero "
+                             "to disable projections")
+        if got.get("proj_size", 0) >= hidden_size:
+            raise ValueError("proj_size has to be smaller than hidden_size")
+        for what in ("device", "dtype"):
+            if got.get(what) is not None:
                 _unsupported(f"{kind}({what}=…) — one device, one precision")
-        for what, given, wanted in (("num_layers", num_layers, 1),
-                                    ("bias", bias, True),
-                                    ("dropout", dropout, 0.0),
-                                    ("bidirectional", bidirectional, False),
-                                    ("proj_size", proj_size, 0)):
-            if given != wanted:
-                _unsupported(f"{kind}({what}={given!r})")
+        bias = got.get("bias", True)
+        batch_first = got.get("batch_first", False)
+        dropout = got.get("dropout", 0.0)
+        bidirectional = got.get("bidirectional", False)
+        proj_size = got.get("proj_size", 0)
+        nonlinearity = got.get("nonlinearity", "tanh")
+        if nonlinearity not in ("tanh", "relu"):
+            raise ValueError("nonlinearity must be 'tanh' or 'relu'.")
         inp, hid = input_size, hidden_size
         # **`RNNBase` is the class's name now** — torch's, where borch.ts had
         # `Recurrent` alone. The alias still resolves at runtime, and
@@ -2974,7 +3380,15 @@ def _recurrent(kind):
         # recurrent case failed at once — six of six under one prefix, which is the
         # shape the runner calls *one cause rather than many*. The signature axis
         # could not have said so: it reads declarations, and this is a call.
-        return _Recurrent(_ts.nn.RNNBase.new(kind, inp, hid), batch_first)
+        # **`nonlinearity` is set after the fact and not passed**, because torch's
+        # `RNNBase` has no such seat — it carries the activation in the mode, and
+        # borch.ts follows. Given as a twelfth argument the class was one longer than
+        # torch's and the signature axis said so.
+        built = _ts.nn.RNNBase.new(kind, inp, hid, int(num_layers), bool(bias),
+                                   False, float(dropout), bool(bidirectional),
+                                   int(proj_size))
+        built.nonlinearity = nonlinearity
+        return _Recurrent(built, batch_first)
     return make
 
 
@@ -3006,13 +3420,26 @@ class _Attention(Module):
         # transposed here before crossing.
         if self._batch_first:
             q, k, v = (_t(t, 0, 1) for t in (q, k, v))
+        # **Everything the layer holds crosses, including the empties.** Under
+        # `kdim`/`vdim` the bundle is `null` and the three separate weights are what
+        # exist; under `add_bias_kv` there are two more. Reading only `inWeight` and
+        # `outWeight` was right while the rest could not exist.
+        def held(name):
+            got = getattr(self._m, name, None)
+            return None if got is None else wrap(got)
+
         out, weights = _mha_forward(
             q, k, v, None, self._heads,
-            wrap(self._m.inWeight), wrap(self._m.inBias),
+            held("inWeight"), held("inBias"),
+            bias_k=held("biasK"), bias_v=held("biasV"),
+            add_zero_attn=bool(self._m.addZeroAttn),
             out_proj_weight=wrap(self._m.outWeight),
-            out_proj_bias=wrap(self._m.outBias),
+            out_proj_bias=held("outBias"),
             attn_mask=attn_mask, need_weights=need_weights,
             key_padding_mask=key_padding_mask,
+            use_separate_proj_weight=not self._m.qkvSameEmbedDim,
+            q_proj_weight=held("qWeight"), k_proj_weight=held("kWeight"),
+            v_proj_weight=held("vWeight"),
             average_attn_weights=average_attn_weights)
         return (_t(out, 0, 1) if self._batch_first else out), weights
 

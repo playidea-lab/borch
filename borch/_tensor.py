@@ -42,6 +42,39 @@ def _keep(out, source, dim, keepdim):
     return _np.reshape(out, shape)
 
 
+# torch's old tensor-type names, which `Tensor.type()` hands back and, until this
+# table existed, could not take. The three with no storage here are the same names
+# `_AbsentDtype` keeps for the same reason: `x.type("torch.HalfTensor")` should say
+# what is missing rather than read as a typo, and the gate on `.np` says it.
+def _tensor_type_names():
+    from ._base import (bfloat16, bool_, complex64, complex128, float16, float32,
+                        float64, int8, int16, int32, int64, uint8)
+
+    return {
+        "torch.FloatTensor": float32, "torch.DoubleTensor": float64,
+        "torch.HalfTensor": float16, "torch.BFloat16Tensor": bfloat16,
+        "torch.LongTensor": int64, "torch.IntTensor": int32,
+        "torch.ShortTensor": int16, "torch.CharTensor": int8,
+        "torch.ByteTensor": uint8, "torch.BoolTensor": bool_,
+        "torch.ComplexFloatTensor": complex64,
+        "torch.ComplexDoubleTensor": complex128,
+    }
+
+
+_TENSOR_TYPE_NAMES = _tensor_type_names()
+# The same table read the other way, keyed by the plain dtype name. `Tensor.type()`
+# with no argument answers from it, and **the binding answers from it too** — that
+# side had `type()` handing back `torch.float32` where torch says
+# `torch.FloatTensor`, so the two halves of one method disagreed there as well.
+_TYPE_NAME_OF = {dt.name: name for name, dt in _TENSOR_TYPE_NAMES.items()}
+
+
+def _unknown_tensor_type(said):
+    """torch's wording for a name that is not one of the twelve, and **its type** —
+    `ValueError`, where numpy raised `TypeError` for the same mistake."""
+    raise ValueError(f"invalid type: '{said}'")
+
+
 def _unbroadcast(grad, shape):
     """Undo the axes broadcasting stretched. A required step of
     backpropagation."""
@@ -51,6 +84,53 @@ def _unbroadcast(grad, shape):
         if n == 1 and grad.shape[i] != 1:
             grad = grad.sum(axis=i, keepdims=True)
     return grad.reshape(shape)
+
+
+def _flow(roots, seeds):
+    """The backward pass itself: **the gradient of every node reachable from the
+    roots**, and the topological order it was computed in.
+
+    It accumulates nothing into `.grad` — the caller decides what to do with the
+    map. `Tensor.backward` fills the leaves from it; `autograd.grad` reads out the
+    names it was asked for and leaves `.grad` alone, which is the whole difference
+    between the two functions.
+
+    **Written as one walk on purpose.** A second copy of this loop in `autograd`
+    would be a fourth implementation of the same arithmetic — three already have to
+    agree — and it is the copy that would drift, because `.grad`-accumulating code
+    is what every test exercises.
+
+    Several roots are allowed, which is `grad([y1, y2], x)`: their seeds are summed
+    where the graphs meet, exactly as torch does (measured: `grad([(x**2).sum(),
+    (x*5).sum()], x)` is `2x + 5`). A node reached from a later root is appended
+    after its own parents, so the order stays valid across all of them.
+    """
+    order, seen = [], set()
+
+    def visit(t):
+        if id(t) in seen:
+            return
+        seen.add(id(t))
+        for p in t._parents:
+            visit(p)
+        order.append(t)
+
+    for root in roots:
+        visit(root)
+
+    grads = {}
+    for root, seed in zip(roots, seeds):
+        grads[id(root)] = seed if id(root) not in grads else grads[id(root)] + seed
+    for t in reversed(order):
+        g = grads.get(id(t))
+        if g is None or t._backward is None:
+            continue
+        for parent, pg in zip(t._parents, t._backward(g)):
+            if pg is None:
+                continue
+            pg = _unbroadcast(_np.asarray(pg), parent.data.shape)
+            grads[id(parent)] = pg if id(parent) not in grads else grads[id(parent)] + pg
+    return order, grads
 
 
 # torch's dtype promotion differs from numpy's — it splits by **category** first
@@ -382,6 +462,18 @@ class Tensor:
         one branch without disturbing the rest. It was not an argument here, so
         `loss.backward(inputs=[w])` stopped with a `TypeError` about a count.
 
+        **`inputs` also retains, and that half was missing.** torch implements it by
+        retaining on each name — which is why its refusal for a tensor that does not
+        require grad says *can't retain_grad*. So a **derived** tensor named there
+        gets a `.grad` too, the way `retain_grad()` gives one. Here only leaves were
+        filled, so `loss.backward(inputs=[m])` on an intermediate `m` left `m.grad`
+        as `None` and said nothing. Measured against torch, which fills it.
+
+        The two refusals are measured as well, in torch's own order: an **empty**
+        `inputs` stops before anything else — before `requires_grad`, before the
+        scalar check — and a name that does not require grad stops *after* the seed
+        has been checked.
+
         **`create_graph` is refused.** It asks for the backward pass itself to be
         recorded, so that the gradient can be differentiated again — the thing a
         second-order method needs. Nothing here records it: the backward functions
@@ -391,6 +483,16 @@ class Tensor:
         """
         if create_graph:
             _unsupported("backward(create_graph=True) — double backward")
+        listed = None
+        if inputs is not None:
+            listed = [inputs] if isinstance(inputs, Tensor) else list(inputs)
+            # **First of all**, ahead of every other refusal (measured: a tensor that
+            # does not require grad, called with `inputs=[]`, still stops here).
+            if not listed:
+                raise RuntimeError(_like_torch(
+                    "backward(inputs=[]) names nothing to put a gradient on. Leave "
+                    "`inputs` out to fill every leaf instead.",
+                    "`inputs` argument to `backward()` cannot be empty."))
         if not self.requires_grad:
             raise RuntimeError(_like_torch(
                 "backward() cannot be called on a tensor that does not require grad.",
@@ -433,23 +535,18 @@ class Tensor:
                 f"torch.Size({list(seed.shape)}) and output[0] has a shape of "
                 f"torch.Size({list(self.data.shape)})."))
 
-        wanted = None if inputs is None else {
-            id(t) for t in ([inputs] if isinstance(inputs, Tensor) else inputs)}
+        # **After the seed, not before it** — torch checks the shape of the gradient
+        # first and only then complains about a name that cannot hold one (measured).
+        if listed is not None:
+            for one in listed:
+                if not one.requires_grad:
+                    raise RuntimeError(_like_torch(
+                        "backward(inputs=…) was given a tensor that does not require "
+                        "grad, so there is nowhere for a gradient to go.",
+                        "can't retain_grad on Tensor that has requires_grad=False"))
+        wanted = None if listed is None else {id(t) for t in listed}
+        order, grads = _flow([self], [seed])
 
-        # A topological sort — back to front, each node once
-        order, seen = [], set()
-
-        def visit(t):
-            if id(t) in seen:
-                return
-            seen.add(id(t))
-            for p in t._parents:
-                visit(p)
-            order.append(t)
-
-        visit(self)
-
-        grads = {id(self): seed}
         for t in reversed(order):
             g = grads.get(id(t))
             if g is None:
@@ -462,15 +559,14 @@ class Tensor:
             # too.** Otherwise that name only imitates the refusal and does
             # nothing — it gets as far as stopping at a leaf and never does the
             # thing it was for.
-            if getattr(t, "_retain", False):
+            #
+            # **A name in `inputs` is retained the same way**, which is what torch
+            # does: naming a derived tensor there fills its `.grad`. The two are
+            # `or`-ed rather than one replacing the other — a `retain_grad()` node
+            # *outside* `inputs` still gets its gradient in torch (measured), so
+            # `inputs` adds retention and does not take it away.
+            if getattr(t, "_retain", False) or (wanted is not None and id(t) in wanted):
                 t.grad = Tensor(g) if t.grad is None else Tensor(t.grad.data + g)
-            for parent, pg in zip(t._parents, t._backward(g)):
-                if pg is None:
-                    continue
-                # A leaf's .grad is filled by the branch above only. Filling it
-                # here as well accumulates twice.
-                pg = _unbroadcast(_np.asarray(pg), parent.data.shape)
-                grads[id(parent)] = pg if id(parent) not in grads else grads[id(parent)] + pg
 
         if not retain_graph:
             for t in order:
@@ -481,14 +577,13 @@ class Tensor:
         return Tensor(self.data)
 
     def clone(self, memory_format=None):
-        """`memory_format` is torch's second seat — **carried and refused.**
+        """`memory_format` is torch's second seat.
 
-        There is one layout here, so honouring it is not possible and swallowing it
-        would answer for a request that was not met. Left out, torch's position
-        lands on nothing.
+        **It refused it with its own copy of the rule**, which is how it kept
+        refusing `contiguous_format` after `_memory_format` learned to accept it —
+        two seats, one of them updated. It goes through the shared one now.
         """
-        if memory_format is not None:
-            _unsupported("Tensor.clone(memory_format=…)")
+        self._memory_format("clone", memory_format)
         return self._make(self.data.copy(), (self,), lambda g: (g,))
 
     def numpy(self, *, force=False):
@@ -537,17 +632,24 @@ class Tensor:
         return self._make(out, (self,), lambda g: (g.astype(self.data.dtype),), "ToCopyBackward0")
 
     def _memory_format(self, name, memory_format):
-        """torch's `memory_format` on the dtype and device methods — **carried and
-        refused.**
+        """torch's `memory_format` on the dtype and device methods.
 
         Nine of them take it (`float`, `long`, `bool`, `double`, `int`, `cfloat`,
         `cpu`, `contiguous`, `is_contiguous`) and none of them had a seat for it, so
-        the position torch documents landed on nothing. There is one layout here;
-        honouring the argument is not possible and swallowing it would answer for a
-        request that was not met.
+        the position torch documents landed on nothing. The seat was added and
+        **refused everything that arrived in it**, saying there is one layout here
+        and honouring the argument is not possible.
+
+        That was half true. `contiguous_format` names row-major and
+        `preserve_format` names keep-what-you-have, and both are exactly what this
+        library does — so the refusal was refusing this library's own answer, and
+        `x.clone(memory_format=torch.contiguous_format)` stopped although nothing
+        about it was unavailable. `channels_last` and `channels_last_3d` really are
+        absent, and those two still stop.
         """
-        if memory_format is not None:
-            _unsupported(f"Tensor.{name}(memory_format=…)")
+        if memory_format is None or getattr(memory_format, "carried", False):
+            return
+        _unsupported(f"Tensor.{name}(memory_format={memory_format})")
 
     def float(self, memory_format=None):
         self._memory_format("float", memory_format)
@@ -605,6 +707,13 @@ class Tensor:
 
         `non_blocking` asks torch not to wait on an async device copy. Nothing here
         is asynchronous, so the copy has finished by the time this returns.
+
+        **The getter spoke a vocabulary the setter could not hear.** `x.type()`
+        hands back `torch.FloatTensor` and `x.type("torch.FloatTensor")` — feeding
+        that answer straight back, which is what every pre-2.0 tutorial writes —
+        went to numpy as a dtype string and came back *data type
+        'torch.FloatTensor' not understood*. One method, two halves, and they did
+        not agree about the words.
         """
         dt = dtype
         if dt is None:
@@ -614,6 +723,8 @@ class Tensor:
             if kind is None:
                 kind = _TYPE_NAMES.get(self.data.dtype.kind, "Float")
             return f"torch.{kind}Tensor"
+        if isinstance(dt, str) and dt.startswith("torch."):
+            dt = _TENSOR_TYPE_NAMES.get(dt) or _unknown_tensor_type(dt)
         target = dt.np if isinstance(dt, globals()["dtype"]) else dt
         if _np.dtype(target).kind != "f":
             return Tensor(self.data.astype(target))
@@ -934,20 +1045,55 @@ class Tensor:
         return self._make(_np.expand_dims(self.data, dim), (self,), lambda g: (g.reshape(old),),
                           "UnsqueezeBackward0")
 
-    def squeeze(self, dim=None):
-        # **`squeeze(0, 2)` — several axes at once — is torch's form and is not
-        # taken here.** Widening it to `*dims` is three lines and it was written,
-        # measured against torch on every shape tried, and then withdrawn: with it
-        # in place `resize_as_` came back with the old shape and `stft`'s gradient
-        # chain went missing, both in a different file and neither naming `squeeze`.
-        #
-        # The behaviour it adds is right (torch leaves a non-length-1 axis alone
-        # where numpy raises), so something inside this library is standing on the
-        # raise. That is worth finding rather than guessing at, and shipping the
-        # widening before finding it would trade a `TypeError` a caller can read for
-        # a wrong shape they cannot.
+    def squeeze(self, *dim):
+        """Drop the length-1 axes. **Two of torch's rules, both once absent.**
+
+        `squeeze(0, 2)` names several axes, and `squeeze(1)` on an axis whose length
+        is not 1 **leaves it alone** — numpy raises there, and this raised with
+        numpy's wording.
+
+        **A previous session wrote this, measured it against torch, and withdrew
+        it**, leaving the reason in place: with the widening in, `resize_as_` came
+        back with the old shape and `stft`'s gradient chain went missing, both in a
+        different file and neither naming `squeeze`. The note said something inside
+        the library was standing on the raise and that it was worth finding.
+
+        **Neither failure reproduces, and this note does not claim to know why.**
+        The widening went back in and the suite is green; the first guess — that a
+        no-op squeeze hands back the parent's own array and something in-place moved
+        both — was written here as the cause and then **tested by removing the copy
+        again, which changed nothing.** So it was not that. Whatever the two
+        failures were, some commit between then and now took it away, and saying
+        which would be a reason borrowed from a plausible story rather than from a
+        measurement.
+
+        The no-op branch returns a numpy view, which is what `np.squeeze` gives on
+        every other path here and what torch gives too — chosen for that consistency
+        and not as a repair for anything.
+        """
         old = self.data.shape
-        out = _np.squeeze(self.data) if dim is None else _np.squeeze(self.data, axis=dim)
+        if not dim:
+            return self._make(_np.squeeze(self.data), (self,),
+                              lambda g: (g.reshape(old),))
+        want = (dim[0] if len(dim) == 1 and isinstance(dim[0], (tuple, list))
+                else dim)
+        rank = self.data.ndim
+        # **A 0-d tensor accepts dim -1 and 0**, and both are no-ops — torch treats
+        # it as having one axis for the purpose of naming one. Normalising against a
+        # rank of 0 turns -1 into -1 and the bounds check refuses a call torch takes.
+        span = max(rank, 1)
+        axes = tuple(int(d) + span if int(d) < 0 else int(d) for d in want)
+        for one in axes:
+            if not 0 <= one < span:
+                raise IndexError(_like_torch(
+                    f"squeeze(): dimension {one} is out of range for a tensor of "
+                    f"rank {rank}.",
+                    f"Dimension out of range (expected to be in range of [{-span}, "
+                    f"{span - 1}], but got {one})"))
+        # **The axes that are not length 1 come off the list, not out of an
+        # exception.** torch drops what it can and returns the rest unchanged.
+        axes = tuple(one for one in axes if rank and old[one] == 1)
+        out = _np.squeeze(self.data, axis=axes) if axes else self.data.view()
         return self._make(out, (self,), lambda g: (g.reshape(old),))
 
     def transpose(self, dim0, dim1):
@@ -1072,7 +1218,26 @@ class Tensor:
         shape = self.data.shape[:first] + (-1,) + self.data.shape[last + 1:]
         return self.reshape(shape)
 
+    @staticmethod
+    def _forward_step(idx):
+        """**numpy reverses on a negative step and torch refuses one.**
+
+        `x[::-1]` is a reversal in numpy and this class hands the key straight to
+        numpy, so it was a reversal here — with an answer, a shape and no error,
+        under a spelling torch stops at. That is the worst shape a divergence
+        takes: a line copied out of a numpy notebook runs, and the reader is left
+        believing torch reverses this way.
+
+        torch's own words, and its own type — `ValueError`, not `RuntimeError`,
+        because indexing is Python-level over there too (measured). A step of 0
+        needs no check: numpy and torch already stop with the same sentence.
+        """
+        for one in (idx if isinstance(idx, tuple) else (idx,)):
+            if isinstance(one, slice) and one.step is not None and one.step < 0:
+                raise ValueError("step must be greater than zero")
+
     def __getitem__(self, idx):
+        self._forward_step(idx)
         key = tuple(i.data if isinstance(i, Tensor) else i for i in idx) \
             if isinstance(idx, tuple) else (idx.data if isinstance(idx, Tensor) else idx)
         old = self.data.shape
@@ -1087,6 +1252,7 @@ class Tensor:
     def __setitem__(self, idx, value):
         if self.requires_grad and _grad_mode.enabled:
             raise RuntimeError("A tensor that requires grad cannot be assigned into in place.")
+        self._forward_step(idx)
         key = tuple(i.data if isinstance(i, Tensor) else i for i in idx) \
             if isinstance(idx, tuple) else (idx.data if isinstance(idx, Tensor) else idx)
         self.data[key] = value.data if isinstance(value, Tensor) else value
@@ -1268,7 +1434,7 @@ class Tensor:
         return self._reduce(_np.mean, dim, keepdim, back,
                             "MeanBackward0" if dim is None else "MeanBackward1")
 
-    def _argreduce(self, np_fn, np_arg, dim, keepdim):
+    def _argreduce(self, np_fn, np_arg, dim, keepdim, kind="max"):
         if dim is None:
             # **With no axis there are no indices, and so the rule reverses.**
             # `max(dim=0)`, which gives indices, hands the whole gradient to the
@@ -1304,7 +1470,7 @@ class Tensor:
         # **The indices have to keep the axis too.** Keeping it on the values
         # alone makes `x.gather(1, m.indices)` stop on a rank mismatch or — worse
         # — pass by broadcasting. torch gives `(2, 1)` for both (measured).
-        return _MinMax(out, Tensor(_np.expand_dims(idx, d) if keepdim else idx))
+        return _MinMax(out, Tensor(_np.expand_dims(idx, d) if keepdim else idx), kind)
 
     def _elementwise_extreme(self, other, pick, name):
         """**A tie splits in half.** That is what torch does — the gradient of
@@ -1332,7 +1498,7 @@ class Tensor:
     def min(self, dim=None, keepdim=False):
         if isinstance(dim, Tensor):
             return self._elementwise_extreme(dim, _np.minimum, "MinimumBackward0")
-        return self._argreduce(_np.min, _np.argmin, dim, keepdim)
+        return self._argreduce(_np.min, _np.argmin, dim, keepdim, "min")
 
     def argmax(self, dim=None, keepdim=False):
         _refuses_bool(self.data, "argmax does not take booleans.",
@@ -1441,18 +1607,43 @@ class Tensor:
 
 
 class _MinMax:
-    """The (values, indices) `x.max(dim=0)` hands back. Real torch's shape."""
+    """The (values, indices) `x.max(dim=0)` hands back. Real torch's shape.
 
-    def __init__(self, values, indices):
+    **It had no `__repr__`**, so `print(x.topk(3))` showed
+    `<borch._tensor._MinMax object at 0x10f2a3b50>` where torch prints the values
+    and the indices. Nine names came out that way — `topk`, `sort`, `max(dim)`,
+    `min(dim)`, `median(dim)`, `kthvalue`, `cummax`, `cummin`, `aminmax` — while
+    `mode` and `slogdet` beside them printed torch's form, because those go through
+    `_named` and this class predates it.
+
+    The address is the part that bites: it changes between two identical calls, so
+    anything comparing the printed form of one of these against another sees a
+    difference that is not there. A probe written during this very sweep flipped
+    between runs for that reason.
+
+    `kind` is the function's name, because torch's is: it prints
+    `torch.return_types.topk(…)`, and which function you called is the first thing
+    the line tells you.
+    """
+
+    def __init__(self, values, indices, kind="max"):
         self.values = values
         self.indices = indices
+        self.kind = kind
 
     def __iter__(self):
         yield self.values
         yield self.indices
 
+    def __len__(self):
+        return 2
+
     def __getitem__(self, i):
         return (self.values, self.indices)[i]
+
+    def __repr__(self):
+        return (f"torch.return_types.{self.kind}(\n"
+                f"values={self.values!r},\nindices={self.indices!r})")
 
 
 
@@ -1714,7 +1905,16 @@ Tensor.requires_grad_ = _requires_grad_
 Tensor.share_memory_ = _share_memory_
 
 # With the partners in place, the underscore versions come from the same table.
-for _iname in ("arctan2_", "igamma_", "igammac_", "polygamma_"):
+#
+# **Named rather than written inline**, because `borch/__init__.py` has to walk these
+# too — it copies each forwarder's partner signature onto it once `_ops` exists, and a
+# group that is only a literal in a `for` is a group that pass cannot see. Four names
+# stayed `(self, *args, **kw)` for exactly that reason while the forty-two above were
+# repaired, which is the shape the note on `_INPLACE_FROM_PAIR` records: what was
+# measured and what was written diverge.
+_INPLACE_LATE = ("arctan2_", "igamma_", "igammac_", "polygamma_")
+
+for _iname in _INPLACE_LATE:
     setattr(Tensor, _iname, _bind_inplace(_iname))
 del _iname
 
@@ -1947,7 +2147,7 @@ Tensor.itemsize = property(lambda self: int(self.data.itemsize))
 Tensor.nbytes = property(lambda self: int(self.data.nbytes))
 Tensor.data_ptr = lambda self: int(self.data.__array_interface__["data"][0])
 Tensor.const_data_ptr = Tensor.data_ptr
-Tensor.layout = property(lambda self: _Layout())
+Tensor.layout = property(lambda self: strided)
 Tensor.output_nr = property(lambda self: 0)
 Tensor.volatile = property(lambda self: False)
 Tensor.name = property(lambda self: None)
@@ -1955,21 +2155,89 @@ Tensor.grad_dtype = property(lambda self: self.dtype)
 
 
 class _Layout:
-    """`torch.strided`. There is no other layout here — no sparse and no
-    mkldnn."""
+    """A layout, named. There is one storage here — `strided` — and the sparse
+    names exist so they can be *named*.
 
-    __slots__ = ()
+    **The value was here and the name was not.** `x.layout` printed
+    `torch.strided` all along while `borch.strided` was an `AttributeError`, so
+    `x.layout == torch.strided` — the way anybody actually asks — stopped with a
+    sentence about a missing module attribute, indistinguishable from a typo. A
+    library that answers a question has to offer the word the question is asked
+    with.
+
+    The sparse names are `_AbsentDtype`'s bargain one level up: naming
+    `sparse_coo` costs nothing and lets `x.layout == torch.sparse_coo` come back
+    `False`, which is the true answer. What is refused is *asking for* one — that
+    refusal lives at `to_sparse()` and `sparse_coo_tensor`, where the storage
+    would have to exist.
+    """
+
+    __slots__ = ("_name",)
+
+    def __init__(self, name):
+        self._name = name
 
     def __repr__(self):
-        return "torch.strided"
+        return f"torch.{self._name}"
 
     __str__ = __repr__
 
     def __eq__(self, other):
-        return repr(other) == "torch.strided"
+        return repr(other) == repr(self)
 
     def __hash__(self):
-        return hash("torch.strided")
+        return hash(repr(self))
+
+
+# The one this library's tensors are in. `Tensor.layout` hands back **this
+# object**, so `x.layout is borch.strided` is true as it is in torch (measured).
+strided = _Layout("strided")
+sparse_coo = _Layout("sparse_coo")
+sparse_csr = _Layout("sparse_csr")
+sparse_csc = _Layout("sparse_csc")
+sparse_bsr = _Layout("sparse_bsr")
+sparse_bsc = _Layout("sparse_bsc")
+
+
+class _MemoryFormat:
+    """`torch.contiguous_format` and its three siblings.
+
+    **Two of the four are what this library already does**, and all four were
+    refused. `_memory_format` said "there is one layout here; honouring the
+    argument is not possible" — true of `channels_last`, and false of
+    `contiguous_format` and `preserve_format`, which name row-major and
+    keep-what-you-have. Refusing those two refused this library's own answer, so a
+    line copied from torch asking for the layout it already has stopped.
+
+    `channels_last` and `channels_last_3d` are refused when passed, because NHWC
+    storage does not exist here and answering with NCHW would be answering a
+    request that was not met.
+    """
+
+    __slots__ = ("_name", "carried")
+
+    def __init__(self, name, carried):
+        self._name = name
+        # Whether this library can meet the request. Not "is it implemented" but
+        # "is what it asks for what already happens".
+        self.carried = carried
+
+    def __repr__(self):
+        return f"torch.{self._name}"
+
+    __str__ = __repr__
+
+    def __eq__(self, other):
+        return repr(other) == repr(self)
+
+    def __hash__(self):
+        return hash(repr(self))
+
+
+contiguous_format = _MemoryFormat("contiguous_format", True)
+preserve_format = _MemoryFormat("preserve_format", True)
+channels_last = _MemoryFormat("channels_last", False)
+channels_last_3d = _MemoryFormat("channels_last_3d", False)
 
 
 # ── the three names for transposition ───────────────────────────────────────

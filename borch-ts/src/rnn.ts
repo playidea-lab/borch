@@ -7,10 +7,13 @@
  * as a list.** torch offers both, and what the layer calls internally is
  * this side.
  *
- * So the step equations live here in one copy. Two copies, here and in the
- * layer, means a day when **the gate order diverges**, and then the shape
- * is right and only the values are wrong — this repository already shares
- * the equations between cell and layer for that same reason.
+ * **This claimed the step equations lived here in one copy, and there were two.**
+ * `nn.RNNBase.run` wrote out its own layer loop, and the day came the sentence warned
+ * about: this side fell behind, refusing `bidirectional` and inter-layer `dropout` as
+ * *not here* while the layer one file away had both. `rnnApply` below stands up an
+ * `RNNBase` and fills its slots now, so the layer loop really is in one place; what
+ * stays here is `rnnStep`, which the four `_cell` names need and the layer does not
+ * call.
  *
  * ## Gate order
  *
@@ -22,6 +25,7 @@
  */
 
 import { RuntimeError } from "./errors.js";
+import { RNNBase } from "./nn.js";
 import { Tensor } from "./tensor.js";
 
 export type RnnKind = "lstm" | "gru" | "rnn_tanh" | "rnn_relu";
@@ -78,24 +82,24 @@ export function rnnStep(
   return [o.mul(nextC.unary("tanh")), nextC];
 }
 
-/** Splits the flat weight list into four per layer. The order is
- *  `[w_ih, w_hh, b_ih, b_hh]`. */
-function layerWeights(params: readonly Tensor[], layers: number, hasBiases: boolean):
-  [Tensor, Tensor, Tensor | null, Tensor | null][] {
-  const per = hasBiases ? 4 : 2;
-  if (params.length !== per * layers) {
-    throw new RuntimeError(
-      `expected ${per * layers} weights but got ${params.length} ` +
-        `(${layers} layers x ${per}).`);
-  }
-  const out: [Tensor, Tensor, Tensor | null, Tensor | null][] = [];
-  for (let k = 0; k < layers; k++) {
-    const at = k * per;
-    out.push([
-      params[at] as Tensor, params[at + 1] as Tensor,
-      hasBiases ? (params[at + 2] as Tensor) : null,
-      hasBiases ? (params[at + 3] as Tensor) : null,
-    ]);
+/**
+ * The names the flat weight list fills, in order.
+ *
+ * **It is `namedParameters()`'s own order** — four per *direction*, the reverse one
+ * second, layers outermost, and `weight_hr` last within a direction under a
+ * projection. Measured against `torch._VF.lstm` with a two-layer bidirectional net;
+ * with one direction, directions and layers cannot be told apart.
+ */
+function slotNames(layers: number, directions: number, hasBiases: boolean,
+                   projSize: number): string[] {
+  const out: string[] = [];
+  for (let layer = 0; layer < layers; layer++) {
+    for (let d = 0; d < directions; d++) {
+      const tail = `_l${layer}` + (d ? "_reverse" : "");
+      out.push("weight_ih" + tail, "weight_hh" + tail);
+      if (hasBiases) out.push("bias_ih" + tail, "bias_hh" + tail);
+      if (projSize) out.push("weight_hr" + tail);
+    }
   }
   return out;
 }
@@ -110,12 +114,21 @@ export interface RnnOptions {
 }
 
 /**
- * Several steps. `hx` is `(layer, batch, H)`.
+ * Several steps. `hx` is `(layer · directions, batch, H)`.
  *
- * **Bidirectional and inter-layer dropout are refused.** Half-imitating
- * something that is not there catches loudly for the first — the shape
- * comes out halved — but **dropout diverges with plausible values**
- * (training with no regularisation applied). Both stop here.
+ * **This was a second layer loop and it is a call now.** The header above says the
+ * step equations live here in one copy; they did not — `nn.RNNBase.run` wrote them
+ * out again, and this side then fell behind it: `bidirectional` and inter-layer
+ * `dropout` were refused here on the ground that they were not implemented, and by
+ * then they were, one file away. So the whole of this function is standing up an
+ * `RNNBase` with the flags the caller gave, filling its named slots from the flat
+ * list, and calling `run`.
+ *
+ * **`projSize` is read off the shapes**, because torch has no seat for it here:
+ * `weight_hh` is `(gates·H, proj or H)`, and torch infers it the same way.
+ *
+ * **`dropout` only crosses when it can act.** At one layer it has nowhere to go and
+ * the layer warns about exactly that, while `torch._VF.lstm` does not (measured).
  */
 export function rnnApply(
   kind: RnnKind, input: Tensor, h0: Tensor, c0: Tensor | null,
@@ -125,38 +138,37 @@ export function rnnApply(
     hasBiases = true, numLayers = 1, dropout = 0, train = false,
     bidirectional = false, batchFirst = false,
   } = options;
-  if (bidirectional) {
-    throw new RuntimeError("bidirectional recurrence (bidirectional=true) is not here.");
-  }
-  if (train && dropout) {
-    throw new RuntimeError(`dropout between layers (dropout=${dropout}) is not here.`);
-  }
   const gates = gatesOf(kind);
-  const weights = layerWeights(params, numLayers, hasBiases);
-  let x = batchFirst ? input.movedim(0, 1) : input;
-  const steps = x.shape[0] ?? 0;
-  const H = ((weights[0]?.[0].shape[0] ?? 0) / gates) | 0;
-
-  const lastH: Tensor[] = [];
-  const lastC: Tensor[] = [];
-  for (const [layer, [wIh, wHh, bIh, bHh]] of weights.entries()) {
-    let h = h0.select(0, layer);
-    let c = c0 === null ? Tensor.zeros(h.shape) : c0.select(0, layer);
-    const outs: Tensor[] = [];
-    for (let t = 0; t < steps; t++) {
-      [h, c] = rnnStep(kind, x.select(0, t), h, c, wIh, wHh, bIh, bHh);
-      outs.push(h);
-    }
-    x = Tensor.stack(outs, 0);
-    lastH.push(h);
-    lastC.push(c);
+  const first = params[0];
+  const second = params[1];
+  if (!first || !second) {
+    throw new RuntimeError("expected at least two weights, got " + params.length);
   }
-  void H;
-  const output = batchFirst ? x.movedim(0, 1) : x;
+  const hidden = ((first.shape[0] ?? 0) / gates) | 0;
+  const carried = second.shape[1] ?? hidden;
+  const projSize = carried === hidden ? 0 : carried;
+  const directions = bidirectional ? 2 : 1;
+  const slots = slotNames(numLayers, directions, hasBiases, projSize);
+  if (params.length !== slots.length) {
+    const per = slots.length / (numLayers * directions);
+    throw new RuntimeError(
+      `expected ${slots.length} weights but got ${params.length} ` +
+        `(${numLayers} layers x ${directions} directions x ${per}).`);
+  }
+  const mode = kind === "lstm" ? "LSTM" : kind === "gru" ? "GRU" : "RNN";
+  const layer = new RNNBase(mode, first.shape[1] ?? 0, hidden, numLayers,
+    hasBiases, false, numLayers > 1 ? dropout : 0, bidirectional, projSize);
+  layer.nonlinearity = kind === "rnn_relu" ? "relu" : "tanh";
+  if (train) layer.train(); else layer.eval();
+  // **Not `loadStateDict`** — that copies values into the layer's own tensors, and
+  // the gradient has to reach the ones the caller handed over, unchanged.
+  layer.installFlat(slots, params);
+  const src = batchFirst ? input.movedim(0, 1) : input;
+  const got = layer.run(src, h0, c0);
   return {
-    output,
-    hidden: Tensor.stack(lastH, 0),
-    cell: Tensor.stack(lastC, 0),
+    output: batchFirst ? got.output.movedim(0, 1) : got.output,
+    hidden: got.hidden,
+    cell: got.cell,
   };
 }
 

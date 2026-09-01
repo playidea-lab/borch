@@ -121,6 +121,28 @@ def positional(fn, receiver=False):
     return names
 
 
+def keyword_only(fn):
+    """The names a caller can reach **only by keyword**, as a set.
+
+    `positional()` above cuts them off; this is the other half, and it is a set on
+    purpose. Order among keyword-only parameters is not a fact about the function —
+    nobody can observe it — so comparing it produces differences that describe a call
+    nobody can write. borch.ts spells the same group as an options object, where order
+    is equally unobservable, and the two line up as sets or not at all.
+
+    Returns `VARIADIC` and `None` exactly as its siblings do.
+    """
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return None
+    got = list(sig.parameters.values())
+    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in got):
+        return VARIADIC
+    return {p.name for p in got if p.kind is p.KEYWORD_ONLY}
+    return names
+
+
 def _close(text, start):
     """The index of the `)` that closes the `(` at `start`, or -1."""
     depth = 0

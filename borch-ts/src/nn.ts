@@ -21,7 +21,8 @@ import { NotImplementedError, RuntimeError, ValueError } from "./errors.js";
 import { runningStats } from "./kernels.js";
 import { onSeed, uniform as uniform01, uniformArray } from "./random.js";
 import {
-  device, keepAlive, noGrad, type PadMode, type Reduction, Tensor,
+  device, type InterpolateMode, keepAlive, noGrad, type PadMode, type Reduction,
+  Tensor,
 } from "./tensor.js";
 
 /**
@@ -196,6 +197,107 @@ export abstract class Module {
 
   children(): Module[] {
     return Object.values(this.namedChildren());
+  }
+
+  /**
+   * The whole tree with dotted names, **this module first and named `""`.**
+   *
+   * `children` is one level and this is every level — a difference invisible on a
+   * flat model, which is why the golden asks it of a `Sequential` inside a
+   * `Sequential`. The names are the `state_dict` keys' prefixes, so a caller who
+   * has a checkpoint key can find the layer it belongs to.
+   *
+   * `seen` drops a module reached twice. A model with tied weights holds one layer
+   * under two names, and walked twice `apply` would initialise it twice.
+   */
+  namedModules(prefix = "", seen: Set<Module> = new Set()): [string, Module][] {
+    if (seen.has(this)) return [];
+    seen.add(this);
+    const out: [string, Module][] = [[prefix, this]];
+    for (const [name, child] of Object.entries(this.namedChildren())) {
+      out.push(...child.namedModules(prefix ? `${prefix}.${name}` : name, seen));
+    }
+    return out;
+  }
+
+  /**
+   * `fn` on every module in the tree, **children first**, then this one, and hands
+   * back `this` so the line reads as a statement about the model.
+   *
+   * The order is torch's and it is the useful one: a container that reads its
+   * children's shapes sees them already initialised.
+   */
+  apply(fn: (m: Module) => void): this {
+    for (const child of Object.values(this.namedChildren())) child.apply(fn);
+    fn(this);
+    return this;
+  }
+
+  /**
+   * One module by its dotted name — `"layer4.1.conv2"`, which is the shape of a
+   * checkpoint key, so this is how a fine-tuning script reaches one layer.
+   */
+  getSubmodule(target: string): Module {
+    if (target === "") return this;
+    let at: Module = this;
+    for (const part of target.split(".")) {
+      const kid = at.namedChildren()[part];
+      if (kid === undefined) {
+        throw new RuntimeError(
+          `${at.constructor.name} has no attribute \`${part}\` is not in the `
+          + "browser subset.");
+      }
+      at = kid;
+    }
+    return at;
+  }
+
+  /** One parameter by its dotted name, as `getSubmodule` reaches a module. */
+  getParameter(target: string): Tensor {
+    return this.dotted(target, (m) => m.namedParameters(), "parameter");
+  }
+
+  /** One buffer by its dotted name. */
+  getBuffer(target: string): Tensor {
+    return this.dotted(target, (m) => m.namedBuffers(), "buffer");
+  }
+
+  private dotted(target: string, bank: (m: Module) => Record<string, Tensor>,
+                 what: string): Tensor {
+    const cut = target.lastIndexOf(".");
+    const owner = this.getSubmodule(cut < 0 ? "" : target.slice(0, cut));
+    const leaf = cut < 0 ? target : target.slice(cut + 1);
+    const held = bank(owner)[leaf];
+    if (held === undefined) {
+      throw new RuntimeError(
+        `${owner.constructor.name} has no ${what} named \`${leaf}\` is not in the `
+        + "browser subset.");
+    }
+    return held;
+  }
+
+  /**
+   * Attach a child under a name decided at run time.
+   *
+   * `namedChildren` reads this object's own fields, so assigning the property *is*
+   * the registration — the method exists because a name held in a variable cannot
+   * be written as a field. `registerModule` is torch's second spelling.
+   */
+  addModule(name: string, module: Module): void {
+    (this as unknown as Record<string, Module>)[name] = module;
+  }
+
+  registerModule(name: string, module: Module): void {
+    this.addModule(name, module);
+  }
+
+  /**
+   * Freeze or unfreeze the whole tree. **This is how a backbone is frozen**, and it
+   * returns `this` so the line reads as a statement about the model.
+   */
+  requiresGrad_(requiresGrad = true): this {
+    for (const p of this.parameters()) p.requiresGrad = requiresGrad;
+    return this;
   }
 
   /**
@@ -1012,32 +1114,61 @@ export class ReLU extends Module {
 // golden asks about the functional form and the layer form separately.
 
 export class Hardsigmoid extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("hardsigmoid");
+    const out = x.unary("hardsigmoid");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
 export class Hardswish extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("hardswish");
+    const out = x.unary("hardswish");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
 export class LogSigmoid extends Module {
+  constructor(inplace = false) {
+    super();
+    if (inplace) {
+      throw new RuntimeError(
+        "LogSigmoid(inplace=true) got an unexpected keyword argument 'inplace' — "
+        + "torch does not give this one an in-place form either");
+    }
+  }
+
   override forward(x: Tensor): Tensor {
     return x.unary("logsigmoid");
   }
 }
 
 export class Mish extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("mish");
+    const out = x.unary("mish");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
 export class ReLU6 extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("relu6");
+    const out = x.unary("relu6");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -1053,12 +1184,30 @@ export class SELU extends Module {
 }
 
 export class Softsign extends Module {
+  constructor(inplace = false) {
+    super();
+    if (inplace) {
+      throw new RuntimeError(
+        "Softsign(inplace=true) got an unexpected keyword argument 'inplace' — "
+        + "torch does not give this one an in-place form either");
+    }
+  }
+
   override forward(x: Tensor): Tensor {
     return x.unary("softsign");
   }
 }
 
 export class Tanhshrink extends Module {
+  constructor(inplace = false) {
+    super();
+    if (inplace) {
+      throw new RuntimeError(
+        "Tanhshrink(inplace=true) got an unexpected keyword argument 'inplace' — "
+        + "torch does not give this one an in-place form either");
+    }
+  }
+
   override forward(x: Tensor): Tensor {
     return x.unary("tanhshrink");
   }
@@ -1201,8 +1350,13 @@ export class GLU extends Module {
 // `Softmax()`'s default axis is **not `-1`.**
 
 export class SiLU extends Module {
+  constructor(private readonly inplace = false) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    return x.unary("silu");
+    const out = x.unary("silu");
+    return this.inplace ? writeBack(x, out) : out;
   }
 }
 
@@ -1471,19 +1625,45 @@ export class InstanceNormND extends Module {
     // constructor of their own, so the emitted `.d.ts` has no argument list for them
     // and the axis reads `no argument list` rather than a disagreement.
     refuseDeviceDtype("InstanceNorm", device, dtype);
-    if (trackRunningStats) {
-      // torch registers three running statistics here and **reads them in eval
-      // mode**. Accepting this and ignoring it leaves training right and
-      // evaluation quietly wrong, and registering the buffers without the
-      // forward using them only moves the parting to where the keys match and
-      // the values do not. The core refuses at the same place for the same
-      // reason (`borch/_nn.py`, `_InstanceNorm`).
-      throw new Error(
-        "InstanceNorm with trackRunningStats=true is not here yet.");
-    }
     this.weight = affine ? Tensor.owned([numFeatures], 1) : null;
     this.bias = affine && bias ? Tensor.owned([numFeatures], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
+    // **The refusal here said an argument accepted and unused becomes a lie**, and
+    // it was right: registering the buffers without the forward reading them moves
+    // the fault to where the `state_dict` keys match and the values do not. The way
+    // out was never to register them quietly but to make the forward read them.
+    //
+    // **They exist only when the flag is on** — torch registers none at the default,
+    // so three keys appear when it is set and none otherwise.
+    if (trackRunningStats) {
+      this.runningMean = Tensor.owned([numFeatures], 0);
+      this.runningVar = Tensor.owned([numFeatures], 1);
+      keepAlive(this.runningMean);
+      keepAlive(this.runningVar);
+    }
+  }
+
+  runningMean: Tensor | null = null;
+  runningVar: Tensor | null = null;
+
+  /**
+   * **The running statistics go out too**, and only when they exist. A field named
+   * `runningMean` has to leave under the key `running_mean`, which rules out
+   * `registerBuffer` — there the field name is the key — so the list lives here, as
+   * `BatchNormND` writes it for the same reason.
+   *
+   * `num_batches_tracked` is built fresh and always zero: torch registers it here and
+   * **never increments it**, which is not what `BatchNorm` does. Measured — after a
+   * training forward it is still 0 there and 1 in the batch layer.
+   */
+  override namedBuffers(persistentOnly = false): Record<string, Tensor> {
+    void persistentOnly;                    // no non-persistent buffer on this layer
+    if (!this.runningMean || !this.runningVar) return {};
+    return {
+      running_mean: this.runningMean,
+      running_var: this.runningVar,
+      num_batches_tracked: Tensor.owned([], 0),
+    };
   }
 
   override ownParameters(): Record<string, Tensor> {
@@ -1494,12 +1674,12 @@ export class InstanceNormND extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    let out = x.instanceNorm(this.eps);
-    // Per channel, so the vector is broadcast along axis 1 and nowhere else.
-    const spread = [1, -1, ...x.shape.slice(2).map(() => 1)];
-    if (this.weight) out = out.mul(this.weight.reshape(spread));
-    if (this.bias) out = out.add(this.bias.reshape(spread));
-    return out;
+    // Training normalises per plane and moves the buffers; evaluation normalises by
+    // the buffers and leaves them. That is the split the refusal was about.
+    return instanceNorm(x, this.runningMean, this.runningVar,
+                        this.weight, this.bias,
+                        !this.trackRunningStats || this.training,
+                        this.momentum, this.eps);
   }
 
   /** The same wording as `BatchNormND`. **The two defaults are opposite** — a batch
@@ -1837,14 +2017,10 @@ export function scaledDotProductAttention(
  * the maximum now. `dilation` is the whole of what is left, and it keeps its seat for
  * the reason above.
  */
-function refuseUnwiredPooling(layer: string, dilation: number): void {
-  if (dilation !== 1) {
-    throw new Error(
-      `${layer}(dilation=…) is not carried across yet — the core implements it ` +
-      "and this side does not. The argument is here so that it cannot take " +
-      "another one's place.");
-  }
-}
+// **`refuseUnwiredPooling` stood here and is gone.** It refused `dilation` on the
+// three max-pool layers with the reason that the core implemented it and this side did
+// not — true of the shader, which had no step between the cells one window reads. It
+// has one now, and at 1 the generated source is the line it always was.
 
 export class MaxPool2d extends Module {
   /**
@@ -1859,16 +2035,17 @@ export class MaxPool2d extends Module {
               readonly returnIndices = false,
               readonly ceilMode = false) {
     super();
-    refuseUnwiredPooling("MaxPool2d", dilation);
   }
 
   override forward(x: Tensor): Tensor {
-    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode,
+                    true, null, this.dilation);
   }
 
   /** The values and the positions that produced them. `MaxUnpool2d` takes both. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
-    return x.maxPoolWithIndices(this.kernelSize, this.stride);
+    return x.maxPoolWithIndices(this.kernelSize, this.stride, this.padding,
+                                this.dilation, this.ceilMode);
   }
 
   /** As `MaxPool1d`, and this one really holds the other three — they are refused
@@ -1901,16 +2078,17 @@ export class MaxPool1d extends Module {
               readonly returnIndices = false,
               readonly ceilMode = false) {
     super();
-    refuseUnwiredPooling("MaxPool1d", dilation);
   }
 
   /** The values and the positions that produced them, as `MaxPool2d.pick`. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
-    return x.maxPoolWithIndices(this.kernelSize, this.stride);
+    return x.maxPoolWithIndices(this.kernelSize, this.stride, this.padding,
+                                this.dilation, this.ceilMode);
   }
 
   override forward(x: Tensor): Tensor {
-    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode,
+                    true, null, this.dilation);
   }
 
   /** torch's `_MaxPoolNd.extra_repr`. **A stride left unset prints the kernel**, which
@@ -1932,16 +2110,17 @@ export class MaxPool3d extends Module {
               readonly returnIndices = false,
               readonly ceilMode = false) {
     super();
-    refuseUnwiredPooling("MaxPool3d", dilation);
   }
 
   /** The values and the positions that produced them, as `MaxPool2d.pick`. */
   pick(x: Tensor): { values: Tensor; indices: Tensor } {
-    return x.maxPoolWithIndices(this.kernelSize, this.stride);
+    return x.maxPoolWithIndices(this.kernelSize, this.stride, this.padding,
+                                this.dilation, this.ceilMode);
   }
 
   override forward(x: Tensor): Tensor {
-    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode);
+    return x.poolND("max", this.kernelSize, this.stride, this.padding, this.ceilMode,
+                    true, null, this.dilation);
   }
 
   /** As `MaxPool1d`. */
@@ -2061,12 +2240,36 @@ export class MaxUnpool3d extends MaxUnpool1d {
 }
 
 /**
- * Flattens, keeping only the batch axis.
+ * Flattens the axes from `startDim` to `endDim`, keeping the rest.
+ *
+ * **The two seats were missing and the defaults hid it.** torch's are `1` and `-1`,
+ * which is "keep the batch axis and fold everything else" — exactly what this did
+ * with no arguments at all, so every case that used the default passed while
+ * `Flatten(0)` and `Flatten(1, 2)` were arguments JavaScript dropped. The class
+ * declared no constructor, so the signature axis reported it as *unreadable* rather
+ * than as short; that reader followed `extends` and found `Module`'s nothing.
  */
 export class Flatten extends Module {
+  constructor(private readonly startDim = 1, private readonly endDim = -1) {
+    super();
+  }
+
   override forward(x: Tensor): Tensor {
-    const batch = x.shape[0] ?? 1;
-    return x.reshape([batch, x.size / batch]);
+    const rank = x.shape.length;
+    const from = this.startDim < 0 ? this.startDim + rank : this.startDim;
+    const to = this.endDim < 0 ? this.endDim + rank : this.endDim;
+    if (from > to || from < 0 || to >= rank) {
+      throw new RuntimeError(
+        `Flatten(${this.startDim}, ${this.endDim}) does not name a run of axes in a `
+        + `rank-${rank} tensor.`);
+    }
+    let folded = 1;
+    for (let i = from; i <= to; i++) folded *= x.shape[i] ?? 1;
+    return x.reshape([...x.shape.slice(0, from), folded, ...x.shape.slice(to + 1)]);
+  }
+
+  override describe(): string {
+    return `Flatten(start_dim=${this.startDim}, end_dim=${this.endDim})`;
   }
 }
 
@@ -2423,7 +2626,7 @@ export class Upsample extends Module {
    */
   constructor(private readonly size: number | readonly number[] | null = null,
               private readonly scaleFactor: number | null = null,
-              private readonly mode: "nearest" | "bilinear" = "nearest",
+              private readonly mode: InterpolateMode = "nearest",
               private readonly alignCorners: boolean | null = null,
               private readonly recomputeScaleFactor: boolean | null = null) {
     super();
@@ -2866,9 +3069,6 @@ export class Embedding extends Module {
               device?: null, dtype?: null) {
     refuseDeviceDtype("Embedding", device, dtype);
     super();
-    if (scaleGradByFreq) {
-      throw new NotImplementedError("Embedding(scaleGradByFreq) is not carried across");
-    }
     if (sparse) {
       throw new NotImplementedError(
         "Embedding(sparse) is not carried across — there is no sparse gradient here");
@@ -2914,7 +3114,11 @@ export class Embedding extends Module {
       table = table.mul(keep)
         .add(table.detach().mul(Tensor.full([this.numEmbeddings, 1], 1).sub(keep)));
     }
-    return embedding(idx, table);
+    // **`scaleGradByFreq` was a constructor field the forward never read.** The
+    // constructor refused it, so the unread field was invisible; taking the refusal
+    // away without passing it here would leave a layer that prints
+    // `scale_grad_by_freq=true` in `describe()` and does not do it.
+    return embedding(idx, table, null, null, this.normType, this.scaleGradByFreq);
   }
 
   override describe(): string {
@@ -3270,7 +3474,7 @@ class LazyNormBase extends LazyModule {
     super(`Lazy${batch ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
       (c) => (batch
         ? new BatchNormND(c, eps, momentum, affine ?? true,
-                          trackRunningStats ?? true, bias)
+                          trackRunningStats ?? true, undefined, undefined, bias)
         : new InstanceNormND(c, eps, momentum, affine ?? false,
                              trackRunningStats ?? false, undefined, undefined, bias)),
       channels);
@@ -3657,23 +3861,14 @@ export function legacyReduction<R extends string>(
   return got;
 }
 
-/**
- * Class weights are **refused rather than absent**, at the position torch puts them.
- *
- * The core refuses them for a reason worth repeating here: torch's `mean` divides by
- * the **sum of the weights** rather than by the sample count, so a `weight` accepted
- * and ignored changes the loss value quietly and leads to choosing the wrong learning
- * rate. What it must not do is take the seat of something else —
- * `new CrossEntropyLoss(classWeights)` set the *reduction* to a tensor until the core
- * grew torch's order and the two sides came apart.
- */
-export function refuseWeight(layer: string, what: string, weight: unknown): void {
-  if (weight !== undefined && weight !== null) {
-    throw new Error(
-      `${layer}(${what}=…) is not in the browser subset. Use real PyTorch on your ` +
-      "own machine; imitating what is missing teaches the wrong thing.");
-  }
-}
+// **`refuseWeight` stood here and is gone.** It refused the class weight on six
+// entry points with a reason that was true when written — torch's `mean` divides by
+// the sum of the weights, so a weight accepted and ignored changes the loss quietly.
+// The way out of that was to divide by the sum of the weights, which is what
+// `reduceIgnoring` now does. Two of its six callers had already been overtaken: the
+// tensor methods behind `l1_loss` and `mse_loss` grew a `weight` and the wrappers went
+// on refusing one, so the same loss answered under one spelling and refused under the
+// other. A refusal helper is worth keeping only while something still refuses.
 
 /**
  * `torch.nn.BCELoss` — over **probabilities**, where `BCEWithLogitsLoss` takes
@@ -3686,14 +3881,15 @@ export function refuseWeight(layer: string, what: string, weight: unknown): void
  */
 export class BCELoss {
   readonly reduction: Reduction;
+  readonly weight: Tensor | undefined;
   constructor(weight?: Tensor, sizeAverage: boolean | null = null,
               reduce: boolean | null = null, reduction: Reduction = "mean") {
-    refuseWeight("BCELoss", "weight", weight);
+    this.weight = weight;
     this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
-    return x.bce(target, this.reduction);
+    return x.bce(target, this.reduction, this.weight);
   }
 
   call(x: Tensor, target: Tensor): Tensor {
@@ -3705,6 +3901,8 @@ export class BCELoss {
 
 export class BCEWithLogitsLoss {
   readonly reduction: Reduction;
+  readonly weight: Tensor | undefined;
+  readonly posWeight: Tensor | undefined;
   constructor(
     weight?: Tensor,
     sizeAverage: boolean | null = null,
@@ -3712,13 +3910,13 @@ export class BCEWithLogitsLoss {
     reduction: Reduction = "mean",
     posWeight?: Tensor,
   ) {
-    refuseWeight("BCEWithLogitsLoss", "weight", weight);
-    refuseWeight("BCEWithLogitsLoss", "posWeight", posWeight);
+    this.weight = weight;
+    this.posWeight = posWeight;
     this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
-    return x.bceWithLogits(target, this.reduction);
+    return x.bceWithLogits(target, this.reduction, this.weight, this.posWeight);
   }
 
   call(x: Tensor, target: Tensor): Tensor {
@@ -3730,6 +3928,7 @@ export class BCEWithLogitsLoss {
 
 export class NLLLoss {
   readonly reduction: Reduction;
+  readonly weight: Tensor | undefined;
   constructor(
     weight: Tensor | undefined = undefined,
     sizeAverage: boolean | null = null,
@@ -3737,12 +3936,12 @@ export class NLLLoss {
     reduce: boolean | null = null,
     reduction: Reduction = "mean",
   ) {
-    refuseWeight("NLLLoss", "weight", weight);
+    this.weight = weight;
     this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(x: Tensor, target: Tensor): Tensor {
-    return x.nllLoss(target, this.ignoreIndex, this.reduction);
+    return x.nllLoss(target, this.ignoreIndex, this.reduction, this.weight);
   }
 
   call(x: Tensor, target: Tensor): Tensor {
@@ -4275,7 +4474,7 @@ function gridReflect(v: Tensor, n: number, alignCorners: boolean): Tensor {
 export function gridSample(
   input: Tensor,
   grid: Tensor,
-  mode: "bilinear" | "nearest" = "bilinear",
+  mode: "bilinear" | "nearest" | "bicubic" = "bilinear",
   paddingMode: "zeros" | "border" | "reflection" = "zeros",
   alignCorners = false,
 ): Tensor {
@@ -4290,12 +4489,18 @@ export function gridSample(
   const g2 = grid.reshape([N, cells, 2]);
   let sx = gridDenorm(g2.narrow(2, 0, 1).reshape([N, cells]), W, alignCorners);
   let sy = gridDenorm(g2.narrow(2, 1, 1).reshape([N, cells]), H, alignCorners);
-  if (paddingMode === "border") {
-    sx = sx.clamp(0, W - 1);
-    sy = sy.clamp(0, H - 1);
-  } else if (paddingMode === "reflection") {
-    sx = gridReflect(sx, W, alignCorners);
-    sy = gridReflect(sy, H, alignCorners);
+  // **The centre is padded for the two-tap kernels and left alone for bicubic.**
+  // Clamping the centre puts both bilinear corners inside, which is the whole job
+  // there; a 4×4 window steps one cell further and needs the rule at the tap instead,
+  // so moving the centre as well would move it twice.
+  if (mode !== "bicubic") {
+    if (paddingMode === "border") {
+      sx = sx.clamp(0, W - 1);
+      sy = sy.clamp(0, H - 1);
+    } else if (paddingMode === "reflection") {
+      sx = gridReflect(sx, W, alignCorners);
+      sy = gridReflect(sy, H, alignCorners);
+    }
   }
 
   // The starting index per plane. With `(N, C)` flattened in advance, each corner is
@@ -4332,6 +4537,44 @@ export function gridSample(
   const wx = sx.sub(x0).reshape([N, 1, cells]);
   const wy = sy.sub(y0).reshape([N, 1, cells]);
   const one = Tensor.full([], 1);
+  if (mode === "bicubic") {
+    // **The same Keys kernel as `interpolate`'s plain `bicubic`, at `a = −0.75`** —
+    // not the anti-aliased path's `−0.5`.
+    //
+    // The weights are tensor expressions in the fractional offset rather than
+    // constants, because **the gradient has to reach the grid**: that is the path by
+    // which a spatial transformer learns `theta`, and constants would cut it silently
+    // while every value case still passed.
+    const cubic = (v: Tensor): Tensor => {
+      const t = v.abs();
+      const a = -0.75;
+      const near = t.mul(Tensor.full([], a + 2)).sub(Tensor.full([], a + 3))
+        .mul(t).mul(t).add(one);
+      const far = t.sub(Tensor.full([], 5)).mul(t).add(Tensor.full([], 8))
+        .mul(t).mul(Tensor.full([], a)).sub(Tensor.full([], 4 * a));
+      return near.where(t.binary("le", one),
+                        far.where(t.binary("lt", Tensor.full([], 2)),
+                                  t.mul(Tensor.full([], 0))));
+    };
+    // The padding lands on the tap, not on the centre. `zeros` wants the tap masked,
+    // which `pick` already does; the other two move the index so the mask never fires.
+    const edge = (i: Tensor, n: number): Tensor => {
+      if (paddingMode === "border") return i.clamp(0, n - 1);
+      if (paddingMode === "reflection") return gridReflect(i, n, alignCorners).round();
+      return i;
+    };
+    let acc: Tensor | null = null;
+    for (let ky = -1; ky < 3; ky++) {
+      const ty = cubic(Tensor.full([], ky).sub(wy));
+      for (let kx = -1; kx < 3; kx++) {
+        const tap = pick(edge(y0.add(Tensor.full([], ky)), H),
+                         edge(x0.add(Tensor.full([], kx)), W));
+        const term = tap.mul(ty).mul(cubic(Tensor.full([], kx).sub(wx)));
+        acc = acc === null ? term : acc.add(term);
+      }
+    }
+    return shaped(acc ?? pick(y0, x0));
+  }
   const x1 = x0.add(one);
   const y1 = y0.add(one);
   const out = pick(y0, x0).mul(one.sub(wy)).mul(one.sub(wx))
@@ -4339,6 +4582,76 @@ export function gridSample(
     .add(pick(y1, x0).mul(wy).mul(one.sub(wx)))
     .add(pick(y1, x1).mul(wy).mul(wx));
   return shaped(out);
+}
+
+/**
+ * The function form of `InstanceNormND` — torch's `F.instance_norm`.
+ *
+ * **The running statistics were refused on the ground that this keeps none.** It
+ * keeps none of its own, which is true and was not the question: torch's buffers are
+ * the *caller's*, handed in and written back, as `batchNorm` below already does. What
+ * the update is was measured rather than derived —
+ *
+ *     runningMean ← (1−m)·runningMean + m·mean over (N, H, W) per channel
+ *     runningVar  ← (1−m)·runningVar  + m·mean over N of the **unbiased**
+ *                   per-(sample, channel) variance
+ *
+ * — and the second line is the one worth writing down: it is the average of the
+ * per-plane variances, not the variance of the whole channel. On a 2×3×2×2 of
+ * consecutive integers those are 1.667 and 47.7.
+ *
+ * **Handing statistics in does not change the output** while `useInputStats` is on;
+ * the normalisation stays per plane and only the buffers move. Measured, because the
+ * opposite is the natural guess.
+ */
+export function instanceNorm(
+  input: Tensor,
+  runningMean: Tensor | null = null,
+  runningVar: Tensor | null = null,
+  weight: Tensor | null = null,
+  bias: Tensor | null = null,
+  useInputStats = true,
+  momentum = 0.1,
+  eps = 1e-5,
+): Tensor {
+  const channels = input.shape[1] ?? 1;
+  const spatial = input.shape.length - 2;
+  const shape = [1, channels, ...new Array<number>(spatial).fill(1)];
+  const affine = (t: Tensor): Tensor => {
+    let out = t;
+    if (weight) out = out.mul(weight.reshape(shape));
+    if (bias) out = out.add(bias.reshape(shape));
+    return out;
+  };
+  if (!useInputStats) {
+    if (!runningMean || !runningVar) {
+      throw new RuntimeError("Expected running_mean and running_var to be defined "
+        + "when use_input_stats is false");
+    }
+    return affine(input.sub(runningMean.reshape(shape))
+      .div(runningVar.reshape(shape).binary("add", Tensor.full([], eps)).sqrt()));
+  }
+  if (runningMean && runningVar) {
+    noGrad(() => {
+      // Reduce every axis but the channel for the mean; for the variance reduce the
+      // spatial axes first — unbiased, per plane — and average over the batch after.
+      let seen = input;
+      for (let d = input.shape.length - 1; d >= 0; d--) {
+        if (d !== 1) seen = seen.mean(d, false);
+      }
+      let plane = input;
+      for (let d = input.shape.length - 1; d >= 2; d--) plane = plane.mean(d, true);
+      let sq = input.sub(plane).square();
+      for (let d = input.shape.length - 1; d >= 2; d--) sq = sq.mean(d, false);
+      const count = input.size / (channels * (input.shape[0] ?? 1));
+      const spread = sq.mul(Tensor.full([], count / (count - 1))).mean(0, false);
+      const keep = Tensor.full([], 1 - momentum);
+      const take = Tensor.full([], momentum);
+      runningMean.copy_(runningMean.mul(keep).add(seen.mul(take)));
+      runningVar.copy_(runningVar.mul(keep).add(spread.mul(take)));
+    });
+  }
+  return affine(input.instanceNorm(eps));
 }
 
 /**
@@ -4371,7 +4684,8 @@ export function batchNorm(
   const b = bias ?? Tensor.zeros([channels]);
   if (!training) {
     if (!runningMean || !runningVar) {
-      throw new Error("batchNorm: eval mode needs running statistics");
+      // torch's own wording, so the three sides answer the same sentence.
+      throw new Error("running_mean must be defined in evaluation mode");
     }
     const centered = input.sub(runningMean.reshape(shape));
     const scaled = centered.div(
@@ -4418,10 +4732,86 @@ export function batchNorm(
  * and holds the weights rather than a new computation, so writing down that
  * it is absent is better than putting the name there alone.
  */
-export function embedding(input: Tensor, weight: Tensor): Tensor {
+/**
+ * **torch's five carried, and they split three ways.**
+ *
+ * `max_norm`/`norm_type` shorten the looked-up rows *in the table itself* — the same
+ * side effect `embeddingBag` has, through the same `renormRows`, which is why that
+ * function's long note applies here unchanged.
+ *
+ * `padding_idx` is **gradient-only**: measured on torch, the forward returns that row
+ * exactly as it stands and only its gradient becomes zero. So it cannot be done by
+ * changing what comes out — the padding row is detached on the way in instead, which
+ * leaves the forward identical to the bit and cuts the path back. Left in, a pad token
+ * drifts toward whatever the loss wants and the mask stops meaning *ignore this*.
+ *
+ * `sparse` is refused, by name, because the core refuses it by name. Left out of the
+ * signature all five were surplus arguments and JavaScript discards those —
+ * `embedding(idx, w, 0)` returned the un-padded answer under the name of a padded one.
+ *
+ * `scaleGradByFreq` **divides each row's gradient by how often that index appears in
+ * this batch**, so a token seen three times does not pull three times as hard as one
+ * seen once. It is `padding_idx`'s trick with a fraction instead of a zero — see
+ * `scaleRowsByCount`.
+ */
+export function embedding(input: Tensor, weight: Tensor,
+                          paddingIdx: number | null = null,
+                          maxNorm: number | null = null, normType = 2.0,
+                          scaleGradByFreq = false, sparse = false): Tensor {
+  if (sparse) {
+    throw new RuntimeError(
+      "embedding(sparse=true) — there is no sparse gradient here is not in the "
+      + "browser subset.");
+  }
   const dim = weight.shape[1] ?? 1;
-  const picked = weight.indexSelect(0, input.reshape([input.size]));
+  if (maxNorm !== null) renormRows(weight, input, maxNorm, normType);
+  let table = paddingIdx === null ? weight : detachRow(weight, paddingIdx);
+  if (scaleGradByFreq) table = scaleRowsByCount(table, input);
+  const picked = table.indexSelect(0, input.reshape([input.size]));
   return picked.reshape([...input.shape, dim]);
+}
+
+/**
+ * The same table whose gradient is divided per row by how often that row is indexed.
+ *
+ * **The form is `w.detach() + (w − w.detach())·k`, and the reason is exactness.** The
+ * obvious alternative is `padding_idx`'s own trick with a fraction in place of the
+ * zero — `w·k + w.detach()·(1−k)` — and that one is not the identity in float32: the
+ * two products round apart, so at `k = 1/3` a row holding 15 comes back as 14.999999
+ * and one holding 27 as 26.999998. Here the bracket is elementwise zero, so the sum
+ * is `w` to the bit while the gradient still arrives scaled by `k`.
+ *
+ * **No check in this repository can tell the two apart**, and that is written down
+ * rather than left to be found: the perturbation is at the last float32 bit, about
+ * 1e-7 relative, and the golden compares at `rtol = 1e-4`. The inexact form was
+ * planted and passed every case. The exact one is still what to write — it costs
+ * nothing and it is right — but it is a choice the measurements do not defend.
+ *
+ * The counts are built with `indexAdd` rather than read back to the host, so this
+ * stays synchronous. A row nobody indexed has a count of zero and a gradient of zero;
+ * the divisor is floored at one there rather than dividing zero by zero into a `nan`
+ * that would poison every later step on that row.
+ */
+function scaleRowsByCount(weight: Tensor, input: Tensor): Tensor {
+  const rows = weight.shape[0] ?? 1;
+  const flat = input.reshape([input.size]);
+  const seen = Tensor.zeros([rows]).indexAdd(0, flat, Tensor.ones([flat.size]));
+  const k = Tensor.full([], 1)
+    .div(seen.binary("maximum", Tensor.full([], 1))).reshape([rows, 1]);
+  return weight.detach().add(weight.sub(weight.detach()).mul(k));
+}
+
+/**
+ * The same table with one row cut out of the graph — value for value identical,
+ * and nothing flows back through that row.
+ */
+function detachRow(weight: Tensor, row: number): Tensor {
+  const rows = weight.shape[0] ?? 1;
+  const mask = Tensor.zeros([rows])
+    .indexAdd(0, Tensor.from([row], [1], { dtype: "int64" }), Tensor.ones([1]))
+    .reshape([rows, 1]);
+  const keep = Tensor.full([], 1).sub(mask);
+  return weight.mul(keep).add(weight.detach().mul(mask));
 }
 
 /**
@@ -4514,12 +4904,28 @@ export function embeddingBag(
   // `embeddingBag(idx, w, offsets, "sum")` handed a mode string to `maxNorm` — and
   // `maxNorm` rewrites the table, so the layer would have been rescaling its own
   // embeddings on every forward pass. The layer's call moved with it.
+  // **`scaleGradByFreq` is answered on `embedding` and refused here, because torch
+  // disagrees with itself.** `embeddingBag(mode: "sum")` is by definition
+  // `embedding(...).sum(1)`, and on torch 2.13.0 the two give different gradients
+  // under this flag: with `arange(12).reshape(4, 3)` and ids `[[0,1,1],[2,1,0]]` the
+  // plain path divides row 1 by three and row 2 by one — the documented rule — while
+  // the bag divides them by two and by three. Eight further probes found no rule
+  // reproducing the second. Copying an answer nobody can state a rule for would be a
+  // wrong number under an argument that reads as a tuning knob.
+  // **The wording is the one the golden reads.** These two said *is not carried
+  // across*, which nothing was asking; the moment a refusal case was written for them
+  // the binding reported the wrong-wording verdict, because that check freezes *is not
+  // in the browser subset* and the core's `_unsupported` produces exactly that. Two
+  // spellings of one refusal is one of them going unread.
   if (scaleGradByFreq) {
-    throw new NotImplementedError("embeddingBag(scaleGradByFreq) is not carried across");
+    throw new NotImplementedError(
+      "embeddingBag(scale_grad_by_freq=true) is not in the browser subset — torch's "
+      + "own bag disagrees with embedding(...).sum(1) under this flag");
   }
   if (sparse) {
     throw new NotImplementedError(
-      "embeddingBag(sparse) is not carried across — there is no sparse gradient here");
+      "embeddingBag(sparse=true) — there is no sparse gradient here is not in the "
+      + "browser subset.");
   }
   if (maxNorm !== null) renormRows(weight, input, maxNorm, normType);
   const dim = weight.shape[1] ?? 1;
@@ -4585,9 +4991,14 @@ export function embeddingBag(
  * is hard and the derivative is soft. Keeping those two apart is what this
  * function means.
  *
- * @param noise Gumbel noise already drawn. Undrawn, it is drawn here — the
- *   golden cases can only ask about properties rather than values, but a
- *   caller sometimes wants to reproduce with fixed noise.
+ * **A sixth `noise` seat used to sit here and does not any more.** It let a caller
+ * hand in the Gumbel draw, which made the function reproducible — and torch has no
+ * such argument, so it was a seat only this implementation had. The one thing it was
+ * used for, asking whether the answer follows the draw rather than the call,
+ * `manualSeed` answers: seed, call, seed again, call again. Reproducibility that
+ * works the way a reader of torch already expects beats an extra parameter that
+ * works only here, and the signature axis counted the seat as this namespace's last
+ * open row.
  */
 export function gumbelSoftmax(
   logits: Tensor,
@@ -4595,7 +5006,6 @@ export function gumbelSoftmax(
   hard = false,
   eps = 1e-10,
   dim = -1,
-  noise: Tensor | null = null,
 ): Tensor {
   // **`eps` is accepted, ignored, and warned about — which is exactly what torch does.**
   //
@@ -4637,7 +5047,7 @@ export function gumbelSoftmax(
   // It keeps `log(0)` out of a uniform draw that can return exactly 0; the parameter
   // above is torch's dead one and never reaches here.
   const floor = 1e-10;
-  const g = noise ?? Tensor.uniform(logits.shape)
+  const g = Tensor.uniform(logits.shape)
     .binary("add", Tensor.full([], floor)).log().neg()
     .binary("add", Tensor.full([], floor)).log().neg();
   const soft = logits.add(g).div(Tensor.full([], tau)).softmax(axis);
@@ -4650,8 +5060,13 @@ export function gumbelSoftmax(
 export class BatchNormND extends Module {
   readonly weight: Tensor | null;
   readonly bias: Tensor | null;
-  readonly runningMean: Tensor;
-  readonly runningVar: Tensor;
+  /**
+   * **Null under `trackRunningStats=false`**, which is torch's own answer there:
+   * `bn.running_mean is None`, `state_dict` holds `weight` and `bias` alone, and the
+   * layer normalises by this batch in both modes.
+   */
+  readonly runningMean: Tensor | null;
+  readonly runningVar: Tensor | null;
   /**
    * How many times it has passed through in training mode. **Not on the GPU — it is
    * just a number.**
@@ -4680,34 +5095,53 @@ export class BatchNormND extends Module {
    */
   private trackedBase: Tensor | null = null;
 
-  /** See `GroupNorm` on `affine` and `bias`. */
+  /**
+   * See `GroupNorm` on `affine` and `bias`.
+   *
+   * **`numFeatures`, not `channels`, and `bias` behind `device` and `dtype`.** This is
+   * the fix `InstanceNormND` took and this class did not, one file apart: torch declares
+   * `bias` keyword-only after the pair, so a sixth positional argument is `device` there
+   * and was `bias` here — **a shift, not a short tail.** The rename goes with it, because
+   * torch and the core both call the first argument `num_features` and its sibling
+   * already did.
+   *
+   * Two things next to it were already right and read like proof: `InstanceNormND`
+   * twenty lines up takes the pair, and `LazyBatchNorm1d` — this layer's own lazy
+   * spelling — declares `device` and `dtype` and refuses them. Only the eager batch
+   * class was short, and the signature axis is what said so.
+   */
   constructor(
-    readonly channels: number,
+    readonly numFeatures: number,
     private readonly eps = 1e-5,
     private readonly momentum = 0.1,
-    // **Kept because `describe` prints them.** `trackRunningStats=false` is refused
-    // below, so the only value it can hold is the one that was honoured — printing it
-    // is a statement about the layer rather than about the argument.
+    // **Kept because `describe` prints them.**
     private readonly affine = true,
     private readonly trackRunningStats = true,
+    device?: null,
+    dtype?: null,
     bias = true,
   ) {
     super();
-    if (!trackRunningStats) {
-      // The forward pass reads the running statistics in eval mode, so accepting
-      // this and ignoring it leaves training right and evaluation quietly wrong.
-      throw new Error(
-        "BatchNorm with trackRunningStats=false is not here yet.");
-    }
-    this.weight = affine ? Tensor.owned([channels], 1) : null;
-    this.bias = affine && bias ? Tensor.owned([channels], 0) : null;
+    refuseDeviceDtype("BatchNorm", device, dtype);
+    this.weight = affine ? Tensor.owned([numFeatures], 1) : null;
+    this.bias = affine && bias ? Tensor.owned([numFeatures], 0) : null;
     this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
-    this.runningMean = Tensor.owned([channels], 0);
-    this.runningVar = Tensor.owned([channels], 1);
-    // The running statistics take no gradient, and **still have to survive the scope
-    // closing.**
-    keepAlive(this.runningMean);
-    keepAlive(this.runningVar);
+    // **`trackRunningStats=false` was refused here**, on the ground that the forward
+    // pass reads the running statistics in eval mode, so accepting the flag and
+    // ignoring it leaves training right and evaluation quietly wrong. Both halves
+    // were true and neither was the whole thing: with the flag off there are **no
+    // running statistics at all** — torch registers none — and the layer normalises
+    // by this batch in both modes, so training and evaluation give the same answer.
+    if (trackRunningStats) {
+      this.runningMean = Tensor.owned([numFeatures], 0);
+      this.runningVar = Tensor.owned([numFeatures], 1);
+      // The running statistics take no gradient, and **still have to survive the
+      // scope closing.**
+      keepAlive(this.runningMean);
+      keepAlive(this.runningVar);
+    } else {
+      this.runningMean = this.runningVar = null;
+    }
   }
 
   override ownParameters(): Record<string, Tensor> {
@@ -4729,6 +5163,10 @@ export class BatchNormND extends Module {
    */
   override namedBuffers(persistentOnly = false): Record<string, Tensor> {
     void persistentOnly;                      // no non-persistent buffer on this layer
+    // **Three keys or none.** torch registers no buffer under
+    // `track_running_stats=false`, so a `state_dict` written here would carry three
+    // keys torch's does not and would not load back into torch's layer.
+    if (!this.runningMean || !this.runningVar) return {};
     return {
       running_mean: this.runningMean,
       running_var: this.runningVar,
@@ -4757,13 +5195,18 @@ export class BatchNormND extends Module {
     const rest: Record<string, Tensor> = {};
     const handled: string[] = [];
     for (const [name, src] of Object.entries(values)) {
-      if (name === "running_mean") {
-        noGrad(() => this.runningMean.copyFrom(src));
+      // With no running statistics the three keys fall through to `rest` and come
+      // back as **unexpected**, which is what torch answers when a tracking layer's
+      // checkpoint is loaded into one built without.
+      if (name === "running_mean" && this.runningMean) {
+        const target = this.runningMean;
+        noGrad(() => target.copyFrom(src));
         handled.push(name);
-      } else if (name === "running_var") {
-        noGrad(() => this.runningVar.copyFrom(src));
+      } else if (name === "running_var" && this.runningVar) {
+        const target = this.runningVar;
+        noGrad(() => target.copyFrom(src));
         handled.push(name);
-      } else if (name === "num_batches_tracked") {
+      } else if (name === "num_batches_tracked" && this.runningMean) {
         // The given tensor is not captured as it is — when the scope closes that
         // buffer is recycled.
         const base = Tensor.owned([], 0);
@@ -4782,17 +5225,21 @@ export class BatchNormND extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    if (this.training) this.numBatchesTracked += 1;
+    if (this.training && this.trackRunningStats) this.numBatchesTracked += 1;
     // **`batchNorm` does the computation.** With the layer and the function each
     // written out, a day comes when they diverge, and the place they diverge is the
     // running statistics — so training is fine and evaluation alone is wrong.
+    //
+    // **Without the statistics the batch's own are used in both modes**, which is
+    // what `training` means to the function: there is nothing else to normalise by.
     return batchNorm(x, this.runningMean, this.runningVar, this.weight,
-      this.bias, this.training, this.momentum, this.eps);
+      this.bias, this.training || !this.trackRunningStats,
+      this.momentum, this.eps);
   }
 
   /** torch's `_BatchNorm.extra_repr`, shared by the instance norms next door. */
   override describe(): string {
-    return `${this.constructor.name}(${this.channels}, eps=${pyNumber(this.eps)}, `
+    return `${this.constructor.name}(${this.numFeatures}, eps=${pyNumber(this.eps)}, `
       + `momentum=${this.momentum}, affine=${this.affine ? "True" : "False"}, `
       + `bias=${this.bias !== null ? "True" : "False"}, `
       + `track_running_stats=${this.trackRunningStats ? "True" : "False"})`;
@@ -4849,91 +5296,152 @@ export type RNNKind = "RNN" | "LSTM" | "GRU";
  * refer to it by that name and a rename that reaches into prose is how a comment
  * starts lying.
  */
+/** One layer in one direction. `hr` is present only under a projection. */
+interface RNNSlab {
+  ih: Tensor;
+  hh: Tensor;
+  bih?: Tensor;
+  bhh?: Tensor;
+  hr?: Tensor;
+}
+
 export class RNNBase extends Module {
-  readonly weightIh: Tensor;
-  readonly weightHh: Tensor;
-  readonly biasIh: Tensor;
-  readonly biasHh: Tensor;
+  /** Indexed `layer * directions + direction`, which is torch's own row order. */
+  readonly slabs: RNNSlab[] = [];
+  readonly directions: number;
+  readonly outWidth: number;
+  /**
+   * **Not a constructor seat, because torch's `RNNBase` has none.** torch carries the
+   * activation in the mode — `RNN_TANH` and `RNN_RELU` are two of its four — and
+   * `RNN` is the only subclass that takes the word. Adding an twelfth argument here
+   * made this class one longer than torch's, which the signature axis reads as a tail
+   * that does not line up; `RNN` sets the field after `super()` instead.
+   */
+  nonlinearity: "tanh" | "relu" = "tanh";
 
   /**
    * **`mode` comes first, as it does in torch.** It used to come last, so
    * `new RNNBase(10, 20, "LSTM")` here was `RNNBase("LSTM", 10, 20)` there — and the
    * row said nothing, because a name torch has at one end and we have at the other
    * cannot be lined up, which puts it in the bucket that reports no detail.
+   *
+   * **`numLayers`, `bias`, `bidirectional` and `projSize` were refused here** with
+   * the reason that this base builds one unidirectional biased layer, so anything
+   * else had nowhere to go. That was true of the code and not of the problem: a
+   * second direction is the same recurrence over `flip(0)` turned back round, a
+   * stack is the loop run again on the last layer's output, and the projection is one
+   * more matrix after `o · tanh(c)`. None of it needed a kernel that was not here.
    */
   constructor(
     readonly mode: RNNKind,
     inputSize: number,
     readonly hidden: number,
-    numLayers = 1,
+    readonly numLayers = 1,
     bias = true,
     readonly batchFirst = false,
-    dropout = 0,
-    bidirectional = false,
-    projSize = 0,
+    readonly dropout = 0,
+    readonly bidirectional = false,
+    readonly projSize = 0,
     device?: null,
     dtype?: null,
   ) {
     super();
     refuseDeviceDtype("RNNBase", device, dtype);
-    // **The three after `batchFirst` are a trailing tail, and a tail is not safe
-    // here.** Python raises on a surplus positional and JavaScript discards it, so
-    // `new RNNBase("LSTM", 2, 4, 1, true, false, 0, true)` built a one-directional net
-    // and said nothing about the `true`. Carried and refused for the same reason
-    // `numLayers` and `bias` below are: an argument that raises with its own name
-    // beats one the caller cannot tell went nowhere.
-    //
-    // `dropout` is the exception and it is torch's own: at one layer torch warns and
-    // ignores it, because the dropout goes *between* layers and there is no between.
-    // Refusing it would stop a line torch accepts.
-    if (dropout !== 0) {
+    // torch's own two messages, in torch's own order — negative before too-large, so
+    // that `projSize = -1` is told it must be positive rather than that it must be
+    // smaller than the hidden size, which is also true of it and is not what torch
+    // says.
+    if (projSize < 0) {
+      throw new RangeError(
+        "proj_size should be a positive integer or zero to disable projections");
+    }
+    if (projSize >= hidden) {
+      throw new RangeError("proj_size has to be smaller than hidden_size");
+    }
+    if (projSize !== 0 && mode !== "LSTM") {
+      throw new RangeError(
+        "proj_size argument is only supported for LSTM, not RNN or GRU");
+    }
+    // `dropout` goes *between* layers, so one layer has nowhere to put it. torch
+    // takes the argument, warns, and never uses it; refusing would stop a line torch
+    // accepts.
+    if (dropout !== 0 && numLayers === 1) {
       console.warn(
         "dropout option adds dropout after all but last recurrent layer, so "
         + `non-zero dropout expects num_layers greater than 1, but got dropout=${dropout} `
-        + "and num_layers=1");
+        + `and num_layers=${numLayers}`);
     }
-    if (bidirectional) {
-      throw new NotImplementedError(
-        "RNNBase(bidirectional=true) — a second set of weights and a reversed pass, "
-        + "neither of which is here");
-    }
-    if (projSize !== 0) {
-      throw new NotImplementedError(
-        `RNNBase(projSize=${projSize}) — the LSTM projection is not carried across`);
-    }
-    // **The seats between `hidden` and `batchFirst` exist so that `batchFirst` sits
-    // where torch has it.** Left out, a line copied from torch positionally puts
-    // `numLayers` into `batchFirst` and the net silently reads its axes the wrong way
-    // round — which is the defect `EmbeddingBag`'s `mode` comment, forty lines up,
-    // records having actually shipped.
-    //
-    // Accepted and refused rather than accepted and ignored. This base is one layer
-    // and always biased; taking the argument and dropping it is the shape the `**kw`
-    // sweep spent a day removing.
-    if (numLayers !== 1) {
-      throw new NotImplementedError(
-        `RNNBase(numLayers=${numLayers}) — this side stacks one layer`);
-    }
-    if (!bias) {
-      throw new NotImplementedError("RNNBase(bias=false) is not carried across");
-    }
+    this.directions = bidirectional ? 2 : 1;
+    this.outWidth = (projSize || hidden) * this.directions;
     const gates = mode === "LSTM" ? 4 : mode === "GRU" ? 3 : 1;
     const rows = hidden * gates;
-    // torch's recurrent nets take the bound from the hidden size — all four weights
-    // use the same bound.
+    // torch's recurrent nets take the bound from the hidden size — every weight,
+    // the projection included, uses the same one.
     const bound = 1 / Math.sqrt(Math.max(1, hidden));
-    this.weightIh = uniform([rows, inputSize], bound);
-    this.weightHh = uniform([rows, hidden], bound);
-    this.biasIh = uniform([rows], bound);
-    this.biasHh = uniform([rows], bound);
-    this.claim(this.weightIh, this.weightHh, this.biasIh, this.biasHh);
+    const carried = this.outWidth;
+    for (let layer = 0; layer < numLayers; layer++) {
+      // **What the next layer receives is not `hidden`.** Under a projection it is
+      // `projSize`, and with both directions twice that — measured against torch, a
+      // two-layer bidirectional LSTM with `projSize = 2` has `weight_ih_l1` at
+      // (16, 4). Sizing it from `hidden` builds a layer that loads no checkpoint.
+      const inSize = layer === 0 ? inputSize : carried;
+      for (let d = 0; d < this.directions; d++) {
+        const slab: RNNSlab = {
+          ih: uniform([rows, inSize], bound),
+          hh: uniform([rows, projSize || hidden], bound),
+        };
+        if (bias) {
+          slab.bih = uniform([rows], bound);
+          slab.bhh = uniform([rows], bound);
+        }
+        if (projSize) slab.hr = uniform([projSize, hidden], bound);
+        this.slabs.push(slab);
+        this.claim(...Object.values(slab));
+      }
+    }
+  }
+
+  /**
+   * Replace the built weights with the ones a caller handed over, by name.
+   *
+   * `torch.lstm` and its siblings take **a flat list** and the gradient has to reach
+   * the tensors in it, so this swaps the slabs' entries rather than copying values
+   * into them — `loadStateDict` would copy, and then the caller's tensors would get
+   * no gradient at all.
+   */
+  installFlat(names: readonly string[], values: readonly Tensor[]): void {
+    names.forEach((name, i) => {
+      const value = values[i];
+      if (!value) return;
+      const at = name.lastIndexOf("_l");
+      const tail = name.slice(at);
+      const rev = tail.endsWith("_reverse");
+      const layer = Number(tail.slice(2, rev ? tail.length - 8 : undefined));
+      const slab = this.slabs[layer * this.directions + (rev ? 1 : 0)];
+      if (!slab) return;
+      const field = name.slice(0, at);
+      if (field === "weight_ih") slab.ih = value;
+      else if (field === "weight_hh") slab.hh = value;
+      else if (field === "bias_ih") slab.bih = value;
+      else if (field === "bias_hh") slab.bhh = value;
+      else if (field === "weight_hr") slab.hr = value;
+    });
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return {
-      weight_ih_l0: this.weightIh, weight_hh_l0: this.weightHh,
-      bias_ih_l0: this.biasIh, bias_hh_l0: this.biasHh,
-    };
+    const out: Record<string, Tensor> = {};
+    this.slabs.forEach((slab, i) => {
+      // torch's names: `weight_ih_l0`, and the reverse direction takes a `_reverse`
+      // tail. A checkpoint crosses on these and nothing else.
+      const tail = `_l${Math.floor(i / this.directions)}`
+        + (i % this.directions ? "_reverse" : "");
+      out["weight_ih" + tail] = slab.ih;
+      out["weight_hh" + tail] = slab.hh;
+      if (slab.bih) out["bias_ih" + tail] = slab.bih;
+      if (slab.bhh) out["bias_hh" + tail] = slab.bhh;
+      if (slab.hr) out["weight_hr" + tail] = slab.hr;
+    });
+    return out;
   }
 
   override forward(x: Tensor): Tensor {
@@ -4943,7 +5451,9 @@ export class RNNBase extends Module {
   /**
    * Produces the full output and the final state together.
    */
-  run(x: Tensor): { output: Tensor; hidden: Tensor; cell: Tensor } {
+  run(
+    x: Tensor, h0: Tensor | null = null, c0: Tensor | null = null,
+  ): { output: Tensor; hidden: Tensor; cell: Tensor } {
     // **`batchFirst` is a turn on the way in and a turn on the way out**, and nothing
     // else — the loop is time-first either way. Turning only on the way in gives an
     // answer of the right rank carrying the wrong layout, and `(2, 5, 4)` where the
@@ -4962,41 +5472,76 @@ export class RNNBase extends Module {
     const src = this.batchFirst ? x.swapaxes(0, 1) : x;
     const [steps = 0, batch = 0] = src.shape;
     const H = this.hidden;
-    let h = Tensor.zeros([batch, H]);
-    let c = Tensor.zeros([batch, H]);
-    const outs: Tensor[] = [];
-    for (let t = 0; t < steps; t++) {
-      const xt = src.select(0, t);
-      const gi = xt.linear(this.weightIh).add(this.biasIh);
-      const gh = h.linear(this.weightHh).add(this.biasHh);
-      if (this.mode === "RNN") {
-        h = gi.add(gh).unary("tanh");
-      } else if (this.mode === "LSTM") {
-        // torch's gate order is i, f, g, o. Wrong order makes the values plausibly wrong.
-        const g = gi.add(gh);
-        const i = slice(g, 0, H).unary("sigmoid");
-        const f = slice(g, 1, H).unary("sigmoid");
-        const gg = slice(g, 2, H).unary("tanh");
-        const o = slice(g, 3, H).unary("sigmoid");
-        c = f.mul(c).add(i.mul(gg));
-        h = o.mul(c.unary("tanh"));
-      } else {
-        // GRU adds only through r and z and **parts ways at the n gate** — the hidden
-        // side's share is multiplied by r and then added. Adding first and multiplying
-        // afterwards changes the value silently.
-        const r = slice(gi, 0, H).add(slice(gh, 0, H)).unary("sigmoid");
-        const z = slice(gi, 1, H).add(slice(gh, 1, H)).unary("sigmoid");
-        const n = slice(gi, 2, H).add(r.mul(slice(gh, 2, H))).unary("tanh");
-        const one = Tensor.full([], 1);
-        h = one.sub(z).mul(n).add(z.mul(h));
+    const finalH: Tensor[] = [];
+    const finalC: Tensor[] = [];
+    let layerInput = src;
+    for (let layer = 0; layer < this.numLayers; layer++) {
+      const halves: Tensor[] = [];
+      for (let d = 0; d < this.directions; d++) {
+        const slab = this.slabs[layer * this.directions + d]!;
+        // **The reverse direction is the same recurrence read backwards**, and its
+        // output is turned round again before the two are joined. Measured by copying
+        // a bidirectional layer's two halves into two plain ones:
+        // `cat([fwd(x), rev(flip(x)).flip()], -1)` is torch's answer exactly.
+        const seq = d === 0 ? layerInput : layerInput.flip(0);
+        // **The initial state is a row per direction**, indexed the way the weights
+        // are — `layer * directions + direction`. Given none, it is zero, which is
+        // what the layer's own `forward` wants; the top-level `torch.lstm` hands one
+        // in and it has to reach the right direction's loop.
+        const row = layer * this.directions + d;
+        let h = h0 ? h0.select(0, row) : Tensor.zeros([batch, this.projSize || H]);
+        let c = c0 ? c0.select(0, row) : Tensor.zeros([batch, H]);
+        const outs: Tensor[] = [];
+        for (let t = 0; t < steps; t++) {
+          const xt = seq.select(0, t);
+          let gi = xt.linear(slab.ih);
+          let gh = h.linear(slab.hh);
+          if (slab.bih) gi = gi.add(slab.bih);
+          if (slab.bhh) gh = gh.add(slab.bhh);
+          if (this.mode === "RNN") {
+            h = gi.add(gh).unary(this.nonlinearity === "relu" ? "relu" : "tanh");
+          } else if (this.mode === "LSTM") {
+            // torch's gate order is i, f, g, o. Wrong order makes the values plausibly wrong.
+            const g = gi.add(gh);
+            const i = slice(g, 0, H).unary("sigmoid");
+            const f = slice(g, 1, H).unary("sigmoid");
+            const gg = slice(g, 2, H).unary("tanh");
+            const o = slice(g, 3, H).unary("sigmoid");
+            c = f.mul(c).add(i.mul(gg));
+            h = o.mul(c.unary("tanh"));
+            // **The projection is the last thing, after `o · tanh(c)`.** `c` keeps its
+            // full width and only `h` narrows, which is why the two halves of the
+            // state come back at different widths.
+            if (slab.hr) h = h.linear(slab.hr);
+          } else {
+            // GRU adds only through r and z and **parts ways at the n gate** — the hidden
+            // side's share is multiplied by r and then added. Adding first and multiplying
+            // afterwards changes the value silently.
+            const r = slice(gi, 0, H).add(slice(gh, 0, H)).unary("sigmoid");
+            const z = slice(gi, 1, H).add(slice(gh, 1, H)).unary("sigmoid");
+            const n = slice(gi, 2, H).add(r.mul(slice(gh, 2, H))).unary("tanh");
+            const one = Tensor.full([], 1);
+            h = one.sub(z).mul(n).add(z.mul(h));
+          }
+          outs.push(h);
+        }
+        const piece = Tensor.stack(outs, 0);
+        halves.push(d === 0 ? piece : piece.flip(0));
+        finalH.push(h);
+        finalC.push(c);
       }
-      outs.push(h);
+      layerInput = halves.length === 1 ? halves[0]! : Tensor.cat(halves, -1);
+      // **Between the layers and not after the last one.** Applied after the last as
+      // well, the output is randomly zeroed on the way out and training and
+      // evaluation disagree about the answer's scale.
+      if (this.dropout && this.training && layer < this.numLayers - 1) {
+        layerInput = layerInput.dropout(this.dropout, true);
+      }
     }
-    const stacked = Tensor.stack(outs, 0);
     return {
-      output: this.batchFirst ? stacked.swapaxes(0, 1) : stacked,
-      hidden: h.reshape([1, batch, H]),
-      cell: c.reshape([1, batch, H]),
+      output: this.batchFirst ? layerInput.swapaxes(0, 1) : layerInput,
+      hidden: Tensor.stack(finalH, 0),
+      cell: Tensor.stack(finalC, 0),
     };
   }
 }
@@ -5011,10 +5556,11 @@ export class RNNBase extends Module {
  * was the name rather than the computation, and **a recurrent-network textbook opens
  * with `nn.LSTM(...)`**, so it stopped people on the first line.
  *
- * **It still does not take all of torch's arguments** — `bidirectional`, `dropout` and
- * `projSize` are absent, and the base here is one layer. Accepting an argument and not
- * using it is a lie, which is the line the core holds the same way at `InstanceNorm`'s
- * `track_running_stats`.
+ * **It takes all of torch's arguments now.** `numLayers`, `bias`, `dropout`,
+ * `bidirectional` and `projSize` were each refused with the reason that this base
+ * builds one unidirectional biased layer — true of the code, and the code was what
+ * changed. `RNN`'s `nonlinearity` went the same way: `relu` was refused on the ground
+ * that this side computes `tanh`, and the unary table has had `relu` all along.
  *
  * **`batchFirst` used to be absent under that same rule, and that was one step too
  * far.** It is not an argument this side cannot honour — it is a turn on the way in and
@@ -5037,41 +5583,47 @@ export const Recurrent = RNNBase;
 export type Recurrent = RNNBase;
 
 /**
- * `torch.nn.RNN` — one layer.
+ * `torch.nn.RNN`, stacked as deep as `numLayers` says.
  *
  * **`nonlinearity` sits fourth and `batchFirst` sixth, which is torch's order and not
  * `LSTM`'s.** This is the one of the three that takes an extra argument, so the same
  * flag lives at a different index here than next door; writing all three alike would
- * put `batchFirst` one seat early on exactly this class.
+ * put `batchFirst` one seat early on exactly this class — and lands a string in
+ * `bias`, where it is true, so the layer builds with biases and computes `tanh`.
  */
 export class RNN extends RNNBase {
   constructor(inputSize: number, hidden: number, numLayers = 1,
               nonlinearity: "tanh" | "relu" = "tanh", bias = true,
-              batchFirst = false) {
-    if (nonlinearity !== "tanh") {
-      throw new NotImplementedError(
-        `RNN(nonlinearity=${nonlinearity}) — this side computes tanh`);
-    }
-    super("RNN", inputSize, hidden, numLayers, bias, batchFirst);
+              batchFirst = false, dropout = 0, bidirectional = false) {
+    // **No `projSize` seat, because torch's `RNN` has none.** It is the base class's
+    // argument and torch refuses it here by name; offering the seat would be an
+    // argument torch does not have, and refusing it from a seat that exists is worse
+    // than not having one.
+    super("RNN", inputSize, hidden, numLayers, bias, batchFirst, dropout,
+          bidirectional);
+    this.nonlinearity = nonlinearity;
   }
 }
 
 /**
- * `torch.nn.LSTM` — one layer. It carries two states, so `cell` comes back alongside
- * `hidden`.
+ * `torch.nn.LSTM`. It carries two states, so `cell` comes back alongside `hidden`,
+ * and it is the one of the three that takes `projSize`.
  */
 export class LSTM extends RNNBase {
   constructor(inputSize: number, hidden: number, numLayers = 1, bias = true,
-              batchFirst = false) {
-    super("LSTM", inputSize, hidden, numLayers, bias, batchFirst);
+              batchFirst = false, dropout = 0, bidirectional = false,
+              projSize = 0) {
+    super("LSTM", inputSize, hidden, numLayers, bias, batchFirst, dropout,
+          bidirectional, projSize);
   }
 }
 
-/** `torch.nn.GRU` — one layer. */
+/** `torch.nn.GRU`. */
 export class GRU extends RNNBase {
   constructor(inputSize: number, hidden: number, numLayers = 1, bias = true,
-              batchFirst = false) {
-    super("GRU", inputSize, hidden, numLayers, bias, batchFirst);
+              batchFirst = false, dropout = 0, bidirectional = false) {
+    super("GRU", inputSize, hidden, numLayers, bias, batchFirst, dropout,
+          bidirectional);
   }
 }
 
@@ -5098,6 +5650,19 @@ function slice(g: Tensor, k: number, H: number): Tensor {
  * summing back to 1. Turning booleans into floats happens where torch's
  * contract is imitated (the Python binding).
  *
+ * **`inProjWeight` is null under `useSeparateProjWeight`**, which is what torch hands
+ * over there — its own layer sets `in_proj_weight` to `None` when the three widths
+ * differ, and the three separate weights carry the projection instead.
+ *
+ * **`outProjWeight` used to default to `inProjWeight`** and cannot now that that one
+ * is nullable. Nobody relied on it: every caller gives an output projection, and a
+ * missing one is a mistake worth naming rather than a square matrix silently borrowed
+ * from the input side.
+ *
+ * (Both of those belong here rather than beside the parameters they describe:
+ * `test_binding_arguments.py` reads this list by splitting on commas, so a comment
+ * inside it becomes two parameters and shifts every position after it.)
+ *
  * @returns the output `(L, N, E)` and the weights. With `averageWeights`
  *   they are `(N, L, S)`, otherwise `(N, H, L, S)`, one per head.
  */
@@ -5107,13 +5672,13 @@ export function multiHeadAttentionForward(
   value: Tensor,
   embedDimToCheck: number | null,
   numHeads: number,
-  inProjWeight: Tensor,
+  inProjWeight: Tensor | null,
   inProjBias: Tensor | null,
   biasK: Tensor | null = null,
   biasV: Tensor | null = null,
   addZeroAttn = false,
   dropoutP = 0.0,
-  outProjWeight: Tensor = inProjWeight,
+  outProjWeight: Tensor | null = null,
   outProjBias: Tensor | null = null,
   training = true,
   keyPaddingMask: Tensor | null = null,
@@ -5134,22 +5699,16 @@ export function multiHeadAttentionForward(
   // the fourth argument on. Every one of the twelve that were missing sat *between*
   // ones that were present, so each shifted what followed.
   //
-  // Six are refused rather than implemented, which is the trade the core makes at the
-  // same place: quietly ignoring a branch like `biasK` or `staticK` makes the values
-  // plausibly different, and plausible is the one thing a comparison cannot catch.
-  for (const [what, given] of [["biasK", biasK], ["biasV", biasV],
-                               ["staticK", staticK], ["staticV", staticV],
-                               ["qProjWeight", qProjWeight],
-                               ["kProjWeight", kProjWeight],
-                               ["vProjWeight", vProjWeight]] as const) {
-    if (given != null) {
-      throw new NotImplementedError(`multiHeadAttentionForward(${what}=…)`);
-    }
-  }
-  for (const [what, on] of [["addZeroAttn", addZeroAttn],
-                            ["useSeparateProjWeight", useSeparateProjWeight]] as const) {
-    if (on) throw new NotImplementedError(`multiHeadAttentionForward(${what}=true)`);
-  }
+  // **Six were refused and all six are written now**, each a concatenation or a
+  // substitution rather than a kernel. The order they happen in is torch's and it
+  // matters:
+  //
+  //     project → concat biasK/biasV → split heads → staticK/staticV
+  //             → concat the zero step → scores
+  //
+  // `biasK` goes in **after** the projection, not through `W_k` — measured, and the
+  // reading that puts it before agrees on nothing. Both concatenations grow the key
+  // axis by one, so each mask grows a column of zero, once per concatenation.
   const inWeight = inProjWeight;
   const inBias = inProjBias;
   const outWeight = outProjWeight;
@@ -5174,28 +5733,72 @@ export function multiHeadAttentionForward(
   // the explicit one when both are given.
   if (isCausal && attnMask === null) attnMask = MultiheadAttention.causalMask(L);
 
-  /** Turns length-first into batch-first and projects. */
-  const project = (t: Tensor, len: number, slot: number): Tensor => {
-    const flat = t.permute([1, 0, 2]).reshape([N * len, E]);
-    const w = inWeight.narrow(0, slot * E, E);
+  /**
+   * Turns length-first into batch-first and projects.
+   *
+   * **`inProjBias` stays bundled even under separate weights**, split in three the
+   * same way — the part a reading of the flag alone misses.
+   */
+  const project = (t: Tensor, len: number, slot: number, width: number): Tensor => {
+    const flat = t.permute([1, 0, 2]).reshape([N * len, width]);
+    const w = useSeparateProjWeight
+      ? [qProjWeight, kProjWeight, vProjWeight][slot]
+      : inWeight?.narrow(0, slot * E, E);
+    if (!w) throw new Error(`useSeparateProjWeight is true but slot ${slot} is null`);
     const out = flat.linear(w);
     return (inBias ? out.add(inBias.narrow(0, slot * E, E)) : out)
       .reshape([N, len, E]);
   };
-  const q = project(query, L, 0);
-  const k = project(key, S, 1);
-  const v = project(value, S, 2);
+  const q = project(query, L, 0, query.shape[2] ?? E);
+  let k = project(key, S, 1, key.shape[2] ?? E);
+  let v = project(value, S, 2, value.shape[2] ?? E);
+
+  /** One more key position, so the mask grows a column that masks nothing. */
+  const grow = (m: Tensor | null): Tensor | null => m === null ? null
+    : Tensor.cat([m, Tensor.zeros([...m.shape.slice(0, -1), 1])], -1);
+
+  let src = S;
+  if (biasK || biasV) {
+    if (!biasK || !biasV) throw new Error("biasK and biasV must be given together");
+    // `(1, 1, E)` widened across the batch. Adding a zero block is the broadcast that
+    // keeps the gradient reaching the one row.
+    const spread = Tensor.zeros([N, 1, E]);
+    k = Tensor.cat([k, biasK.reshape([1, 1, E]).add(spread)], 1);
+    v = Tensor.cat([v, biasV.reshape([1, 1, E]).add(spread)], 1);
+    src += 1;
+    attnMask = grow(attnMask);
+    keyPaddingMask = grow(keyPaddingMask);
+  }
+  // **These arrive already projected and already split**, as `(N·heads, S, head)`.
+  // Inside here a key is `(N, S, E)` with the heads laid out along `E`, so the two
+  // shapes are the same numbers in a different arrangement.
+  const unsplit = (t: Tensor, len: number): Tensor =>
+    t.reshape([N, numHeads, len, head]).permute([0, 2, 1, 3]).reshape([N, len, E]);
+  if (staticK) {
+    src = staticK.shape[1] ?? src;
+    k = unsplit(staticK, src);
+  }
+  if (staticV) v = unsplit(staticV, staticV.shape[1] ?? src);
+  if (addZeroAttn) {
+    const zero = Tensor.zeros([N, 1, E]);
+    k = Tensor.cat([k, zero], 1);
+    v = Tensor.cat([v, zero], 1);
+    src += 1;
+    attnMask = grow(attnMask);
+    keyPaddingMask = grow(keyPaddingMask);
+  }
+  const S2 = src;
 
   const rows: Tensor[] = [];
   const allWeights: Tensor[] = [];
   for (let n = 0; n < N; n++) {
     const perHead: Tensor[] = [];
     const perHeadWeights: Tensor[] = [];
-    const pad = keyPaddingMask ? keyPaddingMask.select(0, n).reshape([1, S]) : null;
+    const pad = keyPaddingMask ? keyPaddingMask.select(0, n).reshape([1, S2]) : null;
     for (let h = 0; h < numHeads; h++) {
       const cut = (t: Tensor, len: number) =>
         t.select(0, n).narrow(1, h * head, head).reshape([len, head]);
-      let scores = cut(q, L).mm(cut(k, S).transpose()).binary("mul", scale);
+      let scores = cut(q, L).mm(cut(k, S2).transpose()).binary("mul", scale);
       if (attnMask) scores = scores.add(attnMask);
       if (pad) scores = scores.add(pad);
       // **Dropout on the attention, torch's way round.** The binding took
@@ -5208,13 +5811,14 @@ export function multiHeadAttentionForward(
       // what was attended to. At `dropoutP = 0` this is the identity, which is
       // why every existing golden case is untouched by it.
       const w = scores.softmax(1).dropout(dropoutP, training);
-      perHeadWeights.push(w.reshape([1, L, S]));
-      perHead.push(w.mm(cut(v, S)));
+      perHeadWeights.push(w.reshape([1, L, S2]));
+      perHead.push(w.mm(cut(v, S2)));
     }
     rows.push(Tensor.cat(perHead, 1));                 // (L, E)
-    allWeights.push(Tensor.cat(perHeadWeights, 0).reshape([1, numHeads, L, S]));
+    allWeights.push(Tensor.cat(perHeadWeights, 0).reshape([1, numHeads, L, S2]));
   }
   const merged = Tensor.stack(rows, 0).reshape([N * L, E]);
+  if (!outWeight) throw new Error("multiHeadAttentionForward needs outProjWeight");
   const projected = merged.linear(outWeight);
   const out = (outBias ? projected.add(outBias) : projected)
     .reshape([N, L, E]).permute([1, 0, 2]);
@@ -5228,10 +5832,19 @@ export function multiHeadAttentionForward(
 }
 
 export class MultiheadAttention extends Module {
-  readonly inWeight: Tensor;
+  /** Null when the three widths differ — see the constructor. */
+  readonly inWeight: Tensor | null;
   readonly inBias: Tensor | null;
   readonly outWeight: Tensor;
   readonly outBias: Tensor | null;
+  readonly qWeight: Tensor | null = null;
+  readonly kWeight: Tensor | null = null;
+  readonly vWeight: Tensor | null = null;
+  readonly biasK: Tensor | null = null;
+  readonly biasV: Tensor | null = null;
+  readonly addZeroAttn: boolean;
+  /** torch's own name for the test that decides whether one bundle is possible. */
+  readonly qkvSameEmbedDim: boolean;
 
   /**
    * torch's eleven, of which three do work here and four are refused by name.
@@ -5243,10 +5856,12 @@ export class MultiheadAttention extends Module {
    * `bias`. An absent feature beats a wrong answer, and **a wrong position is a wrong
    * answer wearing the shape of a feature.**
    *
-   * `dropout`, `bias` and `batchFirst` work. `addBiasKv`, `addZeroAttn` and a
-   * `kdim`/`vdim` unlike the embedding stop with their own name — the refusal exists
-   * a layer down in `multiHeadAttentionForward` already, and carrying the argument
-   * here is what makes it arrive with the right name attached.
+   * **`addBiasKv`, `addZeroAttn` and a `kdim`/`vdim` unlike the embedding stopped
+   * with their own name, and all three are answered now.** `biasK` and `biasV` are
+   * one more key and value step, concatenated in the projected space; `addZeroAttn`
+   * is one more zero step after that; and different widths are three separate
+   * projections instead of the bundled one — which is the path
+   * `useSeparateProjWeight` takes in the function.
    *
    * **`batchFirst` defaults to `false`, which flips what this class used to do.** It
    * read `(batch, len, E)` unconditionally, which is torch's `batch_first=True`, so
@@ -5267,35 +5882,46 @@ export class MultiheadAttention extends Module {
       throw new Error(
         `embed_dim(${embedDim}) is not divisible by num_heads(${numHeads}).`);
     }
-    for (const [what, on] of [["addBiasKv", addBiasKv],
-                              ["addZeroAttn", addZeroAttn]] as const) {
-      if (on) throw new NotImplementedError(`MultiheadAttention(${what}=true)`);
-    }
+    const kd = kdim ?? embedDim;
+    const vd = vdim ?? embedDim;
     // torch only takes the separate-projection path when these differ from
     // `embedDim`; the same number is the ordinary layer and asks for nothing.
-    for (const [what, given] of [["kdim", kdim], ["vdim", vdim]] as const) {
-      if (given !== null && given !== embedDim) {
-        throw new NotImplementedError(
-          `MultiheadAttention(${what}=${given}) — a key or value width unlike the `
-          + "embedding's");
-      }
-    }
+    this.qkvSameEmbedDim = kd === embedDim && vd === embedDim;
+    this.addZeroAttn = addZeroAttn;
     const bound = 1 / Math.sqrt(Math.max(1, embedDim));
-    this.inWeight = uniform([3 * embedDim, embedDim], bound);
+    if (this.qkvSameEmbedDim) {
+      this.inWeight = uniform([3 * embedDim, embedDim], bound);
+    } else {
+      // **Three weights and no bundle.** torch keeps `in_proj_weight` as `None` here
+      // and `state_dict` carries the other three instead — measured on a layer with
+      // `kdim = 6, vdim = 7`.
+      this.inWeight = null;
+      this.qWeight = uniform([embedDim, embedDim], bound);
+      this.kWeight = uniform([embedDim, kd], bound);
+      this.vWeight = uniform([embedDim, vd], bound);
+    }
     // torch's attention starts the bias at 0 — this is not a place where symmetry
     // needs breaking.
     this.inBias = bias ? Tensor.owned([3 * embedDim], 0) : null;
+    // `(1, 1, E)` — one step, widened across the batch inside the function.
+    this.biasK = addBiasKv ? uniform([1, 1, embedDim], bound) : null;
+    this.biasV = addBiasKv ? uniform([1, 1, embedDim], bound) : null;
     this.outWeight = uniform([embedDim, embedDim], bound);
     this.outBias = bias ? Tensor.owned([embedDim], 0) : null;
-    this.claim(...[this.inWeight, this.inBias, this.outWeight, this.outBias]
+    this.claim(...[this.inWeight, this.inBias, this.qWeight, this.kWeight,
+      this.vWeight, this.biasK, this.biasV, this.outWeight, this.outBias]
       .filter((t): t is Tensor => t !== null));
   }
 
   override ownParameters(): Record<string, Tensor> {
-    const out: Record<string, Tensor> = {
-      in_proj_weight: this.inWeight, "out_proj.weight": this.outWeight,
-    };
+    const out: Record<string, Tensor> = { "out_proj.weight": this.outWeight };
+    if (this.inWeight) out.in_proj_weight = this.inWeight;
+    if (this.qWeight) out.q_proj_weight = this.qWeight;
+    if (this.kWeight) out.k_proj_weight = this.kWeight;
+    if (this.vWeight) out.v_proj_weight = this.vWeight;
     if (this.inBias) out.in_proj_bias = this.inBias;
+    if (this.biasK) out.bias_k = this.biasK;
+    if (this.biasV) out.bias_v = this.biasV;
     if (this.outBias) out["out_proj.bias"] = this.outBias;
     return out;
   }
@@ -5304,43 +5930,26 @@ export class MultiheadAttention extends Module {
     return this.attend(x, null);
   }
 
+  /**
+   * Self-attention: one tensor for query, key and value.
+   *
+   * **This wrote out its own attention and it is a call now.** A fourth copy of the
+   * same arithmetic — the core has one, the function above has one, and the binding
+   * had already stopped using this one after the two diverged by 1.26e-01 on the
+   * golden's "same answer as the layer" case. Kept as a copy it would have been the
+   * one place the new flags did not reach, since they are all written in the
+   * function.
+   */
   attend(x: Tensor, mask: Tensor | null): Tensor {
     // **`batchFirst` decides which of the first two axes is which**, and torch's
-    // default is length first. Flipped here so the body below stays one shape.
-    const src = this.batchFirst ? x : x.swapaxes(0, 1);
-    const [batch = 1, len = 1] = src.shape;
-    const E = this.embedDim;
-    const head = E / this.numHeads;
-    const flat = src.reshape([batch * len, E]);
-    const inBias = this.inBias;
-    const projected = inBias ? flat.linear(this.inWeight).add(inBias)
-      : flat.linear(this.inWeight);
-    const parts = [0, 1, 2].map((k) => projected.narrow(1, k * E, E));
-    const scale = Tensor.full([], 1 / Math.sqrt(head));
-    const outs: Tensor[] = [];
-    for (let b = 0; b < batch; b++) {
-      const perHead: Tensor[] = [];
-      for (let h = 0; h < this.numHeads; h++) {
-        const take = (t: Tensor | undefined): Tensor => {
-          if (!t) throw new Error("attention: the projections are missing");
-          return t.reshape([batch, len, E]).select(0, b).narrow(1, h * head, head);
-        };
-        const q = take(parts[0]);
-        const k = take(parts[1]);
-        const v = take(parts[2]);
-        let scores = q.mm(k.transpose()).binary("mul", scale);
-        if (mask) scores = scores.add(mask);
-        // torch drops attention weights, not the values — and while training only.
-        perHead.push(scores.softmax(1).dropout(this.dropout, this.training).mm(v));
-      }
-      outs.push(Tensor.cat(perHead, 1));
-    }
-    const merged = Tensor.stack(outs, 0).reshape([batch * len, E]);
-    const outBias = this.outBias;
-    const out = outBias ? merged.linear(this.outWeight).add(outBias)
-      : merged.linear(this.outWeight);
-    const shaped = out.reshape([batch, len, E]);
-    return this.batchFirst ? shaped : shaped.swapaxes(0, 1);
+    // default is length first — which is what the function below always wants.
+    const src = this.batchFirst ? x.swapaxes(0, 1) : x;
+    const got = multiHeadAttentionForward(
+      src, src, src, this.embedDim, this.numHeads, this.inWeight, this.inBias,
+      this.biasK, this.biasV, this.addZeroAttn, this.dropout,
+      this.outWeight, this.outBias, this.training, null, false, mask,
+      !this.qkvSameEmbedDim, this.qWeight, this.kWeight, this.vWeight);
+    return this.batchFirst ? got.output.swapaxes(0, 1) : got.output;
   }
 
   /**
@@ -5372,6 +5981,7 @@ export class CrossEntropyLoss {
    * The order comes from torch, one class at a time.
    */
   readonly reduction: Reduction;
+  readonly weight: Tensor | undefined;
   constructor(
     weight: Tensor | undefined = undefined,
     sizeAverage: boolean | null = null,
@@ -5380,13 +5990,13 @@ export class CrossEntropyLoss {
     reduction: Reduction = "mean",
     readonly labelSmoothing = 0.0,
   ) {
-    refuseWeight("CrossEntropyLoss", "weight", weight);
+    this.weight = weight;
     this.reduction = legacyReduction(sizeAverage, reduce, reduction);
   }
 
   forward(logits: Tensor, target: Tensor): Tensor {
     return logits.crossEntropy(target, this.ignoreIndex, this.reduction,
-                               this.labelSmoothing);
+                               this.labelSmoothing, this.weight);
   }
 
   call(logits: Tensor, target: Tensor): Tensor {
@@ -5394,6 +6004,87 @@ export class CrossEntropyLoss {
   }
 
   describe(): string { return "CrossEntropyLoss()"; }
+}
+
+/**
+ * torch's knobs for the **chunked** implementation of `linearCrossEntropy`.
+ *
+ * Every field is a memory strategy and **none of them moves a value** — measured in
+ * real torch, four settings all within 4.8e-7 of the default, which is float32 noise
+ * on a loss of 2.96. Nothing chunks here, so it is carried, held, and read by nothing.
+ *
+ * It exists so a line copied out of torch's own documentation runs, rather than
+ * stopping on an argument that could not have changed the answer.
+ */
+export class LinearCrossEntropyOptions {
+  constructor(
+    readonly allowRetainGraph = false,
+    readonly batchChunkSize: number | null = null,
+    readonly chunkingMethod: string | null = "auto",
+    readonly accPolicy: "accurate" | "balanced" | "compact" | "auto" = "auto",
+    readonly accDtype: unknown = null,
+  ) {}
+}
+
+/**
+ * A `Linear` and a cross entropy, fused — **and the fusion is about memory.**
+ *
+ * torch has this so the logits are never all materialised at once. Nothing here
+ * chunks, so what is left is the composition, and the composition is the same number.
+ *
+ * **It owns the weight under `linear`**, so the parameter is `linear.weight` — measured
+ * off torch rather than assumed, because a name in a `stateDict` is a name a checkpoint
+ * is written with.
+ *
+ * `outFeatures` is refused. torch reads the logits as `(N, C, ...outFeatures)` — the
+ * class axis second — and `crossEntropy` here takes a 1-D target, so the shape torch
+ * wants is one the loss underneath cannot be given. The core refuses it for the same
+ * reason and says so the same way.
+ */
+export class LinearCrossEntropyLoss extends Module {
+  readonly linear: Linear;
+
+  constructor(
+    readonly inFeatures: number,
+    readonly numClasses: number,
+    readonly outFeatures: readonly number[] = [],
+    bias = false,
+    device?: null,
+    dtype?: null,
+    readonly reduction: Reduction = "mean",
+    readonly weight: Tensor | undefined = undefined,
+    readonly ignoreIndex: number | null = null,
+    readonly labelSmoothing = 0.0,
+    readonly options: LinearCrossEntropyOptions | undefined = undefined,
+  ) {
+    refuseDeviceDtype("LinearCrossEntropyLoss", device, dtype);
+    super();
+    if (outFeatures.length > 0) {
+      throw new RuntimeError(
+        `outFeatures=[${outFeatures}] needs a K-dimensional cross entropy, and this ` +
+        "library's takes a 1-D target.\n" +
+        "  torch reads the logits as (N, C, ...outFeatures) — the class axis second — " +
+        "and\n  crossEntropy here indexes one class per row.");
+    }
+    this.linear = new Linear(inFeatures, numClasses, bias);
+    // **Registered under `linear`, which is what makes the parameter `linear.weight`.**
+    // torch names it that way because the module owns a `Linear`, and a `stateDict`
+    // key is what a checkpoint is written with.
+    this.registerModule("linear", this.linear);
+  }
+
+  override forward(input: Tensor, target: Tensor): Tensor {
+    const flat = input.linear(this.linear.weight);
+    const logits = this.linear.bias === null ? flat : flat.add(this.linear.bias);
+    return logits.crossEntropy(target, this.ignoreIndex ?? -100, this.reduction,
+                               this.labelSmoothing, this.weight);
+  }
+
+  override call(input: Tensor, target: Tensor): Tensor {
+    return this.forward(input, target);
+  }
+
+  override describe(): string { return "LinearCrossEntropyLoss()"; }
 }
 
 // ── The place torch.nn.functional occupies ─────────────────────────────

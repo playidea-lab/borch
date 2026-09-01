@@ -185,13 +185,24 @@ DELIBERATE = {
     "onnx": "exporting is deployment's job and this is grammar practice",
     "quantiz": "quantisation means something only on real hardware",
     "sparse": "outside the curriculum",
-    # **The eight one-dimensional ones are done** (`fft`, `ifft`, `rfft`, `irfft`,
-    # `fftfreq`, `rfftfreq`, `fftshift`, `ifftshift`). What is not done is 2-D, N-D and the
-    # fifteen Hermitian variants. While this read only "outside the curriculum", those
-    # eight were already running — declining a whole namespace hides **what is done there
-    # too.**
-    "fft": "only the eight one-dimensional ones — 2-D, N-D and the Hermitian variants are outside the curriculum",
-    "special": "outside the curriculum",
+    # **`fft` was here and is now surveyed** — see `_spaces()`. The row said "only the
+    # eight one-dimensional ones — 2-D, N-D and the Hermitian variants are outside the
+    # curriculum", and measured against real torch on a `(4, 6)` input, `fft2`, `ifft2`,
+    # `rfft2`, `irfft2`, `hfft2`, `ihfft2`, `fftn`, `ifftn`, `rfftn`, `irfftn`, `hfftn`,
+    # `ihfftn` and `hfft` all compute and all agree to 1e-4. Twenty-two of the
+    # twenty-three names are here.
+    #
+    # **The comment that used to sit on this line said the lesson and then the line went
+    # stale in exactly that way.** It read: *declining a whole namespace hides what is
+    # done there too* — written when the eight one-dimensional ones were found running
+    # under a blanket "outside the curriculum". The row was narrowed instead of removed,
+    # the rest were built, and nothing told the row. A reason that names its own failure
+    # mode is not protected from it; only a survey is.
+    # **`special` was here and is now surveyed too** — see `_spaces()`. Measured the
+    # same hour `fft` was, because a blanket that had gone false once was not going to
+    # be trusted twice: of its 57 names, 20 were functions this library already
+    # answered to under torch's other spelling, and the blanket was hiding all twenty.
+    # They are built and forwarding; the remaining 36 are declined by name below.
     "futures": "outside the curriculum",
     "package": "outside the curriculum",
     "profiler": "outside the curriculum",
@@ -319,6 +330,7 @@ NOT_API = {
     "nn.functional.Tensor": "an imported label — not F's API",
     "transforms.functional.Tensor": "an imported label — not that namespace's API",
     "optim.lr_scheduler.Tensor": "an imported label — not that namespace's API",
+    "fft.Tensor": "an imported label — not that namespace's API",
     "optim.lr_scheduler.Optimizer": "an imported label — not that namespace's API",
     "ScalingType": "an imported label — an fp8 scaling kind",
     "SwizzleType": "an imported label — an fp8 layout kind",
@@ -407,21 +419,62 @@ SKIPPED = {
     "set_autocast_*": "mixed precision — as above",
     "is_autocast_*": "mixed precision — as above",
     "GradScaler": "mixed precision's loss scaling — as above",
-    "get_num_threads": "inside one tab there is no thread count to choose",
-    "set_num_threads": "inside one tab there is no thread count to choose",
-    "get_num_interop_threads": "it is inside one tab",
-    "set_num_interop_threads": "it is inside one tab",
+    # **These four said "inside one tab there is no thread count to choose", and that
+    # was measured to be false.** In the runner's own page: `navigator.hardwareConcurrency`
+    # is 16, `Worker` is a function, and a worker posted `9.5` came back with `20` — so a
+    # second thread ran arithmetic. There is a count and there are threads.
+    #
+    # Nothing in this repository had ever asked. `Web Worker`, `hardwareConcurrency` and
+    # `SharedArrayBuffer` appear nowhere in `tests/`, `borch/`, `borch_webgpu/`,
+    # `borch-ts/src/` or `site/` — zero occurrences. A reason that asserts an absence
+    # nobody looked for is the shape this file warns about twenty lines from here: not
+    # counted is visible, **not counted for a false reason** is not.
+    #
+    # What is actually missing is two things, and neither is a thread.
+    "get_num_threads":
+        "**the answer is a property of the machine, so there is nothing to compare it "
+        "to.** Measured on the machine that freezes the golden, torch answers 12 here "
+        "and 16 for the interop pair — its own two numbers disagree because both are "
+        "derived from the core count. Frozen, that is a case that passes on one laptop "
+        "and fails on the next, which is the one thing the golden may not be. This "
+        "library runs its ops on the calling thread, so the honest answer is 1, and 1 "
+        "against torch's 12 is a divergence by design rather than a defect to find",
+    "get_num_interop_threads": "as `get_num_threads` — the machine's number, not ours",
+    "set_num_threads":
+        "**`SharedArrayBuffer` is `undefined` and `crossOriginIsolated` is false** — "
+        "measured in `site/index.html` by `tests/browser/platform_claims.py`, and the "
+        "published site cannot differ because GitHub Pages offers no way to set "
+        "response headers, which is what COOP/COEP are. "
+        "Workers exist, but without shared memory every hand-off is a structured-clone "
+        "copy or a transfer that takes the buffer away from the sender — and torch's "
+        "intra-op pool is threads over *one* buffer. So the knob would set a number no "
+        "pool reads: an argument accepted and never used, which is the defect class "
+        "`tests/test_unread_arguments.py` exists to refuse",
+    "set_num_interop_threads": "as `set_num_threads` — no shared buffer for a pool to work over",
     "Stream": "device streams — there is one",
     "Event": "device events — there is one stream to measure",
     "get_device_module": "there is one device",
-    "get_default_device": "there is one device",
-    "set_default_device": "there is one device",
     "AcceleratorError": "there is one accelerator",
     "OutOfMemoryError": "we do not separate out device memory errors",
     "DataParallel": "for several devices — this is one tab",
     "SyncBatchNorm": "for distributed training — this is inside one tab",
 
     # Vendor kernels. They mean something only where that hardware is.
+    #
+    # **These twenty-one are the one group in this table with nothing to ask**, and that
+    # was established by trying. An audit of the fifty-one rows that assert an absence
+    # and carry no measurement split them four ways: eighteen make a claim about *this
+    # library* (`tests/test_subset_claims.py` holds five of those, and names the
+    # thirteen it cannot), six about *the browser*
+    # (`tests/browser/platform_claims.py`), one about *torch* — and these, which are
+    # about a vendor's compiled kernel. There is no adapter to interrogate and no
+    # feature flag to read: `cudnn_convolution` is a symbol torch links against
+    # NVIDIA's library, and a browser has no library to link.
+    #
+    # Written down because *nothing checks these* is a fact worth having on the page.
+    # The other three groups each gained an instrument; this one is the group where an
+    # instrument would be theatre, and the difference between the two is not visible
+    # from a count of unwatched rows.
     # `cudnn_*` was one row, and the sentence under it was true of seven names and
     # **false of the eighth**. `cudnn_is_acceptable` is not a kernel; it is the question
     # *would cudnn take this tensor*, and here the answer is a plain `False` — the same
@@ -453,6 +506,46 @@ SKIPPED = {
     "saddmm": "sparse matrix products — outside the curriculum",
     "sspaddmm": "sparse matrix products — outside the curriculum",
     "resize_as_sparse_": "sparse tensors only — as above",
+
+    # ── torch.special's remaining 35 ─────────────────────────────────────────
+    #
+    # This namespace was a blanket "outside the curriculum" until the day `fft` was
+    # found declined-while-built. Counted properly, 22 of its 57 names are functions
+    # this library already had under torch's other spelling and are forwarders now.
+    # These are the rest, and they split into two kinds that must not be written as
+    # one, because one kind is arithmetic we lack and the other is arithmetic we have
+    # in a form that breaks where the name exists to hold.
+    #
+    # **Thirty-four rows stood here and every one of them is gone, by being built.**
+    # They are worth an account, because the block came apart in a particular order and
+    # each step made the next one visible.
+    #
+    # *Thirteen were forwarders nobody had checked.* `multigammaln` said the two
+    # spellings *disagree on argument order and that wants checking rather than
+    # guessing* — checked: they agree exactly, same order, at p = 1, 2 and 3. A row
+    # that says **this wants measuring** and is filed under *declined* is a deferral
+    # with the word "measure" in it. `modified_bessel_i1` said `i1` is *a different
+    # series, not a step from `i0`*, which was true and was about the wrong pair: once
+    # `i1` existed this name was a second spelling of it. `spherical_bessel_j0` is
+    # `sin(x)/x`.
+    #
+    # *Twelve were one recurrence.* The orthogonal polynomials differ in three places
+    # each — first term, second term, step — and reading them as twelve families is
+    # what made them look like twelve pieces of work.
+    #
+    # *Nine were the compositions this block was right about*, and being right about
+    # them is why they took the longest: `erfc(x)·exp(x²)` is `inf` from x=10,
+    # `log(ndtr(x))` is `-inf` from x=-6, `i0(x)·exp(-|x|)` is `inf` at x=90. Each is
+    # written in the form that does not form the overflowing factor at all — the
+    # continued fraction, the scaled series, the sum of logarithms.
+    #
+    # The last four (`bessel_j0`, `j1`, `y0`, `y1`) and `airy_ai` are minimax tables
+    # and asymptotics, transcribed rather than derived, and **the transcription is what
+    # the golden checks**: a mistyped minimax coefficient does not raise, it moves the
+    # answer in the fifth place.
+    #
+    # What survives is the one name that was never API.
+    "special.Tensor": "an imported label — not that namespace's API",
     # **By its name it looks like `nn.ParameterDict`'s counterpart, and it is not.**
     # Measured, its constructor takes a single `torch._C.ScriptModule` and it does not live
     # under `nn` — it is TorchScript internals. Built as a dictionary, it would hand over
@@ -508,7 +601,28 @@ SKIPPED = {
     # Exchange with the outside. Inside a browser there is nobody to hand to.
     "from_dlpack": "DLPack exchange — there is nobody to exchange with inside a browser",
     "to_dlpack": "DLPack exchange — as above",
-    "from_file": "file mapping — a browser has no such file layer",
+    # **This said "a browser has no such file layer", and the browser has one.** Measured
+    # in the runner's page: `showOpenFilePicker` is a function, `navigator.storage
+    # .getDirectory` is a function, and a round trip through OPFS worked — wrote
+    # `[7, 8, 9]` into `probe.bin` and read the same three bytes back.
+    #
+    # The word that was doing the work is **mapping**, and it is the one the reason
+    # dropped. `from_file` returns a tensor whose storage *is* the file: pages arrive
+    # when touched, `shared=True` writes through, and two readers see one buffer. The
+    # web gives none of that — a file is read into an ArrayBuffer, whole and eagerly,
+    # and `createSyncAccessHandle` (the nearest thing to a file descriptor) came back
+    # `undefined` because it exists on workers only. Nothing named like `mmap` exists
+    # anywhere on `self`.
+    #
+    # Same shape as the four thread rows above: the conclusion was right and the
+    # sentence proving it was false, which is worse than being wrong outright, because
+    # a false sentence is one nobody re-measures.
+    "from_file":
+        "file **mapping**. A browser has a file layer — OPFS and the File System Access "
+        "API both answer, and a write-then-read round trip through OPFS was measured — "
+        "but a file there is read into an ArrayBuffer whole. There is no paging on "
+        "touch and no `shared=True` writing through to one buffer two readers see, "
+        "which is what this name returns",
 
     # Debug switches. We have neither nondeterminism to turn on nor an anomaly detector.
     "use_deterministic_algorithms": "there is no nondeterministic kernel to choose",
@@ -557,13 +671,41 @@ SKIPPED = {
     # real gap.
 
     # Not settled yet.
-    "LinearCrossEntropyLoss": "newly arrived in torch — looked at once it settles",
-    "LinearCrossEntropyOptions": "as above",
-    "linear_cross_entropy": "the functional counterpart of the layer above — looked at when they settle together",
-    "Muon": "an optimizer newly arrived in torch — looked at once it settles",
-    "grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
-    "scaled_grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
-    "scaled_mm": "fp8 GEMM — that hardware is not here",
+    # **Three of these four are built now, and the reason they were not is the point.**
+    # All four read *newly arrived in torch — looked at once it settles*, which is a
+    # deferral with no expiry on it: nothing about a sentence like that ever comes due,
+    # so it never asks to be re-read. Re-read by calling, torch 2.13 marks none of the
+    # family prototype, experimental, unstable or subject to change, and
+    # `linear_cross_entropy(x, w, t)` was measured equal to
+    # `cross_entropy(linear(x, w), t)` across its whole argument surface and both
+    # gradients. The value was always one this library could compute.
+    #
+    # A deferral nobody re-measures is a decline wearing a softer word. This is the
+    # fourth reason in this file found false the same way in one session — after `fft`,
+    # `special` and the `*_video` kernels — and the three before it were all *this
+    # cannot be done*. This one was *not yet*, which is the harder kind to catch,
+    # because it does not sound like a claim at all.
+    #
+    # **`Muon` stays, and its reason is now a number rather than a date.**
+    "Muon": "**its Newton–Schulz iteration runs in bfloat16** and this library has no "
+            "such dtype. Not a precision quibble: torch's own float32, running the "
+            "identical five steps, differs from its bfloat16 by 1.26e-2 — measured — "
+            "and float64 by ~1e-2, about 1% of the values' size and a hundred times "
+            "the golden's 1e-4. So an implementation here would be a correct Muon that "
+            "can never agree with torch's answer, which is the one thing a comparison "
+            "library must not ship. The `_AbsentDtype` family is the same decision one "
+            "level down",
+    # **These three are measured now**, by `tests/browser/platform_claims.py`, and the
+    # measurement is narrower than the sentence used to be. *That hardware is not here*
+    # covers two formats and only one of them is absent: the adapter lists `shader-f16`
+    # and no `f8` at all, so **f16 is here and fp8 is not**. The first draft of that
+    # probe asked about "reduced precision" as one thing and went red on `shader-f16` —
+    # it was measuring the wrong format and would have sent somebody to rewrite three
+    # correct rows. Two formats, two questions.
+    "grouped_mm": "fp8 and grouped GEMM — WebGPU has no 8-bit float type, in the "
+                  "shading language or as an adapter feature (measured)",
+    "scaled_grouped_mm": "fp8 and grouped GEMM — as `grouped_mm`",
+    "scaled_mm": "fp8 GEMM — as `grouped_mm`",
 
     # torchvision. **Only what is declined for good is written here** — everything else
     # absent from `transforms` is the to-do list, and it should read as one.
@@ -770,19 +912,18 @@ SKIPPED = {
     # The four rows that remain are the tv_tensor half, which is a different claim: those
     # kernels take a type this library does not have, rather than a plain tensor under a
     # second name.
-    "transforms.v2.functional.*_video": "**not that there is no video, but that there "
-        "is no N-D image kernel for a `_video` name to bind to.** In torchvision every "
-        "one of these is a single line — `def resize_video(video, …): return "
-        "resize_image(video, …)` — with no container, codec or decoder anywhere in it: "
-        "a video there is a tensor with one more leading axis and its image kernels "
-        "work over the leading axes. Measured, `resize_video` on a `(2, 3, 3, 4, 5)` "
-        "tensor answers `(2, 3, 3, 2, 3)`. It does not follow here, because this "
-        "file's image kernels are **v1's**: they take an `(H, W, C)` numpy array and "
-        "refuse a tensor with a message about `ToTensor`. Bound anyway, these would be "
-        "thirty-three names that accept a video and cannot take one, which is worse "
-        "than their absence. `get_num_frames` and `uniform_temporal_subsample` are not "
-        "among them and are in — they index along the frame axis and touch no picture "
-        "kernel",
+    # **This row covered thirty-four names and now covers one.** It said there was no
+    # N-D image kernel for a `_video` name to bind to, which was true and is not: the
+    # picture's axes are counted from the end now (`_picture_axes` in `borchvision.py`),
+    # so `(H, W, C)` and `(T, H, W, C)` name the same two and every kernel works over
+    # whatever is in front of them. The thirty-four are bound to the same objects their
+    # `*_image` twins are.
+    #
+    # What is left is the one whose reason was never about video.
+    "transforms.v2.functional.jpeg_video": "it encodes and decodes JPEG — as `jpeg`, "
+        "and numpy has no codec. The other thirty-four `*_video` names went in when "
+        "the image kernels started counting their axes from the end; this one never "
+        "waited on that",
     # **The `*_mask` row is gone too, and it was the sentence the box rows borrowed.**
     #
     # It read *a tv_tensor type, and the type system is declined in `v2`*. A mask is an
@@ -927,6 +1068,10 @@ NOT_API_SIZE = {
     "nn.functional": 10,
     "optim": 1,
     "optim.lr_scheduler": 2,
+    # `fft.Tensor` alone — the same imported label already written down for
+    # `optim.lr_scheduler` and `transforms.functional`. Written the day `fft` stopped
+    # being declined as a whole namespace and started being surveyed.
+    "fft": 1,
     "utils.data": 2,
     "transforms.functional": 1,
 }
@@ -955,6 +1100,16 @@ def _spaces():
            ("optim", torch.optim, borch.optim),
            ("optim.lr_scheduler", torch.optim.lr_scheduler, borch.optim.lr_scheduler),
            ("linalg", torch.linalg, borch.linalg),
+           # **Added because the blanket reason above it had gone false.** `fft` was
+           # declined at the namespace level while twenty-two of its twenty-three names
+           # were implemented and agreeing with torch — so the survey was under-counting
+           # this library by twenty-two, and the one number this file exists to produce
+           # was wrong in the direction nobody checks.
+           ("fft", torch.fft, borch.fft),
+           # Added the same hour, and for the same reason: a blanket "outside the
+           # curriculum" was covering 20 names this library already answered to.
+           # Those 20 are forwarders now and the other 37 are declined by name.
+           ("special", torch.special, borch.special),
            ("utils.data", torch.utils.data, borch.utils.data)]
     if torchvision is not None:
         got += [("transforms", torchvision.transforms, borchvision.transforms),

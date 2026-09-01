@@ -7,10 +7,11 @@
  * constraints. Imitating it inherits someone else's detour for no reason.
  */
 
-import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
+import { backward as tapeBackward, flow as tapeFlow, gradMode, type Node }
+  from "./autograd.js";
 import { Device, type DeviceKind, type InitOptions } from "./device.js";
 import { type AxisPlan, isSlice, planAxis, type Slice } from "./indexing.js";
-import { gauss, uniform } from "./random.js";
+import { gauss, refuseGenerator, uniform } from "./random.js";
 // **A cycle on purpose, and it holds because nothing is touched while loading.**
 // `fft.ts` and `special.ts` import `Tensor` from here; these five methods import their
 // bodies back. Every use is inside a method, so by the time one runs both modules have
@@ -47,6 +48,20 @@ export type PadMode = "constant" | "reflect" | "replicate" | "circular";
  * How a loss folds. **Only `KLDivLoss` takes a fourth (`batchmean`).**
  */
 export type Reduction = "none" | "mean" | "sum";
+
+/**
+ * How `interpolate` resamples. **`linear` and `trilinear` were absent because they
+ * want a rank this function did not take** — it was written for `[N, C, H, W]`, and
+ * those two are the 3-D and 5-D members of the same family. They are one separable
+ * kernel at three ranks and `interpolateLinear` is now that kernel, so all three are
+ * here.
+ *
+ * `nearest` and `nearest-exact` differ by half an output cell; `area` is adaptive
+ * average pooling under another name. `bicubic` is 4-D alone, as it is in torch.
+ */
+export type InterpolateMode =
+  "nearest" | "nearest-exact" | "area"
+  | "linear" | "bilinear" | "bicubic" | "trilinear";
 
 /**
  * SELU's fixed point. The value `alphaDropout` puts where it dropped comes from here.
@@ -711,6 +726,8 @@ export class Tensor implements Node<Tensor> {
   requiresGrad: boolean;
   grad: Tensor | null = null;
   freed = false;
+  /** Set by `retainGrad()` — see there. */
+  retainsGrad = false;
   /**
    * **A label.** The values are always in a float32 buffer — the details
    * are in `src/dtype.ts`.
@@ -2445,16 +2462,33 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * Removes an axis of size 1.
+   * Removes the named axes when they are of size 1.
+   *
+   * **Two of torch's rules, both once absent.** `squeeze(0, 2)` names several axes,
+   * and an axis whose length is not 1 is **left alone** rather than refused —
+   * `x.squeeze(1)` on `[1, 2, 3]` gives `[1, 2, 3]` in torch and threw here.
+   *
+   * Refusing looks like the safer of the two and is not: it is torch's own answer
+   * that is being refused, so a line copied from torch stops on a shape torch is
+   * happy with. The core carried the same pair of gaps.
    */
-  squeeze(dim: number): Tensor {
+  squeeze(...dim: number[]): Tensor {
     const rank = this.shape.length;
-    const axis = dim < 0 ? dim + rank : dim;
-    if (this.shape[axis] !== 1) {
-      throw new Error(`dimension ${dim} is not of size 1: [${this.shape}]`);
+    // A 0-d tensor accepts -1 and 0, and both are no-ops — torch counts one axis
+    // for the purpose of naming one.
+    const span = Math.max(rank, 1);
+    const axes = dim.map((d) => (d < 0 ? d + span : d));
+    for (const one of axes) {
+      if (one < 0 || one >= span) {
+        throw new IndexError(
+          `squeeze(): dimension ${one} is out of range for a tensor of rank ${rank}.`
+          + `\n(torch: Dimension out of range (expected to be in range of [${-span}, `
+          + `${span - 1}], but got ${one}))`);
+      }
     }
-    const outShape = [...this.shape];
-    outShape.splice(axis, 1);
+    const keep = axes.filter((one) => rank > 0 && this.shape[one] === 1);
+    if (keep.length === 0) return this.reshape([...this.shape]);
+    const outShape = this.shape.filter((_d, i) => !keep.includes(i));
     const shape = this.shape;
     return Tensor.make(
       this.buffer,
@@ -4010,9 +4044,24 @@ export class Tensor implements Node<Tensor> {
 
   /**
    * Spreads windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.
+   *
+   * **A 3-D input is one unbatched sample**, which is torch's rule and was missing on
+   * both sides — the core refused *anything but 4-D*, half right. `(2, 3, 4)` with a
+   * 2×2 kernel comes back as `(8, 6)`: `(C·kh·kw, L)` with no batch axis. Anything
+   * else is refused with torch's own wording.
    */
   unfoldIm2col(kernel: number | [number, number], dilation = 1, padding = 0,
                stride = 1): Tensor {
+    if (this.shape.length === 3) {
+      const got = this.reshape([1, ...this.shape])
+        .unfoldIm2col(kernel, dilation, padding, stride);
+      return got.reshape(got.shape.slice(1));
+    }
+    if (this.shape.length !== 4) {
+      throw new RuntimeError(
+        "Expected 3D or 4D (batch mode) tensor with possibly 0 batch size and other "
+        + `non-zero dimensions for input, but got: [${this.shape.join(", ")}]`);
+    }
     const [n, c, h, w] = this.shape as [number, number, number, number];
     const [kh, kw] = pairOf(kernel);
     const [ph, pw] = pairOf(padding);
@@ -4029,9 +4078,23 @@ export class Tensor implements Node<Tensor> {
   /**
    * Folds the spread back. **Overlapping positions are added** — that is
    * what this function means.
+   *
+   * **The unbatched form is 2-D here, one rank below `unfoldIm2col`'s**, because this
+   * side has already folded the channel and the kernel into one axis. `(8, 6)` comes
+   * back as `(2, 3, 4)`; 4-D is refused, with torch's own wording.
    */
   fold(outputSize: number | [number, number], kernel: number | [number, number],
        dilation = 1, padding = 0, stride = 1): Tensor {
+    if (this.shape.length === 2) {
+      const got = this.reshape([1, ...this.shape])
+        .fold(outputSize, kernel, dilation, padding, stride);
+      return got.reshape(got.shape.slice(1));
+    }
+    if (this.shape.length !== 3) {
+      throw new RuntimeError(
+        "Expected 2D or 3D (batch mode) tensor for input with possibly 0 batch size "
+        + `and non-zero dimensions for input, but got: [${this.shape.join(", ")}]`);
+    }
     const n = this.shape[0] ?? 1;
     const [kh, kw] = pairOf(kernel);
     const [oh, ow] = pairOf(outputSize);
@@ -4166,22 +4229,51 @@ export class Tensor implements Node<Tensor> {
    */
   interpolateBilinear(outH: number, outW: number, alignCorners: boolean,
                       given: number | null = null): Tensor {
-    const h = this.shape[2] ?? 1;
-    const w = this.shape[3] ?? 1;
-    const ys = bilinearAxis(h, outH, alignCorners, given);
-    const xs = bilinearAxis(w, outW, alignCorners, given);
-    const pick = (t: Tensor, axis: number, at: number[]) =>
-      t.indexSelect(axis, Tensor.from(at, [at.length]));
-    const wy = Tensor.from(ys.frac, [outH, 1]);
-    const wx = Tensor.from(xs.frac, [1, outW]);
+    return this.interpolateLinear([outH, outW], alignCorners,
+                                  given === null ? null : [given, given]);
+  }
+
+  /**
+   * `linear`, `bilinear` and `trilinear` — **one separable kernel at three ranks.**
+   *
+   * Each output cell is a weighted sum of the 2ⁿ input cells around it, the weight
+   * being the product of one per-axis fraction. `bilinearAxis` gives the two
+   * neighbours and the fraction for one axis; everything here is the product over the
+   * axes, which is what makes the three names one function.
+   *
+   * **`interpolateBilinear` wrote the two-axis case out by hand**, and being two-axis
+   * by construction is what made `linear` and `trilinear` read as absent. They are
+   * this at one and three axes.
+   */
+  interpolateLinear(outDims: readonly number[], alignCorners: boolean,
+                    given: readonly number[] | null = null): Tensor {
+    const spatial = outDims.length;
+    const axes = outDims.map((out, k) =>
+      bilinearAxis(this.shape[2 + k] ?? 1, out, alignCorners,
+                   given === null ? null : (given[k] ?? null)));
     const one = Tensor.full([], 1);
-    const corner = (yi: number[], xi: number[]) =>
-      pick(pick(this, 2, yi), 3, xi);
-    const top = corner(ys.lo, xs.lo).mul(one.sub(wx))
-      .add(corner(ys.lo, xs.hi).mul(wx));
-    const bottom = corner(ys.hi, xs.lo).mul(one.sub(wx))
-      .add(corner(ys.hi, xs.hi).mul(wx));
-    return top.mul(one.sub(wy)).add(bottom.mul(wy));
+    // The fraction for one axis, shaped so it broadcasts against the output: a 1 on
+    // every axis but its own.
+    const weights = axes.map((ax, k) => {
+      const shape = new Array<number>(spatial + 2).fill(1);
+      shape[2 + k] = outDims[k] ?? 1;
+      return Tensor.from(ax.frac, shape);
+    });
+    let out: Tensor | null = null;
+    for (let corner = 0; corner < (1 << spatial); corner++) {
+      let piece: Tensor = this;
+      let weight = one;
+      for (let k = 0; k < spatial; k++) {
+        const high = (corner >> k) & 1;
+        const at = high ? (axes[k]?.hi ?? []) : (axes[k]?.lo ?? []);
+        piece = piece.indexSelect(2 + k, Tensor.from(at, [at.length]));
+        const w = weights[k] ?? one;
+        weight = weight.mul(high ? w : one.sub(w));
+      }
+      const term = piece.mul(weight);
+      out = out === null ? term : out.add(term);
+    }
+    return out ?? this;
   }
 
   // ── Moving elements ───────────────────────────────────────────────────
@@ -4568,8 +4660,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * torch's signature and the ones written first were never fixed. The
    * tutorials use the default, so the table never asked either.
    */
-  l1Loss(target: Tensor, reduction: Reduction = "mean"): Tensor {
-    return this.sub(target).abs().reduceAs(reduction);
+  l1Loss(target: Tensor, reduction: Reduction = "mean",
+         weight?: Tensor): Tensor {
+    return this.sub(target).abs().weighTo(reduction, weight, true);
   }
 
   /**
@@ -4580,8 +4673,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Squared error.
    */
-  mseLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
-    return this.sub(target).square().reduceAs(reduction);
+  mseLoss(target: Tensor, reduction: Reduction = "mean",
+          weight?: Tensor): Tensor {
+    return this.sub(target).square().weighTo(reduction, weight, true);
   }
 
   /**
@@ -4592,11 +4686,29 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `max(x,0) − x·y + log(1+exp(−|x|))` gives the same value without
    * overflow — that is why this function exists separately.
    */
-  bceWithLogits(target: Tensor, reduction: Reduction = "mean"): Tensor {
+  bceWithLogits(target: Tensor, reduction: Reduction = "mean",
+                weight?: Tensor, posWeight?: Tensor): Tensor {
     const zero = Tensor.full([], 0);
     const hinge = this.binary("maximum", zero);
     const stable = this.abs().neg().exp().unary("log1p");
-    return hinge.sub(this.mul(target)).add(stable).reduceAs(reduction);
+    let each = hinge.sub(this.mul(target)).add(stable);
+    if (posWeight !== undefined) {
+      // **`posWeight` scales the positive term alone**, so the stable form has to be
+      // split back into its two halves: `−(w·t·log σ(x) + (1−t)·log(1−σ(x)))`.
+      // Multiplying the stable form whole scales the negative term too and is wrong
+      // on every row whose target is 0 — which is half of a balanced batch.
+      const one = Tensor.full([], 1);
+      const softplus = this.neg().exp().unary("log1p");   // log(1+e^−x)
+      const logp = softplus.neg();                        // log σ(x)
+      const logq = this.neg().sub(softplus);              // log(1−σ(x))
+      each = posWeight.mul(target).mul(logp)
+        .add(one.sub(target).mul(logq)).neg();
+    }
+    if (weight !== undefined) each = each.mul(weight);
+    // **`mean` divides by the count here**, weights or no weights — unlike `l1Loss`
+    // and `mseLoss`, whose `weight` divides by the sum of the weights. Measured on
+    // both; a shared helper for the two rules would have to be wrong about one.
+    return each.reduceAs(reduction);
   }
 
   /**
@@ -4615,12 +4727,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Prefer `bceWithLogits` where you have logits: it is the numerically stable
    * path and this one is reached only when the probabilities are what you hold.
    */
-  bce(target: Tensor, reduction: Reduction = "mean"): Tensor {
+  bce(target: Tensor, reduction: Reduction = "mean", weight?: Tensor): Tensor {
     const floor = Tensor.full([], -100);
     const one = Tensor.full([], 1);
     const lo = this.unary("log").binary("maximum", floor);
     const hi = one.sub(this).unary("log").binary("maximum", floor);
-    return target.mul(lo).add(one.sub(target).mul(hi)).neg().reduceAs(reduction);
+    let each = target.mul(lo).add(one.sub(target).mul(hi)).neg();
+    if (weight !== undefined) each = each.mul(weight);  // `mean` still over the count
+    return each.reduceAs(reduction);
   }
 
   /**
@@ -4758,19 +4872,51 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
+   * `reduceAs` with torch's per-element `weight` on the three losses that take one.
+   *
+   * Measured on three weight vectors:
+   *
+   *     none  w · ℓ                      all three
+   *     sum   Σ w · ℓ                    all three
+   *     mean  Σ w·ℓ / Σ w                `l1Loss` and `mseLoss`
+   *     mean  Σ w·ℓ / n                  `huberLoss`
+   *
+   * **`huberLoss` divides by the count and the other two do not**, which is why the
+   * divisor is a parameter rather than a rule — assuming the family agreed would
+   * make huber's `mean` wrong by `Σw / n` with no exception anywhere.
+   *
+   * The shapes must match exactly; torch does not broadcast here, and the wording of
+   * the refusal is torch's.
+   */
+  private weighTo(reduction: Reduction, weight: Tensor | undefined,
+                  meanOverWeights: boolean): Tensor {
+    if (weight === undefined) return this.reduceAs(reduction);
+    if (weight.shape.join() !== this.shape.join()) {
+      throw new RuntimeError("Weights and input must have the same size.");
+    }
+    const scaled = this.mul(weight);
+    if (reduction !== "mean" || !meanOverWeights) return scaled.reduceAs(reduction);
+    return scaled.sum().div(weight.sum());
+  }
+
+  /**
    * **It equals `smoothL1Loss` only at δ=1.**
    *
    * The real relation is `huber(δ) = δ · smoothL1(β=δ)`. Measured at the
    * defaults alone, treating them as one function passes, so the golden
    * cases ask with δ varied.
+   *
+   * **`weight`'s `mean` divides by the count here** and by the sum of the weights on
+   * `l1Loss` and `mseLoss`. Measured, not inferred from the family.
    */
-  huberLoss(target: Tensor, delta = 1.0, reduction: Reduction = "mean"): Tensor {
+  huberLoss(target: Tensor, delta = 1.0, reduction: Reduction = "mean",
+            weight?: Tensor): Tensor {
     const d = this.sub(target);
     const near = d.square().binary("mul", Tensor.full([], 0.5));
     const far = d.abs().binary("sub", Tensor.full([], 0.5 * delta))
       .binary("mul", Tensor.full([], delta));
     const isNear = d.abs().binary("lt", Tensor.full([], delta));
-    return near.where(isNear, far).reduceAs(reduction);
+    return near.where(isNear, far).weighTo(reduction, weight, false);
   }
 
   /**
@@ -5260,6 +5406,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   nllLoss(
     target: Tensor, ignoreIndex = -100, reduction: Reduction = "mean",
+    weight?: Tensor,
   ): Tensor {
     // **The per-sample values are made before folding.** Averaging as soon as they are
     // drawn leaves nowhere to build `reduction: "none"` — per-sample values cannot be
@@ -5270,9 +5417,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // reaches the answer. Same ordering the core needs, for the same reason.
     const keep = target.ne(Tensor.full([], ignoreIndex));
     const safe = target.mul(keep);
-    const each = this.gather(1, safe.reshape([target.size, 1]))
+    let each = this.gather(1, safe.reshape([target.size, 1]))
       .reshape([target.size]).neg().mul(keep.reshape([target.size]));
-    return each.reduceIgnoring(keep, reduction);
+    // The class weight is one number per **row**, drawn from the target the row
+    // points at — so it is a gather too, from the weight vector by the same indices.
+    const row = weight === undefined
+      ? undefined : weight.gather(0, safe.reshape([target.size]));
+    if (row !== undefined) each = each.mul(row);
+    return each.reduceIgnoring(keep, reduction, row);
   }
 
   /**
@@ -5280,21 +5432,32 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   crossEntropy(
     target: Tensor, ignoreIndex = -100, reduction: Reduction = "mean",
-    labelSmoothing = 0.0,
+    labelSmoothing = 0.0, weight?: Tensor,
   ): Tensor {
     const logp = this.logSoftmax(-1);
-    if (!labelSmoothing) return logp.nllLoss(target, ignoreIndex, reduction);
+    if (!labelSmoothing) {
+      return logp.nllLoss(target, ignoreIndex, reduction, weight);
+    }
     // torch spreads ε over every class: the target term keeps 1-ε and the rest
     // share ε/C, which is the mean of every class's log-probability.
     const keep = target.ne(Tensor.full([], ignoreIndex));
     const safe = target.mul(keep);
-    const picked = logp.gather(1, safe.reshape([target.size, 1]))
+    const row = weight === undefined
+      ? undefined : weight.gather(0, safe.reshape([target.size]));
+    let picked = logp.gather(1, safe.reshape([target.size, 1]))
       .reshape([target.size]).neg();
-    const spread = logp.neg().mean(logp.shape.length - 1);
+    if (row !== undefined) picked = picked.mul(row);
+    // **The weight goes inside the spread, not around it.** The spread is the mean
+    // over classes of `w_c · −log p_c`, so it is the *class* weight that enters here
+    // and not the row's — scaling the whole smoothed row by `w[target]` instead is
+    // the reading that needs no extra line, and it is wrong in the second decimal.
+    const spreadOf = weight === undefined
+      ? logp.neg() : logp.neg().mul(weight.reshape([1, weight.size]));
+    const spread = spreadOf.mean(logp.shape.length - 1);
     const each = picked.mul(Tensor.full([], 1 - labelSmoothing))
       .add(spread.mul(Tensor.full([], labelSmoothing)))
       .mul(keep.reshape([target.size]));
-    return each.reduceIgnoring(keep, reduction);
+    return each.reduceIgnoring(keep, reduction, row);
   }
 
   /**
@@ -5305,12 +5468,20 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * divide by the rows that remain, not by all of them — averaging with the zeros in
    * gives a number too small by exactly that ratio and nothing about it looks wrong.
    * `none` **keeps them as zeros**, because the shape is part of that answer.
+   *
+   * **A class weight replaces the denominator.** `mean` then divides by the sum of
+   * the kept rows' weights rather than by how many rows were kept — measured, a batch
+   * whose kept weights are `[0.5, 3]` and whose weighted sum is 6.1504 answers 1.0251,
+   * which is 6.1504/6 and not 6.1504/3. Both are ordinary-looking numbers.
    */
-  reduceIgnoring(keep: Tensor, reduction: Reduction): Tensor {
+  reduceIgnoring(keep: Tensor, reduction: Reduction,
+                 rowWeight?: Tensor): Tensor {
     if (reduction === "none") return this;
     const total = this.sum();
     if (reduction === "sum") return total;
-    return total.div(keep.reshape([keep.size]).sum());
+    const flat = keep.reshape([keep.size]);
+    if (rowWeight === undefined) return total.div(flat.sum());
+    return total.div(rowWeight.mul(flat).sum());
   }
 
   // ── Where the output size depends on the values ───────────────────────
@@ -6185,19 +6356,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * changes the answer rather than only its precision — measured on torch, a 2×2 at
    * `rcond=0.9` comes back entirely different from the default.
    *
-   * `LA.pinverse` decides that cut-off itself, so the seat is carried and refused
-   * until it takes one. Left out, `pinverse(rcond=0.9)` was a surplus argument and
-   * JavaScript discards those.
+   * The seat was carried and **refused** while `LA.pinverse` decided the cut-off
+   * itself — carried because leaving it out made `pinverse(rcond=0.9)` a surplus
+   * argument, and JavaScript discards those. It takes one now, so the refusal is
+   * gone and the number is computed: `rcond` scales to the largest singular value,
+   * which is numpy's convention and torch's, and the core has always matched it.
    */
   async pinverse(rcond?: number): Promise<Tensor> {
-    if (rcond !== undefined) {
-      throw new Error(
-        `pinverse(rcond=${rcond}) — the cut-off is not carried across yet; the `
-        + "solver picks its own");
-    }
     const v = await this.asBatch(false);
     const { rows: m, cols: n } = v;
-    const ps = v.mats.map((a) => LA.pinverse(a, m, n));
+    const ps = v.mats.map((a) => LA.pinverse(a, m, n, rcond));
     const out = Tensor.fromBatch(ps, [...v.lead, n, m]);
     return this.linalgNode(out, (g) =>
       Tensor.perBatch(g, v.batch, [n, m], this.shape, (gb, b) => {
@@ -6616,7 +6784,32 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * the row equivalent. Only the three that need singular values make a CPU
    * round trip.
    */
-  async matrixNorm(ord: number | string = "fro"): Promise<Tensor> {
+  async matrixNorm(ord: number | string = "fro",
+                   dim: readonly [number, number] = [-2, -1],
+                   keepdim = false): Promise<Tensor> {
+    // **The two axes are brought to the end rather than the arithmetic moved to
+    // them.** Every branch below reduces the last two, so naming any other pair
+    // is a permutation and not a second implementation — and `dim` given as the
+    // trailing pair, which is the default, permutes to itself.
+    const rank = this.shape.length;
+    const at = dim.map((d) => (d < 0 ? d + rank : d));
+    const [d0, d1] = at as [number, number];
+    if (d0 === d1 || d0 >= rank || d1 >= rank || d0 < 0 || d1 < 0) {
+      throw new RuntimeError(
+        `matrixNorm: dim=[${dim[0]}, ${dim[1]}] is not two axes of a rank-${rank} tensor`);
+    }
+    const rest = [...Array(rank).keys()].filter((i) => i !== d0 && i !== d1);
+    const moved = rest.length === 0 && d0 === rank - 2 && d1 === rank - 1
+      ? this : this.permute([...rest, d0, d1]);
+    const flat = await moved.matrixNormOfLast(ord);
+    if (!keepdim) return flat;
+    // Back in the caller's axis order, with a 1 where each named axis stood.
+    const kept = this.shape.map((_, i) => (i === d0 || i === d1 ? 1 : this.shape[i]!));
+    return flat.reshape(kept);
+  }
+
+  /** `matrixNorm`'s arithmetic, always on the last two axes. */
+  private async matrixNormOfLast(ord: number | string): Promise<Tensor> {
     if (ord === "nuc" || ord === 2 || ord === -2) {
       const s = await this.svdvals();
       if (ord === "nuc") return s.sumDim(-1, false);
@@ -6717,18 +6910,27 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * minimum absolute value. Branches that must not go through the power
    * formula, so they are written separately.
    */
-  vectorNorm(ord = 2, dim?: number): Tensor {
-    const flat = dim === undefined && this.shape.length > 1
-      ? this.reshape([this.size])
-      : this;
+  vectorNorm(ord = 2, dim?: number, keepdim = false): Tensor {
+    // **`keepdim` was missing and every branch passed `false`.** torch keeps the
+    // reduced axes as length 1, and without it `vector_norm(x, dim=1, keepdim=True)`
+    // came back one rank short — which broadcasts against the input differently and
+    // is the shape of divergence that surfaces somewhere else entirely.
+    //
+    // With no `dim` torch reduces everything and, asked to keep, returns **all ones**
+    // rather than a scalar (measured). The flatten below makes the rank unavailable by
+    // then, so the original is remembered first.
+    const rank = this.shape.length;
+    const flat = dim === undefined && rank > 1 ? this.reshape([this.size]) : this;
     const x = flat.abs();
-    if (ord === Infinity) return x.amax(dim, false);
-    if (ord === -Infinity) return x.amin(dim, false);
-    if (ord === 0) return x.binary("ne", Tensor.full([], 0)).sumDim(dim ?? 0, false);
-    if (ord === 1) return dim === undefined ? x.sum() : x.sumDim(dim, false);
+    const whole = (t: Tensor) => (keepdim ? t.reshape(new Array(rank).fill(1)) : t);
+    if (ord === Infinity) return x.amax(dim, keepdim);
+    if (ord === -Infinity) return x.amin(dim, keepdim);
+    if (ord === 0) return x.binary("ne", Tensor.full([], 0)).sumDim(dim ?? 0, keepdim);
+    if (ord === 1) return dim === undefined ? whole(x.sum()) : x.sumDim(dim, keepdim);
     const powed = ord === 2 ? x.square() : x.powScalar(ord);
-    const total = dim === undefined ? powed.sum() : powed.sumDim(dim, false);
-    return ord === 2 ? total.sqrt() : total.powScalar(1 / ord);
+    const total = dim === undefined ? powed.sum() : powed.sumDim(dim, keepdim);
+    const done = ord === 2 ? total.sqrt() : total.powScalar(1 / ord);
+    return dim === undefined ? whole(done) : done;
   }
 
   /** The Vandermonde matrix. The columns are **increasing powers**. */
@@ -6742,11 +6944,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Folds the tensor into a matrix, solves, and spreads it back.
    */
-  async tensorSolve(b: Tensor): Promise<Tensor> {
+  async tensorSolve(b: Tensor, dims?: readonly number[]): Promise<Tensor> {
+    // **`dims` moves those axes to the end before the fold**, in the order given,
+    // with the rest keeping theirs. It therefore changes which axes become the
+    // matrix — and the answer's shape is the moved array's trailing axes, not this
+    // one's, which is the part a caller reading `slice(b.shape.length)` off the
+    // receiver would get wrong.
+    const a: Tensor = dims === undefined ? this : this.permute([
+      ...this.shape.map((_, k) => k).filter((k) => !dims.includes(k)), ...dims]);
     const n = b.size;
-    const folded = this.reshape([n, this.size / n]);
+    const folded = a.reshape([n, a.size / n]);
     const x = await folded.solve(b.reshape([n]));
-    return x.reshape(this.shape.slice(b.shape.length));
+    return x.reshape(a.shape.slice(b.shape.length));
   }
 
   /**
@@ -6759,14 +6968,22 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return inv.reshape([...this.shape.slice(ind), ...lead]);
   }
 
-  async matrixRank(): Promise<Tensor> {
+  async matrixRank(tol?: number): Promise<Tensor> {
     const v = await this.asBatch(false);
-    return Tensor.from(v.mats.map((a) => LA.matrixRank(a, v.rows, v.cols)), v.lead);
+    return Tensor.from(
+      v.mats.map((a) => LA.matrixRank(a, v.rows, v.cols, tol)), v.lead);
   }
 
   /**
    * The least-squares solution. Square and invertible, it gives the same
    * answer as `solve`.
+   */
+  /**
+   * **This method takes one argument and keeps taking one.** torch removed
+   * `Tensor.lstsq` and the core carries it as a tombstone with a single `other`,
+   * so `rcond` and `driver` — which live on `linalg.lstsq`, where torch puts them
+   * — do not belong on it. Given them here the method read *longer than the core*
+   * on the signature axis, which is exactly the report that argument was for.
    */
   async lstsq(other: Tensor): Promise<Tensor> {
     const v = await this.asBatch(false);
@@ -6819,99 +7036,247 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * A symmetric matrix as `L D Lᵀ`. **It does not pivot.**
+   * A symmetric matrix as `L D Lᵀ` — LAPACK's `dsytf2` on the lower triangle,
+   * **with pivoting.**
    *
-   * torch uses LAPACK's Bunch–Kaufman, which swaps positions when it has
-   * to. Here only the cases with nothing to swap (positive definite and the
-   * like) are handled, and a near-zero diagonal is refused loudly —
-   * carrying on quietly gives a different answer with and without swapping,
-   * and both are plausible.
+   * **This refused an indefinite matrix and the reason was accurate**: torch uses
+   * Bunch–Kaufman, which swaps where it needs to, and a factorisation without the
+   * swaps is a different one. So the way through was to write Bunch–Kaufman rather
+   * than to loosen a tolerance — there are many valid `L D Lᵀ` decompositions and
+   * only LAPACK's packing and swap table compare against torch's.
    *
-   * The answer is **packed into one plate** in torch's shape — the diagonal
-   * is `D` and below it is `L`.
+   * The pivot table is LAPACK's own: a positive `k+1` is a 1×1 pivot with row `k`
+   * swapped for row `pivots[k]−1`, and **a repeated negative pair is a 2×2 block**.
+   *
+   * **The swap is over columns, not rows**, and that one line is where the core's
+   * copy of this first went wrong: written as a row swap, ten of thirteen matrices
+   * still agreed, and the three that did not diverged first in their *pivot table*
+   * two steps later.
+   *
+   * Checked against torch on 470 symmetric matrices, ranks 1 to 8.
    */
   async ldlFactor(): Promise<{ LD: Tensor; pivots: Tensor }> {
+    const got = await this.ldlPacked();
+    if (got.info.some((v) => v !== 0)) {
+      const first = got.info.find((v) => v !== 0) ?? 0;
+      throw new RuntimeError(
+        `linalg.ldl_factor: the leading minor of order ${first} is singular — `
+        + "`ldlFactorEx` reports it in `info` instead of stopping");
+    }
+    return { LD: got.LD, pivots: got.pivots };
+  }
+
+  /** Bunch–Kaufman itself, with `info` rather than a refusal. */
+  private async ldlPacked():
+    Promise<{ LD: Tensor; pivots: Tensor; info: number[] }> {
     const v = await this.asBatch();
     const n = v.rows;
-    const outs = v.mats.map((mat) => {
-      const ld = new Float64Array(n * n);
-      for (let j = 0; j < n; j++) {
-        let d = mat[j * n + j] ?? 0;
-        for (let k = 0; k < j; k++) {
-          d -= (ld[j * n + k] ?? 0) ** 2 * (ld[k * n + k] ?? 0);
-        }
-        if (Math.abs(d) < 1e-12) {
-          throw new RuntimeError("ldl_factor — this symmetric matrix needs pivoting (it is indefinite)");
-        }
-        ld[j * n + j] = d;
-        for (let i = j + 1; i < n; i++) {
-          let s = 0;
-          for (let k = 0; k < j; k++) {
-            s += (ld[i * n + k] ?? 0) * (ld[k * n + k] ?? 0) * (ld[j * n + k] ?? 0);
-          }
-          ld[i * n + j] = ((mat[i * n + j] ?? 0) - s) / d;
-        }
-      }
-      return ld;
-    });
-    // The permutation is the identity counted from 1 — nothing was swapped.
+    const ALPHA = (1 + Math.sqrt(17)) / 8;
     const piv = new Float32Array(v.batch * n);
-    for (let b = 0; b < v.batch; b++) {
-      for (let i = 0; i < n; i++) piv[b * n + i] = i + 1;
-    }
+    const info: number[] = [];
+    const outs = v.mats.map((mat, plate) => {
+      const a = new Float64Array(n * n);
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j <= i; j++) a[i * n + j] = mat[i * n + j] ?? 0;
+      }
+      const at = (i: number, j: number): number => a[i * n + j] ?? 0;
+      let bad = 0;
+      let k = 0;
+      while (k < n) {
+        let step = 1;
+        const here = Math.abs(at(k, k));
+        let imax = -1;
+        let colmax = 0;
+        for (let i = k + 1; i < n; i++) {
+          if (Math.abs(at(i, k)) > colmax) { colmax = Math.abs(at(i, k)); imax = i; }
+        }
+        let kp: number;
+        if (Math.max(here, colmax) === 0 || here >= ALPHA * colmax) {
+          kp = k;
+        } else {
+          let rowmax = 0;
+          for (let j = k; j < imax; j++) rowmax = Math.max(rowmax, Math.abs(at(imax, j)));
+          for (let i = imax + 1; i < n; i++) {
+            rowmax = Math.max(rowmax, Math.abs(at(i, imax)));
+          }
+          if (here >= ALPHA * colmax * (colmax / rowmax)) kp = k;
+          else if (Math.abs(at(imax, imax)) >= ALPHA * rowmax) kp = imax;
+          else { kp = imax; step = 2; }
+        }
+        const kk = k + step - 1;
+        if (kp !== kk) {
+          for (let i = kp + 1; i < n; i++) {
+            const keep = at(i, kk);
+            a[i * n + kk] = at(i, kp);
+            a[i * n + kp] = keep;
+          }
+          for (let j = kk + 1; j < kp; j++) {
+            const keep = at(j, kk);
+            a[j * n + kk] = at(kp, j);
+            a[kp * n + j] = keep;
+          }
+          const keepDiag = at(kk, kk);
+          a[kk * n + kk] = at(kp, kp);
+          a[kp * n + kp] = keepDiag;
+          if (step === 2) {
+            const keepPair = at(kk, k);
+            a[kk * n + k] = at(kp, k);
+            a[kp * n + k] = keepPair;
+          }
+        }
+        if (step === 1) {
+          const d11 = at(k, k);
+          if (d11 === 0 && bad === 0) bad = k + 1;
+          if (d11 !== 0) {
+            for (let i = k + 1; i < n; i++) a[i * n + k] = at(i, k) / d11;
+            for (let j = k + 1; j < n; j++) {
+              for (let i = j; i < n; i++) {
+                a[i * n + j] = at(i, j) - d11 * at(i, k) * at(j, k);
+              }
+            }
+          }
+          // **`kp + 1`, not `k + 1`.** A 1×1 pivot still records where the row came
+          // from; writing the position instead is the identity whenever nothing
+          // swapped, so every unswapped matrix agreed and only the swapped ones
+          // parted — and they parted in the pivot table, not the values.
+          piv[plate * n + k] = kp + 1;
+        } else {
+          if (k < n - 2) {
+            const d21raw = at(k + 1, k);
+            const d11 = at(k + 1, k + 1) / d21raw;
+            const d22 = at(k, k) / d21raw;
+            const d21 = (1 / (d11 * d22 - 1)) / d21raw;
+            for (let j = k + 2; j < n; j++) {
+              const wk = d21 * (d11 * at(j, k) - at(j, k + 1));
+              const wkp1 = d21 * (d22 * at(j, k + 1) - at(j, k));
+              for (let i = j; i < n; i++) {
+                a[i * n + j] = at(i, j) - at(i, k) * wk - at(i, k + 1) * wkp1;
+              }
+              a[j * n + k] = wk;
+              a[j * n + k + 1] = wkp1;
+            }
+          }
+          piv[plate * n + k] = -(kp + 1);
+          piv[plate * n + k + 1] = -(kp + 1);
+        }
+        k += step;
+      }
+      info.push(bad);
+      return a;
+    });
     return {
       LD: Tensor.fromBatch(outs, this.shape),
       pivots: Tensor.from(piv, [...v.lead, n], { dtype: "int64" }),
+      info,
     };
   }
 
   /**
-   * `ldlFactor` **plus one `info`.** The same place as `luFactorEx`.
+   * `ldlFactor` **plus one `info`** — the first zero pivot, counting from 1.
    *
-   * **Here it is always 0** — meeting a bad position makes `ldlFactor`
-   * refuse on the spot, so nothing is left to report by number. The name is
-   * kept anyway: torch offers it, and without it the caller has to invent
-   * one of the three slots themselves — which the binding was actually
-   * doing (standing up `_Fields` by hand and slotting a 0 into `info`).
-   * Then the golden cases go through the binding and are green, and what is
-   * missing is only for whoever writes TypeScript.
+   * It used to be always 0, with the note that a bad position makes `ldlFactor`
+   * refuse on the spot. That was true while every such matrix was refused; now the
+   * only ones left are singular, and this is where they are reported rather than
+   * stopped. Measured against torch: `[[1,1],[1,1]]` gives 2 and a zero matrix 1.
    */
   async ldlFactorEx(): Promise<{ LD: Tensor; pivots: Tensor; info: Tensor }> {
     const v = await this.asBatch();
-    const got = await this.ldlFactor();
-    return { ...got, info: Tensor.zeros(v.lead).to("int64") };
+    const got = await this.ldlPacked();
+    return {
+      LD: got.LD,
+      pivots: got.pivots,
+      info: Tensor.from(got.info, v.lead, { dtype: "int64" }),
+    };
   }
 
   /**
-   * Solves using the factorisation `ldlFactor` produced. Three passes: `L y
-   * = b`, `D z = y`, `Lᵀ x = z`.
+   * Solves using the factorisation `ldlFactor` produced — LAPACK's `dsytrs`,
+   * **pivots and all.**
+   *
+   * `pivots` was not taken here at all, which was right only while nothing was ever
+   * swapped: the factorisation refused every matrix that needed it. With
+   * Bunch–Kaufman in place the old body was wrong on 47 of 80 random symmetric
+   * matrices and returned a plausible number every time.
+   *
+   * **Swap, eliminate, divide — in that order, one step at a time.** Written as
+   * *permute, then solve `L`, then solve `D`* it is still wrong, because `L` was
+   * built in the swapped order and the two do not commute; that version was wrong on
+   * 97 of 279. And **inside a 2×2 block the sub-diagonal entry belongs to `D`**, not
+   * to the unit triangle around it.
    */
-  async ldlSolve(b: Tensor): Promise<Tensor> {
+  async ldlSolve(pivots: Tensor, b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
     const n = v.rows;
     if (v.batch !== 1) throw new RuntimeError("ldl_solve: batching is not here yet");
     const ld = v.mats[0];
     if (!ld) throw new RuntimeError("ldl_solve: the factorization is empty");
+    const piv = Array.from(await pivots.toArray()).map((v2) => Math.round(v2));
     const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
     const rhs = LA.fromF32(await b.toArray());
-    const out = new Float64Array(n * width);
-    for (let c = 0; c < width; c++) {
-      const y = new Float64Array(n);
-      for (let i = 0; i < n; i++) {
-        let s = rhs[i * width + c] ?? 0;
-        for (let k = 0; k < i; k++) s -= (ld[i * n + k] ?? 0) * (y[k] ?? 0);
-        y[i] = s;
+    const x = Float64Array.from(rhs);
+    const at = (i: number, j: number): number => ld[i * n + j] ?? 0;
+    const row = (i: number, c: number): number => x[i * width + c] ?? 0;
+    const swap = (i: number, j: number): void => {
+      for (let c = 0; c < width; c++) {
+        const keep = row(i, c);
+        x[i * width + c] = row(j, c);
+        x[j * width + c] = keep;
       }
-      for (let i = 0; i < n; i++) y[i] = (y[i] ?? 0) / (ld[i * n + i] ?? 1);
-      for (let i = n - 1; i >= 0; i--) {
-        let s = y[i] ?? 0;
-        for (let k = i + 1; k < n; k++) {
-          s -= (ld[k * n + i] ?? 0) * (out[k * width + c] ?? 0);
+    };
+    let k = 0;
+    while (k < n) {
+      if ((piv[k] ?? 0) > 0) {
+        const kp = (piv[k] ?? 0) - 1;
+        if (kp !== k) swap(k, kp);
+        for (let i = k + 1; i < n; i++) {
+          for (let c = 0; c < width; c++) x[i * width + c] = row(i, c) - at(i, k) * row(k, c);
         }
-        out[i * width + c] = s;
+        for (let c = 0; c < width; c++) x[k * width + c] = row(k, c) / at(k, k);
+        k += 1;
+      } else {
+        const kp = -(piv[k] ?? 0) - 1;
+        if (kp !== k + 1) swap(k + 1, kp);
+        for (let i = k + 2; i < n; i++) {
+          for (let c = 0; c < width; c++) {
+            x[i * width + c] = row(i, c) - at(i, k) * row(k, c)
+              - at(i, k + 1) * row(k + 1, c);
+          }
+        }
+        const off = at(k + 1, k);
+        const top = at(k, k) / off;
+        const bot = at(k + 1, k + 1) / off;
+        const denom = top * bot - 1;
+        for (let c = 0; c < width; c++) {
+          const b0 = row(k, c) / off;
+          const b1 = row(k + 1, c) / off;
+          x[k * width + c] = (bot * b0 - b1) / denom;
+          x[(k + 1) * width + c] = (top * b1 - b0) / denom;
+        }
+        k += 2;
       }
     }
-    return Tensor.fromMat(out, b.shape);
+    // A 2×2 block is met at its **second** row on the way up, and both of its
+    // columns are applied before the pair steps past.
+    k = n - 1;
+    while (k >= 0) {
+      const back = (target: number, col: number): void => {
+        let s = row(target, col);
+        for (let i = k + 1; i < n; i++) s -= at(i, target) * row(i, col);
+        x[target * width + col] = s;
+      };
+      if ((piv[k] ?? 0) > 0) {
+        for (let c = 0; c < width; c++) back(k, c);
+        const kp = (piv[k] ?? 0) - 1;
+        if (kp !== k) swap(k, kp);
+        k -= 1;
+      } else {
+        for (let c = 0; c < width; c++) { back(k, c); back(k - 1, c); }
+        const kp = -(piv[k] ?? 0) - 1;
+        if (kp !== k) swap(k, kp);
+        k -= 2;
+      }
+    }
+    return Tensor.fromMat(x, b.shape);
   }
 
   /**
@@ -7044,16 +7409,39 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * count both match, so **nothing catches at that point** and only the
    * value is wrong.
    */
-  async luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor> {
+  async luSolveFactored(pivots: Tensor, b: Tensor,
+                        left = true, adjoint = false): Promise<Tensor> {
+    if (!left) {
+      // `X A = B` is `Aᵀ Xᵀ = Bᵀ`, so the right-hand solve is the left one on the
+      // transposed sides with the adjoint flipped. Real storage only, so torch's
+      // `Aᴴ` is a transpose.
+      const t = await this.luSolveFactored(
+        pivots, b.transpose(-1, -2), true, !adjoint);
+      return t.transpose(-1, -2);
+    }
     const v = await this.asBatch();
-    if (v.batch !== 1) throw new RuntimeError("lu_solve: batching is not here yet");
     const n = v.rows;
+    // **Batched, by the same loop `solve` twenty lines up already uses.** This
+    // refused a batch outright, which was honest; what made it worth closing is
+    // that the core answered a batch and got it **wrong** — one permutation built
+    // from the flattened pivots and applied to the batch axis. A refusal here and a
+    // wrong number there is the pair a golden case cannot ask about, because the
+    // case cannot be written while one side stops.
+    const width = b.shape.length === this.shape.length - 1
+      ? 1 : (b.shape[b.shape.length - 1] ?? 1);
     const piv = Int32Array.from(await pivots.toArray());
-    const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
-    const rhs = LA.fromF32(await b.toArray());
-    const x = LA.luSolveFactored(
-      { lu: v.mats[0]!, piv, rows: n, cols: n }, rhs, width);
-    return Tensor.fromMat(x, b.shape);
+    const rhsFlat = LA.fromF32(await b.toArray());
+    const size = n * width;
+    const xs: LA.Mat[] = [];
+    for (let i = 0; i < v.batch; i++) {
+      xs.push(LA.luSolveFactored(
+        // Each matrix has its own pivots — `n` of them, in the same order as the
+        // matrices. Sharing one row of pivots across the batch is exactly the fault
+        // the core had.
+        { lu: v.mats[i]!, piv: piv.slice(i * n, (i + 1) * n), rows: n, cols: n },
+        rhsFlat.slice(i * size, (i + 1) * size), width, adjoint));
+    }
+    return Tensor.fromBatch(xs, b.shape);
   }
 
   // ── Linear algebra at the top level ───────────────────────────────────
@@ -7263,14 +7651,44 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    *
    * **`largest` decides the order too** — true gives largest first, false
    * smallest first (measured).
+   *
+   * **`b` is the generalised problem `A x = λ B x`, and it was refused.** With `B`
+   * symmetric positive definite it reduces to a standard one in four lines:
+   * `B = L Lᵀ`, the eigenvalues of `L⁻¹ A L⁻ᵀ` are the generalised ones, and
+   * `x = L⁻ᵀ y` are the generalised vectors. Nothing iterative was needed.
+   *
+   * **Those vectors come out `B`-orthonormal**, not unit length — `xᵀBx = 1` and
+   * `xᵀx = 0.996` on the fixture. It falls out of the reduction (`xᵀBx = yᵀy`) and
+   * it is what torch returns; normalising them would look tidier and disagree.
+   *
+   * **`x` is a starting basis and this has nothing to start.** What it changes is
+   * the count: given `x` and no `k`, torch takes `k` from its columns, which is why
+   * `k` is `null` here rather than 1. The converged eigenvalues do not depend on it
+   * — torch with and without agrees to 5e-6, the distance its own answer moves with
+   * the seed.
    */
-  async lobpcg(k = 1, largest = true): Promise<{
+  async lobpcg(k: number | null = null, largest = true,
+               b: Tensor | null = null, x: Tensor | null = null): Promise<{
     eigenvalues: Tensor; eigenvectors: Tensor;
   }> {
-    const { values, vectors } = await this.eigh();
+    const want = k ?? (x === null ? 1 : (x.shape[x.shape.length - 1] ?? 1));
+    let values: Tensor;
+    let vectors: Tensor;
+    if (b === null) {
+      ({ values, vectors } = await this.eigh());
+    } else {
+      const low = await b.cholesky();
+      // `L⁻¹ A L⁻ᵀ`, symmetrised — the two solves are the reduction.
+      const half = await low.solveTriangular(this, false);
+      const inner = await low.solveTriangular(half.transpose(), false);
+      const sym = inner.transpose().add(inner).mul(Tensor.full([], 0.5));
+      const got = await sym.eigh();
+      values = got.values;
+      vectors = await low.transpose().solveTriangular(got.vectors, true);
+    }
     const n = values.shape[values.shape.length - 1] ?? 0;
     const picks: number[] = [];
-    for (let i = 0; i < k; i++) picks.push(largest ? n - 1 - i : i);
+    for (let i = 0; i < want; i++) picks.push(largest ? n - 1 - i : i);
     const idx = Tensor.from(picks, [picks.length]);
     return {
       eigenvalues: values.indexSelect(0, idx),
@@ -7506,6 +7924,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
+   * Writes back whatever the callback computes. **The general form of
+   * `inplaceUnary`**, for the two operations whose out-of-place half takes an
+   * argument the `UNARY` table cannot give it — `round_(decimals)` and
+   * `logit_(eps)`, both attached after the table for the ordering reason `abs` and
+   * `elu` are.
+   */
+  inplaceFrom(compute: () => Tensor): Tensor {
+    return this.mutate(compute);
+  }
+
+  /**
    * The table's **binary** operations, in place. Names like `hypot_` come here.
    *
    * It exists for the same reason `inplaceUnary` does: `mutate` is private, and the
@@ -7535,7 +7964,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.conjPhysical());
   }
 
-  swapaxes_(a: number, b: number): Tensor {
+  // **torch's names, which the partner three thousand lines up already uses.** This
+  // took `a`/`b` where `swapaxes` takes `axis0`/`axis1`, so the two spellings of one
+  // operation named their arguments differently and a keyword call reached one and
+  // not the other.
+  swapaxes_(axis0: number, axis1: number): Tensor {
+    return this.swapaxesInPlace(axis0, axis1);
+  }
+
+  private swapaxesInPlace(a: number, b: number): Tensor {
     return this.mutate(() => this.swapaxes(a, b));
   }
 
@@ -7565,13 +8002,49 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * `torch.Tensor.scatter` — **overwrite at the indexed positions.** borch.ts calls
    * it `scatterSet`, so torch's own name was absent while the operation was there.
+   *
+   * `reduce` is torch's deprecated overload, kept because torch still answers it.
+   * Given, it combines *onto what is there* instead of overwriting, and colliding
+   * indices accumulate — which is `scatterReduce(…, includeSelf = true)` under
+   * another two words, verified against torch rather than reasoned from the docs.
    */
-  scatter(dim: number, index: Tensor, src: Tensor): Tensor {
-    return this.scatterSet(dim, index, src);
+  scatter(dim: number, index: Tensor, src: Tensor, reduce?: string): Tensor {
+    if (reduce === undefined) return this.scatterSet(dim, index, src);
+    return this.scatterOnto(dim, index, src, reduce);
   }
 
-  scatter_(dim: number, index: Tensor, src: Tensor): Tensor {
-    return this.mutate(() => this.scatterSet(dim, index, src));
+  scatter_(dim: number, index: Tensor, src: Tensor, reduce?: string): Tensor {
+    return this.mutate(() => this.scatter(dim, index, src, reduce));
+  }
+
+  /**
+   * The `reduce` half of `scatter`, and **it refuses to differentiate.**
+   *
+   * The value is `scatterReduce`'s, which does have a backward here — so the
+   * refusal is a choice, not a limit. torch raises `derivative for aten::scatter is
+   * not implemented` for this overload, and computing a slope where torch stops
+   * would be the failure this repository keeps finding from the other side: the
+   * number comes out, nothing marks it as ours alone, and it is wrong only in
+   * training, where nobody is reading.
+   */
+  private scatterOnto(
+    dim: number, index: Tensor, src: Tensor, reduce: string,
+  ): Tensor {
+    if (reduce !== "add" && reduce !== "multiply") {
+      throw new RuntimeError(
+        `scatter's \`reduce\` takes 'add' or 'multiply'; got ${JSON.stringify(reduce)}. `
+        + "The wider set ('sum', 'prod', 'mean', 'amax', 'amin') belongs to "
+        + "`scatterReduce`, which is the replacement torch points at."
+        + "\n(torch: reduce argument must be either add or multiply.)");
+    }
+    const value = this.detach().scatterReduce(
+      dim, index, src.detach(), reduce === "add" ? "sum" : "prod", true);
+    return Tensor.make(value.raw, value.shape, [this, src], () => {
+      throw new RuntimeError(
+        "scatter with `reduce` has no gradient — torch does not define one either, "
+        + "and a slope invented here would be wrong only in training."
+        + "\n(torch: derivative for aten::scatter is not implemented)");
+    }, "ScatterBackward0", value.dtype);
   }
 
   scatterAdd_(dim: number, index: Tensor, src: Tensor): Tensor {
@@ -7716,12 +8189,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.variance(dim, take, keepdim);
   }
 
-  transpose_(): Tensor {
-    return this.mutate(() => this.transpose());
+  // **Both took less than their partners one screen up.** `transpose(dim0, dim1)`
+  // and `squeeze(...dim)` carry torch's whole list; the in-place twins took nothing
+  // and one axis, so `x.transpose_(0, 1)` dropped both numbers and did the 2-D swap,
+  // and `x.squeeze_(0, 2)` dropped the second. Same shape as `divide_`, which was
+  // narrower than `div_` for the same reason: an in-place twin written by hand
+  // rather than derived.
+  transpose_(dim0?: number, dim1?: number): Tensor {
+    return this.mutate(() => this.transpose(dim0, dim1));
   }
 
-  squeeze_(dim: number): Tensor {
-    return this.mutate(() => this.squeeze(dim));
+  squeeze_(...dim: number[]): Tensor {
+    return this.mutate(() => this.squeeze(...dim));
   }
 
   unsqueeze_(dim: number): Tensor {
@@ -7736,12 +8215,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.triu(diagonal));
   }
 
-  cumsum_(dim = 0): Tensor {
-    return this.mutate(() => this.cumsum(dim));
+  // **`dtype` was on the partner and not on these.** In place means *the same
+  // arithmetic, written back* — so the two spellings of one operation must take one
+  // list, and `x.cumsum_(0, "int64")` was a word JavaScript dropped. It could not be
+  // seen until the core's forwarders declared what they forward: the signature axis
+  // filed both rows as *no python signature*, one of ninety-seven in that bucket.
+  cumsum_(dim = 0, dtype?: DType): Tensor {
+    return this.mutate(() => this.cumsum(dim, dtype));
   }
 
-  cumprod_(dim = 0): Tensor {
-    return this.mutate(() => this.cumprod(dim));
+  cumprod_(dim = 0, dtype?: DType): Tensor {
+    return this.mutate(() => this.cumprod(dim, dtype));
   }
 
   // ── In the kernel tables, with no name to type ────────────────────────
@@ -8206,12 +8690,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.nextafter(other));
   }
 
-  clampMax_(high: number): Tensor {
-    return this.mutate(() => this.clampMax(high));
+  // **These four take their partner's word for the argument, and did not.** One line
+  // up, `clampMax(max)`, `clampMin(min)`, `fmod(other)` and `remainder(other)` all use
+  // torch's name; the in-place twins had invented `high`, `low` and `divisor`. Nothing
+  // a caller writes changes — JavaScript has no keyword arguments — but the printed
+  // API disagreed with torch's docs at four places, and the signature axis could not
+  // say so while the core's own methods were `(self, *args, **kw)`.
+  clampMax_(max: number): Tensor {
+    return this.mutate(() => this.clampMax(max));
   }
 
-  clampMin_(low: number): Tensor {
-    return this.mutate(() => this.clampMin(low));
+  clampMin_(min: number): Tensor {
+    return this.mutate(() => this.clampMin(min));
   }
 
   digamma_(): Tensor {
@@ -8234,12 +8724,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.floorDivide(Tensor.asTensor(other)));
   }
 
-  fmod_(divisor: number): Tensor {
-    return this.mutate(() => this.fmod(divisor));
+  fmod_(other: number): Tensor {
+    return this.mutate(() => this.fmod(other));
   }
 
-  remainder_(divisor: number): Tensor {
-    return this.mutate(() => this.remainder(divisor));
+  remainder_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.remainder(other));
   }
 
   lerp_(end: Tensor, weight: Tensor | number): Tensor {
@@ -8342,7 +8832,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * between.** The core kept it out of the automatic table for the same
    * reason.
    */
-  bernoulli_(p = 0.5): Tensor {
+  bernoulli_(p = 0.5, generator?: null): Tensor {
+    refuseGenerator("bernoulli_", generator);
     return this.mutate(
       () => Tensor.rand(this.shape).binary("lt", Tensor.full([], p)).to(this.dtype));
   }
@@ -8366,11 +8857,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // **Numbers only** — as their partners `div_`, `mul_` and `sub_` are. In-place
   // arithmetic taking a tensor is not here, and an alias wider than its partner is not
   // an alias but a new promise.
-  divide_(other: number): Tensor {
-    return this.div_(other);
+  // **An alias narrower than what it aliases drops an argument in silence.** `div_`
+  // takes `roundingMode` and `divide_` did not, so `x.divide_(2, "floor")` handed the
+  // mode to nothing and returned the true quotient — a number, and a plausible one.
+  divide_(other: number, roundingMode: "trunc" | "floor" | null = null): Tensor {
+    return this.div_(other, roundingMode);
   }
 
   trueDivide_(other: number): Tensor {
+    // **No `roundingMode` here, and that is torch's own line.** `true_divide` is
+    // always the true quotient; `divide` is `div`'s alias and carries the mode.
     return this.div_(other);
   }
 
@@ -8451,7 +8947,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       [this.buffer, values, indices],
       outer * inner,
     );
-    const idx = new Tensor(indices, this.shape);
+    // **`int64`, and it was defaulting to float32.** A position is not a value, and
+    // `argReduceOver` says exactly that about its own output — so `max(dim).indices`
+    // was int64 while `sort`, `topk`, `kthvalue`, `median`, `cummax` and `cummin`
+    // handed back floats. It went unseen because the pair had no `repr`: every one
+    // of them printed an object address, so the label was never on screen, and
+    // `gather` takes either.
+    const idx = new Tensor(indices, this.shape, { dtype: "int64" });
     return {
       values: this.gatherBack(values, this.shape, idx, axis, len, len),
       indices: idx,
@@ -8584,7 +9086,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       [this.buffer, values, indices],
       this.size,
     );
-    const idx = new Tensor(indices, this.shape);
+    // **`int64`, and it was defaulting to float32.** A position is not a value, and
+    // `argReduceOver` says exactly that about its own output — so `max(dim).indices`
+    // was int64 while `sort`, `topk`, `kthvalue`, `median`, `cummax` and `cummin`
+    // handed back floats. It went unseen because the pair had no `repr`: every one
+    // of them printed an object address, so the label was never on screen, and
+    // `gather` takes either.
+    const idx = new Tensor(indices, this.shape, { dtype: "int64" });
     return {
       values: this.gatherBack(values, this.shape, idx, axis, len, len),
       indices: idx,
@@ -9198,7 +9706,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const room = other.abs().mul(Tensor.full([], rtol)).add(Tensor.full([], atol));
     const near = this.sub(other).abs().binary("le", room);
     if (!equalNan) return near;
-    const bothNan = this.binary("ne", this).mul(other.binary("ne", other));
+    // **`x != x` is not a NaN test in WGSL.** The spec does not promise NaN
+    // semantics, so an implementation may assume there are none and fold the
+    // comparison to false — measured: written that way this line answered `false`
+    // for a NaN pair under SwiftShader and `true` under Metal, same build, same
+    // hour, and every headless run of the golden was red on one case for it.
+    //
+    // `isnan` reads the exponent and mantissa as bits (`is_nan` in `kernels.ts`),
+    // and that comment already says why: seen as bits there is nothing to fold. The
+    // safe primitive existed; this was the one place that did not reach for it.
+    const bothNan = this.isnan().mul(other.isnan());
     return near.add(bothNan).binary("gt", Tensor.full([], 0));
   }
 
@@ -9294,25 +9811,40 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * The Kronecker product. **One-dimensional only** — above that it
-   * refuses.
+   * The Kronecker product, at any rank.
    *
-   * The version in the binding was looking at one axis only (two
-   * `shape[0]`s), and given two dimensions the answer was quietly wrong. It
-   * could have been fixed while carrying it across, but that writes down a
-   * capability that is not here as though it were — **a missing feature
-   * beats a wrong answer** is this repository's rule.
+   * **This was 1-D only, and the 1-D line was already the general one.** It read
+   * `reshape([n, 1]).mul(other.reshape([1, m]))` and refused everything above one
+   * axis — but interleaving the two shapes and letting broadcasting multiply *is*
+   * `kron` at every rank:
+   *
+   *     out[(i, k), (j, l), …] = a[i, j, …] · b[k, l, …]
+   *
+   * The refusal was written because the binding's version looked at one axis only
+   * and was quietly wrong above it, and *a missing feature beats a wrong answer*.
+   * That was the right call on the day; what it hid is that the correct answer was
+   * one loop away from the line it sat on.
+   *
+   * **The shorter operand is padded at the front** — numpy's rule and torch's,
+   * measured against both across nine rank combinations including 0-D.
    */
   kron(other: Tensor): Tensor {
-    if (this.shape.length !== 1 || other.shape.length !== 1) {
-      throw new RuntimeError(
-        "kron only does 1-D — two or more dimensions are not here yet. " +
-        `(got shapes [${this.shape}] and [${other.shape}])`,
-      );
+    const rank = Math.max(this.shape.length, other.shape.length);
+    const pad = (s: readonly number[]): number[] =>
+      [...new Array<number>(rank - s.length).fill(1), ...s];
+    const a = pad(this.shape);
+    const b = pad(other.shape);
+    const aSpread: number[] = [];
+    const bSpread: number[] = [];
+    const folded: number[] = [];
+    for (let i = 0; i < rank; i++) {
+      aSpread.push(a[i] as number, 1);
+      bSpread.push(1, b[i] as number);
+      folded.push((a[i] as number) * (b[i] as number));
     }
-    const n = this.shape[0] ?? 0;
-    const m = other.shape[0] ?? 0;
-    return this.reshape([n, 1]).mul(other.reshape([1, m])).reshape([n * m]);
+    // Both 0-D: there is nothing to interleave and the product is the product.
+    if (rank === 0) return this.mul(other);
+    return this.reshape(aSpread).mul(other.reshape(bSpread)).reshape(folded);
   }
 
   /**
@@ -9447,7 +9979,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The exponential distribution. Its mean is `1/lambd`, and **lambd has to
    * be positive**.
    */
-  exponential_(lambd = 1.0): Tensor {
+  exponential_(lambd = 1.0, generator?: null): Tensor {
+    refuseGenerator("exponential_", generator);
     this.needsFloatDraw("exponential_", "runtime");
     if (!(lambd > 0)) {
       throw new RuntimeError(
@@ -9461,7 +9994,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The Cauchy distribution. **It has no mean** — the tails are heavy
    * enough that the sample mean does not converge.
    */
-  cauchy_(median = 0.0, sigma = 1.0): Tensor {
+  cauchy_(median = 0.0, sigma = 1.0, generator?: null): Tensor {
+    refuseGenerator("cauchy_", generator);
     this.needsFloatDraw("cauchy_", "runtime");
     return this.drawInto_((u) => median + sigma * Math.tan(Math.PI * (u - 0.5)));
   }
@@ -9470,7 +10004,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The log-normal distribution. `mean` and `std` are the values **after
    * taking logs** (as in torch).
    */
-  logNormal_(mean = 1.0, std = 2.0): Tensor {
+  logNormal_(mean = 1.0, std = 2.0, generator?: null): Tensor {
+    refuseGenerator("log_normal_", generator);
     this.needsFloatDraw("log_normal_", "unimplemented");
     return this.drawInto_(() => Math.exp(mean + std * gauss()));
   }
@@ -9479,7 +10014,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Overwrites with the normal distribution. **`std` cannot be negative** —
    * at 0 it is the mean itself.
    */
-  normal_(mean = 0.0, std = 1.0): Tensor {
+  normal_(mean = 0.0, std = 1.0, generator?: null): Tensor {
+    refuseGenerator("normal_", generator);
     this.needsFloatDraw("normal_", "unimplemented");
     if (!(std >= 0)) {
       throw new RuntimeError(
@@ -9491,7 +10027,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Overwrites with reals in `[from, to)`. **`from < to` is required.**
    */
-  uniform_(from = 0.0, to = 1.0): Tensor {
+  uniform_(from = 0.0, to = 1.0, generator?: null): Tensor {
+    refuseGenerator("uniform_", generator);
     this.needsFloatDraw("uniform_", "unimplemented");
     if (!(from < to)) {
       throw new RuntimeError(
@@ -9507,7 +10044,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `p` is an **open interval**. At 0 the event never happens and at 1 it
    * always happens on the first try, so neither is a distribution.
    */
-  geometric_(p: number): Tensor {
+  geometric_(p: number, generator?: null): Tensor {
+    refuseGenerator("geometric_", generator);
     if (!(p > 0 && p < 1)) {
       throw new RuntimeError(
         `geometric_ expects p to be in (0, 1), but got p=${p}`);
@@ -9523,7 +10061,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * f32 cell and cannot count past that — drawn values above it have
    * neighbours that cannot be told apart. That is not imitated.
    */
-  random_(from = 0, to?: number): Tensor {
+  random_(from = 0, to?: number, generator?: null): Tensor {
+    refuseGenerator("random_", generator);
     const high = to ?? EXACT_INT_LIMIT;
     if (!(from < high)) {
       throw new RuntimeError(
@@ -9750,34 +10289,57 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // pooling return the positions alongside and hands them to the unpooling — a common
   // pair in an autoencoder.
 
-  /** The window list for a fixed window. `[start, end)` per axis. */
-  private fixedWindows(kernel: number, stride?: number): [number, number][][] {
+  /**
+   * The positions a fixed window reads, per axis and per output cell.
+   *
+   * **`padding`, `dilation` and `ceilMode` were refused on this path** while the plain
+   * pooling shader answered all three, because the window was `[start, end)` — an
+   * interval, which cannot skip cells and cannot hang off an edge. Written as the
+   * positions themselves, the dilation is the step of the loop that builds them and
+   * the padding is what makes some of them fall outside and be left out. A padded cell
+   * is `-inf` in torch and never wins, so an absent one is the same answer.
+   */
+  private fixedWindows(kernel: number, stride?: number, padding = 0,
+                       dilation = 1, ceilMode = false): number[][][] {
     const step = stride ?? kernel;
     return this.shape.slice(2).map((n) => {
-      const out: [number, number][] = [];
-      for (let s = 0; s + kernel <= n; s += step) out.push([s, s + kernel]);
+      const out: number[][] = [];
+      const cells = poolOut(n, padding, kernel, step, ceilMode, dilation);
+      for (let i = 0; i < cells; i++) {
+        const at: number[] = [];
+        for (let k = 0; k < kernel; k++) {
+          const p = i * step + k * dilation - padding;
+          if (p >= 0 && p < n) at.push(p);
+        }
+        out.push(at);
+      }
       return out;
     });
   }
 
-  /** The window list for the adaptive form. The start floors and the end ceils — the
+  /** The positions the adaptive form reads. The start floors and the end ceils — the
    *  length differs per position. */
-  private adaptiveWindows(outSize: number | readonly number[]): [number, number][][] {
+  private adaptiveWindows(outSize: number | readonly number[]): number[][][] {
     const spatial = this.shape.length - 2;
     const sizes = typeof outSize === "number"
       ? new Array<number>(spatial).fill(outSize)
       : [...outSize];
     return this.shape.slice(2).map((n, k) => {
       const want = sizes[k] ?? 1;
-      const out: [number, number][] = [];
+      const out: number[][] = [];
       for (let i = 0; i < want; i++) {
-        out.push([Math.floor((i * n) / want), Math.ceil(((i + 1) * n) / want)]);
+        const at: number[] = [];
+        for (let p = Math.floor((i * n) / want); p < Math.ceil(((i + 1) * n) / want);
+             p++) {
+          at.push(p);
+        }
+        out.push(at);
       }
       return out;
     });
   }
 
-  private maxWithIndex(axes: [number, number][][]): {
+  private maxWithIndex(axes: number[][][]): {
     values: Tensor;
     indices: Tensor;
   } {
@@ -9817,11 +10379,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return { values, indices };
   }
 
-  maxPoolWithIndices(kernel = 2, stride?: number): {
+  maxPoolWithIndices(kernel = 2, stride?: number, padding = 0, dilation = 1,
+                     ceilMode = false): {
     values: Tensor;
     indices: Tensor;
   } {
-    return this.maxWithIndex(this.fixedWindows(kernel, stride));
+    return this.maxWithIndex(
+      this.fixedWindows(kernel, stride, padding, dilation, ceilMode));
   }
 
   adaptiveMaxPoolWithIndices(outSize: number | readonly number[]): {
@@ -9945,13 +10509,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     for (let p = 0; p < N * C; p++) {
       const plane = this.narrow(0, Math.floor(p / C), 1)
         .narrow(1, p % C, 1);
-      const axes: [number, number][][] = [];
+      const axes: number[][][] = [];
       for (let k = 0; k < spatial; k++) {
         const u = samples[p]?.[order[k] ?? k] ?? 0;
         const starts = Tensor.fractionalStarts(
           this.shape[2 + k] ?? 1, kernel, outDims[k] ?? 1, u,
         );
-        axes.push(starts.map((s) => [s, s + kernel] as [number, number]));
+        // A window is the **positions it reads**, not a `[start, end)` pair. The
+        // fractional windows are contiguous, so it is `start … start+kernel-1` —
+        // but written out, because that is what the shader now walks.
+        axes.push(starts.map(
+          (s) => Array.from({ length: kernel }, (_, j) => s + j)));
       }
       const got = plane.maxWithIndex(axes);
       values.push(got.values);
@@ -10326,9 +10894,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   poolND(kind: "max" | "avg", kernel: number, stride?: number,
          padding = 0, ceilMode = false, countIncludePad = true,
-         divisorOverride: number | null = null): Tensor {
+         divisorOverride: number | null = null, dilation = 1): Tensor {
     const spatial = this.shape.length - 2;
     if (spatial < 1) throw new Error(`pooling: the shape does not match: [${this.shape}]`);
+    // **`dilation` belongs to the maximum alone.** torch's `avg_pool*d` has no such
+    // argument — passing one there is a `TypeError`, not a refusal — so accepting it
+    // here on the average would be a seat torch does not have.
+    if (dilation !== 1 && kind !== "max") {
+      throw new Error("avg_pool does not take a dilation");
+    }
     // **The maximum used to refuse what only the average implements**, on the ground
     // that its backward reads the input at each window position and a padded position
     // has none to read. The average had the answer one function away the whole time:
@@ -10343,10 +10917,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       inDims,
       kernel: new Array<number>(spatial).fill(kernel),
       stride: new Array<number>(spatial).fill(step),
-      outDims: inDims.map((d) => poolOut(d, padding, kernel, step, ceilMode)),
+      outDims: inDims.map((d) =>
+        poolOut(d, padding, kernel, step, ceilMode, dilation)),
       pad: new Array<number>(spatial).fill(padding),
       countIncludePad,
       divisorOverride,
+      dilation: new Array<number>(spatial).fill(dilation),
     };
     const key = poolNDKey(p);
     const outShape = [this.shape[0] ?? 1, this.shape[1] ?? 1, ...p.outDims];
@@ -10407,31 +10983,254 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * shape, different values — measured on torch: sum 120 against 132.
    */
   interpolate(size: number | readonly number[] | null = null,
-              scaleFactor: number | null = null,
-              mode: "nearest" | "bilinear" = "nearest",
+              scaleFactor: number | readonly number[] | null = null,
+              mode: InterpolateMode = "nearest",
               alignCorners = false,
-              recomputeScaleFactor: boolean | null = null): Tensor {
+              recomputeScaleFactor: boolean | null = null,
+              antialias = false): Tensor {
+    // **The union protects TypeScript callers and not the binding.** `mode` reaching
+    // here is a string, and Python hands one over without a type to stop it — so
+    // everything unmatched fell through to bilinear and `mode="quadratic"` came back
+    // as a bilinear answer under its name. The golden case asking that both sides stop
+    // is what found it: `tsc` cannot, because in TypeScript the call does not compile.
+    const known = ["nearest", "nearest-exact", "area", "linear", "bilinear",
+                   "bicubic", "trilinear"];
+    if (!known.includes(mode)) {
+      throw new RuntimeError(
+        `interpolate(mode=${JSON.stringify(mode)}) is not one of ${known.join(", ")}`);
+    }
+    // **The rank a mode needs**, measured across the whole 3×7 grid rather than
+    // reasoned from the names. `bicubic` at a rank that is not 4 falls through to the
+    // generic sentence instead of the specific one, which reads oddly — it lists 3D
+    // among the supported ranks and then refuses a 3D input — and is what torch says.
+    const rank = this.shape.length;
+    const wants: Record<string, number> = { linear: 3, bilinear: 4, trilinear: 5 };
+    const generic = () => new RuntimeError(
+      `Input Error: Only 3D, 4D and 5D input Tensors supported (got ${rank}D) `
+      + "for the modes: nearest | linear | bilinear | bicubic | trilinear | "
+      + `lanczos | area | nearest-exact (got ${mode})`);
+    if (rank !== 3 && rank !== 4 && rank !== 5) throw generic();
+    const want = wants[mode];
+    if (want !== undefined && rank !== want) {
+      throw new RuntimeError(
+        `Got ${rank}D input, but ${mode} mode needs ${want}D input`);
+    }
+    if (mode === "bicubic" && rank !== 4) throw generic();
+    const spatial = rank - 2;
+    const inDims = this.shape.slice(2);
+    // **One scale per axis.** torch takes `scale_factor=(2, 1.5)` and this held one
+    // number, so the second axis silently got the first one's factor — the shape came
+    // out wrong, which is the good direction, but only because the two axes of the
+    // fixtures differed.
+    const scales = typeof scaleFactor === "number" || scaleFactor === null
+      ? new Array<number>(spatial).fill(scaleFactor ?? 2)
+      : Array.from({ length: spatial },
+                   (_, k) => scaleFactor[k] ?? scaleFactor[0] ?? 2);
+    // torch's own rule, in one place so the modes cannot part.
+    const outDims = size === null
+      ? inDims.map((d, k) => Math.floor(d * (scales[k] ?? 2)))
+      : (typeof size === "number"
+        ? new Array<number>(spatial).fill(size)
+        : Array.from({ length: spatial }, (_, k) => size[k] ?? size[0] ?? 1));
+    // **The default is the *given* scale; recomputing is what the flag turns on.**
+    // A size rather than a factor has no scale to recompute from.
+    const given = size === null && !recomputeScaleFactor ? scales : null;
+    if (antialias) {
+      if (mode !== "bilinear" && mode !== "bicubic") {
+        throw new RuntimeError(
+          "Anti-alias option is restricted to bilinear, bicubic, and lanczos modes "
+          + "and requires a 4-D tensor as input");
+      }
+      return this.interpolateAntialias(outDims[0] ?? 1, outDims[1] ?? 1, mode,
+                                       alignCorners, given);
+    }
+    if (mode === "nearest" || mode === "nearest-exact") {
+      // `resizeNearest`'s kernel maps `floor(o · in / out)`, which *is* the
+      // recomputed rule — so it is right exactly where the given scale and the
+      // recomputed one agree, which is every whole factor and every `size=`. Where
+      // they part (5 at 1.7 gives 8, and 8/5 is 1.6) the index map is built here
+      // instead. One fused dispatch stays the common path.
+      const sameScale = given === null
+        || outDims.every((out, k) => given[k] === out / (inDims[k] ?? 1));
+      if (mode === "nearest" && sameScale) return this.resizeNearest(outDims);
+      return this.resizeNearestAt(outDims, mode === "nearest-exact" ? 0.5 : 0,
+                                  given);
+    }
+    // **`area` is `adaptivePool("avg", …)` and nothing else.** Measured against torch
+    // on a shrink, an enlargement and a size dividing evenly into neither, the two
+    // agree bit for bit — so this names what is here rather than writing a second
+    // averaging, and the gradient comes with it.
+    if (mode === "area") return this.adaptivePool("avg", outDims);
+    if (mode === "bicubic") {
+      return this.interpolateBicubic(outDims[0] ?? 1, outDims[1] ?? 1,
+                                     alignCorners, given);
+    }
+    return this.interpolateLinear(outDims, alignCorners, given);
+  }
+
+  /**
+   * `antialias=true` for `bilinear` and `bicubic` — the widened filter torch uses
+   * when shrinking.
+   *
+   * The window is **widened by the shrink factor and the weights renormalised**, which
+   * is the whole of what the flag means. Enlarging, the scale is below one, the
+   * support stays at the kernel's own radius, and the weights are the plain ones —
+   * which is why torch says the flag does nothing going up.
+   *
+   * **Two things here are torch disagreeing with itself, both measured rather than
+   * reasoned.** The cubic constant is `a = −0.5` where plain `bicubic` uses `−0.75`;
+   * fitted against torch, `−0.75` parts by 0.13 to 0.39 on a 4×5 and `−0.5` agrees to
+   * noise. And `alignCorners` is half applied: the scale becomes `(in−1)/(out−1)`,
+   * which is the align-corners rule, while the centre stays `scale·(i + 0.5)`, which
+   * is the other one — taking the align-corners centre parts by 1.3 to 4.5.
+   *
+   * Each axis is a matrix multiply against a `(out, in)` weight matrix, so the
+   * gradient is the multiply's own.
+   */
+  private interpolateAntialias(outH: number, outW: number,
+                               mode: "bilinear" | "bicubic",
+                               alignCorners: boolean,
+                               given: readonly number[] | null): Tensor {
+    const radius = mode === "bilinear" ? 1 : 2;
+    const filt = mode === "bilinear"
+      ? (raw: number): number => {
+        const t = Math.abs(raw);
+        return t < 1 ? 1 - t : 0;
+      }
+      : (raw: number): number => {
+        const t = Math.abs(raw);
+        const a = -0.5;
+        if (t <= 1) return ((a + 2) * t - (a + 3)) * t * t + 1;
+        if (t < 2) return ((t - 5) * t + 8) * t * a - 4 * a;
+        return 0;
+      };
+    const axis = (sizeIn: number, sizeOut: number, k: number): Tensor => {
+      // The caller's scale is not read under `alignCorners` — measured: with it on,
+      // the `scaleFactor` cases agree with `(in−1)/(out−1)` alone.
+      const per = given === null ? null : (given[k] ?? null);
+      const s = alignCorners
+        ? (sizeOut > 1 ? (sizeIn - 1) / (sizeOut - 1) : 0)
+        : (per === null ? sizeIn / sizeOut : 1 / per);
+      const wide = s >= 1;
+      const support = wide ? radius * s : radius;
+      const inv = wide ? 1 / s : 1;
+      const rows = new Float32Array(sizeOut * sizeIn);
+      for (let i = 0; i < sizeOut; i++) {
+        const centre = s * (i + 0.5);
+        const lo = Math.max(Math.trunc(centre - support + 0.5), 0);
+        const span = Math.min(Math.trunc(centre + support + 0.5), sizeIn) - lo;
+        const taps = Array.from({ length: span },
+                                (_, j) => filt((j + lo - centre + 0.5) * inv));
+        const total = taps.reduce((a, b) => a + b, 0);
+        for (let j = 0; j < span; j++) {
+          rows[i * sizeIn + lo + j] = total ? (taps[j] as number) / total : 0;
+        }
+      }
+      return Tensor.from(rows, [sizeOut, sizeIn]);
+    };
+    // `(o, h) · (n, c, h, w) · (w, p)` — the rows fold first, then the columns.
+    return axis(this.shape[2] ?? 1, outH, 0).matmul(this)
+      .matmul(axis(this.shape[3] ?? 1, outW, 1).transpose());
+  }
+
+  /**
+   * `nearest-exact` — nearest measured from the **centre** of the output cell.
+   *
+   * `floor((o + 0.5)·in/out)` against `resizeNearest`'s `floor(o·in/out)`. Half a
+   * cell, which is nothing when enlarging by a whole number and is a different row
+   * entirely when shrinking: on a 4×5 to 2×3, `nearest` takes rows 0 and 2 and this
+   * takes 1 and 3. torch keeps both because the plain one is what everybody else had
+   * already shipped and is off by half.
+   *
+   * Built from `indexSelect` rather than a shader. The index rows are constants, so
+   * the gradient is the gather's own — an output cell reading the same input cell
+   * several times accumulates there, which is what `resizeNearest`'s kernel does by
+   * hand.
+   */
+  /**
+   * Nearest by index map, one axis at a time — **both nearest modes and any rank.**
+   *
+   * `half` is the whole difference between them: `nearest-exact` measures from the
+   * centre of the output cell (`floor((i + 0.5)/s)`) and `nearest` from its edge
+   * (`floor(i/s)`). Half a cell, which is nothing when enlarging by a whole number
+   * and is a different row entirely when shrinking.
+   *
+   * **`given` is the scale the caller asked for**, used when
+   * `recomputeScaleFactor` is off. `resizeNearest`'s kernel maps `floor(o·in/out)`,
+   * which *is* the recomputed rule — right whenever the two scales agree and wrong
+   * when the flooring has lost something, so `interpolate` reaches for that kernel
+   * only where they do agree.
+   */
+  private resizeNearestAt(outDims: readonly number[], half: number,
+                          given: readonly number[] | null): Tensor {
+    let out: Tensor = this;
+    outDims.forEach((sizeOut, k) => {
+      const sizeIn = this.shape[2 + k] ?? 1;
+      const step = given === null ? sizeOut / sizeIn : (given[k] ?? 1);
+      const at = Array.from({ length: sizeOut }, (_, i) =>
+        Math.min(Math.floor((i + half) / step), sizeIn - 1));
+      out = out.indexSelect(2 + k, Tensor.from(at, [sizeOut], { dtype: "int64" }));
+    });
+    return out;
+  }
+
+  /**
+   * Cubic convolution over a 4×4 neighbourhood — torch's `bicubic`.
+   *
+   * **`a = −0.75`**, which is a choice rather than a derivation: the family of cubic
+   * kernels is parameterised by it, OpenCV uses −0.75 and Photoshop −0.5, and the
+   * edges come out visibly different. torch uses −0.75 and that is the whole reason
+   * this one does.
+   *
+   * The sixteen taps are gathers with constant indices times constant weights, so the
+   * gradient is the graph's and nothing had to be written for it. **The edges clamp**,
+   * which is torch's rule and what makes a window one cell outside the image safe.
+   * Nothing is clamped on the way out — cubic convolution overshoots, so an image in
+   * `[0, 1]` comes back slightly outside it, and torch does not clamp either.
+   */
+  private interpolateBicubic(outH: number, outW: number, alignCorners: boolean,
+                             given: readonly number[] | null): Tensor {
     const h = this.shape[2] ?? 1;
     const w = this.shape[3] ?? 1;
-    const pair = (v: number | readonly number[]): [number, number] =>
-      typeof v === "number" ? [v, v] : [v[0] ?? 1, v[1] ?? v[0] ?? 1];
-    const scale = scaleFactor ?? 2;
-    // torch's own rule, in one place so the two modes cannot part.
-    const extent = (inp: number) => Math.floor(inp * scale);
-    if (mode === "nearest") {
-      // `resizeNearest` maps `src = floor(o · in / out)`, which *is* recomputing the
-      // scale from the output size — so nearest gives the same answer either way and
-      // torch says as much by ignoring the flag outside the fractional bilinear case.
-      const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
-      return this.resizeNearest([oh, ow]);
+    const A = -0.75;
+    const cubic = (raw: number): number => {
+      const t = Math.abs(raw);
+      if (t <= 1) return ((A + 2) * t - (A + 3)) * t * t + 1;
+      if (t < 2) return ((t - 5) * t + 8) * t * A - 4 * A;
+      return 0;
+    };
+    // The same two rules the bilinear path uses: `alignCorners` pins both ends,
+    // otherwise the coordinate is measured from the centre of the output cell.
+    const coords = (sizeIn: number, sizeOut: number, k: number): number[] => {
+      if (alignCorners) {
+        if (sizeOut === 1) return [0];
+        return Array.from({ length: sizeOut },
+                          (_, i) => (i * (sizeIn - 1)) / (sizeOut - 1));
+      }
+      const per = given === null ? null : (given[k] ?? null);
+      const step = per === null ? sizeIn / sizeOut : 1 / per;
+      return Array.from({ length: sizeOut }, (_, i) => (i + 0.5) * step - 0.5);
+    };
+    const ys = coords(h, outH, 0);
+    const xs = coords(w, outW, 1);
+    const clampRow = (base: number[], k: number, limit: number): Tensor =>
+      Tensor.from(base.map((v) =>
+        Math.min(Math.max(Math.floor(v) + k, 0), limit - 1)), [base.length],
+      { dtype: "int64" });
+
+    let out: Tensor | null = null;
+    for (let ky = -1; ky < 3; ky++) {
+      const wy = Tensor.from(
+        ys.map((v) => cubic(ky - (v - Math.floor(v)))), [1, 1, outH, 1]);
+      const rows = this.indexSelect(2, clampRow(ys, ky, h));
+      for (let kx = -1; kx < 3; kx++) {
+        const wx = Tensor.from(
+          xs.map((v) => cubic(kx - (v - Math.floor(v)))), [1, 1, 1, outW]);
+        const tap = rows.indexSelect(3, clampRow(xs, kx, w)).mul(wy).mul(wx);
+        out = out === null ? tap : out.add(tap);
+      }
     }
-    const [oh, ow] = size === null ? [extent(h), extent(w)] : pair(size);
-    // **The default is the *given* scale; recomputing is what the flag turns on.**
-    // The kernel had only the recomputed rule (`in / out`), so borch.ts answered as
-    // though the flag were always set. A size rather than a factor has no scale to
-    // recompute from, so that path is unchanged.
-    const given = size === null && !recomputeScaleFactor ? scale : null;
-    return this.interpolateBilinear(oh, ow, alignCorners, given);
+    return out ?? this;
   }
 
   /**
@@ -11061,6 +11860,31 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // ── Backward ──────────────────────────────────────────────────────────
 
   /**
+   * `torch.Tensor.retain_grad` — **keep this one's gradient even though it is
+   * derived.**
+   *
+   * A backward pass writes to leaves; everything in between is used and dropped,
+   * because the intermediates are the bulk of a training loop's memory. This says
+   * *keep that one*, which is how the gradient at a hidden activation is looked at.
+   *
+   * It was the same missing mechanism as `backward(…, inputs)`: both need a
+   * derived node to be able to hold a `grad`, and neither could. Closing one
+   * closed the other.
+   *
+   * On a leaf it is a no-op — a leaf already accumulates. torch is the same.
+   */
+  retainGrad(): void {
+    if (!this.requiresGrad) {
+      throw new RuntimeError(
+        "retainGrad() on a tensor that does not require grad — there would be no "
+        + "gradient to keep."
+        + "\n(torch: can't retain_grad on Tensor that has requires_grad=False)",
+      );
+    }
+    this.retainsGrad = true;
+  }
+
+  /**
    * @param retainGraph true keeps the graph. As in torch, **the default is
    *   to release it** — the intermediate values hold memory, and unreleased
    *   they accumulate through a training loop.
@@ -11083,8 +11907,53 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    *   broadcasting. A mismatched seed gives a wrong gradient with plausible
    *   values, and that surfaces only as training failing to work.
    * @param retainGraph keeps the graph so it can be flowed through again.
+   * @param createGraph **refused.** It asks for the backward pass itself to be
+   *   recorded so the gradient can be differentiated again — what a second-order
+   *   method needs. This tape does not record it: a backward is a closure over
+   *   GPU buffers, not a node. Walking the same ungraphed pass and returning
+   *   would answer a first-order question to a caller who asked a second-order
+   *   one, and the answer would look right. The core refuses it in the same
+   *   words.
+   * @param inputs restricts which tensors get a gradient. torch walks the whole
+   *   graph and writes only to the ones named, which is how a second loss is
+   *   differentiated against one branch without disturbing the rest. It also
+   *   **retains**: a derived tensor named here gets a `grad` the way
+   *   `retainGrad()` gives one — which is why torch's refusal for a tensor that
+   *   does not require grad says *can't retain_grad*.
    */
-  backward(gradient?: Tensor, retainGraph = false): void {
+  backward(
+    // **`null` counts as absent, and that is not tidiness.** The Python binding
+    // fills every position to reach the fourth, and Pyodide turns `None` into
+    // `null` — there is no way to send `undefined` from that side. Read strictly,
+    // `loss.backward(inputs=[w])` would arrive with a `null` seed, miss the
+    // implicit-1 branch, and go looking for `gradient.shape`.
+    gradient?: Tensor | null,
+    retainGraph = false,
+    createGraph = false,
+    inputs?: Tensor | readonly Tensor[] | null,
+  ): void {
+    if (createGraph) {
+      throw new NotImplementedError(
+        "backward(createGraph = true) — double backward is not in the browser subset. "
+        + "This tape holds closures over GPU buffers rather than nodes, so the backward "
+        + "pass is not itself recorded and the second derivative has nowhere to come from.",
+      );
+    }
+    let only: Set<Tensor> | undefined;
+    if (inputs !== undefined && inputs !== null) {
+      const listed = inputs instanceof Tensor ? [inputs] : [...inputs];
+      // **Before every other refusal**, which is torch's order: a tensor that
+      // does not require grad, called with an empty `inputs`, still stops here
+      // (measured).
+      if (listed.length === 0) {
+        throw new RuntimeError(
+          "backward(inputs: []) names nothing to put a gradient on. Leave `inputs` "
+          + "out to fill every leaf instead."
+          + "\n(torch: `inputs` argument to `backward()` cannot be empty.)",
+        );
+      }
+      only = new Set(listed);
+    }
     // **This check comes first.** Measured against torch, a non-scalar tensor that
     // does not require grad is refused this way rather than with "not a scalar" — it is
     // looked at before scalarness. The core (numpy) had that order from the start and
@@ -11108,7 +11977,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       );
     }
     let seed: Tensor;
-    if (gradient === undefined) {
+    if (gradient === undefined || gradient === null) {
       if (this.size !== 1) {
         throw new RuntimeError(
           `${TORCH.nonScalarBackward}: this shape is [${this.shape}] — ` +
@@ -11129,7 +11998,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       // graph.
       seed = gradient.detach();
     }
+    // **After the seed has been checked, not before it** — torch complains about a
+    // name that cannot hold a gradient only once the shape is settled (measured).
+    if (only !== undefined) {
+      for (const one of only) {
+        if (!one.requiresGrad) {
+          throw new RuntimeError(
+            "backward(inputs: …) was given a tensor that does not require grad, so "
+            + "there is nowhere for a gradient to go."
+            + "\n(torch: can't retain_grad on Tensor that has requires_grad=False)",
+          );
+        }
+      }
+    }
     tapeBackward<Tensor>(this, seed, (a, b) => a.add(b), {
+      ...(only === undefined ? {} : { only }),
       retainGraph,
       onSecondPass: () => {
         throw new RuntimeError(
@@ -11137,6 +12020,112 @@ fn gelu_tanh_grad(x: f32) -> f32 {
             "call backward(undefined, true) to keep the graph.",
         );
       },
+    });
+  }
+
+  /**
+   * `torch.autograd.grad` — the gradient **handed back rather than stored.**
+   *
+   * `backward()` accumulates into every leaf's `grad`. This returns the gradient
+   * and leaves every `grad` exactly as it found it, which is why torch has both: a
+   * gradient penalty, a meta-learning inner step and every physics-informed loss
+   * need the gradient as a value to keep computing with, and must not disturb the
+   * accumulation the optimiser is about to step on.
+   *
+   * **It was absent from all three, with no reason ever written.** On the Python
+   * side `borch.autograd` raised `AttributeError: module 'borch' has no attribute
+   * 'autograd'` — a sentence naming neither gradients nor what was missing, so a
+   * reader could not tell an absent feature from a typo.
+   *
+   * `createGraph` is not a parameter at all: it is the one thing this tape cannot
+   * do, `backward` refuses it by name, and a second seat for the same refusal is a
+   * second wording to keep in step.
+   *
+   * @param outputs what is being differentiated. Several are seeded together and
+   *   their gradients sum where the graphs meet — torch's `grad([y1, y2], x)`.
+   * @param inputs what to differentiate with respect to. **A derived tensor is
+   *   allowed**, not only a leaf.
+   * @param gradOutputs one seed per output. Left out, each output has to be a
+   *   scalar.
+   * @param allowUnused puts `null` in the slot of an input the graph never
+   *   reached, rather than stopping.
+   * @param materializeGrads puts zeros there instead. Measured: torch does **not**
+   *   require `allowUnused` alongside it.
+   */
+  static grad(
+    outputs: Tensor | readonly Tensor[],
+    inputs: Tensor | readonly Tensor[],
+    gradOutputs?: Tensor | readonly (Tensor | null)[] | null,
+    retainGraph = false,
+    allowUnused = false,
+    materializeGrads = false,
+  ): (Tensor | null)[] {
+    const outs = outputs instanceof Tensor ? [outputs] : [...outputs];
+    const ins = inputs instanceof Tensor ? [inputs] : [...inputs];
+    // **First of all**, ahead of every other refusal — the order `backward`
+    // follows for its own empty `inputs`.
+    if (ins.length === 0) {
+      throw new RuntimeError("`inputs` argument to `grad()` cannot be empty.");
+    }
+    for (const out of outs) {
+      if (!out.requiresGrad) {
+        throw new RuntimeError(
+          `element 0 of tensors ${TORCH.noGrad} and does not have a grad_fn: `
+          + "it was made under no_grad, or it passed through an operation that breaks the graph.",
+        );
+      }
+    }
+    const given: (Tensor | null)[] = gradOutputs === undefined || gradOutputs === null
+      ? outs.map(() => null)
+      : (gradOutputs instanceof Tensor ? [gradOutputs] : [...gradOutputs]);
+    const seeds = outs.map((out, i) => {
+      const seed = given[i] ?? null;
+      if (seed === null) {
+        if (out.size !== 1) {
+          throw new RuntimeError(
+            `${TORCH.nonScalarBackward}: this shape is [${out.shape}] — `
+            + "pass a gradient, or call .sum() first.",
+          );
+        }
+        return Tensor.full([], 1);
+      }
+      if (seed.shape.length !== out.shape.length
+        || seed.shape.some((n, k) => n !== out.shape[k])) {
+        throw new RuntimeError(
+          `${TORCH.gradShape}: grad_output[0] has a shape of [${seed.shape}] `
+          + `and output[0] has a shape of [${out.shape}].`,
+        );
+      }
+      // Detached, as `backward`'s seed is: this tape does no second derivatives, so
+      // an attached seed would only hold the graph alive through the returned value.
+      return seed.detach();
+    });
+    // **After the seeds have been checked, not before** — torch settles the
+    // gradient's shape first and only then complains about a name that cannot hold
+    // one (measured).
+    for (const one of ins) {
+      if (!one.requiresGrad) {
+        throw new RuntimeError("One of the differentiated Tensors does not require grad");
+      }
+    }
+    const got = tapeFlow<Tensor>(outs, seeds, (a, b) => a.add(b), {
+      retainGraph,
+      onSecondPass: () => {
+        throw new RuntimeError(
+          `${TORCH.secondBackward}. To flow through it again, `
+          + "pass retainGraph = true.",
+        );
+      },
+    });
+    return ins.map((one, at) => {
+      const had = got.get(one);
+      if (had !== undefined) return had;
+      if (materializeGrads) return Tensor.zeros(one.shape);
+      if (allowUnused) return null;
+      throw new RuntimeError(
+        `The differentiated Tensor at index ${at} appears to not have been used in `
+        + "the graph. Set allow_unused=True if this is the desired behavior.",
+      );
     });
   }
 
@@ -11802,6 +12791,33 @@ Object.defineProperty(Tensor.prototype, "round", {
   configurable: true,
 });
 
+/**
+ * **The in-place halves of the two above, which the table gave no seats.**
+ *
+ * `round_` and `logit_` came out of the `UNARY` loop taking nothing, while `round`
+ * and `logit` had been given `decimals` and `eps` by hand right here. So the two
+ * spellings of one operation took different arguments — `x.round_(2)` was a word
+ * JavaScript dropped and the answer came back rounded to whole numbers.
+ *
+ * It could not be seen from the Python side either: the core's `logit_` was built
+ * nullary, so **both libraries agreed by being wrong the same way**, and the
+ * signature axis filed the row as *no python signature* because the core's
+ * forwarders declared `(*args, **kw)`. Teaching those forwarders to declare what
+ * they forward is what surfaced all three.
+ */
+for (const [name, seats] of [["round", 1], ["logit", 1]] as const) {
+  void seats;
+  Object.defineProperty(Tensor.prototype, `${name}_`, {
+    value: function (this: Tensor, arg?: number | null): Tensor {
+      return this.inplaceFrom(() =>
+        (this as unknown as Record<string, (a?: number | null) => Tensor>)[name]!
+          .call(this, arg));
+    },
+    writable: true,
+    configurable: true,
+  });
+}
+
 {
   const realAbs = Tensor.prototype.abs;
   Object.defineProperty(Tensor.prototype, "abs", {
@@ -11890,7 +12906,10 @@ export interface Tensor {
   eq_(other: Tensor): Tensor;
   ge_(other: Tensor): Tensor;
   gt_(other: Tensor): Tensor;
-  heaviside_(other: Tensor): Tensor;
+  // **torch calls it `values`**, and `heaviside` above already does — these
+  // declarations are generated from one table and this row is the one where the
+  // table's own name is not torch's.
+  heaviside_(values: Tensor): Tensor;
   hypot_(other: Tensor): Tensor;
   le_(other: Tensor): Tensor;
   lt_(other: Tensor): Tensor;
@@ -11969,13 +12988,13 @@ export interface Tensor {
   sign_(): Tensor;
   floor_(): Tensor;
   ceil_(): Tensor;
-  round_(): Tensor;
+  round_(decimals?: number): Tensor;
   trunc_(): Tensor;
   frac_(): Tensor;
   deg2rad_(): Tensor;
   rad2deg_(): Tensor;
   positive_(): Tensor;
-  logit_(): Tensor;
+  logit_(eps?: number | null): Tensor;
   sinc_(): Tensor;
   erf_(): Tensor;
   erfc_(): Tensor;

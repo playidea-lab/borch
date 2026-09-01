@@ -19,11 +19,48 @@ class _Opt:
     def __init__(self, o):
         self._o = o
 
-    def zero_grad(self):
-        self._o.zeroGrad()
+    def zero_grad(self, set_to_none=True):
+        """**The seat was not here at all**, so `zero_grad(set_to_none=False)` — the
+        line pre-2.0 training loops are written with — stopped on an unexpected
+        keyword while the core next door accepted it and ignored it. borch.ts takes
+        it now, so this forwards rather than deciding again."""
+        self._o.zeroGrad(bool(set_to_none))
 
     def step(self):
         self._o.step()
+
+    def add_param_group(self, param_group):
+        """torch's — attach another group after the optimizer was built.
+
+        **It fell between two checks and neither was wrong.** The name axis counts a
+        namespace's top-level names and this is a method; the signature axis compares
+        constructors. `Optimizer`'s methods were read by nothing, so a name torch has,
+        borch.ts has as `addParamGroup`, and neither Python surface had was invisible
+        to every instrument here — `tests/test_class_methods.py` is the axis that asks
+        now.
+
+        The two refusals are torch's, measured: a dict is required, and a parameter
+        already in a group is refused because two groups would step it twice.
+        borch.ts refuses the second one; the first is a Python question and stops here.
+        """
+        if not isinstance(param_group, dict):
+            raise TypeError(
+                f"param_group must be a dict, but got {type(param_group)}")
+        group = dict(param_group)
+        params = group.get("params")
+        # A single tensor rather than a list — torch wraps it, so one parameter needs
+        # no brackets.
+        params = [params] if not isinstance(params, (list, tuple)) else list(params)
+        init = _js.JSON.parse("{}")
+        arr = _js.Array.new()
+        for p in params:
+            arr.push(handle(p))
+        init.params = arr
+        if "lr" in group:
+            init.lr = group["lr"]
+        if "weight_decay" in group:
+            init.weightDecay = group["weight_decay"]
+        self._o.addParamGroup(init)
 
     def state_dict(self):
         """**Resuming a run hangs on this.**
@@ -127,7 +164,7 @@ def _pair(two):
     return out
 
 
-def _opts(maximize):
+def _opts(maximize, foreach, fused, capturable, differentiable, **more):
     """borch.ts's trailing options object.
 
     **Built through `JSON.parse` rather than as a dict.** A Python dict crossing the
@@ -135,30 +172,61 @@ def _opts(maximize):
     reads `undefined` off it — the flag is accepted on this side, delivered to the far
     side, and silently dropped there. That failure looks exactly like the feature not
     being implemented, which is what it was mistaken for for a long time.
+
+    **The four after `maximize` are carried, not judged here.** `capturable` and
+    `differentiable` are refused — by borch.ts, one step further on, which is where the
+    core's wording already lives. Deciding it twice would let the two answers drift, and
+    carrying it proves the bridge actually delivers the word: a flag dropped on the way
+    across looks exactly like a flag the far side chose to ignore.
     """
-    return _js.JSON.parse(f'{{"maximize":{str(bool(maximize)).lower()}}}')
+    # **`more` carries a name only one optimizer has.** `Adam`'s
+    # `decoupledWeightDecay` is keyword-only in torch and so belongs in the object;
+    # `NAdam` and `RAdam` take the same flag positionally there and keep it in a seat.
+    # Putting it in this shared dict would hand it to all thirteen.
+    flags = {"maximize": maximize, "foreach": foreach, "fused": fused,
+             "capturable": capturable, "differentiable": differentiable, **more}
+    body = ",".join(f'"{k}":{str(bool(v)).lower()}' for k, v in flags.items())
+    return _js.JSON.parse("{" + body + "}")
 
 
 def SGD(params, lr=1e-3, momentum=0.0, dampening=0.0, weight_decay=0.0,
-        nesterov=False, *, maximize=False):
+        nesterov=False, *, maximize=False,
+        foreach=False, fused=False, capturable=False, differentiable=False):
     """torch's order. **`weight_decay` moved from fourth to fifth** and this call
     moved with it — a positional bridge is a bet that the far side's parameter order
     never changes, and `test_binding_arguments.py` is what collects on it."""
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.SGD.new(_params(params), lr, momentum, dampening,
-                                  weight_decay, nesterov, _opts(maximize)))
+                                  weight_decay, nesterov, bag))
 
 
 def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
-         amsgrad=False, *, maximize=False):
+         amsgrad=False, *, maximize=False, decoupled_weight_decay=False,
+         foreach=False, fused=False, capturable=False, differentiable=False):
     """**These two used to be accepted and refused.** `maximize` raised
     `NotImplementedError` and `amsgrad` was not there at all, on the reasoning that
     holding the position was better than dropping the flag — which was right while it
-    lasted, and is a reason with nothing left to hold now that borch.ts carries both."""
-    return _Opt(_ts.optim.Adam.new(_params(params), lr, _pair(betas), eps, weight_decay, amsgrad, _opts(maximize)))
+    lasted, and is a reason with nothing left to hold now that borch.ts carries both.
+
+    `decoupled_weight_decay` is the third: torch reaches `AdamW`'s placement through
+    this flag as well as through the other name, and absent from the far side the word
+    was accepted and the **coupled** answer came back — 0.781 against 0.800 on the
+    second step. A training curve that is merely slightly wrong.
+    """
+    # **The flag moved into the options object**, where torch declares it —
+    # keyword-only on `Adam`, positional on `NAdam` and `RAdam`, which is why borch.ts
+    # gives `Adam` its own `AdamOptions` rather than widening the shared one. Left in
+    # the seventh seat this call passed eight arguments into seven and JavaScript
+    # dropped the last; `test_binding_arguments.py` named it in the same run.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable,
+                decoupledWeightDecay=decoupled_weight_decay)
+    return _Opt(_ts.optim.Adam.new(_params(params), lr, _pair(betas), eps,
+                                   weight_decay, amsgrad, bag))
 
 
 def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01,
-          amsgrad=False, *, maximize=False):
+          amsgrad=False, *, maximize=False,
+          foreach=False, fused=False, capturable=False, differentiable=False):
     """**`weight_decay` defaults to 0.01 here and to 0 in `Adam`**, which is torch's
     split and most of the reason the two are separate names.
 
@@ -167,97 +235,121 @@ def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01,
     **An absence says so.** The defect a few lines below was a table sending arguments
     into the wrong seats, which said nothing at all for four of its eight.
     """
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.AdamW.new(_params(params), lr, _pair(betas),
-                                    eps, weight_decay, amsgrad, _opts(maximize)))
+                                    eps, weight_decay, amsgrad, bag))
 
 
 def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0,
-            momentum=0.0, centered=False, *, maximize=False):
+            momentum=0.0, centered=False, *, maximize=False,
+            foreach=False, fused=False, capturable=False, differentiable=False):
     """`momentum` and `centered` sit sixth and seventh — torch's seats. They were
     absent, so `RMSprop(p, 0.01, 0.99, 1e-8, 0, 0.9)` raised rather than adding a
     momentum buffer."""
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.RMSprop.new(_params(params), lr, alpha, eps,
                                       weight_decay, momentum, centered,
-                                      _opts(maximize)))
+ bag))
 
 
 def Adagrad(params, lr=0.01, lr_decay=0.0, weight_decay=0.0,
-            initial_accumulator_value=0.0, eps=1e-10, *, maximize=False):
+            initial_accumulator_value=0.0, eps=1e-10, *, maximize=False,
+            foreach=False, fused=False, capturable=False, differentiable=False):
     """`initial_accumulator_value` sits fifth, before `eps` — torch's order, and
     borch.ts moved with the core."""
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Adagrad.new(_params(params), lr, lr_decay, weight_decay,
                                       initial_accumulator_value, eps,
-                                      _opts(maximize)))
+ bag))
 
 
 def Adadelta(params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0, *,
-             maximize=False):
+             maximize=False,
+             foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Adadelta.new(_params(params), lr, rho, eps, weight_decay,
-                                       _opts(maximize)))
+ bag))
 
 
 def Adamax(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
-           maximize=False):
+           maximize=False,
+           foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Adamax.new(_params(params), lr, _pair(betas), eps,
-                                     weight_decay, _opts(maximize)))
+                                     weight_decay, bag))
 
 
 def NAdam(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
           momentum_decay=4e-3, decoupled_weight_decay=False, *,
-          maximize=False):
+          maximize=False,
+          foreach=False, fused=False, capturable=False, differentiable=False):
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.NAdam.new(_params(params), lr, _pair(betas), eps,
                                     weight_decay, momentum_decay,
-                                    decoupled_weight_decay, _opts(maximize)))
+                                    decoupled_weight_decay, bag))
 
 
-def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
-          maximize=False):
+def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
+          decoupled_weight_decay=False, *,
+          maximize=False,
+          foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    #
+    # **`decoupled_weight_decay` sits sixth and positionally**, which is where torch
+    # puts it on this class alone — `Adam` has it keyword-only. Given the `*` a
+    # position early it would take `weight_decay`'s place.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.RAdam.new(_params(params), lr, _pair(betas), eps,
-                                    weight_decay, _opts(maximize)))
+                                    weight_decay, decoupled_weight_decay, bag))
 
 
 def ASGD(params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0.0, *,
-         maximize=False):
+         maximize=False,
+         foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.ASGD.new(_params(params), lr, lambd, alpha, t0,
-                                   weight_decay, _opts(maximize)))
+                                   weight_decay, bag))
 
 
 def Rprop(params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50), *,
-          maximize=False):
+          maximize=False,
+          foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Rprop.new(_params(params), lr, _pair(etas),
-                                    _pair(step_sizes), _opts(maximize)))
+                                    _pair(step_sizes), bag))
 
 
 def Adafactor(params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3), d=1.0,
               weight_decay=0.0, *,
-              maximize=False):
+              maximize=False,
+              foreach=False, fused=False, capturable=False, differentiable=False):
     # `maximize` is the core's now and is not carried across here yet. **Accepted so
     # the position is held, refused so it cannot be believed** — the shape `Adagrad`
     # above already uses. Dropping it instead would train in the wrong direction and
     # say nothing.
+    bag = _opts(maximize, foreach, fused, capturable, differentiable)
     return _Opt(_ts.optim.Adafactor.new(_params(params), lr, beta2_decay,
                                         _pair(eps), d, weight_decay,
-                                        _opts(maximize)))
+ bag))
 
 
 class LBFGS:
@@ -278,7 +370,11 @@ class LBFGS:
     two packages deliberately not importing each other, and the golden asks the
     same three cases of both so a divergence is caught.
 
-    No line search yet — `line_search_fn` is refused loudly.
+    **`line_search_fn` was refused here and the search is imported now.**
+    `borch._optim._strong_wolfe` is pure numpy scalar arithmetic over a flattened
+    gradient — no tensor of either library reaches it — so this file takes the core's
+    rather than writing a third copy of the bracketing and the zoom. The loop around
+    it is still this file's, for the reason above.
     """
 
     def __init__(self, params, lr=1.0, max_iter=20, max_eval=None,
@@ -295,8 +391,16 @@ class LBFGS:
         self._state = {}
 
     def zero_grad(self, set_to_none=True):
+        """**The seat was here and the body never read it** — the core's note on
+        the same method says what that costs. `False` leaves a zeroed tensor
+        behind, which is the whole reason the argument exists."""
+        from ._ops import zeros_like
+
         for p in self._ps:
-            p.grad = None
+            if set_to_none or p.grad is None:
+                p.grad = None
+            else:
+                p.grad = zeros_like(p.grad)
 
     def _flat_grad(self):
         parts = []
@@ -323,11 +427,30 @@ class LBFGS:
                 h.copyFrom(handle(tensor(moved.reshape(shape))))
                 at += n
 
+    def _clone_param(self):
+        return [_np.asarray(p.numpy(), dtype=_np.float32).copy() for p in self._ps]
+
+    def _set_param(self, saved):
+        from ._ops import no_grad as _no_grad
+
+        with _no_grad():
+            for p, value in zip(self._ps, saved):
+                h = handle(p)
+                shape = [int(v) for v in h.shape]
+                h.copyFrom(handle(tensor(value.reshape(shape))))
+
+    def _directional_evaluate(self, closure, x, t, d):
+        """The loss and gradient at `x + t·d`, with the parameters put back."""
+        self._set_param(x)
+        self._add_step(t, d)
+        got = closure()
+        loss = float(got.item() if hasattr(got, "item") else got)
+        flat = self._flat_grad()
+        self._set_param(x)
+        return loss, flat
+
     def step(self, closure):
         group = self.param_groups[0]
-        if group["line_search_fn"] is not None:
-            raise RuntimeError(
-                f"LBFGS(line_search_fn={group['line_search_fn']!r}) is not here yet.")
         lr, max_iter = group["lr"], group["max_iter"]
         max_eval = group["max_eval"]
         tol_grad, tol_change = group["tolerance_grad"], group["tolerance_change"]
@@ -359,39 +482,62 @@ class LBFGS:
             else:
                 y = flat - prev_flat
                 s = d * t
-                ys = float(y @ s)
+                ys = y @ s
                 if ys > 1e-10:
                     if len(old_dirs) == history:
                         old_dirs.pop(0), old_stps.pop(0), ro.pop(0)
                     old_dirs.append(y)
                     old_stps.append(s)
                     ro.append(1.0 / ys)
-                    h_diag = ys / float(y @ y)
+                    h_diag = ys / (y @ y)
                 al = [0.0] * len(old_dirs)
                 q = -flat
                 for i in range(len(old_dirs) - 1, -1, -1):
-                    al[i] = float(old_stps[i] @ q) * ro[i]
+                    al[i] = (old_stps[i] @ q) * ro[i]
                     q = q - al[i] * old_dirs[i]
                 r = q * h_diag
                 for i in range(len(old_dirs)):
-                    be = float(old_dirs[i] @ r) * ro[i]
+                    be = (old_dirs[i] @ r) * ro[i]
                     r = r + old_stps[i] * (al[i] - be)
                 d = r
 
             prev_flat, prev_loss = flat.copy(), loss
             t = min(1.0, 1.0 / _np.abs(flat).sum()) * lr if st["n_iter"] == 1 else lr
-            if float(flat @ d) > -tol_change:
+            gtd = flat @ d
+            if gtd > -tol_change:
                 break
 
-            self._add_step(t, d)
-            if n_iter != max_iter:
-                got = closure()
-                loss = float(got.item() if hasattr(got, "item") else got)
-                flat = self._flat_grad()
-                evals += 1
-                if _np.abs(flat).max() <= tol_grad:
-                    break
-            if n_iter == max_iter or evals >= max_eval:
+            ls_evals = 0
+            opt_cond = False
+            if group["line_search_fn"] is not None:
+                # torch's wording, kind and **position** — inside the loop, so a call
+                # whose gradient is already inside `tolerance_grad` returns without
+                # ever looking at the name, as torch's does.
+                if group["line_search_fn"] != "strong_wolfe":
+                    raise RuntimeError("only 'strong_wolfe' is supported")
+                from borch._optim import _strong_wolfe
+
+                start = self._clone_param()
+                loss, flat, t, ls_evals = _strong_wolfe(
+                    lambda x, tt, dd: self._directional_evaluate(closure, x, tt, dd),
+                    start, t, d, loss, flat, gtd, max_ls=max_eval - evals)
+                self._add_step(t, d)
+                opt_cond = _np.abs(flat).max() <= tol_grad
+            else:
+                self._add_step(t, d)
+                if n_iter != max_iter:
+                    got = closure()
+                    loss = float(got.item() if hasattr(got, "item") else got)
+                    flat = self._flat_grad()
+                    opt_cond = _np.abs(flat).max() <= tol_grad
+                    ls_evals = 1
+            evals += ls_evals
+            # torch's five checks in torch's order.
+            if n_iter == max_iter:
+                break
+            if evals >= max_eval:
+                break
+            if opt_cond:
                 break
             if _np.abs(d * t).max() <= tol_change:
                 break
@@ -484,12 +630,13 @@ _SCHED_ARGS = {
                    "anneal_strategy", "cycle_momentum", "base_momentum",
                    "max_momentum", "div_factor", "final_div_factor", "three_phase",
                    "last_epoch"),
-    # **No `last_epoch` here and that is not an oversight.** torch's list continues
-    # `scale_fn, scale_mode, cycle_momentum, base_momentum, max_momentum, last_epoch`,
-    # and borch.ts stops at `gamma`. Appending it would put it in `scale_fn`'s seat over
-    # there — the shape this table's own comments have been wrong about twice.
+    # The middle used to be missing and `last_epoch` was left out with it — appending
+    # it alone would have put it in `scale_fn`'s seat over there, which is the shape
+    # this table's own comments have been wrong about twice. borch.ts carries all six
+    # now, so the row is torch's whole list.
     "CyclicLR": ("base_lr", "max_lr", "step_size_up", "step_size_down", "mode",
-                 "gamma"),
+                 "gamma", "scale_fn", "scale_mode", "cycle_momentum",
+                 "base_momentum", "max_momentum", "last_epoch"),
 }
 
 
@@ -595,15 +742,24 @@ class _LRScheduler:
         usually a single value, so it landed exactly there, and the symptom was
         a learning rate that never changed at the milestone — the second time
         this repository fell into that trap.
+
+        **`last_epoch` was a seat this body never read**, and borch.ts's constructor
+        has taken it all along — so resuming a run put the chain back at its first
+        interval however far it had got, and the argument that says otherwise
+        stopped at this line.
         """
         return _Sched(_ts.optim.SequentialLR.new(
             optimizer._o, _js.Array.of(*[s._s for s in schedulers]),
-            _js.Array.of(*[int(m) for m in milestones])))
+            _js.Array.of(*[int(m) for m in milestones]), int(last_epoch)))
 
     @staticmethod
     def ChainedScheduler(schedulers, optimizer=None):
+        """**`optimizer` was accepted and dropped here**, while borch.ts's
+        constructor takes it and refuses one that is not the schedulers' — so the
+        check existed one call away and the word never reached it."""
         return _Sched(_ts.optim.ChainedScheduler.new(
-            _js.Array.of(*[s._s for s in schedulers])))
+            _js.Array.of(*[s._s for s in schedulers]),
+            None if optimizer is None else optimizer._o))
 
 
 lr_scheduler = _LRScheduler()

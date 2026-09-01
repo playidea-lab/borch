@@ -144,6 +144,105 @@ def test_api_reference_is_not_stale():
             "  moment is exactly now.")
 
 
+REACHABLE = """
+import { readFileSync } from 'node:fs';
+const index = await import(process.env.INDEX);
+const doc = JSON.parse(readFileSync(process.env.API, 'utf8'));
+
+// Every name any import path arrives at, walking namespaces to the bottom —
+// `nn.functional` is a namespace inside a namespace and its 93 names reach through it.
+const reachable = new Set();
+const walk = (space, depth) => {
+  for (const [name, value] of Object.entries(space)) {
+    reachable.add(name);
+    if (depth > 0 && value && typeof value === 'object') walk(value, depth - 1);
+  }
+};
+walk(index, 3);
+
+// **A type is erased, so the emit cannot be asked about it.** `DType` is exported
+// from the index as `export type { DType }` and reaches an `import type` perfectly
+// well, while `Object.keys` of the module never sees it — the first draft of this
+// check called `dtype` unreachable for that reason alone. So the source of the index
+// is read for its type-only exports and they count as arriving.
+const src = readFileSync(process.env.INDEX_SRC, 'utf8');
+for (const block of src.matchAll(/export\s+type\s*\{([^}]*)\}/g)) {
+  for (const part of (block[1] ?? '').split(',')) {
+    const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+    if (name) reachable.add(name);
+  }
+}
+
+const missing = {};
+for (const mod of doc.modules) {
+  const names = mod.symbols.map((s) => s.name);
+  if (names.length && !names.some((n) => reachable.has(n))) missing[mod.name] = names;
+}
+console.log(JSON.stringify(missing));
+"""
+
+
+def test_every_documented_module_is_reachable_from_the_index():
+    """**A name the reference lists has to have an import path.**
+
+    `ops.ts` existed, `site/build_api.py` listed 159 names out of it, `site/vision.html`
+    described the section — and `index.ts` never exported the module. `import { ops }
+    from "borch-ts"` gave `undefined`, and it was not under `vision` either. It was
+    found by somebody writing a playground example with `nms`, which is the wrong way
+    round: the reference is generated from the declaration files and **never asks
+    whether a module is exported**, so every check on it stayed green while the
+    documented surface was unreachable.
+
+    That is the second half of one failure. The first was `ops` missing from the
+    generator's own module list, which put its golden cases on no name axis at all;
+    fixing that made the names visible to the reference and still not to a caller.
+    Neither half was being asked this question.
+
+    **It asks about the module, not about each name, and that is deliberate.** The
+    per-name form was written first and flagged seventeen modules. Most of what it
+    caught was one of two things it cannot tell apart: a `export type` is erased at
+    run time and unreachable to `Object.keys` while `import type` reaches it fine, and
+    a handful of names (`random`'s `gauss`, `rnn`'s `rnnApply`) are exported from their
+    file for their neighbours and are internal on purpose. Forcing those into the index
+    to satisfy a check would be worse than the hole it was written for. A module with
+    **no** reachable name is unambiguous — 0 of 159 for `ops` — and it is the shape the
+    failure actually took.
+
+    Namespaces are walked to the bottom: `nn.functional` is a namespace inside a
+    namespace and its 93 names reach through it. Members (`Tensor.mul`) reach through
+    their class and are not counted here.
+    """
+    if not API.exists():
+        pytest.fail("site/assets/api.json is missing — python3 site/build_api.py")
+    entry = ROOT / "borch-ts" / "dist" / "src" / "index.js"
+    if not entry.exists():
+        pytest.skip(f"no {entry.relative_to(ROOT)} — run npm run build:ts first")
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node")
+    stale = _stale_dist()
+    if stale:
+        pytest.fail(
+            "the bundle is older than the source, so this would judge an index that\n"
+            "no longer exists:\n\n  " + stale.replace("\n", "\n  "))
+
+    out = subprocess.run([node, "--input-type=module", "-e", REACHABLE],
+                         capture_output=True, text=True, cwd=ROOT,
+                         env={**os.environ, "API": str(API), "INDEX": entry.as_uri(),
+                              "INDEX_SRC": str(ROOT / "borch-ts" / "src" / "index.ts")})
+    assert out.returncode == 0, f"could not load the index:\n{out.stderr[-2000:]}"
+    missing = json.loads(out.stdout)
+
+    report = "\n".join(
+        f"  {mod} — {len(names)} name(s), first: {' '.join(sorted(names)[:4])}"
+        for mod, names in sorted(missing.items()))
+    assert not missing, (
+        "the API reference documents names no import reaches:\n" + report +
+        "\n\nEither export the module from `borch-ts/src/index.ts`, or take it out of\n"
+        "the list in `site/build_api.py` — a reference that lists an unreachable\n"
+        "surface beside a reachable one is worse than one that omits it.")
+
+
 def test_site_examples_name_only_real_modules():
     """The module list the site writes down for loading the Python binding has to match reality.
 
@@ -152,6 +251,14 @@ def test_site_examples_name_only_real_modules():
     itself; the other side — a file gone from the package while the name stays in the
     list — makes fetch return 404 and `runner.js` turn it into an exception. Both are
     known only after the user presses Run. This looks first.
+
+    **Every quoted name counts, not the underscored ones.** The reader used to keep
+    only parts starting with `_` (plus `__init__`), which was every module either
+    package had at the time — so the first public one, `autograd`, was invisible to
+    the left-hand side of the comparison and could never be reconciled: added to the
+    list it still read as forgotten, and the only way to green was to delete the
+    module. A parser that cannot see a name cannot check it, which is this
+    repository's most-repeated shape.
     """
     runner = (ROOT / "site" / "assets" / "runner.js").read_text(encoding="utf-8")
     block = runner[runner.index("const PACKAGES = {"):runner.index("let pyodide")]
@@ -159,10 +266,9 @@ def test_site_examples_name_only_real_modules():
         listed = set()
         chunk = block[block.index(f"{package}:"):]
         for line in chunk.splitlines():
+            listed.update(re.findall(r'"(\w+)"', line))
             if "]" in line:
-                listed.update(part.strip().strip('",') for part in line.split('"') if part.startswith("_") or part == "__init__")
                 break
-            listed.update(part.strip().strip('",') for part in line.split('"') if part.startswith("_") or part == "__init__")
         real = {p.stem for p in (ROOT / package).glob("*.py")}
         missing = listed - real
         assert not missing, (
@@ -173,6 +279,55 @@ def test_site_examples_name_only_real_modules():
             f"the site does not load modules {package} has: {sorted(forgotten)}\n"
             "  add them to PACKAGES in site/assets/runner.js — left out, the browser "
             "blows up with an ImportError.")
+
+
+def test_every_page_that_loads_the_packages_lists_the_same_modules():
+    """**Three pages carry that list and only one of them was checked.**
+
+    `site/assets/runner.js` is the playground, `tests/browser/runner.html` is the
+    golden runner and `tests/browser/scope_escape.html` is the leak probe. The check
+    above reads the first against what is on disk; the other two were free to drift,
+    and they did — a new module went into the playground's list and the golden runner
+    stopped with *cannot import name … from partially initialized module*, a sentence
+    about circular imports for a file that was simply never laid down. It cost a
+    browser round trip to see, and the pages that run least often are the ones that
+    would find out last.
+
+    The lists are compared to each other rather than each to disk: whichever is
+    right, they have to be the same, and a mismatch names both sides.
+    """
+    pages = {
+        "site/assets/runner.js": "let pyodide",
+        "tests/browser/runner.html": "const FILES",
+        "tests/browser/scope_escape.html": "try {",
+    }
+    found = {}
+    for rel, ends in pages.items():
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        start = text.index("PACKAGES = {")
+        block = text[start:text.index(ends, start)]
+        per = {}
+        for package in ("borch", "borch_webgpu"):
+            chunk = block[block.index(f"{package}:"):]
+            names = set()
+            for line in chunk.splitlines():
+                names.update(re.findall(r'"(\w+)"', line))
+                if "]" in line:
+                    break
+            per[package] = names
+        found[rel] = per
+
+    first = next(iter(found))
+    for rel, per in found.items():
+        for package, names in per.items():
+            assert names == found[first][package], (
+                f"{rel} and {first} disagree about which {package} modules to load:\n"
+                f"  only in {rel}: {sorted(names - found[first][package])}\n"
+                f"  only in {first}: {sorted(found[first][package] - names)}\n"
+                "  all three pages lay the same package onto the same virtual "
+                "filesystem; a module in one list and not another is an ImportError "
+                "only whoever opens that page will see.")
+
 
 def test_the_site_deploys_every_root_file_the_runner_fetches():
     """A `.py` at the repository root that `runner.js` fetches has to be **deployed.**
@@ -1588,3 +1743,45 @@ def test_the_menu_bar_can_still_be_scrolled_on_a_phone():
     assert "white-space: nowrap" in rules, (
         "`.top nav a { white-space: nowrap }` is gone — the entries wrap mid-word instead\n"
         "  of scrolling as a row.")
+
+
+# **A run's size goes stale the way a count does, and nothing was reading it.** The pages
+# report a GPU run as `agreeing N / N`, and N is the size of the case table on the day
+# somebody ran it. Two days and fifteen commits later the table had grown by a hundred and
+# twenty-two while the pages still said 3758 — found by sweeping by hand, which is the
+# method this repository keeps replacing.
+#
+# **The live claim is marked rather than matched.** `setup.html` deliberately carries an
+# older figure in the clause that says what it used to claim, so a net cast over the prose
+# would catch the retraction it is supposed to preserve. `data-measured` says which one is
+# speaking for today.
+#
+# The counting is borrowed, not restated — `tests/test_docs.py` already decides what the
+# three legitimate totals are, and a second copy of that rule is a rule that diverges.
+_MEASURED = re.compile(r'<code data-measured="golden">agreeing (\d+) / (\d+)')
+
+
+@pytest.mark.parametrize("name", ["index.html", "setup.html",
+                                  "ko/index.html", "ko/setup.html"])
+def test_a_reported_run_covers_the_cases_that_exist_now(name):
+    """`agreeing N / N` has to be a run over the table as it stands."""
+    docs = _load_module("bt_docs", ROOT / "tests" / "test_docs.py")
+    total, core, bind = docs._counts()
+    page = (ROOT / "site" / name).read_text(encoding="utf-8")
+
+    hit = _MEASURED.search(page)
+    assert hit, (
+        f"site/{name} has no `data-measured=\"golden\"` run to check.\n"
+        "  the figure has to stay marked, or the next reader of this page cannot tell\n"
+        "  which of its numbers is a claim about today and which is a retracted one.")
+    asked, agreed = int(hit.group(1)), int(hit.group(2))
+    assert asked == agreed, (
+        f"site/{name} reports {agreed} of {asked} agreeing.\n"
+        "  a run with failures is not a thing to advertise on a landing page; say what\n"
+        "  diverged and why, as the page did when two cases were about the machine.")
+    assert asked in (total, core, bind), (
+        f"site/{name} reports a run over {asked} cases; the table now holds "
+        f"{total} ({core} for the core, {bind} through the binding).\n"
+        "  the measurement is older than the thing it measured. Re-run it on a real GPU\n"
+        "  and put the new figure here — editing the number alone would be a claim\n"
+        "  about a run nobody made.")

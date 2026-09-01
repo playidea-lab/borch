@@ -208,6 +208,23 @@ SHIFTED = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    "fft": 0,
+    # **Two, and both are `_stacklevel`.** `torch.special.softmax` is
+    # `(input, dim, _stacklevel, dtype)` and borch.ts's is `(input, dim, dtype)`, so
+    # `dtype` sits one place earlier and the row is a genuine shift by this axis's
+    # rule — the rule being about position rather than intent, deliberately, because a
+    # rule that read intent would have excused the `RandomCrop` row two entries down
+    # that was a real defect.
+    #
+    # `_stacklevel` is how far up the stack torch points a deprecation warning. It is
+    # Python's `warnings` module and nothing else; there is no stack to point at from
+    # TypeScript and no warning to raise. **The core carries it** — it has to, or
+    # `softmax(x, 1, dtype=…)` given positionally would land wrongly against torch —
+    # and borch.ts does not, and that is the whole of the difference.
+    #
+    # Frozen at 2 rather than excused by a rule, so the day borch.ts's pair grows a
+    # third parameter for some other reason, this number moves and somebody reads it.
+    "special": 2,
     "utils.data": 0,
     # **`transforms` was 1 and is 0**, and the row it was added for is worth keeping.
     #
@@ -455,6 +472,27 @@ UNALIGNED = {
     # **Two wrong verdicts in a row, each hiding the next.** Nobody predicted the
     # second or the third; both sessions guessed this would land in `shorter` as soon
     # as the alias was read.
+    #
+    # **0 → 3, and the three were never zero — they were unreadable.** `BatchNorm1d`,
+    # `BatchNorm2d` and `BatchNorm3d` declare no constructor of their own, so until the
+    # reader followed `extends` there was no argument list to compare and they sat in
+    # `unread`. Followed to `BatchNormND`, they part in two ways at once, which is what
+    # `unaligned` means: borch.ts calls torch's `num_features` **`channels`**, and it
+    # has no `device`/`dtype` seats, so `bias` — last in both — stands two places
+    # early. Both are closable (a rename, and two seats carried in order to refuse:
+    # one device, one precision), and `bias` moving is a **shift**, so it is written
+    # down rather than done at the end of a long sitting.
+    #
+    # **3 → 0, and the shift is why it waited a sitting.** Done: `channels` is
+    # `numFeatures`, the two seats are carried and refused, and `bias` sits eighth. The
+    # move was safe to make because the compiler names every call site that passed a
+    # sixth positional argument — it named two in `cases.ts` and one in the binding,
+    # and each of the three meant `bias`. That is the difference between a shift here
+    # and a shift in Python: nothing has to be found by reading.
+    #
+    # What made it a defect rather than a spelling: `InstanceNormND` twenty lines up in
+    # the same file already took the pair, and `LazyBatchNorm1d` — **this layer's own
+    # lazy spelling** — declared and refused them. Two neighbours read like proof.
     "nn": 0,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
@@ -524,6 +562,11 @@ UNALIGNED = {
     # here was a divergence of behaviour: the two libraries answered the same values
     # all along and disagreed about what to call the matrix.
     "linalg": 0,
+    # Both new namespaces align: every name that pairs takes its arguments under the
+    # same names in the same order. `special`'s only divergence is positional
+    # (`_stacklevel`) and is counted as a shift rather than a misalignment.
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     "transforms": 0,
     # Two, and both are the picture argument: torchvision's functional takes `img`
@@ -753,6 +796,18 @@ RENAMED = {
     "nn.functional": 0,
     # 7 → 1: the six went back to `unaligned` when the core took torch's whole
     # optimizer surface and borch.ts stayed where it was. See the note there.
+    #
+    # **The one left is `Optimizer` itself, and it is a decision rather than a gap.**
+    # torch's second seat is a `defaults` **dict** — the mechanism `param_groups`
+    # fills a new group from — and borch.ts's is a `defaultLr` number beside the
+    # options object. The core matches torch; only borch.ts differs.
+    #
+    # What that costs is real and bounded: a custom optimizer copied from torch,
+    # `super().__init__(params, dict(lr=lr))`, does not port. What closing it costs is
+    # the base constructor of thirteen classes, and `ParamGroup` on that side already
+    # carries the per-group defaults by name, so the dict would be a second spelling
+    # of a thing that exists. Left named rather than closed — and named here, because
+    # a row nobody can find is the same as no row.
     "optim": 1,
     "optim.lr_scheduler": 0,
     # 17 → 18. `linalg.matmul`: the core says `input, other` now and borch.ts still
@@ -783,6 +838,10 @@ RENAMED = {
     # generalised. The peer's probe found 9 and 15. A summary is a claim about every
     # row, and this one had been checked against six.
     "linalg": 0,
+    # Neither is short: `special`'s twenty declined tails are all `out=`, which is
+    # borch.ts's global decision and counted in its own column rather than here.
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     # **Three, and none of them is camel case** — `kernelSize` folds onto
     # `kernel_size` and lands in `agree`. What is left is three places that chose a
@@ -934,7 +993,22 @@ SHORTER = {
     #     torch raises `TensorBase.relu() takes no keyword arguments`. This axis cannot
     #     see that: torch is in neither of its columns. `test_torch_names.py` did not
     #     either — it compares names at the same position and says so.
-    "Tensor": 8,
+    #
+    # **8 → 0.** All eight were `generator`, and the paragraph above them — *there is
+    # one stream here and no `Generator` object to hand a method* — described the
+    # library correctly and was doing the wrong job. It read as a reason for the row
+    # and was a reason for **refusing**, which is not the same thing: the seat did not
+    # exist, so `x.bernoulli_(0.5, g)` ran, dropped `g`, and drew from the global
+    # stream. JavaScript discards a surplus argument without a word, and what these
+    # produce is a random number, so nothing downstream looks wrong — somebody running
+    # five seeds to measure variance would get five streams that were never separate.
+    #
+    # The seats are there now and each one stops. Asked in `parity.ts`, not here: the
+    # golden compares torch, the core and the binding, and **all three honour a
+    # `Generator`** — the binding draws these through the core's numpy rather than
+    # through borch.ts — so borch.ts being the one side with a single stream has no
+    # seat in that table.
+    "Tensor": 0,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and
@@ -1222,7 +1296,23 @@ SHORTER = {
     # back (see `RENAMED`) and keeps its own `noise` after torch's five, so borch.ts
     # is now *longer* — which this column also counts, being one fact about a common
     # prefix rather than two. A torch-shaped call never reaches that last seat.
-    "nn.functional": 2,
+    #
+    # **2 → 1.** `F.embedding` took all five: `max_norm`/`norm_type` shorten the
+    # looked-up rows in the table, `padding_idx` detaches the padding row so only its
+    # gradient goes to zero (measured — the forward is untouched), and the last two
+    # are refused where the core refuses them.
+    #
+    # The one left was `gumbel_softmax`'s `noise`, kept on the ground that torch's draw
+    # cannot be reproduced from outside and a golden case for a random function can
+    # only ask about properties.
+    #
+    # **1 → 0, and the reason above was answered rather than overruled.** The draw
+    # *can* be reproduced from outside: `manualSeed` rewinds the stream `Tensor.uniform`
+    # draws from, so seed-call-seed-call asks the same property the seat was there to
+    # ask, in the spelling a reader of torch already knows. Reproducibility that works
+    # on all three implementations beats a parameter that works on one, and the seat
+    # went out with the reason it was carrying.
+    "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
     # many raises there, where the same gap in `shifted` would have meant a value
@@ -1240,6 +1330,21 @@ SHORTER = {
     # the far side of the mechanism the `nn` note above describes — the core moved
     # toward torch first and this number rose, and it falls again when borch.ts
     # follows. It is the first bucket on this axis to reach zero.
+    #
+    # **0 → 1, and it is a row that was already there.** `RAdam` is short of
+    # `decoupled_weight_decay`, which torch puts at position five — not in the keyword
+    # tail. It used to be counted in `kw`, because borch.ts's bag held only `maximize`
+    # and the three it was missing filled the `keyword-only absent` half of the note;
+    # with the bag now carrying all five, that half is empty and what is left is the
+    # positional gap that was under it the whole time. **The bucket changed, the defect
+    # did not.** Closing it means implementing decoupled decay in `RAdam`'s step, not
+    # opening a seat — `AdamW` is that arithmetic and `NAdam` already carries the flag.
+    #
+    # **1 → 0**, and it was the arithmetic and not the seat: `p·(1 − lr·λ)` before an
+    # ordinary step, which is the rewriting `Adam` already used. `Adam` took the flag
+    # in the same edit — torch reaches `AdamW`'s placement through it as well as
+    # through the other name, and the two placements differ by 0.781 against 0.800 on
+    # the second step. Back to zero, which this bucket was the first to reach.
     "optim": 0,
     # 12 → 11. borch.ts's `ReduceLROnPlateau` followed the core into torch's
     # list in the same edit, so the row stopped being a truncation. The
@@ -1262,7 +1367,15 @@ SHORTER = {
     # which is the column that matters — a missing tail is a missing feature, a shifted
     # seat is a wrong answer. **A `shorter` is not worth closing by opening a
     # `shifted`.**
-    "optim.lr_scheduler": 1,
+    #
+    # **1 → 0.** The middle is written, so the tail closed with it. `cycle_momentum` is
+    # the one of the six that changes trained values — it moves the momentum against
+    # the learning rate, 0.632 against 0.588 after eight SGD steps, and **no trace case
+    # could see it** because those compare the printed schedule. `scale_mode` turned
+    # out to do nothing without a `scale_fn` beside it, which is torch's own rule and
+    # which this side got wrong at first: `triangular2` halved by step, 0.04 where
+    # torch says 0.07 at the third entry, caught by the case written for the seat.
+    "optim.lr_scheduler": 0,
     # 2 → 1. One of the two left for `unaligned` when the core took torch's `linalg`
     # names — a prefix stopped being a prefix once the words changed. See the note
     # in `RENAMED`.
@@ -1305,7 +1418,52 @@ SHORTER = {
     # Raised by the session holding the core, whose change moved somebody else's
     # count: leaving the suite red is not an option and editing quietly is worse,
     # so it is written up here and said out loud in the ledger.
-    "linalg": 29,
+    #
+    # **29 → 9, and nothing was carried across.** Twenty of those rows differed from
+    # torch in one argument only, `out`, and the sentence above is the reason borch.ts
+    # has none — so they were a decision counted twenty times inside a number that is
+    # read as a list of things to do. They now say so: `ts_signatures.TAIL_NOT_IN_TS`
+    # holds the reason and `DECLINED` below holds the count, because an exemption that
+    # can grow without anyone deciding is worse than the mixture it replaced.
+    #
+    # What was left was nine rows of real absence, legible for the first time — and
+    # **three of them are closed**, which is what took this to 6 and `DECLINED` to 23:
+    # `norm` takes all four of `ord`, `dim`, `keepdim` and `dtype`, `vector_norm` takes
+    # `keepdim`, and `pinv` carries `rcond` in order to refuse it. Their only remaining
+    # difference from torch is the `out` every row here has.
+    #
+    # `norm` was not the one-line forward it looked like. **`linalg.norm` is not
+    # `torch.norm`** — with an `ord` and no `dim` on a matrix torch takes the largest
+    # singular value where the method takes the elementwise p-norm, 16.848 against
+    # 16.882 on `[[1..9]]`. Both libraries had it wired to the elementwise one; the
+    # golden case written alongside caught it in borch.ts on the first run and in the
+    # core on the next.
+    #
+    # Six remained: `lstsq` neither `rcond` nor `driver`; `lu` no `pivot`; `lu_solve`
+    # neither `left` nor `adjoint`; `matrix_norm` no `dim`/`keepdim`; `matrix_rank` no
+    # `tol`; `tensorsolve` no `dims`.
+    #
+    # **6 → 0**, and the six moved into `DECLINED` — what is left on each is the `out`
+    # every row in this namespace has. Three compute (`matrix_norm`'s pair,
+    # `matrix_rank`'s `tol`, `lstsq`'s `rcond`) and three refuse with a reason (`lu`'s
+    # `pivot`, `lu_solve`'s pair, `tensorsolve`'s `dims`), which is what the core does
+    # with the same six. **Both halves have a golden case**: a seat that only ever
+    # refuses and a seat that is not there look identical from a caller who never
+    # passes the argument.
+    #
+    # Closing them found two defects that had nothing to do with borch.ts. The core's
+    # `matrix_norm` moved its two axes **one at a time**, so the second `movedim` named
+    # whatever the first had slid into that index — 5.568 where torch says 5.916 on a
+    # `(3, 2, 2)` with `dim=(0, 1)`. And the core's `lstsq` applied `rcond` under
+    # `driver="gels"`, which torch's does not read at all: 0.79 where torch says 3.50.
+    # Every case before these asked the default, where neither branch runs.
+    "linalg": 0,
+    # Neither is short. `special`'s twenty missing tails are all `out=`, which this axis
+    # counts in the `declined` column against `TAIL_NOT_IN_TS` rather than here — the
+    # distinction being that a tail with a written reason is a decision and a tail
+    # without one is a hole.
+    "fft": 0,
+    "special": 0,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
     # that they exist at all.
@@ -1317,14 +1475,45 @@ SHORTER = {
     # door." Three more names inheriting a decision is not three more decisions —
     # and the number is here rather than the reason so that the day the door opens,
     # all four move at once and one of them not moving is visible.
-    "utils.data": 4,
-    # `Normalize(mean, std, inplace)` against `(mean, std)` — there is no in-place
-    # on this side, and a tail that is short only refuses extra arguments.
-    "transforms": 1,
-# 0 → 2. `erase` and `normalize` arrived from `unaligned`; both are short of
-    # torchvision's `inplace`, which writes into the caller's tensor and has nothing
-    # to write into here.
-    "transforms.functional": 2,
+    #
+    # **4 → 0, and the door did not open — the doorway got a lock.** The decision above
+    # stands: one host stream, no `Generator` object. What changed is that all four now
+    # *take* the argument and stop, where before they took it and dropped it. "The
+    # choice was to not add another door" was a reason to refuse and was being read as
+    # a reason to have no seat, and those differ by exactly the silence JavaScript
+    # gives a surplus argument. All four moved at once, which is what this row was
+    # written for.
+    "utils.data": 0,
+    # `Normalize(mean, std, inplace)` against `(mean, std)` — there was no in-place on
+    # this side, and a tail that is short only refuses extra arguments.
+    #
+    # **1 → 0, and the Python side moved with it.** `inplace` was accepted and inert
+    # there too, on a reason that expired: the sister library whose tensors could not
+    # be written through was deleted in 45be321, and `erase` in the same module had
+    # been honouring its own `inplace` all along. Two functions answering one word two
+    # ways, in one file. The difference no value comparison can see is the call made
+    # for its side effect — `f(t, inplace=True)` with the return thrown away — which
+    # did nothing at all.
+    "transforms": 0,
+    # 0 → 2. `erase` and `normalize` arrived from `unaligned`; both were short of
+    # torchvision's `inplace`, which writes into the caller's tensor.
+    #
+    # **2 → 0**, with `Normalize` above and by the same measurement. `copyFrom` is
+    # what they write through, which is what every optimizer step here already uses.
+    "transforms.functional": 0,
+    # **0 → 1, and the row was never zero — it was unreadable.** `Conv2dNormActivation`
+    # declares no constructor of its own, so until the reader followed `extends` this
+    # class had no argument list to compare and sat in `unread`. Followed, it inherits
+    # `ConvNormActivation`'s, whose tail carries a `convLayer` that torch gives the
+    # *parent* and not this class. So the row is `longer`, which is the safe direction
+    # — a torch-shaped call never reaches a twelfth seat — and it is a real difference
+    # in what a caller may write.
+    #
+    # **1 → 0.** `Conv2dNormActivation` writes its own constructor now and fixes the
+    # factory to `Conv2d`, which is what the name promises: inherited, that seat took a
+    # factory for any rank, so `Conv3d` could be handed to a class called 2d. Its 3-D
+    # sibling had written its own from the start and read `agree` eleven lines below —
+    # the same asymmetry that gave `BatchNorm` away in `nn`.
     "ops": 0,
     # 3 → 0. The three were `RandomResize`, `RandomShortestSize` and `ScaleJitter`,
     # each short of `antialias`. They take it now and **refuse `false`** rather than
@@ -1332,6 +1521,24 @@ SHORTER = {
     # antialiases, so `false` is a request that cannot be honoured, and an argument
     # taken and ignored is the shape that trains slightly wrong in silence. v1's
     # `Resize` refuses it in the same words.
+    #
+    # **0 → 3, and these were unreadable too.** `CutMix`, `MixUp` and
+    # `LinearTransformation` declare no constructor anywhere up their chain, so they
+    # take *nothing* where torch takes two each.
+    #
+    # **3 → 0, and nothing was written to close them — the reason above was wrong.**
+    # All three have their arguments; the chain the reader could not walk ends outside
+    # `api.json`. `CutMix` and `MixUp` extend `MixBase`, which is `declare abstract
+    # class` — **not exported**, so no symbol carries it. `LinearTransformation`
+    # extends `V1LinearTransformation`, an **import alias** for `vision.ts`'s class, a
+    # name that exists nowhere as a declaration. Walked in `build_api.py`, where the
+    # imports and the unexported declarations are, all three read their real lists.
+    #
+    # **The golden was already asking them with arguments and passing** —
+    # `new v2f.CutMix(0.5, 3)`, `new vision.LinearTransformation(rows, means)` — which
+    # is what says the sentence above was a description of the reader rather than of
+    # the library. A reason drawn from an instrument's blind spot is the same failure
+    # as a stale one, and it reads more convincingly.
     "transforms.v2": 0,
     "transforms.v2.functional": 0,
     "datasets": 0,
@@ -1383,6 +1590,8 @@ FREE_FUNCTION = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
@@ -1399,22 +1608,36 @@ FREE_FUNCTION = {
 # move to zero unnoticed* — and this one can move the other way just as quietly,
 # because every row in it is a row the axis declined to judge.
 #
-# The four are `stft`, `istft`, `igamma` and `igammac`: torch has a module function
-# and a method for each, borch.ts now has both too, and the axis will not guess which
-# pair to compare. **That is the right thing for it to say and the wrong thing to
-# leave uncounted**, which is the whole reason this table exists rather than a
-# comment.
+# The four were `stft`, `istft`, `polygamma` and `backward`: torch has a module
+# function and a method for each, borch.ts now has both too, and the axis would not
+# guess which pair to compare. **That was the right thing for it to say and the wrong
+# thing to leave uncounted**, which is the whole reason this table exists rather than
+# a comment.
 #
-# **What retires a row**: one of the two spellings going away, on either side. None
-# should — torch has both — so this is a table that is expected to sit still, and a
-# table expected to sit still is exactly the kind that drifts without one.
+# **4 → 0, and the table is what made it worth looking.** The axis already knew it was
+# after a method — thirty lines above the `ambiguous` branch it files *only a free
+# function* for a name borch.ts writes as a function alone. It just did not carry that
+# through to picking a declaration, so `Tensor.backward` was set beside `autograd.ts`'s
+# `backward<T>(root, seed, add)`, a generic graph walk sharing nothing but a name.
+# `ts_signatures.ts_member_signatures` prefers the method now.
+#
+# What was underneath: `backward` was short of `create_graph` and `inputs`, borch.ts's
+# `retain_grad` was a flag nothing read, and the case table said in as many words that
+# the value "cannot be asked together". A row in a bucket meaning *cannot judge* stops
+# everything downstream of it, and nothing counts what it stopped.
+#
+# **What retires a row**: one of the two spellings going away, or the axis learning
+# which of them to compare — the second is what happened here, and it is the better
+# outcome, because the name still exists twice and is now judged.
 TWO_DECLARATIONS = {
-    "Tensor": 4,
+    "Tensor": 0,
     "nn": 0,
     "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
@@ -1424,6 +1647,186 @@ TWO_DECLARATIONS = {
     "datasets": 0,
 }
 
+# **The bucket that says *this difference is a decision, and here is the reason*.**
+#
+# `ts_signatures.TAIL_NOT_IN_TS` names trailing arguments borch.ts does not carry on
+# purpose, and a row whose only difference is one of them lands here instead of in
+# `SHORTER`. That was worth doing — twenty `linalg` rows were one settled decision
+# counted twenty times inside a number people read as a to-do list.
+#
+# **And it is exactly the shape that goes wrong quietly.** An exemption is a way to make
+# a red number smaller without changing anything, so if this could grow unwatched the
+# next inconvenient row would join it and `SHORTER` would keep falling while nothing
+# improved. Frozen here, growing it is an edit somebody makes on purpose — the same
+# argument `torch_gap.NOT_API_SIZE` carries, and for the same reason: the one bin that
+# comes *out* of a count is the one nothing else is watching.
+DECLINED = {
+    "Tensor": 0,
+    "nn": 0,
+    "nn.functional": 0,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    # 20 → 23. `norm`, `vector_norm` and `pinv` arrived from `SHORTER` when the seats
+    # they were short of were carried across — what is left on those three is the `out`
+    # this table is about. **A rise here is only good news when `SHORTER` fell by the
+    # same three**, which is the pairing the test above enforces by holding both.
+    # 23 → 29. The six that closed in `SHORTER` land here: with their seats carried,
+    # what is left on each is the `out` this table is about. **A rise here is only good
+    # news when `SHORTER` fell by the same six**, which is the pairing the test enforces
+    # by holding both — and this time `SHORTER["linalg"]` went to zero.
+    "linalg": 29,
+    "fft": 0,
+    # **20, and all twenty are `out=`.** Same decision as `linalg`'s 29 one row up:
+    # borch.ts has no `out=` anywhere and the Python surfaces add it from a written
+    # table. `special`'s eighteen out-taking names plus `gammainc`/`gammaincc` are the
+    # twenty; `softmax` and `log_softmax` are not among them because torch does not
+    # give *them* an `out=` either, which is measured rather than assumed.
+    "special": 20,
+    "utils.data": 0,
+    "transforms": 0,
+    "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
+}
+
+# **Where borch.ts's options object and torch's `*` tail do not line up.**
+#
+# Both are unordered — nobody can observe the order of an object literal's members or of
+# a keyword-only group — so they are compared as sets, and what comes out is presence and
+# absence rather than position. Twelve optimizers are here: every one has `maximize`, and
+# every one is short of some of `foreach`, `fused`, `capturable`, `differentiable`.
+# `ASGD` and `RMSprop` also offer `maximize` by keyword where **torch takes it
+# positionally**, which is a difference and is named on the row.
+#
+# **This table exists because its absence was invisible for one commit.** Those twelve
+# rows had been `agree to the bag` — measured nothing past `weightDecay` — and opening
+# the bag turned them into detailed rows that no bucket subtracted, so they were counted
+# as agreement and the whole suite stayed green while twelve rows changed meaning. The
+# file already carries that lesson twice, beside `FREE_FUNCTION` and beside `DECLINED`,
+# and it happened again the same afternoon to the person who had just written it down.
+#
+# **12 → 6, and the six left are not the same kind of thing as the twelve.** The twelve
+# were "borch.ts has `maximize` and none of the other four". borch.ts now carries all
+# five — `OptimizerOptions`, refused where refusing is what the core does — and what is
+# left divides in two:
+#
+#   · `ASGD` and `RMSprop` (4 names each) and `Adadelta`, `Adagrad`, `Adamax`
+#     (`foreach` alone) — **torch spells these positionally in those five classes and
+#     keyword-only everywhere else.** Measured against real torch, not assumed: the
+#     core matches torch exactly on all seven classes read. borch.ts puts them in the
+#     object for all thirteen, which is one rule instead of torch's two, and mirroring
+#     the inconsistency would mean four more positional seats on two classes only.
+#     A named difference, on purpose.
+#   · `Adam` is short of `decoupled_weight_decay`. That is a real absence and not a
+#     spelling — see the `SHORTER` note about `RAdam`, which is the same feature
+#     missing from a positional seat rather than a keyword one.
+#
+# **Following a named type is what made the six readable.** Factoring the five members
+# into an interface first turned all twelve rows back into `agree to the bag` — the
+# count fell to 0 and the suite went green while nothing had been carried. `ts_signatures
+# ._interface_members` now resolves the reference out of `api.json`. That is the fourth
+# time on this axis that a number improved because a reader stopped.
+KEYWORD_GAP = {
+    # 0 → 2: `stft` and `istft`, out of `TWO_DECLARATIONS` and judged for the first
+    # time. Both carry **every** name torch has — `hopLength`, `winLength`, `window`,
+    # `center`, `padMode`, `normalized`, `onesided`, `returnComplex`, `alignToWindow`
+    # — inside an options object where torch has a positional tail. Nothing is
+    # missing; what the bucket records is that the order cannot be observed on either
+    # side, so they are compared as sets. **This is a row that reads worse than the
+    # thing it describes**, and that is the point of not folding it into `agree`.
+    "Tensor": 2,
+    "nn": 0,
+    "nn.functional": 0,
+    # **6 → 5, and the row that left was a finding about a name that was there.**
+    # `Adam` read `keyword-only absent: decoupledWeightDecay` while borch.ts carried it
+    # in a seat of its own — this file looked in the options object and nowhere else.
+    # TypeScript has no keyword arguments, so *positional* and *in the object* are the
+    # only two places a name can be, and both count as present now.
+    #
+    # The flag then moved into the object, where torch declares it (keyword-only on
+    # `Adam`, and positional on `NAdam` and `RAdam` — which is why borch.ts gives
+    # `Adam` its own `AdamOptions` rather than widening the shared one; put in the
+    # shared one it appeared in all thirteen and the two that take it positionally
+    # read as having moved it).
+    #
+    # The five left are the options-object decision itself: torch takes `foreach` and
+    # its neighbours positionally on these five and keyword-only on the rest, and
+    # borch.ts puts all of them in one object either way.
+    "optim": 5,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    "fft": 0,
+    "special": 0,
+    # 0 → 1: `DataLoader`, which used to be `agree to the bag` and measured nothing past
+    # `dataset`. Opened, it names four members borch.ts has not — `inOrder`,
+    # `persistentWorkers`, `pinMemoryDevice`, `prefetchFactor` — every one of them about
+    # worker processes, which is the one-host-stream decision this repository already
+    # made. The row is more useful said out loud than counted as agreement.
+    "utils.data": 1,
+    "transforms": 0,
+    "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 0,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
+}
+
+# **The bucket that means *no list to compare*, and nothing was counting it.**
+#
+# Every other verdict on this axis is a difference between two argument lists.
+# This one says there is no list on the core's side — the method is variadic — so
+# no comparison happens at all. That makes it **absorbing**: a row entering it
+# leaves the other tables and turns up in no total, exactly the state
+# `test_torch_signatures_core.py` holds a ratio against on the other axis and
+# nothing held here.
+#
+# It was not theoretical. `squeeze` became `(self, *dim)` one commit ago and moved
+# into this bucket, and on this axis **no check said a word** — the other axis
+# caught it only because its ratio is frozen.
+#
+# What is left is variadic on torch's side too, which is the whole of the reason:
+#
+#   · **shape** — `expand(*sizes)`, `permute(*dims)`, `reshape(*shape)`,
+#     `view(*shape)`, `repeat(*reps)`, `tile(*reps)`, `flip(*dims)`,
+#     `broadcast_to(*shape)`, `squeeze(*dim)`, `squeeze_`, `count_nonzero(*dim)`
+#     and the three `new_*(*size)`. torch takes a spread list or a tuple at each,
+#     and a spread list has no positions to line up.
+#   · **`to`** — torch's own is three overloads in one name (dtype, device,
+#     tensor), which is what `(*args, **kwargs)` is standing in for.
+#   · **`nn`** — `RNN`, `GRU`, `LSTM`, `Identity` and `Sequential`: **torch's own
+#     `__init__` is `(*args, **kwargs)`** for all five (measured), so a bag here
+#     is the faithful shape rather than a missing one.
+#   · **`utils.data`** — `TensorDataset(*tensors)`, `StackDataset(*datasets,
+#     **named)`; **`transforms.v2`** — `Lambda(lambd, *types)`, `ToTensor()`.
+#
+# **What retires a row**: torch giving the name a fixed list, or this side finding
+# a spelling that has one. What must not retire a row is the core turning variadic
+# to make a comparison go away — which is why the number is frozen and not merely
+# printed.
+UNREAD = {
+    "Tensor": 15,
+    "nn": 5,
+    "nn.functional": 0,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    # **Two, and both are `stft`/`istft`** — torch declares them in C, so there is no
+    # Python signature to read and the pair cannot be judged on this axis at all. The
+    # same bucket `Tensor`'s fifteen sit in, and the reason the column exists: an
+    # unreadable row is not an agreeing row, and folding the two together is how
+    # `Tensor` once read as three agreements and finished.
+    "fft": 2,
+    "special": 0,
+    "utils.data": 2,
+    "transforms": 0,
+    "transforms.functional": 0,
+    "ops": 0,
+    "transforms.v2": 2,
+    "transforms.v2.functional": 0,
+    "datasets": 0,
+}
 
 
 def _stale():
@@ -1494,9 +1897,15 @@ def test_the_signature_axis_has_not_widened():
     moved = []
     for space, found in sorted(rows.items()):
         got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0, "free": 0,
-               "two": 0}
+               "two": 0, "declined": 0, "kw": 0, "unread": 0}
         for _n, _m, _y, note in found:
-            if note in ("dropped", "inserted", "reordered"):
+            # **The keyword rows are taken first, and their note is compound.** A row
+            # reading `shorter · keyword-only absent: foreach` is one row, not one of
+            # each, and letting it fall to the `shorter` branch would count the
+            # positional half of a difference whose other half nothing watches.
+            if "keyword-only absent" in note or "by keyword here" in note:
+                got["kw"] += 1
+            elif note in ("dropped", "inserted", "reordered"):
                 got["shifted"] += 1
             elif note in ("shorter", "longer"):
                 got["shorter"] += 1
@@ -1504,14 +1913,24 @@ def test_the_signature_axis_has_not_widened():
                 got["unaligned"] += 1
             elif note == "renamed":
                 got["renamed"] += 1
+            elif note == "declined":
+                got["declined"] += 1
             elif note.startswith("only a free function"):
                 got["free"] += 1
             elif note.startswith("ambiguous"):
                 got["two"] += 1
+            elif note in ("no python signature", "no argument list"):
+                got["unread"] += 1
         for key, table in (("shifted", SHIFTED), ("shorter", SHORTER),
                            ("unaligned", UNALIGNED), ("renamed", RENAMED),
                            ("free", FREE_FUNCTION),
-                           ("two", TWO_DECLARATIONS)):
+                           ("two", TWO_DECLARATIONS),
+                           # **Held like the rest.** A bucket that takes rows *out* of
+                           # `shorter` has to be as hard to grow as `shorter` is, or it
+                           # becomes the cheap way to make that number fall.
+                           ("declined", DECLINED),
+                           ("kw", KEYWORD_GAP),
+                           ("unread", UNREAD)):
             if got[key] != table[space]:
                 moved.append(f"{space} {key}: {got[key]} now, {table[space]} written")
     assert not moved, (
@@ -1545,6 +1964,45 @@ def test_the_measurement_still_reads_methods():
     assert len(rows["Tensor"]) > 200, (
         f"the Tensor namespace compared {len(rows['Tensor'])} pairs — the methods are "
         "the bulk of this library and they are not being read.")
+
+
+def test_a_keyword_only_name_carried_positionally_is_not_called_absent():
+    """**The two places a name can be, and the reader looked in one.**
+
+    TypeScript has no keyword arguments, so a name torch declares keyword-only lands
+    either inside borch.ts's options object or in a seat of its own. `_bagged_row`
+    subtracted the object alone, so a name carried positionally came back as
+    *keyword-only absent* — a finding about a name that was right there. That reads
+    as work to do when the work is done, and the next reader either does it twice or
+    stops believing the row.
+
+    `Adam`'s `decoupledWeightDecay` was exactly that. It has since moved into
+    `AdamOptions`, which is the right home for it and **also takes away the last row
+    that exercised this line** — a repair nothing exercises is a repair nothing
+    holds, so the situation is built here rather than waited for.
+    """
+    import ts_signatures
+
+    class Stub:
+        @staticmethod
+        def Thing(params, lr, flag=False):    # noqa: N802, N803
+            """The core-side callable whose positional list the row compares against."""
+
+    row = ts_signatures._bagged_row(
+        "Thing",
+        mine=["params", "lr", "flag"],
+        # borch.ts carries the keyword-only name **positionally**.
+        yours=["params", "lr", "decoupledWeightDecay"],
+        wanted=["params", "lr", "flag"],
+        bag=set(),
+        kw={"decoupled_weight_decay"},
+        ours=Stub,
+        space="optim",
+    )
+    assert "absent" not in row[3], (
+        f"a name borch.ts takes positionally was reported missing: {row[3]}\n"
+        "  `absent` has to subtract the positional list as well as the options "
+        "object — those are the only two places a name can be on that side.")
 
 
 def test_a_dropped_middle_argument_is_not_read_as_a_short_tail():

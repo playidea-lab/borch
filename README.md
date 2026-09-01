@@ -6,9 +6,16 @@ PyTorch syntax with nothing installed.
 > ## First, what this is **not**
 >
 > It is not PyTorch. **11%** of the surface, and **0.1%** by code.
-> `CUDA`, distributed training, mixed precision, `torch.compile` and pre-trained
-> weights are **never coming** — they either cannot exist in a browser, or
-> learning them means leaving the browser.
+> `CUDA`, distributed training, mixed precision and `torch.compile` are **never
+> coming** — they either cannot exist in a browser, or learning them means
+> leaving it.
+>
+> **Pre-trained weights were on that list and are not any more.** The reasoning
+> was that using them means leaving the browser; `borch-hub` publishes them with
+> a manifest and a hash, and [the site loads one and checks it against the sample
+> its publisher froze](https://playidea-lab.github.io/borch/site/models.html)
+> without leaving the tab. The refusal was about a limit that turned out not to
+> be one.
 >
 > There is one claim to make. **Introductory tutorial code produces the same
 > values with one import changed.** That was measured (see conformance, below).
@@ -17,7 +24,7 @@ PyTorch syntax with nothing installed.
 > [minitorch](https://minitorch.github.io) · [nanotorch](https://pypi.org/project/nanotorch/) ·
 > [edutorch](https://pypi.org/project/edutorch/).
 
-## Three things carry this name
+## Three things carry this name, and two more stand on them
 
 All three look at the same golden — the expected values pinned with real PyTorch.
 **One table is what makes a divergence visible** — defects caught by comparing the
@@ -29,7 +36,15 @@ three against each other are a large share of this repository's history.
 | **`borch-ts`** (npm) | **WGSL directly, zero dependencies** | in a browser only | CIFAR ResNet-18, **1.5 min/epoch** |
 | **`borch-webgpu`** (Python) | the borch.ts above | in a browser only | the same thing at **1.6 min/epoch** |
 
-The lower two **stand on the same kernels.** `borch-webgpu` is a 9,770 line
+Two more packages sit above rather than beside them:
+[`bimm-ts`](https://github.com/playidea-lab/bimm) is the architecture catalogue —
+timm's seat, a model from a name — and
+[`borch-hub`](https://github.com/playidea-lab/borch-hub) is what fetches a
+published model, checks its hash before loading it and asks the browser what it
+can do before downloading anything. Neither is a runtime, so neither has a
+ceiling of its own; both run on `borch-ts`.
+
+The lower two of the three **stand on the same kernels.** `borch-webgpu` is a 10,984 line
 binding calling borch.ts from Python, and the difference (1.5 against 1.6 minutes)
 is the cost of one trip through Pyodide.
 
@@ -194,7 +209,7 @@ justification went first.
 
 **The public names did not change** — 197 of them, the same before and after the
 split. `import borch` gives the same thing. `borch_webgpu` has the same shape:
-9,770 lines across seven files.
+10,984 lines across eight files.
 
 It was not moved by hand. Only the cut points were chosen and a script did the
 rest — a person cutting and pasting a file that size quietly loses a line, and
@@ -232,7 +247,7 @@ uv run --with pytest --with numpy --with torch --with torchvision --with scipy \
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **the binding passes 3791 golden cases**, and that is a surface check
+> is that **the binding passes 4512 golden cases**, and that is a surface check
 > rather than a line check. The two numbers are not written down as though they were
 > the same thing.
 >
@@ -727,7 +742,7 @@ random, so it cannot be measured".
 
 It does not go through Python. **It does not go through TF.js either** — the
 kernels are written directly in WGSL. **Zero** runtime dependencies, and it is
-an ES module a browser simply reads (371KB gzipped, 1356KB before compression).
+an ES module a browser simply reads (412KB gzipped, 1495KB before compression).
 
 ```bash
 npm install borch-ts
@@ -780,10 +795,15 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **3791 golden cases** — every one in the table but five. Those five are
-the core's alone: complex eigenvalues, and there is no complex dtype on this side.
-The core covers 3743 cases, and the 53 *it* does not see are this side's alone
-(1-D and 3-D convolutions, ranks 7 and 8), which it refuses on purpose.
+It passes **4512 golden cases** — every one in the table but eighty-three. Those
+eighty-three are the core's alone, for three reasons: five are complex eigenvalues
+and there is no complex dtype on this side, six ask `lstsq` for its residuals, rank
+or singular values, which borch.ts does not return and so the binding cannot dress,
+and seventy-two are `torch.special` names borch.ts does not carry. All three could
+be filled in here with numpy and would go green; the names would still be absent for
+anyone holding borch.ts, which is the cover that list exists to refuse. The core
+covers 4542 cases, and the 53 *it* does not see are this side's alone (1-D and 3-D
+convolutions, ranks 7 and 8), which it refuses on purpose.
 
 > That sentence read "nothing in the table is skipped on this side alone" until
 > the day the counts were next touched, and by then five cases were. It went
@@ -803,8 +823,8 @@ The core covers 3743 cases, and the 53 *it* does not see are this side's alone
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 3303 cases. **The remaining 493 are two
-things**: 493 deliberately not carried across, and 0 owed. The binding
+borch.ts itself has written TS bodies for 3870 cases. **The remaining 725 are two
+things**: 650 deliberately not carried across, and 75 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the declined ask about a Python
@@ -1475,11 +1495,16 @@ The design and the evidence behind the measurements are in
 
 ## What is deliberately not supported
 
-`CUDA`, pre-trained weights, mixed precision, distributed training,
-`torch.compile`
+`CUDA`, mixed precision, distributed training, `torch.compile`
 
-**A long refusal list is the intent.** GPUs, saved models and pre-training are
-learned by leaving the browser, and imitating them here loses the lesson.
+**A long refusal list is the intent.** These are learned by leaving the browser,
+and imitating them here loses the lesson.
+
+**Pre-trained weights were on this list.** The reason given was the same one —
+that using them means leaving the browser — and it stopped being true when
+`borch-hub` began publishing models a tab can fetch, hash and run. The list is
+shorter by one, and the entry that left did so because somebody built the thing
+it said could not be here.
 
 ## Conformance
 
@@ -1504,8 +1529,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3796 golden cases** compare all three implementations against **the same
-expected values.** The core covers 3743 cases, leaving out the 53 that are
+And **4595 golden cases** compare all three implementations against **the same
+expected values.** The core covers 4542 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are

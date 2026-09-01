@@ -24,9 +24,16 @@ export interface Node<T> {
    */
   requiresGrad: boolean;
   /**
-   * Accumulates on leaves only, as in torch.
+   * Accumulates on leaves, and on a derived node that asked to keep its gradient
+   * — `retainGrad()`, or being named in `backward(…, inputs)`.
    */
   grad: T | null;
+  /**
+   * Set by `retainGrad()`. A derived node does not keep its gradient otherwise:
+   * the intermediate values are the bulk of a training loop's memory, and torch
+   * makes keeping one an explicit request for the same reason.
+   */
+  retainsGrad?: boolean;
   /**
    * Takes one output gradient and returns **as many as there are parents.**
    *
@@ -74,13 +81,18 @@ export function noGrad<R>(body: () => R): R {
   }
 }
 
-/** A topological sort. It lays them out so a parent always comes after its child. */
-function topoOrder<T>(root: Node<T>): Node<T>[] {
+/** A topological sort. It lays them out so a parent always comes after its child.
+ *
+ * **Several roots**, which is `grad([y1, y2], x)`. A node reached again from a
+ * later root is already placed, and it was placed after its own parents, so the
+ * order stays valid across all of them. */
+function topoOrder<T>(roots: readonly Node<T>[]): Node<T>[] {
   const order: Node<T>[] = [];
   const seen = new Set<Node<T>>();
   // Written recursively, a deep graph (ResNet-18 has hundreds of nodes) overflows the
   // stack. This is an explicit stack with two states, so depth does not bind.
-  const stack: { node: Node<T>; expanded: boolean }[] = [{ node: root, expanded: false }];
+  const stack: { node: Node<T>; expanded: boolean }[] =
+    [...roots].reverse().map((node) => ({ node, expanded: false }));
   while (stack.length > 0) {
     const frame = stack.pop();
     if (!frame) break;
@@ -104,29 +116,82 @@ function topoOrder<T>(root: Node<T>): Node<T>[] {
  *
  * @param add how two gradients are added. A value used in several places is
  *   added that many times.
+ * @param options.only torch's `backward(…, inputs)`: when given, **only** these
+ *   nodes are written to. Every other leaf keeps whatever `grad` it had, which
+ *   is how one branch is differentiated without disturbing the rest.
+ *
+ *   The two rules do not cancel. A node in `only` is written to whether it is a
+ *   leaf or not, and a node that called `retainGrad()` is written to even when
+ *   it is outside `only` — measured against torch, which fills a retained
+ *   intermediate's `grad` while `inputs` names something else entirely.
  */
 export function backward<T>(
   root: Node<T>,
   seed: T,
   add: (a: T, b: T) => T,
-  options: { retainGraph?: boolean; onSecondPass?: () => never } = {},
+  options: {
+    retainGraph?: boolean;
+    onSecondPass?: () => never;
+    only?: ReadonlySet<Node<T>>;
+  } = {},
 ): void {
-  if (!root.requiresGrad) {
-    throw new Error(
-      "backward() was called on a tensor that does not require grad. " +
-        "(It was made under no_grad, or it passed through an operation that breaks the graph.)",
-    );
-  }
-  const grads = new Map<Node<T>, T>();
-  grads.set(root, seed);
-  for (const node of topoOrder(root)) {
-    const g = grads.get(node);
-    if (g === undefined) continue;
+  const { only } = options;
+  const keep = (node: Node<T>): boolean => only === undefined || only.has(node);
+  for (const [node, g] of flow([root], [seed], add, options)) {
     if (!node.backwardFn || node.parents.length === 0) {
-      // A leaf. As in torch, it accumulates here alone.
-      node.grad = node.grad === null ? g : add(node.grad, g);
+      // A leaf. As in torch, it accumulates here — unless `inputs` named others.
+      if (keep(node)) node.grad = node.grad === null ? g : add(node.grad, g);
       continue;
     }
+    // A derived node keeps its gradient only when asked: `retainGrad()`, or
+    // being named in `inputs`.
+    if (node.retainsGrad || (only !== undefined && only.has(node))) {
+      node.grad = node.grad === null ? g : add(node.grad, g);
+    }
+  }
+}
+
+/**
+ * The backward pass itself: **the gradient of every node the roots reach**, and
+ * nothing written to any `grad`.
+ *
+ * `backward` above layers accumulation on top of this; `Tensor.grad` reads the
+ * names it was asked for out of the map and leaves every `grad` alone, which is
+ * the whole difference between the two functions.
+ *
+ * **One walk on purpose.** A second copy of this loop for the returning form
+ * would be a fourth implementation of the same arithmetic — three already have to
+ * agree — and it is the copy that drifts, because the accumulating one is what
+ * every existing test exercises.
+ */
+export function flow<T>(
+  roots: readonly Node<T>[],
+  seeds: readonly T[],
+  add: (a: T, b: T) => T,
+  options: {
+    retainGraph?: boolean;
+    onSecondPass?: () => never;
+  } = {},
+): Map<Node<T>, T> {
+  for (const root of roots) {
+    if (!root.requiresGrad) {
+      throw new Error(
+        "backward() was called on a tensor that does not require grad. " +
+          "(It was made under no_grad, or it passed through an operation that breaks the graph.)",
+      );
+    }
+  }
+  const grads = new Map<Node<T>, T>();
+  for (const [i, root] of roots.entries()) {
+    const seed = seeds[i];
+    if (seed === undefined) continue;
+    const had = grads.get(root);
+    grads.set(root, had === undefined ? seed : add(had, seed));
+  }
+  for (const node of topoOrder(roots)) {
+    const g = grads.get(node);
+    if (g === undefined) continue;
+    if (!node.backwardFn || node.parents.length === 0) continue;
     if (node.freed && options.onSecondPass) options.onSecondPass();
     if (!options.retainGraph) node.freed = true;
     const parts = node.backwardFn(g);
@@ -145,4 +210,5 @@ export function backward<T>(
       grads.set(parent, had === undefined ? part : add(had, part));
     }
   }
+  return grads;
 }

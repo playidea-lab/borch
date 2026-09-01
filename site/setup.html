@@ -85,7 +85,9 @@
     <p>
       Nothing to do. Measured on an Apple M4 Max: the adapter comes back
       <code>apple / metal-3</code> and Run works with no flags, no install, no settings.
-      Every number on this site that says <code>apple / metal-3</code> was taken that way.
+      Every number on this site that says <code>apple / metal-3</code> was taken that way,
+      the whole suite included &mdash;
+      <code data-measured="golden">agreeing 4512 / 4512 [apple / metal-3]</code>.
     </p>
 
     <h2>Linux with an NVIDIA card</h2>
@@ -148,13 +150,24 @@
     </p>
     <p class="small">
       <strong>The whole suite was run on those two flags</strong>, not just an adapter probe:
-      <code>agreeing 3758 / 3758 [nvidia / blackwell]</code> on the 5080, and the training
-      agrees too &mdash; thirty steps of a small ResNet with its per-layer gradients,
+      <code>agreeing 4460 / 4466 [nvidia / blackwell]</code> on the 5080, and the training
+      agrees as well &mdash; thirty steps of a small ResNet with its per-layer gradients,
       batch-norm buffers and eval, matched against torch to <code>64 values</code>, once
-      through the Python binding and once through borch.ts's own API. Earlier this page
-      reported <code>3753 / 3755</code> here: the two that differed were frozen answers about
-      the machine rather than about torch, and they have since been fixed rather than
-      excused. The 4090 has the adapter measurement only; no golden has been run on it.
+      through the Python binding and once through borch.ts's own API.
+    </p>
+    <p class="small">
+      <strong>The six that differ are about that machine, not about the GPU.</strong> All
+      six ask what happens with <code>device='cuda'</code>, and their frozen answers were
+      taken where torch has no CUDA: there both sides refuse, so the case reads <em>both
+      stop</em>. That box has a CUDA build, so torch does not stop and
+      <code>cuda.device_count</code> answers 1 where the golden expects 0. Nothing there is
+      a value coming off a shader &mdash; the same six pass on Apple Metal, which is the
+      shape of a case that froze a property of the machine it was frozen on. Two of this
+      kind were found and fixed before; these are the rest of that family.
+    </p>
+    <p class="small">
+      The 4090 has an adapter measurement only. Its card left the PCIe bus mid-session and
+      has not come back, so no golden has been run on it.
     </p>
     <p class="small">
       <strong>An earlier version of this table said the blocklist flag opened the 5080.</strong>

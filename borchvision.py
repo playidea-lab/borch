@@ -255,6 +255,42 @@ def _antialias(value):
 # differ only in which axis is handed over, and a `_vflip` written next to this one
 # would be the same line under a second name — two places to fix on the day it moves.
 
+def _picture_axes(arr):
+    """Which axes are the height and the width — **counted from the end.**
+
+    Every geometric kernel in this file used to read `shape[0], shape[1]` and pass
+    `0, 1` to the skeleton above. That is right for `(H, W, C)` and for `(H, W)`, and
+    it is wrong for anything with an axis in front of the picture — which is what a
+    video is. Measured before this existed, on a `(2, 6, 7, 3)` array: `resize` to
+    `[3, 4]` answered `(3, 3, 4, 7)`, having resized the frame axis and the height;
+    `horizontal_flip` differed from torchvision in **every one of 252 elements**,
+    because it flipped the height; `adjust_contrast`, `adjust_saturation` and
+    `autocontrast` averaged across frames. None of the eleven raised.
+
+    Counted from the end the two layouts agree: in `(H, W, C)` the height is -3 and
+    in `(T, H, W, C)` it is -3 as well, and the rule extends to any number of leading
+    axes without another case.
+
+    **Two dimensions are the exception and have to be**, because there the array *is*
+    the picture and there is no channel axis to count back past. So: a trailing
+    channel axis exists exactly when the array has three axes or more. That is v1's
+    own rule — `(H, W)` is a grayscale picture and `(H, W, C)` is a colour one —
+    stated once here instead of assumed at twenty call sites.
+    """
+    return (-2, -1) if arr.ndim == 2 else (-3, -2)
+
+
+def _channels(arr):
+    """How many colours. **The last axis, not the third one.**
+
+    Written out eight times as `img.shape[2] if img.ndim == 3 else 1`, which reads the
+    channel count of a `(T, H, W, C)` array as the width. It is the same rule as
+    `_picture_axes` — a trailing channel axis exists exactly when there are three axes
+    or more — and it is here so the two cannot drift apart.
+    """
+    return arr.shape[-1] if arr.ndim >= 3 else 1
+
+
 def _flip(arr, axis):
     return _np.flip(arr, axis=axis)
 
@@ -438,24 +474,28 @@ class Normalize:
     at once (see `augment_batch`). To avoid writing the same arithmetic twice, the
     axes are lined up and one formula is kept.
 
-    **`inplace` is accepted and does nothing, and that is written here because it
-    was true before it was written.** An audit for constructor arguments that never
-    reach `__call__` found exactly one in this file, and it was this — the same
-    shape as `borch_webgpu`'s optimizers taking `weight_decay` and handing it to a
-    JS call that discards surplus arguments.
+    **`inplace` was accepted and did nothing, for a reason that has since expired.**
+    An audit for constructor arguments that never reach `__call__` found exactly one
+    in this file, and it was this — the same shape as `borch_webgpu`'s optimizers
+    taking `weight_decay` and handing it to a JS call that discards surplus
+    arguments.
 
-    It is kept rather than refused, and the distinction from `antialias=False` next
-    door is the whole reason. Ignoring `antialias` silently would give **different
-    pixels**; ignoring `inplace` gives **the same values and one more allocation** —
-    torchvision documents it as an optimisation, and `x = Normalize(..., inplace=
-    True)(x)` returns exactly what the out-of-place form returns. Refusing it would
-    stop a copied tutorial line for nothing.
+    The argument written down then was: the core's tensors could be written through,
+    but the sister library's could not, a TF.js tensor being immutable — so honouring
+    it on one side would make the same line mean two things. **That sister library
+    was deleted in 45be321.** What sits behind `borch_webgpu` now is borch.ts on
+    WebGPU, whose tensors are written through all over `optim.ts`, and `erase` four
+    hundred lines below this has been honouring its own `inplace` the whole time. Two
+    functions in one module answering the same word differently is the divergence
+    this repository exists to find, and one of the two was ours.
 
-    It cannot be honoured either. The core's tensors could be written through, but
-    the sister library's cannot — a TF.js tensor is immutable, which `borch/_tensor.py`
-    already records as where the two part. Doing it on one and not the other would
-    make the same line mean two things. `tests/test_vision.py` pins the no-op so this
-    paragraph cannot quietly stop being true.
+    So it is real now, on all three. The difference a value comparison cannot see is
+    `t = …; Normalize(m, s, inplace=True)(t); use(t)` — used for the side effect
+    rather than the return, which is what the argument is *for*, and which silently
+    did nothing.
+
+    **A leaf that requires grad is refused**, by the in-place guard rather than by
+    this function, and torchvision's `sub_`/`div_` refuse the same call.
     """
 
     def __init__(self, mean, std, inplace=False):
@@ -472,9 +512,21 @@ class Normalize:
         shape = (m.size, 1, 1)
         m, s = m.reshape(shape), s.reshape(shape)
         if isinstance(x, _np.ndarray):
-            return (x - m) / s
+            out = (x - m) / s
+            if not self.inplace:
+                return out
+            # `x[...] = out` rather than `x -= m; x /= s`: an integer array would
+            # refuse the first form and silently floor under the second.
+            x[...] = out
+            return x
         L = _backend()
-        return (x - L.tensor(m)) / L.tensor(s)
+        out = (x - L.tensor(m)) / L.tensor(s)
+        if not self.inplace:
+            return out
+        # The same write `erase` uses below, so both sides of this module reach
+        # in-place the one way — and the one way the binding is known to carry.
+        x[...] = out
+        return x
 
     def __repr__(self):
         return f"{type(self).__name__}(mean={self.mean}, std={self.std})"
@@ -544,7 +596,7 @@ class RandomHorizontalFlip:
         img = _require_hwc(img, type(self).__name__)
         if _rng.random() >= self.p:
             return img
-        return _np.ascontiguousarray(_flip(img, 1))
+        return _np.ascontiguousarray(_flip(img, _picture_axes(img)[1]))
 
     def __repr__(self):
         return f"{type(self).__name__}(p={self.p})"
@@ -566,7 +618,7 @@ class RandomVerticalFlip:
         img = _require_hwc(img, type(self).__name__)
         if _rng.random() >= self.p:
             return img
-        return _np.ascontiguousarray(_flip(img, 0))
+        return _np.ascontiguousarray(_flip(img, _picture_axes(img)[0]))
 
     def __repr__(self):
         return f"{type(self).__name__}(p={self.p})"
@@ -605,21 +657,22 @@ class RandomCrop:
         if self.padding is not None:
             img = Pad(self.padding, self.fill, self.padding_mode)(img)
         th, tw = self.size
-        h, w = img.shape[0], img.shape[1]
+        hax, wax = _picture_axes(img)
+        h, w = img.shape[hax], img.shape[wax]
         # Width first and then height, each on its own — torchvision pads them in two
         # separate steps and the second reads the width the first produced.
         if self.pad_if_needed and w < tw:
             img = Pad([tw - w, 0], self.fill, self.padding_mode)(img)
-        if self.pad_if_needed and img.shape[0] < th:
-            img = Pad([0, th - img.shape[0]], self.fill, self.padding_mode)(img)
-        h, w = img.shape[0], img.shape[1]
+        if self.pad_if_needed and img.shape[hax] < th:
+            img = Pad([0, th - img.shape[hax]], self.fill, self.padding_mode)(img)
+        h, w = img.shape[hax], img.shape[wax]
         if h < th or w < tw:
             raise ValueError(
                 f"The crop size {self.size} is larger than the image {(h, w)}.\n"
                 "(torch: Required crop size is larger than input image size)")
         top = int(_rng.integers(0, h - th + 1))
         left = int(_rng.integers(0, w - tw + 1))
-        return _np.ascontiguousarray(_crop(img, 0, top, th, 1, left, tw))
+        return _np.ascontiguousarray(_crop(img, hax, top, th, wax, left, tw))
 
     def __repr__(self):
         return f"{type(self).__name__}(size={self.size}, padding={self.padding})"
@@ -649,20 +702,29 @@ class Pad:
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
         left, top, right, bottom = _pad_sides(self.padding)
-        pads = [(top, bottom), (left, right)] + [(0, 0)] * (img.ndim - 2)
+        # **Built by axis, not by position.** Written as *the picture pads first and
+        # `(0, 0)` for the rest*, this padded the frame axis of a video and left the
+        # width alone — the `(H, W, C)` layout as an assumption rather than a rule.
+        hax, wax = _picture_axes(img)
+        pads = [(0, 0)] * img.ndim
+        pads[hax], pads[wax] = (top, bottom), (left, right)
         if self.padding_mode != "constant":
             return _np.pad(img, pads, mode=self.padding_mode)
         # **A per-channel fill cannot go through `constant_values`.** That argument
         # is read per axis, so a three-colour fill given there paints the channel
         # axis instead of the colours. Each channel is padded with its own number.
         if isinstance(self.fill, (tuple, list)):
-            if img.ndim != 3 or len(self.fill) != img.shape[2]:
+            if img.ndim < 3 or len(self.fill) != img.shape[-1]:
                 raise ValueError(
                     f"fill has {len(self.fill)} numbers and the image has "
-                    f"{img.shape[2] if img.ndim == 3 else 1} channels")
-            planes = [_np.pad(img[:, :, c], pads[:2], constant_values=self.fill[c])
-                      for c in range(img.shape[2])]
-            return _np.ascontiguousarray(_np.stack(planes, axis=2))
+                    f"{img.shape[-1] if img.ndim >= 3 else 1} channels")
+            # `[..., c]` rather than `[:, :, c]`, so any leading axes ride along, and
+            # the pads for the picture come off the list built above rather than
+            # being its first two entries.
+            plane_pads = [pads[a] for a in range(img.ndim - 1)]
+            planes = [_np.pad(img[..., c], plane_pads, constant_values=self.fill[c])
+                      for c in range(img.shape[-1])]
+            return _np.ascontiguousarray(_np.stack(planes, axis=-1))
         return _np.pad(img, pads, constant_values=self.fill)
 
     def __repr__(self):
@@ -681,23 +743,27 @@ def _to_gray(img, num_output_channels, who):
         raise ValueError(
             f"num_output_channels is 1 or 3 — got {num_output_channels!r}.\n"
             "(torch: num_output_channels should be either 1 or 3)")
-    arr = img if img.ndim == 3 else img[:, :, None]
-    if arr.shape[2] not in (1, 3):
+    # **Counted from the end.** Written as `img.ndim == 3` and `[:, :, c]` this took
+    # the first two axes for the picture, so a `(T, H, W, C)` array came back
+    # `(T, H, 1, W, C)` — a channel inserted in the middle of the frames, no
+    # exception raised, and every kernel standing on this one wrong with it.
+    arr = img if img.ndim >= 3 else img[..., None]
+    if arr.shape[-1] not in (1, 3):
         raise TypeError(
             f"{who} takes a 1- or 3-channel image — it received "
-            f"{arr.shape[2]} channels.")
-    if arr.shape[2] == 3:
-        lum = (arr[:, :, 0] * _LUMA[0] + arr[:, :, 1] * _LUMA[1]
-               + arr[:, :, 2] * _LUMA[2])
+            f"{arr.shape[-1]} channels.")
+    if arr.shape[-1] == 3:
+        lum = (arr[..., 0] * _LUMA[0] + arr[..., 1] * _LUMA[1]
+               + arr[..., 2] * _LUMA[2])
         # **`astype` truncates, and that is the point.** torch's `.to(dtype)`
         # truncates too, so a uint8 image comes out the same on both sides. PIL's
         # `convert("L")` rounds instead, which is where our uint8 answer and a PIL
         # answer part by one — measured, and written down rather than smoothed over.
-        one = lum.astype(arr.dtype)[:, :, None]
+        one = lum.astype(arr.dtype)[..., None]
     else:
         one = arr.copy()
     if num_output_channels == 3:
-        return _np.ascontiguousarray(_np.repeat(one, 3, axis=2))
+        return _np.ascontiguousarray(_np.repeat(one, 3, axis=-1))
     return _np.ascontiguousarray(one)
 
 
@@ -728,7 +794,7 @@ class RandomGrayscale:
         img = _require_hwc(img, type(self).__name__)
         if _rng.random() >= self.p:
             return img
-        channels = img.shape[2] if img.ndim == 3 else 1
+        channels = _channels(img)
         return _to_gray(img, channels, type(self).__name__)
 
     def __repr__(self):
@@ -886,11 +952,13 @@ class Resize:
 
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
-        h, w = img.shape[0], img.shape[1]
+        hax, wax = _picture_axes(img)
+        h, w = img.shape[hax], img.shape[wax]
         th, tw = (_short_side(h, w, self.size, self.max_size)
                   if isinstance(self.size, int) else self.size)
-        out = _resize_axis(_np.asarray(img, dtype=_np.float64), 0, th, self.interpolation)
-        out = _resize_axis(out, 1, tw, self.interpolation)
+        out = _resize_axis(_np.asarray(img, dtype=_np.float64), hax, th,
+                           self.interpolation)
+        out = _resize_axis(out, wax, tw, self.interpolation)
         return _np.ascontiguousarray(out)
 
     def __repr__(self):
@@ -914,16 +982,22 @@ class CenterCrop:
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
         th, tw = self.size
-        h, w = img.shape[0], img.shape[1]
+        hax, wax = _picture_axes(img)
+        h, w = img.shape[hax], img.shape[wax]
         pad_h, pad_w = max(0, th - h), max(0, tw - w)
         if pad_h or pad_w:
-            pads = [(pad_h // 2, pad_h - pad_h // 2),
-                    (pad_w // 2, pad_w - pad_w // 2)] + [(0, 0)] * (img.ndim - 2)
+            # **Built by axis rather than by position.** The old line put the two
+            # picture pads first and `(0, 0)` for everything after, which is the
+            # `(H, W, C)` layout written as an assumption; with a frame axis in
+            # front it padded the frames.
+            pads = [(0, 0)] * img.ndim
+            pads[hax] = (pad_h // 2, pad_h - pad_h // 2)
+            pads[wax] = (pad_w // 2, pad_w - pad_w // 2)
             img = _np.pad(img, pads)
-            h, w = img.shape[0], img.shape[1]
+            h, w = img.shape[hax], img.shape[wax]
         top = int(round((h - th) / 2.0))
         left = int(round((w - tw) / 2.0))
-        return _np.ascontiguousarray(_crop(img, 0, top, th, 1, left, tw))
+        return _np.ascontiguousarray(_crop(img, hax, top, th, wax, left, tw))
 
     def __repr__(self):
         return f"{type(self).__name__}(size={self.size})"
@@ -943,13 +1017,14 @@ class FiveCrop:
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
         th, tw = self.size
-        h, w = img.shape[0], img.shape[1]
+        hax, wax = _picture_axes(img)
+        h, w = img.shape[hax], img.shape[wax]
         if th > h or tw > w:
             raise ValueError(
                 f"The crop size {self.size} is larger than the image {(h, w)}.\n"
                 "(torch: Requested crop size is bigger than input size)")
         corners = ((0, 0), (0, w - tw), (h - th, 0), (h - th, w - tw))
-        out = [_np.ascontiguousarray(_crop(img, 0, top, th, 1, left, tw))
+        out = [_np.ascontiguousarray(_crop(img, hax, top, th, wax, left, tw))
                for top, left in corners]
         # **The centre is `CenterCrop`'s, not another rounding written here.** The
         # halves land differently at odd sizes, and two roundings that agree today
@@ -1010,7 +1085,8 @@ class RandomResizedCrop:
         """Where and how big. **Ten draws, then a centre crop.** Kept as a method
         of its own because it is the only part that draws — the pytest side calls
         it directly to see the distribution."""
-        h, w = img.shape[0], img.shape[1]
+        hax, wax = _picture_axes(img)
+        h, w = img.shape[hax], img.shape[wax]
         area = h * w
         log_ratio = (_np.log(self.ratio[0]), _np.log(self.ratio[1]))
         for _ in range(10):
@@ -1034,7 +1110,8 @@ class RandomResizedCrop:
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
         top, left, ch, cw = self.get_params(img)
-        piece = _np.ascontiguousarray(_crop(img, 0, top, ch, 1, left, cw))
+        hax, wax = _picture_axes(img)
+        piece = _np.ascontiguousarray(_crop(img, hax, top, ch, wax, left, cw))
         return Resize(self.size, self.interpolation)(piece)
 
     def __repr__(self):
@@ -1254,8 +1331,19 @@ def adjust_contrast(img, contrast_factor):
     img = _require_hwc(img, "adjust_contrast")
     work = _working_dtype(img.dtype)
     grey = _to_gray(img, 1, "adjust_contrast")
-    return _blend(img, _np.full(img.shape, grey.astype(work).mean(), dtype=work),
-                  contrast_factor)
+    # **One mean per picture, not one for the whole array.** `.mean()` with no axis
+    # is a single number over everything, which is right for one image and wrong the
+    # moment there are frames in front of it — every frame was pulled toward the
+    # average of the whole clip. Measured against torchvision's `adjust_contrast_video`
+    # before this line moved: 168 of 252 elements differed, and nothing raised.
+    #
+    # torchvision reduces over its `(C, H, W)`; the same three axes here are the
+    # trailing ones, and what is left in front is one number per frame.
+    lead = grey.shape[:-3]
+    mean = grey.astype(work).mean(axis=(-3, -2, -1))
+    target = _np.broadcast_to(mean.reshape(lead + (1,) * (img.ndim - len(lead))),
+                              img.shape).astype(work)
+    return _blend(img, target, contrast_factor)
 
 
 def adjust_saturation(img, saturation_factor):
@@ -1267,7 +1355,7 @@ def adjust_saturation(img, saturation_factor):
             f"saturation_factor is not non-negative — got {saturation_factor}.\n"
             f"(torch: saturation_factor ({saturation_factor}) is not non-negative.)")
     img = _require_hwc(img, "adjust_saturation")
-    if (img.shape[2] if img.ndim == 3 else 1) == 1:
+    if _channels(img) == 1:
         return img
     return _blend(img, _to_gray(img, 1, "adjust_saturation"), saturation_factor)
 
@@ -1284,7 +1372,7 @@ def adjust_hue(img, hue_factor):
             f"hue_factor is not in [-0.5, 0.5] — got {hue_factor}.\n"
             f"(torch: hue_factor ({hue_factor}) is not in [-0.5, 0.5].)")
     img = _require_hwc(img, "adjust_hue")
-    if (img.shape[2] if img.ndim == 3 else 1) == 1:
+    if _channels(img) == 1:
         return img
     dtype = img.dtype
     hsv = _rgb2hsv(_to_float01(img).astype(_np.float32))
@@ -1433,8 +1521,13 @@ def autocontrast(img):
     img = _require_hwc(img, "autocontrast")
     work = _working_dtype(img.dtype)
     bound = _bound(img.dtype)
-    lo = img.min(axis=(0, 1), keepdims=True).astype(work)
-    hi = img.max(axis=(0, 1), keepdims=True).astype(work)
+    # **Over the picture, per channel — and the picture is at the end.** Reduced over
+    # axes `(0, 1)` this took the extremes across every frame of a clip and stretched
+    # them all by one scale, which is not per picture and not what torchvision does:
+    # 237 of 252 elements differed (measured). The picture axes are `_picture_axes`'s.
+    hax, wax = _picture_axes(img)
+    lo = img.min(axis=(hax, wax), keepdims=True).astype(work)
+    hi = img.max(axis=(hax, wax), keepdims=True).astype(work)
     with _np.errstate(divide="ignore", invalid="ignore"):
         scale = bound / (hi - lo)
     flat = ~_np.isfinite(scale)
@@ -1469,9 +1562,20 @@ def equalize(img):
             f"equalize takes a uint8 image — it received {img.dtype}.\n"
             "  It counts a 256-bin histogram, and a float image has no bins.\n"
             f"(torch: Only torch.uint8 image tensors are supported, but found {img.dtype})")
-    arr = img if img.ndim == 3 else img[:, :, None]
-    return _np.stack([_equalize_channel(arr[:, :, c]) for c in range(arr.shape[2])],
-                     axis=-1)
+    arr = img if img.ndim >= 3 else img[..., None]
+    # **One histogram per picture per channel, not one for the whole array.** A
+    # 256-bin count over a whole clip equalises every frame by the brightest frame's
+    # table, which is a different picture and not what torchvision does. The leading
+    # axes are flattened, each picture is equalised on its own, and the shape goes
+    # back — measured against `equalize_video` before and after.
+    hax, wax = _picture_axes(arr)
+    flat = arr.reshape((-1,) + arr.shape[len(arr.shape) + hax:])
+    done = _np.stack(
+        [_np.stack([_equalize_channel(one[..., c]) for c in range(one.shape[-1])],
+                   axis=-1)
+         for one in flat])
+    out = done.reshape(arr.shape)
+    return out if img.ndim >= 3 else out.reshape(img.shape)
 
 
 def _blurred(img):
@@ -1488,13 +1592,25 @@ def _blurred(img):
     kernel[1, 1] = 5.0
     kernel /= kernel.sum()
     src = img.astype(work)
-    h, w = img.shape[0], img.shape[1]
-    middle = _np.zeros((h - 2, w - 2) + img.shape[2:], dtype=work)
+    # **Sliced by axis rather than by leading position.** `src[di:di+h-2, ...]` walks
+    # the first two axes, which are the frames and the height of a clip — 120 of 252
+    # elements differed (measured). The nine shifted views are taken on the picture's
+    # own axes now, and the border is written back the same way.
+    hax, wax = _picture_axes(img)
+    h, w = img.shape[hax], img.shape[wax]
+    inner = list(img.shape)
+    inner[hax], inner[wax] = h - 2, w - 2
+    middle = _np.zeros(tuple(inner), dtype=work)
     for di in range(3):
         for dj in range(3):
-            middle += kernel[di, dj] * src[di:di + h - 2, dj:dj + w - 2]
+            take = [slice(None)] * img.ndim
+            take[hax] = slice(di, di + h - 2)
+            take[wax] = slice(dj, dj + w - 2)
+            middle += kernel[di, dj] * src[tuple(take)]
     out = src.copy()
-    out[1:-1, 1:-1] = middle
+    put = [slice(None)] * img.ndim
+    put[hax] = put[wax] = slice(1, -1)
+    out[tuple(put)] = middle
     if _np.dtype(img.dtype).kind != "f":
         # **Rounded, not truncated.** torch casts the convolution back to an integer
         # dtype through `round`, and truncating instead is one step low on about half
@@ -1512,7 +1628,8 @@ def adjust_sharpness(img, sharpness_factor):
             f"sharpness_factor is not non-negative — got {sharpness_factor}.\n"
             f"(torch: sharpness_factor ({sharpness_factor}) is not non-negative.)")
     img = _require_hwc(img, "adjust_sharpness")
-    if img.shape[0] <= 2 or img.shape[1] <= 2:
+    hax, wax = _picture_axes(img)
+    if img.shape[hax] <= 2 or img.shape[wax] <= 2:
         return img
     return _blend(img, _blurred(img), sharpness_factor)
 
@@ -1613,45 +1730,57 @@ class RandomAdjustSharpness(_RandomPixelOp):
 
 
 def _grid_sample(img, grid, mode):
-    """torch's `grid_sample` with `align_corners=False` and zero padding, on `(H,W,C)`.
+    """torch's `grid_sample` with `align_corners=False` and zero padding, on `(…,H,W,C)`.
 
     **`align_corners=False` is the whole of the coordinate convention** and it is not
     a detail: it puts -1 and 1 at the *outer edges* of the border pixels rather than
     at their centres, so the un-normalising is `((g + 1) * size - 1) / 2`. With the
     other convention every resampled pixel is half a pixel out, which looks like a
     slightly soft image rather than like a bug.
+
+    **Anything in front of the picture rides along.** Written `src[cy, cx]` this
+    indexed the first two axes, so a clip was sampled across its frames — the four
+    resamplers standing on it (`rotate`, `affine`, `perspective`, `elastic`) stopped
+    with a shape mismatch rather than answering wrongly, which is the one mercy in it.
     """
-    h, w = img.shape[0], img.shape[1]
+    hax, wax = _picture_axes(img)
+    h, w = img.shape[hax], img.shape[wax]
+    lead = img.shape[:img.ndim + hax]
+    channels = _channels(img)
     work = _working_dtype(img.dtype)
-    src = img.astype(work)
+    # Normalised to `(*lead, H, W, C)` so one body covers every rank; a picture with
+    # no channel axis gains one here and the caller's shape is restored on the way out.
+    src = img.astype(work).reshape(lead + (h, w, channels))
     x = ((grid[..., 0] + 1.0) * w - 1.0) / 2.0
     y = ((grid[..., 1] + 1.0) * h - 1.0) / 2.0
 
     def read(yy, xx):
         """The input at integer positions, **zero outside** — torch's `padding_mode`."""
         inside = (xx >= 0) & (xx < w) & (yy >= 0) & (yy < h)
-        out = _np.zeros(xx.shape + (src.shape[2],), dtype=work)
         cy = _np.clip(yy, 0, h - 1).astype(_np.intp)
         cx = _np.clip(xx, 0, w - 1).astype(_np.intp)
-        out[inside] = src[cy[inside], cx[inside]]
-        return out
+        # `[..., cy, cx, :]` — the two advanced indices are adjacent, so the sampled
+        # grid lands where `(H, W)` was and the leading axes stay in front of it.
+        got = src[..., cy, cx, :]
+        return _np.where(inside[..., None], got, _np.zeros((), dtype=work))
 
     if mode == "nearest":
         # **Half goes to even**, which is `rint` here and `nearbyint` in torch. Python's
         # `round` agrees; numpy's `floor(x + 0.5)` does not, and the disagreement shows
         # only on positions landing exactly halfway — which a 90-degree rotation
         # produces on every pixel.
-        return read(_np.rint(y).astype(_np.intp), _np.rint(x).astype(_np.intp))
-
-    x0, y0 = _np.floor(x), _np.floor(y)
-    fx, fy = x - x0, y - y0
-    x0i, y0i = x0.astype(_np.intp), y0.astype(_np.intp)
-    corners = ((y0i, x0i, (1 - fy) * (1 - fx)), (y0i, x0i + 1, (1 - fy) * fx),
-               (y0i + 1, x0i, fy * (1 - fx)), (y0i + 1, x0i + 1, fy * fx))
-    out = _np.zeros(x.shape + (src.shape[2],), dtype=work)
-    for yy, xx, weight in corners:
-        out += read(yy, xx) * weight[..., None]
-    return out
+        out = read(_np.rint(y).astype(_np.intp), _np.rint(x).astype(_np.intp))
+    else:
+        x0, y0 = _np.floor(x), _np.floor(y)
+        fx, fy = x - x0, y - y0
+        x0i, y0i = x0.astype(_np.intp), y0.astype(_np.intp)
+        corners = ((y0i, x0i, (1 - fy) * (1 - fx)), (y0i, x0i + 1, (1 - fy) * fx),
+                   (y0i + 1, x0i, fy * (1 - fx)), (y0i + 1, x0i + 1, fy * fx))
+        out = _np.zeros(lead + x.shape + (channels,), dtype=work)
+        for yy, xx, weight in corners:
+            out += read(yy, xx) * weight[..., None]
+    # The channel axis was borrowed for a picture that had none — give the shape back.
+    return out if img.ndim >= 3 else out.reshape(out.shape[:-1])
 
 
 def _grid_transform(img, grid, mode, fill):
@@ -1668,12 +1797,15 @@ def _grid_transform(img, grid, mode, fill):
     if fill is None:
         painted = sampled
     else:
-        ones = _np.ones(img.shape[:2] + (1,), dtype=img.dtype)
+        # **One plane of ones shaped like the picture, not like its first two axes.**
+        # `img.shape[:2]` is the frame axis and the height of a clip.
+        hax, wax = _picture_axes(img)
+        ones = _np.ones((img.shape[hax], img.shape[wax], 1), dtype=img.dtype)
         mask = _grid_sample(ones, grid, mode)
         values = _np.asarray(fill if isinstance(fill, (tuple, list)) else [float(fill)],
                              dtype=_working_dtype(img.dtype))
         if values.size == 1:
-            values = _np.repeat(values, sampled.shape[2])
+            values = _np.repeat(values, _channels(img))
         if mode == "nearest":
             painted = _np.where(mask < 0.5, values, sampled)
         else:
@@ -1782,7 +1914,8 @@ def rotate(img, angle, interpolation="nearest", expand=False, center=None, fill=
     """
     img = _require_hwc(img, "rotate")
     mode = _interpolation(interpolation)
-    h, w = img.shape[0], img.shape[1]
+    hax, wax = _picture_axes(img)
+    h, w = img.shape[hax], img.shape[wax]
     matrix = _inverse_affine_matrix(_center_offset(center, w, h), -angle,
                                     [0.0, 0.0], 1.0, [0.0, 0.0])
     ow, oh = _affine_output_size(matrix, w, h) if expand else (w, h)
@@ -1800,7 +1933,8 @@ def affine(img, angle, translate, scale, shear, interpolation="nearest", fill=No
         raise ValueError(
             f"scale is a positive number — got {scale}.\n"
             "(torch: Argument scale should be positive)")
-    h, w = img.shape[0], img.shape[1]
+    hax, wax = _picture_axes(img)
+    h, w = img.shape[hax], img.shape[wax]
     matrix = _inverse_affine_matrix(_center_offset(center, w, h), angle,
                                     [1.0 * t for t in translate], scale,
                                     _shear_pair(shear))
@@ -1842,7 +1976,7 @@ class RandomRotation:
 
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
-        channels = img.shape[2] if img.ndim == 3 else 1
+        channels = _channels(img)
         fill = ([float(self.fill)] * channels if isinstance(self.fill, (int, float))
                 else [float(f) for f in self.fill])
         return rotate(img, self.get_params(), self.interpolation, self.expand,
@@ -1916,7 +2050,7 @@ class RandomAffine:
 
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
-        channels = img.shape[2] if img.ndim == 3 else 1
+        channels = _channels(img)
         fill = ([float(self.fill)] * channels if isinstance(self.fill, (int, float))
                 else [float(f) for f in self.fill])
         angle, shift, scale, shear = self.get_params(
@@ -1991,13 +2125,21 @@ def gaussian_blur(img, kernel_size, sigma=None):
     ky = _gaussian_kernel1d(sizes[1], sigmas[1], work)
     kernel = _np.outer(ky, kx)
     ph, pw = sizes[1] // 2, sizes[0] // 2
-    padded = _np.pad(img.astype(work), [(ph, ph), (pw, pw)] + [(0, 0)] * (img.ndim - 2),
-                     mode="reflect")
-    h, w = img.shape[0], img.shape[1]
+    # **Padded and sliced on the picture's axes.** Both were written leading-first, so
+    # a clip was reflected along its frame axis and then convolved across frames —
+    # every one of 252 elements differed from torchvision (measured).
+    hax, wax = _picture_axes(img)
+    pads = [(0, 0)] * img.ndim
+    pads[hax], pads[wax] = (ph, ph), (pw, pw)
+    padded = _np.pad(img.astype(work), pads, mode="reflect")
+    h, w = img.shape[hax], img.shape[wax]
     out = _np.zeros(img.shape, dtype=work)
     for di in range(kernel.shape[0]):
         for dj in range(kernel.shape[1]):
-            out += kernel[di, dj] * padded[di:di + h, dj:dj + w]
+            take = [slice(None)] * img.ndim
+            take[hax] = slice(di, di + h)
+            take[wax] = slice(dj, dj + w)
+            out += kernel[di, dj] * padded[tuple(take)]
     if _np.dtype(img.dtype).kind != "f":
         out = _np.clip(_np.round(out), 0, _bound(img.dtype))
     return out.astype(img.dtype)
@@ -2045,7 +2187,8 @@ def perspective(img, startpoints, endpoints, interpolation="bilinear", fill=None
     img = _require_hwc(img, "perspective")
     mode = _interpolation(interpolation)
     coeffs = _perspective_coefficients(startpoints, endpoints)
-    grid = _perspective_grid(coeffs, img.shape[1], img.shape[0],
+    hax, wax = _picture_axes(img)
+    grid = _perspective_grid(coeffs, img.shape[wax], img.shape[hax],
                              _working_dtype(img.dtype))
     return _grid_transform(img, grid, mode, fill)
 
@@ -2068,8 +2211,14 @@ def elastic_transform(img, displacement, interpolation="bilinear", fill=None):
     img = _require_hwc(img, "elastic_transform")
     mode = _interpolation(interpolation)
     work = _working_dtype(img.dtype)
-    shift = _np.asarray(displacement, dtype=work).reshape(img.shape[0], img.shape[1], 2)
-    grid = _identity_grid(img.shape[0], img.shape[1], work) + shift
+    # **The displacement is one warp for the picture, whatever is in front of it.**
+    # torchvision's `elastic_video` shares a single displacement across the frames,
+    # so the grid is built from the picture's own two axes and the sampler broadcasts
+    # it over the rest.
+    hax, wax = _picture_axes(img)
+    h, w = img.shape[hax], img.shape[wax]
+    shift = _np.asarray(displacement, dtype=work).reshape(h, w, 2)
+    grid = _identity_grid(h, w, work) + shift
     return _grid_transform(img, grid, mode, fill)
 
 
@@ -2146,7 +2295,7 @@ class RandomPerspective:
         img = _require_hwc(img, type(self).__name__)
         if _rng.random() >= self.p:
             return img
-        channels = img.shape[2] if img.ndim == 3 else 1
+        channels = _channels(img)
         fill = ([float(self.fill)] * channels if isinstance(self.fill, (int, float))
                 else [float(f) for f in self.fill])
         start, end = self.get_params(img.shape[1], img.shape[0])
@@ -2395,7 +2544,7 @@ def _space_augmix(num_bins, size, all_ops):
 def _fill_per_channel(fill, img):
     if fill is None:
         return None
-    channels = img.shape[2] if img.ndim == 3 else 1
+    channels = _channels(img)
     if isinstance(fill, (int, float)):
         return [float(fill)] * channels
     return [float(f) for f in fill]
@@ -2694,11 +2843,13 @@ class AugMix:
 
 def hflip(img):
     """Left to right, with no draw in it."""
-    return _np.ascontiguousarray(_flip(_require_hwc(img, "hflip"), 1))
+    img = _require_hwc(img, "hflip")
+    return _np.ascontiguousarray(_flip(img, _picture_axes(img)[1]))
 
 
 def vflip(img):
-    return _np.ascontiguousarray(_flip(_require_hwc(img, "vflip"), 0))
+    img = _require_hwc(img, "vflip")
+    return _np.ascontiguousarray(_flip(img, _picture_axes(img)[0]))
 
 
 def crop(img, top, left, height, width):
@@ -2706,13 +2857,14 @@ def crop(img, top, left, height, width):
     fall outside the picture, which numpy would answer with a smaller array rather
     than an error."""
     img = _require_hwc(img, "crop")
-    h, w = img.shape[0], img.shape[1]
+    hax, wax = _picture_axes(img)
+    h, w = img.shape[hax], img.shape[wax]
     if top < 0 or left < 0 or top + height > h or left + width > w:
         raise ValueError(
             f"The crop ({top}, {left}, {height}, {width}) leaves the image {(h, w)}.\n"
             "  numpy would answer a shorter array here rather than stopping, and the "
             "batch that follows would refuse to stack for a reason pointing elsewhere.")
-    return _np.ascontiguousarray(_crop(img, 0, top, height, 1, left, width))
+    return _np.ascontiguousarray(_crop(img, hax, top, height, wax, left, width))
 
 
 def center_crop(img, output_size):
@@ -2778,7 +2930,8 @@ def erase(img, i, j, h, w, v, inplace=False):
 def get_dimensions(img):
     """`[channels, height, width]` — **and `get_image_size` is not this reversed.**"""
     img = _require_hwc(img, "get_dimensions")
-    return [img.shape[2] if img.ndim == 3 else 1, img.shape[0], img.shape[1]]
+    hax, wax = _picture_axes(img)
+    return [_channels(img), img.shape[hax], img.shape[wax]]
 
 
 def get_image_size(img):
@@ -4112,10 +4265,21 @@ def _tv_types(L):
             **Subclasses do not each write this** — the metadata names are declared once in
             `_METADATA` and copied by name. A subclass that grew a field and forgot to copy
             it would produce boxes whose format silently came from nowhere.
+
+            **`kwargs.get(name, getattr(like, name))` read `like` every time.** Python
+            evaluates a `get` default before the call, so the override never spared the
+            lookup: passing `format=` still asked `like` for its `format`, and passing
+            every field still asked `like` for every field. It only mattered once
+            `like` stopped being able to answer — a caller wrapping a tensor it had
+            just written into, on the binding, where a tensor is slotted and an
+            unknown name goes to borch.ts and comes back *'Tensor' object has no
+            attribute 'canvas_size'*. The override is honoured before the lookup now,
+            which is what it was always meant to be.
             """
             out = cls.__new__(cls, wrappee)
             for name in cls._METADATA:
-                setattr(out, name, kwargs.get(name, getattr(like, name)))
+                setattr(out, name,
+                        kwargs[name] if name in kwargs else getattr(like, name))
             return out
 
         def _same(self, values):
@@ -4921,6 +5085,13 @@ def convert_bounding_box_format(inpt, old_format=None, new_format=None,
     On a `BoundingBoxes` the old format is read off the boxes and passing it as well is
     refused — two sources for one fact is a place they can disagree. On a plain tensor
     there is nothing to read, so it must be given.
+
+    **`inplace` was a seat the body never read.** torchvision writes the converted
+    corners back into the tensor it was handed and hands the same object on; here a
+    copy came back and the original kept its old corners under its old format. The
+    values returned were right, so nothing downstream of the call could tell — only
+    code that goes on reading the boxes it passed in, which is the reason to ask for
+    in-place at all.
     """
     L = _backend()
     if new_format is None:
@@ -4944,8 +5115,24 @@ def convert_bounding_box_format(inpt, old_format=None, new_format=None,
             box_convert(_np.asarray(_to_numpy(inpt), dtype=_np.float32),
                         old_format.value.lower(), new_format.value.lower()),
             dtype=_np.float32)))
-    if isinstance(inpt, BoundingBoxes):
-        return BoundingBoxes.wrap(values, inpt, format=new_format)
+    # **The label is read off the boxes before anything is written**, not after.
+    # `wrap(values, like)` asks `like` for the fields it does not override, and under
+    # `inplace` the two are the same object — so it would be asking the thing being
+    # rebuilt to describe itself. On the binding a tensor is slotted and that read
+    # came back *'Tensor' object has no attribute 'canvas_size'*; on the core it
+    # happened to work, which is the worse half of the pair.
+    carried = ({name: getattr(inpt, name) for name in BoundingBoxes._METADATA}
+               if isinstance(inpt, BoundingBoxes) else {})
+    if inplace:
+        # **The corners go back into the caller's own tensor.** `copy_` is the one
+        # write that keeps the object identity torch's `inplace` promises; building
+        # a new tensor and returning it is what this did, and is what the argument
+        # asks it not to do.
+        inpt.copy_(values)
+        values = inpt
+    if carried:
+        return BoundingBoxes.wrap(values, inpt, **{**carried,
+                                                   "format": new_format})
     return values
 
 
@@ -8144,12 +8331,15 @@ def permute_channels(img, permutation):
     puts the old third channel first — the same direction as indexing, and the
     opposite of "where each channel goes"."""
     arr = _np.asarray(img)
-    arr = arr if arr.ndim == 3 else arr[:, :, None]
-    if sorted(permutation) != list(range(arr.shape[2])):
+    # **The channel is the last axis whatever the rank**, which is `_channels`'s rule.
+    # Written `arr.ndim == 3` and `[:, :, c]` this read a clip's width as its channel
+    # count and refused a valid permutation with a message naming the wrong number.
+    arr = arr if arr.ndim >= 3 else arr[..., None]
+    if sorted(permutation) != list(range(_channels(arr))):
         raise ValueError(
-            f"Invalid permutation {list(permutation)} for {arr.shape[2]} channels\n"
+            f"Invalid permutation {list(permutation)} for {_channels(arr)} channels\n"
             "  (torch: Invalid permutation)")
-    return _np.ascontiguousarray(arr[:, :, list(permutation)])
+    return _np.ascontiguousarray(arr[..., list(permutation)])
 
 
 def to_dtype(img, dtype=None, scale=False):
@@ -12117,30 +12307,53 @@ _V2_IMAGE_KERNELS = (
 for _name in _V2_IMAGE_KERNELS:
     setattr(v2_functional, _name + "_image", getattr(v2_functional, _name))
 
-# ── the two `_video` names that are not aliases ──────────────────────────────────
+# ── the `_video` names ───────────────────────────────────────────────────────────
 #
-# **The declined reason was wrong, and not in the direction it looked.** Thirty-seven
-# names read *there is no video anywhere in this project*, and in torchvision every one
-# of these kernels is a single line — `def resize_video(video, …): return
-# resize_image(video, …)`. No container, no codec, no decoder; a video there is a tensor
-# with one more leading axis, and its image kernels are N-D tensor operations that work
-# over the leading axes. Measured: `resize_video` on a `(2, 3, 3, 4, 5)` tensor answers
-# `(2, 3, 3, 2, 3)`.
+# **Two of these were here and thirty-four were declined, and the reason has been wrong
+# twice.** It read *there is no video anywhere in this project*, which was answered by
+# reading torchvision: every one of its `*_video` kernels is a single line —
+# `def resize_video(video, …): return resize_image(video, …)` — with no container, codec
+# or decoder in it. A video there is a tensor with one more leading axis.
 #
-# **It does not follow here, because this file's image kernels are v1's.** They take an
-# `(H, W, C)` numpy array and refuse a tensor with a message about `ToTensor` — measured,
-# binding `resize_video` to `resize` and handing it a five-axis tensor stops at
-# `Resize takes a (H,W,C) numpy array`. So the thirty-three aliases would be names that
-# accept a video and cannot take one, which is worse than their absence.
+# The replacement reason was *not that there is no video, but that there is no N-D image
+# kernel for a `_video` name to bind to*, and that one was true. It is not any more, and
+# **what it took was one rule rather than thirty-four bodies**: `_picture_axes` says the
+# height and the width are counted from the end, so `(H, W, C)` and `(T, H, W, C)` name
+# the same axes and every kernel works over whatever is in front.
 #
-# The real reason is one axis lower than the old one: **not that there is no video, but
-# that there is no N-D image kernel for a `_video` name to bind to.**
+# **The state that reason described was worse than it said.** Handed a four-axis array
+# before the rule went in, these kernels did not refuse — measured against torchvision's
+# own `*_video`, four of twenty-one agreed, eleven answered **wrong values with no
+# exception** (`horizontal_flip` differed in all 252 elements; `adjust_contrast`,
+# `autocontrast` and `equalize` reduced across frames; `resize` and `pad` moved the frame
+# axis), and six stopped with a shape mismatch. So this was never only a missing feature:
+# it was a rank the kernels accepted and mishandled, and the video names are what made
+# anybody measure it.
 #
-# These two are different: they are pure indexing along the frame axis and touch no
-# picture kernel at all.
+# `jpeg_video` is the one that stays out, and its reason is the codec — not this.
+#
+# **`get_num_frames` and `uniform_temporal_subsample` are still separate.** They index
+# along the frame axis and touch no picture kernel, so they were reachable while the
+# other thirty-four were not, and they have no `*_image` twin to be an alias of.
 for _name in ("get_num_frames", "uniform_temporal_subsample"):
     setattr(v2_functional, _name, globals()[_name])
     setattr(v2_functional, _name + "_video", globals()[_name])
+
+# The thirty-three, bound to the very same object their `*_image` twin is bound to —
+# `test_gap.py` compares the pair with `is`, so a video name and an image name cannot
+# drift into two bodies.
+#
+# **`_V2_IMAGE_KERNELS` is not the list, and the difference is two names.** Bound from
+# that tuple this created `rgb_to_grayscale_video` and `grayscale_to_rgb_video`, and
+# **torchvision has neither** — colour conversion is defined for images and masks there
+# and stops at video. Two doors torch has not got, which is the defect
+# `test_no_namespace_offers_a_door_torch_does_not_have` exists for and caught the same
+# minute: nothing is wrong until the reader leaves, and then the line they learned here
+# raises somewhere else.
+_NO_VIDEO_TWIN = ("rgb_to_grayscale", "grayscale_to_rgb")
+for _name in _V2_IMAGE_KERNELS:
+    if _name not in _NO_VIDEO_TWIN:
+        setattr(v2_functional, _name + "_video", getattr(v2_functional, _name))
 
 # **The size family, and four rows that went stale the day the types arrived.**
 #

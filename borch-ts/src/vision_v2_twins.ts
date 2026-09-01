@@ -31,6 +31,11 @@
  */
 
 import { RuntimeError } from "./errors.js";
+// **The one computation this file reaches for.** Every other class here extends a v1
+// one and overrides `describe`; `UniformTemporalSubsample` has no v1 twin, because
+// torchvision added it with v2, so it wraps the `ops` function directly.
+import { uniformTemporalSubsample } from "./ops.js";
+import { Tensor } from "./tensor.js";
 import {
   AugMix as V1AugMix,
   AutoAugment as V1AutoAugment,
@@ -301,13 +306,15 @@ export class RandomGrayscale extends V1RandomGrayscale {
 }
 
 export class Normalize extends V1Normalize {
-  // **`inplace` is taken and not acted on.** There is no in-place path here, and torch
-  // has the seat — so a pipeline copied across keeps its argument list rather than
-  // stopping on an argument count, and v2 prints the flag it was given.
+  // **`inplace` used to be taken and not acted on** — there was no in-place path here
+  // and torch has the seat, so a pipeline copied across kept its argument list rather
+  // than stopping on an argument count. v1 writes through now, and this hands the flag
+  // down rather than shadowing it with a field of its own: two copies of one word is
+  // how the printed repr and the behaviour part.
   constructor(mean: readonly number[],
               std: readonly number[],
-              private readonly inplace = false) {
-    super(mean, std);
+              inplace = false) {
+    super(mean, std, inplace);
   }
 
   override describe(): string {
@@ -962,6 +969,36 @@ export class RandomPhotometricDistort implements Transform {
       ["hue", pyTuple(this.hue)],
       ["saturation", pyTuple(this.saturation)],
       ["p", pyFloat(this.p)],
+    ]);
+  }
+}
+
+/**
+ * Keeps `numSamples` frames of a video, spread evenly over its length.
+ *
+ * **The arithmetic was already here** — `ops.uniformTemporalSubsample` — and this
+ * class was not, so the name axis reported it missing and was right to: torchvision
+ * has both, and a transform is not its function. A pipeline is built out of
+ * transforms, and `Compose([…, UniformTemporalSubsample(8)])` is the line that could
+ * not be written.
+ *
+ * The axis refuses to fold a capital-initial name onto a lowercase one for exactly
+ * this reason — `nn.Embedding` is not `F.embedding` — so the function's presence
+ * could not excuse the class's absence, and did not.
+ */
+export class UniformTemporalSubsample implements Transform {
+  constructor(private readonly numSamples: number) {}
+
+  apply(x: Subject): Subject {
+    if (!(x instanceof Tensor)) {
+      throw new RuntimeError("UniformTemporalSubsample takes a tensor");
+    }
+    return uniformTemporalSubsample(x, this.numSamples);
+  }
+
+  describe(): string {
+    return repr("UniformTemporalSubsample", [
+      ["num_samples", String(this.numSamples)],
     ]);
   }
 }

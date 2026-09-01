@@ -45,7 +45,7 @@ from ._base import (
     BorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
     _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _resolve, _tensor_repr,
     _tensor_str, _unsupported, bool_, device, dtype, float32, float64, int64,
-    bfloat16, chalf, complex32, float16, half, int16, int32, long,
+    bfloat16, chalf, complex32, float16, half, int8, int16, int32, long, uint8,
     set_printoptions, short,
     # The complex dtype names. `complex128` and `cdouble` exist **as names
     # only** — trying to make one stops at the gate in `Tensor.__init__`.
@@ -57,6 +57,11 @@ from ._base import (
 from ._tensor import (
     Tensor, _CATEGORY, _DEFAULT_BY_CATEGORY, _DataDescriptor, _GradMode, _MinMax, _RANK,
     _category, _grad_mode, _no_bool_subtract, _promote, _scalar_category, _unbroadcast,
+    # **The words the questions are asked with.** `x.layout` and the
+    # `memory_format` seat both answered already; without these names the only way
+    # to ask was a string comparison against a `repr`.
+    channels_last, channels_last_3d, contiguous_format, preserve_format,
+    sparse_bsc, sparse_bsr, sparse_coo, sparse_csc, sparse_csr, strided,
 )
 from ._ops import _out                                   # noqa: E402
 from ._ops import (
@@ -91,6 +96,11 @@ from ._ops import (
     split, sqrt, square, stack, svd, swapaxes, swapdims, tan, tanh, tensor, tile, topk,
     trace, tril, triu, trunc, unbind, unflatten, unfold, unique, unsqueeze, vsplit,
     where, xlogy, zeros, zeros_like,
+    # **`special` is twenty of the names already in this import list, under the
+    # second spelling torch gives them.** No arithmetic of its own — see `_Special`
+    # at the foot of `_ops.py`, which is where it has to be defined because half of
+    # what it forwards to is defined below `fft`.
+    special,
     # The ones torch offers under a second name — a name attached to what an
     # operator already does.
     add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,
@@ -129,12 +139,13 @@ from ._ops import (
     # Random state.
     get_rng_state, initial_seed, seed, set_rng_state,
     # Introspection.
-    can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
+    can_cast, finfo, get_default_device, get_default_dtype, iinfo, is_distributed,
+    is_floating_point,
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
     sym_float, sym_int, sym_ite, sym_max, sym_min, sym_not, sym_sqrt, sym_sum,
     cudnn_is_acceptable, is_vulkan_available, narrow_copy, segment_reduce,
     result_type,
-    set_default_dtype, typename,
+    set_default_device, set_default_dtype, typename,
     # Bitwise operations and integer maths. On `bool` they become logical
     # operations — torch looks at the dtype.
     bitwise_and, bitwise_left_shift, bitwise_not, bitwise_or,
@@ -235,6 +246,11 @@ from ._rnn import (
 from ._serialize import (
     load, save,
 )
+# **A submodule, so it has to be imported by name.** `import borch` alone does not
+# pull one in, and `borch.autograd` would go on raising the `AttributeError` this
+# module was written to remove — the failure would be invisible because every test
+# that imports it directly would still pass.
+from . import autograd                                    # noqa: E402, F401
 
 # ==================================================== exposing them as methods
 #
@@ -563,6 +579,20 @@ def _link_wrapped():
             # argument list it does not have; see `_deprecated_by_torch`.
             continue
         _target = getattr(_o, _n, None)
+        # **A name can be the same object on both sides, and then this pointed it at
+        # itself.** `_ops.eq` and `Tensor.eq` are one `_compare.<locals>.cmp`, so
+        # `_m.__wrapped__ = _target` made `__wrapped__` a self-loop — and
+        # `inspect.signature` does not shrug at that, it **raises**
+        # `ValueError: wrapper loop when unwrapping`. Eleven `Tensor` names were in
+        # that state: the eight comparisons and the three aliases pointing at them.
+        #
+        # Worse than the bag it was written to remove. A bag reads as
+        # `(self, *args, **kw)` and says little; a loop makes `inspect.signature`,
+        # `help()` and every editor's hover **fail** on `x.eq`, which torch answers.
+        # The axis filed all eleven as *no python signature*, one wording for two very
+        # different conditions.
+        if _target is _m:
+            continue
         if callable(_m) and callable(_target) and "<locals>" in getattr(
                 _m, "__qualname__", "") and getattr(_m, "__name__", None) == _n:
             try:
@@ -573,6 +603,66 @@ def _link_wrapped():
 
 _link_wrapped()
 del _link_wrapped
+
+
+# **The two generators in `_tensor.py` build `(self, *args, **kw)`, and a bag says
+# nothing.** `_bind_inplace` wraps the partner method and `_bind_from_module` wraps
+# an `_ops` function; both hand the arguments straight on, so what each will accept
+# is already written down one call away. Forty-seven `Tensor` rows were filed as
+# *no python signature* — the bucket meaning **cannot be judged**, which is an
+# absorbing state: no count holds it and nothing downstream of it gets asked.
+#
+# The same repair `_ops._make_inplace` took, on the two generators that live on the
+# other side of the import. **It runs here for the ordering reason above** —
+# `_bind_from_module` reads `_ops`, which does not exist while `_tensor` is being
+# built, and `_bind_inplace`'s partners are only fully readable once `_link_wrapped`
+# has finished.
+#
+# **A variadic source is left alone.** `expand(*sizes)` and `reshape(*shape)` really
+# do take any number, and copying a promise the method cannot keep is worse than the
+# bag — that is the mistake `relu_` caught in `_ops.py`, where a declared signature
+# outran what the method would accept.
+def _declare_forwarders():
+    import inspect as _inspect
+
+    from . import _ops as _o
+    from ._tensor import _INPLACE_FROM_PAIR, _INPLACE_LATE, _METHOD_FROM_MODULE
+    from ._tensor import Tensor as _T
+
+    def _copy(method, source, drop_receiver):
+        if source is None or getattr(method, "__signature__", None) is not None:
+            return
+        try:
+            got = _inspect.signature(source)
+        except (TypeError, ValueError):
+            return
+        params = list(got.parameters.values())
+        # **Not `any(...)`.** This module exports a tensor reduction called `any`, and
+        # inside a function defined here that global wins over the builtin — the
+        # generator expression went to `borch.any`, which tried to make a tensor out of
+        # it. A plain loop has no such name to collide with.
+        for one in params:
+            if one.kind in (one.VAR_POSITIONAL, one.VAR_KEYWORD):
+                return
+        if drop_receiver:
+            if not params:
+                return
+            params = params[1:]
+        first = _inspect.Parameter("self", _inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        method.__signature__ = got.replace(parameters=[first] + params)
+
+    # **The module-borrowed methods go first.** An in-place name reads its partner off
+    # the class, and three of them — `arctan2_`, `igamma_`, `igammac_` — have a partner
+    # that is itself one of these forwarders. Repaired in the other order they copied a
+    # bag and stayed bags, with nothing to say which pass had been the wrong way round.
+    for _n in _METHOD_FROM_MODULE:
+        _copy(getattr(_T, _n, None), getattr(_o, _n, None), drop_receiver=True)
+    for _n in _INPLACE_FROM_PAIR + _INPLACE_LATE:
+        _copy(getattr(_T, _n, None), getattr(_T, _n[:-1], None), drop_receiver=True)
+
+
+_declare_forwarders()
+del _declare_forwarders
 
 
 # ── `out=` — writing into a tensor made in advance ──────────────────────────
@@ -757,6 +847,30 @@ for _name in _LINALG_TAKES_OUT:
     _fn = getattr(linalg, _name, None)
     if _fn is not None and callable(_fn):
         setattr(linalg, _name, _accepts_out(_fn, f"linalg.{_name}"))
+del _name
+
+
+# **And the same reaching `special`, for the same reason `linalg` needed it.** Its
+# members are bound from `_ops` directly, so the `globals()` walk above does not touch
+# them: without this, `borch.erf(x, out=…)` worked and `borch.special.erf(x, out=…)`
+# was a `TypeError`, for one function under two names.
+#
+# **Measured, not read.** Every one of the twenty was called in real torch with
+# `out=`; eighteen took it and `softmax` and `log_softmax` did not — they take `dtype=`
+# instead, which is a different keyword doing a different job. Reading the docstrings
+# would have got this wrong in the other direction too: `special.round`'s prose is
+# `round(input, *, out=None)` with no `decimals`, and torch **reads** a `decimals`
+# passed there (`round(0.34567, decimals=3)` → `0.346`, measured). That is one more
+# for this repository's tally of torch's own prose being short.
+_SPECIAL_TAKES_OUT = frozenset("""
+    digamma erf erfc erfinv exp2 expit expm1 gammainc gammaincc gammaln i0 log1p
+    logit logsumexp modified_bessel_i0 polygamma psi round sinc xlogy
+""".split())
+
+for _name in _SPECIAL_TAKES_OUT:
+    _fn = getattr(special, _name, None)
+    if _fn is not None and callable(_fn):
+        setattr(special, _name, _accepts_out(_fn, f"special.{_name}"))
 del _name
 
 

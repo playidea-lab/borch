@@ -352,19 +352,42 @@ def test_a_namespaced_wildcard_stays_inside_its_namespace():
     matcher again and `to_pil_image` starts answering with the dispatch sentence, which
     is the shape that has to stay impossible.
 
-    **The example has moved twice, and `*_video` is where it stops.** It read
+    **The example has moved three times, every time by being implemented.** It read
     `affine_image` until those kernels were bound as their own dispatchers, then
-    `affine_mask` until the mask kernels were built too. Both rows were retired by being
-    *implemented*, which is the good way for a row to leave and a poor way to keep an
-    example.
+    `affine_mask` until the mask kernels were built, then `affine_video` — and the note
+    here said `*_video` was *the one least likely to move*, "a fact about the project
+    rather than a gap waiting to be filled". It moved the next day. The image kernels
+    started counting their axes from the end, `(H, W, C)` and `(T, H, W, C)` became the
+    same two axes, and thirty-three rows left at once.
 
-    `*_video` is the last namespaced wildcard here and the one least likely to move: it
-    is declined because there is no video anywhere in this project, which is a fact about
-    the project rather than a gap waiting to be filled.
+    **So the lesson is not about which example to pick.** Four times running, the row
+    chosen as the stable one was retired by somebody doing the work, and each time the
+    reason had sounded like a fact about the world.
+
+    The fourth is the one worth keeping. `special.bessel_j*` was written in as the
+    replacement — *a Bessel series is arithmetic nobody here has written* — under a
+    paragraph saying that was exactly what had been said about video, so treat it as a
+    warning rather than a guarantee. **It was gone within the same session**, along with
+    the other thirty-three rows of that block.
+
+    ## There is no live namespaced wildcard now, and that is the finding
+
+    Every wildcard left in the table is flat (`cudnn_*`, `Sym*`, `native_*`). The
+    namespaced path has no user, so the *matches inside its namespace* half cannot be
+    asked of a real row without inventing one — and inventing one to keep a check green
+    is how a check starts passing about nothing.
+
+    So it is asked of `_look` directly, which is a pure function over whatever table it
+    is handed. That keeps the mechanism honest with no live row to go stale, and the
+    **containment** half below stays on the real table, where it is about names that do
+    exist.
     """
-    kernel = _why("transforms.v2.functional", "affine_video")
-    assert kernel and "video" in kernel[1], (
-        "the namespaced wildcard stopped matching inside its own namespace")
+    # The mechanism, on a table of its own: matches inside its namespace, and nowhere
+    # else. Flatten `_look` again and the second assertion fails.
+    table = {"transforms.v2.functional.*_kernel": "the dispatch reason"}
+    assert _look(table, "resize_kernel",
+                 "transforms.v2.functional.resize_kernel") == "the dispatch reason"
+    assert _look(table, "resize_kernel", "transforms.functional.resize_kernel") is None
 
     for space, name in (("transforms.functional", "to_pil_image"),
                         ("transforms", "ToPILImage")):

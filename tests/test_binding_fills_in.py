@@ -60,7 +60,25 @@ get_rng_state initial_seed is_distributed is_grad_enabled
 is_inference is_inference_mode_enabled is_storage numpy promote_types
 result_type set_rng_state share_memory_ sparse_dim to_dense tolist typename
 asarray resize_as_ storage_offset values
+get_default_device multinomial
 """.split()
+# `get_default_device` joins `get_default_dtype` above, and it is that row's reason
+# rather than a new one: **a device here is a Python value.** borch.ts has one adapter
+# and `t.device` over there is a string, so there is nothing to hand back — it answers
+# "cpu" without asking the GPU anything.
+#
+# **Its partner `set_default_device` is deliberately not in this table.** A row here is
+# for a name the golden asks about, and that one cannot be asked: torch's answer is to
+# change the interpreter, not to return a value (`tests/cases.py` records what both
+# arguments did to the table). Listed anyway, `test_the_table_has_no_stale_rows` calls
+# it out as already carried across — a row about an unasked name is indistinguishable
+# from a row that finished.
+#
+# `multinomial` is `bernoulli`'s reason: the sampling is one CPU pass over weights that
+# are already coming down to be normalised, and a WGSL kernel for it would be a second
+# copy of a distribution to keep in step with numpy's. It sits beside `bernoulli`,
+# `normal` and `poisson`, which were judged the same way and for which this file's own
+# opening paragraph is the record.
 # `result_type` joins `can_cast` and `promote_types`, and it is the same reason
 # rather than a new one: all three answer *what dtype comes out*, and a dtype over
 # there is one of four string literals in a union type. There is nothing to look

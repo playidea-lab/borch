@@ -744,10 +744,17 @@ export function completeBasis(u: Mat, rows: number, k: number): Mat {
  * The Moore–Penrose pseudoinverse. Directions whose singular value is near
  * zero are dropped.
  */
-export function pinverse(a: Mat, rows: number, cols = rows): Mat {
+export function pinverse(a: Mat, rows: number, cols = rows, rcond?: number): Mat {
   const k = Math.min(rows, cols);
   const { u, s, vt } = svd(a, rows, cols);
-  const tol = (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON;
+  // **`rcond` is relative to the largest singular value and the default is not.**
+  // numpy's `lstsq` cutoff is `rcond * s[0]`; the machine-precision default carries
+  // a `max(rows, cols)` factor that `rcond` does not. Multiplying the given number
+  // by that factor too would make `rcond=0.9` cut a different set on a 4×2 than on
+  // a 2×4, which is not what either torch or numpy does.
+  const tol = rcond === undefined
+    ? (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON
+    : (s[0] ?? 0) * rcond;
   const inv = new Float64Array(k * k);
   for (let j = 0; j < k; j++) {
     const sj = s[j] ?? 0;
@@ -758,13 +765,35 @@ export function pinverse(a: Mat, rows: number, cols = rows): Mat {
 }
 
 /**
+ * How many singular values survive `pinverse`'s `rcond`.
+ *
+ * The same cutoff `pinverse` applies, counted rather than inverted, so the caller
+ * can ask **whether the cutoff bites** without a second convention. `lstsq` needs
+ * exactly that: under the default driver the answer is only ours while the matrix
+ * stays full rank.
+ */
+export function keptUnder(a: Mat, rows: number, cols: number,
+                          rcond: number): number {
+  const { s } = svd(a, rows, cols);
+  const tol = (s[0] ?? 0) * rcond;
+  let kept = 0;
+  for (let j = 0; j < Math.min(rows, cols); j++) if ((s[j] ?? 0) > tol) kept += 1;
+  return kept;
+}
+
+/**
  * The count of non-zero singular values. What counts as zero is scaled to
  * the largest singular value.
  */
-export function matrixRank(a: Mat, rows: number, cols = rows): number {
+export function matrixRank(a: Mat, rows: number, cols = rows,
+                           given?: number): number {
   const k = Math.min(rows, cols);
   const { s } = svd(a, rows, cols);
-  const tol = (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON;
+  // **A given tolerance is absolute.** numpy's `matrix_rank(tol=)` compares the
+  // singular values to it directly, and only the default is scaled to the largest
+  // one — which is why this is not the `rcond` of `pinverse` above under another
+  // name.
+  const tol = given ?? (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON;
   let rank = 0;
   for (let j = 0; j < k; j++) if ((s[j] ?? 0) > tol) rank += 1;
   return rank;
@@ -990,12 +1019,57 @@ export function eighGap(values: Float64Array, n: number): Mat {
 }
 
 /**
- * Solves `A x = b` using what `lu_factor` produced.
+ * Solves `A x = b` using what `lu_factor` produced, or `Aᵀ x = b` with `adjoint`.
+ *
+ * `A = P L U`, so the plain solve moves `b` onto `L U x = Pᵀ b` and runs forward
+ * then back. **The adjoint runs the whole thing in reverse**: `Aᵀ = Uᵀ Lᵀ Pᵀ`, so
+ * `Uᵀ` goes first — lower triangular, and its diagonal is `U`'s rather than ones —
+ * `Lᵀ` second with a unit diagonal, and the permutation lands on the *answer*
+ * instead of on the right-hand side. Applying the same swaps in reverse order is
+ * `P` where applying them forward is `Pᵀ`.
+ *
+ * Storage is real, so torch's `Aᴴ` is a transpose here.
  */
-export function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat {
+export function luSolveFactored(f: LuPacked, b: Mat, m: number,
+                                adjoint = false): Mat {
   const n = f.rows;
   const x = new Float64Array(n * m);
   for (let i = 0; i < n * m; i++) x[i] = b[i] ?? 0;
+  if (adjoint) {
+    // Uᵀ w = b, forward.
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < i; k++) {
+        const u = f.lu[k * f.cols + i] ?? 0;
+        if (u === 0) continue;
+        for (let j = 0; j < m; j++) {
+          x[i * m + j] = (x[i * m + j] ?? 0) - u * (x[k * m + j] ?? 0);
+        }
+      }
+      const d = f.lu[i * f.cols + i] ?? 1;
+      for (let j = 0; j < m; j++) x[i * m + j] = (x[i * m + j] ?? 0) / d;
+    }
+    // Lᵀ z = w, back. The diagonal is one, so there is nothing to divide by.
+    for (let i = n - 1; i >= 0; i--) {
+      for (let k = i + 1; k < n; k++) {
+        const l = f.lu[k * f.cols + i] ?? 0;
+        if (l === 0) continue;
+        for (let j = 0; j < m; j++) {
+          x[i * m + j] = (x[i * m + j] ?? 0) - l * (x[k * m + j] ?? 0);
+        }
+      }
+    }
+    // x = P z — the forward's swaps, undone.
+    for (let col = f.piv.length - 1; col >= 0; col--) {
+      const src = (f.piv[col] ?? col + 1) - 1;
+      if (src === col) continue;
+      for (let j = 0; j < m; j++) {
+        const t = x[col * m + j] ?? 0;
+        x[col * m + j] = x[src * m + j] ?? 0;
+        x[src * m + j] = t;
+      }
+    }
+    return x;
+  }
   // The swaps made in the forward are applied to the right-hand side in the same
   // order.
   for (let col = 0; col < f.piv.length; col++) {

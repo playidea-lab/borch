@@ -83,21 +83,34 @@ _RENAME = {
 
 # **Keyword arguments become positions.**
 #
-# torch code calls by name in many places — `clamp(x, min=-0.5, max=0.5)` — and
+# torch code calls by name in many places — `clip(x, min=-0.5, max=0.5)` — and
 # JavaScript has no such thing. Discarding `**kw` at first sent
-# `clamp(x, undefined, undefined)` down into a shader and WGSL stopped at
+# `clip(x, undefined, undefined)` down into a shader and WGSL stopped at
 # parsing: that was 72 failures.
 #
 # So the slot names are written down. The **argument order** is borch.ts's, with
 # torch's names placed into those slots. A function absent from here is one that
 # takes no keyword arguments.
+#
+# **Twenty-three rows were removed the day anything read this table.** Nothing
+# did: no test named `_SIGNATURE`, so a row could be written, be reached by no
+# call, and read for years as the reason a call works. `positional()` is entered
+# from four places only — the tensor method (`_base`), the module function
+# (`_ops.__getattr__`), `F.` (`_nn`) and `linalg` — and a name in
+# `_NOT_FORWARDED` with a hand-written `_ops` function of its own is behind all
+# four. `clamp` was one: the paragraph above names it as the example, and its
+# row had stopped mattering the day `def clamp` was written, because a real
+# Python signature takes its own keywords. `squeeze` was in here **twice**, which
+# is the fault the note further down records `quantile` having had.
+#
+# `tests/test_binding_arguments.py` holds it now. Adding a row that nothing can
+# reach is the cheap way to look like a gap was closed, and it was available
+# until then.
 _SIGNATURE = {
-    "clamp": ("min", "max"),
     "clip": ("min", "max"),
     # **`dtype` is the third slot**, exactly as in torch's signature — it means
     # convert before reducing, and that order changes the values when floats are
     # folded into integers.
-    "sum": ("dim", "keepdim", "dtype"),
     "mean": ("dim", "keepdim", "dtype"),
     "prod": ("dim", "keepdim", "dtype"),
     "nansum": ("dim", "keepdim", "dtype"),
@@ -117,6 +130,16 @@ _SIGNATURE = {
     "log_softmax": ("dim",),
     "cumsum": ("dim", "dtype"),
     "cumprod": ("dim", "dtype"),
+    # **The in-place twins need their own rows, and three arrived at once.** The core's
+    # generated `x_ = (*args, **kw)` forwarders were taught to declare what they
+    # forward, which handed `round_`, `logit_` and `heaviside_` the argument their
+    # partners always had. Here that is a keyword crossing into JavaScript, and a
+    # keyword with no row does not go through — `x.round_(decimals=1)` stopped at
+    # *does not take keyword arguments* while `x.round(decimals=1)` computed. The
+    # pair being one line apart in this table is what makes the absence visible.
+    "round_": ("decimals",),
+    "logit_": ("eps",),
+    "heaviside_": ("values",),
     "logcumsumexp": ("dim",),
     "mvlgamma": ("p",),
     "clamp_max": ("max",),
@@ -124,9 +147,7 @@ _SIGNATURE = {
     "fill": ("value",),
     "sort": ("dim", "descending", "stable"),
     "topk": ("k", "dim", "largest", "sorted"),
-    "squeeze": ("dim",),
     "unsqueeze": ("dim",),
-    "flatten": ("start_dim", "end_dim"),
     # Activation arguments. Many places call by name — `F.celu(x, alpha=0.5)`.
     "celu": ("alpha",),
     "hardshrink": ("lambd",),
@@ -148,8 +169,26 @@ _SIGNATURE = {
     "svd": ("some", "compute_uv"),
     "linalgSvd": ("full_matrices",),
     # Keyword arguments of the composite layers.
-    "vector_norm": ("ord", "dim"),
-    "matrix_norm": ("ord",),
+    # **`keepdim` was missing and the seat behind it existed.** borch.ts's `vectorNorm`
+    # takes it third; left out of this row it was dropped on the way and the answer came
+    # back a rank short — a shape, not an exception.
+    "vector_norm": ("ord", "dim", "keepdim"),
+    # **`dim` and `keepdim` were missing for the same reason `vector_norm`'s was**, and
+    # `matrix_norm(A, "fro", (-2, -1), True)` came back a scalar where torch keeps the
+    # two axes as ones.
+    "matrix_norm": ("ord", "dim", "keepdim"),
+    "matrix_rank": ("tol",),
+    # `linalg.norm` is routed to borch.ts's **namespace** function rather than the `norm`
+    # method, so its row is torch's `linalg.norm` and not `torch.norm`'s. The two differ
+    # in the first name — `ord` against `p` — and in what they compute.
+    "linalg.norm": ("ord", "dim", "keepdim", "dtype"),
+    # The other four that reach borch.ts's `linalg` namespace rather than a method.
+    # Their rows are torch's `linalg` argument names — the tensor methods next to them
+    # take neither the same names nor the same count.
+    "linalg.lu": ("pivot",),
+    "linalg.lu_solve": ("pivots", "b", "left", "adjoint"),
+    "linalg.tensorsolve": ("b", "dims"),
+    "linalg.lstsq": ("b", "rcond", "driver"),
     "vander": ("N",),
     "vecdot": ("other", "dim"),
     "eigvalsh": ("UPLO",),
@@ -162,9 +201,7 @@ _SIGNATURE = {
     "conv_transpose1d": ("weight", "bias", "stride", "padding"),
     "conv_transpose2d": ("weight", "bias", "stride", "padding"),
     "conv_transpose3d": ("weight", "bias", "stride", "padding"),
-    "flip": ("dims",),
     "roll": ("shifts", "dims"),
-    "norm": ("p", "dim", "keepdim"),
     "diff": ("n", "dim", "prepend", "append"),
     # Where the names diverge — Python has `rounding_mode` and JavaScript has
     # `roundingMode`. `_SIGNATURE` writes **torch's name** and follows borch.ts's
@@ -180,14 +217,9 @@ _SIGNATURE = {
     "gather": ("dim", "index", "sparse_grad"),
     "index_select": ("dim", "index"),
     "narrow": ("dim", "start", "length"),
-    "transpose": ("dim0", "dim1"),
-    "swapdims": ("dim0", "dim1"),
     "movedim": ("source", "destination"),
-    "repeat_interleave": ("repeats", "dim", "output_size"),
     "cat": ("dim",),
     "stack": ("dim",),
-    "split": ("size", "dim"),
-    "chunk": ("chunks", "dim"),
     "unbind": ("dim",),
     "conv1d": ("weight", "bias", "stride", "padding"),
     "conv2d": ("weight", "bias", "stride", "padding"),
@@ -206,10 +238,19 @@ _SIGNATURE = {
     # time, while the thirteen rare ones did from the start — the tutorials use
     # the default, so nobody asked.
     "smooth_l1_loss": ("target", "beta", "reduction"),
-    "l1_loss": ("target", "reduction"),
-    "mse_loss": ("target", "reduction"),
-    "bce_with_logits": ("target", "reduction"),
-    "binary_cross_entropy_with_logits": ("target", "reduction"),
+    # **`weight` is at the end on these three**, which is where borch.ts puts it —
+    # torch's functional keeps it last too, after `reduction`, so the positions line
+    # up and only the two legacy flags in front of `reduction` are the binding's
+    # to absorb.
+    "l1_loss": ("target", "reduction", "weight"),
+    "mse_loss": ("target", "reduction", "weight"),
+    # The same tail on the binary pair, now that borch.ts answers them: `weight`
+    # scales the whole element and `pos_weight` the positive term alone. Both were a
+    # refusal here and had no seat, so a caller who gave one by keyword met *does not
+    # take keyword arguments* rather than the refusal that was meant for them.
+    "bce_with_logits": ("target", "reduction", "weight", "pos_weight"),
+    "binary_cross_entropy_with_logits": ("target", "reduction", "weight",
+                                         "pos_weight"),
     # **These two had `ignore_index` missing from the middle** and it did not raise.
     # borch.ts is `nllLoss(target, ignoreIndex = -100, reduction = "mean")`, so
     # `nll_loss(x, t, reduction="none")` handed the string `"mean"`… no: it handed
@@ -220,13 +261,11 @@ _SIGNATURE = {
     # A slot whose type is wide enough to swallow the wrong value is the quietest of
     # the positional failures: a string into a string slot is invisible, a string into
     # a *number* slot is invisible too when the number is only ever compared.
-    "nll_loss": ("target", "ignore_index", "reduction"),
-    "cross_entropy": ("target", "ignore_index", "reduction", "label_smoothing"),
-    "huber_loss": ("target", "delta", "reduction"),
+    "nll_loss": ("target", "ignore_index", "reduction", "weight"),
+    "cross_entropy": ("target", "ignore_index", "reduction", "label_smoothing",
+                      "weight"),
+    "huber_loss": ("target", "delta", "reduction", "weight"),
     "interpolate": ("scale_factor",),
-    "max": ("dim", "keepdim"),
-    "min": ("dim", "keepdim"),
-    "aminmax": ("dim",),
     # Boolean reductions and counting. **The dimension itself was missing for a
     # long time** — passing one had it quietly discarded and the whole tensor
     # reduced.
@@ -238,17 +277,19 @@ _SIGNATURE = {
     "nonzero": ("as_tuple",),
     "kthvalue": ("k", "dim", "keepdim"),
     "quantile": ("q", "dim", "keepdim", "interpolation"),
-    "index_fill": ("dim", "index", "value"),
-    "scatter": ("dim", "index", "src"),
     "cumulative_trapezoid": ("dim",),
     "diagonal": ("offset",),
-    "squeeze": ("dim",),
     "expand": ("shape",),
     "unflatten": ("dim", "sizes"),
     # **`quantile` was in this table twice**, thirteen lines apart and with the same
     # value, so the second silently won and the first was dead. Identical, nothing
     # diverged; the next edit to either one would have. One row now, up with
     # `kthvalue`.
+    #
+    # **`squeeze` was the same, and it was still here when this was written** — the
+    # note above it did not stop the next one, because a note is not a check. Both
+    # copies went out with the twenty-three, and the reachability test is what a
+    # third one meets.
     "add_": ("other", "alpha"),
     "sub_": ("other", "alpha"),
     "add": ("other", "alpha"),
@@ -262,13 +303,8 @@ _SIGNATURE = {
     "slice_scatter": ("src", "dim", "start", "end", "step"),
     "diagonal_scatter": ("src", "offset", "dim1", "dim2"),
     "diag_embed": ("offset", "dim1", "dim2"),
-    "tensor_split": ("indices_or_sections", "dim"),
-    "split_with_sizes": ("split_sizes", "dim"),
-    "unique_consecutive": ("return_inverse", "return_counts", "dim"),
     "masked_scatter": ("mask", "source"),
     "masked_scatter_": ("mask", "source"),
-    "index_put": ("indices", "values", "accumulate"),
-    "index_put_": ("indices", "values", "accumulate"),
     "index_reduce": ("dim", "index", "source", "reduce", "include_self"),
     "scatter_reduce": ("dim", "index", "src", "reduce", "include_self"),
     "put": ("index", "source", "accumulate"),
@@ -295,13 +331,16 @@ _SIGNATURE = {
     "triangular_solve": ("A", "upper", "transpose", "unitriangular"),
     "orgqr": ("input2",),
     "ormqr": ("tau", "other", "left", "transpose"),
-    "lobpcg": ("k", "largest"),
+    # **`B` and `X` sit behind `largest` over there and in front of it in torch.**
+    # torch's order is `(A, k, B, X, …, largest, …)`; borch.ts keeps the two it had
+    # first and adds the pair at the end, so this table is what puts each word where
+    # it means the same thing.
+    "lobpcg": ("k", "largest", "B", "X"),
     "svd_lowrank": ("q", "niter", "M"),
     "pca_lowrank": ("q", "center", "niter"),
     # Statistics. borch.ts's argument order.
     "histc": ("bins", "min", "max"),
     "histogram": ("bins", "range", "weight", "density"),
-    "histogramdd": ("bins",),
     "mode": ("dim", "keepdim"),
     "nanmedian": ("dim", "keepdim"),
     "gradient": ("spacing", "dim", "edge_order"),
@@ -425,6 +464,15 @@ def positional(name, args, kw):
         if clash:
             raise TypeError(
                 f"{name}() got multiple values for argument '{clash[0]}'")
+        # **A keyword with no seat in the row was dropped without a word**, which is
+        # the same silence as a surplus positional in JavaScript and the thing this
+        # whole table exists to prevent. `avg_pool2d(x, 2, dilation=2)` — an argument
+        # torch does not have and answers with a `TypeError` — came back as an
+        # ordinary pooling here. torch's wording, so a caller meets the same sentence.
+        stray = [key for key in kw if key not in order]
+        if stray:
+            raise TypeError(
+                f"{name}() got an unexpected keyword argument '{sorted(stray)[0]}'")
         for i, key in enumerate(order):
             if key in kw:
                 while len(out) <= i:
@@ -661,7 +709,19 @@ def _made(out, kw):
     **Gathering it into one place is the point.** `zeros`, `ones`, `full`, `eye`
     and `linspace` each carried the same defect, and left as five copies the next
     fix reaches one of them.
+
+    **`device=` was the same defect one argument over**, and it is handled here for
+    the same reason. `zeros(2, device="cuda")` came back a tensor on the only device
+    there is, with no exception — the values right and the claim about where they
+    are false. The core's `_only_cpu` is the rule, so the two sides cannot part on
+    which devices exist.
     """
+    # Imported here rather than at the top: `_ops` is loaded while `borch` is still
+    # half initialised in Pyodide, and the note beside `_fft` records what a
+    # top-level import of the parent costs there.
+    from borch._base import _only_cpu
+
+    _only_cpu("factory", kw.get("device"))
     t = wrap(out)
     dt = kw.get("dtype")
     if dt is not None:
@@ -1284,45 +1344,84 @@ def manual_seed(seed):
 
 
 class Generator:
-    """For keeping a separate stream, as in
-    `random_split(..., generator=g)`."""
+    """A stream of random numbers of its own, as in `random_split(..., generator=g)`.
+
+    **The core's class carries the same correction** — it built a fresh
+    `default_rng(seed)` on every `rng()` call, so two draws from one generator
+    returned the same numbers where torch's advance. The two are kept in step by
+    hand rather than shared because this side's `manual_seed` also reaches into
+    borch.ts, and a subclass that inherited would hide that.
+    """
 
     def __init__(self, device=None):
         self.seed = 0
+        self._rng = _np.random.default_rng(0)
 
     def manual_seed(self, seed):
         self.seed = seed
+        self._rng = _np.random.default_rng(seed)
         return self
 
+    def initial_seed(self):
+        return self.seed
+
     def rng(self):
-        return _np.random.default_rng(self.seed)
+        return self._rng
+
+
+def _stream(generator):
+    """The stream to draw from: the generator's own, or the global one. A generator
+    must not disturb the global stream, which is what keeping them apart means."""
+    return _rng if generator is None else generator.rng()
 
 
 def _shaped(shape):
     return shape[0] if len(shape) == 1 and isinstance(shape[0], (list, tuple)) else shape
 
 
-def randn(*shape, **kw):
+def randn(*shape, out=None, requires_grad=False, dtype=None, device=None,
+          generator=None):
     """Normal random numbers. **borch.ts has none, so they are made here.**
 
     The golden uses this only in error cases, where it looks at **whether it
     throws** rather than at values (`L.randn(3, 4) @ L.randn(3, 2)`). Once a case
     asks about values, this belongs in borch.ts properly — what is here goes
     through the CPU once.
+
+    **The `**kw` bag is gone, and `generator=` is why.** A bag is the only thing
+    that can swallow a keyword: `randn(3, generator=g)` was accepted and the
+    generator discarded, so two generators carrying the same seed produced
+    different numbers while the call looked exactly like torch's. `_no_out`'s own
+    docstring says the bags were removed for this reason; these two still had them.
     """
-    _no_out(kw.get("out"))
+    _no_out(out)
+    from borch._base import _needs_float_dtype
     from ._base import tensor as _t
 
-    return _t(_rng.standard_normal(tuple(_shaped(shape))).astype("float32"),
-              requires_grad=kw.get("requires_grad", False))
+    _needs_float_dtype("normal_kernel_cpu", dtype)
+    return _made(_t(_stream(generator).standard_normal(
+        tuple(_shaped(shape))).astype("float32")),
+        {"dtype": dtype, "device": device, "requires_grad": requires_grad})
 
 
-def rand(*shape, **kw):
-    _no_out(kw.get("out"))
+def rand(*shape, out=None, requires_grad=False, dtype=None, device=None,
+         generator=None):
+    """**These two stood outside `_made`, and it cost two arguments.**
+
+    `device=` was the first: `rand(2, device="cuda")` answered where `zeros` had
+    stopped, because the rule lives in `_made` and these did not go through it. The
+    fix put `_only_cpu` here by hand — which left `dtype=` still unread, so
+    `rand(3, dtype=torch.int64)` came back float32. Patching one argument at the
+    door a shared seam already guards is how the second one survived; they go
+    through the seam now, and the next argument added to it reaches them too.
+    """
+    _no_out(out)
+    from borch._base import _needs_float_dtype
     from ._base import tensor as _t
 
-    return _t(_rng.random(tuple(_shaped(shape))).astype("float32"),
-              requires_grad=kw.get("requires_grad", False))
+    _needs_float_dtype("check_uniform_bounds", dtype)
+    return _made(_t(_stream(generator).random(tuple(_shaped(shape))).astype("float32")),
+                 {"dtype": dtype, "device": device, "requires_grad": requires_grad})
 
 
 def _no_out(out):
@@ -1345,7 +1444,7 @@ def _no_out(out):
 
 
 def randint(low, high=None, size=(), *, out=None, dtype=None,
-            requires_grad=False):
+            requires_grad=False, generator=None):
     """**`dtype` and `requires_grad` were falling into `**kw`.** torch declares both,
     keyword-only, and the label that came out here was whatever the body produced —
     `int64`, which is torch's default, so the values and the label agreed and nothing
@@ -1356,15 +1455,15 @@ def randint(low, high=None, size=(), *, out=None, dtype=None,
 
     if high is None:
         low, high = 0, low
-    made = _t(_rng.integers(low, high, tuple(size)).astype("int64"))
+    made = _t(_stream(generator).integers(low, high, tuple(size)).astype("int64"))
     return _made(made, {"dtype": dtype, "requires_grad": requires_grad})
 
 
-def randperm(n, *, out=None, dtype=None, requires_grad=False):
+def randperm(n, *, out=None, dtype=None, requires_grad=False, generator=None):
     _no_out(out)
     from ._base import tensor as _t
 
-    return _made(_t(_rng.permutation(n).astype("int64")),
+    return _made(_t(_stream(generator).permutation(n).astype("int64")),
                  {"dtype": dtype, "requires_grad": requires_grad})
 
 
@@ -1460,12 +1559,24 @@ def matrix_power(x, n):
     return guarded(h.matrixPower, n)
 
 
-def quantile(x, q, dim=None, out=None):
-    """`q` may be one number or a list — borch.ts always takes a list."""
+def quantile(x, q, dim=None, keepdim=False, *, interpolation="linear", out=None):
+    """`q` may be one number or a list — borch.ts always takes a list.
+
+    **`dim` was a seat this body never read, and borch.ts refuses it by name.** So
+    the refusal existed one call away and the word stopped here: `quantile(x, 0.5,
+    dim=1)` came back the flattened scalar — one number where torch gives one per
+    row, with no exception and no hint that the axis was ignored. Forwarding it
+    makes borch.ts's *quantile(dim) is not here yet — it flattens* reachable, which
+    is what the caller has to be told.
+
+    `keepdim` and `interpolation` were not seats at all, so torch's positions landed
+    on nothing; both cross now, and `interpolation` is a thing borch.ts does.
+    """
     _no_out(out)
     one = isinstance(q, (int, float))
     qs = [float(v) for v in ([q] if one else q)]
-    out = guarded(handle(x).quantile, _to_js(qs))
+    out = guarded(handle(x).quantile, _to_js(qs), dim, bool(keepdim),
+                  str(interpolation))
     # **One number gives a scalar.** That is what torch does — an axis appears
     # only when asked with a list. borch.ts is always a list, so it is folded
     # here.
@@ -1571,13 +1682,22 @@ def flatten(x, start_dim=0, end_dim=-1, **kw):
     return guarded(h.reshape, _js_list(shape[:a] + [merged] + shape[b + 1:]))
 
 
-def squeeze(x, dim=None, **kw):
-    """With no `dim`, torch removes **every axis of length 1.** borch.ts does
-    one at a time."""
+def squeeze(x, *dim, **kw):
+    """With no `dim`, torch removes **every axis of length 1.**
+
+    **Several axes at once is torch's form too** — `x.squeeze(0, 2)` — and this
+    took one. borch.ts's `squeeze` is variadic now and the tuple spelling
+    (`squeeze((0, 2))`, which torch also takes) is unrolled here.
+    """
     h = handle(x)
-    dim = kw.get("dim", dim)
-    if dim is not None:
-        return guarded(h.squeeze, dim)
+    if "dim" in kw:
+        dim = (kw["dim"],)
+    if len(dim) == 1 and isinstance(dim[0], (tuple, list)):
+        dim = tuple(dim[0])
+    if dim and dim[0] is None:
+        dim = ()
+    if dim:
+        return guarded(h.squeeze, *[int(d) for d in dim])
     keep = [int(n) for n in h.shape if int(n) != 1]
     return guarded(h.reshape, _js_list(keep))
 
@@ -1624,23 +1744,55 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
     if kw.get("dtype") is not None:
         x = wrap(x).to(_dtype_to_make(kw["dtype"]))
     h = handle(x)
-    if dim is None and p == 2:
-        return guarded(h.norm)
+    rank = len(h.shape)
+
+    def _fold(t, how):
+        """One reduction over `dim`, **which may be several axes or none.**
+
+        borch.ts's `sumDim`/`amax`/`amin` take one axis, and this handed the tuple
+        straight through — `norm(x, dim=(1, 2))` reduced axis `(1, 2)`, which
+        JavaScript reads as neither and which came back the wrong rank. Folded one at
+        a time from the back, so the earlier indices stay valid, and squeezed at the
+        end when `keepdim` is off.
+
+        **With no `dim` and `keepdim` on, torch keeps every axis as a 1** — a 2×2 asked
+        for its Frobenius norm gives `(1, 1)` and not a scalar. That was the other
+        half of the same hole: the whole-tensor branch ignored the flag.
+        """
+        axes = (list(range(rank)) if dim is None
+                else [int(d) % rank for d in ((dim,) if isinstance(dim, int) else dim)])
+        out = t
+        for axis in sorted(axes, reverse=True):
+            out = how(out, axis)
+        if keepdim:
+            return out
+        return out
+
+    def _shape_after(t):
+        """`keepdim` off drops the folded axes; `_fold` already kept them."""
+        if keepdim:
+            return t
+        axes = {int(d) % rank for d in
+                (range(rank) if dim is None
+                 else ((dim,) if isinstance(dim, int) else dim))}
+        keep = [n for i, n in enumerate(handle(t).shape) if i not in axes]
+        return wrap(guarded(handle(t).reshape, _js_list([int(n) for n in keep])))
+
+    def _reduce(t, how):
+        return _shape_after(wrap(_fold(t, how)))
+
     if p == 2:
-        return guarded(handle(guarded(h.square).sumDim(dim, bool(keepdim))).sqrt)
+        return _reduce(guarded(h.square), lambda o, a: handle(o).sumDim(a, True)).sqrt()
     if p == 1:
-        got = guarded(h.abs)
-        return wrap(got.sum() if dim is None else got.sumDim(dim, bool(keepdim)))
+        return _reduce(guarded(h.abs), lambda o, a: handle(o).sumDim(a, True))
     if p == float("inf"):
-        got = guarded(h.abs)
-        return wrap(got.max() if dim is None else got.amax(dim, bool(keepdim)))
+        return _reduce(guarded(h.abs), lambda o, a: handle(o).amax(a, True))
     # The three below were opened alongside fixing the place where the core
     # quietly produced the 2-norm. Fixing the core alone makes **the three
     # diverge** — the golden asks all three implementations the same thing, so a
     # case only one of them can answer cannot go in at all.
     if p == float("-inf"):
-        got = guarded(h.abs)
-        return wrap(got.min() if dim is None else got.amin(dim, bool(keepdim)))
+        return _reduce(guarded(h.abs), lambda o, a: handle(o).amin(a, True))
     if p == 0:
         got = handle(x)
         return wrap(got.countNonzero() if dim is None
@@ -1648,21 +1800,37 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
     if p in (None, "fro"):
         return norm(x, 2, dim, keepdim)
     if p == "nuc":
-        raise NotImplementedError(
-            "norm('nuc') is not here yet — it is the sum of singular values and needs an "
-            "SVD. It is not approximated")
-    powed = handle(guarded(handle(guarded(h.abs)).powScalar, float(p)))
-    total = powed.sum() if dim is None else powed.sumDim(dim, bool(keepdim))
-    return wrap(handle(wrap(total)).powScalar(1.0 / float(p)))
+        # **The refusal said it needs an SVD, and borch.ts has had one.** `svdvals`
+        # and `matrixNorm` are both over there and both asynchronous, which is what
+        # `settle` exists for — `guarded` awaits through `run_sync`. The reason named
+        # a computation rather than a gap, and the computation was one call away.
+        #
+        # torch's two checks, in torch's order and with torch's wording: the rank
+        # first, then the count of axes. On a 1-D with no `dim` the axis list is one
+        # long and torch still says *at least 2 dimensions*.
+        axes = (tuple(range(rank)) if dim is None
+                else tuple(int(d) for d in
+                           ((dim,) if isinstance(dim, int) else dim)))
+        if rank < 2:
+            raise RuntimeError("linalg.matrix_norm: The input tensor A must have "
+                               "at least 2 dimensions.")
+        if len(axes) != 2:
+            raise RuntimeError("linalg.matrix_norm: dim must be a 2-tuple. Got "
+                               + " ".join(str(a) for a in axes))
+        return wrap(guarded(h.matrixNorm, "nuc", _js_list(list(axes)),
+                            bool(keepdim)))
+    powed = wrap(guarded(handle(guarded(h.abs)).powScalar, float(p)))
+    total = _reduce(handle(powed), lambda o, a: handle(o).sumDim(a, True))
+    return wrap(handle(total).powScalar(1.0 / float(p)))
 
 
 def transpose(x, dim0=None, dim1=None, **kw):
-    """borch.ts's `transpose()` is **2-D only** and takes no axes.
+    """torch swaps two axes at any rank, and this builds the permutation.
 
-    torch swaps two axes at any rank. Passing axes had them discarded; at rank 2
-    the answer happens to match and at rank 3 and up borch.ts throws, so it was
-    never quietly wrong. Still, `x.transpose(1, 2)` is something torch code does
-    all the time, so it is matched here.
+    **The note here said borch.ts's `transpose()` is 2-D only and takes no axes.**
+    That was true and stopped being true: that side takes `(dim0?, dim1?)` now.
+    The permutation is still built on this side rather than handed over, because
+    `swapdims` below shares it and the two spellings must not part.
     """
     dim0 = kw.get("dim0", dim0)
     dim1 = kw.get("dim1", dim1)
@@ -1898,21 +2066,21 @@ def empty_like(t, **kw):
     return _kept(zeros(*_shape_list(t)), kw)
 
 
-def rand_like(t, **kw):
+def rand_like(t, generator=None, **kw):
     _no_out(kw.get("out"))
-    return _kept(rand(*_shape_list(t)), kw)
+    return _kept(rand(*_shape_list(t), generator=generator), kw)
 
 
-def randn_like(t, **kw):
+def randn_like(t, generator=None, **kw):
     _no_out(kw.get("out"))
-    return _kept(randn(*_shape_list(t)), kw)
+    return _kept(randn(*_shape_list(t), generator=generator), kw)
 
 
-def randint_like(t, low, high=None, **kw):
+def randint_like(t, low, high=None, generator=None, **kw):
     _no_out(kw.get("out"))
     if high is None:
         low, high = 0, low
-    return _kept(randint(low, high, tuple(_shape_list(t))), kw)
+    return _kept(randint(low, high, tuple(_shape_list(t)), generator=generator), kw)
 
 
 def scalar_tensor(value, **kw):
@@ -1972,7 +2140,13 @@ def isreal(t):
 
 
 def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
-    return wrap(guarded(handle(wrap(a)).isclose, handle(wrap(b)), rtol, atol))
+    """**`equal_nan` stopped at this line.** borch.ts's `isclose` has taken it all
+    along and `allclose` next door forwards it, so the check existed and the word
+    never reached it: `isclose(nan, nan, equal_nan=True)` came back `False` where
+    torch says `True`. Two spellings of one question, one of them carrying the
+    argument."""
+    return wrap(guarded(handle(wrap(a)).isclose, handle(wrap(b)), rtol, atol,
+                        bool(equal_nan)))
 
 
 def isin(elements, test_elements):
@@ -2349,7 +2523,7 @@ def histogramdd(t, bins=10, out=None):
     return out
 
 
-def normal(mean=0.0, std=1.0, size=None, **kw):
+def normal(mean=0.0, std=1.0, size=None, generator=None, **kw):
     """A normal sample. **With `std` at 0 it is the mean itself.**
 
     `dtype=` and `requires_grad=` were being swallowed by `**kw` — both times the
@@ -2359,13 +2533,14 @@ def normal(mean=0.0, std=1.0, size=None, **kw):
     _no_out(kw.get("out"))
     from ._base import tensor as _t
 
+    stream = _stream(generator)
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
         m = _np.asarray(wrap(mean).numpy(), dtype=_np.float64)
         s = _np.asarray(wrap(std).numpy(), dtype=_np.float64)
         m, s = _np.broadcast_arrays(m, s)
-        return _made(_t(_rng.normal(m, s).astype(_np.float32)), kw)
+        return _made(_t(stream.normal(m, s).astype(_np.float32)), kw)
     shape = () if size is None else tuple(size)
-    return _made(_t(_rng.normal(float(mean), float(std), shape).astype(_np.float32)), kw)
+    return _made(_t(stream.normal(float(mean), float(std), shape).astype(_np.float32)), kw)
 
 
 def bernoulli(t, p=None, *, generator=None, out=None):
@@ -2383,11 +2558,43 @@ def bernoulli(t, p=None, *, generator=None, out=None):
 
     if out is not None:
         raise NotImplementedError("`bernoulli(out=…)` is not carried across")
-    rng = generator.rng() if generator is not None else _rng
+    rng = _stream(generator)
     probs = (_np.full(tuple(int(v) for v in handle(wrap(t)).shape), float(p))
              if p is not None
              else _np.asarray(wrap(t).numpy(), dtype=_np.float64))
     return _t((rng.random(probs.shape) < probs).astype(_np.float32))
+
+
+def multinomial(probs, num_samples, replacement=True, *, generator=None, out=None):
+    """Draw indices in proportion to the weights.
+
+    **The name was not on this side at all**, so `multinomial` fell through to
+    borch.ts, which has no such name either, and came back *borch.ts does not have
+    `multinomial`* — a sentence about the far side for something the core has had
+    all along. Nothing asked, because no case did.
+
+    Drawn here rather than over there for `bernoulli`'s reason: the sampling is one
+    CPU pass over weights already coming down, and a WGSL kernel for it would be a
+    second copy of a distribution to keep in step.
+    """
+    _no_out(out)
+    from ._base import tensor as _t
+
+    from borch._ops import _multinomial_checks
+
+    stream = _stream(generator)
+    p = _np.asarray(wrap(probs).numpy(), dtype=_np.float64)
+    # **The core's four checks, borrowed rather than retyped.** Written again here
+    # they would be a second copy of torch's wording to keep in step, and the core's
+    # own copy had just been found accepting `replacement=False` and ignoring it.
+    _multinomial_checks(p, num_samples, replacement)
+    p = p / p.sum(axis=-1, keepdims=True)
+    if p.ndim == 1:
+        drawn = stream.choice(len(p), size=num_samples, replace=bool(replacement), p=p)
+        return _t(drawn.astype("int64"))
+    rows = [stream.choice(p.shape[-1], size=num_samples, replace=bool(replacement), p=row)
+            for row in p]
+    return _t(_np.asarray(rows, dtype=_np.int64))
 
 
 def bernoulli_(t, p=0.5, generator=None, **kw):
@@ -2404,7 +2611,7 @@ def bernoulli_(t, p=0.5, generator=None, **kw):
     from ._base import tensor as _t
 
     # As `bernoulli` above: the stream the caller asked for, not always the global one.
-    rng = generator.rng() if generator is not None else _rng
+    rng = _stream(generator)
     got = wrap(t)
     shape = tuple(int(v) for v in handle(got).shape)
     return _t((rng.random(shape) < p).astype(_np.float32))
@@ -2495,10 +2702,13 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,
 def istft(input, n_fft, hop_length=None, win_length=None, window=None,
           center=True, normalized=False, onesided=None, length=None,
           return_complex=False):
+    """**`return_complex` stopped at this line** — the seat was here, the options
+    object carried the name, and the word was never put in it. borch.ts reads it now
+    and the two-sided branch there was running a forward transform besides."""
     return wrap(guarded(
         _ts.istft, handle(input), int(n_fft),
         _stft_options(hop_length, win_length, window, center, None,
-                      normalized, onesided, None, length)))
+                      normalized, onesided, return_complex, length)))
 
 
 # **`torch.fft` is a namespace.** It is a module over in borch.ts too, so it can
@@ -2716,17 +2926,23 @@ def dequantize(input):                                    # noqa: A002
     return wrap(guarded(handle(input).dequantize))
 
 
-def resize_as_(input, other):                             # noqa: A002
-    """In place, to `other`'s shape. **The values in the added cells are
+def resize_as_(input, the_template, memory_format=None):  # noqa: A002
+    """In place, to `the_template`'s shape. **The values in the added cells are
     undefined** (measured).
+
+    The argument is `the_template` because that is the name torch registers — see
+    the method of the same name in `_base.py`.
 
     **`copyFrom` cannot do it** — that needs the same element count, and changing
     the element count is the whole of this operation. In-placeness is kept by
     swapping the handle on the Python side: the object the caller holds stays,
     and only the buffer underneath changes.
     """
+    if memory_format is not None:
+        from borch._base import _unsupported
+        _unsupported("Tensor.resize_as_(memory_format=…)")
     x = wrap(input)
-    want = wrap(other).shape
+    want = wrap(the_template).shape
     flat = x.numpy().reshape(-1)
     need = 1
     for d in want:
@@ -2809,9 +3025,9 @@ def vdot(a, b, out=None):
 
 
 def kron(a, b, out=None):
-    """**1-D only.** The version that lived here looked at one axis, so 2-D
-    input gave a quietly wrong answer — moving it over there turned that place
-    into a refusal."""
+    """Any rank. The version that lived here looked at one axis, so 2-D input gave
+    a quietly wrong answer — moving it over there turned that place into a refusal,
+    and the refusal is gone now that borch.ts interleaves the two shapes."""
     _no_out(out)
     return wrap(guarded(handle(wrap(a)).kron, handle(wrap(b))))
 
@@ -2903,11 +3119,16 @@ def grid_sampler(x, grid, interpolation_mode=0, padding_mode=0,
 
 def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
                             ceil_mode=False):
+    """**The three window arguments go through and are refused one level down.**
+
+    They used to be checked here with a message of this file's own, which put two
+    spellings of one refusal in two places — and the one a caller met depended on
+    which name they had reached for. `_pool_with_indices` says why: the positions come
+    from the window-list machinery, where a window is `[start, end)` with no step.
+    """
     from . import _nn
-    if padding or dilation != 1 or ceil_mode:
-        raise RuntimeError(
-            "max_pool1d_with_indices(padding, dilation, ceil_mode) is not here yet.")
-    return _nn.functional.max_pool1d_with_indices(x, kernel_size, stride)
+    return _nn.functional.max_pool1d_with_indices(
+        x, kernel_size, stride, padding, dilation, ceil_mode)
 
 
 def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
@@ -2992,12 +3213,20 @@ def _spread_index(index, dim, shape):
     return broadcast_to(wrap(guarded(handle(index).reshape, _js_list(lifted))), shape)
 
 
-def scatter(t, dim, index, src):
+def scatter(t, dim, index, src, reduce=None):
     """**Overwrites** at the positions the indices point at. On a collision the
-    last write survives."""
+    last write survives.
+
+    `reduce` is torch's deprecated overload — `'add'` or `'multiply'`, combining
+    onto what is already there. It goes to borch.ts's own `scatter`, which refuses
+    to differentiate exactly where torch does.
+    """
     t = wrap(t)
     if not isinstance(src, Tensor):
         src = zeros(*[int(n) for n in handle(index).shape]) + float(src)
+    if reduce is not None:
+        return wrap(guarded(handle(t).scatter, dim, handle(index), handle(src),
+                            reduce))
     return wrap(guarded(handle(t).scatterSet, dim, handle(index), handle(src)))
 
 
@@ -3105,15 +3334,35 @@ def where(cond, a, b):
     return guarded(handle(a).where, handle(cond), handle(b))
 
 
-def layer_norm(x, shape=None, weight=None, bias=None, eps=1e-5, **kw):
-    """torch takes **the shape to normalise over** and borch.ts takes an axis.
+def layer_norm(x, normalized_shape=None, weight=None, bias=None, eps=1e-5):
+    """torch takes **the shape to normalise over** and borch.ts takes a count.
 
-    torch's rule counts from the back, as in `(length of the last axis,)`, so the
-    starting axis is as many from the end as the given shape is long. Forwarded
-    as-is it asks for axis 4 on a rank-2 tensor.
+    **Two things were wrong and one of them had no seat at all.**
+
+    `weight` and `bias` were in the signature and the body never read them, so
+    `F.layer_norm(x, shape, w, b)` came back unscaled and unshifted — real numbers,
+    the right shape, no exception, and a transformer block silently missing its
+    learned affine.
+
+    And the fold was `layerNorm(-len(shape))`, which folds **one axis, that far from
+    the end** — for `(3, 4)` it took the mean over axis −2 alone. torch folds the
+    last two *together*, which is `layerNormOver(2)` over there; the two agree at one
+    axis, which is every case that asked.
+
+    The refusals come from the core so there are not two copies of four wordings.
     """
-    dim = -len(shape) if isinstance(shape, (list, tuple)) and shape else -1
-    return guarded(handle(x).layerNorm, dim, kw.get("eps", eps))
+    from borch._ops import _layer_norm_checks
+
+    h = handle(x)
+    full = [int(n) for n in h.shape]
+    shape = _layer_norm_checks(
+        full, normalized_shape,
+        *[None if v is None else [int(n) for n in handle(v).shape]
+          for v in (weight, bias)])
+    out = wrap(guarded(h.layerNormOver, len(shape), eps))
+    if weight is not None:
+        out = out * weight
+    return out + bias if bias is not None else out
 
 
 def repeat_interleave(x, repeats, dim=None):
@@ -3216,24 +3465,70 @@ class _MinMax:
         yield self.min
         yield self.max
 
+    def __len__(self):
+        return 2
+
     def __getitem__(self, i):
         return (self.min, self.max)[i]
+
+    def __repr__(self):
+        """**It had none**, like the `{values, indices}` pair next door and the
+        core's two — four classes, one gap. `aminmax` is the one member of this
+        family torch names `min` and `max` rather than `values` and `indices`, which
+        is why it is a class of its own and why the line has to be written twice."""
+        return (f"torch.return_types.aminmax(\n"
+                f"min={self.min!r},\nmax={self.max!r})")
 
 
 # **`torch.linalg` is a namespace.** Most of it exists as tensor methods, and the
 # ones whose sizes depend on the values (`cholesky`, `svd`, `eigh`) are
 # asynchronous, so `settle` waits on them.
+# **Answered by borch.ts's `linalg` namespace rather than by a tensor method.**
+#
+# Each of these five has an argument the method next to it does not take, and every one
+# of those arguments changes the answer:
+#
+#     norm         `ord` with no `dim` on a matrix is the largest singular value there
+#                  and the elementwise p-norm on the method — 16.848 against 16.882
+#     lu           `pivot=False` is a different factorisation, refused
+#     lu_solve     `left`/`adjoint` are different systems, and each is answered now
+#     tensorsolve  `dims` reorders the axes before the fold, and it is answered now
+#     lstsq        `rcond` is the cutoff and `driver` picks among four algorithms
+#
+# Reached through the method the extra words are handed to JavaScript and dropped, so
+# the default answer comes back under the name of a computation nobody ran. The values
+# are named here rather than derived because `lu_solve` is `luSolveFactored` over there.
+_VIA_NAMESPACE = {
+    "norm": "norm",
+    "lu": "lu",
+    "lu_solve": "luSolve",
+    "tensorsolve": "tensorsolve",
+    "lstsq": "lstsq",
+}
+
+
 class _Linalg:
     # Code that meets a singular matrix wraps it in
     # `except linalg.LinAlgError`. Without this here that wrapper cannot find the
     # name and the program dies — needed before any value is.
     LinAlgError = _LinAlgError
 
-    def lstsq(self, a, b):
+    def lstsq(self, a, b, rcond=None, *, driver=None):
         """torch gives an object holding `.solution` — borch.ts gives the answer
-        directly."""
+        directly.
+
+        **This one cannot go through `__getattr__` even though it is in
+        `_VIA_NAMESPACE`**, because the result has to be dressed as torch's named
+        tuple before it is handed back. It reaches the same namespace function the
+        table names; only the wrapping is here.
+
+        `rcond` and `driver` were absent, so `linalg.lstsq(A, B, 0.9)` was **a third
+        argument JavaScript discarded** and the uncut answer came back — 3.5 where
+        torch says 0.77, under an argument whose whole purpose is to move it.
+        """
         from ._base import _Fields
-        got = settle(handle(a).lstsq(handle(b)))
+        ns = getattr(_js.borch, "linalg", None)
+        got = settle(ns.lstsq(handle(a), handle(b), rcond, driver or "gelsy"))
         out = _Fields.__new__(_Fields)
         object.__setattr__(out, "_order", ["solution"])
         object.__setattr__(out, "_d", {"solution": got})
@@ -3264,9 +3559,15 @@ class _Linalg:
         return wrap(guarded(handle(a).diagonal, offset, dim1, dim2))
 
     def tensorsolve(self, a, b, dims=None):
-        if dims is not None:
-            raise RuntimeError("tensorsolve(dims) is not here yet")
-        return wrap(guarded(handle(a).tensorSolve, handle(b)))
+        """**The refusal moved to borch.ts and this forwards to it.**
+
+        It used to raise here, which was right while borch.ts had no seat for `dims`
+        at all — but it meant two libraries deciding one question, and a caller
+        reaching borch.ts directly got the unmoved answer in silence. One rule, one
+        place; this only carries the word across.
+        """
+        ns = getattr(_js.borch, "linalg", None)
+        return wrap(guarded(ns.tensorsolve, handle(a), handle(b), dims))
 
     def tensorinv(self, a, ind=2):
         return wrap(guarded(handle(a).tensorInv, ind))
@@ -3296,7 +3597,10 @@ class _Linalg:
         return guarded(handle(a).ldlFactorEx)
 
     def ldl_solve(self, ld, pivots, b, hermitian=False):
-        return wrap(guarded(handle(ld).ldlSolve, handle(b)))
+        # **The pivots were not handed over**, which was safe only while the
+        # factorisation refused every matrix that needed a swap. They are the
+        # difference between a right answer and a plausible one now.
+        return wrap(guarded(handle(ld).ldlSolve, handle(pivots), handle(b)))
 
     def householder_product(self, a, tau):
         return wrap(guarded(handle(a).householderProduct, handle(tau)))
@@ -3337,6 +3641,30 @@ class _Linalg:
                          "matrix_rank": "matrixRank"}.get(name, name))
 
         def call(x, *args, **kw):
+            # **`linalg.norm` is not the `norm` method and must not be routed to it.**
+            # With an `ord` and no `dim` on a matrix torch takes the largest singular
+            # value where the method takes the elementwise p-norm — 16.848 against
+            # 16.882 on `[[1..9]]`, near enough to read as rounding. The dispatch lives
+            # in borch.ts's `linalg` namespace, which `index.ts` exports, so this reaches
+            # the free function rather than reimplementing the rule a third time.
+            #
+            # All three implementations had it wired to the elementwise one. The golden
+            # case written for it caught borch.ts, then the core, then this.
+            #
+            # **The list grew and became a table.** `lu`, `luSolve` and `tensorsolve`
+            # each carry an argument in order to refuse it — `pivot`, `left`/`adjoint`,
+            # `dims` — and every one of those refusals lives in borch.ts's `linalg`
+            # namespace, not on the tensor. Reached by method the words are received by
+            # JavaScript and dropped, and the default answer comes back under the name
+            # of a computation nobody performed. That is the same failure `norm` was,
+            # one argument further in.
+            if name in _VIA_NAMESPACE:
+                ns = getattr(_js.borch, "linalg", None)
+                if ns is not None:
+                    # The free function takes the tensor first; the method took it as
+                    # the receiver.
+                    return guarded(getattr(ns, _VIA_NAMESPACE[name]), handle(x),
+                                   *positional(f"linalg.{name}", args, kw))
             fn = getattr(handle(x), js_name, None)
             if fn is None:
                 raise AttributeError(f"borch.ts does not have `{js_name}` (linalg.{name})")
@@ -3359,3 +3687,119 @@ class _Linalg:
 
 
 linalg = _Linalg()
+
+
+# ---------------------------------------------------------------- torch.special
+#
+# Twenty names, none of them arithmetic — every one is the second spelling torch
+# gives something this binding already answers to. The core's `_Special` carries the
+# reasoning; this side only has to route.
+#
+# **The name list is written out rather than forwarded blindly**, and that is the
+# whole of the care here. A `__getattr__` that passed anything through would make
+# `special.bessel_j0` resolve to `x.bessel_j0()` — a name torch has and this library
+# does not — and it would be **counted as present** by the survey while failing at
+# the first call. Thirty-six of this namespace's names are exactly that: real
+# arithmetic that is not here, declined by name in `tests/torch_gap.py`. Forwarding
+# without a list would quietly claim all thirty-six.
+class _Special:
+    """`torch.special`. Routing only — the bodies are the top-level ones.
+
+    **The first draft routed everything through the module's `__getattr__`, and one
+    browser run found three defects in it.** Worth keeping the account, because all
+    three came from the same wrong idea.
+
+    That door forwards a name to *the first argument's method* — torch's own
+    `torch.exp(x)` = `x.exp()` rule, and right for a unary op. It is wrong the moment
+    the first argument is not the tensor: `special.polygamma(1, x)` became
+    `(1).polygamma(x)` and reached the shader as `polygamma:NaN:1`, a WGSL parse error
+    six times over (`pow(y, NaN.0)`) and a `()` where a `(2, 2)` belonged. **This
+    module already has a correct `polygamma(n, input)`**, thirty lines up, and going
+    through the generic door deliberately stepped around it.
+
+    It is wrong a second way for keywords: the generic wrapper hands `**kwargs` to the
+    JS side, which takes positional arguments only, so `logit(x, eps=0.3)` and
+    `round(x, decimals=3)` both came back *does not take keyword arguments*.
+
+    So the ones carrying an argument are written out and forward positionally, and
+    only the plain unary ones are routed. **The unary door is safe for exactly the
+    reason the others were not** — there the first argument is the tensor, which is
+    what it assumes.
+    """
+
+    # The four torch spells differently here than at the top level. `expit` and
+    # `gammaln` are the statistics literature's names and resolve nowhere else.
+    _RENAMED = {"expit": "sigmoid", "gammaln": "lgamma", "psi": "digamma",
+                "modified_bessel_i0": "i0"}
+
+    # The unary ones, where routing is torch's rule rather than a guess.
+    _UNARY = frozenset("""
+        digamma erf erfc erfinv exp2 expit expm1 gammaln i0 log1p
+        modified_bessel_i0 psi sinc
+    """.split())
+
+    # ── the ones carrying an argument, written out ──────────────────────────
+
+    @staticmethod
+    def logit(input, eps=None, out=None):                       # noqa: A002
+        """`eps` clamps away from 0 and 1. **Positional through the door** — the JS
+        side takes no keywords."""
+        return __getattr__("logit")(input, eps, out=out)
+
+    @staticmethod
+    def round(input, decimals=0, out=None):                     # noqa: A002
+        """**`decimals` is missing from torch's docstring for this name and torch
+        reads it** (`round(0.34567, decimals=3)` → `0.346`, measured)."""
+        return __getattr__("round")(input, decimals, out=out)
+
+    @staticmethod
+    def logsumexp(input, dim, keepdim=False, out=None):         # noqa: A002
+        return __getattr__("logsumexp")(input, dim, keepdim, out=out)
+
+    @staticmethod
+    def xlogy(input, other, out=None):                          # noqa: A002
+        return __getattr__("xlogy")(input, other, out=out)
+
+    @staticmethod
+    def polygamma(n, input, out=None):                          # noqa: A002
+        """**`n` first, the tensor second** — torch's order, and the one the generic
+        door cannot honour because it sends the first argument to itself."""
+        return polygamma(n, input, out=out)
+
+    @staticmethod
+    def gammainc(input, other, out=None):                       # noqa: A002
+        """`igamma` under torch's `special` spelling — the same function."""
+        return igamma(input, other, out=out)
+
+    @staticmethod
+    def gammaincc(input, other, out=None):                      # noqa: A002
+        return igammac(input, other, out=out)
+
+    # **These two take `dtype=`, not `out=`.** Measured in real torch:
+    # `special.softmax(x, 1, out=…)` raises while the top-level `softmax` accepts one.
+    # Routed generically they would pick `out=` up from the core's `_TAKES_OUT` and
+    # accept a call torch refuses.
+    @staticmethod
+    def softmax(input, dim, dtype=None):                        # noqa: A002
+        return _resolve_name("softmax")(input, dim, dtype)
+
+    @staticmethod
+    def log_softmax(input, dim, dtype=None):                    # noqa: A002
+        return _resolve_name("log_softmax")(input, dim, dtype)
+
+    def __getattr__(self, name):
+        # **The list is written out rather than forwarded blindly.** A door that
+        # passed anything through would make `special.bessel_j0` resolve to
+        # `x.bessel_j0()` — a name torch has and this library does not — and it would
+        # be counted present by the survey while failing at the first call.
+        # Thirty-five of this namespace's names are exactly that.
+        if name not in self._UNARY:
+            raise AttributeError(
+                f"`special.{name}` is not in this subset. torch.special has 57 names "
+                "and 22 are here — the rest are Bessel, Airy, ndtr and the "
+                "orthogonal-polynomial families, which is arithmetic this library "
+                "does not carry. See tests/torch_gap.py.")
+        return __getattr__(self._RENAMED.get(name, name))
+
+
+special = _Special()

@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 356
+  "missing": 404
  },
  "modules": [
   {
@@ -123,6 +123,13 @@
     },
     {
      "kind": "type",
+     "name": "InterpolateMode",
+     "signature": "export type InterpolateMode = \"nearest\" | \"nearest-exact\" | \"area\" | \"linear\" | \"bilinear\" | \"bicubic\" | \"trilinear\"",
+     "doc": "How `interpolate` resamples. **`linear` and `trilinear` were absent because they\nwant a rank this function did not take** — it was written for `[N, C, H, W]`, and\nthose two are the 3-D and 5-D members of the same family. They are one separable\nkernel at three ranks and `interpolateLinear` is now that kernel, so all three are\nhere.\n\n`nearest` and `nearest-exact` differ by half an output cell; `area` is adaptive\naverage pooling under another name. `bicubic` is 4-D alone, as it is in torch.",
+     "members": []
+    },
+    {
+     "kind": "type",
      "name": "AtIndex",
      "signature": "export type AtIndex = number | null | Slice | Tensor | readonly number[]",
      "doc": "What can go into one axis of `at()`. The syntax is written down in\n`indexing.ts`.",
@@ -190,12 +197,25 @@
       {
        "name": "grad",
        "signature": "grad: Tensor | null",
-       "doc": ""
+       "doc": "`torch.autograd.grad` — the gradient **handed back rather than stored.**\n\n`backward()` accumulates into every leaf's `grad`. This returns the gradient\nand leaves every `grad` exactly as it found it, which is why torch has both: a\ngradient penalty, a meta-learning inner step and every physics-informed loss\nneed the gradient as a value to keep computing with, and must not disturb the\naccumulation the optimiser is about to step on.\n\n**It was absent from all three, with no reason ever written.** On the Python\nside `borch.autograd` raised `AttributeError: module 'borch' has no attribute\n'autograd'` — a sentence naming neither gradients nor what was missing, so a\nreader could not tell an absent feature from a typo.\n\n`createGraph` is not a parameter at all: it is the one thing this tape cannot\ndo, `backward` refuses it by name, and a second seat for the same refusal is a\nsecond wording to keep in step.",
+       "overloads": [
+        "static grad(outputs: Tensor | readonly Tensor[], inputs: Tensor | readonly Tensor[], gradOutputs?: Tensor | readonly (Tensor | null)[] | null, retainGraph?: boolean, allowUnused?: boolean, materializeGrads?: boolean): (Tensor | null)[]"
+       ],
+       "section": {
+        "ko": "Backward",
+        "en": "Backward"
+       }
       },
       {
        "name": "freed",
        "signature": "freed: boolean",
        "doc": ""
+      },
+      {
+       "name": "retainsGrad",
+       "signature": "retainsGrad: boolean",
+       "doc": "Set by `retainGrad()` — see there.",
+       "torch": "retains_grad"
       },
       {
        "name": "dtype",
@@ -1014,13 +1034,13 @@
       },
       {
        "name": "squeeze",
-       "signature": "squeeze(dim: number): Tensor",
-       "doc": "Removes an axis of size 1.",
+       "signature": "squeeze(...dim: number[]): Tensor",
+       "doc": "Removes the named axes when they are of size 1.\n\n**Two of torch's rules, both once absent.** `squeeze(0, 2)` names several axes,\nand an axis whose length is not 1 is **left alone** rather than refused —\n`x.squeeze(1)` on `[1, 2, 3]` gives `[1, 2, 3]` in torch and threw here.\n\nRefusing looks like the safer of the two and is not: it is torch's own answer\nthat is being refused, so a line copied from torch stops on a shape torch is\nhappy with. The core carried the same pair of gaps.",
        "section": {
         "ko": "Reductions",
         "en": "Reductions"
        },
-       "doc_ko": "크기 1 인 축을 뺀다."
+       "doc_ko": "이름 붙인 축이 길이 1 이면 없앤다.\n\n**torch 의 규칙 둘, 둘 다 없었다.** `squeeze(0, 2)` 처럼 축을 여러 개 부를 수 있고, 길이가 1 이 아닌 축은 거절이 아니라 **그냥 둔다** — `[1, 2, 3]` 에 `x.squeeze(1)` 은 torch 에서 `[1, 2, 3]` 이고 여기선 던졌다.\n\n거절이 더 안전해 보이지만 아니다. 거절당하는 것이 torch 자신의 답이라서, torch 에서 복사한 줄이 torch 는 괜찮은 모양에서 멈춘다. 코어도 같은 두 구멍을 갖고 있었다."
       },
       {
        "name": "reshape",
@@ -1711,23 +1731,23 @@
       {
        "name": "unfoldIm2col",
        "signature": "unfoldIm2col(kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor",
-       "doc": "Spreads windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.",
+       "doc": "Spreads windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.\n\n**A 3-D input is one unbatched sample**, which is torch's rule and was missing on\nboth sides — the core refused *anything but 4-D*, half right. `(2, 3, 4)` with a\n2×2 kernel comes back as `(8, 6)`: `(C·kh·kw, L)` with no batch axis. Anything\nelse is refused with torch's own wording.",
        "torch": "unfold_im2col",
        "section": {
         "ko": "Windows",
         "en": "Windows"
        },
-       "doc_ko": "창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`."
+       "doc_ko": "창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`.\n\n**3 차원 입력은 배치 없는 표본 하나다.** torch 의 규칙이고 양쪽 다 없었다 — 코어는 *4 차원이 아니면 전부* 를 거절하고 있었는데 절반만 맞았다. `(2, 3, 4)` 에 2×2 커널이면 `(8, 6)` 이 나온다: 배치 축 없는 `(C·kh·kw, L)`. 그 밖의 차원은 torch 자신의 문구로 거절한다."
       },
       {
        "name": "fold",
        "signature": "fold(outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor",
-       "doc": "Folds the spread back. **Overlapping positions are added** — that is\nwhat this function means.",
+       "doc": "Folds the spread back. **Overlapping positions are added** — that is\nwhat this function means.\n\n**The unbatched form is 2-D here, one rank below `unfoldIm2col`'s**, because this\nside has already folded the channel and the kernel into one axis. `(8, 6)` comes\nback as `(2, 3, 4)`; 4-D is refused, with torch's own wording.",
        "section": {
         "ko": "Windows",
         "en": "Windows"
        },
-       "doc_ko": "편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다."
+       "doc_ko": "편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다.\n\n**배치 없는 꼴은 여기서 2 차원**으로, `unfoldIm2col` 보다 한 랭크 아래다. 이쪽은 채널과 커널이 이미 한 축으로 접혀 있기 때문이다. `(8, 6)` 은 `(2, 3, 4)` 로 돌아오고, 4 차원은 torch 자신의 문구로 거절한다."
       },
       {
        "name": "bilinear",
@@ -1791,6 +1811,16 @@
         "en": "What the remaining layers use"
        },
        "doc_ko": "겹선형 확대.\n\n**`alignCorners` 가 값을 바꾼다.** 참이면 양 끝을 못 박고 그 사이를 고르게\n나누고, 거짓이면 칸의 가운데를 기준으로 잰다. `UpsamplingBilinear2d` 는 참이고\n`Upsample(mode='bilinear')` 의 기본값은 거짓이라, 이름만 보고 별명으로 두면\n가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다."
+      },
+      {
+       "name": "interpolateLinear",
+       "signature": "interpolateLinear(outDims: readonly number[], alignCorners: boolean, given?: readonly number[] | null): Tensor",
+       "doc": "`linear`, `bilinear` and `trilinear` — **one separable kernel at three ranks.**\n\nEach output cell is a weighted sum of the 2ⁿ input cells around it, the weight\nbeing the product of one per-axis fraction. `bilinearAxis` gives the two\nneighbours and the fraction for one axis; everything here is the product over the\naxes, which is what makes the three names one function.\n\n**`interpolateBilinear` wrote the two-axis case out by hand**, and being two-axis\nby construction is what made `linear` and `trilinear` read as absent. They are\nthis at one and three axes.",
+       "torch": "interpolate_linear",
+       "section": {
+        "ko": "What the remaining layers use",
+        "en": "What the remaining layers use"
+       }
       },
       {
        "name": "pixelShuffle",
@@ -2019,7 +2049,7 @@
       },
       {
        "name": "l1Loss",
-       "signature": "l1Loss(target: Tensor, reduction?: Reduction): Tensor",
+       "signature": "l1Loss(target: Tensor, reduction?: Reduction, weight?: Tensor): Tensor",
        "doc": "Absolute error.\n\n**`reduction` was missing here.** Thirteen rarely-used losses all took\nit and the four most used did not — the ones written later followed\ntorch's signature and the ones written first were never fixed. The\ntutorials use the default, so the table never asked either.",
        "torch": "l1_loss",
        "section": {
@@ -2030,7 +2060,7 @@
       },
       {
        "name": "mseLoss",
-       "signature": "mseLoss(target: Tensor, reduction?: Reduction): Tensor",
+       "signature": "mseLoss(target: Tensor, reduction?: Reduction, weight?: Tensor): Tensor",
        "doc": "Squared error.",
        "torch": "mse_loss",
        "section": {
@@ -2041,7 +2071,7 @@
       },
       {
        "name": "bceWithLogits",
-       "signature": "bceWithLogits(target: Tensor, reduction?: Reduction): Tensor",
+       "signature": "bceWithLogits(target: Tensor, reduction?: Reduction, weight?: Tensor, posWeight?: Tensor): Tensor",
        "doc": "Binary cross-entropy taking logits directly.\n\n**It does not compute `sigmoid` first and take the log.** That gives\n`log(0)` where the model is confident and the loss becomes infinite.\n`max(x,0) − x·y + log(1+exp(−|x|))` gives the same value without\noverflow — that is why this function exists separately.",
        "torch": "bce_with_logits",
        "section": {
@@ -2052,7 +2082,7 @@
       },
       {
        "name": "bce",
-       "signature": "bce(target: Tensor, reduction?: Reduction): Tensor",
+       "signature": "bce(target: Tensor, reduction?: Reduction, weight?: Tensor): Tensor",
        "doc": "Binary cross-entropy over **probabilities**, not logits. `torch.nn.BCELoss`.\n\n**torch clamps the log at −100, and the obvious guard is a different one.**\nThe core wrote `-(p + 1e-12).log()`, which cannot exceed 27.63 whatever `p`\nis — so every confident-and-wrong prediction reported the same loss as every\nother one, and at `p = 1e-8` the epsilon moved the answer in the fourth\ndecimal. Clamping the log's *output* caps the loss at 100 and leaves 1e-20\ntelling the truth (46.05).\n\nIt is `CrossEntropyLoss`'s defect a second time. Both had the guard and the\ndefect on the same line.\n\nPrefer `bceWithLogits` where you have logits: it is the numerically stable\npath and this one is reached only when the probabilities are what you hold.",
        "section": {
         "ko": "Moving elements",
@@ -2147,14 +2177,14 @@
       },
       {
        "name": "huberLoss",
-       "signature": "huberLoss(target: Tensor, delta?: number, reduction?: Reduction): Tensor",
-       "doc": "**It equals `smoothL1Loss` only at δ=1.**\n\nThe real relation is `huber(δ) = δ · smoothL1(β=δ)`. Measured at the\ndefaults alone, treating them as one function passes, so the golden\ncases ask with δ varied.",
+       "signature": "huberLoss(target: Tensor, delta?: number, reduction?: Reduction, weight?: Tensor): Tensor",
+       "doc": "**It equals `smoothL1Loss` only at δ=1.**\n\nThe real relation is `huber(δ) = δ · smoothL1(β=δ)`. Measured at the\ndefaults alone, treating them as one function passes, so the golden\ncases ask with δ varied.\n\n**`weight`'s `mean` divides by the count here** and by the sum of the weights on\n`l1Loss` and `mseLoss`. Measured, not inferred from the family.",
        "torch": "huber_loss",
        "section": {
         "ko": "Losses and distances",
         "en": "Losses and distances"
        },
-       "doc_ko": "**`smoothL1Loss` 와 δ=1 에서만 같다.**\n\n실제 관계는 `huber(δ) = δ · smoothL1(β=δ)` 다. 기본값으로만 재면 둘을 같은\n함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다."
+       "doc_ko": "**`smoothL1Loss` 와 δ=1 에서만 같다.**\n\n실제 관계는 `huber(δ) = δ · smoothL1(β=δ)` 다. 기본값으로만 재면 둘을 같은\n함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다.\n\n**`weight` 의 `mean` 은 여기서 개수로 나눈다.** `l1Loss` 와 `mseLoss` 는 가중치의\n합으로 나눈다 — 잰 것이지 계열에서 미루어 짐작한 것이 아니다."
       },
       {
        "name": "klDiv",
@@ -2517,7 +2547,7 @@
       },
       {
        "name": "nllLoss",
-       "signature": "nllLoss(target: Tensor, ignoreIndex?: number, reduction?: Reduction): Tensor",
+       "signature": "nllLoss(target: Tensor, ignoreIndex?: number, reduction?: Reduction, weight?: Tensor): Tensor",
        "doc": "The negative log-likelihood. `this` must already have been through\n`log_softmax`.\n\n**The graph breaks easily where the target position is extracted.**\nReturn the value detached and no gradient reaches the extracted slot,\nmaking the whole classification loss non-differentiable.",
        "torch": "nll_loss",
        "section": {
@@ -2528,7 +2558,7 @@
       },
       {
        "name": "crossEntropy",
-       "signature": "crossEntropy(target: Tensor, ignoreIndex?: number, reduction?: Reduction, labelSmoothing?: number): Tensor",
+       "signature": "crossEntropy(target: Tensor, ignoreIndex?: number, reduction?: Reduction, labelSmoothing?: number, weight?: Tensor): Tensor",
        "doc": "Straight from logits. `log_softmax` and `nll_loss` joined.",
        "torch": "cross_entropy",
        "section": {
@@ -2539,8 +2569,8 @@
       },
       {
        "name": "reduceIgnoring",
-       "signature": "reduceIgnoring(keep: Tensor, reduction: Reduction): Tensor",
-       "doc": "Fold, with the ignored rows already zeroed and `keep` marking which stayed.\n\n**The three reductions treat a skipped row differently and two of the three are\neasy to get right by accident.** `sum` is unaffected either way. `mean` has to\ndivide by the rows that remain, not by all of them — averaging with the zeros in\ngives a number too small by exactly that ratio and nothing about it looks wrong.\n`none` **keeps them as zeros**, because the shape is part of that answer.",
+       "signature": "reduceIgnoring(keep: Tensor, reduction: Reduction, rowWeight?: Tensor): Tensor",
+       "doc": "Fold, with the ignored rows already zeroed and `keep` marking which stayed.\n\n**The three reductions treat a skipped row differently and two of the three are\neasy to get right by accident.** `sum` is unaffected either way. `mean` has to\ndivide by the rows that remain, not by all of them — averaging with the zeros in\ngives a number too small by exactly that ratio and nothing about it looks wrong.\n`none` **keeps them as zeros**, because the shape is part of that answer.\n\n**A class weight replaces the denominator.** `mean` then divides by the sum of\nthe kept rows' weights rather than by how many rows were kept — measured, a batch\nwhose kept weights are `[0.5, 3]` and whose weighted sum is 6.1504 answers 1.0251,\nwhich is 6.1504/6 and not 6.1504/3. Both are ordinary-looking numbers.",
        "torch": "reduce_ignoring",
        "section": {
         "ko": "The addmm family",
@@ -2797,12 +2827,12 @@
       {
        "name": "pinverse",
        "signature": "pinverse(rcond?: number): Promise<Tensor>",
-       "doc": "**`rcond` is the cut-off below which a singular value counts as zero**, and it\nchanges the answer rather than only its precision — measured on torch, a 2×2 at\n`rcond=0.9` comes back entirely different from the default.\n\n`LA.pinverse` decides that cut-off itself, so the seat is carried and refused\nuntil it takes one. Left out, `pinverse(rcond=0.9)` was a surplus argument and\nJavaScript discards those.",
+       "doc": "**`rcond` is the cut-off below which a singular value counts as zero**, and it\nchanges the answer rather than only its precision — measured on torch, a 2×2 at\n`rcond=0.9` comes back entirely different from the default.\n\nThe seat was carried and **refused** while `LA.pinverse` decided the cut-off\nitself — carried because leaving it out made `pinverse(rcond=0.9)` a surplus\nargument, and JavaScript discards those. It takes one now, so the refusal is\ngone and the number is computed: `rcond` scales to the largest singular value,\nwhich is numpy's convention and torch's, and the core has always matched it.",
        "section": {
         "ko": "Linear algebra",
         "en": "Linear algebra"
        },
-       "doc_ko": "유사역행렬. **기울기가 있다** — 항이 셋이다.\n\n    Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)\n\n뒤의 두 항은 **정사각 정칙에서 0 이 된다.** 그때는 `I − AP` 와 `I − PA` 가 둘 다\n0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을\n빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다 — 골든이 직사각으로도 묻는다.\n\n## `rcond` 는 정밀도가 아니라 답을 바꾼다\n\n특잇값을 0 으로 셀 문턱인데, 그것이 달라지면 결과가 통째로 달라진다 — torch 에서\n실측하면 2×2 가 `rcond=0.9` 에서 기본값과 전혀 다른 값으로 온다.\n\n`LA.pinverse` 가 그 문턱을 스스로 정하므로, 그것이 문턱을 받을 때까지 자리는\n싣고 거절한다. 빼두면 `pinverse(rcond=0.9)` 는 남는 인자이고 JavaScript 는\n남는 인자를 버린다.\n"
+       "doc_ko": "**`rcond` 는 특이값을 0 으로 볼 문턱**이고, 정밀도가 아니라 답 자체를 바꾼다 — torch 로 재보면 2×2 를 `rcond=0.9` 로 부른 것과 기본으로 부른 것이 아예 다른 행렬로 돌아온다.\n\n`LA.pinverse` 가 문턱을 스스로 정하던 동안 이 자리는 **싣고 거절**했다. 실은 이유는, 빼면 `pinverse(rcond=0.9)` 가 남는 인자가 되고 JavaScript 는 남는 인자를 말없이 버리기 때문이다. 이제 문턱을 받으므로 거절은 사라지고 값을 계산한다 — `rcond` 는 가장 큰 특이값에 대한 비율이고, 이는 numpy 와 torch 의 규약이며 코어는 처음부터 그것에 맞아 있었다."
       },
       {
        "name": "cholesky",
@@ -2935,7 +2965,7 @@
       },
       {
        "name": "matrixNorm",
-       "signature": "matrixNorm(ord?: number | string): Promise<Tensor>",
+       "signature": "matrixNorm(ord?: number | string, dim?: readonly [number, number], keepdim?: boolean): Promise<Tensor>",
        "doc": "The norm measured treating it as a matrix. **A different number per\nbranch.**\n\nThe default is Frobenius; `2` is the largest singular value; `nuc` the\nsum of singular values; `1` the maximum column absolute sum; and `inf`\nthe row equivalent. Only the three that need singular values make a CPU\nround trip.",
        "torch": "matrix_norm",
        "section": {
@@ -2998,7 +3028,7 @@
       },
       {
        "name": "vectorNorm",
-       "signature": "vectorNorm(ord?: number, dim?: number): Tensor",
+       "signature": "vectorNorm(ord?: number, dim?: number, keepdim?: boolean): Tensor",
        "doc": "The norm measured treating it as a vector. **Given a matrix it flattens\nthe whole thing** — where it parts from `matrixNorm`.\n\n`ord=0` is the count of non-zeros, and `±Infinity` the maximum and\nminimum absolute value. Branches that must not go through the power\nformula, so they are written separately.",
        "torch": "vector_norm",
        "section": {
@@ -3009,7 +3039,7 @@
       },
       {
        "name": "tensorSolve",
-       "signature": "tensorSolve(b: Tensor): Promise<Tensor>",
+       "signature": "tensorSolve(b: Tensor, dims?: readonly number[]): Promise<Tensor>",
        "doc": "Folds the tensor into a matrix, solves, and spreads it back.",
        "torch": "tensor_solve",
        "section": {
@@ -3031,7 +3061,7 @@
       },
       {
        "name": "matrixRank",
-       "signature": "matrixRank(): Promise<Tensor>",
+       "signature": "matrixRank(tol?: number): Promise<Tensor>",
        "doc": "",
        "torch": "matrix_rank",
        "section": {
@@ -3042,12 +3072,12 @@
       {
        "name": "lstsq",
        "signature": "lstsq(other: Tensor): Promise<Tensor>",
-       "doc": "The least-squares solution. Square and invertible, it gives the same\nanswer as `solve`.",
+       "doc": "**This method takes one argument and keeps taking one.** torch removed\n`Tensor.lstsq` and the core carries it as a tombstone with a single `other`,\nso `rcond` and `driver` — which live on `linalg.lstsq`, where torch puts them\n— do not belong on it. Given them here the method read *longer than the core*\non the signature axis, which is exactly the report that argument was for.",
        "section": {
         "ko": "Linear algebra",
         "en": "Linear algebra"
        },
-       "doc_ko": "최소제곱해. 정사각이고 정칙이면 `solve` 와 같은 답이다."
+       "doc_ko": "**이 메서드는 인자를 하나 받고, 계속 하나만 받는다.** torch 는 `Tensor.lstsq` 를 지웠고 코어는 `other` 하나짜리 묘비로 들고 있다. 그러니 `rcond` 와 `driver` — torch 가 `linalg.lstsq` 에 두는 것들 — 은 여기 자리가 아니다. 여기에 달았더니 서명 축이 이 메서드를 *코어보다 길다* 고 보고했는데, 그것이 바로 그 축을 만든 이유다."
       },
       {
        "name": "luFactor",
@@ -3074,35 +3104,35 @@
       {
        "name": "ldlFactor",
        "signature": "ldlFactor(): Promise<{ LD: Tensor; pivots: Tensor; }>",
-       "doc": "A symmetric matrix as `L D Lᵀ`. **It does not pivot.**\n\ntorch uses LAPACK's Bunch–Kaufman, which swaps positions when it has\nto. Here only the cases with nothing to swap (positive definite and the\nlike) are handled, and a near-zero diagonal is refused loudly —\ncarrying on quietly gives a different answer with and without swapping,\nand both are plausible.\n\nThe answer is **packed into one plate** in torch's shape — the diagonal\nis `D` and below it is `L`.",
+       "doc": "A symmetric matrix as `L D Lᵀ` — LAPACK's `dsytf2` on the lower triangle,\n**with pivoting.**\n\n**This refused an indefinite matrix and the reason was accurate**: torch uses\nBunch–Kaufman, which swaps where it needs to, and a factorisation without the\nswaps is a different one. So the way through was to write Bunch–Kaufman rather\nthan to loosen a tolerance — there are many valid `L D Lᵀ` decompositions and\nonly LAPACK's packing and swap table compare against torch's.\n\nThe pivot table is LAPACK's own: a positive `k+1` is a 1×1 pivot with row `k`\nswapped for row `pivots[k]−1`, and **a repeated negative pair is a 2×2 block**.\n\n**The swap is over columns, not rows**, and that one line is where the core's\ncopy of this first went wrong: written as a row swap, ten of thirteen matrices\nstill agreed, and the three that did not diverged first in their *pivot table*\ntwo steps later.\n\nChecked against torch on 470 symmetric matrices, ranks 1 to 8.",
        "torch": "ldl_factor",
        "section": {
         "ko": "Linear algebra",
         "en": "Linear algebra"
        },
-       "doc_ko": "대칭 행렬을 `L D Lᵀ` 로. **피벗을 안 한다.**\n\ntorch 는 LAPACK 의 Bunch-Kaufman 을 쓰고 그것은 필요하면 자리를 바꾼다. 여기서는\n바꿀 일이 없는 자리(양의 정부호 같은 것)만 다루고, 대각이 0 에 가까우면 시끄럽게\n거절한다 — 조용히 이어 가면 바꾼 것과 안 바꾼 것이 다른 답을 내는데 둘 다\n그럴듯하다.\n\n답은 torch 와 같은 모양으로 **한 장에 겹쳐 담는다** — 대각이 `D`, 그 아래가 `L`."
+       "doc_ko": "대칭 행렬을 `L D Lᵀ` 로 — 아래 삼각에 대한 LAPACK 의 `dsytf2`, **피벗까지.**\n\n**부정부호 행렬을 거절하고 있었고 그 이유는 정확했다**: torch 는 Bunch-Kaufman 을 쓰고 그것은 필요한 곳에서 자리를 바꾸며, 교환 없는 분해는 다른 분해다. 그러니 길은 허용오차를 느슨하게 하는 것이 아니라 Bunch-Kaufman 을 쓰는 것이었다 — 유효한 `L D Lᵀ` 분해는 여럿이고, torch 와 대조되는 것은 LAPACK 의 담는 방식과 교환표뿐이다.\n\n교환표는 LAPACK 의 것 그대로다: 양수 `k+1` 은 `k` 행을 `pivots[k]−1` 행과 바꾼 1×1 피벗이고, **음수가 짝지어 반복되면 2×2 블록**이다.\n\n**교환은 행이 아니라 열에 대해서 한다.** 그 한 줄이 코어 쪽 사본이 처음 틀렸던 자리다 — 행 교환으로 쓰면 열세 행렬 중 열이 여전히 맞았고, 갈린 셋은 값이 아니라 **교환표**에서 두 단계 뒤에 갈렸다.\n\n1 부터 8 차수의 대칭 행렬 470 개로 torch 에 대조했다."
       },
       {
        "name": "ldlFactorEx",
        "signature": "ldlFactorEx(): Promise<{ LD: Tensor; pivots: Tensor; info: Tensor; }>",
-       "doc": "`ldlFactor` **plus one `info`.** The same place as `luFactorEx`.\n\n**Here it is always 0** — meeting a bad position makes `ldlFactor`\nrefuse on the spot, so nothing is left to report by number. The name is\nkept anyway: torch offers it, and without it the caller has to invent\none of the three slots themselves — which the binding was actually\ndoing (standing up `_Fields` by hand and slotting a 0 into `info`).\nThen the golden cases go through the binding and are green, and what is\nmissing is only for whoever writes TypeScript.",
+       "doc": "`ldlFactor` **plus one `info`** — the first zero pivot, counting from 1.\n\nIt used to be always 0, with the note that a bad position makes `ldlFactor`\nrefuse on the spot. That was true while every such matrix was refused; now the\nonly ones left are singular, and this is where they are reported rather than\nstopped. Measured against torch: `[[1,1],[1,1]]` gives 2 and a zero matrix 1.",
        "torch": "ldl_factor_ex",
        "section": {
         "ko": "Linear algebra",
         "en": "Linear algebra"
        },
-       "doc_ko": "`ldlFactor` 에 **`info` 를 하나 더.** `luFactorEx` 와 같은 자리다.\n\n**여기서는 늘 0 이다** — 나쁜 자리를 만나면 `ldlFactor` 가 그 자리에서 거절하므로\n번호로 알릴 것이 안 남는다. 그래도 이름을 둔다: torch 가 주는 이름이고, 없으면\n부르는 쪽이 세 자리 중 하나를 스스로 지어내야 한다 — 결속이 실제로 그러고\n있었다(`_Fields` 를 손으로 세워 `info` 에 0 을 끼웠다). 그러면 골든은 결속을\n지나니 초록이고, 없는 것은 TypeScript 로 쓰는 쪽뿐이다."
+       "doc_ko": "`ldlFactor` 에 **`info` 를 하나 더** — 1 부터 세는 첫 0 피벗.\n\n늘 0 이었고, 나쁜 자리를 만나면 `ldlFactor` 가 그 자리에서 거절한다는 말이 붙어 있었다. 그런 행렬이 전부 거절되던 동안은 참이었고, 이제 남은 것은 특이행렬뿐이며 여기가 그것을 멈추는 대신 보고하는 자리다. torch 에 대조: `[[1,1],[1,1]]` 은 2, 영행렬은 1."
       },
       {
        "name": "ldlSolve",
-       "signature": "ldlSolve(b: Tensor): Promise<Tensor>",
-       "doc": "Solves using the factorisation `ldlFactor` produced. Three passes: `L y\n= b`, `D z = y`, `Lᵀ x = z`.",
+       "signature": "ldlSolve(pivots: Tensor, b: Tensor): Promise<Tensor>",
+       "doc": "Solves using the factorisation `ldlFactor` produced — LAPACK's `dsytrs`,\n**pivots and all.**\n\n`pivots` was not taken here at all, which was right only while nothing was ever\nswapped: the factorisation refused every matrix that needed it. With\nBunch–Kaufman in place the old body was wrong on 47 of 80 random symmetric\nmatrices and returned a plausible number every time.\n\n**Swap, eliminate, divide — in that order, one step at a time.** Written as\n*permute, then solve `L`, then solve `D`* it is still wrong, because `L` was\nbuilt in the swapped order and the two do not commute; that version was wrong on\n97 of 279. And **inside a 2×2 block the sub-diagonal entry belongs to `D`**, not\nto the unit triangle around it.",
        "torch": "ldl_solve",
        "section": {
         "ko": "Linear algebra",
         "en": "Linear algebra"
        },
-       "doc_ko": "`ldlFactor` 가 낸 분해로 푼다. `L y = b`, `D z = y`, `Lᵀ x = z` 세 번이다."
+       "doc_ko": "`ldlFactor` 가 낸 분해로 푼다 — LAPACK 의 `dsytrs`, **피벗까지.**\n\n`pivots` 를 아예 받지 않고 있었는데, 그것은 아무것도 교환되지 않는 동안에만 옳았다. 분해가 교환이 필요한 행렬을 전부 거절했기 때문이다. Bunch-Kaufman 이 들어오자 옛 본문은 무작위 대칭 행렬 80 개 중 47 개에서 틀렸고, 매번 그럴듯한 수를 돌려줬다.\n\n**교환하고, 소거하고, 나눈다 — 그 순서로 한 단계씩.** *먼저 치환하고 그다음 `L`, 그다음 `D`* 로 쓰면 여전히 틀린다. `L` 이 교환된 순서로 만들어졌고 둘은 교환법칙이 성립하지 않기 때문이다. 그 판은 279 개 중 97 개에서 틀렸다. 그리고 **2×2 블록 안의 부대각 성분은 `D` 의 것**이지 그것을 둘러싼 단위 삼각의 것이 아니다."
       },
       {
        "name": "geqrf",
@@ -3137,7 +3167,7 @@
       },
       {
        "name": "luSolveFactored",
-       "signature": "luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor>",
+       "signature": "luSolveFactored(pivots: Tensor, b: Tensor, left?: boolean, adjoint?: boolean): Promise<Tensor>",
        "doc": "Solves `A x = b` with the factorisation. **`this` is the LU** — the\nargument order of `linalg.lu_solve(LU, pivots, B)`, and a different\nreceiver from torch's `Tensor.lu_solve`.\n\nSo **the torch claim was taken out of the name.** This used to be\n`luSolve`, and someone carrying torch across writing `b.lu_solve(LU,\npiv)` puts `LU` into the `pivots` slot — the name and the argument\ncount both match, so **nothing catches at that point** and only the\nvalue is wrong.",
        "torch": "lu_solve_factored",
        "section": {
@@ -3245,13 +3275,13 @@
       },
       {
        "name": "lobpcg",
-       "signature": "lobpcg(k?: number, largest?: boolean): Promise<{ eigenvalues: Tensor; eigenvectors: Tensor; }>",
-       "doc": "The **`k` extreme eigenpairs** of a symmetric matrix.\n\n**torch is iterative and we are exact.** That side iterates to get a\nfew cheaply out of a large sparse matrix; we have no sparse and the\nsizes are small. Measuring showed torch's answer converges to within\n7e-6 of the exact one and wobbles by about that much with the seed\n(measured) — far below tolerance. The value is the same and only the\ncost differs.\n\n**`largest` decides the order too** — true gives largest first, false\nsmallest first (measured).",
+       "signature": "lobpcg(k?: number | null, largest?: boolean, b?: Tensor | null, x?: Tensor | null): Promise<{ eigenvalues: Tensor; eigenvectors: Tensor; }>",
+       "doc": "The **`k` extreme eigenpairs** of a symmetric matrix.\n\n**torch is iterative and we are exact.** That side iterates to get a\nfew cheaply out of a large sparse matrix; we have no sparse and the\nsizes are small. Measuring showed torch's answer converges to within\n7e-6 of the exact one and wobbles by about that much with the seed\n(measured) — far below tolerance. The value is the same and only the\ncost differs.\n\n**`largest` decides the order too** — true gives largest first, false\nsmallest first (measured).\n\n**`b` is the generalised problem `A x = λ B x`, and it was refused.** With `B`\nsymmetric positive definite it reduces to a standard one in four lines:\n`B = L Lᵀ`, the eigenvalues of `L⁻¹ A L⁻ᵀ` are the generalised ones, and\n`x = L⁻ᵀ y` are the generalised vectors. Nothing iterative was needed.\n\n**Those vectors come out `B`-orthonormal**, not unit length — `xᵀBx = 1` and\n`xᵀx = 0.996` on the fixture. It falls out of the reduction (`xᵀBx = yᵀy`) and\nit is what torch returns; normalising them would look tidier and disagree.\n\n**`x` is a starting basis and this has nothing to start.** What it changes is\nthe count: given `x` and no `k`, torch takes `k` from its columns, which is why\n`k` is `null` here rather than 1. The converged eigenvalues do not depend on it\n— torch with and without agrees to 5e-6, the distance its own answer moves with\nthe seed.",
        "section": {
         "ko": "Linear algebra at the top level",
         "en": "Linear algebra at the top level"
        },
-       "doc_ko": "대칭 행렬의 **끝쪽 고유쌍 `k` 개.**\n\n**torch 는 반복법이고 우리는 정확해다.** 그쪽은 큰 희소 행렬에서 몇 개만 싸게\n얻으려고 반복하는데, 우리에게는 희소가 없고 크기도 작다. 재보니 torch 의 답이\n정확해로 7e-6 안까지 수렴하고 씨앗에도 그만큼만 흔들린다(실측) — 허용 오차\n한참 아래다. 값은 같고 비용만 다르다.\n\n**`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측)."
+       "doc_ko": "대칭 행렬의 **끝쪽 고유쌍 `k` 개.**\n\n**torch 는 반복법이고 우리는 정확해다.** 그쪽은 큰 희소 행렬에서 몇 개만 싸게\n얻으려고 반복하는데, 우리에게는 희소가 없고 크기도 작다. 재보니 torch 의 답이\n정확해로 7e-6 안까지 수렴하고 씨앗에도 그만큼만 흔들린다(실측) — 허용 오차\n한참 아래다. 값은 같고 비용만 다르다.\n\n**`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측).\n\n**`b` 는 일반화 고유값 문제 `A x = λ B x` 이고, 거절되고 있었다.** `B` 가 대칭 양의 정부호면 표준 문제로 네 줄 만에 환원된다: `B = L Lᵀ`, `L⁻¹ A L⁻ᵀ` 의 고유값이 일반화 고유값이고 `x = L⁻ᵀ y` 가 일반화 고유벡터다. 반복법은 필요 없었다.\n\n**그 벡터는 단위길이가 아니라 `B`-정규직교로 나온다** — 이 픽스처에서 `xᵀBx = 1`, `xᵀx = 0.996`. 환원에서 그대로 따라 나오고(`xᵀBx = yᵀy`) torch 가 돌려주는 것도 그것이다. 정규화하면 보기엔 깔끔하고 답은 갈린다.\n\n**`x` 는 시작 기저이고 여기엔 시작할 것이 없다.** 그것이 바꾸는 것은 개수다 — `x` 를 주고 `k` 를 안 주면 torch 는 `x` 의 열 수에서 `k` 를 가져온다. 그래서 여기 `k` 의 기본값이 1 이 아니라 `null` 이다. 수렴한 고유값은 `x` 에 의존하지 않는다 — 재보니 torch 는 주고 안 주고가 5e-6 안에서 같고, 그것은 그 답이 씨앗에 흔들리는 거리와 같다."
       },
       {
        "name": "svdLowrank",
@@ -3422,6 +3452,16 @@
        "doc_ko": "표의 단항을 제자리로. `abs_` 같은 이름들이 이리로 온다."
       },
       {
+       "name": "inplaceFrom",
+       "signature": "inplaceFrom(compute: () => Tensor): Tensor",
+       "doc": "Writes back whatever the callback computes. **The general form of\n`inplaceUnary`**, for the two operations whose out-of-place half takes an\nargument the `UNARY` table cannot give it — `round_(decimals)` and\n`logit_(eps)`, both attached after the table for the ordering reason `abs` and\n`elu` are.",
+       "torch": "inplace_from",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
        "name": "inplaceBinary",
        "signature": "inplaceBinary(name: string, other: Tensor): Tensor",
        "doc": "The table's **binary** operations, in place. Names like `hypot_` come here.\n\nIt exists for the same reason `inplaceUnary` does: `mutate` is private, and the\nloop that attaches these lives outside the class. Reaching into the private\nfrom out there would have needed a cast, and a cast is how a class stops being\nable to say what it owns.",
@@ -3443,7 +3483,7 @@
       },
       {
        "name": "swapaxes_",
-       "signature": "swapaxes_(a: number, b: number): Tensor",
+       "signature": "swapaxes_(axis0: number, axis1: number): Tensor",
        "doc": "",
        "section": {
         "ko": "In-place operations",
@@ -3502,8 +3542,8 @@
       },
       {
        "name": "scatter",
-       "signature": "scatter(dim: number, index: Tensor, src: Tensor): Tensor",
-       "doc": "`torch.Tensor.scatter` — **overwrite at the indexed positions.** borch.ts calls\nit `scatterSet`, so torch's own name was absent while the operation was there.",
+       "signature": "scatter(dim: number, index: Tensor, src: Tensor, reduce?: string): Tensor",
+       "doc": "`torch.Tensor.scatter` — **overwrite at the indexed positions.** borch.ts calls\nit `scatterSet`, so torch's own name was absent while the operation was there.\n\n`reduce` is torch's deprecated overload, kept because torch still answers it.\nGiven, it combines *onto what is there* instead of overwriting, and colliding\nindices accumulate — which is `scatterReduce(…, includeSelf = true)` under\nanother two words, verified against torch rather than reasoned from the docs.",
        "section": {
         "ko": "In-place operations",
         "en": "In-place operations"
@@ -3511,7 +3551,7 @@
       },
       {
        "name": "scatter_",
-       "signature": "scatter_(dim: number, index: Tensor, src: Tensor): Tensor",
+       "signature": "scatter_(dim: number, index: Tensor, src: Tensor, reduce?: string): Tensor",
        "doc": "",
        "section": {
         "ko": "In-place operations",
@@ -3664,7 +3704,7 @@
       },
       {
        "name": "transpose_",
-       "signature": "transpose_(): Tensor",
+       "signature": "transpose_(dim0?: number, dim1?: number): Tensor",
        "doc": "",
        "section": {
         "ko": "The `new_*` family, and four more built from what is here",
@@ -3673,7 +3713,7 @@
       },
       {
        "name": "squeeze_",
-       "signature": "squeeze_(dim: number): Tensor",
+       "signature": "squeeze_(...dim: number[]): Tensor",
        "doc": "",
        "section": {
         "ko": "The `new_*` family, and four more built from what is here",
@@ -3709,7 +3749,7 @@
       },
       {
        "name": "cumsum_",
-       "signature": "cumsum_(dim?: number): Tensor",
+       "signature": "cumsum_(dim?: number, dtype?: DType): Tensor",
        "doc": "",
        "section": {
         "ko": "The `new_*` family, and four more built from what is here",
@@ -3718,7 +3758,7 @@
       },
       {
        "name": "cumprod_",
-       "signature": "cumprod_(dim?: number): Tensor",
+       "signature": "cumprod_(dim?: number, dtype?: DType): Tensor",
        "doc": "",
        "section": {
         "ko": "The `new_*` family, and four more built from what is here",
@@ -4394,7 +4434,7 @@
       },
       {
        "name": "clampMax_",
-       "signature": "clampMax_(high: number): Tensor",
+       "signature": "clampMax_(max: number): Tensor",
        "doc": "",
        "torch": "clamp_max_",
        "section": {
@@ -4404,7 +4444,7 @@
       },
       {
        "name": "clampMin_",
-       "signature": "clampMin_(low: number): Tensor",
+       "signature": "clampMin_(min: number): Tensor",
        "doc": "",
        "torch": "clamp_min_",
        "section": {
@@ -4433,7 +4473,7 @@
       },
       {
        "name": "fmod_",
-       "signature": "fmod_(divisor: number): Tensor",
+       "signature": "fmod_(other: number): Tensor",
        "doc": "",
        "section": {
         "ko": "The thirty-eight in-place forms",
@@ -4442,7 +4482,7 @@
       },
       {
        "name": "remainder_",
-       "signature": "remainder_(divisor: number): Tensor",
+       "signature": "remainder_(other: Tensor | number): Tensor",
        "doc": "",
        "section": {
         "ko": "The thirty-eight in-place forms",
@@ -4606,7 +4646,7 @@
       },
       {
        "name": "bernoulli_",
-       "signature": "bernoulli_(p?: number): Tensor",
+       "signature": "bernoulli_(p?: number, generator?: null): Tensor",
        "doc": "**A different operation from its counterpart.** `bernoulli()` reads its\nown values as probabilities; this one **ignores** them and fills with\n`p` (measured: feed it `[1,4,9,2]` and at `p=0` it is all zeros).\n\nBuilt from the counterpart on the strength of the underscore alone, the\nvalues agree wherever the probability is 0 or 1, because those are\ncertain, and **it is quietly wrong only at the probabilities in\nbetween.** The core kept it out of the automatic table for the same\nreason.",
        "section": {
         "ko": "The thirty-eight in-place forms",
@@ -4627,7 +4667,7 @@
       },
       {
        "name": "divide_",
-       "signature": "divide_(other: number): Tensor",
+       "signature": "divide_(other: number, roundingMode?: \"trunc\" | \"floor\" | null): Tensor",
        "doc": "",
        "section": {
         "ko": "The thirty-eight in-place forms",
@@ -5148,12 +5188,12 @@
       {
        "name": "kron",
        "signature": "kron(other: Tensor): Tensor",
-       "doc": "The Kronecker product. **One-dimensional only** — above that it\nrefuses.\n\nThe version in the binding was looking at one axis only (two\n`shape[0]`s), and given two dimensions the answer was quietly wrong. It\ncould have been fixed while carrying it across, but that writes down a\ncapability that is not here as though it were — **a missing feature\nbeats a wrong answer** is this repository's rule.",
+       "doc": "The Kronecker product, at any rank.\n\n**This was 1-D only, and the 1-D line was already the general one.** It read\n`reshape([n, 1]).mul(other.reshape([1, m]))` and refused everything above one\naxis — but interleaving the two shapes and letting broadcasting multiply *is*\n`kron` at every rank:\n\n    out[(i, k), (j, l), …] = a[i, j, …] · b[k, l, …]\n\nThe refusal was written because the binding's version looked at one axis only\nand was quietly wrong above it, and *a missing feature beats a wrong answer*.\nThat was the right call on the day; what it hid is that the correct answer was\none loop away from the line it sat on.\n\n**The shorter operand is padded at the front** — numpy's rule and torch's,\nmeasured against both across nine rank combinations including 0-D.",
        "section": {
         "ko": "Names that existed only in the binding",
         "en": "Names that existed only in the binding"
        },
-       "doc_ko": "크로네커 곱. **1 차원만 한다** — 그 위는 거절한다.\n\n결속에 있던 판이 축 하나만 보고 있었고(`shape[0]` 두 개), 2 차원을 넣으면 답이\n조용히 틀렸다. 옮기면서 고칠 수도 있었지만, 그러면 여기 없는 능력을 있는 것처럼\n적게 된다 — **틀린 답보다 없는 기능이 낫다**는 것이 이 저장소의 규칙이다."
+       "doc_ko": "크로네커 곱. 모든 차원에서 한다.\n\n**1 차원 전용이었는데, 그 1 차원짜리 줄이 이미 일반형이었다.** `reshape([n, 1]).mul(other.reshape([1, m]))`\n이라고 적혀 있었고 축 하나를 넘어가면 전부 거절했다 — 그런데 두 모양을 번갈아 끼우고\n브로드캐스팅에게 곱하게 하는 것이 곧 모든 차원의 `kron` 이다:\n\n    out[(i, k), (j, l), …] = a[i, j, …] · b[k, l, …]\n\n거절이 적힌 이유는 결속에 있던 판이 축 하나만 보고 있어서 그 위에서 조용히 틀렸기\n때문이고, *틀린 답보다 없는 기능이 낫다*는 판단은 그날 옳았다. 다만 그것이 가리고\n있던 사실은, 맞는 답이 그 줄에서 반복문 하나 거리였다는 것이다.\n\n**짧은 쪽은 앞이 채워진다** — numpy 의 규칙이자 torch 의 규칙이고, 0 차원을 포함한\n아홉 가지 차원 조합에서 둘 다에 대조했다."
       },
       {
        "name": "corrcoef",
@@ -5224,7 +5264,7 @@
       },
       {
        "name": "exponential_",
-       "signature": "exponential_(lambd?: number): Tensor",
+       "signature": "exponential_(lambd?: number, generator?: null): Tensor",
        "doc": "The exponential distribution. Its mean is `1/lambd`, and **lambd has to\nbe positive**.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5234,7 +5274,7 @@
       },
       {
        "name": "cauchy_",
-       "signature": "cauchy_(median?: number, sigma?: number): Tensor",
+       "signature": "cauchy_(median?: number, sigma?: number, generator?: null): Tensor",
        "doc": "The Cauchy distribution. **It has no mean** — the tails are heavy\nenough that the sample mean does not converge.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5244,7 +5284,7 @@
       },
       {
        "name": "logNormal_",
-       "signature": "logNormal_(mean?: number, std?: number): Tensor",
+       "signature": "logNormal_(mean?: number, std?: number, generator?: null): Tensor",
        "doc": "The log-normal distribution. `mean` and `std` are the values **after\ntaking logs** (as in torch).",
        "torch": "log_normal_",
        "section": {
@@ -5255,7 +5295,7 @@
       },
       {
        "name": "normal_",
-       "signature": "normal_(mean?: number, std?: number): Tensor",
+       "signature": "normal_(mean?: number, std?: number, generator?: null): Tensor",
        "doc": "Overwrites with the normal distribution. **`std` cannot be negative** —\nat 0 it is the mean itself.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5265,7 +5305,7 @@
       },
       {
        "name": "uniform_",
-       "signature": "uniform_(from?: number, to?: number): Tensor",
+       "signature": "uniform_(from?: number, to?: number, generator?: null): Tensor",
        "doc": "Overwrites with reals in `[from, to)`. **`from < to` is required.**",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5275,7 +5315,7 @@
       },
       {
        "name": "geometric_",
-       "signature": "geometric_(p: number): Tensor",
+       "signature": "geometric_(p: number, generator?: null): Tensor",
        "doc": "The geometric distribution. **Being discrete, it runs on integer\ntensors too** — that is what separates it from the continuous ones.\n\n`p` is an **open interval**. At 0 the event never happens and at 1 it\nalways happens on the first try, so neither is a distribution.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5285,7 +5325,7 @@
       },
       {
        "name": "random_",
-       "signature": "random_(from?: number, to?: number): Tensor",
+       "signature": "random_(from?: number, to?: number, generator?: null): Tensor",
        "doc": "Fills with integers from `[from, to)`.\n\n**Left out, the bound is as far as f32 counts exactly** (2^24). torch's\ndepends on the dtype and is 2^62 for int64, but int64 here lives in an\nf32 cell and cannot count past that — drawn values above it have\nneighbours that cannot be told apart. That is not imitated.",
        "section": {
         "ko": "Names that existed only in the binding",
@@ -5521,7 +5561,7 @@
       },
       {
        "name": "maxPoolWithIndices",
-       "signature": "maxPoolWithIndices(kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }",
+       "signature": "maxPoolWithIndices(kernel?: number, stride?: number, padding?: number, dilation?: number, ceilMode?: boolean): { values: Tensor; indices: Tensor; }",
        "doc": "",
        "torch": "max_pool_with_indices",
        "section": {
@@ -5657,7 +5697,7 @@
       },
       {
        "name": "poolND",
-       "signature": "poolND(kind: \"max\" | \"avg\", kernel: number, stride?: number, padding?: number, ceilMode?: boolean, countIncludePad?: boolean, divisorOverride?: number | null): Tensor",
+       "signature": "poolND(kind: \"max\" | \"avg\", kernel: number, stride?: number, padding?: number, ceilMode?: boolean, countIncludePad?: boolean, divisorOverride?: number | null, dilation?: number): Tensor",
        "doc": "Pooling independent of dimensionality.",
        "torch": "pool_n_d",
        "section": {
@@ -5668,7 +5708,7 @@
       },
       {
        "name": "interpolate",
-       "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean, recomputeScaleFactor?: boolean | null): Tensor",
+       "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | readonly number[] | null, mode?: InterpolateMode, alignCorners?: boolean, recomputeScaleFactor?: boolean | null, antialias?: boolean): Tensor",
        "doc": "**A fractional `scaleFactor` has to be floored, and was not.**\n\ntorch's output extent is `floor(in · scale)`. Multiplying without it gave\n`Upsample(scale_factor=1.5)` on a 3×4 input a shape of `[1, 1, 4.5, 6]` — a\nnon-integer dimension, which for `nearest` produced a tensor summing to zero and\n*did not throw*, and for `bilinear` blew up somewhere else entirely (`shape\n[4.5,1] does not match 5 elements`). At 2.3 it reached WebGPU as `Size (253) must\nbe a multiple of 4`.\n\nWhole factors were right, which is why this stood: 2 and 3 are what anybody tries.\n\n`recomputeScaleFactor` is torch's fourth answer to the same arithmetic. With it\non, torch works out the integer output size and then **derives the scale back\nfrom it** per axis, so a 3-high input at 1.5 samples at 4/3 rather than 1.5. Same\nshape, different values — measured on torch: sum 120 against 132.",
        "section": {
         "ko": "CTC",
@@ -5936,8 +5976,18 @@
        "doc_ko": "편각. 복소수는 `atan2(im, re)`, 실수는 음수에 π 다(형은 언제나 실수)."
       },
       {
+       "name": "retainGrad",
+       "signature": "retainGrad(): void",
+       "doc": "`torch.Tensor.retain_grad` — **keep this one's gradient even though it is\nderived.**\n\nA backward pass writes to leaves; everything in between is used and dropped,\nbecause the intermediates are the bulk of a training loop's memory. This says\n*keep that one*, which is how the gradient at a hidden activation is looked at.\n\nIt was the same missing mechanism as `backward(…, inputs)`: both need a\nderived node to be able to hold a `grad`, and neither could. Closing one\nclosed the other.\n\nOn a leaf it is a no-op — a leaf already accumulates. torch is the same.",
+       "torch": "retain_grad",
+       "section": {
+        "ko": "Backward",
+        "en": "Backward"
+       }
+      },
+      {
        "name": "backward",
-       "signature": "backward(gradient?: Tensor, retainGraph?: boolean): void",
+       "signature": "backward(gradient?: Tensor | null, retainGraph?: boolean, createGraph?: boolean, inputs?: Tensor | readonly Tensor[] | null): void",
        "doc": "Flows gradient.\n\n**The argument order matches torch** — `backward(gradient,\nretainGraph)`. It used to have `retainGraph` first, which made\n`y.backward(onesLike(y))` impossible to carry across. It is a common\nline for a Jacobian-vector product, and **the core (numpy) had taken it\nfrom the start** — this was the only one of the three that could not.\n\nChanging the first position broke no call site. Nowhere in the\nrepository passed an argument to `backward` at all, because the only\nthing that could be passed was `retainGraph`, and nobody used it.",
        "tags": [
         {
@@ -5947,6 +5997,14 @@
         {
          "tag": "param",
          "text": "retainGraph keeps the graph so it can be flowed through again."
+        },
+        {
+         "tag": "param",
+         "text": "createGraph **refused.** It asks for the backward pass itself to be recorded so the gradient can be differentiated again — what a second-order method needs. This tape does not record it: a backward is a closure over GPU buffers, not a node. Walking the same ungraphed pass and returning would answer a first-order question to a caller who asked a second-order one, and the answer would look right. The core refuses it in the same words."
+        },
+        {
+         "tag": "param",
+         "text": "inputs restricts which tensors get a gradient. torch walks the whole graph and writes only to the ones named, which is how a second loss is differentiated against one branch without disturbing the rest. It also **retains**: a derived tensor named here gets a `grad` the way `retainGrad()` gives one — which is why torch's refusal for a tensor that does not require grad says *can't retain_grad*."
         }
        ],
        "section": {
@@ -6370,7 +6428,7 @@
       },
       {
        "name": "heaviside_",
-       "signature": "heaviside_(other: Tensor): Tensor",
+       "signature": "heaviside_(values: Tensor): Tensor",
        "doc": ""
       },
       {
@@ -6832,7 +6890,7 @@
       },
       {
        "name": "round_",
-       "signature": "round_(): Tensor",
+       "signature": "round_(decimals?: number): Tensor",
        "doc": "",
        "section": {
         "ko": "The in-place forms the table attaches",
@@ -6886,7 +6944,7 @@
       },
       {
        "name": "logit_",
-       "signature": "logit_(): Tensor",
+       "signature": "logit_(eps?: number | null): Tensor",
        "doc": "",
        "section": {
         "ko": "The in-place forms the table attaches",
@@ -7213,7 +7271,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 747,
+   "count": 752,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -7278,6 +7336,53 @@
        "name": "children",
        "signature": "children(): Module[]",
        "doc": ""
+      },
+      {
+       "name": "namedModules",
+       "signature": "namedModules(prefix?: string, seen?: Set<Module>): [string, Module][]",
+       "doc": "The whole tree with dotted names, **this module first and named `\"\"`.**\n\n`children` is one level and this is every level — a difference invisible on a\nflat model, which is why the golden asks it of a `Sequential` inside a\n`Sequential`. The names are the `state_dict` keys' prefixes, so a caller who\nhas a checkpoint key can find the layer it belongs to.\n\n`seen` drops a module reached twice. A model with tied weights holds one layer\nunder two names, and walked twice `apply` would initialise it twice.",
+       "torch": "named_modules"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(fn: (m: Module) => void): this",
+       "doc": "`fn` on every module in the tree, **children first**, then this one, and hands\nback `this` so the line reads as a statement about the model.\n\nThe order is torch's and it is the useful one: a container that reads its\nchildren's shapes sees them already initialised."
+      },
+      {
+       "name": "getSubmodule",
+       "signature": "getSubmodule(target: string): Module",
+       "doc": "One module by its dotted name — `\"layer4.1.conv2\"`, which is the shape of a\ncheckpoint key, so this is how a fine-tuning script reaches one layer.",
+       "torch": "get_submodule"
+      },
+      {
+       "name": "getParameter",
+       "signature": "getParameter(target: string): Tensor",
+       "doc": "One parameter by its dotted name, as `getSubmodule` reaches a module.",
+       "torch": "get_parameter"
+      },
+      {
+       "name": "getBuffer",
+       "signature": "getBuffer(target: string): Tensor",
+       "doc": "One buffer by its dotted name.",
+       "torch": "get_buffer"
+      },
+      {
+       "name": "addModule",
+       "signature": "addModule(name: string, module: Module): void",
+       "doc": "Attach a child under a name decided at run time.\n\n`namedChildren` reads this object's own fields, so assigning the property *is*\nthe registration — the method exists because a name held in a variable cannot\nbe written as a field. `registerModule` is torch's second spelling.",
+       "torch": "add_module"
+      },
+      {
+       "name": "registerModule",
+       "signature": "registerModule(name: string, module: Module): void",
+       "doc": "",
+       "torch": "register_module"
+      },
+      {
+       "name": "requiresGrad_",
+       "signature": "requiresGrad_(requiresGrad?: boolean): this",
+       "doc": "Freeze or unfreeze the whole tree. **This is how a backbone is frozen**, and it\nreturns `this` so the line reads as a statement about the model.",
+       "torch": "requires_grad_"
       },
       {
        "name": "namedChildren",
@@ -7738,6 +7843,11 @@
      "doc": "",
      "members": [
       {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -7750,6 +7860,11 @@
      "signature": "export declare class Hardswish extends Module",
      "doc": "",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
@@ -7764,6 +7879,11 @@
      "doc": "",
      "members": [
       {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -7777,6 +7897,11 @@
      "doc": "",
      "members": [
       {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -7789,6 +7914,11 @@
      "signature": "export declare class ReLU6 extends Module",
      "doc": "",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
@@ -7821,6 +7951,11 @@
      "doc": "",
      "members": [
       {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
+      {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
@@ -7833,6 +7968,11 @@
      "signature": "export declare class Tanhshrink extends Module",
      "doc": "",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
@@ -8000,6 +8140,11 @@
      "signature": "export declare class SiLU extends Module",
      "doc": "",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inplace?: boolean)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
@@ -8251,6 +8396,24 @@
        "doc": "torch's list, in torch's seats. **`affine` defaults to false here and true\non `BatchNorm`** — that is torch, and flipping it swaps which layers carry\nparameters, so the `state_dict` keys part wholesale."
       },
       {
+       "name": "runningMean",
+       "signature": "runningMean: Tensor | null",
+       "doc": "",
+       "torch": "running_mean"
+      },
+      {
+       "name": "runningVar",
+       "signature": "runningVar: Tensor | null",
+       "doc": "",
+       "torch": "running_var"
+      },
+      {
+       "name": "namedBuffers",
+       "signature": "namedBuffers(persistentOnly?: boolean): Record<string, Tensor>",
+       "doc": "**The running statistics go out too**, and only when they exist. A field named\n`runningMean` has to leave under the key `running_mean`, which rules out\n`registerBuffer` — there the field name is the key — so the list lives here, as\n`BatchNormND` writes it for the same reason.\n\n`num_batches_tracked` is built fresh and always zero: torch registers it here and\n**never increments it**, which is not what `BatchNorm` does. Measured — after a\ntraining forward it is still 0 there and 1 in the batch layer.",
+       "torch": "named_buffers"
+      },
+      {
        "name": "ownParameters",
        "signature": "ownParameters(): Record<string, Tensor>",
        "doc": "",
@@ -8452,7 +8615,7 @@
      "kind": "class",
      "name": "MaxPool2d",
      "signature": "export declare class MaxPool2d extends Module",
-     "doc": "",
+     "doc": "**`padding`, `dilation` and `ceilMode` hold torch's positions and refuse.**\n\nThe core grew all three as working arguments; until the WGSL pooling kernel does\ntoo, the choice is between an argument that is absent and one that is in the wrong\nseat — and the wrong seat is what makes `new MaxPool2d(2, 2, 1)` set\n`returnIndices` where torch and the core set `padding`. A refusal that names the\nargument is the smaller wrong.\n\nIt was written inline in `MaxPool2d` and the 1-D and 3-D layers had **no seats at\nall** while printing `padding=0, dilation=1, ceil_mode=False` in their `describe`\n— a repr for arguments they could not take, which is the tidiest way to look\nfinished. Three classes now share the one refusal, which is the third repetition\nand the point at which this stops being a copy.\n\n**`padding` and `ceilMode` have left it.** They were refused on the ground that the\nmaximum's backward reads the input at each window position and a padded one has\nnone to read — which the average had answered one function away, by taking the\npadding off the coordinate and skipping what falls outside. `poolND` does both for\nthe maximum now. `dilation` is the whole of what is left, and it keeps its seat for\nthe reason above.",
      "members": [
       {
        "name": "padding",
@@ -8651,6 +8814,7 @@
      "signature": "export declare class AdaptiveMaxPool2d extends AdaptiveMaxPool1d",
      "doc": "`torch.nn.AdaptiveMaxPool2d`.",
      "members": [],
+     "inherited_ctor": "constructor(outputSize: number | readonly number[], returnIndices?: boolean)",
      "doc_ko": "`torch.nn.AdaptiveMaxPool2d`."
     },
     {
@@ -8659,6 +8823,7 @@
      "signature": "export declare class AdaptiveMaxPool3d extends AdaptiveMaxPool1d",
      "doc": "`torch.nn.AdaptiveMaxPool3d`.",
      "members": [],
+     "inherited_ctor": "constructor(outputSize: number | readonly number[], returnIndices?: boolean)",
      "doc_ko": "`torch.nn.AdaptiveMaxPool3d`."
     },
     {
@@ -8736,6 +8901,7 @@
        "protected": true
       }
      ],
+     "inherited_ctor": "constructor(kernelSize: number, stride?: number | undefined, padding?: number)",
      "doc_ko": "`torch.nn.MaxUnpool2d`."
     },
     {
@@ -8751,21 +8917,32 @@
        "protected": true
       }
      ],
+     "inherited_ctor": "constructor(kernelSize: number, stride?: number | undefined, padding?: number)",
      "doc_ko": "`torch.nn.MaxUnpool3d`."
     },
     {
      "kind": "class",
      "name": "Flatten",
      "signature": "export declare class Flatten extends Module",
-     "doc": "Flattens, keeping only the batch axis.",
+     "doc": "Flattens the axes from `startDim` to `endDim`, keeping the rest.\n\n**The two seats were missing and the defaults hid it.** torch's are `1` and `-1`,\nwhich is \"keep the batch axis and fold everything else\" — exactly what this did\nwith no arguments at all, so every case that used the default passed while\n`Flatten(0)` and `Flatten(1, 2)` were arguments JavaScript dropped. The class\ndeclared no constructor, so the signature axis reported it as *unreadable* rather\nthan as short; that reader followed `extends` and found `Module`'s nothing.",
      "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(startDim?: number, endDim?: number)",
+       "doc": ""
+      },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
       }
      ],
-     "doc_ko": "배치 축만 남기고 납작하게."
+     "doc_ko": "`startDim` 부터 `endDim` 까지의 축을 접고 나머지는 남긴다.\n\n**두 자리가 없었고, 그것을 감춘 건 그 자리들의 기본값이었다.** torch 의 기본은 `1` 과 `-1` — 배치 축은 두고 나머지를 접는다 — 인데, 그게 바로 이 클래스가 인자 없이 하던 일이다. 그래서 기본값을 쓰는 사례는 전부 통과했고 `Flatten(0)` 과 `Flatten(1, 2)` 는 JavaScript 가 버리는 낱말이었다. 생성자를 선언하지 않았으므로 서명 축은 이 클래스를 *꼬리가 짧다* 가 아니라 **못 읽음**으로 셌다 — 그 읽개가 `extends` 를 따라가 `Module` 의 '없음' 을 찾은 것이다."
     },
     {
      "kind": "class",
@@ -8989,14 +9166,16 @@
      "name": "LPPool2d",
      "signature": "export declare class LPPool2d extends LPPool1d",
      "doc": "",
-     "members": []
+     "members": [],
+     "inherited_ctor": "constructor(normType: number, kernelSize: number, stride?: number | undefined, ceilMode?: boolean)"
     },
     {
      "kind": "class",
      "name": "LPPool3d",
      "signature": "export declare class LPPool3d extends LPPool1d",
      "doc": "",
-     "members": []
+     "members": [],
+     "inherited_ctor": "constructor(normType: number, kernelSize: number, stride?: number | undefined, ceilMode?: boolean)"
     },
     {
      "kind": "class",
@@ -9046,7 +9225,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean | null, recomputeScaleFactor?: boolean | null)",
+       "signature": "constructor(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: InterpolateMode, alignCorners?: boolean | null, recomputeScaleFactor?: boolean | null)",
        "doc": "**`recomputeScaleFactor` was missing and the kernel behaved as though it were\non.** With a fractional factor torch works out the integer output size and then\neither samples at the factor it was given (the default) or derives the scale back\nfrom that size (the flag). Same shape, different values — measured on torch at\n`scale_factor=1.5`: sums 120 and 132."
       },
       {
@@ -10316,14 +10495,6 @@
      "torch": "legacy_reduction"
     },
     {
-     "kind": "function",
-     "name": "refuseWeight",
-     "signature": "export declare function refuseWeight(layer: string, what: string, weight: unknown): void",
-     "doc": "Class weights are **refused rather than absent**, at the position torch puts them.\n\nThe core refuses them for a reason worth repeating here: torch's `mean` divides by\nthe **sum of the weights** rather than by the sample count, so a `weight` accepted\nand ignored changes the loss value quietly and leads to choosing the wrong learning\nrate. What it must not do is take the seat of something else —\n`new CrossEntropyLoss(classWeights)` set the *reduction* to a tensor until the core\ngrew torch's order and the two sides came apart.",
-     "members": [],
-     "torch": "refuse_weight"
-    },
-    {
      "kind": "class",
      "name": "BCELoss",
      "signature": "export declare class BCELoss",
@@ -10332,6 +10503,11 @@
       {
        "name": "reduction",
        "signature": "readonly reduction: Reduction",
+       "doc": ""
+      },
+      {
+       "name": "weight",
+       "signature": "readonly weight: Tensor | undefined",
        "doc": ""
       },
       {
@@ -10366,6 +10542,17 @@
        "name": "reduction",
        "signature": "readonly reduction: Reduction",
        "doc": ""
+      },
+      {
+       "name": "weight",
+       "signature": "readonly weight: Tensor | undefined",
+       "doc": ""
+      },
+      {
+       "name": "posWeight",
+       "signature": "readonly posWeight: Tensor | undefined",
+       "doc": "",
+       "torch": "pos_weight"
       },
       {
        "name": "constructor",
@@ -10404,6 +10591,11 @@
       {
        "name": "reduction",
        "signature": "readonly reduction: Reduction",
+       "doc": ""
+      },
+      {
+       "name": "weight",
+       "signature": "readonly weight: Tensor | undefined",
        "doc": ""
       },
       {
@@ -11303,11 +11495,19 @@
     {
      "kind": "function",
      "name": "gridSample",
-     "signature": "export declare function gridSample(input: Tensor, grid: Tensor, mode?: \"bilinear\" | \"nearest\", paddingMode?: \"zeros\" | \"border\" | \"reflection\", alignCorners?: boolean): Tensor",
+     "signature": "export declare function gridSample(input: Tensor, grid: Tensor, mode?: \"bilinear\" | \"nearest\" | \"bicubic\", paddingMode?: \"zeros\" | \"border\" | \"reflection\", alignCorners?: boolean): Tensor",
      "doc": "Lifts values from where the grid points. The counterpart of `affineGrid`.\n\n**The positions are constants and the weights are tensors.** A floored\ninteger has no derivative and its remainder becomes the weight, so\nkeeping only the weights in the graph lets gradient flow to both the\ninput and the grid.",
      "members": [],
      "torch": "grid_sample",
      "doc_ko": "격자가 가리키는 자리에서 값을 떠 온다. `affineGrid` 의 짝이다.\n\n**자리 번호는 상수, 무게는 텐서다.** 내림한 정수는 미분이 없고 그 나머지가 무게가\n되므로, 무게만 그래프에 두면 입력과 격자 양쪽으로 기울기가 흐른다."
+    },
+    {
+     "kind": "function",
+     "name": "instanceNorm",
+     "signature": "export declare function instanceNorm(input: Tensor, runningMean?: Tensor | null, runningVar?: Tensor | null, weight?: Tensor | null, bias?: Tensor | null, useInputStats?: boolean, momentum?: number, eps?: number): Tensor",
+     "doc": "The function form of `InstanceNormND` — torch's `F.instance_norm`.\n\n**The running statistics were refused on the ground that this keeps none.** It\nkeeps none of its own, which is true and was not the question: torch's buffers are\nthe *caller's*, handed in and written back, as `batchNorm` below already does. What\nthe update is was measured rather than derived —\n\n    runningMean ← (1−m)·runningMean + m·mean over (N, H, W) per channel\n    runningVar  ← (1−m)·runningVar  + m·mean over N of the **unbiased**\n                  per-(sample, channel) variance\n\n— and the second line is the one worth writing down: it is the average of the\nper-plane variances, not the variance of the whole channel. On a 2×3×2×2 of\nconsecutive integers those are 1.667 and 47.7.\n\n**Handing statistics in does not change the output** while `useInputStats` is on;\nthe normalisation stays per plane and only the buffers move. Measured, because the\nopposite is the natural guess.",
+     "members": [],
+     "torch": "instance_norm"
     },
     {
      "kind": "function",
@@ -11321,10 +11521,10 @@
     {
      "kind": "function",
      "name": "embedding",
-     "signature": "export declare function embedding(input: Tensor, weight: Tensor): Tensor",
-     "doc": "Selects rows from a table by index. Where `F.embedding(indices, table)`\ngoes.\n\n**It is the definition itself** — the same thing `indexSelect` does, and\nthat side already knows the gradient. An index appearing several times\naccumulates into that row several times. This is **naming something that\nexists**, not imitating something that does not, so there is no place for\nthe values to diverge.\n\nAnd yet this name was missing for a long time. The binding held the same\nthree lines in Python and the golden cases went through that side, so it\nwas a name absent only for those writing TypeScript — the place\n`tests/test_binding_fills_in.py` points at.\n\n**There is no `nn.Embedding` layer yet.** None of the three has it and\nthe golden cases do not ask. It would be a place that wraps this function\nand holds the weights rather than a new computation, so writing down that\nit is absent is better than putting the name there alone.",
+     "signature": "export declare function embedding(input: Tensor, weight: Tensor, paddingIdx?: number | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, sparse?: boolean): Tensor",
+     "doc": "**torch's five carried, and they split three ways.**\n\n`max_norm`/`norm_type` shorten the looked-up rows *in the table itself* — the same\nside effect `embeddingBag` has, through the same `renormRows`, which is why that\nfunction's long note applies here unchanged.\n\n`padding_idx` is **gradient-only**: measured on torch, the forward returns that row\nexactly as it stands and only its gradient becomes zero. So it cannot be done by\nchanging what comes out — the padding row is detached on the way in instead, which\nleaves the forward identical to the bit and cuts the path back. Left in, a pad token\ndrifts toward whatever the loss wants and the mask stops meaning *ignore this*.\n\n`sparse` is refused, by name, because the core refuses it by name. Left out of the\nsignature all five were surplus arguments and JavaScript discards those —\n`embedding(idx, w, 0)` returned the un-padded answer under the name of a padded one.\n\n`scaleGradByFreq` **divides each row's gradient by how often that index appears in\nthis batch**, so a token seen three times does not pull three times as hard as one\nseen once. It is `padding_idx`'s trick with a fraction instead of a zero — see\n`scaleRowsByCount`.",
      "members": [],
-     "doc_ko": "표에서 번호대로 행을 고른다. `F.embedding(번호, 표)` 자리다.\n\n**정의 그대로다** — `indexSelect` 가 하는 일과 같고 기울기도 그쪽이 이미 안다.\n같은 번호가 여러 번 나오면 그 행으로 여러 번 더해진다. 없는 것을 흉내 내는 것이\n아니라 **있는 것에 이름을 붙이는 것**이므로 값이 갈릴 자리가 없다.\n\n그런데도 이 이름이 오래 없었다. 결속이 같은 세 줄을 파이썬에 갖고 있었고 골든이\n그쪽을 지나서, TypeScript 로 쓰는 쪽에만 없는 이름이었다 —\n`tests/test_binding_fills_in.py` 가 가리킨 자리다.\n\n**`nn.Embedding` 층은 아직 없다.** 셋 어디에도 없고 골든도 안 묻는다. 그것은 이\n함수를 감싸고 가중치를 들고 있는 자리이지 새 계산이 아니므로, 여기 없다는 것을\n적어 두는 편이 이름만 놓는 것보다 낫다."
+     "doc_ko": "**torch 의 다섯을 실었고, 셋으로 갈린다.**\n\n`max_norm`/`norm_type` 은 찾아본 줄을 *표 자체에서* 짧게 만든다 — `embeddingBag` 과 같은 부작용이고 같은 `renormRows` 를 지나므로, 그쪽의 긴 설명이 여기에도 그대로 적용된다.\n\n`padding_idx` 는 **기울기 전용**이다. torch 로 재보면 순전파는 그 줄을 있는 그대로 내놓고 기울기만 0 이 된다. 그러니 내놓는 값을 바꿔서는 할 수 없고, 대신 들어가는 길에서 그 줄을 그래프에서 떼어 낸다 — 순전파는 비트까지 같고 돌아오는 길만 끊긴다. 남겨 두면 pad 토큰이 손실이 원하는 쪽으로 흘러가고 마스크가 *이건 무시하라* 는 뜻을 잃는다.\n\n`sparse` 는 이름을 대고 거절한다 — 코어가 이름을 대고 거절하기 때문이다. 서명에서 빠져 있던 동안 다섯은 모두 남는 인자였고 JavaScript 는 남는 인자를 버린다 — `embedding(idx, w, 0)` 은 패딩 안 한 답을 패딩한 것의 이름으로 돌려주고 있었다.\n\n`scaleGradByFreq` 는 **각 줄의 기울기를 그 번호가 이 배치에 몇 번 나왔는지로 나눈다.** 세 번 본 토큰이 한 번 본 토큰보다 세 배로 당기지 않게 하는 것이다. `padding_idx` 의 수법을 0 대신 분수로 쓴 것이고, `scaleRowsByCount` 를 보라."
     },
     {
      "kind": "function",
@@ -11338,17 +11538,11 @@
     {
      "kind": "function",
      "name": "gumbelSoftmax",
-     "signature": "export declare function gumbelSoftmax(logits: Tensor, tau?: number, hard?: boolean, eps?: number, dim?: number, noise?: Tensor | null): Tensor",
-     "doc": "Picks one at random **while letting derivatives through.**\n\nDrawing one category is not differentiable, so Gumbel noise is added and\n`softmax` smooths it. The smaller `tau`, the more it concentrates on one\nside.\n\nWith `hard=true` the answer is 0/1 but **the gradient is the smooth\none's** — the common `hard - soft.detach() + soft` trick, where the value\nis hard and the derivative is soft. Keeping those two apart is what this\nfunction means.",
+     "signature": "export declare function gumbelSoftmax(logits: Tensor, tau?: number, hard?: boolean, eps?: number, dim?: number): Tensor",
+     "doc": "Picks one at random **while letting derivatives through.**\n\nDrawing one category is not differentiable, so Gumbel noise is added and\n`softmax` smooths it. The smaller `tau`, the more it concentrates on one\nside.\n\nWith `hard=true` the answer is 0/1 but **the gradient is the smooth\none's** — the common `hard - soft.detach() + soft` trick, where the value\nis hard and the derivative is soft. Keeping those two apart is what this\nfunction means.\n\n**A sixth `noise` seat used to sit here and does not any more.** It let a caller\nhand in the Gumbel draw, which made the function reproducible — and torch has no\nsuch argument, so it was a seat only this implementation had. The one thing it was\nused for, asking whether the answer follows the draw rather than the call,\n`manualSeed` answers: seed, call, seed again, call again. Reproducibility that\nworks the way a reader of torch already expects beats an extra parameter that\nworks only here, and the signature axis counted the seat as this namespace's last\nopen row.",
      "members": [],
-     "tags": [
-      {
-       "tag": "param",
-       "text": "noise Gumbel noise already drawn. Undrawn, it is drawn here — the golden cases can only ask about properties rather than values, but a caller sometimes wants to reproduce with fixed noise."
-      }
-     ],
      "torch": "gumbel_softmax",
-     "doc_ko": "무작위로 하나를 고르되 **미분이 흐르게** 고른다.\n\n범주 하나를 뽑는 것은 미분이 안 되는 일이라, Gumbel 잡음을 더해 `softmax` 로\n부드럽게 만든다. `tau` 가 작을수록 한쪽으로 몰린다.\n\n`hard=true` 면 답은 0/1 이지만 **기울기는 부드러운 쪽 것을 쓴다** —\n`hard - soft.detach() + soft` 라는 흔한 수법이고, 값은 hard 이고 미분은 soft 다.\n그 둘을 갈라 두지 않으면 이 함수의 뜻이 없어진다."
+     "doc_ko": "무작위로 하나를 고르되 **미분이 흐르게** 고른다.\n\n범주 하나를 뽑는 것은 미분이 안 되는 일이라, Gumbel 잡음을 더해 `softmax` 로\n부드럽게 만든다. `tau` 가 작을수록 한쪽으로 몰린다.\n\n`hard=true` 면 답은 0/1 이지만 **기울기는 부드러운 쪽 것을 쓴다** —\n`hard - soft.detach() + soft` 라는 흔한 수법이고, 값은 hard 이고 미분은 soft 다.\n그 둘을 갈라 두지 않으면 이 함수의 뜻이 없어진다.\n\n여섯째 `noise` 자리가 있었고 지금은 없다. 호출자가 Gumbel 추첨을 직접 건네 재현할 수 있게 한 자리인데, torch 에는 없는 자리라 이 구현에만 있었다. 그 자리로 묻던 것 — 답이 호출이 아니라 추첨을 따르는가 — 은 `manualSeed` 가 답한다. torch 독자가 이미 아는 방식의 재현성이 여기서만 되는 인자보다 낫다."
     },
     {
      "kind": "class",
@@ -11357,9 +11551,10 @@
      "doc": "",
      "members": [
       {
-       "name": "channels",
-       "signature": "readonly channels: number",
-       "doc": ""
+       "name": "numFeatures",
+       "signature": "readonly numFeatures: number",
+       "doc": "",
+       "torch": "num_features"
       },
       {
        "name": "weight",
@@ -11373,20 +11568,20 @@
       },
       {
        "name": "runningMean",
-       "signature": "readonly runningMean: Tensor",
-       "doc": "",
+       "signature": "readonly runningMean: Tensor | null",
+       "doc": "**Null under `trackRunningStats=false`**, which is torch's own answer there:\n`bn.running_mean is None`, `state_dict` holds `weight` and `bias` alone, and the\nlayer normalises by this batch in both modes.",
        "torch": "running_mean"
       },
       {
        "name": "runningVar",
-       "signature": "readonly runningVar: Tensor",
+       "signature": "readonly runningVar: Tensor | null",
        "doc": "",
        "torch": "running_var"
       },
       {
        "name": "constructor",
-       "signature": "constructor(channels: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, bias?: boolean)",
-       "doc": "See `GroupNorm` on `affine` and `bias`."
+       "signature": "constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, device?: null, dtype?: null, bias?: boolean)",
+       "doc": "See `GroupNorm` on `affine` and `bias`.\n\n**`numFeatures`, not `channels`, and `bias` behind `device` and `dtype`.** This is\nthe fix `InstanceNormND` took and this class did not, one file apart: torch declares\n`bias` keyword-only after the pair, so a sixth positional argument is `device` there\nand was `bias` here — **a shift, not a short tail.** The rename goes with it, because\ntorch and the core both call the first argument `num_features` and its sibling\nalready did.\n\nTwo things next to it were already right and read like proof: `InstanceNormND`\ntwenty lines up takes the pair, and `LazyBatchNorm1d` — this layer's own lazy\nspelling — declares `device` and `dtype` and refuses them. Only the eager batch\nclass was short, and the signature axis is what said so."
       },
       {
        "name": "ownParameters",
@@ -11425,6 +11620,7 @@
      "signature": "export declare class BatchNorm2d extends BatchNormND",
      "doc": "`torch.nn.BatchNorm2d`. **It inherits `BatchNormND` unchanged.**\n\nRank is not consulted, so the number in the name does not change the\ncomputation — everything but the channel axis is reduced, which makes\n(N,C,H,W) and (N,C,D,H,W) the same code. The core (`borch/_nn.py`) writes\nthe same reason at the same place, and three implementations giving one\nanswer is what this table is worth.\n\n**torch diverges here** — it rejects a 3-D input to `BatchNorm2d`. Adding\nthat check to borch.ts alone would split it from the core, so if it goes in\nit is a change to all three, not something to slip in while standing this\nname up.",
      "members": [],
+     "inherited_ctor": "constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, device?: null, dtype?: null, bias?: boolean)",
      "doc_ko": "`torch.nn.BatchNorm2d`. **`BatchNormND` 를 그대로 물려받는다.**\n\n차수를 안 따지므로 이름의 숫자가 계산을 안 바꾼다 — 채널 축만 남기고 나머지를\n전부 줄이니 (N,C,H,W) 든 (N,C,D,H,W) 든 같은 코드다. 코어(`borch/_nn.py`)가 같은\n자리에 같은 이유를 적어 두었고, 셋이 같은 답을 내는 것이 이 표의 값어치다.\n\n**torch 는 여기서 갈린다** — 저쪽은 `BatchNorm2d` 에 3 차원을 주면 거절한다.\n그 검사를 borch.ts 에만 넣으면 코어와 갈리므로, 넣는다면 세 구현을 함께 고칠\n일이지 이 이름을 세우면서 지나가며 할 일이 아니다."
     },
     {
@@ -11432,7 +11628,8 @@
      "name": "BatchNorm1d",
      "signature": "export declare class BatchNorm1d extends BatchNormND",
      "doc": "`torch.nn.BatchNorm1d`. The same inheritance as `BatchNorm2d`, and it was\n**the one of the three that was never written** — see `InstanceNorm1d` for\nhow four absent names sat inside a counter that was pinned as expected.",
-     "members": []
+     "members": [],
+     "inherited_ctor": "constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, device?: null, dtype?: null, bias?: boolean)"
     },
     {
      "kind": "class",
@@ -11440,6 +11637,7 @@
      "signature": "export declare class BatchNorm3d extends BatchNormND",
      "doc": "`torch.nn.BatchNorm3d`. The computation is the same, for the reason above.",
      "members": [],
+     "inherited_ctor": "constructor(numFeatures: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, device?: null, dtype?: null, bias?: boolean)",
      "doc_ko": "`torch.nn.BatchNorm3d`. 위와 같은 이유로 계산이 같다."
     },
     {
@@ -11454,7 +11652,7 @@
      "kind": "class",
      "name": "RNNBase",
      "signature": "export declare class RNNBase extends Module",
-     "doc": "What `RNN`, `LSTM` and `GRU` share — the weights and the time loop.\n\n**torch calls this `RNNBase`**, and the name was `Recurrent` alone, so the name\naxis counted the base class as a feature borch.ts does not have while `RNN\nextends` it two hundred lines down. `RNNBase` is the exported name now and\n`Recurrent` stays beside it, because `src/rnn.ts` and the golden's own comments\nrefer to it by that name and a rename that reaches into prose is how a comment\nstarts lying.",
+     "doc": "",
      "members": [
       {
        "name": "mode",
@@ -11467,39 +11665,64 @@
        "doc": ""
       },
       {
+       "name": "numLayers",
+       "signature": "readonly numLayers: number",
+       "doc": "",
+       "torch": "num_layers"
+      },
+      {
        "name": "batchFirst",
        "signature": "readonly batchFirst: boolean",
        "doc": "",
        "torch": "batch_first"
       },
       {
-       "name": "weightIh",
-       "signature": "readonly weightIh: Tensor",
-       "doc": "",
-       "torch": "weight_ih"
+       "name": "dropout",
+       "signature": "readonly dropout: number",
+       "doc": ""
       },
       {
-       "name": "weightHh",
-       "signature": "readonly weightHh: Tensor",
-       "doc": "",
-       "torch": "weight_hh"
+       "name": "bidirectional",
+       "signature": "readonly bidirectional: boolean",
+       "doc": ""
       },
       {
-       "name": "biasIh",
-       "signature": "readonly biasIh: Tensor",
+       "name": "projSize",
+       "signature": "readonly projSize: number",
        "doc": "",
-       "torch": "bias_ih"
+       "torch": "proj_size"
       },
       {
-       "name": "biasHh",
-       "signature": "readonly biasHh: Tensor",
+       "name": "slabs",
+       "signature": "readonly slabs: RNNSlab[]",
+       "doc": "Indexed `layer * directions + direction`, which is torch's own row order."
+      },
+      {
+       "name": "directions",
+       "signature": "readonly directions: number",
+       "doc": ""
+      },
+      {
+       "name": "outWidth",
+       "signature": "readonly outWidth: number",
        "doc": "",
-       "torch": "bias_hh"
+       "torch": "out_width"
+      },
+      {
+       "name": "nonlinearity",
+       "signature": "nonlinearity: \"tanh\" | \"relu\"",
+       "doc": "**Not a constructor seat, because torch's `RNNBase` has none.** torch carries the\nactivation in the mode — `RNN_TANH` and `RNN_RELU` are two of its four — and\n`RNN` is the only subclass that takes the word. Adding an twelfth argument here\nmade this class one longer than torch's, which the signature axis reads as a tail\nthat does not line up; `RNN` sets the field after `super()` instead."
       },
       {
        "name": "constructor",
        "signature": "constructor(mode: RNNKind, inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean, dropout?: number, bidirectional?: boolean, projSize?: number, device?: null, dtype?: null)",
-       "doc": "**`mode` comes first, as it does in torch.** It used to come last, so\n`new RNNBase(10, 20, \"LSTM\")` here was `RNNBase(\"LSTM\", 10, 20)` there — and the\nrow said nothing, because a name torch has at one end and we have at the other\ncannot be lined up, which puts it in the bucket that reports no detail."
+       "doc": "**`mode` comes first, as it does in torch.** It used to come last, so\n`new RNNBase(10, 20, \"LSTM\")` here was `RNNBase(\"LSTM\", 10, 20)` there — and the\nrow said nothing, because a name torch has at one end and we have at the other\ncannot be lined up, which puts it in the bucket that reports no detail.\n\n**`numLayers`, `bias`, `bidirectional` and `projSize` were refused here** with\nthe reason that this base builds one unidirectional biased layer, so anything\nelse had nowhere to go. That was true of the code and not of the problem: a\nsecond direction is the same recurrence over `flip(0)` turned back round, a\nstack is the loop run again on the last layer's output, and the projection is one\nmore matrix after `o · tanh(c)`. None of it needed a kernel that was not here."
+      },
+      {
+       "name": "installFlat",
+       "signature": "installFlat(names: readonly string[], values: readonly Tensor[]): void",
+       "doc": "Replace the built weights with the ones a caller handed over, by name.\n\n`torch.lstm` and its siblings take **a flat list** and the gradient has to reach\nthe tensors in it, so this swaps the slabs' entries rather than copying values\ninto them — `loadStateDict` would copy, and then the caller's tensors would get\nno gradient at all.",
+       "torch": "install_flat"
       },
       {
        "name": "ownParameters",
@@ -11514,7 +11737,7 @@
       },
       {
        "name": "run",
-       "signature": "run(x: Tensor): { output: Tensor; hidden: Tensor; cell: Tensor; }",
+       "signature": "run(x: Tensor, h0?: Tensor | null, c0?: Tensor | null): { output: Tensor; hidden: Tensor; cell: Tensor; }",
        "doc": "Produces the full output and the final state together.",
        "doc_ko": "출력 전체와 마지막 상태를 같이 낸다."
       }
@@ -11531,49 +11754,49 @@
      "kind": "class",
      "name": "RNN",
      "signature": "export declare class RNN extends RNNBase",
-     "doc": "`torch.nn.RNN` — one layer.\n\n**`nonlinearity` sits fourth and `batchFirst` sixth, which is torch's order and not\n`LSTM`'s.** This is the one of the three that takes an extra argument, so the same\nflag lives at a different index here than next door; writing all three alike would\nput `batchFirst` one seat early on exactly this class.",
+     "doc": "`torch.nn.RNN`, stacked as deep as `numLayers` says.\n\n**`nonlinearity` sits fourth and `batchFirst` sixth, which is torch's order and not\n`LSTM`'s.** This is the one of the three that takes an extra argument, so the same\nflag lives at a different index here than next door; writing all three alike would\nput `batchFirst` one seat early on exactly this class — and lands a string in\n`bias`, where it is true, so the layer builds with biases and computes `tanh`.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, nonlinearity?: \"tanh\" | \"relu\", bias?: boolean, batchFirst?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, nonlinearity?: \"tanh\" | \"relu\", bias?: boolean, batchFirst?: boolean, dropout?: number, bidirectional?: boolean)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.RNN` — 한 층.\n\n**`nonlinearity` 가 넷째, `batchFirst` 가 여섯째** — torch 의 순서이지 `LSTM` 의 순서가 아니다. 셋 중 이것만 인자가 하나 더 있어서 같은 플래그가 옆집과 다른 자리에 산다. 셋을 똑같이 쓰면 바로 이 클래스에서 `batchFirst` 가 한 칸 앞으로 간다."
+     "doc_ko": "`torch.nn.RNN` — `numLayers` 가 말하는 만큼 쌓는다.\n\n**`nonlinearity` 가 넷째, `batchFirst` 가 여섯째** — torch 의 순서이지 `LSTM` 의 순서가 아니다. 셋 중 이것만 인자가 하나 더 있어서 같은 플래그가 옆집과 다른 자리에 산다. 셋을 똑같이 쓰면 바로 이 클래스에서 `batchFirst` 가 한 칸 앞으로 가고, 문자열이 `bias` 에 앉는다 — 거기서는 참이므로 층은 편향을 달고 `tanh` 를 계산한다."
     },
     {
      "kind": "class",
      "name": "LSTM",
      "signature": "export declare class LSTM extends RNNBase",
-     "doc": "`torch.nn.LSTM` — one layer. It carries two states, so `cell` comes back alongside\n`hidden`.",
+     "doc": "`torch.nn.LSTM`. It carries two states, so `cell` comes back alongside `hidden`,\nand it is the one of the three that takes `projSize`.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean, dropout?: number, bidirectional?: boolean, projSize?: number)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.LSTM` — 한 층. 상태를 둘 나르므로 `cell` 이 `hidden` 과 함께 돌아온다."
+     "doc_ko": "`torch.nn.LSTM`. 상태를 둘 나르므로 `cell` 이 `hidden` 과 함께 돌아오고, 셋 중 `projSize` 를 받는 것은 이것뿐이다."
     },
     {
      "kind": "class",
      "name": "GRU",
      "signature": "export declare class GRU extends RNNBase",
-     "doc": "`torch.nn.GRU` — one layer.",
+     "doc": "`torch.nn.GRU`.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean)",
+       "signature": "constructor(inputSize: number, hidden: number, numLayers?: number, bias?: boolean, batchFirst?: boolean, dropout?: number, bidirectional?: boolean)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.GRU` — 한 층."
+     "doc_ko": "`torch.nn.GRU`."
     },
     {
      "kind": "function",
      "name": "multiHeadAttentionForward",
-     "signature": "export declare function multiHeadAttentionForward(query: Tensor, key: Tensor, value: Tensor, embedDimToCheck: number | null, numHeads: number, inProjWeight: Tensor, inProjBias: Tensor | null, biasK?: Tensor | null, biasV?: Tensor | null, addZeroAttn?: boolean, dropoutP?: number, outProjWeight?: Tensor, outProjBias?: Tensor | null, training?: boolean, keyPaddingMask?: Tensor | null, needWeights?: boolean, attnMask?: Tensor | null, useSeparateProjWeight?: boolean, qProjWeight?: Tensor | null, kProjWeight?: Tensor | null, vProjWeight?: Tensor | null, staticK?: Tensor | null, staticV?: Tensor | null, averageAttnWeights?: boolean, isCausal?: boolean): { output: Tensor; weights: Tensor | null; }",
-     "doc": "The function form of attention. Weights come from outside.\n\n**Input is `(L, N, E)` — length first.** torch's function of the same\nname is, and calling it with batch first quietly mixes the wrong axes.\n\n**The mask is an added float.** A boolean table is not accepted here —\n`-inf` is added so that softmax produces zero, rather than multiplying by\nzero, and multiplying after normalisation leaves the remaining slots not\nsumming back to 1. Turning booleans into floats happens where torch's\ncontract is imitated (the Python binding).",
+     "signature": "export declare function multiHeadAttentionForward(query: Tensor, key: Tensor, value: Tensor, embedDimToCheck: number | null, numHeads: number, inProjWeight: Tensor | null, inProjBias: Tensor | null, biasK?: Tensor | null, biasV?: Tensor | null, addZeroAttn?: boolean, dropoutP?: number, outProjWeight?: Tensor | null, outProjBias?: Tensor | null, training?: boolean, keyPaddingMask?: Tensor | null, needWeights?: boolean, attnMask?: Tensor | null, useSeparateProjWeight?: boolean, qProjWeight?: Tensor | null, kProjWeight?: Tensor | null, vProjWeight?: Tensor | null, staticK?: Tensor | null, staticV?: Tensor | null, averageAttnWeights?: boolean, isCausal?: boolean): { output: Tensor; weights: Tensor | null; }",
+     "doc": "The function form of attention. Weights come from outside.\n\n**Input is `(L, N, E)` — length first.** torch's function of the same\nname is, and calling it with batch first quietly mixes the wrong axes.\n\n**The mask is an added float.** A boolean table is not accepted here —\n`-inf` is added so that softmax produces zero, rather than multiplying by\nzero, and multiplying after normalisation leaves the remaining slots not\nsumming back to 1. Turning booleans into floats happens where torch's\ncontract is imitated (the Python binding).\n\n**`inProjWeight` is null under `useSeparateProjWeight`**, which is what torch hands\nover there — its own layer sets `in_proj_weight` to `None` when the three widths\ndiffer, and the three separate weights carry the projection instead.\n\n**`outProjWeight` used to default to `inProjWeight`** and cannot now that that one\nis nullable. Nobody relied on it: every caller gives an output projection, and a\nmissing one is a mistake worth naming rather than a square matrix silently borrowed\nfrom the input side.\n\n(Both of those belong here rather than beside the parameters they describe:\n`test_binding_arguments.py` reads this list by splitting on commas, so a comment\ninside it becomes two parameters and shifts every position after it.)",
      "members": [],
      "tags": [
       {
@@ -11582,7 +11805,7 @@
       }
      ],
      "torch": "multi_head_attention_forward",
-     "doc_ko": "어텐션의 함수 꼴. 가중치를 밖에서 받는다.\n\n**입력이 `(L, N, E)` 다 — 길이가 앞이다.** torch 의 같은 이름이 그렇고, 배치를\n앞에 두고 부르면 조용히 다른 축을 섞는다.\n\n**가림막은 더하는 실수다.** 참·거짓 표를 여기서 안 받는다 — `-inf` 를 더해\nsoftmax 가 0 을 내게 하는 것이지 0 을 곱하는 것이 아니고, 곱하면 이미 정규화한\n뒤라 남은 자리가 1 로 안 돌아간다. 참·거짓을 실수로 바꾸는 일은 torch 의 계약을\n흉내내는 자리(파이썬 결속)에서 한다."
+     "doc_ko": "어텐션의 함수 꼴. 가중치를 밖에서 받는다.\n\n**입력이 `(L, N, E)` 다 — 길이가 앞이다.** torch 의 같은 이름이 그렇고, 배치를\n앞에 두고 부르면 조용히 다른 축을 섞는다.\n\n**가림막은 더하는 실수다.** 참·거짓 표를 여기서 안 받는다 — `-inf` 를 더해\nsoftmax 가 0 을 내게 하는 것이지 0 을 곱하는 것이 아니고, 곱하면 이미 정규화한\n뒤라 남은 자리가 1 로 안 돌아간다. 참·거짓을 실수로 바꾸는 일은 torch 의 계약을\n흉내내는 자리(파이썬 결속)에서 한다.\n\n**`useSeparateProjWeight` 아래에서는 `inProjWeight` 가 null 이다.** torch 가\n거기서 그렇게 넘긴다 — 세 폭이 다르면 torch 의 층도 `in_proj_weight` 를 `None`\n으로 두고, 대신 분리된 세 가중치가 투영을 맡는다.\n\n**`outProjWeight` 의 기본값은 `inProjWeight` 였고**, 그쪽이 null 이 될 수 있는\n지금은 그럴 수 없다. 기대던 곳은 없다: 부르는 쪽은 모두 출력 투영을 준다. 없는\n것은 입력 쪽에서 말없이 빌려온 정사각 행렬보다 이름을 붙여 알릴 실수다.\n\n(둘 다 인자 옆이 아니라 여기 적는다: `test_binding_arguments.py` 가 이 목록을\n쉼표로 갈라 읽어서, 목록 안의 주석은 인자 두 개가 되고 뒤 자리를 전부 민다.)"
     },
     {
      "kind": "class",
@@ -11615,8 +11838,8 @@
       },
       {
        "name": "inWeight",
-       "signature": "readonly inWeight: Tensor",
-       "doc": "",
+       "signature": "readonly inWeight: Tensor | null",
+       "doc": "Null when the three widths differ — see the constructor.",
        "torch": "in_weight"
       },
       {
@@ -11638,9 +11861,51 @@
        "torch": "out_bias"
       },
       {
+       "name": "qWeight",
+       "signature": "readonly qWeight: Tensor | null",
+       "doc": "",
+       "torch": "q_weight"
+      },
+      {
+       "name": "kWeight",
+       "signature": "readonly kWeight: Tensor | null",
+       "doc": "",
+       "torch": "k_weight"
+      },
+      {
+       "name": "vWeight",
+       "signature": "readonly vWeight: Tensor | null",
+       "doc": "",
+       "torch": "v_weight"
+      },
+      {
+       "name": "biasK",
+       "signature": "readonly biasK: Tensor | null",
+       "doc": "",
+       "torch": "bias_k"
+      },
+      {
+       "name": "biasV",
+       "signature": "readonly biasV: Tensor | null",
+       "doc": "",
+       "torch": "bias_v"
+      },
+      {
+       "name": "addZeroAttn",
+       "signature": "readonly addZeroAttn: boolean",
+       "doc": "",
+       "torch": "add_zero_attn"
+      },
+      {
+       "name": "qkvSameEmbedDim",
+       "signature": "readonly qkvSameEmbedDim: boolean",
+       "doc": "torch's own name for the test that decides whether one bundle is possible.",
+       "torch": "qkv_same_embed_dim"
+      },
+      {
        "name": "constructor",
        "signature": "constructor(embedDim: number, numHeads: number, dropout?: number, bias?: boolean, addBiasKv?: boolean, addZeroAttn?: boolean, kdim?: number | null, vdim?: number | null, batchFirst?: boolean, device?: null, dtype?: null)",
-       "doc": "torch's eleven, of which three do work here and four are refused by name.\n\n**This took `(embedDim, numHeads)`, so seven arguments were missing from the\nmiddle and every one of them shifted what followed.** `new MultiheadAttention(64,\n8, 0.1)` — torch's own way of writing a dropout of 0.1 — reached nothing at all\nhere, and the core had the same list a shift earlier where `0.1` landed on\n`bias`. An absent feature beats a wrong answer, and **a wrong position is a wrong\nanswer wearing the shape of a feature.**\n\n`dropout`, `bias` and `batchFirst` work. `addBiasKv`, `addZeroAttn` and a\n`kdim`/`vdim` unlike the embedding stop with their own name — the refusal exists\na layer down in `multiHeadAttentionForward` already, and carrying the argument\nhere is what makes it arrive with the right name attached.\n\n**`batchFirst` defaults to `false`, which flips what this class used to do.** It\nread `(batch, len, E)` unconditionally, which is torch's `batch_first=True`, so\nthe default was the option torch does not take."
+       "doc": "torch's eleven, of which three do work here and four are refused by name.\n\n**This took `(embedDim, numHeads)`, so seven arguments were missing from the\nmiddle and every one of them shifted what followed.** `new MultiheadAttention(64,\n8, 0.1)` — torch's own way of writing a dropout of 0.1 — reached nothing at all\nhere, and the core had the same list a shift earlier where `0.1` landed on\n`bias`. An absent feature beats a wrong answer, and **a wrong position is a wrong\nanswer wearing the shape of a feature.**\n\n**`addBiasKv`, `addZeroAttn` and a `kdim`/`vdim` unlike the embedding stopped\nwith their own name, and all three are answered now.** `biasK` and `biasV` are\none more key and value step, concatenated in the projected space; `addZeroAttn`\nis one more zero step after that; and different widths are three separate\nprojections instead of the bundled one — which is the path\n`useSeparateProjWeight` takes in the function.\n\n**`batchFirst` defaults to `false`, which flips what this class used to do.** It\nread `(batch, len, E)` unconditionally, which is torch's `batch_first=True`, so\nthe default was the option torch does not take."
       },
       {
        "name": "ownParameters",
@@ -11656,7 +11921,7 @@
       {
        "name": "attend",
        "signature": "attend(x: Tensor, mask: Tensor | null): Tensor",
-       "doc": ""
+       "doc": "Self-attention: one tensor for query, key and value.\n\n**This wrote out its own attention and it is a call now.** A fourth copy of the\nsame arithmetic — the core has one, the function above has one, and the binding\nhad already stopped using this one after the two diverged by 1.26e-01 on the\ngolden's \"same answer as the layer\" case. Kept as a copy it would have been the\none place the new flags did not reach, since they are all written in the\nfunction."
       },
       {
        "name": "causalMask",
@@ -11691,6 +11956,11 @@
        "doc": "**`sizeAverage` and `reduce` are not adjacent here.** torch puts `ignoreIndex`\nbetween them, and a rule that inserts the pair side by side would be right about\ntwelve of these classes and wrong about this one, `NLLLoss` and `PoissonNLLLoss`.\nThe order comes from torch, one class at a time."
       },
       {
+       "name": "weight",
+       "signature": "readonly weight: Tensor | undefined",
+       "doc": ""
+      },
+      {
        "name": "constructor",
        "signature": "constructor(weight?: Tensor | undefined, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction, labelSmoothing?: number)",
        "doc": ""
@@ -11714,9 +11984,130 @@
      "doc_ko": "로짓과 정답 번호에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다.\n\n**`reduction` 이 없었다** — 층 쪽에도 같은 구멍이 있었다. 교재는 함수보다 층을\n더 많이 쓰므로 이쪽이 더 자주 닿는 자리다."
     },
     {
+     "kind": "class",
+     "name": "LinearCrossEntropyOptions",
+     "signature": "export declare class LinearCrossEntropyOptions",
+     "doc": "torch's knobs for the **chunked** implementation of `linearCrossEntropy`.\n\nEvery field is a memory strategy and **none of them moves a value** — measured in\nreal torch, four settings all within 4.8e-7 of the default, which is float32 noise\non a loss of 2.96. Nothing chunks here, so it is carried, held, and read by nothing.\n\nIt exists so a line copied out of torch's own documentation runs, rather than\nstopping on an argument that could not have changed the answer.",
+     "members": [
+      {
+       "name": "allowRetainGraph",
+       "signature": "readonly allowRetainGraph: boolean",
+       "doc": "",
+       "torch": "allow_retain_graph"
+      },
+      {
+       "name": "batchChunkSize",
+       "signature": "readonly batchChunkSize: number | null",
+       "doc": "",
+       "torch": "batch_chunk_size"
+      },
+      {
+       "name": "chunkingMethod",
+       "signature": "readonly chunkingMethod: string | null",
+       "doc": "",
+       "torch": "chunking_method"
+      },
+      {
+       "name": "accPolicy",
+       "signature": "readonly accPolicy: \"accurate\" | \"balanced\" | \"compact\" | \"auto\"",
+       "doc": "",
+       "torch": "acc_policy"
+      },
+      {
+       "name": "accDtype",
+       "signature": "readonly accDtype: unknown",
+       "doc": "",
+       "torch": "acc_dtype"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(allowRetainGraph?: boolean, batchChunkSize?: number | null, chunkingMethod?: string | null, accPolicy?: \"accurate\" | \"balanced\" | \"compact\" | \"auto\", accDtype?: unknown)",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "LinearCrossEntropyLoss",
+     "signature": "export declare class LinearCrossEntropyLoss extends Module",
+     "doc": "A `Linear` and a cross entropy, fused — **and the fusion is about memory.**\n\ntorch has this so the logits are never all materialised at once. Nothing here\nchunks, so what is left is the composition, and the composition is the same number.\n\n**It owns the weight under `linear`**, so the parameter is `linear.weight` — measured\noff torch rather than assumed, because a name in a `stateDict` is a name a checkpoint\nis written with.\n\n`outFeatures` is refused. torch reads the logits as `(N, C, ...outFeatures)` — the\nclass axis second — and `crossEntropy` here takes a 1-D target, so the shape torch\nwants is one the loss underneath cannot be given. The core refuses it for the same\nreason and says so the same way.",
+     "members": [
+      {
+       "name": "inFeatures",
+       "signature": "readonly inFeatures: number",
+       "doc": "",
+       "torch": "in_features"
+      },
+      {
+       "name": "numClasses",
+       "signature": "readonly numClasses: number",
+       "doc": "",
+       "torch": "num_classes"
+      },
+      {
+       "name": "outFeatures",
+       "signature": "readonly outFeatures: readonly number[]",
+       "doc": "",
+       "torch": "out_features"
+      },
+      {
+       "name": "reduction",
+       "signature": "readonly reduction: Reduction",
+       "doc": ""
+      },
+      {
+       "name": "weight",
+       "signature": "readonly weight: Tensor | undefined",
+       "doc": ""
+      },
+      {
+       "name": "ignoreIndex",
+       "signature": "readonly ignoreIndex: number | null",
+       "doc": "",
+       "torch": "ignore_index"
+      },
+      {
+       "name": "labelSmoothing",
+       "signature": "readonly labelSmoothing: number",
+       "doc": "",
+       "torch": "label_smoothing"
+      },
+      {
+       "name": "options",
+       "signature": "readonly options: LinearCrossEntropyOptions | undefined",
+       "doc": ""
+      },
+      {
+       "name": "linear",
+       "signature": "readonly linear: Linear",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(inFeatures: number, numClasses: number, outFeatures?: readonly number[], bias?: boolean, device?: null, dtype?: null, reduction?: Reduction, weight?: Tensor | undefined, ignoreIndex?: number | null, labelSmoothing?: number, options?: LinearCrossEntropyOptions | undefined)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Tensor, target: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "call",
+       "signature": "call(input: Tensor, target: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
      "kind": "const",
      "name": "functional",
-     "signature": "export declare const functional: { affineGrid: typeof affineGrid; batchNorm: typeof batchNorm; ctcLoss: typeof ctcLoss; embedding: typeof embedding; embeddingBag: typeof embeddingBag; gridSample: typeof gridSample; gumbelSoftmax: typeof gumbelSoftmax; multiHeadAttentionForward: typeof multiHeadAttentionForward; scaledDotProductAttention: typeof scaledDotProductAttention; alphaDropout(input: Tensor, p?: number, training?: boolean, perChannel?: boolean): Tensor; avgPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; bilinear(input: Tensor, other: Tensor, weight: Tensor, bias?: Tensor | null): Tensor; celu(input: Tensor, alpha?: number): Tensor; channelShuffle(input: Tensor, groups: number): Tensor; conv1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; cosineSimilarity(input: Tensor, other: Tensor, dim?: number, eps?: number): Tensor; crossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction, labelSmoothing?: number): Tensor; dropout(input: Tensor, p?: number, training?: boolean): Tensor; fold(input: Tensor, outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; gaussianNllLoss(input: Tensor, target: Tensor, variance: Tensor, full?: boolean, eps?: number, reduction?: Reduction): Tensor; glu(input: Tensor, dim?: number): Tensor; groupNorm(input: Tensor, numGroups: number, eps?: number): Tensor; hardshrink(input: Tensor, lambd?: number): Tensor; hardtanh(input: Tensor, minVal?: number, maxVal?: number): Tensor; hingeEmbeddingLoss(input: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; instanceNorm(input: Tensor, eps?: number): Tensor; klDiv(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction | \"batchmean\", logTarget?: boolean): Tensor; l1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; leakyRelu(input: Tensor, slope?: number): Tensor; linear(input: Tensor, weight: Tensor): Tensor; localResponseNorm(input: Tensor, size: number, alpha?: number, beta?: number, k?: number): Tensor; logSoftmax(input: Tensor, dim?: number): Tensor; marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; maxPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; mseLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelMarginLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelSoftMarginLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; nllLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; normalize(input: Tensor, dim?: number, eps?: number): Tensor; oneHot(input: Tensor, classes: number): Tensor; pairwiseDistance(input: Tensor, other: Tensor, p?: number, eps?: number, keepdim?: boolean): Tensor; pdist(input: Tensor, p?: number): Tensor; pixelShuffle(input: Tensor, upscaleFactor: number): Tensor; pixelUnshuffle(input: Tensor, downscaleFactor: number): Tensor; poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, sizeAverage?: boolean | null, eps?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; prelu(input: Tensor, weight: Tensor): Tensor; rrelu(input: Tensor, lower?: number, upper?: number, training?: boolean): Tensor; smoothL1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, beta?: number): Tensor; softMarginLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; softmax(input: Tensor, dim?: number): Tensor; softmin(input: Tensor, dim?: number): Tensor; softplus(input: Tensor, beta?: number, threshold?: number): Tensor; softshrink(input: Tensor, lambd?: number): Tensor; threshold(input: Tensor, t: number, value: number): Tensor; tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; unfold(input: Tensor, kernelSize: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; huberLoss(input: Tensor, target: Tensor, reduction?: Reduction, delta?: number): Tensor; relu(input: Tensor): Tensor; relu6(input: Tensor): Tensor; sigmoid(input: Tensor): Tensor; hardsigmoid(input: Tensor): Tensor; hardswish(input: Tensor): Tensor; logsigmoid(input: Tensor): Tensor; mish(input: Tensor): Tensor; selu(input: Tensor): Tensor; softsign(input: Tensor): Tensor; tanh(input: Tensor): Tensor; tanhshrink(input: Tensor): Tensor; avgPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; avgPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; convTranspose1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; lpPool1d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool2d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool3d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; maxPool1dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool2dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool3dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxUnpool1d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool2d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool3d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; fractionalMaxPool2d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool2dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; binaryCrossEntropyWithLogits(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, posWeight?: Tensor): Tensor; binaryCrossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; adaptiveAvgPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool2dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool3dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; tripletMarginWithDistanceLoss(anchor: Tensor, positive: Tensor, negative: Tensor, distanceFunction?: ((u: Tensor, v: Tensor) => Tensor) | null, margin?: number, swap?: boolean, reduction?: Reduction): Tensor; }",
+     "signature": "export declare const functional: { affineGrid: typeof affineGrid; batchNorm: typeof batchNorm; ctcLoss: typeof ctcLoss; embedding: typeof embedding; embeddingBag: typeof embeddingBag; gridSample: typeof gridSample; gumbelSoftmax: typeof gumbelSoftmax; multiHeadAttentionForward: typeof multiHeadAttentionForward; scaledDotProductAttention: typeof scaledDotProductAttention; alphaDropout(input: Tensor, p?: number, training?: boolean, perChannel?: boolean): Tensor; avgPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; bilinear(input: Tensor, other: Tensor, weight: Tensor, bias?: Tensor | null): Tensor; celu(input: Tensor, alpha?: number): Tensor; channelShuffle(input: Tensor, groups: number): Tensor; conv1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; cosineSimilarity(input: Tensor, other: Tensor, dim?: number, eps?: number): Tensor; crossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction, labelSmoothing?: number): Tensor; dropout(input: Tensor, p?: number, training?: boolean): Tensor; fold(input: Tensor, outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; gaussianNllLoss(input: Tensor, target: Tensor, variance: Tensor, full?: boolean, eps?: number, reduction?: Reduction): Tensor; glu(input: Tensor, dim?: number): Tensor; groupNorm(input: Tensor, numGroups: number, eps?: number): Tensor; hardshrink(input: Tensor, lambd?: number): Tensor; hardtanh(input: Tensor, minVal?: number, maxVal?: number): Tensor; hingeEmbeddingLoss(input: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; instanceNorm(input: Tensor, eps?: number): Tensor; klDiv(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction | \"batchmean\", logTarget?: boolean): Tensor; l1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; leakyRelu(input: Tensor, slope?: number): Tensor; linear(input: Tensor, weight: Tensor): Tensor; linearCrossEntropy(input: Tensor, linearWeight: Tensor, target: Tensor, linearBias?: Tensor, weight?: Tensor, reduction?: Reduction, ignoreIndex?: number | null, labelSmoothing?: number, options?: unknown): Tensor; localResponseNorm(input: Tensor, size: number, alpha?: number, beta?: number, k?: number): Tensor; logSoftmax(input: Tensor, dim?: number): Tensor; marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; maxPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; mseLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, weight?: Tensor): Tensor; multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelMarginLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; multilabelSoftMarginLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; nllLoss(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, ignoreIndex?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; normalize(input: Tensor, dim?: number, eps?: number): Tensor; oneHot(input: Tensor, classes: number): Tensor; pairwiseDistance(input: Tensor, other: Tensor, p?: number, eps?: number, keepdim?: boolean): Tensor; pdist(input: Tensor, p?: number): Tensor; pixelShuffle(input: Tensor, upscaleFactor: number): Tensor; pixelUnshuffle(input: Tensor, downscaleFactor: number): Tensor; poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, sizeAverage?: boolean | null, eps?: number, reduce?: boolean | null, reduction?: Reduction): Tensor; prelu(input: Tensor, weight: Tensor): Tensor; rrelu(input: Tensor, lower?: number, upper?: number, training?: boolean): Tensor; smoothL1Loss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, beta?: number): Tensor; softMarginLoss(input: Tensor, target: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; softmax(input: Tensor, dim?: number): Tensor; softmin(input: Tensor, dim?: number): Tensor; softplus(input: Tensor, beta?: number, threshold?: number): Tensor; softshrink(input: Tensor, lambd?: number): Tensor; threshold(input: Tensor, t: number, value: number): Tensor; tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; unfold(input: Tensor, kernelSize: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; huberLoss(input: Tensor, target: Tensor, reduction?: Reduction, delta?: number): Tensor; relu(input: Tensor): Tensor; relu6(input: Tensor): Tensor; sigmoid(input: Tensor): Tensor; hardsigmoid(input: Tensor): Tensor; hardswish(input: Tensor): Tensor; logsigmoid(input: Tensor): Tensor; mish(input: Tensor): Tensor; selu(input: Tensor): Tensor; softsign(input: Tensor): Tensor; tanh(input: Tensor): Tensor; tanhshrink(input: Tensor): Tensor; avgPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; avgPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; convTranspose1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; lpPool1d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool2d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool3d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; maxPool1dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool2dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool3dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxUnpool1d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool2d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool3d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; fractionalMaxPool2d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool2dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; binaryCrossEntropyWithLogits(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, posWeight?: Tensor): Tensor; binaryCrossEntropy(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction): Tensor; adaptiveAvgPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool2dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool3dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; tripletMarginWithDistanceLoss(anchor: Tensor, positive: Tensor, negative: Tensor, distanceFunction?: ((u: Tensor, v: Tensor) => Tensor) | null, margin?: number, swap?: boolean, reduction?: Reduction): Tensor; }",
      "doc": "",
      "members": []
     },
@@ -11950,7 +12341,7 @@
      ]
     }
    ],
-   "count": 792,
+   "count": 851,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -12142,6 +12533,14 @@
      "signature": "export declare function linear(input: Tensor, weight: Tensor): Tensor",
      "doc": "",
      "members": []
+    },
+    {
+     "kind": "function",
+     "name": "linearCrossEntropy",
+     "signature": "export declare function linearCrossEntropy(input: Tensor, linearWeight: Tensor, target: Tensor, linearBias?: Tensor, weight?: Tensor, reduction?: Reduction, ignoreIndex?: number | null, labelSmoothing?: number, options?: unknown): Tensor",
+     "doc": "`crossEntropy(linear(input, w, b), target)` — **and that is what torch computes**,\nnot a simplification of it.\n\ntorch keeps a separate name so the logits are never all materialised at once, which\nis what makes a vocabulary-sized class count fit in memory. Nothing here chunks, so\nthe fusion has nothing to give and the composition is the whole of it. Measured\nagainst real torch across its argument surface — bare, with a bias, with class\nweights, at every reduction, with label smoothing and with `ignoreIndex` — and the\ntwo agree, gradients included.\n\n**`ignoreIndex` defaults differently in the two names.** torch's is `null` here and\n`-100` on `crossEntropy`, and `null` is measured to *mean* -100 — so a port passing\nit straight through would make it mean *ignore nothing*, which is the same answer on\nevery target that holds no -100 and a different one on the targets this argument\nexists for.\n\n`options` is torch's chunking configuration. Every field of it is a memory strategy\nand none moves a value (measured: four settings within 4.8e-7 of the default), so it\nis accepted and read by nothing rather than refused — a line copied from torch's own\ndocumentation should not stop on an argument that cannot change the answer.",
+     "members": [],
+     "torch": "linear_cross_entropy"
     },
     {
      "kind": "function",
@@ -12598,7 +12997,7 @@
      "kind": "function",
      "name": "binaryCrossEntropyWithLogits",
      "signature": "export declare function binaryCrossEntropyWithLogits(input: Tensor, target: Tensor, weight?: Tensor, sizeAverage?: boolean | null, reduce?: boolean | null, reduction?: Reduction, posWeight?: Tensor): Tensor",
-     "doc": "`F.binary_cross_entropy_with_logits`. The method has been here as `bceWithLogits`\n— this is torch's name for it.\n\n**torch's whole list, and it took three of seven.** `reduction` sat in `weight`'s\nseat, so a caller writing torch's own line — or the binding unrolling it\npositionally — put a tensor where a string belongs. The layer next door,\n`BCEWithLogitsLoss`, has taken all seven and refused two of them for as long as it\nhas existed; only the functional form was short.\n\n`weight` and `posWeight` are **refused rather than ignored**, which is what the\nlayer does and what this repository's rule says: an argument accepted and unused is\nworse than one that is absent, because the caller cannot tell.",
+     "doc": "`F.binary_cross_entropy_with_logits`. The method has been here as `bceWithLogits`\n— this is torch's name for it.\n\n**torch's whole list, and it took three of seven.** `reduction` sat in `weight`'s\nseat, so a caller writing torch's own line — or the binding unrolling it\npositionally — put a tensor where a string belongs. The layer next door,\n`BCEWithLogitsLoss`, has taken all seven and refused two of them for as long as it\nhas existed; only the functional form was short.\n\n`weight` and `posWeight` were **refused rather than ignored** — the rule being that\nan argument accepted and unused is worse than one that is absent, because the caller\ncannot tell. Both are answered now: `posWeight` scales the positive term alone and\n`weight` scales the whole element, and `mean` divides by the count under either.",
      "members": [],
      "torch": "binary_cross_entropy_with_logits"
     },
@@ -12691,7 +13090,7 @@
      "torch": "triplet_margin_with_distance_loss"
     }
    ],
-   "count": 95
+   "count": 96
   },
   {
    "name": "optim",
@@ -12734,6 +13133,12 @@
        "optional": true,
        "torch": "weight_decay",
        "doc_ko": "이 그룹만 다른 값을 쓸 때. 없으면 옵티마이저를 세울 때 준 값이다."
+      },
+      {
+       "name": "momentum",
+       "signature": "momentum?: number",
+       "doc": "**Present only on the optimizers that have one**, which is the condition\n`CyclicLR` reads: torch writes a cycling momentum into a group only where the\nkey already exists, and this key existing is what says so.",
+       "optional": true
       }
      ],
      "doc_ko": "파라미터 묶음 하나와 거기 걸린 하이퍼파라미터.\n\n**전에는 `params` 가 없었다.** 이름은 torch 의 `param_groups` 인데 언제나\n`[{ lr }]` 하나였고 스케줄러가 전부 `[0]` 만 봤다 — 층별 학습률도, bias·norm 에\nweight decay 를 빼는 것도 안 되는데 이름은 된다고 말하고 있었다. 모양만 torch 인\n것이 없는 것보다 나쁘다: 쓰는 사람이 `paramGroups.push(...)` 를 쓰면 조용히\n무시됐다."
@@ -12774,6 +13179,59 @@
      "doc_ko": "옵티마이저 생성자가 받는 것 — 텐서 목록이거나 그룹 목록이다."
     },
     {
+     "kind": "interface",
+     "name": "OptimizerOptions",
+     "signature": "export interface OptimizerOptions",
+     "doc": "The keyword-only group every `torch.optim.*` carries, spelled as an object.\n\n**All five seats exist so that four of them can be answered.** Left out, they were\nsurplus properties on an object literal — TypeScript rejects those at the call site,\nand JavaScript and the Python binding do not: `new SGD(p, 0.1, 0.9, 0, 1e-4, false,\n{ fused: true })` was accepted and the word discarded. Present, each one gets the\nanswer the core already gives, and the two libraries stop differing about a question\nneither of them computes.",
+     "members": [
+      {
+       "name": "maximize",
+       "signature": "maximize?: boolean",
+       "doc": "",
+       "optional": true
+      },
+      {
+       "name": "foreach",
+       "signature": "foreach?: boolean",
+       "doc": "A hint about batching the update, not a different answer. Accepted and unused.",
+       "optional": true
+      },
+      {
+       "name": "fused",
+       "signature": "fused?: boolean",
+       "doc": "The same. torch fuses on CUDA; there is one kernel here and it is the same number.",
+       "optional": true
+      },
+      {
+       "name": "capturable",
+       "signature": "capturable?: boolean",
+       "doc": "",
+       "optional": true
+      },
+      {
+       "name": "differentiable",
+       "signature": "differentiable?: boolean",
+       "doc": "",
+       "optional": true
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "AdamOptions",
+     "signature": "export interface AdamOptions extends OptimizerOptions",
+     "doc": "`Adam`'s options, and **only `Adam`'s.**\n\ntorch gives `decoupled_weight_decay` to three optimizers and declares it\ndifferently in each: keyword-only on `Adam`, positional on `NAdam` and `RAdam`.\nSo it cannot live in `OptimizerOptions` — put there it appears in every\noptimizer's object, and the two that take it positionally then read as having\nmoved it. The signature axis said exactly that the moment it was tried.\n\nA seventh positional seat on `Adam` was the other place it sat, and that made\n`Adam`'s positional list one longer than torch's. Neither of the two easy homes\nwas right; this is the third.",
+     "members": [
+      {
+       "name": "decoupledWeightDecay",
+       "signature": "decoupledWeightDecay?: boolean",
+       "doc": "",
+       "optional": true,
+       "torch": "decoupled_weight_decay"
+      }
+     ]
+    },
+    {
      "kind": "class",
      "name": "Optimizer",
      "signature": "export declare abstract class Optimizer",
@@ -12801,7 +13259,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, defaultLr: number, { maximize }?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, defaultLr: number, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -12847,11 +13305,31 @@
        "doc_ko": "지금 그룹이 따로 정한 값, 없으면 옵티마이저의 기본값."
       },
       {
+       "name": "momentumOf",
+       "signature": "protected momentumOf(fallback: number): number",
+       "doc": "The momentum of the group being stepped. **A scheduler can move it** — that is\nwhat `CyclicLR(cycle_momentum=True)` does, and it changes the trained values by\nabout 7% over eight steps, not the schedule that is printed.\n\nThe value goes into the pipeline key like the learning rate already does, and the\nlearning rate is moved every step by every scheduler here — so a momentum that\nmoves costs the same kind of shader cache and no new kind.",
+       "protected": true,
+       "torch": "momentum_of"
+      },
+      {
+       "name": "publishMomentum",
+       "signature": "protected publishMomentum(value: number): void",
+       "doc": "Publishes a momentum onto every group. Called by the optimizers that have one,\nso `CyclicLR` can tell them from the ones that do not — torch's own test is\nwhether the key is in the group.",
+       "protected": true,
+       "torch": "publish_momentum"
+      },
+      {
        "name": "zeroGrad",
-       "signature": "zeroGrad(): void",
-       "doc": "Empties the gradients. **It returns them to `null`** — filling with\nzeros blurs the leaf test.",
+       "signature": "zeroGrad(setToNone?: boolean): void",
+       "doc": "Empties the gradients.\n\n  The difference is invisible until something reads `grad` between two calls:\n  `null` has no shape and nothing to add into, and the argument is there\n  precisely so that a zeroed tensor is.",
+       "tags": [
+        {
+         "tag": "param",
+         "text": "setToNone torch's argument, and the default is `true`: the gradient is dropped rather than filled with zeros. **The seat did not exist here, and on both Python sides it existed and was never read** — so the ordinary call agreed everywhere and `setToNone = false` quietly did the other thing."
+        }
+       ],
        "torch": "zero_grad",
-       "doc_ko": "기울기를 비운다. **`null` 로 되돌린다** — 0 으로 채우면 잎 판정이 흐려진다."
+       "doc_ko": "기울기를 비운다.\n\n두 번의 호출 사이에서 `grad` 를 읽기 전까지는 차이가 보이지 않는다: `null` 은 모양도 없고 더할 곳도 없다. 인자가 있는 이유가 바로 0 으로 채운 텐서를 남기기 위해서다."
       },
       {
        "name": "step",
@@ -12903,7 +13381,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, momentum?: number, dampening?: number, weightDecay?: number, nesterov?: boolean, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, momentum?: number, dampening?: number, weightDecay?: number, nesterov?: boolean, opts?: OptimizerOptions)",
        "doc": "torch's order — `dampening` third and `nesterov` sixth, with `maximize`\nkeyword-only behind them as torch has it.\n\n**This read `(params, lr, momentum, weightDecay)`**, so `new SGD(p, 0.1, 0.9,\n1e-4)` — the line a torch tutorial writes — set the dampening to the weight\ndecay and left the decay at zero. Two different things, both plausible small\nnumbers, and the run trains and trains slightly wrong.\n\n**`lr` has torch's default and used to be required.** `new SGD(params)` is the\nline a first tutorial writes, and it stopped here on an argument count — the one\noptimizer most likely to be built with nothing but its parameters. The number is\ntorch's `1e-3` rather than a rounder one: the Python side had `0.01` for a while,\nwhich is ten times too large and is the kind of divergence a case cannot catch by\n*using* the value, because every case names its own rate."
       },
       {
@@ -12927,13 +13405,13 @@
      "members": [
       {
        "name": "decoupled",
-       "signature": "protected readonly decoupled: boolean",
-       "doc": "**`AdamW` is this class with the decay moved.** Coupled, it goes onto the\ngradient before the moments see it; decoupled, onto the weights after the\nupdate. That one placement is the whole difference between the two names.",
+       "signature": "protected decoupled: boolean",
+       "doc": "**`AdamW` is this class with the decay moved.** Coupled, it goes onto the\ngradient before the moments see it; decoupled, onto the weights after the\nupdate. That one placement is the whole difference between the two names.\n\ntorch reaches the same placement a second way — `Adam(decoupled_weight_decay=\nTrue)` — so this is no longer a per-class constant. Left out of the signature\nthe word was a surplus argument and JavaScript discards those: the call was\naccepted and the **coupled** answer came back, 0.781 against 0.800 on the\nsecond step of a plain descent, which is a training curve that is merely\nslightly wrong.",
        "protected": true
       },
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: AdamOptions)",
        "doc": "**`betas` is one argument, because torch makes it one.** This took `beta1` and\n`beta2` in two positions, so every later argument sat one seat early and\n`new Adam(p, 1e-3, 0.9, 0.999, 1e-8)` meant something different from\n`Adam(p, 1e-3, (0.9, 0.999), 1e-8)` — the lists could not be lined up at all,\nwhich is the bucket that reports nothing beneath it.\n\nA pair is not a rename and it is not a short tail; splitting it is the one shape\nof divergence the axis has no name for."
       },
       {
@@ -12970,7 +13448,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: AdamOptions)",
        "doc": ""
       }
      ]
@@ -12983,7 +13461,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, alpha?: number, eps?: number, weightDecay?: number, momentum?: number, centered?: boolean, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr: number, alpha?: number, eps?: number, weightDecay?: number, momentum?: number, centered?: boolean, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -13002,7 +13480,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, lrDecay?: number, weightDecay?: number, initialAccumulatorValue?: number, eps?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, lrDecay?: number, weightDecay?: number, initialAccumulatorValue?: number, eps?: number, opts?: OptimizerOptions)",
        "doc": "**`weightDecay` sits fourth, before `eps`** — that is torch's order, and the\nbinding calls this positionally, so the position is the contract. It is one\nof the two here inserted into the middle rather than appended; every call in\nthis repository stops at `lr`, so nothing moved under them, and that was\nchecked rather than assumed."
       },
       {
@@ -13040,7 +13518,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, rho?: number, eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, rho?: number, eps?: number, weightDecay?: number, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -13060,7 +13538,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -13098,7 +13576,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, momentumDecay?: number, decoupledWeightDecay?: boolean, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, momentumDecay?: number, decoupledWeightDecay?: boolean, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -13136,7 +13614,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, betas?: readonly [number, number], eps?: number, weightDecay?: number, decoupledWeightDecay?: boolean, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -13174,7 +13652,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, lambd?: number, alpha?: number, t0?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, lambd?: number, alpha?: number, t0?: number, weightDecay?: number, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -13212,7 +13690,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, etas?: readonly [number, number], stepSizes?: readonly [number, number], opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, etas?: readonly [number, number], stepSizes?: readonly [number, number], opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -13228,7 +13706,7 @@
      "kind": "class",
      "name": "LBFGS",
      "signature": "export declare class LBFGS extends Optimizer",
-     "doc": "A quasi-Newton method. **`step` takes a closure, and here it is async.**\n\n## Why this one is different\n\nEvery other optimizer walks one step from one set of gradients. This one loops\nup to `maxIter` times inside a single step, asking for the loss and the\ngradients again each time. **In torch too, this is the only name that takes a\nclosure** — the shape of the training loop is genuinely different.\n\nBeing async is a second mark on top of that. Each iteration **reads scalars to\nbranch** — the gradient threshold, the curvature `y·s`, the directional\nderivative `g·d`, the change in loss. They are all conditions of an `if` or a\n`break`, so they cannot stay on the GPU, and reading a value is async here.\n\n**There was one way to remove those reads, and the golden closed it.** Drop the\nearly termination and run a fixed `maxIter` and this becomes synchronous — but\none of the `opt::LBFGS` cases asks precisely whether it stops near the tolerance.\nWhat you get that way is not a synchronous LBFGS; it is **a different algorithm.**\n\n## It is slow, and that is a property of the algorithm\n\nOne `step()` costs something like a hundred GPU-to-host round trips (twenty\niterations × five scalars). Running a quasi-Newton method in a browser is that\nkind of work, not a flaw in this implementation. Use `Adam` for a large model;\nuse this name to solve **a small problem precisely.**\n\n**There is no line search.** Pass `lineSearchFn` and it stops loudly — taking a\nfixed step size quietly converges differently, and that difference shows up in\nthe curve, not in a value.",
+     "doc": "",
      "members": [
       {
        "name": "constructor",
@@ -13266,7 +13744,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta2Decay?: number, eps?: readonly [number | null, number], d?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta2Decay?: number, eps?: readonly [number | null, number], d?: number, weightDecay?: number, opts?: OptimizerOptions)",
        "doc": ""
       },
       {
@@ -13578,7 +14056,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, baseLr: number, maxLr: number, stepSizeUp?: number, stepSizeDown?: number | null, mode?: \"triangular\" | \"triangular2\" | \"exp_range\", gamma?: number)",
+       "signature": "constructor(opt: Optimizer, baseLr: number, maxLr: number, stepSizeUp?: number, stepSizeDown?: number | null, mode?: \"triangular\" | \"triangular2\" | \"exp_range\", gamma?: number, scaleFn?: ((x: number) => number) | null, scaleMode?: \"cycle\" | \"iterations\" | null, cycleMomentum?: boolean, baseMomentum?: number, maxMomentum?: number, lastEpoch?: number)",
        "doc": ""
       },
       {
@@ -13721,7 +14199,7 @@
      "doc_ko": "값이 나아지지 않으면 학습률을 줄인다.\n\n다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다."
     }
    ],
-   "count": 155,
+   "count": 166,
    "doc_ko": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다."
   },
   {
@@ -13864,7 +14342,7 @@
     {
      "kind": "function",
      "name": "randomSplit",
-     "signature": "export declare function randomSplit(dataset: Dataset, lengths: readonly number[]): Subset[]",
+     "signature": "export declare function randomSplit(dataset: Dataset, lengths: readonly number[], generator?: null): Subset[]",
      "doc": "Splits without overlap. Where `torch.utils.data.random_split` goes.\n\n**The parts must sum to the whole.** torch stops there too — a leftover\nsample quietly discarded makes the train/validation ratio differ from the\none written down, and nobody sees it.\n\nShuffling follows `manualSeed`. The same seed gives the same split.",
      "members": [],
      "torch": "random_split",
@@ -13909,7 +14387,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(dataSource: { readonly length: number; }, replacement?: boolean, numSamples?: number | null)",
+       "signature": "constructor(dataSource: { readonly length: number; }, replacement?: boolean, numSamples?: number | null, generator?: null)",
        "doc": ""
       },
       {
@@ -13927,7 +14405,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(indices: readonly number[])",
+       "signature": "constructor(indices: readonly number[], generator?: null)",
        "doc": ""
       },
       {
@@ -13951,7 +14429,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(weights: readonly number[], numSamples: number, replacement?: boolean)",
+       "signature": "constructor(weights: readonly number[], numSamples: number, replacement?: boolean, generator?: null)",
        "doc": ""
       },
       {
@@ -14135,9 +14613,45 @@
      "doc": "Several samples into one batch. `torch.utils.data.default_collate`.\n\nIt stacks per position — `[[x₀, y₀], [x₁, y₁]]` becomes `[X, Y]`.\n\n**It was called `stackItems` and its own comment said \"the place\n`default_collate` occupies\".** The function was here the whole time; only\ntorch's name was missing, and the name axis counts names — so it read as an\nabsent feature while the feature was three lines above the loader that used it.\nA comment naming what something *would* be called is not the name.",
      "members": [],
      "torch": "default_collate"
+    },
+    {
+     "kind": "class",
+     "name": "DistributedSampler",
+     "signature": "export declare class DistributedSampler implements Sampler",
+     "doc": "Every rank takes **an interleaved slice** of the same shuffled order.\n`torch.utils.data.DistributedSampler`.\n\nIts row said *for distributed training — this is inside one tab*, which names\nwhat the class is **for** rather than what it needs. Given `numReplicas` and\n`rank` it touches no network at all: it is arithmetic on indices, and a process\ngroup is only where those two numbers come from when nobody passes them.\n\nThree things it has to get right, and none of them is a network:\n\n- **The slice is `rank`, `rank + numReplicas`, …** — interleaved, not a block.\n  Cut into blocks instead, each rank sees one region of a sorted dataset and the\n  batches stop being a sample of it. Nothing throws; the loss curve is the only\n  witness.\n- **The order is redrawn per epoch from `seed + epoch`**, and every rank draws\n  the same permutation because they draw from the same seed — which is what\n  makes the interleave a partition rather than an overlap.\n- **Short of a whole multiple it pads by wrapping**, or drops with `dropLast`.\n  The ranks must receive the same count, and the padding comes from the front of\n  the same list rather than a repeat of the tail.\n\n**`setEpoch` is not decoration.** A loop that never calls it draws the same\norder every epoch — invisible except as a model that stops improving early.\n\nThe draw is **its own stream, seeded here**, not the module's: a shared stream\nwould hand each rank a different permutation and the partition would break. The\nnumbers it produces are not numpy's and not torch's, so what is frozen about the\nshuffled case is a property (the ranks partition, one epoch repeats, two epochs\ndiffer) rather than a value.",
+     "members": [
+      {
+       "name": "numSamples",
+       "signature": "readonly numSamples: number",
+       "doc": "",
+       "torch": "num_samples"
+      },
+      {
+       "name": "totalSize",
+       "signature": "readonly totalSize: number",
+       "doc": "",
+       "torch": "total_size"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(dataset: { readonly length: number; }, numReplicas: number, rank: number, shuffle?: boolean, seed?: number, dropLast?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "length",
+       "signature": "get length(): number",
+       "doc": ""
+      },
+      {
+       "name": "setEpoch",
+       "signature": "setEpoch(epoch: number): void",
+       "doc": "Which epoch's order to draw. See the note above on why it matters.",
+       "torch": "set_epoch"
+      }
+     ]
     }
    ],
-   "count": 66,
+   "count": 72,
    "doc_ko": "데이터셋과 적재기 — `torch.utils.data` 자리.\n\n## 없으면 이야기가 반쯤 거짓이 된다\n\n이 저장소는 \"브라우저에서 학습한다\" 고 말하는데, 여기가 비어 있으면 그 학습이\n**배치를 손으로 자르는 것**으로 끝난다. 실제로 저장소 안의 정확도 러너가 뽑기·섞기를\n직접 짜고 있었다 — 쓰는 사람은 누구나 같은 것을 다시 짜게 된다.\n\n## 무엇을 안 만들었나\n\n**`sampler` 옵션이 없다.** torch 에 있는 이름이지만 지금 받쳐 줄 것이 없다. 이름만\n놓으면 `paramGroups` 가 그랬던 꼴이 된다 — 모양은 torch 인데 속이 비어서, 쓰는\n사람이 넣은 것이 조용히 무시되는 자리. 없는 것은 없다고 둔다.\n\n`num_workers` 도 없다. 워커를 띄우면 GPU 손잡이가 그쪽으로 안 건너간다.\n\n## torch 와 갈리는 두 자리\n\n**배치는 GPU 텐서라 `scope()` 안에서 받아야 한다.** 적재기가 대신 감쌀 수가 없다 —\n텐서가 구역 밖으로 나가는 것이 목적이기 때문이다. 안 감싸면 한 에폭이 만드는 배치가\n전부 남는다.\n\n```ts\nfor (const [x, y] of loader) {\n  await scope(async () => {\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n  });\n}\n```\n\n`x` 와 `y` 는 구역 **밖에서** 만들어졌으므로 살려 둘 것으로 표시할 필요가 없다.\n구역이 놓는 것은 그 안에서 만든 중간 버퍼다.\n\n**섞기가 `manualSeed` 를 따른다.** torch 는 DataLoader 에 별도 generator 를 두는데\n여기서는 호스트 줄기 하나를 쓴다(`random.ts`) — 씨앗 하나가 층 초기화·dropout·\n텐서 팩토리에 이어 배치 순서까지 되돌린다. 문을 늘리지 않는 쪽을 골랐다."
   },
   {
@@ -14384,9 +14898,15 @@
        "protected": true
       },
       {
+       "name": "inplace",
+       "signature": "protected readonly inplace: boolean",
+       "doc": "",
+       "protected": true
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(mean: readonly number[], std: readonly number[])",
-       "doc": ""
+       "signature": "constructor(mean: readonly number[], std: readonly number[], inplace?: boolean)",
+       "doc": "**`inplace` was absent here and a no-op on the Python side**, on a reason that\nexpired: the sister library whose tensors could not be written through was\ndeleted, and this one writes through in `optim.ts` on every step. `erase` below\nhas been honouring its own `inplace` the whole time, so one module answered the\nsame word two ways.\n\nThe difference no value comparison can see is the one the argument is *for* —\n`Normalize(m, s, true).apply(t)` called for the side effect, then `t` used."
       },
       {
        "name": "apply",
@@ -15123,14 +15643,14 @@
     {
      "kind": "function",
      "name": "normalize",
-     "signature": "export declare function normalize(tensor: Tensor, mean: readonly number[], std: readonly number[]): Tensor",
+     "signature": "export declare function normalize(tensor: Tensor, mean: readonly number[], std: readonly number[], inplace?: boolean): Tensor",
      "doc": "",
      "members": []
     },
     {
      "kind": "function",
      "name": "erase",
-     "signature": "export declare function erase(img: Tensor, i: number, j: number, h: number, w: number, v: Tensor): Tensor",
+     "signature": "export declare function erase(img: Tensor, i: number, j: number, h: number, w: number, v: Tensor, inplace?: boolean): Tensor",
      "doc": "Blank out a rectangle of a `(...,C,H,W)` tensor. **The position is given**,\nwhere `RandomErasing` draws it.",
      "members": []
     },
@@ -15922,7 +16442,7 @@
      ]
     }
    ],
-   "count": 278,
+   "count": 279,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -17188,7 +17708,8 @@
        "signature": "forward(input: Tensor): Tensor",
        "doc": ""
       }
-     ]
+     ],
+     "inherited_ctor": "constructor(p: number, blockSize: number, inplace?: boolean, eps?: number)"
     },
     {
      "kind": "class",
@@ -17407,8 +17928,14 @@
      "kind": "class",
      "name": "Conv2dNormActivation",
      "signature": "export declare class Conv2dNormActivation extends ConvNormActivation",
-     "doc": "`ConvNormActivation` with the convolution fixed to two dimensions.",
-     "members": []
+     "doc": "`ConvNormActivation` with the convolution **fixed** to two dimensions.\n\n**Fixed, not defaulted, and the empty body was the difference.** Written\n`extends ConvNormActivation {}` it inherited the base's whole list, `convLayer`\nincluded — a twelfth seat torchvision's 2-D subclass does not have, and one that\ntakes a factory for any rank. A caller could hand it `Conv3d` and build a\nthree-dimensional block out of a class whose name says two.\n\nIts 3-D sibling wrote its own constructor and read `agree` while this one read\n`longer`, one line apart. The asymmetry is what the signature axis found.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inChannels: number, outChannels: number, kernelSize?: number, stride?: number, padding?: number | null, groups?: number, normLayer?: ((width: number) => Module) | null, activationLayer?: (() => Module) | null, dilation?: number, inplace?: boolean | null, bias?: boolean | null)",
+       "doc": ""
+      }
+     ]
     },
     {
      "kind": "class",
@@ -17528,7 +18055,7 @@
      "torch": "uniform_temporal_subsample"
     }
    ],
-   "count": 163
+   "count": 164
   },
   {
    "name": "datasets",
@@ -18210,7 +18737,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "inherited_ctor": "constructor(transformationMatrix: readonly (readonly number[])[], meanVector: readonly number[])"
     },
     {
      "kind": "class",
@@ -18418,7 +18946,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "inherited_ctor": "constructor(alpha?: number, numClasses?: number | null)"
     },
     {
      "kind": "class",
@@ -18431,7 +18960,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "inherited_ctor": "constructor(alpha?: number, numClasses?: number | null)"
     },
     {
      "kind": "class",
@@ -18455,9 +18985,32 @@
        "doc": ""
       }
      ]
+    },
+    {
+     "kind": "class",
+     "name": "UniformTemporalSubsample",
+     "signature": "export declare class UniformTemporalSubsample implements Transform",
+     "doc": "Keeps `numSamples` frames of a video, spread evenly over its length.\n\n**The arithmetic was already here** — `ops.uniformTemporalSubsample` — and this\nclass was not, so the name axis reported it missing and was right to: torchvision\nhas both, and a transform is not its function. A pipeline is built out of\ntransforms, and `Compose([…, UniformTemporalSubsample(8)])` is the line that could\nnot be written.\n\nThe axis refuses to fold a capital-initial name onto a lowercase one for exactly\nthis reason — `nn.Embedding` is not `F.embedding` — so the function's presence\ncould not excuse the class's absence, and did not.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(numSamples: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 130
+   "count": 134
   },
   {
    "name": "fft",
@@ -18810,11 +19363,11 @@
     {
      "kind": "function",
      "name": "matrixRank",
-     "signature": "export declare function matrixRank(input: Tensor): Promise<Tensor>",
-     "doc": "`matrix_rank(A)` — how many singular values are above the tolerance.",
+     "signature": "export declare function matrixRank(input: Tensor, tol?: number): Promise<Tensor>",
+     "doc": "`matrix_rank(A, tol=None)` — how many singular values are above the tolerance.",
      "members": [],
      "torch": "matrix_rank",
-     "doc_ko": "`matrix_rank(A)` — 허용 오차를 넘는 특잇값의 개수."
+     "doc_ko": "`matrix_rank(A, tol=None)` — 특이값 중 허용오차를 넘는 것의 개수. `tol` 은 **절대** 기준이라 특이값과 곧바로 견준다 — 가장 큰 값에 대한 비율인 `pinv` 의 `rcond` 와는 다른 것이다."
     },
     {
      "kind": "function",
@@ -18909,36 +19462,36 @@
     {
      "kind": "function",
      "name": "lstsq",
-     "signature": "export declare function lstsq(input: Tensor, b: Tensor): Promise<Tensor>",
-     "doc": "`lstsq(A, B)` — the least-squares solution.",
+     "signature": "export declare function lstsq(input: Tensor, b: Tensor, rcond?: number, driver?: string): Promise<Tensor>",
+     "doc": "`lstsq(A, B, rcond=None, *, driver=None)` — the least-squares solution.\n\nThe last two used to be absent, so `rcond` was **received by JavaScript and\ndiscarded** — a cutoff that reads as a tuning knob and moved nothing.\n\n**The four drivers are four algorithms and this is one of them.** The\npseudoinverse is the SVD, which is `gelsd`. At full rank all four of torch's\nagree to float noise; once the cutoff bites they separate, measured on\n`[[1,1],[1,2],[1,3],[1,4]]` against `[6,5,7,10]` with `rcond=0.9`: `gels`\n3.500/1.400, `gelsy` 0.770/2.310, `gelsd` and `gelss` 0.790/2.322.\n\nSo `gels` takes no cutoff — torch's assumes full rank and never reads `rcond` —\nand `gelsy`, *the default*, is refused where the cutoff would change the answer,\nbecause it solves with a pivoted QR there and handing back the SVD's numbers\nunder its name is a wrong answer with nothing attached to it. The core refuses\nthe same call for the same reason.\n\nThe arithmetic is here rather than on `Tensor.lstsq`, which torch removed and\nthe core keeps as a one-argument tombstone.\n\n**A batch is answered now, and the refusal that stood here was one line from\nthe answer.** It read `input.shape.length !== 2` and threw — while `pinverse`\none line below has batched all along, and `matmul` batches too. What was\ngenuinely missing was smaller than the refusal: the cut-off test compared one\ncount against `Math.min(...input.shape)`, which on a batch is the batch size.\n\n**The two readings of `B` do not broadcast the same way** — measured on torch,\nand the core carries the same rule with the same measurement written out. A\nright-hand side one dimension shorter is a vector per matrix and its leading\ndimensions must *equal* the matrix's; one of equal rank is `(*, m, k)` and its\nleading dimensions broadcast.",
      "members": [],
-     "doc_ko": "`lstsq(A, B)` — 최소제곱 해."
+     "doc_ko": "`lstsq(A, B, rcond=None, *, driver=None)` — 최소제곱 해.\n\n뒤의 둘이 없었기 때문에 `rcond` 는 **JavaScript 가 받아서 버렸다** — 값을 옮기라고 있는 인자인데 아무것도 옮기지 않았다.\n\n**드라이버 넷은 알고리즘 넷이고 여기 있는 것은 그 중 하나다.** 의사역행렬은 SVD, 즉 `gelsd` 다. 전랭크에서는 torch 의 넷이 부동소수 잡음 수준으로 일치해서 아무것도 드러나지 않는다. 문턱이 물리는 순간 갈린다 — `[[1,1],[1,2],[1,3],[1,4]]` 과 `[6,5,7,10]` 에 `rcond=0.9` 로 재보면 `gels` 3.500/1.400, `gelsy` 0.770/2.310, `gelsd` 와 `gelss` 0.790/2.322 다.\n\n그래서 `gels` 은 문턱을 받지 않고(torch 의 것도 전랭크를 가정해 `rcond` 를 읽지 않는다), *기본값인* `gelsy` 는 문턱이 답을 바꾸는 자리에서 거절한다. 거기서 torch 는 피벗 QR 로 풀고, SVD 의 숫자를 그 이름으로 돌려주는 것은 아무것도 딸려 있지 않은 틀린 답이기 때문이다. 코어도 같은 호출을 같은 이유로 거절한다.\n\n산술이 `Tensor.lstsq` 가 아니라 여기 있는 것은, 그 메서드를 torch 가 지웠고 코어가 인자 하나짜리 묘비로 들고 있기 때문이다.\n\n**이제 배치를 답한다. 여기 서 있던 거절은 답에서 한 줄 거리였다.** `input.shape.length !== 2` 를 보고 던지고 있었는데, 바로 아래의 `pinverse` 는 처음부터 배치를 했고 `matmul` 도 한다. 정말로 없던 것은 거절보다 작았다 — 문턱 판정이 개수 하나를 `Math.min(...input.shape)` 와 비교했고, 배치에서 그 값은 배치 크기다.\n\n**우변을 읽는 두 방식은 브로드캐스팅이 같지 않다** — torch 에서 재봤고, 코어가 같은 규칙을 같은 측정과 함께 들고 있다. 차원이 하나 짧은 우변은 행렬마다의 벡터이고 앞 차원이 행렬 쪽과 *같아야* 한다. 차원이 같은 우변은 `(*, m, k)` 이고 앞 차원은 브로드캐스팅된다."
     },
     {
      "kind": "function",
      "name": "matrixNorm",
-     "signature": "export declare function matrixNorm(input: Tensor, ord?: number | string): Promise<Tensor>",
-     "doc": "`matrix_norm(A, ord=\"fro\")`.",
+     "signature": "export declare function matrixNorm(input: Tensor, ord?: number | string, dim?: readonly [number, number], keepdim?: boolean): Promise<Tensor>",
+     "doc": "`matrix_norm(A, ord=\"fro\", dim=(-2,-1), keepdim=False)`.",
      "members": [],
      "torch": "matrix_norm",
-     "doc_ko": "`matrix_norm(A, ord=\"fro\")`."
+     "doc_ko": "`matrix_norm(A, ord=\"fro\", dim=(-2,-1), keepdim=False)`. `dim` 이 가리키는 두 축을 끝으로 옮겨서 계산하므로 축을 어떻게 부르든 산술은 하나다. `keepdim` 은 **부른 쪽의 축 자리에** 1 을 남긴다."
     },
     {
      "kind": "function",
      "name": "vectorNorm",
-     "signature": "export declare function vectorNorm(input: Tensor, ord?: number, dim?: number): Tensor",
-     "doc": "`vector_norm(x, ord=2, dim=None)`.",
+     "signature": "export declare function vectorNorm(input: Tensor, ord?: number, dim?: number, keepdim?: boolean): Tensor",
+     "doc": "`vector_norm(x, ord=2, dim=None, keepdim=False)`.",
      "members": [],
      "torch": "vector_norm",
-     "doc_ko": "`vector_norm(x, ord=2, dim=None)`."
+     "doc_ko": "`vector_norm(x, ord=2, dim=None, keepdim=False)`. `keepdim` 은 줄인 축을 길이 1 로 남긴다 — `dim` 이 없으면 모든 축을 1 로 남긴다."
     },
     {
      "kind": "function",
      "name": "norm",
-     "signature": "export declare function norm(input: Tensor): Tensor",
-     "doc": "`norm(A)` — the Frobenius norm of the whole tensor.",
+     "signature": "export declare function norm(input: Tensor, ord?: number, dim?: number, keepdim?: boolean, dtype?: DType): Promise<Tensor>",
+     "doc": "`norm(A, ord=None, dim=None, keepdim=False, dtype=None)`.\n\n**All four were missing and the method had all four.** This read `norm(input)` and\ncalled `input.norm()`, so `linalg.norm(x, 2, 1)` — the line a torch tutorial writes —\nthrew away the order and the axis and returned the Frobenius norm of everything.\nJavaScript discards surplus arguments without a word, so it was not an error but a\ndifferent number, of a different rank, that flows on and breaks somewhere unrelated.\n\ntorch spells the first one `ord`; the method spells it `p`. Nothing else differs.",
      "members": [],
-     "doc_ko": "`norm(A)` — 텐서 전체의 프로베니우스 노름."
+     "doc_ko": "`norm(A, ord=None, dim=None, keepdim=False, dtype=None)` — **`torch.norm` 이 아니다.** `ord` 가 있고 `dim` 이 없는 행렬이면 `matrix_norm` 으로 가고, `ord=2` 는 최대 특이값이다. 나머지는 `vector_norm`."
     },
     {
      "kind": "function",
@@ -18977,10 +19530,10 @@
     {
      "kind": "function",
      "name": "lu",
-     "signature": "export declare function lu(A: Tensor): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
-     "doc": "`lu(A)` — the LU decomposition, expanded into `P`, `L` and `U`.",
+     "signature": "export declare function lu(A: Tensor, pivot?: boolean): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
+     "doc": "`lu(A, *, pivot=True)` — the LU decomposition, expanded into `P`, `L` and `U`.\n\n**`pivot` is carried in order to refuse it**, which is what the core does with the\nsame argument. Without pivoting the factorisation is a different one and exists only\nwhere no pivot is ever needed; there is no such path here. Left out of the signature\nthe word would be discarded by JavaScript and the pivoted answer returned under its\nname — a wrong factorisation that looks like a right one.",
      "members": [],
-     "doc_ko": "`lu(A)` — LU 분해를 `P`·`L`·`U` 로 펴서."
+     "doc_ko": "`lu(A, *, pivot=True)` — LU 분해를 `P`, `L`, `U` 로 펼친 것.\n\n**`pivot` 은 거절하기 위해 싣는다** — 코어도 같은 인자를 같은 이유로 거절한다. 피벗 없는 분해는 다른 분해이고, 피벗이 한 번도 필요 없는 자리에서만 존재한다. 여기엔 그 경로가 없다. 서명에서 빼면 그 낱말은 JavaScript 가 버리고 피벗한 답이 그 이름으로 돌아온다 — 맞아 보이는 틀린 분해다."
     },
     {
      "kind": "function",
@@ -19001,7 +19554,7 @@
     {
      "kind": "function",
      "name": "pinv",
-     "signature": "export declare function pinv(input: Tensor): Promise<Tensor>",
+     "signature": "export declare function pinv(input: Tensor, rcond?: number): Promise<Tensor>",
      "doc": "`pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`.",
      "members": [],
      "doc_ko": "`pinv(A)` — 무어-펜로즈 유사역행렬. 메서드 이름은 `pinverse` 다."
@@ -19017,11 +19570,11 @@
     {
      "kind": "function",
      "name": "luSolve",
-     "signature": "export declare function luSolve(LU: Tensor, pivots: Tensor, b: Tensor): Promise<Tensor>",
-     "doc": "`lu_solve(LU, pivots, B)` — solve using factors from `lu_factor`.\n\n**The factors come first here and the method is received by `B`.** Forwarding this one\npositionally would swap `LU` and `B`, and with square matrices nothing about the call\nwould look wrong.",
+     "signature": "export declare function luSolve(LU: Tensor, pivots: Tensor, b: Tensor, left?: boolean, adjoint?: boolean): Promise<Tensor>",
+     "doc": "`lu_solve(LU, pivots, B)` — solve using factors from `lu_factor`.\n\n**The factors come first here and the method is received by `B`.** Forwarding this one\npositionally would swap `LU` and `B`, and with square matrices nothing about the call\nwould look wrong.\n\n**`left` and `adjoint` were carried in order to refuse, and now they answer.** The\nrefusal said each solves a different system than the one these factors were made\nfor, which was true and was also the reason it could be closed: `A = P L U` gives\n`Aᵀ = Uᵀ Lᵀ Pᵀ`, so the adjoint is the same three pieces in the other order, and\n`X A = B` is `Aᵀ Xᵀ = Bᵀ` — the right-hand solve is the left one with the sides\ntransposed and the flag flipped. All four combinations are measured against torch.",
      "members": [],
      "torch": "lu_solve",
-     "doc_ko": "`lu_solve(LU, pivots, B)` — `lu_factor` 가 낸 인수로 푼다.\n\n**여기서는 인수가 먼저 오고 메서드는 `B` 가 받는다.** 이것만 자리대로 넘기면 `LU` 와\n`B` 가 뒤바뀌는데, 정사각 행렬이면 부름의 어디를 봐도 이상해 보이지 않는다."
+     "doc_ko": "`lu_solve(LU, pivots, B)` — `lu_factor` 가 낸 인수로 푼다.\n\n**여기서는 인수가 먼저 오고 메서드는 `B` 가 받는다.** 이것만 자리대로 넘기면 `LU` 와\n`B` 가 뒤바뀌는데, 정사각 행렬이면 부름의 어디를 봐도 이상해 보이지 않는다.\n\n**`left` 와 `adjoint` 는 거절하려고 들고 있던 자리였고, 이제 답한다.** 거절문은 각각이 이 인수가 만들어진 것과 다른 계를 푼다고 적고 있었는데, 그것은 사실이었고 동시에 닫을 수 있었던 이유였다 — `A = P L U` 에서 `Aᵀ = Uᵀ Lᵀ Pᵀ` 이므로 수반은 같은 세 조각을 반대 순서로 쓰는 것이고, `X A = B` 는 `Aᵀ Xᵀ = Bᵀ` 이므로 오른쪽 풀이는 양변을 전치하고 깃발을 뒤집은 왼쪽 풀이다. 네 조합 모두 torch 에 대조했다."
     },
     {
      "kind": "function",
@@ -19043,7 +19596,7 @@
     {
      "kind": "function",
      "name": "tensorsolve",
-     "signature": "export declare function tensorsolve(input: Tensor, b: Tensor): Promise<Tensor>",
+     "signature": "export declare function tensorsolve(input: Tensor, b: Tensor, dims?: readonly number[]): Promise<Tensor>",
      "doc": "`tensorsolve(A, B)` — solve `A x = B` where `A` and `B` carry more than two axes.\n\nThe method is `tensorSolve`. **It was already there and this file nearly reimplemented\nit**, because the search for it used torch's spelling (`tensorsolve`) against the\ncamelCase method names and matched nothing. `test_binding_fills_in.py` caught the two\ndeclarations colliding on one lookup key — the collision check another session added\nthis morning, after a normaliser folded `eq_` onto `eq`.",
      "members": [],
      "doc_ko": "`tensorsolve(A, B)` — 축이 둘보다 많은 `A`·`B` 에 대해 `A x = B` 를 푼다.\n\n메서드 이름은 `tensorSolve` 다. **이미 있었는데 이 파일이 하마터면 다시 구현할\n뻔했다.** 없다고 판정한 검색이 torch 의 철자(`tensorsolve`)를 camelCase 메서드 이름에\n대고 물어서 아무것도 안 맞았기 때문이다. 붙잡은 것은 `test_binding_fills_in.py` 가 두\n선언이 한 열쇠로 접히는 것을 본 것이고, 그 검사는 다른 세션이 오늘 아침 정규화기가\n`eq_` 를 `eq` 로 접는 것을 보고 붙인 것이다."
@@ -19558,7 +20111,8 @@
        "torch": "adapter_features",
        "doc_ko": "어댑터가 주는 선택 기능들. **`timestamp-query` 가 여기 있어야 커널별 시간을 잰다.**\n\n벽시계로는 스텝 전체밖에 못 재고, 그러면 429 개 dispatch 중 어느 것이 비싼지\n물을 방법이 없다 — 실제로 그 자리에서 막혔다."
       }
-     ]
+     ],
+     "inherited_ctor": "private constructor()"
     }
    ],
    "count": 41
@@ -19592,6 +20146,14 @@
     },
     {
      "kind": "function",
+     "name": "refuseGenerator",
+     "signature": "export declare function refuseGenerator(who: string, generator: unknown): void",
+     "doc": "`generator=` — **carried in order to refuse it**, wherever torch takes one.\n\nThere is one stream in this file and a `Generator` is a second one. torch's\nargument names a stream to draw from; here there is only the stream above, and\nthe honest answer is to say so rather than to accept the object and draw from\nthe global one anyway.\n\n**Accepting it is the failure this exists to stop, and it is silent twice\nover.** JavaScript discards a surplus argument without a word, so\n`x.bernoulli_(0.5, g)` ran and ignored `g`; and what it produces is a *random\nnumber*, so nothing downstream looks wrong. Somebody running five seeds to\nmeasure variance would get five streams that were never separate.\n\n`null` and `undefined` both pass: torch's default is `None`, and the Python\nbinding cannot send `undefined`.",
+     "members": [],
+     "torch": "refuse_generator"
+    },
+    {
+     "kind": "function",
      "name": "uniform",
      "signature": "export declare function uniform(): number",
      "doc": "One sample from the uniform distribution on `[0, 1)`.",
@@ -19616,7 +20178,7 @@
      "doc_ko": "`[-bound, bound]` 균등분포로 채운 배열. 층 초기화가 쓴다."
     }
    ],
-   "count": 5
+   "count": 6
   },
   {
    "name": "autograd",
@@ -19649,8 +20211,15 @@
       {
        "name": "grad",
        "signature": "grad: T | null",
-       "doc": "Accumulates on leaves only, as in torch.",
-       "doc_ko": "잎에만 쌓인다. torch 와 같다."
+       "doc": "Accumulates on leaves, and on a derived node that asked to keep its gradient\n— `retainGrad()`, or being named in `backward(…, inputs)`.",
+       "doc_ko": "잎에 쌓이고, 기울기를 남겨 달라고 한 파생 노드에도 쌓인다 — `retainGrad()` 이거나 `backward(…, inputs)` 에 이름이 불린 경우다."
+      },
+      {
+       "name": "retainsGrad",
+       "signature": "retainsGrad?: boolean",
+       "doc": "Set by `retainGrad()`. A derived node does not keep its gradient otherwise:\nthe intermediate values are the bulk of a training loop's memory, and torch\nmakes keeping one an explicit request for the same reason.",
+       "optional": true,
+       "torch": "retains_grad"
       },
       {
        "name": "backwardFn",
@@ -19696,26 +20265,37 @@
     {
      "kind": "function",
      "name": "backward",
-     "signature": "export declare function backward<T>(root: Node<T>, seed: T, add: (a: T, b: T) => T, options?: { retainGraph?: boolean; onSecondPass?: () => never; }): void",
-     "doc": "Backpropagation. Seeds at `root` and accumulates into the leaves' `grad`.",
+     "signature": "export declare function backward<T>(root: Node<T>, seed: T, add: (a: T, b: T) => T, options?: { retainGraph?: boolean; onSecondPass?: () => never; only?: ReadonlySet<Node<T>>; }): void",
+     "doc": "Backpropagation. Seeds at `root` and accumulates into the leaves' `grad`.\n\n  The two rules do not cancel. A node in `only` is written to whether it is a\n  leaf or not, and a node that called `retainGrad()` is written to even when\n  it is outside `only` — measured against torch, which fills a retained\n  intermediate's `grad` while `inputs` names something else entirely.",
      "members": [],
      "tags": [
       {
        "tag": "param",
        "text": "add how two gradients are added. A value used in several places is added that many times."
+      },
+      {
+       "tag": "param",
+       "text": "options.only torch's `backward(…, inputs)`: when given, **only** these nodes are written to. Every other leaf keeps whatever `grad` it had, which is how one branch is differentiated without disturbing the rest."
       }
      ],
-     "doc_ko": "역전파. `root` 에서 씨앗을 흘려 잎의 `grad` 에 쌓는다."
+     "doc_ko": "역전파. `root` 에서 씨앗을 흘려 잎의 `grad` 에 쌓는다. 두 규칙은 서로를 지우지 않는다 — `only` 에 든 노드는 잎이든 아니든 채워지고, `retainGrad()` 를 부른 노드는 `only` 밖이어도 채워진다 (torch 로 실측)."
+    },
+    {
+     "kind": "function",
+     "name": "flow",
+     "signature": "export declare function flow<T>(roots: readonly Node<T>[], seeds: readonly T[], add: (a: T, b: T) => T, options?: { retainGraph?: boolean; onSecondPass?: () => never; }): Map<Node<T>, T>",
+     "doc": "The backward pass itself: **the gradient of every node the roots reach**, and\nnothing written to any `grad`.\n\n`backward` above layers accumulation on top of this; `Tensor.grad` reads the\nnames it was asked for out of the map and leaves every `grad` alone, which is\nthe whole difference between the two functions.\n\n**One walk on purpose.** A second copy of this loop for the returning form\nwould be a fourth implementation of the same arithmetic — three already have to\nagree — and it is the copy that drifts, because the accumulating one is what\nevery existing test exercises.",
+     "members": []
     }
    ],
-   "count": 10
+   "count": 12
   },
   {
    "name": "special",
    "title": "special",
    "blurb": {
-    "ko": "특수함수. `torch.special` 자리.",
-    "en": "Special functions. Where `torch.special` would be."
+    "ko": "불완전 감마·폴리감마 커널. 아래 `torch.special` 이름들이 여기 딛는다.",
+    "en": "The incomplete-gamma and polygamma kernels. The `torch.special` names below stand partly on these."
    },
    "doc": "Special functions — the incomplete gamma and the polygammas.\n\n**The reason these kernels live apart** is that `n` is a shader constant.\n`polygamma(n, x)` bakes a different shader per `n`, and the unary table\n(`UNARY` in `kernels.ts`) hangs one shader off one name, so it does not\nfit there.\n\nThe formulas are carried over from the core (numpy) unchanged — two\ncopies means a day when only one gets fixed. The core side was confirmed\nagainst torch for both values and gradients first; this is that carried\nacross.",
    "symbols": [
@@ -19746,13 +20326,181 @@
    "doc_ko": "특수 함수 — 불완전 감마와 폴리감마.\n\n**커널을 여기 따로 두는 이유**는 `n` 이 셰이더 상수이기 때문이다. `polygamma(n, x)`\n는 `n` 마다 다른 셰이더를 굽는데, 단항 표(`kernels.ts` 의 `UNARY`)는 이름 하나에\n셰이더 하나를 매다는 구조라 그 자리에 안 들어간다.\n\n식은 코어(numpy)의 것을 그대로 옮겼다 — 두 벌로 두면 한쪽만 고쳐지는 날이 온다.\n코어 쪽이 torch 와 값·기울기 모두 맞는 것을 먼저 확인했고, 여기는 그 옮김이다."
   },
   {
+   "name": "special_names",
+   "title": "special",
+   "blurb": {
+    "ko": "`torch.special` 자리 — 스물두 이름, 전부 이미 있는 것의 두 번째 철자.",
+    "en": "Where `torch.special` would be — twenty-two names, every one the second spelling of something this library already has."
+   },
+   "doc": "`torch.special` — the namespace, which is twenty-two names and no new arithmetic.\n\nEvery function here forwards to a method this library already has. torch spells a\nhandful of things twice, and this is the second spelling: `expit` is `sigmoid`,\n`gammaln` is `lgamma`, `psi` is `digamma`, `modified_bessel_i0` is `i0`, and\n`gammainc`/`gammaincc` are the regularised incomplete gammas next door in\n`special.ts`. None of the six is guessable from the name, which is the whole reason\nthe namespace is worth carrying: `special.expit(x)` is the line a paper's appendix\nwrites, and without this module it stopped on a namespace that was not there while\n`x.sigmoid()` sat one call away.\n\n**Why the file is not called `special.ts`.** That name is taken by the module holding\nthe incomplete-gamma and polygamma *kernels* — WGSL, and two of the names below stand\non it. Renaming that file would touch every importer for a cosmetic gain, so the\nawkward name is here instead of there, with this paragraph as the apology.\n\n**This is deliberately thin.** Writing the bodies again would be a second copy of\narithmetic that is already tested, which is the defect this repository keeps finding\n— a fix reaches one copy and the hand-written one is the copy it misses. If a line\nbelow is longer than `return x.something()`, it is because the argument order differs\nfrom the method's, and that is said where it happens.\n\nThe 35 names of `torch.special` that are **not** here are real arithmetic — the\nBessel, Airy, `ndtr` and orthogonal-polynomial families — and `tests/torch_gap.py`\ncarries each with its reason.",
+   "symbols": [
+    {
+     "kind": "function",
+     "name": "digamma",
+     "signature": "export declare function digamma(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "erf",
+     "signature": "export declare function erf(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "erfc",
+     "signature": "export declare function erfc(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "erfinv",
+     "signature": "export declare function erfinv(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "exp2",
+     "signature": "export declare function exp2(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "expm1",
+     "signature": "export declare function expm1(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "i0",
+     "signature": "export declare function i0(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "log1p",
+     "signature": "export declare function log1p(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "sinc",
+     "signature": "export declare function sinc(input: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "logit",
+     "signature": "export declare function logit(input: Tensor, eps?: number | null): Tensor",
+     "doc": "`eps` clamps the input away from 0 and 1 before the log — torch takes it here too.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "round",
+     "signature": "export declare function round(input: Tensor, decimals?: number): Tensor",
+     "doc": "**`decimals` is absent from torch's own docstring for this name and torch reads it.**\n`special.round(0.34567, decimals=3)` answers `0.346` (measured), while the prose says\n`round(input, *, out=None)`. Dropping the parameter to match the documentation would\ntake a working call away, so it is carried.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "expit",
+     "signature": "export declare function expit(input: Tensor): Tensor",
+     "doc": "The logistic sigmoid, under statistics' name for it.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "gammaln",
+     "signature": "export declare function gammaln(input: Tensor): Tensor",
+     "doc": "The log-gamma, under statistics' name for it.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "psi",
+     "signature": "export declare function psi(input: Tensor): Tensor",
+     "doc": "The digamma, under its classical name.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "modifiedBesselI0",
+     "signature": "export declare function modifiedBesselI0(input: Tensor): Tensor",
+     "doc": "The zeroth modified Bessel — the same function as `i0`, spelled out.",
+     "members": [],
+     "torch": "modified_bessel_i0"
+    },
+    {
+     "kind": "function",
+     "name": "polygamma",
+     "signature": "export declare function polygamma(n: number, input: Tensor): Tensor",
+     "doc": "**`(n, input)`, and that order is torch's.** `special.polygamma(x, 1)` is a\n`TypeError` there (measured), so taking them the other way round would accept a call\ntorch refuses. The method is `x.polygamma(n)`, which is the pair reversed — the one\nplace in this file where forwarding is not a straight pass-through.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "xlogy",
+     "signature": "export declare function xlogy(input: Tensor, other: Tensor): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "logsumexp",
+     "signature": "export declare function logsumexp(input: Tensor, dim?: number, keepdim?: boolean): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "softmax",
+     "signature": "export declare function softmax(input: Tensor, dim?: number, dtype?: Parameters<Tensor[\"softmax\"]>[1]): Tensor",
+     "doc": "**`softmax` and `logSoftmax` take `dtype`, not a destination.** Eighteen of this\nnamespace's names accept `out=` in torch and these two do not — measured, where\n`special.softmax(x, 1, out=…)` raises and the top-level `softmax` does not.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "logSoftmax",
+     "signature": "export declare function logSoftmax(input: Tensor, dim?: number, dtype?: Parameters<Tensor[\"logSoftmax\"]>[1]): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "log_softmax"
+    },
+    {
+     "kind": "function",
+     "name": "gammainc",
+     "signature": "export declare function gammainc(input: Tensor, other: Tensor): Tensor",
+     "doc": "The regularised lower incomplete gamma `P(a, x)`.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "gammaincc",
+     "signature": "export declare function gammaincc(input: Tensor, other: Tensor): Tensor",
+     "doc": "The upper branch, `Q(a, x) = 1 − P(a, x)`.",
+     "members": []
+    }
+   ],
+   "count": 22
+  },
+  {
    "name": "rnn",
    "title": "rnn",
    "blurb": {
     "ko": "순환 신경망 유틸.",
     "en": "Recurrent-network utilities."
    },
-   "doc": "The eight top-level recurrences — `torch.lstm`, `torch.gru`,\n`torch.rnn_tanh`, `torch.rnn_relu`, and their `_cell` counterparts.\n\n**The only difference from the layer (`nn.Recurrent`) is where the\nweights come from.** The layer holds its own; this side **receives them\nas a list.** torch offers both, and what the layer calls internally is\nthis side.\n\nSo the step equations live here in one copy. Two copies, here and in the\nlayer, means a day when **the gate order diverges**, and then the shape\nis right and only the values are wrong — this repository already shares\nthe equations between cell and layer for that same reason.\n\n## Gate order\n\nThe **row order** of `weight_ih` is the convention (measured):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (just one)\n\nChange it and only the values diverge; the shape stays.",
+   "doc": "The eight top-level recurrences — `torch.lstm`, `torch.gru`,\n`torch.rnn_tanh`, `torch.rnn_relu`, and their `_cell` counterparts.\n\n**The only difference from the layer (`nn.Recurrent`) is where the\nweights come from.** The layer holds its own; this side **receives them\nas a list.** torch offers both, and what the layer calls internally is\nthis side.\n\n**This claimed the step equations lived here in one copy, and there were two.**\n`nn.RNNBase.run` wrote out its own layer loop, and the day came the sentence warned\nabout: this side fell behind, refusing `bidirectional` and inter-layer `dropout` as\n*not here* while the layer one file away had both. `rnnApply` below stands up an\n`RNNBase` and fills its slots now, so the layer loop really is in one place; what\nstays here is `rnnStep`, which the four `_cell` names need and the layer does not\ncall.\n\n## Gate order\n\nThe **row order** of `weight_ih` is the convention (measured):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (just one)\n\nChange it and only the values diverge; the shape stays.",
    "symbols": [
     {
      "kind": "type",
@@ -19827,10 +20575,10 @@
      "kind": "function",
      "name": "rnnApply",
      "signature": "export declare function rnnApply(kind: RnnKind, input: Tensor, h0: Tensor, c0: Tensor | null, params: readonly Tensor[], options?: RnnOptions): { output: Tensor; hidden: Tensor; cell: Tensor; }",
-     "doc": "Several steps. `hx` is `(layer, batch, H)`.\n\n**Bidirectional and inter-layer dropout are refused.** Half-imitating\nsomething that is not there catches loudly for the first — the shape\ncomes out halved — but **dropout diverges with plausible values**\n(training with no regularisation applied). Both stop here.",
+     "doc": "Several steps. `hx` is `(layer · directions, batch, H)`.\n\n**This was a second layer loop and it is a call now.** The header above says the\nstep equations live here in one copy; they did not — `nn.RNNBase.run` wrote them\nout again, and this side then fell behind it: `bidirectional` and inter-layer\n`dropout` were refused here on the ground that they were not implemented, and by\nthen they were, one file away. So the whole of this function is standing up an\n`RNNBase` with the flags the caller gave, filling its named slots from the flat\nlist, and calling `run`.\n\n**`projSize` is read off the shapes**, because torch has no seat for it here:\n`weight_hh` is `(gates·H, proj or H)`, and torch infers it the same way.\n\n**`dropout` only crosses when it can act.** At one layer it has nowhere to go and\nthe layer warns about exactly that, while `torch._VF.lstm` does not (measured).",
      "members": [],
      "torch": "rnn_apply",
-     "doc_ko": "여러 걸음. `hx` 는 `(층, 배치, H)` 다.\n\n**양방향과 층간 드롭아웃은 거절한다.** 없는 것을 반쪽으로 흉내 내면, 앞쪽은 모양이\n절반이라 시끄럽게 걸리지만 **드롭아웃 쪽은 값이 그럴듯한 채로 갈린다**(정칙화가\n안 걸린 학습). 둘 다 여기서 멈춘다."
+     "doc_ko": "여러 걸음. `hx` 는 `(층 · 방향, 배치, H)` 다.\n\n**여기 층 루프가 한 벌 더 있었고 지금은 호출이다.** 위 머리말은 걸음 식이 여기\n한 벌만 있다고 말하지만 그렇지 않았다 — `nn.RNNBase.run` 이 따로 써 두었고,\n그러자 이쪽이 뒤처졌다: `bidirectional` 과 층간 `dropout` 을 구현이 없다는 이유로\n거절했는데 그때 이미 한 파일 건너에는 있었다. 그래서 이 함수가 하는 일은 전부\n호출자가 준 플래그로 `RNNBase` 를 세우고, 평평한 목록에서 이름 붙은 자리를 채우고,\n`run` 을 부르는 것이다.\n\n**`projSize` 는 모양에서 읽는다.** torch 도 여기에는 자리를 두지 않았다:\n`weight_hh` 가 `(gates·H, proj 또는 H)` 이고 torch 도 같은 식으로 알아낸다.\n\n**`dropout` 은 쓸모가 있을 때만 건넌다.** 한 층이면 갈 데가 없고 층은 바로 그것을\n경고하는데, `torch._VF.lstm` 은 경고하지 않는다(실측)."
     },
     {
      "kind": "function",
@@ -19897,7 +20645,7 @@
     }
    ],
    "count": 18,
-   "doc_ko": "최상위 순환 여덟 — `torch.lstm` · `torch.gru` · `torch.rnn_tanh` · `torch.rnn_relu`\n와 그 `_cell` 짝.\n\n**층(`nn.Recurrent`)과 다른 것은 가중치를 어디서 얻는가뿐이다.** 층은 자기가 들고\n있고 이쪽은 **목록으로 받는다.** torch 도 그 둘을 다 주고, 층이 안에서 부르는 것이\n이 함수 쪽이다.\n\n그래서 걸음 식을 여기 한 벌만 둔다. 층 쪽과 두 벌로 두면 **게이트 순서가 갈리는\n날**이 오고, 그때 모양은 같고 값만 틀린다 — 이 저장소가 셀과 층 사이에서 이미 그\n이유로 식을 공유하고 있다.\n\n## 게이트 순서\n\n`weight_ih` 의 **행 순서**가 규약이다(실측):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (하나)\n\n바꾸면 값만 갈리고 모양은 그대로다."
+   "doc_ko": "최상위 순환 여덟 — `torch.lstm` · `torch.gru` · `torch.rnn_tanh` · `torch.rnn_relu`\n와 그 `_cell` 짝.\n\n**층(`nn.Recurrent`)과 다른 것은 가중치를 어디서 얻는가뿐이다.** 층은 자기가 들고\n있고 이쪽은 **목록으로 받는다.** torch 도 그 둘을 다 주고, 층이 안에서 부르는 것이\n이 함수 쪽이다.\n\n**걸음 식을 여기 한 벌만 둔다고 적혀 있었고, 실제로는 두 벌이었다.**\n`nn.RNNBase.run` 이 자기 층 루프를 따로 써 두었고, 그 문장이 경고하던 날이 왔다 —\n이쪽이 뒤처져서 `bidirectional` 과 층간 `dropout` 을 *여기 없다* 며 거절하는 동안\n한 파일 건너 층에는 둘 다 있었다. 아래 `rnnApply` 는 이제 `RNNBase` 를 세우고\n자리를 채운다. 그래서 층 루프는 정말로 한 곳에 있고, 여기 남는 것은 `rnnStep` —\n네 개의 `_cell` 이 쓰고 층은 부르지 않는 것 — 뿐이다.\n\n## 게이트 순서\n\n`weight_ih` 의 **행 순서**가 규약이다(실측):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (하나)\n\n바꾸면 값만 갈리고 모양은 그대로다."
   },
   {
    "name": "errors",
@@ -20048,5 +20796,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2710
+ "total": 2823
 }

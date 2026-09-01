@@ -461,6 +461,14 @@ class _Cuda:
         return False
 
     @staticmethod
+    def device_count():
+        """Zero — torch's own answer on a machine without CUDA (it returns 0 rather
+        than raising). `if torch.cuda.device_count() > 1:` opens every multi-GPU
+        example and stopped here on a missing attribute while `is_available()`
+        beside it answered."""
+        return 0
+
+    @staticmethod
     def manual_seed_all(seed):
         return None
 
@@ -470,6 +478,32 @@ class _Cuda:
 
 
 cuda = _Cuda()
+
+
+def get_default_device():
+    """The device new tensors land on. **The GPU is behind borch.ts and the tensors
+    are still `cpu` to torch's vocabulary** — `x.device` has said so all along, so
+    this returns what that says rather than inventing a second answer."""
+    from borch._base import device as _device
+    return _device("cpu")
+
+
+def set_default_device(what=None):
+    """The other half. `cpu` and `None` pass; anything else stops, because putting
+    the tensor where it already was and reporting success is the shape this library
+    refuses everywhere else."""
+    # **The core's `_unsupported`, not this file's.** The local one says "is not
+    # here yet. Use the core `borch` or real PyTorch", which is a second wording for
+    # the same kind of refusal; the core's is what every other absent thing in this
+    # library says, and the golden compares wording. The local one is left alone —
+    # what it already refuses has frozen answers, and moving those is its own
+    # question.
+    from borch._base import _unsupported as _core_unsupported
+
+    name = "cpu" if what is None else str(getattr(what, "type", what))
+    if name != "cpu":
+        _core_unsupported(f"set_default_device({name!r})")
+    return None
 
 
 def backend():

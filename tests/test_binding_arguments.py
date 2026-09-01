@@ -80,6 +80,7 @@ that is the argument for treating this file as the model rather than the excepti
 **it would have caught its defect whatever the types happened to be.**
 """
 
+import ast
 import pathlib
 import re
 
@@ -444,3 +445,146 @@ def test_every_call_site_is_either_compared_or_explained():
     unexplained = {n for n in NOT_COMPARABLE if n not in seen}
     assert not unexplained, (
         f"`NOT_COMPARABLE` names call sites that no longer exist: {sorted(unexplained)}")
+
+
+# ── `_SIGNATURE`, and whether anything can reach a row ──
+#
+# The table turns torch's keyword call into borch.ts's positional one. A row no
+# call can reach reads exactly like a row that works — which is what made this
+# worth writing: a `"scatter_"` row went in to close a gap, the whole binding
+# stayed green, and only taking the row back out again showed it had never been
+# consulted. Something else had closed the gap.
+#
+# `positional(name, …)` is entered from four places and no others (measured by
+# reading every call in `borch_webgpu/`):
+#
+#   1. the tensor method   — `_base.__getattr__`, but only after `_NOT_FORWARDED`
+#                            has had its turn, and that branch calls `_ops`
+#                            directly, with real Python keywords
+#   2. the module function — `_ops.__getattr__`, which fires only for names
+#                            `_ops` does not define itself
+#   3. `F.<name>`          — `_nn.__getattr__`, minus its hand-written list
+#   4. `linalg.<name>`     — keyed `linalg.x`, or by borch.ts's own name
+#
+# So a row is unreachable when its name is in `_NOT_FORWARDED`, `_ops` defines a
+# function of that name, and it is not an `F.` name. Twenty-three were, including
+# `clamp` — the example the table's own opening paragraph uses.
+_ROUTE_BY_HAND = ("pad", "clamp", "flip", "pow", "split", "chunk",
+                  "layer_norm", "where", "squeeze", "repeat_interleave")
+
+
+def _table(module, name):
+    """The literal assigned to `name` at the top level of `borch_webgpu/<module>`.
+
+    Read rather than imported: `borch_webgpu` reaches for Pyodide at import time
+    and cannot be stood up in a native test.
+    """
+    tree = ast.parse((ROOT / "borch_webgpu" / module).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == name for t in node.targets):
+            return tree, node.value
+    raise AssertionError(f"`{name}` is not assigned at the top level of {module}")
+
+
+def _signature_rows():
+    """`[(key, line)]`, in file order, **with duplicates kept.**
+
+    A dict comprehension here would hide the fault this found: `squeeze` was in
+    the table twice, and a dict shows one of it.
+    """
+    _tree, node = _table("_ops.py", "_SIGNATURE")
+    return [(k.value, k.lineno) for k in node.keys if isinstance(k, ast.Constant)]
+
+
+def _routes():
+    """The four routes, as the sets of names each is gated on."""
+    ops_tree, _ = _table("_ops.py", "_SIGNATURE")
+    _base_tree, not_forwarded = _table("_base.py", "_NOT_FORWARDED")
+    _nn_tree, hand = _table("_nn.py", "_HAND_WRITTEN")
+    init = ast.parse(
+        (ROOT / "borch_webgpu" / "__init__.py").read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(init):
+        if isinstance(node, ast.ImportFrom):
+            imported |= {a.name for a in node.names}
+    return {
+        "not_forwarded": {e.value for e in not_forwarded.elts},
+        "ops_defines": {n.name for n in ops_tree.body
+                        if isinstance(n, ast.FunctionDef)},
+        "imported": imported,
+        "hand_written": {k.value for k in hand.keys if isinstance(k, ast.Constant)},
+    }
+
+
+def _unreachable_rows():
+    import torch
+
+    where = _routes()
+    functional = set(dir(torch.nn.functional))
+    dead = []
+    for key, line in _signature_rows():
+        # `linalg.x` and borch.ts's own camel names (`linalgSvd`) are route 4.
+        if key.startswith("linalg.") or any(c.isupper() for c in key):
+            continue
+        bare = key[:-1] if key.endswith("_") and not key.endswith("__") else key
+        method = bare not in where["not_forwarded"]
+        module = key in where["imported"] and key not in where["ops_defines"]
+        as_f = (key in functional and key not in _ROUTE_BY_HAND
+                and key not in where["hand_written"])
+        if not (method or module or as_f):
+            dead.append(f'_ops.py:{line}  "{key}"')
+    return dead
+
+
+def test_no_signature_row_is_unreachable():
+    """**Every row in `_SIGNATURE` has a call that can reach it.**
+
+    Unreachable, a row is not merely inert — it is misleading. It is where a reader
+    looks to find out how a keyword crosses into JavaScript, and it answers about a
+    call that never asks.
+    """
+    dead = _unreachable_rows()
+    assert not dead, (
+        "`_SIGNATURE` rows no call can reach:\n    " + "\n    ".join(dead) +
+        "\n\n  `positional()` is entered from the tensor method, the module function, "
+        "`F.` and `linalg`. A name in `_NOT_FORWARDED` that `_ops` also defines is "
+        "behind all four: that branch calls the Python function directly, and a real "
+        "Python signature takes its own keywords.\n"
+        "  Take the row out. If the row is right and the routing is wrong, then the "
+        "routing is what to change — a row nothing reads cannot make a call work.")
+
+
+def test_the_reachability_rule_is_reading_the_tables():
+    """**A rule that finds nothing holds nothing while passing**, and this file has
+    already lost that way once — see `test_every_call_site_is_either_compared_or_explained`.
+
+    Each of the four tables is asserted non-trivial, because an `ast` walk that
+    misses an assignment returns an empty set and every row then looks reachable.
+    """
+    rows = _signature_rows()
+    where = _routes()
+    assert len(rows) > 100, f"only {len(rows)} `_SIGNATURE` rows were read"
+    assert len(where["not_forwarded"]) > 40, "`_NOT_FORWARDED` came back short"
+    assert len(where["ops_defines"]) > 100, "`_ops`'s functions came back short"
+    assert len(where["imported"]) > 100, "`__init__`'s imports came back short"
+    assert len(where["hand_written"]) > 20, "`_HAND_WRITTEN` came back short"
+
+
+def test_no_name_is_in_the_signature_table_twice():
+    """A second row silently wins and the first is dead.
+
+    `quantile` was here twice, and then `squeeze` was — with the note about
+    `quantile` sitting eight lines away. **The note did not stop the second one**,
+    which is the whole argument for a check over a comment.
+    """
+    seen = {}
+    twice = []
+    for key, line in _signature_rows():
+        if key in seen:
+            twice.append(f'"{key}" at _ops.py:{seen[key]} and :{line}')
+        seen[key] = line
+    assert not twice, (
+        "`_SIGNATURE` names something twice:\n    " + "\n    ".join(twice) +
+        "\n\n  The later row wins and the earlier one is dead. Identical, nothing "
+        "diverges today; the next edit to either copy is where it surfaces.")

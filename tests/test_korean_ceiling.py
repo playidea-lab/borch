@@ -197,7 +197,184 @@ CEILINGS = {
     # 3419 → 3421. Two, and the ledger's own vocabulary: a new `v2f::` row, whose reason
     # has to open with one of `아직` / `없음` / `별칭` / `파이썬` for `test_site.py` to
     # split the remainder. This one is 없음.
-    "borch-ts/test": 3421,
+    # 3421 → 3441. Twenty, and case names plus the three verdicts they return: the
+    # `낱말::` group asks each of `foreach`, `fused`, `capturable`, `differentiable` of
+    # `SGD` and `Adam`, and answers `거절` / `받고 값이 같다` / `받는데 값이 다르다`.
+    # **The verdict strings cannot be English here.** They are the frozen values in
+    # `golden.json`, written by `tests/cases.py`, and the two sides have to spell them
+    # identically or every one of the eight reads as a divergence.
+    # 3441 → 3486. Forty-five, case names and two verdicts: the `linalg` group's six
+    # closed seats — `matrix_norm(dim)`, `matrix_norm(keepdim)`, `matrix_rank(tol)`,
+    # `pinv(rcond)`, four `lstsq` rows and three refusals — plus `둘 다 멈춘다` and
+    # `여기선 통과했다`, which are frozen values in `golden.json` and have to be spelled
+    # the same on both sides or the case reads as a divergence.
+    # 3486 → 3523. Thirty-seven, case names again: `embedding` 의 여섯 (`표가
+    # 짧아진다`, `안 본 줄은 그대로`, `내놓는 값`, `padding_idx 없이`) plus the two
+    # `우리는거절` rows, and the two optimizer rows the Python table names. Every one
+    # of these is a key in `golden.json` and has to be spelled identically on both
+    # sides or the case reads as a divergence.
+    # 3523 → 3600. Seventy-seven, case names once more: the eight `inplace` rows
+    # (`같은 객체`, `부른 쪽 텐서`, `기본은 그대로 둔다`) and the seven `CyclicLR` ones
+    # (`momentum 자취`, `momentum 이 값을 바꾼다`, `scale_mode 만으로는 안 바뀐다` …).
+    # Each is a key in `golden.json` and has to be spelled identically on both sides
+    # or the case reads as a divergence — and `같은 객체=True` had to take **Python's**
+    # spelling of the boolean for the same reason, `${true}` giving `true`.
+    # 3600 → 3627. Twenty-seven, case names: the five `(inplace)/같은 객체` rows, the
+    # three `=둘 다 거절` ones and `Flatten기본`. Each is a key in `golden.json` and has
+    # to be spelled the same on both sides or the case reads as a divergence.
+    # 3627 → 3734. A hundred and seven, case names: the nineteen `container::` rows
+    # that walk the module tree (`층 이름`, `뿌리는 빈 이름`, `자기를 돌려준다`,
+    # `점 찍힌 이름`, `이름을 나중에`, `add_param_group/스텝` …). Each is a key in
+    # `golden.json` and has to be spelled identically on both sides or the case reads
+    # as a divergence.
+    # 3734 → 3765. Thirty-one, case names: the five in-place rows the generated
+    # forwarders opened (`heaviside_(values 라는 이름)`) and the six `scatter` ones
+    # `reduce` opened (`제자리::scatter_(reduce=add)`, `거절::scatter(reduce=sum)`,
+    # `거절::scatter(reduce) 의 기울기`). Each is a key in `golden.json`, and the two
+    # refusals also **return** a fragment string that both sides spell by hand — so a
+    # divergence here reads as a divergence in the answer, not in the name.
+    # 3765 → 3873. A hundred and eight, case names and one verdict: the nine
+    # `inplace::기울기::` rows that `backward(inputs=…)` and `retainGrad()` opened
+    # (`중간 노드도 채운다`, `안 부른 잎을 안 건드린다`, `inputs 밖에서도 남는다`,
+    # `거절::빈 inputs`), plus `있다`/`없다`, which is a **frozen value** in
+    # `golden.json` rather than a name and has to be spelled the same on both sides.
+    # 3873 → 3891. Eighteen: the two `container::BatchNorm(device|dtype)=우리는거절`
+    # names and the `기대대로` / `뜻밖의 성공` verdicts they return, which are frozen
+    # values in `golden.json` and have to be spelled identically on both sides.
+    # 3891 → 3900. Nine, one case name: `modfn::모양::squeeze(길이가 1 이 아닌 축)`,
+    # a key in `golden.json` and so spelled the same on both sides.
+    # 3900 → 3911. Eleven, two case names: `제자리::transpose_(1, 2) 는 3차원에서`
+    # and `제자리::squeeze_(0, 2)`. Both are keys in `golden.json`.
+    # 3911 → 3918. Seven, in the two `seq::grad::TransformerEncoderLayer/` case
+    # names — `입력` and `파라미터 합`. Both are keys in `golden.json`.
+    # 3918 → 3923. Five, one case name: `batch::lu_solve(한쪽만 교환)`, a key in
+    # `golden.json`.
+    # 3923 → 3938. Fifteen, in four `kron` case names — `kron(2차원)`,
+    # `kron(2차원 × 1차원)`, `kron(직사각)` and `kron(2차원)의 기울기`. All four are
+    # keys in `golden.json` and so are spelled the same on both sides.
+    # 3938 → 4053. A hundred and fifteen, in `lstsq`'s eight new batched case names
+    # (`batch::lstsq(행렬 우변)`, `(우변 하나를 늘린다)`, `(벡터 우변은 안 늘어난다)`,
+    # `(잘림은 행렬마다 본다)`, `(둘 다 잘리면)`, `(하나짜리 배치도 잘린다)` and two
+    # more) plus the verdict strings they return — all of them keys or values in
+    # `golden.json`, so both sides spell them the same — and the reason written beside
+    # the `linalg::` row in `run.py`.
+    # 4053 → 4063. Ten, in `lu_solve`'s two new batched case names
+    # (`batch::lu_solve(adjoint, 한쪽만 교환)` and `(left=False, 한쪽만 교환)`) — keys in
+    # `golden.json`, so both sides spell them the same. The other three new names are
+    # `adjoint` and `left=False`, which are English.
+    # 4063 → 4065. Two, in `tensorsolve(dims 없이, 2×3×2×3)` — a key in `golden.json`.
+    # The six `dims=` names beside it are English.
+    # 4065 → 4089. Twenty-four, in the two `weight::` case names that are not pure
+    # ASCII — `mse_loss 의 기울기` and `모양이 다르면 거절` — plus the verdict strings
+    # `문구대로` and `안 던졌다` that the second one returns. All are keys or values in
+    # `golden.json`, so both sides spell them the same.
+    # 4089 → 4119. Thirty, in `embedding`'s new case names — the two `없이` suffixes,
+    # `scale_grad_by_freq 는 값을 안 건드린다`, the two `=우리는거절` on the bag — and the
+    # verdict strings those refusals return. All are keys or values in `golden.json`,
+    # so both sides spell them the same.
+    # 4119 → 4140. Twenty-one, in `interpolate`'s four gradient case names
+    # (`… 의 기울기`) — keys in `golden.json` — and the reason written beside the
+    # `fname::` row in `run.py` for the mode a compile-time union cannot refuse.
+    # 4140 → 4170. Thirty, in `unfold`/`fold`'s new case names — the four
+    # `배치 없이` suffixes, `grad::unfold(배치 없이)`, `fold(배치 없이)` and the two
+    # `=거절 문구` — plus the `안 던졌다` verdict. All are keys or values in
+    # `golden.json`, so both sides spell them the same.
+    # 4170 → 4191. Twenty-one, in `antialias`'s two gradient case names
+    # (`… 의 기울기`) and `interpolate(nearest 에 antialias)=둘 다 거절` with the two
+    # verdict strings it returns. All are keys or values in `golden.json`.
+    # 4191 → 4193. Two, in `grid_sample(bicubic, 반 칸)` — a key in `golden.json`.
+    # The other twelve `bicubic` names are English.
+    # 4193 → 4230. Thirty-seven, in `InstanceNorm`'s three ported case names
+    # (`(기본)/state_dict 열쇠`, `(affine)/…`, `(추적)/…`) and the `container::` reason
+    # rewritten in `run.py` — that row is a Korean sentence and replacing it swapped
+    # one Korean string for a longer one rather than adding a new kind.
+    # 4230 → 4260. Thirty, in `ldl_factor`'s new case names — the three fixtures'
+    # tags (`2x2 블록`, `교환`, `6x6 열 교환`), `(특이)` and `(영행렬)`, and the
+    # `=둘 다 거절` with the two verdict strings it returns. All keys or values in
+    # `golden.json`.
+    # 4260 → 4283. Twenty-three, in the recurrent flags' case names — the labels
+    # `양방향`, `2층`, `2층양방향`, `편향없음` and `dropout 은 평가에서 항등`, the parts
+    # `출력`/`상태`/`셀`, `state_dict 열쇠` and the `(거절 없음)` a refusal case returns
+    # when nothing was refused. Every one is a key or a value in `golden.json`, so
+    # both sides have to spell it the same; the `proj_size` and `relu` labels beside
+    # them are ASCII and add nothing.
+    # 4283 → 4298. Fifteen, in `BatchNorm(추적없음)`'s four case names — the label
+    # itself, `state_dict 열쇠` and `running_mean 은 None`. Keys in `golden.json`, so
+    # both sides spell them the same; the `BatchNorm1d(N,C,L)` rows beside them are
+    # ASCII apart from the `열쇠` they do not carry.
+    # 4298 → 4312. Fourteen, in the top-level recurrent flags' case names — `양방향`,
+    # `2층양방향`, `2층 dropout, 평가` and `proj_size 와 양방향`. Keys in `golden.json`,
+    # so both sides spell them the same.
+    # 4312 → 4333. Twenty-one, in the attention flags' case names — `둘 다`,
+    # `출력`, `가중치`, `state_dict 열쇠` and the two `마스크` rows. Keys in
+    # `golden.json`; `add_bias_kv`, `add_zero_attn` and `kdim, vdim` are ASCII.
+    # 4333 → 4362. Twenty-nine, in `interpolate`'s rank case names — `3차원`, `5차원`,
+    # `… 의 기울기` and the `=둘 다 거절` rows with the `둘 다 멈춘다` verdict they
+    # return. All keys or values in `golden.json`, so both sides spell them the same.
+    # 4362 → 4376. Fourteen, in the six `축마다 다른 배율` case names — one scale per
+    # axis. Keys in `golden.json`.
+    # 4376 → 4430. Fifty-four, in the strong-Wolfe case names — `진짜 기울기`,
+    # `이력이 밀려난다`, `평가 예산이 짧다`, `없는 line_search_fn`, `얽힌 이차형식`,
+    # `(3변수)`, `처음이 모자란다` — and the `(거절 없음)` a refusal case returns when
+    # nothing was refused. All keys or values in `golden.json`.
+    # 4430 → 4456. Twenty-six, in the pooling dilation case names — `자리::` on the
+    # eleven `max_pool` rows, `grad::` on one, and the `avg_pool2d(dilation)=둘 다 거절`
+    # with the `둘 다 멈춘다` verdict it returns. Keys or values in `golden.json`.
+    # 4456 → 4475. Nineteen, in the `torch.norm` case names — `dim 뒤집기`, `배치`,
+    # the `F.lp_pool*d(올림)` rows' `올림`, and the widened `linalg::` skip reason in
+    # `run.py`. Keys in `golden.json` except the last, which is a sentence.
+    # 4475 → 4499. Twenty-four, in the with-indices window case names — `자리 내놓기`
+    # on twelve `max_pool2d`/`MaxPool2d` rows, `셋 다` on three of them, and
+    # `창이 있는 자리` on the unpool row. Keys in `golden.json`, so both sides spell
+    # them the same.
+    # 4499 → 4503. Four, in the `index::` skip reason — `표기`, which names what the
+    # eleven `걸음::` cases are about (`x[a:b:step]` is Python's notation and borch.ts
+    # has no `[]`). A reason in `run.py`, not a case name.
+    # 4503 → 4587. Eighty-four, in the `autograd.grad` case names — `기울기::` on
+    # fifteen rows, `입력 둘`, `출력 둘`, `중간 텐서`, `안 쓰인 입력`, `씨앗 없는 벡터
+    # 출력`, `모양이 틀린 grad_outputs`, `.grad 를 안 건드린다`, `쌓는다` — and the
+    # `있다`/`None` verdict strings two of them return. Keys or values in
+    # `golden.json`, so both sides spell them the same.
+    # 4587 → 4601. Fourteen, in the `top::` skip reason — `난수::generator::`,
+    # `살펴보기::layout::`, `살펴보기::형식::`, which name the case groups the row
+    # accounts for. A reason in `run.py`, not case names.
+    # 4601 → 4628. Twenty-seven: `norm::nn.LayerNorm… 는 F 와 같다` on two rows and
+    # `0 텐서=` in the two `zero_grad` verdicts (keys and values in `golden.json`),
+    # plus the `norm::`/`opt::`/`container::` skip reasons in `run.py` naming what
+    # each row is about.
+    # 4628 → 4690. Sixty-two: the `opt::SequentialLR/ChainedScheduler(…)=거절` and
+    # `(last_epoch=N)/자취` names, the two `fft::istft(…)` ones, and the `문구대로`/
+    # `안 던졌다` verdicts they return. Keys and values in `golden.json`, so both
+    # sides spell them the same.
+    # 4690 → 4738. Forty-eight: the eight `살펴보기::짝::… 의 자리는 int64` names, the
+    # two `nn.RMSNorm/F.rms_norm(eps 를 크게)` ones, `isclose(equal_nan 없이)`, and the
+    # `top::`/`act::` skip reasons in `run.py` naming what each row is about. Keys in
+    # `golden.json`, so both sides spell them the same.
+    # 4738 → 4771. Thirty-three: the `special::` skip reason in `run.py`, which names
+    # the three of that namespace's thirty-two cases borch.ts does not ask — two are
+    # `out=` (declined everywhere over there) and one hands `xlogy` a bare scalar
+    # where TS types a `Tensor`. It is Korean because every other reason in that
+    # ledger is, and a row in a different language reads as a different kind of row.
+    # Nothing was added to `cases.ts`: the twenty-nine names ported are ASCII.
+    # 4771 → 4810. Thirty-nine: the `video::` skip reason in `run.py`. It is the one
+    # row in that ledger about a **type** rather than a backlog — borch.ts's `Image` is
+    # `{data, height, width, channels}` and has no axis a frame could go in — and it is
+    # Korean because every other reason there is, and a row in a different language
+    # reads as a different kind of row. `cases.ts` did not move: the thirty video case
+    # names are the core's and are not asked over there.
+    # 4810 → 4824. Fourteen: the case name `linear_cross_entropy(기본이 -100 을
+    # 건너뛴다)` in `cases.ts`, plus two in the `loss::` ledger row. **Names are keys** —
+    # the Python and TypeScript tables have to spell the string identically or the row
+    # reconciles against nothing, so a Korean name on one side is a Korean name on
+    # both. That case is the one that catches `ignoreIndex=null` being passed through
+    # rather than mapped to -100, which no other target can see.
+    # 4824 → 4857. Thirty-three: the `special::` skip reason in `run.py`, rewritten
+    # when that row went from 3 to 75. It is the one row in that ledger that changed
+    # marker from `파이썬` to `아직` — from *a Python affordance* to *work owed on the
+    # borch.ts side* — and the marker words are the keys `test_site.py` matches on to
+    # split the README's remainder, so the change had to be made in the reason's own
+    # language rather than beside it.
+    "borch-ts/test": 4857,
 }
 
 

@@ -405,6 +405,14 @@ def _bn_roundtrip(L, img):
     return fresh(L.tensor(img))
 
 
+def _backward_by_inputs(L, arr):
+    """`a·b` differentiated against `a` alone, and `a` handed back."""
+    a = L.tensor(arr, requires_grad=True)
+    b = L.tensor(arr, requires_grad=True)
+    (a * b).sum().backward(inputs=[a])
+    return a
+
+
 def _grad_of(leaf, name):
     """Checks a gradient **actually arrived** at the leaf, and hands it back.
 
@@ -907,6 +915,22 @@ def grad_cases(inp=None):
     for _how in ("lower", "higher", "midpoint", "nearest"):
         folds(f"quantile(0.3, {_how})",
               lambda L, x, h=_how: x.quantile(0.3, interpolation=h))
+    # **`dim` was a seat the binding never read**, and borch.ts refuses it by name —
+    # so the refusal sat one call away while `quantile(x, 0.5, dim=1)` came back the
+    # flattened scalar: one number where torch gives one per row, no exception, and
+    # nothing saying the axis had been dropped. The core folds it; the browser side
+    # stops, which is what `_as_expected` is for.
+    cases.append((ACT_PREFIX + "quantile(dim)=브라우저는거절",
+                  _as_expected(
+                      lambda L: L.quantile(
+                          L.tensor(np.array([[3.0, 1.0], [0.5, 4.0]],
+                                            dtype=np.float32)), 0.5, dim=1),
+                      # **The median of each row**, which is the whole content of
+                      # `dim`: `[2.0, 2.25]` and not the flattened `1.75` the binding
+                      # was handing back before the word reached borch.ts.
+                      holds=lambda out: np.allclose(
+                          np.asarray(to_numpy(out), dtype=np.float64).reshape(-1),
+                          [2.0, 2.25], atol=1e-6))))
     # Its derivative is `i1`. borch.ts was **flowing a zero** here, and its comment cited the
     # core's hole as its grounds — one side had copied the other. A gradient whose value is zero
     # and a gradient that is absent are different statements, and in the copying the second
@@ -1058,6 +1082,23 @@ def act_cases(inp=None):
                       lambda L, a=_act, g=_args: getattr(L.nn, a)(*g, True)(L.tensor(k))))
         cases.append((ACT_PREFIX + f"nn.{_act}(inplace)/같은 객체",
                       lambda L, a=_act, g=_args: _same_object(L, getattr(L.nn, a)(*g, True))))
+    # **Five more take it and were asked by nobody.** The browser side declared no
+    # constructor for these, so the signature axis reported them as *unreadable*
+    # rather than as short — `SELU` thirty lines above them in the same file has the
+    # seat and these five did not, and the count said nothing either way.
+    for _act in ("Hardsigmoid", "Hardswish", "Mish", "ReLU6", "SiLU"):
+        cases.append((ACT_PREFIX + f"nn.{_act}(inplace)",
+                      lambda L, a=_act: getattr(L.nn, a)(True)(L.tensor(k))))
+        cases.append((ACT_PREFIX + f"nn.{_act}(inplace)/같은 객체",
+                      lambda L, a=_act: _same_object(L, getattr(L.nn, a)(True))))
+    # **And three refuse it, because torch gives them no in-place form.** The core
+    # stops on the word by name; the browser side had no seat for it, so JavaScript
+    # dropped it and the call went through. *Accepted where the authority declines*
+    # misleads exactly as much as *accepted and inert*.
+    for _act in ("LogSigmoid", "Softsign", "Tanhshrink"):
+        cases.append((ACT_PREFIX + f"nn.{_act}(inplace)=둘 다 거절",
+                      lambda L, a=_act: _both_stop(
+                          L, lambda M, n=a: getattr(M.nn, n)(True)(M.tensor(k)))))
     cases.append((ACT_PREFIX + "nn.Identity", lambda L: L.nn.Identity()(L.tensor(k))))
     # torch's `Identity` **swallows any argument at all** (measured). It is a placeholder
     # layer, so swapping a layer out and leaving its arguments in place while changing the name
@@ -1619,6 +1660,7 @@ def shape_index_cases(inp=None):
 
 CPLX_PREFIX = "cplx::"
 FFT_PREFIX = "fft::"
+SPECIAL_PREFIX = "special::"
 
 # **Cases the core alone sees.** Exactly the opposite direction from `WEBGPU_PREFIX`.
 #
@@ -1649,7 +1691,33 @@ FFT_PREFIX = "fft::"
 # The binding could fill it in with numpy, but **that is the very thing being narrowed** — if
 # Python computes it instead, the name is still absent for anyone using borch.ts, and the golden
 # cases go green through the binding. This is written down so that cover is not built again.
-CORE_ONLY_PREFIXES = ("linalg::eig::",)
+#
+# **`special::수학::` is the thirty-four that have bodies of their own.** The
+# twenty-three forwarders in that namespace run on all three sides — they point at
+# arithmetic the golden already held — and these do not: the Bessel and Airy
+# approximations, the twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin and the
+# nine tail-safe forms are numpy in `borch/_ops.py` and have no WGSL behind them.
+#
+# **The binding refuses them by name rather than forwarding blindly**, which is why
+# they arrive here as `AttributeError: special.bessel_j0 is not in this subset` instead
+# of as a wrong number. That refusal is the design working: `_Special` over there holds
+# a written list precisely so a name torch has and this side lacks cannot resolve to
+# something plausible.
+#
+# The paragraph above about `linalg.eig` applies here word for word — the binding
+# *could* fill these in with numpy on the Python side and the cases would go green,
+# and the names would still be absent for anyone holding borch.ts. That is the cover
+# this list exists to refuse. `tests/ts_axis.py` carries the thirty-four by name.
+#
+# **`linalg::lstsqfield::` is here for a smaller reason and a plainer one.** torch's
+# `linalg.lstsq` returns four fields; borch.ts returns the solution as a bare tensor,
+# because it is `pinverse` applied to `B` and the other three would each be a second
+# pass over the matrix. So the binding dresses one field as torch's named tuple, and
+# `.residuals`, `.rank` and `.singular_values` raise `AttributeError` through it.
+# Filling them in with numpy on the Python side is the cover the paragraph above
+# warns against: the names would still be absent for anyone holding borch.ts, and the
+# cases would go green. The solution itself is asked on both sides, batched.
+CORE_ONLY_PREFIXES = ("linalg::eig::", "linalg::lstsqfield::", "special::수학::")
 
 
 def complex_cases(inp=None):
@@ -1826,6 +1894,220 @@ def complex_cases(inp=None):
             return type(exc).__name__
 
     add("복소 손실의 backward 는 거절", refuses_complex_loss)
+    return cases
+
+
+def special_cases(inp=None):
+    """`torch.special` — **twenty names and no new arithmetic.**
+
+    Every one of these forwards to a function this library already had, so the value is
+    not what is in doubt: `borch.erf` has had a case since the beginning. What these ask
+    is **that the second spelling reaches the same body**, which is the only thing a
+    forwarding namespace can get wrong, and it can get it wrong in three ways:
+
+    * pointing at the wrong function — `expit` is `sigmoid`, `gammaln` is `lgamma`,
+      `psi` is `digamma` and `modified_bessel_i0` is `i0`, and none of the four is
+      guessable from the name. A pair swapped here computes a real number and returns
+      it, so nothing raises;
+    * losing an argument on the way through — `polygamma` is `(n, input)` in this
+      namespace and torch enforces that order (`special.polygamma(x, 1)` is a
+      `TypeError` there, measured), and `round`'s `decimals` is absent from torch's own
+      docstring while torch reads it (`round(0.34567, decimals=3)` → `0.346`, measured);
+    * accepting `out=` where torch does not. Eighteen of the twenty take it and
+      `softmax` and `log_softmax` do not — they take `dtype=` instead. Routed through
+      the binding's generic door they *would* pick `out=` up, so the pair is asked
+      about directly.
+
+    **The arguments are what the cases are for.** A bare `special.erf(x)` case would
+    pass with every one of those three mistakes in place, because the plain unary call
+    is the one shape all of them still get right.
+    """
+    x = np.array([[0.3, 0.7], [1.2, 2.5]], dtype=np.float32)
+    unit = np.array([0.2, 0.8], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((SPECIAL_PREFIX + name, fn))
+
+    # The eleven spelled the same in both places, plus the four that are not. Both
+    # groups are one line each; the point of listing the renames beside the rest is
+    # that from here they look identical, which is why a swap is invisible.
+    for name in ("digamma", "erf", "erfc", "exp2", "expm1", "i0", "log1p", "sinc",
+                 "psi", "gammaln", "expit", "modified_bessel_i0"):
+        add(name, lambda L, n=name: getattr(L.special, n)(L.tensor(x)))
+    # `erfinv` and `logit` want the open unit interval — outside it `erfinv` is ±inf
+    # and `logit` is undefined, and a case sitting on that is a case about infinity.
+    for name in ("erfinv", "logit"):
+        add(name, lambda L, n=name: getattr(L.special, n)(L.tensor(unit)))
+
+    # The arguments, which is where a forwarder actually fails.
+    add("logit(eps)", lambda L: L.special.logit(L.tensor(unit), eps=0.3))
+    add("round", lambda L: L.special.round(L.tensor(x)))
+    # **`decimals` is not in torch's docstring for this name and torch reads it.** The
+    # value has to move for the case to mean anything, so the input is chosen to round.
+    add("round(decimals)",
+        lambda L: L.special.round(L.tensor(np.array([0.34567, 1.98765, -2.55555],
+                                                    dtype=np.float32)), decimals=3))
+    add("polygamma", lambda L: L.special.polygamma(1, L.tensor(x)))
+    add("polygamma(n=2)", lambda L: L.special.polygamma(2, L.tensor(x)))
+    add("xlogy", lambda L: L.special.xlogy(L.tensor(x), L.tensor(x)))
+    add("xlogy(스칼라)", lambda L: L.special.xlogy(L.tensor(x), 2.0))
+    add("logsumexp", lambda L: L.special.logsumexp(L.tensor(x), 1))
+    add("logsumexp(keepdim)",
+        lambda L: L.special.logsumexp(L.tensor(x), 1, keepdim=True))
+    add("softmax", lambda L: L.special.softmax(L.tensor(x), 1))
+    add("log_softmax", lambda L: L.special.log_softmax(L.tensor(x), 1))
+    # **The two that must disagree with the top level.** `softmax(dim=0)` and
+    # `softmax(dim=1)` differ, so a forwarder that dropped `dim` would be caught here
+    # and nowhere above.
+    add("softmax(dim=0)", lambda L: L.special.softmax(L.tensor(x), 0))
+    add("log_softmax(dim=0)", lambda L: L.special.log_softmax(L.tensor(x), 0))
+
+    # **`out=` reaching the namespace.** `linalg` needed the same wiring and did not
+    # have it for a long time — `borch.qr(x, out=…)` worked while
+    # `borch.linalg.qr(x, out=…)` was a `TypeError`, for one function. The case asks
+    # for the value in the destination, so a wrapper that computes and discards fails.
+    # **The value in the destination and the identity of what came back are two
+    # questions**, and only the second one is about `out=`. The values case is
+    # deliberately equal to the plain `erf` case — that is the whole claim, that the
+    # answer did not change — and it is written into `test_case_names.DELIBERATE` and
+    # `test_inert_arguments.ATTESTED` under that reason, the way the six `inplace`
+    # rows above it are.
+    #
+    # Without the second row this pair says nothing a wrapper could fail: one that
+    # computed `erf` and threw the destination away would give the same numbers.
+    def into(L):
+        dest = L.zeros(2, 2)
+        L.special.erf(L.tensor(x), out=dest)
+        return dest
+
+    def into_id(L):
+        dest = L.zeros(2, 2)
+        back = L.special.erf(L.tensor(x), out=dest)
+        return f"같은 객체={back is dest}"
+
+    add("erf(out=)", into)
+    add("erf(out=)/같은 객체", into_id)
+
+    # ── the thirty-four that are arithmetic ──────────────────────────────────
+    #
+    # Everything above this line forwards to a body the golden already held. These have
+    # bodies of their own, and **every one of them is asked where it breaks rather than
+    # where it is easy.** Each was declined until measured, under a reason that named a
+    # real hazard; the hazard is what the inputs below are chosen to hit.
+    #
+    # The orthogonal polynomials are asked **outside their orthogonality interval**.
+    # Chebyshev's `T` is defined on [-1, 1] and torch evaluates the polynomial anywhere:
+    # an implementation that clamped, or answered NaN outside, agrees on every textbook
+    # input and parts at x = 2. A negative order is 0 and is asked too.
+    # **These carry a second prefix** so `CORE_ONLY_PREFIXES` can name them: the
+    # twenty-three above run on all three sides and these thirty-four are numpy in the
+    # core with no WGSL behind them. Splitting the namespace by prefix rather than by a
+    # per-case list is what keeps the two claims from being one.
+    def add_math(name, fn):
+        cases.append((SPECIAL_PREFIX + "수학::" + name, fn))
+
+    poly_x = np.array([-2.0, -1.5, -0.6, 0.0, 0.3, 0.9, 1.0, 2.0, 3.7],
+                      dtype=np.float32)
+    for name in ("chebyshev_polynomial_t", "chebyshev_polynomial_u",
+                 "chebyshev_polynomial_v", "chebyshev_polynomial_w",
+                 "shifted_chebyshev_polynomial_t", "shifted_chebyshev_polynomial_u",
+                 "shifted_chebyshev_polynomial_v", "shifted_chebyshev_polynomial_w",
+                 "hermite_polynomial_h", "hermite_polynomial_he",
+                 "laguerre_polynomial_l", "legendre_polynomial_p"):
+        # n = 5 is past the point where a wrong second term or a wrong step coefficient
+        # has compounded into a visible difference; n = 0, 1 and -1 are the three the
+        # recurrence never reaches.
+        for order in (0, 1, 5, -1):
+            add_math(f"{name}(n={order})",
+                     lambda L, n=name, k=order:
+                     getattr(L.special, n)(L.tensor(poly_x), k))
+
+    # **The scaled and tail-safe nine, at the tails.** A middle-of-the-range input
+    # passes against the composition each of these exists to replace, so the numbers
+    # here are the ones where the composition is `inf` or `nan`: `erfc(x)·exp(x²)` from
+    # x=10, `log(ndtr(x))` from x=-6, `i0(x)·exp(-|x|)` at x=90.
+    tails = {
+        "erfcx": np.array([-5.0, -1.0, 0.0, 1.0, 10.0, 26.0, 100.0], dtype=np.float32),
+        "ndtr": np.array([-8.0, -3.0, 0.0, 1.0, 5.0], dtype=np.float32),
+        "log_ndtr": np.array([-40.0, -10.0, -6.0, -1.0, 0.0, 2.0], dtype=np.float32),
+        "ndtri": np.array([0.001, 0.1, 0.5, 0.9, 0.999], dtype=np.float32),
+        "entr": np.array([-1.0, 0.0, 0.25, 0.5, 1.0, 2.0], dtype=np.float32),
+        "i0e": np.array([0.0, 1.0, 15.0, 50.0, 90.0, 200.0], dtype=np.float32),
+        "i1": np.array([-5.0, -1.0, 0.0, 0.5, 2.0, 10.0], dtype=np.float32),
+        "i1e": np.array([-200.0, -1.0, 0.0, 1.0, 15.0, 90.0], dtype=np.float32),
+        "modified_bessel_i1": np.array([-3.0, 0.0, 0.5, 2.0, 10.0], dtype=np.float32),
+        "spherical_bessel_j0": np.array([-3.0, 0.0, 0.5, 2.0, 10.0], dtype=np.float32),
+        # **The seam at 10 is asked from both sides.** The series and the asymptotic
+        # meet there, and the first crossover tried (2) was worth two digits — `k₀(2)`
+        # came back 0.0906 against 0.1139, on the two points either side of the seam
+        # and nowhere else.
+        "modified_bessel_k0": np.array([0.01, 0.5, 2.0, 9.9, 10.0, 10.1, 20.0],
+                                       dtype=np.float32),
+        "modified_bessel_k1": np.array([0.01, 0.5, 2.0, 9.9, 10.0, 10.1, 20.0],
+                                       dtype=np.float32),
+        "scaled_modified_bessel_k0": np.array([0.01, 0.5, 2.0, 9.9, 10.1, 80.0],
+                                              dtype=np.float32),
+        "scaled_modified_bessel_k1": np.array([0.01, 0.5, 2.0, 9.9, 10.1, 80.0],
+                                              dtype=np.float32),
+        # `J` and `Y` change method at 8. `Y` has a pole at 0 and is `nan` below it,
+        # `J₀` is even and `J₁` is odd — a sign dropped there is invisible on the
+        # positive half alone.
+        "bessel_j0": np.array([-20.0, -8.1, -7.9, -1.0, 0.0, 2.4, 7.9, 8.1, 20.0],
+                              dtype=np.float32),
+        "bessel_j1": np.array([-20.0, -8.1, -7.9, -1.0, 0.0, 2.4, 7.9, 8.1, 20.0],
+                              dtype=np.float32),
+        "bessel_y0": np.array([0.001, 0.5, 2.4, 7.9, 8.0, 8.1, 20.0],
+                              dtype=np.float32),
+        "bessel_y1": np.array([0.001, 0.5, 2.4, 7.9, 8.0, 8.1, 20.0],
+                              dtype=np.float32),
+        # The Airy seam is at 8 as well, and the negative side oscillates — the
+        # envelope and the phase are two ways to be wrong and only the negative
+        # arguments show the second.
+        "airy_ai": np.array([-30.0, -12.0, -8.1, -7.9, -1.0, 0.0, 1.0, 7.9, 8.1, 12.0],
+                            dtype=np.float32),
+    }
+    for name, xs in tails.items():
+        add_math(name, lambda L, n=name, a=xs: getattr(L.special, n)(L.tensor(a)))
+
+    # **`xlog1py` is asked at y = 1e-12**, which is the whole of it: written as
+    # `xlogy(x, 1+y)` the `1 + y` rounds the argument away and the answer becomes 0
+    # where torch says 1e-12.
+    _xl_x = np.array([1.0, 1.0, 1.0, 0.0, 2.0, -1.0], dtype=np.float32)
+    _xl_y = np.array([1.0, 1e-8, 1e-12, -1.0, 0.5, 3.0], dtype=np.float32)
+    add_math("xlog1py",
+             lambda L: L.special.xlog1py(L.tensor(_xl_x), L.tensor(_xl_y)))
+
+    # **`zeta` against two closed forms.** `ζ(2,1)` is π²/6 and `ζ(4,1)` is π⁴/90, so
+    # these two rows are checked by arithmetic as well as by torch. `x ≤ 1` is `nan`
+    # and `ζ(1,1)` is `inf` — measured, and a partial sum returned there instead would
+    # be a plausible number in place of a refusal.
+    _z_x = np.array([2.0, 3.0, 4.0, 2.5, 1.5, 6.0, 10.0, 2.0, 1.0, 0.5],
+                    dtype=np.float32)
+    _z_q = np.array([1.0, 1.0, 1.0, 2.0, 1.0, 3.0, 0.5, 10.0, 1.0, 1.0],
+                    dtype=np.float32)
+    add_math("zeta", lambda L: L.special.zeta(L.tensor(_z_x), L.tensor(_z_q)))
+
+    # `multigammaln` is `mvlgamma`, and the pair is asked so the two spellings cannot
+    # drift into two bodies.
+    _mg = np.array([2.5, 3.0, 4.5], dtype=np.float32)
+    for p in (1, 2, 3):
+        add_math(f"multigammaln(p={p})",
+                 lambda L, k=p: L.special.multigammaln(L.tensor(_mg), k))
+
+    # **The two that were nearly missed.** `gammainc` and `gammaincc` are `igamma` and
+    # `igammac`, and the first sweep of this namespace put them in the thirty-seven
+    # *not* here — measured, they are the same function. Two arguments and a shape that
+    # is not the unary one, so they need their own case rather than the loop above.
+    a = np.array([0.5, 1.5, 2.5], dtype=np.float32)
+    z = np.array([0.3, 1.0, 2.0], dtype=np.float32)
+    add("gammainc", lambda L: L.special.gammainc(L.tensor(a), L.tensor(z)))
+    add("gammaincc", lambda L: L.special.gammaincc(L.tensor(a), L.tensor(z)))
+    # **They must sum to one**, which is a statement about the pair that neither case
+    # above makes: both could be the lower branch and both would still freeze fine.
+    add("gammainc+gammaincc",
+        lambda L: L.special.gammainc(L.tensor(a), L.tensor(z))
+        + L.special.gammaincc(L.tensor(a), L.tensor(z)))
     return cases
 
 
@@ -2012,6 +2294,61 @@ def fft_cases(inp=None):
           lambda L, t: L.istft(L.stft(t, 8, 4, window=hann(L),
                                       return_complex=True),
                                8, 4, window=hann(L), length=16))
+
+    # ── `istft`'s two-sided path ran a **forward** transform ──────────────────
+    #
+    # `onesided=True` used `irfft` and was right; the other branch called `fft`, so
+    # the function whose name is *inverse* did the forward one. Reconstructing
+    # `sin(0.3k)` gave `[3.60, 0.97, 3.56, …]` where the waveform is
+    # `[0, 0.30, 0.56, …]` — no exception, a plausible wave, and the default path
+    # being correct is why nothing said so. `return_complex` was a seat neither
+    # implementation read besides, so the dtype was wrong there too.
+    def two_sided(L, complex_out):
+        spec = L.stft(s(L), 8, 4, window=hann(L), onesided=False,
+                      return_complex=True)
+        return L.istft(spec, 8, 4, window=hann(L), onesided=False, length=16,
+                       return_complex=complex_out)
+
+    # **The verdict carries the measurement**, and it has to. `_as_expected` asks
+    # *did it behave as documented* — succeed on torch and the core, refuse on the
+    # browser — and putting `fft` back where `ifft` belongs left all three answers
+    # unchanged, so the plant passed. That is why the helper now takes `holds`, and
+    # these two rows were what taught it.
+    #
+    # **Both halves are in the one check**: the reconstruction against the waveform
+    # that went in, and the dtype. The values alone do not hold the dtype — the
+    # comparison reads `.real` off whatever comes back, so a complex answer where
+    # torch gives a real one compares equal.
+    def _reconstructs(got, complex_out):
+        want = np.asarray(sig, dtype=np.float32)[:16]
+        flat = np.asarray([complex(v).real for v in got.reshape(-1).tolist()],
+                          dtype=np.float32)
+        wanted = "complex64" if complex_out else "float32"
+        return (np.allclose(flat, want, atol=1e-3)
+                and str(got.dtype).endswith(wanted))
+
+    for _cx, _tag in ((False, ""), (True, ", 복소로")):
+        cases.append((FFT_PREFIX + f"istft(onesided=False{_tag})=브라우저는복소를안먹는다",
+                      _as_expected(lambda L, c=_cx: two_sided(L, c),
+                                   holds=lambda got, c=_cx: _reconstructs(got, c))))
+    # The dtype of the ordinary call, which is the half every caller meets: torch
+    # hands back a real waveform and this handed back `complex64` on that branch.
+    add("istft 의 형은 실수다",
+        lambda L: str(L.istft(L.stft(s(L), 8, 4, window=hann(L),
+                                     return_complex=True),
+                              8, 4, window=hann(L), length=16).dtype))
+    # Asking a onesided reconstruction for a complex result: the result is real by
+    # construction and torch refuses the request rather than dressing it.
+    def onesided_complex(L):
+        try:
+            L.istft(L.stft(s(L), 8, 4, window=hann(L), return_complex=True),
+                    8, 4, window=hann(L), length=16, return_complex=True)
+        except Exception as exc:                                # noqa: BLE001
+            return ("문구대로" if "Cannot have onesided output" in str(exc)
+                    else f"다른 문구 <{exc}>")
+        return "안 던졌다"
+
+    add("istft(onesided 인데 복소를 달라면 거절)", onesided_complex)
 
     # ── refusals ──
     def refuses(name, body):
@@ -2780,6 +3117,43 @@ def top_linalg_cases(inp=None):
             add(f"lobpcg(k={k}, largest={largest}) 고윳값",
                 lambda L, kk=k, lg=largest: L.lobpcg(L.tensor(big), k=kk,
                                                      largest=lg)[0])
+    # ── `B` and `X`, which were refused ────────────────────────────────
+    #
+    # `B` is the generalised problem `A x = λ B x`. With `B` symmetric positive
+    # definite it reduces to a standard one — `B = L Lᵀ`, eigenvalues of `L⁻¹ A L⁻ᵀ` —
+    # so nothing iterative and no new dependency were needed.
+    #
+    # **`X` is a starting basis and this has nothing to start.** What it changes is the
+    # count: given `X` and no `k`, torch takes `k` from `X`'s columns. That was
+    # unreachable here because `k` defaulted to 1 where torch's defaults to `None`, so
+    # the argument would have been received and the answer one pair wide whatever came
+    # in. Measured: the converged eigenvalues do not depend on `X` — torch with and
+    # without it agrees to 5e-6, the same distance its own answer moves with the seed.
+    _LOB_B = np.diag([2., 1., 1., 3., 1., 1., 2., 1., 1., 2.]).astype(np.float32)
+    _LOB_X = np.eye(10, dtype=np.float32)[:, :2].copy()
+    for _lg in (True, False):
+        add(f"lobpcg(B, largest={_lg}) 고윳값",
+            lambda L, lg=_lg: L.lobpcg(L.tensor(big), k=2, B=L.tensor(_LOB_B),
+                                       largest=lg)[0])
+    add("lobpcg(X 가 k 를 정한다) 고윳값",
+        lambda L: L.lobpcg(L.tensor(big), X=L.tensor(_LOB_X))[0])
+    add("lobpcg(X 가 k 를 정한다) 모양",
+        lambda L: str(tuple(L.lobpcg(L.tensor(big), X=L.tensor(_LOB_X))[1].shape)))
+    add("lobpcg(B 와 X) 고윳값",
+        lambda L: L.lobpcg(L.tensor(big), B=L.tensor(_LOB_B),
+                           X=L.tensor(_LOB_X))[0])
+
+    def lobpcg_b_orthonormal(L):
+        """**The generalised vectors come out `B`-orthonormal, not unit length.** It
+        falls out of the reduction (`xᵀBx = yᵀy`) and it is what torch returns —
+        normalising them would look tidier and disagree. The sign is arbitrary, so
+        what is asked is the quadratic form, which the sign cannot reach."""
+        w = L.lobpcg(L.tensor(big), k=2, B=L.tensor(_LOB_B))[1]
+        bm = L.tensor(_LOB_B)
+        return (w * (bm @ w)).sum(dim=0)
+
+    add("lobpcg(B) 의 벡터는 B-정규직교", lobpcg_b_orthonormal)
+
     # **Exactly rank 3** — over it, torch moves with the seed and there is nothing to freeze.
     low = (rng.standard_normal((8, 3))
            @ rng.standard_normal((3, 5))).astype(np.float32)
@@ -2844,8 +3218,14 @@ def constant_cases(inp=None):
     # This case was written as a value first and the binding came back red. Adding the five
     # constants very nearly became "you can write it like torch now".
     cases.append((CONST_PREFIX + "-inf 를 상수로 굽는 것은 브라우저가 거절한다",
-                  _as_expected(lambda L: L.clamp(L.tensor(inp["train_x"]),
-                                                 min=-L.inf))))
+                  _as_expected(
+                      lambda L: L.clamp(L.tensor(inp["train_x"]), min=-L.inf),
+                      # **Clamping at −∞ changes nothing**, so the values have to come
+                      # back as they went in. A version that clamped at the largest
+                      # negative float instead would succeed and be wrong here.
+                      holds=lambda out: np.allclose(
+                          np.asarray(to_numpy(out), dtype=np.float64),
+                          np.asarray(inp["train_x"], dtype=np.float64), atol=1e-6))))
 
     return cases
 
@@ -3127,6 +3507,21 @@ def index_cases(inp=None):
     add("scatter(스칼라)",
         lambda L: L.zeros(3, 4).scatter(1, L.tensor(dup), 7.0))
 
+    # ── `reduce`, torch's deprecated overload ──
+    #
+    # **It is asked on a non-zero base, because on zeros `add` is `scatter_add`.**
+    # `reduce` combines *onto what is already there*; started from zeros the two
+    # are the same function and the case would pass with the seat unimplemented.
+    # `x2` is that base, and `dup` repeats an index so collisions accumulate too —
+    # the second thing a `put_along_axis` implementation gets wrong.
+    for red in ("add", "multiply"):
+        add(f"scatter(reduce={red})",
+            lambda L, r=red: L.tensor(x2).scatter(1, L.tensor(dup),
+                                                  L.tensor(src), reduce=r))
+        add(f"제자리::scatter_(reduce={red})",
+            lambda L, r=red: L.tensor(x2).scatter_(1, L.tensor(dup),
+                                                   L.tensor(src), reduce=r))
+
     # The gradient is looked at too. **It has to flow only to where it was written.**
     def scatter_grad(L):
         s = L.tensor(src, requires_grad=True)
@@ -3197,6 +3592,81 @@ def index_cases(inp=None):
                                      side="left", right=True))
     refuses("side 가 셋째 값", "can only be 'left' or 'right'",
             lambda L: L.searchsorted(L.tensor(line), L.tensor(want), side="both"))
+    refuses("scatter(reduce=sum)", "must be either add or multiply",
+            lambda L: L.tensor(x2).scatter(1, L.tensor(dup), L.tensor(src),
+                                           reduce="sum"))
+
+    def scatter_reduce_backward(L):
+        """**torch stops here and so does this**, and the forward is not where it stops.
+
+        `scatter(reduce=…)` returns a tensor that carries `requires_grad` and a
+        `NotImplemented` node; only `backward()` raises. A refusal written into the
+        forward would have looked the same in every check that only calls the
+        function — and would have taken away a value torch hands back.
+        """
+        s = L.tensor(src, requires_grad=True)
+        out = L.tensor(x2).scatter(1, L.tensor(dup), s, reduce="add")
+        out.sum().backward()
+
+    refuses("scatter(reduce) 의 기울기", "derivative for aten::scatter is not implemented",
+            scatter_reduce_backward)
+
+    # ── `x[a:b:step]` — the step in a slice, reading and writing ────────────────
+    #
+    # **The two halves disagreed about whether it exists.** Assignment refused it by
+    # name (*assigning into a strided slice is not here yet*) and reading dropped it
+    # on the floor: `x[::2]` narrowed from 0 to the end and handed back the whole
+    # axis, with a plausible shape, real values and no error anywhere. The refusal
+    # was the honest half.
+    #
+    # A cube, because a step has to be asked **per axis**: one written for the last
+    # axis alone and applied to all of them passes every case that steps one axis.
+    cube = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+
+    def stepped(name, run):
+        add(f"걸음::{name}", run)
+
+    stepped("x[::2]", lambda L: L.tensor(cube)[::2])
+    stepped("x[:, ::2]", lambda L: L.tensor(cube)[:, ::2])
+    stepped("x[..., 1::2]", lambda L: L.tensor(cube)[..., 1::2])
+    # Three axes at once, each with its own step, and a bounded slice among them —
+    # `1:3:2` is one cell, which is where an off-by-one in the count shows.
+    stepped("x[:, 1:3:2, ::3]", lambda L: L.tensor(cube)[:, 1:3:2, ::3])
+
+    def writes(name, put):
+        def run(L, f=put):
+            y = L.tensor(cube).clone()
+            f(L, y)
+            return y
+        stepped(name, run)
+
+    writes("x[:, ::2] = 0", lambda L, y: y.__setitem__((slice(None), slice(None, None, 2)), 0.0))
+    # **A tensor value, not a scalar.** A fill writes the same number everywhere, so
+    # a walk that visits the right cells in the wrong order passes it; a two-element
+    # value that alternates does not.
+    writes("x[..., 1::2] = 벡터",
+           lambda L, y: y.__setitem__((Ellipsis, slice(1, None, 2)),
+                                      L.tensor([-1.0, -2.0])))
+    # An integer axis mixed with two stepped ones — the integer contributes a span of
+    # one, and everything outside plane 1 has to be left alone.
+    writes("x[1, ::2, 1::2] = 9",
+           lambda L, y: y.__setitem__((1, slice(None, None, 2), slice(1, None, 2)), 9.0))
+
+    # **numpy reverses and torch refuses.** The core handed the key straight to numpy,
+    # so `x[::-1]` came back reversed, with a shape and no error, under a spelling
+    # torch stops at — the shape a divergence takes when a numpy notebook line runs.
+    for label, call in (
+        ("x[::-1]", lambda L: L.tensor(cube)[::-1]),
+        ("x[:, ::-2]", lambda L: L.tensor(cube)[:, ::-2]),
+        ("x[::-1] = 0",
+         lambda L: L.tensor(cube).clone().__setitem__(slice(None, None, -1), 0.0)),
+    ):
+        stepped(f"거꾸로::{label} 는 양쪽 다 멈춘다",
+                lambda L, f=call: _both_stop(L, f))
+    # A step of 0 needed no work — numpy and torch already stop with the same
+    # sentence. It is asked so that a future rewrite of the check cannot lose it.
+    stepped("걸음 0 은 양쪽 다 멈춘다",
+            lambda L: _both_stop(L, lambda M: M.tensor(cube)[::0]))
     return cases
 
 
@@ -3249,6 +3719,39 @@ def new_function_cases(inp=None):
     add("nan_to_num(값 지정)",
         lambda L: L.nan_to_num(L.tensor(withnan), nan=0.5, posinf=9.0, neginf=-9.0))
     add("isclose", lambda L: L.isclose(L.tensor(x1), L.tensor(x1 + 1e-9)))
+    # **`equal_nan` stopped at the binding's boundary.** borch.ts's `isclose` has
+    # taken it all along and `allclose` next door forwarded it, so the check existed
+    # and the word never reached it: NaN against NaN came back `False` where torch
+    # says `True`. A fixture without a NaN in it cannot tell the two apart, which is
+    # why the row above did not.
+    #
+    # **This row parted on a software adapter, and the adapter was not the defect.**
+    # Measured the same hour, same build: `1 of 3 booleans differ` under SwiftShader,
+    # all agreeing under `apple / metal-3`. The note here said so and stopped there —
+    # *nothing is wrong with the library, the next person should read this instead of
+    # hunting a bug that is the adapter's*.
+    #
+    # That was wrong twice over. CI runs headless, so headless is not an unusual way
+    # to run this: **main was red on this case and a peer session had to come and say
+    # so.** And the cause was ours — borch.ts found both NaNs with `x != x`, and WGSL
+    # does not promise NaN semantics, so an implementation may assume there are none
+    # and fold it to false. `kernels.ts` already had a bit-reading `is_nan` written for
+    # exactly that, with a comment saying *seen as bits there is nothing to fold*;
+    # `isclose` was the one place that did not reach for it.
+    #
+    # The lesson is about the shape of the first verdict rather than about NaN. *The
+    # values are right on the machines that matter* is a sentence that ends an
+    # investigation, and it ended this one one step early — one adapter disagreeing
+    # about a primitive is a question, not a footnote.
+    _nan_pair = np.array([1.0, np.nan, 3.0], dtype=np.float32)
+    add("isclose(equal_nan)",
+        lambda L: L.isclose(L.tensor(_nan_pair), L.tensor(_nan_pair),
+                            equal_nan=True))
+    add("isclose(equal_nan 없이)",
+        lambda L: L.isclose(L.tensor(_nan_pair), L.tensor(_nan_pair)))
+    add("allclose(equal_nan)",
+        lambda L: str(L.allclose(L.tensor(_nan_pair), L.tensor(_nan_pair),
+                                 equal_nan=True)))
     add("isreal", lambda L: L.isreal(L.tensor(withnan)))
     add("isposinf", lambda L: L.isposinf(L.tensor(withnan)))
     add("isneginf", lambda L: L.isneginf(L.tensor(withnan)))
@@ -3401,6 +3904,19 @@ def pool_cases(inp=None):
                   lambda L: L.nn.LPPool1d(2, 3, 3, True)(L.tensor(seq))))
     cases.append((POOL_PREFIX + "nn.LPPool2d(올림)",
                   lambda L: L.nn.LPPool2d(2, 3, 3, True)(L.tensor(img))))
+    # **The layer honoured `ceil_mode` and the function refused it**, on the two sides
+    # that are not the core. The two rows above go through borch.ts's `LPPool*d` class
+    # and the three below through the binding's `F.lp_pool*d`, which checked the flag
+    # itself and stopped — with a reason that was true when written and had stopped
+    # being true the day `lpPool` grew the seat. A refusal on the call path nothing
+    # exercised is exactly the kind that outlives its gap, and these are the rows that
+    # exercise it.
+    cases.append((POOL_PREFIX + "F.lp_pool1d(올림)",
+                  lambda L: L.nn.functional.lp_pool1d(L.tensor(seq), 2, 3, 3, True)))
+    cases.append((POOL_PREFIX + "F.lp_pool2d(올림)",
+                  lambda L: L.nn.functional.lp_pool2d(L.tensor(img), 2, 3, 3, True)))
+    cases.append((POOL_PREFIX + "F.lp_pool3d(올림)",
+                  lambda L: L.nn.functional.lp_pool3d(L.tensor(vol), 2, 3, 3, True)))
 
     # **The backward divides by the same three things and none of the seven above
     # reaches it.** A cell in a short edge window was divided by fewer cells going
@@ -3464,6 +3980,21 @@ def module_function_cases(inp=None):
     add("permute", lambda L: L.permute(L.tensor(x2), (1, 0)))
     add("transpose", lambda L: L.transpose(L.tensor(x2), 0, 1))
     add("squeeze", lambda L: L.squeeze(L.tensor(x1).reshape(1, 6, 1)))
+    # **Two of torch's rules that had been absent for a long time.** Several axes at
+    # once, and an axis whose length is not 1 **left alone** rather than refused —
+    # `x.squeeze(1)` on `[1, 2, 3]` is a no-op in torch and raised numpy's
+    # `ValueError` here. A previous session wrote the widening, hit two failures
+    # elsewhere and withdrew it with the reason written down; neither failure
+    # reproduces now, so it went back in with a check under it.
+    for label, call in (
+        ("squeeze(0, 2)", lambda t: t.squeeze(0, 2)),
+        ("squeeze((0, 2))", lambda t: t.squeeze((0, 2))),
+        # 1 is not the axis of length 1 — torch drops what it can and keeps the rest.
+        ("squeeze(0, 1)", lambda t: t.squeeze(0, 1)),
+        ("squeeze(길이가 1 이 아닌 축)", lambda t: t.squeeze(1)),
+    ):
+        add(f"모양::{label}",
+            lambda L, f=call: str(tuple(f(L.tensor(x1).reshape(1, 6, 1)).shape)))
 
     # **`max` and `min` return a pair when given an axis.** Taken out by position it works
     # whatever the two sides call them.
@@ -3771,6 +4302,14 @@ _OPTIMIZERS = [
     ("RMSprop(momentum)", {"lr": 0.05, "momentum": 0.9}),
     ("NAdam(decoupled_weight_decay)",
      {"lr": 0.05, "decoupled_weight_decay": True, "weight_decay": 0.1}),
+    # **The same flag on the other two torch gives it to.** `NAdam` had it and the
+    # other two did not, so borch.ts took the word and discarded it — the coupled
+    # answer under the decoupled name, 0.781 against 0.800 on the second step. A
+    # training curve that is merely slightly wrong, which nothing else here catches.
+    ("Adam(decoupled_weight_decay)",
+     {"lr": 0.05, "decoupled_weight_decay": True, "weight_decay": 0.1}),
+    ("RAdam(decoupled_weight_decay)",
+     {"lr": 0.05, "decoupled_weight_decay": True, "weight_decay": 0.1}),
 ]
 
 # `(name, constructor arguments, how many steps)`. The learning rate's **trajectory** is asked.
@@ -3792,6 +4331,28 @@ _SCHEDULERS = [
     # **`exp_range` measures against the step, not the cycle.** That one thing is where it parts.
     ("CyclicLR(exp_range)", {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3,
                              "mode": "exp_range", "gamma": 0.9}, 14),
+    # **`scale_mode` alone does nothing, and that is torch's rule**: the branch that
+    # derives a curve from `mode` sets *both*, so a `scale_mode` passed beside a bare
+    # `mode` is overwritten. Frozen here because it is the shape a reader would guess
+    # wrong — borch.ts let it win and `triangular2` then halved by step, 0.04 where
+    # torch says 0.07 at the third entry.
+    ("CyclicLR(scale_mode 만으로는 안 바뀐다)",
+     {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3, "mode": "triangular2",
+      "scale_mode": "iterations"}, 14),
+    # `scale_fn` overrides the mode's own curve. Given one, `triangular2`'s halving
+    # must not happen — a version that multiplied the two together passes every case
+    # above and fails this.
+    ("CyclicLR(scale_fn)",
+     {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3, "mode": "triangular2",
+      "scale_fn": (lambda c: 0.5)}, 14),
+    # **Together they do act**, which is what makes the pair worth a seat: the same
+    # `scale_fn` handed the step count instead of the cycle number.
+    ("CyclicLR(scale_fn, iterations)",
+     {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3,
+      "scale_fn": (lambda i: 1 / (1 + i)), "scale_mode": "iterations"}, 14),
+    ("CyclicLR(scale_fn, cycle)",
+     {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3,
+      "scale_fn": (lambda c: 1 / (1 + c)), "scale_mode": "cycle"}, 14),
 ]
 
 
@@ -3872,6 +4433,75 @@ def opt_cases(inp=None):
 
     # **The two that chain.** This is where schedulers are composed, and a wrong composition
     # parts the values even with every individual scheduler right.
+    # ── `cycle_momentum`, which the `자취` cases cannot see ──
+    #
+    # Every scheduler case above compares the **printed learning rate**, and
+    # `cycle_momentum` moves the momentum instead — against the rate, low where the
+    # rate is high. torch's default for it is `True`, so a `CyclicLR` built the way a
+    # tutorial builds it was training with a fixed momentum on one of the three
+    # implementations: 0.632 against 0.588 after eight steps, about 7%, with an
+    # identical schedule on screen.
+    def cyclic_momentum(L, **kw):
+        p = L.tensor(np.array([1.0, -2.0, 0.5], dtype=np.float32), requires_grad=True)
+        opt = L.optim.SGD([p], lr=0.1, momentum=0.9)
+        sch = L.optim.lr_scheduler.CyclicLR(opt, base_lr=0.01, max_lr=0.1,
+                                            step_size_up=3, **kw)
+        seen = []
+        for _ in range(8):
+            opt.zero_grad()
+            p.grad = L.tensor(np.array([0.3, 0.2, -0.4], dtype=np.float32))
+            opt.step()
+            sch.step()
+            seen.append(round(float(opt.param_groups[0]["momentum"]), 6))
+        return p, L.tensor(np.array(seen, dtype=np.float32))
+
+    cases.append((OPT_PREFIX + "CyclicLR/momentum 자취",
+                  lambda L: cyclic_momentum(L)[1]))
+    cases.append((OPT_PREFIX + "CyclicLR/momentum 이 값을 바꾼다",
+                  lambda L: cyclic_momentum(L)[0]))
+    # The off branch, so the on branch is not the only thing measured — with both, a
+    # scheduler that never touched the momentum shows as the two agreeing.
+    cases.append((OPT_PREFIX + "CyclicLR(cycle_momentum=False)/자취",
+                  lambda L: cyclic_momentum(L, cycle_momentum=False)[1]))
+    cases.append((OPT_PREFIX + "CyclicLR(base/max_momentum)",
+                  lambda L: cyclic_momentum(L, base_momentum=0.7,
+                                            max_momentum=0.95)[1]))
+
+    # `last_epoch` resumes mid-schedule. The other fourteen schedulers take it; this
+    # one could not until its middle was written.
+    #
+    # **`initial_lr` is set to `base_lr` and that is not arbitrary.** torch's
+    # `CyclicLR` assigns `self.base_lrs = base_lrs` *after* `super().__init__()` has
+    # already taken one step, so the very first value after a resume is measured from
+    # `initial_lr` instead of from `base_lr` — measured, with `base_lr=0.01,
+    # max_lr=0.1, step_size_up=3, last_epoch=4`:
+    #
+    #     initial_lr=0.1   torch 0.100, 0.01, 0.04, …   ours 0.040, 0.01, 0.04, …
+    #     initial_lr=0.05  torch 0.067, 0.01, 0.04, …   ours 0.040, 0.01, 0.04, …
+    #     initial_lr=0.01  torch 0.040, 0.01, 0.04, …   ours 0.040, 0.01, 0.04, …
+    #
+    # Every entry from the second on agrees in all three rows; only the first moves,
+    # and it moves with a number that has no business in this schedule. Setting the
+    # two equal is the arrangement where torch's ordering cannot show, so the case
+    # asks what `last_epoch` is *for* — where the schedule resumes — rather than
+    # freezing an accident of construction order as the expected answer.
+    def cyclic_resume(L):
+        p = L.tensor(np.zeros(3, dtype=np.float32), requires_grad=True)
+        opt = L.optim.SGD([p], lr=0.1)
+        # A resumed scheduler needs the baseline torch stamps on the first build.
+        opt.param_groups[0]["initial_lr"] = 0.01
+        sch = L.optim.lr_scheduler.CyclicLR(opt, base_lr=0.01, max_lr=0.1,
+                                            step_size_up=3, cycle_momentum=False,
+                                            last_epoch=4)
+        seen = []
+        for _ in range(6):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            opt.step()
+            sch.step()
+        return L.tensor(np.array(seen, dtype=np.float32))
+
+    cases.append((OPT_PREFIX + "CyclicLR(last_epoch)/자취", cyclic_resume))
+
     def sequential(L):
         m = model_of(L)
         opt = L.optim.SGD(m.parameters(), lr=0.2)
@@ -3906,6 +4536,72 @@ def opt_cases(inp=None):
 
     cases.append((OPT_PREFIX + "SequentialLR/자취", sequential))
     cases.append((OPT_PREFIX + "ChainedScheduler/자취", chained))
+
+    # ── the two chaining classes checked nothing about their schedulers ────────
+    #
+    # `SequentialLR(a, [ConstantLR(a), ConstantLR(b)])` was built without complaint
+    # and then, at the milestone, stepped `b`'s learning rate while `get_last_lr`
+    # read `a`'s. The rate that trains and the rate that is printed part company and
+    # nothing raises. torch checks it, in both classes.
+    def two_optimizers(L, which):
+        m = model_of(L)
+        a = L.optim.SGD(m.parameters(), lr=0.2)
+        b = L.optim.SGD(m.parameters(), lr=0.2)
+        S = L.optim.lr_scheduler
+        try:
+            if which == "SequentialLR":
+                S.SequentialLR(a, [S.ConstantLR(a, factor=0.5, total_iters=2),
+                                   S.ConstantLR(b, factor=0.1, total_iters=2)],
+                               milestones=[2])
+            else:
+                S.ChainedScheduler([S.ConstantLR(a), S.ConstantLR(b)])
+        except Exception as exc:                                # noqa: BLE001
+            return ("문구대로"
+                    if "belong to the same optimizer" in str(exc)
+                    else f"다른 문구 <{str(exc).splitlines()[0][:50]}>")
+        return "안 던졌다"
+
+    for _who in ("SequentialLR", "ChainedScheduler"):
+        cases.append((OPT_PREFIX + f"{_who}(다른 optimizer)=거절",
+                      lambda L, w=_who: two_optimizers(L, w)))
+
+    # One scheduler per interval and one interval more than there are milestones.
+    # Given two of each the last is never reached and `step` walks the wrong one.
+    def milestone_count(L):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.2)
+        S = L.optim.lr_scheduler
+        try:
+            S.SequentialLR(opt, [S.ConstantLR(opt), S.ConstantLR(opt)],
+                           milestones=[1, 2])
+        except Exception as exc:                                # noqa: BLE001
+            return ("문구대로" if "one more than the number of milestone" in str(exc)
+                    else f"다른 문구 <{str(exc).splitlines()[0][:50]}>")
+        return "안 던졌다"
+
+    cases.append((OPT_PREFIX + "SequentialLR(milestone 개수가 안 맞으면)=거절",
+                  milestone_count))
+
+    # **`last_epoch` was a seat neither side read**, so resuming put the chain back
+    # at its first interval however far it had got. Measured: the whole trace shifts
+    # by `last_epoch + 1`, which is what resuming means.
+    def sequential_resumed(L, last_epoch):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.2)
+        S = L.optim.lr_scheduler
+        sch = S.SequentialLR(
+            opt, [S.ConstantLR(opt, factor=0.5, total_iters=2),
+                  S.ExponentialLR(opt, gamma=0.5)],
+            milestones=[2], last_epoch=last_epoch)
+        seen = []
+        for _ in range(5):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            sch.step()
+        return L.tensor(np.array(seen, dtype=np.float32))
+
+    for _le in (-1, 0, 2):
+        cases.append((OPT_PREFIX + f"SequentialLR(last_epoch={_le})/자취",
+                      lambda L, e=_le: sequential_resumed(L, e)))
 
     # ── where a branch is asked in isolation ──
     #
@@ -4050,6 +4746,129 @@ def opt_cases(inp=None):
                   lambda L: lbfgs_real(L, steps=2, lr=0.3, max_iter=12,
                                        tolerance_change=1e-3)))
 
+    # ── the strong-Wolfe line search, refused on all three sides until today ──
+    #
+    # The refusal's reason was that taking a fixed step size converges differently
+    # and the difference shows in the curve rather than in a value. Right, and the
+    # way out was to write the search rather than to keep saying so.
+    #
+    # **The zoom phase needs a step that overshoots.** `sum(w·p²)` at these rates
+    # never reaches it: the bracketing satisfies the curvature condition on its first
+    # or second probe and returns, so a plant that skips the whole zoom agrees with
+    # every one of these. The rows below use `lr=2` on a coupled quadratic, where the
+    # first probe overshoots, the bracketing hands over an interval, and the zoom is
+    # what produces the step — the same plant moves those by a whole unit.
+    #
+    # **A note on the float32 scalars, which these do *not* defend.** torch's slopes
+    # are 0-d tensors, so its comparisons and its cubic interpolation run at that
+    # width, and this code follows. Measured, widening them to float64 moves the
+    # answer 1.65e-04 on the coupled quadratic — under this table's threshold there
+    # (1e-4 + 1e-4·1.13 ≈ 2.1e-04), so no case here separates the two. Written down
+    # rather than left implied: the choice is torch's arithmetic and the reason for it
+    # is fidelity, not a measurement these rows can hold.
+    #
+    # Two shapes were tried and dropped for being **chaotic rather than sensitive**:
+    # Rosenbrock at `lr=1, max_iter=8`, and a stiff quadratic (`[[8,3],[3,1.5]]`,
+    # κ ≈ 40). Both part from torch by 1e-03 with nothing wrong — they agree at the
+    # first step and amplify a one-ulp difference in the order a float32 reduction
+    # sums. A case that measures the reduction order will go red on a day nothing
+    # broke.
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/진짜 기울기",
+                  lambda L: lbfgs_real(L, lr=0.8,
+                                       line_search_fn="strong_wolfe")))
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/이력이 밀려난다",
+                  lambda L: lbfgs_real(L, steps=2, lr=0.5, max_iter=8,
+                                       history_size=2,
+                                       line_search_fn="strong_wolfe")))
+    # **The budget the search gets is what is left of `max_eval`.** Given `max_ls`'s
+    # own default it spends the caller's whole evaluation budget inside one
+    # iteration, and the trajectory parts from the second step onwards.
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/평가 예산이 짧다",
+                  lambda L: lbfgs_real(L, steps=3, lr=0.8, max_iter=5,
+                                       max_eval=6,
+                                       line_search_fn="strong_wolfe")))
+
+    def lbfgs_bad_name(L):
+        """**A name torch does not have, refused where torch refuses it.**
+
+        The check is inside the iteration loop and not at construction: a call whose
+        gradient is already inside `tolerance_grad` returns before the loop, and
+        torch never looks at the name. Refusing early stops a line torch accepts —
+        which is why this case starts from a point with a real gradient.
+        """
+        p = L.tensor(start.copy(), requires_grad=True)
+        w = L.tensor(curve)
+        opt = L.optim.LBFGS([p], line_search_fn="backtracking")
+        try:
+            def closure(pp=p, ww=w):
+                if pp.grad is not None:
+                    pp.grad = None
+                out = (pp * pp * ww).sum()
+                out.backward()
+                return out
+            opt.step(closure)
+        except Exception as exc:                                # noqa: BLE001
+            return str(exc)
+        return "(거절 없음)"
+
+    cases.append((OPT_PREFIX + "LBFGS(없는 line_search_fn)=문구",
+                  lbfgs_bad_name))
+
+    # **Coupled quadratics — the off-diagonal term is the point.** It makes the
+    # search direction cross the axes, which is where the step length stops being
+    # obvious, and it is what `sum(w·p²)` above cannot do.
+    _LB_A2 = np.array([[3.0, 0.5], [0.5, 2.0]], dtype=np.float32)
+    _LB_B2 = np.array([1.0, -2.0], dtype=np.float32)
+    _LB_X2 = np.array([2.5, -1.5], dtype=np.float32)
+    _LB_A3 = np.array([[4.0, 1.0, 0.5], [1.0, 3.0, -1.0], [0.5, -1.0, 2.0]],
+                      dtype=np.float32)
+    _LB_B3 = np.array([1.0, -2.0, 0.5], dtype=np.float32)
+    _LB_X3 = np.array([2.5, -1.5, 0.75], dtype=np.float32)
+
+    def lbfgs_shape(L, mat, vec, x0, steps=3, **args):
+        p = L.tensor(x0.copy(), requires_grad=True)
+        opt = L.optim.LBFGS([p], **args)
+        seen = []
+        for _ in range(steps):
+            def closure(pp=p, m=mat, b=vec):
+                if pp.grad is not None:
+                    pp.grad = None
+                out = (0.5 * (pp * (L.tensor(m) @ pp)).sum()
+                       + (L.tensor(b) * pp).sum())
+                out.backward()
+                return out
+            opt.step(closure)
+            seen.append(np.asarray(p.detach().numpy(), dtype=np.float32).copy())
+        return L.tensor(np.stack(seen))
+
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/얽힌 이차형식",
+                  lambda L: lbfgs_shape(L, _LB_A2, _LB_B2, _LB_X2, lr=2.0,
+                                        line_search_fn="strong_wolfe")))
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/얽힌 이차형식(3변수)",
+                  lambda L: lbfgs_shape(L, _LB_A3, _LB_B3, _LB_X3, lr=2.0,
+                                        line_search_fn="strong_wolfe")))
+    # **The other half of the bracketing: a first step that undershoots.** At
+    # `lr=0.1` the probe satisfies Armijo — the loss fell by plenty for how far it
+    # went — and fails the curvature condition, because the slope is still steep. The
+    # search has to walk *outwards* from there. A plant that keeps Armijo and drops
+    # the curvature test stops at that first probe and agrees with every case above,
+    # where the step overshoots and Armijo is what fails; here it parts by 2.7.
+    #
+    # `max_iter=2` on purpose. Left at 20 this shape converges over enough inner
+    # iterations that accumulated float32 noise moves the answer 4e-04 with nothing
+    # wrong — the chaotic direction again, measured rather than guessed.
+    cases.append((OPT_PREFIX + "LBFGS(strong_wolfe)/처음이 모자란다",
+                  lambda L: lbfgs_shape(L, _LB_A2, _LB_B2, _LB_X2, lr=0.1,
+                                        max_iter=2,
+                                        line_search_fn="strong_wolfe")))
+    # The same shape without the search — **at a smaller rate, and that is the
+    # point.** A fixed step of 2 on this quadratic overshoots and the iteration
+    # becomes chaotic: torch and this core part by 3.5 with nothing wrong, both
+    # bouncing. The line search is what makes `lr=2` a sane setting at all, so the
+    # pair below differs by the flag *and* by the rate the flag makes possible.
+    cases.append((OPT_PREFIX + "LBFGS/얽힌 이차형식",
+                  lambda L: lbfgs_shape(L, _LB_A2, _LB_B2, _LB_X2, lr=0.8)))
+
     def scalar_param_keeps_constants(L):
         """**Training a single-element parameter must not change the constants.**
 
@@ -4134,6 +4953,32 @@ def opt_cases(inp=None):
                          ("RMSprop", {"lr": 0.05})):
         cases.append((OPT_PREFIX + f"{_name}/이어서 학습하기",
                       lambda L, n=_name, a=_args: resume(L, n, a)))
+
+    # ── `zero_grad(set_to_none)` — a seat the body never read ─────────────────
+    #
+    # It always set `None`, which is torch's default, so the ordinary call agreed
+    # and `set_to_none=False` — what code written before torch 2.0 asks for —
+    # quietly did the other thing. The difference is invisible until a line reads
+    # `p.grad` between the two calls: `None` has no shape and no `.zero_()`, and the
+    # argument exists precisely so that it does.
+    #
+    # **The model's own `zero_grad` had no seat at all**, so one of the two spellings
+    # was a `TypeError` and the other accepted-and-ignored. Two ways to be wrong
+    # about one argument in one library, which is why both are asked here.
+    def _grad_after_zeroing(L, through, to_none):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.1)
+        L.nn.CrossEntropyLoss()(m(L.tensor(xin)), L.tensor(yin)).backward()
+        (opt if through == "opt" else m).zero_grad(set_to_none=to_none)
+        got = dict(m.named_parameters())["0.weight"].grad
+        # The **kind** of what is left, not a value — `None` and a zero tensor are
+        # what the flag chooses between, and only one of them has values at all.
+        return "None" if got is None else f"0 텐서={bool(float(got.abs().sum()) == 0.0)}"
+
+    for _through in ("opt", "model"):
+        for _flag in (True, False):
+            cases.append((OPT_PREFIX + f"zero_grad({_through}, set_to_none={_flag})",
+                          lambda L, t=_through, f=_flag: _grad_after_zeroing(L, t, f)))
 
     # **Did the three above really move anything?**
     #
@@ -4297,6 +5142,35 @@ def opt_cases(inp=None):
         return dst(L.tensor(xin))
 
     cases.append((OPT_PREFIX + "되읽은 것을 그대로 얹을 수 있다", save_load_then_use))
+
+    # ── the four words every `torch.optim.*` carries and none of the three of us compute ──
+    #
+    # They split in two, and **torch draws the line, not us.** `foreach` and `fused` pick a
+    # kernel: measured on both classes, torch returns the very same numbers with them on. So
+    # ours take the word and ignore it, and a library that instead refused would be the one
+    # differing. `capturable` and `differentiable` change what a step means, and torch itself
+    # stops on both without CUDA — no such parameter on `SGD`, an assertion about the device on
+    # `Adam`, and an in-place-on-a-leaf error for `differentiable`. So ours stop too.
+    #
+    # **The verdict is the category and not the wording.** torch's own two classes refuse
+    # `capturable` with different exception types; asking for a phrase would only freeze which
+    # torch build froze the file. The `foreach`/`fused` rows are what keeps this from being
+    # passed by refusing everything — they are a real numeric comparison against the plain step.
+    def carries(L, name, word):
+        one = [np.array([0.3, 0.2, -0.4], dtype=np.float32)]
+        plain = np.asarray(walk(L, name, one, lr=0.1).detach().numpy())
+        try:
+            got = np.asarray(walk(L, name, one, lr=0.1, **{word: True})
+                             .detach().numpy())
+        except Exception:                                          # noqa: BLE001
+            return "거절"
+        return "받고 값이 같다" if np.array_equal(got, plain) else "받는데 값이 다르다"
+
+    for _cls in ("SGD", "Adam"):
+        for _word in ("foreach", "fused", "capturable", "differentiable"):
+            cases.append((OPT_PREFIX + f"낱말::{_cls}({_word})",
+                          lambda L, c=_cls, w=_word: carries(L, c, w)))
+
     return cases
 
 
@@ -4406,6 +5280,202 @@ def functional_name_cases(inp=None):
 
     add("upsample_bilinear 은 별명이 아니다",
         lambda L: str(upsample_corners_differ(L)))
+
+    # ── `interpolate`'s other three modes ──────────────────────────────
+    #
+    # `mode` was nearest and bilinear, and everything else stopped with *only nearest
+    # and bilinear are here*. Three of the rest were a short distance away:
+    #
+    #     area           `adaptive_avg_pool2d` under another name — bit for bit
+    #     nearest-exact  `floor((i + 0.5)·s)` where nearest has `floor(i·s)`
+    #     bicubic        Keys' cubic kernel at `a = −0.75`, which is torch's constant
+    #
+    # `linear` and `trilinear` are the 3-D and 5-D members of the same family and this
+    # function unpacks four axes, so they want a rank rather than a kernel.
+    #
+    # **The output size is asked three ways** — a shrink, an enlargement, and one that
+    # divides evenly into neither. The last is the one that separates the modes: at a
+    # whole-number enlargement `nearest` and `nearest-exact` agree exactly, and `area`
+    # agrees with `nearest` as well, so a case asking only `scale_factor=2` would pass
+    # with all three wired to the same body.
+    _INTERP_IMG = np.arange(1., 21., dtype=np.float32).reshape(1, 1, 4, 5)
+    for _mode in ("area", "nearest-exact"):
+        for _size in ((2, 3), (8, 10), (3, 7)):
+            add(f"interpolate({_mode}, size={_size})",
+                lambda L, m=_mode, s=_size: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), size=s, mode=m))
+        for _sf in (0.5, 1.5):
+            add(f"interpolate({_mode}, scale={_sf})",
+                lambda L, m=_mode, f=_sf: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), scale_factor=f, mode=m))
+    # **`align_corners` is asked both ways for bicubic**, because the two coordinate
+    # rules part at the edges and agree closely in the middle — the difference is the
+    # kind the eye does not see and a value comparison does.
+    for _ac in (False, True):
+        for _size in ((2, 3), (8, 10), (3, 7)):
+            add(f"interpolate(bicubic, align={_ac}, size={_size})",
+                lambda L, a=_ac, s=_size: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), size=s, mode="bicubic", align_corners=a))
+        add(f"interpolate(bicubic, align={_ac}, scale=1.5)",
+            lambda L, a=_ac: F(L).interpolate(
+                L.tensor(_INTERP_IMG), scale_factor=1.5, mode="bicubic",
+                align_corners=a))
+
+    def interp_grad(L, mode, align=False):
+        """**The gradient is where a resampling is usually wrong.** Each of the three
+        is a gather with constant weights, so nothing was written for the backward —
+        and that is exactly the situation where a wrong forward index goes unnoticed,
+        because the same wrong index is used on the way back and the two agree."""
+        x = L.tensor(_INTERP_IMG.copy(), requires_grad=True)
+        seed = np.arange(1., 22., dtype=np.float32).reshape(1, 1, 3, 7)
+        kw = {"align_corners": align} if mode == "bicubic" else {}
+        (F(L).interpolate(x, size=(3, 7), mode=mode, **kw)
+         * L.tensor(seed)).sum().backward()
+        return _grad_of(x, f"interpolate/{mode}")
+
+    add("interpolate(area) 의 기울기", lambda L: interp_grad(L, "area"))
+    add("interpolate(nearest-exact) 의 기울기",
+        lambda L: interp_grad(L, "nearest-exact"))
+    add("interpolate(bicubic) 의 기울기", lambda L: interp_grad(L, "bicubic"))
+    add("interpolate(bicubic, align=True) 의 기울기",
+        lambda L: interp_grad(L, "bicubic", True))
+    # **A mode torch does not have either.** Both sides stop; asked so that the
+    # widened `mode` list still has a floor under it.
+    add("interpolate(mode 이 없는 이름)=둘 다 거절",
+        lambda L: _both_stop(L, lambda M: M.nn.functional.interpolate(
+            M.tensor(_INTERP_IMG), size=(2, 3), mode="quadratic")))
+
+    # ── the ranks, which were a `ValueError` from an unpacking ────────────────
+    #
+    # `linear` and `trilinear` were refused with *a rank this function does not
+    # take*, and the sentence was about the code: it unpacked `n, c, h, w`, so
+    # **`nearest` and `area` failed at ranks 3 and 5 too** — with *not enough values
+    # to unpack (expected 4, got 3)*, which names neither the library nor the
+    # argument. The three interpolating names are one separable kernel at one, two
+    # and three axes.
+    #
+    # **The mode-against-rank grid was measured whole rather than reasoned from the
+    # names.** `bicubic` at a rank that is not 4 does not get the specific sentence
+    # the other three get; it falls through to the generic one, which lists 3D among
+    # the supported ranks and then refuses a 3D input. Copied as torch says it.
+    _INTERP_3D = np.arange(1., 31., dtype=np.float32).reshape(2, 3, 5)
+    _INTERP_5D = np.arange(1., 145., dtype=np.float32).reshape(2, 3, 2, 3, 4)
+    for _rank, _img, _lin in ((3, _INTERP_3D, "linear"), (5, _INTERP_5D, "trilinear")):
+        for _mode in ("nearest", "nearest-exact", "area"):
+            for _sf in (2, 1.7, 0.5):
+                add(f"interpolate({_rank}차원 {_mode}, scale={_sf})",
+                    lambda L, a=_img, m=_mode, f=_sf: F(L).interpolate(
+                        L.tensor(a), scale_factor=f, mode=m))
+            add(f"interpolate({_rank}차원 {_mode}, size=3)",
+                lambda L, a=_img, m=_mode: F(L).interpolate(
+                    L.tensor(a), size=3, mode=m))
+        for _ac in (False, True):
+            for _sf in (2, 1.7):
+                add(f"interpolate({_lin}, align={_ac}, scale={_sf})",
+                    lambda L, a=_img, m=_lin, c=_ac, f=_sf: F(L).interpolate(
+                        L.tensor(a), scale_factor=f, mode=m, align_corners=c))
+            add(f"interpolate({_lin}, align={_ac}, size=3)",
+                lambda L, a=_img, m=_lin, c=_ac: F(L).interpolate(
+                    L.tensor(a), size=3, mode=m, align_corners=c))
+
+    def interp_rank_grad(L, img, mode, align=None):
+        x = L.tensor(img.copy(), requires_grad=True)
+        kw = {} if align is None else {"align_corners": align}
+        out = F(L).interpolate(x, scale_factor=2, mode=mode, **kw)
+        (out * out).sum().backward()
+        return _grad_of(x, f"interpolate/{mode}")
+
+    for _rank, _img, _lin in ((3, _INTERP_3D, "linear"), (5, _INTERP_5D, "trilinear")):
+        for _mode, _ac in ((_lin, False), ("nearest", None), ("area", None)):
+            add(f"interpolate({_rank}차원 {_mode}) 의 기울기",
+                lambda L, a=_img, m=_mode, c=_ac: interp_rank_grad(L, a, m, c))
+
+    # **`recompute_scale_factor` reaches `nearest` too**, and the browser side had it
+    # reaching neither nearest name — its kernel maps `floor(o·in/out)`, which is the
+    # *recomputed* rule, and the comment beside it said the flag made no difference to
+    # nearest. It does whenever the flooring loses something: 5 at 1.7 gives 8, and
+    # 8/5 is 1.6, so the two pick different source cells in the middle of the row.
+    for _mode in ("nearest", "nearest-exact"):
+        for _rsf in (True, False):
+            add(f"interpolate({_mode}, scale=1.7, recompute={_rsf})",
+                lambda L, m=_mode, r=_rsf: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), scale_factor=1.7, mode=m,
+                    recompute_scale_factor=r))
+
+    # The mode-against-rank refusals, and `align_corners` on a mode with no corners.
+    for _rank, _img in ((3, _INTERP_3D), (4, _INTERP_IMG), (5, _INTERP_5D)):
+        for _mode in ("linear", "bilinear", "bicubic", "trilinear"):
+            if (_rank, _mode) in ((3, "linear"), (4, "bilinear"), (4, "bicubic"),
+                                  (5, "trilinear")):
+                continue
+            add(f"interpolate({_rank}차원 {_mode})=둘 다 거절",
+                lambda L, a=_img, m=_mode: _both_stop(
+                    L, lambda M, b=a, n=m: M.nn.functional.interpolate(
+                        M.tensor(b), scale_factor=2, mode=n)))
+    add("interpolate(nearest 에 align_corners)=둘 다 거절",
+        lambda L: _both_stop(L, lambda M: M.nn.functional.interpolate(
+            M.tensor(_INTERP_IMG), scale_factor=2, mode="nearest",
+            align_corners=True)))
+
+    # **One scale per axis.** torch takes `scale_factor=(2, 1.5)`; the browser side
+    # held a single number, so the second axis silently took the first one's factor.
+    # The shape came out wrong, which is the loud direction — but only because the
+    # fixture's two axes differ, and every case up to here passed the same scale to
+    # both. `(2, 1.5)` on a 4×5 gives 8×7, and one number would give 8×10 or 6×7.
+    for _mode in ("nearest", "nearest-exact", "area", "bilinear", "bicubic"):
+        add(f"interpolate({_mode}, 축마다 다른 배율)",
+            lambda L, m=_mode: F(L).interpolate(
+                L.tensor(_INTERP_IMG), scale_factor=(2, 1.5), mode=m,
+                **({"align_corners": False} if m in ("bilinear", "bicubic") else {})))
+    add("interpolate(bilinear, antialias, 축마다 다른 배율)",
+        lambda L: F(L).interpolate(
+            L.tensor(_INTERP_IMG), scale_factor=(0.6, 0.4), mode="bilinear",
+            align_corners=False, antialias=True))
+
+    # ── `antialias`, the last of `interpolate`'s seats ─────────────────
+    #
+    # It widens the filter by the shrink factor and renormalises the weights, so every
+    # input cell reaches the output instead of being skipped. Enlarging, the scale is
+    # below one and the weights are the plain ones — which is why torch says the flag
+    # does nothing going up, and why the sizes below include one.
+    #
+    # **Two things in torch's own implementation disagree with the rest of torch, and
+    # both are asked here rather than reasoned about.** The anti-aliased `bicubic` uses
+    # `a = −0.5` where the plain one uses `−0.75`, and `align_corners` is applied to
+    # the scale but not to the centre. Fitting either the other way parts by more than
+    # a tolerance: 0.13–0.39 for the constant and 1.3–4.5 for the centre.
+    for _mode in ("bilinear", "bicubic"):
+        for _ac in (False, True):
+            for _size in ((2, 3), (8, 10), (3, 7)):
+                add(f"interpolate({_mode}, antialias, align={_ac}, size={_size})",
+                    lambda L, m=_mode, a=_ac, s=_size: F(L).interpolate(
+                        L.tensor(_INTERP_IMG), size=s, mode=m,
+                        align_corners=a, antialias=True))
+            # **The caller's scale is read when `align_corners` is off and not when it
+            # is on** — the pair is what says so, and a size alone cannot.
+            add(f"interpolate({_mode}, antialias, align={_ac}, scale=1.5)",
+                lambda L, m=_mode, a=_ac: F(L).interpolate(
+                    L.tensor(_INTERP_IMG), scale_factor=1.5, mode=m,
+                    align_corners=a, antialias=True))
+
+    def antialias_grad(L, mode):
+        """A matrix multiply per axis, so the backward is the multiply's own — and
+        that is when a wrong weight matrix goes unnoticed, the same wrong weights
+        being used coming back."""
+        x = L.tensor(_INTERP_IMG.copy(), requires_grad=True)
+        seed = np.arange(1., 22., dtype=np.float32).reshape(1, 1, 3, 7)
+        (F(L).interpolate(x, size=(3, 7), mode=mode, antialias=True)
+         * L.tensor(seed)).sum().backward()
+        return _grad_of(x, f"interpolate/antialias/{mode}")
+
+    add("interpolate(bilinear, antialias) 의 기울기",
+        lambda L: antialias_grad(L, "bilinear"))
+    add("interpolate(bicubic, antialias) 의 기울기",
+        lambda L: antialias_grad(L, "bicubic"))
+    # torch restricts the flag to the two smooth modes, and refuses the rest by name.
+    add("interpolate(nearest 에 antialias)=둘 다 거절",
+        lambda L: _both_stop(L, lambda M: M.nn.functional.interpolate(
+            M.tensor(_INTERP_IMG), size=(2, 3), mode="nearest", antialias=True)))
 
     # ── the three faces of `max` and `min` ──
     #
@@ -4518,6 +5588,119 @@ def functional_name_cases(inp=None):
 
     add("embedding_bag::grad", eb_grad)
 
+    # **`scale_grad_by_freq` is answered on `embedding` and refused here, because
+    # torch disagrees with itself.** `embedding_bag(mode="sum")` is by definition
+    # `embedding(...).sum(1)`, and on torch 2.13.0 the two give different gradients
+    # under this flag — the plain path divides by the index's frequency, which is the
+    # documented rule and what the core now does, while the bag divides by something
+    # eight probes found no rule for. So this is a `refusal_case`: torch answers and
+    # we stop, and the stop is the honest half.
+    cases.append((FNAME_PREFIX + "embedding_bag::scale_grad_by_freq=우리는거절",
+                  refusal_case(lambda L: F(L).embedding_bag(
+                      L.tensor(eb_idx), L.tensor(eb_table), mode="sum",
+                      scale_grad_by_freq=True))))
+    cases.append((FNAME_PREFIX + "embedding_bag::sparse=우리는거절",
+                  refusal_case(lambda L: F(L).embedding_bag(
+                      L.tensor(eb_idx), L.tensor(eb_table), sparse=True))))
+
+    # ── embedding's five ───────────────────────────────────────────────
+    #
+    # `F.embedding` took two of seven while `nn.Embedding` beside it had all of
+    # them, and borch.ts took **none** — so `F.embedding(i, w, 0)` handed the
+    # padding index to nothing and the un-padded answer came back under the name
+    # of a padded one.
+    em_table = np.arange(12, dtype=np.float32).reshape(4, 3)
+    em_idx = np.array([0, 2, 1, 0], dtype=np.int64)
+
+    # **`padding_idx` is gradient-only** (measured on torch): the forward hands
+    # back that row exactly as it stands and only its gradient goes to zero. So a
+    # value case cannot see it, and this asks the gradient.
+    def em_pad(L, pad):
+        w = L.tensor(em_table, requires_grad=True)
+        F(L).embedding(L.tensor(em_idx), w, padding_idx=pad).sum().backward()
+        return w.grad
+
+    add("embedding::grad(padding_idx 없이)", lambda L: em_pad(L, None))
+    add("embedding::grad(padding_idx=0)", lambda L: em_pad(L, 0))
+
+    # `max_norm` shortens the looked-up rows **in the table**, which no returned
+    # value shows — so the table is what is handed back.
+    def em_norm(L, max_norm, norm_type):
+        w = L.tensor(em_table.copy())
+        F(L).embedding(L.tensor(em_idx), w, max_norm=max_norm,
+                       norm_type=norm_type)
+        return w
+
+    add("embedding::max_norm(표가 짧아진다)", lambda L: em_norm(L, 1.0, 2.0))
+    add("embedding::norm_type=1", lambda L: em_norm(L, 1.0, 1.0))
+    add("embedding::max_norm(내놓는 값)",
+        lambda L: F(L).embedding(L.tensor(em_idx),
+                                 L.tensor(em_table.copy()), max_norm=1.0))
+    # A row nobody looked up stays long — the whole-table shortcut is the obvious
+    # wrong version and only this row separates it.
+    add("embedding::max_norm(안 본 줄은 그대로)",
+        lambda L: em_norm(L, 1.0, 2.0)[3])
+
+    cases.append((FNAME_PREFIX + "embedding::sparse=우리는거절",
+                  refusal_case(lambda L: F(L).embedding(
+                      L.tensor(em_idx), L.tensor(em_table), sparse=True))))
+
+    # **`scale_grad_by_freq` divides each row's gradient by how often that index
+    # appears in this batch.** The fixture repeats index 1 three times and index 0
+    # twice, so the three divisors are 2, 3 and 1 and no two rows share one — with
+    # each index appearing once, or the same number of times, the flag changes
+    # nothing and the case would pass with it ignored. Row 3 is never indexed: its
+    # count is zero and its gradient is zero, and the divisor is floored at one so
+    # that nothing turns into a `nan`.
+    em_freq_idx = np.array([[0, 1, 1], [2, 1, 0]], dtype=np.int64)
+    em_freq_seed = np.arange(1.0, 19.0, dtype=np.float32).reshape(2, 3, 3)
+
+    def em_freq(L, flag, pad=None):
+        w = L.tensor(em_table.copy(), requires_grad=True)
+        (F(L).embedding(L.tensor(em_freq_idx), w, padding_idx=pad,
+                        scale_grad_by_freq=flag) * L.tensor(em_freq_seed)).sum().backward()
+        return _grad_of(w, "embedding/scale_grad_by_freq")
+
+    add("embedding::scale_grad_by_freq 없이", lambda L: em_freq(L, False))
+    add("embedding::scale_grad_by_freq", lambda L: em_freq(L, True))
+    # The padding row is zeroed as well as scaled, and zero over any count is zero —
+    # so the two are asked together to say that neither undoes the other.
+    add("embedding::scale_grad_by_freq(padding_idx=1)",
+        lambda L: em_freq(L, True, 1))
+
+    def em_freq_layer(L, flag):
+        """**The layer stored the flag, printed it, and never read it.** The
+        constructor refused it, so the unread field could not be seen; taking the
+        refusal away without threading it through `forward` would leave a layer that
+        says `scale_grad_by_freq=True` and does not do it."""
+        e = L.nn.Embedding(4, 3, _weight=L.tensor(em_table.copy()),
+                           scale_grad_by_freq=flag)
+        (e(L.tensor(em_freq_idx)) * L.tensor(em_freq_seed)).sum().backward()
+        return _grad_of(e.weight, "nn.Embedding/scale_grad_by_freq")
+
+    add("embedding::Embedding(scale_grad_by_freq) 없이",
+        lambda L: em_freq_layer(L, False))
+    add("embedding::Embedding(scale_grad_by_freq)",
+        lambda L: em_freq_layer(L, True))
+
+    # **The flag touches the gradient and must leave the forward alone**, which the
+    # gradient cases above cannot say. On borch.ts the scaling is done by putting the
+    # table through an expression that is the identity in value, so a wrong expression
+    # there would move the values as well as the gradient, and nothing else here looks.
+    #
+    # **What this cannot see is the last bit.** The obvious alternative expression,
+    # `w·k + w.detach()·(1−k)`, is not the identity in float32 — the two products round
+    # apart, and at `k = 1/3` a row holding 15 comes back as 14.999999. That is 1e-7
+    # relative and the golden compares at `rtol = 1e-4`, so the wrong form was planted
+    # and passed. This table holds the values where the perturbation is largest anyway,
+    # which costs nothing and means the case is at least pointed at the right place.
+    em_round = np.array([[1., 2., 3.], [15., 27., 45.],
+                         [7., 8., 9.], [0., 0., 0.]], dtype=np.float32)
+
+    add("embedding::scale_grad_by_freq 는 값을 안 건드린다",
+        lambda L: F(L).embedding(L.tensor(em_freq_idx), L.tensor(em_round),
+                                 scale_grad_by_freq=True))
+
     # ── gumbel_softmax ──
     #
     # Random, so the value cannot be asked. **The properties are asked** — a row sums to 1, and
@@ -4620,6 +5803,45 @@ def functional_name_cases(inp=None):
     add("grid_sample::직사각 입력",
         lambda L: F(L).grid_sample(L.tensor(rect24), L.tensor(half_grid),
                                    align_corners=False))
+
+    # ── `bicubic`, the third mode ──────────────────────────────────────
+    #
+    # The refusal said *only bilinear and nearest are here*. It is the same Keys
+    # kernel `interpolate`'s plain `bicubic` uses, at `a = −0.75` — not the
+    # anti-aliased path's `−0.5`, which is the constant next door and the one a
+    # reader carrying it over would take.
+    #
+    # **The padding lands on the tap, not on the centre.** Bilinear clamps the
+    # continuous coordinate once and both its corners are inside; a 4×4 window steps
+    # one cell further, and clamping the centre and then masking gave `border` the
+    # same numbers as `zeros` — 6.04 where torch says 5.48, with the gradient to the
+    # grid zeroed at the edges too. So the out-of-range grid is asked under all three
+    # padding modes, which is the only place they part.
+    for pad in ("zeros", "border", "reflection"):
+        for ac in (False, True):
+            add(f"grid_sample(bicubic, padding={pad}, align={ac})",
+                lambda L, p=pad, a=ac: F(L).grid_sample(
+                    L.tensor(img3), L.tensor(out_grid), mode="bicubic",
+                    padding_mode=p, align_corners=a))
+    add("grid_sample(bicubic, 반 칸)",
+        lambda L: F(L).grid_sample(L.tensor(img3), L.tensor(half_grid),
+                                   mode="bicubic", align_corners=False))
+
+    def grid_bicubic_grad(L, which, pad):
+        """**The gradient has to reach the grid**, which is the path a spatial
+        transformer learns `theta` along. The cubic weights are written as tensor
+        expressions for that reason alone — computed as numpy constants the values
+        would all still be right and this would be zero."""
+        x = L.tensor(img3.copy(), requires_grad=True)
+        g = L.tensor(out_grid.copy(), requires_grad=True)
+        F(L).grid_sample(x, g, mode="bicubic", padding_mode=pad,
+                         align_corners=False).sum().backward()
+        return _grad_of(x if which == "input" else g, f"grid_sample/bicubic/{which}")
+
+    for _which in ("input", "grid"):
+        for _pad in ("zeros", "border", "reflection"):
+            add(f"grid_sample(bicubic, grad {_which}, padding={_pad})",
+                lambda L, w=_which, p=_pad: grid_bicubic_grad(L, w, p))
 
     planes33 = np.arange(2 * 2 * 3 * 3, dtype=np.float32).reshape(2, 2, 3, 3)
     add("grid_sample::여러 평면",
@@ -5051,6 +6273,178 @@ def top_level_cases(inp=None):
 
     add("살펴보기::result_type(dtype,dtype)=거절", result_type_refuses_dtypes)
     add("살펴보기::get_default_dtype", lambda L: str(L.get_default_dtype()))
+
+    # ── the words the questions are asked with ────────────────────────────────
+    #
+    # `x.layout` printed `torch.strided` all along and `torch.strided` the **name**
+    # was an `AttributeError`, so `x.layout == torch.strided` — the way anybody
+    # actually asks — stopped with a sentence about a missing module attribute,
+    # indistinguishable from a typo. The `memory_format` seat was the same shape one
+    # step further on: it existed, refused everything, and two of the four values it
+    # refused name exactly what this library does.
+    for label in ("strided", "sparse_coo", "sparse_csr", "sparse_csc",
+                  "sparse_bsr", "sparse_bsc"):
+        add(f"살펴보기::layout::{label}", lambda L, n=label: str(getattr(L, n)))
+    add("살펴보기::layout::x.layout 은 strided 다",
+        lambda L: str(L.zeros(2).layout == L.strided))
+    # `is`, not only `==`. torch's `x.layout is torch.strided` is true, and the
+    # binding built a fresh object per call — reading identically and failing this.
+    add("살펴보기::layout::x.layout is strided",
+        lambda L: str(L.zeros(2).layout is L.strided))
+    add("살펴보기::layout::x.layout 은 sparse_coo 가 아니다",
+        lambda L: str(L.zeros(2).layout == L.sparse_coo))
+
+    for label in ("contiguous_format", "preserve_format", "channels_last",
+                  "channels_last_3d"):
+        add(f"살펴보기::형식::{label}", lambda L, n=label: str(getattr(L, n)))
+    # **The two this library already does.** Refusing them refused its own answer.
+    for label in ("contiguous_format", "preserve_format"):
+        add(f"살펴보기::형식::clone({label})",
+            lambda L, n=label: L.arange(6, dtype=L.float32).reshape(2, 3)
+            .clone(memory_format=getattr(L, n)))
+        add(f"살펴보기::형식::is_contiguous({label})",
+            lambda L, n=label: str(L.zeros(2, 3).is_contiguous(
+                memory_format=getattr(L, n))))
+        add(f"살펴보기::형식::contiguous({label})",
+            lambda L, n=label: L.arange(6, dtype=L.float32).reshape(2, 3)
+            .contiguous(memory_format=getattr(L, n)))
+    # And the two it does not. torch answers these; all three of ours stop.
+    # **Each at the rank it needs.** `channels_last` is NHWC and wants rank 4;
+    # `channels_last_3d` is NDHWC and wants rank 5 — asked at rank 4 torch stops
+    # too, and `refusal_case` needs torch to answer or it freezes a shared limit as
+    # our defect (it said so on the first run).
+    for label, rank in (("channels_last", (1, 2, 3, 4)),
+                        ("channels_last_3d", (1, 2, 3, 4, 5))):
+        cases.append((TOP_PREFIX + f"살펴보기::형식::clone({label})=우리는거절",
+                      refusal_case(lambda L, n=label, s=rank: L.zeros(*s)
+                                   .clone(memory_format=getattr(L, n)))))
+
+    # `uint8` was the one narrow integer with no name at all, and it is the one a
+    # textbook writes most — an image is `uint8` before `ToTensor` divides it by 255.
+    # Its four siblings said what was missing; this said `module has no attribute`,
+    # which is a typo's wording. **The name exists and the storage does not**, so
+    # torch answers and all three of ours stop.
+    for label in ("uint8", "int8"):
+        cases.append((TOP_PREFIX + f"살펴보기::{label} 은 이름뿐=우리는거절",
+                      refusal_case(lambda L, n=label:
+                                   L.tensor([1], dtype=getattr(L, n)))))
+
+    # ── `device=` on the factories, which read it not at all ──────────────────
+    #
+    # `zeros(2, device="cuda")` handed back a CPU tensor: the values right, the
+    # claim about where they are false, no exception. The same rule the layers use
+    # now, and they had the opposite habit — refusing `"cpu"`, this library's own
+    # device.
+    for name in ("zeros", "ones", "rand", "empty"):
+        add(f"살펴보기::장치::{name}(device='cpu') 는 만들어진다",
+            lambda L, n=name: " ".join(
+                str(int(v)) for v in getattr(L, n)(2, 3, device="cpu").shape))
+        cases.append((TOP_PREFIX + f"살펴보기::장치::{name}(device='cuda') 는 양쪽 다 멈춘다",
+                      lambda L, n=name: _both_stop(
+                          L, lambda M, m=n: getattr(M, m)(2, 3, device="cuda"))))
+
+    # ── the pair-returning names had no `__repr__` ────────────────────────────
+    #
+    # `print(x.topk(3))` showed `<borch._tensor._MinMax object at 0x10f2a3b50>`
+    # where torch prints the values and the indices. Nine names came out that way
+    # while `mode` and `slogdet` beside them printed torch's form, because those go
+    # through `_named` and the pair class predates it.
+    #
+    # **The address is the part that bites**: it changes between two identical
+    # calls, so anything comparing the printed form of one against another sees a
+    # difference that is not there — a probe written while sweeping this very axis
+    # flipped between runs for exactly that.
+    _pair_src = np.array([3.0, 1.0, 2.0, 0.5], dtype=np.float32)
+    for _label, _call in (
+        ("topk", lambda L, t: L.topk(t, 2)),
+        ("sort", lambda L, t: L.sort(t)),
+        ("max(dim)", lambda L, t: L.max(t, 0)),
+        ("min(dim)", lambda L, t: L.min(t, 0)),
+        ("median(dim)", lambda L, t: L.median(t, 0)),
+        ("kthvalue", lambda L, t: L.kthvalue(t, 2)),
+        ("cummax", lambda L, t: L.cummax(t, 0)),
+        ("cummin", lambda L, t: L.cummin(t, 0)),
+        # **Its fields are `min` and `max`**, not `values` and `indices` — the one
+        # member of the family torch names differently, so it is asked separately.
+        ("aminmax", lambda L, t: L.aminmax(t)),
+    ):
+        add(f"살펴보기::짝::{_label} 의 repr",
+            lambda L, c=_call: repr(c(L, L.tensor(_pair_src))))
+    # **Two identical calls print the same.** The nine rows above would all pass on
+    # an implementation that printed an address, as long as it printed one *once*;
+    # this is the half that says the address is gone.
+    add("살펴보기::짝::두 번 찍으면 같다",
+        lambda L: str(repr(L.topk(L.tensor(_pair_src), 2))
+                      == repr(L.topk(L.tensor(_pair_src), 2))))
+    add("살펴보기::짝::len 은 둘", lambda L: str(len(L.topk(L.tensor(_pair_src), 2))))
+    # **The indices are `int64`, and six of the eight were float32.** The repr rows
+    # above found that by accident — the moment the address stopped hiding the
+    # values, `tensor([0., 2.])` was on screen beside torch's `tensor([0, 2])`. A
+    # position is not a value, and `max(dim)` beside them had it right all along.
+    #
+    # Asked by name as well, because a `repr` case is a poor place to keep a dtype:
+    # it holds it only as long as the numbers stay short enough to print.
+    for _label, _call in (
+        ("topk", lambda L, t: L.topk(t, 2)),
+        ("sort", lambda L, t: L.sort(t)),
+        ("max(dim)", lambda L, t: L.max(t, 0)),
+        ("min(dim)", lambda L, t: L.min(t, 0)),
+        ("median(dim)", lambda L, t: L.median(t, 0)),
+        ("kthvalue", lambda L, t: L.kthvalue(t, 2)),
+        ("cummax", lambda L, t: L.cummax(t, 0)),
+        ("cummin", lambda L, t: L.cummin(t, 0)),
+    ):
+        add(f"살펴보기::짝::{_label} 의 자리는 int64",
+            lambda L, c=_call: str(c(L, L.tensor(_pair_src)).indices.dtype))
+
+    # ── a sampler cannot fill an integer slot ─────────────────────────────────
+    #
+    # torch refuses `rand`/`randn` a non-floating dtype by naming the kernel that
+    # has no such overload; here the draw ran and the floats were cast into the
+    # requested cells, so `rand(3, dtype=int64)` came back all zeros — a plausible
+    # tensor and a sample of nothing.
+    for _name, _kernel in (("rand", "check_uniform_bounds"),
+                           ("randn", "normal_kernel_cpu")):
+        for _dt in ("int64", "bool"):
+            def _sampler_refuses(L, n=_name, k=_kernel, d=_dt):
+                try:
+                    getattr(L, n)(3, dtype=getattr(L, d if d != "bool" else "bool"))
+                except Exception as exc:                        # noqa: BLE001
+                    return (f"{k} 문구대로" if f'"{k}" not implemented' in str(exc)
+                            else f"다른 문구 <{str(exc).splitlines()[0][:44]}>")
+                return "안 던졌다"
+
+            add(f"살펴보기::표본::{_name}(dtype={_dt}) 는 거절", _sampler_refuses)
+    # And the floating one it does take, which is the half that says the gate is
+    # not simply refusing everything.
+    add("살펴보기::표본::randn(dtype=float32) 는 된다",
+        lambda L: str(L.randn(3, dtype=L.float32).dtype))
+
+    add("살펴보기::cuda.device_count", lambda L: str(L.cuda.device_count()))
+    add("살펴보기::get_default_device", lambda L: str(L.get_default_device()))
+    # **Neither `set_default_device` call is asked, and both were, once.**
+    #
+    # `refusal_case` and every case here run torch first, and torch's
+    # `set_default_device` changes the process rather than returning a value.
+    #
+    #   `'cuda'` — every tensor made afterwards goes to a device that is not on this
+    #     machine. Some 3,000 later rows became `AssertionError: Torch not compiled
+    #     with CUDA enabled`. Loud, and obvious within a minute.
+    #
+    #   `'cpu'` — **looks like a no-op and is not.** It installs a `DeviceContext`
+    #     torch-function mode on the global stack, and a mode on the stack makes
+    #     `has_torch_function_variadic` true everywhere after it, which sends
+    #     `F.l1_loss` down its override path — where `weight=` is dropped. Measured:
+    #     `l1_loss(x, y, reduction='none', weight=w)` gives `[[.5, 4, 9], [4, .25,
+    #     1]]` before the call and `[[.5, 2, 3], [1, .25, 1]]` after, the unweighted
+    #     answer, with no exception. Four `loss::weight::` rows turned red **and only
+    #     when another test had already dumped once in the same process** — green
+    #     alone, red in the suite, and nothing pointing at the cause.
+    #
+    # A case whose torch half changes the interpreter has no place in a shared table
+    # however harmless the argument reads. Ours is measured by hand instead: `'cpu'`
+    # passes and everything else stops with the core's wording, in both `_ops.py` and
+    # `_data.py`.
     add("살펴보기::finfo",
         lambda L: (f"{L.finfo(L.float32).eps:.9g} {L.finfo(L.float32).max:.9g} "
                    f"{L.finfo(L.float32).bits}"))
@@ -5080,6 +6474,100 @@ def top_level_cases(inp=None):
         return f"왕복={bool(L.allclose(first, second))} 씨앗={L.initial_seed()}"
 
     add("난수::상태 왕복", rng_round_trip)
+
+    # ── `generator=` — a stream of one's own ───────────────────────────────────
+    #
+    # **Three answers to one question inside one library.** `random_split` honoured
+    # it, `multinomial` refused it by name, and `rand`/`randn`/`randint`/`randperm`
+    # had no seat at all — on the binding two of them had a `**kw` bag, which took
+    # the argument and dropped it, so the call read exactly like torch's and the
+    # generator did nothing.
+    #
+    # **The values cannot be compared with torch** (numpy's stream is not torch's),
+    # so what is asked is the three properties that make a generator one: the same
+    # seed gives the same numbers, successive draws differ, and the global stream is
+    # left alone. Each is a `True`, which is comparable everywhere.
+    def fresh(L, seed=3):
+        g = L.Generator()
+        g.manual_seed(seed)
+        return g
+
+    DRAWS = (
+        ("rand", lambda L, g: L.rand(4, generator=g)),
+        ("randn", lambda L, g: L.randn(4, generator=g)),
+        ("randint", lambda L, g: L.randint(0, 100, (4,), generator=g)),
+        ("randperm", lambda L, g: L.randperm(8, generator=g)),
+        ("normal", lambda L, g: L.normal(0.0, 1.0, (4,), generator=g)),
+        ("multinomial", lambda L, g: L.multinomial(
+            L.tensor([0.1, 0.2, 0.3, 0.4]), 4, replacement=True, generator=g)),
+        ("bernoulli", lambda L, g: L.bernoulli(L.full((4,), 0.5), generator=g)),
+    )
+
+    def same_seed(L, draw):
+        return bool(L.equal(draw(L, fresh(L)), draw(L, fresh(L))))
+
+    def advances(L, draw):
+        g = fresh(L)
+        return not bool(L.equal(draw(L, g), draw(L, g)))
+
+    def leaves_global_alone(L, draw):
+        """**The point of a generator.** One that reached for the global stream
+        would pass both cases above and quietly change what the seeded run does."""
+        L.manual_seed(11)
+        want = L.rand(4)
+        L.manual_seed(11)
+        draw(L, fresh(L))
+        return bool(L.equal(want, L.rand(4)))
+
+    for name, draw in DRAWS:
+        add(f"난수::generator::{name}(같은 씨앗은 같은 값)",
+            lambda L, d=draw: str(same_seed(L, d)))
+        add(f"난수::generator::{name}(두 번 뽑으면 다르다)",
+            lambda L, d=draw: str(advances(L, d)))
+        add(f"난수::generator::{name}(전역을 안 건드린다)",
+            lambda L, d=draw: str(leaves_global_alone(L, d)))
+
+    add("난수::generator::initial_seed", lambda L: str(fresh(L, 7).initial_seed()))
+    # Re-seeding returns to the first draw, which is what re-seeding means and what
+    # a generator holding a fresh stream per call cannot tell you.
+    add("난수::generator::씨앗을 다시 심으면 처음으로", lambda L: str(bool(
+        (lambda g: L.equal(L.rand(4, generator=g),
+                           (g.manual_seed(3), L.rand(4, generator=g))[1]))(fresh(L)))))
+
+    # ── `multinomial(replacement=False)` — an argument that reached nothing ────
+    #
+    # `np.random.Generator.choice` defaults to `replace=True`, so the word was
+    # accepted and dropped: measured, 184 of 200 draws of 4 from 4 weights came back
+    # with a repeat where torch has none. Asked as **whether the four drawn indices
+    # are distinct**, which is the whole meaning of the argument and is a fact rather
+    # than a stream.
+    def without_replacement(L):
+        got = L.multinomial(L.tensor([1.0, 1.0, 1.0, 1.0]), 4, replacement=False)
+        drawn = [int(v) for v in got.reshape(-1).tolist()]
+        return f"서로 다른가={len(set(drawn)) == 4}"
+
+    add("난수::multinomial(replacement=False) 는 겹치지 않는다", without_replacement)
+
+    for label, fragment, call in (
+        ("무복원인데 더 많이", "without replacement",
+         lambda L: L.multinomial(L.tensor([1.0, 1.0]), 5, replacement=False)),
+        ("0개", "n_sample <= 0",
+         lambda L: L.multinomial(L.tensor([1.0, 1.0]), 0)),
+        ("음수 가중치", "element < 0",
+         lambda L: L.multinomial(L.tensor([-1.0, 1.0]), 1)),
+        ("전부 0", "sum of probabilities <= 0",
+         lambda L: L.multinomial(L.tensor([0.0, 0.0]), 1)),
+        ("3차원", "prob_dist must be 1 or 2 dim",
+         lambda L: L.multinomial(L.ones(2, 2, 2), 1)),
+    ):
+        def refuses(L, f=call, frag=fragment):
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                return frag if frag in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+
+        add(f"난수::multinomial 거절::{label}", refuses)
     return cases
 
 
@@ -5245,6 +6733,94 @@ def unpool_cases(inp=None):
 
     add("자리::grad::max_pool2d(padding)", grad_padded)
 
+    # ── the dilation, which the browser side refused ──────────────────────
+    #
+    # borch.ts's pooling shader had no step between the cells one window reads, so
+    # `dilation` was refused there and answered in the core — one of the places where
+    # the two implementations were not the same library. The step multiplies the
+    # window index and nothing else; at 1 the generated source is what it always was.
+    #
+    # **A dilated window covers `dil·(k−1)+1` cells and reads `k` of them**, which is
+    # why the output size cannot be found by widening the kernel: the extent grows and
+    # the count of reads does not.
+    #
+    # `avg_pool*d` has no such argument in torch at all — `F.avg_pool2d(x, 2,
+    # dilation=2)` is a `TypeError`, not a refusal — so the average is asked for the
+    # refusal instead.
+    _DIL = np.arange(1., 1 + 7 * 8, dtype=np.float32).reshape(1, 1, 7, 8)
+    for _tag, _kw in (("dilation", {"dilation": 2}),
+                      ("dilation, stride", {"dilation": 2, "stride": 2}),
+                      ("dilation, padding", {"dilation": 2, "padding": 1}),
+                      ("dilation, ceil", {"dilation": 2, "ceil_mode": True}),
+                      ("dilation=3", {"dilation": 3, "stride": 3})):
+        add(f"자리::max_pool2d({_tag})",
+            lambda L, k=_kw: F(L).max_pool2d(L.tensor(_DIL), 3, **k))
+        add(f"자리::MaxPool2d({_tag})",
+            lambda L, k=_kw: L.nn.MaxPool2d(3, **k)(L.tensor(_DIL)))
+    for _rank, _shape in ((1, (1, 3, 9)), (3, (2, 2, 5, 5, 5))):
+        _vol = (np.arange(int(np.prod(_shape)), dtype=np.float32) * 0.1
+                - 1.0).reshape(_shape)
+        add(f"자리::max_pool{_rank}d(dilation)",
+            lambda L, r=_rank, v=_vol: getattr(F(L), f"max_pool{r}d")(
+                L.tensor(v), 2, dilation=2))
+
+    def grad_dilated(L):
+        """**The gradient is where a wrong window shows.** Forward, a dilated window
+        reading the wrong cells is one plausible maximum among others; backward, the
+        whole window's gradient goes to whichever cell it decided had won."""
+        x = L.tensor(_DIL, requires_grad=True)
+        F(L).max_pool2d(x, 3, stride=2, padding=1, dilation=2).sum().backward()
+        return x.grad
+
+    add("자리::grad::max_pool2d(dilation)", grad_dilated)
+    # **torch's `avg_pool2d` does not take a dilation at all**, so both sides stop —
+    # ours by name and torch's with a `TypeError` about an unexpected keyword.
+    add("자리::avg_pool2d(dilation)=둘 다 거절",
+        lambda L: _both_stop(L, lambda M: M.nn.functional.avg_pool2d(
+            M.tensor(_DIL), 2, dilation=2)))
+
+    # ── the same three on the path that also hands back the positions ────────
+    #
+    # The plain pooling went through the shader, which takes a padding, a dilation and
+    # a ceiling; this one went through a **window list** whose entry was `[start,
+    # end)`. An interval cannot skip cells and cannot hang off an edge, so all three
+    # were refused here while the same three arguments worked one call away. Written
+    # as the positions themselves the difference disappears — a padded cell is `-inf`
+    # in torch and never wins, so leaving it out of the list is the same answer.
+    #
+    # **The positions are the point, not the values.** A window that reads the wrong
+    # cells can still report the right maximum (the maximum of a superset often is),
+    # and the index is what `MaxUnpool` sends the gradient back through — so both
+    # halves are asked, and the unpooling after them.
+    for _tag, _kw in (("padding", {"padding": 1, "stride": 2}),
+                      ("dilation", {"dilation": 2}),
+                      ("ceil", {"stride": 2, "ceil_mode": True}),
+                      ("셋 다", {"padding": 1, "stride": 2, "dilation": 2,
+                                 "ceil_mode": True})):
+        for _part in (0, 1):
+            add(f"자리::max_pool2d(자리 내놓기, {_tag})[{_part}]",
+                lambda L, k=_kw, i=_part: F(L).max_pool2d(
+                    L.tensor(_DIL), 3, return_indices=True, **k)[i])
+        add(f"자리::MaxPool2d(자리 내놓기, {_tag})",
+            lambda L, k=_kw: L.nn.MaxPool2d(3, return_indices=True, **k)(
+                L.tensor(_DIL))[1])
+
+    def unpool_windowed(L):
+        """**The positions have to be usable.** An index that names a cell the window
+        never covered is not caught by comparing the pooled values — it is caught here,
+        where the unpooling puts the value back at that cell.
+
+        **The padding and not the dilation**, because `max_unpool2d` has no dilation:
+        given one it would rebuild a plane of a different size from the one the indices
+        point into, and torch refuses the mismatch before any of that is measured.
+        """
+        out, idx = F(L).max_pool2d(L.tensor(_DIL), 3, stride=2, padding=1,
+                                   return_indices=True)
+        return F(L).max_unpool2d(out, idx, 3, stride=2, padding=1,
+                                 output_size=(7, 8))
+
+    add("자리::max_unpool2d(창이 있는 자리)", unpool_windowed)
+
     # ── gradients ──
     def grad_pool(L):
         x = L.tensor(plane, requires_grad=True)
@@ -5298,8 +6874,8 @@ def unpool_cases(inp=None):
 
     # ── LPPool3d ───────────────────────────────────────────────────────
     small = grid(1, 1, 4, 4, 4) / 8
-    add("lp_pool3d", lambda L: F(L).lp_pool3d(L.tensor(small), 2, 2))
-    add("lp_pool3d(p=1)", lambda L: F(L).lp_pool3d(L.tensor(small), 1, 2))
+    add("lp_pool3d", lambda L: L.nn.functional.lp_pool3d(L.tensor(small), 2, 2))
+    add("lp_pool3d(p=1)", lambda L: L.nn.functional.lp_pool3d(L.tensor(small), 1, 2))
     add("층::LPPool3d", lambda L: L.nn.LPPool3d(2, 2)(L.tensor(small)))
 
     # ── fractional max pooling ──
@@ -5953,6 +7529,39 @@ def method_name_cases(inp=None):
     add("kron",
         lambda L: L.tensor(np.array([1., 2., 3.], dtype=np.float32)).kron(
             L.tensor(np.array([4., 5.], dtype=np.float32))))
+    # **Above one axis, where it used to refuse.** The 1-D case cannot tell the
+    # general rule from the one-axis version that was wrong above it — both give the
+    # same answer on vectors, which is why the miniature above skips `kron` with a
+    # note rather than asking it. These three make the interleaving visible: two
+    # square matrices, a mixed rank (the shorter is padded at the *front*), and a
+    # rectangle where every axis has a different length so a transposed fold shows.
+    _k2a = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+    _k2b = np.array([[0., 5.], [6., 7.]], dtype=np.float32)
+    add("kron(2차원)", lambda L: L.tensor(_k2a).kron(L.tensor(_k2b)))
+    add("kron(2차원 × 1차원)",
+        lambda L: L.tensor(_k2a).kron(
+            L.tensor(np.array([5., 6.], dtype=np.float32))))
+    add("kron(직사각)",
+        lambda L: L.tensor(np.array([[1., 2., 3.]], dtype=np.float32)).kron(
+            L.tensor(np.array([[4.], [5.]], dtype=np.float32))))
+
+    def kron_grad(L):
+        """**The backward, which is what the general form had to keep.** It is built
+        from `reshape` and `mul`, both of which already carry one, so a wrong
+        interleaving shows here as much as in the value.
+
+        Both gradients come back as one tensor rather than as a formatted pair —
+        a `tolist()` in an f-string is Python's formatter, and the other side would
+        have to reproduce `82.0` rather than the number.
+        """
+        a = L.tensor(_k2a.copy(), requires_grad=True)
+        b = L.tensor(_k2b.copy(), requires_grad=True)
+        out = a.kron(b)
+        (out * (L.arange(out.numel()).reshape(out.shape).float() + 1)).sum().backward()
+        return L.cat([_grad_of(a, "kron/a").reshape(4),
+                      _grad_of(b, "kron/b").reshape(4)])
+
+    add("kron(2차원)의 기울기", kron_grad)
     add("broadcast_to",
         lambda L: L.tensor(np.array([1., 2.], dtype=np.float32)).broadcast_to((3, 2)))
     add("prelu",
@@ -6041,6 +7650,28 @@ def method_name_cases(inp=None):
         return x
 
     add("제자리::transpose_ 의 값", inplace_transpose_values)
+
+    def inplace_transpose_rank3(L):
+        """**Rank 3, where a dropped pair of axes shows.**
+
+        Every case above is 2-D, and at 2-D `transpose_(0, 1)` and `transpose_()`
+        are the same answer — so borch.ts's `transpose_()`, which took no axes at
+        all and did the 2-D swap, passed all of them. The axes have to matter for
+        the case to ask anything.
+        """
+        x = L.tensor(np.arange(24, dtype=np.float32).reshape(2, 3, 4))
+        x.transpose_(1, 2)
+        return f"{tuple(x.shape)} {x.reshape(-1)[:6].tolist()}"
+
+    add("제자리::transpose_(1, 2) 는 3차원에서", inplace_transpose_rank3)
+
+    def inplace_squeeze_two_axes(L):
+        """`squeeze_(0, 2)` — several axes, as `squeeze` takes them."""
+        x = L.tensor(np.arange(6, dtype=np.float32).reshape(1, 6, 1))
+        x.squeeze_(0, 2)
+        return str(tuple(x.shape))
+
+    add("제자리::squeeze_(0, 2)", inplace_squeeze_two_axes)
 
     def inplace_is_same_object(L):
         """**In place edits the same tensor.** Handing back a new one is meaningless."""
@@ -6308,6 +7939,72 @@ def rnn_top_cases(inp=None):
     # where torch runs too, rather than one where only our answer is frozen.
     add("dropout=0 이면 돈다",
         lambda L: try_lstm(L, dropout=0.0, train=True)[0])
+
+    # ── bidirectional, stacked and projected, refused here until today ────────
+    #
+    # `bidirectional` and inter-layer `dropout` stopped at this door on the ground
+    # that the layers underneath had neither. They have both now, so the arguments go
+    # through instead of stopping.
+    #
+    # **The flat parameter list is `named_parameters()`'s own order** — four per
+    # *direction*, the reverse one second, layers outermost, and `weight_hr` last
+    # within a direction under a projection. Measured against `torch._VF.lstm` with a
+    # two-layer bidirectional net rather than assumed from the one-direction case,
+    # where directions and layers cannot be told apart.
+    #
+    # **`proj_size` has no seat in these functions.** torch reads it off the shapes:
+    # `weight_hh` is `(gates·H, proj or H)`. A `proj_size` argument here would be one
+    # torch does not have, and inferring is what torch itself does.
+    _RT_X = np.arange(5 * 2 * 3, dtype=np.float32).reshape(5, 2, 3) * 0.1 - 1.0
+    _RT_GATES = {"lstm": 4, "gru": 3, "rnn_tanh": 1, "rnn_relu": 1}
+
+    def _rt_ramp(shape):
+        n = int(np.prod(shape))
+        return np.array([0.1 * ((i % 7) - 3) for i in range(n)],
+                        dtype=np.float32).reshape(shape)
+
+    def top_flag(L, name, part, layers=1, bidirectional=False, dropout=0.0,
+                 proj=0):
+        gates, hidden, width = _RT_GATES[name], 4, 3
+        dirs = 2 if bidirectional else 1
+        real = proj or hidden
+        flat = []
+        for layer in range(layers):
+            in_size = width if layer == 0 else real * dirs
+            for _ in range(dirs):
+                flat.append(_rt_ramp((gates * hidden, in_size)))
+                flat.append(_rt_ramp((gates * hidden, real)))
+                flat.append(_rt_ramp((gates * hidden,)))
+                flat.append(_rt_ramp((gates * hidden,)))
+                if proj:
+                    flat.append(_rt_ramp((proj, hidden)))
+        rows = layers * dirs
+        h0 = _np_zeros = np.zeros((rows, 2, real), dtype=np.float32)
+        hx = ((L.tensor(h0), L.tensor(np.zeros((rows, 2, hidden), np.float32)))
+              if name == "lstm" else L.tensor(_np_zeros))
+        got = getattr(L, name)(L.tensor(_RT_X), hx,
+                               [L.tensor(v) for v in flat], True, layers,
+                               dropout, False, bidirectional, False)
+        return got[part]
+
+    for _n in ("lstm", "gru", "rnn_tanh", "rnn_relu"):
+        for _p in range(3 if _n == "lstm" else 2):
+            add(f"{_n}(양방향)[{_p}]",
+                lambda L, n=_n, p=_p: top_flag(L, n, p, bidirectional=True))
+            add(f"{_n}(2층양방향)[{_p}]",
+                lambda L, n=_n, p=_p: top_flag(L, n, p, layers=2,
+                                               bidirectional=True))
+        # `train` is false here, so the dropout is the identity and the answer is the
+        # stack's — which is the claim: a dropout that acted outside training would
+        # part from it.
+        add(f"{_n}(2층 dropout, 평가)",
+            lambda L, n=_n: top_flag(L, n, 0, layers=2, dropout=0.5))
+    for _p in range(3):
+        add(f"lstm(proj_size)[{_p}]",
+            lambda L, p=_p: top_flag(L, "lstm", p, proj=2))
+        add(f"lstm(proj_size 와 양방향)[{_p}]",
+            lambda L, p=_p: top_flag(L, "lstm", p, layers=2, proj=2,
+                                     bidirectional=True))
     return cases
 
 
@@ -6494,6 +8191,53 @@ def misc_cases(inp=None):
         return _grad_of(x, "unfold")
 
     add("grad::unfold", unfold_grad)
+
+    # ── the unbatched rank, which the refusal had half right ────────────
+    #
+    # It said *anything but 4-D*, and torch takes 3-D as **one unbatched sample**:
+    # `(C, H, W)` comes back as `(C·kh·kw, L)` with no batch axis. `fold`'s unbatched
+    # form is one rank lower again — 2-D, because the channel and the kernel are
+    # already folded into one axis there — and the pair is asked together because
+    # taking them for the same number is the mistake available.
+    #
+    # 5-D and 4-D respectively are refused, and the wording is torch's own rather than
+    # invented: both messages were read off torch and are compared as strings.
+    _UF_3D = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    for _tag, _kw in (("기본", {}), ("stride=2", {"stride": 2}),
+                      ("padding=1", {"padding": 1}), ("dilation=2", {"dilation": 2})):
+        add(f"unfold(배치 없이, {_tag})",
+            lambda L, k=_kw: F(L).unfold(L.tensor(_UF_3D), 2, **k))
+    add("fold(배치 없이)",
+        lambda L: F(L).fold(F(L).unfold(L.tensor(_UF_3D), 2), (3, 4), 2))
+
+    def unfold_unbatched_grad(L):
+        """The unbatched path goes through the batched one and reshapes, so the
+        gradient has to come back out of that reshape with the batch axis gone. A
+        value case cannot see a gradient that kept it."""
+        x = L.tensor(_UF_3D.copy(), requires_grad=True)
+        out = F(L).unfold(x, 2)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(x, "unfold/unbatched")
+
+    add("grad::unfold(배치 없이)", unfold_unbatched_grad)
+
+    def rank_refusal(L, which):
+        """torch's wording, compared as a string — an invented message would pass a
+        check that only asks whether something was raised."""
+        shape = (2, 3, 4, 5, 6) if which == "unfold" else (2, 3, 8, 6)
+        bad = np.zeros(shape, dtype=np.float32)
+        try:
+            if which == "unfold":
+                F(L).unfold(L.tensor(bad), 2)
+            else:
+                F(L).fold(L.tensor(bad), (3, 4), 2)
+        except Exception as exc:                                # noqa: BLE001
+            head = str(exc).split(",")[0]
+            return head if head.startswith("Expected") else f"다른 문구 <{exc}>"
+        return "안 던졌다"
+
+    add("unfold(5차원)=거절 문구", lambda L: rank_refusal(L, "unfold"))
+    add("fold(4차원)=거절 문구", lambda L: rank_refusal(L, "fold"))
 
     # ── Bilinear ────────────────────────────────────────────────────────
     w = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4) / 10
@@ -6753,6 +8497,17 @@ def shuffle_cases(inp=None):
         lambda L: F(L).pixel_unshuffle(F(L).pixel_shuffle(L.tensor(pix), 2), 2))
     add("channel_shuffle(2)", lambda L: F(L).channel_shuffle(L.tensor(chan), 2))
     add("channel_shuffle(3)", lambda L: F(L).channel_shuffle(L.tensor(chan6), 3))
+    # ── `nn.Flatten`'s two seats ──
+    #
+    # **The defaults hid them.** torch's are `1` and `-1` — keep the batch axis, fold
+    # the rest — which is exactly what the browser side did with no arguments at all,
+    # so every case that used the default passed while `Flatten(0)` and `Flatten(1, 2)`
+    # were words JavaScript dropped. The class declared no constructor, so the
+    # signature axis called it *unreadable* rather than short.
+    for _label, _args in (("기본", ()), ("(0, -1)", (0, -1)), ("(1, 2)", (1, 2)),
+                          ("(2, 3)", (2, 3)), ("(0, 1)", (0, 1))):
+        add(f"층::Flatten{_label}",
+            lambda L, g=_args: L.nn.Flatten(*g)(L.tensor(pix)))
     add("층::PixelShuffle", lambda L: L.nn.PixelShuffle(2)(L.tensor(pix)))
     add("층::PixelUnshuffle", lambda L: L.nn.PixelUnshuffle(2)(L.tensor(flat)))
     add("층::ChannelShuffle", lambda L: L.nn.ChannelShuffle(2)(L.tensor(chan)))
@@ -7012,6 +8767,11 @@ LOSS_PREFIX = "loss::"
 # passes.
 _LOSS_X = np.array([[0.5, -1.0, 2.0], [1.5, 0.25, -0.5]], dtype=np.float32)
 _LOSS_Y = np.array([[1.0, 0.0, -1.0], [0.5, 1.0, 0.25]], dtype=np.float32)
+# **For the per-element `weight` the three elementwise losses take.** Its sum is 12
+# against 6 elements, so `Σw` and `n` are two different divisors — which is the whole
+# of what separates `l1`/`mse` from `huber` under `mean`. A weight of all ones, or of
+# all twos summing to 12 with 6 elements, would let the two rules agree.
+_LOSS_W = np.array([[1.0, 2.0, 3.0], [4.0, 1.0, 1.0]], dtype=np.float32)
 _LOSS_ANC = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
 _LOSS_POS = np.array([[2.0, 0.5], [1.5, 1.0]], dtype=np.float32)
 _LOSS_NEG = np.array([[1.1, 0.1], [0.2, 0.9]], dtype=np.float32)
@@ -7023,6 +8783,24 @@ _LOSS_HTGT = np.array([[1.0, -1.0], [-1.0, 1.0]], dtype=np.float32)
 _LOSS_COUNT = np.array([[1.0, 2.0, 0.0], [3.0, 0.5, 1.0]], dtype=np.float32)
 _LOSS_VAR = np.array([[1.0, 0.5, 2.0], [0.25, 1.5, 1.0]], dtype=np.float32)
 _LOSS_MM = np.array([[0.1, 0.2, 0.4], [0.8, 0.3, 0.1]], dtype=np.float32)
+# The class weights are unequal and none of them is 1: an equal weight makes `mean`'s
+# two denominators agree and the case would pass with the rule written either way.
+_CLS_W = np.array([0.5, 2.0, 3.0], dtype=np.float32)
+_CLS_LOGITS = np.array([[2., 1., .1], [.5, 2.5, .3], [1., .2, 3.]], dtype=np.float32)
+_CLS_T = np.array([0, 1, 2], dtype=np.int64)
+# The **middle** row is skipped, so a `none` that drops instead of zeroing changes the
+# order of what survives rather than only its length.
+_CLS_T_IGN = np.array([0, -100, 2], dtype=np.int64)
+# `_BCE_P` and `_BCE_T` are already taken further down this file and are a different
+# shape; naming these the obvious thing bound the lambdas to those instead, and the
+# dump said "target size (2, 3)" for a fixture written four wide.
+_BW_Z = np.array([-1.0, 0.5, 2.0, -0.25], dtype=np.float32)
+_BW_T = np.array([1.0, 0.0, 1.0, 0.0], dtype=np.float32)
+_BW_W = np.array([0.5, 1.5, 2.0, 0.25], dtype=np.float32)
+# A scalar `pos_weight` would broadcast even if it were being applied to the wrong
+# axis; four unequal entries pin it to the rows.
+_BW_PW = np.array([2.5, 0.5, 1.0, 3.0], dtype=np.float32)
+_BW_P = (1.0 / (1.0 + np.exp(-_BW_Z))).astype(np.float32)
 
 
 def loss_cases(inp=None):
@@ -7064,6 +8842,110 @@ def loss_cases(inp=None):
 
     def add(name, fn):
         cases.append((LOSS_PREFIX + name, fn))
+
+    # ── `linear_cross_entropy`, which is a fusion and not a formula ──────────
+    #
+    # **It equals `cross_entropy(linear(x, w, b), t)`, and that is the claim.** torch has
+    # the separate name so the logits are never all materialised at once — a memory
+    # strategy for a vocabulary-sized `num_classes` — and nothing here chunks, so the
+    # composition is the whole of it. What the cases have to hold is that the seven
+    # arguments arrive at the right side of the fusion.
+    #
+    # **`ignore_index` is the one that would slip through a lazy port.** torch's default
+    # here is `None` and `cross_entropy`'s is `-100`, so a forwarder passing it straight
+    # through makes `ignore_index=None` mean *ignore class -100* on one side and *ignore
+    # nothing* on the other. The two are the same on this fixture, which is why the case
+    # gives it a value.
+    _lce_x = np.array([[0.5, -1.2, 0.3, 2.0, -0.7],
+                       [1.1, 0.4, -0.9, 0.2, 1.5],
+                       [-0.3, 0.8, 1.7, -1.1, 0.6],
+                       [2.2, -0.5, 0.1, 0.9, -1.4],
+                       [0.7, 1.3, -0.2, -0.8, 0.4],
+                       [-1.0, 0.2, 0.9, 1.6, -0.3]], dtype=np.float32)
+    _lce_w = np.array([[0.3, -0.7, 1.1, 0.2, -0.4],
+                       [-1.2, 0.5, 0.8, -0.9, 1.3],
+                       [0.6, 1.0, -0.3, 0.7, -1.1],
+                       [-0.8, -0.2, 0.4, 1.5, 0.9]], dtype=np.float32)
+    _lce_b = np.array([0.2, -0.5, 0.9, -0.1], dtype=np.float32)
+    _lce_t = np.array([0, 1, 2, 3, 0, 1], dtype=np.int64)
+    _lce_cw = np.array([0.7, 1.4, 0.9, 1.1], dtype=np.float32)
+
+    def _plant(L, target, arr):
+        """Write `arr` into a parameter, the one way all three sides carry.
+
+        **`.data[...] = ` is not that way.** The core's `data` is the numpy array and
+        takes an array; torch's is a tensor and refuses one; the binding's parameter has
+        no `data` at all and answered `AttributeError: data`. `copy_` under `no_grad` is
+        what the layer-filling helper five thousand lines up already uses, for the same
+        reason and against the same three sides.
+        """
+        with L.no_grad():
+            target.copy_(L.tensor(np.ascontiguousarray(arr)))
+
+    def _lce(name, call):
+        add(f"linear_cross_entropy({name})",
+            lambda L: call(F(L), L.tensor(_lce_x), L.tensor(_lce_w),
+                           L.tensor(_lce_t), L))
+
+    _lce("기본", lambda f, x_, w_, t_, L: f.linear_cross_entropy(x_, w_, t_))
+    _lce("linear_bias", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, linear_bias=L.tensor(_lce_b)))
+    _lce("weight", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, weight=L.tensor(_lce_cw)))
+    _lce("reduction=sum", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, reduction="sum"))
+    _lce("reduction=none", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, reduction="none"))
+    _lce("label_smoothing", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, label_smoothing=0.1))
+    _lce("ignore_index", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, ignore_index=1))
+    # **A target that actually holds -100, and without it this pair says nothing.**
+    # torch's default here is `None` and `cross_entropy`'s is `-100`, so a forwarder
+    # that passes `None` straight through is only wrong where a -100 is present — on
+    # any other fixture *ignore nothing* and *ignore class -100* are the same answer.
+    # Planted: passing it through, every case above stayed green and this one turns
+    # red. (Measured in torch first: `linear_cross_entropy(ignore_index=None)` equals
+    # `cross_entropy`'s default exactly, 2.589689 on a target holding -100.)
+    _lce_skip = np.array([0, -100, 2, 3, -100, 1], dtype=np.int64)
+    add("linear_cross_entropy(기본이 -100 을 건너뛴다)",
+        lambda L: F(L).linear_cross_entropy(
+            L.tensor(_lce_x), L.tensor(_lce_w), L.tensor(_lce_skip)))
+    _lce("전부", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, linear_bias=L.tensor(_lce_b), weight=L.tensor(_lce_cw),
+        reduction="sum", label_smoothing=0.1, ignore_index=2))
+    # **`options` has to be accepted and has to change nothing** — measured in real
+    # torch, four settings all within 4.8e-7 of the default. Frozen equal to the bare
+    # case above on purpose: this is the row that says the seat is inert, and it is
+    # attested as deliberately-equal rather than left to look like a hole.
+    _lce("options", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, options=L.nn.LinearCrossEntropyOptions(batch_chunk_size=2)))
+
+    def _lce_layer(L):
+        """The layer, with the weight pinned — its initialisation is not torch's.
+
+        **`data[...] = ndarray` works on one side and not the other**, so the write
+        goes through each side's own tensor. torch refuses `can't assign a
+        numpy.ndarray to a torch.FloatTensor`; the core's `data` is the array itself.
+        """
+        loss = L.nn.LinearCrossEntropyLoss(5, 4)
+        _plant(L, loss.linear.weight, _lce_w)
+        return loss(L.tensor(_lce_x), L.tensor(_lce_t))
+
+    def _lce_layer_bias(L):
+        loss = L.nn.LinearCrossEntropyLoss(5, 4, bias=True)
+        _plant(L, loss.linear.weight, _lce_w)
+        _plant(L, loss.linear.bias, _lce_b)
+        return loss(L.tensor(_lce_x), L.tensor(_lce_t))
+
+    add("nn.LinearCrossEntropyLoss", _lce_layer)
+    add("nn.LinearCrossEntropyLoss(bias)", _lce_layer_bias)
+    # **The parameter is `linear.weight`, not `weight`** — the layer owns a `Linear`
+    # submodule and a checkpoint is written with that name. Frozen as text because a
+    # `state_dict` key is a spelling.
+    add("nn.LinearCrossEntropyLoss/이름",
+        lambda L: str(sorted(n for n, _ in
+                             L.nn.LinearCrossEntropyLoss(5, 4).named_parameters())))
 
     # ── Huber — where the defaults coincide with SmoothL1 ──
     for tag, delta in (("기본", None), ("δ=0.5", 0.5), ("δ=2", 2.0)):
@@ -7337,6 +9219,60 @@ def loss_cases(inp=None):
              L.tensor(np.log(np.array([[.7, .2, .1], [.1, .8, .1], [.2, .2, .6]],
                                       dtype=np.float32))),
              L.tensor(np.array([0, -100, 2], dtype=np.int64)))),
+        # ── the class weight, refused here until today ────────────────────────────
+        #
+        # The refusal's reason was that accepting `weight` and ignoring it changes the
+        # loss silently, which was true and is not a reason to keep refusing. **What
+        # it costs to get wrong is one division.** `mean` divides by the sum of the
+        # weights of the rows it kept, not by how many rows those were, and the two
+        # differ by whatever the weights average to — 1.0251 against 2.0501 on the
+        # `ignore_index` row below. Both are plausible numbers and only one is torch's,
+        # which is why `mean` is asked with the weight *and* the skip at once: either
+        # rule alone gives the right answer to the other's case.
+        *[(f"CrossEntropyLoss(weight, {red})",
+           lambda L, r=red: L.nn.CrossEntropyLoss(
+               weight=L.tensor(_CLS_W), reduction=r)(
+                   L.tensor(_CLS_LOGITS), L.tensor(_CLS_T)))
+          for red in ("mean", "sum", "none")],
+        ("CrossEntropyLoss(weight, ignore_index)",
+         lambda L: L.nn.CrossEntropyLoss(weight=L.tensor(_CLS_W), ignore_index=-100)(
+             L.tensor(_CLS_LOGITS), L.tensor(_CLS_T_IGN))),
+        # **The weight goes inside the spread, not around it.** Label smoothing sends
+        # ε to every class, and torch weights that share per class — the row is
+        # `(1−ε)·w[t]·nll + ε·mean_c(w_c·−log p_c)`. Scaling the whole smoothed row by
+        # `w[t]` instead is the reading that needs no new code and it is off in the
+        # second decimal, which is the distance nothing notices.
+        ("CrossEntropyLoss(weight, label_smoothing)",
+         lambda L: L.nn.CrossEntropyLoss(weight=L.tensor(_CLS_W),
+                                         label_smoothing=0.1)(
+             L.tensor(_CLS_LOGITS), L.tensor(_CLS_T))),
+        ("NLLLoss(weight, ignore_index)",
+         lambda L: L.nn.NLLLoss(weight=L.tensor(_CLS_W), ignore_index=-100)(
+             L.tensor(np.log(np.array([[.7, .2, .1], [.1, .8, .1], [.2, .2, .6]],
+                                      dtype=np.float32))),
+             L.tensor(_CLS_T_IGN))),
+        # **The binary pair divides by the count instead**, weights or no weights —
+        # measured, `weight=[0.5, 1.5, 2, 0.25]` over four rows gives 5.6076/4 and not
+        # 5.6076/4.25. So this file now holds two different rules called "weighted
+        # mean": `mse_loss`'s divides by the sum of the weights and this one does not,
+        # and a single shared helper for both would have to be wrong about one.
+        ("BCEWithLogitsLoss(pos_weight)",
+         lambda L: L.nn.BCEWithLogitsLoss(pos_weight=L.tensor(_BW_PW))(
+             L.tensor(_BW_Z), L.tensor(_BW_T))),
+        ("BCEWithLogitsLoss(weight)",
+         lambda L: L.nn.BCEWithLogitsLoss(weight=L.tensor(_BW_W))(
+             L.tensor(_BW_Z), L.tensor(_BW_T))),
+        # `pos_weight` scales the positive term alone, so the two multiply rather than
+        # collapsing: `w · −(pw·t·log σ + (1−t)·log(1−σ))`. Applying `pos_weight` to
+        # the whole safe form `relu(x) − x·t + log(1+e^−|x|)` scales the negative rows
+        # too and is wrong on exactly the targets that are 0.
+        ("BCEWithLogitsLoss(weight, pos_weight)",
+         lambda L: L.nn.BCEWithLogitsLoss(weight=L.tensor(_BW_W),
+                                          pos_weight=L.tensor(_BW_PW))(
+             L.tensor(_BW_Z), L.tensor(_BW_T))),
+        ("BCELoss(weight)",
+         lambda L: L.nn.BCELoss(weight=L.tensor(_BW_W))(
+             L.tensor(_BW_P), L.tensor(_BW_T))),
         # **The weighted form, added when borch.ts grew a `weight` it did not have.**
         # torch puts `weight` first and borch.ts took `reduction` there, so
         # `MultiLabelSoftMarginLoss('sum')` set the class weights in one library and
@@ -7514,6 +9450,54 @@ def loss_cases(inp=None):
         ):
             add(f"reduction::{name}({reduction})",
                 lambda L, c=call, r=reduction: c(L, r))
+
+    # **`weight` on the three elementwise losses, which was a refusal nothing asked.**
+    # The seat was carried and the value stopped, on the ground that `mean` divides by
+    # the sum of the weights rather than by the count — a reason that was right and was
+    # also the specification. Measured on three weight vectors:
+    #
+    #     none  w · ℓ                      all three
+    #     sum   Σ w · ℓ                    all three
+    #     mean  Σ w·ℓ / Σ w                `l1_loss` and `mse_loss`
+    #     mean  Σ w·ℓ / n                  `huber_loss`
+    #
+    # **huber's divisor is the count and the other two are not**, so all three are asked
+    # under `mean` rather than one standing for the family. Assuming they agreed would
+    # put huber out by `Σw / n` — a factor of two on this fixture, with no exception.
+    for name, call in (
+            ("l1_loss", lambda L, r, w: F(L).l1_loss(
+                L.tensor(x), L.tensor(y), reduction=r, weight=w)),
+            ("mse_loss", lambda L, r, w: F(L).mse_loss(
+                L.tensor(x), L.tensor(y), reduction=r, weight=w)),
+            ("huber_loss", lambda L, r, w: F(L).huber_loss(
+                L.tensor(x), L.tensor(y), reduction=r, weight=w))):
+        for reduction in ("none", "sum", "mean"):
+            add(f"weight::{name}({reduction})",
+                lambda L, c=call, r=reduction: c(L, r, L.tensor(_LOSS_W)))
+
+    def loss_weight_grad(L):
+        """The backward carries the weight too — it is a `mul` in the graph rather
+        than a number applied afterwards, so nothing had to be written for it and
+        nothing would say so if it had been dropped."""
+        p = L.tensor(_LOSS_X.copy(), requires_grad=True)
+        F(L).mse_loss(p, L.tensor(y), reduction="mean",
+                      weight=L.tensor(_LOSS_W)).backward()
+        return _grad_of(p, "mse_loss/weight")
+
+    add("weight::mse_loss 의 기울기", loss_weight_grad)
+
+    # torch does not broadcast the weight: a `(6,)` against a `(2, 3)` input raises,
+    # and so does a `(3,)`. Both sides stop with torch's own wording.
+    def loss_weight_shape(L):
+        try:
+            F(L).l1_loss(L.tensor(x), L.tensor(y),
+                         weight=L.tensor(_LOSS_W.reshape(6)))
+        except Exception as exc:                                # noqa: BLE001
+            return ("문구대로" if "must have the same size" in str(exc)
+                    else f"다른 문구 <{exc}>")
+        return "안 던졌다"
+
+    add("weight::모양이 다르면 거절", loss_weight_shape)
 
     # **An unknown value is not swallowed into the mean.** It was `else: return mean()`, and then
     # a typo like `reduction="MEAN"` passes quietly and is trained on — the person believes what
@@ -7786,6 +9770,60 @@ def norm_cases(inp=None):
             return _grad_of(x, n)
         cases.append((NORM_PREFIX + f"grad::{name}", grad))
 
+    # ── `F.layer_norm` folded the last axis whatever it was told ──────────────
+    #
+    # `normalized_shape` was in the signature and the body never read it. With one
+    # axis "fold the last axis" is the right answer, so every case asked it that way
+    # and agreed; `(3, 4)` folds the last **two** as one block — mean and variance
+    # over 12 cells rather than 4 — and came back normalised over 4, real numbers
+    # and no exception. **`nn.LayerNorm` had it right the whole time**, which is why
+    # nothing said so: the golden asked the layer for the multi-axis case and the
+    # function for the single-axis one, so neither ever met the other's question.
+    #
+    # Asked at all three depths, and both ways round: the function and the layer on
+    # the same input, so one of them being wrong cannot hide behind the other.
+    _ln = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    for _dims, _tag in (((4,), "(4,)"), ((3, 4), "(3, 4)"), ((2, 3, 4), "(2, 3, 4)")):
+        add(f"F.layer_norm{_tag}",
+            lambda L, x, d=_dims: L.nn.functional.layer_norm(x, d), _ln)
+    _lnw = np.arange(1, 13, dtype=np.float32).reshape(3, 4)
+    # **The affine pair, which the binding held a seat for and never read** — the
+    # answer came back unscaled and unshifted, which in a transformer block is the
+    # learned affine silently missing.
+    cases.append((NORM_PREFIX + "F.layer_norm(weight)",
+                  lambda L: L.nn.functional.layer_norm(
+                      L.tensor(_ln), (3, 4), L.tensor(_lnw))))
+    cases.append((NORM_PREFIX + "F.layer_norm(weight, bias)",
+                  lambda L: L.nn.functional.layer_norm(
+                      L.tensor(_ln), (3, 4), L.tensor(_lnw),
+                      L.tensor(_lnw * 0.0 + 2.0))))
+    # The layer, on the same input, so the two halves are compared with each other
+    # rather than each with itself.
+    for _dims, _tag in (((4,), "(4,)"), ((3, 4), "(3, 4)")):
+        cases.append((NORM_PREFIX + f"nn.LayerNorm{_tag} 는 F 와 같다",
+                      lambda L, d=_dims: L.nn.LayerNorm(d)(L.tensor(_ln))
+                      - L.nn.functional.layer_norm(L.tensor(_ln), d)))
+
+    for _label, _fragment, _call in (
+        ("모양이 안 맞으면", "expected input with shape",
+         lambda L: L.nn.functional.layer_norm(L.tensor(_ln), (5,))),
+        ("빈 모양", "at least 1-dimensional",
+         lambda L: L.nn.functional.layer_norm(L.tensor(_ln), ())),
+        # torch's **function** wants a tuple where its layer takes an int happily.
+        ("int 하나", "must be tuple of ints",
+         lambda L: L.nn.functional.layer_norm(L.tensor(_ln), 4)),
+        ("weight 모양이 틀리면", "same shape as normalized_shape",
+         lambda L: L.nn.functional.layer_norm(L.tensor(_ln), (3, 4), L.ones(4))),
+    ):
+        def _ln_refuses(L, f=_call, frag=_fragment):
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                return frag if frag in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+
+        cases.append((NORM_PREFIX + f"F.layer_norm 거절::{_label}", _ln_refuses))
+
     # ── GroupNorm. At one group it is LayerNorm, and at the channel count InstanceNorm. ──
     add("F.group_norm(1)", lambda L, x: L.nn.functional.group_norm(x, 1), img)
     add("F.group_norm(3)", lambda L, x: L.nn.functional.group_norm(x, 3), img)
@@ -7827,6 +9865,15 @@ def norm_cases(inp=None):
     add("F.rms_norm", lambda L, x: L.nn.functional.rms_norm(x, (4,)), img)
     cases.append((NORM_PREFIX + "nn.RMSNorm",
                   lambda L: L.nn.RMSNorm(4)(L.tensor(img))))
+    # **`eps` was in the layer's signature and `forward` never handed it on**, on
+    # the binding — the kernel over there has carried it from the start, and
+    # borch.ts's own `RMSNorm` note records fixing exactly this defect in exactly
+    # this place, which the Python class beside it then repeated. Asked at an `eps`
+    # big enough to move the answer, because at the default the two agree.
+    cases.append((NORM_PREFIX + "nn.RMSNorm(eps 를 크게)",
+                  lambda L: L.nn.RMSNorm(4, eps=10.0)(L.tensor(img))))
+    cases.append((NORM_PREFIX + "F.rms_norm(eps 를 크게)",
+                  lambda L: L.nn.functional.rms_norm(L.tensor(img), (4,), eps=10.0)))
 
     # ── LayerNorm's `normalized_shape` is **how many axes are folded** ──
     #
@@ -8184,14 +10231,107 @@ def container_cases(inp=None):
     #
     # All three were blocked with a `TypeError`. That is the same screen as a typo and does not
     # say "this library does not have it".
-    cases.append((CONTAINER_PREFIX + "InstanceNorm(추적)=우리는거절",
-                  refusal_case(
-                      lambda L: L.nn.InstanceNorm2d(3, track_running_stats=True))))
-    cases.append((CONTAINER_PREFIX + "CrossEntropyLoss(weight)=우리는거절",
-                  refusal_case(lambda L: L.nn.CrossEntropyLoss(weight=L.ones(3)))))
-    cases.append((CONTAINER_PREFIX + "BCEWithLogitsLoss(pos_weight)=우리는거절",
-                  refusal_case(
-                      lambda L: L.nn.BCEWithLogitsLoss(pos_weight=L.ones(3)))))
+    # **`track_running_stats=True` stopped being refused.** The refusal's reason —
+    # registering buffers the forward does not read puts the keys right and the values
+    # wrong — was true, and the way out was to make the forward read them rather than
+    # to register them quietly. `F.instance_norm` grew the seats first.
+    cases.append((CONTAINER_PREFIX + "InstanceNorm(추적)/state_dict 열쇠",
+                  lambda L: " ".join(sorted(L.nn.InstanceNorm2d(
+                      3, affine=True, track_running_stats=True).state_dict()))))
+
+    def instance_tracks(L, stage):
+        """**Training moves the buffers and evaluation reads them**, which is the
+        whole of what the flag does — and the two halves have to be asked separately
+        because each alone passes with the other missing.
+
+        `num_batches_tracked` is registered here and **never incremented**, unlike
+        `BatchNorm`'s. Measured: after a training forward it is still 0."""
+        m = L.nn.InstanceNorm2d(3, track_running_stats=True)
+        m.train()
+        trained = m(L.tensor(_INORM_X))
+        m.eval()
+        evaled = m(L.tensor(_INORM_X))
+        if stage == "train":
+            return trained
+        if stage == "eval":
+            return evaled
+        if stage == "tracked":
+            got = m.state_dict()["num_batches_tracked"]
+            return str(int(np.asarray(
+                got.detach() if hasattr(got, "detach") else got.data).reshape(-1)[0]))
+        return L.cat([m.running_mean.reshape(3), m.running_var.reshape(3)])
+
+    _INORM_X = np.arange(1., 25., dtype=np.float32).reshape(2, 3, 2, 2)
+    for _stage in ("train", "eval", "buffers", "tracked"):
+        cases.append((CONTAINER_PREFIX + f"InstanceNorm(추적)/{_stage}",
+                      lambda L, s=_stage: instance_tracks(L, s)))
+
+    # **`CrossEntropyLoss(weight)` and `BCEWithLogitsLoss(pos_weight)` were two
+    # refusals here and are answered now** — the cases moved to `loss_cases`, where
+    # they ask for the number instead of the wording. A refusal case is worth keeping
+    # only while the refusal is; kept past that it freezes the gap in place.
+
+    # **`device` and `dtype` are two seats, not one**, and BatchNorm had neither while
+    # its own lazy spelling and `InstanceNorm` beside it both did. That is not a short
+    # tail: torch declares `bias` keyword-only *after* the pair, so a sixth positional
+    # argument is `device` there and was `bias` here — **a shift**, which returns a
+    # layer rather than raising. What found it was the signature axis reading three
+    # `unaligned` rows where the neighbours read `agree`.
+    # **`device="cpu"` stopped here, and that was refusing our own device.** The
+    # seat is `_only_cpu` now — one rule shared with the factories, which had the
+    # opposite habit of reading the argument not at all — so the layer builds and
+    # the case asks for what it built. `dtype` still stops: a parameter here is
+    # float32 and `dtype=float64` is a request that cannot be met.
+    cases.append((CONTAINER_PREFIX + "BatchNorm(device='cpu') 는 만들어진다",
+                  lambda L: repr(L.nn.BatchNorm2d(3, device="cpu"))))
+    cases.append((CONTAINER_PREFIX + "BatchNorm(dtype)=우리는거절",
+                  refusal_case(lambda L: L.nn.BatchNorm2d(3, dtype=L.float32))))
+    # And the other half of the rule, which nothing asked before: a device that is
+    # not here. torch has no CUDA on this machine either, so both stop.
+    cases.append((CONTAINER_PREFIX + "BatchNorm(device='cuda') 는 양쪽 다 멈춘다",
+                  lambda L: _both_stop(L, lambda M: M.nn.BatchNorm2d(3, device="cuda"))))
+
+    # ── `track_running_stats=False`, refused on all three sides until today ──────
+    #
+    # The reason was that the forward pass reads the buffers in evaluation mode, so
+    # taking the flag and ignoring it leaves training right and evaluation quietly
+    # wrong. Both halves were true and neither was the whole thing: with the flag off
+    # there are **no buffers at all** — torch registers none, `running_mean` is `None`
+    # — and the layer normalises by this batch in **both** modes. So the two answers
+    # being equal is the claim, and it is asked as two rows rather than as a
+    # subtraction, because a layer that read the (absent) buffers in eval cannot
+    # produce a number to subtract.
+    _BN_TRS = np.arange(2 * 3 * 2 * 2, dtype=np.float32).reshape(2, 3, 2, 2) * 0.1 - 1.0
+
+    def _bn_untracked(L, mode):
+        m = L.nn.BatchNorm2d(3, track_running_stats=False)
+        getattr(m, mode)()
+        return m(L.tensor(_BN_TRS))
+
+    for _mode in ("train", "eval"):
+        cases.append((CONTAINER_PREFIX + f"BatchNorm(추적없음)/{_mode}",
+                      lambda L, m=_mode: _bn_untracked(L, m)))
+    cases.append((CONTAINER_PREFIX + "BatchNorm(추적없음)/state_dict 열쇠",
+                  lambda L: " ".join(sorted(
+                      L.nn.BatchNorm2d(3, track_running_stats=False).state_dict()))))
+    cases.append((CONTAINER_PREFIX + "BatchNorm(추적없음)/running_mean 은 None",
+                  lambda L: str(L.nn.BatchNorm2d(
+                      3, track_running_stats=False).running_mean is None)))
+    # **`BatchNorm1d` wrote its own copy of the formula and it was wrong at rank 3.**
+    # torch takes `(N, C)` and `(N, C, L)` and reduces over everything but the channel
+    # in both; the copy looped over `dim=0` alone, so this shape raised on the
+    # broadcast in evaluation and normalised over the wrong axes in training. It
+    # inherits `BatchNorm2d` now, and `batch_norm` does not examine the rank.
+    _BN_1D3 = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4) * 0.1 - 1.0
+
+    def _bn1d_rank3(L, mode):
+        m = L.nn.BatchNorm1d(3)
+        getattr(m, mode)()
+        return m(L.tensor(_BN_1D3))
+
+    for _mode in ("train", "eval"):
+        cases.append((CONTAINER_PREFIX + f"BatchNorm1d(N,C,L)/{_mode}",
+                      lambda L, m=_mode: _bn1d_rank3(L, m)))
 
     # Keys fitting is no use if **the values do not cross.** The buffer round trip is asked by value.
     def buffer_roundtrip(L):
@@ -8261,7 +10401,140 @@ def container_cases(inp=None):
         return m.layers[1](m.layers[0](L.tensor(xin)))
 
     cases.append((CONTAINER_PREFIX + "eval 이 컨테이너를 뚫는다", eval_through))
+
+    # ── walking the tree ──
+    #
+    # **Eleven methods that no check could see were missing.** The name axis counts a
+    # namespace's top-level names and `Module` is one of them; the signature axis
+    # compares constructors. Nothing read a class's *methods*, so `nn.Module` held 14
+    # of torch's 50 while borch.ts has had `children` and `namedChildren` all along —
+    # a three-way divergence, green everywhere. `tests/test_class_methods.py` is the
+    # axis that now asks.
+    def nested(L):
+        return L.nn.Sequential(L.nn.Linear(6, 8), L.nn.ReLU(),
+                               L.nn.Sequential(L.nn.Linear(8, 3)))
+
+    # **Read from the repr, not from `type(...).__name__`.** The binding wraps every
+    # layer in one generic Python class, so the class name there is `Module` for all
+    # of them while the repr is the layer's own — the question is *which layer sits
+    # here*, and the repr is the form all three can answer it in.
+    cases.append((CONTAINER_PREFIX + "children/층 이름",
+                  lambda L: " ".join(_layer_name(c) for c in nested(L).children())))
+    cases.append((CONTAINER_PREFIX + "named_children/이름",
+                  lambda L: " ".join(n for n, _ in nested(L).named_children())))
+    # **One level against the whole tree** is the difference between the two, and it
+    # is invisible on a flat model — hence a `Sequential` inside a `Sequential`.
+    cases.append((CONTAINER_PREFIX + "named_modules/이름",
+                  lambda L: "|".join(n for n, _ in nested(L).named_modules())))
+    # torch names the root `""`, so the join above starts with a bar. Asked on its own
+    # because an implementation that skips the root passes every later entry.
+    cases.append((CONTAINER_PREFIX + "named_modules/뿌리는 빈 이름",
+                  lambda L: str(next(iter(nested(L).named_modules()))[0] == "")))
+    # **Children first, then the parent** — the order is torch's, and a container that
+    # reads its children's shapes needs them already visited.
+    cases.append((CONTAINER_PREFIX + "apply/순서",
+                  lambda L: " ".join(_apply_order(nested(L)))))
+    cases.append((CONTAINER_PREFIX + "apply/자기를 돌려준다",
+                  lambda L: str(_apply_returns_self(nested(L)))))
+    cases.append((CONTAINER_PREFIX + "get_submodule(점 찍힌 이름)",
+                  lambda L: _layer_name(nested(L).get_submodule("2.0"))))
+    cases.append((CONTAINER_PREFIX + "get_submodule(빈 이름은 자기)",
+                  lambda L: str(_submodule_is_self(nested(L)))))
+    cases.append((CONTAINER_PREFIX + "get_parameter(점 찍힌 이름)/모양",
+                  lambda L: str(tuple(nested(L).get_parameter("0.weight").shape))))
+    cases.append((CONTAINER_PREFIX + "get_buffer(점 찍힌 이름)/모양",
+                  lambda L: str(tuple(np.asarray(
+                      L.nn.BatchNorm1d(3).get_buffer("running_mean")).shape))))
+    cases.append((CONTAINER_PREFIX + "add_module(이름을 나중에)",
+                  lambda L: _added_module_name(L)))
+    # **This is how a backbone is frozen**, and it hands back the model so the line
+    # reads as a statement about it.
+    cases.append((CONTAINER_PREFIX + "requires_grad_(False)",
+                  lambda L: _frozen(nested(L))))
+    cases.append((CONTAINER_PREFIX + "get_submodule(없는 이름)=둘 다 멈춘다",
+                  lambda L: _both_stop(L, lambda M: nested(M).get_submodule("nope"))))
+    # **The binding's `Sequential` had no `repr` at all** — `print(model)` gave an
+    # object address where the other two print the layers. Found by the case above
+    # reading a child's name out of its repr, which is a question about the walk and
+    # answered this one instead.
+    cases.append((CONTAINER_PREFIX + "Sequential/print", lambda L: repr(nested(L))))
+
+    # `add_param_group` — the optimizer half of the same seam. It is the line
+    # fine-tuning is written with: a fresh head at one rate on a backbone at another.
+    def added_group(L, what):
+        a = L.tensor(np.array([1.0, 2.0], dtype=np.float32), requires_grad=True)
+        b = L.tensor(np.array([3.0], dtype=np.float32), requires_grad=True)
+        opt = L.optim.SGD([a], lr=0.1, momentum=0.9)
+        opt.add_param_group({"params": [b], "lr": 0.3})
+        if what == "lr":
+            return " ".join(str(g["lr"]) for g in opt.param_groups)
+        # **The default is filled in from the constructor's arguments**, not from
+        # torch's own default — so the second group's momentum is 0.9 and not 0.
+        if what == "momentum":
+            return " ".join(str(g["momentum"]) for g in opt.param_groups)
+        a.grad = L.tensor(np.array([0.3, 0.2], dtype=np.float32))
+        b.grad = L.tensor(np.array([0.5], dtype=np.float32))
+        opt.step()
+        return L.tensor(np.concatenate([
+            np.asarray(a.detach().numpy()), np.asarray(b.detach().numpy())]))
+
+    for _what in ("lr", "momentum", "스텝"):
+        cases.append((CONTAINER_PREFIX + f"add_param_group/{_what}",
+                      lambda L, w=_what: added_group(L, w)))
+    cases.append((CONTAINER_PREFIX + "add_param_group(같은 파라미터 두 번)=둘 다 멈춘다",
+                  lambda L: _both_stop(L, _group_twice)))
+    cases.append((CONTAINER_PREFIX + "add_param_group(사전이 아니면)=둘 다 멈춘다",
+                  lambda L: _both_stop(L, _group_not_a_dict)))
     return cases
+
+
+def _layer_name(module):
+    """Which layer this is, **read from its repr.**
+
+    `type(m).__name__` is `Module` for every layer on the binding — one generic
+    Python class wrapping a JavaScript handle — while the repr is the layer's own.
+    The question is which layer sits at a position, and this is the form all three
+    implementations can answer it in.
+    """
+    return repr(module).split("(")[0].strip()
+
+
+def _apply_order(model):
+    seen = []
+    model.apply(lambda m: seen.append(_layer_name(m)))
+    return seen
+
+
+def _apply_returns_self(model):
+    return model.apply(lambda _m: None) is model
+
+
+def _submodule_is_self(model):
+    return model.get_submodule("") is model
+
+
+def _added_module_name(L):
+    holder = L.nn.Module()
+    holder.add_module("lin", L.nn.Linear(2, 2))
+    return " ".join(n for n, _ in holder.named_children())
+
+
+def _frozen(model):
+    back = model.requires_grad_(False)
+    return (f"{back is model} "
+            f"{any(p.requires_grad for p in model.parameters())}")
+
+
+def _group_twice(L):
+    a = L.tensor(np.array([1.0], dtype=np.float32), requires_grad=True)
+    opt = L.optim.SGD([a], lr=0.1)
+    opt.add_param_group({"params": [a]})
+
+
+def _group_not_a_dict(L):
+    a = L.tensor(np.array([1.0], dtype=np.float32), requires_grad=True)
+    opt = L.optim.SGD([a], lr=0.1)
+    opt.add_param_group([a])
 
 
 _TRAIN_STEPS = 5
@@ -8516,6 +10789,65 @@ def train_cases(inp=None):
                   lambda L: attention(L, lambda LL: LL.nn.Transformer
                                       .generate_square_subsequent_mask(5))))
 
+    # ── the attention flags, refused on all three sides until today ────────────
+    #
+    # `add_bias_kv`, `add_zero_attn` and a `kdim`/`vdim` unlike the embedding stopped
+    # with their own names, and the refusal lived one layer down in
+    # `multi_head_attention_forward` beside `use_separate_proj_weight`, `static_k`
+    # and `static_v`. None of them needed a kernel:
+    #
+    #     project → concat bias_k/bias_v → split heads → static_k/static_v
+    #             → concat the zero step → scores
+    #
+    # **`bias_k` goes in after the projection**, not through `W_k` — measured, and
+    # the reading that puts it before agrees on nothing. **The zero step goes in
+    # after the heads are split**, which is the same position by value and a
+    # different one to write. Each concatenation grows the key axis by one, so each
+    # mask grows a column of zero, once per concatenation — which is why the masked
+    # rows below are asked as well as the plain ones.
+    _MHA_X = np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4) * 0.1 - 1.0
+
+    def _attn_flags(L, part, kdim=4, vdim=4, mask=None, **flags):
+        mod = L.nn.MultiheadAttention(4, 2, **flags, kdim=kdim, vdim=vdim)
+        mod.eval()
+        _ramp(L, mod)
+        q = L.tensor(_MHA_X)
+        k = L.tensor(np.arange(5 * 2 * kdim, dtype=np.float32)
+                     .reshape(5, 2, kdim) * 0.1 - 1.0)
+        v = L.tensor(np.arange(5 * 2 * vdim, dtype=np.float32)
+                     .reshape(5, 2, vdim) * 0.1 - 1.0)
+        extra = {}
+        if mask == "attn":
+            m = np.zeros((3, 5), dtype=np.float32)
+            m[0, 0] = -1e9
+            extra["attn_mask"] = L.tensor(m)
+        elif mask == "pad":
+            p = np.zeros((2, 5), dtype=bool)
+            p[0, 1] = True
+            extra["key_padding_mask"] = L.tensor(p)
+        got = mod(q, k, v, **extra)
+        return got[0] if part == "출력" else got[1]
+
+    _MHA_FLAGS = (
+        ("add_bias_kv", {"add_bias_kv": True}),
+        ("add_zero_attn", {"add_zero_attn": True}),
+        ("둘 다", {"add_bias_kv": True, "add_zero_attn": True}),
+        ("kdim, vdim", {"kdim": 6, "vdim": 7}),
+    )
+    for _lab, _kw in _MHA_FLAGS:
+        for _part in ("출력", "가중치"):
+            cases.append((f"seq::MultiheadAttention({_lab})/{_part}",
+                          lambda L, p=_part, w=_kw: _attn_flags(L, p, **w)))
+        cases.append((f"seq::MultiheadAttention({_lab})/state_dict 열쇠",
+                      lambda L, w=_kw: " ".join(sorted(
+                          L.nn.MultiheadAttention(4, 2, **w).state_dict()))))
+    # The masks, which the two concatenations have to grow a column of.
+    for _lab, _kw in _MHA_FLAGS[:3]:
+        for _m in ("attn", "pad"):
+            cases.append((f"seq::MultiheadAttention({_lab}, {_m} 마스크)",
+                          lambda L, w=_kw, m=_m: _attn_flags(
+                              L, "출력", mask=m, **w)))
+
     # ── The transformer ────────────────────────────────────────────────────
     #
     # **The weights are built from each parameter's own shape**, not read from a
@@ -8533,6 +10865,95 @@ def train_cases(inp=None):
             filled[name] = L.tensor(flat.reshape(tuple(value.shape)))
         mod.load_state_dict(filled)
         return mod
+
+    # ── the recurrent flags, refused on all three sides until today ───────────
+    #
+    # `num_layers`, `bias`, `dropout`, `bidirectional` and `proj_size` were each
+    # refused with the same reason on each side: the layer builds one unidirectional
+    # biased pass, so anything else has nowhere to go. That was true of the code and
+    # not of the problem — the reverse direction is the same recurrence over `flip(0)`
+    # turned back round, a stack is the loop run again, and the projection is one more
+    # matrix after `o · tanh(c)`. No kernel was missing on any side.
+    #
+    # **The weights come from each parameter's own shape**, so nothing crosses the
+    # boundary and the two sides agree only if their `state_dict` **keys and shapes**
+    # do — which is half of what these ask. A reverse direction whose parameters are
+    # not named `…_reverse` loads no checkpoint, and a second layer sized from
+    # `hidden_size` rather than from what the first one emits multiplies nothing.
+    _RNN_SEQ = np.arange(5 * 2 * 3, dtype=np.float32).reshape(5, 2, 3) * 0.1 - 1.0
+
+    def _rnn(L, kind, **kw):
+        mod = getattr(L.nn, kind)(3, 4, **kw)
+        mod.eval()
+        return _ramp(L, mod)
+
+    def _rnn_part(L, kind, part, **kw):
+        got = _rnn(L, kind, **kw)(L.tensor(_RNN_SEQ))
+        if part == "출력":
+            return got[0]
+        state = got[1]
+        if kind != "LSTM":
+            return state
+        # The LSTM's two halves come back at **different widths** under a projection —
+        # `h` is narrowed and `c` keeps the full hidden size — so both are asked.
+        return state[0] if part == "상태" else state[1]
+
+    _RNN_FLAGS = (
+        ("양방향", {"bidirectional": True}, ("RNN", "LSTM", "GRU")),
+        ("2층", {"num_layers": 2}, ("RNN", "LSTM", "GRU")),
+        ("2층양방향", {"num_layers": 2, "bidirectional": True},
+         ("RNN", "LSTM", "GRU")),
+        ("편향없음", {"bias": False}, ("RNN", "LSTM", "GRU")),
+        # **`eval` is what makes this deterministic**, and it is also the whole claim:
+        # dropout goes between the layers while training and is the identity after
+        # `eval()`. Asked in training the answer is a coin toss and no golden can hold
+        # it; asked here, a layer that drops in eval as well parts immediately.
+        ("dropout 은 평가에서 항등", {"num_layers": 2, "dropout": 0.5},
+         ("RNN", "LSTM", "GRU")),
+        ("proj_size", {"proj_size": 2}, ("LSTM",)),
+        ("proj_size 와 양방향",
+         {"num_layers": 2, "proj_size": 2, "bidirectional": True}, ("LSTM",)),
+        # `relu` was refused on the browser side with *this side computes tanh*, and
+        # the unary table had `relu` all along.
+        ("relu", {"nonlinearity": "relu"}, ("RNN",)),
+    )
+    for _lab, _kw, _kinds in _RNN_FLAGS:
+        for _k in _kinds:
+            for _part in ("출력", "상태") + (("셀",) if _k == "LSTM" else ()):
+                cases.append((f"seq::{_k}({_lab})/{_part}",
+                              lambda L, k=_k, p=_part, w=_kw: _rnn_part(L, k, p, **w)))
+
+    # The names a checkpoint crosses on. `_ramp` above already loads by them, so a
+    # missing `_reverse` would fail there too — but it would fail as *the wrong
+    # answer*, and this row says which name is missing.
+    for _lab, _kw, _kinds in _RNN_FLAGS:
+        for _k in _kinds:
+            cases.append((
+                f"seq::{_k}({_lab})/state_dict 열쇠",
+                lambda L, k=_k, w=_kw: " ".join(
+                    sorted(getattr(L.nn, k)(3, 4, **w).state_dict()))))
+
+    def _rnn_refuses(L, kind, **kw):
+        """The wording, which is torch's — four refusals that stay refusals.
+
+        **The message alone and not the exception's type.** Python answers these with
+        `ValueError` and JavaScript with `RangeError`, and neither is the other's
+        mistake — the two languages name the same refusal differently. Freezing the
+        type would make the browser side fail at a place where it agrees.
+        """
+        try:
+            getattr(L.nn, kind)(3, 4, **kw)
+        except Exception as exc:                                    # noqa: BLE001
+            return str(exc)
+        return "(거절 없음)"
+
+    for _name, _k, _kw in (
+            ("RNN(proj_size)", "RNN", {"proj_size": 2}),
+            ("GRU(proj_size)", "GRU", {"proj_size": 2}),
+            ("LSTM(proj_size=hidden)", "LSTM", {"proj_size": 4}),
+            ("LSTM(proj_size<0)", "LSTM", {"proj_size": -1})):
+        cases.append((f"seq::거절::{_name}",
+                      lambda L, k=_k, w=_kw: _rnn_refuses(L, k, **w)))
 
     _tseq = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4) * 0.1 - 1.0
 
@@ -8559,6 +10980,50 @@ def train_cases(inp=None):
         return _ramp(L, m)(L.tensor(_tseq))
 
     cases.append(("seq::TransformerEncoder(2층)", _encoder_stack))
+
+    # **All three above are `eval()` and forward only, and that is the shape of the
+    # first defect this repository ever found.** `tests/scenario.py` says it in its
+    # own opening: BatchNorm's backward was wrong and survived a long time "because
+    # only the forward was being compared — training ran, the loss came down, and
+    # only the values differed."
+    #
+    # The encoder is the largest block here and the one where a wrong gradient is
+    # least visible: a mask, a softmax and three projections meet inside attention,
+    # and a forward sum agrees whatever the backward does.
+    def _encoder_grad(L):
+        """The gradient at the input, folded with a per-slot weight."""
+        m = _ramp(L, L.nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True))
+        m.eval()
+        x = L.tensor(_tseq.copy(), requires_grad=True)
+        got = m(x)
+        (got * (L.arange(got.numel()).reshape(got.shape).float() + 1)).sum().backward()
+        return _grad_of(x, "TransformerEncoderLayer")
+
+    cases.append(("seq::grad::TransformerEncoderLayer/입력", _encoder_grad))
+
+    def _encoder_param_grad(L):
+        """**And the parameters', which is what training actually moves.**
+
+        One number rather than every tensor: the layer holds a dozen, and the sum of
+        their magnitudes is enough to part a right backward from a plausible one
+        while staying a single comparable value.
+        """
+        m = _ramp(L, L.nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True))
+        m.eval()
+        got = m(L.tensor(_tseq.copy()))
+        (got * (L.arange(got.numel()).reshape(got.shape).float() + 1)).sum().backward()
+        # **Not rounded, and handed back as a tensor.** The first version returned
+        # `round(total, 4)` and the two sides came back 2098.6908 and 2098.6909 — a
+        # relative difference of 5e-11 that rounding turns into a mismatch, because a
+        # rounded number is compared as written and a tensor within tolerance.
+        # Quantising right at the digit where two float sums part is the one place
+        # rounding makes a check worse.
+        total = sum(float(p.grad.abs().sum().item()) for p in m.parameters()
+                    if p.grad is not None)
+        return L.tensor(total)
+
+    cases.append(("seq::grad::TransformerEncoderLayer/파라미터 합",
+                  _encoder_param_grad))
 
     def _decoder_layer(L):
         m = L.nn.TransformerDecoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True)
@@ -8722,7 +11187,7 @@ HIGH_RANKS = (6,)
 CEILING_RANKS = (7, 8)
 
 
-def _as_expected(fn):
+def _as_expected(fn, holds=None):
     """How to hold a place **torch manages and the browser implementation refuses** in the golden
     answers.
 
@@ -8736,17 +11201,51 @@ def _as_expected(fn):
     rank 7 and 8 produce values, and this device reported it as seven "unexpected successes". What
     was done then was to rewrite the limit **deliberately**, not to delete the cases. That it must
     not widen of its own accord is why this function exists.
+
+    ## `holds` — because a verdict about behaviour cannot hold a value
+
+    **A defect planted on the succeeding side passed this helper.** `istft`'s two-sided
+    branch ran a forward transform where the inverse belonged; the core reconstructed
+    `[3.60, 0.97, 3.56, …]` where the waveform was `[0, 0.30, 0.56, …]`, and every
+    verdict here stayed `기대대로` — torch succeeded, the core succeeded, the browser
+    refused, all as documented. *As documented* was never a statement about the number.
+
+    So `holds(out)` is asked wherever the call goes through, and it returns `True` when
+    the value is what it should be. It is not optional: a caller with nothing to check
+    passes `lambda _: True` and thereby says so in the source, which is a different
+    thing from a helper that quietly checks nothing.
     """
+    if holds is None:
+        raise TypeError(
+            "_as_expected(fn, holds) needs `holds` — what the value must be where the "
+            "call goes through.\n"
+            "  A verdict about behaviour cannot hold a value: a wrong answer on the "
+            "succeeding side\n"
+            "  reads as `기대대로` and the case passes. If there is genuinely nothing "
+            "to check, pass\n"
+            "  `lambda _: True` and say why in the case's comment.")
+
     def run(L):
         # The floor is a GPU buffer, so it is not shared out as views. There is no double
         # precision either. Those two reasons make the few places that gather here.
         must_reject = hasattr(L, "backend")
         try:
-            fn(L)
+            got = fn(L)
         except Exception as exc:                                # noqa: BLE001
             return "기대대로" if must_reject else f"뜻밖의 거절 <{type(exc).__name__}>"
-        return "뜻밖의 성공" if must_reject else "기대대로"
+        if must_reject:
+            return "뜻밖의 성공"
+        return "기대대로" if holds(got) else f"값이 틀리다 <{_short(got)}>"
     return run
+
+
+def _short(out):
+    """A value cut down to something a verdict can carry."""
+    try:
+        flat = np.asarray(to_numpy(out), dtype=np.float64).reshape(-1)[:3]
+        return " ".join(f"{v:.4g}" for v in flat)
+    except Exception:                                           # noqa: BLE001
+        return str(out)[:40]
 
 
 def _rank_ceiling_cases(ranks, inp):
@@ -8900,6 +11399,15 @@ def _vision(L):
     return _BT_VISION.transforms
 
 
+def _vfunc(L):
+    """`transforms.functional` for each side, through `_vision` so the module is
+    loaded and bound to `L` once rather than a second copy living beside the first."""
+    if _is_real_torch(L):
+        from torchvision.transforms import functional as real
+        return real
+    return _vision(L).functional
+
+
 def _vision_ops(L):
     """`borchvision.ops` for us, `torchvision.ops` for real torch."""
     if _is_real_torch(L):
@@ -8978,6 +11486,26 @@ def vision_cases(inp=None):
         T = _vision(L)
         return T.Normalize(mean, std)(T.ToTensor()(img_u8))
 
+    # ── the three `inplace` seats ──
+    #
+    # **Only the identity separates them**, and no value comparison can see it: the
+    # returned numbers are the same either way, which is why `Normalize`'s flag sat
+    # accepted and inert on the Python side and absent from borch.ts. What the
+    # argument is *for* is `t = …; f(t, inplace=True); use(t)` — the return thrown
+    # away — and that call did nothing at all.
+    def inplace_id(L, run):
+        T = _vision(L)
+        t = T.ToTensor()(img_u8)
+        out = run(T, t)
+        return f"같은 객체={out is t}"
+
+    def inplace_after(L, run):
+        """The caller's tensor **after** the call, which is the half that parts."""
+        T = _vision(L)
+        t = T.ToTensor()(img_u8)
+        run(T, t)
+        return t
+
     def flip(L, p):
         T = _vision(L)
         out = T.RandomHorizontalFlip(p=p)(_pil_position(L, img_u8))
@@ -9025,6 +11553,32 @@ def vision_cases(inp=None):
         (VISION_PREFIX + "ToTensor(실수)", lambda L: _vision(L).ToTensor()(img_f)),
         (VISION_PREFIX + "ToTensor(2차원)", lambda L: _vision(L).ToTensor()(gray)),
         (VISION_PREFIX + "Normalize", normalize),
+        (VISION_PREFIX + "Normalize(inplace)/같은 객체",
+         lambda L: inplace_id(L, lambda T, t: T.Normalize(mean, std, True)(t))),
+        (VISION_PREFIX + "Normalize(inplace)/부른 쪽 텐서",
+         lambda L: inplace_after(L, lambda T, t: T.Normalize(mean, std, True)(t))),
+        (VISION_PREFIX + "Normalize(기본은 그대로 둔다)",
+         lambda L: inplace_after(L, lambda T, t: T.Normalize(mean, std)(t))),
+        (VISION_PREFIX + "F.normalize(inplace)/같은 객체",
+         lambda L: inplace_id(
+             L, lambda T, t: _vfunc(L).normalize(t, mean, std, inplace=True))),
+        (VISION_PREFIX + "F.normalize(inplace)/부른 쪽 텐서",
+         lambda L: inplace_after(
+             L, lambda T, t: _vfunc(L).normalize(t, mean, std, inplace=True))),
+        (VISION_PREFIX + "F.erase(inplace)/같은 객체",
+         lambda L: inplace_id(
+             L, lambda T, t: _vfunc(L).erase(
+                 t, 0, 0, 2, 2, L.tensor(np.zeros((3, 2, 2), dtype=np.float32)),
+                 inplace=True))),
+        (VISION_PREFIX + "F.erase(inplace)/부른 쪽 텐서",
+         lambda L: inplace_after(
+             L, lambda T, t: _vfunc(L).erase(
+                 t, 0, 0, 2, 2, L.tensor(np.zeros((3, 2, 2), dtype=np.float32)),
+                 inplace=True))),
+        (VISION_PREFIX + "F.erase(기본은 그대로 둔다)",
+         lambda L: inplace_after(
+             L, lambda T, t: _vfunc(L).erase(
+                 t, 0, 0, 2, 2, L.tensor(np.zeros((3, 2, 2), dtype=np.float32))))),
         (VISION_PREFIX + "Compose", compose),
         (VISION_PREFIX + "Flip(p=1)", lambda L: flip(L, 1.0)),
         (VISION_PREFIX + "Flip(p=0)", lambda L: flip(L, 0.0)),
@@ -10098,6 +12652,22 @@ def _eig_holds(L, mat):
     return f"{float((left - right).abs().max()):.4f}"
 
 
+def _both_stop(L, call):
+    """**torch stops here too**, so what is asked is that both do — not that ours does.
+
+    `refusal_case` next door needs torch to succeed; used where torch also refuses it
+    freezes *unexpected refusal* as torch's answer and files a shared limit as our
+    defect. The exception's type is not compared: torch says `RuntimeError` and the
+    browser subset raises its own class, and a call that lands in the `except` at all
+    is the whole of what this asks.
+    """
+    try:
+        call(L)
+    except Exception:                                              # noqa: BLE001
+        return "둘 다 멈춘다"
+    return "여기선 통과했다"
+
+
 def linalg_cases(inp=None):
     """Linear-algebra decompositions. **Both sides have them** — the sister library reads back to
     the CPU and computes with numpy, warning once on the first call that it is slow.
@@ -10192,7 +12762,78 @@ _LA_BATCH_VEC = np.array([[1., 2.], [3., 1.], [0., 4.]], dtype=np.float32)
 _LA_BATCH_RHS = np.array([[[1., 0.], [2., 1.]],
                           [[0., 3.], [1., 1.]],
                           [[2., 2.], [0., 1.]]], dtype=np.float32)
+# **None of `_LA_BATCH`'s three swap a row**, and the note above says the fixture was
+# written by hand so that a swap would happen — which it does for the factorisations
+# that pivot differently, and not for `lu_factor`. Partial pivoting takes the largest
+# absolute value in the column and 4 > 2, 2 > 1, 3 > 1: every one is `[1, 2]`.
+#
+# A permutation that is the identity hides anything done to it. The core built one
+# permutation for the whole batch and applied it to the batch axis, and against these
+# three that was harmless. Here the first matrix swaps and the second does not, so a
+# per-matrix permutation and a shared one give different numbers.
+_LA_BATCH_PIVOT = np.array([[[1., 2.], [3., 4.]],
+                            [[5., 1.], [1., 2.]]], dtype=np.float32)
+_LA_BATCH_PIVOT_RHS = np.array([[[1.], [0.]],
+                                [[0.], [1.]]], dtype=np.float32)
 _LA_RECT = np.array([[1., 2.], [3., 4.], [5., 7.]], dtype=np.float32)
+# **For `lstsq`'s cutoff.** Its two singular values are 5.779 and 0.774, a ratio of
+# 7.5, so `rcond=0.9` drops the second one and `rcond=1e-6` drops neither. Asked with
+# a well-conditioned matrix the argument moves nothing and every driver agrees, which
+# is exactly the shape that let `rcond` be discarded unnoticed.
+_LA_TALL = np.array([[1., 1.], [1., 2.], [1., 3.], [1., 4.]], dtype=np.float32)
+_LA_TALL_RHS = np.array([[6.], [5.], [7.], [10.]], dtype=np.float32)
+# **For `lstsq` over a batch.** The second matrix is not the first — a batched solve
+# that computes one matrix and stretches the answer agrees with a batch of copies and
+# with nothing else. The vector right-hand side is a batch of `(m,)` rows, which torch
+# reads as one vector per matrix; the matrix one is a batch of `(m, k)`, and the two
+# readings do not broadcast the same way.
+_LA_BATCH_TALL = np.array([[[1., 1.], [1., 2.], [1., 3.], [1., 4.]],
+                           [[2., 0.], [0., 1.], [1., 1.], [3., 2.]]], dtype=np.float32)
+_LA_BATCH_TALL_VEC = np.array([[6., 5., 7., 10.], [1., 2., 3., 4.]], dtype=np.float32)
+_LA_BATCH_TALL_RHS = np.array([[[6., 1.], [5., 2.], [7., 3.], [10., 4.]],
+                               [[1., 0.], [2., 1.], [3., 2.], [4., 3.]]], dtype=np.float32)
+# **The cut-off is per matrix, and this is the pair that says so.** Singular values
+# 10/9.5 and 1/0.95 — at `rcond=0.9` neither matrix loses one, so `gelsy` goes
+# through. Scale the whole batch against one largest instead and the second matrix
+# keeps nothing, and the call is refused where torch answers. The failure is one-way
+# (a shared largest is never smaller, so it can only over-refuse), which is why the
+# pair has to be *un*refused rather than refused to tell the two apart.
+_LA_BATCH_SCALE = np.array([[[10., 0.], [0., 9.5], [0., 0.], [0., 0.]],
+                            [[1., 0.], [0., 0.95], [0., 0.], [0., 0.]]], dtype=np.float32)
+# **For `lu_solve`'s `left` and `adjoint`, and it has to be unsymmetric.** A
+# symmetric matrix is its own transpose, so `adjoint=True` on `_LA_SYM3` agrees with
+# the plain solve and an implementation that ignores the flag passes.
+#
+# **And its permutation has to be a three-cycle.** The adjoint puts the permutation on
+# the *answer* rather than on the right-hand side, which is a scatter where the
+# forward is a gather — but a single row swap is its own inverse, so with one the two
+# agree and the plant that gathers both ways passed untouched. This matrix pivots
+# `[2, 3, 3]`, giving the order `[1, 2, 0]` against the inverse `[2, 0, 1]`.
+#
+# The right-hand sides are 3×2 and 2×3: `A x = b` and `x A = b` want different shapes,
+# so one cannot stand in for the other.
+_LA_ASYM3 = np.array([[4., 2., -3.], [9., -1., -5.], [7., -6., 7.]], dtype=np.float32)
+_LA_ASYM3_RHS = np.array([[5., 1.], [-2., 3.], [9., 0.]], dtype=np.float32)
+_LA_ASYM3_RHS_T = np.array([[5., -2., 9.], [1., 3., 0.]], dtype=np.float32)
+# The batched twin of the pair above: `_LA_BATCH_PIVOT`'s first matrix swaps and its
+# second does not, so a permutation built once for the batch and a per-matrix one
+# part here — on the answer's side this time.
+_LA_BATCH_PIVOT_RHS_T = np.array([[[1., 0.]], [[0., 1.]]], dtype=np.float32)
+# Rank 2 by construction — the second row is twice the first. `matrix_rank(tol=3.0)`
+# cuts it to 1, so the argument is asked where it changes the answer.
+_LA_RANK2 = np.array([[1., 2., 3.], [2., 4., 6.], [1., 0., 1.]], dtype=np.float32)
+_LA_RANK_RHS = np.array([[1.], [2.], [3.]], dtype=np.float32)
+# For `tensorsolve`. Four axes folded into a 4×4, which is what `dims` would reorder.
+_LA_T4 = (np.eye(4, dtype=np.float32) + 0.1).reshape(2, 2, 2, 2)
+_LA_B4 = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+# **For `dims`, and it has to be non-cubic.** `_LA_T4` above is 2×2×2×2, so moving
+# axes changes the values but leaves the answer's shape at 2×2 — and the shape is
+# half of what `dims` does. This one is 2×3×2×3, where `(1, 0)` gives 3×2 and `(0, 1)`
+# gives 2×3. Built from `arange` with the folded diagonal raised so that every
+# reordering asked below stays invertible (the determinants are ±44500).
+_LA_T6 = (np.arange(36, dtype=np.float32).reshape(2, 3, 2, 3) * 0.1
+          + np.eye(6, dtype=np.float32).reshape(2, 3, 2, 3) * 5.0)
+_LA_B6 = np.array([[1., 2., 3.], [4., 5., 6.]], dtype=np.float32)
 _LA_SYM3 = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]], dtype=np.float32)
 # The first element is smaller than the second row's → partial pivoting swaps a row. Asked only
 # with matrices that do not swap, the pivots are the identity and **counting from 1 cannot be told
@@ -10382,6 +13023,59 @@ def linalg_struct_cases(inp=None):
 
     cases.append((LINALG_PREFIX + "lu::lu_solve(교환)", lu_solve))
 
+    def lu_solve_batched(L):
+        """**One matrix, and every fault below it was invisible.**
+
+        The core built one permutation from `pivots.reshape(-1)` — the batch
+        flattened, so every matrix took the first one's — and applied it as
+        `rhs[order]`, which on a batch indexes the **batch** axis rather than the
+        rows. Both are unreachable with a single matrix, and both are silent when
+        the permutation happens to be the identity.
+
+        So this one asks a batch whose first matrix swaps and whose second does not.
+        Before the repair the second came back `[0.222, -0.111]` where the answer is
+        `[-0.111, 0.556]` — a plausible number with no exception. At 3×3 the same
+        code raised `IndexError: index 2 is out of bounds for axis 0 with size 2`,
+        numpy's words about an axis nobody had asked about.
+        """
+        f = L.linalg.lu_factor(L.tensor(_LA_BATCH_PIVOT))
+        return L.linalg.lu_solve(f.LU, f.pivots, L.tensor(_LA_BATCH_PIVOT_RHS))
+
+    cases.append((LINALG_PREFIX + "batch::lu_solve(한쪽만 교환)", lu_solve_batched))
+
+    # **`left` and `adjoint`, which were carried in order to refuse.** The refusal
+    # said each solves a different system than the one these factors were made for.
+    # That was true, and it was also why it could be closed: `A = P L U` gives
+    # `Aᵀ = Uᵀ Lᵀ Pᵀ`, so the adjoint is the same three pieces in the other order with
+    # the permutation on the answer, and `X A = B` is `Aᵀ Xᵀ = Bᵀ`. All four are
+    # asked, and the matrix is unsymmetric because a symmetric one is its own
+    # transpose and would pass with the flag ignored.
+    for _tag, _left, _adj, _rhs in (
+            ("adjoint", True, True, _LA_ASYM3_RHS),
+            ("left=False", False, False, _LA_ASYM3_RHS_T),
+            ("left=False, adjoint", False, True, _LA_ASYM3_RHS_T)):
+        cases.append((LINALG_PREFIX + f"batch::lu_solve({_tag})",
+                      lambda L, le=_left, ad=_adj, r=_rhs: L.linalg.lu_solve(
+                          *L.linalg.lu_factor(L.tensor(_LA_ASYM3)),
+                          L.tensor(r), left=le, adjoint=ad)))
+
+    def lu_solve_adjoint_batched(L):
+        """**The adjoint's permutation goes on the answer, and this is where that
+        shows.** The first matrix swaps and the second does not, so a permutation
+        built once for the whole batch — the fault the plain solve had — parts from a
+        per-matrix one here as well. Applying the swaps forward is `Pᵀ`; the adjoint
+        needs `P`, which is the same swaps in reverse order."""
+        f = L.linalg.lu_factor(L.tensor(_LA_BATCH_PIVOT))
+        return L.linalg.lu_solve(f.LU, f.pivots, L.tensor(_LA_BATCH_PIVOT_RHS),
+                                 adjoint=True)
+
+    cases.append((LINALG_PREFIX + "batch::lu_solve(adjoint, 한쪽만 교환)",
+                  lu_solve_adjoint_batched))
+    cases.append((LINALG_PREFIX + "batch::lu_solve(left=False, 한쪽만 교환)",
+                  lambda L: L.linalg.lu_solve(
+                      *L.linalg.lu_factor(L.tensor(_LA_BATCH_PIVOT)),
+                      L.tensor(_LA_BATCH_PIVOT_RHS_T), left=False)))
+
     # ── `_ex`, LDL and reflectors ──
     #
     # `lu_factor_ex` **reports through `info`** instead of throwing. 0 means it went well and `k`
@@ -10418,6 +13112,71 @@ def linalg_struct_cases(inp=None):
         return L.linalg.ldl_solve(f.LD, f.pivots, L.tensor(b))
 
     cases.append((LINALG_PREFIX + "ex::ldl_solve", ldl_solve))
+
+    # ── the pivoting, which was refused ────────────────────────────────
+    #
+    # `ldl_factor` stopped on any matrix needing a swap, and the reason was accurate:
+    # torch uses LAPACK's Bunch-Kaufman and a factorisation without the swaps is a
+    # different one. So the way through was to write Bunch-Kaufman — there are many
+    # valid `L D Lᵀ` decompositions and only LAPACK's packing and pivot table compare
+    # against torch's.
+    #
+    # **Both halves are asked, and both had to be.** The first fixture takes a 2×2
+    # block over rows 0 and 1 (`pivots` comes back `[-3, -3, 3]`); the second takes a
+    # 1×1 pivot with a row swap. Writing the swap over rows instead of columns left
+    # ten of thirteen matrices agreeing, and the three that did not diverged first in
+    # their **pivot table**, two steps after the wrong line.
+    _LDL_BLOCK = np.array([[0., 1., 2.], [1., 0., 3.], [2., 3., 0.]], dtype=np.float32)
+    _LDL_SWAP = np.array([[-0.31, 0.96, -1.07], [0.96, 0.29, 0.01],
+                          [-1.07, 0.01, 0.69]], dtype=np.float32)
+    # **A 6×6, because the column swap is empty on a 3×3.** The swap runs over the
+    # rows below `kp`, and on a 3×3 every pivot that is not the diagonal lands on the
+    # last row — so there is nothing below it and dropping the swap entirely changes
+    # no answer. Both plants passed against the two above. This one pivots to row 5
+    # at the first column with a 2×2 block after it, so the swap has somewhere to go;
+    # it was found by sampling until one parted rather than reasoned into existence.
+    _LDL_WIDE = np.array(
+        [[-1.32, -0.52, 1.01, 0.32, 0.47, -0.27],
+         [-0.52, 0.75, 0.92, -0.22, -1.44, -0.50],
+         [1.01, 0.92, -1.73, 0.23, -0.71, -0.47],
+         [0.32, -0.22, 0.23, -0.06, -0.79, -0.32],
+         [0.47, -1.44, -0.71, -0.79, -0.17, -0.84],
+         [-0.27, -0.50, -0.47, -0.32, -0.84, -1.09]], dtype=np.float32)
+    for _tag, _arr in (("2x2 블록", _LDL_BLOCK), ("교환", _LDL_SWAP),
+                       ("6x6 열 교환", _LDL_WIDE)):
+        for _field in ("LD", "pivots"):
+            cases.append((LINALG_PREFIX + f"ex::ldl_factor({_tag})/{_field}",
+                          lambda L, a=_arr, f=_field: getattr(
+                              L.linalg.ldl_factor(L.tensor(a)), f)))
+
+    def ldl_solve_pivoted(L, arr):
+        """**The solve reads the pivot table too**, and it did not — it took the
+        packed matrix alone, which was right only while nothing was ever swapped.
+        With the blocks in place the old body was wrong on 47 of 80 random symmetric
+        matrices and plausible on every one."""
+        f = L.linalg.ldl_factor(L.tensor(arr))
+        rhs = (np.arange(arr.shape[0] * 2, dtype=np.float32).reshape(-1, 2) * 0.5
+               - 1.0)
+        return L.linalg.ldl_solve(f.LD, f.pivots, L.tensor(rhs))
+
+    for _tag, _arr in (("2x2 블록", _LDL_BLOCK), ("교환", _LDL_SWAP),
+                       ("6x6 열 교환", _LDL_WIDE)):
+        cases.append((LINALG_PREFIX + f"ex::ldl_solve({_tag})",
+                      lambda L, a=_arr: ldl_solve_pivoted(L, a)))
+
+    # **`info` stopped being a constant.** It was hardcoded to 0 with the note *the
+    # bad cases are refused*, true while they were; the only ones left are singular
+    # and it is the first zero pivot, counting from 1.
+    for _tag, _arr in (("특이", np.array([[1., 1.], [1., 1.]], dtype=np.float32)),
+                       ("영행렬", np.zeros((2, 2), dtype=np.float32))):
+        cases.append((LINALG_PREFIX + f"ex::ldl_factor_ex({_tag})/info",
+                      lambda L, a=_arr: L.linalg.ldl_factor_ex(L.tensor(a)).info))
+    # **torch's own `ldl_factor` breaks here**, with *INTERNAL ASSERT FAILED … please
+    # report a bug to PyTorch* rather than anything about the matrix. So what is asked
+    # is that both stop, not that our wording matches one nobody would want to copy.
+    cases.append((LINALG_PREFIX + "ex::ldl_factor(특이)=둘 다 거절",
+                  lambda L: _both_stop(L, lambda M: M.linalg.ldl_factor(
+                      M.tensor(np.array([[1., 1.], [1., 1.]], dtype=np.float32))).LD)))
 
     # **QR in reflector form.** `geqrf` holds it and `householder_product` unfolds it into `Q`.
     #
@@ -10587,7 +13346,159 @@ def linalg_name_cases(inp=None):
          lambda L: L.linalg.vector_norm(L.tensor(mat))),
         (LINALG_PREFIX + "name2::vector_norm(dim)",
          lambda L: L.linalg.vector_norm(L.tensor(mat), dim=1)),
+        # **`keepdim` reduces to length 1 rather than dropping the axis**, and with no
+        # `dim` at all torch keeps *every* axis as 1 rather than handing back a scalar
+        # (measured). borch.ts took no such argument and every branch passed `false`, so
+        # the result came back one rank short — which broadcasts differently against the
+        # input and surfaces somewhere else entirely.
+        (LINALG_PREFIX + "name2::vector_norm(dim, keepdim)",
+         lambda L: L.linalg.vector_norm(L.tensor(mat), dim=1, keepdim=True)),
+        (LINALG_PREFIX + "name2::vector_norm(keepdim, no dim)",
+         lambda L: L.linalg.vector_norm(L.tensor(mat), keepdim=True)),
+        # **`linalg.norm` took none of its four**, while the method behind it had all
+        # four — so `norm(x, 2, 1)` threw the order and the axis away and returned the
+        # Frobenius norm of everything. Not an error: a different number of a different
+        # rank. These ask the seats one at a time.
+        (LINALG_PREFIX + "name2::norm(ord)",
+         lambda L: L.linalg.norm(L.tensor(mat), 2)),
+        (LINALG_PREFIX + "name2::norm(ord, dim)",
+         lambda L: L.linalg.norm(L.tensor(mat), 2, 1)),
+        (LINALG_PREFIX + "name2::norm(ord, dim, keepdim)",
+         lambda L: L.linalg.norm(L.tensor(mat), 2, 1, True)),
+
+        # ── the six seats `linalg` was short of ──
+        #
+        # Each was **an argument JavaScript received and dropped**, so the default
+        # answer came back under the name of a computation nobody ran. Three of them
+        # the browser side computes and three it refuses; both halves are asked,
+        # because a seat that only ever refuses and a seat that is not there look
+        # identical from a caller who never passes the argument.
+        # **Asked by keyword on purpose.** The binding unrolls keywords into positions
+        # through a table, and a name missing from that row raises there — while a
+        # positional call sails past the table untouched. Written positionally these
+        # three passed with the row still empty, so the row was carried by nothing.
+        (LINALG_PREFIX + "name2::matrix_norm(dim)",
+         lambda L: L.linalg.matrix_norm(L.tensor(_LA_BATCH), dim=(0, 1))),
+        # **`keepdim` keeps the two named axes as ones**, so this is a (1, 1) and
+        # not a scalar — a rank, which broadcasts differently and surfaces elsewhere.
+        (LINALG_PREFIX + "name2::matrix_norm(keepdim)",
+         lambda L: L.linalg.matrix_norm(L.tensor(mat), keepdim=True)),
+        # `tol` is an **absolute** cutoff on the singular values — not the `rcond` of
+        # `pinv`, which is relative to the largest. The fixture is rank 2, and this
+        # tolerance cuts it to 1.
+        (LINALG_PREFIX + "name2::matrix_rank(tol)",
+         lambda L: L.linalg.matrix_rank(L.tensor(_LA_RANK2), tol=3.0)),
+        # **`pinv`'s cut-off stopped being a refusal.** The browser side held the seat
+        # and raised on it while the solver picked its own tolerance; the solver takes
+        # one now. The core has matched torch here from the start, so this asks the
+        # third implementation to catch up rather than freezing anything new.
+        (LINALG_PREFIX + "name2::pinv(rcond)",
+         lambda L: L.linalg.pinv(L.tensor(_LA_RANK2), 0.5)),
     ]
+    # **`lstsq`'s two, and they are where torch's four drivers separate.** At full
+    # rank all four agree to float noise and nothing shows; with `rcond=0.9` on this
+    # fixture, `gels` gives 3.50/1.40, `gelsy` 0.77/2.31 and `gelsd`/`gelss`
+    # 0.79/2.32. Ours is the SVD, so `gels` takes no cutoff (torch's reads none) and
+    # `gelsd` is exact — while `gelsy`, *the default*, is refused where the cutoff
+    # bites, because there is no pivoted QR here to produce its answer with.
+    for _tag, _drv in (("gels", "gels"), ("gelsd", "gelsd"), ("gelss", "gelss")):
+        cases.append((LINALG_PREFIX + f"name2::lstsq(rcond, {_tag})",
+                      lambda L, d=_drv: L.linalg.lstsq(
+                          L.tensor(_LA_TALL), L.tensor(_LA_TALL_RHS),
+                          rcond=0.9, driver=d).solution))
+    # **`lstsq` over a batch, which was refused outright until now.** numpy's is
+    # two-dimensional, so the batch is a loop — and the loop is where a field can go
+    # wrong without the solution doing so. `gelsd` is the driver that fills all four,
+    # so all four are asked; the three that empty a field under another driver are
+    # asked for that emptiness, because an empty field stacked over a batch becomes a
+    # shape and stops being an absence.
+    cases.append((LINALG_PREFIX + "batch::lstsq(gelsd).solution",
+                  lambda L: L.linalg.lstsq(
+                      L.tensor(_LA_BATCH_TALL), L.tensor(_LA_BATCH_TALL_VEC),
+                      driver="gelsd").solution))
+    # **The other three fields are `lstsqfield::`, which is the core's alone.**
+    # borch.ts's `linalg.lstsq` returns the solution as a bare tensor — it is built
+    # from `pinverse`, and residuals, rank and singular values would each have to be
+    # computed a second time to be handed over — so the binding dresses one field as
+    # torch's named tuple and the other three raise `AttributeError` there. That is a
+    # real narrowing rather than a Python matter, and it is recorded here rather than
+    # covered by computing the three in Python, which would leave the names absent for
+    # anyone holding borch.ts while the cases went green.
+    for _field in ("residuals", "rank", "singular_values"):
+        cases.append((LINALG_PREFIX + f"lstsqfield::batch(gelsd).{_field}",
+                      lambda L, f=_field: getattr(L.linalg.lstsq(
+                          L.tensor(_LA_BATCH_TALL), L.tensor(_LA_BATCH_TALL_VEC),
+                          driver="gelsd"), f)))
+    # An empty field stacked over a batch becomes a shape and stops being an absence,
+    # so the three drivers that empty one are asked for that emptiness.
+    for _tag, _drv, _field in (("gels", "gels", "rank"),
+                               ("gels", "gels", "singular_values"),
+                               ("gelsy", "gelsy", "residuals")):
+        cases.append((LINALG_PREFIX + f"lstsqfield::batch({_tag}) 의 빈 {_field}",
+                      lambda L, d=_drv, f=_field: getattr(L.linalg.lstsq(
+                          L.tensor(_LA_BATCH_TALL), L.tensor(_LA_BATCH_TALL_VEC),
+                          driver=d), f)))
+    cases.append((LINALG_PREFIX + "batch::lstsq(행렬 우변)",
+                  lambda L: L.linalg.lstsq(L.tensor(_LA_BATCH_TALL),
+                                           L.tensor(_LA_BATCH_TALL_RHS),
+                                           driver="gelsd").solution))
+    # The matrix reading broadcasts its leading dimensions and the vector reading does
+    # not — measured, and the pair is what tells the two apart.
+    cases.append((LINALG_PREFIX + "batch::lstsq(우변 하나를 늘린다)",
+                  lambda L: L.linalg.lstsq(L.tensor(_LA_BATCH_TALL),
+                                           L.tensor(_LA_BATCH_TALL_RHS[:1]),
+                                           driver="gelsd").solution))
+    cases.append((LINALG_PREFIX + "batch::lstsq(잘림은 행렬마다 본다)",
+                  lambda L: L.linalg.lstsq(L.tensor(_LA_BATCH_SCALE),
+                                           L.tensor(_LA_BATCH_TALL_VEC),
+                                           0.9).solution))
+    cases.append((LINALG_PREFIX + "batch::lstsq(둘 다 잘리면)=우리는거절",
+                  refusal_case(lambda L: L.linalg.lstsq(
+                      L.tensor(_LA_BATCH_TALL), L.tensor(_LA_BATCH_TALL_VEC),
+                      0.9).solution)))
+    # **A batch of one, because two is the number that hid a defect.** The rank bound
+    # is `min(m, n)`, and written as `min(…shape)` over a `(2, 4, 2)` batch it comes to
+    # 2 either way — the plant survived the case above untouched. At `(1, 4, 2)` the
+    # same expression gives 1, the bitten matrix keeps 1, and `1 < 1` is false: the
+    # refusal disappears and torch's answer comes back from an algorithm nobody ran.
+    cases.append((LINALG_PREFIX + "batch::lstsq(하나짜리 배치도 잘린다)=우리는거절",
+                  refusal_case(lambda L: L.linalg.lstsq(
+                      L.tensor(_LA_BATCH_TALL[:1]), L.tensor(_LA_BATCH_TALL_VEC[:1]),
+                      0.9).solution)))
+    cases.append((LINALG_PREFIX + "batch::lstsq(벡터 우변은 안 늘어난다)=둘 다 거절",
+                  lambda L: _both_stop(L, lambda M: M.linalg.lstsq(
+                      M.tensor(_LA_BATCH_TALL), M.tensor(_LA_BATCH_TALL_VEC[:1]),
+                      driver="gelsd").solution)))
+    cases.append((LINALG_PREFIX + "name2::lstsq(rcond 이 안 자를 때)",
+                  lambda L: L.linalg.lstsq(L.tensor(_LA_TALL),
+                                           L.tensor(_LA_TALL_RHS), 1e-6).solution))
+    # The three the browser side refuses. torch computes all three, so the verdict is
+    # the shape `refusal_case` holds: torch succeeds and ours stops with the specified
+    # wording.
+    cases += [
+        (LINALG_PREFIX + "name2::lstsq(기본 driver 가 자르면)=우리는거절",
+         refusal_case(lambda L: L.linalg.lstsq(
+             L.tensor(_LA_TALL), L.tensor(_LA_TALL_RHS), 0.9).solution)),
+        # **torch refuses this one too** — *LU without pivoting is not implemented on
+        # the CPU*. So it is not a `refusal_case`, which needs torch to succeed; what
+        # is asked is that both stop. Written as a `refusal_case` it read as our defect
+        # and the note would have been the wrong one forever.
+        (LINALG_PREFIX + "name2::lu(pivot=False)=둘 다 거절",
+         lambda L: _both_stop(L, lambda M: M.linalg.lu(M.tensor(_LA_MAT),
+                                                       pivot=False).U)),
+    ]
+    # **`dims` was refused, and numpy's `tensorsolve` had been taking it all along**
+    # under the name `axes`. It moves those axes of `A` to the end before the fold,
+    # in the order given, so it changes which axes become the matrix — the values and
+    # the answer's *shape* both. Six settings, and the shape parts on three of them.
+    for _tag, _dims in (("(0, 1)", (0, 1)), ("(1, 0)", (1, 0)), ("(0,)", (0,)),
+                        ("(2, 3)", (2, 3)), ("(3,)", (3,)), ("(1, 2)", (1, 2))):
+        cases.append((LINALG_PREFIX + f"name2::tensorsolve(dims={_tag})",
+                      lambda L, d=_dims: L.linalg.tensorsolve(
+                          L.tensor(_LA_T6), L.tensor(_LA_B6), d)))
+    cases.append((LINALG_PREFIX + "name2::tensorsolve(dims 없이, 2×3×2×3)",
+                  lambda L: L.linalg.tensorsolve(L.tensor(_LA_T6),
+                                                 L.tensor(_LA_B6))))
     for tag, ordv in (("1", 1), ("inf", float("inf")), ("-inf", float("-inf")),
                       ("0", 0), ("3", 3)):
         cases.append((LINALG_PREFIX + f"name2::vector_norm(ord={tag})",
@@ -10600,6 +13511,50 @@ def linalg_name_cases(inp=None):
                   lambda L: L.linalg.matrix_norm(L.tensor(mat))))
     cases.append((LINALG_PREFIX + "name2::matrix_norm(배치)",
                   lambda L: L.linalg.matrix_norm(L.tensor(_LA_BATCH))))
+    # ── `torch.norm`'s two words, which were a `ValueError` from `float()` ──
+    #
+    # `linalg.matrix_norm(ord="nuc")` above has been answered for a long time and
+    # **the top-level `torch.norm(A, "nuc")` had not** — it fell past every branch to
+    # `float(p)` and stopped inside a message about converting a string, naming
+    # neither the argument nor the function. `"fro"` went the same way on the core
+    # while the binding happened to catch it; two spellings of one gap, in two
+    # implementations, under a name the other three-quarters of which worked.
+    #
+    # torch's own rules, measured: `"fro"` is the elementwise 2-norm under another
+    # name — on a 2×3×4 it is 65.757, the root of the sum of all 24 squares, and not a
+    # per-matrix anything — while `"nuc"` is `matrix_norm`'s, over two axes and no
+    # more. The two refusals are the two checks torch makes, in torch's order: the
+    # rank first, so a 1-D is told *at least 2 dimensions* rather than *a 2-tuple*.
+    for _tag, _kw in (("nuc", {"p": "nuc"}),
+                      ("nuc, keepdim", {"p": "nuc", "keepdim": True}),
+                      ("nuc, dim 뒤집기", {"p": "nuc", "dim": (1, 0)}),
+                      ("fro", {"p": "fro"}),
+                      ("fro, keepdim", {"p": "fro", "keepdim": True})):
+        cases.append((LINALG_PREFIX + f"name2::torch.norm({_tag})",
+                      lambda L, k=_kw: L.norm(L.tensor(mat), **k)))
+    for _tag, _kw in (("nuc, dim=(0,1)", {"p": "nuc", "dim": (0, 1)}),
+                      ("nuc, dim=(1,2), keepdim",
+                       {"p": "nuc", "dim": (1, 2), "keepdim": True}),
+                      ("fro", {"p": "fro"}),
+                      ("fro, dim=(1,2)", {"p": "fro", "dim": (1, 2)})):
+        cases.append((LINALG_PREFIX + f"name2::torch.norm(배치, {_tag})",
+                      lambda L, k=_kw: L.norm(L.tensor(_LA_BATCH), **k)))
+    def norm_message(L, build):
+        """torch's wording, compared as a string. An invented one would pass a check
+        that only asks whether something was raised."""
+        try:
+            build(L)
+        except Exception as exc:                                # noqa: BLE001
+            return str(exc)
+        return "(거절 없음)"
+
+    for _tag, _fn in (
+            ("3차원에 dim 없이",
+             lambda L: L.norm(L.tensor(_LA_BATCH), p="nuc")),
+            ("1차원",
+             lambda L: L.norm(L.tensor(vec3), p="nuc"))):
+        cases.append((LINALG_PREFIX + f"name2::torch.norm(nuc, {_tag})=문구",
+                      lambda L, f=_fn: norm_message(L, f)))
     for tag, pv in (("기본", None), ("fro", "fro"), ("nuc", "nuc"), ("2", 2),
                     ("-2", -2), ("1", 1), ("inf", float("inf"))):
         cases.append((LINALG_PREFIX + f"name2::cond(p={tag})",
@@ -10788,6 +13743,30 @@ def inplace_cases(inp=None):
         run("clip_", lambda x: x.clip_(2, 5), plain),
         # **Chaining is the real test.** What comes back has to be itself for a chain to work.
         run("이어 부르기", lambda x: x.mul_(2).add_(1).clamp_(0, 10), plain),
+        # ── the seats the in-place halves were short of ──
+        #
+        # **In place means the same arithmetic written back**, so the two spellings of
+        # one operation take one list — and four of them did not. None could be seen
+        # until the core's generated forwarders declared what they forward: they read
+        # `(*args, **kw)`, which the signature axis files as *no python signature*,
+        # and ninety-seven `Tensor` rows sat in that bucket.
+        #
+        # `logit_` was the sharpest: it was built **nullary** here while `logit` takes
+        # `eps`, so `x.logit_(eps=0.1)` — which torch computes — stopped on an
+        # argument count. borch.ts's took nothing either, so **both libraries agreed
+        # by being wrong the same way**, which is the one arrangement the golden
+        # cannot catch on its own.
+        run("round_(decimals)", lambda x: x.round_(decimals=1),
+            np.array([1.234, 4.567, 9.876, 2.345], dtype=np.float32)),
+        run("logit_(eps)", lambda x: x.logit_(eps=0.1),
+            np.array([0.0, 0.2, 0.5, 1.0], dtype=np.float32)),
+        run("cumsum_(dim)", lambda x: x.cumsum_(0), plain),
+        run("cumprod_(dim)", lambda x: x.cumprod_(0), plain),
+        # torch calls it `values`, and the browser side called it `other` — a keyword
+        # call reached one spelling and not the other.
+        run("heaviside_(values 라는 이름)",
+            lambda x: x.heaviside_(values=x.new_tensor([1., 1., 1., 1.])),
+            np.array([-1., 0., 1., 0.], dtype=np.float32)),
     ]
     for name in _INPLACE_UNARY:
         arr = small if name in ("asin_", "acos_", "atan_", "log_", "log2_", "log10_",
@@ -10801,7 +13780,15 @@ def inplace_cases(inp=None):
         return a
 
     cases.append((INPLACE_PREFIX + "뷰 전파=브라우저는거절",
-                  _as_expected(view_propagates)))
+                  _as_expected(
+                      view_propagates,
+                      # **The write has to reach the original**, which is the whole
+                      # claim: `arange(4)` plus ten through a view is `[10, 11, 12,
+                      # 13]`. A version that wrote into the view alone succeeds and
+                      # comes back `[0, 1, 2, 3]` — the case's own subject, unchecked.
+                      holds=lambda out: np.allclose(
+                          np.asarray(to_numpy(out), dtype=np.float64).reshape(-1),
+                          [10.0, 11.0, 12.0, 13.0], atol=1e-6))))
 
     # **A second divergence from the same root.** With no views there is nowhere to become
     # non-contiguous, so `is_contiguous()` is always true in the browser. The core is false as
@@ -10895,6 +13882,12 @@ def inplace_cases(inp=None):
         ("clamp_min_", lambda L, x: x.clamp_min_(3), plain),
         ("digamma_", lambda L, x: x.digamma_(), pos),
         ("divide_", lambda L, x: x.divide_(2), plain),
+        # **An alias narrower than what it aliases drops an argument in silence.**
+        # `div_` carries `rounding_mode` and borch.ts's `divide_` did not, so this
+        # call handed the mode to nothing and returned the true quotient — a number,
+        # and a plausible one. The two are one line apart in that file.
+        ("divide_(rounding_mode)",
+         lambda L, x: x.divide_(2, rounding_mode="floor"), plain),
         ("erfinv_", lambda L, x: x.erfinv_(), small - 0.5),
         ("floor_divide_", lambda L, x: x.floor_divide_(2), plain),
         ("fmod_", lambda L, x: x.fmod_(2), plain),
@@ -11151,6 +14144,22 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "짝없이::resize_as_ 는 제자리다", resized))
 
+    def resized_by_name(L):
+        """**The keyword is `the_template`**, which is neither what torch's docstring
+        says nor what the rest of the family takes.
+
+        Its own doc reads `resize_as_(tensor)`; the plausible repair is `other`, which
+        every neighbour uses and which its non-in-place twin `resize_as` really does
+        take. torch refuses both (measured, all three spellings). A name that can only
+        be found by calling is the reason `test_torch_names.py` calls.
+        """
+        x = L.tensor(grid2.copy())
+        x.resize_as_(the_template=L.tensor(np.zeros((1, 4), dtype=np.float32)))
+        return str(tuple(x.shape))
+
+    cases.append((INPLACE_PREFIX + "짝없이::resize_as_(the_template 이라는 이름)",
+                  resized_by_name))
+
     # ── the twenty predicates torch gives as attributes ──
     #
     # Most have one determined answer. **The name still has to exist** — without it, `if x.is_cuda:`
@@ -11268,13 +14277,22 @@ def inplace_cases(inp=None):
     # torch raises the conjugate **as a bit only**, so `numpy()` stops — it has to be resolved with
     # `resolve_conj()` for the value to be visible, and our side already stores it flipped, so that
     # call is the identity.
-    for label, call in (
-        ("H(복소수)", lambda L: L.tensor(cplx).H.resolve_conj()),
-        ("mT(복소수) 는 켤레를 안 한다", lambda L: L.tensor(cplx).mT.resolve_conj()),
-        ("mH(복소수) 는 켤레를 한다", lambda L: L.tensor(cplx).mH.resolve_conj()),
+    # **The conjugating half is what each holds**, and it is the difference the three
+    # names exist for — `H` and `mH` flip the sign of the imaginary part and `mT` does
+    # not. Written as a verdict alone, a version where all three conjugated (or none
+    # did) succeeds and reads as `기대대로`, which is the one thing these rows are for.
+    _cplx_t = np.array([[1 + 2j], [3 - 1j]], dtype=np.complex64)
+    for label, call, want in (
+        ("H(복소수)", lambda L: L.tensor(cplx).H.resolve_conj(), _cplx_t.conj()),
+        ("mT(복소수) 는 켤레를 안 한다",
+         lambda L: L.tensor(cplx).mT.resolve_conj(), _cplx_t),
+        ("mH(복소수) 는 켤레를 한다",
+         lambda L: L.tensor(cplx).mH.resolve_conj(), _cplx_t.conj()),
     ):
         cases.append((INPLACE_PREFIX + f"전치::{label}=브라우저는거절",
-                      _as_expected(call)))
+                      _as_expected(call, holds=lambda out, w=want: np.allclose(
+                          np.asarray(to_numpy(out)).reshape(-1),
+                          w.reshape(-1), atol=1e-6))))
 
     def h_needs_a_matrix(L):
         try:
@@ -11323,8 +14341,264 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "기울기::잎에 부르면 지나간다",
                   lambda L: str(L.tensor(wide, requires_grad=True).retain_grad())))
 
-    # Whether a value is **really kept** after `retain_grad` is in `tests/test_fold_grad.py` —
-    # borch.ts does not hand out a derived tensor's `.grad`, so the three cannot be asked together.
+    # ── the gradient really being kept, and `backward(inputs=…)` ──
+    #
+    # **This block used to read "the three cannot be asked together."** borch.ts wrote
+    # into leaves only, so a derived tensor's `.grad` was `None` over there while the
+    # core filled it, and the value went to `tests/test_fold_grad.py` — which asks the
+    # core alone. The reason was true and stopped being true, and nothing would have
+    # said so: the signature axis could not read `backward` at all (`Tensor.backward`
+    # and `autograd.ts`'s generic graph walk share a name, so the row came back
+    # *ambiguous — 2 declarations*), and everything downstream of it went unasked.
+    #
+    # `retain_grad` and `backward(inputs=…)` are **one mechanism** — a derived node
+    # being able to hold a gradient — which is why torch's refusal for the second
+    # speaks of the first. Closing either closes both.
+    def kept(name, body):
+        cases.append((INPLACE_PREFIX + f"기울기::{name}", body))
+
+    def retained(L):
+        """The gradient at a hidden value. `m = 3x`, `loss = Σm²` → `dL/dm = 2m`."""
+        x = L.tensor(wide, requires_grad=True)
+        m = x * 3
+        m.retain_grad()
+        (m * m).sum().backward()
+        return _grad_of(m, "retain_grad")
+
+    kept("retain_grad 가 값을 정말 남긴다", retained)
+
+    def by_inputs(L):
+        """`inputs` names a **derived** tensor, and torch fills it — it retains too."""
+        x = L.tensor(wide, requires_grad=True)
+        m = x * 3
+        (m * m).sum().backward(inputs=[m])
+        return _grad_of(m, "inputs")
+
+    kept("backward(inputs) 는 중간 노드도 채운다", by_inputs)
+
+    def leaves_the_others(L):
+        """**The point of the argument.** The leaf that was not named keeps `None`.
+
+        Asked as *which of the two arrived*, not by value: the value of `a.grad` is
+        the next case's business, and a repr would carry each library's formatter
+        into a comparison about presence.
+        """
+        a = L.tensor(wide, requires_grad=True)
+        b = L.tensor(wide, requires_grad=True)
+        (a * b).sum().backward(inputs=[a])
+        return (f"a={'있다' if a.grad is not None else '없다'} "
+                f"b={'있다' if b.grad is not None else '없다'}")
+
+    kept("backward(inputs) 는 안 부른 잎을 안 건드린다", leaves_the_others)
+    kept("backward(inputs) 로 부른 잎의 값",
+         lambda L: _grad_of(_backward_by_inputs(L, wide), "a"))
+
+    def retain_outside_inputs(L):
+        """**The two rules do not cancel.** A `retain_grad` node outside `inputs` still
+        gets its gradient — measured against torch, which does not read `inputs` as the
+        list of the only things allowed a `.grad`.
+
+        `x` is checked for arrival and `m`'s value is what comes back: `_grad_of`
+        raises when a gradient did not arrive, so both are asked and one is compared.
+        """
+        x = L.tensor(wide, requires_grad=True)
+        m = x * 3
+        m.retain_grad()
+        (m * m).sum().backward(inputs=[x])
+        _grad_of(x, "x")
+        return _grad_of(m, "m")
+
+    kept("retain_grad 는 inputs 밖에서도 남는다", retain_outside_inputs)
+
+    def refuses_backward(name, fragment, call):
+        def run(L, f=call, frag=fragment):
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                return frag if frag in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+        cases.append((INPLACE_PREFIX + f"기울기::거절::{name}", run))
+
+    # **Empty stops before everything**, ahead even of `requires_grad` — measured.
+    refuses_backward("빈 inputs", "cannot be empty",
+                     lambda L: (L.tensor(wide, requires_grad=True) * 2).sum()
+                     .backward(inputs=[]))
+    refuses_backward("grad 없는 것을 inputs 에", "requires_grad=False",
+                     lambda L: (L.tensor(wide, requires_grad=True) * 2).sum()
+                     .backward(inputs=[L.tensor(wide)]))
+    # **torch computes this one.** Asked by value it would stay parted forever, so it is
+    # asked the way every deliberate divergence here is: torch succeeds, all three of
+    # ours refuse in the specified words, and both are *as documented*.
+    cases.append((INPLACE_PREFIX + "기울기::backward(create_graph)=우리는거절",
+                  refusal_case(lambda L: (L.tensor(wide, requires_grad=True) * 2)
+                               .sum().backward(create_graph=True))))
+
+    # ── `torch.autograd.grad` — the gradient handed back, not stored ───────────
+    #
+    # **It was absent from all three and nobody had written a reason.**
+    # `borch.autograd` raised `AttributeError: module 'borch' has no attribute
+    # 'autograd'`, which names neither gradients nor what is missing, so an absent
+    # feature and a typo read the same. Every other gap here states itself.
+    def taken(L):
+        x = L.tensor(wide, requires_grad=True)
+        return L.autograd.grad((x ** 2).sum(), x)[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad", taken))
+
+    def leaves_dot_grad_alone(L):
+        """**The whole reason the function exists.** `backward()` accumulates and this
+        does not, so a gradient penalty can be differentiated without adding its
+        gradient to the one the optimiser is about to step on. Asked by the value it
+        returns alone, an implementation that accumulated as well would pass."""
+        x = L.tensor(wide, requires_grad=True)
+        L.autograd.grad((x ** 2).sum(), x)
+        return f"grad={x.grad}"
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad 는 .grad 를 안 건드린다",
+                  leaves_dot_grad_alone))
+
+    def two_inputs(L):
+        a = L.tensor(wide, requires_grad=True)
+        b = L.tensor(wide, requires_grad=True)
+        got = L.autograd.grad((a * b).sum(), [a, b])
+        return L.stack([got[0], got[1]])
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(입력 둘)", two_inputs))
+
+    def from_a_derived_tensor(L):
+        """**Not only a leaf.** torch differentiates with respect to an intermediate,
+        which is how a saliency map is taken against an activation."""
+        x = L.tensor(wide, requires_grad=True)
+        mid = x * 3
+        return L.autograd.grad((mid ** 2).sum(), mid)[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(중간 텐서)", from_a_derived_tensor))
+
+    def two_outputs(L):
+        """Several outputs are seeded together and their gradients **sum where the
+        graphs meet** — measured: `2x + 5`. A walk written for one root gives one of
+        the two halves and looks entirely reasonable."""
+        x = L.tensor(wide, requires_grad=True)
+        return L.autograd.grad([(x ** 2).sum(), (x * 5).sum()], x)[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(출력 둘)", two_outputs))
+
+    def with_a_seed(L):
+        x = L.tensor(wide, requires_grad=True)
+        return L.autograd.grad(x * 2, x, grad_outputs=L.ones(*wide.shape))[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(grad_outputs)", with_a_seed))
+
+    def unused_allowed(L):
+        """`None` in the slot, which is torch's answer and not an error. It is asked
+        as a string because a tuple holding `None` has no value to compare."""
+        a = L.tensor(wide, requires_grad=True)
+        b = L.tensor(wide, requires_grad=True)
+        got = L.autograd.grad((a * 2).sum(), [a, b], allow_unused=True)
+        # **Both slots**, because an implementation that put `None` in every slot
+        # would pass a case that only looked at the second.
+        return f"둘째={got[1]} 첫째={'있다' if got[0] is not None else None}"
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(allow_unused)", unused_allowed))
+
+    def unused_materialised(L):
+        """Zeros rather than `None` — and measured: torch does **not** ask for
+        `allow_unused` alongside it, though every reading of the documentation
+        suggests it would."""
+        a = L.tensor(wide, requires_grad=True)
+        b = L.tensor(wide, requires_grad=True)
+        got = L.autograd.grad((a * 2).sum(), [a, b], materialize_grads=True)
+        return L.stack([got[0], got[1]])
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(materialize_grads)",
+                  unused_materialised))
+
+    def retained_then_again(L):
+        """It releases the graph by default, as `backward()` does. Asked without
+        `retain_graph` the second walk stops; this asks that the flag works.
+
+        **The two walks are summed rather than the second one returned.** Returned
+        alone the answer is `2x`, which is exactly what the plain case above gives —
+        so the case hung an argument in its name and asked nothing the default did
+        not (`test_case_names.py` said so). Summed it is `4x`, which no single walk
+        produces."""
+        x = L.tensor(wide, requires_grad=True)
+        y = (x ** 2).sum()
+        first = L.autograd.grad(y, x, retain_graph=True)[0]
+        return first + L.autograd.grad(y, x)[0]
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(retain_graph)", retained_then_again))
+
+    def free_backward(L):
+        """`torch.autograd.backward(y)` — the free-function spelling, which **does**
+        accumulate. The pair to the case above: one fills `.grad` and one must not."""
+        x = L.tensor(wide, requires_grad=True)
+        L.autograd.backward((x ** 2).sum())
+        return x.grad
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.backward 는 쌓는다", free_backward))
+
+    for name, fragment, call in (
+        # The fragment is `not **have** been used` — written without the "have" it
+        # matched neither side, and both came back `다른 문구 <…>` holding the very
+        # sentence it was looking for. A fragment that never matches turns a
+        # wording check into a check that both sides fail the same way.
+        ("안 쓰인 입력", "not have been used in the graph",
+         lambda L: L.autograd.grad(
+             (L.tensor(wide, requires_grad=True) * 2).sum(),
+             [L.tensor(wide, requires_grad=True)])),
+        ("빈 inputs", "cannot be empty",
+         lambda L: L.autograd.grad(
+             (L.tensor(wide, requires_grad=True) * 2).sum(), [])),
+        ("grad 없는 입력", "does not require grad",
+         lambda L: L.autograd.grad(
+             (L.tensor(wide, requires_grad=True) * 2).sum(), L.tensor(wide))),
+        ("씨앗 없는 벡터 출력", "only for scalar outputs",
+         lambda L: L.autograd.grad(
+             L.tensor(wide, requires_grad=True) * 2,
+             L.tensor(wide, requires_grad=True))),
+        ("모양이 틀린 grad_outputs", "Mismatch in shape",
+         lambda L: L.autograd.grad(
+             (x := L.tensor(wide, requires_grad=True)) * 2, x,
+             grad_outputs=L.ones(9))),
+    ):
+        refuses_backward(f"autograd.grad({name})", fragment, call)
+
+    # The type is API too: torch raises `RuntimeError` for the unused input, and the
+    # binding turned it into an `IndexError` because the wording contains the word
+    # its guess looks for. Frozen so the guess cannot come back.
+    def unused_is_a_runtime_error(L):
+        try:
+            L.autograd.grad((L.tensor(wide, requires_grad=True) * 2).sum(),
+                            [L.tensor(wide, requires_grad=True)])
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+        return "안 던졌다"
+
+    cases.append((INPLACE_PREFIX + "기울기::autograd.grad(안 쓰인 입력) 의 형",
+                  unused_is_a_runtime_error))
+
+    # torch computes these three; all of ours refuse in the specified words.
+    for label, call in (
+        ("create_graph", lambda L: L.autograd.grad(
+            (x := L.tensor(wide, requires_grad=True) ** 3).sum(), x, create_graph=True)),
+        # **Shaped so torch succeeds.** Written as a scalar output with no seed,
+        # torch stopped too — inside `vmap`, complaining that a 0-d tensor has no
+        # axis to batch over — and `refusal_case` needs torch to answer or it
+        # freezes a shared limit as our defect. This is the whole Jacobian of
+        # `y = 2x`, which is what the argument is for.
+        ("is_grads_batched", lambda L: L.autograd.grad(
+            (x := L.tensor(np.arange(9, dtype=np.float32).reshape(3, 3),
+                           requires_grad=True)) * 2, x,
+            grad_outputs=L.eye(3).unsqueeze(1).expand(3, 3, 3).contiguous(),
+            is_grads_batched=True)),
+        ("only_inputs=False", lambda L: L.autograd.grad(
+            (x := L.tensor(wide, requires_grad=True) * 2).sum(), x,
+            only_inputs=False)),
+    ):
+        cases.append((INPLACE_PREFIX + f"기울기::autograd.grad({label})=우리는거절",
+                      refusal_case(call)))
+
     cases.append((INPLACE_PREFIX + "기울기::grad_fn 의 형 이름",
                   lambda L: type((L.tensor(wide, requires_grad=True) * 2).grad_fn).__name__))
     cases.append((INPLACE_PREFIX + "기울기::잎의 grad_fn 은 없다",
@@ -12054,6 +15328,7 @@ def golden_cases(inp=None):
             + scalar_cache_cases(inp) + constant_cases(inp)
             + top_linalg_cases(inp) + stat_cases(inp)
             + make_cases(inp) + complex_cases(inp) + fft_cases(inp)
+            + special_cases(inp) + video_cases(inp)
             + keepdim_cases(inp) + rnn_top_cases(inp) + top_rest_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
@@ -12223,6 +15498,46 @@ def dtype_cases(inp=None):
     for name in ("half", "bfloat16", "chalf", "cdouble", "byte", "char",
                  "short", "int"):
         we_refuse(name, lambda L, n=name: getattr(L.tensor(floats), n)())
+
+    # ── `x.type()` — the getter spoke a vocabulary the setter could not hear ───
+    #
+    # It hands back `torch.FloatTensor` and could not take that answer back:
+    # `x.type("torch.FloatTensor")`, which is what every pre-2.0 tutorial writes,
+    # went to numpy as a dtype string and came back *data type 'torch.FloatTensor'
+    # not understood*. On the binding both halves were wrong the other way — the
+    # getter returned `torch.float32`, and the setter **relabelled**, so
+    # `x.type("torch.zzzTensor")` produced a tensor whose dtype printed
+    # `torch.zzzTensor`: a name for nothing, with no exception.
+    cases.append(("dtype::형이름::x.type() 은 텐서형 이름이다",
+                  lambda L: L.tensor(floats).type()))
+    cases.append(("dtype::형이름::int64 의 이름",
+                  lambda L: L.tensor(ints).type()))
+    cases.append(("dtype::형이름::불리언의 이름",
+                  lambda L: L.tensor(ints > 1).type()))
+    # **Round trip** — the answer fed straight back in, which is the whole point.
+    cases.append(("dtype::형이름::자기 이름을 다시 먹인다",
+                  lambda L: str(L.tensor(floats).type(
+                      L.tensor(floats).type()).dtype)))
+    for _name in ("torch.FloatTensor", "torch.LongTensor", "torch.BoolTensor"):
+        cases.append((f"dtype::형이름::type({_name})",
+                      lambda L, n=_name: str(L.tensor(floats).type(n).dtype)))
+    # The three whose storage is absent keep their names and say so, as their
+    # `dtype=` spellings do.
+    for _name in ("torch.DoubleTensor", "torch.IntTensor", "torch.HalfTensor"):
+        we_refuse(f"type({_name})",
+                  lambda L, n=_name: L.tensor(floats).type(n), group="형이름")
+    # A name that is not one of the twelve: torch's wording **and its type** —
+    # `ValueError`, where numpy raised `TypeError` for the same mistake.
+    def unknown_type_name(L):
+        try:
+            L.tensor(floats).type("torch.zzzTensor")
+        except Exception as exc:                                # noqa: BLE001
+            return (f"{type(exc).__name__} 문구대로"
+                    if "invalid type: 'torch.zzzTensor'" in str(exc)
+                    else f"다른 문구 <{type(exc).__name__}: {exc}>")
+        return "안 던졌다"
+
+    cases.append(("dtype::형이름::이름이 아닌 것", unknown_type_name))
 
     # ── the three asked — **an input producing false was measured first** ──
     #
@@ -13765,6 +17080,23 @@ def v2_cases(inp=None):
         return L.tensor(np.ascontiguousarray(
             np.asarray(_as_numpy(out), dtype=np.float32).reshape(-1)))
 
+    def _converted_in_place(L, inplace):
+        """What the **caller's own boxes** hold after the call.
+
+        **The backend is chosen before the boxes are built**, and that ordering is the
+        whole of this helper. `_vision_v2(L)` rebinds the tv_tensor classes, so boxes
+        made ahead of it are of the class that was current a moment earlier — and the
+        first draft of this case, written inline, built them first and came back
+        `'Tensor' object has no attribute 'canvas_size'` from the browser. The rows
+        above avoid it by accident, because `_vision_v2(L).functional…(_boxes(L))`
+        evaluates the attribute chain before the argument.
+        """
+        v2 = _vision_v2(L)
+        given = _boxes(L)
+        v2.functional.convert_bounding_box_format(
+            given, new_format="XYWH", inplace=inplace)
+        return _values(L, given)
+
     def convert_case(target):
         """**The label goes with the numbers.** A conversion that returned a plain
         tensor would leave the next transform reading the same four numbers under the
@@ -13847,6 +17179,15 @@ def v2_cases(inp=None):
     cases += [
         (V2_PREFIX + "convert_bounding_box_format(XYWH)", convert_case("XYWH")),
         (V2_PREFIX + "convert_bounding_box_format(CXCYWH)", convert_case("CXCYWH")),
+        # **`inplace` was a seat the body never read.** torchvision writes the
+        # converted corners back into the tensor it was handed; here a copy came
+        # back and the original kept its old corners under its old format. The
+        # returned values were right either way, so the case has to read **the
+        # tensor that was passed in** — nothing about the answer can show it.
+        (V2_PREFIX + "convert_bounding_box_format(inplace)/원본이 바뀐다",
+         lambda L: _converted_in_place(L, True)),
+        (V2_PREFIX + "convert_bounding_box_format(inplace 아니면 안 바뀐다)",
+         lambda L: _converted_in_place(L, False)),
         (V2_PREFIX + "clamp_bounding_boxes(soft)", clamp_case("soft")),
         (V2_PREFIX + "clamp_bounding_boxes(hard, the same for these)",
          clamp_case("hard")),
@@ -14167,6 +17508,147 @@ def dataset_cases(inp=None):
 
 
 V2F_PREFIX = "v2f::"
+VIDEO_PREFIX = "video::"
+
+
+def video_cases(inp=None):
+    """The thirty-three `*_video` kernels — **one leading axis, and every kernel over it.**
+
+    These names are aliases of the `*_image` ones, which is the same shape as the
+    `*_image` aliases themselves and would ordinarily need almost no asking. It needs a
+    great deal of asking, because of what the measurements found on the way in.
+
+    **Handed a four-axis array before this, the kernels did not refuse.** Measured
+    against torchvision's own `*_video` on a `(2, 6, 7, 3)` array: four of twenty-one
+    agreed, six stopped with a shape mismatch, and **eleven answered wrong values with
+    no exception at all** — `horizontal_flip` differed in every one of 252 elements
+    because it flipped the height; `adjust_contrast`, `autocontrast` and `equalize`
+    reduced across the frames, pulling every frame toward the whole clip's average;
+    `resize` and `pad` moved the frame axis and left the width alone. So this table is
+    not asking whether an alias points at the right body. It is asking whether **a rank
+    the kernels already accepted is one they handle**, and the answer was no for eleven
+    of them the day before these names existed.
+
+    That is why every case here is a **video** rather than a picture: on a three-axis
+    array all eleven were and remain correct, so a case shaped like the rest of this
+    file cannot see the thing this table exists for.
+
+    **The two layouts are not the same and the case has to move between them.**
+    torchvision's video is `(T, C, H, W)` and this library's picture is `(H, W, C)`, so
+    a clip here is `(T, H, W, C)`. Written without the transpose the frozen answer would
+    be torchvision's for a differently-shaped input, which compares as a shape error
+    rather than as the wrong picture.
+    """
+    rng = np.random.default_rng(11)
+    clip = rng.random((2, 6, 7, 3)).astype(np.float32)
+    clip_u8 = (clip * 255).astype(np.uint8)
+    # One displacement shared by the frames, which is what `elastic_video` does.
+    warp = (rng.random((1, 6, 7, 2)).astype(np.float32) * 0.2 - 0.1)
+    cases = []
+
+    def on(video, call):
+        """The clip in each side's own layout, out as a float tensor."""
+        def run(L):
+            F = _vision_v2_functional(L)
+            if _is_real_torch(L):
+                given = L.tensor(np.ascontiguousarray(video.transpose(0, 3, 1, 2)))
+                out = _as_numpy(call(F, given, L).detach())
+                out = out.transpose(0, 2, 3, 1) if len(out.shape) == 4 else out
+            else:
+                out = _as_numpy(call(F, video, L))
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    def add(name, call, video=clip):
+        cases.append((VIDEO_PREFIX + name, on(video, call)))
+
+    # **The geometry — where the axes were read from the wrong end.**
+    add("resize", lambda F, v, L: F.resize_video(v, [3, 4]))
+    add("center_crop", lambda F, v, L: F.center_crop_video(v, [3, 4]))
+    add("crop", lambda F, v, L: F.crop_video(v, 1, 2, 3, 4))
+    add("resized_crop", lambda F, v, L: F.resized_crop_video(v, 1, 2, 3, 4, [3, 4]))
+    add("pad", lambda F, v, L: F.pad_video(v, [1, 2]))
+    add("horizontal_flip", lambda F, v, L: F.horizontal_flip_video(v))
+    add("vertical_flip", lambda F, v, L: F.vertical_flip_video(v))
+    # **The flips need an asymmetric clip to be caught at all.** Flipping the wrong axis
+    # keeps the shape, so only the values say so — and on a clip whose frames are equal
+    # even the values would agree. The random one above is neither.
+
+    # The resamplers, which all stand on one `grid_sample`.
+    add("rotate", lambda F, v, L: F.rotate_video(v, 30.0))
+    add("affine", lambda F, v, L: F.affine_video(v, 10.0, [1, 2], 1.1, [0.0, 0.0]))
+    add("perspective",
+        lambda F, v, L: F.perspective_video(v, [[0, 0], [6, 0], [6, 5], [0, 5]],
+                                            [[1, 1], [5, 0], [6, 4], [0, 5]]))
+    add("elastic", lambda F, v, L: F.elastic_video(
+        v, L.tensor(warp) if _is_real_torch(L) else warp))
+
+    # **The colour kernels that reduce.** Each of these takes a statistic over the
+    # picture, and each took it over the clip.
+    add("adjust_contrast", lambda F, v, L: F.adjust_contrast_video(v, 1.4))
+    add("autocontrast", lambda F, v, L: F.autocontrast_video(v))
+    add("adjust_saturation", lambda F, v, L: F.adjust_saturation_video(v, 1.4))
+    add("adjust_sharpness", lambda F, v, L: F.adjust_sharpness_video(v, 1.4))
+    add("gaussian_blur", lambda F, v, L: F.gaussian_blur_video(v, [3, 3]))
+    # **A clip whose frames differ is what makes these five cases mean anything.** With
+    # equal frames the whole-clip statistic and the per-frame one are the same number,
+    # and all five pass against the version that was wrong.
+
+    # The pointwise ones, which were already right — kept so that a later change to the
+    # axis rule cannot quietly break what it was written to fix.
+    add("adjust_brightness", lambda F, v, L: F.adjust_brightness_video(v, 1.4))
+    add("adjust_gamma", lambda F, v, L: F.adjust_gamma_video(v, 1.4))
+    add("adjust_hue", lambda F, v, L: F.adjust_hue_video(v, 0.1))
+    add("invert", lambda F, v, L: F.invert_video(v))
+    add("solarize", lambda F, v, L: F.solarize_video(v, 0.5))
+    add("permute_channels", lambda F, v, L: F.permute_channels_video(v, [2, 0, 1]))
+
+    # uint8, where the histogram lives.
+    add("equalize", lambda F, v, L: F.equalize_video(v), video=clip_u8)
+    add("posterize", lambda F, v, L: F.posterize_video(v, 3), video=clip_u8)
+
+    # **The two that were channel-first all along** and needed no change — `normalize`
+    # and `erase` take what `ToTensor` produces, so their leading axes already rode
+    # along. Asked here because *needed no change* is a claim, and an untested claim
+    # about which of two layouts a kernel wants is the one this file keeps finding
+    # wrong.
+    def chw(L, v):
+        return L.tensor(np.ascontiguousarray(v.transpose(0, 3, 1, 2)))
+
+    def normalized(L):
+        F = _vision_v2_functional(L)
+        given = chw(L, clip) if _is_real_torch(L) else clip.transpose(0, 3, 1, 2).copy()
+        out = _as_numpy(F.normalize_video(given, [0.5, 0.4, 0.3], [0.2, 0.3, 0.4]))
+        return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+
+    def erased(L):
+        F = _vision_v2_functional(L)
+        given = chw(L, clip) if _is_real_torch(L) else clip.transpose(0, 3, 1, 2).copy()
+        blank = (L.tensor(np.zeros((1, 1, 1), dtype=np.float32)) if _is_real_torch(L)
+                 else np.zeros((1, 1, 1), dtype=np.float32))
+        out = _as_numpy(F.erase_video(given, 1, 2, 3, 4, blank))
+        return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+
+    cases.append((VIDEO_PREFIX + "normalize", normalized))
+    cases.append((VIDEO_PREFIX + "erase", erased))
+
+    # The three that answer a list rather than a picture. Frozen as text, because
+    # `[3, 6, 7]` and `[7, 6, 3]` compare equal to nothing else.
+    def sized(L, name):
+        F = _vision_v2_functional(L)
+        given = (chw(L, clip) if _is_real_torch(L) else clip)
+        return str(getattr(F, name)(given))
+
+    for _name in ("get_dimensions_video", "get_num_channels_video", "get_size_video"):
+        cases.append((VIDEO_PREFIX + _name,
+                      lambda L, n=_name: sized(L, n)))
+
+    # **`get_num_frames` is the one that reads the axis the others ride over**, and it
+    # is the reason this whole family was reachable before the rest: it touches no
+    # picture kernel.
+    cases.append((VIDEO_PREFIX + "get_num_frames",
+                  lambda L: str(sized(L, "get_num_frames_video"))))
+    return cases
 
 
 def _vision_v2_functional(L):

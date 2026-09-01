@@ -79,6 +79,7 @@ and counted as `ambiguous`.
 
 import json
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -159,12 +160,136 @@ def _matching(text, open_at):
     return None
 
 
+_BAG_MEMBER = re.compile(r"([A-Za-z_$][\w$]*)\s*\??\s*:")
+
+_INTERFACES = {}
+_CTORS = {}
+
+_EXTENDS = re.compile(r"\bextends\s+(\w+)")
+
+
+def _class_constructors():
+    """`{class name: constructor signature}`, **following `extends`.**
+
+    TypeScript gives a class that declares no constructor its parent's, so what a
+    caller may write is the parent's list — and reading only the class's own members
+    reported `BatchNorm2d extends BatchNormND` as *no argument list*, which is the
+    wording for **could not be measured**. Eleven classes sat in that bucket with
+    their arguments declared one line up the chain.
+
+    A class with none anywhere up the chain takes **nothing**, and that is a fact
+    rather than an absence of one — it is filed as `constructor()` so the row is
+    compared. Left unreadable, `Hardsigmoid`, `Mish`, `ReLU6`, `LogSigmoid` and
+    `Hardswish` were reported as unmeasured while `SELU` thirty lines below them in
+    the same file takes torch's `inplace` and they do not. **The same family, half of
+    it short, and the count said nothing.**
+
+    **The walk moved to `build_api.py` and this reads its answer.** Following
+    `extends` here could only see what `api.json` holds, and a base can be
+    *unexported* (`declare abstract class MixBase`), reached through an **import
+    alias** (`LinearTransformation as V1LinearTransformation`, a name that exists
+    nowhere as a class), or both. Neither resolves without the declaration file, so
+    the chain broke and this filed `constructor()` — **a claim that the class takes
+    nothing**, which is what an unfinished walk should never produce. `CutMix`,
+    `MixUp` and `LinearTransformation` were counted three short of torchvision with
+    every argument present one line up.
+
+    The distinction that had gone missing: *the chain ended at a class with no
+    constructor* is a fact; *the chain ended because the next name could not be
+    found* is not.
+    """
+    if not _CTORS:
+        import json
+
+        for module in json.loads(API.read_text(encoding="utf-8"))["modules"]:
+            for sym in module.get("symbols", ()):
+                if sym.get("kind") != "class":
+                    continue
+                ctor = [m.get("signature") for m in sym.get("members", ())
+                        if m.get("name") == "constructor" and m.get("signature")]
+                _CTORS[sym["name"]] = (ctor[0] if ctor
+                                       else sym.get("inherited_ctor") or "constructor()")
+    return _CTORS
+
+
+def _interface_members():
+    """`{interface name: [member names]}`, read once from `api.json`.
+
+    **Following a named type used to be "a different job".** It was, while every bag in
+    the library was written inline — and the day the thirteen optimizers factored their
+    five shared members into `OptimizerOptions`, that sentence turned twelve measured
+    rows back into `agree to the bag` and the `kw` count fell from 12 to 0. A tally
+    reaching zero because the reader stopped is the failure this file has now recorded
+    three times, and it is the one that reads as good news.
+
+    `api.json` already carries every interface's members, so the reference resolves out
+    of the same file the declaration came from and needs no second parser.
+
+    **`extends` is followed, and that is the same failure one level up.** An interface
+    that names a base declares only its own members, so reading them alone reports the
+    base's as absent — `AdamOptions extends OptimizerOptions` would have come back as
+    one member and five missing. Exactly what `_class_constructors` had to learn about
+    classes, and what the `unique` overload had to teach about declarations: **the
+    reader stopping at a reference improves a number while carrying nothing.**
+    """
+    if not _INTERFACES:
+        import json
+
+        bases = {}
+        for module in json.loads(API.read_text(encoding="utf-8"))["modules"]:
+            for sym in module.get("symbols", ()):
+                if sym.get("kind") != "interface":
+                    continue
+                _INTERFACES[sym["name"]] = [m["name"]
+                                            for m in sym.get("members", ())]
+                found = _EXTENDS.search(sym.get("signature") or "")
+                bases[sym["name"]] = found.group(1) if found else None
+        for name in _INTERFACES:
+            at, seen = bases.get(name), {name}
+            while at is not None and at not in seen:
+                seen.add(at)
+                _INTERFACES[name] += _INTERFACES.get(at, [])
+                at = bases.get(at)
+    return _INTERFACES
+
+
+def _bag_members(raw):
+    """The names inside an inline object type, or `None` when it is not written inline.
+
+    **The bag's members are in the declaration and were being thrown away.** borch.ts
+    writes `opts?: { maximize?: boolean }` and `.d.ts` carries that verbatim, so the one
+    name inside is as readable as any positional one. Stopping at the object read as
+    *nothing beyond here can be compared*, and for thirteen optimizers that was thirteen
+    rows where the axis said `agree to the bag` and measured nothing — while the
+    argument torch puts first in that group, `maximize`, was sitting inside and matching.
+
+    An object written **inline** is opened here. A named one is followed through
+    `_interface_members`, which reads the declaration `api.json` already carries —
+    added the day `OptimizerOptions` was factored out and this function's refusal to
+    follow a name silently un-measured twelve rows.
+    """
+    body = raw.split(":", 1)[1] if ":" in raw else raw
+    body = body.strip()
+    if not (body.startswith("{") and body.endswith("}")):
+        named = _interface_members().get(body)
+        return list(named) if named else None
+    # Nested objects would need a real parser; there are none here and one would be a
+    # silent under-read, so anything with a second `{` bags instead.
+    inner = body[1:-1]
+    if "{" in inner:
+        return None
+    return _BAG_MEMBER.findall(inner)
+
+
 def ts_params(signature):
     """`(names, bagged)` — the parameter names in order, and how many an options bag ate.
 
     A destructured or object-typed trailing parameter is where borch.ts puts what
-    torch spells as keyword arguments. It is not comparable name by name, so the
+    torch spells as keyword arguments. It is not comparable **by position**, so the
     list stops there and the number cut is carried out rather than dropped.
+
+    What is inside the bag is readable and is read by `ts_bag` below — separately,
+    because it lines up against a different half of the other signature.
     """
     inner = _arg_list(signature)
     if inner is None:
@@ -183,6 +308,33 @@ def ts_params(signature):
             return names, 1
         names.append(head)
     return names, 0
+
+
+def ts_bag(signature):
+    """The names inside the trailing options object — a **set** — or `None`.
+
+    `None` means there is no bag, or there is one this cannot read. Everything else is
+    what a caller can pass by keyword, and it is a set because order inside an object
+    literal is not something a caller can observe. That is the same reason
+    `signature_read.keyword_only` is a set on the other side, and the two are compared
+    to each other.
+
+    **This was being thrown away.** The declaration carries `opts?: { maximize?: boolean }`
+    verbatim, so the name inside is as readable as any positional one — and thirteen
+    optimizers were reported as `agree to the bag`, measuring nothing past `weightDecay`,
+    while the argument that group is mostly about was sitting inside and matching.
+    """
+    inner = _arg_list(signature)
+    if inner is None:
+        return None
+    for raw in _split_top(inner):
+        head = raw.split(":", 1)[0].strip() if raw else ""
+        if not (head.startswith("{") or head.rstrip("?") in ("options", "opts")
+                or head.rstrip("?").endswith("Options")):
+            continue
+        members = _bag_members(raw)
+        return None if members is None else set(members)
+    return None
 
 
 def core_params(fn, receiver=False):
@@ -266,6 +418,19 @@ MODULES = {
     "transforms.v2": frozenset({"vision_v2_twins"}),
     "transforms.v2.functional": frozenset({"vision_v2"}),
     "datasets": frozenset({"datasets"}),
+    # **Two namespaces arrived on the name axis and this file reads that axis's list.**
+    # `ts_axis.SPACES` gained `fft` and `special`, and `compare()` here walks the same
+    # spaces — so the two are one list with two tables behind it, and adding to one
+    # without the other is a `KeyError` rather than a silent miss. That is the good
+    # direction for the coupling to fail in, and it is why this row is written rather
+    # than the lookup being made forgiving.
+    #
+    # `special` maps to `special_names` and not to `special`: the second is the
+    # incomplete-gamma and polygamma **kernels**, and pairing a namespace's leaf names
+    # against a kernel module's declarations manufactures findings, which is the
+    # paragraph at the head of this table.
+    "fft": frozenset({"fft"}),
+    "special": frozenset({"special_names"}),
 }
 
 
@@ -355,11 +520,16 @@ def ts_signatures():
                 # be a finding.
                 ctor = [m.get("signature") for m in members
                         if m.get("name") == "constructor" and m.get("signature")]
-                # A class with no constructor member is filed with its own bare
-                # declaration, which has no argument list and therefore lands in
-                # `unreadable`. **Loudly unmeasured beats quietly uncompared** — the
-                # first version skipped it and the whole `nn` namespace went silent.
-                into.setdefault(name, []).append(ctor[0] if ctor else sig)
+                # **A class with no constructor of its own is not unreadable.**
+                # TypeScript hands it the parent's, and with none anywhere up the
+                # chain the implicit one takes nothing — both are facts, and
+                # `_class_constructors` works out which. Filed as the bare
+                # declaration instead, twenty-eight classes landed in `unreadable`,
+                # and *loudly unmeasured* turned out to be quiet after all: half the
+                # activation family is short of torch's `inplace` and the count read
+                # `unread` rather than `shorter` for every one of them.
+                into.setdefault(name, []).append(
+                    ctor[0] if ctor else _class_constructors().get(name, sig))
             elif name and sig and sym.get("kind") in CALLABLE_KINDS:
                 for one in _declarations(sym):
                     into.setdefault(name, []).append(one)
@@ -404,6 +574,44 @@ def ts_members():
             for member in sym.get("members") or []:
                 if member.get("name") and member.get("signature"):
                     held.add(member["name"])
+    return out
+
+
+def ts_member_signatures():
+    """`{module: {name: [signature, ...]}}` — **only** what is declared inside a class.
+
+    `ts_signatures` files a method and a free function of the same name into one
+    list, and in the `Tensor` space that made four names *ambiguous — 2
+    declarations*: `stft` and `istft` are methods on `Tensor` and functions in
+    `fft.ts`, `polygamma` is a method and a function in `special.ts`, and
+    `backward` is a method and — in `autograd.ts` — a generic graph walk,
+    `backward<T>(root: Node<T>, seed: T, add)`, which has nothing to do with
+    torch's.
+
+    **`ambiguous` was the wrong answer and not a harmless one.** It is this file's
+    word for *one name in two modules that may mean different things*, and here the
+    two do not: one is the counterpart and the other is a different callable. The
+    row read as unmeasurable while `backward` was genuinely short of `create_graph`
+    and `inputs` — a gap parked in the bucket that means *cannot judge*, which is
+    the absorbing state this axis has been caught by twice.
+
+    The rule is already written down thirty lines below, at the `only a free
+    function` branch: **a method's counterpart has to be a method.** This carries it
+    through to picking which declaration to compare.
+    """
+    if not API.exists():
+        raise SystemExit(f"no {API.relative_to(ROOT)} — run npm run docs:api first")
+    raw = json.loads(API.read_text(encoding="utf-8"))
+    modules = raw.get("modules") if isinstance(raw, dict) else raw
+    out = {}
+    for module in modules or []:
+        into = out.setdefault(module.get("name") or "?", {})
+        for sym in module.get("symbols") or []:
+            for member in sym.get("members") or []:
+                name, sig = member.get("name"), member.get("signature")
+                if name and sig and _arg_list(sig) is not None:
+                    for one in _declarations(member):
+                        into.setdefault(name, []).append(one)
     return out
 
 
@@ -505,6 +713,45 @@ def _fold_initial(names):
     return [n[:1].lower() + n[1:] for n in names]
 
 
+# **Trailing arguments borch.ts does not take, on purpose, with the reason.**
+#
+# Without this the table has one bucket for two different things: *a feature not carried
+# across* and *a layering decision already made and implemented one layer up*. Both come
+# out as `shorter`, and then the number is a mixture nobody can act on — 47 rows of which
+# 23 were the same settled decision counted 23 times.
+#
+# That is `torch_gap.py`'s `SKIPPED` in a different file, and it took the same argument to
+# get here: a count is only a to-do list if everything in it is to do.
+#
+# **The claim in each reason has to be true of every row it covers**, so `out` was measured
+# before it was written: all 29 `linalg` names that torch gives an `out=` have one on the
+# Python side, and none of them has one in borch.ts. Whoever adds a row here should call
+# the thing before writing the sentence — the first attempt at *checking* this one found
+# seven names that seemed to break under `out=` and every one was the probe, which asked
+# `hasattr(result, "_fields")` on results that `_named` builds with `__slots__`. The
+# comment in `borch/_ops.py:_out` warns about exactly that question.
+TAIL_NOT_IN_TS = {
+    "out": ("borch.ts has no `out=` anywhere — the Python surfaces add it, by table: "
+            "`_TAKES_OUT` and `_LINALG_TAKES_OUT` in `borch/__init__.py`, which "
+            "`borch_webgpu` reads rather than restating. Measured: 29 of 29 `linalg` "
+            "names that torch gives an `out=` have one in Python and none in borch.ts."),
+}
+
+
+def _strip_declined(wanted, yours):
+    """`wanted` without the trailing arguments `TAIL_NOT_IN_TS` names, and the reason.
+
+    **Only from the tail, and only while they are missing on our side.** An argument gone
+    from the middle shifts everything after it, which is the one shape this axis exists to
+    catch, and it must not become invisible because the name happens to be in this table.
+    """
+    cut, why = list(wanted), None
+    while cut and cut[-1] in TAIL_NOT_IN_TS and cut[-1] not in yours:
+        why = TAIL_NOT_IN_TS[cut[-1]]
+        cut.pop()
+    return cut, why
+
+
 def _verdict(wanted, yours):
     """`agree` · `shorter` · `longer` · `differ` — **and the split is the point.**
 
@@ -527,6 +774,13 @@ def _verdict(wanted, yours):
     wanted, yours = _fold_initial(wanted), _fold_initial(yours)
     if wanted == yours:
         return "agree"
+    # **A settled decision is taken out before the tail is measured, not after.**
+    # `TAIL_NOT_IN_TS` names arguments borch.ts does not carry on purpose; with those
+    # gone the row either agrees — and is a decision rather than a debt — or it is still
+    # short, and what is left is the part somebody has to do.
+    trimmed, why = _strip_declined(wanted, yours)
+    if why is not None and trimmed == yours:
+        return "declined"
     if len(yours) < len(wanted) and yours == wanted[:len(yours)]:
         return "shorter"
     if len(yours) > len(wanted) and yours[:len(wanted)] == wanted:
@@ -602,6 +856,7 @@ def compare():
 
     theirs = ts_signatures()
     members = ts_members()
+    only_members = ts_member_signatures()
     stubs = ts_axis.refused()
     out = {}
     for space, _real, ours in torch_gap._spaces():
@@ -630,6 +885,18 @@ def compare():
                 rows.append((name, None, None,
                              "only a free function — no method of this name"))
                 continue
+            # **The same rule, carried one step further.** Having established that the
+            # counterpart is a method, take the *method's* declaration and leave the
+            # free function of the same name where it is. Without this the two arrive
+            # together and disagree, and the row reads `ambiguous` — which is the
+            # word for *two things that may differ*, not for *the counterpart and
+            # something else*. Four rows sat there, one of them (`backward`) paired
+            # against `autograd.ts`'s generic graph walk.
+            if space == "Tensor":
+                method = (_theirs(only_members, space, camel)
+                          or _theirs(only_members, space, name))
+                if method:
+                    sigs = method
             # In the `Tensor` space every name is reached through the class, so the
             # first parameter is the receiver — except a `staticmethod`, which has
             # none. Asked of the raw attribute so that a descriptor answers as
@@ -651,8 +918,18 @@ def compare():
                 continue
             wanted = [ts_axis._camel(RENAMES.get(p, p)) for p in mine]
             if bagged:
-                # The bag stands where torch's keyword arguments do. Compare only as
-                # far as the bag reaches and say how much was left uncompared.
+                # **The bag and torch's keyword-only group are the same thing**, and
+                # both are unordered — nobody can observe the order of either, so
+                # comparing them by position describes a call that cannot be written.
+                # `signature_read.positional` already says where positions stop.
+                bag = ts_bag(sigs[0])
+                kw = _keyword_only_of(ours, name, space)
+                if bag is not None and kw is not None:
+                    rows.append(_bagged_row(name, mine, yours, wanted, bag, kw,
+                                            ours, space))
+                    continue
+                # Unreadable bag — as before: compare as far as it reaches and say how
+                # much was left. An unread tail is not an agreeing one.
                 head = wanted[:len(yours)]
                 if head == yours:
                     rows.append((name, mine, yours,
@@ -661,6 +938,65 @@ def compare():
             rows.append((name, mine, yours, _verdict(wanted, yours)))
         out[space] = rows
     return out
+
+
+def _keyword_only_of(namespace, name, space):
+    """The core's keyword-only names for one member, or `None` when unreadable."""
+    import inspect
+
+    from signature_read import VARIADIC, keyword_only
+
+    held = inspect.getattr_static(namespace, name, None)
+    del held, space                                   # the receiver never lands here
+    got = keyword_only(getattr(namespace, name))
+    return None if got is VARIADIC else got
+
+
+def _bagged_row(name, mine, yours, wanted, bag, kw, ours, space):
+    """One row when borch.ts writes an options object and the core has keyword-onlys.
+
+    The two halves are judged apart, which is the whole point:
+
+    - **positions** against `signature_read.positional` — the part where a shift is a
+      real hazard, because a positional call lands somewhere;
+    - **the bag** against `keyword_only` as sets — where a shift is not expressible, so
+      what is left is presence and absence.
+
+    Reading them together as one ordered list is what produced ten `dropped` rows on
+    optimizers whose only difference was that `maximize` sits inside an object. Ten
+    entries in the sharpest bucket there is, every one describing a call nobody can
+    write.
+    """
+    import ts_axis
+    from signature_read import VARIADIC, positional
+
+    pos = positional(getattr(ours, name), receiver=(space == "Tensor"))
+    if pos is None or pos is VARIADIC:
+        return (name, mine, yours, f"agree to the bag — {len(wanted) - len(yours)} uncompared")
+    want_pos = [ts_axis._camel(RENAMES.get(p, p)) for p in pos]
+    verdict = _verdict(want_pos, yours)
+    # A name the core reaches positionally and borch.ts only by keyword. Not a shift —
+    # the object sits in that seat, so a positional call lands on the object and not on
+    # a wrong parameter — but it is a difference and it is named rather than absorbed.
+    moved = sorted(bag & {ts_axis._camel(p) for p in pos})
+    # **A keyword-only name may be carried positionally on the other side**, and
+    # looking in the bag alone called it absent. `Adam`'s `decoupledWeightDecay` was
+    # in a seat of its own and this reported it missing — a finding about a name that
+    # was right there, which is the worst kind: it reads as work to do and the work
+    # is already done, so the next reader either adds it twice or stops trusting the
+    # row. TypeScript has no keyword arguments, so *positional* and *in the options
+    # object* are the only two places a name can be, and both count as present.
+    absent = sorted({ts_axis._camel(p) for p in kw} - bag - set(yours))
+    if verdict == "agree" and not absent and not moved:
+        return (name, mine, yours + sorted(bag), "agree")
+    notes = []
+    if verdict != "agree":
+        notes.append(verdict)
+    if absent:
+        notes.append(f"keyword-only absent: {', '.join(absent)}")
+    if moved:
+        notes.append(f"by keyword here, positional in torch: {', '.join(moved)}")
+    return (name, mine, yours + sorted(bag), " · ".join(notes))
 
 
 def renames(rows):
@@ -705,7 +1041,7 @@ def main(argv):
             print(f"  {n:>4}  {a}  →  {b}")
         return 0
     differ = bagged = unreadable = ambiguous = agreed = shorter = renamed = 0
-    unaligned = freefn = 0
+    unaligned = freefn = declined = kwgap = 0
     for space, found in rows.items():
         d = [r for r in found if r[3] in ("dropped", "inserted", "reordered")]
         s = [r for r in found if r[3] in ("shorter", "longer")]
@@ -717,6 +1053,14 @@ def main(argv):
         # counting it beside the harmless spelling differences would bury it.
         x = [r for r in found if r[3] == "unaligned"]
         b = [r for r in found if r[3].startswith("agree to the bag")]
+        # **The keyword-only gap, and it needed its own column immediately.** The rows
+        # `_bagged_row` writes carry a compound note — a positional verdict, then what
+        # is missing from the options object — and until this line existed the twelve
+        # optimizers with `foreach`/`fused`/`capturable` absent fell through every
+        # branch into the residual and were counted as **agreement**. That is the
+        # failure written up beside `FREE_FUNCTION` two paragraphs down, happening
+        # again in the same file, on the same day, to the person who read it.
+        k = [r for r in found if "keyword-only absent" in r[3] or "by keyword here" in r[3]]
         a = [r for r in found if r[3].startswith("ambiguous")]
         u = [r for r in found if r[3].startswith("no ")]
         # **Its own column too, and it had to be.** The verdict reads *only a free
@@ -726,22 +1070,30 @@ def main(argv):
         # false `unaligned` it replaced. A new verdict that nothing subtracts is a new
         # verdict that reads as green.
         f = [r for r in found if r[3].startswith("only a free function")]
+        # **Its own column, subtracted from the residual like every other verdict.**
+        # A new verdict that nothing subtracts is a new verdict that reads as green —
+        # written down when `only a free function` did exactly that.
+        c = [r for r in found if r[3] == "declined"]
         differ += len(d)
         shorter += len(s)
+        declined += len(c)
         bagged += len(b)
         ambiguous += len(a)
         unreadable += len(u)
         renamed += len(n)
         unaligned += len(x)
         freefn += len(f)
-        counted = len(d) + len(s) + len(n) + len(x) + len(b) + len(a) + len(u) + len(f)
+        kwgap += len(k)
+        counted = (len(d) + len(s) + len(n) + len(x) + len(b) + len(a) + len(u)
+                   + len(f) + len(c) + len(k))
         agreed += len(found) - counted
         mark = " " if not (d or x or n or f) else "✘"
         print(f"  {mark} {space:22s} "
               f"agree {len(found) - counted:>4}   "
               f"shifted {len(d):>3}   unaligned {len(x):>3}   shorter {len(s):>4}   "
               f"renamed {len(n):>4}   bag {len(b):>3}   two {len(a):>3}   "
-              f"free {len(f):>3}   unread {len(u):>3}")
+              f"free {len(f):>3}   declined {len(c):>3}   kw {len(k):>3}   "
+              f"unread {len(u):>3}")
         if show is not None and space.startswith(show):
             # **The agreeing pairs print too.** A namespace reporting nothing wrong is
             # the one to distrust — `nn`'s 144 constructors went from unmeasurable to
@@ -754,7 +1106,16 @@ def main(argv):
     print(f"맞음 {agreed}건 · **밀림 {differ}건** · **못 맞춤 {unaligned}건** · "
           f"꼬리가 짧다 {shorter}건 · 이름만 다르다 {renamed}건 · "
           f"보따리에서 멈춘 것 {bagged}건 · 두 선언 {ambiguous}건 · "
-          f"**메서드가 없고 자유 함수만 {freefn}건** · 못 읽음 {unreadable}건.")
+          f"**메서드가 없고 자유 함수만 {freefn}건** · 사유가 적힌 것 {declined}건 · "
+          f"키워드 전용이 빈 것 {kwgap}건 · 못 읽음 {unreadable}건.")
+    if kwgap:
+        print(f"키워드 전용 {kwgap}건은 위치로 못 미는 자리다 — 옵션 객체와 torch 의 "
+              "`*` 뒤는 둘 다 순서가 관측되지 않으므로 집합으로 비교한다.")
+    if declined:
+        print(f"사유가 적힌 {declined}건은 부채가 아니라 이미 내려진 결정이다 "
+              "— `TAIL_NOT_IN_TS` 에 이유가 있다:")
+        for arg, why in sorted(TAIL_NOT_IN_TS.items()):
+            print(f"  {arg}: {why}")
     print("밀림은 이름으로 밀린 것이 보이는 자리다. 못 맞춤과 이름만 다름은 "
           "이름으로 가를 수 없어 사람이 읽어야 하는 자리다 —")
     print("  `Optimizer` 는 둘째 자리가 torch 에선 defaults 사전이고 borch.ts 에선 "

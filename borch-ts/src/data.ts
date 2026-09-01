@@ -47,7 +47,7 @@
  */
 
 import { RuntimeError } from "./errors.js";
-import { uniform } from "./random.js";
+import { refuseGenerator, uniform } from "./random.js";
 import { Tensor } from "./tensor.js";
 
 /**
@@ -191,8 +191,9 @@ export class ConcatDataset implements Dataset {
  * Shuffling follows `manualSeed`. The same seed gives the same split.
  */
 export function randomSplit(
-  dataset: Dataset, lengths: readonly number[],
+  dataset: Dataset, lengths: readonly number[], generator?: null,
 ): Subset[] {
+  refuseGenerator("random_split", generator);
   const total = lengths.reduce((a, b) => a + b, 0);
   if (total !== dataset.length) {
     throw new RuntimeError(
@@ -257,7 +258,9 @@ export class RandomSampler implements Sampler {
     private readonly dataSource: { readonly length: number },
     private readonly replacement = false,
     private readonly numSamples: number | null = null,
+    generator?: null,
   ) {
+    refuseGenerator("RandomSampler", generator);
     if (numSamples !== null && !replacement) {
       throw new RuntimeError(
         "numSamples should not be specified when replacement is false");
@@ -282,7 +285,9 @@ export class RandomSampler implements Sampler {
 
 /** A shuffled order over the indices given. `torch.utils.data.SubsetRandomSampler`. */
 export class SubsetRandomSampler implements Sampler {
-  constructor(private readonly indices: readonly number[]) {}
+  constructor(private readonly indices: readonly number[], generator?: null) {
+    refuseGenerator("SubsetRandomSampler", generator);
+  }
 
   get length(): number {
     return this.indices.length;
@@ -310,7 +315,9 @@ export class WeightedRandomSampler implements Sampler {
     weights: readonly number[],
     readonly numSamples: number,
     replacement = true,
+    generator?: null,
   ) {
+    refuseGenerator("WeightedRandomSampler", generator);
     if (!replacement) {
       // Drawing without replacement by weight needs the weights renormalised after
       // every pick, and torch's own answer differs from the obvious one. Refused
@@ -607,4 +614,100 @@ function shuffled(n: number): number[] {
     order[j] = tmp;
   }
   return order;
+}
+
+/**
+ * Every rank takes **an interleaved slice** of the same shuffled order.
+ * `torch.utils.data.DistributedSampler`.
+ *
+ * Its row said *for distributed training — this is inside one tab*, which names
+ * what the class is **for** rather than what it needs. Given `numReplicas` and
+ * `rank` it touches no network at all: it is arithmetic on indices, and a process
+ * group is only where those two numbers come from when nobody passes them.
+ *
+ * Three things it has to get right, and none of them is a network:
+ *
+ * - **The slice is `rank`, `rank + numReplicas`, …** — interleaved, not a block.
+ *   Cut into blocks instead, each rank sees one region of a sorted dataset and the
+ *   batches stop being a sample of it. Nothing throws; the loss curve is the only
+ *   witness.
+ * - **The order is redrawn per epoch from `seed + epoch`**, and every rank draws
+ *   the same permutation because they draw from the same seed — which is what
+ *   makes the interleave a partition rather than an overlap.
+ * - **Short of a whole multiple it pads by wrapping**, or drops with `dropLast`.
+ *   The ranks must receive the same count, and the padding comes from the front of
+ *   the same list rather than a repeat of the tail.
+ *
+ * **`setEpoch` is not decoration.** A loop that never calls it draws the same
+ * order every epoch — invisible except as a model that stops improving early.
+ *
+ * The draw is **its own stream, seeded here**, not the module's: a shared stream
+ * would hand each rank a different permutation and the partition would break. The
+ * numbers it produces are not numpy's and not torch's, so what is frozen about the
+ * shuffled case is a property (the ranks partition, one epoch repeats, two epochs
+ * differ) rather than a value.
+ */
+export class DistributedSampler implements Sampler {
+  private epoch = 0;
+  readonly numSamples: number;
+  readonly totalSize: number;
+
+  constructor(
+    private readonly dataset: { readonly length: number },
+    private readonly numReplicas: number,
+    private readonly rank: number,
+    private readonly shuffle = true,
+    private readonly seed = 0,
+    private readonly dropLast = false,
+  ) {
+    if (rank >= numReplicas || rank < 0) {
+      throw new RuntimeError(
+        `Invalid rank ${rank}, rank should be in the interval `
+        + `[0, ${numReplicas - 1}]`);
+    }
+    const count = dataset.length;
+    this.numSamples = dropLast && count % numReplicas !== 0
+      ? Math.ceil((count - numReplicas) / numReplicas)
+      : Math.ceil(count / numReplicas);
+    this.totalSize = this.numSamples * numReplicas;
+  }
+
+  get length(): number {
+    return this.numSamples;
+  }
+
+  /** Which epoch's order to draw. See the note above on why it matters. */
+  setEpoch(epoch: number): void {
+    this.epoch = epoch;
+  }
+
+  *[Symbol.iterator](): Iterator<number> {
+    const count = this.dataset.length;
+    let order = Array.from({ length: count }, (_, i) => i);
+    if (this.shuffle) {
+      // MINSTD, seeded per epoch. The product stays under 2^53 so a float64
+      // multiply is exact and every rank walks the identical sequence.
+      let state = ((this.seed + this.epoch) % 2147483646) + 1;
+      const next = (): number => {
+        state = (state * 48271) % 2147483647;
+        return state;
+      };
+      for (let i = count - 1; i > 0; i--) {
+        const j = next() % (i + 1);
+        [order[i], order[j]] = [order[j] as number, order[i] as number];
+      }
+    }
+    if (!this.dropLast) {
+      const padding = this.totalSize - order.length;
+      order = padding <= order.length
+        ? order.concat(order.slice(0, padding))
+        : order.concat(
+            Array.from({ length: padding }, (_, i) => order[i % order.length] as number));
+    } else {
+      order = order.slice(0, this.totalSize);
+    }
+    for (let i = this.rank; i < this.totalSize; i += this.numReplicas) {
+      yield order[i] as number;
+    }
+  }
 }

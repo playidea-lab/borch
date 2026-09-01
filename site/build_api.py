@@ -148,9 +148,19 @@ MODULES = [
       "en": "Acquiring the adapter, and asking it what it is doing."}),
     ("random", "random", {"ko": "난수의 씨앗.", "en": "Seeding the random draws."}),
     ("autograd", "autograd", {"ko": "기울기 스위치.", "en": "The gradient switch."}),
+    # **These two are a pair and the labels used to be one.** `special.ts` holds the
+    # incomplete-gamma and polygamma *kernels*, and its entry said "where
+    # `torch.special` would be" — true while nothing else claimed that place, and
+    # false the moment `special_names.ts` did. The kernels module is three exported
+    # functions; the namespace is twenty-two forwarders standing partly on it.
     ("special", "special",
-     {"ko": "특수함수. `torch.special` 자리.",
-      "en": "Special functions. Where `torch.special` would be."}),
+     {"ko": "불완전 감마·폴리감마 커널. 아래 `torch.special` 이름들이 여기 딛는다.",
+      "en": "The incomplete-gamma and polygamma kernels. The `torch.special` names "
+            "below stand partly on these."}),
+    ("special_names", "special",
+     {"ko": "`torch.special` 자리 — 스물두 이름, 전부 이미 있는 것의 두 번째 철자.",
+      "en": "Where `torch.special` would be — twenty-two names, every one the second "
+            "spelling of something this library already has."}),
     ("rnn", "rnn", {"ko": "순환 신경망 유틸.", "en": "Recurrent-network utilities."}),
     ("errors", "errors",
      {"ko": "예외 종류. torch 와 같은 이름을 쓴다.",
@@ -533,6 +543,79 @@ def parse(path):
     return module_doc, symbols
 
 
+# Every class declaration in a `.d.ts`, **exported or not** — `declare abstract class
+# MixBase` is not exported and is still the constructor `CutMix` and `MixUp` have.
+_ANY_CLASS = re.compile(
+    r"^(?:export\s+)?declare\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)"
+    r"(?:<[^>]*>)?(?:\s+extends\s+([A-Za-z_$][\w$]*))?", re.M)
+# `import { LinearTransformation as V1LinearTransformation } from "./vision.js";`
+_IMPORT_ALIAS = re.compile(r"([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)")
+_OWN_CTOR = re.compile(r"^\s+(?:protected\s+|private\s+)?constructor\s*\(", re.M)
+
+
+def _inheritance(text):
+    """`{class: (own constructor or None, base name or None)}` for one declaration file.
+
+    **Three things a caller cannot see from `api.json` alone**, and each one turned a
+    complete class into a row reading *takes nothing*:
+
+      · a base that is **not exported** — `declare abstract class MixBase` carries
+        `constructor(alpha?, numClasses?)`, and `CutMix`/`MixUp` are exactly it;
+      · a base reached through an **import alias** — `LinearTransformation as
+        V1LinearTransformation`, where the name in the `extends` clause exists nowhere
+        as a class;
+      · a base **in another module**, which needs the whole build rather than one file.
+
+    The first two are facts of this file and are resolved here. The third is left to
+    the caller, which sees every module.
+
+    This is the fifth time on these axes that **a reader stopping at a reference**
+    improved a number while carrying nothing: the count for `transforms.v2` read three
+    classes short of torchvision, and all three had their arguments one line up a chain
+    the reader could not walk.
+    """
+    alias = {new: original for original, new in _IMPORT_ALIAS.findall(text)}
+    out = {}
+    for found in _ANY_CLASS.finditer(text):
+        name, base = found.group(1), found.group(2)
+        body = text[found.end():]
+        close = body.find("\n}")
+        own = _OWN_CTOR.search(body[:close if close >= 0 else len(body)])
+        line = None
+        if own:
+            end = body.find("\n", own.start())
+            line = body[own.start():end if end >= 0 else len(body)].strip().rstrip(";")
+        out[name] = (line, alias.get(base, base) if base else None)
+    return out
+
+
+def _stamp_inherited_constructors(modules, chains):
+    """Give every exported class the constructor a caller may actually write.
+
+    Walked across **all** modules, because a base can live in another file. A class with
+    none anywhere up the chain takes nothing, and that is a fact rather than an absence
+    of one — recorded so the axis compares the row instead of filing it unreadable.
+    """
+    joined = {}
+    for one in chains:
+        for name, pair in one.items():
+            joined.setdefault(name, pair)
+    for module in modules:
+        for sym in module["symbols"]:
+            if sym.get("kind") != "class":
+                continue
+            if any(m.get("name") == "constructor" for m in sym.get("members", ())):
+                continue
+            at, seen = sym["name"], set()
+            while at is not None and at not in seen:
+                seen.add(at)
+                own, base = joined.get(at, (None, None))
+                if own:
+                    sym["inherited_ctor"] = own
+                    break
+                at = base
+
+
 def _top_entry(kind, name, stripped, pending, symbols):
     """One top-level symbol. A name appearing twice (as `class` and as `interface`) is merged —
     torch does not show those two apart either."""
@@ -664,11 +747,13 @@ def main():
         raise SystemExit(f"no declaration files: {DECL}\n  first: npm run build:ts")
 
     modules = []
+    chains = []
     for name, title, blurb in MODULES:
         path = DECL / f"{name}.d.ts"
         if not path.exists():
             continue
         doc, symbols = parse(path)
+        chains.append(_inheritance(path.read_text(encoding="utf-8")))
         marks = sections_of(name)
         for sym in symbols:
             for member in sym["members"]:
@@ -683,6 +768,7 @@ def main():
             "count": sum(1 + len(s["members"]) for s in symbols),
         })
 
+    _stamp_inherited_constructors(modules, chains)
     done, stale, missing = attach_korean(modules)
 
     payload = {

@@ -86,6 +86,43 @@ def int64_name():
     return _DType("int64")
 
 
+def _forward_step(one):
+    """torch's rule for a slice's step, in torch's words.
+
+    **The core's `_forward_step` is the same sentence** — it had to reach numpy's
+    reversal, which is a real answer under a spelling torch stops at. Here nothing
+    reverses, so a negative step would have gone to `range(start, stop, -2)` and
+    come back empty: a tensor with a zero-length axis, no error, and the reading
+    that the slice simply selected nothing.
+    """
+    if one.step == 0:
+        raise ValueError("slice step cannot be zero")
+    if one.step is not None and one.step < 0:
+        raise ValueError("step must be greater than zero")
+
+
+def _expand_ellipsis(keys, rank):
+    """`...` becomes the full slices it stands for. `keys` is returned changed.
+
+    **Found by identity, never by `==`.** Written as `Ellipsis in keys`, the
+    membership test compares each key with `==`, and a key that is a tensor answers
+    that with a tensor comparison — over the boundary, into borch.ts, where it came
+    back as `other.isComplex is not a function`. Twenty-one `roi_align`,
+    `ps_roi_align` and `deform_conv2d` cases stopped with that sentence, which names
+    neither indexing nor an ellipsis. Every key here is compared by `is`.
+
+    `None` adds an axis rather than consuming one, so it does not count against what
+    `...` has left to stand for.
+    """
+    at = [i for i, k in enumerate(keys) if k is Ellipsis]
+    if len(at) > 1:
+        raise IndexError("an index can only have a single ellipsis ('...')")
+    if at:
+        named = sum(1 for k in keys if k is not Ellipsis and k is not None)
+        keys[at[0]:at[0] + 1] = [slice(None)] * max(0, rank - named)
+    return keys
+
+
 def _core_repr(shim):
     """Borrow the core's `_tensor_repr`. In a browser it lives under `/work`."""
     global _REPR
@@ -369,11 +406,38 @@ class Tensor:
             return complex(float(flat[0]), float(flat[1]))
         return float(flat[0])
 
-    def backward(self, *args):
-        return guarded(self._h.backward, *[handle(a) for a in args])
+    def backward(self, gradient=None, retain_graph=False, create_graph=False,
+                 inputs=None):
+        """torch's four names, written out.
+
+        It was `(*args)` — every argument positional, no keyword accepted at all,
+        so `loss.backward(inputs=[w])` stopped at *unexpected keyword argument*
+        while the core and torch both ran it. A bag takes anything and reports
+        nothing about what it will not do.
+
+        `inputs` crosses as a real JS array. Handed over as a Python list it
+        arrives a proxy, and `inputs instanceof Tensor` is false for a proxy while
+        the spread of it is empty — the argument would be received and do nothing,
+        which is the failure this binding is most often caught by.
+        """
+        import js as _js
+
+        listed = inputs
+        if inputs is not None and not isinstance(inputs, Tensor):
+            listed = _js.Array.from_([handle(t) for t in inputs])
+        return guarded(self._h.backward, handle(gradient) if gradient is not None else None,
+                       bool(retain_graph), bool(create_graph),
+                       handle(listed) if isinstance(listed, Tensor) else listed)
 
     # The dtype-changing names. borch.ts takes them all as `to("float32")`.
     def to(self, dtype):
+        # **A dtype with no storage stops here too.** `float64` was caught below by
+        # name and its four siblings were not: the core's `int32` has no `.plain`,
+        # so `str(dtype)` gave `torch.int32`, the prefix came off, and borch.ts
+        # labelled a float32 buffer `int32`. `tensor()` had the same door and
+        # `_gate_dtype` closed it there; this is the other one, and
+        # `x.type("torch.IntTensor")` is what walked through it.
+        _gate_dtype(dtype)
         name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
         name = name.replace("torch.", "")
         # **Double precision stops here, and this is the one place it can** —
@@ -520,8 +584,13 @@ class Tensor:
         from . import _ops
         return _ops.imag(self)
 
-    def resize_as_(self, other):
+    def resize_as_(self, the_template, memory_format=None):
         """An underscore name with no pair, so the derived table does not build it.
+
+        **The argument is `the_template`.** torch registers it under that name and
+        refuses both `tensor=` (its own docstring's word) and `other=` (what every
+        neighbour and its non-in-place twin take) — measured, all three. The core
+        carries the same name, and this side said `other` until it did.
 
         **It is in place** — handing back a new tensor would make the name a
         lie. `_write_back` follows the shape change too, which is the same path
@@ -531,7 +600,10 @@ class Tensor:
         had since it was first committed. What it says here comes from reading
         the line below it rather than from guessing at the gaps.)
         """
-        return self._write_back(self.reshape(*[int(v) for v in other.shape]))
+        if memory_format is not None:
+            from borch._base import _unsupported
+            _unsupported("Tensor.resize_as_(memory_format=…)")
+        return self._write_back(self.reshape(*[int(v) for v in the_template.shape]))
 
     def is_same_size(self, other):
         return tuple(self.shape) == tuple(other.shape)
@@ -632,16 +704,44 @@ class Tensor:
                 " is ambiguous)")
         return bool(self.item() != 0)
 
-    def is_contiguous(self):
+    def _memory_format(self, name, memory_format):
+        """torch's `memory_format`, **through the core's rule.**
+
+        `contiguous_format` and `preserve_format` name what already happens, so
+        they pass; `channels_last` names storage that does not exist, so it stops.
+        The core owns that decision — written again here it would be a second
+        wording for one rule, and the pair had already parted once on this
+        library's own `clone`.
+        """
+        from borch._tensor import Tensor as _Core
+
+        _Core._memory_format(self, name, memory_format)
+
+    def is_contiguous(self, memory_format=None):
         """**Always true** — GPU buffers are not shared out as views, so there is
         nowhere for non-contiguous to arise. In the core numpy's views make it
-        false after a transpose."""
+        false after a transpose.
+
+        **The `memory_format` seat was missing here and present on the core**, so
+        `x.is_contiguous(memory_format=torch.contiguous_format)` — a line torch
+        answers `True` to — stopped with *unexpected keyword argument*.
+        """
+        self._memory_format("is_contiguous", memory_format)
         return True
 
-    def contiguous(self):
+    def contiguous(self, memory_format=None):
         """Already contiguous, so it hands itself back. In the core a
         non-contiguous tensor gets copied."""
+        self._memory_format("contiguous", memory_format)
         return self
+
+    def clone(self, memory_format=None):
+        """**`clone` took no keywords at all on this side.** It reached borch.ts
+        through the forwarding path, which refuses every keyword by name, so
+        `x.clone(memory_format=torch.contiguous_format)` stopped with *`clone` does
+        not take keyword arguments* while the core answered it."""
+        self._memory_format("clone", memory_format)
+        return wrap(self._h.clone())
 
     def cfloat(self):
         """complex64. **Not a relabel** — borch.ts stores complex interleaved as
@@ -653,8 +753,28 @@ class Tensor:
     def bool(self):
         return self.to("bool")
 
-    def type(self, dtype=None):
-        return self.dtype if dtype is None else self.to(dtype)
+    def type(self, dtype=None, non_blocking=False):
+        """**Both halves were wrong, in opposite directions.**
+
+        With no argument it handed back `torch.float32`, the dtype's own `repr`,
+        where torch names the tensor type — `torch.FloatTensor`. And given one of
+        those names it passed the string to `to()`, which relabels: `x.type(
+        "torch.zzzTensor")` came back a tensor whose dtype printed
+        `torch.zzzTensor`, a label naming nothing, with no exception anywhere.
+
+        The core's two tables are used for both, so there is one vocabulary rather
+        than three. `non_blocking` is torch's seat and there is nothing asynchronous
+        to wait on.
+        """
+        from borch._tensor import (_TENSOR_TYPE_NAMES, _TYPE_NAME_OF,
+                                   _unknown_tensor_type)
+
+        if dtype is None:
+            plain = self.dtype.plain
+            return _TYPE_NAME_OF.get(plain, f"torch.{plain}Tensor")
+        if isinstance(dtype, str) and dtype.startswith("torch."):
+            dtype = _TENSOR_TYPE_NAMES.get(dtype) or _unknown_tensor_type(dtype)
+        return self.to(dtype)
 
     def tolist(self):
         return self.numpy().tolist()
@@ -946,21 +1066,18 @@ class Tensor:
         return wrap(self._h.neg())
 
     def _spans(self, key):
-        """`key` as one `(start, stop)` per axis, in order, covering every axis.
+        """`key` as one `(start, stop, step)` per axis, in order, covering every axis.
 
-        Only basic indexing — integers, slices with step 1, and one `Ellipsis`.
-        An integer becomes a span of length one, which is what makes assignment
-        and slicing the same walk. Anything else is refused by name rather than
-        approximated, because a *nearly* right region is a wrong picture with no
-        error attached to it.
+        Only basic indexing — integers, slices and one `Ellipsis`. An integer
+        becomes a span of length one, which is what makes assignment and slicing the
+        same walk. Anything else is refused by name rather than approximated, because
+        a *nearly* right region is a wrong picture with no error attached to it.
+
+        **The step used to be refused here** and rides along now; `_take` says what
+        that refusal was standing on.
         """
-        keys = list(key) if isinstance(key, tuple) else [key]
-        if keys.count(Ellipsis) > 1:
-            raise IndexError("an index can only have a single ellipsis ('...')")
-        if Ellipsis in keys:
-            at = keys.index(Ellipsis)
-            named = len(keys) - 1
-            keys[at:at + 1] = [slice(None)] * (len(self.shape) - named)
+        keys = _expand_ellipsis(list(key) if isinstance(key, tuple) else [key],
+                                len(self.shape))
         keys += [slice(None)] * (len(self.shape) - len(keys))
         if len(keys) > len(self.shape):
             raise IndexError(
@@ -970,24 +1087,36 @@ class Tensor:
         for axis, k in enumerate(keys):
             n = self.shape[axis]
             if isinstance(k, slice):
-                if k.step not in (None, 1):
-                    raise NotImplementedError(
-                        "assigning into a strided slice is not here yet — "
-                        f"step {k.step} on dimension {axis}.")
-                start, stop, _ = k.indices(n)
-                spans.append((start, max(start, stop)))
+                _forward_step(k)
+                start, stop, step = k.indices(n)
+                spans.append((start, max(start, stop), step))
             elif isinstance(k, int):
                 at = k + n if k < 0 else k
                 if not 0 <= at < n:
                     raise IndexError(
                         f"index {k} is out of bounds for dimension {axis} "
                         f"with size {n}")
-                spans.append((at, at + 1))
+                spans.append((at, at + 1, 1))
             else:
                 raise NotImplementedError(
                     f"assigning with {type(k).__name__} is not here yet — "
                     "integers, slices and `...` are.")
         return spans
+
+    def _take(self, axis, start, stop, step):
+        """The region on one axis. A step of 1 is a `narrow`; anything else is the
+        strided positions, picked out by name.
+
+        **This is what the step refusal was standing on.** It read "assigning into a
+        strided slice is not here yet", and the reason was that the walk below is
+        `narrow` all the way down — a contiguous window, which cannot skip. It never
+        had to be: `arange` and `indexSelect` are both over there, and `sliceScatter`
+        has taken a step the whole time, which is the half that is harder to write.
+        """
+        if step == 1:
+            return wrap(self._h.narrow(axis, start, stop - start))
+        at = tensor(list(range(start, stop, step)), int64_name())
+        return wrap(self._h.indexSelect(axis, at._h))
 
     def __setitem__(self, key, value):
         """`x[0] = 1`, `img[..., y:y + h, x:x + w] = 0`.
@@ -1008,8 +1137,8 @@ class Tensor:
         self._refuse_inplace_on_leaf("__setitem__")
         spans = self._spans(key)
         region = self
-        for axis, (start, stop) in enumerate(spans):
-            region = wrap(region._h.narrow(axis, start, stop - start))
+        for axis, (start, stop, step) in enumerate(spans):
+            region = region._take(axis, start, stop, step)
         # **`value` is not always a number.** `borchvision.erase` is called both
         # ways — a scalar fill and a `(C, h, w)` patch — and `float(value)` on the
         # second turns into `only length-1 arrays can be converted to Python
@@ -1029,25 +1158,40 @@ class Tensor:
         def put(dst, axis):
             if axis == len(spans):
                 return src
-            start, stop = spans[axis]
-            inner = wrap(dst._h.narrow(axis, start, stop - start))
+            start, stop, step = spans[axis]
+            inner = dst._take(axis, start, stop, step)
             return wrap(dst._h.sliceScatter(
-                handle(put(inner, axis + 1)), axis, start, stop, 1))
+                handle(put(inner, axis + 1)), axis, start, stop, step))
 
         return self._write_back(put(self, 0))
 
     def __getitem__(self, key):
-        """`x[0]`, `x[1:3]`, `x[:, 1]`. The most common thing torch code does."""
-        keys = key if isinstance(key, tuple) else (key,)
+        """`x[0]`, `x[1:3]`, `x[:, 1]`. The most common thing torch code does.
+
+        **`...` was understood on the assignment side and not here.** `_spans`
+        expands it; this loop had no branch for it, so `x[..., 1::2]` fell through
+        to the integer branch and stopped with `'<' not supported between instances
+        of 'ellipsis' and 'int'` — an error about comparison, in code about
+        indexing, naming nothing the caller wrote. The two halves of the same
+        notation disagreed about whether it exists.
+        """
+        keys = _expand_ellipsis(list(key) if isinstance(key, tuple) else [key],
+                               len(self.shape))
         kinds = [isinstance(k, (Tensor, list, tuple)) for k in keys]
         if sum(kinds) > 1 and all(kinds):
             return self._gather_at(keys)
         out, axis = self, 0
         for k in keys:
             if isinstance(k, slice):
-                start = 0 if k.start is None else k.start
-                stop = out.shape[axis] if k.stop is None else k.stop
-                out = wrap(out._h.narrow(axis, start, stop - start))
+                # **The step was read and thrown away here.** `x[::2]` narrowed
+                # from 0 to the end and handed back the whole axis — the right
+                # shape for `x[:]`, under the spelling for every other row. No
+                # exception, no warning, and the values are all real, so nothing
+                # downstream can tell. It is `_take`'s walk now, the same one
+                # assignment uses, so the two cannot part again.
+                _forward_step(k)
+                start, stop, step = k.indices(out.shape[axis])
+                out = out._take(axis, start, max(start, stop), step)
                 axis += 1
             elif k is None:
                 # **`x[:, None]` inserts a dimension.** `torch.newaxis` is this
@@ -1200,14 +1344,26 @@ def translate(exc):
     # `replace` turned `RuntimeError: shape …` into `Runtimeshape …` and broke
     # the wording — us destroying the very phrasing that was kept so a search
     # would find it.
-    for head in ("RuntimeError: ", "IndexError: ", "Error: "):
+    said = None
+    for head, cls in (("RuntimeError: ", RuntimeError),
+                      ("IndexError: ", IndexError),
+                      ("Error: ", None)):
         if text.startswith(head):
-            text = text[len(head):]
+            text, said = text[len(head):], cls
             break
-    # The Korean spelling used to be checked here as well, back when our own
-    # messages were Korean. They are English now, so that branch could never
-    # match — a condition that cannot fire reads as one that is guarding
-    # something.
+    # **The name borch.ts threw wins over the guess.** The prefix was stripped and
+    # then dropped, so the guess below decided even where the far side had said
+    # which class it meant — and `autograd.grad`'s *"The differentiated Tensor at
+    # index 1 …"* is a `RuntimeError` in torch that arrived here as an `IndexError`,
+    # because its wording contains the word the guess looks for. The comment above
+    # named that hazard for `LinAlgError` and `NotImplementedError` and stopped
+    # there; these two were left to the guess although they were just as explicit.
+    if said is not None:
+        return said(text)
+    # A bare `Error` carries no class, so the wording is all there is to go on. The
+    # Korean spelling used to be checked here as well, back when our own messages
+    # were Korean. They are English now, so that branch could never match — a
+    # condition that cannot fire reads as one that is guarding something.
     kind = IndexError if "index" in text.lower() else RuntimeError
     return kind(text)
 
@@ -1221,18 +1377,37 @@ class _Pair:
     `AttributeError: numpy`.
     """
 
-    __slots__ = ("values", "indices")
+    __slots__ = ("values", "indices", "kind")
 
-    def __init__(self, obj):
+    def __init__(self, obj, kind="max"):
         self.values = wrap(obj.values)
         self.indices = wrap(obj.indices)
+        self.kind = kind
 
     def __iter__(self):
         yield self.values
         yield self.indices
 
+    def __len__(self):
+        return 2
+
     def __getitem__(self, i):
         return (self.values, self.indices)[i]
+
+    def __repr__(self):
+        """**It had none**, so `print(x.topk(3))` showed
+        `<borch_webgpu._base._Pair object at 0x1b3b710>` where torch prints the
+        values and the indices. The core's pair class carried the same gap, and the
+        address is the part that bites: it changes between two identical calls, so
+        anything comparing one printed form against another sees a difference that
+        is not there.
+
+        The name comes from the JS method that produced the pair — `settle` reads
+        `fn.name` off it. Threading a kind through every call site would be the
+        other way, and there are dozens of them; the function already knows what it
+        is called."""
+        return (f"torch.return_types.{self.kind}(\n"
+                f"values={self.values!r},\nindices={self.indices!r})")
 
     def __getattr__(self, name):
         """**Forwarded to the values side.** torch's `median()` called without a
@@ -1242,8 +1417,11 @@ class _Pair:
         return getattr(self.values, name)
 
 
-def settle(out):
+def settle(out, kind=None):
     """Shape what came back into something Python can use.
+
+    `kind` is the name of the borch.ts function that produced it, and it is only
+    used to print a `{values, indices}` pair the way torch does — see `_Pair`.
 
     **A promise is awaited here.** A few things in borch.ts are asynchronous —
     `unique`, `bincount`, `masked_select` and the rest, whose **result size
@@ -1266,7 +1444,7 @@ def settle(out):
     # A `{values, indices}` pair or an array of tensors leaves a proxy loose in
     # Python if it is passed straight through.
     if hasattr(out, "values") and hasattr(out, "indices"):
-        return _Pair(out)
+        return _Pair(out, kind or "max")
     if _js.Array.isArray(out):
         return [wrap(x) if _js.borch.isTensor(x) else x for x in out]
     # **The ones handing back several named slots** — `slogdet`'s
@@ -1337,11 +1515,19 @@ class _Fields:
 
 
 def guarded(fn, *args):
-    """Call it, and re-raise a JavaScript exception as torch's type."""
+    """Call it, and re-raise a JavaScript exception as torch's type.
+
+    **The function's own name is carried through**, because a `{values, indices}`
+    pair prints `torch.return_types.<name>(…)` and this is the one place that knows
+    which name was called. A JS function object holds its `name`, so nothing has to
+    be threaded through the dozens of call sites — `getattr(fn, "name", None)`
+    rather than `fn.name`, since a free function reached another way may not be a
+    JS proxy at all.
+    """
     from pyodide.ffi import JsException
 
     try:
-        return settle(fn(*args))
+        return settle(fn(*args), getattr(fn, "name", None))
     except JsException as exc:
         raise translate(exc) from None
 
@@ -1373,6 +1559,25 @@ def handle(x):
     return wrap(x)._h
 
 
+def _gate_dtype(dtype):
+    """**A dtype with no storage stops here, in the core's wording.**
+
+    The name went across as a *label*: `str(dtype)` on the core's `uint8` is
+    `torch.uint8`, and borch.ts labelled the tensor with it and handed back
+    something whose dtype printed `torch.torch.uint8` — float32 storage wearing a
+    name for eight-bit integers. No exception anywhere.
+
+    The core keeps those names so `dtype=torch.uint8` says what is missing instead
+    of reading as a typo, and its `_AbsentDtype.np` is the gate that says it.
+    Reading the property here is the whole check: a real dtype answers, an absent
+    one raises with the sentence the core would have used.
+    """
+    from borch._base import dtype as _core_dtype
+
+    if isinstance(dtype, _core_dtype) and not isinstance(dtype, _DType):
+        dtype.np                                        # noqa: B018 — the gate
+
+
 def tensor(data, dtype=None, requires_grad=False):
     """Where `torch.tensor` sits. Takes numpy arrays, nested lists and numbers."""
     from pyodide.ffi import JsException
@@ -1381,6 +1586,7 @@ def tensor(data, dtype=None, requires_grad=False):
     if dtype is not None:
         # Something that shows as `torch.float32` still crosses to borch.ts as
         # `float32`.
+        _gate_dtype(dtype)
         name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
     elif arr.dtype.kind == "c":
         name = "complex64"
@@ -1594,8 +1800,15 @@ Tensor.layout = property(lambda self: _CoreLayout())
 
 
 def _CoreLayout():                                          # noqa: N802
-    from borch._tensor import _Layout
-    return _Layout()
+    """**The core's own `strided` object, not a fresh one.**
+
+    It used to build `_Layout()` per call, which read the same and made
+    `x.layout is torch.strided` false — torch's is true (measured), and `is` is how
+    a layout is compared as often as `==`. Borrowing the instance also means this
+    side cannot drift into a second layout vocabulary.
+    """
+    from borch._tensor import strided
+    return strided
 
 
 def _matrix_transpose(self):
@@ -1674,12 +1887,25 @@ def _sum_to_size(self, *size):
 
 
 def _retain_grad(self):
-    """**Stops on a leaf**, as the core does. borch.ts already keeps gradients
-    for a derived tensor, so this only raises the flag."""
+    """**It calls through now, and for a while it did not.**
+
+    The line that stood here said borch.ts already kept a derived tensor's
+    gradient, so the flag did not need setting — and that was false. borch.ts
+    accumulated into leaves only; the method raised on a tensor that takes no
+    gradients, passed on every other, and **did nothing**. A caller who asked for
+    a hidden activation's gradient got `None` and no word about why.
+
+    The claim was never checked because the signature axis could not read
+    `backward` at all: `Tensor.backward` and `autograd.ts`'s generic graph walk
+    share a name, the row came back *ambiguous — 2 declarations*, and everything
+    downstream of it went unasked. Closing `backward(inputs=…)` gave borch.ts the
+    mechanism, and this is the same mechanism.
+    """
     if not self._h.requiresGrad:
         raise RuntimeError(
             "`retain_grad()` cannot be used on a tensor that does not take gradients. "
             "(torch: can't retain_grad on Tensor that has requires_grad=False)")
+    guarded(self._h.retainGrad)
     return None
 
 

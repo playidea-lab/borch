@@ -130,10 +130,16 @@ FROZEN = {
     # is asynchronous; the `resize_`/`set_` family re-aims storage a borch.ts tensor
     # owns; `sspaddmm` and the sparse queries ask about a layout that does not exist.
     #
-    # **Three are marked `owed` rather than refused** — `sum_to_size`,
-    # `multinomial`, `retain_grad`. That word is doing work: without it "no reason"
-    # means *nobody looked*, and these have been looked at and are ordinary work.
-    "Tensor": 49,
+    # **Two are marked `owed` rather than refused** — `sum_to_size` and
+    # `multinomial`. That word is doing work: without it "no reason" means *nobody
+    # looked*, and these have been looked at and are ordinary work.
+    #
+    # 49 → 48. `retain_grad` was the third `owed` and it went out with
+    # `backward(…, inputs)`: both need a derived node able to hold a gradient, and
+    # closing either closes both. The row named the missing mechanism rather than
+    # the missing method, which is why it could leave with work that was not aimed
+    # at it.
+    "Tensor": 48,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
     # was a layer the core had and borch.ts did not, `embedding` a function both had;
     # folding the two reported the layer as present because the function was. torch's
@@ -254,6 +260,22 @@ FROZEN = {
     # `inverse`, `pinverse` and `mm`, which had no name anywhere in borch.ts. The
     # `linalg` namespace carries them now.
     "linalg": 0,
+    # **Two namespaces arrived on this axis at once, and one of them is 0.**
+    # `fft` and `special` were both declined whole in `torch_gap.py` — `fft` while
+    # twenty-two of its twenty-three names were built, `special` while twenty-three of
+    # its fifty-seven were. Adding them there did not add them here, so a name the core
+    # gained and borch.ts did not had no ledger between the two.
+    #
+    # `fft` comes in at zero, which is the answer that makes the omission cheap to have
+    # had and worth fixing anyway: nothing was wrong and nothing was watching.
+    "fft": 0,
+    # **34, and every one is a body somebody could write.** `special`'s other
+    # twenty-three forward to arithmetic borch.ts already has; these are the Bessel and
+    # Airy approximations, twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin and
+    # the nine tail-safe forms — numpy in `borch/_ops.py` with no WGSL behind them.
+    # Unlike `transforms.v2.functional`'s row below, this is not a type that would have
+    # to change first, so the number is expected to come down.
+    "special": 34,
     # **12 → 2, and the two that remain have reasons.** The ten were the samplers
     # and the two dataset shapes: `Sampler`, `SequentialSampler`, `RandomSampler`,
     # `SubsetRandomSampler`, `WeightedRandomSampler`, `BatchSampler`,
@@ -274,10 +296,20 @@ FROZEN = {
     # lines above the loader that called it — a comment naming what something
     # *would* be called is not the name.
     #
-    # 2 → 3. `DistributedSampler`. It is not a network — it interleaves indices and
-    # slices by rank — but borch.ts has no `utils.data` at all: a page loads its own
-    # data and there is nothing there to sample from.
-    "utils.data": 3,
+    # 2 → 3 → 2. `DistributedSampler` went in and came out again in three days.
+    #
+    # The row said *borch.ts has no `utils.data` at all: a page loads its own data
+    # and there is nothing there to sample from*, and **that was not true when it was
+    # written** — `data.ts` already held `SequentialSampler`, `RandomSampler`,
+    # `WeightedRandomSampler` and `BatchSampler`, exported as `borch.data`. The
+    # sentence was about the class (it is not a network) and then reached for a claim
+    # about the namespace to finish, and the second half was never checked.
+    #
+    # What it actually needed was a **seeded local stream**: every rank has to draw
+    # the same permutation or the interleave stops being a partition, and borch.ts
+    # shuffles from one global. Thirty lines of MINSTD inside the class, and it
+    # crossed.
+    "utils.data": 2,
     # **These two were not measured at all until now.** `ts_axis.py` left them out
     # because the golden's `vision::` cases were said to hold them name by name, and
     # for `five_crop`, `ten_crop` and `to_grayscale` the golden had no case — the
@@ -376,7 +408,15 @@ FROZEN = {
     #
     # 14 → 15. `UniformTemporalSubsample`, the transform. Its functional is on both
     # sides; what is here alone is the `Transform` subclass, for the reason above.
-    "transforms.v2": 15,
+    #
+    # **15 → 14, and the reason above was the wrong one for it.** That row said *for
+    # the reason above*, which is the tv_tensor type system — and this transform
+    # touches no label at all: it keeps `n` frames of a video tensor, and the
+    # arithmetic had been in borch.ts's `ops.uniformTemporalSubsample` the whole time.
+    # What was missing was the class a pipeline is built out of, and it is thirteen
+    # lines wrapping the function. A reason borrowed from the row above it is the
+    # cheapest kind to write and the hardest to notice is wrong.
+    "transforms.v2": 14,
     #
     # 1 → 3. The format conversion and the two clamps go up with the type system,
     # because the clamping taxonomy is what `BoundingBoxes` carries.
@@ -391,7 +431,20 @@ FROZEN = {
     # 7 → 9. `get_num_frames` and `uniform_temporal_subsample` under their `_video`
     # spellings. The plain names are on both sides; the second spelling is a
     # tv_tensor-keyed alias, and there are no tv_tensor types over there to key it on.
-    "transforms.v2.functional": 9,
+    #
+    # 9 → 42. The other thirty-three `*_video` kernels, which the core gained the day
+    # its picture kernels started counting their axes from the end — `(H, W, C)` and
+    # `(T, H, W, C)` name the same two, so a video is an image with something in front
+    # of it and thirty-three names are aliases of what was already there.
+    #
+    # **This row rising is not work owed on that side, and the distinction matters
+    # here more than usual.** borch.ts's `Image` is `{data, height, width, channels,
+    # isByte}` — one picture by construction, with no axis a frame could go in. Every
+    # other row in this table is a body somebody could write; this one is a type that
+    # would have to change first, and the reasons in `ts_axis.DELIBERATE` say so per
+    # name rather than as a group, so the day `Image` gains a rank they come off one
+    # at a time.
+    "transforms.v2.functional": 42,
     # **Eighteen, and they are one decision rather than eighteen.** A dataset is an
     # address and a format; the address needs hosts that send a CORS header and
     # torchvision's do not, so what crossed is the decoders. Written per name because a
@@ -439,6 +492,10 @@ REFUSALS = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    # Neither new namespace carries a refusal stub: what the core lacks in `special` it
+    # lacks by not having the name at all, and `fft` lacks nothing.
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
@@ -506,6 +563,66 @@ def test_the_core_to_borch_ts_axis_has_not_widened():
           "  once already — reading tables alone found 14 of the 40.\n"
           "  See it: uv run --with numpy --with torch --with torchvision \\\n"
           "            python tests/ts_axis.py --show Tensor")
+
+
+def test_every_gap_carries_a_reason():
+    """**`DELIBERATE` was printed and asserted by nothing.**
+
+    `ts_axis.py --show` prints `까닭 없는 결손 N건` and the suite never read it, so
+    a name absent from both borch.ts and that table was invisible: the only thing
+    held was the frozen *count*, and a count is satisfied by editing it. Fifty-five
+    rows were written into the table in the commit that added this test, and until
+    it existed they changed a number nobody checked.
+
+    Measured, not argued: removing one row from `DELIBERATE` left the suite green.
+
+    `tests/test_class_methods.py` was written with this pair from the start — the
+    fourth axis got it right because this one had already gone wrong.
+    """
+    if _stale():
+        pytest.skip("generated index is stale")
+
+    import ts_axis
+
+    unexplained = sorted(
+        f"{space}::{name}"
+        for space, (gaps, _refusals) in ts_axis.compare().items()
+        for name in gaps
+        if f"{space}::{name}" not in ts_axis.DELIBERATE)
+    assert not unexplained, (
+        "these names are the core's, are not in borch.ts, and have no reason:\n  "
+        + "\n  ".join(unexplained)
+        + "\n\nWrite one into `ts_axis.DELIBERATE`, or carry the name across. A "
+          "reason says why it cannot or should not follow — not that it has not, "
+          "which the count already says.")
+
+
+def test_no_reason_outlives_the_gap_it_explains():
+    """**A reason for a name that has arrived is worse than no reason.** It reads
+    as a live limit and it is a record of the past.
+
+    The same pair as `test_class_methods.py`'s, and the same lesson underneath:
+    `borch-ts/test/run.py`'s `AvgPool2d` row stayed true for an hour after its cause
+    was gone, and survived only because the person who ended it read the line.
+
+    It fired for real on the first run: `UniformTemporalSubsample`'s row said *for
+    the reason above*, borrowing the tv_tensor argument from the rows beside it —
+    and that transform touches no label at all. **A borrowed reason is the cheapest
+    kind to write and the hardest to notice is wrong.**
+    """
+    if _stale():
+        pytest.skip("generated index is stale")
+
+    import ts_axis
+
+    live = {f"{space}::{name}"
+            for space, (gaps, _refusals) in ts_axis.compare().items()
+            for name in gaps}
+    stale = sorted(set(ts_axis.DELIBERATE) - live)
+    assert not stale, (
+        "these are excused in `DELIBERATE` and are no longer missing:\n  "
+        + "\n  ".join(stale)
+        + "\n\nTake the row out. The reason describes a state that has ended.")
 
 
 def test_the_measurement_still_runs_as_a_script():

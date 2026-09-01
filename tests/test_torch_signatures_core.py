@@ -657,14 +657,61 @@ JUDGED = {
     # seat torch has, refused here with the wording that says why) and `poisson`
     # declares nothing more than it takes. Two rows left an absorbing state, which is
     # the movement this check was written to make visible in the other direction.
-    "Tensor": (389, 510),
+    #
+    # **388 → 414, and this is the largest single move the row has recorded.** The
+    # core's in-place methods are generated: `_make_inplace` wraps the partner
+    # function in a `def method(self, *args, **kw)`, so every one of them declared a
+    # bag and every one of them was `variadic` — *cannot be judged*, twenty-six rows
+    # deep, and none of them counted as a gap anywhere. Teaching the generator to
+    # copy the partner's signature onto what it builds emptied that pocket, and two
+    # real defects were underneath it: `logit_` refused an `eps` torch computes, and
+    # `scatter_` had no `reduce` at all. Neither was reachable from a bucket that
+    # means the question cannot be asked.
+    #
+    # **414 → 470, and this one was larger again.** `_ops._make_inplace` was only one of
+    # four generators; the other three live in `_tensor.py` (`_bind_inplace`,
+    # `_bind_from_module`) and could not read their sources at class-build time, because
+    # `_ops` imports `_tensor` and not the other way round. `borch/__init__.py` copies
+    # the partner's signature onto each of them now, after both modules exist — the same
+    # place and the same reason `_link_wrapped` already sat there.
+    #
+    # Eleven more came from a `__wrapped__` that **pointed at itself**: `_ops.eq` and
+    # `Tensor.eq` are one object, so linking one to the other made a loop, and
+    # `inspect.signature` does not shrug at a loop — it raises. Worse than the bag it
+    # was meant to remove, and filed under the same wording.
+    #
+    # What the 56 exposed: fifteen places where torch's own prose is wrong (see
+    # `TORCH_DOC_IS_WRONG`), one real core defect (`resize_as_`'s argument is
+    # `the_template`, and neither the docstring's `tensor` nor the family's `other` is
+    # accepted by torch), and five borch.ts rows on the other axis.
+    # **470 → 469, and down is the direction this row exists to stop.** It is
+    # allowed here for the one reason that makes it not a loss: `squeeze` became
+    # `(self, *dim)` because **torch's takes several axes**, so the row moved into
+    # `variadic` by matching torch rather than by hiding from it. The bucket means
+    # *no positional list to compare*, and there genuinely is none on either side.
+    #
+    # Written out because the check cannot tell those apart and a number moving the
+    # wrong way must not be edited quietly. What went in with it: `x.squeeze(0, 2)`
+    # is torch's form and stopped here, and `x.squeeze(1)` on an axis that is not
+    # length 1 is a no-op in torch and raised numpy's `ValueError` here.
+    #
+    # **469 → 470**, and back up by a different row: `transpose_`. `_make_inplace`
+    # reads a module function, and there is no `_ops.transpose` — so it fell back to
+    # a closure that calls the method, and `_forwards` had a bag to copy from. It
+    # reads `Tensor.transpose(dim0, dim1)` now, one attribute away and fully spelled
+    # the whole time.
+    "Tensor": (471, 510),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a
     # fix looks like here** — the total did not change, and no other number in this
     # file would have recorded that anything happened.
     # 144 → 145. `LazyLinear`, see `SHORTER`.
-    "nn": (145, 161),
+    # 145 → 147 of 161 → 163. `LinearCrossEntropyLoss` and its `Options`, which were
+    # declined under *newly arrived in torch — looked at once it settles* until that
+    # sentence was re-read by calling. Both land in `agree`; the filed total rises by
+    # the same two, which is what an implementation looks like from here.
+    "nn": (147, 163),
     # 76 → 84. **Eight pooling functions stopped being uncomparable.** They ended
     # `(…, **_)`, which makes the whole signature read as `VARIADIC` — and on this
     # axis `variadic` means *cannot be compared at all*, so one `**_` bought silence
@@ -673,7 +720,9 @@ JUDGED = {
     # it is set), so it is named and unused now. The difference between that and
     # `**_` is that a reader can see it.
     # 84 → 109. Twenty-five `nn.functional` names are C too.
-    "nn.functional": (109, 126),
+    # 109 → 110 of 126 → 127. `linear_cross_entropy`, the functional half of the pair
+    # one namespace up.
+    "nn.functional": (110, 127),
     "optim": (14, 14),
     "optim.lr_scheduler": (16, 16),
     # 0 → 5, same reading. The four `unaligned` are `householder_product`, `lu`,
