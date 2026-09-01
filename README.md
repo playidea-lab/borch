@@ -6,9 +6,16 @@ PyTorch syntax with nothing installed.
 > ## First, what this is **not**
 >
 > It is not PyTorch. **11%** of the surface, and **0.1%** by code.
-> `CUDA`, distributed training, mixed precision, `torch.compile` and pre-trained
-> weights are **never coming** — they either cannot exist in a browser, or
-> learning them means leaving the browser.
+> `CUDA`, distributed training, mixed precision and `torch.compile` are **never
+> coming** — they either cannot exist in a browser, or learning them means
+> leaving it.
+>
+> **Pre-trained weights were on that list and are not any more.** The reasoning
+> was that using them means leaving the browser; `borch-hub` publishes them with
+> a manifest and a hash, and [the site loads one and checks it against the sample
+> its publisher froze](https://playidea-lab.github.io/borch/site/models.html)
+> without leaving the tab. The refusal was about a limit that turned out not to
+> be one.
 >
 > There is one claim to make. **Introductory tutorial code produces the same
 > values with one import changed.** That was measured (see conformance, below).
@@ -17,7 +24,7 @@ PyTorch syntax with nothing installed.
 > [minitorch](https://minitorch.github.io) · [nanotorch](https://pypi.org/project/nanotorch/) ·
 > [edutorch](https://pypi.org/project/edutorch/).
 
-## Three things carry this name
+## Three things carry this name, and two more stand on them
 
 All three look at the same golden — the expected values pinned with real PyTorch.
 **One table is what makes a divergence visible** — defects caught by comparing the
@@ -29,7 +36,15 @@ three against each other are a large share of this repository's history.
 | **`borch-ts`** (npm) | **WGSL directly, zero dependencies** | in a browser only | CIFAR ResNet-18, **1.5 min/epoch** |
 | **`borch-webgpu`** (Python) | the borch.ts above | in a browser only | the same thing at **1.6 min/epoch** |
 
-The lower two **stand on the same kernels.** `borch-webgpu` is a 10,337 line
+Two more packages sit above rather than beside them:
+[`bimm-ts`](https://github.com/playidea-lab/bimm) is the architecture catalogue —
+timm's seat, a model from a name — and
+[`borch-hub`](https://github.com/playidea-lab/borch-hub) is what fetches a
+published model, checks its hash before loading it and asks the browser what it
+can do before downloading anything. Neither is a runtime, so neither has a
+ceiling of its own; both run on `borch-ts`.
+
+The lower two of the three **stand on the same kernels.** `borch-webgpu` is a 10,337 line
 binding calling borch.ts from Python, and the difference (1.5 against 1.6 minutes)
 is the cost of one trip through Pyodide.
 
@@ -1477,11 +1492,16 @@ The design and the evidence behind the measurements are in
 
 ## What is deliberately not supported
 
-`CUDA`, pre-trained weights, mixed precision, distributed training,
-`torch.compile`
+`CUDA`, mixed precision, distributed training, `torch.compile`
 
-**A long refusal list is the intent.** GPUs, saved models and pre-training are
-learned by leaving the browser, and imitating them here loses the lesson.
+**A long refusal list is the intent.** These are learned by leaving the browser,
+and imitating them here loses the lesson.
+
+**Pre-trained weights were on this list.** The reason given was the same one —
+that using them means leaving the browser — and it stopped being true when
+`borch-hub` began publishing models a tab can fetch, hash and run. The list is
+shorter by one, and the entry that left did so because somebody built the thing
+it said could not be here.
 
 ## Conformance
 
