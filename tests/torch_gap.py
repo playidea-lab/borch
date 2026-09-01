@@ -344,6 +344,16 @@ NOT_API = {
     "transforms.functional.Tensor": "an imported label — not that namespace's API",
     "optim.lr_scheduler.Tensor": "an imported label — not that namespace's API",
     "fft.Tensor": "an imported label — not that namespace's API",
+    # **`special.Tensor` was the fifth and sat in `SKIPPED` instead**, carrying this
+    # exact sentence — and the comment above it said outright *what survives is the one
+    # name that was never API*. So it was filed as a decision to decline while its own
+    # reason said it was not API at all, which cost `special` a percentage point
+    # (56 of 57 rather than 56 of 56) and the declined column one row.
+    #
+    # `fft` and `special` came off the same blanket in one sweep. `fft` got its row here
+    # that day and `special` did not — the row below records the reason, and the reason
+    # applied to both.
+    "special.Tensor": "an imported label — not that namespace's API",
     "optim.lr_scheduler.Optimizer": "an imported label — not that namespace's API",
     "ScalingType": "an imported label — an fp8 scaling kind",
     "SwizzleType": "an imported label — an fp8 layout kind",
@@ -638,8 +648,8 @@ SKIPPED = {
     # the golden checks**: a mistyped minimax coefficient does not raise, it moves the
     # answer in the fifth place.
     #
-    # What survives is the one name that was never API.
-    "special.Tensor": "an imported label — not that namespace's API",
+    # What survived was one name that was never API, and it is in `NOT_API` now with its
+    # four siblings — see the note there. Nothing in this namespace is declined.
     # **By its name it looks like `nn.ParameterDict`'s counterpart, and it is not.**
     # Measured, its constructor takes a single `torch._C.ScriptModule` and it does not live
     # under `nn` — it is TorchScript internals. Built as a dictionary, it would hand over
@@ -1197,6 +1207,9 @@ NOT_API_SIZE = {
     # `optim.lr_scheduler` and `transforms.functional`. Written the day `fft` stopped
     # being declined as a whole namespace and started being surveyed.
     "fft": 1,
+    # `special.Tensor` alone, and for the same reason one line up — the two namespaces
+    # left the blanket together and only one of them was counted that day.
+    "special": 1,
     "utils.data": 2,
     "transforms.functional": 1,
 }
