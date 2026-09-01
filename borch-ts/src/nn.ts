@@ -1995,32 +1995,17 @@ export function scaledDotProductAttention(
   return Tensor.stack(outs, 0);
 }
 
-/**
- * **`padding`, `dilation` and `ceilMode` hold torch's positions and refuse.**
- *
- * The core grew all three as working arguments; until the WGSL pooling kernel does
- * too, the choice is between an argument that is absent and one that is in the wrong
- * seat — and the wrong seat is what makes `new MaxPool2d(2, 2, 1)` set
- * `returnIndices` where torch and the core set `padding`. A refusal that names the
- * argument is the smaller wrong.
- *
- * It was written inline in `MaxPool2d` and the 1-D and 3-D layers had **no seats at
- * all** while printing `padding=0, dilation=1, ceil_mode=False` in their `describe`
- * — a repr for arguments they could not take, which is the tidiest way to look
- * finished. Three classes now share the one refusal, which is the third repetition
- * and the point at which this stops being a copy.
- *
- * **`padding` and `ceilMode` have left it.** They were refused on the ground that the
- * maximum's backward reads the input at each window position and a padded one has
- * none to read — which the average had answered one function away, by taking the
- * padding off the coordinate and skipping what falls outside. `poolND` does both for
- * the maximum now. `dilation` is the whole of what is left, and it keeps its seat for
- * the reason above.
- */
-// **`refuseUnwiredPooling` stood here and is gone.** It refused `dilation` on the
-// three max-pool layers with the reason that the core implemented it and this side did
-// not — true of the shader, which had no step between the cells one window reads. It
-// has one now, and at 1 the generated source is the line it always was.
+// **`refuseUnwiredPooling` stood here and is gone, and so has the paragraph that
+// described it.** That paragraph opened *`padding`, `dilation` and `ceilMode` hold
+// torch's positions and refuse* and closed with `dilation` keeping its seat — while
+// the note directly beneath it said the shader had grown the step and the refusal was
+// gone. Two sentences a line apart, one of them false, and the false one first.
+//
+// All three are working arguments now: `poolND` takes the padding off the coordinate
+// and skips what falls outside, and at `dilation = 1` the generated source is the line
+// it always was. `parity.ts` asks each of the three by arrival rather than by refusal,
+// because a check that watches for a throw expires the day somebody does the work —
+// which is how it went red twice unnoticed.
 
 export class MaxPool2d extends Module {
   /**

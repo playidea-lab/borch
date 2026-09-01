@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 416
+  "missing": 415
  },
  "modules": [
   {
@@ -8695,7 +8695,7 @@
      "kind": "class",
      "name": "MaxPool2d",
      "signature": "export declare class MaxPool2d extends Module",
-     "doc": "**`padding`, `dilation` and `ceilMode` hold torch's positions and refuse.**\n\nThe core grew all three as working arguments; until the WGSL pooling kernel does\ntoo, the choice is between an argument that is absent and one that is in the wrong\nseat — and the wrong seat is what makes `new MaxPool2d(2, 2, 1)` set\n`returnIndices` where torch and the core set `padding`. A refusal that names the\nargument is the smaller wrong.\n\nIt was written inline in `MaxPool2d` and the 1-D and 3-D layers had **no seats at\nall** while printing `padding=0, dilation=1, ceil_mode=False` in their `describe`\n— a repr for arguments they could not take, which is the tidiest way to look\nfinished. Three classes now share the one refusal, which is the third repetition\nand the point at which this stops being a copy.\n\n**`padding` and `ceilMode` have left it.** They were refused on the ground that the\nmaximum's backward reads the input at each window position and a padded one has\nnone to read — which the average had answered one function away, by taking the\npadding off the coordinate and skipping what falls outside. `poolND` does both for\nthe maximum now. `dilation` is the whole of what is left, and it keeps its seat for\nthe reason above.",
+     "doc": "",
      "members": [
       {
        "name": "padding",

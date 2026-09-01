@@ -56,8 +56,9 @@ sys.path.insert(0, "/work")
 import cases
 cases.run()
 `);
-    window.__scopeEscape = { text: report, adapter: borch.Device.adapterInfo };
-    say(report);
+    const got = JSON.parse(report);   // {ok, text} — the verdict is data, not prose
+    window.__scopeEscape = { ...got, adapter: borch.Device.adapterInfo };
+    say(got.text);
   } catch (err) {
     const detail = err && err.stack ? err.stack : String(err);
     window.__scopeEscape = { error: detail };

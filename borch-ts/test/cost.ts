@@ -90,12 +90,24 @@ class Small extends nn.Module {
  * Taken on `Small` above at batch 4; it moves when the model or the kernels move.
  */
 const EXPECT = {
-  dispatches: 53,
+  // **53 → 58, and which phase moved could not be recovered.** The figure had been one
+  // number for the whole step since it was frozen, and by the time anything ran this
+  // file again the forward, the loss, the backward and the optimizer had all been
+  // rewritten — 14,600 inserted lines across the four files a step touches. A total
+  // that moves by 5 says only *something costs more now*.
+  //
+  // So the phases are frozen too. They sum to the total, and if one moves the report
+  // names it instead of leaving the next reader the search this one could not finish.
+  dispatches: 58,
   // **One step is one submit.** The commands pile up and go in a single send when the
   // loss is read, so this number rising means a place appeared that waits on the GPU
   // mid-step — the kind that leaves the values alone and makes the step slower, which the
   // golden can never see.
   submits: 1,
+  // Measured on `Small` at batch 4, each phase run in a scope of its own. The optimizer
+  // is one fused dispatch per parameter and `Small` has five — conv weight (no bias),
+  // the pair BatchNorm learns, and the pair in the Linear.
+  phases: { forward: 13, loss: 14, backward: 26, optimizer: 5 },
 };
 
 export async function report(): Promise<Report> {
@@ -153,6 +165,48 @@ export async function report(): Promise<Report> {
   want("the submit count is the same every step",
     perSubmit.every((n) => n === firstSubmit),
     perSubmit.join(" "));
+
+  // ── 1b. **Where the dispatches go** ──────────────────────────────────
+  //
+  // Each phase is run in a scope of its own and the counter is read across it, so the
+  // four are cumulative prefixes of one step and their differences are the phases.
+  // `zeroGrad` is not among them because it dispatches nothing — it drops the graph's
+  // gradient tensors on the host.
+  //
+  // **Each phase clears the gradients first.** They are made inside whichever scope
+  // ran the backward, so the one left over from the previous phase points into a
+  // buffer that has gone back to the pool, and the next `backward` adds into it and
+  // stops. `zeroGrad` drops them on the host and dispatches nothing, so it costs the
+  // count nothing to be correct here.
+  const upto = async (body: () => Promise<void>): Promise<number> => {
+    opt.zeroGrad();
+    const before = dev.dispatches;
+    await scope(async () => { await body(); });
+    return dev.dispatches - before;
+  };
+  const afterForward = await upto(async () => { await model.call(x).sum().item(); });
+  const afterLoss = await upto(async () => {
+    await crit.call(model.call(x), y).item();
+  });
+  const afterBackward = await upto(async () => {
+    const l = crit.call(model.call(x), y);
+    l.backward();
+    await l.item();
+  });
+  const measured = {
+    forward: afterForward,
+    loss: afterLoss - afterForward,
+    backward: afterBackward - afterLoss,
+    optimizer: first - afterBackward,
+  };
+  for (const [name, want_] of Object.entries(EXPECT.phases)) {
+    const got = measured[name as keyof typeof measured];
+    want(`the ${name} costs what it did`, got === want_, `${got} (frozen ${want_})`);
+  }
+  // **The parts have to be the whole.** Without this the four could each match while
+  // the total is something else — which is the only way this split could lie.
+  const summed = Object.values(measured).reduce((a, b) => a + b, 0);
+  want("the phases add up to the step", summed === first, `${summed} against ${first}`);
 
   // ── 2. Is it the frozen number ───────────────────────────────────────
   if (EXPECT.dispatches > 0) {

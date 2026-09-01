@@ -43,10 +43,13 @@ def main(argv):
         return 1
     print(result["text"])
     warn_if_software(result.get("adapter"), "lifetime rules")
-    # **This sentence is a contract with another file.** `scope_escape_cases.py` prints it,
-    # and the wording is what decides the exit code — change one side alone and this returns
-    # 1 while everything passes. That file is still Korean; the literal moves when it does.
-    return 0 if result["text"].startswith("구역 탈출이 돈다") else 1
+    # **The verdict arrives as a boolean.** It used to be read off the head line of the
+    # report, and the comment here said what that costs: *change one side alone and this
+    # returns 1 while everything passes.* Then `scope_escape_cases.py` was translated to
+    # English, the literal stayed Korean, and this returned 1 with all twelve checks
+    # green — in a runner nothing schedules, so it stayed that way. Writing the warning
+    # did not prevent it; removing the sentence from the contract does.
+    return 0 if result.get("ok") else 1
 
 
 if __name__ == "__main__":

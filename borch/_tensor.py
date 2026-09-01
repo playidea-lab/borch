@@ -5,6 +5,7 @@ import math as _math
 import numpy as _np
 
 from ._base import (
+    BorchError,
     Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _float_in, _like_torch,
     _needs_float,
     _no_complex128, _np, _refuses_bool, _requested_dtype, _tensor_repr,
@@ -283,6 +284,26 @@ class Tensor:
         # described the fix was already sitting above the place it belonged.
         elif self._array.dtype == _np.float64:
             self._array = self._array.astype(_DEFAULT_DTYPE)
+        # **And the narrow widths walked through the same door.** The paragraph above
+        # says every new operation forgets one; what it forgot was that `float64` is not
+        # the only dtype this library does not have. `int32`, `int16`, `int8`, `uint8`
+        # and `float16` are all `_AbsentDtype`, each naming what it is gathered into —
+        # and an array carrying one arrived, was stored as it came, and then reported
+        # **`float32`**, because `Tensor.dtype` looks the numpy dtype up in a table it
+        # is not in and the table's default is float32.
+        #
+        # That is a confident wrong answer rather than a missing one, so nothing found
+        # it: on a 64-bit host `argsort` gives `int64` and the table knows it. In
+        # Pyodide, where `intp` is 32 bits, the same call gives `int32` — so `topk`,
+        # `sort`, `max(dim)`, `min(dim)` and `median(dim)` handed back index halves
+        # labelled `torch.float32`, and `tests/browser/run.py --lib borch` was the only
+        # thing that could see it. It runs when a person runs it.
+        #
+        # Normalising here rather than at each `argsort` is the point of a throat.
+        elif self._array.dtype.kind in "iu" and self._array.dtype != _np.int64:
+            self._array = self._array.astype(_np.int64)
+        elif self._array.dtype.kind == "f" and self._array.dtype != _DEFAULT_DTYPE:
+            self._array = self._array.astype(_DEFAULT_DTYPE)
         # no_grad only stops **the result of an operation** from carrying a
         # graph; it does not turn off requires_grad on a leaf made directly.
         # torch is the same — turning it off here would quietly drop a parameter
@@ -308,7 +329,20 @@ class Tensor:
 
     @property
     def dtype(self):
-        return _NP_TO_DTYPE.get(self.data.dtype, float32)
+        """**The default used to be `float32` and that is what made the bug silent.**
+
+        A numpy dtype the table does not know is a tensor this library cannot describe,
+        and answering `float32` describes it wrongly rather than not at all. Every dtype
+        that reaches here is normalised in `__init__` now, so this raise is unreachable
+        — which is the point: the next dtype that finds a way in says so.
+        """
+        got = _NP_TO_DTYPE.get(self.data.dtype)
+        if got is None:
+            raise BorchError(
+                f"this tensor is stored as numpy `{self.data.dtype}`, which is not one "
+                "of this library's dtypes — it should have been normalised when the "
+                "tensor was made. Please report it.")
+        return got
 
     @property
     def ndim(self):

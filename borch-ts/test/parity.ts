@@ -1258,17 +1258,37 @@ export async function report(): Promise<Report> {
       logits, targets, undefined, false).item();
     want("and sizeAverage=false still means sum", near(legacy, summed, 1e-6),
       `${legacy} against ${summed}`);
-    let refused = false;
-    try {
-      F.binaryCrossEntropyWithLogits(logits, targets, Tensor.from([1, 1, 1], [3]));
-    } catch { refused = true; }
-    want("a class weight is refused rather than ignored", refused);
-    let refusedPos = false;
-    try {
-      F.binaryCrossEntropyWithLogits(
-        logits, targets, undefined, null, null, "mean", Tensor.from([1], [1]));
-    } catch { refusedPos = true; }
-    want("and so is posWeight, at torch's seventh seat", refusedPos);
+    // **These two asked for a refusal, and the refusal was replaced by an answer.**
+    // `weight` and `posWeight` were declined on the rule that an argument accepted and
+    // unused is worse than one that is absent; both are implemented now, so a check
+    // that still demands a throw is measuring a seat that stopped refusing — the same
+    // shape as a reason outliving its cause, in a check rather than a comment. It is
+    // the third time this file has had it (see `MaxPool1d` below, and the note there
+    // about `padding`), and each time the cause was that nothing schedules this run.
+    //
+    // What replaces it is the property a dropped argument cannot fake, and it is two
+    // sided: uniform weights must leave the answer **alone**, and doubling them must
+    // double it. A seat that swallows its argument passes the first and fails the
+    // second; one that mangles it fails the first. Measured against torch, both hold
+    // exactly under `sum` (0.914267 → 1.828534).
+    const bce = (w?: Tensor, pos?: Tensor) => F.binaryCrossEntropyWithLogits(
+      logits, targets, w, null, null, "sum", pos).item();
+    const plain = await bce();
+    want("a uniform class weight leaves the answer alone",
+      near(await bce(Tensor.from([1, 1, 1], [3])), plain, 1e-5),
+      `${await bce(Tensor.from([1, 1, 1], [3]))} against ${plain}`);
+    want("and doubling it doubles the answer — the weight arrives",
+      near(await bce(Tensor.from([2, 2, 2], [3])), plain * 2, 1e-5),
+      `${await bce(Tensor.from([2, 2, 2], [3]))} against ${plain} × 2`);
+    // `posWeight` scales the positive term alone, so it has no doubling law — what is
+    // asked is that 1 is the identity and 3 is not, which is arrival without guessing
+    // at the arithmetic the golden already holds.
+    want("posWeight at torch's seventh seat is the identity at 1",
+      near(await bce(undefined, Tensor.from([1], [1])), plain, 1e-5),
+      `${await bce(undefined, Tensor.from([1], [1]))} against ${plain}`);
+    want("and moves the answer at 3, so the seventh seat arrives",
+      !near(await bce(undefined, Tensor.from([3], [1])), plain, 1e-5),
+      `${await bce(undefined, Tensor.from([3], [1]))} against ${plain}`);
   }
 
   // ── ten more functional losses, in torch's seats ──────────────────────
@@ -1329,11 +1349,18 @@ export async function report(): Promise<Report> {
     want("and ignoreIndex reaches the fifth, between the pair",
       !sum(ignored, ceSum), `ignoring class 0 gives ${ignored}, none gives ${ceSum}`);
 
-    let ceRefused = false;
-    try {
-      F.crossEntropy(logits, labels, Tensor.from([1, 1, 1], [3]));
-    } catch { ceRefused = true; }
-    want("a class weight is refused there too", ceRefused);
+    // As the BCE pair above: the refusal became an answer and this check did not
+    // follow. The same two-sided property, and it holds on torch under `sum`
+    // (0.550595 → 1.101189).
+    const ce = (w?: Tensor) => F.crossEntropy(
+      logits, labels, w, null, -100, null, "sum").item();
+    const bare = await ce();
+    want("a uniform class weight leaves cross entropy alone",
+      sum(await ce(Tensor.from([1, 1, 1], [3])), bare),
+      `${await ce(Tensor.from([1, 1, 1], [3]))} against ${bare}`);
+    want("and doubling it doubles the sum — the weight arrives there too",
+      sum(await ce(Tensor.from([2, 2, 2], [3])), bare * 2),
+      `${await ce(Tensor.from([2, 2, 2], [3]))} against ${bare} × 2`);
   }
 
   // ── inplace on the eight that were passed over ────────────────────────
@@ -1489,17 +1516,27 @@ export async function report(): Promise<Report> {
       new nn.AvgPool2d(3, 2, 1).describe());
 
     // **MaxPool1d/3d were printing three arguments they could not take.**
-    // **This asked about `padding` and now asks about `dilation`.** A peer implemented
-    // padding and ceilMode in the pooling kernel between one run and the next, so the
-    // refusal moved and the check was measuring a seat that had stopped refusing —
-    // the same shape as a reason outliving its cause, in a check rather than a
-    // comment. `dilation` is what is left: no pooling kernel here dilates.
-    const M1 = nn.MaxPool1d as unknown as new (...a: unknown[]) => { describe(): string };
-    let refused = "";
-    try { new M1(2, undefined, 0, 2); } catch (e) { refused = (e as Error).message; }
-    want("MaxPool1d refuses dilation by name rather than dropping it",
-      refused.includes("MaxPool1d(dilation"), refused || "(no error)");
-    // And the two that were refused with it now work, which is why this moved.
+    // **This asked about `padding`, then about `dilation`, and now asks neither.**
+    // Both times a peer implemented the seat between one run and the next, the refusal
+    // it was watching stopped happening, and the check went red in a runner nothing
+    // schedules. Twice is a pattern: **a check that asserts a refusal expires the
+    // moment somebody does the work**, and this file cannot tell the difference
+    // between that and a regression.
+    //
+    // So it asks arrival instead, which does not expire. `dilation = 2` on a kernel of
+    // 2 reads cells 0 and 2 rather than 0 and 1, and over six cells that is **two
+    // windows rather than three** — measured on torch, `[5, 9, 4]` becomes `[2, 3]`.
+    // A dropped argument gives back the first list.
+    const signal = Tensor.from([1, 5, 2, 9, 3, 4], [1, 1, 6]);
+    const adjacent = await new nn.MaxPool1d(2, 2, 0, 1).call(signal).toArray();
+    const spread = await new nn.MaxPool1d(2, 2, 0, 2).call(signal).toArray();
+    want("MaxPool1d dilation arrives — it changes how many windows there are",
+      adjacent.length === 3 && spread.length === 2,
+      `dilation 1 gives ${adjacent}, dilation 2 gives ${spread}`);
+    want("and it reads the dilated cells, not the adjacent ones",
+      JSON.stringify(Array.from(spread)) === JSON.stringify([2, 3]),
+      `${spread}`);
+    // padding and ceilMode were refused alongside it and are carried too.
     want("while padding and ceilMode are carried now",
       !!new nn.MaxPool1d(2, undefined, 1, 1, false, true));
     want("and its repr is now what it holds, not a constant",
@@ -1579,19 +1616,26 @@ export async function report(): Promise<Report> {
       // a tail is not safe in a language that discards surplus arguments. Before
       // this, `bidirectional` was dropped in silence and the caller got a
       // one-directional net.
-      const R = nn.RNNBase as unknown as new (...a: unknown[]) => unknown;
-      let said = "";
-      try { new R("LSTM", 2, 4, 1, true, false, 0, true); } catch (e) {
-        said = (e as Error).message;
-      }
-      want("RNNBase refuses bidirectional by name",
-        said.includes("bidirectional"), said || "(no error)");
-      said = "";
-      try { new R("LSTM", 2, 4, 1, true, false, 0, false, 1); } catch (e) {
-        said = (e as Error).message;
-      }
-      want("and projSize, which is the seat after it",
-        said.includes("projSize"), said || "(no error)");
+      //
+      // **These two asked for a refusal until both were built.** The golden asks their
+      // values, but through `nn.LSTM`; what is left here that nothing else covers is
+      // the **base class taking its own trailing seats**, and the observable that a
+      // discarded argument cannot fake is the output's width. Measured on torch:
+      // hidden 4 gives 4, bidirectional 8, `proj_size = 2` gives 2.
+      const width = async (bidirectional: boolean, projSize: number) => {
+        const m = new nn.RNNBase("LSTM", 2, 4, 1, true, false, 0, bidirectional,
+                                 projSize);
+        m.eval();
+        const { output } = m.run(Tensor.zeros([3, 1, 2]));
+        await output.toArray();
+        return output.shape[output.shape.length - 1];
+      };
+      const one = await width(false, 0);
+      want("RNNBase's bidirectional seat arrives — the output doubles in width",
+        one === 4 && await width(true, 0) === 8,
+        `plain ${one}, bidirectional ${await width(true, 0)}`);
+      want("and projSize, the seat after it, sets the width instead",
+        await width(false, 2) === 2, `${await width(false, 2)}`);
       // `dropout` is torch's own exception: at one layer it warns and carries on,
       // because the dropout goes between layers and there is no between.
       want("but dropout is accepted at one layer, as torch accepts it",

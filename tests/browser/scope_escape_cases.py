@@ -6,6 +6,8 @@ alive means the scope is not doing its job, and then a training loop collapses o
 memory.
 """
 
+import json as _json
+
 import borch_webgpu as torch
 
 _lines = []
@@ -111,4 +113,10 @@ def run():
                        "a module function is reported as one", str(e)))
 
     head = "scope escape works" if all(ok) else "**something does not work**"
-    return "\n".join([head, *_lines])
+    # **The verdict crosses as data, not as a sentence.** `scope_escape.py` used to
+    # decide its exit code by matching the head line, and the head line is prose:
+    # translating this file to English left every check passing and the runner
+    # returning 1, because the literal it matched was still the Korean one. The
+    # comment beside that line had predicted exactly this. A boolean cannot be
+    # translated.
+    return _json.dumps({"ok": all(ok), "text": "\n".join([head, *_lines])})

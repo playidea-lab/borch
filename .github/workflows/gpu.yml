@@ -108,6 +108,25 @@
 # golden were both green and two greens read as three. The core suite cannot see any of
 # this: `borch_webgpu` will not import outside Pyodide.
 #
+# **The nine were then run by hand, and two of them were red.** Neither was a
+# regression; both were checks that had outlived what they watched.
+#
+#   · `parity:ts` — six failures. `weight` and `posWeight` on the BCE pair, a class
+#     weight on `crossEntropy`, `dilation` on `MaxPool1d`, `bidirectional` and
+#     `projSize` on `RNNBase` were all **declined once and implemented since**, and the
+#     checks still demanded a throw. A check that watches for a refusal expires the day
+#     somebody does the work. `MaxPool1d`'s had already moved once for that exact
+#     reason with the lesson written beside it, so this is the second time in one file
+#     and it is now asked by arrival instead, which does not expire.
+#   · `scope:py` — twelve checks green and exit 1, because the runner matched the head
+#     line of the report and the report had been translated. The comment on that line
+#     had predicted it. The verdict crosses as a boolean now.
+#
+# So the failure mode this census guards against is not only *a check nobody runs goes
+# stale* but *nobody finds out for however long*. `tests/test_browser_entry_points.py`
+# holds the number below against the tree — it cannot run any of these, but a
+# fourteenth cannot arrive unnamed.
+#
 # **The list is here rather than a script.** Making it automatic means making it slower
 # to run, and slower means run less often — which is the road the miss above walked.
 # What a reader needs is not a longer command but the number, so that leaving one out
