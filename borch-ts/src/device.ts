@@ -370,6 +370,13 @@ export class Device {
    * batching works looks here.
    */
   submits = 0;
+  /**
+   * Bytes handed out since the last submission.
+   *
+   * The encoder holds every buffer its commands name, so this grows with the
+   * whole un-submitted batch, not with what is live.
+   */
+  private sinceSubmit = 0;
 
   /**
    * It does not swallow shader compilation errors.
@@ -670,6 +677,7 @@ export class Device {
       this.madeBytes += size;
     }
     this.sizes.set(buf, size);
+    this.sinceSubmit += size;
     this.scopes[this.scopes.length - 1]?.add(buf);
     return buf;
   }
@@ -713,6 +721,33 @@ export class Device {
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
     this.dispatches += 1;
+    // **A batch that grows too large is dropped, and nothing says so.**
+    //
+    // Commands accumulate in one encoder and go out when something is read. The
+    // encoder holds every buffer its commands name, and a forward that never reads
+    // releases nothing along the way — so the batch grows with the whole model.
+    //
+    // Past some size Metal stops running it. There is no exception, no validation
+    // error and no lost device: every output is exactly 0, which reads as a model
+    // that answers zero rather than as work that never happened. Measured on
+    // EfficientNet-B4, one submission, 140,445 dispatches either way:
+    //
+    //     288x288   134 GB handed out   correct
+    //     296x296   190 GB              every logit 0
+    //     304x304   247 GB              every logit 0
+    //
+    // Submitting once in the middle fixes it, so what bounds a batch is its size and
+    // not its dispatch count — the count is identical across all three.
+    //
+    // **The cheap threshold is the safe one.** Anything that runs today stays in one
+    // submission and pays nothing; a ResNet-18 forward hands out far less than this.
+    // What crosses it is work that currently fails outright, and there a few extra
+    // submissions cost milliseconds against an answer that was zero.
+    //
+    // Not near the measured edge, deliberately. That edge belongs to the driver and
+    // was found on one machine; a threshold that only just fits here is one that
+    // fails elsewhere, silently, in the way this comment is about.
+    if (this.sinceSubmit > Device.MAX_BATCH_BYTES) this.flush();
     this.byKind.set(this.current, (this.byKind.get(this.current) ?? 0) + 1);
   }
 
@@ -823,6 +858,14 @@ export class Device {
   profileDropped = 0;
   /** The query set's size. More than this in one submission and the rest go
    *  unmeasured. */
+  /**
+   * How many bytes one submission may hand out before it goes early.
+   *
+   * 4 GB against a measured failure at 190 GB — a wide margin on purpose,
+   * because the real edge belongs to the driver. See `run`.
+   */
+  private static readonly MAX_BATCH_BYTES = 4 * 1024 * 1024 * 1024;
+
   private static readonly MAX_QUERIES = 4096;
 
   /**
@@ -953,6 +996,7 @@ export class Device {
     if (!this.encoder) return;
     this.device.queue.submit([this.encoder.finish()]);
     this.encoder = null;
+    this.sinceSubmit = 0;
     this.submits += 1;
   }
 
