@@ -144,6 +144,10 @@ from ._ops import (
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
     sym_float, sym_int, sym_ite, sym_max, sym_min, sym_not, sym_sqrt, sym_sum,
     cudnn_is_acceptable, is_vulkan_available, narrow_copy, segment_reduce,
+    get_autocast_cpu_dtype, get_autocast_dtype, get_autocast_gpu_dtype,
+    get_autocast_ipu_dtype, get_autocast_xla_dtype, is_autocast_cache_enabled,
+    is_autocast_cpu_enabled, is_autocast_enabled, is_autocast_ipu_enabled,
+    is_autocast_xla_enabled,
     result_type,
     set_default_device, set_default_dtype, typename,
     # Bitwise operations and integer maths. On `bool` they become logical

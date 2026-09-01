@@ -123,6 +123,10 @@ from ._ops import (                                      # noqa: E402,F401
     # borch.ts keeps all four as module functions, so `__getattr__` — which asks
     # `Tensor.prototype` — cannot reach them and each needs a line.
     cudnn_is_acceptable, is_vulkan_available, narrow_copy, segment_reduce,
+    get_autocast_cpu_dtype, get_autocast_dtype, get_autocast_gpu_dtype,
+    get_autocast_ipu_dtype, get_autocast_xla_dtype, is_autocast_cache_enabled,
+    is_autocast_cpu_enabled, is_autocast_enabled, is_autocast_ipu_enabled,
+    is_autocast_xla_enabled,
     # Top-level linear algebra. **Only the three whose names collide with the
     # `linalg` namespace are written out** — `__getattr__` passes the rest to the
     # first argument's method.

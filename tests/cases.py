@@ -6178,6 +6178,52 @@ def top_level_cases(inp=None):
                       L.tensor(np.ascontiguousarray(
                           np.zeros((2, 2), dtype=np.float32)))))))
 
+    # ── the ten autocast questions ─────────────────────────────────────────────
+    #
+    # Six ledger rows covered twenty-two names under *mixed precision — as above*,
+    # which is what the family is **for**. Ten of them only *ask* about it, and a
+    # question can be answered anywhere — the same split `cudnn_is_acceptable` made
+    # two rows up, where seven of eight were an NVIDIA kernel and the eighth was a
+    # question about one.
+    #
+    # **`is_autocast_cache_enabled` is `True` and the other four are `False`.** Asked
+    # one at a time rather than folded, because a reader that answered `False` to
+    # everything named `is_autocast_*` agrees with four of the five — measured, torch
+    # keeps the weight cache on by default, and the flag says whether caching *would*
+    # happen rather than whether autocast is running.
+    for _name in ("is_autocast_enabled", "is_autocast_cpu_enabled",
+                  "is_autocast_ipu_enabled", "is_autocast_xla_enabled",
+                  "is_autocast_cache_enabled"):
+        cases.append((TOP_PREFIX + _name,
+                      lambda L, n=_name: str(getattr(L, n)())))
+
+    # The five getters answer with a **dtype this library does not have**, and that is
+    # the point: `bfloat16` and `float16` are here as names (`_AbsentDtype`) whose
+    # reprs are torch's exactly, so the answer matches and *using* it says what is
+    # missing. A library that returned `float32` instead would agree with nothing.
+    #
+    # cpu and xla are bfloat16, cuda and ipu are float16 — measured, and not one
+    # constant repeated.
+    for _name in ("get_autocast_cpu_dtype", "get_autocast_gpu_dtype",
+                  "get_autocast_ipu_dtype", "get_autocast_xla_dtype"):
+        cases.append((TOP_PREFIX + _name,
+                      lambda L, n=_name: repr(getattr(L, n)())))
+    for _dev in ("cpu", "cuda", "xla", "ipu"):
+        cases.append((TOP_PREFIX + f"get_autocast_dtype({_dev})",
+                      lambda L, d=_dev: repr(L.get_autocast_dtype(d))))
+
+    # **And it refuses a device it does not know**, as torch does — the getter is a
+    # lookup, so a typo has to stop rather than fall through to a default.
+    def _autocast_unknown(L):
+        try:
+            L.get_autocast_dtype("nonsense")
+            return "받았다"
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+
+    cases.append((TOP_PREFIX + "get_autocast_dtype(모르는 장치)=거절",
+                  _autocast_unknown))
+
     # ── the eight `sym_*` helpers ──────────────────────────────────────────────
     #
     # Their row read *symbolic sizes — for graph capture*, which is what they are for.

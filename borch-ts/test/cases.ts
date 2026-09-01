@@ -22,6 +22,11 @@
  * a comparison, so they were carried across verbatim.
  */
 
+import {
+  getAutocastCpuDtype, getAutocastDtype, getAutocastGpuDtype, getAutocastIpuDtype,
+  getAutocastXlaDtype, isAutocastCacheEnabled, isAutocastCpuEnabled,
+  isAutocastEnabled, isAutocastIpuEnabled, isAutocastXlaEnabled,
+} from "../src/index.js";
 import { cudnnIsAcceptable, isVulkanAvailable, narrowCopy, segmentReduce }
   from "../src/index.js";
 import { type DType, dtypeName } from "../src/dtype.js";
@@ -2270,6 +2275,48 @@ function addOps(out: Map<string, Case>): void {
   const asPython = (b: boolean): string => (b ? "True" : "False");
   out.set("top::is_vulkan_available", () => asPython(isVulkanAvailable()));
   out.set("top::cudnn_is_acceptable", () => asPython(cudnnIsAcceptable(SEG())));
+
+  // **The ten autocast questions, and this side is what their reason is about.**
+  // Mixed precision is declined because *our shaders use f32 only*, and the shaders
+  // are here. Four answer false; `isAutocastCacheEnabled` answers **true**, which is
+  // why the five are asked one at a time rather than folded into one row.
+  for (const [name, fn] of [
+    ["is_autocast_enabled", isAutocastEnabled],
+    ["is_autocast_cpu_enabled", isAutocastCpuEnabled],
+    ["is_autocast_ipu_enabled", isAutocastIpuEnabled],
+    ["is_autocast_xla_enabled", isAutocastXlaEnabled],
+    ["is_autocast_cache_enabled", isAutocastCacheEnabled],
+  ] as [string, () => boolean][]) {
+    out.set(`top::${name}`, () => asPython(fn()));
+  }
+
+  // The getters answer with a **name**, not a dtype this side has — `DType` is the
+  // four that exist and half precision is deliberately not among them. Python spells
+  // the same answer `torch.bfloat16`, which is an `_AbsentDtype` there: a name kept so
+  // that using it says what is missing. So the case carries torch's spelling.
+  const asTorchDtype = (name: string): string => `torch.${name}`;
+  for (const [name, fn] of [
+    ["get_autocast_cpu_dtype", getAutocastCpuDtype],
+    ["get_autocast_gpu_dtype", getAutocastGpuDtype],
+    ["get_autocast_ipu_dtype", getAutocastIpuDtype],
+    ["get_autocast_xla_dtype", getAutocastXlaDtype],
+  ] as [string, () => string][]) {
+    out.set(`top::${name}`, () => asTorchDtype(fn()));
+  }
+  for (const dev of ["cpu", "cuda", "xla", "ipu"]) {
+    out.set(`top::get_autocast_dtype(${dev})`,
+      () => asTorchDtype(getAutocastDtype(dev)));
+  }
+  out.set("top::get_autocast_dtype(모르는 장치)=거절", () => {
+    try {
+      getAutocastDtype("nonsense");
+    } catch (e) {
+      // The Python case answers with the exception's class name, and torch's is a
+      // `RuntimeError` — which borch.ts raises under that name too.
+      return (e as Error).name;
+    }
+    return "받았다";
+  });
 
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look

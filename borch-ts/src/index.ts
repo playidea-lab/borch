@@ -342,3 +342,92 @@ export function isVulkanAvailable(): boolean {
 export function cudnnIsAcceptable(_tensor: TensorClass): boolean {
   return false;
 }
+
+// ── the ten autocast questions ────────────────────────────────────────────────
+//
+// **This side is what the family's reason is about.** Mixed precision is declined
+// because *our shaders use f32 only*, and the shaders are here — so the honest place
+// to answer *is autocast running?* is this file, and the answer is no and always no.
+//
+// Six ledger rows covered twenty-two names under one sentence naming what the family
+// is **for**. These ten only ask about it. The other twelve are setters, the context
+// manager's depth counter, and a cache nothing fills — those change state, and a
+// setter that accepts and drops is how a run trains in f32 believing it is in f16.
+
+/** `false` — no autocast is running here, and none can be. */
+export function isAutocastEnabled(_deviceType?: string): boolean {
+  return false;
+}
+
+/** `false`, as above. */
+export function isAutocastCpuEnabled(): boolean {
+  return false;
+}
+
+/** `false`, as above. */
+export function isAutocastIpuEnabled(): boolean {
+  return false;
+}
+
+/** `false`, as above. */
+export function isAutocastXlaEnabled(): boolean {
+  return false;
+}
+
+/**
+ * **`true`, and it is the one of the five that is not `false`.**
+ *
+ * torch keeps the autocast weight cache on by default. The flag says whether caching
+ * *would* happen, not whether autocast is running — so matching its four neighbours
+ * would look tidier and disagree with torch.
+ */
+export function isAutocastCacheEnabled(): boolean {
+  return true;
+}
+
+/**
+ * The dtype autocast would use on a device — **a name, not a dtype this library has.**
+ *
+ * `DType` here is the four that exist (`float32`, `int64`, `bool`, `complex64`), and
+ * half precision is deliberately not among them. Returning one of those instead would
+ * be an answer that agrees with nothing; returning the name is what torch reports, and
+ * on the Python side it lands on `torch.bfloat16` — a name kept in order to say what
+ * is missing when somebody uses it.
+ */
+export type AutocastDType = "bfloat16" | "float16";
+
+const AUTOCAST_DTYPE: Readonly<Record<string, AutocastDType>> = {
+  cpu: "bfloat16", xla: "bfloat16", mkldnn: "bfloat16",
+  cuda: "float16", ipu: "float16", mps: "float16", xpu: "float16",
+};
+
+/** torch's per-device default. It refuses a device it does not know, as torch does. */
+export function getAutocastDtype(deviceType: string): AutocastDType {
+  const got = AUTOCAST_DTYPE[deviceType];
+  if (got === undefined) {
+    throw new RuntimeError(
+      `Expected one of ${Object.keys(AUTOCAST_DTYPE).sort().join(", ")} device type `
+      + `at start of device string: ${deviceType}`);
+  }
+  return got;
+}
+
+/** `bfloat16`, torch's CPU default. */
+export function getAutocastCpuDtype(): AutocastDType {
+  return getAutocastDtype("cpu");
+}
+
+/** `float16`, torch's CUDA default. */
+export function getAutocastGpuDtype(): AutocastDType {
+  return getAutocastDtype("cuda");
+}
+
+/** `float16`, torch's IPU default. */
+export function getAutocastIpuDtype(): AutocastDType {
+  return getAutocastDtype("ipu");
+}
+
+/** `bfloat16`, torch's XLA default. */
+export function getAutocastXlaDtype(): AutocastDType {
+  return getAutocastDtype("xla");
+}

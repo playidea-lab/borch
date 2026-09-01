@@ -396,7 +396,11 @@ CEILINGS = {
     # `예외가 안 났다` — the second is not a name but an **answer**, the string the
     # Python case returns when nothing was raised, so the two tables have to spell it
     # identically or the row compares against nothing.
-    "borch-ts/test": 4889,
+    # 4889 → 4899. Ten, and one name: `top::get_autocast_dtype(모르는 장치)=거절`. The
+    # ten autocast questions came off a glob that covered twenty-two, and the row asking
+    # that the getter refuses an unknown device is spelled in the Python table first —
+    # so this side spells it identically or reconciles against nothing.
+    "borch-ts/test": 4899,
 }
 
 

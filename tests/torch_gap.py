@@ -432,13 +432,33 @@ SKIPPED = {
     # then removing it breaks someone else's code. What has to be measured again when it is
     # added is the first line above — whether `shader-f16` has become effectively
     # universal.
+    #
+    # **Six rows covered twenty-two names and ten of them were questions.** The family
+    # was declined for what it is *for* — mixed precision — and the ten that only *ask*
+    # about it are answerable on any machine, `False` for the four and `True` for the
+    # cache flag, and torch's own per-device dtype constants for the five getters. They
+    # are built; what is below is what is left, and each row now says what it is rather
+    # than which family it belongs to.
+    #
+    # The split is `cudnn_is_acceptable`'s, one commit earlier: seven of that row's eight
+    # were an NVIDIA kernel and the eighth was a question about one.
     "autocast": "mixed precision — our shaders use f32 only (a decision, not the hardware)",
-    "autocast_*": "mixed precision — as above",
-    "clear_autocast_cache": "mixed precision — as above",
-    "get_autocast_*": "mixed precision — as above",
-    "set_autocast_*": "mixed precision — as above",
-    "is_autocast_*": "mixed precision — as above",
-    "GradScaler": "mixed precision's loss scaling — as above",
+    "clear_autocast_cache": "it empties the autocast weight cache, and nothing fills one "
+                            "here — the cache belongs to the context manager above",
+    "set_autocast_*": "the ten setters would change a state that does not exist. "
+                      "Accepting one and dropping it is the worse wrong: the caller "
+                      "cannot tell, and the run trains in f32 believing it is in f16",
+    "autocast_increment_nesting": "the context manager's own depth counter — without the "
+                                  "context manager, a number nobody reads",
+    "autocast_decrement_nesting": "the other half of the counter above",
+    # **`as above` again, and the row above it just moved.** It pointed at `autocast`
+    # and survived `test_no_reason_points_at_whatever_precedes_it` only because it
+    # carries a topic in front of the pointer. Naming what it agrees with is what makes
+    # it survive a reordering — and this block was reordered in the same commit that
+    # noticed.
+    "GradScaler": "mixed precision's loss scaling. It exists to keep f16 gradients from "
+                  "flushing to zero, and there is no f16 to flush — the same decision as "
+                  "`autocast`, which is where the reason is written out",
     # **These four said "inside one tab there is no thread count to choose", and that
     # was measured to be false.** In the runner's own page: `navigator.hardwareConcurrency`
     # is 16, `Worker` is a function, and a worker posted `9.5` came back with `20` — so a

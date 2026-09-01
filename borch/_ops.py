@@ -7596,6 +7596,104 @@ def cudnn_is_acceptable(tensor):
     return False
 
 
+# ── the ten autocast questions ──────────────────────────────────────────────────
+#
+# **One sentence covered twenty-two names and ten of them are questions.** The rows read
+# `is_autocast_*`, `get_autocast_*`, `set_autocast_*` and `autocast_*`, each answering
+# *mixed precision — as above*, which is what the family is **for**. The same split
+# `cudnn_is_acceptable` made one commit earlier: seven of those eight were an NVIDIA
+# kernel and the eighth was a question about one, and a question can be answered on any
+# machine.
+#
+# `autocast` itself stays out, and its row is the honest kind already — *our shaders use
+# f32 only (a decision, not the hardware)*. That decision is exactly what makes these
+# ten answerable: **there is no autocast here and there is not going to be**, so
+# `is_autocast_enabled()` is `False` for the same reason `torch.cuda.is_available()` is,
+# and it is the first line of every mixed-precision tutorial.
+#
+# **The twelve that stay out are not questions.**
+#   · the ten `set_autocast_*` would change a state that does not exist. Accepting one
+#     and dropping it is the failure this repository names most often — the caller
+#     cannot tell, and the run trains in f32 believing it is in f16.
+#   · `autocast_increment_nesting` / `autocast_decrement_nesting` are the context
+#     manager's own counter. Without the context manager, a depth nobody reads.
+#   · `clear_autocast_cache` empties a cache that was never filled.
+#
+# **`is_autocast_cache_enabled()` is `True` and the other four are `False`** — measured,
+# not assumed. A blanket *they all answer False* would have been wrong about exactly one
+# of the five, which is why each is asked separately in the cases.
+
+def is_autocast_enabled(device_type=None):
+    """**False** — no autocast is running, and none can be. See the note above."""
+    del device_type
+    return False
+
+
+def is_autocast_cpu_enabled():
+    """False, as above."""
+    return False
+
+
+def is_autocast_ipu_enabled():
+    """False, as above."""
+    return False
+
+
+def is_autocast_xla_enabled():
+    """False, as above."""
+    return False
+
+
+def is_autocast_cache_enabled():
+    """**True**, and it is the one of the five that is not False.
+
+    torch keeps the autocast weight cache on by default; the flag says whether caching
+    *would* happen, not whether autocast is running. Answering `False` here to match its
+    neighbours would be tidier and wrong."""
+    return True
+
+
+# torch's per-device defaults, measured: bfloat16 on cpu and xla, float16 on cuda and
+# ipu. Both names exist here as `_AbsentDtype` and their reprs are torch's exactly, so
+# the answer is the same object's name on both sides — and **using** it says what is
+# missing, which is what that class is for.
+_AUTOCAST_DTYPE = {
+    "cpu": "bfloat16", "xla": "bfloat16", "mkldnn": "bfloat16",
+    "cuda": "float16", "ipu": "float16", "mps": "float16", "xpu": "float16",
+}
+
+
+def get_autocast_dtype(device_type):
+    """The dtype autocast would use on that device. torch refuses an unknown one."""
+    name = _AUTOCAST_DTYPE.get(str(device_type))
+    if name is None:
+        raise RuntimeError(
+            f"Expected one of {', '.join(sorted(_AUTOCAST_DTYPE))} device type at start "
+            f"of device string: {device_type}")
+    from . import _base
+    return getattr(_base, name)
+
+
+def get_autocast_cpu_dtype():
+    """`bfloat16`, torch's CPU default."""
+    return get_autocast_dtype("cpu")
+
+
+def get_autocast_gpu_dtype():
+    """`float16`, torch's CUDA default."""
+    return get_autocast_dtype("cuda")
+
+
+def get_autocast_ipu_dtype():
+    """`float16`, torch's IPU default."""
+    return get_autocast_dtype("ipu")
+
+
+def get_autocast_xla_dtype():
+    """`bfloat16`, torch's XLA default."""
+    return get_autocast_dtype("xla")
+
+
 # ── the eight `sym_*` helpers ───────────────────────────────────────────────────
 #
 # **Their row read *symbolic sizes — for graph capture, and they do not sit on wasm*,

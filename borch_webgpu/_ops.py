@@ -1524,6 +1524,78 @@ def cudnn_is_acceptable(tensor):
     return bool(_ts.cudnnIsAcceptable(handle(tensor)))
 
 
+# ── the ten autocast questions ──────────────────────────────────────────────────
+#
+# Six ledger rows covered twenty-two names under *mixed precision*, which is what the
+# family is for; ten of them only ask about it. borch.ts holds the answers because the
+# reason is about borch.ts — *our shaders use f32 only* — and the shaders are there.
+
+def is_autocast_enabled(device_type=None):
+    """False — no autocast is running, and none can be."""
+    del device_type
+    return bool(_ts.isAutocastEnabled())
+
+
+def is_autocast_cpu_enabled():
+    """False, as above."""
+    return bool(_ts.isAutocastCpuEnabled())
+
+
+def is_autocast_ipu_enabled():
+    """False, as above."""
+    return bool(_ts.isAutocastIpuEnabled())
+
+
+def is_autocast_xla_enabled():
+    """False, as above."""
+    return bool(_ts.isAutocastXlaEnabled())
+
+
+def is_autocast_cache_enabled():
+    """**True** — the one of the five that is not False. torch keeps the weight cache
+    on whether or not autocast is running."""
+    return bool(_ts.isAutocastCacheEnabled())
+
+
+def _autocast_dtype(name):
+    """The name borch.ts answers with, as **this side's dtype object.**
+
+    borch.ts returns `"bfloat16"` or `"float16"` as a string, because its `DType` is
+    the four that exist and half precision is deliberately not among them. Here both
+    names do exist — as `_AbsentDtype`, kept so that *using* one says what is missing —
+    so the string is turned back into the object a caller would compare against.
+
+    Borrowed from `borch._base`, which is where `__init__` takes the other seven absent
+    dtypes from and for the same stated reason — one set of names, one wording."""
+    from borch._base import bfloat16, float16
+    return {"bfloat16": bfloat16, "float16": float16}[str(name)]
+
+
+def get_autocast_dtype(device_type):
+    """The dtype autocast would use there. borch.ts refuses a device it does not know."""
+    return _autocast_dtype(guarded(_ts.getAutocastDtype, str(device_type)))
+
+
+def get_autocast_cpu_dtype():
+    """`bfloat16`, torch's CPU default."""
+    return _autocast_dtype(_ts.getAutocastCpuDtype())
+
+
+def get_autocast_gpu_dtype():
+    """`float16`, torch's CUDA default."""
+    return _autocast_dtype(_ts.getAutocastGpuDtype())
+
+
+def get_autocast_ipu_dtype():
+    """`float16`, torch's IPU default."""
+    return _autocast_dtype(_ts.getAutocastIpuDtype())
+
+
+def get_autocast_xla_dtype():
+    """`bfloat16`, torch's XLA default."""
+    return _autocast_dtype(_ts.getAutocastXlaDtype())
+
+
 def as_tensor(data, dtype=None):
     from ._base import tensor as _t
     return data if isinstance(data, Tensor) else _t(data, dtype)
