@@ -390,7 +390,12 @@ NOT_PORTED = {
     # torch has. The integer reduction is the same — `F`'s takes the word, and a second
     # spelling that takes a number is a Python-side fact about two bindings of one
     # library.
-    "loss::": (18, "파이썬 — torch keeps these seven at top level as well as "
+    # 18 → 19. `nn.LinearCrossEntropyLoss/이름`, which freezes the parameter names as
+    # text — `['linear.weight']`, the key a checkpoint is written with. The layer and
+    # the eleven functional rows beside it are ported; this one asks a `state_dict`
+    # spelling, and borch.ts names its own through `ownParameters`, which is a
+    # different question from the one the case is named for.
+    "loss::": (19, "파이썬 — torch keeps these seven at top level as well as "
                          "under `F`, with an integer reduction and a different default. "
                          "borch.ts has one namespace, so there is no second place to "
                          "put them"),

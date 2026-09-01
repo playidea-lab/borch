@@ -424,6 +424,124 @@ class Linear(Module):
                 f"bias={getattr(self, 'bias', None) is not None})")
 
 
+class LinearCrossEntropyOptions:
+    """torch's knobs for the **chunked** implementation of `linear_cross_entropy`.
+
+    Every field here is a memory strategy, and **none of them moves a value** — that
+    was measured before this class was given a seat. Real torch, asked for
+    `batch_chunk_size=2`, `chunking_method=None`, `acc_policy='accurate'` and
+    `acc_policy='compact'`, answers within 4.8e-7 of its own default, which is float32
+    noise on a loss of 2.96. (`acc_dtype=float64` it refuses outright, so there is not
+    even a branch there.)
+
+    So this is carried, held, and read by nothing — which is exactly the shape
+    `tests/test_unread_arguments.py` refuses, and the reason it is allowed here is the
+    measurement above: that check is about a seat which *would* have changed the
+    answer. Nothing chunks in this library, so there is no strategy to pick and the
+    unchunked composition is the whole of it.
+
+    It is a class rather than an absence because a line written
+    `LinearCrossEntropyLoss(..., options=LinearCrossEntropyOptions(batch_chunk_size=8))`
+    is a line a reader copies from torch's own documentation, and stopping it would
+    stop a program whose answer is not in question.
+    """
+
+    def __init__(self, allow_retain_graph=False, batch_chunk_size=None,
+                 chunking_method="auto", acc_policy="auto", acc_dtype=None):
+        self.allow_retain_graph = allow_retain_graph
+        self.batch_chunk_size = batch_chunk_size
+        self.chunking_method = chunking_method
+        self.acc_policy = acc_policy
+        self.acc_dtype = acc_dtype
+
+    def __repr__(self):
+        # torch's is a dataclass, so this is a dataclass's repr — matched by measuring
+        # rather than by guessing at the order.
+        return (f"{type(self).__name__}("
+                f"allow_retain_graph={self.allow_retain_graph}, "
+                f"batch_chunk_size={self.batch_chunk_size}, "
+                f"chunking_method={self.chunking_method!r}, "
+                f"acc_policy={self.acc_policy!r}, acc_dtype={self.acc_dtype})")
+
+
+class LinearCrossEntropyLoss(Module):
+    """A `Linear` and a cross entropy, fused — **and the fusion is about memory.**
+
+    torch has this so the logits are never all materialised at once, which is what
+    makes a vocabulary-sized `num_classes` fit. Nothing here chunks, so what is left is
+    the composition, and the composition is the same number: measured against real
+    torch with and without a bias, and at `out_features=(3,)`, agreeing exactly.
+
+    **It owns the weight**, unlike `nn.functional.linear_cross_entropy`, and it owns it
+    under `self.linear` — so the parameter is `linear.weight` and the repr carries the
+    submodule. Both were measured off torch rather than assumed; a name in a
+    `state_dict` is a name a checkpoint is written with.
+
+    **`out_features` is refused, and the reason is one layer down.** Given `(3,)` torch
+    makes the weight `(3 * num_classes, in_features)` and reads the logits as
+    `(N, C, 3)` — the class axis second, its K-dimensional cross-entropy convention.
+    That much was measured and is written into the refusal, because it is the half that
+    is easy to get backwards: `(N, 3, C)` gives 1.5127 where `(N, C, 3)` gives 1.5190
+    on the same input, close enough to read as rounding and a different loss.
+
+    What stops it is that **this library's `cross_entropy` takes a 1-D target only** —
+    it indexes `logp[arange(n), target]`, which broadcasts against `(6,)` and refuses
+    `(6, 3)`. So the shape torch wants here is one the loss underneath cannot be given,
+    and building the reshape anyway would hand `cross_entropy` a rank it answers wrongly
+    or not at all. The K-dimensional form is a gap in `cross_entropy`, not in this
+    class, and it is named here rather than worked around.
+    """
+
+    def __init__(self, in_features, num_classes, *, out_features=(), bias=False,
+                 device=None, dtype=None, reduction="mean", weight=None,
+                 ignore_index=None, label_smoothing=0.0, options=None):
+        super().__init__()
+        _no_device_dtype("LinearCrossEntropyLoss", device, dtype)
+        self.in_features = in_features
+        self.num_classes = num_classes
+        self.out_features = tuple(out_features)
+        self.reduction = reduction
+        self.weight = weight
+        self.ignore_index = ignore_index
+        self.label_smoothing = label_smoothing
+        self.options = options
+        if self.out_features:
+            raise NotImplementedError(
+                f"out_features={self.out_features} needs a K-dimensional cross "
+                "entropy, and this library's takes a 1-D target.\n"
+                "  torch reads the logits as (N, C, *out_features) — the class axis "
+                "second — and\n"
+                "  `cross_entropy` here indexes `logp[arange(n), target]`, which "
+                "refuses a target\n"
+                "  of that rank. Building the reshape without the loss underneath "
+                "would give a\n"
+                "  wrong answer where torch gives one; the gap is in `cross_entropy`.")
+        self.linear = Linear(in_features, num_classes, bias=bias)
+
+    def forward(self, input, target):                           # noqa: A002
+        logits = _Functional.linear(input, self.linear.weight, self.linear.bias)
+        return _Functional.cross_entropy(
+            logits, target, weight=self.weight, reduction=self.reduction,
+            ignore_index=-100 if self.ignore_index is None else self.ignore_index,
+            label_smoothing=self.label_smoothing)
+
+    def __repr__(self):
+        # torch prints the arguments on their own line and then the submodule, which is
+        # `Module.__repr__`'s shape with an `extra_repr`. Written out because this
+        # library's base class does not carry that hook.
+        return (f"{type(self).__name__}(\n"
+                f"  in_features={self.in_features}, "
+                f"num_classes={self.num_classes}, "
+                f"out_features={self.out_features}, "
+                f"bias={self.linear.bias is not None}, "
+                f"reduction={self.reduction}, "
+                f"ignore_index={self.ignore_index}, "
+                f"label_smoothing={self.label_smoothing}, "
+                f"options={self.options}\n"
+                f"  (linear): {self.linear!r}\n"
+                f")")
+
+
 class Sigmoid(Module):
     def forward(self, x):
         return sigmoid(x)
@@ -3694,7 +3812,12 @@ class EmbeddingBag(Module):
 
 
 for _cls in (Unfold, Fold, Bilinear, LocalResponseNorm, Softmax2d, RReLU,
-             UpsamplingNearest2d, UpsamplingBilinear2d, EmbeddingBag):
+             UpsamplingNearest2d, UpsamplingBilinear2d, EmbeddingBag,
+             # Two that were declined under *newly arrived in torch — looked at once
+             # it settles*, a reason with no expiry. Re-read by calling: torch 2.13
+             # marks neither prototype nor experimental nor subject to change, and
+             # what they compute is what this library already computed.
+             LinearCrossEntropyLoss, LinearCrossEntropyOptions):
     setattr(nn, _cls.__name__, _cls)
 
 
@@ -4573,6 +4696,52 @@ class _Functional(_Namespace):
                                 ignore_index=ignore_index, reduce=reduce,
                                 reduction=reduction,
                                 label_smoothing=label_smoothing)(input, target)
+
+    @staticmethod
+    def linear_cross_entropy(input, linear_weight, target, *,   # noqa: A002
+                             linear_bias=None, weight=None, reduction="mean",
+                             ignore_index=None, label_smoothing=0.0,
+                             options=None):
+        """`cross_entropy(linear(input, w, b), target)` — **and that is not a
+        simplification, it is what torch computes.**
+
+        Measured against real torch across its whole argument surface — bare,
+        `linear_bias`, `weight`, `reduction` at `sum` and `none`, `label_smoothing`,
+        `ignore_index`, and all of them at once — the two agree to 1e-5 every time,
+        and so do `d/dx` and `d/dw`.
+
+        **What torch's separate name buys is memory, not a different answer.** It
+        fuses the two so the logits are never all materialised at once, which matters
+        when `num_classes` is a vocabulary. Nothing here chunks, so the fusion has
+        nothing to give and the composition is the whole of it.
+
+        This was declined until today under *newly arrived in torch — looked at once
+        it settles*, a reason with no expiry on it. Re-read by calling: torch 2.13
+        marks none of this family prototype, experimental or subject to change, and
+        the value was always one this library could compute. A deferral that nobody
+        re-measures is a decline wearing a softer word.
+
+        **`options` is accepted and changes nothing, which was measured before it was
+        given a seat.** Every field on `LinearCrossEntropyOptions` is a chunking
+        strategy; asked for `batch_chunk_size=2`, `chunking_method=None`,
+        `acc_policy='accurate'` and `acc_policy='compact'`, real torch answers within
+        4.8e-7 of its own default — float32 noise. So honouring it and ignoring it
+        produce the same number, which is what makes accepting it honest here rather
+        than the *accepted and never read* defect `tests/test_unread_arguments.py`
+        refuses: that check is about a seat that would have changed the answer.
+        (`acc_dtype=float64` is refused by torch itself, so there is no branch there
+        to miss either.)
+        """
+        _ = options                     # see the docstring: no field of it moves a value
+        logits = _Functional.linear(input, linear_weight, linear_bias)
+        # **torch's default here is `None` and `cross_entropy`'s is `-100`.** The two
+        # names disagree about the same argument, so passing it straight through would
+        # make `ignore_index=None` mean *ignore class -100* on one side and *ignore
+        # nothing* on the other.
+        return _Functional.cross_entropy(
+            logits, target, weight=weight, reduction=reduction,
+            ignore_index=-100 if ignore_index is None else ignore_index,
+            label_smoothing=label_smoothing)
 
 
 nn.functional = _Functional()

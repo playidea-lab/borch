@@ -689,10 +689,30 @@ SKIPPED = {
     # real gap.
 
     # Not settled yet.
-    "LinearCrossEntropyLoss": "newly arrived in torch — looked at once it settles",
-    "LinearCrossEntropyOptions": "as above",
-    "linear_cross_entropy": "the functional counterpart of the layer above — looked at when they settle together",
-    "Muon": "an optimizer newly arrived in torch — looked at once it settles",
+    # **Three of these four are built now, and the reason they were not is the point.**
+    # All four read *newly arrived in torch — looked at once it settles*, which is a
+    # deferral with no expiry on it: nothing about a sentence like that ever comes due,
+    # so it never asks to be re-read. Re-read by calling, torch 2.13 marks none of the
+    # family prototype, experimental, unstable or subject to change, and
+    # `linear_cross_entropy(x, w, t)` was measured equal to
+    # `cross_entropy(linear(x, w), t)` across its whole argument surface and both
+    # gradients. The value was always one this library could compute.
+    #
+    # A deferral nobody re-measures is a decline wearing a softer word. This is the
+    # fourth reason in this file found false the same way in one session — after `fft`,
+    # `special` and the `*_video` kernels — and the three before it were all *this
+    # cannot be done*. This one was *not yet*, which is the harder kind to catch,
+    # because it does not sound like a claim at all.
+    #
+    # **`Muon` stays, and its reason is now a number rather than a date.**
+    "Muon": "**its Newton–Schulz iteration runs in bfloat16** and this library has no "
+            "such dtype. Not a precision quibble: torch's own float32, running the "
+            "identical five steps, differs from its bfloat16 by 1.26e-2 — measured — "
+            "and float64 by ~1e-2, about 1% of the values' size and a hundred times "
+            "the golden's 1e-4. So an implementation here would be a correct Muon that "
+            "can never agree with torch's answer, which is the one thing a comparison "
+            "library must not ship. The `_AbsentDtype` family is the same decision one "
+            "level down",
     "grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
     "scaled_grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
     "scaled_mm": "fp8 GEMM — that hardware is not here",

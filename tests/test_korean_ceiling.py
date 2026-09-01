@@ -362,7 +362,13 @@ CEILINGS = {
     # Korean because every other reason there is, and a row in a different language
     # reads as a different kind of row. `cases.ts` did not move: the thirty video case
     # names are the core's and are not asked over there.
-    "borch-ts/test": 4810,
+    # 4810 → 4824. Fourteen: the case name `linear_cross_entropy(기본이 -100 을
+    # 건너뛴다)` in `cases.ts`, plus two in the `loss::` ledger row. **Names are keys** —
+    # the Python and TypeScript tables have to spell the string identically or the row
+    # reconciles against nothing, so a Korean name on one side is a Korean name on
+    # both. That case is the one that catches `ignoreIndex=null` being passed through
+    # rather than mapped to -100, which no other target can see.
+    "borch-ts/test": 4824,
 }
 
 

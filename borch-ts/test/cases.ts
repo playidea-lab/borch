@@ -5952,6 +5952,81 @@ function addLoss(out: Map<string, Case>): void {
   ];
   for (const [name, fn] of value) out.set(`loss::${name}`, fn);
 
+  // ── `linearCrossEntropy`, which is a fusion and not a formula ────────────
+  //
+  // It equals `crossEntropy(linear(x, w, b), t)` and the cases are about the arguments
+  // arriving on the right side of that. **`ignoreIndex` is the one a lazy port loses**:
+  // torch's default here is `null`, `crossEntropy`'s is `-100`, and `null` is measured
+  // to *mean* -100 — so passing it through is the same answer on every target that
+  // holds no -100 and a different one on the targets the argument exists for.
+  const lceX = [0.5, -1.2, 0.3, 2.0, -0.7,
+                1.1, 0.4, -0.9, 0.2, 1.5,
+                -0.3, 0.8, 1.7, -1.1, 0.6,
+                2.2, -0.5, 0.1, 0.9, -1.4,
+                0.7, 1.3, -0.2, -0.8, 0.4,
+                -1.0, 0.2, 0.9, 1.6, -0.3];
+  const lceW = [0.3, -0.7, 1.1, 0.2, -0.4,
+                -1.2, 0.5, 0.8, -0.9, 1.3,
+                0.6, 1.0, -0.3, 0.7, -1.1,
+                -0.8, -0.2, 0.4, 1.5, 0.9];
+  const lceB = [0.2, -0.5, 0.9, -0.1];
+  const lceCw = [0.7, 1.4, 0.9, 1.1];
+  const lx = (): Tensor => Tensor.from(lceX, [6, 5]);
+  const lw = (): Tensor => Tensor.from(lceW, [4, 5]);
+  const lt = (): Tensor => Tensor.from([0, 1, 2, 3, 0, 1], [6], { dtype: "int64" });
+
+  const lce: [string, () => Tensor][] = [
+    ["기본", () => F.linearCrossEntropy(lx(), lw(), lt())],
+    ["linear_bias",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), Tensor.from(lceB, [4]))],
+    ["weight", () => F.linearCrossEntropy(lx(), lw(), lt(), undefined,
+                                          Tensor.from(lceCw, [4]))],
+    ["reduction=sum",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "sum")],
+    ["reduction=none",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "none")],
+    ["label_smoothing",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "mean",
+                                 null, 0.1)],
+    ["ignore_index",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "mean", 1)],
+    ["전부",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), Tensor.from(lceB, [4]),
+                                 Tensor.from(lceCw, [4]), "sum", 2, 0.1)],
+    ["options",
+      () => F.linearCrossEntropy(lx(), lw(), lt(), undefined, undefined, "mean",
+                                 null, 0.0,
+                                 new nn.LinearCrossEntropyOptions(false, 2))],
+    // The target that actually holds -100. Without it the pair above says nothing
+    // about the default, because *ignore nothing* and *ignore class -100* agree
+    // everywhere else.
+    ["기본이 -100 을 건너뛴다",
+      () => F.linearCrossEntropy(
+        lx(), lw(),
+        Tensor.from([0, -100, 2, 3, -100, 1], [6], { dtype: "int64" }))],
+  ];
+  for (const [name, fn] of lce) out.set(`loss::linear_cross_entropy(${name})`, fn);
+
+  // The layer, with the weight planted — its initialisation is not torch's.
+  //
+  // **Inside `noGrad`, because a parameter is a leaf that wants a gradient** and
+  // writing into one is refused: *a leaf Variable that requires grad is being used in
+  // an in-place operation*. Every other planted case in this file goes through the same
+  // door; these two did not at first and said so on the first run.
+  out.set("loss::nn.LinearCrossEntropyLoss", () => {
+    const m = new nn.LinearCrossEntropyLoss(5, 4);
+    noGrad(() => m.linear.weight.copyFrom(lw()));
+    return m.call(lx(), lt());
+  });
+  out.set("loss::nn.LinearCrossEntropyLoss(bias)", () => {
+    const m = new nn.LinearCrossEntropyLoss(5, 4, [], true);
+    noGrad(() => {
+      m.linear.weight.copyFrom(lw());
+      if (m.linear.bias) m.linear.bias.copyFrom(Tensor.from(lceB, [4]));
+    });
+    return m.call(lx(), lt());
+  });
+
   // **torch's deprecated pair, and it beats `reduction`.** The last two read wrongly
   // at a glance and are the point: all three given folds to the *mean*, and the
   // positional string lands on `sizeAverage`, which is truthy, so it folds there too.

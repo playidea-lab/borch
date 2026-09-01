@@ -8556,6 +8556,110 @@ def loss_cases(inp=None):
     def add(name, fn):
         cases.append((LOSS_PREFIX + name, fn))
 
+    # ── `linear_cross_entropy`, which is a fusion and not a formula ──────────
+    #
+    # **It equals `cross_entropy(linear(x, w, b), t)`, and that is the claim.** torch has
+    # the separate name so the logits are never all materialised at once — a memory
+    # strategy for a vocabulary-sized `num_classes` — and nothing here chunks, so the
+    # composition is the whole of it. What the cases have to hold is that the seven
+    # arguments arrive at the right side of the fusion.
+    #
+    # **`ignore_index` is the one that would slip through a lazy port.** torch's default
+    # here is `None` and `cross_entropy`'s is `-100`, so a forwarder passing it straight
+    # through makes `ignore_index=None` mean *ignore class -100* on one side and *ignore
+    # nothing* on the other. The two are the same on this fixture, which is why the case
+    # gives it a value.
+    _lce_x = np.array([[0.5, -1.2, 0.3, 2.0, -0.7],
+                       [1.1, 0.4, -0.9, 0.2, 1.5],
+                       [-0.3, 0.8, 1.7, -1.1, 0.6],
+                       [2.2, -0.5, 0.1, 0.9, -1.4],
+                       [0.7, 1.3, -0.2, -0.8, 0.4],
+                       [-1.0, 0.2, 0.9, 1.6, -0.3]], dtype=np.float32)
+    _lce_w = np.array([[0.3, -0.7, 1.1, 0.2, -0.4],
+                       [-1.2, 0.5, 0.8, -0.9, 1.3],
+                       [0.6, 1.0, -0.3, 0.7, -1.1],
+                       [-0.8, -0.2, 0.4, 1.5, 0.9]], dtype=np.float32)
+    _lce_b = np.array([0.2, -0.5, 0.9, -0.1], dtype=np.float32)
+    _lce_t = np.array([0, 1, 2, 3, 0, 1], dtype=np.int64)
+    _lce_cw = np.array([0.7, 1.4, 0.9, 1.1], dtype=np.float32)
+
+    def _plant(L, target, arr):
+        """Write `arr` into a parameter, the one way all three sides carry.
+
+        **`.data[...] = ` is not that way.** The core's `data` is the numpy array and
+        takes an array; torch's is a tensor and refuses one; the binding's parameter has
+        no `data` at all and answered `AttributeError: data`. `copy_` under `no_grad` is
+        what the layer-filling helper five thousand lines up already uses, for the same
+        reason and against the same three sides.
+        """
+        with L.no_grad():
+            target.copy_(L.tensor(np.ascontiguousarray(arr)))
+
+    def _lce(name, call):
+        add(f"linear_cross_entropy({name})",
+            lambda L: call(F(L), L.tensor(_lce_x), L.tensor(_lce_w),
+                           L.tensor(_lce_t), L))
+
+    _lce("기본", lambda f, x_, w_, t_, L: f.linear_cross_entropy(x_, w_, t_))
+    _lce("linear_bias", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, linear_bias=L.tensor(_lce_b)))
+    _lce("weight", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, weight=L.tensor(_lce_cw)))
+    _lce("reduction=sum", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, reduction="sum"))
+    _lce("reduction=none", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, reduction="none"))
+    _lce("label_smoothing", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, label_smoothing=0.1))
+    _lce("ignore_index", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, ignore_index=1))
+    # **A target that actually holds -100, and without it this pair says nothing.**
+    # torch's default here is `None` and `cross_entropy`'s is `-100`, so a forwarder
+    # that passes `None` straight through is only wrong where a -100 is present — on
+    # any other fixture *ignore nothing* and *ignore class -100* are the same answer.
+    # Planted: passing it through, every case above stayed green and this one turns
+    # red. (Measured in torch first: `linear_cross_entropy(ignore_index=None)` equals
+    # `cross_entropy`'s default exactly, 2.589689 on a target holding -100.)
+    _lce_skip = np.array([0, -100, 2, 3, -100, 1], dtype=np.int64)
+    add("linear_cross_entropy(기본이 -100 을 건너뛴다)",
+        lambda L: F(L).linear_cross_entropy(
+            L.tensor(_lce_x), L.tensor(_lce_w), L.tensor(_lce_skip)))
+    _lce("전부", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, linear_bias=L.tensor(_lce_b), weight=L.tensor(_lce_cw),
+        reduction="sum", label_smoothing=0.1, ignore_index=2))
+    # **`options` has to be accepted and has to change nothing** — measured in real
+    # torch, four settings all within 4.8e-7 of the default. Frozen equal to the bare
+    # case above on purpose: this is the row that says the seat is inert, and it is
+    # attested as deliberately-equal rather than left to look like a hole.
+    _lce("options", lambda f, x_, w_, t_, L: f.linear_cross_entropy(
+        x_, w_, t_, options=L.nn.LinearCrossEntropyOptions(batch_chunk_size=2)))
+
+    def _lce_layer(L):
+        """The layer, with the weight pinned — its initialisation is not torch's.
+
+        **`data[...] = ndarray` works on one side and not the other**, so the write
+        goes through each side's own tensor. torch refuses `can't assign a
+        numpy.ndarray to a torch.FloatTensor`; the core's `data` is the array itself.
+        """
+        loss = L.nn.LinearCrossEntropyLoss(5, 4)
+        _plant(L, loss.linear.weight, _lce_w)
+        return loss(L.tensor(_lce_x), L.tensor(_lce_t))
+
+    def _lce_layer_bias(L):
+        loss = L.nn.LinearCrossEntropyLoss(5, 4, bias=True)
+        _plant(L, loss.linear.weight, _lce_w)
+        _plant(L, loss.linear.bias, _lce_b)
+        return loss(L.tensor(_lce_x), L.tensor(_lce_t))
+
+    add("nn.LinearCrossEntropyLoss", _lce_layer)
+    add("nn.LinearCrossEntropyLoss(bias)", _lce_layer_bias)
+    # **The parameter is `linear.weight`, not `weight`** — the layer owns a `Linear`
+    # submodule and a checkpoint is written with that name. Frozen as text because a
+    # `state_dict` key is a spelling.
+    add("nn.LinearCrossEntropyLoss/이름",
+        lambda L: str(sorted(n for n, _ in
+                             L.nn.LinearCrossEntropyLoss(5, 4).named_parameters())))
+
     # ── Huber — where the defaults coincide with SmoothL1 ──
     for tag, delta in (("기본", None), ("δ=0.5", 0.5), ("δ=2", 2.0)):
         add(f"huber({tag})",

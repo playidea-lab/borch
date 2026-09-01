@@ -707,7 +707,11 @@ JUDGED = {
     # fix looks like here** — the total did not change, and no other number in this
     # file would have recorded that anything happened.
     # 144 → 145. `LazyLinear`, see `SHORTER`.
-    "nn": (145, 161),
+    # 145 → 147 of 161 → 163. `LinearCrossEntropyLoss` and its `Options`, which were
+    # declined under *newly arrived in torch — looked at once it settles* until that
+    # sentence was re-read by calling. Both land in `agree`; the filed total rises by
+    # the same two, which is what an implementation looks like from here.
+    "nn": (147, 163),
     # 76 → 84. **Eight pooling functions stopped being uncomparable.** They ended
     # `(…, **_)`, which makes the whole signature read as `VARIADIC` — and on this
     # axis `variadic` means *cannot be compared at all*, so one `**_` bought silence
@@ -716,7 +720,9 @@ JUDGED = {
     # it is set), so it is named and unused now. The difference between that and
     # `**_` is that a reader can see it.
     # 84 → 109. Twenty-five `nn.functional` names are C too.
-    "nn.functional": (109, 126),
+    # 109 → 110 of 126 → 127. `linear_cross_entropy`, the functional half of the pair
+    # one namespace up.
+    "nn.functional": (110, 127),
     "optim": (14, 14),
     "optim.lr_scheduler": (16, 16),
     # 0 → 5, same reading. The four `unaligned` are `householder_product`, `lu`,

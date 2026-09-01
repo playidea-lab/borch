@@ -169,6 +169,41 @@ export function linear(input: Tensor, weight: Tensor): Tensor {
   return input.linear(weight);
 }
 
+/**
+ * `crossEntropy(linear(input, w, b), target)` — **and that is what torch computes**,
+ * not a simplification of it.
+ *
+ * torch keeps a separate name so the logits are never all materialised at once, which
+ * is what makes a vocabulary-sized class count fit in memory. Nothing here chunks, so
+ * the fusion has nothing to give and the composition is the whole of it. Measured
+ * against real torch across its argument surface — bare, with a bias, with class
+ * weights, at every reduction, with label smoothing and with `ignoreIndex` — and the
+ * two agree, gradients included.
+ *
+ * **`ignoreIndex` defaults differently in the two names.** torch's is `null` here and
+ * `-100` on `crossEntropy`, and `null` is measured to *mean* -100 — so a port passing
+ * it straight through would make it mean *ignore nothing*, which is the same answer on
+ * every target that holds no -100 and a different one on the targets this argument
+ * exists for.
+ *
+ * `options` is torch's chunking configuration. Every field of it is a memory strategy
+ * and none moves a value (measured: four settings within 4.8e-7 of the default), so it
+ * is accepted and read by nothing rather than refused — a line copied from torch's own
+ * documentation should not stop on an argument that cannot change the answer.
+ */
+export function linearCrossEntropy(
+  input: Tensor, linearWeight: Tensor, target: Tensor,
+  linearBias?: Tensor, weight?: Tensor, reduction: Reduction = "mean",
+  ignoreIndex: number | null = null, labelSmoothing = 0.0,
+  options?: unknown,
+): Tensor {
+  void options;
+  const flat = input.linear(linearWeight);
+  const logits = linearBias === undefined ? flat : flat.add(linearBias);
+  return logits.crossEntropy(target, ignoreIndex ?? -100, reduction,
+                             labelSmoothing, weight);
+}
+
 export function localResponseNorm(input: Tensor, size: number, alpha = 1e-4, beta = 0.75, k = 1.0): Tensor {
   return input.localResponseNorm(size, alpha, beta, k);
 }

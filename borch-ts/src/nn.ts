@@ -6006,6 +6006,87 @@ export class CrossEntropyLoss {
   describe(): string { return "CrossEntropyLoss()"; }
 }
 
+/**
+ * torch's knobs for the **chunked** implementation of `linearCrossEntropy`.
+ *
+ * Every field is a memory strategy and **none of them moves a value** — measured in
+ * real torch, four settings all within 4.8e-7 of the default, which is float32 noise
+ * on a loss of 2.96. Nothing chunks here, so it is carried, held, and read by nothing.
+ *
+ * It exists so a line copied out of torch's own documentation runs, rather than
+ * stopping on an argument that could not have changed the answer.
+ */
+export class LinearCrossEntropyOptions {
+  constructor(
+    readonly allowRetainGraph = false,
+    readonly batchChunkSize: number | null = null,
+    readonly chunkingMethod: string | null = "auto",
+    readonly accPolicy: "accurate" | "balanced" | "compact" | "auto" = "auto",
+    readonly accDtype: unknown = null,
+  ) {}
+}
+
+/**
+ * A `Linear` and a cross entropy, fused — **and the fusion is about memory.**
+ *
+ * torch has this so the logits are never all materialised at once. Nothing here
+ * chunks, so what is left is the composition, and the composition is the same number.
+ *
+ * **It owns the weight under `linear`**, so the parameter is `linear.weight` — measured
+ * off torch rather than assumed, because a name in a `stateDict` is a name a checkpoint
+ * is written with.
+ *
+ * `outFeatures` is refused. torch reads the logits as `(N, C, ...outFeatures)` — the
+ * class axis second — and `crossEntropy` here takes a 1-D target, so the shape torch
+ * wants is one the loss underneath cannot be given. The core refuses it for the same
+ * reason and says so the same way.
+ */
+export class LinearCrossEntropyLoss extends Module {
+  readonly linear: Linear;
+
+  constructor(
+    readonly inFeatures: number,
+    readonly numClasses: number,
+    readonly outFeatures: readonly number[] = [],
+    bias = false,
+    device?: null,
+    dtype?: null,
+    readonly reduction: Reduction = "mean",
+    readonly weight: Tensor | undefined = undefined,
+    readonly ignoreIndex: number | null = null,
+    readonly labelSmoothing = 0.0,
+    readonly options: LinearCrossEntropyOptions | undefined = undefined,
+  ) {
+    refuseDeviceDtype("LinearCrossEntropyLoss", device, dtype);
+    super();
+    if (outFeatures.length > 0) {
+      throw new RuntimeError(
+        `outFeatures=[${outFeatures}] needs a K-dimensional cross entropy, and this ` +
+        "library's takes a 1-D target.\n" +
+        "  torch reads the logits as (N, C, ...outFeatures) — the class axis second — " +
+        "and\n  crossEntropy here indexes one class per row.");
+    }
+    this.linear = new Linear(inFeatures, numClasses, bias);
+    // **Registered under `linear`, which is what makes the parameter `linear.weight`.**
+    // torch names it that way because the module owns a `Linear`, and a `stateDict`
+    // key is what a checkpoint is written with.
+    this.registerModule("linear", this.linear);
+  }
+
+  override forward(input: Tensor, target: Tensor): Tensor {
+    const flat = input.linear(this.linear.weight);
+    const logits = this.linear.bias === null ? flat : flat.add(this.linear.bias);
+    return logits.crossEntropy(target, this.ignoreIndex ?? -100, this.reduction,
+                               this.labelSmoothing, this.weight);
+  }
+
+  override call(input: Tensor, target: Tensor): Tensor {
+    return this.forward(input, target);
+  }
+
+  override describe(): string { return "LinearCrossEntropyLoss()"; }
+}
+
 // ── The place torch.nn.functional occupies ─────────────────────────────
 //
 // **It is exported as `nn.functional`** — torch's path is `torch.nn.functional`, so one

@@ -763,7 +763,30 @@ def _bilinear(x1, x2, weight, bias=None):
                         handle(bias) if bias is not None else None))
 
 
+def _linear_cross_entropy(input, linear_weight, target, *,   # noqa: A002
+                          linear_bias=None, weight=None, reduction="mean",
+                          ignore_index=None, label_smoothing=0.0, options=None):
+    """**The generic door cannot carry this one**, and the reason is the same shape as
+    `special.polygamma`'s: it forwards to the first argument's method, and borch.ts has
+    this as a module function taking three tensors rather than a method on one.
+
+    `ignore_index` defaults to `None` here and to `-100` on `crossEntropy`, and `None`
+    is measured to *mean* -100 — so it is mapped rather than passed through. Handed
+    straight over it would mean *ignore nothing*, which agrees on every target that
+    holds no -100 and differs on the ones this argument exists for.
+    """
+    _ = options                     # no field of it moves a value (measured)
+    return wrap(guarded(
+        _ts.nn.functional.linearCrossEntropy,
+        handle(input), handle(linear_weight), handle(target),
+        handle(linear_bias) if linear_bias is not None else None,
+        handle(weight) if weight is not None else None,
+        reduction, -100 if ignore_index is None else int(ignore_index),
+        float(label_smoothing), None))
+
+
 _HAND_WRITTEN = {
+    "linear_cross_entropy": _linear_cross_entropy,
     "interpolate": _interpolate,
     "multi_head_attention_forward": _mha_forward,
     "affine_grid": _affine_grid,
@@ -1348,6 +1371,20 @@ class Module:
             return None
         if _ts.isTensor(got):
             return wrap(got)
+        # **A submodule came back as the raw borch.ts object**, so `model.fc.weight` was
+        # reachable and unusable: the tensor behind it never went through `wrap`, and
+        # `copy_` on it stopped at `size mismatch: [4,5] <- [torch.Size([4, 5])]` —
+        # a borch.ts message holding a stringified Python argument, which is what a raw
+        # handle receiving a wrapped value looks like.
+        #
+        # Found through `LinearCrossEntropyLoss`, which is the first layer here to own
+        # a named child; every layer before it held tensors alone, so the branch had
+        # nothing to be wrong about. **`forward` is the mark**, and duck-typing rather
+        # than a class check is deliberate: borch.ts's layers do not share a base this
+        # side can see, and asking for the one method they all have is the question
+        # that survives that.
+        if callable(getattr(got, "forward", None)):
+            return Module(got)
         return got
 
 
@@ -3171,6 +3208,67 @@ def CrossEntropyLoss(weight=None, size_average=None, ignore_index=-100,
     w = handle(weight) if weight is not None else None
     return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(
         handle(b), int(ignore_index), reduction, float(label_smoothing), w)))
+
+
+class LinearCrossEntropyOptions:
+    """torch's chunking configuration, held and read by nothing.
+
+    Every field is a memory strategy. Measured in real torch, four of them answer
+    within 4.8e-7 of the default — float32 noise — so accepting it and ignoring it give
+    the same number, which is what makes carrying it honest rather than the
+    *accepted and never read* defect. The core's class says the same at more length.
+    """
+
+    def __init__(self, allow_retain_graph=False, batch_chunk_size=None,
+                 chunking_method="auto", acc_policy="auto", acc_dtype=None):
+        self.allow_retain_graph = allow_retain_graph
+        self.batch_chunk_size = batch_chunk_size
+        self.chunking_method = chunking_method
+        self.acc_policy = acc_policy
+        self.acc_dtype = acc_dtype
+
+    def __repr__(self):
+        return (f"{type(self).__name__}("
+                f"allow_retain_graph={self.allow_retain_graph}, "
+                f"batch_chunk_size={self.batch_chunk_size}, "
+                f"chunking_method={self.chunking_method!r}, "
+                f"acc_policy={self.acc_policy!r}, acc_dtype={self.acc_dtype})")
+
+
+def LinearCrossEntropyLoss(in_features, num_classes, *, out_features=(),
+                           bias=False, device=None, dtype=None, reduction="mean",
+                           weight=None, ignore_index=None, label_smoothing=0.0,
+                           options=None):
+    """A `Linear` and a cross entropy, fused — **and the fusion is about memory.**
+
+    borch.ts carries the class, so this forwards to it rather than assembling the pair
+    in Python. Assembled here the golden would go green and the name would not exist
+    for anyone holding borch.ts, which is the seam this repository has fallen into
+    seven times.
+
+    `out_features` is refused over there for the reason the core gives: torch reads the
+    logits as `(N, C, *out_features)` and neither implementation's cross entropy takes
+    a target of that rank.
+    """
+    from borch._base import _only_cpu, _unsupported
+
+    # **The pair is carried in order to answer it.** Not taking them is not the same as
+    # answering them — `LinearCrossEntropyLoss(5, 4, device="cpu")` would come back
+    # *unexpected keyword argument*, which is the screen a typo gives.
+    _only_cpu("nn.LinearCrossEntropyLoss", device)
+    if dtype is not None:
+        _unsupported("nn.LinearCrossEntropyLoss(dtype=…)")
+    # **`out_features` and `options` go across rather than being written as constants.**
+    # Hard-wired here they were two seats that took a value and sent something else,
+    # which `test_binding_arguments.py` caught by reading the call — the shape that file
+    # exists for. `out_features` is refused over there and `options` is inert on both
+    # sides, and neither of those is a reason for the value not to travel.
+    return Module(_ts.nn.LinearCrossEntropyLoss.new(
+        int(in_features), int(num_classes), _js_list([int(v) for v in out_features]),
+        bool(bias), None, None,
+        reduction, handle(weight) if weight is not None else None,
+        None if ignore_index is None else int(ignore_index),
+        float(label_smoothing), options))
 
 
 class _Recurrent(Module):
