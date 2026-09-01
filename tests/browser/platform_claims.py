@@ -143,8 +143,27 @@ DEFENDS = ("get_num_threads", "set_num_threads",
 
 
 def _still_declined():
-    """The names above that `torch_gap.py` no longer declines."""
+    """The names above that `torch_gap.py` no longer declines.
+
+    **`(rows, None)` when torch is not installed**, and the caller says so rather than
+    passing quietly. This step runs under `uv run --with playwright` and nothing else —
+    `torch_gap.py` imports torch at module scope, so on the CI runner this raised
+    `No module named 'torch'` and turned the whole step red for a reason that has
+    nothing to do with the browser. **It took main down with it**, and a peer session
+    had to come and say so on the morning of a launch.
+
+    Installing torch here to read one dictionary would cost the step its speed, which
+    is why it sits beside the clipping scan rather than with the value comparisons. So
+    the half that needs torch is skipped and **named as skipped** — a check that goes
+    quiet without saying so is the failure this repository keeps finding, and the
+    distinction between *checked and fine* and *not checked* has to survive into the
+    output.
+    """
     import importlib.util                                             # noqa: PLC0415
+    try:
+        import torch                                                  # noqa: PLC0415, F401
+    except ImportError:
+        return None
     spec = importlib.util.spec_from_file_location(
         "bt_gap_claims", ROOT / "tests" / "torch_gap.py")
     gap = importlib.util.module_from_spec(spec)
@@ -174,6 +193,11 @@ def main():
     print(f"platform claims behind {len(DEFENDS)} declined names — measured in /{PAGE}\n")
     for what, holds, seen, _ in rows:
         print(f"  {'ok ' if holds else 'NO '} {what}\n        {seen}")
+    if stale is None:
+        print("\n  -- whether these names are still declined was NOT checked --\n"
+              "  `torch_gap.py` imports torch and this step does not install it. The\n"
+              "  browser half above ran; the half that would catch a claim outliving\n"
+              "  its row did not.")
 
     broken = [(what, seen, sting) for what, holds, seen, sting in rows if not holds]
     if not broken and not stale:
