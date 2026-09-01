@@ -1140,13 +1140,22 @@ NOT_PORTED = {
     # the generator it was handed does not feel it. borch.ts has `manualSeed` and one
     # stream, so there is no second generator here to hand it; that is the decision at
     # the top of `data.ts` and these rows sit behind it with the other two.
-    "dataconv::": (21, "파이썬 — `default_convert`, `get_worker_info`, the eleven "
-                        "`generator` rows (one host stream), `drop_last` given by "
-                        "position (borch.ts takes an options object), and the six "
-                        "`DistributedSampler` rows. That last one is not a network — "
-                        "it interleaves indices and slices by rank — but borch.ts has "
-                        "no `utils.data` at all: a page loads its own data and there "
-                        "is nothing there to sample from"),
+    # **15 → 21 → 15, and the six in the middle were never true.** Two sessions closed
+    # `DistributedSampler` on the same day from opposite ends. One wrote six cases from
+    # the Python side and this row to excuse them, saying *borch.ts has no `utils.data`
+    # at all* — while `src/data.ts` held the samplers, the loader and, by then, that
+    # class. The row was not stale; it was **wrong when written**, because it described a
+    # side its author had not looked at.
+    #
+    # The lesson is not about that session. A reason for *the other implementation*
+    # cannot be checked by the runner that prints it: this file measures which cases
+    # borch.ts answers, and any sentence about **why** is prose it cannot read. All six
+    # are asked now, `ValueError` included — the one thing that genuinely had to be
+    # settled first, and it was settled by measuring torch rather than by either side
+    # deciding.
+    "dataconv::": (15, "파이썬 — `default_convert`, `get_worker_info`, the eleven "
+                       "`generator` rows (one host stream), and `drop_last` given by "
+                       "position (borch.ts takes an options object)"),
 }
 
 

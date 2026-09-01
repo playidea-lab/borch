@@ -8743,6 +8743,47 @@ function addRecent(out: Map<string, Case>): void {
   out.set("dataconv::DistributedSampler(음수 rank)",
     () => refuses(() => new data.DistributedSampler({ length: 10 }, 3, -1)));
 
+  // **A second session wrote these six the same day, from the Python side.** Its ledger
+  // row said they could not be asked here because *borch.ts has no `utils.data` at
+  // all*, which the file next door disproves — the samplers, the loader and this class
+  // are in `src/data.ts`. Two sessions closing one name from two ends is why the row
+  // was written before the other end existed; the answer is to ask them, not to explain
+  // them.
+  //
+  // Their shape differs from the rows above and is worth keeping: **every rank in one
+  // answer.** Asked one rank at a time the interleave and a contiguous split look alike
+  // on rank 0 — `[0, 2, 4]` one way and `[0, 1, 2]` the other, both starting at zero
+  // with the right length.
+  const allRanks = (n: number, k: number, dropLast: boolean): string =>
+    Array.from({ length: k }, (_, rank) =>
+      Array.from(new data.DistributedSampler({ length: n }, k, rank, false, 0, dropLast))
+        .join(",")).join(" | ");
+  for (const [tag, n, k, dropLast] of [
+    ["10 over 2", 10, 2, false],
+    ["10 over 3, padded", 10, 3, false],
+    ["10 over 3, dropped", 10, 3, true],
+    ["7 over 4, padded past its own length", 7, 4, false],
+  ] as [string, number, number, boolean][]) {
+    out.set(`dataconv::DistributedSampler(${tag})`, () => allRanks(n, k, dropLast));
+  }
+
+  // These two answer with the **name of the error class**, so they only line up because
+  // borch.ts has a `ValueError` of its own and this class raises it — which it did not
+  // until the Python side's measurement said which of torch's two it should be.
+  const refusalName = (build: () => unknown): string => {
+    try {
+      build();
+    } catch (e) {
+      return (e as Error).name;
+    }
+    return "예외가 안 났다";
+  };
+  out.set("dataconv::DistributedSampler(no ranks given)=거절",
+    () => refusalName(() => new (data.DistributedSampler as unknown as
+      new (...a: unknown[]) => unknown)({ length: 4 })));
+  out.set("dataconv::DistributedSampler(rank out of range)=거절",
+    () => refusalName(() => new data.DistributedSampler({ length: 4 }, 2, 2)));
+
 
   // **`wrap` means something only on a tall matrix.** While it was asked with squares
   // alone, this version invented a rule that does not exist (skipping a row on wrapping

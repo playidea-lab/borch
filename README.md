@@ -820,8 +820,8 @@ convolutions, ranks 7 and 8), which it refuses on purpose.
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 3972 cases. **The remaining 653 are two
-things**: 653 deliberately not carried across, and 0 owed. The binding
+borch.ts itself has written TS bodies for 3978 cases. **The remaining 647 are two
+things**: 647 deliberately not carried across, and 0 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the declined ask about a Python

@@ -391,7 +391,12 @@ CEILINGS = {
     # was already spelled in this file; the eight new characters are the two
     # `set_epoch` rows and `음수 rank`. Nothing about the class itself is Korean —
     # `borch-ts/src/data.ts` is English, as that ceiling requires.
-    "borch-ts/test": 4879,
+    # 4879 → 4889. Ten, and again all keys: a second session wrote six more
+    # `DistributedSampler` cases from the Python side, and their names carry `거절` and
+    # `예외가 안 났다` — the second is not a name but an **answer**, the string the
+    # Python case returns when nothing was raised, so the two tables have to spell it
+    # identically or the row compares against nothing.
+    "borch-ts/test": 4889,
 }
 
 

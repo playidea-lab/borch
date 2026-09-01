@@ -46,7 +46,7 @@
  * too. The choice was to not add another door.
  */
 
-import { RuntimeError } from "./errors.js";
+import { RuntimeError, ValueError } from "./errors.js";
 import { refuseGenerator, uniform } from "./random.js";
 import { Tensor } from "./tensor.js";
 
@@ -388,11 +388,16 @@ export class DistributedSampler implements Sampler {
     private readonly seed = 0,
     private readonly dropLast = false,
   ) {
+    // **`ValueError`, matching the core and torch.** These were `RuntimeError`, which
+    // is torch's other answer — the one for *the distributed package will not import*
+    // rather than *these two numbers are wrong*. A caller catching torch's actual error
+    // walks straight past the wrong one, and here the pair is not even optional, so the
+    // import branch cannot be what this is.
     if (!Number.isInteger(numReplicas) || !Number.isInteger(rank)) {
-      throw new RuntimeError("numReplicas and rank must be integers");
+      throw new ValueError("numReplicas and rank must both be given as integers");
     }
     if (rank >= numReplicas || rank < 0) {
-      throw new RuntimeError(
+      throw new ValueError(
         `Invalid rank ${rank}, rank should be in the interval [0, ${numReplicas - 1}]`);
     }
     const n = dataset.length;

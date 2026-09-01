@@ -301,11 +301,9 @@ class DistributedSampler(Sampler):
     collectives are not. Given `num_replicas` and `rank` outright it never asks a
     process group anything — it reads that pair *from* one only when both are
     omitted, so here both are required and the omission raises rather than
-    pretending there is a group of one. It raises `RuntimeError` because that is
-    the branch torch itself takes when there is no distributed package to ask:
-    *Requires distributed package to be available*. The `ValueError` a built
-    torch gives instead comes from the group being uninitialised, which is a
-    different sentence about a thing that exists.
+    pretending there is a group of one. The class of that error is `ValueError`
+    and the reason is under `__init__`; this paragraph said `RuntimeError` until
+    the two disagreed by a hand's width, which is the distance that hides one.
 
     Two properties are what make it worth having over slicing by hand.
 
