@@ -173,15 +173,28 @@ import borchvision
 
 # **A whole namespace.** Matched on the prefix of the namespace's name.
 DELIBERATE = {
-    "cuda": "there is no CUDA in a browser. Imitating it loses the lesson about GPUs",
-    "mps": "same reason",
-    "xpu": "same reason",
-    "mtia": "same reason",
+    # **The blanket, and the four names under it that are built.** A namespace-wide row
+    # reads as *nothing here*, and twice this session that reading was wrong — `fft`
+    # was declined whole with 22 of 23 names built, `special` with 23 of 57. Asked the
+    # same question, `cuda` answers four: `is_available` gives `False`, `device_count`
+    # gives 0, and `manual_seed_all` and `synchronize` refuse by name (measured).
+    #
+    # Which is the distinction the sentence was missing rather than getting wrong.
+    # *Imitating it loses the lesson* is the reason **the other 116 are absent**; the
+    # four that are here do the opposite of imitating — they are the questions a
+    # tutorial's first line asks (`torch.cuda.is_available()`), answered truthfully.
+    "cuda": "there is no CUDA in a browser, and imitating it loses the lesson about "
+            "GPUs. The four that are here answer that absence rather than pretend "
+            "otherwise — `is_available()` is False and `device_count()` is 0",
+    "mps": "as `cuda` — a vendor's accelerator, and there is none in a browser",
+    "xpu": "as `cuda` — a vendor's accelerator, and there is none in a browser",
+    "mtia": "as `cuda` — a vendor's accelerator, and there is none in a browser",
     "distributed": "this is one tab. Learning distribution means leaving for several machines",
     "compile": "TorchDynamo rewrites CPython bytecode. It does not sit on wasm",
-    "jit": "same reason",
-    "export": "same reason",
-    "fx": "same reason",
+    "jit": "as `compile` — capturing a graph out of CPython bytecode, which does not "
+           "sit on wasm",
+    "export": "as `compile` — the same capture, written out to a file",
+    "fx": "as `compile` — the graph it captures into",
     "onnx": "exporting is deployment's job and this is grammar practice",
     "quantiz": "quantisation means something only on real hardware",
     "sparse": "outside the curriculum",
@@ -461,10 +474,64 @@ SKIPPED = {
     "Stream": "device streams — there is one",
     "Event": "device events — there is one stream to measure",
     "get_device_module": "there is one device",
-    "AcceleratorError": "there is one accelerator",
-    "OutOfMemoryError": "we do not separate out device memory errors",
-    "DataParallel": "for several devices — this is one tab",
-    "SyncBatchNorm": "for distributed training — this is inside one tab",
+    # `get_default_device` and `set_default_device` used to sit here under the same
+    # reason, and **"there is one device" is why they are easy, not why they are
+    # declined.** Every `device=` seat in this library already accepted `"cpu"` and
+    # refused the rest; the pair that names that directly was the only way to ask
+    # that was missing. `test_skipped_does_not_claim_what_we_actually_do` said so
+    # the moment they were written.
+    # ── five rows that read as a wall and are not ────────────────────────────
+    #
+    # These sat beside `Stream`, `Event` and `prepare_multiprocessing_environment`
+    # under sentences of the same shape — *this is one tab* — and the shape was doing
+    # the work rather than the sentence. Those three are walls: WebGPU gives one queue,
+    # and a browser has no `fork` and no shared memory (`SharedArrayBuffer` is
+    # `undefined`, measured). **These five are not**, and each is not a wall for a
+    # different reason, which is exactly what one repeated sentence hid.
+
+    # **Two that are our decision about error taxonomy**, not the platform's.
+    "AcceleratorError": "torch raises this when a *particular* device fails, and names "
+                        "which. There is one accelerator here, so the class would carry "
+                        "no information the message does not — a decision about the "
+                        "taxonomy rather than an absence. Raising the plain error is "
+                        "what this library does everywhere it does not divide a case",
+    "OutOfMemoryError": "**a decision, and the reversible one.** torch separates *the "
+                        "device is full* from every other failure so a training loop "
+                        "can catch it and halve the batch. WebGPU does surface "
+                        "allocation failure, so this could be told apart; it is not, "
+                        "because nothing here catches it yet and a class nobody raises "
+                        "distinctly is a promise the message would have to keep",
+
+    # **Three that are a scope decision.** Written *this is one tab*, which reads as a
+    # fact about the platform, and it is not one: browsers connect to each other over
+    # WebRTC and federated learning in a tab exists. Two things are actually missing —
+    # collective primitives (`all_reduce` and the rest, which would be written from
+    # scratch on data channels) and **a coordinator**. The second is the decision: a
+    # server in front turns *a library in a tab* into *a library plus a service*, and
+    # that is the sentence this project is built around.
+    "DataParallel": "it replicates a model across several devices and averages their "
+                    "gradients. A tab gets one adapter, and joining tabs needs "
+                    "collectives written from scratch plus a coordinator — possible, "
+                    "and it makes this a service rather than a library",
+    "SyncBatchNorm": "it shares BatchNorm's statistics across devices, so it needs the "
+                     "collectives `DataParallel` does. Same decision, and it is the "
+                     "layer that shows why the decision matters: without the sharing "
+                     "each replica normalises by its own batch and the model trains to "
+                     "somewhere else",
+
+    # **And one that was in the wrong group entirely — it is built now.**
+    #
+    # main's row said `DistributedSampler` needs no distribution at all: given
+    # `num_replicas` and `rank` it never touches a process group, so it is index
+    # arithmetic over two integers and the name it carries is what put it beside the
+    # collectives. That reading was right and this branch had already acted on it, so
+    # the row is gone rather than rewritten — `borch.utils.data` and `borch.data` both
+    # carry the sampler, and `SKIPPED` claiming otherwise is the one thing
+    # `test_skipped_does_not_claim_what_we_actually_do` exists to refuse.
+    #
+    # What it actually needed was nowhere in the row: **a seeded local stream.** Every
+    # rank must draw the same permutation or the interleave stops being a partition,
+    # and borch.ts shuffles from one global.
 
     # Vendor kernels. They mean something only where that hardware is.
     #
@@ -595,7 +662,9 @@ SKIPPED = {
     # that mints a fresh size, and the three `Sym*` types themselves.
     "sym_constrain_range": "constrains a symbolic range — there are no symbolic sizes "
                            "here to constrain",
-    "sym_constrain_range_for_size": "as above",
+    "sym_constrain_range_for_size": "constrains a symbolic range too, with the extra "
+                                    "rule that a size is not negative — and there are "
+                                    "no symbolic sizes here to constrain either way",
     # **Namespaced, because `linalg.cond` is a different function and we built it.** Bare,
     # this reason reached the condition number — which works, returns 14.93 on a 2×2, and
     # was being explained to any reader of this table as *a control-flow capture op*.
@@ -633,10 +702,16 @@ SKIPPED = {
 
     # Debug switches. We have neither nondeterminism to turn on nor an anomaly detector.
     "use_deterministic_algorithms": "there is no nondeterministic kernel to choose",
-    "are_deterministic_algorithms_enabled": "as above",
-    "is_deterministic_algorithms_warn_only_enabled": "as above",
-    "get_deterministic_debug_mode": "as above",
-    "set_deterministic_debug_mode": "as above",
+    "are_deterministic_algorithms_enabled":
+        "as `use_deterministic_algorithms` — there is no nondeterministic kernel to "
+        "choose, so there is no switch to read back",
+    "is_deterministic_algorithms_warn_only_enabled":
+        "as `use_deterministic_algorithms` — the warn-only half of a switch that is "
+        "not here",
+    "get_deterministic_debug_mode":
+        "as `use_deterministic_algorithms`, spelled as a mode rather than a flag",
+    "set_deterministic_debug_mode":
+        "as `use_deterministic_algorithms`, spelled as a mode rather than a flag",
     "is_anomaly_enabled": "there is no anomaly detector",
     "set_anomaly_enabled": "there is no anomaly detector",
     "is_anomaly_check_nan_enabled": "there is no anomaly detector",
@@ -662,7 +737,14 @@ SKIPPED = {
     "non_deterministic": "torch's folded DataPipes experiment",
     "runtime_validation": "torch's folded DataPipes experiment",
     "runtime_validation_disabled": "torch's folded DataPipes experiment",
-    "Future": "a TorchScript async promise — this is one tab",
+    # **Two clauses, and the second was carrying weight it does not have.** This is what
+    # `torch.jit.fork` hands back, so it falls with TorchScript — declined whole one
+    # table up, for a reason about CPython bytecode. *This is one tab* rode along
+    # because the row sat among the tab sentences, and a tab is not what stops it: a
+    # promise is one object, not one machine.
+    "Future": "what `torch.jit.fork` returns — it falls with TorchScript, which is "
+              "declined whole because TorchDynamo rewrites CPython bytecode and that "
+              "does not sit on wasm",
     "conv_tbc": "an old-layout (time-batch-channel) convolution — no code calls it",
 
     # **The raw ATen losses at the top level.** They share `F`'s names and **are not the
@@ -863,10 +945,26 @@ SKIPPED = {
     "datasets.ImageNet": "**its meta file is a torch pickle.** `load_meta_file` is `torch.load(meta.bin, weights_only=True)`, and when that file is absent `parse_devkit_archive` builds it by reading `data/meta.mat` out of the devkit tar — a **MATLAB struct array**. So a fixture has to write one format or the other, and both are formats this repository reads rather than writes. Nothing is md5'd: `check_integrity` is called on the meta file with no hash, which is an existence check",
     "datasets.Kinetics": "video, as `HMDB51` and `UCF101`. Its row said `as above` under a sentence about a codec, which is the wrong wall by a wide margin — this one wants a container, a codec and a clip sampler",
     "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",
-    "datasets.LSUNClass": "as above",
+    # The second bare `as above`, and this one happens to be right — `LSUN` is directly
+    # above it. Given what it names anyway, for `UCF101`'s reason four rows down.
+    "datasets.LSUNClass": "as `LSUN` — the pictures live in an LMDB database, which is "
+                          "a second dependency before the codec is even reached",
     "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
     "datasets.SBDataset": "**its annotations are sparse matrices inside a struct array.** `_get_boundaries_target` reads `mat['GTcls'][0]['Boundaries'][0][i][0]` and calls `.toarray()` on it — twenty scipy sparse matrices per picture. `_mat_read` reads dense numeric, struct, cell and char, and `mxSPARSE_CLASS` is none of those. The `segmentation` mode alone is dense and would be reachable, and a fixture would still have to **write** a struct-array `.mat` without scipy, which is a writer this repository does not have. The old row said a codec, and named the `.mat` as a second reason it then dismissed — the dismissal was of the half that turned out to be the wall",
-    "datasets.UCF101": "as above",
+    # **`as above` pointed at `SBDataset`, and this one is video.**
+    #
+    # `Kinetics` two rows up records exactly this failure — *its row said `as above`
+    # under a sentence about a codec, which is the wrong wall by a wide margin* — and
+    # the row below it was left with the same bare reference. Writing the lesson beside
+    # one row does not repair the row after it.
+    #
+    # **`as above` is a reference by position in a table nobody reads in order.** Every
+    # other one in this file carries what it is agreeing with (*as above — the devkit
+    # tar is md5'd*), and those survive a reordering because the sentence, not the
+    # position, is doing the work. The two bare ones were the two that could go wrong,
+    # and one of them had.
+    "datasets.UCF101": "video, as `HMDB51` — a container, a codec and a clip sampler, "
+                       "none of which is here",
 
     # The stereo and optical-flow sets were one row and are no longer one kind. It read
     # *paired pictures plus a disparity field, so a codec and then another format*, and

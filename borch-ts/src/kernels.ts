@@ -222,6 +222,306 @@ fn i1_(x: f32) -> f32 {
 }`;
 
 /**
+ * **The scaled Bessel family — `iₙ(x)·exp(-|x|)` and `kₙ(x)·exp(x)`.**
+ *
+ * Scaled from the first term of the series, never as a product. `i0(90)` is about 4e37
+ * and `i0(200)` is past f32's ceiling entirely, so a shader that summed `iₙ` and then
+ * multiplied by `exp(-|x|)` would answer `inf` and then `nan` where the true values are
+ * 0.042111 and 0.0282272 — the scaled function is bounded by 1 everywhere. `k` runs the
+ * other way: `k₀(20)` is 5.74e-10 and underflows long before the scaled form does.
+ *
+ * The same split as the core, at the same crossovers, and the crossovers were measured
+ * rather than chosen: `k`'s series and asymptotic first met at 2 (where the textbooks
+ * split the *unscaled* pair) and that was worth two digits — `k₀(2)` came back 0.0906
+ * against 0.1139, on the two points either side of the seam and nowhere else.
+ */
+const BESSEL_SCALED_PRELUDE = `
+fn i_scaled_(x: f32, order: u32) -> f32 {
+  let a = abs(x);
+  if (a < 15.0) {
+    let half = a * 0.5;
+    // The leading term carries exp(-a) from the start: (a/2)^order / order! · exp(-a).
+    var term = exp(-a);
+    for (var j = 1u; j <= order; j = j + 1u) { term = term * half / f32(j); }
+    var total = term;
+    for (var k = 1u; k < 200u; k = k + 1u) {
+      term = term * (half * half) / (f32(k) * (f32(k) + f32(order)));
+      total = total + term;
+    }
+    return total;
+  }
+  // Hankel's asymptotic for the scaled function, with mu = 4·order².
+  let mu = 4.0 * f32(order) * f32(order);
+  var series = 1.0;
+  var term = 1.0;
+  for (var k = 1u; k < 9u; k = k + 1u) {
+    let m = 2.0 * f32(k) - 1.0;
+    term = term * -(mu - m * m) / (8.0 * a * f32(k));
+    series = series + term;
+  }
+  return series / sqrt(6.283185307179586 * a);
+}
+
+// **k is a minimax table here and a series in the core, and that is not a duplication
+// to remove.** The core sums the harmonic-weighted series in float64 and subtracts
+// (log(x/2) + gamma) * i0(x) from it; in f32 that subtraction is where the digits go.
+// Measured: at x = 9.9 the shader answered 0.0015 where the true value is 1.97e-5,
+// because the series peaks near 610 on its way to an answer of 2e-5 — seven digits of
+// cancellation into a format that has seven.
+//
+// So this side uses the Abramowitz & Stegun 9.8 polynomials, which exist for exactly
+// that reason: minimax fits in x^2/4 and 2/x with no cancelling sum in them, accurate
+// to about 1e-7, splitting at 2 rather than at 10.
+//
+// **Two implementations of one function, and the golden is what holds them together.**
+// The alternative was to make the core lose precision to match a shader, which is the
+// wrong direction — the frozen answers come from torch, and both sides are held to
+// those rather than to each other.
+//
+// (No backticks in this block. The shader text is a template literal and one closes
+//  it — the note beside i1_ above says this repository has stepped on that three
+//  times, and writing that note did not stop a fourth.)
+fn k_scaled_(x: f32, order: u32) -> f32 {
+  if (x <= 2.0) {
+    let y = x * x * 0.25;
+    if (order == 0u) {
+      let poly = -0.57721566 + y * (0.42278420 + y * (0.23069756 + y * (0.03488590
+        + y * (0.00262698 + y * (0.00010750 + y * 0.0000074)))));
+      return (-log(x * 0.5) * i0_(x) + poly) * exp(x);
+    }
+    let poly = 1.0 + y * (0.15443144 + y * (-0.67278579 + y * (-0.18156897
+      + y * (-0.01919402 + y * (-0.00110404 + y * -0.00004686)))));
+    return (log(x * 0.5) * i1_(x) + poly / x) * exp(x);
+  }
+  let y = 2.0 / x;
+  if (order == 0u) {
+    let poly = 1.25331414 + y * (-0.07832358 + y * (0.02189568 + y * (-0.01062446
+      + y * (0.00587872 + y * (-0.00251540 + y * 0.00053208)))));
+    return poly / sqrt(x);
+  }
+  let poly = 1.25331414 + y * (0.23498619 + y * (-0.03655620 + y * (0.01504268
+    + y * (-0.00780353 + y * (0.00325614 + y * -0.00068245)))));
+  return poly / sqrt(x);
+}`;
+
+/**
+ * **`erfcx` and `log_ndtr` — the two whose whole reason is the tail.**
+ *
+ * `erfc(x)·exp(x²)` is `inf` from x=10 and `nan` by x=26, against the true 0.056141 and
+ * 0.0216836; `log(ndtr(x))` is `-inf` from x=-6, against -20.7368. Neither product is
+ * formed here: `erfcx` is a continued fraction above |x| = 4 with no exponential in it,
+ * and `log_ndtr` is a sum of logarithms rather than the logarithm of a product that has
+ * already underflowed.
+ *
+ * **The split is on `|x|`, not on `x`.** The core's first draft split on `x >= 4` and
+ * every negative argument took the small branch *and* the reflection on top of an answer
+ * that was already right — `erfcx(-2)` came back 0.255 against 108.941.
+ */
+const ERFCX_PRELUDE = `
+fn erfcx_(x: f32) -> f32 {
+  if (abs(x) < 4.0) {
+    // Nothing overflows here either way: exp(16) is 8.9e6 and erfc(-4) is nearly 2.
+    return erfc_(x) * exp(x * x);
+  }
+  let a = abs(x);
+  var frac = 0.0;
+  for (var k = 60u; k >= 1u; k = k - 1u) { frac = (f32(k) * 0.5) / (a + frac); }
+  let got = 1.0 / (1.7724538509055159 * (a + frac));
+  // erfcx(-t) = 2·exp(t²) − erfcx(t), which overflows honestly for large t.
+  return select(got, 2.0 * exp(a * a) - got, x < 0.0);
+}
+fn log_ndtr_(x: f32) -> f32 {
+  if (x >= -1.0) { return log(erfc_(-x * 0.7071067811865476) * 0.5); }
+  // ndtr(x) = erfcx(-x/√2)·exp(-x²/2)/2, so the logarithm is a sum rather than the
+  // logarithm of a product that is already zero.
+  let t = -x * 0.7071067811865476;
+  return log(erfcx_(t) * 0.5) - x * x * 0.5;
+}`;
+
+/**
+ * **The first- and second-kind Bessel functions, as minimax tables.**
+ *
+ * Not series: the ascending series for `J₀` alternates and cancels catastrophically past
+ * x ≈ 8 — the terms reach 10⁴ before they turn over and the answer is under 1. So the
+ * large-argument side is the asymptotic form and the two meet at 8 without a step.
+ *
+ * The coefficients are the standard ones (Abramowitz & Stegun 9.4), the same digits the
+ * core carries, and **the transcription is what the golden checks**: a mistyped minimax
+ * coefficient does not raise, it moves the answer in the fifth place.
+ */
+const BESSEL_JY_PRELUDE = `
+fn bessel_j0_(x: f32) -> f32 {
+  let a = abs(x);
+  if (a < 8.0) {
+    let y = a * a;
+    let p = 57568490574.0 + y * (-13362590354.0 + y * (651619640.7
+      + y * (-11214424.18 + y * (77392.33017 + y * -184.9052456))));
+    let q = 57568490411.0 + y * (1029532985.0 + y * (9494680.718
+      + y * (59272.64853 + y * (267.8532712 + y))));
+    return p / q;
+  }
+  let z = 8.0 / a;
+  let y = z * z;
+  let xx = a - 0.785398164;
+  let p1 = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4
+    + y * (-0.2073370639e-5 + y * 0.2093887211e-6)));
+  let q1 = -0.1562499995e-1 + y * (0.1430488765e-3 + y * (-0.6911147651e-5
+    + y * (0.7621095161e-6 + y * -0.934935152e-7)));
+  return sqrt(0.636619772 / a) * (cos(xx) * p1 - z * sin(xx) * q1);
+}
+fn bessel_j1_(x: f32) -> f32 {
+  let a = abs(x);
+  var out = 0.0;
+  if (a < 8.0) {
+    let y = a * a;
+    let p = a * (72362614232.0 + y * (-7895059235.0 + y * (242396853.1
+      + y * (-2972611.439 + y * (15704.48260 + y * -30.16036606)))));
+    let q = 144725228442.0 + y * (2300535178.0 + y * (18583304.74
+      + y * (99447.43394 + y * (376.9991397 + y))));
+    out = p / q;
+  } else {
+    let z = 8.0 / a;
+    let y = z * z;
+    let xx = a - 2.356194491;
+    let p1 = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4
+      + y * (0.2457520174e-5 + y * -0.240337019e-6)));
+    let q1 = 0.04687499995 + y * (-0.2002690873e-3 + y * (0.8449199096e-5
+      + y * (-0.88228987e-6 + y * 0.105787412e-6)));
+    out = sqrt(0.636619772 / a) * (cos(xx) * p1 - z * sin(xx) * q1);
+  }
+  // **J1 is odd where J0 is even**, so the sign of the argument comes back.
+  return select(out, -out, x < 0.0);
+}
+fn bessel_y0_(x: f32) -> f32 {
+  // **NaN and -inf are made from the argument, not written down.** WGSL refuses a
+  // constant it cannot represent — bitcast<f32>(0x7fc00000u) is rejected at parse time
+  // with "value nan cannot be represented as f32" — and a shader that fails to compile
+  // does not raise: the dispatch quietly does nothing and whatever was in the buffer
+  // comes back. Measured that way: bessel_y0(0.001) answered 99.97, which is k1's value
+  // from the dispatch before it.
+  let zero = x - x;
+  if (x < 0.0) { return zero / zero; }
+  if (x == 0.0) { return -1.0 / zero; }
+  if (x < 8.0) {
+    let y = x * x;
+    let p = -2957821389.0 + y * (7062834065.0 + y * (-512359803.6
+      + y * (10879881.29 + y * (-86327.92757 + y * 228.4622733))));
+    let q = 40076544269.0 + y * (745249964.8 + y * (7189466.438
+      + y * (47447.26470 + y * (226.1030244 + y))));
+    return p / q + 0.636619772 * bessel_j0_(x) * log(x);
+  }
+  let z = 8.0 / x;
+  let y = z * z;
+  let xx = x - 0.785398164;
+  let p1 = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4
+    + y * (-0.2073370639e-5 + y * 0.2093887211e-6)));
+  let q1 = -0.1562499995e-1 + y * (0.1430488765e-3 + y * (-0.6911147651e-5
+    + y * (0.7621095161e-6 + y * -0.934935152e-7)));
+  return sqrt(0.636619772 / x) * (sin(xx) * p1 + z * cos(xx) * q1);
+}
+fn bessel_y1_(x: f32) -> f32 {
+  // **NaN and -inf are made from the argument, not written down.** WGSL refuses a
+  // constant it cannot represent — bitcast<f32>(0x7fc00000u) is rejected at parse time
+  // with "value nan cannot be represented as f32" — and a shader that fails to compile
+  // does not raise: the dispatch quietly does nothing and whatever was in the buffer
+  // comes back. Measured that way: bessel_y0(0.001) answered 99.97, which is k1's value
+  // from the dispatch before it.
+  let zero = x - x;
+  if (x < 0.0) { return zero / zero; }
+  if (x == 0.0) { return -1.0 / zero; }
+  if (x < 8.0) {
+    let y = x * x;
+    let p = x * (-4900604943000.0 + y * (1275274390000.0 + y * (-51534381390.0
+      + y * (734926455.1 + y * (-4237922.726 + y * 8511.937935)))));
+    let q = 24995805700000.0 + y * (424441966400.0 + y * (3733650367.0
+      + y * (22459040.02 + y * (102042.605 + y * (354.9632885 + y)))));
+    return p / q + 0.636619772 * (bessel_j1_(x) * log(x) - 1.0 / x);
+  }
+  let z = 8.0 / x;
+  let y = z * z;
+  let xx = x - 2.356194491;
+  let p1 = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4
+    + y * (0.2457520174e-5 + y * -0.240337019e-6)));
+  let q1 = 0.04687499995 + y * (-0.2002690873e-3 + y * (0.8449199096e-5
+    + y * (-0.88228987e-6 + y * 0.105787412e-6)));
+  return sqrt(0.636619772 / x) * (sin(xx) * p1 + z * cos(xx) * q1);
+}`;
+
+/**
+ * **Airy's `Ai`** — the solution of `y″ = xy` that decays to the right.
+ *
+ * Two regimes, and the seam is where cancellation starts costing digits: the ascending
+ * series converges for every argument, and past |x| ≈ 8 its largest term is a hundred
+ * times the answer. Beyond that it is the standard asymptotic — exponential decay for
+ * positive `x`, an oscillation with an `x^(−1/4)` envelope for negative.
+ *
+ * `Ai(0)` is `3^(−2/3)/Γ(2/3)` = 0.3550280539 and `−Ai′(0)` is `3^(−1/3)/Γ(1/3)`; both
+ * were matched against torch to ten digits before the series was written, because a
+ * normalisation constant wrong in the fourth place produces a curve of exactly the right
+ * shape.
+ */
+const AIRY_PRELUDE = `
+fn airy_ai_(x: f32) -> f32 {
+  // **The seam is 6 here and 8 in the core, and the difference is f32.** The ascending
+  // series converges everywhere and cancels as it goes: at x = -7.9 its largest term is
+  // about 123 on the way to an answer of 0.04, which is three and a half digits gone
+  // into a format with seven. Measured before this moved: 0.041377 against 0.041701,
+  // outside the golden by three times. At 6 the largest term is 4.5 against an answer
+  // near 0.33 and nothing is lost.
+  if (abs(x) <= 6.0) {
+    let cube = x * x * x;
+    var f = 1.0;
+    var term = 1.0;
+    for (var k = 1u; k < 30u; k = k + 1u) {
+      term = term * cube / ((3.0 * f32(k)) * (3.0 * f32(k) - 1.0));
+      f = f + term;
+    }
+    var g = x;
+    var t2 = x;
+    for (var k = 1u; k < 30u; k = k + 1u) {
+      t2 = t2 * cube / ((3.0 * f32(k) + 1.0) * (3.0 * f32(k)));
+      g = g + t2;
+    }
+    return 0.3550280538878172 * f - 0.2588194037928068 * g;
+  }
+  let a = abs(x);
+  let zeta = 0.6666666666666666 * a * sqrt(a);
+  // u_k = u_{k-1}·(6k−5)(6k−3)(6k−1)/(216k(2k−1)); u_1 is 5/72 either way, which is
+  // what pinned the form.
+  var u = array<f32, 12>(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+  for (var k = 1u; k < 12u; k = k + 1u) {
+    let n = f32(k);
+    u[k] = u[k - 1u] * (6.0 * n - 5.0) * (6.0 * n - 3.0) * (6.0 * n - 1.0)
+         / (216.0 * n * (2.0 * n - 1.0));
+  }
+  // **Eight terms, not twelve.** The expansion is asymptotic rather than convergent —
+  // past its optimal truncation the terms turn and grow — and the seam moving from 8 to
+  // 6 lowered the smallest zeta it is asked at from 15.1 to 9.8, which is where twelve
+  // terms stops being past it and starts being over it.
+  if (x > 0.0) {
+    var series = 0.0;
+    var power = 1.0;
+    for (var k = 0u; k < 8u; k = k + 1u) {
+      series = series + select(-u[k], u[k], (k & 1u) == 0u) * power;
+      power = power / zeta;
+    }
+    return exp(-zeta) / (2.0 * 1.7724538509055159 * pow(a, 0.25)) * series;
+  }
+  var even = 0.0;
+  var odd = 0.0;
+  var power = 1.0;
+  for (var k = 0u; k < 4u; k = k + 1u) {
+    let s = select(-1.0, 1.0, (k & 1u) == 0u);
+    even = even + s * u[2u * k] * power;
+    odd = odd + s * u[2u * k + 1u] * power / zeta;
+    power = power / (zeta * zeta);
+  }
+  let phase = zeta + 0.7853981633974483;
+  return (sin(phase) * even - cos(phase) * odd)
+       / (1.7724538509055159 * pow(a, 0.25));
+}`;
+
+/**
  * Anything with no derivative (a step, such as `sign` or `floor`) is `bwd: "0.0"`.
  *
  * **The graph is not severed.** torch flows a 0, and a refusal is not a 0 — the sister
@@ -298,6 +598,47 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
   },
   notNan: { fwd: "select(1.0, 0.0, is_nan(x))", bwd: "0.0", prelude: NAN_PRELUDE },
   isnan: { fwd: "select(0.0, 1.0, is_nan(x))", bwd: "0.0", prelude: NAN_PRELUDE },
+
+  // ── `torch.special`'s fifteen that need a kernel ────────────────────────
+  //
+  // The other nineteen of that namespace forward or compose; these do not, and every
+  // one of them exists **because** the obvious composition of what is already in this
+  // table is `inf` or `nan` exactly where the name is reached for. Built as
+  // arrangements they would agree with the core at every ordinary input and part in
+  // the tail — which is the shape a value comparison against torch sees and a reader
+  // does not.
+  //
+  // `bwd: "0.0"` throughout. torch differentiates several of these and this does not:
+  // the derivations are a second body each, and a wrong one is wrong quietly. The
+  // graph is not severed — a zero flows, which is what the note above this table is
+  // about — and `backward()` through them gives 0 rather than refusing, which is the
+  // one thing here that is worse than torch rather than absent.
+  erfcx: { fwd: "erfcx_(x)", bwd: "0.0", prelude: ERF_PRELUDE + ERFCX_PRELUDE },
+  logNdtr: { fwd: "log_ndtr_(x)", bwd: "0.0", prelude: ERF_PRELUDE + ERFCX_PRELUDE },
+
+  // `i1` is `i0`'s derivative and has been in this file since `i0` arrived — it had no
+  // public name until torch's `special.i1` needed one.
+  i1: { fwd: "i1_(x)", bwd: "0.0", prelude: I0_PRELUDE },
+  i0e: { fwd: "i_scaled_(x, 0u)", bwd: "0.0",
+         prelude: I0_PRELUDE + BESSEL_SCALED_PRELUDE },
+  // **Odd, where `i0e` is even.** The scaled series is computed on |x| and the sign is
+  // put back — dropped, the negative half is silently the positive one.
+  i1e: { fwd: "sign(x) * i_scaled_(abs(x), 1u)", bwd: "0.0",
+         prelude: I0_PRELUDE + BESSEL_SCALED_PRELUDE },
+  modifiedBesselK0: { fwd: "k_scaled_(x, 0u) * exp(-x)", bwd: "0.0",
+                      prelude: I0_PRELUDE + BESSEL_SCALED_PRELUDE },
+  modifiedBesselK1: { fwd: "k_scaled_(x, 1u) * exp(-x)", bwd: "0.0",
+                      prelude: I0_PRELUDE + BESSEL_SCALED_PRELUDE },
+  scaledModifiedBesselK0: { fwd: "k_scaled_(x, 0u)", bwd: "0.0",
+                            prelude: I0_PRELUDE + BESSEL_SCALED_PRELUDE },
+  scaledModifiedBesselK1: { fwd: "k_scaled_(x, 1u)", bwd: "0.0",
+                            prelude: I0_PRELUDE + BESSEL_SCALED_PRELUDE },
+
+  besselJ0: { fwd: "bessel_j0_(x)", bwd: "0.0", prelude: BESSEL_JY_PRELUDE },
+  besselJ1: { fwd: "bessel_j1_(x)", bwd: "0.0", prelude: BESSEL_JY_PRELUDE },
+  besselY0: { fwd: "bessel_y0_(x)", bwd: "0.0", prelude: BESSEL_JY_PRELUDE },
+  besselY1: { fwd: "bessel_y1_(x)", bwd: "0.0", prelude: BESSEL_JY_PRELUDE },
+  airyAi: { fwd: "airy_ai_(x)", bwd: "0.0", prelude: AIRY_PRELUDE },
   // The infinity test is bitwise too — an exponent of all ones with a zero mantissa.
   isinf: {
     fwd: "select(0.0, 1.0, (bitcast<u32>(x) & 0x7fffffffu) == 0x7f800000u)",

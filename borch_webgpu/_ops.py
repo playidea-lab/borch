@@ -3733,10 +3733,59 @@ class _Special:
                 "modified_bessel_i0": "i0"}
 
     # The unary ones, where routing is torch's rule rather than a guess.
+    #
+    # **The second block arrived when borch.ts grew the arithmetic.** These were numpy
+    # in the core with nothing behind them over there, and their golden cases were
+    # core-only for that reason; the shaders exist now, so the names route like any
+    # other unary op and the binding stops being the one side that refuses them.
     _UNARY = frozenset("""
         digamma erf erfc erfinv exp2 expit expm1 gammaln i0 log1p
         modified_bessel_i0 psi sinc
+
+        airy_ai bessel_j0 bessel_j1 bessel_y0 bessel_y1 erfcx i0e i1 i1e
+        log_ndtr modified_bessel_k0 modified_bessel_k1
+        scaled_modified_bessel_k0 scaled_modified_bessel_k1
     """.split())
+
+    # **Five that are unary and still cannot use that door**, because over there they
+    # are module functions rather than `Tensor` methods — the fifteen above are entries
+    # in borch.ts's `UNARY` table and these five are arrangements of other operations,
+    # so they live in `special_names.ts` and nothing attaches them to the class. The
+    # door sends a name to *the first argument's method* and there is no method to find:
+    # `borch.ts does not have ndtr`, which is the truthful message for the wrong
+    # question.
+    _MODULE_UNARY = frozenset("""
+        ndtr ndtri entr modified_bessel_i1 spherical_bessel_j0
+    """.split())
+
+    # The polynomials take `(x, n)` — the tensor first and an order after it, which the
+    # unary door cannot carry. Bound by a loop rather than written out sixteen times,
+    # because sixteen copies of one line is what this repository keeps finding.
+    _POLYNOMIALS = frozenset("""
+        chebyshev_polynomial_t chebyshev_polynomial_u chebyshev_polynomial_v
+        chebyshev_polynomial_w shifted_chebyshev_polynomial_t
+        shifted_chebyshev_polynomial_u shifted_chebyshev_polynomial_v
+        shifted_chebyshev_polynomial_w hermite_polynomial_h hermite_polynomial_he
+        laguerre_polynomial_l legendre_polynomial_p
+    """.split())
+
+    @staticmethod
+    def zeta(input, other, out=None):                           # noqa: A002
+        """The Hurwitz zeta. **A module function over there, not a method** — it takes
+        two tensors and the generic door sends the first to itself."""
+        return _out(wrap(guarded(_ts.special.zeta, handle(input), handle(other))),
+                    out, "special.zeta")
+
+    @staticmethod
+    def xlog1py(input, other, out=None):                        # noqa: A002
+        return _out(wrap(guarded(_ts.special.xlog1py, handle(input), handle(other))),
+                    out, "special.xlog1py")
+
+    @staticmethod
+    def multigammaln(input, p, out=None):                       # noqa: A002
+        """`p` is a count and not a tensor, so this cannot route either."""
+        return _out(wrap(guarded(_ts.special.multigammaln, handle(input), int(p))),
+                    out, "special.multigammaln")
 
     # ── the ones carrying an argument, written out ──────────────────────────
 
@@ -3788,17 +3837,34 @@ class _Special:
         return _resolve_name("log_softmax")(input, dim, dtype)
 
     def __getattr__(self, name):
-        # **The list is written out rather than forwarded blindly.** A door that
-        # passed anything through would make `special.bessel_j0` resolve to
-        # `x.bessel_j0()` — a name torch has and this library does not — and it would
-        # be counted present by the survey while failing at the first call.
-        # Thirty-five of this namespace's names are exactly that.
+        # **The list is written out rather than forwarded blindly**, and it is the one
+        # thing here that has not changed as the namespace filled. A door that passed
+        # anything through would make a name torch has and this library does not
+        # resolve to `x.that_name()` — counted present by the survey and failing at the
+        # first call. Fifty-six of fifty-seven are here now; the list is what makes the
+        # fifty-seventh say so.
+        if name in self._POLYNOMIALS:
+            js = camel(name)
+
+            def call(input, n, out=None):                       # noqa: A002
+                return _out(wrap(guarded(getattr(_ts.special, js),
+                                         handle(input), int(n))),
+                            out, f"special.{name}")
+            call.__name__ = name
+            return call
+        if name in self._MODULE_UNARY:
+            js = camel(name)
+
+            def one(input, out=None):                           # noqa: A002
+                return _out(wrap(guarded(getattr(_ts.special, js), handle(input))),
+                            out, f"special.{name}")
+            one.__name__ = name
+            return one
         if name not in self._UNARY:
             raise AttributeError(
                 f"`special.{name}` is not in this subset. torch.special has 57 names "
-                "and 22 are here — the rest are Bessel, Airy, ndtr and the "
-                "orthogonal-polynomial families, which is arithmetic this library "
-                "does not carry. See tests/torch_gap.py.")
+                "and 56 are here — the one absent is `Tensor`, an imported label. "
+                "See tests/torch_gap.py.")
         return __getattr__(self._RENAMED.get(name, name))
 
 

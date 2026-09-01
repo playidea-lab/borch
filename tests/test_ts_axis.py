@@ -269,13 +269,18 @@ FROZEN = {
     # `fft` comes in at zero, which is the answer that makes the omission cheap to have
     # had and worth fixing anyway: nothing was wrong and nothing was watching.
     "fft": 0,
-    # **34, and every one is a body somebody could write.** `special`'s other
-    # twenty-three forward to arithmetic borch.ts already has; these are the Bessel and
-    # Airy approximations, twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin and
-    # the nine tail-safe forms — numpy in `borch/_ops.py` with no WGSL behind them.
-    # Unlike `transforms.v2.functional`'s row below, this is not a type that would have
-    # to change first, so the number is expected to come down.
-    "special": 34,
+    # **34 → 16 → 0**, and the row is kept at zero rather than deleted: a namespace off
+    # this table is a namespace nobody counts, which is how `fft` and `special` both
+    # came to be declined whole while most of their names were built.
+    #
+    # The eighteen that left first needed no shader — twelve orthogonal recurrences and
+    # six compositions whose safe form is a composition. The sixteen after them each
+    # exist *because* a composition breaks (`erfcx` is `inf` from x=10, `log_ndtr` from
+    # x=-6, `i0e` at x=90), and became fifteen entries in the `UNARY` table plus one
+    # loop for `zeta`. What separated this row from `transforms.v2.functional`'s below
+    # is what let it reach zero: a body somebody could write, not a type that would have
+    # to change first.
+    "special": 0,
     # **12 → 2, and the two that remain have reasons.** The ten were the samplers
     # and the two dataset shapes: `Sampler`, `SequentialSampler`, `RandomSampler`,
     # `SubsetRandomSampler`, `WeightedRandomSampler`, `BatchSampler`,

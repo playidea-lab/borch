@@ -6067,6 +6067,95 @@ function addLoss(out: Map<string, Case>): void {
   ];
   for (const [name, fn] of lce) out.set(`loss::linear_cross_entropy(${name})`, fn);
 
+  // ── `special::수학::`, the eighteen that need no shader ──────────────────
+  //
+  // Twelve orthogonal recurrences and six compositions. **The polynomials are asked
+  // outside their orthogonality interval** — Chebyshev's `T` is defined on [-1, 1] and
+  // torch evaluates the polynomial anywhere, so an implementation that clamped would
+  // agree on every textbook input and part at x = 2. A negative order is 0 and is asked.
+  const polyX = [-2.0, -1.5, -0.6, 0.0, 0.3, 0.9, 1.0, 2.0, 3.7];
+  const px = (): Tensor => Tensor.from(polyX, [9]);
+  const polys: [string, (x: Tensor, n: number) => Tensor][] = [
+    ["chebyshev_polynomial_t", special.chebyshevPolynomialT],
+    ["chebyshev_polynomial_u", special.chebyshevPolynomialU],
+    ["chebyshev_polynomial_v", special.chebyshevPolynomialV],
+    ["chebyshev_polynomial_w", special.chebyshevPolynomialW],
+    ["shifted_chebyshev_polynomial_t", special.shiftedChebyshevPolynomialT],
+    ["shifted_chebyshev_polynomial_u", special.shiftedChebyshevPolynomialU],
+    ["shifted_chebyshev_polynomial_v", special.shiftedChebyshevPolynomialV],
+    ["shifted_chebyshev_polynomial_w", special.shiftedChebyshevPolynomialW],
+    ["hermite_polynomial_h", special.hermitePolynomialH],
+    ["hermite_polynomial_he", special.hermitePolynomialHe],
+    ["laguerre_polynomial_l", special.laguerrePolynomialL],
+    ["legendre_polynomial_p", special.legendrePolynomialP],
+  ];
+  for (const [name, fn] of polys) {
+    // n = 5 is past where a wrong second term or step coefficient has compounded into
+    // something visible; 0, 1 and -1 are the three the recurrence never reaches.
+    for (const n of [0, 1, 5, -1]) {
+      out.set(`special::수학::${name}(n=${n})`, () => fn(px(), n));
+    }
+  }
+
+  out.set("special::수학::ndtr",
+          () => special.ndtr(Tensor.from([-8.0, -3.0, 0.0, 1.0, 5.0], [5])));
+  out.set("special::수학::ndtri",
+          () => special.ndtri(Tensor.from([0.001, 0.1, 0.5, 0.9, 0.999], [5])));
+  out.set("special::수학::entr",
+          () => special.entr(Tensor.from([-1.0, 0.0, 0.25, 0.5, 1.0, 2.0], [6])));
+  out.set("special::수학::spherical_bessel_j0",
+          () => special.sphericalBesselJ0(Tensor.from([-3.0, 0.0, 0.5, 2.0, 10.0], [5])));
+  out.set("special::수학::xlog1py",
+          () => special.xlog1py(Tensor.from([1.0, 1.0, 1.0, 0.0, 2.0, -1.0], [6]),
+                                Tensor.from([1.0, 1e-8, 1e-12, -1.0, 0.5, 3.0], [6])));
+  for (const p of [1, 2, 3]) {
+    out.set(`special::수학::multigammaln(p=${p})`,
+            () => special.multigammaln(Tensor.from([2.5, 3.0, 4.5], [3]), p));
+  }
+
+  // **The sixteen that carry a kernel, at the inputs the kernels exist for.**
+  // A middle-of-the-range value passes against the composition each of these replaces,
+  // so the numbers here are the ones where that composition is `inf` or `nan`:
+  // `erfc(x)·exp(x²)` from x=10, `log(ndtr(x))` from x=-6, `i0(x)·exp(-|x|)` at x=90.
+  // The `k` pair is asked either side of its seam at 10 — the first crossover tried was
+  // 2 and was worth two digits, on those two points and nowhere else.
+  const tails: [string, number[], (x: Tensor) => Tensor][] = [
+    ["erfcx", [-5, -1, 0, 1, 10, 26, 100], special.erfcx],
+    ["log_ndtr", [-40, -10, -6, -1, 0, 2], special.logNdtr],
+    ["i0e", [0, 1, 15, 50, 90, 200], special.i0e],
+    ["i1", [-5, -1, 0, 0.5, 2, 10], special.i1],
+    ["i1e", [-200, -1, 0, 1, 15, 90], special.i1e],
+    ["modified_bessel_i1", [-3, 0, 0.5, 2, 10], special.modifiedBesselI1],
+    ["modified_bessel_k0", [0.01, 0.5, 2, 9.9, 10, 10.1, 20],
+     special.modifiedBesselK0],
+    ["modified_bessel_k1", [0.01, 0.5, 2, 9.9, 10, 10.1, 20],
+     special.modifiedBesselK1],
+    ["scaled_modified_bessel_k0", [0.01, 0.5, 2, 9.9, 10.1, 80],
+     special.scaledModifiedBesselK0],
+    ["scaled_modified_bessel_k1", [0.01, 0.5, 2, 9.9, 10.1, 80],
+     special.scaledModifiedBesselK1],
+    // `J` and `Y` change method at 8. `Y` has a pole at 0 and is `nan` below it;
+    // `J₀` is even and `J₁` is odd, and a sign dropped there is invisible on the
+    // positive half alone.
+    ["bessel_j0", [-20, -8.1, -7.9, -1, 0, 2.4, 7.9, 8.1, 20], special.besselJ0],
+    ["bessel_j1", [-20, -8.1, -7.9, -1, 0, 2.4, 7.9, 8.1, 20], special.besselJ1],
+    ["bessel_y0", [0.001, 0.5, 2.4, 7.9, 8, 8.1, 20], special.besselY0],
+    ["bessel_y1", [0.001, 0.5, 2.4, 7.9, 8, 8.1, 20], special.besselY1],
+    // Airy's seam is at 8 too, and the negative side oscillates — the envelope and the
+    // phase are two ways to be wrong and only the negative arguments show the second.
+    ["airy_ai", [-30, -12, -8.1, -7.9, -1, 0, 1, 7.9, 8.1, 12], special.airyAi],
+  ];
+  for (const [name, xs, fn] of tails) {
+    out.set(`special::수학::${name}`,
+            () => fn(Tensor.from(xs, [xs.length])));
+  }
+
+  // `ζ(2,1)` is π²/6 and `ζ(4,1)` is π⁴/90, so two of these rows are checked by
+  // arithmetic as well as by torch. `x ≤ 1` is `nan` and `ζ(1,1)` is `inf`.
+  out.set("special::수학::zeta", () => special.zeta(
+    Tensor.from([2, 3, 4, 2.5, 1.5, 6, 10, 2, 1, 0.5], [10]),
+    Tensor.from([1, 1, 1, 2, 1, 3, 0.5, 10, 1, 1], [10])));
+
   // The layer, with the weight planted — its initialisation is not torch's.
   //
   // **Inside `noGrad`, because a parameter is a leaf that wants a gradient** and

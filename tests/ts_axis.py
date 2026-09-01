@@ -411,36 +411,32 @@ DELIBERATE: dict[str, str] = {
     # side has not got, rather than a body it has not been given. Carrying the names
     # across would mean giving `Image` a rank, which is a change to every transform in
     # that file and not thirty-three aliases.
-    # **`special`'s thirty-four, and the split inside that namespace is the point.**
-    # Twenty-three of its names forward to arithmetic borch.ts already has and run on
-    # all three sides. These have bodies of their own — the Bessel and Airy
-    # approximations, twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin, and the
-    # nine written in a tail-safe form because the obvious composition is `inf` where
-    # the name is reached for — and every one of them is numpy in `borch/_ops.py`.
+    # **`special` had thirty-four rows here and has none.** Worth an account, because
+    # the number came down in steps and the steps were the point: the thirty-four were
+    # not one kind of job, and treating them as one is what had kept all of them
+    # written down rather than done.
     #
-    # **This is a body somebody could write, not a mechanism that side lacks**, which
-    # is the opposite of the `*_video` row below it. Marked per name rather than as a
-    # group so they come off one at a time, and the count in `test_ts_axis.py` is what
-    # records how far along that is.
+    # 34 → 16: eighteen were **arrangements of operations borch.ts already had** —
+    # twelve orthogonal recurrences (`mul` and `sub` in a loop) and six compositions
+    # whose *safe* form is a composition. `ndtr` is the one worth naming: it looks like
+    # it belongs with the sixteen and does not, because `erfc(-x/√2)/2` needs no kernel
+    # while `(1 + erf(x/√2))/2` would have needed one or a wrong answer.
     #
-    # The golden's `special::수학::` prefix is core-only for the same reason, and the
-    # binding refuses them by name rather than forwarding — so a caller gets *not in
-    # this subset* instead of a plausible number.
-    **{f"special::{n}":
-       "arithmetic of its own rather than a forward — numpy in `borch/_ops.py` with no "
-       "WGSL behind it. A body to write, not a mechanism borch.ts has not got"
-       for n in ("airy_ai", "bessel_j0", "bessel_j1", "bessel_y0", "bessel_y1",
-                 "chebyshev_polynomial_t", "chebyshev_polynomial_u",
-                 "chebyshev_polynomial_v", "chebyshev_polynomial_w",
-                 "shifted_chebyshev_polynomial_t", "shifted_chebyshev_polynomial_u",
-                 "shifted_chebyshev_polynomial_v", "shifted_chebyshev_polynomial_w",
-                 "hermite_polynomial_h", "hermite_polynomial_he",
-                 "laguerre_polynomial_l", "legendre_polynomial_p",
-                 "entr", "erfcx", "i0e", "i1", "i1e", "log_ndtr",
-                 "modified_bessel_i1", "modified_bessel_k0", "modified_bessel_k1",
-                 "multigammaln", "ndtr", "ndtri",
-                 "scaled_modified_bessel_k0", "scaled_modified_bessel_k1",
-                 "spherical_bessel_j0", "xlog1py", "zeta")},
+    # 16 → 0: fifteen became entries in the `UNARY` table in `kernels.ts`, and `zeta` a
+    # loop over tensor operations, since that table has no seat for a binary op and
+    # inventing one for a single name is a mechanism with one user.
+    #
+    # **The three that were wrong the first time are the reason the golden asks at the
+    # tails.** WGSL refuses a constant NaN, and a shader that fails to compile does not
+    # raise — `bessel_y0(0.001)` came back 99.97, which was `k1`'s value from the
+    # dispatch before it. `k`'s series lost seven digits to cancellation in f32 and
+    # became the Abramowitz & Stegun minimax table. And Airy's seam moved from 8 to 6
+    # for the same reason, at a third the golden's tolerance. None of the three is
+    # visible from an ordinary input.
+    #
+    # Nothing is written below for that namespace, which is what a closed row looks
+    # like here — `test_ts_axis.py` holds its count at 0 and `torch_gap.py` holds the
+    # core at 56 of 56.
     **{f"transforms.v2.functional::{n}_video":
        "borch.ts's `Image` is `{data, height, width, channels}` — one picture by "
        "construction, with no axis for frames. The core's kernels count from the end "

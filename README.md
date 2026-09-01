@@ -247,7 +247,7 @@ uv run --with pytest --with numpy --with torch --with torchvision --with scipy \
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **the binding passes 4512 golden cases**, and that is a surface check
+> is that **the binding passes 4584 golden cases**, and that is a surface check
 > rather than a line check. The two numbers are not written down as though they were
 > the same thing.
 >
@@ -795,13 +795,10 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **4512 golden cases** — every one in the table but eighty-three. Those
-eighty-three are the core's alone, for three reasons: five are complex eigenvalues
-and there is no complex dtype on this side, six ask `lstsq` for its residuals, rank
-or singular values, which borch.ts does not return and so the binding cannot dress,
-and seventy-two are `torch.special` names borch.ts does not carry. All three could
-be filled in here with numpy and would go green; the names would still be absent for
-anyone holding borch.ts, which is the cover that list exists to refuse. The core
+It passes **4584 golden cases** — every one in the table but eleven. Those eleven
+are the core's alone, for two reasons: five are complex eigenvalues and there is no
+complex dtype on this side, and six ask `lstsq` for its residuals, rank or singular
+values, which borch.ts does not return and so the binding cannot dress. The core
 covers 4542 cases, and the 53 *it* does not see are this side's alone (1-D and 3-D
 convolutions, ranks 7 and 8), which it refuses on purpose.
 
@@ -823,8 +820,8 @@ convolutions, ranks 7 and 8), which it refuses on purpose.
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 3870 cases. **The remaining 725 are two
-things**: 650 deliberately not carried across, and 75 owed. The binding
+borch.ts itself has written TS bodies for 3942 cases. **The remaining 653 are two
+things**: 653 deliberately not carried across, and 0 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the declined ask about a Python

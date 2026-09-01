@@ -197,6 +197,47 @@ def test_every_reason_says_something():
         "\n\nA row whose reason cannot be written is a gap — take it out of the table.")
 
 
+# What a row is allowed to say and nothing more: a bare pointer at whatever happens to
+# precede it. Anything longer carries its own sentence and survives a reordering.
+_BARE_POINTERS = ("as above", "same reason", "as above.", "same reason.")
+
+
+def test_no_reason_points_at_whatever_precedes_it():
+    """**`as above` is a reference by position in a table nobody reads in order.**
+
+    `datasets.UCF101` read exactly `as above`, and the row above it was `SBDataset` —
+    whose reason is about sparse matrices inside a MATLAB struct array. UCF101 is a
+    video dataset. So the name was declined, counted, and explained by a wall it does
+    not stand at.
+
+    **The lesson was already written two rows up and did not reach it.** `Kinetics`
+    carries: *its row said `as above` under a sentence about a codec, which is the wrong
+    wall by a wide margin.* Somebody found this once, fixed the row in front of them,
+    wrote down what it taught, and left the next row alone — which is the failure this
+    file exists for, one level in.
+
+    **Every other `as above` in the table names what it agrees with** — *as above — the
+    devkit tar is md5'd*, *as `LSUN` — the pictures live in an LMDB database*. Those
+    survive a reordering because the sentence rather than the position does the work.
+    The two bare ones were the only two that could go wrong, and one of them had.
+
+    A short pointer is still allowed; it just has to point at a name rather than at a
+    place.
+    """
+    bare = []
+    for table, label in ((DELIBERATE, "DELIBERATE"), (NOT_API, "NOT_API"),
+                         (SKIPPED, "SKIPPED")):
+        for key, reason in table.items():
+            if reason.strip().lower() in _BARE_POINTERS:
+                bare.append(f"{label}['{key}'] = {reason!r}")
+    assert not bare, (
+        "reasons that point at whatever happens to sit above them:\n  "
+        + "\n  ".join(bare)
+        + "\n\n  Name what it agrees with — `as `LSUN` — the pictures live in an LMDB\n"
+          "  database` rather than `as above`. A dict is not read in order, and a row\n"
+          "  that moves takes a reason it never had.")
+
+
 def test_not_api_does_not_claim_what_we_implement():
     """**Catches contradictions.**
 
