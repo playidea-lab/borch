@@ -6007,6 +6007,52 @@ function addLoss(out: Map<string, Case>): void {
   ];
   for (const [name, fn] of lce) out.set(`loss::linear_cross_entropy(${name})`, fn);
 
+  // ── `special::수학::`, the eighteen that need no shader ──────────────────
+  //
+  // Twelve orthogonal recurrences and six compositions. **The polynomials are asked
+  // outside their orthogonality interval** — Chebyshev's `T` is defined on [-1, 1] and
+  // torch evaluates the polynomial anywhere, so an implementation that clamped would
+  // agree on every textbook input and part at x = 2. A negative order is 0 and is asked.
+  const polyX = [-2.0, -1.5, -0.6, 0.0, 0.3, 0.9, 1.0, 2.0, 3.7];
+  const px = (): Tensor => Tensor.from(polyX, [9]);
+  const polys: [string, (x: Tensor, n: number) => Tensor][] = [
+    ["chebyshev_polynomial_t", special.chebyshevPolynomialT],
+    ["chebyshev_polynomial_u", special.chebyshevPolynomialU],
+    ["chebyshev_polynomial_v", special.chebyshevPolynomialV],
+    ["chebyshev_polynomial_w", special.chebyshevPolynomialW],
+    ["shifted_chebyshev_polynomial_t", special.shiftedChebyshevPolynomialT],
+    ["shifted_chebyshev_polynomial_u", special.shiftedChebyshevPolynomialU],
+    ["shifted_chebyshev_polynomial_v", special.shiftedChebyshevPolynomialV],
+    ["shifted_chebyshev_polynomial_w", special.shiftedChebyshevPolynomialW],
+    ["hermite_polynomial_h", special.hermitePolynomialH],
+    ["hermite_polynomial_he", special.hermitePolynomialHe],
+    ["laguerre_polynomial_l", special.laguerrePolynomialL],
+    ["legendre_polynomial_p", special.legendrePolynomialP],
+  ];
+  for (const [name, fn] of polys) {
+    // n = 5 is past where a wrong second term or step coefficient has compounded into
+    // something visible; 0, 1 and -1 are the three the recurrence never reaches.
+    for (const n of [0, 1, 5, -1]) {
+      out.set(`special::수학::${name}(n=${n})`, () => fn(px(), n));
+    }
+  }
+
+  out.set("special::수학::ndtr",
+          () => special.ndtr(Tensor.from([-8.0, -3.0, 0.0, 1.0, 5.0], [5])));
+  out.set("special::수학::ndtri",
+          () => special.ndtri(Tensor.from([0.001, 0.1, 0.5, 0.9, 0.999], [5])));
+  out.set("special::수학::entr",
+          () => special.entr(Tensor.from([-1.0, 0.0, 0.25, 0.5, 1.0, 2.0], [6])));
+  out.set("special::수학::spherical_bessel_j0",
+          () => special.sphericalBesselJ0(Tensor.from([-3.0, 0.0, 0.5, 2.0, 10.0], [5])));
+  out.set("special::수학::xlog1py",
+          () => special.xlog1py(Tensor.from([1.0, 1.0, 1.0, 0.0, 2.0, -1.0], [6]),
+                                Tensor.from([1.0, 1e-8, 1e-12, -1.0, 0.5, 3.0], [6])));
+  for (const p of [1, 2, 3]) {
+    out.set(`special::수학::multigammaln(p=${p})`,
+            () => special.multigammaln(Tensor.from([2.5, 3.0, 4.5], [3]), p));
+  }
+
   // The layer, with the weight planted — its initialisation is not torch's.
   //
   // **Inside `noGrad`, because a parameter is a leaf that wants a gradient** and

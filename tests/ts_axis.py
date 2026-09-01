@@ -411,36 +411,33 @@ DELIBERATE: dict[str, str] = {
     # side has not got, rather than a body it has not been given. Carrying the names
     # across would mean giving `Image` a rank, which is a change to every transform in
     # that file and not thirty-three aliases.
-    # **`special`'s thirty-four, and the split inside that namespace is the point.**
-    # Twenty-three of its names forward to arithmetic borch.ts already has and run on
-    # all three sides. These have bodies of their own — the Bessel and Airy
-    # approximations, twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin, and the
-    # nine written in a tail-safe form because the obvious composition is `inf` where
-    # the name is reached for — and every one of them is numpy in `borch/_ops.py`.
+    # **34 → 16, and the eighteen that left were the ones needing no shader.**
     #
-    # **This is a body somebody could write, not a mechanism that side lacks**, which
-    # is the opposite of the `*_video` row below it. Marked per name rather than as a
-    # group so they come off one at a time, and the count in `test_ts_axis.py` is what
-    # records how far along that is.
+    # `torch.special` splits three ways on this axis. Twenty-three names forward to
+    # arithmetic borch.ts already has. Eighteen more were arithmetic and crossed
+    # anyway, because they are arrangements of existing operations: twelve orthogonal
+    # recurrences (`mul` and `sub` in a loop) and six compositions whose *safe* form is
+    # a composition — `ndtr` through `erfc`, `ndtri` through `erfinv`, `entr`,
+    # `xlog1py`, `sphericalBesselJ0`, `multigammaln`.
     #
-    # The golden's `special::수학::` prefix is core-only for the same reason, and the
-    # binding refuses them by name rather than forwarding — so a caller gets *not in
-    # this subset* instead of a plausible number.
+    # **What is left is sixteen names that each exist because a composition breaks.**
+    # `erfcx` is `erfc(x)·exp(x²)` and that product is `inf` from x=10; `log_ndtr` is
+    # `-inf` from x=-6; `i0e` is `inf` at x=90. Arranged out of existing operations
+    # here they would agree with the core at every ordinary input and part in the tail,
+    # which is the shape the core refused when it wrote them as kernels. So the row is
+    # narrower than it was and says what the remaining work actually is: **a shader,
+    # not an arrangement.**
+    #
+    # Still a body somebody could write, not a mechanism that side lacks — the opposite
+    # of the `*_video` row below. Per name, so they come off one at a time.
     **{f"special::{n}":
-       "arithmetic of its own rather than a forward — numpy in `borch/_ops.py` with no "
-       "WGSL behind it. A body to write, not a mechanism borch.ts has not got"
+       "needs a kernel of its own: it exists because the obvious composition of what "
+       "borch.ts already has is `inf` or `nan` exactly where the name is reached for. "
+       "numpy in `borch/_ops.py` today"
        for n in ("airy_ai", "bessel_j0", "bessel_j1", "bessel_y0", "bessel_y1",
-                 "chebyshev_polynomial_t", "chebyshev_polynomial_u",
-                 "chebyshev_polynomial_v", "chebyshev_polynomial_w",
-                 "shifted_chebyshev_polynomial_t", "shifted_chebyshev_polynomial_u",
-                 "shifted_chebyshev_polynomial_v", "shifted_chebyshev_polynomial_w",
-                 "hermite_polynomial_h", "hermite_polynomial_he",
-                 "laguerre_polynomial_l", "legendre_polynomial_p",
-                 "entr", "erfcx", "i0e", "i1", "i1e", "log_ndtr",
+                 "erfcx", "i0e", "i1", "i1e", "log_ndtr",
                  "modified_bessel_i1", "modified_bessel_k0", "modified_bessel_k1",
-                 "multigammaln", "ndtr", "ndtri",
-                 "scaled_modified_bessel_k0", "scaled_modified_bessel_k1",
-                 "spherical_bessel_j0", "xlog1py", "zeta")},
+                 "scaled_modified_bessel_k0", "scaled_modified_bessel_k1", "zeta")},
     **{f"transforms.v2.functional::{n}_video":
        "borch.ts's `Image` is `{data, height, width, channels}` — one picture by "
        "construction, with no axis for frames. The core's kernels count from the end "

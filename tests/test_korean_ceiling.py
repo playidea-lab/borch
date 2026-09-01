@@ -374,7 +374,18 @@ CEILINGS = {
     # borch.ts side* — and the marker words are the keys `test_site.py` matches on to
     # split the README's remainder, so the change had to be made in the reason's own
     # language rather than beside it.
-    "borch-ts/test": 4857,
+    # 4857 → 4871. Fourteen: the `special::` ledger reason rewritten as the row fell
+    # from 75 to 19, and the fifty-six new case names carrying the `수학::` tag that
+    # `CORE_ONLY_PREFIXES` and the golden both key on — **names are keys**, so the
+    # Python and TypeScript tables have to spell the string identically or the row
+    # reconciles against nothing.
+    #
+    # **`borch-ts/src` did not move and one character nearly made it.** A comment in
+    # `special_names.ts` quoted that same prefix, which would have put Korean into the
+    # directory this ceiling is about — the ceiling caught it, and the repair was to
+    # reword the comment rather than to raise the number. A prefix quoted in prose is
+    # not a key; the tables are where it has to match.
+    "borch-ts/test": 4871,
 }
 
 

@@ -269,13 +269,15 @@ FROZEN = {
     # `fft` comes in at zero, which is the answer that makes the omission cheap to have
     # had and worth fixing anyway: nothing was wrong and nothing was watching.
     "fft": 0,
-    # **34, and every one is a body somebody could write.** `special`'s other
-    # twenty-three forward to arithmetic borch.ts already has; these are the Bessel and
-    # Airy approximations, twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin and
-    # the nine tail-safe forms — numpy in `borch/_ops.py` with no WGSL behind them.
-    # Unlike `transforms.v2.functional`'s row below, this is not a type that would have
-    # to change first, so the number is expected to come down.
-    "special": 34,
+    # **34 → 16, and the number coming down is what this row was written to record.**
+    # The eighteen that left needed no shader — twelve orthogonal recurrences, which
+    # are `mul` and `sub` in a loop, and six compositions whose safe form is a
+    # composition. The sixteen left each exist *because* a composition breaks (`erfcx`
+    # is `inf` from x=10, `log_ndtr` from x=-6, `i0e` at x=90), so each wants a kernel
+    # rather than an arrangement of what is already there. Still not a type that would
+    # have to change first, which is what separates this row from
+    # `transforms.v2.functional`'s below.
+    "special": 16,
     # **12 → 2, and the two that remain have reasons.** The ten were the samplers
     # and the two dataset shapes: `Sampler`, `SequentialSampler`, `RandomSampler`,
     # `SubsetRandomSampler`, `WeightedRandomSampler`, `BatchSampler`,
