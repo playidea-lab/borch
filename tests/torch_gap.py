@@ -475,11 +475,64 @@ SKIPPED = {
     # the moment they were written.
     "is_vulkan_available": "not a backend a browser chooses",
     "cudnn_is_acceptable": "there is no cuDNN",
-    "AcceleratorError": "there is one accelerator",
-    "OutOfMemoryError": "we do not separate out device memory errors",
-    "DataParallel": "for several devices — this is one tab",
-    "SyncBatchNorm": "for distributed training — this is inside one tab",
-    "DistributedSampler": "for distributed training — this is inside one tab",
+    # ── five rows that read as a wall and are not ────────────────────────────
+    #
+    # These sat beside `Stream`, `Event` and `prepare_multiprocessing_environment`
+    # under sentences of the same shape — *this is one tab* — and the shape was doing
+    # the work rather than the sentence. Those three are walls: WebGPU gives one queue,
+    # and a browser has no `fork` and no shared memory (`SharedArrayBuffer` is
+    # `undefined`, measured). **These five are not**, and each is not a wall for a
+    # different reason, which is exactly what one repeated sentence hid.
+
+    # **Two that are our decision about error taxonomy**, not the platform's.
+    "AcceleratorError": "torch raises this when a *particular* device fails, and names "
+                        "which. There is one accelerator here, so the class would carry "
+                        "no information the message does not — a decision about the "
+                        "taxonomy rather than an absence. Raising the plain error is "
+                        "what this library does everywhere it does not divide a case",
+    "OutOfMemoryError": "**a decision, and the reversible one.** torch separates *the "
+                        "device is full* from every other failure so a training loop "
+                        "can catch it and halve the batch. WebGPU does surface "
+                        "allocation failure, so this could be told apart; it is not, "
+                        "because nothing here catches it yet and a class nobody raises "
+                        "distinctly is a promise the message would have to keep",
+
+    # **Three that are a scope decision.** Written *this is one tab*, which reads as a
+    # fact about the platform, and it is not one: browsers connect to each other over
+    # WebRTC and federated learning in a tab exists. Two things are actually missing —
+    # collective primitives (`all_reduce` and the rest, which would be written from
+    # scratch on data channels) and **a coordinator**. The second is the decision: a
+    # server in front turns *a library in a tab* into *a library plus a service*, and
+    # that is the sentence this project is built around.
+    "DataParallel": "it replicates a model across several devices and averages their "
+                    "gradients. A tab gets one adapter, and joining tabs needs "
+                    "collectives written from scratch plus a coordinator — possible, "
+                    "and it makes this a service rather than a library",
+    "SyncBatchNorm": "it shares BatchNorm's statistics across devices, so it needs the "
+                     "collectives `DataParallel` does. Same decision, and it is the "
+                     "layer that shows why the decision matters: without the sharing "
+                     "each replica normalises by its own batch and the model trains to "
+                     "somewhere else",
+
+    # **And one that was in the wrong group entirely.**
+    #
+    # `DistributedSampler` needs no distribution at all. Given `num_replicas` and
+    # `rank` it never touches a process group — measured:
+    # `DistributedSampler(range(10), num_replicas=3, rank=1, shuffle=False)` answers
+    # `[1, 4, 7, 0]` with no `init_process_group` anywhere, and `drop_last=True` gives
+    # `[1, 4, 7]`. It reads the pair from the process group **only when they are
+    # omitted**.
+    #
+    # So it is index arithmetic over two integers, and the name it carries is what put
+    # it beside the other two. A row grouped by its name rather than by what it does —
+    # which is the same mistake as `multigammaln` being declined for an argument order
+    # nobody had checked.
+    "DistributedSampler": "**buildable, and grouped with the collectives by its name "
+                          "rather than by what it does.** Given `num_replicas` and "
+                          "`rank` it is index arithmetic over two integers and touches "
+                          "no process group — measured, `(range(10), num_replicas=3, "
+                          "rank=1, shuffle=False)` answers [1, 4, 7, 0] with nothing "
+                          "initialised. What is owed is the sampler, not the network",
 
     # Vendor kernels. They mean something only where that hardware is.
     #
@@ -665,7 +718,14 @@ SKIPPED = {
     "non_deterministic": "torch's folded DataPipes experiment",
     "runtime_validation": "torch's folded DataPipes experiment",
     "runtime_validation_disabled": "torch's folded DataPipes experiment",
-    "Future": "a TorchScript async promise — this is one tab",
+    # **Two clauses, and the second was carrying weight it does not have.** This is what
+    # `torch.jit.fork` hands back, so it falls with TorchScript — declined whole one
+    # table up, for a reason about CPython bytecode. *This is one tab* rode along
+    # because the row sat among the tab sentences, and a tab is not what stops it: a
+    # promise is one object, not one machine.
+    "Future": "what `torch.jit.fork` returns — it falls with TorchScript, which is "
+              "declined whole because TorchDynamo rewrites CPython bytecode and that "
+              "does not sit on wasm",
     "conv_tbc": "an old-layout (time-batch-channel) convolution — no code calls it",
 
     # **The raw ATen losses at the top level.** They share `F`'s names and **are not the
