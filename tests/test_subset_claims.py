@@ -77,8 +77,14 @@ CLAIMS = [
      ("transforms.ToPILImage", "transforms.v2.ToPILImage",
       "transforms.functional.to_pil_image", "transforms.functional.pil_to_tensor"),
      "pil"),
+    # **This row shrank from three names to one, and the check is what noticed.**
+    # `is_anomaly_enabled` and `is_anomaly_check_nan_enabled` were declined beside
+    # `set_anomaly_enabled` under one sentence; they only *ask* whether the detector is
+    # on, and the answer is `False` and `True` on any machine, so they were built. The
+    # claim itself is untouched and still true — there is no detector, which is why the
+    # first of those two answers `False`. What it defends is the setter alone now.
     ("there is no anomaly detector",
-     ("is_anomaly_enabled", "set_anomaly_enabled", "is_anomaly_check_nan_enabled"),
+     ("set_anomaly_enabled",),
      "anomaly"),
     ("numpy has no codec",
      ("transforms.v2.JPEG", "transforms.v2.functional.jpeg",

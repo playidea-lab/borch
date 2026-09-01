@@ -127,6 +127,9 @@ from ._ops import (                                      # noqa: E402,F401
     get_autocast_ipu_dtype, get_autocast_xla_dtype, is_autocast_cache_enabled,
     is_autocast_cpu_enabled, is_autocast_enabled, is_autocast_ipu_enabled,
     is_autocast_xla_enabled,
+    are_deterministic_algorithms_enabled, get_deterministic_debug_mode,
+    get_float32_matmul_precision, is_anomaly_check_nan_enabled, is_anomaly_enabled,
+    is_deterministic_algorithms_warn_only_enabled, is_warn_always_enabled,
     # Top-level linear algebra. **Only the three whose names collide with the
     # `linalg` namespace are written out** — `__getattr__` passes the rest to the
     # first argument's method.

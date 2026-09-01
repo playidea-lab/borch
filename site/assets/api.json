@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 426
+  "missing": 433
  },
  "modules": [
   {
@@ -159,9 +159,65 @@
      "doc": "`bfloat16`, torch's XLA default.",
      "members": [],
      "torch": "get_autocast_xla_dtype"
+    },
+    {
+     "kind": "function",
+     "name": "areDeterministicAlgorithmsEnabled",
+     "signature": "export declare function areDeterministicAlgorithmsEnabled(): boolean",
+     "doc": "`false` — torch's default, and there is no nondeterministic kernel to turn off.",
+     "members": [],
+     "torch": "are_deterministic_algorithms_enabled"
+    },
+    {
+     "kind": "function",
+     "name": "isDeterministicAlgorithmsWarnOnlyEnabled",
+     "signature": "export declare function isDeterministicAlgorithmsWarnOnlyEnabled(): boolean",
+     "doc": "`false` — the warn-only half of the switch above.",
+     "members": [],
+     "torch": "is_deterministic_algorithms_warn_only_enabled"
+    },
+    {
+     "kind": "function",
+     "name": "getDeterministicDebugMode",
+     "signature": "export declare function getDeterministicDebugMode(): number",
+     "doc": "`0`, the same switch spelled as a mode. torch's default.",
+     "members": [],
+     "torch": "get_deterministic_debug_mode"
+    },
+    {
+     "kind": "function",
+     "name": "isAnomalyEnabled",
+     "signature": "export declare function isAnomalyEnabled(): boolean",
+     "doc": "`false` — the autograd anomaly detector is off, here and in torch by default.",
+     "members": [],
+     "torch": "is_anomaly_enabled"
+    },
+    {
+     "kind": "function",
+     "name": "isAnomalyCheckNanEnabled",
+     "signature": "export declare function isAnomalyCheckNanEnabled(): boolean",
+     "doc": "**`true`**, and the one of these that is not false. The flag says whether the\ndetector *would* check for NaN if it were on, not whether it is on.",
+     "members": [],
+     "torch": "is_anomaly_check_nan_enabled"
+    },
+    {
+     "kind": "function",
+     "name": "isWarnAlwaysEnabled",
+     "signature": "export declare function isWarnAlwaysEnabled(): boolean",
+     "doc": "`false` — torch's default warning policy, which is to show a warning once.",
+     "members": [],
+     "torch": "is_warn_always_enabled"
+    },
+    {
+     "kind": "function",
+     "name": "getFloat32MatmulPrecision",
+     "signature": "export declare function getFloat32MatmulPrecision(): string",
+     "doc": "*`\"highest\"`** — full float32, no TF32. torch's default and this library's fact.",
+     "members": [],
+     "torch": "get_float32_matmul_precision"
     }
    ],
-   "count": 18,
+   "count": 25,
    "doc_ko": "borch — 브라우저에서 WebGPU 위에 도는 PyTorch 모양의 텐서 라이브러리.\n\n```ts\nimport { init, Tensor, nn, optim, scope, keepAlive } from \"borch-ts\";\n\nawait init();                                  // WebGPU 어댑터를 잡는다\n\nconst model = new nn.Sequential(\n  new nn.Linear(784, 128), new nn.ReLU(), new nn.Linear(128, 10));\nconst opt = new optim.SGD(model.parameters(), 0.05, 0.9);\nconst crit = new nn.CrossEntropyLoss();\n\nconst x = keepAlive(Tensor.from(pixels, [32, 784]));\nconst y = keepAlive(Tensor.from(labels, [32], { dtype: \"int64\" }));\n\nfor (let i = 0; i < steps; i++) {\n  await scope(async () => {                    // 한 스텝의 중간 버퍼를 놓는다\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n    console.log(await loss.item());\n  });\n}\n```\n\n## 이 파일이 하는 일\n\n공개 표면을 **한 자리에 모은다.** 이것이 없으면 쓰는 사람이 `dist/src/tensor.js`\n같은 안쪽 경로를 직접 짚어야 하고, 그러면 우리가 파일을 옮기는 순간 남의 코드가\n깨진다. 여기 적힌 것만 약속이고 나머지는 안쪽 사정이다.\n\n## torch 와 갈리는 자리 — 미리 적는다\n\n**`await init()` 을 먼저 불러야 한다.** WebGPU 어댑터를 잡는 것이 비동기라 피할\n길이 없다. 안 부르고 텐서를 만들면 그 자리에서 문구와 함께 멈춘다. `torch.cuda.\nis_available()` 자리는 `await isAvailable()` 이고, 왜 안 되는지까지 알아야 하면\n`await probe()` 가 `'no-api'`(브라우저가 낡음)와 `'no-adapter'`(드라이버 차단·\n헤드리스)를 갈라 준다.\n\n**`'cpu'` 는 값이 담긴 그릇이지 연산되는 장치가 아니다.** `await t.cpu()` 로 값을\n호스트로 내리고 `t.webgpu()` 로 올린다. 내려온 텐서는 읽을 수는 있어도(`toArray`·\n`item`·`repr`) 연산에는 못 쓴다 — borch 에 CPU 커널이 없다. 넣으면 torch 와 같은\n문구(\"Expected all tensors to be on the same device\")로 멈춘다. `t.device` 가\n지금 어디인지 답한다.\n\n**값을 읽는 것이 비동기다.** `await t.item()`, `await t.toArray()`. GPU 메모리를\n다시 가져오는 일이라 그렇다. 순방향·역방향은 동기다.\n\n**구역을 열어야 학습이 돈다.** `scope()` 안에서 만든 중간 버퍼는 나갈 때 놓는다.\n자바스크립트의 쓰레기 수집은 GPU 메모리를 제때 안 놓아주므로, 한 스텝이 만드는\n수천 개를 그냥 두면 몇 스텝 만에 장치가 찬다. torch 에 없는 개념이고 TF.js 의\n`tidy` 와 같은 자리다. 파라미터처럼 살아남아야 하는 것은 `keepAlive` 로 표시한다.\n\n**꼴이 둘이다 — 파이썬의 `with` 에 가까운 쪽을 권한다.**\n\n```ts\nfor (let i = 0; i < steps; i++) {\n  using s = scope();                 // 블록 끝에서 닫힌다\n  opt.zeroGrad();\n  const loss = crit.call(model.call(x), y);\n  loss.backward();\n  opt.step();\n  console.log(await loss.item());\n}\n```\n\n놓는 일이 동기라 `await using` 이 아니라 `using` 이다. 블록을 벗어나는 시점은\n안의 `await` 이 전부 끝난 뒤이므로 위의 `await loss.item()` 은 안전하다(실측).\n콜백 꼴도 그대로 남는다 — 값을 그대로 돌려받는 자리는 그쪽이 짧다.\n\n**까먹으면 시끄럽게 멈춘다.** 표시 없이 구역 밖으로 들고 나간 텐서를 쓰면 그\n자리에서 예외가 난다. 한동안 안 그랬고, 그때는 **다음 할당이 덮어쓴 남의 값**이\n조용히 읽혔다(실측: `[1,2,3,4]` → `9,9,9,9`).\n\n**모델을 부르는 것은 `model.call(x)` 다.** 자바스크립트는 객체를 그냥 부를 수\n없어서 torch 의 `model(x)` 를 그대로 옮길 수 없다. `forward` 를 직접 불러도 같은\n값이 나오지만 `call` 쪽을 권한다 — 나중에 훅이 붙는다면 그 자리다."
   },
   {
@@ -21225,5 +21281,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2882
+ "total": 2889
 }

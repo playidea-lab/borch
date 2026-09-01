@@ -195,6 +195,22 @@ DELIBERATE = {
            "sit on wasm",
     "export": "as `compile` — the same capture, written out to a file",
     "fx": "as `compile` — the graph it captures into",
+    # **These keys match as prefixes, not as namespaces**, and two names were caught by
+    # a blanket that is not about them. Spread out (`--show torch`), `compile` covers two
+    # rows and one of them is `compiled_with_cxx11_abi` — a question about the C++ ABI a
+    # build was compiled against, which has nothing to do with rewriting bytecode. The
+    # same for `profiler`, whose one top-level catch is a CUDA profiler flag rather than
+    # anything about profiling being outside the curriculum.
+    #
+    # Neither is built: there is no C++ build here to ask about and no CUDA profiler to
+    # configure. What changes is that each says so on its own row, which is what the
+    # `cudnn_*` and `sym_*` rows were narrowed for.
+    "compiled_with_cxx11_abi": "it reports which C++ ABI torch's binaries were compiled "
+                               "against. There are no binaries here — the answer would "
+                               "be about a build that does not exist",
+    "profiler_allow_cudagraph_cupti_lazy_reinit_cuda12":
+        "a CUDA profiler flag — it sets how CUPTI is re-initialised around CUDA graphs, "
+        "and there is neither",
     "onnx": "exporting is deployment's job and this is grammar practice",
     "quantiz": "quantisation means something only on real hardware",
     "sparse": "outside the curriculum",
@@ -730,26 +746,33 @@ SKIPPED = {
         "touch and no `shared=True` writing through to one buffer two readers see, "
         "which is what this name returns",
 
-    # Debug switches. We have neither nondeterminism to turn on nor an anomaly detector.
-    "use_deterministic_algorithms": "there is no nondeterministic kernel to choose",
-    "are_deterministic_algorithms_enabled":
-        "as `use_deterministic_algorithms` — there is no nondeterministic kernel to "
-        "choose, so there is no switch to read back",
-    "is_deterministic_algorithms_warn_only_enabled":
-        "as `use_deterministic_algorithms` — the warn-only half of a switch that is "
-        "not here",
-    "get_deterministic_debug_mode":
-        "as `use_deterministic_algorithms`, spelled as a mode rather than a flag",
+    # Debug switches — **and only the writing half of each.**
+    #
+    # These were three get/set pairs declined together for what the switch is *for*,
+    # which is the shape `autocast` had one commit ago and `cudnn_is_acceptable` the
+    # commit before that. The reading half answers on any machine: what it reports is
+    # the default nobody changed, and it is built now — `False`, `False`, `0`, `False`,
+    # **`True`** for the NaN flag, `False`, and `'highest'`.
+    #
+    # `get_float32_matmul_precision` was the one worth reading twice. Its row said *that
+    # hardware is not here*, and torch's default answer is `'highest'`, which means
+    # *full float32, no TF32* — not a stand-in for a missing switch but a true statement
+    # about these shaders.
+    #
+    # The setters stay, and the reason is the one the autocast setters carry: they would
+    # change a state that does not exist, and one accepted and dropped is worse than one
+    # absent, because the caller cannot tell.
+    "use_deterministic_algorithms": "there is no nondeterministic kernel to choose, so "
+                                    "the switch would set a flag nothing reads",
     "set_deterministic_debug_mode":
         "as `use_deterministic_algorithms`, spelled as a mode rather than a flag",
-    "is_anomaly_enabled": "there is no anomaly detector",
-    "set_anomaly_enabled": "there is no anomaly detector",
-    "is_anomaly_check_nan_enabled": "there is no anomaly detector",
-    "set_warn_always": "a warning-policy switch — outside the curriculum",
-    "is_warn_always_enabled": "a warning-policy switch — outside the curriculum",
+    "set_anomaly_enabled": "there is no anomaly detector for it to turn on",
+    "set_warn_always": "a warning-policy switch, and this library raises rather than "
+                       "warns — so it would set a policy nothing consults",
     "set_flush_denormal": "a subnormal-handling switch — WGSL does not offer it",
-    "get_float32_matmul_precision": "a TF32 switch — that hardware is not here",
-    "set_float32_matmul_precision": "a TF32 switch — that hardware is not here",
+    "set_float32_matmul_precision": "it would choose between float32 and TF32, and "
+                                    "there is one of those. The **reading** half is "
+                                    "here and answers `'highest'`, which is that fact",
 
     # Things torch deprecated or folded itself.
     "symeig": "torch deprecated it — `eigh` replaced it",

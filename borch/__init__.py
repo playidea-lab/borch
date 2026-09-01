@@ -148,6 +148,9 @@ from ._ops import (
     get_autocast_ipu_dtype, get_autocast_xla_dtype, is_autocast_cache_enabled,
     is_autocast_cpu_enabled, is_autocast_enabled, is_autocast_ipu_enabled,
     is_autocast_xla_enabled,
+    are_deterministic_algorithms_enabled, get_deterministic_debug_mode,
+    get_float32_matmul_precision, is_anomaly_check_nan_enabled, is_anomaly_enabled,
+    is_deterministic_algorithms_warn_only_enabled, is_warn_always_enabled,
     result_type,
     set_default_device, set_default_dtype, typename,
     # Bitwise operations and integer maths. On `bool` they become logical

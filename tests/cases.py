@@ -6224,6 +6224,30 @@ def top_level_cases(inp=None):
     cases.append((TOP_PREFIX + "get_autocast_dtype(모르는 장치)=거절",
                   _autocast_unknown))
 
+    # ── the seven switch questions ─────────────────────────────────────────────
+    #
+    # Determinism, the anomaly detector and the warning policy are three get/set
+    # pairs, and each pair was declined whole for what the switch is **for**. The
+    # reading half answers on any machine — it reports the default nobody changed —
+    # so it is the same split autocast made one block up.
+    #
+    # **`is_anomaly_check_nan_enabled` is `True` and the rest are `False` or `0`.**
+    # A reader answering `False` to everything spelled `is_*` agrees with five of six,
+    # which is why they are asked one at a time rather than folded.
+    for _name in ("are_deterministic_algorithms_enabled",
+                  "is_deterministic_algorithms_warn_only_enabled",
+                  "get_deterministic_debug_mode",
+                  "is_anomaly_enabled", "is_anomaly_check_nan_enabled",
+                  "is_warn_always_enabled"):
+        cases.append((TOP_PREFIX + _name,
+                      lambda L, n=_name: str(getattr(L, n)())))
+
+    # **`'highest'` means full float32 and no TF32**, so this is not a placeholder
+    # standing in for a switch that is missing — it is what these shaders do, and the
+    # answer is the same on the machine that has the hardware.
+    cases.append((TOP_PREFIX + "get_float32_matmul_precision",
+                  lambda L: L.get_float32_matmul_precision()))
+
     # ── the eight `sym_*` helpers ──────────────────────────────────────────────
     #
     # Their row read *symbolic sizes — for graph capture*, which is what they are for.

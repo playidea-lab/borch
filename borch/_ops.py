@@ -7694,6 +7694,68 @@ def get_autocast_xla_dtype():
     return get_autocast_dtype("xla")
 
 
+# ── the seven switch questions ──────────────────────────────────────────────────
+#
+# **The same split as autocast, one commit later.** Determinism, the anomaly detector
+# and the warning policy are each a get/set pair, and the rows declined both halves
+# together for what the switch is *for*. The reading half answers on any machine,
+# because what it reports is the default nobody changed.
+#
+# `get_float32_matmul_precision` is the one worth pausing on. Its row read *a TF32
+# switch — that hardware is not here*, and torch's default answer is **`'highest'`**,
+# which means *full float32, no TF32*. That is not a placeholder standing in for a
+# missing switch: it is exactly what this library does, so the answer is true here and
+# true on the machine with the hardware.
+#
+# **The setters stay out** for autocast's reason — they would change a state that does
+# not exist, and one accepted and dropped is worse than one absent.
+#
+# `is_anomaly_check_nan_enabled()` is `True` and the rest are `False` or `0` —
+# measured. A reader answering `False` to everything spelled `is_*` agrees with five of
+# six, which is why they are asked one at a time.
+
+def are_deterministic_algorithms_enabled():
+    """`False` — torch's default, and there is no nondeterministic kernel to turn off."""
+    return False
+
+
+def is_deterministic_algorithms_warn_only_enabled():
+    """`False` — the warn-only half of the switch above."""
+    return False
+
+
+def get_deterministic_debug_mode():
+    """`0`, the same switch spelled as a mode. torch's default."""
+    return 0
+
+
+def is_anomaly_enabled():
+    """`False` — the autograd anomaly detector is off, here and in torch by default."""
+    return False
+
+
+def is_anomaly_check_nan_enabled():
+    """**`True`**, and it is the one of these that is not False.
+
+    The flag says whether the detector *would* check for NaN if it were on, not whether
+    it is on — so it reads `True` while `is_anomaly_enabled()` reads `False`, in torch
+    and here."""
+    return True
+
+
+def is_warn_always_enabled():
+    """`False` — torch's default warning policy, which is to show a warning once."""
+    return False
+
+
+def get_float32_matmul_precision():
+    """**`'highest'`** — full float32, no TF32.
+
+    torch's own default, and a true statement about this library rather than a stand-in:
+    the shaders are f32 and there is no reduced-precision path for a matmul to take."""
+    return "highest"
+
+
 # ── the eight `sym_*` helpers ───────────────────────────────────────────────────
 #
 # **Their row read *symbolic sizes — for graph capture, and they do not sit on wasm*,

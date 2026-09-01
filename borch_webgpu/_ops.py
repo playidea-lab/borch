@@ -1596,6 +1596,46 @@ def get_autocast_xla_dtype():
     return _autocast_dtype(_ts.getAutocastXlaDtype())
 
 
+# ── the seven switch questions ──────────────────────────────────────────────────
+#
+# Determinism, the anomaly detector and the warning policy, each a get/set pair
+# declined whole for what the switch is for. The reading half answers anywhere.
+
+def are_deterministic_algorithms_enabled():
+    """False — torch's default, and no nondeterministic kernel to turn off."""
+    return bool(_ts.areDeterministicAlgorithmsEnabled())
+
+
+def is_deterministic_algorithms_warn_only_enabled():
+    """False — the warn-only half of the switch above."""
+    return bool(_ts.isDeterministicAlgorithmsWarnOnlyEnabled())
+
+
+def get_deterministic_debug_mode():
+    """0, the same switch spelled as a mode."""
+    return int(_ts.getDeterministicDebugMode())
+
+
+def is_anomaly_enabled():
+    """False — the autograd anomaly detector is off."""
+    return bool(_ts.isAnomalyEnabled())
+
+
+def is_anomaly_check_nan_enabled():
+    """**True** — whether the detector *would* check for NaN, not whether it is on."""
+    return bool(_ts.isAnomalyCheckNanEnabled())
+
+
+def is_warn_always_enabled():
+    """False — torch's default warning policy."""
+    return bool(_ts.isWarnAlwaysEnabled())
+
+
+def get_float32_matmul_precision():
+    """**`'highest'`** — full float32, no TF32, which is what these shaders do."""
+    return str(_ts.getFloat32MatmulPrecision())
+
+
 def as_tensor(data, dtype=None):
     from ._base import tensor as _t
     return data if isinstance(data, Tensor) else _t(data, dtype)

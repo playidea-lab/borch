@@ -26,6 +26,9 @@ import {
   getAutocastCpuDtype, getAutocastDtype, getAutocastGpuDtype, getAutocastIpuDtype,
   getAutocastXlaDtype, isAutocastCacheEnabled, isAutocastCpuEnabled,
   isAutocastEnabled, isAutocastIpuEnabled, isAutocastXlaEnabled,
+  areDeterministicAlgorithmsEnabled, getDeterministicDebugMode,
+  getFloat32MatmulPrecision, isAnomalyCheckNanEnabled, isAnomalyEnabled,
+  isDeterministicAlgorithmsWarnOnlyEnabled, isWarnAlwaysEnabled,
 } from "../src/index.js";
 import { cudnnIsAcceptable, isVulkanAvailable, narrowCopy, segmentReduce }
   from "../src/index.js";
@@ -2317,6 +2320,25 @@ function addOps(out: Map<string, Case>): void {
     }
     return "받았다";
   });
+
+  // **The seven switch questions**, the same split as autocast above: three get/set
+  // pairs declined whole for what the switch is for, and the reading half answers
+  // anywhere. `isAnomalyCheckNanEnabled` is the `true` among them.
+  for (const [name, fn] of [
+    ["are_deterministic_algorithms_enabled", areDeterministicAlgorithmsEnabled],
+    ["is_deterministic_algorithms_warn_only_enabled",
+      isDeterministicAlgorithmsWarnOnlyEnabled],
+    ["is_anomaly_enabled", isAnomalyEnabled],
+    ["is_anomaly_check_nan_enabled", isAnomalyCheckNanEnabled],
+    ["is_warn_always_enabled", isWarnAlwaysEnabled],
+  ] as [string, () => boolean][]) {
+    out.set(`top::${name}`, () => asPython(fn()));
+  }
+  out.set("top::get_deterministic_debug_mode",
+    () => String(getDeterministicDebugMode()));
+  // `"highest"` is full float32 and no TF32 — what these shaders do, rather than a
+  // stand-in for a switch that is missing.
+  out.set("top::get_float32_matmul_precision", () => getFloat32MatmulPrecision());
 
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look

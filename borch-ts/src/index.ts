@@ -431,3 +431,54 @@ export function getAutocastIpuDtype(): AutocastDType {
 export function getAutocastXlaDtype(): AutocastDType {
   return getAutocastDtype("xla");
 }
+
+// ── the seven switch questions ────────────────────────────────────────────────
+//
+// Determinism, the anomaly detector and the warning policy are each a get/set pair,
+// and each pair was declined whole for what the switch is *for*. The reading half
+// answers anywhere: what it reports is the default nobody changed.
+//
+// `getFloat32MatmulPrecision` is the one worth pausing on — `"highest"` means *full
+// float32, no TF32*, which is what these shaders do. True here and true on the machine
+// that has the hardware, rather than a stand-in for a missing switch.
+//
+// The setters stay out, as autocast's do: they would change a state that does not
+// exist.
+
+/** `false` — torch's default, and there is no nondeterministic kernel to turn off. */
+export function areDeterministicAlgorithmsEnabled(): boolean {
+  return false;
+}
+
+/** `false` — the warn-only half of the switch above. */
+export function isDeterministicAlgorithmsWarnOnlyEnabled(): boolean {
+  return false;
+}
+
+/** `0`, the same switch spelled as a mode. torch's default. */
+export function getDeterministicDebugMode(): number {
+  return 0;
+}
+
+/** `false` — the autograd anomaly detector is off, here and in torch by default. */
+export function isAnomalyEnabled(): boolean {
+  return false;
+}
+
+/**
+ * **`true`**, and the one of these that is not false. The flag says whether the
+ * detector *would* check for NaN if it were on, not whether it is on.
+ */
+export function isAnomalyCheckNanEnabled(): boolean {
+  return true;
+}
+
+/** `false` — torch's default warning policy, which is to show a warning once. */
+export function isWarnAlwaysEnabled(): boolean {
+  return false;
+}
+
+/** **`"highest"`** — full float32, no TF32. torch's default and this library's fact. */
+export function getFloat32MatmulPrecision(): string {
+  return "highest";
+}
