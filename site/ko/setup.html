@@ -143,13 +143,23 @@
     </p>
     <p class="small">
       <strong>그 두 플래그로 스위트 전체를 돌렸습니다.</strong> 어댑터만 물어본 것이 아니라 —
-      5080 에서 <code>agreeing 3880 / 3880 [nvidia / blackwell]</code> — 2026-08-30 에 잰 것이고
-      그때 바인딩 몫이 3880 이었습니다. 그리고 학습도 맞습니다.
+      5080 에서 <code>agreeing 4460 / 4466 [nvidia / blackwell]</code>, 그리고 학습도 맞습니다.
       작은 ResNet 30 스텝의 궤적, 층별 기울기, 배치정규화 버퍼, eval 까지 torch 와 대조해
-      <code>64 values</code>, 파이썬 바인딩으로 한 번 borch.ts 자체 API 로 한 번. 이 페이지는 앞서
-      여기에 <code>3753 / 3755</code> 라고 적었습니다 — 갈린 둘은 torch 가 아니라 <strong>기계에
-      대한 답</strong>이 얼려져 있던 것이고, 변명되지 않고 고쳐졌습니다. 4090 은 어댑터 측정만
-      있고 골든은 돌린 적이 없습니다.
+      <code>64 values</code>, 파이썬 바인딩으로 한 번 borch.ts 자체 API 로 한 번.
+    </p>
+    <p class="small">
+      <strong>갈린 여섯은 GPU 가 아니라 그 기계에 대한 것입니다.</strong> 여섯 다
+      <code>device='cuda'</code> 일 때 무슨 일이 나는지를 묻는데, 그 답이
+      <strong>torch 에 CUDA 가 없는 기계에서 얼려졌습니다.</strong> 거기서는 양쪽 다 거절하니
+      케이스가 <em>둘 다 멈춘다</em>가 됩니다. 그 박스는 CUDA 빌드라 torch 가 안 멈추고,
+      <code>cuda.device_count</code> 는 골든이 0 을 기대하는 자리에서 1 이라고 답합니다.
+      <strong>셰이더에서 나온 값은 하나도 없습니다</strong> — 같은 여섯이 Apple Metal 에서는
+      통과합니다. 얼려진 기계의 성질을 같이 얼려버린 케이스의 모양입니다. 이 종류가 앞서 둘
+      발견돼 고쳐졌고, 이것들이 그 가족의 나머지입니다.
+    </p>
+    <p class="small">
+      4090 은 어댑터 측정만 있습니다. 세션 도중 카드가 PCIe 버스에서 빠진 뒤 돌아오지 않아
+      골든은 돌린 적이 없습니다.
     </p>
     <p class="small">
       <strong>이 표의 이전 판은 차단목록 플래그가 5080 을 연다고 말했습니다.</strong> 아닙니다 —
