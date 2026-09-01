@@ -385,7 +385,13 @@ CEILINGS = {
     # directory this ceiling is about — the ceiling caught it, and the repair was to
     # reword the comment rather than to raise the number. A prefix quoted in prose is
     # not a key; the tables are where it has to match.
-    "borch-ts/test": 4871,
+    # 4871 → 4879. Eight, and they are all case names: `DistributedSampler` was
+    # declined and is built, so thirty rows land in `dataconv::` and their names are
+    # keys against `tests/cases.py`. Most of the Korean in them (`행`, `랭크`, `거절`)
+    # was already spelled in this file; the eight new characters are the two
+    # `set_epoch` rows and `음수 rank`. Nothing about the class itself is Korean —
+    # `borch-ts/src/data.ts` is English, as that ceiling requires.
+    "borch-ts/test": 4879,
 }
 
 

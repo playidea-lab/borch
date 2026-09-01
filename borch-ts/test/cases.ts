@@ -8680,6 +8680,69 @@ function addRecent(out: Map<string, Case>): void {
     return seen.join(" | ");
   });
 
+  // **`DistributedSampler` was declined for the wrong reason and is here now.**
+  // It read as *this is one tab* because of its name; given `numReplicas` and
+  // `rank` outright it never asks a process group anything.
+  //
+  // The padding is asked by value because that is where the surprise is: ten rows
+  // over three ranks is 4/4/4, not 4/3/3, so rank 1 ends `…, 0`.
+  const sliced = (n: number, k: number, r: number, dropLast: boolean): string => {
+    const s = new data.DistributedSampler({ length: n }, k, r, false, 0, dropLast);
+    return `[${Array.from(s).join(", ")}] len=${s.length} total=${s.totalSize}`;
+  };
+  for (const [n, k, dropLast] of [
+    [10, 3, false], [10, 3, true], [9, 3, false],
+    [2, 5, false], [2, 5, true], [7, 1, false], [0, 3, false],
+  ] as [number, number, boolean][]) {
+    for (let r = 0; r < k; r++) {
+      const rank = r;
+      out.set(
+        `dataconv::DistributedSampler(${n}행 ${k}랭크 drop_last=${verdict(dropLast)})`
+        + `/rank ${rank}`,
+        () => sliced(n, k, rank, dropLast));
+    }
+  }
+
+  // The shuffled order is this library's stream rather than torch's, so what is
+  // asked is the contract: **the ranks together cover the dataset exactly once**,
+  // which holds only if all of them drew the same permutation.
+  for (const [n, k] of [[10, 3], [12, 4], [100, 7]] as [number, number][]) {
+    out.set(`dataconv::DistributedSampler(shuffle)/${n}행 ${k}랭크가 전부를 덮는다`,
+      () => {
+        const seen: number[] = [];
+        for (let r = 0; r < k; r++) {
+          const s = new data.DistributedSampler({ length: n }, k, r, true, 7);
+          s.setEpoch(0);
+          seen.push(...s);
+        }
+        const got = Array.from(new Set(seen)).sort((a, b) => a - b);
+        return verdict(got.length === n && got.every((v, i) => v === i));
+      });
+  }
+
+  const epochOrder = (epoch: number): string => {
+    const s = new data.DistributedSampler({ length: 12 }, 3, 0, true, 0);
+    s.setEpoch(epoch);
+    return Array.from(s).join(",");
+  };
+  out.set("dataconv::DistributedSampler(set_epoch)/같은 epoch 은 재현",
+    () => verdict(epochOrder(3) === epochOrder(3)));
+  out.set("dataconv::DistributedSampler(set_epoch)/epoch 이 순서를 바꾼다",
+    () => verdict(epochOrder(0) !== epochOrder(1)));
+
+  const refuses = (build: () => unknown): string => {
+    try {
+      build();
+    } catch {
+      return "거절";
+    }
+    return "받았다";
+  };
+  out.set("dataconv::DistributedSampler(범위 밖 rank)",
+    () => refuses(() => new data.DistributedSampler({ length: 10 }, 3, 3)));
+  out.set("dataconv::DistributedSampler(음수 rank)",
+    () => refuses(() => new data.DistributedSampler({ length: 10 }, 3, -1)));
+
 
   // **`wrap` means something only on a tall matrix.** While it was asked with squares
   // alone, this version invented a rule that does not exist (skipping a row on wrapping

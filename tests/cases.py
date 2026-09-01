@@ -7386,6 +7386,81 @@ def data_loader_cases(inp=None):
                       for b in L.utils.data.DataLoader(
                           items, batch_sampler=L.utils.data.BatchSampler(
                               L.utils.data.SequentialSampler(items), 4, True)))))
+
+    # ── `DistributedSampler` — the padding, and then the property ─────────────
+    #
+    # It was declined for four years' worth of the wrong reason: **it was grouped
+    # with the collectives by its name.** Given `num_replicas` and `rank` outright
+    # it touches no process group at all, and what is left is arithmetic over two
+    # integers, which runs anywhere.
+    #
+    # **The arithmetic is asked by value, because that is where the surprise is.**
+    # Ten rows over three workers is 4/4/4 and not 4/3/3 — the tail is padded from
+    # the front until the count divides, so rank 1 ends `…, 0`. Nobody writing the
+    # obvious slice by hand produces that, and in torch the ragged version hangs
+    # the loop at a collective. `drop_last` is the other branch and drops the tail.
+    def sliced(L, n, k, r, **kw):
+        s = L.utils.data.DistributedSampler(list(range(n)), num_replicas=k, rank=r,
+                                            shuffle=False, **kw)
+        return f"{[int(i) for i in s]} len={len(s)} total={s.total_size}"
+
+    for _n, _k, _dl in ((10, 3, False), (10, 3, True), (9, 3, False),
+                        (2, 5, False), (2, 5, True), (7, 1, False), (0, 3, False)):
+        for _r in range(_k):
+            cases.append((
+                DATACONV_PREFIX
+                + f"DistributedSampler({_n}행 {_k}랭크 drop_last={_dl})/rank {_r}",
+                (lambda n, k, r, dl: lambda L: sliced(L, n, k, r, drop_last=dl))(
+                    _n, _k, _r, _dl)))
+
+    # **The shuffled order cannot be frozen** — numpy's stream is not torch's — so
+    # what is asked is the contract that makes the class worth having, and it is
+    # one property rather than three: *the ranks together cover the dataset
+    # exactly once.* That holds only if every rank drew the **same** permutation,
+    # which is the whole reason the shuffle is seeded from `seed + epoch` instead
+    # of drawn from the global stream. A sampler that reached for the global one
+    # passes "same seed, same order" and fails this.
+    def covers(L, n, k, epoch):
+        seen = []
+        for r in range(k):
+            s = L.utils.data.DistributedSampler(list(range(n)), num_replicas=k,
+                                                rank=r, shuffle=True, seed=7)
+            s.set_epoch(epoch)
+            seen += [int(i) for i in s]
+        return str(sorted(set(seen)) == list(range(n)))
+
+    for _n, _k in ((10, 3), (12, 4), (100, 7)):
+        cases.append((DATACONV_PREFIX
+                      + f"DistributedSampler(shuffle)/{_n}행 {_k}랭크가 전부를 덮는다",
+                      (lambda n, k: lambda L: covers(L, n, k, 0))(_n, _k)))
+
+    def epoch_order(L, epoch):
+        s = L.utils.data.DistributedSampler(list(range(12)), num_replicas=3, rank=0,
+                                            shuffle=True, seed=0)
+        s.set_epoch(epoch)
+        return [int(i) for i in s]
+
+    # `seed=0` on purpose: it is the default, so epoch 0 and epoch 1 are the two
+    # runs everybody makes first. A stream guarded with `seed || 1` sends both to
+    # the same state and `set_epoch` looks like it works.
+    cases.append((DATACONV_PREFIX + "DistributedSampler(set_epoch)/같은 epoch 은 재현",
+                  lambda L: str(epoch_order(L, 3) == epoch_order(L, 3))))
+    cases.append((DATACONV_PREFIX + "DistributedSampler(set_epoch)/epoch 이 순서를 바꾼다",
+                  lambda L: str(epoch_order(L, 0) != epoch_order(L, 1))))
+
+    def refuses(L, build):
+        try:
+            build(L)
+        except Exception:                                        # noqa: BLE001
+            return "거절"
+        return "받았다"
+
+    cases.append((DATACONV_PREFIX + "DistributedSampler(범위 밖 rank)",
+                  lambda L: refuses(L, lambda M: M.utils.data.DistributedSampler(
+                      items, num_replicas=3, rank=3))))
+    cases.append((DATACONV_PREFIX + "DistributedSampler(음수 rank)",
+                  lambda L: refuses(L, lambda M: M.utils.data.DistributedSampler(
+                      items, num_replicas=3, rank=-1))))
     return cases
 
 

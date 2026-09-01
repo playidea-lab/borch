@@ -9,6 +9,8 @@ batch is 3MB. Uploading per batch is cheaper and leaves the GPU memory for the
 model.
 """
 
+import math as _math
+
 import numpy as _np
 
 import js as _js
@@ -82,25 +84,6 @@ class SequentialSampler:
         return len(self.data_source)
 
 
-class DistributedSampler:
-    """Every rank takes **an interleaved slice** of the same shuffled order.
-
-    **The core's body, imported rather than written again.** It is arithmetic on a list
-    of integers — no tensor is made, no kernel runs — so a second copy here would be a
-    second place for the padding rule to drift. The binding's own samplers exist because
-    they hand indices to a loader that builds tensors; this one hands indices to those.
-
-    Its declined row read *for distributed training — this is inside one tab*, which
-    names what the class is for and not what it needs: given `num_replicas` and `rank`
-    it never reaches for a process group. Measured on the binding's golden, which is
-    what noticed it was absent here after it went into the core.
-    """
-
-    def __new__(cls, *args, **kwargs):
-        from borch._data import DistributedSampler as _Core
-        return _Core(*args, **kwargs)
-
-
 class RandomSampler:
     def __init__(self, data_source, replacement=False, num_samples=None,
                  generator=None):
@@ -167,6 +150,70 @@ class WeightedRandomSampler:
         p = self.weights / self.weights.sum()
         return iter(rng.choice(len(p), size=self.num_samples,
                                replace=self.replacement, p=p).tolist())
+
+    def __len__(self):
+        return self.num_samples
+
+
+class DistributedSampler:
+    """Each of `num_replicas` workers takes a different slice of one dataset.
+
+    **No distribution is involved**, which is why it is here: given the pair
+    outright it is arithmetic over two integers. torch reads them from a process
+    group only when they are omitted, so omitting them raises here — as
+    `ValueError`, which is what torch itself raises on an ordinary install:
+    `RuntimeError` is its answer when the distributed package cannot be imported
+    at all, and that is not the case a caller meets.
+
+    The padding and the seeded shuffle are the core's; see `borch/_data.py` for
+    why the shuffle must not come from the global stream.
+    """
+
+    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
+                 seed=0, drop_last=False):
+        if num_replicas is None or rank is None:
+            raise ValueError(
+                "DistributedSampler needs num_replicas and rank given outright — "
+                "torch reads them from the process group when they are omitted, "
+                "and there is no process group here")
+        num_replicas, rank = int(num_replicas), int(rank)
+        if not 0 <= rank < num_replicas:
+            raise ValueError(f"Invalid rank {rank}, rank should be in the interval "
+                             f"[0, {num_replicas - 1}]")
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.epoch = 0
+        self.shuffle = shuffle
+        self.seed = seed
+        self.drop_last = drop_last
+        n = len(dataset)
+        if drop_last and n % num_replicas:
+            self.num_samples = _math.ceil((n - num_replicas) / num_replicas)
+        else:
+            self.num_samples = _math.ceil(n / num_replicas)
+        self.total_size = self.num_samples * num_replicas
+
+    def set_epoch(self, epoch):
+        """Moves the shuffle. Call it before each epoch, on every rank."""
+        self.epoch = int(epoch)
+
+    def __iter__(self):
+        n = len(self.dataset)
+        if self.shuffle:
+            indices = _np.random.default_rng(
+                self.seed + self.epoch).permutation(n).tolist()
+        else:
+            indices = list(range(n))
+        if self.drop_last:
+            indices = indices[:self.total_size]
+        else:
+            pad = self.total_size - len(indices)
+            if pad <= len(indices):
+                indices += indices[:pad]
+            else:
+                indices += (indices * _math.ceil(pad / len(indices)))[:pad]
+        return iter(indices[self.rank:self.total_size:self.num_replicas])
 
     def __len__(self):
         return self.num_samples
@@ -336,10 +383,10 @@ class _UtilsData:
     ConcatDataset = ConcatDataset
     DataLoader = DataLoader
     BatchSampler = BatchSampler
+    DistributedSampler = DistributedSampler
     RandomSampler = RandomSampler
     SequentialSampler = SequentialSampler
     WeightedRandomSampler = WeightedRandomSampler
-    DistributedSampler = DistributedSampler
     default_collate = staticmethod(default_collate)
     default_convert = staticmethod(default_convert)
     get_worker_info = staticmethod(get_worker_info)

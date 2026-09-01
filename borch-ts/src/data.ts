@@ -354,6 +354,85 @@ export class WeightedRandomSampler implements Sampler {
 }
 
 /**
+ * Each of `numReplicas` workers takes a different slice of one dataset.
+ * `torch.utils.data.DistributedSampler`.
+ *
+ * **Nothing is distributed here and nothing needs to be.** Given the pair
+ * outright it is arithmetic over two integers; torch reads them from a process
+ * group only when they are omitted, and there is no group in a tab, so both are
+ * required.
+ *
+ * **Every rank gets the same count.** Ten rows over three workers is 4/4/4, not
+ * 4/3/3 — the tail is padded from the front until the count divides. `dropLast`
+ * throws the tail away instead, and then it is 3/3/3 with the tenth row unseen
+ * this epoch.
+ *
+ * **The shuffle has its own stream, and that is the point rather than an
+ * oversight.** The ranks agree only because each computes the *same*
+ * permutation from `seed + epoch`; drawing from the host stream would give two
+ * ranks constructed at different moments two different orders, and then they
+ * would overlap and drop rows between them — with the loop still training, on
+ * the wrong data. So this is the one place in the library that seeds a stream
+ * of its own, and it takes a number rather than a `Generator`.
+ */
+export class DistributedSampler implements Sampler {
+  readonly numSamples: number;
+  readonly totalSize: number;
+  private epoch = 0;
+
+  constructor(
+    private readonly dataset: { readonly length: number },
+    private readonly numReplicas: number,
+    private readonly rank: number,
+    private readonly shuffle = true,
+    private readonly seed = 0,
+    private readonly dropLast = false,
+  ) {
+    if (!Number.isInteger(numReplicas) || !Number.isInteger(rank)) {
+      throw new RuntimeError("numReplicas and rank must be integers");
+    }
+    if (rank >= numReplicas || rank < 0) {
+      throw new RuntimeError(
+        `Invalid rank ${rank}, rank should be in the interval [0, ${numReplicas - 1}]`);
+    }
+    const n = dataset.length;
+    this.numSamples = dropLast && n % numReplicas !== 0
+      ? Math.ceil((n - numReplicas) / numReplicas)
+      : Math.ceil(n / numReplicas);
+    this.totalSize = this.numSamples * numReplicas;
+  }
+
+  /** Moves the shuffle. Call it before each epoch, on every rank. */
+  setEpoch(epoch: number): void {
+    this.epoch = epoch;
+  }
+
+  get length(): number {
+    return this.numSamples;
+  }
+
+  *[Symbol.iterator](): Iterator<number> {
+    const n = this.dataset.length;
+    let indices = this.shuffle
+      ? seededShuffle(n, this.seed + this.epoch)
+      : Array.from({ length: n }, (_, i) => i);
+    if (this.dropLast) {
+      indices = indices.slice(0, this.totalSize);
+    } else {
+      const pad = this.totalSize - indices.length;
+      const front = pad <= indices.length
+        ? indices.slice(0, pad)
+        // Fewer rows than ranks — one pass over the front is not enough.
+        : Array.from({ length: pad }, (_, i) => indices[i % indices.length] as number);
+      indices = indices.concat(front);
+    }
+    for (let at = this.rank; at < this.totalSize; at += this.numReplicas) {
+      yield indices[at] as number;
+    }
+  }
+}
+
+/**
  * Groups another sampler's indices into batches. `torch.utils.data.BatchSampler`.
  *
  * This is what a `batchSampler` option is *for*: the batches come from here, so
@@ -604,6 +683,37 @@ export function defaultCollate(
     Tensor.stack(batch.map((item) => item[slot] as Tensor), 0));
 }
 
+/**
+ * `0..n-1` shuffled **from the seed given**, touching no shared state.
+ *
+ * `DistributedSampler` is the caller and the isolation is its contract: every
+ * rank must get this same array from this same seed, whatever else has drawn
+ * from the host stream in between.
+ */
+function seededShuffle(n: number, seed: number): number[] {
+  // **The seed is scrambled, not used raw.** xorshift emits zero forever from a
+  // zero state, and the obvious guard — `seed || 1` — sends seed 0 and seed 1 to
+  // the same stream. With the default `seed = 0` that is epoch 0 and epoch 1,
+  // so the two epochs everybody runs first would shuffle identically while
+  // `setEpoch` appeared to work.
+  let state = (Math.imul(seed >>> 0, 0x9e3779b1) ^ 0x85ebca6b) >>> 0;
+  if (state === 0) state = 1;
+  const next = (): number => {
+    state ^= state << 13; state >>>= 0;
+    state ^= state >> 17;
+    state ^= state << 5; state >>>= 0;
+    return state / 0x100000000;
+  };
+  const order = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1));
+    const tmp = order[i] as number;
+    order[i] = order[j] as number;
+    order[j] = tmp;
+  }
+  return order;
+}
+
 /** `0..n-1` shuffled. Fisher–Yates, on the host stream (it follows `manualSeed`). */
 function shuffled(n: number): number[] {
   const order = Array.from({ length: n }, (_, i) => i);
@@ -614,100 +724,4 @@ function shuffled(n: number): number[] {
     order[j] = tmp;
   }
   return order;
-}
-
-/**
- * Every rank takes **an interleaved slice** of the same shuffled order.
- * `torch.utils.data.DistributedSampler`.
- *
- * Its row said *for distributed training — this is inside one tab*, which names
- * what the class is **for** rather than what it needs. Given `numReplicas` and
- * `rank` it touches no network at all: it is arithmetic on indices, and a process
- * group is only where those two numbers come from when nobody passes them.
- *
- * Three things it has to get right, and none of them is a network:
- *
- * - **The slice is `rank`, `rank + numReplicas`, …** — interleaved, not a block.
- *   Cut into blocks instead, each rank sees one region of a sorted dataset and the
- *   batches stop being a sample of it. Nothing throws; the loss curve is the only
- *   witness.
- * - **The order is redrawn per epoch from `seed + epoch`**, and every rank draws
- *   the same permutation because they draw from the same seed — which is what
- *   makes the interleave a partition rather than an overlap.
- * - **Short of a whole multiple it pads by wrapping**, or drops with `dropLast`.
- *   The ranks must receive the same count, and the padding comes from the front of
- *   the same list rather than a repeat of the tail.
- *
- * **`setEpoch` is not decoration.** A loop that never calls it draws the same
- * order every epoch — invisible except as a model that stops improving early.
- *
- * The draw is **its own stream, seeded here**, not the module's: a shared stream
- * would hand each rank a different permutation and the partition would break. The
- * numbers it produces are not numpy's and not torch's, so what is frozen about the
- * shuffled case is a property (the ranks partition, one epoch repeats, two epochs
- * differ) rather than a value.
- */
-export class DistributedSampler implements Sampler {
-  private epoch = 0;
-  readonly numSamples: number;
-  readonly totalSize: number;
-
-  constructor(
-    private readonly dataset: { readonly length: number },
-    private readonly numReplicas: number,
-    private readonly rank: number,
-    private readonly shuffle = true,
-    private readonly seed = 0,
-    private readonly dropLast = false,
-  ) {
-    if (rank >= numReplicas || rank < 0) {
-      throw new RuntimeError(
-        `Invalid rank ${rank}, rank should be in the interval `
-        + `[0, ${numReplicas - 1}]`);
-    }
-    const count = dataset.length;
-    this.numSamples = dropLast && count % numReplicas !== 0
-      ? Math.ceil((count - numReplicas) / numReplicas)
-      : Math.ceil(count / numReplicas);
-    this.totalSize = this.numSamples * numReplicas;
-  }
-
-  get length(): number {
-    return this.numSamples;
-  }
-
-  /** Which epoch's order to draw. See the note above on why it matters. */
-  setEpoch(epoch: number): void {
-    this.epoch = epoch;
-  }
-
-  *[Symbol.iterator](): Iterator<number> {
-    const count = this.dataset.length;
-    let order = Array.from({ length: count }, (_, i) => i);
-    if (this.shuffle) {
-      // MINSTD, seeded per epoch. The product stays under 2^53 so a float64
-      // multiply is exact and every rank walks the identical sequence.
-      let state = ((this.seed + this.epoch) % 2147483646) + 1;
-      const next = (): number => {
-        state = (state * 48271) % 2147483647;
-        return state;
-      };
-      for (let i = count - 1; i > 0; i--) {
-        const j = next() % (i + 1);
-        [order[i], order[j]] = [order[j] as number, order[i] as number];
-      }
-    }
-    if (!this.dropLast) {
-      const padding = this.totalSize - order.length;
-      order = padding <= order.length
-        ? order.concat(order.slice(0, padding))
-        : order.concat(
-            Array.from({ length: padding }, (_, i) => order[i % order.length] as number));
-    } else {
-      order = order.slice(0, this.totalSize);
-    }
-    for (let i = this.rank; i < this.totalSize; i += this.numReplicas) {
-      yield order[i] as number;
-    }
-  }
 }

@@ -234,9 +234,9 @@ from ._optim import (
     ASGD, Adafactor, LBFGS, Rprop, CyclicLR,
 )
 from ._data import (
-    BatchSampler, ChainDataset, ConcatDataset, DataLoader, Dataset, IterableDataset,
-    DistributedSampler, RandomSampler, Sampler, SequentialSampler, StackDataset,
-    Subset,
+    BatchSampler, ChainDataset, ConcatDataset, DataLoader, Dataset,
+    DistributedSampler, IterableDataset,
+    RandomSampler, Sampler, SequentialSampler, StackDataset, Subset,
     SubsetRandomSampler, TensorDataset, WeightedRandomSampler, _Utils, _UtilsData,
     default_collate, random_split, utils,
 )

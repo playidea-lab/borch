@@ -728,9 +728,10 @@ JUDGED = {
     # 0 → 5, same reading. The four `unaligned` are `householder_product`, `lu`,
     # `matrix_power` and `qr` naming their input `A` where the core says `t`.
     "linalg": (5, 42),
-    # 13/18 → 14/19. `DistributedSampler`, whose row read *for distributed training —
-    # this is inside one tab*: it names what the class is for and not what it needs.
-    # Given `num_replicas` and `rank` it never touches `torch.distributed`.
+    # 13 → 14 of 18 → 19. `DistributedSampler`, declined until its reason was read
+    # again: it was grouped with the collectives by its name, and given `num_replicas`
+    # and `rank` it never touches a process group. It lands in `agree`, so the filed
+    # total and the judged count rise together — an implementation, not a widening.
     "utils.data": (14, 19),
 }
 

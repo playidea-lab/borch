@@ -14521,6 +14521,42 @@
     },
     {
      "kind": "class",
+     "name": "DistributedSampler",
+     "signature": "export declare class DistributedSampler implements Sampler",
+     "doc": "Each of `numReplicas` workers takes a different slice of one dataset.\n`torch.utils.data.DistributedSampler`.\n\n**Nothing is distributed here and nothing needs to be.** Given the pair\noutright it is arithmetic over two integers; torch reads them from a process\ngroup only when they are omitted, and there is no group in a tab, so both are\nrequired.\n\n**Every rank gets the same count.** Ten rows over three workers is 4/4/4, not\n4/3/3 — the tail is padded from the front until the count divides. `dropLast`\nthrows the tail away instead, and then it is 3/3/3 with the tenth row unseen\nthis epoch.\n\n**The shuffle has its own stream, and that is the point rather than an\noversight.** The ranks agree only because each computes the *same*\npermutation from `seed + epoch`; drawing from the host stream would give two\nranks constructed at different moments two different orders, and then they\nwould overlap and drop rows between them — with the loop still training, on\nthe wrong data. So this is the one place in the library that seeds a stream\nof its own, and it takes a number rather than a `Generator`.",
+     "members": [
+      {
+       "name": "numSamples",
+       "signature": "readonly numSamples: number",
+       "doc": "",
+       "torch": "num_samples"
+      },
+      {
+       "name": "totalSize",
+       "signature": "readonly totalSize: number",
+       "doc": "",
+       "torch": "total_size"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(dataset: { readonly length: number; }, numReplicas: number, rank: number, shuffle?: boolean, seed?: number, dropLast?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "setEpoch",
+       "signature": "setEpoch(epoch: number): void",
+       "doc": "Moves the shuffle. Call it before each epoch, on every rank.",
+       "torch": "set_epoch"
+      },
+      {
+       "name": "length",
+       "signature": "get length(): number",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
      "name": "BatchSampler",
      "signature": "export declare class BatchSampler implements Iterable<readonly number[]>",
      "doc": "Groups another sampler's indices into batches. `torch.utils.data.BatchSampler`.\n\nThis is what a `batchSampler` option is *for*: the batches come from here, so\n`batchSize`, `shuffle` and `dropLast` are already decided and the loader must\nnot decide them again. torch refuses all three alongside it, and so does the\nloader below.",
@@ -14693,42 +14729,6 @@
      "doc": "Several samples into one batch. `torch.utils.data.default_collate`.\n\nIt stacks per position — `[[x₀, y₀], [x₁, y₁]]` becomes `[X, Y]`.\n\n**It was called `stackItems` and its own comment said \"the place\n`default_collate` occupies\".** The function was here the whole time; only\ntorch's name was missing, and the name axis counts names — so it read as an\nabsent feature while the feature was three lines above the loader that used it.\nA comment naming what something *would* be called is not the name.",
      "members": [],
      "torch": "default_collate"
-    },
-    {
-     "kind": "class",
-     "name": "DistributedSampler",
-     "signature": "export declare class DistributedSampler implements Sampler",
-     "doc": "Every rank takes **an interleaved slice** of the same shuffled order.\n`torch.utils.data.DistributedSampler`.\n\nIts row said *for distributed training — this is inside one tab*, which names\nwhat the class is **for** rather than what it needs. Given `numReplicas` and\n`rank` it touches no network at all: it is arithmetic on indices, and a process\ngroup is only where those two numbers come from when nobody passes them.\n\nThree things it has to get right, and none of them is a network:\n\n- **The slice is `rank`, `rank + numReplicas`, …** — interleaved, not a block.\n  Cut into blocks instead, each rank sees one region of a sorted dataset and the\n  batches stop being a sample of it. Nothing throws; the loss curve is the only\n  witness.\n- **The order is redrawn per epoch from `seed + epoch`**, and every rank draws\n  the same permutation because they draw from the same seed — which is what\n  makes the interleave a partition rather than an overlap.\n- **Short of a whole multiple it pads by wrapping**, or drops with `dropLast`.\n  The ranks must receive the same count, and the padding comes from the front of\n  the same list rather than a repeat of the tail.\n\n**`setEpoch` is not decoration.** A loop that never calls it draws the same\norder every epoch — invisible except as a model that stops improving early.\n\nThe draw is **its own stream, seeded here**, not the module's: a shared stream\nwould hand each rank a different permutation and the partition would break. The\nnumbers it produces are not numpy's and not torch's, so what is frozen about the\nshuffled case is a property (the ranks partition, one epoch repeats, two epochs\ndiffer) rather than a value.",
-     "members": [
-      {
-       "name": "numSamples",
-       "signature": "readonly numSamples: number",
-       "doc": "",
-       "torch": "num_samples"
-      },
-      {
-       "name": "totalSize",
-       "signature": "readonly totalSize: number",
-       "doc": "",
-       "torch": "total_size"
-      },
-      {
-       "name": "constructor",
-       "signature": "constructor(dataset: { readonly length: number; }, numReplicas: number, rank: number, shuffle?: boolean, seed?: number, dropLast?: boolean)",
-       "doc": ""
-      },
-      {
-       "name": "length",
-       "signature": "get length(): number",
-       "doc": ""
-      },
-      {
-       "name": "setEpoch",
-       "signature": "setEpoch(epoch: number): void",
-       "doc": "Which epoch's order to draw. See the note above on why it matters.",
-       "torch": "set_epoch"
-      }
-     ]
     }
    ],
    "count": 72,

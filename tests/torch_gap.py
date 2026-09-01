@@ -521,17 +521,17 @@ SKIPPED = {
 
     # **And one that was in the wrong group entirely — it is built now.**
     #
-    # main's row said `DistributedSampler` needs no distribution at all: given
-    # `num_replicas` and `rank` it never touches a process group, so it is index
-    # arithmetic over two integers and the name it carries is what put it beside the
-    # collectives. That reading was right and this branch had already acted on it, so
-    # the row is gone rather than rewritten — `borch.utils.data` and `borch.data` both
-    # carry the sampler, and `SKIPPED` claiming otherwise is the one thing
-    # `test_skipped_does_not_claim_what_we_actually_do` exists to refuse.
+    # `DistributedSampler` sat under *this is one tab* and needs no distribution at
+    # all: given `num_replicas` and `rank` outright it touches no process group, and
+    # what is left is index arithmetic over two integers. It read the pair *from* a
+    # group only when both were omitted, which is the one thing a tab cannot do, and
+    # that single branch had been read as the whole class.
     #
-    # What it actually needed was nowhere in the row: **a seeded local stream.** Every
-    # rank must draw the same permutation or the interleave stops being a partition,
-    # and borch.ts shuffles from one global.
+    # A row grouped by its name rather than by what it does — the same mistake as
+    # `multigammaln`, declined for an argument order nobody had checked. It is in
+    # `utils.data` now and agrees with torch by value on every non-shuffled split;
+    # the shuffled order is numpy's rather than torch's, so what the cases ask there
+    # is the property that the ranks together cover the dataset exactly once.
 
     # Vendor kernels. They mean something only where that hardware is.
     #
