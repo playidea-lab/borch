@@ -156,6 +156,37 @@ def _close(text, start):
     return -1
 
 
+def _opens(line, name):
+    """Where the `(` is when `line` documents `name`, or -1.
+
+    **torch writes the name with its namespace in front and this reader wanted it
+    bare.** `Tensor.add` documents `add(other, *, alpha=1)` and matched;
+    `linalg.solve` documents `linalg.solve(A, B, *, left=True, out=None)` and did not
+    — so **all thirty-six of `linalg`'s C functions sat in the bucket meaning *torch
+    has it and nothing could read it*** while their signature was in the first line of
+    the docstring. `linalg` read `agree 3 · torch is C 36 · prose 0/0` where `Tensor`
+    read `prose 247/1`.
+
+    That bucket is absorbing: the total stays whole while the judged share drops, which
+    is the fault `test_torch_signatures_core.py` says this axis shipped with.
+
+    **Anchored, not searched.** A substring test for `name + "("` would match
+    `matrix_norm` on any prose line that happens to mention `norm(`, and a wrong name
+    read out of prose becomes a row that looks like a finding. So what stands in front
+    has to be a dotted path and nothing else.
+    """
+    if line.startswith(name + "("):
+        return len(name)
+    marker = "." + name + "("
+    at = line.find(marker)
+    if at < 0:
+        return -1
+    head = line[:at]
+    if not head or not all(part.isidentifier() for part in head.split(".")):
+        return -1
+    return at + len(marker) - 1
+
+
 def _split_top(inner):
     """Split on commas that are not inside brackets. `Union[int, str]` stays whole."""
     parts, depth, cur = [], 0, ""
@@ -246,13 +277,14 @@ def from_docstring(fn, name, positional_only=False):
             return DEFERRED(got) if isinstance(got, list) else got
     for line in doc.splitlines()[:3]:
         line = line.strip()
-        if not line.startswith(name + "("):
+        opened = _opens(line, name)
+        if opened < 0:
             continue
-        end = _close(line, len(name))
+        end = _close(line, opened)
         if end < 0:
             continue
         names, seen_star = [], False
-        for part in _split_top(line[len(name) + 1:end]):
+        for part in _split_top(line[opened + 1:end]):
             if part == "*":
                 seen_star = True
                 continue

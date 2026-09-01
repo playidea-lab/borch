@@ -190,7 +190,27 @@ SHIFTED = {
     # The obvious rule — momentum runs opposite to the rate — gets both other phases
     # exactly right, which is why it survived being written.
     "optim.lr_scheduler": 0,
-    "linalg": 0,
+    # **0 → 5, and none of the five is new.** They were behind a reader that could not
+    # see them: torch writes a C function's signature in the first line of its
+    # docstring, this axis reads it from there, and the reader matched the **bare**
+    # name. `linalg`'s docstrings write `linalg.solve(A, B, *, left=True, out=None)`,
+    # so every one of its thirty-six C functions fell into *torch has it and nothing
+    # could read it* — the absorbing bucket the docstring below this table warns about.
+    # `linalg` read `agree 3 · torch is C 36` and reads `agree 14 · torch is C 1` now.
+    #
+    # The five, and each is an argument torch has in the middle:
+    #   · `solve`      — torch `(A, B, left, out)`; `left` is absent, so `out` stands
+    #                    in its seat and `linalg.solve(A, B, False)` sets `out=False`
+    #                    here and `left=False` there
+    #   · `solve_ex`   — the same `left`
+    #   · `svd`        — torch `(A, full_matrices, driver, out)`; `driver` is absent
+    #   · `svdvals`    — the same `driver`
+    #   · `norm`       — torch orders the tail `out, dtype` and this orders it
+    #                    `dtype, out`
+    #
+    # Written out rather than left as a number: the count says *five somethings*, and
+    # what the next person needs is which five. They are owed, not accepted.
+    "linalg": 5,
     "utils.data": 0,
 }
 
@@ -406,7 +426,21 @@ UNALIGNED = {
     # The second half was that the wrapper declared `__wrapped__` and not
     # `__signature__` — so `out=` worked and no reader could see it. Both closed,
     # and **zero here is the end state**, not a number waiting to be lowered again.
-    "linalg": 0,
+    #
+    # **0 → 5, and it is the same opening as the `SHIFTED` row above** — thirty-six
+    # rows left the unreadable bucket and five of them land here. The sentence above
+    # said zero was the end state; it was the end state *of what could be seen*, which
+    # is the shape this whole file is about.
+    #
+    # The five, each an argument torch has that the core does not:
+    #   · `matrix_norm`  — `dtype`, and `out` sits in its seat
+    #   · `vector_norm`  — the same `dtype`
+    #   · `matrix_rank`  — torch `(A, atol, rtol, hermitian, out)` against a single
+    #                      `tol`; torch deprecated `tol` for the pair and this kept it
+    #   · `pinv`         — the same three against a single `rcond`
+    #   · `lstsq`        — the other direction: the core carries an `out` torch's
+    #                      documented list does not have
+    "linalg": 5,
     # 1 → 0. `DataLoader` had seven of torch's seventeen names **and two of them
     # in the wrong seats** — `collate_fn` is torch's seventh and `drop_last` its
     # ninth, where here they were sixth and seventh. `DataLoader(ds, 4, False,
@@ -598,7 +632,23 @@ SHORTER = {
 # `_sparse_only` factory — so three sparse stubs were being counted as gaps there
 # and filed here. One of them is C in torch, and it left this bucket when the
 # classification was fixed. Not a torch upgrade; a correction one file over.
-UNREADABLE_IN_TORCH = 58
+#
+# **58 → 23, and the message above asked the right question again.** *Lower means
+# something started reading C signatures — check what authority it is using.* The
+# authority is the same as last time and no weaker: torch's own docstring, first line,
+# which is where torch writes a C function's argument list. What changed is that the
+# reader matched the **bare** name and torch writes `linalg.solve(A, B, *, left=True,
+# out=None)` with its namespace in front. Thirty-five `linalg` rows were unreadable for
+# a prefix.
+#
+# `signature_read._opens` accepts a dotted path now, anchored — the line has to *be*
+# the name behind an optional path, not merely contain it, because a substring test
+# would read `norm(` out of a sentence about `matrix_norm` and a wrong name out of
+# prose becomes a row that looks like a finding.
+#
+# Ten divergences came out of those thirty-five, five `shifted` and five `unaligned`,
+# each named on its row in the two tables above.
+UNREADABLE_IN_TORCH = 23
 
 # **How many rows each namespace actually gets judged on, out of how many are filed.**
 # The measurement's docstring prints this table as prose, and prose goes stale in
@@ -727,7 +777,19 @@ JUDGED = {
     "optim.lr_scheduler": (16, 16),
     # 0 → 5, same reading. The four `unaligned` are `householder_product`, `lu`,
     # `matrix_power` and `qr` naming their input `A` where the core says `t`.
-    "linalg": (5, 42),
+    #
+    # **5 → 40 of 42, and this is the number this whole file exists to move.** The
+    # docstring below says a judged share falling while the total holds is the
+    # dangerous direction, because *cannot judge* is absorbing. It had 37 rows in it
+    # here, and they were not unreadable — the reader matched the bare name and
+    # `linalg` writes `linalg.solve(...)`. One anchored prefix in
+    # `signature_read._opens` and the bucket empties to 1.
+    #
+    # **It was not empty.** Ten divergences came out, five `shifted` and five
+    # `unaligned`, each named on its row above. Sixteen more are `renamed` — the core
+    # calls torch's `A` its `input` — which is the kind already written down two lines
+    # up as the row's standing shape.
+    "linalg": (40, 42),
     # 13 → 14 of 18 → 19. `DistributedSampler`, declined until its reason was read
     # again: it was grouped with the collectives by its name, and given `num_replicas`
     # and `rank` it never touches a process group. It lands in `agree`, so the filed
