@@ -57,7 +57,21 @@ PROBE = """() => new Promise((resolve) => {
     crossOriginIsolated: self.crossOriginIsolated === true,
     workerAnswered: null,
     opfsRoundTrip: null,
+    adapterFeatures: null,
   };
+  // **What the GPU actually offers**, which is what three declined rows rest on:
+  // `scaled_mm`, `grouped_mm` and `scaled_grouped_mm` read *that hardware is not
+  // here*, and `autocast`'s row says its own absence is "a decision, not the
+  // hardware" and names `shader-f16` as the thing to re-measure. Asked of the
+  // adapter rather than of the shader, because a feature the adapter does not
+  // list is one no shader can ask for.
+  const features = (async () => {
+    if (!navigator.gpu) return "no navigator.gpu";
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return "no adapter";
+    return [...adapter.features].sort().join(" ") || "(none)";
+  })().then((v) => { out.adapterFeatures = v; },
+            (e) => { out.adapterFeatures = "failed: " + e.message; });
   const opfs = (async () => {
     // A handle existing is not the layer working. Write bytes, read them back.
     const dir = await navigator.storage.getDirectory();
@@ -98,7 +112,7 @@ PROBE = """() => new Promise((resolve) => {
     }
   });
 
-  Promise.all([opfs, worker]).then(() => resolve(out));
+  Promise.all([opfs, worker, features]).then(() => resolve(out));
 })"""
 
 
@@ -132,6 +146,34 @@ def _claims(got):
          "`from_file`'s reason opens by granting this. If OPFS stopped working the "
          "sentence would be defending the wrong thing — the old reason said a browser "
          "has no file layer, and it was this measurement that showed otherwise."),
+
+        # **Two claims, not one, and writing them as one was wrong.** The first draft
+        # asked whether the adapter offered *any* reduced-precision format and went red
+        # on `shader-f16` — which is f16, and the three rows it was defending are about
+        # **fp8**. Two formats, two questions: the check was measuring the wrong one and
+        # would have sent somebody to rewrite three correct sentences.
+        ("the GPU has no fp8 format",
+         isinstance(got["adapterFeatures"], str)
+         and "f8" not in got["adapterFeatures"],
+         f"no `f8` among: {got['adapterFeatures']}",
+         "`scaled_mm`, `grouped_mm` and `scaled_grouped_mm` are torch's fp8 and "
+         "grouped GEMMs, declined under *that hardware is not here*. WebGPU has no "
+         "8-bit float type at all, in the shading language or as a feature; if one "
+         "appears the sentence is spent."),
+
+        # **The opposite direction, and the only claim here asserted as a presence.**
+        ("the GPU does have f16, so `autocast` is declined by choice",
+         isinstance(got["adapterFeatures"], str)
+         and "shader-f16" in got["adapterFeatures"],
+         f"`shader-f16` present: {'shader-f16' in (got['adapterFeatures'] or '')}",
+         "`autocast`'s row says its absence is **a decision, not the hardware** and "
+         "names `shader-f16` as the thing to re-measure. That sentence only holds "
+         "while the feature is actually there — were it to vanish, the row would be "
+         "right for a reason it does not give, which is the same defect as being "
+         "wrong. The note beside it says half precision is declined because the "
+         "feature is *optional* and machines with it and without it would diverge; "
+         "this measures one machine, and that is the point of running it in CI on "
+         "another."),
     ]
 
 
@@ -139,7 +181,10 @@ def _claims(got):
 # an assertion protecting a decision nobody makes any more passes forever about nothing,
 # which is the failure this repository keeps finding in its own checks.
 DEFENDS = ("get_num_threads", "set_num_threads",
-           "get_num_interop_threads", "set_num_interop_threads", "from_file")
+           "get_num_interop_threads", "set_num_interop_threads", "from_file",
+           # The three fp8 rows, all under *that hardware is not here*, and `autocast`,
+           # whose row rests on f16 being present rather than absent.
+           "scaled_mm", "grouped_mm", "scaled_grouped_mm", "autocast")
 
 
 def _still_declined():

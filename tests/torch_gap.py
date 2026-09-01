@@ -469,6 +469,21 @@ SKIPPED = {
     "DistributedSampler": "for distributed training — this is inside one tab",
 
     # Vendor kernels. They mean something only where that hardware is.
+    #
+    # **These twenty-one are the one group in this table with nothing to ask**, and that
+    # was established by trying. An audit of the fifty-one rows that assert an absence
+    # and carry no measurement split them four ways: eighteen make a claim about *this
+    # library* (`tests/test_subset_claims.py` holds five of those, and names the
+    # thirteen it cannot), six about *the browser*
+    # (`tests/browser/platform_claims.py`), one about *torch* — and these, which are
+    # about a vendor's compiled kernel. There is no adapter to interrogate and no
+    # feature flag to read: `cudnn_convolution` is a symbol torch links against
+    # NVIDIA's library, and a browser has no library to link.
+    #
+    # Written down because *nothing checks these* is a fact worth having on the page.
+    # The other three groups each gained an instrument; this one is the group where an
+    # instrument would be theatre, and the difference between the two is not visible
+    # from a count of unwatched rows.
     "cudnn_*": "an NVIDIA kernel — not in a browser",
     "miopen_*": "an AMD kernel — not in a browser",
     "mkldnn_*": "an Intel kernel — not in a browser",
@@ -671,9 +686,17 @@ SKIPPED = {
             "can never agree with torch's answer, which is the one thing a comparison "
             "library must not ship. The `_AbsentDtype` family is the same decision one "
             "level down",
-    "grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
-    "scaled_grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
-    "scaled_mm": "fp8 GEMM — that hardware is not here",
+    # **These three are measured now**, by `tests/browser/platform_claims.py`, and the
+    # measurement is narrower than the sentence used to be. *That hardware is not here*
+    # covers two formats and only one of them is absent: the adapter lists `shader-f16`
+    # and no `f8` at all, so **f16 is here and fp8 is not**. The first draft of that
+    # probe asked about "reduced precision" as one thing and went red on `shader-f16` —
+    # it was measuring the wrong format and would have sent somebody to rewrite three
+    # correct rows. Two formats, two questions.
+    "grouped_mm": "fp8 and grouped GEMM — WebGPU has no 8-bit float type, in the "
+                  "shading language or as an adapter feature (measured)",
+    "scaled_grouped_mm": "fp8 and grouped GEMM — as `grouped_mm`",
+    "scaled_mm": "fp8 GEMM — as `grouped_mm`",
 
     # torchvision. **Only what is declined for good is written here** — everything else
     # absent from `transforms` is the to-do list, and it should read as one.
