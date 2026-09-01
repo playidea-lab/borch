@@ -397,6 +397,13 @@ SKIPPED = {
     # absent is not the hardware but **our decision that our shaders use f32 only.** Writing
     # cannot and will-not in the same sentence stops the next person reviewing it.
     #
+    # **And "so does this machine" is one machine.** CI runs on SwiftShader, which offers
+    # no `shader-f16` at all — that is not a counter-example to the sentence below, it is
+    # the sentence below: the feature is optional and machines differ. `platform_claims`
+    # asserted presence everywhere and went red on the first runner that disagreed with
+    # it; it abstains on a CPU adapter now, because only hardware can witness a claim
+    # about hardware.
+    #
     # **Why half precision is declined** (decided after measuring):
     #
     # - `shader-f16` is an **optional feature.** Machines that have it and machines that do
