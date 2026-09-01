@@ -6248,6 +6248,25 @@ def top_level_cases(inp=None):
     cases.append((TOP_PREFIX + "get_float32_matmul_precision",
                   lambda L: L.get_float32_matmul_precision()))
 
+    # ── the two thread counts, asked for what can be asked ─────────────────────
+    #
+    # **The value cannot be frozen and the name still can.** torch answers the
+    # machine's core count — 12 here, and 16 for the interop pair, its own two numbers
+    # disagreeing because both derive from it — so a frozen value would pass on one
+    # laptop and fail on the next. This library answers 1: every op runs on the calling
+    # thread.
+    #
+    # So what the golden asks is the part that holds on both sides. It is a weak
+    # question and it is not nothing: it fails on an absent name, on `None`, on `0`
+    # and on a negative. **The 1 is pinned in `tests/test_subset_claims.py` and in
+    # `parity.ts`** — against this library, where a deliberate divergence belongs,
+    # rather than against torch, where it would only look like a defect.
+    for _name in ("get_num_threads", "get_num_interop_threads"):
+        cases.append((
+            TOP_PREFIX + f"{_name}(양수 정수인가)",
+            lambda L, n=_name: (lambda v: f"{type(v).__name__} {v >= 1}")(
+                getattr(L, n)())))
+
     # ── the eight `sym_*` helpers ──────────────────────────────────────────────
     #
     # Their row read *symbolic sizes — for graph capture*, which is what they are for.

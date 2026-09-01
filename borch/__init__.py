@@ -151,6 +151,7 @@ from ._ops import (
     are_deterministic_algorithms_enabled, get_deterministic_debug_mode,
     get_float32_matmul_precision, is_anomaly_check_nan_enabled, is_anomaly_enabled,
     is_deterministic_algorithms_warn_only_enabled, is_warn_always_enabled,
+    get_num_interop_threads, get_num_threads,
     result_type,
     set_default_device, set_default_dtype, typename,
     # Bitwise operations and integer maths. On `bool` they become logical

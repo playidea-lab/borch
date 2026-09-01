@@ -7756,6 +7756,38 @@ def get_float32_matmul_precision():
     return "highest"
 
 
+# ── the two thread counts ───────────────────────────────────────────────────────
+#
+# **These answer 1, and 1 is not torch's answer.** On the machine that freezes the
+# golden torch says 12 and 16 — both derived from the core count, which is why its own
+# two numbers disagree. So the value cannot be frozen against torch: it would pass on
+# one laptop and fail on the next.
+#
+# That was the reason these were declined, and it proves less than it was asked to. The
+# golden is one place a value can be pinned and not the only one — `parity.ts` pins
+# `nn.Parameter` not sharing storage, which is the same kind of deliberate divergence,
+# and says why: *write a divergence in a comment only and the next person changes it
+# without reading the comment.*
+#
+# So the name is here, the answer is the truth about this library, the golden asks only
+# what holds on both sides (a positive integer), and the 1 is pinned in
+# `tests/test_subset_claims.py` against this library rather than against torch.
+#
+# **The setters stay out**, and their reason is measured rather than assumed:
+# `SharedArrayBuffer` is `undefined` and `crossOriginIsolated` is false, so a pool would
+# have no shared buffer to work over and the knob would set a number nothing reads.
+
+def get_num_threads():
+    """**`1`** — every op runs on the calling thread. See the note above on why this
+    parts from torch and where the 1 is held."""
+    return 1
+
+
+def get_num_interop_threads():
+    """`1`, as `get_num_threads`. There is no pool between ops either."""
+    return 1
+
+
 # ── the eight `sym_*` helpers ───────────────────────────────────────────────────
 #
 # **Their row read *symbolic sizes — for graph capture, and they do not sit on wasm*,

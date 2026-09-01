@@ -219,3 +219,39 @@ def test_the_unwatched_claims_are_named_rather_than_forgotten():
         "the unwatched list changed. If a claim gained a probe, move it into CLAIMS; "
         "if a new one arrived without one, say so here and say why no probe means "
         "anything.")
+
+
+def test_every_op_runs_on_the_calling_thread():
+    """**A divergence from torch, pinned against this library rather than against it.**
+
+    `get_num_threads()` answers `1` here and the machine's core count in torch — 12 on
+    the laptop that freezes the golden, and 16 for the interop pair, its own two numbers
+    disagreeing because both derive from it. That is why the value cannot go in the
+    golden: frozen, it would pass on one laptop and fail on the next.
+
+    Both names were declined for exactly that, and the reason carried a second sentence
+    that does not follow from the first — *so the name cannot exist.* The golden is one
+    place a value can be pinned and not the only one. `parity.ts` is the other, and its
+    own comment says what it is for: **write a divergence in a comment only and the next
+    person changes it without reading the comment.** `nn.Parameter` not sharing storage
+    is held there for the same reason; this is the Python side of the same idea.
+
+    So changing the 1 goes red here, and that is the moment somebody decides again
+    whether the divergence was meant.
+    """
+    assert L.get_num_threads() == 1, (
+        f"get_num_threads() answers {L.get_num_threads()}. It is 1 because every op runs "
+        "on the calling thread — if that stopped being true, this library grew a thread "
+        "pool and the reason on `set_num_threads` needs re-reading first.")
+    assert L.get_num_interop_threads() == 1, (
+        f"get_num_interop_threads() answers {L.get_num_interop_threads()}, and there is "
+        "no pool between ops either.")
+    # **And the writing half is still absent**, which is what makes the 1 true rather
+    # than merely reported: a setter that took a number nothing reads would leave this
+    # assertion passing while the caller believed otherwise.
+    for name in ("set_num_threads", "set_num_interop_threads"):
+        assert not hasattr(L, name), (
+            f"`{name}` arrived. Its reason is measured — `SharedArrayBuffer` is "
+            "`undefined` and `crossOriginIsolated` is false, so a pool has no shared "
+            "buffer to work over — and if that changed, this test is where the pair "
+            "gets decided together rather than one at a time.")

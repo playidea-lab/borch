@@ -482,3 +482,26 @@ export function isWarnAlwaysEnabled(): boolean {
 export function getFloat32MatmulPrecision(): string {
   return "highest";
 }
+
+/**
+ * **`1`, and torch answers something else** — 12 on the machine that freezes the
+ * golden, because torch derives it from the core count.
+ *
+ * That divergence is why these were declined: the value cannot go in the golden, where
+ * it would pass on one laptop and fail on the next. But the golden is one place a value
+ * can be pinned and not the only one, and `parity.ts` is the other — it already pins
+ * `nn.Parameter` not sharing storage for the same reason, and says why: a divergence
+ * written in a comment alone is one the next person changes without reading it.
+ *
+ * `1` is the truth here. Every op runs on the calling thread; `setNumThreads` is absent
+ * because `SharedArrayBuffer` is `undefined` and a pool would have no shared buffer to
+ * work over.
+ */
+export function getNumThreads(): number {
+  return 1;
+}
+
+/** `1`, as `getNumThreads`. There is no pool between ops either. */
+export function getNumInteropThreads(): number {
+  return 1;
+}

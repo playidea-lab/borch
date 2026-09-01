@@ -1636,6 +1636,18 @@ def get_float32_matmul_precision():
     return str(_ts.getFloat32MatmulPrecision())
 
 
+def get_num_threads():
+    """**1** — every op runs on the calling thread. torch answers the machine's core
+    count, so this parts from it deliberately; the 1 is pinned in `parity.ts` rather
+    than in the golden, which could not hold a number that moves per laptop."""
+    return int(_ts.getNumThreads())
+
+
+def get_num_interop_threads():
+    """1, as `get_num_threads`. There is no pool between ops either."""
+    return int(_ts.getNumInteropThreads())
+
+
 def as_tensor(data, dtype=None):
     from ._base import tensor as _t
     return data if isinstance(data, Tensor) else _t(data, dtype)

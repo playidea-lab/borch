@@ -497,15 +497,18 @@ SKIPPED = {
     # counted is visible, **not counted for a false reason** is not.
     #
     # What is actually missing is two things, and neither is a thread.
-    "get_num_threads":
-        "**the answer is a property of the machine, so there is nothing to compare it "
-        "to.** Measured on the machine that freezes the golden, torch answers 12 here "
-        "and 16 for the interop pair — its own two numbers disagree because both are "
-        "derived from the core count. Frozen, that is a case that passes on one laptop "
-        "and fails on the next, which is the one thing the golden may not be. This "
-        "library runs its ops on the calling thread, so the honest answer is 1, and 1 "
-        "against torch's 12 is a divergence by design rather than a defect to find",
-    "get_num_interop_threads": "as `get_num_threads` — the machine's number, not ours",
+    # **`get_num_threads` and its interop pair were here and are built.** The row said
+    # the answer is a property of the machine so there is nothing to compare it to —
+    # true, and it was carrying a second sentence that does not follow from it: *so the
+    # name cannot exist.* The value cannot go in **the golden**, which is one place a
+    # value can be pinned and not the only one.
+    #
+    # `parity.ts` is the other, and its own comment says what it is for: *write a
+    # divergence in a comment only and the next person changes it without reading the
+    # comment.* `nn.Parameter` not sharing storage is pinned there for exactly this
+    # reason. So the getters answer **1** — the truth about a library that runs its ops
+    # on the calling thread — the golden asks only what holds on both sides (a positive
+    # integer), and the 1 is pinned against this library rather than against torch.
     "set_num_threads":
         "**`SharedArrayBuffer` is `undefined` and `crossOriginIsolated` is false** — "
         "measured in `site/index.html` by `tests/browser/platform_claims.py`, and the "

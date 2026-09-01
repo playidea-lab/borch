@@ -10,7 +10,8 @@
  */
 
 import {
-  data, device, type DType, igamma, igammac, init, keepAlive, linalg, manualSeed, nn,
+  data, device, type DType, getNumInteropThreads, getNumThreads, igamma, igammac, init,
+  keepAlive, linalg, manualSeed, nn,
   noGrad, optim, polygamma, scope, slice, stft, Tensor, vision,
 } from "../src/index.js";
 
@@ -160,6 +161,14 @@ export async function report(): Promise<Report> {
     const after = await src.toArray();
     want("Parameter does not share storage — here we part from torch",
       after[0] === 1, `first slot of the original ${after[0]}`);
+    // **The third place we part from torch, pinned the same way.** `getNumThreads()`
+    // answers 1 and torch answers the machine's core count — 12 on the laptop that
+    // freezes the golden. That is why the value cannot be frozen there, and why it is
+    // held here instead: 1 is the truth about a library whose ops run on the calling
+    // thread, and changing it should go red on the spot.
+    want("getNumThreads is 1 — here we part from torch",
+      getNumThreads() === 1 && getNumInteropThreads() === 1,
+      `${getNumThreads()} intra, ${getNumInteropThreads()} interop`);
   })();
   // **A plain `requiresGrad` tensor counts as a parameter too.** torch counts only what
   // is wrapped in `Parameter` and does not count this (measured) — move the rule that way

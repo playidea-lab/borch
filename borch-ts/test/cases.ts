@@ -29,6 +29,7 @@ import {
   areDeterministicAlgorithmsEnabled, getDeterministicDebugMode,
   getFloat32MatmulPrecision, isAnomalyCheckNanEnabled, isAnomalyEnabled,
   isDeterministicAlgorithmsWarnOnlyEnabled, isWarnAlwaysEnabled,
+  getNumInteropThreads, getNumThreads,
 } from "../src/index.js";
 import { cudnnIsAcceptable, isVulkanAvailable, narrowCopy, segmentReduce }
   from "../src/index.js";
@@ -2339,6 +2340,18 @@ function addOps(out: Map<string, Case>): void {
   // `"highest"` is full float32 and no TF32 — what these shaders do, rather than a
   // stand-in for a switch that is missing.
   out.set("top::get_float32_matmul_precision", () => getFloat32MatmulPrecision());
+
+  // **The two thread counts, asked for the part that holds on both sides.** The value
+  // itself parts from torch — 1 here against the machine's core count there — so it is
+  // pinned in `parity.ts` beside `nn.Parameter`, not frozen here where it would pass on
+  // one laptop and fail on the next. `int` is Python's spelling for what JS calls a
+  // number, so the case carries Python's word.
+  for (const [name, fn] of [
+    ["get_num_threads", getNumThreads],
+    ["get_num_interop_threads", getNumInteropThreads],
+  ] as [string, () => number][]) {
+    out.set(`top::${name}(양수 정수인가)`, () => `int ${verdict(fn() >= 1)}`);
+  }
 
   out.set("ops::box_area", () => ops.boxArea(boxes()));
   // The same boxes read three ways. **`fmt` is a claim about four numbers that look

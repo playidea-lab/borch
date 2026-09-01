@@ -400,7 +400,11 @@ CEILINGS = {
     # ten autocast questions came off a glob that covered twenty-two, and the row asking
     # that the getter refuses an unknown device is spelled in the Python table first —
     # so this side spells it identically or reconciles against nothing.
-    "borch-ts/test": 4899,
+    # 4899 → 4905. Six, and one name twice: `(양수 정수인가)` on the two thread counts.
+    # Their value parts from torch — 1 here against the machine's core count — so the
+    # golden asks only the part that holds on both sides, and the question has to be
+    # spelled identically in the two tables or the row compares against nothing.
+    "borch-ts/test": 4905,
 }
 
 

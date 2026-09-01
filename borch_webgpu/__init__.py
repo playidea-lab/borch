@@ -130,6 +130,7 @@ from ._ops import (                                      # noqa: E402,F401
     are_deterministic_algorithms_enabled, get_deterministic_debug_mode,
     get_float32_matmul_precision, is_anomaly_check_nan_enabled, is_anomaly_enabled,
     is_deterministic_algorithms_warn_only_enabled, is_warn_always_enabled,
+    get_num_interop_threads, get_num_threads,
     # Top-level linear algebra. **Only the three whose names collide with the
     # `linalg` namespace are written out** — `__getattr__` passes the rest to the
     # first argument's method.
