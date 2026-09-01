@@ -9694,7 +9694,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const room = other.abs().mul(Tensor.full([], rtol)).add(Tensor.full([], atol));
     const near = this.sub(other).abs().binary("le", room);
     if (!equalNan) return near;
-    const bothNan = this.binary("ne", this).mul(other.binary("ne", other));
+    // **`x != x` is not a NaN test in WGSL.** The spec does not promise NaN
+    // semantics, so an implementation may assume there are none and fold the
+    // comparison to false — measured: written that way this line answered `false`
+    // for a NaN pair under SwiftShader and `true` under Metal, same build, same
+    // hour, and every headless run of the golden was red on one case for it.
+    //
+    // `isnan` reads the exponent and mantissa as bits (`is_nan` in `kernels.ts`),
+    // and that comment already says why: seen as bits there is nothing to fold. The
+    // safe primitive existed; this was the one place that did not reach for it.
+    const bothNan = this.isnan().mul(other.isnan());
     return near.add(bothNan).binary("gt", Tensor.full([], 0));
   }
 

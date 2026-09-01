@@ -3602,16 +3602,24 @@ def new_function_cases(inp=None):
     # says `True`. A fixture without a NaN in it cannot tell the two apart, which is
     # why the row above did not.
     #
-    # **This row parts on a software adapter and agrees on a real GPU** — measured the
-    # same hour, same build: `1 of 3 booleans differ` under SwiftShader, 4436/4436
-    # under `apple / metal-3`. borch.ts finds both NaNs with `x != x`, and WGSL does
-    # not promise NaN semantics — an implementation is allowed to fold that to false.
-    # So a headless run (`--headless` picks SwiftShader) reports this one red and
-    # nothing is wrong with the library.
+    # **This row parted on a software adapter, and the adapter was not the defect.**
+    # Measured the same hour, same build: `1 of 3 booleans differ` under SwiftShader,
+    # all agreeing under `apple / metal-3`. The note here said so and stopped there —
+    # *nothing is wrong with the library, the next person should read this instead of
+    # hunting a bug that is the adapter's*.
     #
-    # Written here rather than in a skip list because it is not a divergence to
-    # forgive: on the machines this ships to it is correct, and the next person to run
-    # headless should read this instead of hunting a bug that is the adapter's.
+    # That was wrong twice over. CI runs headless, so headless is not an unusual way
+    # to run this: **main was red on this case and a peer session had to come and say
+    # so.** And the cause was ours — borch.ts found both NaNs with `x != x`, and WGSL
+    # does not promise NaN semantics, so an implementation may assume there are none
+    # and fold it to false. `kernels.ts` already had a bit-reading `is_nan` written for
+    # exactly that, with a comment saying *seen as bits there is nothing to fold*;
+    # `isclose` was the one place that did not reach for it.
+    #
+    # The lesson is about the shape of the first verdict rather than about NaN. *The
+    # values are right on the machines that matter* is a sentence that ends an
+    # investigation, and it ended this one one step early — one adapter disagreeing
+    # about a primitive is a question, not a footnote.
     _nan_pair = np.array([1.0, np.nan, 3.0], dtype=np.float32)
     add("isclose(equal_nan)",
         lambda L: L.isclose(L.tensor(_nan_pair), L.tensor(_nan_pair),
