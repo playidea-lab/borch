@@ -418,6 +418,19 @@ MODULES = {
     "transforms.v2": frozenset({"vision_v2_twins"}),
     "transforms.v2.functional": frozenset({"vision_v2"}),
     "datasets": frozenset({"datasets"}),
+    # **Two namespaces arrived on the name axis and this file reads that axis's list.**
+    # `ts_axis.SPACES` gained `fft` and `special`, and `compare()` here walks the same
+    # spaces — so the two are one list with two tables behind it, and adding to one
+    # without the other is a `KeyError` rather than a silent miss. That is the good
+    # direction for the coupling to fail in, and it is why this row is written rather
+    # than the lookup being made forgiving.
+    #
+    # `special` maps to `special_names` and not to `special`: the second is the
+    # incomplete-gamma and polygamma **kernels**, and pairing a namespace's leaf names
+    # against a kernel module's declarations manufactures findings, which is the
+    # paragraph at the head of this table.
+    "fft": frozenset({"fft"}),
+    "special": frozenset({"special_names"}),
 }
 
 

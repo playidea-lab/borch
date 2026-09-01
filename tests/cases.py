@@ -1692,6 +1692,23 @@ SPECIAL_PREFIX = "special::"
 # Python computes it instead, the name is still absent for anyone using borch.ts, and the golden
 # cases go green through the binding. This is written down so that cover is not built again.
 #
+# **`special::수학::` is the thirty-four that have bodies of their own.** The
+# twenty-three forwarders in that namespace run on all three sides — they point at
+# arithmetic the golden already held — and these do not: the Bessel and Airy
+# approximations, the twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin and the
+# nine tail-safe forms are numpy in `borch/_ops.py` and have no WGSL behind them.
+#
+# **The binding refuses them by name rather than forwarding blindly**, which is why
+# they arrive here as `AttributeError: special.bessel_j0 is not in this subset` instead
+# of as a wrong number. That refusal is the design working: `_Special` over there holds
+# a written list precisely so a name torch has and this side lacks cannot resolve to
+# something plausible.
+#
+# The paragraph above about `linalg.eig` applies here word for word — the binding
+# *could* fill these in with numpy on the Python side and the cases would go green,
+# and the names would still be absent for anyone holding borch.ts. That is the cover
+# this list exists to refuse. `tests/ts_axis.py` carries the thirty-four by name.
+#
 # **`linalg::lstsqfield::` is here for a smaller reason and a plainer one.** torch's
 # `linalg.lstsq` returns four fields; borch.ts returns the solution as a bare tensor,
 # because it is `pinverse` applied to `B` and the other three would each be a second
@@ -1700,7 +1717,7 @@ SPECIAL_PREFIX = "special::"
 # Filling them in with numpy on the Python side is the cover the paragraph above
 # warns against: the names would still be absent for anyone holding borch.ts, and the
 # cases would go green. The solution itself is asked on both sides, batched.
-CORE_ONLY_PREFIXES = ("linalg::eig::", "linalg::lstsqfield::")
+CORE_ONLY_PREFIXES = ("linalg::eig::", "linalg::lstsqfield::", "special::수학::")
 
 
 def complex_cases(inp=None):
@@ -1971,6 +1988,112 @@ def special_cases(inp=None):
 
     add("erf(out=)", into)
     add("erf(out=)/같은 객체", into_id)
+
+    # ── the thirty-four that are arithmetic ──────────────────────────────────
+    #
+    # Everything above this line forwards to a body the golden already held. These have
+    # bodies of their own, and **every one of them is asked where it breaks rather than
+    # where it is easy.** Each was declined until measured, under a reason that named a
+    # real hazard; the hazard is what the inputs below are chosen to hit.
+    #
+    # The orthogonal polynomials are asked **outside their orthogonality interval**.
+    # Chebyshev's `T` is defined on [-1, 1] and torch evaluates the polynomial anywhere:
+    # an implementation that clamped, or answered NaN outside, agrees on every textbook
+    # input and parts at x = 2. A negative order is 0 and is asked too.
+    # **These carry a second prefix** so `CORE_ONLY_PREFIXES` can name them: the
+    # twenty-three above run on all three sides and these thirty-four are numpy in the
+    # core with no WGSL behind them. Splitting the namespace by prefix rather than by a
+    # per-case list is what keeps the two claims from being one.
+    def add_math(name, fn):
+        cases.append((SPECIAL_PREFIX + "수학::" + name, fn))
+
+    poly_x = np.array([-2.0, -1.5, -0.6, 0.0, 0.3, 0.9, 1.0, 2.0, 3.7],
+                      dtype=np.float32)
+    for name in ("chebyshev_polynomial_t", "chebyshev_polynomial_u",
+                 "chebyshev_polynomial_v", "chebyshev_polynomial_w",
+                 "shifted_chebyshev_polynomial_t", "shifted_chebyshev_polynomial_u",
+                 "shifted_chebyshev_polynomial_v", "shifted_chebyshev_polynomial_w",
+                 "hermite_polynomial_h", "hermite_polynomial_he",
+                 "laguerre_polynomial_l", "legendre_polynomial_p"):
+        # n = 5 is past the point where a wrong second term or a wrong step coefficient
+        # has compounded into a visible difference; n = 0, 1 and -1 are the three the
+        # recurrence never reaches.
+        for order in (0, 1, 5, -1):
+            add_math(f"{name}(n={order})",
+                     lambda L, n=name, k=order:
+                     getattr(L.special, n)(L.tensor(poly_x), k))
+
+    # **The scaled and tail-safe nine, at the tails.** A middle-of-the-range input
+    # passes against the composition each of these exists to replace, so the numbers
+    # here are the ones where the composition is `inf` or `nan`: `erfc(x)·exp(x²)` from
+    # x=10, `log(ndtr(x))` from x=-6, `i0(x)·exp(-|x|)` at x=90.
+    tails = {
+        "erfcx": np.array([-5.0, -1.0, 0.0, 1.0, 10.0, 26.0, 100.0], dtype=np.float32),
+        "ndtr": np.array([-8.0, -3.0, 0.0, 1.0, 5.0], dtype=np.float32),
+        "log_ndtr": np.array([-40.0, -10.0, -6.0, -1.0, 0.0, 2.0], dtype=np.float32),
+        "ndtri": np.array([0.001, 0.1, 0.5, 0.9, 0.999], dtype=np.float32),
+        "entr": np.array([-1.0, 0.0, 0.25, 0.5, 1.0, 2.0], dtype=np.float32),
+        "i0e": np.array([0.0, 1.0, 15.0, 50.0, 90.0, 200.0], dtype=np.float32),
+        "i1": np.array([-5.0, -1.0, 0.0, 0.5, 2.0, 10.0], dtype=np.float32),
+        "i1e": np.array([-200.0, -1.0, 0.0, 1.0, 15.0, 90.0], dtype=np.float32),
+        "modified_bessel_i1": np.array([-3.0, 0.0, 0.5, 2.0, 10.0], dtype=np.float32),
+        "spherical_bessel_j0": np.array([-3.0, 0.0, 0.5, 2.0, 10.0], dtype=np.float32),
+        # **The seam at 10 is asked from both sides.** The series and the asymptotic
+        # meet there, and the first crossover tried (2) was worth two digits — `k₀(2)`
+        # came back 0.0906 against 0.1139, on the two points either side of the seam
+        # and nowhere else.
+        "modified_bessel_k0": np.array([0.01, 0.5, 2.0, 9.9, 10.0, 10.1, 20.0],
+                                       dtype=np.float32),
+        "modified_bessel_k1": np.array([0.01, 0.5, 2.0, 9.9, 10.0, 10.1, 20.0],
+                                       dtype=np.float32),
+        "scaled_modified_bessel_k0": np.array([0.01, 0.5, 2.0, 9.9, 10.1, 80.0],
+                                              dtype=np.float32),
+        "scaled_modified_bessel_k1": np.array([0.01, 0.5, 2.0, 9.9, 10.1, 80.0],
+                                              dtype=np.float32),
+        # `J` and `Y` change method at 8. `Y` has a pole at 0 and is `nan` below it,
+        # `J₀` is even and `J₁` is odd — a sign dropped there is invisible on the
+        # positive half alone.
+        "bessel_j0": np.array([-20.0, -8.1, -7.9, -1.0, 0.0, 2.4, 7.9, 8.1, 20.0],
+                              dtype=np.float32),
+        "bessel_j1": np.array([-20.0, -8.1, -7.9, -1.0, 0.0, 2.4, 7.9, 8.1, 20.0],
+                              dtype=np.float32),
+        "bessel_y0": np.array([0.001, 0.5, 2.4, 7.9, 8.0, 8.1, 20.0],
+                              dtype=np.float32),
+        "bessel_y1": np.array([0.001, 0.5, 2.4, 7.9, 8.0, 8.1, 20.0],
+                              dtype=np.float32),
+        # The Airy seam is at 8 as well, and the negative side oscillates — the
+        # envelope and the phase are two ways to be wrong and only the negative
+        # arguments show the second.
+        "airy_ai": np.array([-30.0, -12.0, -8.1, -7.9, -1.0, 0.0, 1.0, 7.9, 8.1, 12.0],
+                            dtype=np.float32),
+    }
+    for name, xs in tails.items():
+        add_math(name, lambda L, n=name, a=xs: getattr(L.special, n)(L.tensor(a)))
+
+    # **`xlog1py` is asked at y = 1e-12**, which is the whole of it: written as
+    # `xlogy(x, 1+y)` the `1 + y` rounds the argument away and the answer becomes 0
+    # where torch says 1e-12.
+    _xl_x = np.array([1.0, 1.0, 1.0, 0.0, 2.0, -1.0], dtype=np.float32)
+    _xl_y = np.array([1.0, 1e-8, 1e-12, -1.0, 0.5, 3.0], dtype=np.float32)
+    add_math("xlog1py",
+             lambda L: L.special.xlog1py(L.tensor(_xl_x), L.tensor(_xl_y)))
+
+    # **`zeta` against two closed forms.** `ζ(2,1)` is π²/6 and `ζ(4,1)` is π⁴/90, so
+    # these two rows are checked by arithmetic as well as by torch. `x ≤ 1` is `nan`
+    # and `ζ(1,1)` is `inf` — measured, and a partial sum returned there instead would
+    # be a plausible number in place of a refusal.
+    _z_x = np.array([2.0, 3.0, 4.0, 2.5, 1.5, 6.0, 10.0, 2.0, 1.0, 0.5],
+                    dtype=np.float32)
+    _z_q = np.array([1.0, 1.0, 1.0, 2.0, 1.0, 3.0, 0.5, 10.0, 1.0, 1.0],
+                    dtype=np.float32)
+    add_math("zeta", lambda L: L.special.zeta(L.tensor(_z_x), L.tensor(_z_q)))
+
+    # `multigammaln` is `mvlgamma`, and the pair is asked so the two spellings cannot
+    # drift into two bodies.
+    _mg = np.array([2.5, 3.0, 4.5], dtype=np.float32)
+    for p in (1, 2, 3):
+        add_math(f"multigammaln(p={p})",
+                 lambda L, k=p: L.special.multigammaln(L.tensor(_mg), k))
 
     # **The two that were nearly missed.** `gammainc` and `gammaincc` are `igamma` and
     # `igammac`, and the first sweep of this namespace put them in the thirty-seven

@@ -208,6 +208,23 @@ SHIFTED = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    "fft": 0,
+    # **Two, and both are `_stacklevel`.** `torch.special.softmax` is
+    # `(input, dim, _stacklevel, dtype)` and borch.ts's is `(input, dim, dtype)`, so
+    # `dtype` sits one place earlier and the row is a genuine shift by this axis's
+    # rule — the rule being about position rather than intent, deliberately, because a
+    # rule that read intent would have excused the `RandomCrop` row two entries down
+    # that was a real defect.
+    #
+    # `_stacklevel` is how far up the stack torch points a deprecation warning. It is
+    # Python's `warnings` module and nothing else; there is no stack to point at from
+    # TypeScript and no warning to raise. **The core carries it** — it has to, or
+    # `softmax(x, 1, dtype=…)` given positionally would land wrongly against torch —
+    # and borch.ts does not, and that is the whole of the difference.
+    #
+    # Frozen at 2 rather than excused by a rule, so the day borch.ts's pair grows a
+    # third parameter for some other reason, this number moves and somebody reads it.
+    "special": 2,
     "utils.data": 0,
     # **`transforms` was 1 and is 0**, and the row it was added for is worth keeping.
     #
@@ -545,6 +562,11 @@ UNALIGNED = {
     # here was a divergence of behaviour: the two libraries answered the same values
     # all along and disagreed about what to call the matrix.
     "linalg": 0,
+    # Both new namespaces align: every name that pairs takes its arguments under the
+    # same names in the same order. `special`'s only divergence is positional
+    # (`_stacklevel`) and is counted as a shift rather than a misalignment.
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     "transforms": 0,
     # Two, and both are the picture argument: torchvision's functional takes `img`
@@ -816,6 +838,10 @@ RENAMED = {
     # generalised. The peer's probe found 9 and 15. A summary is a claim about every
     # row, and this one had been checked against six.
     "linalg": 0,
+    # Neither is short: `special`'s twenty declined tails are all `out=`, which is
+    # borch.ts's global decision and counted in its own column rather than here.
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     # **Three, and none of them is camel case** — `kernelSize` folds onto
     # `kernel_size` and lands in `agree`. What is left is three places that chose a
@@ -1432,6 +1458,12 @@ SHORTER = {
     # `driver="gels"`, which torch's does not read at all: 0.79 where torch says 3.50.
     # Every case before these asked the default, where neither branch runs.
     "linalg": 0,
+    # Neither is short. `special`'s twenty missing tails are all `out=`, which this axis
+    # counts in the `declined` column against `TAIL_NOT_IN_TS` rather than here — the
+    # distinction being that a tail with a written reason is a decision and a tail
+    # without one is a hole.
+    "fft": 0,
+    "special": 0,
     # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
     # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
     # that they exist at all.
@@ -1558,6 +1590,8 @@ FREE_FUNCTION = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
@@ -1602,6 +1636,8 @@ TWO_DECLARATIONS = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
@@ -1639,6 +1675,13 @@ DECLINED = {
     # news when `SHORTER` fell by the same six**, which is the pairing the test enforces
     # by holding both — and this time `SHORTER["linalg"]` went to zero.
     "linalg": 29,
+    "fft": 0,
+    # **20, and all twenty are `out=`.** Same decision as `linalg`'s 29 one row up:
+    # borch.ts has no `out=` anywhere and the Python surfaces add it from a written
+    # table. `special`'s eighteen out-taking names plus `gammainc`/`gammaincc` are the
+    # twenty; `softmax` and `log_softmax` are not among them because torch does not
+    # give *them* an `out=` either, which is measured rather than assumed.
+    "special": 20,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
@@ -1714,6 +1757,8 @@ KEYWORD_GAP = {
     "optim": 5,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    "fft": 0,
+    "special": 0,
     # 0 → 1: `DataLoader`, which used to be `agree to the bag` and measured nothing past
     # `dataset`. Opened, it names four members borch.ts has not — `inOrder`,
     # `persistentWorkers`, `pinMemoryDevice`, `prefetchFactor` — every one of them about
@@ -1767,6 +1812,13 @@ UNREAD = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    # **Two, and both are `stft`/`istft`** — torch declares them in C, so there is no
+    # Python signature to read and the pair cannot be judged on this axis at all. The
+    # same bucket `Tensor`'s fifteen sit in, and the reason the column exists: an
+    # unreadable row is not an agreeing row, and folding the two together is how
+    # `Tensor` once read as three agreements and finished.
+    "fft": 2,
+    "special": 0,
     "utils.data": 2,
     "transforms": 0,
     "transforms.functional": 0,

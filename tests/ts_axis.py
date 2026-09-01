@@ -107,6 +107,14 @@ SPACES = frozenset({
     # because it was off the *generator's* list too, so this axis could not have seen
     # it even if it had been named here.
     "ops", "transforms.v2", "transforms.v2.functional", "datasets",
+    # **`fft` and `special` were off this list for the same reason `transforms` was:
+    # nobody had put them on it.** Both were declined whole in `torch_gap.py` until the
+    # day that blanket was measured and found false, and adding them there did not add
+    # them here — so a name the core gained and borch.ts did not had no ledger at all
+    # between the two. `special` matters most: thirty-four of its names are numpy in
+    # `borch/_ops.py` with no WGSL behind them, and without this row the only thing
+    # recording that would be a prefix in the golden's core-only list.
+    "fft", "special",
 })
 
 
@@ -403,6 +411,36 @@ DELIBERATE: dict[str, str] = {
     # side has not got, rather than a body it has not been given. Carrying the names
     # across would mean giving `Image` a rank, which is a change to every transform in
     # that file and not thirty-three aliases.
+    # **`special`'s thirty-four, and the split inside that namespace is the point.**
+    # Twenty-three of its names forward to arithmetic borch.ts already has and run on
+    # all three sides. These have bodies of their own — the Bessel and Airy
+    # approximations, twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin, and the
+    # nine written in a tail-safe form because the obvious composition is `inf` where
+    # the name is reached for — and every one of them is numpy in `borch/_ops.py`.
+    #
+    # **This is a body somebody could write, not a mechanism that side lacks**, which
+    # is the opposite of the `*_video` row below it. Marked per name rather than as a
+    # group so they come off one at a time, and the count in `test_ts_axis.py` is what
+    # records how far along that is.
+    #
+    # The golden's `special::수학::` prefix is core-only for the same reason, and the
+    # binding refuses them by name rather than forwarding — so a caller gets *not in
+    # this subset* instead of a plausible number.
+    **{f"special::{n}":
+       "arithmetic of its own rather than a forward — numpy in `borch/_ops.py` with no "
+       "WGSL behind it. A body to write, not a mechanism borch.ts has not got"
+       for n in ("airy_ai", "bessel_j0", "bessel_j1", "bessel_y0", "bessel_y1",
+                 "chebyshev_polynomial_t", "chebyshev_polynomial_u",
+                 "chebyshev_polynomial_v", "chebyshev_polynomial_w",
+                 "shifted_chebyshev_polynomial_t", "shifted_chebyshev_polynomial_u",
+                 "shifted_chebyshev_polynomial_v", "shifted_chebyshev_polynomial_w",
+                 "hermite_polynomial_h", "hermite_polynomial_he",
+                 "laguerre_polynomial_l", "legendre_polynomial_p",
+                 "entr", "erfcx", "i0e", "i1", "i1e", "log_ndtr",
+                 "modified_bessel_i1", "modified_bessel_k0", "modified_bessel_k1",
+                 "multigammaln", "ndtr", "ndtri",
+                 "scaled_modified_bessel_k0", "scaled_modified_bessel_k1",
+                 "spherical_bessel_j0", "xlog1py", "zeta")},
     **{f"transforms.v2.functional::{n}_video":
        "borch.ts's `Image` is `{data, height, width, channels}` — one picture by "
        "construction, with no axis for frames. The core's kernels count from the end "

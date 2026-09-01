@@ -503,77 +503,35 @@ SKIPPED = {
     # one, because one kind is arithmetic we lack and the other is arithmetic we have
     # in a form that breaks where the name exists to hold.
     #
-    # **The special-function families.** Nothing here approximates them, they are not
-    # one-liners over anything present, and scipy is the dependency this library does
-    # not take.
-    "special.airy_ai": "the Airy function — no series or asymptotic for it here",
-    "special.bessel_j*": "a Bessel function of the first kind — none of the Bessel "
-                         "family is implemented here beyond `i0`",
-    "special.bessel_y*": "a Bessel function of the second kind — as `bessel_j0`",
-    "special.modified_bessel_i1": "as the Bessel family above. `i0` is here and `i1` "
-                                  "is a different series, not a step from it",
-    "special.modified_bessel_k*": "as the Bessel family above",
-    "special.scaled_modified_bessel_k*": "as the Bessel family above",
-    "special.spherical_bessel_j0": "as the Bessel family above",
-    "special.i1": "the first-order modified Bessel — `i0` is here, `i1` is its own "
-                  "series",
-    "special.i1e": "as `i1`, and exponentially scaled on top of it",
-    # **Two rows, not one with a leading `*`.** `_leaf_match` takes a trailing wildcard
-    # only, so `special.*chebyshev_polynomial_*` matched nothing and the eight names
-    # came back as *wants reviewing* — a row that looks like a reason and is not one.
-    "special.chebyshev_polynomial_*": "an orthogonal-polynomial family — a recurrence "
-                                      "this library does not carry",
-    "special.shifted_chebyshev_polynomial_*": "the same family on [0, 1] — as above",
-    "special.hermite_polynomial_*": "an orthogonal-polynomial family — as the "
-                                    "Chebyshevs",
-    "special.laguerre_polynomial_l": "an orthogonal-polynomial family — as the "
-                                     "Chebyshevs",
-    "special.legendre_polynomial_p": "an orthogonal-polynomial family — as the "
-                                     "Chebyshevs",
-    "special.zeta": "the Hurwitz zeta — its own summation and not a step from "
-                    "`polygamma`, which is where torch shares code the other way",
-    "special.multigammaln": "the multivariate log-gamma. `mvlgamma` at the top level "
-                            "is this function and **is here** — this row is the "
-                            "`special` spelling of it, left out because the two "
-                            "disagree on argument order and that wants checking "
-                            "rather than guessing",
-
-    # **The five that exist because the obvious composition is wrong**, with where it
-    # breaks measured rather than asserted. Every one of them is `f(x)` written out of
-    # pieces this library has, and every one of them is right in the middle and
-    # useless at the end — which is precisely the range the name is reached for.
+    # **Thirty-four rows stood here and every one of them is gone, by being built.**
+    # They are worth an account, because the block came apart in a particular order and
+    # each step made the next one visible.
     #
-    # Writing them as the composition would produce cases that agree with torch at
-    # every ordinary input and hand back `inf` in the tail. That is the shape this
-    # repository refuses everywhere else: a wrong answer is worse than an absent one,
-    # and a wrong answer that passes the tests is worse again.
-    "special.erfcx": "`erfc(x)·exp(x²)`, and that composition is `inf` from x=10 and "
-                     "`nan` by x=26 — measured, against the true 0.056141 and "
-                     "0.0216836. The scaling is the whole function; without it this "
-                     "is `erfc`, which is here",
-    "special.log_ndtr": "`log(ndtr(x))`, and that composition is `-inf` from x=-6 — "
-                        "measured, against the true -20.7368, and -804.608 at x=-40. "
-                        "The left tail is the only reason this name exists",
-    "special.i0e": "`i0(x)·exp(-|x|)`, and that composition is `inf` at x=90 and "
-                   "`nan` at 200 — measured, against the true 0.042111 and 0.0282272",
-    "special.xlog1py": "`x·log1p(y)` with the 0·log rule. Written as "
-                       "`xlogy(x, 1+y)` the `1+y` rounds away small y: at y=1e-12 "
-                       "torch answers 1e-12 and the composition answers 0 (measured) "
-                       "— the whole point of the name, gone",
-    "special.entr": "`-x·log(x)` with x=0 defined as 0 and x<0 as -inf. The plain "
-                    "composition is `nan` at both (measured), and both are the "
-                    "boundary an entropy is evaluated at",
-
-    # **The two that are safe compositions, and are declined anyway — for now.**
-    # `ndtr` is `(1+erf(x/√2))/2` and `ndtri` is `√2·erfinv(2u−1)`, both measured
-    # equal to torch across the ordinary range with no tail hazard found. They are a
-    # step past forwarding — two lines of real arithmetic apiece — and the pass that
-    # produced this namespace was the forwarding one. Written down as reachable
-    # rather than left looking like the Bessels, which they are not.
-    "special.ndtr": "the standard normal CDF. `(1 + erf(x/√2))/2` from parts that are "
-                    "here and measured equal to torch — arithmetic rather than "
-                    "forwarding, so it did not come in with the twenty-two",
-    "special.ndtri": "the normal quantile. `√2·erfinv(2u−1)`, as `ndtr` above",
+    # *Thirteen were forwarders nobody had checked.* `multigammaln` said the two
+    # spellings *disagree on argument order and that wants checking rather than
+    # guessing* — checked: they agree exactly, same order, at p = 1, 2 and 3. A row
+    # that says **this wants measuring** and is filed under *declined* is a deferral
+    # with the word "measure" in it. `modified_bessel_i1` said `i1` is *a different
+    # series, not a step from `i0`*, which was true and was about the wrong pair: once
+    # `i1` existed this name was a second spelling of it. `spherical_bessel_j0` is
+    # `sin(x)/x`.
+    #
+    # *Twelve were one recurrence.* The orthogonal polynomials differ in three places
+    # each — first term, second term, step — and reading them as twelve families is
+    # what made them look like twelve pieces of work.
+    #
+    # *Nine were the compositions this block was right about*, and being right about
+    # them is why they took the longest: `erfc(x)·exp(x²)` is `inf` from x=10,
+    # `log(ndtr(x))` is `-inf` from x=-6, `i0(x)·exp(-|x|)` is `inf` at x=90. Each is
+    # written in the form that does not form the overflowing factor at all — the
+    # continued fraction, the scaled series, the sum of logarithms.
+    #
+    # The last four (`bessel_j0`, `j1`, `y0`, `y1`) and `airy_ai` are minimax tables
+    # and asymptotics, transcribed rather than derived, and **the transcription is what
+    # the golden checks**: a mistyped minimax coefficient does not raise, it moves the
+    # answer in the fifth place.
+    #
+    # What survives is the one name that was never API.
     "special.Tensor": "an imported label — not that namespace's API",
     # **By its name it looks like `nn.ParameterDict`'s counterpart, and it is not.**
     # Measured, its constructor takes a single `torch._C.ScriptModule` and it does not live

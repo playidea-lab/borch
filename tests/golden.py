@@ -173,7 +173,21 @@ def check(lib, path=DEFAULT_PATH, faults=None):
             continue
         if want.shape != got.shape:
             bad.append(f"{name}: shape {want.shape} vs {got.shape}")
-        elif not np.allclose(want, got, atol=ATOL, rtol=RTOL):
+        # **`equal_nan=True`, because a NaN can be the specification.**
+        #
+        # Without it `np.allclose` calls two NaNs different, so **`inf` could be frozen
+        # and `nan` could not** — an arbitrary line that nothing had drawn on purpose.
+        # It surfaced on `special::zeta`, where torch answers `nan` for x ≤ 1 because
+        # the series does not converge there; the case was red while every one of its
+        # positions matched, including which ones were NaN.
+        #
+        # What this gives up is a case that produces NaN *by accident* on both sides —
+        # but such a case was already failing for the wrong reason rather than
+        # succeeding, so nothing that was being caught stops being caught. What it buys
+        # is that a function's refusal region can be held: an implementation that
+        # returned a plausible partial sum where torch says NaN now diverges, and
+        # before this it could not be asked at all.
+        elif not np.allclose(want, got, atol=ATOL, rtol=RTOL, equal_nan=True):
             # **A boolean answer cannot be subtracted**, and this line did it: numpy
             # refuses `-` on booleans, so the first divergence in a boolean case
             # raised a `TypeError` **inside the reporting** and took the whole run
@@ -186,7 +200,20 @@ def check(lib, path=DEFAULT_PATH, faults=None):
                 wrong = int(np.count_nonzero(np.asarray(want) != np.asarray(got)))
                 bad.append(f"{name}: {wrong} of {want.size} booleans differ")
             else:
-                bad.append(f"{name}: max diff {np.abs(want - got).max():.2e}")
+                # **A NaN in either side makes `max` report `nan` and say nothing.**
+                # The same shape as the boolean branch above: the check has found the
+                # difference and cannot name it. `zeta` diverging on its refusal region
+                # printed `max diff nan`, which is true and useless — the positions
+                # that part are the whole of what a reader needs there.
+                pair = np.isnan(np.asarray(want)) != np.isnan(np.asarray(got))
+                if pair.any():
+                    bad.append(f"{name}: {int(pair.sum())} of {want.size} positions "
+                               "are NaN on one side only")
+                else:
+                    finite = np.isfinite(want) & np.isfinite(got)
+                    gap = (np.abs(want[finite] - got[finite]).max()
+                           if finite.any() else float("nan"))
+                    bad.append(f"{name}: max diff {gap:.2e}")
     return bad, len(cases) - skipped
 
 

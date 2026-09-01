@@ -10133,6 +10133,730 @@ def i0_(x):
     return x._inplace(lambda: i0(x), "i0_")
 
 
+# ── the orthogonal polynomials — twelve names, one recurrence ────────────────
+#
+# **They are twelve names and one engine**, and writing them out twelve times is the
+# defect this repository keeps finding. Each family differs in three places only: the
+# first term, the second term, and the coefficients of the three-term step.
+#
+# **Every convention here was measured rather than looked up.** The textbooks agree
+# about the recurrences and say nothing about the two things that actually vary between
+# implementations:
+#
+# * **The argument order is `(x, n)`**, the tensor first. Given `(n, x)` torch answers
+#   the constant 1 — it broadcasts the integer as the input and reads the tensor as an
+#   order — so a pair swapped here returns a real array and raises nothing.
+# * **Nothing is clipped to the orthogonality interval.** Chebyshev's `T` is defined on
+#   [-1, 1] and torch evaluates the polynomial anywhere: `T₃(2)` is 26 and `T₃(-1.5)` is
+#   -9 (measured). An implementation that clamped, or answered NaN outside, would agree
+#   on every textbook input and part on the ones a test sweep produces.
+# * **A negative order is 0**, not an error and not `T₋ₙ = Tₙ` (measured at n = -1).
+#
+# The shifted four are the plain four at `2x − 1`. Checked, not assumed: shifted `T₂` at
+# -1.5 is 31, which is `T₂(-4)`.
+
+def _orthogonal(x, n, first, second, step):
+    """The three-term recurrence, given its two starting terms and its step.
+
+    `step(k, prev, prev2, xv)` is `p_k` from `p_{k-1}` and `p_{k-2}`.
+    """
+    x = _wrap(x)
+    n = int(n)
+    xv = _float_in(_np.asarray(x.data))
+    if n < 0:
+        return x._make(_np.zeros_like(xv), (), None)
+    out = first(xv)
+    if n == 0:
+        return x._make(out, (), None)
+    prev2, prev = out, second(xv)
+    for k in range(2, n + 1):
+        prev2, prev = prev, step(k, prev, prev2, xv)
+    return x._make(prev, (), None)
+
+
+def _chebyshev(kind, shifted):
+    """One Chebyshev family. `kind` sets the second term; all four share the step."""
+    def build(x, n):
+        def second(xv):
+            xx = 2.0 * xv - 1.0 if shifted else xv
+            return {"t": xx, "u": 2.0 * xx, "v": 2.0 * xx - 1.0,
+                    "w": 2.0 * xx + 1.0}[kind]
+
+        def step(_k, prev, prev2, xv):
+            xx = 2.0 * xv - 1.0 if shifted else xv
+            return 2.0 * xx * prev - prev2
+
+        return _orthogonal(x, n, _np.ones_like, second, step)
+    return build
+
+
+chebyshev_polynomial_t = _chebyshev("t", False)
+chebyshev_polynomial_u = _chebyshev("u", False)
+chebyshev_polynomial_v = _chebyshev("v", False)
+chebyshev_polynomial_w = _chebyshev("w", False)
+shifted_chebyshev_polynomial_t = _chebyshev("t", True)
+shifted_chebyshev_polynomial_u = _chebyshev("u", True)
+shifted_chebyshev_polynomial_v = _chebyshev("v", True)
+shifted_chebyshev_polynomial_w = _chebyshev("w", True)
+
+
+def hermite_polynomial_h(input, n):                             # noqa: A002
+    """The **physicists'** Hermite — `H(k) = 2x·H(k−1) − 2(k−1)·H(k−2)`."""
+    return _orthogonal(input, n, _np.ones_like, lambda xv: 2.0 * xv,
+                       lambda k, p, p2, xv: 2.0 * xv * p - 2.0 * (k - 1) * p2)
+
+
+def hermite_polynomial_he(input, n):                            # noqa: A002
+    """The **probabilists'** Hermite — `He(k) = x·He(k−1) − (k−1)·He(k−2)`.
+
+    The two differ by more than a scale factor in the middle of the recurrence, which
+    is why they are two functions rather than one with a flag: `H₂(-1.5)` is 7 and
+    `He₂(-1.5)` is 1.25 (measured), and no constant relates the pair term by term.
+    """
+    return _orthogonal(input, n, _np.ones_like, lambda xv: xv,
+                       lambda k, p, p2, xv: xv * p - (k - 1) * p2)
+
+
+def laguerre_polynomial_l(input, n):                            # noqa: A002
+    """`L(k) = ((2k−1−x)·L(k−1) − (k−1)·L(k−2)) / k`."""
+    return _orthogonal(input, n, _np.ones_like, lambda xv: 1.0 - xv,
+                       lambda k, p, p2, xv: ((2 * k - 1 - xv) * p - (k - 1) * p2) / k)
+
+
+def legendre_polynomial_p(input, n):                            # noqa: A002
+    """`P(k) = ((2k−1)·x·P(k−1) − (k−1)·P(k−2)) / k`."""
+    return _orthogonal(input, n, _np.ones_like, lambda xv: xv,
+                       lambda k, p, p2, xv: ((2 * k - 1) * xv * p - (k - 1) * p2) / k)
+
+
+# ── the nine that exist because the obvious composition breaks ───────────────
+#
+# Every one of these is `f(x)` written out of pieces this library already has, and every
+# one of them is right in the middle and useless at the end — which is the range the
+# name is reached for. The break points below were measured before any of this was
+# written, and they are why the composition is not what is here:
+#
+#     erfc(x)·exp(x²)      inf from x=10,  nan by x=26   (true: 0.056141, 0.0216836)
+#     log(ndtr(x))         -inf from x=-6                (true: -20.7368, -804.608)
+#     i0(x)·exp(-|x|)      inf at x=90,    nan at 200    (true: 0.042111, 0.0282272)
+#     xlogy(x, 1+y)        0 at y=1e-12                  (true: 1e-12)
+#     -x·log(x)            nan at x=0 and x<0            (true: 0 and -inf)
+#
+# Built as compositions they would agree with torch at every ordinary input and hand
+# back `inf` in the tail — a wrong answer that passes its own tests, which is worse than
+# an absent one.
+
+def _erfcx64(x):
+    """`erfc(x)·exp(x²)` without ever forming either factor at full size.
+
+    Small `x` goes through `erfc` directly, which is exact there and where the scaling
+    is nearly 1. From `x ≥ 4` it is the continued fraction
+    `1/(√π · (x + 1/(2x + 2/(x + 3/(2x + …)))))`, evaluated backwards, which has no
+    exponential in it at all — that is the whole point.
+    """
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    # **The split is on `|x|`, not on `x`.** Written `x >= 4` the small branch took
+    # every negative argument and the reflection below was then applied on top of an
+    # answer that was already right — `erfcx(-2)` came back 0.255 against torch's
+    # 108.941. Below 4 in magnitude nothing overflows either way: `exp(16)` is 8.9e6
+    # and `erfc(-4)` is very nearly 2, so the plain product is exact and needs no
+    # reflection at all.
+    small = _np.abs(x) < 4.0
+    if _np.any(small):
+        xs = x[small]
+        out[small] = _np.asarray(erfc(Tensor(xs)).data) * _np.exp(xs * xs)
+    big = ~small
+    if _np.any(big):
+        # The continued fraction is for positive argument, so it runs on `|x|` and the
+        # negative side is reflected: `erfcx(-t) = 2·exp(t²) − erfcx(t)`. That overflows
+        # honestly for large `t` and torch answers `inf` there too.
+        xb = _np.abs(x[big])
+        frac = _np.zeros_like(xb)
+        for k in range(60, 0, -1):
+            frac = (k / 2.0) / (xb + frac)
+        got = 1.0 / (_math.sqrt(_math.pi) * (xb + frac))
+        with _np.errstate(over="ignore"):
+            out[big] = _np.where(x[big] < 0, 2.0 * _np.exp(xb * xb) - got, got)
+    return out
+
+
+def erfcx(input):                                               # noqa: A002
+    """The scaled complementary error function, `erfc(x)·exp(x²)`.
+
+    **The scaling is the whole function.** Without it this is `erfc`, which is already
+    here; with it the answer stays around `1/(x√π)` out to where `erfc` itself has
+    underflowed to zero and `exp(x²)` has overflowed to infinity.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_erfcx64(data).astype(data.dtype), (), None)
+
+
+def ndtr(input):                                                # noqa: A002
+    """The standard normal CDF.
+
+    **`erfc(-x/√2)/2` and not `(1 + erf(x/√2))/2`.** The two are the same formula and
+    not the same arithmetic: in the left tail the second one is `1` plus something very
+    close to `-1`, and the digits that matter cancel away. The first never forms the
+    difference.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    half = _np.asarray(erfc(Tensor(-data / _math.sqrt(2.0))).data) * 0.5
+    return input._make(half.astype(data.dtype), (), None)
+
+
+def log_ndtr(input):                                            # noqa: A002
+    """`log(ndtr(x))`, and **the left tail is the only reason the name exists.**
+
+    `ndtr` underflows to exactly 0 below about x = -38, and its logarithm is then `-inf`
+    where the true value is around -725. Measured against torch before this was written:
+    the plain composition is already `-inf` at x = -6, where the answer is -20.7368.
+
+    Below the cut it is the asymptotic `-x²/2 − log(-x√(2π)) + log(1 − 1/x² + 3/x⁴ …)`,
+    which is the same series `erfcx` sums and is written out here because the two are
+    reached at different scales.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    out = _np.empty_like(data, dtype=_np.float64)
+    x = _np.asarray(data, dtype=_np.float64)
+    low = x < -1.0
+    if _np.any(~low):
+        out[~low] = _np.log(_np.asarray(
+            erfc(Tensor(-x[~low] / _math.sqrt(2.0))).data) * 0.5)
+    if _np.any(low):
+        # `ndtr(x) = erfcx(-x/√2)·exp(-x²/2)/2`, so its logarithm is a sum rather than
+        # the logarithm of a product that has already underflowed.
+        t = -x[low] / _math.sqrt(2.0)
+        out[low] = _np.log(_erfcx64(t) * 0.5) - x[low] * x[low] * 0.5
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def ndtri(input):                                               # noqa: A002
+    """The normal quantile — `√2 · erfinv(2u − 1)`.
+
+    Safe as a composition, unlike its four neighbours: `erfinv` is already accurate
+    across the open unit interval and `2u − 1` loses nothing that `erfinv` then needs.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    out = _np.asarray(erfinv(Tensor(2.0 * data - 1.0)).data) * _math.sqrt(2.0)
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def entr(input):                                                # noqa: A002
+    """`-x·log(x)`, **with the two boundaries an entropy is actually evaluated at.**
+
+    `entr(0)` is 0 and `entr(x < 0)` is `-inf`. The plain expression is `nan` at both
+    (measured), and both are exactly where a probability vector puts its mass when a
+    class is impossible.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    x = _np.asarray(data, dtype=_np.float64)
+    out = _np.full_like(x, -_np.inf)
+    pos = x > 0
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        out[pos] = -x[pos] * _np.log(x[pos])
+    out[x == 0] = 0.0
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def xlog1py(input, other):                                      # noqa: A002
+    """`x·log1p(y)`, with `0·anything` defined as 0.
+
+    **Not `xlogy(x, 1 + y)`**, which is the same formula and different arithmetic: the
+    `1 + y` rounds a small `y` away before the logarithm sees it. Measured at y = 1e-12,
+    torch answers 1e-12 and the composition answers 0 — the whole of what the name is
+    for, gone.
+    """
+    # Written through `_binary` for the reason `xlogy` next door is: the broadcasting,
+    # the dtype promotion and the gradient all live there, and a hand-rolled pair is a
+    # second copy of three things that are already right.
+    #
+    # `0 · -inf` is `nan` in floating point and 0 here — torch's rule, and the one that
+    # makes a zero-weighted term drop out instead of poisoning the sum.
+    input = _wrap(input)
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        return input._binary(
+            other,
+            lambda x, y: _np.where(x == 0, 0.0, x * _np.log1p(y)),
+            lambda g, x, y: g * _np.where(x == 0, 0.0, _np.log1p(y)),
+            lambda g, x, y: g * _np.where(x == 0, 0.0, x / (1.0 + y)),
+            "Xlog1pyBackward0")
+
+
+def i0e(input):                                                 # noqa: A002
+    """`i0(x)·exp(-|x|)`, **which is where `i0` itself has already overflowed.**
+
+    `i0(90)` is about 4e37 and `i0(200)` is past float64's ceiling, so the composition
+    is `inf` and then `nan` (measured) while the true answers are 0.042111 and 0.0282272
+    — the scaled function is bounded by 1 everywhere.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_i0e64(data).astype(data.dtype), (), None)
+
+
+def i1(input):                                                  # noqa: A002
+    """The order-1 modified Bessel function.
+
+    **`_i1` was already here as `i0`'s derivative** and had no public name — the
+    arithmetic has been checked by every `i0` gradient case since it was written. This
+    is that function under the name torch gives it.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_i1(data).astype(data.dtype), (), None)
+
+
+def i1e(input):                                                 # noqa: A002
+    """`i1(x)·exp(-|x|)`, as `i0e` is to `i0`."""
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_i1e64(data).astype(data.dtype), (), None)
+
+
+def _bessel_i_scaled(x, order):
+    """`iₙ(x)·exp(-|x|)` by the ascending series below the crossover and the asymptotic
+    above it.
+
+    **The series is written in the scaled form from the start.** Summing `iₙ` and then
+    multiplying by `exp(-|x|)` is the composition this whole block exists to avoid: the
+    sum overflows long before the product would have been small.
+    """
+    x = _np.abs(_np.asarray(x, dtype=_np.float64))
+    out = _np.empty_like(x)
+    small = x < 15.0
+    if _np.any(small):
+        xs = x[small]
+        half = xs / 2.0
+        # Leading term: (x/2)^order / order!  — scaled by exp(-x) up front.
+        term = (half ** order) / _math.factorial(order) * _np.exp(-xs)
+        total = term.copy()
+        for k in range(1, 200):
+            term = term * (half * half) / (k * (k + order))
+            total = total + term
+            if _np.all(term <= _np.abs(total) * 1e-17):
+                break
+        out[small] = total
+    if _np.any(~small):
+        # Hankel's asymptotic for the scaled function: 1/√(2πx) · (1 − (μ−1)/(8x) + …),
+        # with μ = 4·order².
+        xb = x[~small]
+        mu = 4.0 * order * order
+        series = _np.ones_like(xb)
+        term = _np.ones_like(xb)
+        for k in range(1, 9):
+            term = term * -(mu - (2 * k - 1) ** 2) / (8.0 * xb * k)
+            series = series + term
+        out[~small] = series / _np.sqrt(2.0 * _math.pi * xb)
+    return out
+
+
+def _i0e64(x):
+    return _bessel_i_scaled(x, 0)
+
+
+def _i1e64(x):
+    """`i1` is odd, so the sign follows the argument where `i0` has none."""
+    return _np.sign(_np.asarray(x, dtype=_np.float64)) * _bessel_i_scaled(x, 1)
+
+
+# ── the first- and second-kind Bessel functions ──────────────────────────────
+#
+# **These are rational approximations, not series**, and that is why they are written
+# out as coefficient tables rather than derived. The ascending series for `J₀`
+# alternates and cancels catastrophically past x ≈ 8 — the terms reach 10⁴ before they
+# turn over, and the answer is under 1 — so the large-argument side has to be the
+# asymptotic form, and the two have to meet without a step at the seam.
+#
+# The tables are the standard minimax ones (Abramowitz & Stegun 9.4), good to about
+# 1e-8 absolute, which is four orders inside the golden's 1e-4. They are transcribed
+# rather than invented, and **the transcription is what the measurements check**: a
+# mistyped digit in a minimax coefficient does not blow up, it shifts the answer in the
+# fifth place, which is exactly the size of error a value comparison against torch sees
+# and a reader does not.
+
+_BESSEL_PI_2 = 0.636619772                  # 2/π, as the tables spell it
+
+
+def _poly(y, coefficients):
+    """Horner, outermost coefficient last — the order the tables are written in."""
+    out = _np.full_like(y, coefficients[-1])
+    for c in reversed(coefficients[:-1]):
+        out = c + y * out
+    return out
+
+
+def _bessel_j0(x):
+    x = _np.asarray(x, dtype=_np.float64)
+    ax = _np.abs(x)
+    out = _np.empty_like(ax)
+    near = ax < 8.0
+    if _np.any(near):
+        y = ax[near] ** 2
+        p = _poly(y, [57568490574.0, -13362590354.0, 651619640.7,
+                      -11214424.18, 77392.33017, -184.9052456])
+        q = _poly(y, [57568490411.0, 1029532985.0, 9494680.718,
+                      59272.64853, 267.8532712, 1.0])
+        out[near] = p / q
+    far = ~near
+    if _np.any(far):
+        z = 8.0 / ax[far]
+        y = z * z
+        xx = ax[far] - 0.785398164
+        p1 = _poly(y, [1.0, -0.1098628627e-2, 0.2734510407e-4,
+                       -0.2073370639e-5, 0.2093887211e-6])
+        q1 = _poly(y, [-0.1562499995e-1, 0.1430488765e-3, -0.6911147651e-5,
+                       0.7621095161e-6, -0.934935152e-7])
+        out[far] = _np.sqrt(_BESSEL_PI_2 / ax[far]) * (
+            _np.cos(xx) * p1 - z * _np.sin(xx) * q1)
+    return out
+
+
+def _bessel_j1(x):
+    x = _np.asarray(x, dtype=_np.float64)
+    ax = _np.abs(x)
+    out = _np.empty_like(ax)
+    near = ax < 8.0
+    if _np.any(near):
+        y = ax[near] ** 2
+        p = ax[near] * _poly(y, [72362614232.0, -7895059235.0, 242396853.1,
+                                 -2972611.439, 15704.48260, -30.16036606])
+        q = _poly(y, [144725228442.0, 2300535178.0, 18583304.74,
+                      99447.43394, 376.9991397, 1.0])
+        out[near] = p / q
+    far = ~near
+    if _np.any(far):
+        z = 8.0 / ax[far]
+        y = z * z
+        xx = ax[far] - 2.356194491
+        p1 = _poly(y, [1.0, 0.183105e-2, -0.3516396496e-4,
+                       0.2457520174e-5, -0.240337019e-6])
+        q1 = _poly(y, [0.04687499995, -0.2002690873e-3, 0.8449199096e-5,
+                       -0.88228987e-6, 0.105787412e-6])
+        out[far] = _np.sqrt(_BESSEL_PI_2 / ax[far]) * (
+            _np.cos(xx) * p1 - z * _np.sin(xx) * q1)
+    # **`J₁` is odd** where `J₀` is even, so the sign of the argument comes back.
+    return _np.where(x < 0, -out, out)
+
+
+def _bessel_y0(x):
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    near = (x < 8.0) & (x > 0)
+    if _np.any(near):
+        xs = x[near]
+        y = xs * xs
+        p = _poly(y, [-2957821389.0, 7062834065.0, -512359803.6,
+                      10879881.29, -86327.92757, 228.4622733])
+        q = _poly(y, [40076544269.0, 745249964.8, 7189466.438,
+                      47447.26470, 226.1030244, 1.0])
+        out[near] = p / q + _BESSEL_PI_2 * _bessel_j0(xs) * _np.log(xs)
+    far = x >= 8.0
+    if _np.any(far):
+        z = 8.0 / x[far]
+        y = z * z
+        xx = x[far] - 0.785398164
+        p1 = _poly(y, [1.0, -0.1098628627e-2, 0.2734510407e-4,
+                       -0.2073370639e-5, 0.2093887211e-6])
+        q1 = _poly(y, [-0.1562499995e-1, 0.1430488765e-3, -0.6911147651e-5,
+                       0.7621095161e-6, -0.934935152e-7])
+        out[far] = _np.sqrt(_BESSEL_PI_2 / x[far]) * (
+            _np.sin(xx) * p1 + z * _np.cos(xx) * q1)
+    # `Y` has a logarithmic pole at 0 and is undefined below it — torch's answers.
+    out = _np.where(x == 0, -_np.inf, out)
+    return _np.where(x < 0, _np.nan, out)
+
+
+def _bessel_y1(x):
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    near = (x < 8.0) & (x > 0)
+    if _np.any(near):
+        xs = x[near]
+        y = xs * xs
+        p = xs * _poly(y, [-4900604943000.0, 1275274390000.0, -51534381390.0,
+                           734926455.1, -4237922.726, 8511.937935])
+        q = _poly(y, [24995805700000.0, 424441966400.0, 3733650367.0,
+                      22459040.02, 102042.605, 354.9632885, 1.0])
+        out[near] = p / q + _BESSEL_PI_2 * (
+            _bessel_j1(xs) * _np.log(xs) - 1.0 / xs)
+    far = x >= 8.0
+    if _np.any(far):
+        z = 8.0 / x[far]
+        y = z * z
+        xx = x[far] - 2.356194491
+        p1 = _poly(y, [1.0, 0.183105e-2, -0.3516396496e-4,
+                       0.2457520174e-5, -0.240337019e-6])
+        q1 = _poly(y, [0.04687499995, -0.2002690873e-3, 0.8449199096e-5,
+                       -0.88228987e-6, 0.105787412e-6])
+        out[far] = _np.sqrt(_BESSEL_PI_2 / x[far]) * (
+            _np.sin(xx) * p1 + z * _np.cos(xx) * q1)
+    out = _np.where(x == 0, -_np.inf, out)
+    return _np.where(x < 0, _np.nan, out)
+
+
+def _bessel(fn, name):
+    """One unary Bessel name over `fn`, in the caller's dtype."""
+    def call(input):                                            # noqa: A002
+        t = _wrap(input)
+        data = _float_in(_np.asarray(t.data))
+        with _np.errstate(divide="ignore", invalid="ignore"):
+            out = fn(data)
+        return t._make(out.astype(data.dtype), (), None)
+    call.__name__ = name
+    return call
+
+
+bessel_j0 = _bessel(_bessel_j0, "bessel_j0")
+bessel_j1 = _bessel(_bessel_j1, "bessel_j1")
+bessel_y0 = _bessel(_bessel_y0, "bessel_y0")
+bessel_y1 = _bessel(_bessel_y1, "bessel_y1")
+
+
+def _airy_u(k):
+    """The asymptotic series' coefficients, `uₖ = Γ(3k+½)/(54ᵏ k! Γ(k+½))`.
+
+    Built by the recurrence `uₖ = uₖ₋₁·(6k−5)(6k−3)(6k−1)/(216k(2k−1))`, which is the
+    same numbers without the two gamma functions — `u₁` is 5/72 either way, and that is
+    what pinned the form.
+    """
+    out, u = [1.0], 1.0
+    for k in range(1, 12):
+        u = u * (6 * k - 5) * (6 * k - 3) * (6 * k - 1) / (216.0 * k * (2 * k - 1))
+        out.append(u)
+    return out
+
+
+_AIRY_U = _airy_u(0)
+# Ai(0) and −Ai′(0), which are `3^(−2/3)/Γ(2/3)` and `3^(−1/3)/Γ(1/3)`. Checked against
+# torch to ten digits before the series was written — a normalisation constant that is
+# wrong in the fourth place produces a curve of exactly the right shape.
+_AIRY_C1 = 0.355028053887817239
+_AIRY_C2 = 0.258819403792806798
+
+
+def _airy_ai(x):
+    """The Airy function of the first kind.
+
+    **Two regimes, and the seam is where cancellation starts costing digits.** The
+    ascending series converges for every argument, and past |x| ≈ 8 its largest term is
+    a hundred times the answer, so the digits go. Beyond that it is the standard
+    asymptotic — exponential decay for positive `x`, an oscillation with an `x^(−1/4)`
+    envelope for negative.
+    """
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    near = _np.abs(x) <= 8.0
+    if _np.any(near):
+        # `Ai = c₁·f − c₂·g`, with f and g the two power series in x³.
+        xs = x[near]
+        cube = xs ** 3
+        f = _np.ones_like(xs)
+        term = _np.ones_like(xs)
+        for k in range(1, 30):
+            term = term * cube / ((3 * k) * (3 * k - 1))
+            f = f + term
+        g = xs.copy()
+        term = xs.copy()
+        for k in range(1, 30):
+            term = term * cube / ((3 * k + 1) * (3 * k))
+            g = g + term
+        out[near] = _AIRY_C1 * f - _AIRY_C2 * g
+    far = ~near
+    if _np.any(far):
+        xf = x[far]
+        ax = _np.abs(xf)
+        zeta_ = (2.0 / 3.0) * ax ** 1.5
+        pos = xf > 0
+        # Positive: `exp(-ζ)/(2√π x^¼) · Σ (−1)ᵏ uₖ/ζᵏ`.
+        series = _np.zeros_like(ax)
+        for k, u in enumerate(_AIRY_U):
+            series = series + ((-1) ** k) * u / zeta_ ** k
+        grow = _np.exp(-zeta_) / (2.0 * _math.sqrt(_math.pi) * ax ** 0.25) * series
+        # Negative: the oscillation, split into even and odd coefficients.
+        even = _np.zeros_like(ax)
+        odd = _np.zeros_like(ax)
+        for k in range(len(_AIRY_U) // 2):
+            even = even + ((-1) ** k) * _AIRY_U[2 * k] / zeta_ ** (2 * k)
+            odd = odd + ((-1) ** k) * _AIRY_U[2 * k + 1] / zeta_ ** (2 * k + 1)
+        phase = zeta_ + _math.pi / 4.0
+        wave = (_np.sin(phase) * even - _np.cos(phase) * odd) / (
+            _math.sqrt(_math.pi) * ax ** 0.25)
+        out[far] = _np.where(pos, grow, wave)
+    return out
+
+
+def airy_ai(input):                                             # noqa: A002
+    """The Airy function `Ai(x)` — the solution of `y″ = xy` that decays to the right.
+
+    `Ai(0)` is `3^(−2/3)/Γ(2/3)` = 0.3550280539, matched to ten digits.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    with _np.errstate(over="ignore", invalid="ignore"):
+        out = _airy_ai(data)
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def zeta(input, other):                                         # noqa: A002
+    """The **Hurwitz** zeta, `ζ(x, q) = Σₖ (q+k)^(−x)` — not Riemann's alone.
+
+    `q = 1` is Riemann's, and that is the case worth checking against something known:
+    `ζ(2, 1)` is π²/6 = 1.644934067 and `ζ(4, 1)` is π⁴/90 = 1.082323234, both matched
+    to ten digits.
+
+    **The method is `polygamma`'s** and the two are the same identity read in opposite
+    directions — torch derives its polygamma from zeta, and this library already had
+    the Euler–Maclaurin engine on the other side. Sum the first few terms directly,
+    then take the tail as an integral plus its correction:
+
+        ζ(x, q) = Σ_{k<N} (q+k)^(−x) + (q+N)^(1−x)/(x−1) + (q+N)^(−x)/2
+                  + Σⱼ B₂ⱼ/(2j)! · (x)₂ⱼ₋₁ · (q+N)^(−x−2j+1)
+
+    **`x ≤ 1` is `nan`, and `ζ(1, 1)` is `inf`** — measured, not chosen: the series
+    does not converge there and torch says so rather than returning a partial sum.
+    """
+    a = _wrap(input)
+    b = _wrap(other)
+    s = _np.asarray(_float_in(_np.asarray(a.data)), dtype=_np.float64)
+    q = _np.asarray(_float_in(_np.asarray(b.data)), dtype=_np.float64)
+    s, q = _np.broadcast_arrays(s, q)
+    with _np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        total = _np.zeros_like(s)
+        terms = 9
+        for k in range(terms):
+            total = total + (q + k) ** (-s)
+        z = q + terms
+        total = total + z ** (1.0 - s) / (s - 1.0) + 0.5 * z ** (-s)
+        # B₂, B₄, B₆, B₈ over their factorials, with the rising factorial of `s`.
+        rising = s.copy()
+        power = z ** (-s - 1.0)
+        for j, bern in enumerate((1 / 6, -1 / 30, 1 / 42, -1 / 30), start=1):
+            total = total + bern / _math.factorial(2 * j) * rising * power
+            rising = rising * (s + 2 * j - 1) * (s + 2 * j)
+            power = power / (z * z)
+        out = _np.where(s > 1.0, total, _np.nan)
+        out = _np.where((s == 1.0) & (q > 0), _np.inf, out)
+    dtype = _np.asarray(_float_in(_np.asarray(a.data))).dtype
+    return a._make(out.astype(dtype), (), None)
+
+
+def spherical_bessel_j0(input):                                 # noqa: A002
+    """`sin(x)/x`, and **1 at the origin** rather than the `nan` the quotient gives.
+
+    Measured equal to torch across the sign, including at 0 — it is not an
+    approximation of anything, which is why it sits with the Bessel family in torch's
+    namespace and with the one-liners here.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    x = _np.asarray(data, dtype=_np.float64)
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        out = _np.where(x == 0, 1.0, _np.sin(x) / _np.where(x == 0, 1.0, x))
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def _bessel_k_scaled(x, order):
+    """`kₙ(x)·exp(x)` — the scaled second-kind modified Bessel.
+
+    **Scaled from the start, for `i0e`'s reason inverted.** `k₀(20)` is 5.74e-10 and
+    `k₀(800)` is under float64's floor, so a composition that formed `kₙ` and then
+    multiplied would be exactly 0 where the scaled function is still 0.044.
+
+    Below 2 it is the series through `i₀`/`i₁` and a logarithm — the standard pairing,
+    written out because the two pieces need different expansions. Above it the
+    asymptotic `√(π/2x)·(1 + (μ−1)/(8x) + …)` with `μ = 4n²`.
+    """
+    x = _np.asarray(x, dtype=_np.float64)
+    out = _np.empty_like(x)
+    # **The crossover is 10, and it was 2 first.** Two is where the textbooks split the
+    # *unscaled* pair, and the asymptotic there is worth about two digits: measured
+    # against torch, `k₀(2)` came back 0.0906 against 0.1139 and `k₀(2.1)` 0.0889
+    # against 0.1008 — 200 times the golden's tolerance, on the two points either side
+    # of the seam and nowhere else. The series below converges perfectly well out to 10
+    # (`(x/2)²ᵏ/(k!)²` at x=10 is 25ᵏ/(k!)², which turns over by k=5), so the seam
+    # moves rather than the method.
+    small = x < 10.0
+    if _np.any(small):
+        xs = x[small]
+        half = xs / 2.0
+        # `k₀(x) = -(log(x/2) + γ)·i₀(x) + Σ …`, and `k₁` from its own series. Both are
+        # summed unscaled here (they are small arguments, so nothing overflows) and the
+        # `exp(x)` goes on at the end.
+        euler = 0.5772156649015328606
+        term = _np.ones_like(xs)
+        k0 = _np.zeros_like(xs)
+        i0v = _np.ones_like(xs)
+        harmonic = _np.zeros_like(xs)
+        for k in range(1, 60):
+            term = term * (half * half) / (k * k)
+            harmonic = harmonic + 1.0 / k
+            i0v = i0v + term
+            k0 = k0 + term * harmonic
+        k0 = k0 - (_np.log(half) + euler) * i0v
+        if order == 0:
+            out[small] = k0 * _np.exp(xs)
+        else:
+            # `k₁(x) = 1/x + log(x/2)·i₁(x) − …`, taken through the Wronskian instead:
+            # `i₀·k₁ + i₁·k₀ = 1/x`, which is exact and needs no second series.
+            i1v = _i1(xs)
+            out[small] = ((1.0 / xs - i1v * k0) / i0v) * _np.exp(xs)
+    big = ~small
+    if _np.any(big):
+        xb = x[big]
+        mu = 4.0 * order * order
+        series = _np.ones_like(xb)
+        term = _np.ones_like(xb)
+        for k in range(1, 12):
+            term = term * (mu - (2 * k - 1) ** 2) / (8.0 * xb * k)
+            series = series + term
+        out[big] = _np.sqrt(_math.pi / (2.0 * xb)) * series
+    return out
+
+
+def scaled_modified_bessel_k0(input):                           # noqa: A002
+    """`k₀(x)·exp(x)`. Measured against torch: the pair is exactly that product."""
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_bessel_k_scaled(data, 0).astype(data.dtype), (), None)
+
+
+def scaled_modified_bessel_k1(input):                           # noqa: A002
+    """`k₁(x)·exp(x)`."""
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    return input._make(_bessel_k_scaled(data, 1).astype(data.dtype), (), None)
+
+
+def modified_bessel_k0(input):                                  # noqa: A002
+    """`k₀(x)`, computed scaled and then unscaled — **not the other way round.**
+
+    Under about x = 750 the two orders agree; past it `exp(-x)` underflows to 0 and so
+    does `k₀`, which is torch's answer there as well.
+    """
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    x = _np.asarray(data, dtype=_np.float64)
+    with _np.errstate(under="ignore"):
+        out = _bessel_k_scaled(x, 0) * _np.exp(-x)
+    return input._make(out.astype(data.dtype), (), None)
+
+
+def modified_bessel_k1(input):                                  # noqa: A002
+    """`k₁(x)`, as `modified_bessel_k0`."""
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
+    x = _np.asarray(data, dtype=_np.float64)
+    with _np.errstate(under="ignore"):
+        out = _bessel_k_scaled(x, 1) * _np.exp(-x)
+    return input._make(out.astype(data.dtype), (), None)
+
+
 def mvlgamma(input, p):
     """The multivariate log gamma.
     `log Γ_p(x) = p(p−1)/4 · log π + Σ log Γ(x + (1−i)/2)`."""
@@ -12267,6 +12991,62 @@ class _Special(_Namespace):
     # careful; only counting again does.
     gammainc = staticmethod(igamma)
     gammaincc = staticmethod(igammac)
+
+    # **`multigammaln` is `mvlgamma`, and the row that declined it guessed wrong.**
+    # It read *the two disagree on argument order and that wants checking rather than
+    # guessing* — measured, `multigammaln(x, p)` and `mvlgamma(x, p)` agree exactly at
+    # p = 1, 2 and 3, same order, same values. A sentence that says *this wants
+    # measuring* and is then filed under *declined* is a deferral with the word
+    # "measure" in it, which is the shape three other rows here have already been
+    # caught in.
+    multigammaln = staticmethod(mvlgamma)
+
+    # ── the twenty-one that are arithmetic ───────────────────────────────────
+    #
+    # Twelve orthogonal polynomials (one recurrence engine, twelve starting pairs), and
+    # nine that exist because the obvious composition of what this library already had
+    # is `inf` or `nan` exactly where the name is reached for. Both groups are in
+    # `_ops.py` above with the break points measured beside them.
+    chebyshev_polynomial_t = staticmethod(chebyshev_polynomial_t)
+    chebyshev_polynomial_u = staticmethod(chebyshev_polynomial_u)
+    chebyshev_polynomial_v = staticmethod(chebyshev_polynomial_v)
+    chebyshev_polynomial_w = staticmethod(chebyshev_polynomial_w)
+    shifted_chebyshev_polynomial_t = staticmethod(shifted_chebyshev_polynomial_t)
+    shifted_chebyshev_polynomial_u = staticmethod(shifted_chebyshev_polynomial_u)
+    shifted_chebyshev_polynomial_v = staticmethod(shifted_chebyshev_polynomial_v)
+    shifted_chebyshev_polynomial_w = staticmethod(shifted_chebyshev_polynomial_w)
+    hermite_polynomial_h = staticmethod(hermite_polynomial_h)
+    hermite_polynomial_he = staticmethod(hermite_polynomial_he)
+    laguerre_polynomial_l = staticmethod(laguerre_polynomial_l)
+    legendre_polynomial_p = staticmethod(legendre_polynomial_p)
+
+    erfcx = staticmethod(erfcx)
+    ndtr = staticmethod(ndtr)
+    ndtri = staticmethod(ndtri)
+    log_ndtr = staticmethod(log_ndtr)
+    entr = staticmethod(entr)
+    xlog1py = staticmethod(xlog1py)
+    i0e = staticmethod(i0e)
+    i1 = staticmethod(i1)
+    i1e = staticmethod(i1e)
+
+    # **`modified_bessel_i1` is `i1`** — measured identical, not inferred from the
+    # names. The row that declined it said *`i0` is here and `i1` is a different
+    # series, not a step from it*, which was true and was about the wrong pair: the
+    # series it names is the one `i1` needed, and once that existed this name was a
+    # second spelling of it.
+    modified_bessel_i1 = staticmethod(i1)
+    spherical_bessel_j0 = staticmethod(spherical_bessel_j0)
+    modified_bessel_k0 = staticmethod(modified_bessel_k0)
+    modified_bessel_k1 = staticmethod(modified_bessel_k1)
+    scaled_modified_bessel_k0 = staticmethod(scaled_modified_bessel_k0)
+    scaled_modified_bessel_k1 = staticmethod(scaled_modified_bessel_k1)
+    zeta = staticmethod(zeta)
+    bessel_j0 = staticmethod(bessel_j0)
+    bessel_j1 = staticmethod(bessel_j1)
+    bessel_y0 = staticmethod(bessel_y0)
+    bessel_y1 = staticmethod(bessel_y1)
+    airy_ai = staticmethod(airy_ai)
 
 
 special = _Special()

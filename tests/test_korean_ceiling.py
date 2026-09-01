@@ -368,7 +368,13 @@ CEILINGS = {
     # reconciles against nothing, so a Korean name on one side is a Korean name on
     # both. That case is the one that catches `ignoreIndex=null` being passed through
     # rather than mapped to -100, which no other target can see.
-    "borch-ts/test": 4824,
+    # 4824 → 4857. Thirty-three: the `special::` skip reason in `run.py`, rewritten
+    # when that row went from 3 to 75. It is the one row in that ledger that changed
+    # marker from `파이썬` to `아직` — from *a Python affordance* to *work owed on the
+    # borch.ts side* — and the marker words are the keys `test_site.py` matches on to
+    # split the README's remainder, so the change had to be made in the reason's own
+    # language rather than beside it.
+    "borch-ts/test": 4857,
 }
 
 

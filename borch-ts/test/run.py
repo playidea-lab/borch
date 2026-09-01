@@ -657,8 +657,22 @@ NOT_PORTED = {
     # rather than a missing body. Written as a scalar tensor here it would freeze
     # cleanly and **stop asking the thing it is named for**, which is worse than not
     # asking: the name would claim a check nobody performs.
-    "special::": (3, "파이썬 — `out=` 두 건(borch.ts 전역 결정)과, "
-                     "`xlogy` 에 맨 스칼라를 넘기는 자리. TS 는 Tensor 를 받는다"),
+    # 3 → 75. **The three were Python's affordances; the seventy-two are bodies.**
+    # `torch.special` splits in two here: twenty-three names forward to arithmetic
+    # borch.ts already has and are asked on both sides, and thirty-four have bodies of
+    # their own — the Bessel and Airy approximations, twelve orthogonal recurrences,
+    # `zeta`'s Euler–Maclaurin, and the nine written in a tail-safe form because the
+    # obvious composition is `inf` where the name is reached for. Those are numpy in
+    # `borch/_ops.py` with no WGSL behind them, and their cases carry the
+    # `special::수학::` prefix so the golden's core-only list can name them too.
+    #
+    # **Marked `아직` rather than `없음`**, which is the opposite of the `video::` row
+    # above: nothing about borch.ts's types stands in the way, so this is work owed on
+    # that side and the README's split should read it that way. `tests/ts_axis.py`
+    # carries the thirty-four by name, so they come off one at a time.
+    "special::": (75, "아직 — 산술 서른넷이 코어에만 있다(Bessel·Airy·직교다항식 열둘·"
+                      "zeta·꼬리에서 안전한 형태 아홉). 나머지 셋은 `out=` 둘과 "
+                      "`xlogy` 에 맨 스칼라를 넘기는 파이썬 자리"),
     # **The thirty-three `*_video` kernels, and this row is a type rather than a
     # backlog.** The core's picture kernels count their axes from the end now, so
     # `(H, W, C)` and `(T, H, W, C)` name the same two and a video is an image with a

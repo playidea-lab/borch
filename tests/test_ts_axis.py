@@ -260,6 +260,22 @@ FROZEN = {
     # `inverse`, `pinverse` and `mm`, which had no name anywhere in borch.ts. The
     # `linalg` namespace carries them now.
     "linalg": 0,
+    # **Two namespaces arrived on this axis at once, and one of them is 0.**
+    # `fft` and `special` were both declined whole in `torch_gap.py` — `fft` while
+    # twenty-two of its twenty-three names were built, `special` while twenty-three of
+    # its fifty-seven were. Adding them there did not add them here, so a name the core
+    # gained and borch.ts did not had no ledger between the two.
+    #
+    # `fft` comes in at zero, which is the answer that makes the omission cheap to have
+    # had and worth fixing anyway: nothing was wrong and nothing was watching.
+    "fft": 0,
+    # **34, and every one is a body somebody could write.** `special`'s other
+    # twenty-three forward to arithmetic borch.ts already has; these are the Bessel and
+    # Airy approximations, twelve orthogonal recurrences, `zeta`'s Euler–Maclaurin and
+    # the nine tail-safe forms — numpy in `borch/_ops.py` with no WGSL behind them.
+    # Unlike `transforms.v2.functional`'s row below, this is not a type that would have
+    # to change first, so the number is expected to come down.
+    "special": 34,
     # **12 → 2, and the two that remain have reasons.** The ten were the samplers
     # and the two dataset shapes: `Sampler`, `SequentialSampler`, `RandomSampler`,
     # `SubsetRandomSampler`, `WeightedRandomSampler`, `BatchSampler`,
@@ -462,6 +478,10 @@ REFUSALS = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
+    # Neither new namespace carries a refusal stub: what the core lacks in `special` it
+    # lacks by not having the name at all, and `fft` lacks nothing.
+    "fft": 0,
+    "special": 0,
     "utils.data": 0,
     "transforms": 0,
     "transforms.functional": 0,
