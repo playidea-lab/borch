@@ -5970,6 +5970,48 @@ def functional_name_cases(inp=None):
             return "거절"
 
     add("mha::bias_k 는 거절", mha_refuses)
+
+    # ── the eight in-place forms, and what they refuse ─────────────────────────
+    #
+    # **They took `(x, *args, **kw)` and handed the bag on.** The arguments reached —
+    # this was never the accepted-and-dropped failure — but a bag accepts what torch
+    # refuses, and `F.relu_(x, 0.5)` ran here (the 0.5 became `inplace`) while torch
+    # answered `TypeError`. Code that runs here and stops there is the one direction
+    # this library cannot be wrong in.
+    #
+    # The list is the base's minus `inplace`, which is exact across all eight — and
+    # torch's underscore forms refuse the word `inplace` too, the name being the flag.
+    def refuses(L, call):
+        try:
+            call(L)
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+        return "받았다"
+
+    _INPLACE_SEATS = (
+        ("relu_", lambda f, x: f.relu_(x)),
+        ("celu_", lambda f, x: f.celu_(x, 2.0)),
+        ("elu_", lambda f, x: f.elu_(x, 2.0)),
+        ("selu_", lambda f, x: f.selu_(x)),
+        ("hardtanh_", lambda f, x: f.hardtanh_(x, -2.0, 2.0)),
+        ("leaky_relu_", lambda f, x: f.leaky_relu_(x, 0.2)),
+        ("threshold_", lambda f, x: f.threshold_(x, 0.0, 9.0)),
+    )
+    for _name, _call in _INPLACE_SEATS:
+        add(f"{_name}::자리가 도착한다",
+            (lambda c: lambda L: c(F(L), L.tensor(np.array([1., -1., 0.5],
+                                                           dtype=np.float32))))(_call))
+        add(f"{_name}::inplace=는 자리가 아니다",
+            (lambda n: lambda L: refuses(L, lambda M: getattr(F(M), n)(
+                M.tensor(np.array([1., -1.], dtype=np.float32)), inplace=True)))(_name))
+
+    # **A surplus positional is the one that used to run.** `relu_` takes the input
+    # and nothing else, so the second number had a seat here and none over there.
+    add("relu_::남는 위치 인자는 거절", lambda L: refuses(L, lambda M: F(M).relu_(
+        M.tensor(np.array([1., -1.], dtype=np.float32)), 0.5)))
+    add("celu_::모르는 키워드는 거절", lambda L: refuses(L, lambda M: F(M).celu_(
+        M.tensor(np.array([1., -1.], dtype=np.float32)), bogus=1)))
+
     return cases
 
 

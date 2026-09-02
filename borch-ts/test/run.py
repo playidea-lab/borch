@@ -851,7 +851,13 @@ NOT_PORTED = {
     # borch.ts takes a boolean, so the two are the same word by the time they arrive
     # and there is nothing here to refuse. The binding raises it before crossing, and
     # the case is asked there.
-    "fname::": (30, "별칭 — `F`'s in-place variants. The method side asks them already"),
+    # **30 → 46.** Sixteen more, and they are the same row: the eight in-place forms
+    # took `(x, *args, **kw)` on both Python sides and now carry the base's list
+    # minus `inplace`. Seven ask that a real argument arrives, seven that
+    # `inplace=` is refused as torch refuses it, and two that a surplus positional
+    # and an unknown keyword stop. borch.ts has no in-place write-back to route
+    # them to, which is the row's standing reason and is unchanged.
+    "fname::": (46, "별칭 — `F`'s in-place variants. The method side asks them already"),
     # `bit::` used to be here — 24 cases, "alias — the method names of the bit
     # operations". **The point was that those names were not over there**, and the reason
     # called them aliases. They went in and all were ported, so the row is gone.

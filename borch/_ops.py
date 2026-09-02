@@ -10032,16 +10032,48 @@ _FUNCTIONAL_INPLACE = ("relu", "celu", "elu", "selu", "hardtanh", "leaky_relu",
 
 
 def _make_functional_inplace(name):
-    fn = globals()[name]
+    """One of the eight, with **the argument list its own name has.**
 
-    def call(x, *args, **kw):
-        x = _wrap(x)
-        return x._inplace(lambda: fn(x, *args, **kw), name + "_")
+    ## Why it is derived rather than declared
+
+    These eight took `(x, *args, **kw)` and handed the bag on. The arguments did
+    reach — this was never the accepted-and-dropped failure — but a bag accepts what
+    torch refuses, and that is the direction this library must not be wrong in:
+
+        F.relu_(x, 0.5)           torch: TypeError   here: ran, 0.5 became `inplace`
+        F.relu_(x, inplace=True)  torch: TypeError   here: ran
+
+    **The rule is exact and mechanical: the underscore form is the base's list minus
+    `inplace`.** Measured across all eight — `celu_(input, alpha=1.)`,
+    `hardtanh_(input, min_val=-1., max_val=1.)`, `threshold_(input, threshold,
+    value)`, and `relu_`/`selu_` with nothing but the input. torch's own underscore
+    forms refuse `inplace=`, which the name already says.
+
+    So the list is taken from the function rather than retyped eight times: a second
+    copy is a second thing to keep true, and the base already holds it. **`bind` is
+    what makes the refusal real** — a signature alone would document a door that still
+    let everything through, which is the shape this repository keeps finding.
+    """
+    fn = globals()[name]
+    kept = [p for p in _inspect.signature(fn).parameters.values()
+            if p.name != "inplace"]
+    shown = _inspect.Signature(kept)
+    first = kept[0].name
+
+    def call(*args, **kw):
+        bound = shown.bind(*args, **kw)     # refuses exactly what torch refuses
+        bound.apply_defaults()
+        rest = dict(bound.arguments)
+        x = _wrap(rest.pop(first))
+        return x._inplace(lambda: fn(x, **rest), name + "_")
 
     call.__name__ = name + "_"
+    call.__signature__ = shown
     call.__doc__ = (f"`F.{name}` in place. That side does the computation and "
                     "this writes it back into its own buffer. A leaf with "
-                    "gradients on is refused as torch does.")
+                    "gradients on is refused as torch does.\n\n"
+                    "**`inplace=` is not a seat here** — the name is the flag, and "
+                    "torch's underscore forms refuse the word too.")
     return call
 
 

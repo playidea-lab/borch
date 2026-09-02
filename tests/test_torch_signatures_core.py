@@ -790,7 +790,16 @@ JUDGED = {
     # 84 → 109. Twenty-five `nn.functional` names are C too.
     # 109 → 110 of 126 → 127. `linear_cross_entropy`, the functional half of the pair
     # one namespace up.
-    "nn.functional": (110, 127),
+    # 110 → 118. **Eight rows left the bucket meaning *cannot judge*.** The in-place
+    # activations — `relu_`, `celu_`, `elu_`, `selu_`, `hardtanh_`, `leaky_relu_`,
+    # `threshold_`, `rrelu_` — were generated with `(x, *args, **kw)`, so the axis
+    # could not compare them and a caller could pass anything. The arguments did
+    # reach; what a bag adds is accepting what torch refuses, and `F.relu_(x, 0.5)`
+    # ran here with the 0.5 landing in `inplace` while torch answered `TypeError`.
+    #
+    # The list is now derived from the base function minus `inplace`, which is the
+    # rule across all eight, and `bind` makes the refusal real rather than documented.
+    "nn.functional": (118, 127),
     "optim": (14, 14),
     "optim.lr_scheduler": (16, 16),
     # 0 → 5, same reading. The four `unaligned` are `householder_product`, `lu`,

@@ -14,6 +14,7 @@ not approximating what is missing, but naming what is there.
 """
 
 import collections as _collections
+import inspect as _inspect
 import warnings as _warnings
 
 import numpy as _np
@@ -729,10 +730,46 @@ def _functional_inplace(name):
     The same place and the same reason as the core. Two copies of the expression
     diverge eventually and the values stay plausible enough that nobody sees it.
     A leaf with gradients on is refused, as torch does.
+
+    **And the argument list is the base's minus `inplace`**, taken from the function
+    rather than retyped — the same derivation the core makes. Written `(x, *args,
+    **kw)` on both sides, `F.relu_(x, 0.5)` ran with the 0.5 landing in `inplace`
+    while torch answered `TypeError`, and `F.elu_(x, inplace=True)` ran where torch
+    refuses the word. `bind` is what refuses; a signature alone documents a door that
+    still lets everything through.
+
+    Six of the eight already stopped here for reasons of their own, and the two that
+    did not are why this is derived rather than trusted.
     """
-    def call(x, *args, **kw):
+    # **Read off the core's own underscore form**, which derives it from its base.
+    # Two things follow: there is one table rather than two, and this side cannot
+    # drift from the list the argument axis measures.
+    #
+    # Late, because `functional` below does not exist while this dictionary is being
+    # built — and from `borch` rather than from here, because `getattr(functional,
+    # name)` lands on a forwarder whose own signature is the bag this is replacing.
+    cache = {}
+
+    def prepared():
+        if not cache:
+            from borch import nn as _core_nn
+            shown = _inspect.signature(getattr(_core_nn.functional, name + "_"))
+            cache["sig"] = shown
+            cache["first"] = next(iter(shown.parameters))
+        return cache
+
+    def call(*args, **kw):
+        got = prepared()
+        bound = got["sig"].bind(*args, **kw)
+        bound.apply_defaults()
+        # **Handed on by position.** `bind` keeps the declared order, and several of
+        # these forwarders reach borch.ts by a table that takes no keywords at all —
+        # `threshold` answers *does not take keyword arguments* to its own parameter
+        # names. Position is what both sides agree on.
+        rest = list(bound.arguments.values())
+        x = rest.pop(0)
         x._refuse_inplace_on_leaf(name + "_")
-        return x._write_back(getattr(functional, name)(x, *args, **kw))
+        return x._write_back(getattr(functional, name)(x, *rest))
 
     call.__name__ = name + "_"
     return call
