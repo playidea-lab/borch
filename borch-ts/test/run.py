@@ -670,8 +670,17 @@ NOT_PORTED = {
     # **What is left is three Python affordances**, which is where this row started.
     # Two are `out=`, borch.ts's global decision, and the third hands `xlogy` a bare
     # scalar where TypeScript types a `Tensor`.
-    "special::": (3, "파이썬 — `out=` 두 건(borch.ts 전역 결정)과, "
-                     "`xlogy` 에 맨 스칼라를 넘기는 자리. TS 는 Tensor 를 받는다"),
+    # **3 → 11.** Eight more, and every one of them is a refusal JavaScript cannot
+    # make. `special.softmax` was bound to `F.softmax`'s list on both Python sides,
+    # so `dim` had a default and `_stacklevel` had a seat; torch requires the first
+    # and has never had the second. Asked here, the rows would be: a missing
+    # argument (JS passes `undefined` rather than stopping), a keyword (JS has
+    # none), and a surplus positional (JS discards it). The `dim` requirement is
+    # carried in `special_names.ts` as a type, which `tsc` enforces and a golden
+    # case cannot see.
+    "special::": (11, "파이썬 — `out=` 두 건(borch.ts 전역 결정), `xlogy` 에 맨 스칼라를 "
+                       "넘기는 자리, 그리고 `softmax`/`log_softmax` 의 여덟 — 필수 인자와 "
+                       "키워드와 잉여 인자를 JS 는 거절하지 못한다"),
     # **The thirty-three `*_video` kernels, and this row is a type rather than a
     # backlog.** The core's picture kernels count their axes from the end now, so
     # `(H, W, C)` and `(T, H, W, C)` name the same two and a video is an image with a

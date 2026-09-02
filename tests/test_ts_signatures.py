@@ -224,7 +224,11 @@ SHIFTED = {
     #
     # Frozen at 2 rather than excused by a rule, so the day borch.ts's pair grows a
     # third parameter for some other reason, this number moves and somebody reads it.
-    "special": 2,
+    # **2 → 0.** `softmax` and `logSoftmax` had `dim = 0` where torch requires a
+    # value — the default belongs to `F.softmax`, which both were bound to on the
+    # Python side too. A default where torch requires one is the quiet direction:
+    # the call runs here and stops there.
+    "special": 0,
     "utils.data": 0,
     # **`transforms` was 1 and is 0**, and the row it was added for is worth keeping.
     #

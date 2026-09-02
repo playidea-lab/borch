@@ -412,7 +412,13 @@ CEILINGS = {
     # rows for `matrix_rank` and `pinv`. `기본`, `비대칭`, `위치`, `그대로` and
     # `폐기된 이름` are keys against `tests/cases.py` — the tag has to be the same
     # string in both tables or the row reconciles against nothing.
-    "borch-ts/test": 4943,
+    # 4943 → 4965. Twenty-two, and none of them in `cases.ts` — the whole rise is one
+    # ledger reason in `run.py`. `special::` went 3 → 11 when `softmax` and
+    # `log_softmax` stopped being bound to `F.softmax`'s list, and the row has to say
+    # in Korean why JavaScript cannot ask those eight: the marker word `파이썬` is the
+    # key `test_site.py` matches on to split declined work from owed work, so the
+    # sentence after it lives in the same language.
+    "borch-ts/test": 4965,
 }
 
 

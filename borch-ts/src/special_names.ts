@@ -136,13 +136,27 @@ export function logsumexp(input: Tensor, dim?: number, keepdim = false): Tensor 
  * namespace's names accept `out=` in torch and these two do not — measured, where
  * `special.softmax(x, 1, out=…)` raises and the top-level `softmax` does not.
  */
-export function softmax(input: Tensor, dim = 0, dtype?: Parameters<Tensor["softmax"]>[1]): Tensor {
+/**
+ * **`dim` is required, and had a default here.** torch's `special.softmax(x)` is a
+ * `TypeError` — the default belongs to `F.softmax`, which is the function these two
+ * were bound to on the Python side as well. A default where torch requires a value
+ * is the quiet direction: the call runs here and stops there.
+ */
+export function softmax(
+  input: Tensor, dim: number, dtype?: Parameters<Tensor["softmax"]>[1],
+): Tensor {
   return input.softmax(dim, dtype);
 }
 
+/**
+ * As `softmax`, and torch makes `dtype` **keyword-only on this one alone** —
+ * `special.log_softmax(x, 1, torch.float32)` raises where the neighbour runs. JavaScript
+ * has no keyword-only, so that half of the asymmetry lives on the Python sides, which
+ * is where a caller can express it.
+ */
 export function logSoftmax(
   input: Tensor,
-  dim = 0,
+  dim: number,
   dtype?: Parameters<Tensor["logSoftmax"]>[1],
 ): Tensor {
   return input.logSoftmax(dim, dtype);

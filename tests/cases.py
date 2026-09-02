@@ -2108,6 +2108,49 @@ def special_cases(inp=None):
     add("gammainc+gammaincc",
         lambda L: L.special.gammainc(L.tensor(a), L.tensor(z))
         + L.special.gammaincc(L.tensor(a), L.tensor(z)))
+
+    # ── the pair that was bound to `F.softmax`'s argument list ────────────────
+    #
+    # **`special.softmax` is not `F.softmax`**, and both were `staticmethod(softmax)`
+    # — the fourth time this shape has turned up, after `linalg.norm`, `linalg.svd`
+    # and `linalg.pinv`. `F.softmax` is `(input, dim=None, _stacklevel=3,
+    # dtype=None)`; `special` has neither the default nor the stack level, so this
+    # library accepted `_stacklevel=4` and a dimensionless call where torch refuses
+    # both.
+    #
+    # **And the two differ from each other**, which is torch's own inconsistency and
+    # the kind a shared binding smooths over:
+    #
+    #     special.softmax(x, 1, torch.float32)      runs
+    #     special.log_softmax(x, 1, torch.float32)  TypeError
+    def stops(L, call):
+        try:
+            call(L)
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+        return "받았다"
+
+    _pair = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+    for _name in ("softmax", "log_softmax"):
+        add(f"{_name}(dim 은 필수)=거절",
+            (lambda n: lambda L: stops(L, lambda M: getattr(M.special, n)(
+                M.tensor(_pair))))(_name))
+        add(f"{_name}(_stacklevel 은 자리가 아니다)=거절",
+            (lambda n: lambda L: stops(L, lambda M: getattr(M.special, n)(
+                M.tensor(_pair), 1, _stacklevel=4)))(_name))
+        add(f"{_name}(dtype= 키워드)",
+            (lambda n: lambda L: getattr(L.special, n)(
+                L.tensor(_pair), 1, dtype=L.float32))(_name))
+
+    # **The asymmetry itself, asked as two rows.** `softmax` takes the dtype third
+    # and `log_softmax` does not — treated as one function, a reader agrees with the
+    # first and is wrong about the second.
+    add("softmax(dtype 를 셋째 위치로)",
+        lambda L: L.special.softmax(L.tensor(_pair), 1, L.float32))
+    add("log_softmax(셋째 위치는 거절)",
+        lambda L: stops(L, lambda M: M.special.log_softmax(
+            M.tensor(_pair), 1, M.float32)))
+
     return cases
 
 

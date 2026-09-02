@@ -3991,8 +3991,12 @@ class _Special:
     def softmax(input, dim, dtype=None):                        # noqa: A002
         return _resolve_name("softmax")(input, dim, dtype)
 
+    # **And `dtype` is keyword-only on this one and positional on its neighbour.**
+    # torch's own asymmetry, measured: `special.softmax(x, 1, torch.float32)` runs
+    # and `special.log_softmax(x, 1, torch.float32)` is a `TypeError`. A shared
+    # binding smooths that over, which is how both took a third positional here.
     @staticmethod
-    def log_softmax(input, dim, dtype=None):                    # noqa: A002
+    def log_softmax(input, dim, *, dtype=None):                 # noqa: A002
         return _resolve_name("log_softmax")(input, dim, dtype)
 
     def __getattr__(self, name):

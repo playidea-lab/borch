@@ -13544,8 +13544,34 @@ class _Special(_Namespace):
     polygamma = staticmethod(polygamma)
     xlogy = staticmethod(xlogy)
     logsumexp = staticmethod(logsumexp)
-    softmax = staticmethod(softmax)
-    log_softmax = staticmethod(log_softmax)
+
+    # **`special.softmax` is not `F.softmax`, and these were bound to it.** The fourth
+    # time this shape has turned up here, after `linalg.norm`, `linalg.svd` and
+    # `linalg.pinv`: one name pointing at another name's argument list.
+    #
+    # `F.softmax` is `(input, dim=None, _stacklevel=3, dtype=None)`. Measured on real
+    # torch, `special` has neither the default nor the stack level, and **the two
+    # differ from each other**:
+    #
+    #     special.softmax(input, dim, dtype=None)          third position accepted
+    #     special.log_softmax(input, dim, *, dtype=None)    keyword-only
+    #
+    # So `special.softmax(x, 1, torch.float32)` runs over there and
+    # `special.log_softmax(x, 1, torch.float32)` is a `TypeError` — torch being
+    # inconsistent between two neighbours, which is exactly the kind a shared binding
+    # smooths over. Bound to `F`, this library accepted `_stacklevel=4` on both, and
+    # the third positional on `log_softmax`, where torch refuses all three.
+    @staticmethod
+    def softmax(input, dim, dtype=None):                    # noqa: A002
+        """`torch.special.softmax`. **`dim` is required and there is no
+        `_stacklevel`** — see the note above on the name it was bound to."""
+        return softmax(input, dim, dtype=dtype)
+
+    @staticmethod
+    def log_softmax(input, dim, *, dtype=None):             # noqa: A002
+        """`torch.special.log_softmax`. **`dtype` is keyword-only here and
+        positional on `softmax` next door** — torch's own asymmetry, measured."""
+        return log_softmax(input, dim, dtype=dtype)
 
     # **These two arrived by asking the same question one more time.** The first pass
     # counted twenty forwarders and called the other thirty-seven arithmetic we do not

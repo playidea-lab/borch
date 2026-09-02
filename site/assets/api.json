@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 436
+  "missing": 437
  },
  "modules": [
   {
@@ -20711,15 +20711,15 @@
     {
      "kind": "function",
      "name": "softmax",
-     "signature": "export declare function softmax(input: Tensor, dim?: number, dtype?: Parameters<Tensor[\"softmax\"]>[1]): Tensor",
-     "doc": "**`softmax` and `logSoftmax` take `dtype`, not a destination.** Eighteen of this\nnamespace's names accept `out=` in torch and these two do not — measured, where\n`special.softmax(x, 1, out=…)` raises and the top-level `softmax` does not.",
+     "signature": "export declare function softmax(input: Tensor, dim: number, dtype?: Parameters<Tensor[\"softmax\"]>[1]): Tensor",
+     "doc": "**`dim` is required, and had a default here.** torch's `special.softmax(x)` is a\n`TypeError` — the default belongs to `F.softmax`, which is the function these two\nwere bound to on the Python side as well. A default where torch requires a value\nis the quiet direction: the call runs here and stops there.",
      "members": []
     },
     {
      "kind": "function",
      "name": "logSoftmax",
-     "signature": "export declare function logSoftmax(input: Tensor, dim?: number, dtype?: Parameters<Tensor[\"logSoftmax\"]>[1]): Tensor",
-     "doc": "",
+     "signature": "export declare function logSoftmax(input: Tensor, dim: number, dtype?: Parameters<Tensor[\"logSoftmax\"]>[1]): Tensor",
+     "doc": "As `softmax`, and torch makes `dtype` **keyword-only on this one alone** —\n`special.log_softmax(x, 1, torch.float32)` raises where the neighbour runs. JavaScript\nhas no keyword-only, so that half of the asymmetry lives on the Python sides, which\nis where a caller can express it.",
      "members": [],
      "torch": "log_softmax"
     },
