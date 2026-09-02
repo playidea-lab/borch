@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 437
+  "missing": 438
  },
  "modules": [
   {
@@ -20283,6 +20283,11 @@
        "doc": ""
       },
       {
+       "name": "word",
+       "signature": "word(value: number): GPUBuffer",
+       "doc": "One `u32` for a kernel to read at run time — an offset, a padding width.\n\n**Cached by value, for the life of the device.** The first version allocated a fresh\nfour-byte buffer per dispatch; a grouped convolution issues one such dispatch per\ngroup, and an EfficientNet-B4 forward asked for 83,724 of them — which is why the\nword is not a pooled buffer either. Slices repeat their offsets far more than they\nvary them (11,042 distinct against 55,794 asked, measured on that model), so a map\nfrom value to buffer is small, and a buffer that lives outside the scopes cannot be\nreleased under a dispatch that has not run yet.\n\nIt cannot be one buffer rewritten per dispatch: the dispatches are recorded now and\nsubmitted later, and `writeBuffer` lands before the submission — every dispatch\nwould read the last value written.\n\nA storage buffer like the rest, so the shader declares `array<u32>` and no new usage\nflag or pool appears."
+      },
+      {
        "name": "run",
        "signature": "run(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], groups: readonly [number, number, number]): void",
        "doc": "One kernel. `groups` is the **workgroup count**, and the per-axis limit\nis rechecked here — `kernels.ts` folds the grid, but a hand-called path\nmay appear.",
@@ -20362,7 +20367,7 @@
      "inherited_ctor": "private constructor()"
     }
    ],
-   "count": 41
+   "count": 42
   },
   {
    "name": "random",
@@ -21305,5 +21310,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2892
+ "total": 2893
 }

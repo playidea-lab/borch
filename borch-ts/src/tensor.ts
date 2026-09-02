@@ -2536,9 +2536,12 @@ export class Tensor implements Node<Tensor> {
     if (n === 0) {
       return new Tensor(dev().alloc(0), outShape, { dtype: this.dtype });
     }
-    const key = ruleKey(rules, offset);
+    const key = ruleKey(rules);
     const out = dev().alloc(n);
-    dev().run1d(dev().pipeline(`gt:${key}`, () => gather(rules, offset)), [this.buffer, out], n);
+    // The offset rides in a one-word buffer so that slices of one shape share one shader
+    // — the reason is written above `ruleKey`.
+    dev().run1d(dev().pipeline(`gt:${key}`, () => gather(rules)),
+                [this.buffer, out, dev().word(offset)], n);
     const inSize = this.size;
     const inShape = this.shape;
     return Tensor.make(
@@ -2549,8 +2552,8 @@ export class Tensor implements Node<Tensor> {
         const gi = dev().alloc(inSize);
         dev().run1d(
           dev().pipeline(`gb:${gradName}:${key}|${inSize}`,
-                        () => gatherBackward(rules, offset, inSize)),
-          [g.buffer, gi],
+                        () => gatherBackward(rules, inSize)),
+          [g.buffer, gi, dev().word(offset)],
           inSize,
         );
         return [new Tensor(gi, inShape)];
@@ -4012,12 +4015,13 @@ export class Tensor implements Node<Tensor> {
     const outShape = this.shape.map((s, d) => (d === axis ? s + before + after : s));
     const n = outShape.reduce((a, b) => a * b, 1);
     const out = dev().alloc(n);
+    const outSize = before + size + after;
     dev().run1d(
       dev().pipeline(
-        `pad:${outer}:${before}:${size}:${after}:${inner}:${value}`,
-        () => padAxis(outer, before, size, after, inner, value),
+        `pad:${outer}:${outSize}:${size}:${inner}:${value}`,
+        () => padAxis(outer, outSize, size, inner, value),
       ),
-      [this.buffer, out],
+      [this.buffer, out, dev().word(before)],
       n,
     );
     return Tensor.make(

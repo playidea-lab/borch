@@ -1458,18 +1458,21 @@ ${flatId(n)}
  */
 export function padAxis(
   outer: number,
-  before: number,
+  outSize: number,
   size: number,
-  after: number,
   inner: number,
   value: number,
 ): string {
-  const outSize = before + size + after;
+  // **`before` is read from `P[0]`, not baked** — see the note above `gather`. A
+  // concatenation pads each piece to the full width with a different `before`, and a
+  // grouped convolution concatenates once per group, so the padding shader was the second
+  // half of the compile storm. `outSize`, `size` and `inner` are the divisors and stay.
   const n = outer * outSize * inner;
   const literal = f32lit(value);
   return `
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(2) var<storage, read> P: array<u32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
@@ -1477,11 +1480,12 @@ ${flatId(n)}
   let rest = gid % ${outSize * inner}u;
   let c = rest / ${inner}u;
   let i = rest % ${inner}u;
-  if (c < ${before}u || c >= ${before + size}u) {
+  let before = P[0];
+  if (c < before || c >= before + ${size}u) {
     Out[gid] = ${literal};
     return;
   }
-  Out[gid] = A[o * ${size * inner}u + (c - ${before}u) * ${inner}u + i];
+  Out[gid] = A[o * ${size * inner}u + (c - before) * ${inner}u + i];
 }`;
 }
 
@@ -1576,11 +1580,11 @@ function ruleCoord(r: AxisRule, c: string): string {
  *  literal, so no division survives. */
 function sourceIndex(
   rules: readonly AxisRule[],
-  offset: number,
+  offset: string,
   from: string,
   out: string,
 ): string {
-  const lines = [`  var rest_${out} = ${from};`, `  var ${out} = ${offset}u;`];
+  const lines = [`  var rest_${out} = ${from};`, `  var ${out} = ${offset};`];
   for (let d = rules.length - 1; d >= 0; d--) {
     const r = rules[d];
     if (!r) continue;
@@ -1604,22 +1608,36 @@ function ruleCount(rules: readonly AxisRule[]): number {
  * and with shapes baked in, that is a quietly wrong answer. Which is why this function
  * lives next to the rules.
  */
-export function ruleKey(rules: readonly AxisRule[], offset: number): string {
+export function ruleKey(rules: readonly AxisRule[]): string {
   const parts = rules.map(
     (r) => `${r.kind}:${r.size}:${r.stride}:${r.wrap}:${r.bias ?? 0}`,
   );
-  return `${parts.join(",")}|${offset}`;
+  return parts.join(",");
 }
 
-export function gather(rules: readonly AxisRule[], offset: number): string {
+// **The offset is not in the key, because it is not in the shader.** It was, and one
+// EfficientNet-B4 forward baked 11,042 gather shaders whose rule sets were identical and
+// whose offsets were not: a grouped convolution slices its input once per group, and
+// every slice starts somewhere else. With 8,207 `pad` shaders of the same shape that was
+// 19,249 of the model's 19,533 pipelines — the compile storm behind #121 — while the
+// convolutions themselves were 52. The offset now arrives in a one-word storage buffer,
+// `P[0]`, and the rule set alone names the pipeline: 19,533 → 349 on that model, measured
+// before the change was written.
+//
+// The sizes and strides stay baked. They are the divisors, and a divisor the compiler
+// can see is the difference `convNDForwardTiled` documents; an addend costs nothing
+// either way.
+
+export function gather(rules: readonly AxisRule[]): string {
   const n = ruleCount(rules);
   return `
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(2) var<storage, read> P: array<u32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-${sourceIndex(rules, offset, "gid", "src")}
+${sourceIndex(rules, "P[0]", "gid", "src")}
   Out[gid] = A[src];
 }`;
 }
@@ -1691,7 +1709,6 @@ function invertibleAxes(
 
 export function gatherBackward(
   rules: readonly AxisRule[],
-  offset: number,
   inSize: number,
 ): string {
   const outN = ruleCount(rules);
@@ -1713,12 +1730,13 @@ export function gatherBackward(
     return `
 @group(0) @binding(0) var<storage, read> G: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(2) var<storage, read> P: array<u32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(inSize)}
   var acc = 0.0;
-  if (gid >= ${offset}u) {
-    var rest = gid - ${offset}u;
+  if (gid >= P[0]) {
+    var rest = gid - P[0];
     var t = 0u;
     var ok = true;
 ${steps}
@@ -1732,12 +1750,13 @@ ${steps}
   return `
 @group(0) @binding(0) var<storage, read> G: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(2) var<storage, read> P: array<u32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(inSize)}
   var acc = 0.0;
   for (var t = 0u; t < ${outN}u; t = t + 1u) {
-${sourceIndex(rules, offset, "t", "src")}
+${sourceIndex(rules, "P[0]", "t", "src")}
     if (src == gid) { acc = acc + G[t]; }
   }
   Out[gid] = acc;

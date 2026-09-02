@@ -164,6 +164,36 @@ export async function report(): Promise<Report> {
   await device().synchronize();
   want("synchronize() sends what piled up and waits", device().submits > before);
 
+  // ── One shader per shape, not per offset ────────────────────────────────────
+  // A grouped convolution slices its input once per group and pads once per group, and
+  // every slice starts at a different offset. When the offset was baked into the shader,
+  // one EfficientNet-B4 forward compiled 19,533 pipelines, 19,249 of them these two kinds
+  // (#121). The offset and the padding width now arrive in a parameter word, so the
+  // second slice of a shape must find the first slice's pipeline — measured here rather
+  // than trusted, because a key that quietly grows again is exactly what this was.
+  const wide = Tensor.from(Array.from({ length: 24 }, (_, i) => i), [4, 6]);
+  const baked = device().pipelineCount;
+  await wide.narrow(1, 0, 2).toArray();
+  const afterFirstSlice = device().pipelineCount;
+  await wide.narrow(1, 3, 2).toArray();
+  want("a second slice of the same shape bakes no new shader",
+    device().pipelineCount === afterFirstSlice,
+    `pipelines ${baked} → ${afterFirstSlice} → ${device().pipelineCount}`);
+  const narrowed = wide.narrow(1, 0, 2);
+  await narrowed.pad(1, 0, 4).toArray();
+  const afterFirstPad = device().pipelineCount;
+  await narrowed.pad(1, 4, 0).toArray();
+  want("a second pad to the same width bakes no new shader",
+    device().pipelineCount === afterFirstPad,
+    `pipelines ${afterFirstSlice} → ${afterFirstPad} → ${device().pipelineCount}`);
+  // And the values still come from the right place — sharing a shader must not mean
+  // sharing an answer.
+  want("the offset still reaches the shader",
+    same(await wide.narrow(1, 3, 2).toArray(), Float32Array.from([3, 4, 9, 10, 15, 16, 21, 22])));
+  want("the padding width still reaches the shader",
+    same(await narrowed.pad(1, 4, 0).toArray().then((a) => a.slice(0, 6)),
+         Float32Array.from([0, 0, 0, 0, 0, 1])));
+
   const failed = checks.filter((c) => !c.ok);
   const lines = checks.map((c) =>
     `  ${c.ok ? "✓" : "✗"} ${c.name}${c.note ? ` — ${c.note}` : ""}`);

@@ -755,6 +755,38 @@ export class Device {
   }
 
   /**
+   * One `u32` for a kernel to read at run time — an offset, a padding width.
+   *
+   * **Cached by value, for the life of the device.** The first version allocated a fresh
+   * four-byte buffer per dispatch; a grouped convolution issues one such dispatch per
+   * group, and an EfficientNet-B4 forward asked for 83,724 of them — which is why the
+   * word is not a pooled buffer either. Slices repeat their offsets far more than they
+   * vary them (11,042 distinct against 55,794 asked, measured on that model), so a map
+   * from value to buffer is small, and a buffer that lives outside the scopes cannot be
+   * released under a dispatch that has not run yet.
+   *
+   * It cannot be one buffer rewritten per dispatch: the dispatches are recorded now and
+   * submitted later, and `writeBuffer` lands before the submission — every dispatch
+   * would read the last value written.
+   *
+   * A storage buffer like the rest, so the shader declares `array<u32>` and no new usage
+   * flag or pool appears.
+   */
+  word(value: number): GPUBuffer {
+    const hit = this.words.get(value);
+    if (hit) return hit;
+    const buf = this.device.createBuffer({
+      size: BYTES_PER_F32,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(buf, 0, new Uint32Array([value]));
+    this.words.set(value, buf);
+    return buf;
+  }
+
+  private readonly words = new Map<number, GPUBuffer>();
+
+  /**
    * One kernel. `groups` is the **workgroup count**, and the per-axis limit
    * is rechecked here — `kernels.ts` folds the grid, but a hand-called path
    * may appear.
