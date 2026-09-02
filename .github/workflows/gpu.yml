@@ -88,18 +88,19 @@
 # ## What this file does **not** run — counted, because it used to say it did
 #
 # The line above read "the commands below are all of it". They are all of the *golden
-# comparison*. There are **thirteen entry points that need a browser** and this file
+# comparison*. There are **fourteen entry points that need a browser** and this file
 # names four:
 #
 #     here          run.py --lib borch · run.py --lib borch_webgpu ·
 #                   borch-ts/test/run.py · vendor.py check
 #
 #     not here      parity:ts · data:ts · device:ts · serialize:ts · example:ts ·
-#                   lessons:ts · scope:py          (seven more correctness checks)
+#                   lessons:ts · scope:py · firstrun:site
+#                                                 (eight more correctness checks)
 #                   cost:ts · bench:ts             (measurements, not checks)
 #
-# **Nothing runs any of the thirteen automatically** — the reason above is a good one
-# and it applies to all of them equally, so the nine below are in exactly the position
+# **Nothing runs any of the fourteen automatically** — the reason above is a good one
+# and it applies to all of them equally, so the ten below are in exactly the position
 # the four above are: run when a person runs them.
 #
 # The cost of that is not hypothetical. Three commits shipped in one session with the
@@ -128,10 +129,12 @@
 # fourteenth cannot arrive unnamed.
 #
 # **And since 2026-09-02 something does run them.** `tests/browser/nightly.py` runs the
-# twelve correctness checks (`bench` is a measurement and stays out) in a worktree of
+# thirteen correctness checks (`bench` is a measurement and stays out) in a worktree of
 # `origin/main` at 04:30 on the machine that owns this checkout, via
 # `~/Library/LaunchAgents/co.pilab.borch-nightly.plist`, and writes a log per run under
-# `~/Library/Logs/borch-nightly/`. That is one machine and one person's laptop, which is
+# `~/Library/Logs/borch-nightly/`. `firstrun:site` is the newest of them: the PRD's own
+# first number, time to first run on the landing page, measured on a real adapter every
+# night instead of once by whoever pressed the button. That is one machine and one person's laptop, which is
 # exactly the position the paragraph above describes — but it is a log line every
 # morning instead of a red file nobody opened. The list below is still the census; the
 # nightly is what reads it.

@@ -1,4 +1,4 @@
-"""The twelve browser checks nothing else runs, run once a night in a worktree.
+"""The thirteen browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -39,6 +39,7 @@ CHECKS = [
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py"]),
     ("scope",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/scope_escape.py"]),
     ("cost",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/cost.py"]),
+    ("first-run",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/first_run.py"]),
 ]
 
 

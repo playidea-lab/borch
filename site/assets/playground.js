@@ -362,10 +362,16 @@ async function run() {
     say(t("run.done", result.ms.toFixed(0)), "ok");
     if (result.stats && result.stats.faults > 0) {
       say(t("run.faults", result.stats.faults, result.stats.firstFault), "err");
+      // A fault is the device's answer; the page has another one, and the person should
+      // not have to know that to find it.
+      sayLink(t("run.pythonSay"), t("run.pythonHref"));
     }
   } catch (err) {
     say("");
     say(describeError(err), "err");
+    if (/device|WebGPU|adapter/i.test(String(err && err.message ? err.message : err))) {
+      sayLink(t("run.pythonSay"), t("run.pythonHref"));
+    }
   } finally {
     running = false;
     runBtn.disabled = false;

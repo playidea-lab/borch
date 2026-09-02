@@ -64,6 +64,11 @@ const STRINGS = {
   "run.faults": {
     en: "WebGPU validation errors: {0} — {1}",
     ko: "WebGPU 검증 오류 {0} 건: {1}" },
+  "run.pythonSay": {
+    en: "Same code without WebGPU — Python mode runs the core on wasm →",
+    ko: "WebGPU 없이 같은 코드 — Python 모드는 코어를 wasm 으로 돌린다 →" },
+  "run.pythonHref": {
+    en: "python.html", ko: "python.html" },
   "run.stopping": {
     en: "stop requested — the loop halts where it checks stopped().",
     ko: "중지를 걸었다 — 루프가 stopped() 를 보는 자리에서 멈춘다." },
