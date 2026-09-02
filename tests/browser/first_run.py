@@ -59,12 +59,45 @@ GIVE_UP_S = 120
 # Installed from outside the page once the device is ready: counts the shaders the click
 # compiles and the time `createComputePipeline` takes, which is what a first visit pays on
 # a driver with no warm cache.
+# Installed before any page script runs (`add_init_script`): every adapter request, every
+# device request, every submit and the first readback wait, page probe included.
+GPU_HOOK = """
+(() => {
+  const stat = { adapterMs: 0, deviceMs: 0, adapters: [], submits: 0, firstMapMs: 0 };
+  window.__gpuStat = stat;
+  const install = () => {
+    if (!("gpu" in navigator) || !window.GPU) return;
+    const ra = GPU.prototype.requestAdapter;
+    GPU.prototype.requestAdapter = async function (...a) {
+      const t0 = performance.now(); const r = await ra.apply(this, a);
+      const ms = performance.now() - t0; stat.adapterMs += ms;
+      stat.adapters.push({ opts: JSON.stringify(a[0] ?? null), ms: Math.round(ms) });
+      return r;
+    };
+    const rd = GPUAdapter.prototype.requestDevice;
+    GPUAdapter.prototype.requestDevice = async function (...a) {
+      const t0 = performance.now(); const r = await rd.apply(this, a); stat.deviceMs += performance.now() - t0; return r;
+    };
+    const sub = GPUQueue.prototype.submit;
+    GPUQueue.prototype.submit = function (...a) { stat.submits += 1; return sub.apply(this, a); };
+    const map = GPUBuffer.prototype.mapAsync;
+    let firstMap = true;
+    GPUBuffer.prototype.mapAsync = async function (...a) {
+      const t0 = performance.now(); const r = await map.apply(this, a);
+      if (firstMap) { stat.firstMapMs = Math.round(performance.now() - t0); firstMap = false; }
+      return r;
+    };
+  };
+  install();
+})();
+"""
+
 HOOK = """
 (lib) => import(lib).then((m) => {
   // Hooked on the class, not an instance: the page probes at load and creates its
   // device on the first click, so there is nothing to hook until then. The WebGPU
   // entry points are wrapped too, so the adapter and device requests are on the clock.
-  const stat = { compiled: 0, compileMs: 0, adapterMs: 0, deviceMs: 0 };
+  const stat = { compiled: 0, compileMs: 0 };
   const proto = m.Device.prototype;
   const orig = proto.pipeline;
   proto.pipeline = function (sig, src) {
@@ -73,14 +106,6 @@ HOOK = """
     const p = orig.call(this, sig, src);
     if (this.pipelineCount > had) { stat.compiled += 1; stat.compileMs += performance.now() - t0; }
     return p;
-  };
-  const ra = GPU.prototype.requestAdapter;
-  GPU.prototype.requestAdapter = async function (...a) {
-    const t0 = performance.now(); const r = await ra.apply(this, a); stat.adapterMs += performance.now() - t0; return r;
-  };
-  const rd = GPUAdapter.prototype.requestDevice;
-  GPUAdapter.prototype.requestDevice = async function (...a) {
-    const t0 = performance.now(); const r = await rd.apply(this, a); stat.deviceMs += performance.now() - t0; return r;
   };
   window.__firstRun = stat;
   return 0;
@@ -95,6 +120,7 @@ def _lib_url(url):
 def _visit(context, url, label):
     """One visit: opens the page, waits for the device, hooks the shader compiler, clicks."""
     page = context.new_page()
+    page.add_init_script(GPU_HOOK)
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     opened = time.time()
@@ -113,7 +139,7 @@ def _visit(context, url, label):
     done = time.time()
     said = page.evaluate(
         "[...document.querySelectorAll('#hero-out div')].map(d => d.textContent).find(t => t.startsWith('done'))")
-    stat = page.evaluate("window.__firstRun")
+    stat = page.evaluate("Object.assign({}, window.__gpuStat, window.__firstRun)")
     adapter = page.evaluate(
         f"import('{_lib_url(url)}').then(m => m.probe()).then(p => p.ok ? p.adapter : null)")
     in_page = said.split("—", 1)[1].split("ms")[0].strip() if "—" in said else "?"
@@ -121,6 +147,8 @@ def _visit(context, url, label):
     print(f"  load {loaded - opened:.2f} s · probe +{ready - loaded:.2f} s · click→done "
           f"{done - ready:.2f} s = adapter {stat['adapterMs']:.0f} ms + device {stat['deviceMs']:.0f} ms + "
           f"{stat['compiled']} shaders {stat['compileMs']:.0f} ms + the rest")
+    print(f"  adapter requests: {stat['adapters']} · submits {stat['submits']} · "
+          f"first readback waited {stat['firstMapMs']} ms")
     if errors:
         print("  page errors: " + " | ".join(errors[:3]))
     page.close()
