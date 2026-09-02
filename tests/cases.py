@@ -4088,6 +4088,75 @@ def module_function_cases(inp=None):
         lambda L: L.column_stack([L.tensor(line), L.tensor(line)]))
     add("dstack", lambda L: L.dstack([L.tensor(a2), L.tensor(b2)]))
     add("concat", lambda L: L.concat([L.tensor(a2), L.tensor(b2)], 0))
+
+    # ── one function under two torch names, asked with each name's own list ──────
+    #
+    # `tests/test_one_name_one_list.py` asks, for every function this library binds
+    # under two torch names, whether torch documents one list for both. The first run
+    # found six, all measured real against torch, and each is asked here both ways
+    # so a fixture that stops measuring is caught by the case going green for the
+    # wrong reason.
+    def stops(L, call):
+        try:
+            call(L)
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+        return "받았다"
+
+    # **`axis=` on all three joining names** — `concatenate` documents it, and torch's
+    # parser takes it on `cat` and `concat` too, measured. This library refused it on
+    # all three.
+    for _name in ("cat", "concat", "concatenate"):
+        add(f"{_name}(axis=)",
+            (lambda n: lambda L: getattr(L, n)([L.tensor(a2), L.tensor(b2)], axis=1))(_name))
+    # **Both spellings at once stop torch** — `TypeError`, measured, and the first
+    # draft of `cat`'s docstring had guessed the opposite. `dim=0` is torch's default,
+    # so this is asked with `dim=1`: `dim=0, axis=1` would be indistinguishable from
+    # `axis=1` alone to any implementation that cannot tell "given" from "default".
+    add("cat(dim 과 axis 를 둘 다)=거절",
+        lambda L: stops(L, lambda M: M.cat([M.tensor(a2), M.tensor(b2)], dim=1, axis=1)))
+
+    # **`decimals` is keyword-only** on `torch.round`, `special.round` and the method
+    # alike — `round(x, 2)` is a `TypeError` on all three, measured. This library took
+    # it positionally, so a call that stops in torch ran here.
+    _r = np.array([0.34567, 1.98765, -2.55555], dtype=np.float32)
+    add("round(decimals 는 키워드 전용)=거절",
+        lambda L: stops(L, lambda M: M.round(M.tensor(_r), 2)))
+    add("special.round(decimals 는 키워드 전용)=거절",
+        lambda L: stops(L, lambda M: M.special.round(M.tensor(_r), 2)))
+    add("Tensor.round(decimals 는 키워드 전용)=거절",
+        lambda L: stops(L, lambda M: M.tensor(_r).round(2)))
+    add("round(decimals=)", lambda L: L.round(L.tensor(_r), decimals=2))
+
+    # **`torch.softmax` is not `F.softmax`.** The top level was bound to `F`'s list —
+    # `dim` optional, `_stacklevel` a seat — and torch's top level has neither. The
+    # third position is `dtype` on both top-level names, unlike `special`'s pair.
+    _pair = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+    for _name in ("softmax", "log_softmax"):
+        add(f"torch.{_name}(dim 은 필수)=거절",
+            (lambda n: lambda L: stops(L, lambda M: getattr(M, n)(M.tensor(_pair))))(_name))
+        add(f"torch.{_name}(_stacklevel 은 자리가 아니다)=거절",
+            (lambda n: lambda L: stops(L, lambda M: getattr(M, n)(
+                M.tensor(_pair), 1, _stacklevel=4)))(_name))
+        add(f"torch.{_name}(dtype 를 셋째 위치로)",
+            (lambda n: lambda L: getattr(L, n)(L.tensor(_pair), 1, L.float32))(_name))
+
+    # **Three names torch removed in 1.9.** `torch.solve`, `torch.lstsq` and
+    # `torch.matrix_rank` exist there and raise; this library bound each to its
+    # `linalg` successor and computed — with the old argument order. The `linalg`
+    # names beside them still run, which is the other half of the same fact.
+    _A = np.array([[3., 1.], [1., 2.]], dtype=np.float32)
+    _B = np.array([[9., 2.], [8., 3.]], dtype=np.float32)
+    add("torch.solve(제거된 이름)=거절",
+        lambda L: stops(L, lambda M: M.solve(M.tensor(_B), M.tensor(_A))))
+    add("torch.lstsq(제거된 이름)=거절",
+        lambda L: stops(L, lambda M: M.lstsq(M.tensor(_B), M.tensor(_A))))
+    add("torch.matrix_rank(제거된 이름)=거절",
+        lambda L: stops(L, lambda M: M.matrix_rank(M.tensor(_A))))
+    add("torch.matrix_rank(symmetric= 도 거절)=거절",
+        lambda L: stops(L, lambda M: M.matrix_rank(M.tensor(_A), symmetric=True)))
+    add("linalg.solve(이웃은 산다)", lambda L: L.linalg.solve(L.tensor(_A), L.tensor(_B)))
+    add("linalg.matrix_rank(이웃은 산다)", lambda L: L.linalg.matrix_rank(L.tensor(_A)))
     add("block_diag", lambda L: L.block_diag(L.tensor(a2), L.tensor(b2[:1])))
 
     add("t(2차원)", lambda L: L.t(L.tensor(a2)))

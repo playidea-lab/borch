@@ -7843,6 +7843,18 @@ function addModFn(out: Map<string, Case>, inp: Inputs): void {
   ];
   for (const [name, fn] of aliases) out.set(`modfn::${name}`, fn);
 
+  // **The other half of three tombstones.** `torch.solve`, `torch.lstsq` and
+  // `torch.matrix_rank` were removed in torch 1.9 and the Python surface now refuses
+  // them (asked there, under this prefix); borch.ts never had the three names, which
+  // is the same refusal. These two say the `linalg` neighbours beside them still run.
+  // Set here rather than in the table above: the table is typed synchronous and
+  // `linalg` answers with a promise.
+  out.set("modfn::linalg.solve(이웃은 산다)",
+    async () => linalg.solve(Tensor.from([3, 1, 1, 2], [2, 2]),
+                             Tensor.from([9, 2, 8, 3], [2, 2])));
+  out.set("modfn::linalg.matrix_rank(이웃은 산다)",
+    async () => linalg.matrixRank(Tensor.from([3, 1, 1, 2], [2, 2])));
+
   // The blocks are laid along the diagonal and the rest is 0.
   out.set("modfn::block_diag", () => {
     const a = a2();

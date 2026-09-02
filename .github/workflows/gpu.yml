@@ -127,6 +127,15 @@
 # holds the number below against the tree — it cannot run any of these, but a
 # fourteenth cannot arrive unnamed.
 #
+# **And since 2026-09-02 something does run them.** `tests/browser/nightly.py` runs the
+# twelve correctness checks (`bench` is a measurement and stays out) in a worktree of
+# `origin/main` at 04:30 on the machine that owns this checkout, via
+# `~/Library/LaunchAgents/co.pilab.borch-nightly.plist`, and writes a log per run under
+# `~/Library/Logs/borch-nightly/`. That is one machine and one person's laptop, which is
+# exactly the position the paragraph above describes — but it is a log line every
+# morning instead of a red file nobody opened. The list below is still the census; the
+# nightly is what reads it.
+#
 # **The list is here rather than a script.** Making it automatic means making it slower
 # to run, and slower means run less often — which is the road the miss above walked.
 # What a reader needs is not a longer command but the number, so that leaving one out

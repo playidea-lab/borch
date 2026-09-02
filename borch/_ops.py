@@ -519,7 +519,24 @@ def stack(items, dim=0):
         "StackBackward0")
 
 
-def cat(items, dim=0):
+def cat(items, dim=0, *, axis=None):
+    """Join along one axis.
+
+    **`axis=` is accepted, because torch accepts it** — on `cat`, `concat` and
+    `concatenate` alike, measured. `concatenate` even documents it as `axis`, numpy's
+    spelling, and the other two take it as an alias. Refused here, a numpy-shaped line
+    stopped in this library and ran in torch, which is the direction this library must
+    not be wrong in.
+
+    **Given both, torch stops** — `cat([x, x], dim=0, axis=0)` is
+    `TypeError: cat() got an unexpected keyword argument 'axis'`, measured. The first
+    draft of this docstring said the named one wins, which was a guess about torch's
+    parser written as a fact; the measurement replaced it before the case was frozen.
+    """
+    if axis is not None:
+        if dim != 0:
+            raise TypeError("cat() got an unexpected keyword argument 'axis'")
+        dim = axis
     items = [_wrap(t) for t in items]
     out = _np.concatenate([t.data for t in items], axis=dim)
     sizes = [t.data.shape[dim] for t in items]
@@ -2692,8 +2709,14 @@ ceil = _unary("Ceil", _np.ceil, _zero_grad)
 _round_unary = _unary("Round", lambda x: _np.round(x), _zero_grad)
 
 
-def round(input, decimals=0):
-    """**torch takes `decimals` and this did not**, so `round(x, 2)` was a
+def round(input, *, decimals=0):
+    """**torch takes `decimals` and this did not**, and then took it in the wrong
+    seat: keyword-only there — `torch.round(x, 2)` and `x.round(2)` are both a
+    `TypeError`, measured — and positional here, so `round(x, 2)` ran in this library
+    and stopped in torch. Found by `tests/test_one_name_one_list.py`, which asks the
+    same question of every function standing under two names.
+
+    The earlier note, kept because it is still the other half: `round(x, 2)` was a
     `TypeError` where torch rounds to two places. The name is one of the most
     ordinary in the library and the argument is the reason anybody reaches for it.
 
@@ -6224,6 +6247,23 @@ def prelu(input, weight):
     return input._make(out.astype(d.dtype), (input, weight), back, "PreluBackward0")
 
 
+# **`torch.softmax` is not `F.softmax`, and the top level was bound to `F`'s.** The fifth
+# time this shape has come up (`linalg.norm`, `linalg.svd`, `linalg.pinv`,
+# `special.softmax`), and the first found by the check written after the fourth rather
+# than by a sweep. Measured: `torch.softmax(x)` is a `TypeError` (`dim` required),
+# `torch.softmax(x, 1, _stacklevel=4)` is a `TypeError`, and the third position takes
+# `dtype` — on `log_softmax` too, unlike `special`'s pair.
+def top_softmax(input, dim, dtype=None):                        # noqa: A002
+    """`torch.softmax(input, dim, dtype=None)`. `dim` is required; there is no
+    `_stacklevel` — that seat belongs to `F.softmax`, which this stood in for."""
+    return softmax(input, dim, dtype=dtype)
+
+
+def top_log_softmax(input, dim, dtype=None):                    # noqa: A002
+    """`torch.log_softmax(input, dim, dtype=None)`, as `top_softmax`."""
+    return log_softmax(input, dim, dtype=dtype)
+
+
 def log_softmax(input, dim=None, _stacklevel=3, dtype=None):   # noqa: A002
     t, dim = _softmax_args(input, dim, dtype, _stacklevel, "log_softmax")
     shifted = t.data - t.data.max(axis=dim, keepdims=True)
@@ -7588,6 +7628,54 @@ def is_vulkan_available(*args, **kw):
     be believed."""
     del args, kw
     return False
+
+
+# ── three names torch removed, kept here to refuse the way torch refuses ──────────
+#
+# `torch.solve`, `torch.lstsq` and `torch.matrix_rank` were deprecated in 1.9 and are
+# **removed**: the names still exist and raise. This library bound each to its
+# `linalg` successor, so `torch.solve(B, A)` computed here — with the old argument
+# order, no less — and raises over there. Running where torch stops is the worst
+# direction a compatibility layer can be wrong in, and it was found by
+# `tests/test_one_name_one_list.py` asking whether one function stood under two names
+# with two lists. The `Tensor` methods of the same names already refuse this way.
+#
+# Each carries torch's old argument list, so a wrong call stops where torch stops it,
+# and torch's own first sentence.
+def _removed_by_torch(name, instead, note):
+    def refuse(*args, **kw):
+        del args, kw
+        raise RuntimeError(_like_torch(
+            f"`torch.{name}` was removed in torch 1.9 — use `torch.linalg.{instead}`.",
+            "This function was deprecated since version 1.9 and is now removed. "
+            + note))
+    refuse.__name__ = name
+    refuse.__qualname__ = name
+    return refuse
+
+
+def removed_solve(input, A):                                    # noqa: A002, N803
+    """`torch.solve(B, A)` — removed. `torch.linalg.solve(A, B)` is the successor,
+    **with its arguments reversed** and no LU factorisation in the return."""
+    return _removed_by_torch("solve", "solve",
+        "`torch.solve` is deprecated in favor of `torch.linalg.solve`. `torch.linalg.solve` "
+        "has its arguments reversed and does not return the LU factorization.")(input, A)
+
+
+def removed_lstsq(input, A):                                    # noqa: A002, N803
+    """`torch.lstsq(B, A)` — removed. `torch.linalg.lstsq(A, B)` is the successor,
+    with reversed arguments and the residuals in a named field."""
+    return _removed_by_torch("lstsq", "lstsq",
+        "`torch.lstsq` is deprecated in favor of `torch.linalg.lstsq`.")(input, A)
+
+
+def removed_matrix_rank(input, tol=None, symmetric=False):      # noqa: A002
+    """`torch.matrix_rank(input, tol, symmetric)` — removed. `torch.linalg.matrix_rank`
+    is the successor, and `symmetric` was renamed `hermitian` there."""
+    return _removed_by_torch("matrix_rank", "matrix_rank",
+        "Please use the `torch.linalg.matrix_rank` function instead. The parameter "
+        "'symmetric' was renamed in `torch.linalg.matrix_rank()` to 'hermitian'.")(
+        input, tol, symmetric)
 
 
 def cudnn_is_acceptable(tensor):

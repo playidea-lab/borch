@@ -395,6 +395,15 @@ NOT_PORTED = {
     # the eleven functional rows beside it are ported; this one asks a `state_dict`
     # spelling, and borch.ts names its own through `ownParameters`, which is a
     # different question from the one the case is named for.
+    # **Eighteen from `tests/test_one_name_one_list.py`'s first run**, all about the
+    # Python surface: `axis=` as a keyword spelling of `dim` (borch.ts has one seat and
+    # no keywords), `decimals` and `dtype` in seats that are keyword-only or required
+    # over there (a JavaScript call has no keyword-only), and the three top-level names
+    # torch removed in 1.9 — `solve`, `lstsq`, `matrix_rank` — which borch.ts never had,
+    # so the refusal is the absence. The two `linalg` neighbours from the same block
+    # are ported above, which is why the number is eighteen and not twenty.
+    "modfn::": (18, "파이썬 — keyword spellings, keyword-only seats and three removed "
+                    "top-level names; the two portable neighbours are ported"),
     "loss::": (19, "파이썬 — torch keeps these seven at top level as well as "
                          "under `F`, with an integer reduction and a different default. "
                          "borch.ts has one namespace, so there is no second place to "

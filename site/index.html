@@ -209,6 +209,28 @@
       anything that must survive is marked <code>keepAlive()</code> ·
       you call a model with <code>model.call(x)</code> (JS cannot call an object).
     </div>
+
+    <div class="note-box" style="margin-top:1rem">
+      <strong>And five places the <em>values</em> part from torch — each pinned by a check, so
+      changing one goes red rather than drifting.</strong><br>
+      <code>nn.Parameter(t)</code> <strong>copies</strong> rather than sharing storage
+      (there are no views here; the Python binding made the same choice so the two GPU
+      sides do not part from each other) ·
+      on borch.ts, <code>requiresGrad</code> alone makes a tensor a parameter
+      (torch counts only what is wrapped) ·
+      <code>get_num_threads()</code> answers <strong>1</strong> (every op runs on the
+      calling thread; torch answers the machine's core count) ·
+      there is no <code>float64</code> or <code>complex128</code>, and <code>int32</code>,
+      <code>int16</code>, <code>int8</code>, <code>uint8</code>, <code>float16</code>,
+      <code>bfloat16</code> are <strong>names only</strong> — kept so a typo and an absence
+      read differently, gathered into <code>int64</code> and <code>float32</code> ·
+      <code>conj()</code> flips the values at once, so <code>is_conj()</code> is never
+      true (torch's is lazy).<br>
+      <span class="small muted">Pinned in <code>borch-ts/test/parity.ts</code>
+      ("here we part from torch") and <code>tests/test_subset_claims.py</code>. The
+      golden holds only what agrees with torch; a divergence written in a comment alone
+      is one the next person changes without reading it.</span>
+    </div>
   </div>
 </section>
 
@@ -465,9 +487,9 @@ for step in range(201):
     </table>
     </div>
     <p class="small muted" style="margin-top:.8rem">
-      On top of that, <strong>4700 golden cases</strong> hold all three implementations to the same expected values.
+      On top of that, <strong>4720 golden cases</strong> hold all three implementations to the same expected values.
       Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
-      on Apple Metal — <code data-measured="golden">agreeing 4689 / 4689 [apple / metal-3]</code> — and on
+      on Apple Metal — <code data-measured="golden">agreeing 4709 / 4709 [apple / metal-3]</code> — and on
       <strong>NVIDIA</strong> too: <code>3880 / 3880 [nvidia / blackwell]</code> on an RTX 5080, in a real desktop
       session rather than a virtual framebuffer, measured on 2026-08-30 when the table held 3880 through the
       binding. <strong>The training agrees as well</strong>:

@@ -766,7 +766,13 @@ def eye(n, m=None, **kw):
     return _made(_ts.Tensor.eye(n, n if m is None else m), kw)
 
 
-def cat(parts, dim=0):
+def cat(parts, dim=0, *, axis=None):
+    # `axis=` is torch's accepted alias on all three joining names and both at once is
+    # torch's `TypeError` — the rule and its measurement are on the core's `cat`.
+    if axis is not None:
+        if dim != 0:
+            raise TypeError("cat() got an unexpected keyword argument 'axis'")
+        dim = axis
     return wrap(_ts.Tensor.cat(_js.Array.from_([p._h for p in parts]), dim))
 
 
@@ -3637,6 +3643,44 @@ class _MinMax:
 # Reached through the method the extra words are handed to JavaScript and dropped, so
 # the default answer comes back under the name of a computation nobody ran. The values
 # are named here rather than derived because `lu_solve` is `luSolveFactored` over there.
+# **Three names torch removed in 1.9**, refused here the way the core refuses them —
+# the core's tombstones are reused rather than rewritten, so the message is one
+# string. Without these the module-level `__getattr__` forwards `solve(B, A)` to the
+# first argument's method, and a call that stops in torch computes here.
+def solve(input, A):                                            # noqa: A002, N803
+    from borch._ops import removed_solve
+    return removed_solve(input, A)
+
+
+def lstsq(input, A):                                            # noqa: A002, N803
+    from borch._ops import removed_lstsq
+    return removed_lstsq(input, A)
+
+
+def matrix_rank(input, tol=None, symmetric=False):              # noqa: A002
+    from borch._ops import removed_matrix_rank
+    return removed_matrix_rank(input, tol, symmetric)
+
+
+# **Three top-level names that the forwarder answered with the wrong list.** Reached
+# through `__getattr__`, `round(x, 2)` became the method call `x.round(2)` and ran,
+# and `round(x, decimals=2)` was refused as a keyword the door does not take — the
+# opposite of torch on both counts. `softmax`/`log_softmax` had a `_SIGNATURE` row
+# that made `dim` optional, where `torch.softmax(x)` is a `TypeError`. Each is
+# written out here with torch's list, and named in `__init__`, which is the only way
+# a name gets past that door.
+def round(input, *, decimals=0, out=None):                      # noqa: A002
+    return _out(input.round(decimals=decimals), out, "round")
+
+
+def softmax(input, dim, dtype=None):                            # noqa: A002
+    return _resolve_name("softmax")(input, dim, dtype)
+
+
+def log_softmax(input, dim, dtype=None):                        # noqa: A002
+    return _resolve_name("log_softmax")(input, dim, dtype)
+
+
 _VIA_NAMESPACE = {
     "norm": "norm",
     "lu": "lu",
@@ -3955,7 +3999,7 @@ class _Special:
         return __getattr__("logit")(input, eps, out=out)
 
     @staticmethod
-    def round(input, decimals=0, out=None):                     # noqa: A002
+    def round(input, *, decimals=0, out=None):                  # noqa: A002
         """**`decimals` is missing from torch's docstring for this name and torch
         reads it** (`round(0.34567, decimals=3)` → `0.346`, measured)."""
         return __getattr__("round")(input, decimals, out=out)

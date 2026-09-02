@@ -135,6 +135,11 @@ from ._ops import (                                      # noqa: E402,F401
     # `linalg` namespace are written out** — `__getattr__` passes the rest to the
     # first argument's method.
     lu, lu_solve, lu_unpack,
+    # Three names torch removed in 1.9 — written out so they refuse instead of
+    # reaching the first argument's method, which computes. And three whose list the
+    # forwarder got wrong: `round` (keyword-only `decimals`), `softmax`, `log_softmax`
+    # (`dim` required).
+    solve, lstsq, matrix_rank, round, softmax, log_softmax,
     # Statistics. Four of the random ones are frozen by **their bounds** rather
     # than their values. The last two keep a name and refuse.
     bernoulli, binomial, hash_tensor, histogramdd, normal, poisson, trapz,

@@ -838,6 +838,12 @@ class Tensor:
 
     # ── everything else is forwarded ──────────────────────────────────────
 
+    def round(self, *, decimals=0):
+        """`decimals` is keyword-only on torch's method — `x.round(2)` is a
+        `TypeError` there, measured — and the forwarder below would have passed the
+        `2` straight to borch.ts, which takes it. Written out so the seat refuses."""
+        return Tensor.__getattr__(self, "round")(decimals)
+
     def __getattr__(self, name):
         """Names this class does not have are forwarded **to the borch.ts
         tensor.**

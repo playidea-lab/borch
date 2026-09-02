@@ -122,6 +122,11 @@ def test_every_binding_name_torch_gives_out_has_a_door():
     **It does not require the argument to be honoured.** Refusing is the right answer
     here and `_no_out` is the refusal; what is forbidden is the third thing, taking it
     and going on, which leaves the caller's tensor unwritten with no error at all.
+
+    **Writing is the other door.** `_out(value, out, name)` is what the module's
+    `__getattr__` puts on every forwarded name, and a name written out by hand — the
+    top-level `round`, once its `decimals` became keyword-only — can reach the same
+    helper. That honours the argument, which is the opposite of swallowing it.
     """
     taking_out = _torch_names_taking_out()
     naked = []
@@ -133,7 +138,7 @@ def test_every_binding_name_torch_gives_out_has_a_door():
             head = src.split("\n", 1)[0]
             if "out" not in head and "**kw" not in head:
                 continue                    # the name is not offered here at all
-            if "_no_out" not in src:
+            if "_no_out" not in src and "_out(" not in src:
                 naked.append(f"{where} — {name}")
     assert not naked, (
         "binding names torch gives an `out=` and this takes with no door:\n  "

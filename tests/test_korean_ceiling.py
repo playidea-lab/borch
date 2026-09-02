@@ -418,7 +418,11 @@ CEILINGS = {
     # in Korean why JavaScript cannot ask those eight: the marker word `파이썬` is the
     # key `test_site.py` matches on to split declined work from owed work, so the
     # sentence after it lives in the same language.
-    "borch-ts/test": 4965,
+    # 4965 → 4978. Thirteen: two case names in `cases.ts` — `linalg.solve(이웃은
+    # 산다)` and `linalg.matrix_rank(이웃은 산다)`, keys against `tests/cases.py` — and
+    # the `파이썬` marker heading the new `modfn::` ledger row in `run.py`, which is a
+    # key too (`test_alias_rows.py` reads the marker off the head of the string).
+    "borch-ts/test": 4978,
 }
 
 
