@@ -190,7 +190,7 @@ import {
   convGradInputGrid,
   convGradWeightGrid,
   convGradWeightSplit,
-  convNDForwardTiled,
+  convNDForwardTiled, depthwiseForward, isDepthwise,
   convNDGradInputTiled,
   convNDGradWeightTiled,
   convNDKey,
@@ -10237,31 +10237,34 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * conv was fast only in that layout. Here we write the kernels ourselves,
    * so torch's layout is used as-is.
    */
-  conv2d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
+  conv2d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0,
+         dilation: number | readonly number[] = 1, groups = 1): Tensor {
     if (this.shape.length !== 4 || weight.shape.length !== 4) {
       throw new Error(`conv2d is 4-D by 4-D: [${this.shape}] x [${weight.shape}]`);
     }
-    return this.convND(weight, bias, stride, padding);
+    return this.convND(weight, bias, stride, padding, dilation, groups);
   }
 
   /**
    * One-dimensional convolution. `(N, C, L)`.
    */
-  conv1d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
+  conv1d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0,
+         dilation: number | readonly number[] = 1, groups = 1): Tensor {
     if (this.shape.length !== 3 || weight.shape.length !== 3) {
       throw new Error(`conv1d is 3-D by 3-D: [${this.shape}] x [${weight.shape}]`);
     }
-    return this.convND(weight, bias, stride, padding);
+    return this.convND(weight, bias, stride, padding, dilation, groups);
   }
 
   /**
    * Three-dimensional convolution. `(N, C, D, H, W)`.
    */
-  conv3d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
+  conv3d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0,
+         dilation: number | readonly number[] = 1, groups = 1): Tensor {
     if (this.shape.length !== 5 || weight.shape.length !== 5) {
       throw new Error(`conv3d is 5-D by 5-D: [${this.shape}] x [${weight.shape}]`);
     }
-    return this.convND(weight, bias, stride, padding);
+    return this.convND(weight, bias, stride, padding, dilation, groups);
   }
 
   maxPool1d(kernel = 2, stride?: number): Tensor {
@@ -10604,12 +10607,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     groups = 1,
   ): Tensor {
     const spatial = this.shape.length - 2;
+    // **Groups live inside the kernel now.** They were a loop of slice → convolve → join,
+    // which reads as the gradient following from the pieces and was measured as the whole
+    // cost of a depthwise network: EfficientNet-B4 at 64×64 spent 140,541 dispatches on
+    // one forward, 83,724 of them the slices and the joins, and its second forward took
+    // 2.2 s after the compile storm was gone. The three conv shaders take a group axis
+    // (`tiledGemm`'s `groups`), so a grouped layer is one dispatch like any other.
     if (groups !== 1) {
-      // **Groups by slicing and joining, not inside the kernel.** The gradient
-      // then follows from the pieces — `narrow` and `cat` carry theirs — where a
-      // grouped path through the shader would be a second index arithmetic that
-      // has to agree with the first, and the three conv shaders each carry one
-      // already.
       const inCh = this.shape[1] ?? 1;
       const outCh = weight.shape[0] ?? 1;
       if (inCh % groups !== 0 || outCh % groups !== 0) {
@@ -10617,16 +10621,6 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           `groups=${groups} divides neither the input channels (${inCh}) nor the `
           + `filters (${outCh})`);
       }
-      const cin = inCh / groups;
-      const cout = outCh / groups;
-      const parts: Tensor[] = [];
-      for (let g = 0; g < groups; g++) {
-        parts.push(this.narrow(1, g * cin, cin).convND(
-          weight.narrow(0, g * cout, cout),
-          bias === null ? null : bias.narrow(0, g * cout, cout),
-          stride, padding, dilation));
-      }
-      return Tensor.cat(parts, 1);
     }
     if (spatial < 1 || weight.shape.length !== this.shape.length) {
       throw new Error(`conv: shapes do not match: [${this.shape}] x [${weight.shape}]`);
@@ -10640,15 +10634,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const dl = spread(dilation);
     const C = this.shape[1] ?? 1;
     const WC = weight.shape[1] ?? 1;
-    if (C !== WC) {
+    if (C !== WC * groups) {
       throw new RuntimeError(
-        `Given groups=1, weight of size [${weight.shape}], expected input` +
-          `[${this.shape}] to have ${WC} channels, but got ${C} channels instead`,
+        `Given groups=${groups}, weight of size [${weight.shape}], expected input` +
+          `[${this.shape}] to have ${WC * groups} channels, but got ${C} channels instead`,
       );
     }
     const s: ConvNDShape = {
       N: this.shape[0] ?? 1, C, O: weight.shape[0] ?? 1,
-      inDims, kernel, stride: st, pad: pd, dilation: dl,
+      inDims, kernel, stride: st, pad: pd, dilation: dl, groups,
       outDims: inDims.map((d, i) =>
         convOut(d, pd[i] ?? 0, kernel[i] ?? 1, st[i] ?? 1, dl[i] ?? 1)),
     };
@@ -10659,13 +10653,22 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // It uses the tiled version. The shader is longer than the simple one and costs one
     // more compilation, and it is cached by shape signature, so that happens once while
     // what runs every step is the kernel.
-    dev().run(
-      dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}`,
-        () => convNDForwardTiled(s, bias !== null)),
-      bias ? [this.buffer, weight.buffer, bias.buffer, out]
-        : [this.buffer, weight.buffer, out],
-      convTiledGrid(s),
-    );
+    const buffers = bias ? [this.buffer, weight.buffer, bias.buffer, out]
+      : [this.buffer, weight.buffer, out];
+    if (isDepthwise(s)) {
+      // One thread per output cell — the tiled GEMM wastes 63 rows in 64 here. Reason
+      // and measurement are on `depthwiseForward`.
+      dev().run1d(
+        dev().pipeline(`cdw:${key}:${bias ? "b" : "n"}`, () => depthwiseForward(s, bias !== null)),
+        buffers, n);
+    } else {
+      dev().run(
+        dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}`,
+          () => convNDForwardTiled(s, bias !== null)),
+        buffers,
+        convTiledGrid(s),
+      );
+    }
     const parents = bias ? [this, weight, bias] : [this, weight];
     return Tensor.make(
       out,

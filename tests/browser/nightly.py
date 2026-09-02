@@ -82,7 +82,11 @@ def prepare(log):
     if sh(["npx", "tsc", "-p", "borch-ts/tsconfig.json"], WORKTREE, log):
         return False
     # The golden is not committed; every runner reads it, so it is frozen here first.
-    return sh(["uv", "run", "--project", str(REPO), "python", "-W", "ignore",
+    # **torch is named here, not assumed.** The project's own environment has numpy and
+    # nothing else; the first run on the 5080 stopped at `import torch` because the
+    # laptop's environment happened to carry it. This is the workflow's spelling.
+    return sh(["uv", "run", "--project", str(REPO), "--with", "torch", "--with", "torchvision",
+               "--with", "scipy", "python", "-W", "ignore",
                "tests/golden.py", "dump"], WORKTREE, log) == 0
 
 

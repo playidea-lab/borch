@@ -57,16 +57,22 @@ export function channelShuffle(input: Tensor, groups: number): Tensor {
   return input.channelShuffle(groups);
 }
 
-export function conv1d(input: Tensor, weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
-  return input.conv1d(weight, bias, stride, padding);
+// `dilation` and `groups` are torch's fifth and sixth seats. The door had four, so
+// `F.conv2d(x, w, null, 1, 1, 1, 2)` ran a groups=1 convolution and refused the shape —
+// while `nn.Conv2d` carried both all along. Measured by the grouped golden cases.
+export function conv1d(input: Tensor, weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0,
+                       dilation: number | readonly number[] = 1, groups = 1): Tensor {
+  return input.conv1d(weight, bias, stride, padding, dilation, groups);
 }
 
-export function conv2d(input: Tensor, weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
-  return input.conv2d(weight, bias, stride, padding);
+export function conv2d(input: Tensor, weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0,
+                       dilation: number | readonly number[] = 1, groups = 1): Tensor {
+  return input.conv2d(weight, bias, stride, padding, dilation, groups);
 }
 
-export function conv3d(input: Tensor, weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
-  return input.conv3d(weight, bias, stride, padding);
+export function conv3d(input: Tensor, weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0,
+                       dilation: number | readonly number[] = 1, groups = 1): Tensor {
+  return input.conv3d(weight, bias, stride, padding, dilation, groups);
 }
 
 export function cosineEmbeddingLoss(

@@ -233,7 +233,18 @@ def golden_inputs():
     vis_f = vis.random((5, 4, 3)).astype(np.float32)
     vis_gray = vis.integers(0, 256, (5, 4), dtype=np.uint8)
 
-    return {"x1": x1, "xp": xp, "x2": x2, "img": img, "idx2": idx2, "tail": tail,
+    # Grouped-convolution fixtures, drawn from their own generator so the inputs above
+    # keep their values: 4 channels in, 6 filters over 2 (groups=2), a depthwise 4-over-1
+    # (groups=4), and a 1-D 6-over-1 in three groups.
+    _g = np.random.default_rng(7)
+    gx = _g.standard_normal((2, 4, 5, 5)).astype(np.float32)
+    gw = _g.standard_normal((6, 2, 3, 3)).astype(np.float32)
+    gb = _g.standard_normal(6).astype(np.float32)
+    dw = _g.standard_normal((4, 1, 3, 3)).astype(np.float32)
+    g1x = _g.standard_normal((2, 3, 7)).astype(np.float32)
+    g1w = _g.standard_normal((6, 1, 3)).astype(np.float32)
+    return {"gx": gx, "gw": gw, "gb": gb, "dw": dw, "g1x": g1x, "g1w": g1w,
+            "x1": x1, "xp": xp, "x2": x2, "img": img, "idx2": idx2, "tail": tail,
             "seq_x": seq_x, "attn_x": attn_x,
             "train_x": train_x, "train_y": train_y,
             "w0": w0, "b0": b0, "w1": w1, "b1": b1,
@@ -11390,6 +11401,40 @@ def webgpu_cases(inp=None):
             return _grad_of(x if w == "x" else k, f"conv1d/{w}")
         return run
 
+    gx, gw, gb, dw, g1x, g1w = (inp[k] for k in ("gx", "gw", "gb", "dw", "g1x", "g1w"))
+
+    def grouped_grad(which):
+        def run(L, w=which):
+            x = L.tensor(gx, requires_grad=True)
+            k = L.tensor(gw, requires_grad=True)
+            b = L.tensor(gb, requires_grad=True)
+            L.nn.functional.conv2d(x, k, b, 1, 1, 1, 2).sum().backward()
+            return _grad_of({"x": x, "w": k, "b": b}[w], f"conv2d_groups/{w}")
+        return run
+
+    def depthwise_grad(which):
+        def run(L, w=which):
+            x = L.tensor(gx, requires_grad=True)
+            k = L.tensor(dw, requires_grad=True)
+            L.nn.functional.conv2d(x, k, None, 2, 1, 1, 4).sum().backward()
+            return _grad_of(x if w == "x" else k, f"conv2d_depthwise/{w}")
+        return run
+
+    def conv1d_groups_grad():
+        def run(L):
+            x = L.tensor(g1x, requires_grad=True)
+            k = L.tensor(g1w, requires_grad=True)
+            L.nn.functional.conv1d(x, k, None, 1, 1, 1, 3).sum().backward()
+            return _grad_of(k, "conv1d_groups/w")
+        return run
+
+    def _stops(call):
+        try:
+            call()
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+        return "받았다"
+
     cases = [
         (WEBGPU_PREFIX + "F.conv1d",
          lambda L: L.nn.functional.conv1d(L.tensor(seq), L.tensor(ck1), None, 1, 1)),
@@ -11397,6 +11442,26 @@ def webgpu_cases(inp=None):
          lambda L: L.nn.functional.conv1d(L.tensor(seq), L.tensor(ck1), None, 2, 1)),
         (WEBGPU_PREFIX + "grad::conv1d/x", conv1d_grad("x")),
         (WEBGPU_PREFIX + "grad::conv1d/w", conv1d_grad("w")),
+        # ── channel groups, inside the kernel ──────────────────────────────────
+        # `groups=` was a loop of slice → convolve → join around the kernel, and the
+        # golden had one forward case for it. The three conv shaders now take a group
+        # axis, so the gradient to every input is a different index arithmetic than
+        # before — asked here for a plain grouping, for depthwise (`groups == C`, the
+        # EfficientNet case), and for 1-D, each against real torch.
+        (WEBGPU_PREFIX + "F.conv2d(groups=2)",
+         lambda L: L.nn.functional.conv2d(L.tensor(gx), L.tensor(gw), L.tensor(gb), 1, 1, 1, 2)),
+        (WEBGPU_PREFIX + "grad::conv2d_groups/x", grouped_grad("x")),
+        (WEBGPU_PREFIX + "grad::conv2d_groups/w", grouped_grad("w")),
+        (WEBGPU_PREFIX + "grad::conv2d_groups/b", grouped_grad("b")),
+        (WEBGPU_PREFIX + "F.conv2d(depthwise, stride 2)",
+         lambda L: L.nn.functional.conv2d(L.tensor(gx), L.tensor(dw), None, 2, 1, 1, 4)),
+        (WEBGPU_PREFIX + "grad::conv2d_depthwise/x", depthwise_grad("x")),
+        (WEBGPU_PREFIX + "grad::conv2d_depthwise/w", depthwise_grad("w")),
+        (WEBGPU_PREFIX + "F.conv1d(groups=3)",
+         lambda L: L.nn.functional.conv1d(L.tensor(g1x), L.tensor(g1w), None, 1, 1, 1, 3)),
+        (WEBGPU_PREFIX + "grad::conv1d_groups/w", conv1d_groups_grad()),
+        (WEBGPU_PREFIX + "F.conv2d(groups 가 채널을 안 나눔)=거절",
+         lambda L: _stops(lambda: L.nn.functional.conv2d(L.tensor(gx), L.tensor(gw), None, 1, 1, 1, 3))),
         (WEBGPU_PREFIX + "F.max_pool1d",
          lambda L: L.nn.functional.max_pool1d(L.tensor(seq), 2)),
         (WEBGPU_PREFIX + "Upsample(최근접)",

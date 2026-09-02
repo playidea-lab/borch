@@ -236,9 +236,12 @@ _SIGNATURE = {
     "cat": ("dim",),
     "stack": ("dim",),
     "unbind": ("dim",),
-    "conv1d": ("weight", "bias", "stride", "padding"),
-    "conv2d": ("weight", "bias", "stride", "padding"),
-    "conv3d": ("weight", "bias", "stride", "padding"),
+    # torch's full list — `dilation` and `groups` are the fifth and sixth seats, and the
+    # functional door dropped both while `nn.Conv2d` carried them: `F.conv2d(x, w, None,
+    # 1, 1, 1, 2)` computed a groups=1 convolution and then refused the shape.
+    "conv1d": ("weight", "bias", "stride", "padding", "dilation", "groups"),
+    "conv2d": ("weight", "bias", "stride", "padding", "dilation", "groups"),
+    "conv3d": ("weight", "bias", "stride", "padding", "dilation", "groups"),
     "max_pool1d": ("kernel_size", "stride"),
     "max_pool2d": ("kernel_size", "stride"),
     "max_pool3d": ("kernel_size", "stride"),

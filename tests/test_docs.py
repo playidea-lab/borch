@@ -56,7 +56,9 @@ DERIVED = re.compile(r"(\d{3,5})\s*건을\s*본다"
 # **Places that speak of now.** Design and history documents are not here — see the docstring above.
 # `README.md` is the front door and `docs/BOOK.md` the long document it opens onto —
 # the book was the README until 2026-09-03, and both speak of now.
-LIVE_DOCS = ("README.md", "docs/BOOK.md", "site/index.html", "site/ko/index.html")
+# `ROADMAP.md` carried a conformance count that was three weeks stale before anyone read it
+# against the golden; it names the golden once now, and this holds it.
+LIVE_DOCS = ("README.md", "docs/BOOK.md", "ROADMAP.md", "site/index.html", "site/ko/index.html")
 
 
 def _hit(found):
@@ -145,6 +147,7 @@ CLAIMS = {
     # stayed current. Translating it into a phrasing the pattern catches is
     # what put it under watch.
     ("README.md", "golden"): 1,
+    ("ROADMAP.md", "golden"): 1,
     ("docs/BOOK.md", "golden"): 5,
     ("site/index.html", "golden"): 1,
     ("site/ko/index.html", "golden"): 1,
