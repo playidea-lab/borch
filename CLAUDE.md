@@ -27,7 +27,7 @@ says why and counts them; `tests/test_browser_entry_points.py` holds the count).
 they were run by hand after a gap, two were red for nobody knew how long and a real
 defect in the core was visible only through Pyodide.
 
-`tests/browser/nightly.py` runs the thirteen correctness checks in a worktree of
+`tests/browser/nightly.py` runs the fourteen correctness checks (the first-run clock twice: this checkout, and the deployed site) in a worktree of
 `origin/main`; `~/Library/LaunchAgents/co.pilab.borch-nightly.plist` fires it at 04:30.
 Logs are under `~/Library/Logs/borch-nightly/`. **Read the last log before assuming
 green.** If the agent is not loaded, load it:

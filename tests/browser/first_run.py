@@ -19,8 +19,10 @@ this measures is the page and the device — load, probe, compile, run — which
 part this repository can change. The deployed site adds its transfer on top, and that
 is a different measurement with a different owner.
 
-First measurement, 2026-09-03: 180 ms in the page, 0.7 s from opening the page to the
-done line, apple / metal-3.
+First measurements, 2026-09-03, apple / metal-3: this checkout served locally, 180 ms in
+the page and 0.7 s from opening the page to the done line (46 ms / 0.2 s on the quiet
+machine at 04:30); the deployed site (`--url=https://playidea-lab.github.io/borch/site/index.html`),
+763 ms and 1.8 s — the difference is the transfer, and that row is the visitor's number.
 
 Run nightly (`tests/browser/nightly.py`) so the number has a history, not a moment.
 """
@@ -44,6 +46,9 @@ def main():
     from playwright.sync_api import sync_playwright
 
     headed = "--headed" in sys.argv
+    # `--url <page>` measures a deployed copy instead of this checkout — the network is
+    # then inside the clock, which is the number a visitor actually waits for.
+    url = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--url=")), None)
     port, shutdown = serve(ROOT)
     try:
         with sync_playwright() as pw, browser(pw, headed=headed) as b:
@@ -51,7 +56,7 @@ def main():
             errors = []
             page.on("pageerror", lambda e: errors.append(str(e)))
             opened = time.time()
-            page.goto(f"http://127.0.0.1:{port}/site/index.html", wait_until="load")
+            page.goto(url or f"http://127.0.0.1:{port}/site/index.html", wait_until="load")
             # The button is disabled until the device probe answers — that wait is part of
             # what a visitor experiences, so it is inside the clock.
             page.wait_for_function("!document.getElementById('hero-run').disabled",
@@ -64,10 +69,13 @@ def main():
             done = page.evaluate(
                 "[...document.querySelectorAll('#hero-out div')].map(d => d.textContent).find(t => t.startsWith('done'))")
             badge = page.evaluate("document.getElementById('device-text').textContent")
+            lib = "/borch-ts/dist/src/index.js" if not url else url.rsplit("/site/", 1)[0] + "/borch-ts/dist/src/index.js"
             adapter = page.evaluate(
-                "import('/borch-ts/dist/src/index.js').then(m => m.probe()).then(p => p.ok ? p.adapter : null)")
+                f"import('{lib}').then(m => m.probe()).then(p => p.ok ? p.adapter : null)")
             in_page = done.split("—", 1)[1].split("ms")[0].strip() if "—" in done else "?"
+            where = url or "this checkout, served locally (network not in the clock)"
             print(f"first run: {in_page} ms in the page · {wall:.1f} s from opening the page to done")
+            print(f"  page: {where}")
             print(f"  badge: {badge}")
             if errors:
                 print("  page errors: " + " | ".join(errors[:3]))
