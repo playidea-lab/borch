@@ -1,0 +1,10 @@
+# Fires borch-nightly.service at 04:30 local time. Pairs with borch-nightly.service.
+[Unit]
+Description=borch nightly browser checks, 04:30
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

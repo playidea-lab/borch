@@ -27,12 +27,18 @@ says why and counts them; `tests/test_browser_entry_points.py` holds the count).
 they were run by hand after a gap, two were red for nobody knew how long and a real
 defect in the core was visible only through Pyodide.
 
-`tests/browser/nightly.py` runs the twelve correctness checks in a worktree of
+`tests/browser/nightly.py` runs the thirteen correctness checks in a worktree of
 `origin/main`; `~/Library/LaunchAgents/co.pilab.borch-nightly.plist` fires it at 04:30.
 Logs are under `~/Library/Logs/borch-nightly/`. **Read the last log before assuming
 green.** If the agent is not loaded, load it:
 
     launchctl load ~/Library/LaunchAgents/co.pilab.borch-nightly.plist
+
+**One machine is one adapter.** The second is an RTX 5080 on Ubuntu (`/home/pi/borch-nv`,
+Chrome 151, driver 580, `DISPLAY=:1`); `tests/browser/borch-nightly.{service,timer}` are
+its systemd user units and the install command is in the service file. Installing them is
+a person's decision — that machine runs other people's work. Until both logs exist, a
+sentence that says "verified on the GPU" names one adapter.
 
 ## 3. A name bound to another name's argument list is a defect, and it recurs
 

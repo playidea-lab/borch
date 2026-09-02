@@ -1,0 +1,25 @@
+# borch's browser checks, once a night, on a Linux machine with a real GPU.
+#
+# The macOS twin is ~/Library/LaunchAgents/co.pilab.borch-nightly.plist; this is the
+# systemd user unit for the second machine (RTX 5080, Ubuntu, /home/pi/borch-nv), so
+# every nightly number arrives with two adapters instead of one. Installing it is a
+# person's decision — see CLAUDE.md rule 2:
+#
+#     mkdir -p ~/.config/systemd/user
+#     cp tests/browser/borch-nightly.{service,timer} ~/.config/systemd/user/
+#     systemctl --user daemon-reload && systemctl --user enable --now borch-nightly.timer
+#
+# The window has to be real (`DISPLAY`) and the system Chrome has to be the browser
+# (`BORCH_CHROME_CHANNEL=chrome`): headless or Playwright's own Chromium on Linux with the
+# proprietary driver hands back SwiftShader, and the runners refuse that adapter.
+# `tests/browser/launch.py` is where those two facts are measured and explained.
+[Unit]
+Description=borch nightly browser checks (worktree of origin/main)
+
+[Service]
+Type=oneshot
+Environment=BORCH_CHROME_CHANNEL=chrome
+Environment=DISPLAY=:1
+Environment=PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/pi/borch-nv
+ExecStart=/home/pi/.local/bin/uv run --project /home/pi/borch-nv python /home/pi/borch-nv/tests/browser/nightly.py

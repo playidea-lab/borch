@@ -18,12 +18,22 @@ Exit code is the number of entry points that failed. The log names each.
 import datetime
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
-REPO = pathlib.Path("/Users/changmin/git/borch")
+# **The checkout is wherever this file lives**, not a path written down — the second
+# machine (an RTX 5080 on Ubuntu, `/home/pi/borch-nv`) has it somewhere else, and one
+# number per adapter is the whole point of a second machine. Override with
+# `BORCH_NIGHTLY_REPO` when the file is run from a copy.
+REPO = pathlib.Path(os.environ.get("BORCH_NIGHTLY_REPO")
+                    or pathlib.Path(__file__).resolve().parents[2])
 WORKTREE = REPO.parent / "borch-nightly"
-LOGS = pathlib.Path.home() / "Library" / "Logs" / "borch-nightly"
+# macOS keeps logs where Console.app looks; Linux where the XDG state dir says.
+LOGS = (pathlib.Path.home() / "Library" / "Logs" / "borch-nightly"
+        if sys.platform == "darwin"
+        else pathlib.Path(os.environ.get("XDG_STATE_HOME")
+                          or pathlib.Path.home() / ".local" / "state") / "borch-nightly")
 
 # The twelve, as `gpu.yml` lists them minus `bench`. Each is (label, argv).
 CHECKS = [
@@ -74,6 +84,11 @@ def prepare(log):
 
 
 def main():
+    if "--list" in sys.argv:
+        print(f"repo      {REPO}\nworktree  {WORKTREE}\nlogs      {LOGS}\nchecks    {len(CHECKS)}")
+        for label, argv in CHECKS:
+            print(f"  {label:16s} {' '.join(argv[-3:])}")
+        return 0
     LOGS.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
     path = LOGS / f"{stamp}.log"
@@ -97,10 +112,19 @@ def main():
         latest.unlink()
     latest.symlink_to(path)
     if failed:
-        subprocess.run(["osascript", "-e",
-                        f'display notification "{", ".join(failed)}" '
-                        f'with title "borch nightly: {len(failed)} failed"'])
+        notify(f"borch nightly: {len(failed)} failed", ", ".join(failed))
     return len(failed)
+
+
+def notify(title, body):
+    """A desktop notification where the desktop has one; the log is the record either way."""
+    if sys.platform == "darwin":
+        argv = ["osascript", "-e", f'display notification "{body}" with title "{title}"']
+    elif shutil.which("notify-send"):
+        argv = ["notify-send", title, body]
+    else:
+        return
+    subprocess.run(argv, check=False)
 
 
 if __name__ == "__main__":
