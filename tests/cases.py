@@ -12976,6 +12976,55 @@ def linalg_cases(inp=None):
                   lambda L: L.linalg.vector_norm(L.tensor(vec), dtype=L.float32)))
     cases.append((LINALG_PREFIX + "matrix_norm(dtype)",
                   lambda L: L.linalg.matrix_norm(L.tensor(rect), dtype=L.float32)))
+
+    # ── the tolerance rule, on a fixture that discriminates ────────────────────
+    #
+    # **The first probe written for these answered 1 everywhere and told nothing.**
+    # A rank is only interesting where the cutoff falls between two singular values,
+    # so the fixture has `10, 1, 1e-3` and the thresholds are put on both sides of
+    # each gap. `atol` and `rtol` are the larger-of-two rule: `rtol=0.05` is 5% of
+    # 10, which is `atol=0.5`, and giving both takes whichever is bigger.
+    #
+    # **Under `tol::` because the names are keys twice over.** Written as
+    # `matrix_rank(atol=0.5)` they pair with the plain `matrix_rank` case in
+    # `tests/test_inert_arguments.py`, which asks whether naming an argument changed
+    # the answer — and that case uses a different matrix, so four of these collided
+    # with it by value and read as arguments that do nothing. They are not; the
+    # pairing had the wrong base.
+    spread = np.diag([10., 1., 1e-3]).astype(np.float32)
+    for _tag, _kw in (("기본", {}), ("atol=0.5", {"atol": 0.5}), ("atol=5", {"atol": 5.0}),
+                      ("rtol=0.05", {"rtol": 0.05}), ("rtol=0.5", {"rtol": 0.5}),
+                      ("atol=0.5,rtol=0.5", {"atol": 0.5, "rtol": 0.5}),
+                      ("tol=0.5(폐기된 이름)", {"tol": 0.5})):
+        cases.append((LINALG_PREFIX + f"tol::matrix_rank({_tag})",
+                      lambda L, k=_kw: L.linalg.matrix_rank(L.tensor(spread), **k)))
+
+    # **`hermitian` reads one triangle, so it is a different matrix.** On a symmetric
+    # fixture the two routes agree and the argument looks like a hint; on this one at
+    # `atol=1` the singular values are `9.68, 0.62` and the eigenvalues `-3, 2`, so the
+    # rank is 1 one way and 2 the other — and `pinv` comes back **diagonal** under it.
+    skew = np.array([[2., 9.], [0., -3.]], dtype=np.float32)
+    for _tag, _kw in (("atol=1", {"atol": 1.0}),
+                      ("atol=1,hermitian", {"atol": 1.0, "hermitian": True})):
+        cases.append((LINALG_PREFIX + f"tol::matrix_rank(비대칭,{_tag})",
+                      lambda L, k=_kw: L.linalg.matrix_rank(L.tensor(skew), **k)))
+        cases.append((LINALG_PREFIX + f"tol::pinv(비대칭,{_tag})",
+                      lambda L, k=_kw: L.linalg.pinv(L.tensor(skew), **k)))
+
+    # A cut singular value is **zeroed, not inverted** — `1e-3` becomes 1000 by
+    # default and 0 once the cutoff passes it.
+    for _tag, _kw in (("기본", {}), ("atol=0.5", {"atol": 0.5}), ("rtol=0.05", {"rtol": 0.05})):
+        cases.append((LINALG_PREFIX + f"tol::pinv({_tag})",
+                      lambda L, k=_kw: L.linalg.pinv(L.tensor(spread), **k)))
+    # **The positional seat torch's docstring does not show and its runtime takes.**
+    cases.append((LINALG_PREFIX + "tol::pinv(0.05 위치)",
+                  lambda L: L.linalg.pinv(L.tensor(spread), 0.05)))
+    cases.append((LINALG_PREFIX + "tol::matrix_rank(0.5 위치)",
+                  lambda L: L.linalg.matrix_rank(L.tensor(spread), 0.5)))
+    # And `torch.pinverse` is **not** `linalg.pinv` — a different argument list, which
+    # is why the two were split. It keeps answering what it always did.
+    cases.append((LINALG_PREFIX + "tol::pinverse(그대로)",
+                  lambda L: L.pinverse(L.tensor(spread))))
     return cases
 
 

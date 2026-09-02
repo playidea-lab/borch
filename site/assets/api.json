@@ -19602,11 +19602,11 @@
     {
      "kind": "function",
      "name": "matrixRank",
-     "signature": "export declare function matrixRank(input: Tensor, tol?: number): Promise<Tensor>",
-     "doc": "`matrix_rank(A, tol=None)` — how many singular values are above the tolerance.",
+     "signature": "export declare function matrixRank(input: Tensor, tol?: number | null, atol?: number | null, rtol?: number | null, hermitian?: boolean): Promise<Tensor>",
+     "doc": "`matrix_rank(A, tol=None, *, atol=None, rtol=None, hermitian=False)`.\n\n**The positional seat stays.** torch's documented list has none, and its runtime\ntakes one — `torch.linalg.matrix_rank(A, 0.5)` is accepted over there, measured — so\ndropping it to make the two lists align would stop a line torch runs.",
      "members": [],
      "torch": "matrix_rank",
-     "doc_ko": "`matrix_rank(A, tol=None)` — 특이값 중 허용오차를 넘는 것의 개수. `tol` 은 **절대** 기준이라 특이값과 곧바로 견준다 — 가장 큰 값에 대한 비율인 `pinv` 의 `rcond` 와는 다른 것이다."
+     "doc_ko": "`matrix_rank(A, tol=None, *, atol=None, rtol=None, hermitian=False)`.\n\n**위치 자리는 남긴다.** torch 문서 목록엔 없고 런타임은 받는다 —\n`torch.linalg.matrix_rank(A, 0.5)` 는 저쪽에서 통과한다(실측). 두 목록을\n맞추자고 그 자리를 빼면 torch 가 도는 줄을 여기서 멈추게 된다."
     },
     {
      "kind": "function",
@@ -19801,10 +19801,10 @@
     {
      "kind": "function",
      "name": "pinv",
-     "signature": "export declare function pinv(input: Tensor, rcond?: number): Promise<Tensor>",
-     "doc": "`pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`.",
+     "signature": "export declare function pinv(input: Tensor, rcond?: number | null, atol?: number | null, rtol?: number | null, hermitian?: boolean): Promise<Tensor>",
+     "doc": "`pinv(A, rcond=None, *, atol=None, rtol=None, hermitian=False)`.\n\n**`hermitian` goes all the way through, not only into the cutoff.** torch reads one\ntriangle and inverts *that* matrix, so `[[2, 9], [0, -3]]` comes back diagonal. The\nfirst version of this on the Python side took the spectrum from the eigenvalues and\nthen inverted the original by SVD — two different matrices — and was right in three\nof four entries, which is how it would have passed a fixture looking at one.",
      "members": [],
-     "doc_ko": "`pinv(A)` — 무어-펜로즈 유사역행렬. 메서드 이름은 `pinverse` 다."
+     "doc_ko": "`pinv(A, rcond=None, *, atol=None, rtol=None, hermitian=False)`.\n\n**`hermitian` 은 절단값에만 들어가는 게 아니라 끝까지 간다.** torch 는 한쪽\n삼각을 읽고 *그 행렬* 의 역을 만든다 — `[[2, 9], [0, -3]]` 은 대각으로\n돌아온다. 파이썬 쪽 첫 판은 고윳값으로 절단값만 잡고 원래 행렬을 SVD 로\n뒤집었다(서로 다른 두 행렬이다). 네 성분 중 셋이 맞았는데, 하나만 보는\n픽스처였다면 그대로 통과했을 모양이다."
     },
     {
      "kind": "function",

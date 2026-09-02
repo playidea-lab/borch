@@ -408,7 +408,11 @@ CEILINGS = {
     # out of the argument axis learning to read `linalg`'s docstrings. `거절` and
     # `특잇값` and `벡터` are keys against `tests/cases.py` — the two tables spell them
     # identically or the row reconciles against nothing.
-    "borch-ts/test": 4921,
+    # 4921 → 4943. Twenty-two, all case names again: the seventeen `linalg::tol::`
+    # rows for `matrix_rank` and `pinv`. `기본`, `비대칭`, `위치`, `그대로` and
+    # `폐기된 이름` are keys against `tests/cases.py` — the tag has to be the same
+    # string in both tables or the row reconciles against nothing.
+    "borch-ts/test": 4943,
 }
 
 

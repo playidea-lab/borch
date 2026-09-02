@@ -62,9 +62,64 @@ export function matrixPower(input: Tensor, n: number): Tensor {
   return input.matrixPower(n);
 }
 
-/** `matrix_rank(A, tol=None)` — how many singular values are above the tolerance. */
-export function matrixRank(input: Tensor, tol?: number): Promise<Tensor> {
-  return input.matrixRank(tol);
+/**
+ * The numbers a rank or a pseudo-inverse counts — **and which ones depends on
+ * `hermitian`.** With it, the absolute eigenvalues of *one triangle*; without it, the
+ * singular values of the whole matrix. On a symmetric input the two agree, which is why
+ * a symmetric fixture cannot tell them apart: on `[[2, 9], [0, -3]]` at `atol = 1` they
+ * answer 1 and 2, the singular values being `9.68, 0.62` and the eigenvalues `-3, 2`.
+ */
+async function spectrum(a: Tensor, hermitian: boolean): Promise<number[][]> {
+  const t = hermitian ? await a.eigvalsh("L") : await a.svdvals();
+  const flat = Array.from(await t.abs().toArray());
+  // **One row per matrix, not one list for the batch.** Flattened, a batch of three
+  // came back as a single rank and the golden said `shape (3,) vs ()` — the count was
+  // over every singular value in the batch at once.
+  const k = t.shape[t.shape.length - 1] ?? flat.length;
+  const rows: number[][] = [];
+  for (let at = 0; at < flat.length; at += k) rows.push(flat.slice(at, at + k));
+  return rows.length ? rows : [[]];
+}
+
+/**
+ * torch's cutoff: **the larger of an absolute and a relative bound.** With neither
+ * given, `atol` is 0 and `rtol` is `max(m, n) · eps` — which is what makes a singular
+ * value of `1e-9` disappear from an f32 matrix while `1e-3` stays.
+ */
+function cutoff(spec: number[], shape: readonly number[],
+                atol?: number | null, rtol?: number | null): number {
+  const largest = spec.length ? Math.max(...spec) : 0;
+  const m = shape[shape.length - 2] ?? 1;
+  const n = shape[shape.length - 1] ?? 1;
+  const relative = (atol === undefined || atol === null)
+      && (rtol === undefined || rtol === null)
+    ? Math.max(m, n) * F32_EPS
+    : (rtol ?? 0);
+  return Math.max(atol ?? 0, relative * largest);
+}
+
+/** `2**-23`, the gap above 1 in f32 — what torch's default relative tolerance scales. */
+const F32_EPS = 1.1920928955078125e-7;
+
+/**
+ * `matrix_rank(A, tol=None, *, atol=None, rtol=None, hermitian=False)`.
+ *
+ * **The positional seat stays.** torch's documented list has none, and its runtime
+ * takes one — `torch.linalg.matrix_rank(A, 0.5)` is accepted over there, measured — so
+ * dropping it to make the two lists align would stop a line torch runs.
+ */
+export async function matrixRank(
+  input: Tensor, tol?: number | null, atol?: number | null,
+  rtol?: number | null, hermitian = false,
+): Promise<Tensor> {
+  const effective = (atol === undefined || atol === null) ? tol : atol;
+  const rows = await spectrum(input, hermitian);
+  const counts = rows.map((row) => {
+    const cut = cutoff(row, input.shape, effective, rtol);
+    return row.filter((s) => s > cut).length;
+  });
+  const lead = input.shape.slice(0, -2);
+  return Tensor.from(counts, lead);
 }
 
 /** `matrix_exp(A)` — the matrix exponential. */
@@ -382,14 +437,32 @@ export function inv(a: Tensor): Promise<Tensor> {
   return a.inverse();
 }
 
-/** `pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`. */
-export function pinv(input: Tensor, rcond?: number): Promise<Tensor> {
-  // **Carried in order to refuse, and now carried in order to compute.** The seat had
-  // to exist here for `pinverse`'s stop to be reachable at all — left out, the door was
-  // narrower than the room behind it and `linalg.pinv(a, 1e-6)` discarded the number in
-  // silence. `pinverse` takes the cut-off now, so the same seat delivers it, and the
-  // core has been giving torch's answer for this all along.
-  return input.pinverse(rcond);
+/**
+ * `pinv(A, rcond=None, *, atol=None, rtol=None, hermitian=False)`.
+ *
+ * **`hermitian` goes all the way through, not only into the cutoff.** torch reads one
+ * triangle and inverts *that* matrix, so `[[2, 9], [0, -3]]` comes back diagonal. The
+ * first version of this on the Python side took the spectrum from the eigenvalues and
+ * then inverted the original by SVD — two different matrices — and was right in three
+ * of four entries, which is how it would have passed a fixture looking at one.
+ */
+export async function pinv(
+  input: Tensor, rcond?: number | null, atol?: number | null,
+  rtol?: number | null, hermitian = false,
+): Promise<Tensor> {
+  const spec = (await spectrum(input, hermitian))[0] ?? [];
+  const cut = cutoff(spec, input.shape, atol, rtol ?? rcond);
+  if (hermitian) {
+    const { values, vectors } = await input.eigh("L");
+    const w = Array.from(await values.toArray());
+    const keep = w.map((x) => (Math.abs(x) > cut ? 1 / x : 0));
+    const diag = Tensor.from(keep, [keep.length]);
+    return vectors.mul(diag.unsqueeze(0)).matmul(vectors.transpose(-2, -1));
+  }
+  // The SVD route reaches `pinverse`, whose cut-off is **relative to the largest**
+  // singular value — so the absolute number computed above is turned back into one.
+  const largest = spec.length ? Math.max(...spec) : 1;
+  return input.pinverse(largest > 0 ? cut / largest : 0);
 }
 
 /** `matmul(A, B)` — matrix multiplication. The method is `mm`. */

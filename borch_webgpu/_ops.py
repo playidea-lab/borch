@@ -177,7 +177,8 @@ _SIGNATURE = {
     # `matrix_norm(A, "fro", (-2, -1), True)` came back a scalar where torch keeps the
     # two axes as ones.
     "linalg.matrix_norm": ("ord", "dim", "keepdim", "dtype"),
-    "matrix_rank": ("tol",),
+    "linalg.matrix_rank": ("tol", "atol", "rtol", "hermitian"),
+    "linalg.pinv": ("rcond", "atol", "rtol", "hermitian"),
     # `linalg.norm` is routed to borch.ts's **namespace** function rather than the `norm`
     # method, so its row is torch's `linalg.norm` and not `torch.norm`'s. The two differ
     # in the first name — `ord` against `p` — and in what they compute.
@@ -3655,6 +3656,11 @@ _VIA_NAMESPACE = {
     # which it dispatches to, did not.
     "vector_norm": "vectorNorm",
     "matrix_norm": "matrixNorm",
+    # And the two whose tolerance rule grew: torch takes `atol`, `rtol` and
+    # `hermitian` where the core had one `tol`/`rcond`, and `hermitian` is not
+    # a hint — it reads one triangle, so it inverts a different matrix.
+    "matrix_rank": "matrixRank",
+    "pinv": "pinv",
     "svd": "svd",
     "svdvals": "svdvals",
 }

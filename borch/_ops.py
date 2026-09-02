@@ -8631,8 +8631,19 @@ def pinverse(input, rcond=1e-15):
     asks with rectangles too.
     """
     input = _mat(input, "pinverse", square=False)
-    p = _np.linalg.pinv(input.data, rcond=rcond)
-    m, n = input.data.shape[-2], input.data.shape[-1]
+    return _pinv_grad(input, _np.linalg.pinv(input.data, rcond=rcond))
+
+
+def _pinv_grad(t, p):
+    """Attach the pseudo-inverse's gradient to an already-computed `p`.
+
+    **Split out because `linalg.pinv` computes `p` differently and needs the same
+    gradient.** Written as a second body it was written without one: the first version
+    of `linalg.pinv` returned a bare `Tensor`, and three `grad2::pinv` cases went red
+    saying `backward() cannot be called on a tensor that does not require grad` — the
+    values were right and the graph was gone.
+    """
+    m, n = t.data.shape[-2], t.data.shape[-1]
     eye_m = _np.eye(m, dtype=p.dtype)
     eye_n = _np.eye(n, dtype=p.dtype)
 
@@ -8640,16 +8651,103 @@ def pinverse(input, rcond=1e-15):
         gg = _np.asarray(g)
         pt = _T(p)
         left = -(pt @ gg @ pt)
-        mid = (eye_m - input.data @ p) @ _T(gg) @ p @ pt
-        right = pt @ p @ _T(gg) @ (eye_n - p @ input.data)
+        mid = (eye_m - t.data @ p) @ _T(gg) @ p @ pt
+        right = pt @ p @ _T(gg) @ (eye_n - p @ t.data)
         return (left + mid + right,)
 
-    return input._make(p, (input,), back, "PinverseBackward0")
+    return t._make(p, (t,), back, "PinverseBackward0")
 
 
-def matrix_rank(input, tol=None):  # noqa: A002
+def _spectrum(data, hermitian):
+    """The numbers a rank or a pseudo-inverse counts — **and which ones depends on
+    `hermitian`.**
+
+    With it, the absolute eigenvalues of **one triangle**; without it, the singular
+    values of the whole matrix. On a symmetric input the two agree, which is why a
+    symmetric fixture cannot tell them apart — measured on `[[2, 9], [0, -3]]` at
+    `atol=1.0` they answer **1 and 2**, because the singular values are `9.68, 0.62`
+    and the eigenvalues of the lower triangle are `-3, 2`.
+    """
+    if hermitian:
+        return _np.abs(_np.linalg.eigvalsh(data))
+    return _np.linalg.svd(data, compute_uv=False)
+
+
+def _tolerance(spectrum, shape, atol, rtol):
+    """torch's cutoff: **the larger of an absolute and a relative bound.**
+
+    Measured on singular values `10, 1, 1e-3`: `atol=0.5` gives rank 2 and `atol=5`
+    gives 1; `rtol=0.05` is 5% of the largest and gives 2, `rtol=0.5` gives 1; the two
+    together take whichever is larger.
+
+    **The default is not zero on both.** With neither given, `atol` is 0 and `rtol` is
+    `max(m, n) · eps` — which is what makes a singular value of `1e-9` disappear from a
+    float32 matrix while `1e-3` stays.
+    """
+    largest = spectrum.max(axis=-1, keepdims=True) if spectrum.size else spectrum
+    if atol is None and rtol is None:
+        rtol = max(shape[-2], shape[-1]) * float(_np.finfo(_np.float32).eps)
+    return _np.maximum(0.0 if atol is None else float(atol),
+                       (0.0 if rtol is None else float(rtol)) * largest)
+
+
+def linalg_pinv(input, rcond=None, *, atol=None, rtol=None, hermitian=False):  # noqa: A002
+    """`torch.linalg.pinv` — **the other one.**
+
+    `torch.pinverse(input, rcond=1e-15)` and `torch.linalg.pinv(A, *, atol, rtol,
+    hermitian)` are two argument lists, and this library bound `linalg.pinv` straight
+    to `pinverse` — the same shape `linalg.norm` was in, and `linalg.svd` before that.
+    Bound to the other one, `linalg.pinv(A, atol=…)` stopped and `linalg.pinv(A, 0.5)`
+    read the number as `rcond` rather than as torch's legacy positional, which happen
+    to mean the same thing and so hid the split.
+
+    **The positional seat is kept**, because torch's runtime accepts it —
+    `torch.linalg.pinv(A, 0.5)` is measured to work while the docstring shows none.
+    It behaves as `rtol` does, which is what `rcond` always meant.
+
+    Small singular values are **cut to zero** rather than inverted: measured, a
+    spectrum of `10, 1, 1e-3` inverts the last to 1000 by default and to 0 under
+    `atol=0.5`.
+    """
+    t = _mat(input, "linalg.pinv", square=False)
+    if rcond is not None and rtol is None:
+        rtol = rcond
+    spec = _spectrum(t.data, hermitian)
+    cut = _tolerance(spec, t.data.shape, atol, rtol)
+    if hermitian:
+        # **The eigendecomposition all the way through, not only for the cutoff.**
+        # The first version took the spectrum from `eigvalsh` and then inverted the
+        # original matrix by SVD, which is two different matrices: torch reads one
+        # triangle, so `[[2, 9], [0, -3]]` is inverted as `[[2, 0], [0, -3]]` and the
+        # answer is diagonal. Measured, torch gives `[[0.5, 0], [0, -0.333]]` and that
+        # version gave `[[0.5, 1.5], [0, -0.333]]` — right in three entries, which is
+        # how it would have passed a fixture that only looked at one.
+        w, v = _np.linalg.eigh(t.data)
+        keep = _np.where(_np.abs(w) > cut, 1.0 / _np.where(_np.abs(w) > cut, w, 1.0), 0.0)
+        return _pinv_grad(t, v @ (keep[..., :, None] * _T(v)))
+    u, s, vh = _np.linalg.svd(t.data, full_matrices=False)
+    keep = _np.where(s > cut, 1.0 / _np.where(s > cut, s, 1.0), 0.0)
+    return _pinv_grad(t, _T(vh) @ (keep[..., :, None] * _T(u)))
+
+
+def matrix_rank(input, tol=None, *, atol=None, rtol=None, hermitian=False):  # noqa: A002
+    """How many of the spectrum's numbers clear the cutoff.
+
+    **torch's documented list is `(A, *, atol, rtol, hermitian, out)` and its runtime
+    takes a positional second argument too** — `torch.linalg.matrix_rank(A, 0.5)` is
+    accepted over there, measured. So `tol` keeps its seat: dropping it to make the two
+    lists align would stop a line torch runs, which is the one direction this library
+    cannot be wrong in. It behaves as `atol` does.
+
+    `hermitian` is not an optimisation here — see `_spectrum` for the fixture where it
+    changes the answer.
+    """
     input = _mat(input, "matrix_rank", square=False)
-    return Tensor(_np.asarray(_np.linalg.matrix_rank(input.data, tol=tol), dtype=_np.int64))
+    if tol is not None and atol is None:
+        atol = tol
+    spec = _spectrum(input.data, hermitian)
+    cut = _tolerance(spec, input.data.shape, atol, rtol)
+    return Tensor(_np.asarray((spec > cut).sum(axis=-1), dtype=_np.int64))
 
 
 def eigh(input, UPLO="L"):  # noqa: A002
@@ -9795,7 +9893,11 @@ class _Linalg(_Namespace):
     matrix_power = staticmethod(matrix_power)
     qr = staticmethod(_linalg_qr)
     svd = staticmethod(linalg_svd)
-    pinv = staticmethod(pinverse)
+    # **Not `pinverse`.** The two names take different lists — `torch.pinverse(input,
+    # rcond)` against `torch.linalg.pinv(A, *, atol, rtol, hermitian)` — and this
+    # pointed at the first for as long as it existed. The same split `svd` and `norm`
+    # each turned out to be.
+    pinv = staticmethod(linalg_pinv)
     matrix_rank = staticmethod(matrix_rank)
     eig = staticmethod(eig)
     eigh = staticmethod(eigh)

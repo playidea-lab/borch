@@ -10143,6 +10143,53 @@ function addLinalg(out: Map<string, Case>): void {
   out.set("linalg::matrix_norm(dtype)",
     async () => linalg.matrixNorm(rect(), "fro", [-2, -1], false, "float32"));
 
+  // ── the tolerance rule, on a fixture that discriminates ────────────────────
+  //
+  // A rank is only interesting where the cutoff falls between two singular values,
+  // so the spectrum is `10, 1, 1e-3` and the thresholds sit on both sides of each
+  // gap. `atol` and `rtol` are the larger-of-two rule.
+  const spread = (): Tensor =>
+    Tensor.from([10, 0, 0, 0, 1, 0, 0, 0, 1e-3], [3, 3]);
+  const skew = (): Tensor => Tensor.from([2, 9, 0, -3], [2, 2]);
+
+  const rankArgs: [string, number | null, number | null, number | null, boolean][] = [
+    ["기본", null, null, null, false],
+    ["atol=0.5", null, 0.5, null, false],
+    ["atol=5", null, 5.0, null, false],
+    ["rtol=0.05", null, null, 0.05, false],
+    ["rtol=0.5", null, null, 0.5, false],
+    ["atol=0.5,rtol=0.5", null, 0.5, 0.5, false],
+    ["tol=0.5(폐기된 이름)", 0.5, null, null, false],
+  ];
+  for (const [tag, tol, atol, rtol, herm] of rankArgs) {
+    out.set(`linalg::tol::matrix_rank(${tag})`,
+      async () => linalg.matrixRank(spread(), tol, atol, rtol, herm));
+  }
+
+  // **`hermitian` reads one triangle, so it is a different matrix.** At `atol = 1`
+  // the singular values are `9.68, 0.62` and the eigenvalues `-3, 2` — rank 1 one
+  // way and 2 the other, and `pinv` comes back diagonal under it.
+  for (const [tag, herm] of [["atol=1", false], ["atol=1,hermitian", true]] as
+       [string, boolean][]) {
+    out.set(`linalg::tol::matrix_rank(비대칭,${tag})`,
+      async () => linalg.matrixRank(skew(), null, 1.0, null, herm));
+    out.set(`linalg::tol::pinv(비대칭,${tag})`,
+      async () => linalg.pinv(skew(), null, 1.0, null, herm));
+  }
+
+  // A cut singular value is zeroed, not inverted.
+  for (const [tag, atol, rtol] of [["기본", null, null], ["atol=0.5", 0.5, null],
+    ["rtol=0.05", null, 0.05]] as [string, number | null, number | null][]) {
+    out.set(`linalg::tol::pinv(${tag})`,
+      async () => linalg.pinv(spread(), null, atol, rtol, false));
+  }
+  out.set("linalg::tol::pinv(0.05 위치)", async () => linalg.pinv(spread(), 0.05));
+  out.set("linalg::tol::matrix_rank(0.5 위치)",
+    async () => linalg.matrixRank(spread(), 0.5));
+  // `pinverse` is **not** `linalg.pinv` — a different argument list, which is why the
+  // two were split.
+  out.set("linalg::tol::pinverse(그대로)", async () => spread().pinverse());
+
   addLinalgStruct(out);
 }
 

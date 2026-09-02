@@ -416,8 +416,8 @@
     "src": "e940860fdd61"
   },
   "linalg/matrixRank": {
-    "src": "9e8661d9eb17",
-    "ko": "`matrix_rank(A, tol=None)` — 특이값 중 허용오차를 넘는 것의 개수. `tol` 은 **절대** 기준이라 특이값과 곧바로 견준다 — 가장 큰 값에 대한 비율인 `pinv` 의 `rcond` 와는 다른 것이다."
+    "ko": "`matrix_rank(A, tol=None, *, atol=None, rtol=None, hermitian=False)`.\n\n**위치 자리는 남긴다.** torch 문서 목록엔 없고 런타임은 받는다 —\n`torch.linalg.matrix_rank(A, 0.5)` 는 저쪽에서 통과한다(실측). 두 목록을\n맞추자고 그 자리를 빼면 torch 가 도는 줄을 여기서 멈추게 된다.",
+    "src": "bd919e2e5cec"
   },
   "linalg/multiDot": {
     "ko": "`multi_dot([A, B, C, …])` — 행렬 곱의 사슬.\n\n행렬 곱은 결합법칙을 따르므로 **어떤 순서로 묶어도 같은 행렬**이 나온다. 갈리는 것은\n일의 양이다. `(A·B)·C` 와 `A·(B·C)` 는 `n·m·p + n·p·q` 와 `m·p·q + n·m·q` 만큼 드는데,\n가운데 인수가 얇으면 자릿수가 달라진다. 그래서 가장 싼 묶음을 먼저 찾는다 — 흔한 동적\n계획법이고, torch 가 이 이름을 두는 이유 전체가 그것이다.\n\n**순서가 다르면 값이 비트까지 같지는 않다.** 부동소수점 덧셈은 결합법칙을 안 따르므로,\n고른 순서는 마지막 자리를 견주는 물음에 대해서는 답의 일부다.",
@@ -428,8 +428,8 @@
     "src": "450bcf6028bd"
   },
   "linalg/pinv": {
-    "ko": "`pinv(A)` — 무어-펜로즈 유사역행렬. 메서드 이름은 `pinverse` 다.",
-    "src": "21f733f4d33a"
+    "ko": "`pinv(A, rcond=None, *, atol=None, rtol=None, hermitian=False)`.\n\n**`hermitian` 은 절단값에만 들어가는 게 아니라 끝까지 간다.** torch 는 한쪽\n삼각을 읽고 *그 행렬* 의 역을 만든다 — `[[2, 9], [0, -3]]` 은 대각으로\n돌아온다. 파이썬 쪽 첫 판은 고윳값으로 절단값만 잡고 원래 행렬을 SVD 로\n뒤집었다(서로 다른 두 행렬이다). 네 성분 중 셋이 맞았는데, 하나만 보는\n픽스처였다면 그대로 통과했을 모양이다.",
+    "src": "ff29d38563ac"
   },
   "linalg/qr": {
     "ko": "`qr(A, mode=\"reduced\")` — QR 분해.",
