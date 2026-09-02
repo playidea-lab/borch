@@ -190,6 +190,18 @@ export async function isAvailable(options: InitOptions = {}): Promise<boolean> {
 }
 
 /** Numbers the shader's lines so the line an error names can be found. */
+/**
+ * Whether to ask each shader module how its compile went.
+ *
+ * Set `globalThis.BORCH_SHADER_DIAGNOSTICS = true` before building anything.
+ * Read per call rather than cached so it can be switched on from a console
+ * mid-session, which is exactly when someone wants it.
+ */
+function shaderDiagnostics(): boolean {
+  return (globalThis as { BORCH_SHADER_DIAGNOSTICS?: boolean })
+    .BORCH_SHADER_DIAGNOSTICS === true;
+}
+
 function numbered(code: string): string {
   return code
     .split("\n")
@@ -408,7 +420,7 @@ export class Device {
   private sinceSubmit = 0;
 
   /**
-   * It does not swallow shader compilation errors.
+   * It does not swallow shader compilation errors — **when asked to look.**
    *
    * **A failed WGSL compile does not arrive as an exception.**
    * `createShaderModule` simply returns, and dispatching with that pipeline
@@ -416,6 +428,29 @@ export class Device {
    * says is "the values differ". A reduction kernel in this very runner
    * returned zeros that way, with no error visible anywhere. So the
    * diagnostics are pulled out deliberately.
+   *
+   * ## Why the asking is now opt-in
+   *
+   * It used to run for every pipeline, unawaited. That is fine at a hundred
+   * shaders and **not fine at twenty thousand**, which is what one
+   * EfficientNet builds:
+   *
+   *     resnet18      66 pipelines
+   *     resnet152     72
+   *     vit_base     121
+   *     efficientnet_b4  **19,531**
+   *
+   * The count is that high because the pipeline key bakes in the spatial
+   * dims and the channel counts, and a depthwise stack changes both at
+   * every block. Twenty thousand `getCompilationInfo()` promises are then
+   * in flight at once, each holding the full WGSL source in its closure for
+   * a message it will almost never print — and the device is lost partway
+   * through with `Instance dropped error in getCompilationInfo`.
+   *
+   * So it is off unless `BORCH_SHADER_DIAGNOSTICS` is set on `globalThis`.
+   * The zero-returning kernel that motivated this is a **development**
+   * failure: it happens while writing a kernel, and that is when the switch
+   * is on. Nothing about a shipped model needs it.
    */
   pipeline(signature: string, source: () => string): GPUComputePipeline {
     // The first segment of the signature is the kernel kind (`cnt:...`, `u:relu:...`).
@@ -430,15 +465,17 @@ export class Device {
     if (hit) return hit;
     const code = source();
     const module = this.device.createShaderModule({ code });
-    void module.getCompilationInfo().then((info) => {
-      for (const m of info.messages) {
-        if (m.type !== "error" && m.type !== "warning") continue;
-        console.error(
-          `[borch.ts] ${signature} shader ${m.type} ${m.lineNum}:${m.linePos} — ` +
-            `${m.message}\n${numbered(code)}`,
-        );
-      }
-    });
+    if (shaderDiagnostics()) {
+      void module.getCompilationInfo().then((info) => {
+        for (const m of info.messages) {
+          if (m.type !== "error" && m.type !== "warning") continue;
+          console.error(
+            `[borch.ts] ${signature} shader ${m.type} ${m.lineNum}:${m.linePos} — ` +
+              `${m.message}\n${numbered(code)}`,
+          );
+        }
+      });
+    }
     const pipeline = this.device.createComputePipeline({
       layout: "auto",
       compute: { module, entryPoint: "main" },

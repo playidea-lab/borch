@@ -152,8 +152,8 @@
     "src": "ddc6bf0ee6d6"
   },
   "device/Device.pipeline": {
-    "ko": "셰이더 컴파일 오류를 삼키지 않는다.\n\n**WGSL 컴파일 실패는 예외로 오지 않는다.** `createShaderModule` 은 그냥 돌아오고,\n그 파이프라인으로 dispatch 하면 아무 일도 안 일어난다 — 결과 버퍼가 0 인 채로\n남고 화면에는 \"값이 다르다\"만 뜬다. 실제로 이 러너에서 축약 커널이 그렇게\n0 을 냈고, 그때 아무 오류도 안 보였다. 그래서 진단 정보를 직접 꺼내 본다.",
-    "src": "3f800513cfbe"
+    "ko": "셰이더 컴파일 오류를 삼키지 않는다 — **물어보라고 했을 때는.**\n\n**WGSL 컴파일 실패는 예외로 오지 않는다.** `createShaderModule` 은 그냥 돌아오고, 그 파이프라인으로 dispatch 하면 아무 일도 안 일어난다 — 결과 버퍼는 0 인 채로 남고 화면에는 \"값이 다르다\" 만 뜬다. 이 러너의 reduction 커널 하나가 실제로 그렇게 0 을 냈고, 어디에도 오류가 안 보였다. 그래서 진단을 일부러 꺼낸다.\n\n## 왜 물어보는 쪽이 선택이 됐나\n\n전에는 파이프라인마다 무조건 불렀고 기다리지도 않았다. 셰이더 100 개에서는 괜찮고 **2 만 개에서는 안 괜찮다.** EfficientNet 하나가 그만큼 만든다:\n\n    resnet18          66 개\n    resnet152         72 개\n    vit_base         121 개\n    efficientnet_b4  **19,531 개**\n\n파이프라인 열쇠에 공간 크기와 채널 수가 구워지는데 depthwise 스택은 블록마다 둘 다 바꾸기 때문이다. 그러면 `getCompilationInfo()` 프로미스 2 만 개가 동시에 떠서, 거의 찍힐 일 없는 메시지 하나를 위해 각자 WGSL 소스 전문을 클로저에 붙들고 있는다 — 그러다 중간에 디바이스가 떨어진다(`Instance dropped error in getCompilationInfo`).\n\n그래서 `globalThis` 에 `BORCH_SHADER_DIAGNOSTICS` 를 세우지 않으면 꺼져 있다. 이것을 만든 0 내는 커널은 **개발 중**의 실패다 — 커널을 쓰는 동안 나고, 그때 스위치를 켜면 된다. 배포된 모델에는 필요 없다.",
+    "src": "dc974a524f00"
   },
   "device/Device.pipelineCount": {
     "ko": "지금까지 구운 셰이더 수. 캐시가 도는지 테스트가 본다.",
