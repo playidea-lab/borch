@@ -25,7 +25,7 @@ from contextlib import redirect_stdout
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-README = ROOT / "README.md"
+README = ROOT / "docs" / "BOOK.md"
 
 # A trailing note on an output line — `tensor([2.])        # what it means`. Two spaces or
 # more, so a `#` inside an actual output is left alone.
@@ -86,7 +86,7 @@ def test_the_readme_session_block_prints_what_it_says():
     """
     line, body = _doctest_block()
     pairs = _pairs(body)
-    assert len(pairs) >= 4, f"README.md:{line} has {len(pairs)} statements — it had four"
+    assert len(pairs) >= 4, f"docs/BOOK.md:{line} has {len(pairs)} statements — it had four"
 
     import borch
 
@@ -97,7 +97,7 @@ def test_the_readme_session_block_prints_what_it_says():
         if got != said:
             wrong.append(f"  >>> {statement}\n  says: {said}\n  does: {got}")
     assert not wrong, (
-        f"README.md:{line} — the session block says something the library does not:\n"
+        f"docs/BOOK.md:{line} — the session block says something the library does not:\n"
         + "\n\n".join(wrong))
 
 
@@ -114,7 +114,7 @@ def test_the_readme_autograd_example_prints_what_its_comment_claims():
 
     claimed = [NOTE.search(raw) for raw in body.splitlines() if raw.startswith("print(")]
     assert claimed and claimed[0], (
-        f"README.md:{line} — the print no longer carries the value it claims, so nothing "
+        f"docs/BOOK.md:{line} — the print no longer carries the value it claims, so nothing "
         "here can be checked. Put the expected value back as a trailing comment.")
     said = claimed[0].group(0).split("#", 1)[1].strip()
 
@@ -123,7 +123,7 @@ def test_the_readme_autograd_example_prints_what_its_comment_claims():
         exec(compile(body, str(README), "exec"), {})                # noqa: S102
     got = buffer.getvalue().strip()
     assert got == said, (
-        f"README.md:{line} — the example claims it prints {said!r} and it prints {got!r}")
+        f"docs/BOOK.md:{line} — the example claims it prints {said!r} and it prints {got!r}")
 
 
 # ── the same message, quoted in a second document ─────────────────────

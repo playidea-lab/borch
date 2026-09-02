@@ -373,7 +373,7 @@ def test_the_site_deploys_every_root_file_the_runner_fetches():
 # All three here are **measurable**. A number that cannot be measured is not on this list.
 SIZE_CLAIMS = (
     # (document, the marker that line must carry, the name of what measures the truth)
-    ("README.md", "ES module", "bundle"),
+    ("docs/BOOK.md", "ES module", "bundle"),
     ("site/index.html", "ES module", "bundle"),
     ("site/ko/index.html", "ES 모듈", "bundle"),
 )
@@ -438,8 +438,8 @@ def test_docs_do_not_name_a_stale_bundle_size():
 # place in another document**, not prose to be read, so translating it would break the
 # very link the sentence exists to make.
 HEADING_QUOTES = (
-    ("site/learn/08-debugging.html", "README.md", "Seven places where green can be a lie"),
-    ("site/ko/learn/08-debugging.html", "README.md", "Seven places where green can be a lie"),
+    ("site/learn/08-debugging.html", "docs/BOOK.md", "Seven places where green can be a lie"),
+    ("site/ko/learn/08-debugging.html", "docs/BOOK.md", "Seven places where green can be a lie"),
 )
 
 
@@ -519,7 +519,7 @@ def test_the_readme_counts_the_typescript_bodies_correctly():
         f"{got['unknown']} TS cases carry a name tests/golden.json does not have — "
         "the answer for those is nowhere, and the runner passes them by in silence.")
 
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = (ROOT / "docs" / "BOOK.md").read_text(encoding="utf-8")
     said_written = WRITTEN.search(readme)
     said_remaining = REMAINING.search(readme)
     assert said_written and said_remaining, (
@@ -640,7 +640,7 @@ def test_the_ladder_row_that_says_it_is_FLAGS_is_FLAGS():
     comparison that happened once.
     """
     launch = _load_module("bt_launch", ROOT / "tests" / "browser" / "launch.py")
-    lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+    lines = (ROOT / "docs" / "BOOK.md").read_text(encoding="utf-8").splitlines()
 
     marked = _marked_rung(
         (line.split("|")[1].strip(), "= `FLAGS`" in line or "(= FLAGS)" in line)
@@ -1543,7 +1543,7 @@ def test_the_readme_splits_the_remainder_the_way_the_ledger_does():
     better sentence but not retyping a number the ledger already holds.
     """
     declined, owed = _ledger_split()
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = (ROOT / "docs" / "BOOK.md").read_text(encoding="utf-8")
     said_declined, said_owed = DECLINED.search(readme), OWED.search(readme)
     assert said_declined and said_owed, (
         "the README stopped stating the split in the shape this reads — fix the "

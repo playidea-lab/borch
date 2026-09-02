@@ -46,6 +46,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # sentence here is a published sentence.
 LIVE = [
     "README.md",
+    "docs/BOOK.md",
     "site/index.html",
     "site/ko/index.html",
 ]

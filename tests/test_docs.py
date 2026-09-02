@@ -54,7 +54,9 @@ DERIVED = re.compile(r"(\d{3,5})\s*건을\s*본다"
                      r"|(?:looks at|examines|covers)\s*\*{0,2}(\d{3,5})\s*cases")
 
 # **Places that speak of now.** Design and history documents are not here — see the docstring above.
-LIVE_DOCS = ("README.md", "site/index.html", "site/ko/index.html")
+# `README.md` is the front door and `docs/BOOK.md` the long document it opens onto —
+# the book was the README until 2026-09-03, and both speak of now.
+LIVE_DOCS = ("README.md", "docs/BOOK.md", "site/index.html", "site/ko/index.html")
 
 
 def _hit(found):
@@ -131,7 +133,7 @@ PACKAGES = {"borch", "borch_webgpu"}
 # there later is checked, and it has never carried one — `git log -S` finds no
 # line count in its whole history. Leaving it in the must-yield list would be
 # demanding a claim that was never made.
-LINE_DOCS = ("README.md", "borch_webgpu/__init__.py", "borch/__init__.py")
+LINE_DOCS = ("docs/BOOK.md", "borch_webgpu/__init__.py", "borch/__init__.py")
 
 # How many claims each document makes, so that losing one is visible. See
 # `test_the_documents_still_make_the_claims_this_file_checks` for why a count
@@ -142,10 +144,11 @@ CLAIMS = {
     # matched it and the figure sat stale at 2930 while the two beside it
     # stayed current. Translating it into a phrasing the pattern catches is
     # what put it under watch.
-    ("README.md", "golden"): 5,
+    ("README.md", "golden"): 1,
+    ("docs/BOOK.md", "golden"): 5,
     ("site/index.html", "golden"): 1,
     ("site/ko/index.html", "golden"): 1,
-    ("README.md", "lines"): 4,
+    ("docs/BOOK.md", "lines"): 4,
     ("borch_webgpu/__init__.py", "lines"): 2,
 }
 
@@ -344,7 +347,7 @@ def test_the_readme_does_not_name_a_stale_case_count(request):
     and it is the count that was actually found wrong. It also needs only what every
     run has, so no dependency moves it.
     """
-    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    text = (ROOT / "docs" / "BOOK.md").read_text(encoding="utf-8")
     claim = SUITE_CLAIM.search(text)
     assert claim, (
         "the README no longer states the pytest counts in the shape this reads.\n"

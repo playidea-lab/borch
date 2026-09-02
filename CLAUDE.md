@@ -50,6 +50,11 @@ whose documented lists differ, and each time the shared binding accepted what on
 
 ## Everything else
 
+`README.md` is a front door and `docs/BOOK.md` is the long document it opens onto — the
+book was the README until 2026-09-03, and the checks in `tests/` police both. Put a
+measured claim in the book; put a link to it on the door.
+
+
 The rest is in the code, which says why beside what. Reasons for declined names live in
 `tests/torch_gap.py`; the browser-side ledger in `borch-ts/test/run.py`; the argument
 axes in `tests/test_torch_signatures_core.py` and `tests/test_ts_signatures.py`. Every

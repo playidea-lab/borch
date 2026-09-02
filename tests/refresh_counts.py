@@ -66,14 +66,18 @@ def counts():
 # rewritten under its old meaning — the wording and the number move together or the
 # rule stops finding it, which is the loud half.
 RULES = (
-    ("README.md", r"(?<=the binding passes \*\*)\d[\d,]*(?= golden cases)", "bind"),
-    ("README.md", r"(?<=It passes \*\*)\d[\d,]*(?= golden cases)", "bind"),
-    ("README.md", r"(?<=covers )\d[\d,]*(?= cases)", "core"),
-    ("README.md", r"(?<=And \*\*)\d[\d,]*(?= golden cases\*\* compare)", "total"),
-    ("README.md", r"(?<=written TS bodies for )\d[\d,]*(?= cases)", "written"),
-    ("README.md", r"(?<=The remaining )\d[\d,]*(?= are two)", "remaining"),
-    ("README.md", r"(?<=things\*\*: )\d[\d,]*(?= deliberately)", "declined"),
-    ("README.md", r"(?<=deliberately not carried across, and )\d[\d,]*(?= owed)", "owed"),
+    ("docs/BOOK.md", r"(?<=the binding passes \*\*)\d[\d,]*(?= golden cases)", "bind"),
+    ("docs/BOOK.md", r"(?<=It passes \*\*)\d[\d,]*(?= golden cases)", "bind"),
+    ("docs/BOOK.md", r"(?<=covers )\d[\d,]*(?= cases)", "core"),
+    ("docs/BOOK.md", r"(?<=And \*\*)\d[\d,]*(?= golden cases\*\* compare)", "total"),
+    # The front door states the total once, in the book's words minus the "And".
+    ("README.md", r"(?<=\*\*)\d[\d,]*(?= golden cases\*\* compare)", "total"),
+    # The front door states the total once, in the book's own words minus the "And".
+    ("docs/BOOK.md", r"(?<=\*\*)\d[\d,]*(?= golden cases\*\* compare)", "total"),
+    ("docs/BOOK.md", r"(?<=written TS bodies for )\d[\d,]*(?= cases)", "written"),
+    ("docs/BOOK.md", r"(?<=The remaining )\d[\d,]*(?= are two)", "remaining"),
+    ("docs/BOOK.md", r"(?<=things\*\*: )\d[\d,]*(?= deliberately)", "declined"),
+    ("docs/BOOK.md", r"(?<=deliberately not carried across, and )\d[\d,]*(?= owed)", "owed"),
     ("site/index.html", r"(?<=<strong>)\d[\d,]*(?= golden cases</strong>)", "total"),
     ("site/ko/index.html", r"(?<=<strong>골든 )\d[\d,]*(?=건</strong>)", "total"),
 )

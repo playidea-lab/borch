@@ -94,7 +94,7 @@ def test_the_readme_transform_count_is_the_measured_one():
     against. A number nobody can measure is the kind that goes stale.
     """
     theirs, ours = _api(torchvision.transforms, "transforms"), _public(borchvision.transforms)
-    row = (ROOT / "README.md").read_text(encoding="utf-8")
+    row = (ROOT / "docs" / "BOOK.md").read_text(encoding="utf-8")
     said = re.search(r"\*\*(\d+) of the (\d+) names `torchvision.transforms` carries", row)
     assert said is not None, (
         "the README's torchvision row no longer states its two numbers in the form this\n"
@@ -114,7 +114,7 @@ def test_the_readme_functional_count_is_the_measured_one():
     """
     theirs = _api(torchvision.transforms.functional, "transforms.functional")
     ours = _public(borchvision.transforms.functional)
-    row = (ROOT / "README.md").read_text(encoding="utf-8")
+    row = (ROOT / "docs" / "BOOK.md").read_text(encoding="utf-8")
     said = re.search(
         r"holds (\d+) of the (\d+) names `torchvision.transforms.functional` carries", row)
     assert said is not None, (

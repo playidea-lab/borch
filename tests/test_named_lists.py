@@ -47,9 +47,9 @@ def test_the_readme_names_every_borchvision_transform():
     there reads as a promise. Both are wrong in the direction that matters — a
     reader decides whether to reach for this based on that row.
     """
-    row = _row("README.md", "| what is here |")
+    row = _row("docs/BOOK.md", "| what is here |")
     assert row is not None, (
-        "the transforms row is gone from README.md, or its leading cell was "
+        "the transforms row is gone from docs/BOOK.md, or its leading cell was "
         "reworded. This check keys off `| what is here |`; if the wording moved, "
         "move this with it rather than deleting the check.")
 
