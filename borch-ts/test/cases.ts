@@ -9817,6 +9817,47 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
     });
   }
 
+  // ── channel groups, inside the kernel ──────────────────────────────────────
+  // The Python side asks these through the binding; asked here too, because the group
+  // axis is new index arithmetic in all three conv shaders and the value check is the
+  // only thing that can see it. Fixtures come from `golden_inputs()` like the rest.
+  const gx = (grad = false) => inp.get("gx", grad);
+  const gw = (grad = false) => inp.get("gw", grad);
+  const gb = (grad = false) => inp.get("gb", grad);
+  const dw = (grad = false) => inp.get("dw", grad);
+  const g1x = (grad = false) => inp.get("g1x", grad);
+  const g1w = (grad = false) => inp.get("g1w", grad);
+  out.set("webgpu::F.conv2d(groups=2)", () => gx().conv2d(gw(), gb(), 1, 1, 1, 2));
+  for (const which of ["x", "w", "b"] as const) {
+    out.set(`webgpu::grad::conv2d_groups/${which}`, () => {
+      const x = gx(true); const k = gw(true); const b = gb(true);
+      x.conv2d(k, b, 1, 1, 1, 2).sum().backward();
+      return gradOf({ x, w: k, b }[which], `conv2d_groups/${which}`);
+    });
+  }
+  out.set("webgpu::F.conv2d(depthwise, stride 2)", () => gx().conv2d(dw(), null, 2, 1, 1, 4));
+  for (const which of ["x", "w"] as const) {
+    out.set(`webgpu::grad::conv2d_depthwise/${which}`, () => {
+      const x = gx(true); const k = dw(true);
+      x.conv2d(k, null, 2, 1, 1, 4).sum().backward();
+      return gradOf(which === "x" ? x : k, `conv2d_depthwise/${which}`);
+    });
+  }
+  out.set("webgpu::F.conv1d(groups=3)", () => g1x().conv1d(g1w(), null, 1, 1, 1, 3));
+  out.set("webgpu::grad::conv1d_groups/w", () => {
+    const x = g1x(true); const k = g1w(true);
+    x.conv1d(k, null, 1, 1, 1, 3).sum().backward();
+    return gradOf(k, "conv1d_groups/w");
+  });
+  out.set("webgpu::F.conv2d(groups 가 채널을 안 나눔)=거절", () => {
+    try {
+      gx().conv2d(gw(), null, 1, 1, 1, 3);
+    } catch (e) {
+      return (e as Error).name;
+    }
+    return "받았다";
+  });
+
   out.set("webgpu::grad::pad_sequence", () => {
     const a = Tensor.from([1, 2, 3, 4], [2, 2], { requiresGrad: true });
     const b = Tensor.from([5, 6], [1, 2], { requiresGrad: true });
