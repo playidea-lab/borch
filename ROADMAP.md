@@ -54,12 +54,17 @@ danger.
 
 ### Fidelity grades
 
-| grade | meaning | target | at the time |
+| grade | meaning | target | at the time (2026-08-14, when this was written) |
 |---|---|---|---|
 | **T1 values** | values, shapes and gradients equal under `allclose(1e-5)` | **100%** of the supported range | **100%** (132/132) |
 | **T2 errors** | the same exception type plus a searchable message | the main errors | **12/12 · 9/9** |
 | **T3 printed form** | `print(t)` and `repr` identical | the common ones | **15/15** |
 | **T4 bits** | identical bits | **a non-goal** | — |
+
+**Now.** The 132 above was the generated conformance table on the day; the measure
+since then is the golden — **4720 golden cases** across three implementations, held to
+the count by `tests/test_docs.py` so this sentence cannot go stale the way the column
+above did (it sat at 132 for three weeks while the golden passed 4,000).
 
 Writing T4 down as a non-goal is the heart of this document. Left unwritten,
 somebody eventually chases it.
