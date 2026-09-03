@@ -69,7 +69,8 @@ def main():
     from run import serve                                            # noqa: PLC0415
     from launch import browser                                       # noqa: PLC0415
 
-    pages = sorted((ROOT / "site").rglob("*.html"))
+    # JupyterLite's pages (`site/lab/`, built) are not this site's layout.
+    pages = sorted(p for p in (ROOT / "site").rglob("*.html") if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src"))
     port, shutdown = serve(ROOT)
     problems, checked = [], 0
     try:
