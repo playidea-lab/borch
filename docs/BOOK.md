@@ -1506,6 +1506,23 @@ equal, on purpose: memory layout — each library runs its native one, which is 
 what is being compared. `npm run compare:ts` reproduces it; the number is not carried
 into any sentence here without its adapter.
 
+**And the half this library loses.** The same page runs one more comparison, for
+inference, against **ONNX Runtime Web 1.29.0** (WebGPU execution provider, bytes pinned
+the same way). The weights are one ResNet-18 exported from torch by
+`tests/browser/export_resnet18.py` — safetensors for borch.ts, ONNX for ORT — and the
+table is printed only after both runtimes reproduce torch's logits on a seeded input to
+1e-3 (measured: borch.ts 1.0e-7, ORT Web 6.7e-8). Forward pass, mean of five after two
+warm-ups, readback included:
+
+| ResNet-18 (CIFAR) forward, `apple / metal-3` | batch 1 | batch 16 |
+|---|---|---|
+| borch.ts | 9.9 ms | 18.8 ms |
+| ONNX Runtime Web 1.29.0 (WebGPU) | **3.2 ms** | **5.4 ms** |
+| ORT is faster by | 3.0× | 3.5× |
+
+That is the honest boundary: for inference alone, use ORT Web. What this library has
+that it does not is the training step above and torch's own shape of code.
+
 > The accuracy is **with augmentation on.** With it off the figure is 59.3%, below
 > the sister library's. It read 65.5% / 62.4% for a while, and at that time six of
 > the benchmark model's shortcut layers were not being trained — that freezing was

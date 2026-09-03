@@ -466,6 +466,19 @@ for step in range(201):
     </table>
     </div>
     <p class="small muted"><code>borch-ts/test/compare.ts</code> 가 같은 step 을 TF.js 4.22.0(자체 layers API·NHWC, WebGPU 백엔드, <code>tests/browser/assets.lock</code> 으로 바이트 고정)으로 borch.ts 바로 뒤에 같은 페이지에서 돌린다. 같게 둔 것: 구조, SGD 0.05/0.9, 교차엔트로피, 같은 시드 배치, 워밍 2회 뒤 5회 측정, 매 step 손실 readback. <code>npm run compare:ts</code> 로 재현.</p>
+
+    <h3 style="margin-top:2rem">이 라이브러리가 지는 반쪽 — 추론, 같은 페이지</h3>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>ResNet-18 (CIFAR) forward, <code>apple / metal-3</code></th><th>batch 1</th><th>batch 16</th></tr></thead>
+      <tbody>
+        <tr><td>borch.ts</td><td class="num">9.9 ms</td><td class="num">18.8 ms</td></tr>
+        <tr><td>ONNX Runtime Web 1.29.0</td><td class="num"><strong>3.2 ms</strong></td><td class="num"><strong>5.4 ms</strong></td></tr>
+        <tr><td>ORT 가 빠른 배수</td><td class="num">3.0×</td><td class="num">3.5×</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted">가중치는 둘 다 같다(ResNet-18 하나를 torch 에서 <code>tests/browser/export_resnet18.py</code> 로 safetensors 와 ONNX 로 내보냄). WebGPU 실행기. 두 런타임이 torch 로짓을 1e-3 안에서 재현한 뒤에만 표를 찍는다 — 실측 1.0e-7 과 6.7e-8. forward, 워밍 2회 뒤 5회 평균, readback 포함. 추론만 필요하면 ORT Web 을 쓰라. 이 라이브러리에 있고 저쪽에 없는 것은 위의 학습 step 과 torch 모양의 코드다.</p>
     <p class="small muted">
       <strong>기계 하나이고, 그 기계가 여기 안 적혀 있다.</strong> 세 열을 서로 비교할 수 있는 것은 같은 상자에서
       서로 맞대어 쟀기 때문이고 — 남의 수와는 비교할 수 없다. 어느 상자였는지 이 페이지가 말하지 않기 때문이다.

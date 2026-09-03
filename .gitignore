@@ -62,6 +62,12 @@ vendor/*
 # TF.js for the comparison bench (`borch-ts/test/compare.ts`), pinned by tests/browser/assets.lock.
 !vendor/tf.min.js
 !vendor/tf-backend-webgpu.min.js
+# ONNX Runtime Web for the same bench's inference half, pinned the same way.
+!vendor/ort.webgpu.min.js
+!vendor/ort-wasm-simd-threaded.asyncify.mjs
+!vendor/ort-wasm-simd-threaded.asyncify.wasm
+# The weights the inference comparison exports from torch at bench time — never committed.
+borch-ts/test/out/
 
 # The data subset the tutorials use (`site/assets/data/`) **is in the repository.**
 #

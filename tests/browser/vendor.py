@@ -49,6 +49,21 @@ PYODIDE_PACKAGES = ["numpy"]          # the file name is looked up in the lock
 # honest way to hold a competitor still is to pin its bytes the way Pyodide's are pinned.
 # The UMD builds are used (a global `tf`), because that is what the CDN serves and what
 # a reader of the number can fetch themselves.
+# **ONNX Runtime Web, for the inference half of the comparison.** The WebGPU build is a
+# UMD script (global `ort`) plus one wasm and its loader; `ort.env.wasm.wasmPaths` points
+# the page at `vendor/`.
+ORT_VERSION = "1.29.0"
+ORT = {
+    "ort.webgpu.min.js":
+        f"https://cdn.jsdelivr.net/npm/onnxruntime-web@{ORT_VERSION}/dist/ort.webgpu.min.js",
+    # 1.29's WebGPU execution provider loads the **asyncify** build, measured — the page
+    # asked for these two and refused with "no available backend" when only the `jsep`
+    # pair (which the file list suggested) was here.
+    "ort-wasm-simd-threaded.asyncify.mjs":
+        f"https://cdn.jsdelivr.net/npm/onnxruntime-web@{ORT_VERSION}/dist/ort-wasm-simd-threaded.asyncify.mjs",
+    "ort-wasm-simd-threaded.asyncify.wasm":
+        f"https://cdn.jsdelivr.net/npm/onnxruntime-web@{ORT_VERSION}/dist/ort-wasm-simd-threaded.asyncify.wasm",
+}
 TFJS_VERSION = "4.22.0"
 TFJS = {
     "tf.min.js":
@@ -77,7 +92,7 @@ def _get(url):
 
 def _targets():
     """A list of (path, URL). numpy's name can only be known by reading the lock."""
-    return ([(pathlib.Path(name), url) for name, url in TFJS.items()]
+    return ([(pathlib.Path(name), url) for name, url in {**TFJS, **ORT}.items()]
             + [(pathlib.Path("pyodide") / name, PYODIDE_BASE + name)
                for name in PYODIDE_FILES])
 

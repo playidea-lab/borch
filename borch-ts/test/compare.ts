@@ -21,6 +21,10 @@
  * shader compilation, which the warm-up pays for on both sides.
  */
 
+import { Tensor, noGrad } from "../src/tensor.js";
+import { load } from "../src/serialize.js";
+import { ResNet18 } from "./bench.js";
+
 // The UMD build puts `tf` on the window; this file is typed against what it uses.
 type TfTensor = { dataSync(): Float32Array; data(): Promise<Float32Array>; dispose(): void };
 type TfLayer = { apply(x: unknown): unknown };
@@ -138,6 +142,99 @@ export async function reportTf(batches: readonly number[] = [16, 32, 64]): Promi
     const r = await runStepTf(b);
     lines.push(`batch ${String(r.batch).padStart(3)}  ${r.msPerStep.toFixed(1).padStart(8)} ms/step  ` +
                `params ${r.params}  loss ${r.lastLoss.toFixed(4)}`);
+  }
+  return lines.join("\n");
+}
+
+
+// ── inference: the same weights in borch.ts and in ONNX Runtime Web ────────────────
+//
+// **Training is the claim; inference is the honest neighbour.** ORT Web is an
+// inference runtime with years of kernel work behind it, and this library expects to
+// lose here. The point is to say by how much, on the same page, with the same weights —
+// exported once from torch by `tests/browser/export_resnet18.py` as safetensors for
+// borch.ts and ONNX for ORT — and only after both runtimes reproduce torch's logits on a
+// seeded input to 1e-3. A speed without that gate is a speed of something else.
+
+interface OrtTensorLike { data: Float32Array }
+interface OrtSession { run(feeds: Record<string, unknown>): Promise<Record<string, OrtTensorLike>> }
+interface Ort {
+  env: { wasm: { wasmPaths: string } };
+  Tensor: new (type: string, data: Float32Array, dims: number[]) => unknown;
+  InferenceSession: { create(url: string, opts: { executionProviders: string[] }): Promise<OrtSession> };
+}
+
+function ort(): Ort {
+  const got = (globalThis as { ort?: Ort }).ort;
+  if (!got) throw new Error("ONNX Runtime Web is not on the page — compare.html loads vendor/ort.webgpu.min.js first");
+  return got;
+}
+
+interface Probe { input: number[]; shape: number[]; logits: number[]; torch: string }
+
+const OUT = "../test/out/";
+
+async function bytes(url: string): Promise<Uint8Array> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: ${r.status} — run tests/browser/export_resnet18.py first`);
+  return new Uint8Array(await r.arrayBuffer());
+}
+
+function maxAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  let m = 0;
+  for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs((a[i] ?? 0) - (b[i] ?? 0)));
+  return m;
+}
+
+/** Warm twice, time five, mean — the bench's shape. `run` must include the readback. */
+async function timed(run: () => Promise<unknown>, warmup = 2, steps = 5): Promise<number> {
+  for (let i = 0; i < warmup; i++) await run();
+  const t0 = performance.now();
+  for (let i = 0; i < steps; i++) await run();
+  return (performance.now() - t0) / steps;
+}
+
+export async function reportInfer(batches: readonly number[] = [1, 16]): Promise<string> {
+  const probe = JSON.parse(new TextDecoder().decode(await bytes(OUT + "resnet18_cifar.probe.json"))) as Probe;
+  const lines: string[] = [`weights from torch ${probe.torch}, exported by tests/browser/export_resnet18.py`];
+
+  // borch.ts: the bench's ResNet18 with the exported state, in eval mode.
+  const table = load(await bytes(OUT + "resnet18_cifar.safetensors")) as Record<string, Tensor>;
+  const model = new ResNet18();
+  // Not strict: `num_batches_tracked` is not in the file (an int64 counter with no part
+  // in inference), and it must be the only thing missing.
+  const report = model.loadStateDict(table, false);
+  const missing = report.missing.filter((k) => !k.endsWith("num_batches_tracked"));
+  if (missing.length || report.unexpected.length) {
+    throw new Error(`state dict did not fit: missing ${missing.join(",")} unexpected ${report.unexpected.join(",")}`);
+  }
+  model.eval();
+  const x1 = Tensor.from(Float32Array.from(probe.input), probe.shape);
+  const ours = await noGrad(() => model.forward(x1)).toArray();
+  const oursGap = maxAbsDiff(ours, probe.logits);
+
+  // ORT Web, WebGPU execution provider, the ONNX twin of the same weights.
+  const o = ort();
+  o.env.wasm.wasmPaths = "../../vendor/";
+  const session = await o.InferenceSession.create(OUT + "resnet18_cifar.onnx", { executionProviders: ["webgpu"] });
+  const feed = (data: Float32Array, b: number) => ({ input: new o.Tensor("float32", data, [b, 3, 32, 32]) });
+  const theirsOut = await session.run(feed(Float32Array.from(probe.input), 1));
+  const theirs = theirsOut["logits"]?.data ?? new Float32Array();
+  const theirsGap = maxAbsDiff(theirs, probe.logits);
+
+  const GATE = 1e-3;
+  lines.push(`gate: max |logits − torch| on the probe input — borch.ts ${oursGap.toExponential(2)} · ORT Web ${theirsGap.toExponential(2)} · limit ${GATE}`);
+  if (oursGap > GATE || theirsGap > GATE) {
+    lines.push("**a runtime does not reproduce torch's logits — its speed below is a speed of something else**");
+  }
+
+  for (const b of batches) {
+    const data = new Float32Array(b * 3 * 32 * 32);
+    for (let i = 0; i < b; i++) data.set(probe.input, i * 3 * 32 * 32);
+    const xb = Tensor.from(data, [b, 3, 32, 32]);
+    const oursMs = await timed(() => noGrad(() => model.forward(xb)).toArray());
+    const theirsMs = await timed(() => session.run(feed(data, b)));
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts ${oursMs.toFixed(2).padStart(8)} ms · ORT Web ${theirsMs.toFixed(2).padStart(8)} ms · ratio ${(oursMs / theirsMs).toFixed(2)}× (borch/ORT)`);
   }
   return lines.join("\n");
 }

@@ -1,3 +1,6 @@
+5d25483158d53d8f34d0e9c06a654d56c8dca4ebdf370ea0982ef11315a00e0e  ort-wasm-simd-threaded.asyncify.mjs
+503d17cb7411b79781b9fad1cf0978f03cf06b050c7d399c730e914f473bf549  ort-wasm-simd-threaded.asyncify.wasm
+2d0bac4406b97d87c2ee2f279a0e6ad089567e62283d41e7e535a40e5c03d2f5  ort.webgpu.min.js
 ebfa5de0256e98fcd4ece4546e054dea50b73ecf735ec836237fd45bcc5eab1f  pyodide/numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl
 3a3cfb1c0bc02917a1792c1ecdf2b9b484ca406f5d03cb8af4083e97ec7d706a  pyodide/pyodide-lock.json
 c5bc43242dbdd922b03fd9f9ca22480d37451238686e84cb38499143f81ec75b  pyodide/pyodide.asm.js

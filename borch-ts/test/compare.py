@@ -50,6 +50,15 @@ def main(argv):
         print(f"no emit: {dist}\n  first: npm run build:ts", file=sys.stderr)
         return 2
 
+    # The inference half needs the exported weights; torch makes them once.
+    out = runner.ROOT / "borch-ts" / "test" / "out"
+    if not all((out / f).exists() for f in ("resnet18_cifar.safetensors", "resnet18_cifar.onnx", "resnet18_cifar.probe.json")):
+        import subprocess
+        r = subprocess.run(["uv", "run", "--project", str(runner.ROOT), "--with", "torch", "--with", "onnx",
+                            "python", "-W", "ignore", "tests/browser/export_resnet18.py"], cwd=str(runner.ROOT))
+        if r.returncode:
+            print("could not export the weights for the inference comparison", file=sys.stderr)
+            return 2
     port, stop = runner.serve(runner.ROOT)
     try:
         from playwright.sync_api import sync_playwright

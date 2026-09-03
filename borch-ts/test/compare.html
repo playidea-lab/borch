@@ -11,7 +11,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>borch.ts vs TF.js — a ResNet-18 (CIFAR) training step</title>
+  <title>borch.ts vs TF.js vs ONNX Runtime Web — ResNet-18 (CIFAR)</title>
   <style>
     body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
            margin: 2rem; max-width: 60rem; }
@@ -20,6 +20,7 @@
   <!-- Pinned bytes, not a CDN: tests/browser/assets.lock holds their hashes. -->
   <script src="../../vendor/tf.min.js"></script>
   <script src="../../vendor/tf-backend-webgpu.min.js"></script>
+  <script src="../../vendor/ort.webgpu.min.js"></script>
 </head>
 <body>
   <h1>borch.ts vs TF.js — a ResNet-18 (CIFAR) training step</h1>
@@ -28,7 +29,7 @@
     import { init } from "../dist/src/tensor.js";
     import { Device } from "../dist/src/device.js";
     import { report } from "../dist/test/bench.js";
-    import { reportTf } from "../dist/test/compare.js";
+    import { reportTf, reportInfer } from "../dist/test/compare.js";
     import { why } from "./why.js";
 
     const out = document.getElementById("out");
@@ -37,7 +38,9 @@
       const ours = await report();
       out.textContent = "borch.ts\n" + ours + "\n\nTF.js: measuring…";
       const theirs = await reportTf();
-      const text = "borch.ts\n" + ours + "\n\nTF.js\n" + theirs;
+      out.textContent = "borch.ts\n" + ours + "\n\nTF.js\n" + theirs + "\n\ninference: measuring…";
+      const infer = await reportInfer();
+      const text = "borch.ts\n" + ours + "\n\nTF.js\n" + theirs + "\n\ninference — borch.ts vs ONNX Runtime Web (WebGPU)\n" + infer;
       window.__borchCompare = { text, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
