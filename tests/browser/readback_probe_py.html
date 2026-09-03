@@ -193,6 +193,30 @@ timed("model.weight.grad.item()", lambda: w.grad.item())
     say("which readbacks are slow:");
     for (const l of kinds) say("  " + l);
 
+    // **The boundary.** The Python inside HERO_PY sees milliseconds; the call around it
+    // sees a second. Four ways of making the same call, each timed from outside, with
+    // the Python's own first-to-last-line time printed beside it.
+    const pyH = await runner.loadPython();
+    const stamped = "import time as _t\n_t0 = _t.perf_counter()\n" + ex.HERO_PY + "\nprint(f'inside {(_t.perf_counter() - _t0) * 1000:.0f} ms')";
+    const ways = [];
+    const inside = [];
+    const grab = (line) => { if (line.startsWith("inside")) inside.push(line); };
+    for (const [name, call] of [
+      ["py.runPythonAsync, no stdout hook", async () => { await pyH.runPythonAsync(stamped); }],
+      ["py.runPythonAsync + setStdout batched", async () => { pyH.setStdout({ batched: grab }); try { await pyH.runPythonAsync(stamped); } finally { pyH.setStdout({}); } }],
+      ["py.runPython (sync entry)", async () => { pyH.setStdout({ batched: grab }); try { pyH.runPython(stamped); } finally { pyH.setStdout({}); } }],
+      ["runner.runPython", async () => { await runner.runPython(stamped, { onLog: grab }); }],
+    ]) {
+      const t0 = performance.now();
+      try { await call(); } catch (err) { inside.push(`error ${String(err).split("\n")[0].slice(0, 80)}`); }
+      ways.push(`${name}: ${(performance.now() - t0).toFixed(0)} ms outside · ${inside.pop() ?? "?"}`);
+    }
+    say("the boundary around HERO_PY:");
+    for (const w of ways) say("  " + w);
+    const ts = performance.now();
+    const st = runner.readStats(borch);
+    say(`readStats alone: ${(performance.now() - ts).toFixed(1)} ms · ${JSON.stringify(st).slice(0, 80)}`);
+
     window.__readbackPy = { text: lines.join("\n"), adapter: borch.Device.adapterInfo,
       medians: { js: med(js), py: med(pr), pyTimer: med(pt), pyLoop: med(pl) },
       maxes: { js: Math.max(...js), py: Math.max(...pr), pyTimer: Math.max(...pt), pyLoop: Math.max(...pl) } };
