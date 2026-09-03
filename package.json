@@ -54,6 +54,7 @@
     "wheel:py": "uv run --with playwright python tests/browser/wheel_probe.py --build",
     "lab:py": "uv run --with playwright python tests/browser/lab_probe.py --build",
     "envelope:py": "uv run --with playwright python tests/browser/envelope.py",
+    "envelope2:py": "uv run --with playwright python tests/browser/envelope2.py",
     "build:lab": "python3 site/build_lab.py",
     "cost:ts": "uv run --with playwright python borch-ts/test/cost.py",
     "bench:ts": "uv run --with playwright python borch-ts/test/bench.py",

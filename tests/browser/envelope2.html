@@ -1,0 +1,163 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the envelope, part two — your own model, trained end to end</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<script src="/vendor/ort.webgpu.min.js"></script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Can a model somebody wrote themselves train end to end — backward and all — at
+  // 128 and 224 px, and leave as ONNX?** Part one froze a pretrained backbone; this is
+  // the other mode of the tool, where the model is the reader's own. A small CNN, three
+  // classes of synthetic images with structure to learn, 200 for training and 60 held
+  // out, five epochs at batch 16. Time, memory, faults, held-out accuracy, and the
+  // ONNX round trip through ORT Web — in TypeScript, then the same in Python.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const sizes = (new URLSearchParams(location.search).get("sizes") || "128,224").split(",").map(Number);
+  const EPOCHS = 5, BATCH = 16, TRAIN = 200, TEST = 60, CLASSES = 3;
+  try {
+    const { init, Device, Tensor, nn, optim, noGrad, device, scope, keepAlive, onnx } = await import("borch-ts");
+    await init();
+    say(`adapter: ${Device.adapterInfo}`);
+    const d = device();
+
+    // Three classes: a low-frequency template per class (seeded), plus per-image noise.
+    let seed = 12345;
+    const rnd = () => { seed ^= seed << 13; seed >>>= 0; seed ^= seed >>> 17; seed ^= seed << 5; seed >>>= 0; return seed / 4294967296; };
+    const gauss = () => { const u = Math.max(rnd(), 1e-9), v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+    // **One set of templates for train and test.** The first run of this page drew new
+    // templates per call, so the held-out classes were different patterns from the
+    // trained ones and accuracy sat at chance while the loss fell — the bench's bug.
+    const cells = 6;                                     // template resolution
+    const templates = Array.from({ length: CLASSES }, () => Float32Array.from({ length: 3 * cells * cells }, () => gauss()));
+    function dataset(S, n) {
+      const x = new Float32Array(n * 3 * S * S), y = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const k = i % CLASSES; y[i] = k;
+        const t = templates[k];
+        for (let c = 0; c < 3; c++) for (let h = 0; h < S; h++) for (let w = 0; w < S; w++) {
+          const th = Math.floor(h * cells / S), tw = Math.floor(w * cells / S);
+          x[((i * 3 + c) * S + h) * S + w] = 0.6 * t[(c * cells + th) * cells + tw] + 0.8 * gauss();
+        }
+      }
+      return { x, y };
+    }
+
+    // The reader's own model, as torch writes it.
+    function makeModel() {
+      const block = (cin, cout) => [new nn.Conv2d(cin, cout, 3, 1, 1), new nn.BatchNorm2d(cout), new nn.ReLU(), new nn.MaxPool2d(2)];
+      return new nn.Sequential(...block(3, 16), ...block(16, 32), ...block(32, 64),
+        new nn.AdaptiveAvgPool2d(1), new nn.Flatten(), new nn.Linear(64, CLASSES));
+    }
+
+    const results = {};
+    for (const S of sizes) {
+      const faults0 = d.faults.count;
+      const { x: tx, y: ty } = dataset(S, TRAIN);
+      const { x: vx, y: vy } = dataset(S, TEST);
+      const X = keepAlive(Tensor.from(tx, [TRAIN, 3, S, S]));
+      const Y = keepAlive(Tensor.from(ty, [TRAIN], { dtype: "int64" }));
+      const VX = keepAlive(Tensor.from(vx, [TEST, 3, S, S]));
+      const model = makeModel();
+      const opt = new optim.Adam(model.parameters(), 1e-3);
+      const crit = new nn.CrossEntropyLoss();
+      const steps = Math.floor(TRAIN / BATCH);
+      let lastLoss = 0, firstLoss = 0, stepMs = 0;
+      const t0 = performance.now();
+      for (let epoch = 0; epoch < EPOCHS; epoch++) {
+        for (let s = 0; s < steps; s++) {
+          const ts = performance.now();
+          await scope(async () => {
+            const xb = X.narrow(0, s * BATCH, BATCH);
+            const yb = Y.narrow(0, s * BATCH, BATCH);
+            opt.zeroGrad();
+            const loss = crit.forward(model.forward(xb), yb);
+            loss.backward();
+            opt.step();
+            const v = (await loss.toArray())[0];
+            if (epoch === 0 && s === 0) firstLoss = v;
+            lastLoss = v;
+          });
+          if (epoch === EPOCHS - 1) stepMs += performance.now() - ts;
+        }
+      }
+      const trainMs = performance.now() - t0;
+      stepMs /= steps;
+      model.eval();
+      const pred = await scope(async () => noGrad(() => model.forward(VX)).argmax(1).toArray());
+      let hit = 0; for (let i = 0; i < TEST; i++) if (pred[i] === vy[i]) hit++;
+      const acc = hit / TEST;
+      const faults = d.faults.count - faults0;
+      const mem = `${(d.memory.bytes / 1e6).toFixed(0)} MB (+pool ${(d.pooled.bytes / 1e6).toFixed(0)})`;
+      say(`${S} px · ${EPOCHS} epochs × ${steps} steps · ${(trainMs / 1000).toFixed(1)} s · last epoch ${stepMs.toFixed(0)} ms/step · loss ${firstLoss.toFixed(2)} → ${lastLoss.toFixed(3)} · held-out ${(acc * 100).toFixed(0)}% · gpu ${mem}${faults ? ` · **${faults} faults — ${String(d.faults.first).slice(0, 100)}**` : ""}`);
+
+      // ONNX: the trained model leaves, ORT Web runs it on eight held-out images.
+      const sample = keepAlive(VX.narrow(0, 0, 8));
+      const exported = await onnx.exportOnnx(model, sample);
+      const ours = await scope(async () => noGrad(() => model.forward(sample)).toArray());
+      const session = await ort.InferenceSession.create(exported.bytes, { executionProviders: ["webgpu"] });
+      ort.env.wasm.wasmPaths = "/vendor/";
+      const theirs = (await session.run({ input: new ort.Tensor("float32", vx.slice(0, 8 * 3 * S * S), [8, 3, S, S]) })).output.data;
+      let gap = 0; for (let i = 0; i < ours.length; i++) gap = Math.max(gap, Math.abs(ours[i] - theirs[i]));
+      say(`  ONNX: ${exported.ops.length} nodes · ${(exported.bytes.length / 1e3).toFixed(0)} KB · ORT Web vs borch.ts max |Δ| ${gap.toExponential(2)}`);
+      results[S] = { trainMs, stepMs, acc, faults, gap, lastLoss };
+    }
+
+    // The same model and data in Python, through the binding, at the first size.
+    const runner = await import("/site/assets/runner.js");
+    const S = sizes[0];
+    const py = `
+import time, js
+import borch_webgpu as torch
+import numpy as np
+S = ${S}; TRAIN = ${TRAIN}; TEST = ${TEST}; BATCH = ${BATCH}; EPOCHS = ${EPOCHS}
+rng = np.random.default_rng(7)
+cells = 6
+templates = [rng.standard_normal((3, cells, cells)).astype(np.float32) for _ in range(3)]
+def make(n):
+    x = np.empty((n, 3, S, S), np.float32); y = np.empty(n, np.int64)
+    idx = (np.arange(S) * cells // S)
+    for i in range(n):
+        k = i % 3; y[i] = k
+        x[i] = 0.6 * templates[k][:, idx][:, :, idx] + 0.8 * rng.standard_normal((3, S, S)).astype(np.float32)
+    return x, y
+tx, ty = make(TRAIN); vx, vy = make(TEST)
+X = torch.tensor(tx); Y = torch.tensor(ty); VX = torch.tensor(vx)
+def block(cin, cout):
+    return [torch.nn.Conv2d(cin, cout, 3, padding=1), torch.nn.BatchNorm2d(cout), torch.nn.ReLU(), torch.nn.MaxPool2d(2)]
+model = torch.nn.Sequential(*block(3, 16), *block(16, 32), *block(32, 64), torch.nn.AdaptiveAvgPool2d(1), torch.nn.Flatten(), torch.nn.Linear(64, 3))
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+crit = torch.nn.CrossEntropyLoss()
+steps = TRAIN // BATCH
+t0 = time.perf_counter()
+for epoch in range(EPOCHS):
+    for s in range(steps):
+        xb = X[s*BATCH:(s+1)*BATCH]; yb = Y[s*BATCH:(s+1)*BATCH]
+        opt.zero_grad(); loss = crit(model(xb), yb); loss.backward(); opt.step()
+        if epoch == 0 and s == 0: first = loss.item()
+last = loss.item()
+train_s = time.perf_counter() - t0
+model.eval()
+with torch.no_grad():
+    pred = model(VX).argmax(1).numpy()
+acc = float((pred == vy).mean())
+print(f"python {S} px · {EPOCHS} epochs × {steps} steps · {train_s:.1f} s · loss {first:.2f} → {last:.3f} · held-out {acc*100:.0f}% · faults {js.borch.device().faults.count}")
+`;
+    let pyLine = "";
+    const tp = performance.now();
+    await runner.runPython(py, { onLog: (line) => { if (line.startsWith("python")) pyLine = line; } });
+    say(pyLine || `python: no line (${(performance.now() - tp).toFixed(0)} ms)`);
+
+    const faultsAll = d.faults.count;
+    say(`validation faults in all: ${faultsAll}`);
+    window.__envelope2 = { text: lines.join("\n"), adapter: Device.adapterInfo, results, python: pyLine, faults: faultsAll };
+  } catch (err) {
+    window.__envelope2 = { error: String(err && err.stack || err) };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>
