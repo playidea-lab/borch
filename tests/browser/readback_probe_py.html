@@ -160,6 +160,39 @@ lap("two parameter item()s")
     await runner.runPython(ex.HERO_PY, { onLog: () => {} });
     say(`HERO_PY again: ${(performance.now() - th2).toFixed(0)} ms`);
 
+    // **Which readbacks are slow?** The same value read five ways, each five times.
+    const kinds = [];
+    const variants = `
+import time
+import borch_webgpu as torch
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+ys = 3 * xs + 1
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+for step in range(3):
+    loss = ((model(xs) - ys) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+w = model.weight
+fresh = torch.tensor([1.5])
+def timed(name, fn):
+    ts = []
+    for _ in range(5):
+        t0 = time.perf_counter(); fn(); ts.append((time.perf_counter() - t0) * 1000)
+    ts.sort(); print(f"kind {name:36s} median {ts[2]:7.1f} ms · max {ts[-1]:7.1f}")
+timed("loss.item()", lambda: loss.item())
+timed("fresh tensor .item()", lambda: fresh.item())
+timed("model.weight.item()", lambda: w.item())
+timed("model.weight.detach().item()", lambda: w.detach().item())
+timed("model.weight.numpy()", lambda: w.numpy())
+timed("(model.weight * 1).item()", lambda: (w * 1).item())
+timed("model.bias.item()", lambda: model.bias.item())
+timed("xs.sum().item()", lambda: xs.sum().item())
+timed("model.weight.grad.item()", lambda: w.grad.item())
+`;
+    await runner.runPython(variants, { onLog: (line) => { if (line.startsWith("kind")) kinds.push(line); } });
+    say("which readbacks are slow:");
+    for (const l of kinds) say("  " + l);
+
     window.__readbackPy = { text: lines.join("\n"), adapter: borch.Device.adapterInfo,
       medians: { js: med(js), py: med(pr), pyTimer: med(pt), pyLoop: med(pl) },
       maxes: { js: Math.max(...js), py: Math.max(...pr), pyTimer: Math.max(...pt), pyLoop: Math.max(...pl) } };
