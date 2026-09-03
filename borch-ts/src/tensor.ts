@@ -329,6 +329,8 @@ function applyPlan(t: Tensor, axis: number, plan: AxisPlan): Tensor {
  */
 const scalarCache = new Map<number, GPUBuffer>();
 
+let initializing: Promise<Device> | null = null;
+
 /**
  * Acquires the WebGPU adapter. From the second call on it returns the one
  * already acquired.
@@ -338,7 +340,13 @@ const scalarCache = new Map<number, GPUBuffer>();
  * than quietly ignored.
  */
 export async function init(options: InitOptions = {}): Promise<Device> {
-  if (!deviceHolder.current) deviceHolder.current = await Device.create(options);
+  // **Two callers at once get one device.** A page that warms the device at load and a
+  // click that arrives before the warm-up finishes both land here; without the shared
+  // promise each would create a device and the second would replace the first.
+  if (!deviceHolder.current) {
+    initializing ??= Device.create(options).finally(() => { initializing = null; });
+    deviceHolder.current = await initializing;
+  }
   return deviceHolder.current;
 }
 

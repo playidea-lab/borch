@@ -156,6 +156,39 @@ function askAdapter(options: InitOptions): Promise<GPUAdapter | null> {
 }
 
 /**
+ * The adapter the last `probe()` obtained, kept for the `init()` that follows it.
+ *
+ * **On Linux with the NVIDIA driver, every `requestAdapter` after the first costs one
+ * to three seconds** — measured on an RTX 5080 (driver 580, Chrome 151): the page's
+ * probe at load took 14 ms and the click's second request 2,953 ms, and on a revisit
+ * both requests were slow. Apple answers both in tens of milliseconds, which is why
+ * nobody saw it. A page that probes and then inits asked twice for the same thing;
+ * now the probe's adapter is held and `Device.create` consumes it when the options
+ * match, so the second request never happens.
+ *
+ * Held, not cached: a WebGPU adapter is consumed by its first `requestDevice`, and it
+ * can go stale on its own, so the holder is cleared once used and `create()` falls back
+ * to a fresh request if the held one refuses.
+ */
+// One per option set: a probe for the software adapter must not evict the one a
+// probe for the GPU obtained — the device test does exactly that sequence.
+const held = new Map<string, GPUAdapter>();
+
+function optionsKey(options: InitOptions): string {
+  return `${options.powerPreference ?? "high-performance"}|${options.forceFallbackAdapter ?? false}`;
+}
+
+async function adapterFor(options: InitOptions): Promise<GPUAdapter | null> {
+  const key = optionsKey(options);
+  const kept = held.get(key);
+  if (kept) {
+    held.delete(key);
+    return kept;
+  }
+  return askAdapter(options);
+}
+
+/**
  * Asks whether it could attach, without attaching. It does not create a
  * device.
  *
@@ -169,6 +202,7 @@ export async function probe(options: InitOptions = {}): Promise<Availability> {
   if (!("gpu" in navigator)) return { ok: false, why: "no-api", message: NO_API };
   const adapter = await askAdapter(options);
   if (!adapter) return { ok: false, why: "no-adapter", message: NO_ADAPTER };
+  held.set(optionsKey(options), adapter);
   const name = describe(adapter);
   // **`ok` and `software` are two answers, not one.** Folding them together is the
   // mistake this repository spent a day undoing at a larger scale: a software run is a
@@ -239,7 +273,7 @@ export class Device {
 
   static async create(options: InitOptions = {}): Promise<Device> {
     if (!("gpu" in navigator)) throw new Error(NO_API);
-    const adapter = await askAdapter(options);
+    const adapter = await adapterFor(options);
     if (!adapter) throw new Error(NO_ADAPTER);
     // **A measured number means something only once you know which device it came
     // from.** A headless browser sometimes hands back a software adapter instead of a
@@ -261,10 +295,20 @@ export class Device {
     // is measuring cannot know at that moment. Requesting it on an adapter without it
     // makes `requestDevice` refuse, so it goes in only when present.
     const canTime = adapter.features.has("timestamp-query");
-    const device = await adapter.requestDevice({
+    const descriptor = {
       requiredLimits: want,
-      requiredFeatures: canTime ? ["timestamp-query"] : [],
-    });
+      requiredFeatures: canTime ? ["timestamp-query" as GPUFeatureName] : [],
+    };
+    let device: GPUDevice;
+    try {
+      device = await adapter.requestDevice(descriptor);
+    } catch (err) {
+      // A held adapter can have gone stale between the probe and the click. One fresh
+      // request, then the error stands.
+      const fresh = await askAdapter(options);
+      if (!fresh) throw err;
+      device = await fresh.requestDevice(descriptor);
+    }
     // Validation errors do not arrive as exceptions either. Uncaught, a badly built
     // pipeline quietly does nothing, and we see that result only as "the values are
     // wrong".

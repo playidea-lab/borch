@@ -66,6 +66,12 @@ export async function report(): Promise<Report> {
   // **The order matters.** Asked after `init()`, the unattached state is never seen.
   want("currentDevice() is null before init", currentDevice() === null);
 
+  // How many times the page asks the browser for an adapter — the number the Linux
+  // NVIDIA driver charges seconds for. Counted from the outside, on the API itself.
+  let asked = 0;
+  const askedBefore = GPU.prototype.requestAdapter;
+  GPU.prototype.requestAdapter = function (...a) { asked += 1; return askedBefore.apply(this, a); };
+
   const first = await probe();
   want("probe() finds an adapter", first.ok,
     first.ok ? "" : `${first.why}: ${first.message}`);
@@ -95,6 +101,13 @@ export async function report(): Promise<Report> {
 
   // Called in the form the README writes down — code in a document rots unless it runs.
   await init({ powerPreference: "high-performance" });
+  // Three probes above (`probe()`, `isAvailable()`, the fallback) asked three times;
+  // `init()` consumed the GPU adapter the second of them held, so the count stays at
+  // three instead of reaching four. The fallback probe in between must not have evicted
+  // it — the hold is per option set. On the RTX 5080 the request `init()` no longer
+  // makes was 2,953 ms, the whole of the click.
+  want("init() consumed the adapter probe() obtained — one request fewer",
+    asked === 3, `requestAdapter was called ${asked} times across three probes and init()`);
   want("currentDevice() is webgpu after init", currentDevice() === "webgpu");
   want("the device is alive", device().alive && device().lost === null);
 

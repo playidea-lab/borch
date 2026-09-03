@@ -14,7 +14,7 @@
 import { EXAMPLES } from "./examples.js";
 import { t } from "./i18n.js";
 import {
-  decodeCode, describeError, encodeCode, formatBytes, highlight, probeDevice, requestStop,
+  decodeCode, describeError, encodeCode, formatBytes, highlight, loadBorch, probeDevice, requestStop,
   runCode, runPython,
 } from "./runner.js";
 
@@ -321,6 +321,15 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
     if (p.ok) {
       badge.className = p.software ? "badge off" : "badge on";
       badgeText.textContent = p.adapter;
+      // **The device is made now, while the visitor is still reading.** On Linux with
+      // the NVIDIA driver, asking for the adapter and the device at the click cost
+      // three seconds; moved here it overlaps the reading, and the click pays for the
+      // shaders and the readback only. `init()` is idempotent, so the click's own
+      // `init()` joins this one rather than making a second device.
+      if (!p.software) {
+        const warm = () => loadBorch().then((b) => b.init()).catch(() => {});
+        if ("requestIdleCallback" in window) requestIdleCallback(warm); else setTimeout(warm, 0);
+      }
       if (p.software) {
         say(t("device.software"), "err");
         sayLink(t("device.setupSay"), t("device.setupHref"));

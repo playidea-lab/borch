@@ -7,7 +7,7 @@
 
 import { HERO_CODE } from "./examples.js";
 import { t } from "./i18n.js";
-import { describeError, highlight, probeDevice, runCode } from "./runner.js";
+import { describeError, highlight, loadBorch, probeDevice, runCode } from "./runner.js";
 
 const codeEl = document.getElementById("hero-code");
 const outEl = document.getElementById("hero-out");
@@ -59,6 +59,15 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
     if (p.ok) {
       badge.className = p.software ? "badge off" : "badge on";
       badgeText.textContent = p.adapter;
+      // **The device is made now, while the visitor is still reading.** On Linux with
+      // the NVIDIA driver, asking for the adapter and the device at the click cost
+      // three seconds; moved here it overlaps the reading, and the click pays for the
+      // shaders and the readback only. `init()` is idempotent, so the click's own
+      // `init()` joins this one rather than making a second device.
+      if (!p.software) {
+        const warm = () => loadBorch().then((b) => b.init()).catch(() => {});
+        if ("requestIdleCallback" in window) requestIdleCallback(warm); else setTimeout(warm, 0);
+      }
       // **One screen, one sentence.** Saying both — "that adapter is a CPU" and "Run
       // executes on this tab's GPU" — is the confusion this site exists to refuse, and it
       // was here for a day: the warning was added above the ready line without the ready
