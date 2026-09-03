@@ -119,6 +119,47 @@ for step in range(20):
     await runner.runPython(hero, { onLog: () => {} });
     say(`the same loop a second time (pipelines warm): ${(performance.now() - t1).toFixed(0)} ms`);
 
+    // Outside the loop: each line of the hero before the loop, timed — and the landing
+    // page's own HERO_PY (sixty steps) through the same runner, twice.
+    const segs = [];
+    const before = `
+import time
+t = time.perf_counter()
+def lap(name):
+    global t
+    now = time.perf_counter(); print(f"seg {name:28s} {(now - t) * 1000:8.1f} ms"); t = now
+import borch_webgpu as torch
+lap("import borch_webgpu")
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+lap("torch.tensor")
+ys = 3 * xs + 1
+lap("3 * xs + 1")
+model = torch.nn.Linear(1, 1)
+lap("nn.Linear(1, 1)")
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+lap("optim.SGD")
+loss = ((model(xs) - ys) ** 2).mean()
+lap("first forward + loss")
+opt.zero_grad(); loss.backward(); opt.step()
+lap("first backward + step")
+v = loss.item()
+lap("first loss.item()")
+w, b = [p.item() for p in model.parameters()]
+lap("two parameter item()s")
+`;
+    const tb = performance.now();
+    await runner.runPython(before, { onLog: (line) => { if (line.startsWith("seg")) segs.push(line); } });
+    say(`the hero's first lines, one by one (${(performance.now() - tb).toFixed(0)} ms in all):`);
+    for (const l of segs) say("  " + l);
+    const ex = await import("/site/assets/examples.js");
+    const th = performance.now();
+    let heroLines = 0;
+    await runner.runPython(ex.HERO_PY, { onLog: () => { heroLines += 1; } });
+    say(`HERO_PY itself (60 steps) through the runner: ${(performance.now() - th).toFixed(0)} ms · ${heroLines} lines`);
+    const th2 = performance.now();
+    await runner.runPython(ex.HERO_PY, { onLog: () => {} });
+    say(`HERO_PY again: ${(performance.now() - th2).toFixed(0)} ms`);
+
     window.__readbackPy = { text: lines.join("\n"), adapter: borch.Device.adapterInfo,
       medians: { js: med(js), py: med(pr), pyTimer: med(pt), pyLoop: med(pl) },
       maxes: { js: Math.max(...js), py: Math.max(...pr), pyTimer: Math.max(...pt), pyLoop: Math.max(...pl) } };
