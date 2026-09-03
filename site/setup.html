@@ -90,6 +90,30 @@
       <code data-measured="golden">agreeing 4719 / 4719 [apple / metal-3]</code>.
     </p>
 
+    <h3>What the first run costs, per adapter</h3>
+    <p>
+      Measured by <code>tests/browser/first_run.py</code> on 2026-09-03: the landing page opened
+      cold, the device probed, Run pressed, until the done line. "In the page" is the page's own
+      timer; "open&rarr;done" is the wall clock from opening the page. The deployed row adds
+      the transfer from GitHub Pages.
+    </p>
+    <div style="overflow-x:auto"><table>
+      <tr><th>adapter</th><th>visit</th><th>in the page</th><th>open&rarr;done</th><th>where the wait is</th></tr>
+      <tr><td rowspan="3"><code>apple / metal-3</code><br>M4 Max, Chrome</td><td>first</td><td>29 ms</td><td>0.2 s</td><td rowspan="3">nothing to wait for; the adapter answers in tens of milliseconds</td></tr>
+      <tr><td>revisit</td><td>10 ms</td><td>0.1 s</td></tr>
+      <tr><td>deployed site, first</td><td>763 ms</td><td>1.8 s</td></tr>
+      <tr><td rowspan="3"><code>nvidia / blackwell</code><br>RTX 5080, driver 580, Ubuntu (Xorg + GNOME), Chrome 151</td><td>first</td><td>2.1 s</td><td>4.3 s</td><td rowspan="3"><strong>the browser's adapter handshake: about 3 s per page, in one-second steps</strong>, charged to the first WebGPU calls the page makes whatever they are. A bare page with no library asks for an adapter three times and pays the same &mdash; measured, so this is Chrome's Vulkan path on this driver and not this library. The six shaders take 1 ms; the device request 60 ms.</td></tr>
+      <tr><td>revisit</td><td>1.0 s</td><td>6.0 s</td></tr>
+      <tr><td>deployed site, first</td><td>1.0 s</td><td>6.2 s</td></tr>
+    </table></div>
+    <p>
+      What this library does about it: the page asks for the adapter once (the probe's
+      adapter is held for <code>init()</code>) and makes the device while you are still
+      reading, so the click pays for the shaders and the readback. What it cannot do is
+      make the handshake shorter. On Linux with the NVIDIA driver, the first run on a page is
+      seconds, and it is the browser's seconds.
+    </p>
+
     <h2>Linux with an NVIDIA card</h2>
     <p>
       <strong>Two flags are enough, and the runner now sends those two.</strong> What

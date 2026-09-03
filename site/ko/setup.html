@@ -84,6 +84,28 @@
       <code data-measured="golden">agreeing 4719 / 4719 [apple / metal-3]</code>.
     </p>
 
+    <h3>첫 실행이 얼마나 걸리나 — 어댑터별</h3>
+    <p>
+      <code>tests/browser/first_run.py</code> 로 2026-09-03 에 잰 값. 랜딩 페이지를 새로 열고, 장치를
+      probe 하고, Run 을 눌러 done 줄까지. "페이지 안" 은 페이지 자신의 타이머, "열기→done" 은
+      페이지를 연 시점부터의 벽시계. 배포 행은 GitHub Pages 전송이 더해진다.
+    </p>
+    <div style="overflow-x:auto"><table>
+      <tr><th>어댑터</th><th>방문</th><th>페이지 안</th><th>열기→done</th><th>기다림의 정체</th></tr>
+      <tr><td rowspan="3"><code>apple / metal-3</code><br>M4 Max, Chrome</td><td>첫 방문</td><td>29 ms</td><td>0.2 s</td><td rowspan="3">기다릴 것이 없다. 어댑터가 수십 ms 에 답한다</td></tr>
+      <tr><td>재방문</td><td>10 ms</td><td>0.1 s</td></tr>
+      <tr><td>배포 사이트, 첫 방문</td><td>763 ms</td><td>1.8 s</td></tr>
+      <tr><td rowspan="3"><code>nvidia / blackwell</code><br>RTX 5080, 드라이버 580, Ubuntu (Xorg + GNOME), Chrome 151</td><td>첫 방문</td><td>2.1 s</td><td>4.3 s</td><td rowspan="3"><strong>브라우저의 어댑터 핸드셰이크: 페이지당 약 3 s 가 1 초 단위로</strong>, 페이지가 처음 하는 WebGPU 호출 몇 개에 얹힌다 — 그것이 무엇이든. 라이브러리 없는 맨 페이지가 어댑터를 세 번 요청해도 같은 값을 낸다(실측). 이 드라이버 위 Chrome 의 Vulkan 경로이지 이 라이브러리가 아니다. 셰이더 6 개는 1 ms, device 요청은 60 ms.</td></tr>
+      <tr><td>재방문</td><td>1.0 s</td><td>6.0 s</td></tr>
+      <tr><td>배포 사이트, 첫 방문</td><td>1.0 s</td><td>6.2 s</td></tr>
+    </table></div>
+    <p>
+      이 라이브러리가 하는 것: 페이지가 어댑터를 한 번만 요청하고(probe 가 받은 어댑터를
+      <code>init()</code> 이 그대로 쓴다), 읽는 동안 device 를 미리 만들어 클릭은 셰이더와
+      readback 값만 치르게 한다. 못 하는 것: 핸드셰이크를 짧게 만드는 일. NVIDIA 드라이버 위
+      Linux 에서 페이지의 첫 실행은 몇 초이고, 그 몇 초는 브라우저의 것이다.
+    </p>
+
     <h2>NVIDIA 카드를 단 리눅스</h2>
     <p>
       <strong>플래그 둘이면 충분하고, 러너도 이제 그 둘을 보냅니다.</strong> 그 둘이 없을 때
