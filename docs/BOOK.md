@@ -1390,11 +1390,15 @@ What differs is the clock, and the rule that matters is not *do not run on the C
 the benchmark and accuracy runners refuse outright, the site's badge goes dark and says
 why, and every score line prints the adapter.
 
-**Windows — not measured.** Nothing in this repository has ever run there: no CI job,
-no recorded run, no comment. The library is a browser library and there is no reason
-to expect it to fail, but *no reason to expect* is not a measurement, and writing
-steps here would be inventing them. If you run it, the adapter line is the whole
-report worth sending.
+**Windows — seen to work, never timed.** On 2026-08-27 somebody opened the playground
+on a Windows desktop with an NVIDIA card: the badge came back `nvidia / blackwell` with
+no flags at all (Chrome uses D3D12 there, not the Vulkan path the Linux ladder is
+about), and three values agreed with torch. That is the whole record. Nothing in this
+repository has *run* there — no CI job, no golden, no first-run clock — and the
+sentence that stood here until 2026-09-03 still said "not measured" a week after the
+setup page said otherwise. What is worth sending from a Windows machine is one line:
+`site/check.html` prints, before the golden, the first run's cost with the adapter and
+the OS beside it, and then the golden's count on that card.
 
 ### How much it does
 

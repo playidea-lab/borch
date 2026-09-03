@@ -107,8 +107,35 @@ will be busy while it runs.</pre>
     go.disabled = true;
     out.textContent = "running…";
     try {
+      // **A first-run stopwatch, before the golden.** The golden says whether the values
+      // are right on this card; this line says what the first run costs on it — the
+      // adapter request, the device request and the first result of a tiny kernel — with
+      // the adapter and the OS beside them, so one pasted line is a measurement from a
+      // machine this repository has never had. Windows is the one it was written for:
+      // seen to work there on 2026-08-27, never timed.
+      const gpuStat = { adapterMs: 0, deviceMs: 0 };
+      if (globalThis.GPU && globalThis.GPUAdapter) {
+        const ra = GPU.prototype.requestAdapter;
+        GPU.prototype.requestAdapter = async function (...a) {
+          const t0 = performance.now(); const r = await ra.apply(this, a); gpuStat.adapterMs += performance.now() - t0; return r;
+        };
+        const rd = GPUAdapter.prototype.requestDevice;
+        GPUAdapter.prototype.requestDevice = async function (...a) {
+          const t0 = performance.now(); const r = await rd.apply(this, a); gpuStat.deviceMs += performance.now() - t0; return r;
+        };
+      }
+      const borch = await import("../borch-ts/dist/src/index.js");
+      const t0 = performance.now();
+      await borch.init();
+      const x = borch.Tensor.from([1, 2, 3, 4], [4]);
+      const first = await x.mul(x).sum().toArray();
+      const firstMs = performance.now() - t0;
+      const os = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "?";
+      const firstLine = `first run: ${Math.round(firstMs)} ms (adapter ${Math.round(gpuStat.adapterMs)} · device ${Math.round(gpuStat.deviceMs)} · value ${first[0]}) · ${borch.Device.adapterInfo} · ${os}`;
+      out.textContent = firstLine + "\nrunning the golden…";
       const { run, format } = await import("../borch-ts/dist/test/golden.js");
       const report = await run(GOLDEN);
+      report.firstLine = firstLine;
       // Kept where an automated runner can read it, as the local page does.
       window.__borchReport = report;
       // **`adapter` is a string, not a pair.** Reading it as `{vendor, architecture}`
@@ -116,7 +143,7 @@ will be busy while it runs.</pre>
       // `apple / metal-3` — the page would have shipped saying nothing, next to a
       // count that was right.
       where.textContent = report.adapter ?? "";
-      out.textContent = format(report);
+      out.textContent = firstLine + "\n" + format(report);
       out.className = report.failed.length === 0 && report.unknown.length === 0
         ? "out ok" : "out fail";
     } catch (err) {
