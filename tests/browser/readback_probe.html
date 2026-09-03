@@ -17,10 +17,19 @@
   const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
   const fmt = (xs) => `median ${med(xs).toFixed(1)} ms · min ${Math.min(...xs).toFixed(1)} · max ${Math.max(...xs).toFixed(1)}`;
   try {
+    // `?timer=1`: an empty 4 ms interval from the very start — before the adapter is
+    // asked for. The handshake on this machine came in one-second quanta too.
+    const fromStart = new URLSearchParams(location.search).get("timer") === "1";
+    if (fromStart) setInterval(() => {}, 4);
+    const ta = performance.now();
     const adapter = await navigator.gpu.requestAdapter();
+    const adapterMs = performance.now() - ta;
     const info = adapter.info ?? {};
+    const td = performance.now();
     const device = await adapter.requestDevice();
-    say(`adapter: ${info.vendor ?? "?"} / ${info.architecture ?? "?"} · visibility ${document.visibilityState}`);
+    const deviceMs = performance.now() - td;
+    say(`adapter: ${info.vendor ?? "?"} / ${info.architecture ?? "?"} · visibility ${document.visibilityState}`
+      + ` · requestAdapter ${adapterMs.toFixed(0)} ms · requestDevice ${deviceMs.toFixed(0)} ms${fromStart ? " · timer from page start" : ""}`);
 
     // 1) requestAnimationFrame interval — the display's tick as the page sees it.
     const frames = [];
@@ -205,7 +214,7 @@
     say(`  with an empty submit every 50 ms during the quiet: ${fmt(after.beat)}`);
 
     window.__readback = { text: lines.join("\n"), adapter: `${info.vendor ?? "?"} / ${info.architecture ?? "?"}`,
-      medians: { raf: med(frames.slice(1)), map: med(wm), workDone: med(wd), dispatchMap: med(dm), rafMap: med(am), timerMap: med(tm), idleMap: med(idle), idleTimerMap: med(idleT), idleMax: Math.max(...idle), idleTimerMax: Math.max(...idleT), pipeline: med(mk), pipelineMax: Math.max(...mk), firstDispatch: med(first), firstDispatchMax: Math.max(...first), pipelineAsync: med(mkA), afterBare: Math.max(...after.bare), afterTimer: Math.max(...after.timer), afterBeat: Math.max(...after.beat) } };
+      medians: { raf: med(frames.slice(1)), map: med(wm), workDone: med(wd), dispatchMap: med(dm), rafMap: med(am), timerMap: med(tm), idleMap: med(idle), idleTimerMap: med(idleT), idleMax: Math.max(...idle), idleTimerMax: Math.max(...idleT), pipeline: med(mk), pipelineMax: Math.max(...mk), firstDispatch: med(first), firstDispatchMax: Math.max(...first), pipelineAsync: med(mkA), afterBare: Math.max(...after.bare), afterTimer: Math.max(...after.timer), afterBeat: Math.max(...after.beat), adapterMs, deviceMs } };
   } catch (err) {
     window.__readback = { error: String(err && err.stack || err) };
     say(`the probe blew up: ${err}`);

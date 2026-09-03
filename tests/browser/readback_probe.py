@@ -91,20 +91,22 @@ def main(argv):
                 ("+ --disable-frame-rate-limit", base + extra + ["--disable-frame-rate-limit"], not headed),
                 ("+ both", base + extra + ["--disable-gpu-vsync", "--disable-frame-rate-limit"], not headed),
                 ("headless, runner's flags", base + extra, True),
+                ("runner's flags, timer from page start", base + extra + ["?timer=1"], not headed),
             ]
             for label, flags, headless in configs:
-                m = one(pw, url, label, flags, headless)
+                query = "?timer=1" if "?timer=1" in flags else ""
+                m = one(pw, url + query, label, [f for f in flags if f != "?timer=1"], headless)
                 rows.append((label, m))
                 time.sleep(1)
     finally:
         shutdown()
     print()
-    print(f"{'configuration':32} {'rAF':>7} {'map':>7} {'workDone':>9} {'disp→map':>9} {'rAF+map':>8} {'timer+map':>10} {'idle→map':>9} {'idle,max':>9} {'idle+timer':>11} {'its max':>8} {'pipeline':>9} {'pipe max':>9} {'1st disp':>9} {'its max':>8} {'pipeAsync':>10} {'sub@quiet':>10} {'+timer':>7} {'+beat':>7}")
+    print(f"{'configuration':32} {'rAF':>7} {'map':>7} {'workDone':>9} {'disp→map':>9} {'rAF+map':>8} {'timer+map':>10} {'idle→map':>9} {'idle,max':>9} {'idle+timer':>11} {'its max':>8} {'pipeline':>9} {'pipe max':>9} {'1st disp':>9} {'its max':>8} {'pipeAsync':>10} {'sub@quiet':>10} {'+timer':>7} {'+beat':>7} {'adapter':>8} {'device':>7}")
     for label, m in rows:
         if m is None:
             print(f"{label:32} (blew up)")
             continue
-        print(f"{label:32} {m['raf']:7.1f} {m['map']:7.1f} {m['workDone']:9.1f} {m['dispatchMap']:9.1f} {m['rafMap']:8.1f} {m['timerMap']:10.1f} {m['idleMap']:9.1f} {m['idleMax']:9.1f} {m['idleTimerMap']:11.1f} {m['idleTimerMax']:8.1f} {m['pipeline']:9.1f} {m['pipelineMax']:9.1f} {m['firstDispatch']:9.1f} {m['firstDispatchMax']:8.1f} {m['pipelineAsync']:10.1f} {m['afterBare']:10.1f} {m['afterTimer']:7.1f} {m['afterBeat']:7.1f}")
+        print(f"{label:32} {m['raf']:7.1f} {m['map']:7.1f} {m['workDone']:9.1f} {m['dispatchMap']:9.1f} {m['rafMap']:8.1f} {m['timerMap']:10.1f} {m['idleMap']:9.1f} {m['idleMax']:9.1f} {m['idleTimerMap']:11.1f} {m['idleTimerMax']:8.1f} {m['pipeline']:9.1f} {m['pipelineMax']:9.1f} {m['firstDispatch']:9.1f} {m['firstDispatchMax']:8.1f} {m['pipelineAsync']:10.1f} {m['afterBare']:10.1f} {m['afterTimer']:7.1f} {m['afterBeat']:7.1f} {m['adapterMs']:8.0f} {m['deviceMs']:7.0f}")
     return 0
 
 

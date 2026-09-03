@@ -244,27 +244,44 @@ function numbered(code: string): string {
 }
 
 /**
- * **Keeps the page's clock ticking while the GPU is awaited.**
+ * **Keeps the page's clock ticking around GPU work.**
  *
- * On Linux with the NVIDIA driver (Chrome 143, Vulkan), a `mapAsync` or
- * `onSubmittedWorkDone` awaited by a page that is otherwise quiet resolves about one
- * second late — the browser looks at the device's fences only when something else
- * turns its loop, and falls back to a one-second poll. Measured with a bare page
- * (`tests/browser/readback_probe.py`): median 0.1 ms, maximum 1.9 s; with a
- * requestAnimationFrame loop or a 0 ms interval timer alive during the wait, maximum
- * 0.1 ms. A training loop that prints its loss paid a second a print on that machine.
+ * On Linux with the NVIDIA driver (Chrome 143, Vulkan), the first submit or readback
+ * after the page has been quiet for a moment resolves about a second late — measured
+ * with a bare page (`tests/browser/readback_probe.py`): 300 ms of quiet, then submit +
+ * map, maximum 0.7 s in every headed configuration; with an empty 4 ms interval timer
+ * alive *through the quiet*, maximum 2.5 ms. A timer started at the wait itself is too
+ * late (the first version of this, measured: no change) — the browser has already
+ * backed its GPU polling off, and waking it is what costs the second. Neither
+ * `--disable-gpu-vsync` nor `--disable-frame-rate-limit` changes it.
  *
- * So every GPU wait here runs with a 4 ms interval timer alive — one empty callback,
- * cleared the moment the wait ends. It costs nothing on Apple (0.2 ms either way) and
- * it does not depend on the tab being visible, which `requestAnimationFrame` does.
+ * So the device keeps one empty 4 ms interval alive from any GPU activity until
+ * `AWAKE_MS` after the last, and lets it lapse. A training loop, or a page reading a
+ * value every few steps, never sees the quiet; an idle tab stops ticking within seconds.
+ * It costs nothing on Apple (0.2 ms readbacks either way).
  */
+const AWAKE_MS = 3000;
+let awakeUntil = 0;
+let awakeTimer: ReturnType<typeof setInterval> | null = null;
+
+function stayAwake(): void {
+  awakeUntil = performance.now() + AWAKE_MS;
+  if (awakeTimer !== null || typeof setInterval !== "function") return;
+  awakeTimer = setInterval(() => {
+    if (performance.now() > awakeUntil && awakeTimer !== null) {
+      clearInterval(awakeTimer);
+      awakeTimer = null;
+    }
+  }, 4);
+}
+
+/** A GPU wait, with the clock kept ticking through it and for a while after. */
 async function awake<T>(wait: Promise<T>): Promise<T> {
-  if (typeof setInterval !== "function") return wait;
-  const tick = setInterval(() => {}, 4);
+  stayAwake();
   try {
     return await wait;
   } finally {
-    clearInterval(tick);
+    stayAwake();
   }
 }
 
@@ -1124,6 +1141,7 @@ export class Device {
     const encoder = this.device.createCommandEncoder();
     encoder.resolveQuerySet(this.querySet, 0, count, resolved, 0);
     encoder.copyBufferToBuffer(resolved, 0, stage, 0, bytes);
+    stayAwake();
     this.device.queue.submit([encoder.finish()]);
     await awake(stage.mapAsync(GPUMapMode.READ));
     const times = new BigUint64Array(stage.getMappedRange().slice(0));
@@ -1161,6 +1179,7 @@ export class Device {
       this.pass = null;
     }
     if (!this.encoder) return;
+    stayAwake();
     this.device.queue.submit([this.encoder.finish()]);
     this.encoder = null;
     this.sinceSubmit = 0;
