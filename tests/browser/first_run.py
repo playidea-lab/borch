@@ -117,8 +117,14 @@ def _lib_url(url):
     return url.rsplit("/site/", 1)[0] + "/borch-ts/dist/src/index.js" if url else "/borch-ts/dist/src/index.js"
 
 
-def _visit(context, url, label):
-    """One visit: opens the page, waits for the device, hooks the shader compiler, clicks."""
+def _visit(context, url, label, after_warm=False):
+    """One visit: opens the page, waits for the device, hooks the shader compiler, clicks.
+
+    `after_warm` waits for the page's own warm-up (`init()` from an idle callback) to
+    finish before clicking — the visitor who reads for a moment. Without it the click
+    lands while the warm-up is still asking the driver, joins it, and pays for it: that
+    is the visitor who clicks at once, and on NVIDIA the two are seconds apart.
+    """
     page = context.new_page()
     page.add_init_script(GPU_HOOK)
     errors = []
@@ -132,6 +138,12 @@ def _visit(context, url, label):
                            timeout=GIVE_UP_S * 1000)
     ready = time.time()
     page.evaluate(HOOK, _lib_url(url))
+    warm_s = None
+    if after_warm:
+        page.wait_for_function(
+            f"import('{_lib_url(url)}').then(m => m.currentDevice() !== null)",
+            timeout=GIVE_UP_S * 1000, polling=100)
+        warm_s = time.time() - ready
     page.click("#hero-run")
     page.wait_for_function(
         "[...document.querySelectorAll('#hero-out div')].some(d => d.textContent.startsWith('done'))",
@@ -143,7 +155,8 @@ def _visit(context, url, label):
     adapter = page.evaluate(
         f"import('{_lib_url(url)}').then(m => m.probe()).then(p => p.ok ? p.adapter : null)")
     in_page = said.split("—", 1)[1].split("ms")[0].strip() if "—" in said else "?"
-    print(f"{label}: {in_page} ms in the page · {done - opened:.1f} s from opening the page to done")
+    print(f"{label}: {in_page} ms in the page · {done - opened:.1f} s from opening the page to done"
+          + (f" · warm-up took {warm_s:.2f} s before the click" if warm_s is not None else ""))
     print(f"  load {loaded - opened:.2f} s · probe +{ready - loaded:.2f} s · click→done "
           f"{done - ready:.2f} s = adapter {stat['adapterMs']:.0f} ms + device {stat['deviceMs']:.0f} ms + "
           f"{stat['compiled']} shaders {stat['compileMs']:.0f} ms + the rest")
@@ -185,6 +198,11 @@ def main():
                 # cache are whatever the first visit left them.
                 adapter2, errors2 = _visit(context, target, "revisit")
                 if errors2:
+                    return 1
+                # The visitor who reads first: the page's warm-up has finished by the
+                # time they click. This is the number the warm-up exists for.
+                _adapter3, errors3 = _visit(context, target, "revisit, click after warm-up", after_warm=True)
+                if errors3:
                     return 1
             finally:
                 context.close()
