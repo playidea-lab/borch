@@ -76,8 +76,10 @@ details are in [site/README.md](site/README.md).
 torch — and lesson 0 (`site/learn/00-fix-it.html`) hands the reader two loops that do
 not learn, one wrong line each, and says whether the fix worked. The reader's clock is
 `tests/browser/learner_path.py`, run nightly against the deployed site: on Apple, Python
-is ready 4.4 s after the page opens and the click reaches "learned" 0.8 s later; the
-setup page carries the table, including the 4090's slower seconds and why.
+is ready 4.4 s after the page opens and the click reaches "learned" 0.8 s later, and the
+4090 reads the same (4.7 s and 0.6 s). The setup page carries the table — and the day
+the 4090 read seven seconds instead, because its monitor was blanked and every GPU wait
+on a Linux desktop then takes a second; the timing scripts refuse that condition now.
 
 ## Installing
 

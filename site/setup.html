@@ -95,18 +95,18 @@
       Measured by <code>tests/browser/first_run.py</code> on 2026-09-03: the landing page opened
       cold, the device probed, Run pressed, until the done line. "In the page" is the page's own
       timer; "open&rarr;done" is the wall clock from opening the page. The deployed row adds
-      the transfer from GitHub Pages.
+      the transfer from GitHub Pages. Since the first screen became a Python training loop,
+      the click also pays for Pyodide's first <code>import borch_webgpu</code> (about 0.5 s
+      on either machine) when it lands before the warm-up is done.
     </p>
     <div style="overflow-x:auto"><table>
       <tr><th>adapter</th><th>visit</th><th>in the page</th><th>open&rarr;done</th><th>where the wait is</th></tr>
-      <tr><td rowspan="3"><code>apple / metal-3</code><br>M4 Max, Chrome</td><td>first</td><td>29 ms</td><td>0.2 s</td><td rowspan="3">nothing to wait for; the adapter answers in tens of milliseconds</td></tr>
-      <tr><td>revisit</td><td>10 ms</td><td>0.1 s</td></tr>
-      <tr><td>deployed site, first</td><td>763 ms</td><td>1.8 s</td></tr>
-      <tr><td rowspan="3"><code>nvidia / blackwell</code><br>RTX 5080, driver 580, Ubuntu (Xorg + GNOME), Chrome 151</td><td>first</td><td>2.1 s</td><td>4.3 s</td><td rowspan="3"><strong>the browser's adapter handshake: about 3 s per page, in one-second steps</strong>, charged to the first WebGPU calls the page makes whatever they are. A bare page with no library asks for an adapter three times and pays the same &mdash; measured, so this is Chrome's Vulkan path on this driver and not this library. The six shaders take 1 ms; the device request 60 ms.</td></tr>
-      <tr><td>revisit</td><td>1.0 s</td><td>6.0 s</td></tr>
-      <tr><td>deployed site, first</td><td>1.0 s</td><td>6.2 s</td></tr>
-      <tr><td rowspan="2"><code>nvidia / lovelace</code><br>RTX 4090, driver 550, Ubuntu (Xorg + GNOME), Chrome 143</td><td>first</td><td>1.0 s</td><td>7.1 s</td><td rowspan="2">the same shape on an older card, driver and Chrome: the adapter request 2.9&ndash;4.0 s, the first readback 1.0 s. Three variables changed at once and the number did not, so it is the path, not the part.</td></tr>
-      <tr><td>revisit</td><td>1.0 s</td><td>5.0 s</td></tr>
+      <tr><td rowspan="3"><code>apple / metal-3</code><br>M4 Max, Chrome</td><td>first</td><td>1.35 s</td><td>1.6 s</td><td rowspan="3">the adapter answers in tens of milliseconds; the first click pays Python's first import (0.5 s) and the run</td></tr>
+      <tr><td>revisit</td><td>0.66 s</td><td>1.3 s</td></tr>
+      <tr><td>deployed site, first</td><td>1.71 s</td><td>1.9 s</td></tr>
+      <tr><td rowspan="2"><code>nvidia / lovelace</code><br>RTX 4090, driver 550, Ubuntu (Xorg + GNOME), Chrome 143, <strong>monitor on</strong></td><td>first</td><td>1.60 s</td><td>1.8 s</td><td rowspan="2">the same as Apple: adapter 14 ms, device 15 ms, 22 shaders 1 ms, the first readback 28 ms. <strong>Measured in front of a lit monitor</strong> &mdash; see the note below for what the same machine read with its screen blanked.</td></tr>
+      <tr><td>revisit</td><td>1.51 s</td><td>1.6 s</td></tr>
+      <tr><td><code>nvidia / blackwell</code><br>RTX 5080, driver 580, Ubuntu (Xorg + GNOME), Chrome 151</td><td colspan="3">to be measured again with its screen on</td><td>its earlier row here (2.1 s first, "a 3 s handshake in one-second steps") was taken over ssh in front of a blanked monitor, and that is what it measured &mdash; withdrawn.</td></tr>
     </table></div>
 
     <h3>To the first training — the learner's clock</h3>
@@ -120,22 +120,27 @@
     <div style="overflow-x:auto"><table>
       <tr><th>adapter</th><th>Python ready after opening</th><th>click → first loss line</th><th>click → learned</th><th>revisit, click at once → learned</th><th>lesson 0, three blocks</th></tr>
         <tr><td><code>apple / metal-3</code><br>M4 Max, Chrome</td><td>4.4 s</td><td>0.7 s</td><td>0.8 s</td><td>1.4 s</td><td>2.4 s</td></tr>
-        <tr><td><code>nvidia / lovelace</code><br>RTX 4090, driver 550, Ubuntu, Chrome 143</td><td>8.6 s</td><td>3.5 s</td><td>6.5 s</td><td>6.1 s</td><td>26 s</td></tr>
+        <tr><td><code>nvidia / lovelace</code><br>RTX 4090, driver 550, Ubuntu, Chrome 143, monitor on</td><td>4.7 s</td><td>0.6 s</td><td>0.6 s</td><td>1.6 s</td><td>2.6 s</td></tr>
     </table></div>
     <p class="small muted">
-      The 4090's seconds are not the GPU's: sixty steps of SGD are microseconds there.
-      Each value the page reads back (<code>loss.item()</code>, seven times in that
-      loop) waits about one second on that machine — the same one-second quantum the
-      adapter handshake above shows — so a loop that prints its loss costs a second a
-      print. Measured on a machine whose display is virtual; whether a real screen
-      changes it is not yet known.
+      <strong>A blanked monitor makes every GPU wait a one-second wait.</strong> The
+      first time this table was filled, the 4090's rows read 8.6 s to Python ready and
+      6.5 s from the click to "learned", and the row above it said the adapter handshake
+      took 3 s in one-second steps. Both were measured over ssh on a desktop whose HDMI
+      monitor GNOME had blanked after five idle minutes (<code>xset q</code>: "Monitor is
+      Off"). In front of a blanked screen each frame swap times out at about a second,
+      and every GPU wait queues behind the frame: the adapter request took 3.0 s, a
+      readback after a line was written to the page 1.0 s, a training loop that prints
+      its loss seven seconds. With the monitor woken, the same probes read 52 ms, 46 ms
+      and 0.56 s. Reproduced line by line by <code>tests/browser/readback_probe.py
+      --fresh</code>; the timing scripts now refuse to measure in front of a blanked
+      screen, and say so.
     </p>
     <p>
-      What this library does about it: the page asks for the adapter once (the probe's
-      adapter is held for <code>init()</code>) and makes the device while you are still
-      reading, so the click pays for the shaders and the readback. What it cannot do is
-      make the handshake shorter. On Linux with the NVIDIA driver, the first run on a page is
-      seconds, and it is the browser's seconds.
+      What this library does on its side: the page asks for the adapter once (the probe's
+      adapter is held for <code>init()</code>) and makes the device and loads Python while
+      you are still reading, so the click pays for the run. With the screen on, Linux with
+      the NVIDIA driver is Apple's equal on every number here.
     </p>
 
     <h2>Linux with an NVIDIA card</h2>
