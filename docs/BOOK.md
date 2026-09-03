@@ -1491,11 +1491,14 @@ layout, its own optimizer and loss, WebGPU backend; bytes pinned by
 `tests/browser/assets.lock`) on the same page as borch.ts, one after the other, and
 prints the adapter:
 
-| CIFAR ResNet-18, `apple / metal-3`, same page | batch 16 | batch 32 | batch 64 |
+| CIFAR ResNet-18, same page | batch 16 | batch 32 | batch 64 |
 |---|---|---|---|
-| borch.ts | **38.6 ms/step** | **63.1** | **119.1** |
-| TF.js 4.22.0 (layers API, WebGPU) | 86.4 | 170.0 | 347.5 |
+| `apple / metal-3` — borch.ts | **38.6 ms/step** | **63.1** | **119.1** |
+| `apple / metal-3` — TF.js 4.22.0 | 86.4 | 170.0 | 347.5 |
 | ratio | 2.2× | 2.7× | 2.9× |
+| `nvidia / lovelace` (RTX 4090, driver 550, Chrome 143) — borch.ts | **28.1** | **38.7** | **69.7** |
+| `nvidia / lovelace` — TF.js 4.22.0 | 67.8 | 112.2 | 205.8 |
+| ratio | 2.4× | 2.9× | 3.0× |
 
 Held equal: architecture, SGD 0.05/0.9, cross-entropy, the same seeded pixels and
 labels, two warm-up steps then five timed, a loss readback every step. Not held

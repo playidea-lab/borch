@@ -454,11 +454,14 @@ for step in range(201):
     <h3 style="margin-top:2rem">다시 잰 값 — 2026-09-03, 같은 페이지, 어댑터 명기</h3>
     <div class="scroll-x">
     <table class="data">
-      <thead><tr><th>CIFAR ResNet-18, <code>apple / metal-3</code></th><th>batch 16</th><th>batch 32</th><th>batch 64</th></tr></thead>
+      <thead><tr><th>CIFAR ResNet-18, same page</th><th>batch 16</th><th>batch 32</th><th>batch 64</th></tr></thead>
       <tbody>
-        <tr><td>borch.ts</td><td class="num"><strong>38.6 ms/step</strong></td><td class="num"><strong>63.1</strong></td><td class="num"><strong>119.1</strong></td></tr>
-        <tr><td>TF.js 4.22.0</td><td class="num">86.4</td><td class="num">170.0</td><td class="num">347.5</td></tr>
+        <tr><td><code>apple / metal-3</code> — borch.ts</td><td class="num"><strong>38.6 ms/step</strong></td><td class="num"><strong>63.1</strong></td><td class="num"><strong>119.1</strong></td></tr>
+        <tr><td><code>apple / metal-3</code> — TF.js 4.22.0</td><td class="num">86.4</td><td class="num">170.0</td><td class="num">347.5</td></tr>
         <tr><td>비율</td><td class="num">2.2×</td><td class="num">2.7×</td><td class="num">2.9×</td></tr>
+        <tr><td><code>nvidia / lovelace</code> (RTX 4090, Chrome 143) — borch.ts</td><td class="num"><strong>28.1</strong></td><td class="num"><strong>38.7</strong></td><td class="num"><strong>69.7</strong></td></tr>
+        <tr><td><code>nvidia / lovelace</code> — TF.js 4.22.0</td><td class="num">67.8</td><td class="num">112.2</td><td class="num">205.8</td></tr>
+        <tr><td>비율</td><td class="num">2.4×</td><td class="num">2.9×</td><td class="num">3.0×</td></tr>
       </tbody>
     </table>
     </div>

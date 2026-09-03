@@ -98,6 +98,8 @@
       <tr><td rowspan="3"><code>nvidia / blackwell</code><br>RTX 5080, 드라이버 580, Ubuntu (Xorg + GNOME), Chrome 151</td><td>첫 방문</td><td>2.1 s</td><td>4.3 s</td><td rowspan="3"><strong>브라우저의 어댑터 핸드셰이크: 페이지당 약 3 s 가 1 초 단위로</strong>, 페이지가 처음 하는 WebGPU 호출 몇 개에 얹힌다 — 그것이 무엇이든. 라이브러리 없는 맨 페이지가 어댑터를 세 번 요청해도 같은 값을 낸다(실측). 이 드라이버 위 Chrome 의 Vulkan 경로이지 이 라이브러리가 아니다. 셰이더 6 개는 1 ms, device 요청은 60 ms.</td></tr>
       <tr><td>재방문</td><td>1.0 s</td><td>6.0 s</td></tr>
       <tr><td>배포 사이트, 첫 방문</td><td>1.0 s</td><td>6.2 s</td></tr>
+      <tr><td rowspan="2"><code>nvidia / lovelace</code><br>RTX 4090, 드라이버 550, Ubuntu (Xorg + GNOME), Chrome 143</td><td>첫 방문</td><td>1.0 s</td><td>7.1 s</td><td rowspan="2">더 오래된 카드·드라이버·Chrome 에서도 같은 모양: adapter 요청 2.9~4.0 s, 첫 readback 1.0 s. 변수 셋이 한꺼번에 바뀌었는데 수치가 안 바뀌었으니 부품이 아니라 경로다.</td></tr>
+      <tr><td>재방문</td><td>1.0 s</td><td>5.0 s</td></tr>
     </table></div>
     <p>
       이 라이브러리가 하는 것: 페이지가 어댑터를 한 번만 요청하고(probe 가 받은 어댑터를

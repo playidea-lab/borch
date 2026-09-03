@@ -105,6 +105,8 @@
       <tr><td rowspan="3"><code>nvidia / blackwell</code><br>RTX 5080, driver 580, Ubuntu (Xorg + GNOME), Chrome 151</td><td>first</td><td>2.1 s</td><td>4.3 s</td><td rowspan="3"><strong>the browser's adapter handshake: about 3 s per page, in one-second steps</strong>, charged to the first WebGPU calls the page makes whatever they are. A bare page with no library asks for an adapter three times and pays the same &mdash; measured, so this is Chrome's Vulkan path on this driver and not this library. The six shaders take 1 ms; the device request 60 ms.</td></tr>
       <tr><td>revisit</td><td>1.0 s</td><td>6.0 s</td></tr>
       <tr><td>deployed site, first</td><td>1.0 s</td><td>6.2 s</td></tr>
+      <tr><td rowspan="2"><code>nvidia / lovelace</code><br>RTX 4090, driver 550, Ubuntu (Xorg + GNOME), Chrome 143</td><td>first</td><td>1.0 s</td><td>7.1 s</td><td rowspan="2">the same shape on an older card, driver and Chrome: the adapter request 2.9&ndash;4.0 s, the first readback 1.0 s. Three variables changed at once and the number did not, so it is the path, not the part.</td></tr>
+      <tr><td>revisit</td><td>1.0 s</td><td>5.0 s</td></tr>
     </table></div>
     <p>
       What this library does about it: the page asks for the adapter once (the probe's
