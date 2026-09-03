@@ -383,6 +383,9 @@ export class Device {
     return this.lost === null;
   }
 
+  /** How many faults the last readback had already reported — `read` throws when the
+   *  count has grown since. */
+  private faultsReported = 0;
   /**
    * Errors the device reported and nobody caught.
    *
@@ -406,9 +409,6 @@ export class Device {
    *
    * `count` stays the total, so everything already reading it is unchanged.
    */
-  /** How many faults the last readback had already reported — `read` throws when the
-   *  count has grown since. */
-  private faultsReported = 0;
   faults: { count: number; first: string; outOfMemory: number } =
     { count: 0, first: "", outOfMemory: 0 };
 
