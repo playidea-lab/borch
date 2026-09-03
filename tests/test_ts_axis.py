@@ -207,10 +207,10 @@ FROZEN = {
     # `multiHeadAttentionForward` takes query, key and value separately, which is
     # what makes the real thing possible.
     #
-    # The four that remain all have reasons: `AdaptiveAvgPool2d` is held for a
+    # The three that remain all have reasons (`AdaptiveAvgPool2d` was the fourth, held for a
     # lesson page, and `Buffer`, `UninitializedParameter` and `UninitializedBuffer`
     # are marks with nothing on this side to read them.
-    "nn": 4,
+    "nn": 3,
     # **30 → 10, and eighteen of the twenty were one delegation each.**
     #
     # `poolND`, `lpPool`, `maxUnpool`, `convTransposeND`, `maxPoolWithIndices` and

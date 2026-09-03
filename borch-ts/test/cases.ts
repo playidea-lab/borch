@@ -4869,6 +4869,8 @@ function addUnpool(out: Map<string, Case>): void {
     ["LPPool1d", () => new nn.LPPool1d(2, 2)],
     ["LPPool2d(stride, ceil)", () => new nn.LPPool2d(3, 2, 2, true)],
     ["AdaptiveAvgPool1d", () => new nn.AdaptiveAvgPool1d(1)],
+    ["AdaptiveAvgPool2d", () => new nn.AdaptiveAvgPool2d(1)],
+    ["AdaptiveAvgPool2d(pair)", () => new nn.AdaptiveAvgPool2d([2, 3])],
     ["AdaptiveMaxPool2d", () => new nn.AdaptiveMaxPool2d(1)],
     ["GELU", () => new nn.GELU()],
     ["GELU(tanh)", () => new nn.GELU("tanh")],

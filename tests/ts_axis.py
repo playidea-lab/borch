@@ -259,21 +259,6 @@ DELIBERATE: dict[str, str] = {
                        "and the core only answers because dense is the trivial case"
        for n in ("dense_dim", "sparse_dim", "is_coalesced", "to_dense")},
     "Tensor::sspaddmm": "sparse-by-sparse addmm; there is no sparse layout here",
-    # **Held absent on purpose, and checked in both directions.** A lesson page
-    # teaches a reader what to do without this class, and pins the absence at both
-    # ends — the sentence must stay and the name must not appear. Filling it would
-    # leave a page teaching a detour around a road that exists.
-    #
-    # The pooling itself is here (`adaptivePool`), and the nine `nn.functional`
-    # adaptive names are too — those are camelCase and `_folds_onto` refuses to fold
-    # a capitalised name, so the class stays a gap however many of them go in. That
-    # was measured against the index rather than assumed, including the positive
-    # control the page relies on (`AdaptiveAvgPool1d` must be *findable*).
-    #
-    # It moves when that page does, and not before.
-    "nn::AdaptiveAvgPool2d": "held — a lesson page teaches the way around this "
-                             "absence and pins it at both ends; the pooling itself "
-                             "is here as `adaptivePool`",
     # **A per-element callback needs the values, and getting them is asynchronous.**
     # torch's three run a Python function over every cell and are CPU-only for that
     # reason. On this side the values live in a GPU buffer and `toArray()` returns a

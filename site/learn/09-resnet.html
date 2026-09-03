@@ -193,16 +193,12 @@
           }
         }
 
-        // What torchvision writes as AdaptiveAvgPool2d([1, 1]).
-        class GlobalAvgPool extends nn.Module {
-          forward(x) { return x.adaptivePool("avg", [1, 1]); }
-        }
 
         const net = new nn.Sequential(
           new nn.Conv2d(1, 8, 3, 1, 1), new nn.BatchNorm2d(8), new nn.ReLU(),
           new BasicBlock(8, 8, 1),
           new BasicBlock(8, 16, 2),
-          new GlobalAvgPool(), new nn.Flatten(), new nn.Linear(16, 3));
+          new nn.AdaptiveAvgPool2d([1, 1]), new nn.Flatten(), new nn.Linear(16, 3));
 
         const B = 12;
         const x = keepAlive(Tensor.randn([B, 1, 16, 16]));
@@ -229,22 +225,16 @@
     </div>
 
     <div class="note-box">
-      <strong><code>AdaptiveAvgPool2d</code> is not here — but the pooling is.</strong>
-      torchvision's ResNet ends with that name, so a line copied from there will not run.
-      What is absent is the name alone: <code>AdaptiveAvgPool1d</code> and
-      <code>AdaptiveAvgPool3d</code> are both here and <strong>their bodies are
-      identical</strong> — each calls <code>adaptivePool("avg", size)</code>, which does
-      not care how many spatial axes it is given. The missing piece is a one-line alias,
-      not a feature.<br><br>
-      This lesson first told you to use <code>AvgPool2d</code> with the feature-map size
-      instead, and called the absence one the measured table counts. Both were wrong. That
-      table is about speed and agreement and has no row for this; the absence is held by
-      <code>tests/ts_axis.py</code>, which lists the name under <em>no reason</em>. And a
-      fixed pool is not the same thing: given a <code>[2, 16, 5, 7]</code> input,
-      <code>AvgPool2d(8)</code> returns <code>[2, 16, 0, 0]</code> and raises nothing,
-      where the adaptive path returns the <code>[2, 16, 1, 1]</code> that was asked for.
-      Reading a gap list by name suggests the repair the name suggests, and that is how a
-      lesson ends up teaching a workaround for something that was never missing.
+      <strong><code>AdaptiveAvgPool2d</code> is here now.</strong> torchvision's ResNet ends
+      with that name, and for a year a line copied from there stopped on it: the 1-D and 3-D
+      layers existed, the 2-D one did not, and all three are the same one-line call to
+      <code>adaptivePool("avg", size)</code>. This lesson taught a workaround — a
+      <code>GlobalAvgPool</code> module of its own — and the ledger carried the name as a
+      hole, until a review of what was missing found this at the top of the list and wrote
+      it. The workaround is gone from the block above; the layer takes the output size,
+      <code>[1, 1]</code> here, and given a <code>[2, 16, 5, 7]</code> input returns
+      <code>[2, 16, 1, 1]</code>, where a fixed <code>AvgPool2d(8)</code> would return
+      <code>[2, 16, 0, 0]</code> and raise nothing.
     </div>
 
     <p>

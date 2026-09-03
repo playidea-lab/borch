@@ -2722,9 +2722,9 @@ def _size_repr(size):
 def _adaptive_layer(name, indices):
     """The adaptive poolings borch.ts has as layers. As `_max_pool_layer` above.
 
-    **`AdaptiveAvgPool2d` is not among them** and stays on the wrapped method — the
-    average side over there has the 1-D and 3-D names and not the 2-D one, which is
-    the row `borch-ts/test/run.py` already carries as declined.
+    All four average and maximum names are over there now — `AdaptiveAvgPool2d` was the
+    one missing, on the same tensor method as its siblings, and stayed on the wrapped
+    method here until it was written.
     """
     def make(output_size, return_indices=False):
         # **The pair keeps the Python path**, as `_max_pool_layer` above. borch.ts's
@@ -2735,12 +2735,18 @@ def _adaptive_layer(name, indices):
             n = (output_size[0] if isinstance(output_size, (list, tuple))
                  else output_size)
             return _Wrap(lambda x: _pool_with_indices(x, n, None, adaptive=True))
+        # **A pair has to cross as a real array.** Passed as a Python tuple it arrives as a
+        # borrowed proxy that Pyodide destroys after the call, and the layer keeps it for
+        # `describe()` — "This borrowed proxy was automatically destroyed" at the repr.
+        # Measured on `AdaptiveAvgPool2d((2, 3))`; the 1-D and 3-D goldens use integers.
+        if isinstance(output_size, (list, tuple)):
+            output_size = _js_list(output_size)
         return _layer(name, output_size)
     make.__name__ = name
     return make
 
 
-AdaptiveAvgPool2d = _pool_layer("avg", True, "AdaptiveAvgPool2d")
+AdaptiveAvgPool2d = _adaptive_layer("AdaptiveAvgPool2d", False)
 AdaptiveAvgPool1d = _adaptive_layer("AdaptiveAvgPool1d", False)
 AdaptiveAvgPool3d = _adaptive_layer("AdaptiveAvgPool3d", False)
 AdaptiveMaxPool1d = _adaptive_layer("AdaptiveMaxPool1d", True)

@@ -439,14 +439,9 @@ NOT_PORTED = {
     # `AvgPool2d` lesson one paragraph up, happening again to the line that records it.
     # The class declared no constructor, so the signature axis called it *unreadable*
     # rather than short and this reason was the only place the gap was written down.
-    "unpool::": (2, "없음 — two ask about "
-                        "`AdaptiveAvgPool2d`, which is not a name over there. "
-                        "**The maximum's padding and ceilMode left this row** with "
-                        "AvgPool2d's: they were refused on the ground that the "
-                        "maximum's backward reads the input at each window position "
-                        "and a padded one has none, and the average had answered that "
-                        "one function away — take the padding off the coordinate and "
-                        "skip what falls outside"),
+    # **2 → 0: `AdaptiveAvgPool2d` is written.** The 1-D and 3-D layers were there and
+    # the 2-D one — the one every classifier uses — was not, on the same tensor method.
+    # Both cases ask its `describe`, and the row that carried them is gone.
     # **`ops::` is gone, and it was the only row that said 아직.** Thirty-nine cases,
     # and the reason under them named a harness for writing parameters by name — true
     # of eight, and standing for all thirty-nine. What actually stopped the rest, taken

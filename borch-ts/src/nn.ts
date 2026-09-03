@@ -2472,6 +2472,28 @@ export class AdaptiveAvgPool1d extends Module {
   }
 }
 
+/**
+ * `torch.nn.AdaptiveAvgPool2d`. It takes the output size — `1` or `(1, 1)` is the
+ * global average every classifier puts before its head. **The 1-D and 3-D names were
+ * here and this one was not**, for a year: the tensor method under all three is the
+ * same `adaptivePool`, and a ResNet written as torch writes it stopped on this line
+ * with "not a name". Two golden cases asked for it the whole time, in the ledger as
+ * a hole.
+ */
+export class AdaptiveAvgPool2d extends Module {
+  constructor(private readonly outputSize: number | readonly number[]) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.adaptivePool("avg", this.outputSize);
+  }
+
+  override describe(): string {
+    return `AdaptiveAvgPool2d(output_size=${describeSize(this.outputSize)})`;
+  }
+}
+
 /** `torch.nn.AdaptiveAvgPool3d`. It takes the output size. */
 export class AdaptiveAvgPool3d extends Module {
   constructor(private readonly outputSize: number | readonly number[]) {

@@ -1067,12 +1067,10 @@ def test_a_section_sidebar_lists_every_page_of_its_section():
 # harder*. The control is the sibling the lesson itself points at.
 
 ABSENCES_A_PAGE_TEACHES = (
-    ("site/learn/09-resnet.html",
-     "<code>AdaptiveAvgPool2d</code> is not here — but the pooling is.",
-     "AdaptiveAvgPool2d", "AdaptiveAvgPool1d"),
-    ("site/ko/learn/09-resnet.html",
-     "<code>AdaptiveAvgPool2d</code> 는 여기 없다 — 그런데 그 풀링은 있다.",
-     "AdaptiveAvgPool2d", "AdaptiveAvgPool1d"),
+    # Empty since `nn.AdaptiveAvgPool2d` was written: the ResNet lesson taught the way
+    # around it and now uses it. The table stays, for the next name a page has to
+    # teach around — a row is (page, the sentence it must carry, the absent name, and
+    # a sibling name that must be found).
 )
 
 
