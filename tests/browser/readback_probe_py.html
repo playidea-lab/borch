@@ -1,0 +1,95 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>readback probe — the Python path</title>
+<body>
+<pre id="out">probing…</pre>
+<script src="/vendor/pyodide/pyodide.js"></script>
+<script type="module">
+  // The same question as readback_probe.html, asked of **the Python path**: a readback
+  // reached through Pyodide's run_sync (a JSPI suspension) after the page has been
+  // quiet. Three shapes: JS awaiting borch's toArray() after 300 ms of quiet; Python's
+  // run_sync of the same after the same quiet; and that run_sync with a 4 ms interval
+  // timer kept alive on the JavaScript side around the whole Python call.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+  const fmt = (xs) => `median ${med(xs).toFixed(1)} ms · min ${Math.min(...xs).toFixed(1)} · max ${Math.max(...xs).toFixed(1)}`;
+  const ROUNDS = 6;
+  try {
+    const borch = await import("/borch-ts/dist/src/index.js");
+    await borch.init();
+    globalThis.borch = borch;
+    say(`adapter: ${borch.Device.adapterInfo}`);
+    const py = await loadPyodide({ indexURL: "/vendor/pyodide/" });
+    say(`Pyodide ${py.version}`);
+
+    // JS: submit work, idle, read back through borch itself (Device.read → awake).
+    const js = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      const t = borch.Tensor.full([4], i + 1).mul(borch.Tensor.full([], 2));
+      await sleep(300);
+      const t0 = performance.now();
+      await t.toArray();
+      js.push(performance.now() - t0);
+    }
+    say(`JS: work, idle 300 ms, await toArray(): ${fmt(js)}`);
+
+    // Python: the same through run_sync, one runPythonAsync per round, idle between.
+    const pyCode = `
+import js
+from pyodide.ffi import run_sync
+t = js.borch.Tensor.full(js.Array.of(4), 3.0).mul(js.borch.Tensor.full(js.Array.new(), 2.0))
+list(run_sync(t.toArray()))
+`;
+    await py.runPythonAsync(pyCode);          // the first call pays for imports
+    const pr = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      await sleep(300);
+      const t0 = performance.now();
+      await py.runPythonAsync(pyCode);
+      pr.push(performance.now() - t0);
+    }
+    say(`Python: idle 300 ms, then run_sync(toArray()) inside runPythonAsync: ${fmt(pr)}`);
+
+    // Python with a JS-side timer alive across the call.
+    const pt = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      await sleep(300);
+      const keep = setInterval(() => {}, 4);
+      const t0 = performance.now();
+      await py.runPythonAsync(pyCode);
+      pt.push(performance.now() - t0);
+      clearInterval(keep);
+    }
+    say(`Python, with a 4 ms interval alive on the JS side around the call: ${fmt(pt)}`);
+
+    // Python doing the work first, then idling in Python (time.sleep busy-waits in Pyodide),
+    // then reading — the learner's loop between two prints.
+    const pyLoop = `
+import js, time
+from pyodide.ffi import run_sync
+t = js.borch.Tensor.full(js.Array.of(4), 3.0)
+for i in range(15):
+    t = t.mul(js.borch.Tensor.full(js.Array.new(), 1.01))
+list(run_sync(t.toArray()))
+`;
+    await py.runPythonAsync(pyLoop);
+    const pl = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      const t0 = performance.now();
+      await py.runPythonAsync(pyLoop);
+      pl.push(performance.now() - t0);
+    }
+    say(`Python: 15 GPU ops then run_sync(toArray()), back to back: ${fmt(pl)}`);
+
+    window.__readbackPy = { text: lines.join("\n"), adapter: borch.Device.adapterInfo,
+      medians: { js: med(js), py: med(pr), pyTimer: med(pt), pyLoop: med(pl) },
+      maxes: { js: Math.max(...js), py: Math.max(...pr), pyTimer: Math.max(...pt), pyLoop: Math.max(...pl) } };
+  } catch (err) {
+    window.__readbackPy = { error: String(err && err.stack || err) };
+    say(`the probe blew up: ${err}`);
+  }
+</script>
+</body>

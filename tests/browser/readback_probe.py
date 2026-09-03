@@ -40,8 +40,41 @@ def one(pw, url, label, flags, headless):
     return got["medians"]
 
 
+def python_path(argv):
+    """`--python`: the same question of the Python path, under the runner's flags only."""
+    from playwright.sync_api import sync_playwright
+    headed = "--headed" in argv
+    port, shutdown = serve(ROOT)
+    url = f"http://127.0.0.1:{port}/tests/browser/readback_probe_py.html"
+    profile = tempfile.mkdtemp(prefix="borch-readback-py-")
+    channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
+    try:
+        with sync_playwright() as pw:
+            context = pw.chromium.launch_persistent_context(profile, headless=not headed, channel=channel, args=list(FLAGS), timeout=60_000)
+            try:
+                page = context.new_page()
+                page.goto(url, wait_until="load")
+                page.wait_for_function("window.__readbackPy !== undefined", timeout=GIVE_UP_MS * 3)
+                got = page.evaluate("window.__readbackPy")
+            finally:
+                context.close()
+    finally:
+        shutdown()
+    if "error" in got:
+        print(got["error"]); return 1
+    print(got["text"])
+    m, x = got["medians"], got["maxes"]
+    print(f"\n{'path':60} {'median':>8} {'max':>8}")
+    for key, label in (("js", "JS await toArray() after idle"), ("py", "Python run_sync after idle"),
+                       ("pyTimer", "Python run_sync, JS timer alive"), ("pyLoop", "Python 15 ops then run_sync")):
+        print(f"{label:60} {m[key]:8.1f} {x[key]:8.1f}")
+    return 0
+
+
 def main(argv):
     from playwright.sync_api import sync_playwright
+    if "--python" in argv:
+        return python_path(argv)
     headed = "--headed" in argv
     base = list(FLAGS)
     if "--no-vulkan" in argv:
