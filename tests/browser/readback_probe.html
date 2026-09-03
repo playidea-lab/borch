@@ -1,0 +1,122 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>readback probe</title>
+<body>
+<pre id="out">probing…</pre>
+<script type="module">
+  // **How long does one value take to come back from the GPU?** Bare WebGPU — no
+  // borch — so the answer is the browser's and the driver's alone. Three shapes of the
+  // round trip, each many times: write → mapAsync; submit → onSubmittedWorkDone; a
+  // one-thread compute dispatch → copy → mapAsync. And the page's own frame clock
+  // (requestAnimationFrame), because a readback that waits for a frame waits for
+  // whatever the display gives.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const ROUNDS = 12;
+  const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+  const fmt = (xs) => `median ${med(xs).toFixed(1)} ms · min ${Math.min(...xs).toFixed(1)} · max ${Math.max(...xs).toFixed(1)}`;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    const info = adapter.info ?? {};
+    const device = await adapter.requestDevice();
+    say(`adapter: ${info.vendor ?? "?"} / ${info.architecture ?? "?"} · visibility ${document.visibilityState}`);
+
+    // 1) requestAnimationFrame interval — the display's tick as the page sees it.
+    const frames = [];
+    let last = performance.now();
+    await new Promise((resolve) => {
+      const tick = () => { const now = performance.now(); frames.push(now - last); last = now; if (frames.length < 8) requestAnimationFrame(tick); else resolve(); };
+      requestAnimationFrame(tick);
+    });
+    say(`rAF interval: ${fmt(frames.slice(1))}`);
+
+    // 2) write → mapAsync
+    const read = device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const src = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    const wm = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      device.queue.writeBuffer(src, 0, new Float32Array([i, 0, 0, 0]));
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(src, 0, read, 0, 16);
+      device.queue.submit([enc.finish()]);
+      const t0 = performance.now();
+      await read.mapAsync(GPUMapMode.READ);
+      wm.push(performance.now() - t0);
+      read.unmap();
+    }
+    say(`copy → mapAsync: ${fmt(wm)}`);
+
+    // 3) submit → onSubmittedWorkDone
+    const wd = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(src, 0, read, 0, 16);
+      device.queue.submit([enc.finish()]);
+      const t0 = performance.now();
+      await device.queue.onSubmittedWorkDone();
+      wd.push(performance.now() - t0);
+    }
+    say(`submit → onSubmittedWorkDone: ${fmt(wd)}`);
+
+    // 4) a one-thread dispatch → copy → mapAsync
+    const shader = device.createShaderModule({ code: `
+      @group(0) @binding(0) var<storage, read_write> o: array<f32>;
+      @compute @workgroup_size(1) fn main() { o[0] = o[0] + 1.0; }` });
+    const pipeline = device.createComputePipeline({ layout: "auto", compute: { module: shader, entryPoint: "main" } });
+    const store = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: store } }] });
+    const dm = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      pass.setPipeline(pipeline); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(1); pass.end();
+      enc.copyBufferToBuffer(store, 0, read, 0, 16);
+      const t0 = performance.now();
+      device.queue.submit([enc.finish()]);
+      await read.mapAsync(GPUMapMode.READ);
+      dm.push(performance.now() - t0);
+      read.unmap();
+    }
+    say(`dispatch → copy → mapAsync: ${fmt(dm)}`);
+
+    // 5) the same, with a requestAnimationFrame loop running — a page that animates.
+    let running = true;
+    const spin = () => { if (running) requestAnimationFrame(spin); };
+    requestAnimationFrame(spin);
+    const am = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(src, 0, read, 0, 16);
+      const t0 = performance.now();
+      device.queue.submit([enc.finish()]);
+      await read.mapAsync(GPUMapMode.READ);
+      am.push(performance.now() - t0);
+      read.unmap();
+    }
+    running = false;
+    say(`copy → mapAsync while a rAF loop runs: ${fmt(am)}`);
+
+    // 6) mapAsync with a setTimeout(0) spinning — is it a timer starvation?
+    const tm = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(src, 0, read, 0, 16);
+      const t0 = performance.now();
+      device.queue.submit([enc.finish()]);
+      const keep = setInterval(() => {}, 0);
+      await read.mapAsync(GPUMapMode.READ);
+      clearInterval(keep);
+      tm.push(performance.now() - t0);
+      read.unmap();
+    }
+    say(`copy → mapAsync with a 0 ms interval timer ticking: ${fmt(tm)}`);
+
+    window.__readback = { text: lines.join("\n"), adapter: `${info.vendor ?? "?"} / ${info.architecture ?? "?"}`,
+      medians: { raf: med(frames.slice(1)), map: med(wm), workDone: med(wd), dispatchMap: med(dm), rafMap: med(am), timerMap: med(tm) } };
+  } catch (err) {
+    window.__readback = { error: String(err && err.stack || err) };
+    say(`the probe blew up: ${err}`);
+  }
+</script>
+</body>
