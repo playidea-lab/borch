@@ -39,7 +39,8 @@ DIRECT = re.compile(r"^\s*run:\s*(?:uv run .*?python )(tests/browser/\S+\.py)(.*
 WORDS = {
     "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
     "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
-    "twenty": 20,
+    "twenty": 20, "twenty-one": 21, "twenty-two": 22, "twenty-three": 23, "twenty-four": 24,
+    "twenty-five": 25,
 }
 
 
@@ -98,7 +99,7 @@ def test_the_written_count_is_the_number_of_entry_points():
     the fault this whole file is about.
     """
     text = WORKFLOW.read_text(encoding="utf-8")
-    said = re.search(r"\*\*(\w+) entry points that need a browser\*\*", text)
+    said = re.search(r"\*\*([a-z-]+) entry points that need a browser\*\*", text)
     assert said, ("gpu.yml no longer states the count in the form this reads.\n"
                   "  Expected: **<word> entry points that need a browser**")
     written = WORDS.get(said.group(1))
