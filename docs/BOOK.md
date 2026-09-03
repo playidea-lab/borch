@@ -1560,24 +1560,28 @@ table is printed only after both runtimes reproduce torch's logits on a seeded i
 
 | ResNet-18 (CIFAR) forward | adapter | batch 1 | batch 16 |
 |---|---|---|---|
-| borch.ts, `eval()` | `apple / metal-3` | 8.2 ms | 12.5 ms |
-| borch.ts, `eval()` + `fuse_conv_bn_eval` | `apple / metal-3` | 7.6 ms | 11.1 ms |
-| ONNX Runtime Web 1.29.0 (WebGPU) | `apple / metal-3` | **3.2 ms** | **5.4 ms** |
-| ORT is faster than the fused network by | | 2.4× | 2.1× |
-| borch.ts, `eval()` | `nvidia / lovelace` (RTX 4090, Linux) | 5.7 ms | 10.0 ms |
-| borch.ts, `eval()` + `fuse_conv_bn_eval` | `nvidia / lovelace` | 5.0 ms | 7.6 ms |
-| ONNX Runtime Web 1.29.0 (WebGPU) | `nvidia / lovelace` | **3.6 ms** | **3.5 ms** |
-| ORT is faster than the fused network by | | 1.4× | 2.2× |
+| borch.ts, `eval()` | `apple / metal-3` | 6.6 ms | 11.0 ms |
+| borch.ts, `eval()` + `fuse_conv_bn_eval` | `apple / metal-3` | 4.5 ms | 9.4 ms |
+| ONNX Runtime Web 1.29.0 (WebGPU) | `apple / metal-3` | **3.8 ms** | **5.3 ms** |
+| ORT is faster than the fused network by | | 1.2× | 1.8× |
+| borch.ts, `eval()` | `nvidia / lovelace` (RTX 4090, Linux) | 3.6 ms | 7.9 ms |
+| borch.ts, `eval()` + `fuse_conv_bn_eval` | `nvidia / lovelace` | **2.9 ms** | 5.6 ms |
+| ONNX Runtime Web 1.29.0 (WebGPU) | `nvidia / lovelace` | 3.5 ms | **3.5 ms** |
+| ORT is faster than the fused network by | | 0.8× | 1.6× |
 
 Two of ORT's advantages are now ours too. The eval-mode batch norm was six dispatches
 a layer (assembled from `sub`, `add`, `sqrt`, `div`, `mul`, `add`) and is one; and
 `nn.utils.fusion.fuse_conv_bn_eval` — torch's own name — folds each norm into the
 convolution before it, so the forward is 56 dispatches where it was 176. Before those
-two, the table read 9.9 / 18.8 ms on Apple and 6.7 / 14.5 ms on the 4090. What
-remains is the convolution kernel itself: at batch 16 the GPU spends 4.3 of the
-4090's 7.6 ms inside `conv2d`, and the largest of those — 512 → 512 channels on a
-4 × 4 plane — runs at about 1 % of the card's peak. That is the next lever, and it is
-kernel work rather than a fold.
+two, the table read 9.9 / 18.8 ms on Apple and 6.7 / 14.5 ms on the 4090. The third
+was the convolution kernel — not its arithmetic but its grid: 512 → 512 channels on a
+4 × 4 plane is 32 workgroups at batch 16 and 8 at batch 1, on a card with 128 SMs,
+against a reduction 4,608 long (about 1 % of peak, measured). The forward now splits
+that reduction the way the weight gradient already did (`convForwardSplit`), and the
+layer's GPU time went from 2.8 to 0.3 ms at batch 1. At batch 1 the fused network is
+now level with ORT on Apple and ahead of it on the 4090. What remains at batch 16 is
+mostly the calls themselves — 64 dispatches for 3.0 ms of GPU work on the 4090's 5.6
+ms — and that lever is fusing the activation into the convolution, not a faster kernel.
 
 And the page closes the loop: the fused network leaves as **borch's own ONNX file**
 (`exportOnnx`, 49 nodes, 44.7 MB), ORT Web runs it, and the logits land 4.5e-8 from
