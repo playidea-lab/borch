@@ -1581,8 +1581,8 @@ kernel work rather than a fold.
 
 And the page closes the loop: the fused network leaves as **borch's own ONNX file**
 (`exportOnnx`, 49 nodes, 44.7 MB), ORT Web runs it, and the logits land 4.5e-8 from
-torch's — at 3.1 / 5.3 ms on Apple, the same speed as the file torch exported. Train
-here, serve anywhere.
+torch's on Apple and 5.2e-8 on the 4090 — at 3.1 / 5.3 ms and 3.2 / 3.4 ms, the same
+speed as the file torch exported. Train here, serve anywhere.
 
 That is the honest boundary: for inference alone, use ORT Web. What this library has
 that it does not is the training step above and torch's own shape of code.
