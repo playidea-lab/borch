@@ -2441,12 +2441,16 @@ export function convNDForwardTiled(s: ConvNDShape, hasBias: boolean): string {
   // path, so its row stride is the per-group `K` whatever `groups` is.
   const K = cin * kSpace;
   const P = s.N * outSpace;
+  // Split, the partial sums land in a slab per piece and `sumSplitsConv` adds them (and
+  // the bias) once more — the bias binding is not taken here in that case.
+  const splits = convForwardSplit(s);
+  const withBias = hasBias && splits === 1;
   return tiledGemm({
-    M: cout, N: P, K, groups,
+    M: cout, N: P, K, groups, splits,
     bindings: `@group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> Wt: array<f32>;
-${hasBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
-@group(0) @binding(${hasBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;`,
+${withBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
+@group(0) @binding(${withBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;`,
     // The weights run as (O, K), so one row is contiguous in its entirety.
     loadA: `          v = Wt[(grp * ${cout}u + arow) * ${K}u + kk];`,
     // im2col is built here **without being laid out in memory.**
@@ -2468,10 +2472,48 @@ ${s.outDims.map((_, d) =>
 ${s.outDims.map((size, d) =>
       `  let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`).join("\n")}
   let fo = grp * ${cout}u + f;
-  Out[(bn * ${s.O}u + fo) * ${outSpace}u
+  Out[${splits > 1 ? `part * ${s.N * s.O * outSpace}u + ` : ""}(bn * ${s.O}u + fo) * ${outSpace}u
     + ${s.outDims.map((_, d) => `o${d} * ${outStride[d] ?? 1}u`).join(" + ")}]
-    = v${hasBias ? " + B[fo]" : ""};`,
+    = v${withBias ? " + B[fo]" : ""};`,
   });
+}
+
+/**
+ * How many pieces the forward's reduction is split into. The same policy as the weight
+ * gradient's, for the same reason: **the late layers of a network make a tile grid too
+ * small to fill the GPU.** ResNet-18's 512 → 512 convolution on a 4 × 4 plane at batch
+ * 16 is 256 positions by 512 filters — 32 workgroups of 64 × 64 for a card with 128
+ * SMs, and 8 at batch 1 — while its reduction is 4,608 long. Measured before the
+ * split: 1.9 ms for that layer on a 4090, about 1 % of the card's peak.
+ */
+export function convForwardSplit(s: ConvNDShape): number {
+  const { groups, cin, cout } = grouped(s);
+  const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
+  const tiles = Math.ceil(P / 64) * Math.ceil(cout / 64) * groups;
+  const K = cin * s.kernel.reduce((a, b) => a * b, 1);
+  const WANT = 128;
+  if (tiles >= WANT) return 1;
+  const MIN_PER_SPLIT = 256;
+  return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
+}
+
+/** Sums a split forward's partials and adds the bias per output channel. */
+export function sumSplitsConv(s: ConvNDShape, splits: number, hasBias: boolean): string {
+  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
+  const n = s.N * s.O * outSpace;
+  return `
+@group(0) @binding(0) var<storage, read> Parts: array<f32>;
+${hasBias ? "@group(0) @binding(1) var<storage, read> B: array<f32>;" : ""}
+@group(0) @binding(${hasBias ? 2 : 1}) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  var acc = 0.0;
+  for (var s = 0u; s < ${splits}u; s = s + 1u) {
+    acc = acc + Parts[s * ${n}u + gid];
+  }
+  Out[gid] = acc${hasBias ? ` + B[(gid / ${outSpace}u) % ${s.O}u]` : ""};
+}`;
 }
 
 /**
@@ -2538,7 +2580,7 @@ export function isDepthwise(s: ConvNDShape): boolean {
 export function convTiledGrid(s: ConvNDShape): [number, number, number] {
   const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
   const { groups, cout } = grouped(s);
-  return [Math.ceil(P / 64), Math.ceil(cout / 64), groups];
+  return [Math.ceil(P / 64), Math.ceil(cout / 64), groups * convForwardSplit(s)];
 }
 
 /**

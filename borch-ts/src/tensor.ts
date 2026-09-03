@@ -190,7 +190,7 @@ import {
   binaryForward,
   convGradInputGrid,
   convGradWeightGrid,
-  convGradWeightSplit,
+  convGradWeightSplit, convForwardSplit, sumSplitsConv,
   convNDForwardTiled, depthwiseForward, isDepthwise,
   convNDGradInputTiled,
   convNDGradWeightTiled,
@@ -693,6 +693,38 @@ function padShape(shape: readonly number[], rank: number): number[] {
 function absentDType(name: string, shown: string): never {
   throw new RuntimeError(
     `\`.${name}()\`(${shown}) ${TORCH.absent}\n${TORCH.absentAdvice}`,
+  );
+}
+
+/**
+ * The tiled convolution forward, split when its tile grid is small. Split, the GEMM
+ * writes one slab of partial sums per piece and a second kernel adds them and the
+ * bias; unsplit, the GEMM writes the result (with the bias) itself. The policy and its
+ * measurement are on `convForwardSplit`.
+ */
+function convForwardRun(
+  s: ConvNDShape, key: string, x: GPUBuffer, w: GPUBuffer, bias: GPUBuffer | null, out: GPUBuffer,
+): void {
+  const splits = convForwardSplit(s);
+  const n = s.N * s.O * s.outDims.reduce((a, b) => a * b, 1);
+  if (splits === 1) {
+    dev().run(
+      dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}`, () => convNDForwardTiled(s, bias !== null)),
+      bias ? [x, w, bias, out] : [x, w, out],
+      convTiledGrid(s),
+    );
+    return;
+  }
+  const parted = dev().alloc(n * splits);
+  dev().run(
+    dev().pipeline(`cnt:${key}:s`, () => convNDForwardTiled(s, false)),
+    [x, w, parted],
+    convTiledGrid(s),
+  );
+  dev().run1d(
+    dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}`, () => sumSplitsConv(s, splits, bias !== null)),
+    bias ? [parted, bias, out] : [parted, out],
+    n,
   );
 }
 
@@ -10711,12 +10743,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         dev().pipeline(`cdw:${key}:${bias ? "b" : "n"}`, () => depthwiseForward(s, bias !== null)),
         buffers, n);
     } else {
-      dev().run(
-        dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}`,
-          () => convNDForwardTiled(s, bias !== null)),
-        buffers,
-        convTiledGrid(s),
-      );
+      convForwardRun(s, key, this.buffer, weight.buffer, bias ? bias.buffer : null, out);
     }
     const parents = bias ? [this, weight, bias] : [this, weight];
     return Tensor.make(
@@ -10870,11 +10897,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         if (this.requiresGrad) {
           // The gradient on our input side is **an ordinary convolution's forward**.
           const gi = dev().alloc(this.size);
-          dev().run(
-            dev().pipeline(`cnt:${key}:n`, () => convNDForwardTiled(s, false)),
-            [g.buffer, weight.buffer, gi],
-            convTiledGrid(s),
-          );
+          convForwardRun(s, key, g.buffer, weight.buffer, null, gi);
           parts.push(new Tensor(gi, this.shape));
         } else parts.push(null);
         if (weight.requiresGrad) {
