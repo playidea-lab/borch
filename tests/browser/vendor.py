@@ -44,6 +44,20 @@ PYODIDE_FILES = ["pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm",
                  "python_stdlib.zip", "pyodide-lock.json"]
 PYODIDE_PACKAGES = ["numpy"]          # the file name is looked up in the lock
 
+# **TF.js, for the comparison bench and nothing else.** `borch-ts/test/compare.ts` trains
+# the same ResNet-18 step in TF.js beside borch.ts, on the same page, and the only
+# honest way to hold a competitor still is to pin its bytes the way Pyodide's are pinned.
+# The UMD builds are used (a global `tf`), because that is what the CDN serves and what
+# a reader of the number can fetch themselves.
+TFJS_VERSION = "4.22.0"
+TFJS = {
+    "tf.min.js":
+        f"https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@{TFJS_VERSION}/dist/tf.min.js",
+    "tf-backend-webgpu.min.js":
+        f"https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgpu@{TFJS_VERSION}"
+        "/dist/tf-backend-webgpu.min.js",
+}
+
 # **This is where TF.js used to be fetched.** Two `@tensorflow/tfjs@4.22.0` files came from
 # the CDN into `vendor/`. Replacing the implementation that stood on it with hand-written WGSL
 # made them unnecessary — the only thing fetched from outside now is Pyodide.
@@ -63,8 +77,9 @@ def _get(url):
 
 def _targets():
     """A list of (path, URL). numpy's name can only be known by reading the lock."""
-    return [(pathlib.Path("pyodide") / name, PYODIDE_BASE + name)
-            for name in PYODIDE_FILES]
+    return ([(pathlib.Path(name), url) for name, url in TFJS.items()]
+            + [(pathlib.Path("pyodide") / name, PYODIDE_BASE + name)
+               for name in PYODIDE_FILES])
 
 
 def _package_targets(lock_bytes):

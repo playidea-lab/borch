@@ -59,6 +59,9 @@ cifar-fake.bin
 # no longer fetched.
 vendor/*
 !vendor/pyodide/
+# TF.js for the comparison bench (`borch-ts/test/compare.ts`), pinned by tests/browser/assets.lock.
+!vendor/tf.min.js
+!vendor/tf-backend-webgpu.min.js
 
 # The data subset the tutorials use (`site/assets/data/`) **is in the repository.**
 #

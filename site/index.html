@@ -459,6 +459,19 @@ for step in range(201):
       </tbody>
     </table>
     </div>
+
+    <h3 style="margin-top:2rem">Measured again — 2026-09-03, same page, adapter named</h3>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>CIFAR ResNet-18, <code>apple / metal-3</code></th><th>batch 16</th><th>batch 32</th><th>batch 64</th></tr></thead>
+      <tbody>
+        <tr><td>borch.ts</td><td class="num"><strong>38.6 ms/step</strong></td><td class="num"><strong>63.1</strong></td><td class="num"><strong>119.1</strong></td></tr>
+        <tr><td>TF.js 4.22.0</td><td class="num">86.4</td><td class="num">170.0</td><td class="num">347.5</td></tr>
+        <tr><td>ratio</td><td class="num">2.2×</td><td class="num">2.7×</td><td class="num">2.9×</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted"><code>borch-ts/test/compare.ts</code> trains the same step in TF.js 4.22.0 (its own layers API and NHWC layout, WebGPU backend, bytes pinned by <code>tests/browser/assets.lock</code>) right after borch.ts on one page. Held equal: architecture, SGD 0.05/0.9, cross-entropy, the seeded batch, two warm-up steps then five timed, a loss readback every step. <code>npm run compare:ts</code> reproduces it.</p>
     <p class="small muted">
       <strong>One machine, and it is not written down here.</strong> The three columns can be compared with each
       other because they were timed against each other on the same box — they cannot be compared with anyone

@@ -1,0 +1,49 @@
+<!doctype html>
+<!--
+  The comparison bench: borch.ts's ResNet-18 (CIFAR) training step and the same step in
+  TF.js, on this page, on this GPU, one after the other.
+
+      npm run build:ts
+      uv run --with playwright python borch-ts/test/compare.py [--headed]
+
+  The result stays on the screen and in `window.__borchCompare`.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>borch.ts vs TF.js — a ResNet-18 (CIFAR) training step</title>
+  <style>
+    body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+           margin: 2rem; max-width: 60rem; }
+    pre { white-space: pre-wrap; }
+  </style>
+  <!-- Pinned bytes, not a CDN: tests/browser/assets.lock holds their hashes. -->
+  <script src="../../vendor/tf.min.js"></script>
+  <script src="../../vendor/tf-backend-webgpu.min.js"></script>
+</head>
+<body>
+  <h1>borch.ts vs TF.js — a ResNet-18 (CIFAR) training step</h1>
+  <pre id="out">measuring… (this takes a while)</pre>
+  <script type="module">
+    import { init } from "../dist/src/tensor.js";
+    import { Device } from "../dist/src/device.js";
+    import { report } from "../dist/test/bench.js";
+    import { reportTf } from "../dist/test/compare.js";
+    import { why } from "./why.js";
+
+    const out = document.getElementById("out");
+    try {
+      await init();
+      const ours = await report();
+      out.textContent = "borch.ts\n" + ours + "\n\nTF.js: measuring…";
+      const theirs = await reportTf();
+      const text = "borch.ts\n" + ours + "\n\nTF.js\n" + theirs;
+      window.__borchCompare = { text, adapter: Device.adapterInfo };
+      out.textContent = text;
+    } catch (err) {
+      window.__borchCompare = { error: String(why(err)) };
+      out.textContent = `it could not be measured: ${why(err)}`;
+    }
+  </script>
+</body>
+</html>

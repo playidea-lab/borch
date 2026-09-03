@@ -450,6 +450,19 @@ for step in range(201):
       </tbody>
     </table>
     </div>
+
+    <h3 style="margin-top:2rem">다시 잰 값 — 2026-09-03, 같은 페이지, 어댑터 명기</h3>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>CIFAR ResNet-18, <code>apple / metal-3</code></th><th>batch 16</th><th>batch 32</th><th>batch 64</th></tr></thead>
+      <tbody>
+        <tr><td>borch.ts</td><td class="num"><strong>38.6 ms/step</strong></td><td class="num"><strong>63.1</strong></td><td class="num"><strong>119.1</strong></td></tr>
+        <tr><td>TF.js 4.22.0</td><td class="num">86.4</td><td class="num">170.0</td><td class="num">347.5</td></tr>
+        <tr><td>비율</td><td class="num">2.2×</td><td class="num">2.7×</td><td class="num">2.9×</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted"><code>borch-ts/test/compare.ts</code> 가 같은 step 을 TF.js 4.22.0(자체 layers API·NHWC, WebGPU 백엔드, <code>tests/browser/assets.lock</code> 으로 바이트 고정)으로 borch.ts 바로 뒤에 같은 페이지에서 돌린다. 같게 둔 것: 구조, SGD 0.05/0.9, 교차엔트로피, 같은 시드 배치, 워밍 2회 뒤 5회 측정, 매 step 손실 readback. <code>npm run compare:ts</code> 로 재현.</p>
     <p class="small muted">
       <strong>기계 하나이고, 그 기계가 여기 안 적혀 있다.</strong> 세 열을 서로 비교할 수 있는 것은 같은 상자에서
       서로 맞대어 쟀기 때문이고 — 남의 수와는 비교할 수 없다. 어느 상자였는지 이 페이지가 말하지 않기 때문이다.

@@ -1485,6 +1485,24 @@ The right two columns are **the same kernels.** The 4.9ms difference is the cost
 one trip through Python, and it is the only number that measures what this binding
 costs.
 
+**Measured again on 2026-09-03, reproducibly this time.** `borch-ts/test/compare.ts`
+trains the same ResNet-18 step in **TF.js 4.22.0** (its own layers API, its own NHWC
+layout, its own optimizer and loss, WebGPU backend; bytes pinned by
+`tests/browser/assets.lock`) on the same page as borch.ts, one after the other, and
+prints the adapter:
+
+| CIFAR ResNet-18, `apple / metal-3`, same page | batch 16 | batch 32 | batch 64 |
+|---|---|---|---|
+| borch.ts | **38.6 ms/step** | **63.1** | **119.1** |
+| TF.js 4.22.0 (layers API, WebGPU) | 86.4 | 170.0 | 347.5 |
+| ratio | 2.2× | 2.7× | 2.9× |
+
+Held equal: architecture, SGD 0.05/0.9, cross-entropy, the same seeded pixels and
+labels, two warm-up steps then five timed, a loss readback every step. Not held
+equal, on purpose: memory layout — each library runs its native one, which is part of
+what is being compared. `npm run compare:ts` reproduces it; the number is not carried
+into any sentence here without its adapter.
+
 > The accuracy is **with augmentation on.** With it off the figure is 59.3%, below
 > the sister library's. It read 65.5% / 62.4% for a while, and at that time six of
 > the benchmark model's shortcut layers were not being trained — that freezing was
