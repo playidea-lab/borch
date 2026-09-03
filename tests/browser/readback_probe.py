@@ -71,8 +71,36 @@ def python_path(argv):
     return 0
 
 
+def fresh_page(argv):
+    """`--fresh`: the landing's order on an untouched page, every line stamped."""
+    from playwright.sync_api import sync_playwright
+    headed = "--headed" in argv
+    port, shutdown = serve(ROOT)
+    url = f"http://127.0.0.1:{port}/tests/browser/readback_probe_fresh.html"
+    channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
+    try:
+        with sync_playwright() as pw:
+            for visit in ("first visit", "second visit, same profile"):
+                profile = tempfile.mkdtemp(prefix="borch-readback-fresh-") if visit.startswith("first") else profile
+                context = pw.chromium.launch_persistent_context(profile, headless=not headed, channel=channel, args=list(FLAGS), timeout=60_000)
+                try:
+                    page = context.new_page()
+                    page.goto(url, wait_until="load")
+                    page.wait_for_function("window.__fresh !== undefined", timeout=GIVE_UP_MS * 3, polling="raf")
+                    got = page.evaluate("window.__fresh")
+                finally:
+                    context.close()
+                print(f"== {visit}")
+                print(got.get("error") or got["text"])
+    finally:
+        shutdown()
+    return 0
+
+
 def main(argv):
     from playwright.sync_api import sync_playwright
+    if "--fresh" in argv:
+        return fresh_page(argv)
     if "--python" in argv:
         return python_path(argv)
     headed = "--headed" in argv

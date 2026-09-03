@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>readback probe — a fresh page, the landing's order</title>
+<body>
+<pre id="out">probing…</pre>
+<script src="/vendor/pyodide/pyodide.js"></script>
+<script type="module">
+  // The landing page's exact order on a page nothing else has touched: probe the device,
+  // load borch and init(), load Python, then run the hero's code at once — with a lap
+  // time printed at every line that matters. The question: where do seven seconds go
+  // on a machine where the same code, on a page already warm, takes one.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const t = (ms) => `${ms.toFixed(0)} ms`;
+  try {
+    const T0 = performance.now();
+    const runner = await import("/site/assets/runner.js");
+    const p = await runner.probeDevice();
+    say(`probeDevice: ${p.ok ? p.adapter : p.why} · ${t(performance.now() - T0)}`);
+    const T1 = performance.now();
+    const borch = await runner.loadBorch();
+    await borch.init();
+    say(`loadBorch + init: ${t(performance.now() - T1)}`);
+    const T2 = performance.now();
+    const py = await runner.loadPython(() => {});
+    say(`loadPython: ${t(performance.now() - T2)}`);
+
+    const code = `
+import time as _t
+_T = _t.perf_counter(); _L = _T
+def lap(name):
+    global _L
+    now = _t.perf_counter(); print(f"lap {name:34s} {(now - _L) * 1000:8.1f} ms   (at {(now - _T) * 1000:7.0f})"); _L = now
+import borch_webgpu as torch
+lap("import borch_webgpu")
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+lap("torch.tensor")
+ys = 3 * xs + 1
+lap("3 * xs + 1")
+model = torch.nn.Linear(1, 1)
+lap("nn.Linear")
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+lap("optim.SGD")
+for step in range(60):
+    loss = ((model(xs) - ys) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+    if step % 15 == 0 or step == 59:
+        v = loss.item()
+        lap(f"step {step:2d} + item()")
+w, b = [p.item() for p in model.parameters()]
+lap("parameters item()")
+print(f"learned  y = {w:.2f}x + {b:.2f}")
+`;
+    const T3 = performance.now();
+    const laps = [];
+    const r = await runner.runPython(code, { onLog: (line) => { if (line.startsWith("lap")) laps.push(line); } });
+    const outside = performance.now() - T3;
+    say(`runPython (the hero, stamped): ${t(outside)} outside · ${t(r.ms)} the runner's own clock`);
+    for (const l of laps) say("  " + l);
+    // Once more, at once — is the second run one second too?
+    const T4 = performance.now();
+    const laps2 = [];
+    await runner.runPython(code, { onLog: (line) => { if (line.startsWith("lap")) laps2.push(line); } });
+    say(`the same again: ${t(performance.now() - T4)} outside`);
+    for (const l of laps2) say("  " + l);
+    window.__fresh = { text: lines.join("\n"), adapter: borch.Device.adapterInfo };
+  } catch (err) {
+    window.__fresh = { error: String(err && err.stack || err) };
+    say(`blew up: ${err}`);
+  }
+</script>
+</body>
