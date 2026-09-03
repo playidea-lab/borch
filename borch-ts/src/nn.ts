@@ -6474,3 +6474,70 @@ export function fuseConvBnEval(conv: ConvND, bn: BatchNormND): ConvND {
   fused.training = false;
   return fused;
 }
+
+// ================================================================ nn.intrinsic
+
+/**
+ * The convolution's configuration, read off the layer for the fused modules below.
+ * `paddingMode` other than zeros is refused: the fused kernel pads inside itself.
+ */
+function convConfig(conv: ConvND): {
+  stride: number; padding: number; dilation: number; groups: number;
+} {
+  if (conv["paddingMode"] !== "zeros" && conv["padding"] !== 0) {
+    throw new Error(`a fused convolution pads with zeros; this one pads with ${String(conv["paddingMode"])}`);
+  }
+  return { stride: conv["stride"], padding: conv["padding"], dilation: conv["dilation"], groups: conv["groups"] };
+}
+
+/**
+ * `torch.ao.nn.intrinsic.ConvReLU2d` — **a convolution and the relu after it, one
+ * kernel.** For inference: what it saves is a dispatch per layer, which on ResNet-18 at
+ * batch 16 was a quarter of the forward's calls. torch's takes `(conv, relu)`; the relu
+ * has no state, so it is not asked for here. Use after `fuse_conv_bn_eval`.
+ */
+export class ConvReLU2d extends Module {
+  constructor(readonly conv: ConvND) {
+    super();
+    this.training = false;
+  }
+
+  override forward(x: Tensor): Tensor {
+    const c = convConfig(this.conv);
+    return x.convNDFused(this.conv.weight, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, true, null);
+  }
+}
+
+/**
+ * `torch.ao.nn.intrinsic.ConvAdd2d` — the convolution plus a residual of the output's
+ * shape, one kernel. `forward(x1, x2)` as torch's: `conv(x1) + x2`.
+ */
+export class ConvAdd2d extends Module {
+  constructor(readonly conv: ConvND) {
+    super();
+    this.training = false;
+  }
+
+  override forward(x: Tensor, residual?: Tensor): Tensor {
+    if (!residual) throw new Error("ConvAdd2d.forward takes (x1, x2)");
+    const c = convConfig(this.conv);
+    return x.convNDFused(this.conv.weight, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, false, residual);
+  }
+}
+
+/** `torch.ao.nn.intrinsic.ConvAddReLU2d` — `relu(conv(x1) + x2)`, one kernel. */
+export class ConvAddReLU2d extends Module {
+  constructor(readonly conv: ConvND) {
+    super();
+    this.training = false;
+  }
+
+  override forward(x: Tensor, residual?: Tensor): Tensor {
+    if (!residual) throw new Error("ConvAddReLU2d.forward takes (x1, x2)");
+    const c = convConfig(this.conv);
+    return x.convNDFused(this.conv.weight, this.conv.bias, c.stride, c.padding, c.dilation, c.groups, true, residual);
+  }
+}
+
+/** The place `torch.ao.nn.intrinsic` occupies. */
+export const intrinsic = { ConvReLU2d, ConvAdd2d, ConvAddReLU2d };

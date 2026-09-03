@@ -53,7 +53,14 @@ export class Block extends nn.Module {
     this.downBn = shrinks ? new nn.BatchNormND(cout) : null;
   }
 
-  /** Fold each batch norm into the convolution before it — inference only. */
+  /** After `fuse()`: conv1 carries its relu, conv2 its residual add and relu. */
+  private fused: { first: nn.ConvReLU2d; second: nn.ConvAddReLU2d } | null = null;
+
+  /**
+   * Fold each batch norm into the convolution before it, then the relu and the
+   * residual add into the convolution's epilogue — inference only. Two folds, two
+   * torch names: `fuse_conv_bn_eval` and `torch.ao.nn.intrinsic`.
+   */
   fuse(): void {
     this.conv1 = nn.fuseConvBnEval(this.conv1, this.bn1);
     this.bn1 = new nn.Identity() as unknown as nn.BatchNormND;
@@ -63,9 +70,14 @@ export class Block extends nn.Module {
       this.downConv = nn.fuseConvBnEval(this.downConv, this.downBn);
       this.downBn = new nn.Identity() as unknown as nn.BatchNormND;
     }
+    this.fused = { first: new nn.ConvReLU2d(this.conv1), second: new nn.ConvAddReLU2d(this.conv2) };
   }
 
   override forward(x: Tensor): Tensor {
+    if (this.fused) {
+      const short = this.downConv ? this.downConv.forward(x) : x;
+      return this.fused.second.forward(this.fused.first.forward(x), short);
+    }
     let out = this.bn1.forward(this.conv1.forward(x)).unary("relu");
     out = this.bn2.forward(this.conv2.forward(out));
     const side = this.downConv && this.downBn
@@ -102,14 +114,21 @@ export class ResNet18 extends nn.Module {
   // them. Overriding it opens a place to disagree with `namedChildren()`, and that
   // disagreement is what kept `Block` above from learning for six layers.
 
-  /** `fuse_conv_bn_eval` over the whole network — call after `eval()`. */
+  private fusedStem: nn.ConvReLU2d | null = null;
+
+  /** Both folds over the whole network — call after `eval()`. */
   fuse(): void {
     this.stem = nn.fuseConvBnEval(this.stem, this.bn);
     this.bn = new nn.Identity() as unknown as nn.BatchNormND;
+    this.fusedStem = new nn.ConvReLU2d(this.stem);
     for (const block of this.body.children()) (block as Block).fuse();
   }
 
   override forward(x: Tensor): Tensor {
+    if (this.fusedStem) {
+      const h = this.body.forward(this.fusedStem.forward(x)).adaptiveAvgPool(1);
+      return this.fc.forward(h.reshape([h.shape[0] ?? 1, 512]));
+    }
     let h = this.bn.forward(this.stem.forward(x)).unary("relu");
     h = this.body.forward(h).adaptiveAvgPool(1);
     return this.fc.forward(h.reshape([h.shape[0] ?? 1, 512]));

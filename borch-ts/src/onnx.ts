@@ -203,27 +203,47 @@ const BINARY: Record<string, string> = {
   add: "Add", sub: "Sub", mul: "Mul", div: "Div", pow: "Pow", maximum: "Max", minimum: "Min",
 };
 
+/** The previous node's output, in a chain — `emit` may spell one traced op as several. */
+const PREV = Symbol("previous");
+type EmittedInput = Tensor | null | typeof PREV;
+
 interface Emitted {
   opType: string;
-  inputs: (Tensor | null)[];
+  inputs: EmittedInput[];
   attrs: Record<string, Attr>;
   /** An int64 constant this node takes as an extra input (Reshape's shape). */
   shapeInput?: readonly number[];
 }
 
-/** One traced node, spelled as ONNX — or a refusal that names the op. */
-function emit(node: TraceNode, batch: number, dynamicBatch: boolean): Emitted {
+/** One traced node, spelled as ONNX (one node, or a chain) — or a refusal that names the op. */
+function emit(node: TraceNode, batch: number, dynamicBatch: boolean): Emitted[] {
   const { op, inputs, attrs } = node;
   if (op.startsWith("unary:")) {
     const opType = UNARY[op.slice(6)];
     if (!opType) throw new Error(`cannot export ${op.slice(6)}: no ONNX spelling for it here`);
-    return { opType, inputs, attrs: {} };
+    return [{ opType, inputs, attrs: {} }];
   }
   if (op.startsWith("binary:")) {
     const opType = BINARY[op.slice(7)];
     if (!opType) throw new Error(`cannot export ${op.slice(7)}: no ONNX spelling for it here`);
-    return { opType, inputs, attrs: {} };
+    return [{ opType, inputs, attrs: {} }];
   }
+  if (op === "ConvFused") {
+    // The file is the unfused network's: the epilogue is written as the ops it stands
+    // for, so a reader that knows Conv, Add and Relu needs nothing else.
+    const { relu, residual, ...conv } = attrs;
+    const [x = null, w = null, b = null, r = null] = inputs;
+    const chain: Emitted[] = [{ opType: "Conv", inputs: [x, w, b], attrs: conv }];
+    if (residual === 1) chain.push({ opType: "Add", inputs: [PREV, r], attrs: {} });
+    if (relu === 1) chain.push({ opType: "Relu", inputs: [PREV], attrs: {} });
+    return chain;
+  }
+  return [emitOne(op, inputs, attrs, batch, dynamicBatch)];
+}
+
+function emitOne(
+  op: string, inputs: (Tensor | null)[], attrs: Record<string, Attr>, batch: number, dynamicBatch: boolean,
+): Emitted {
   switch (op) {
     case "Conv":
     case "MatMul":
@@ -296,7 +316,7 @@ export interface Exported {
  * in borch.ts and synchronous in the Python binding, and the encoder should not care.
  */
 export interface OnnxPlan {
-  emitted: Emitted[];
+  emitted: Emitted[][];
   nodes: TraceNode[];
   names: Map<Tensor, string>;
   sample: Tensor;
@@ -347,17 +367,18 @@ export function planOnnx(
   const produced = new Set<Tensor>();
   const counts = new Map<string, number>();
   const emitted = nodes.map((node) => emit(node, batch, dynamicBatch));
-  emitted.forEach((e, i) => {
+  emitted.forEach((chain, i) => {
     const node = nodes[i];
-    if (!node) return;
+    const last = chain[chain.length - 1];
+    if (!node || !last) return;
     produced.add(node.output);
     if (node.output === output) {
       names.set(node.output, outputName);
       return;
     }
-    const n = (counts.get(e.opType) ?? 0) + 1;
-    counts.set(e.opType, n);
-    names.set(node.output, `${e.opType.toLowerCase()}_${n}`);
+    const n = (counts.get(last.opType) ?? 0) + 1;
+    counts.set(last.opType, n);
+    names.set(node.output, `${last.opType.toLowerCase()}_${n}`);
   });
   if (!produced.has(output)) {
     throw new Error("the forward's result was not made by any traced op — nothing reaches the output");
@@ -367,9 +388,9 @@ export function planOnnx(
   const weights: Tensor[] = [];
   const seen = new Set<Tensor>();
   let constants = 0;
-  for (const e of emitted) {
+  for (const e of emitted.flat()) {
     for (const t of e.inputs) {
-      if (!t || t === sample || produced.has(t) || seen.has(t)) continue;
+      if (!t || t === PREV || t === sample || produced.has(t) || seen.has(t)) continue;
       seen.add(t);
       if (!names.has(t)) names.set(t, `const_${++constants}`);
       weights.push(t);
@@ -409,27 +430,32 @@ export function encodeOnnx(plan: OnnxPlan, read: (t: Tensor) => Float32Array): E
   }
 
   const ops: string[] = [];
-  emitted.forEach((e, i) => {
+  emitted.forEach((chain, i) => {
     const node = nodes[i];
     if (!node) return;
-    const pb = new Pb();
-    // A trailing absent input (a convolution's bias) is left off rather than written as
-    // "" — the spec allows either, and ORT Web's WebGPU convolution reads "" as a
-    // tensor with no shape (measured: `The input shape must not be empty`).
-    const inputs = [...e.inputs];
-    while (inputs.length && inputs[inputs.length - 1] === null) inputs.pop();
-    for (const t of inputs) pb.string(NODE.input, t ? names.get(t) ?? "" : "");
-    const outName = names.get(node.output) ?? "";
-    if (e.shapeInput) {
-      const shapeName = `${outName}_shape`;
-      graph.message(GRAPH.initializer, int64Tensor(shapeName, e.shapeInput));
-      initializers.push(shapeName);
-      pb.string(NODE.input, shapeName);
-    }
-    pb.string(NODE.output, outName).string(NODE.name, `${e.opType}_${i}`).string(NODE.opType, e.opType);
-    for (const [k, v] of Object.entries(e.attrs)) pb.message(NODE.attribute, attribute(k, v));
-    graph.message(GRAPH.node, pb);
-    ops.push(e.opType);
+    const finalName = names.get(node.output) ?? "";
+    chain.forEach((e, j) => {
+      const pb = new Pb();
+      // A trailing absent input (a convolution's bias) is left off rather than written as
+      // "" — the spec allows either, and ORT Web's WebGPU convolution reads "" as a
+      // tensor with no shape (measured: `The input shape must not be empty`).
+      const inputs = [...e.inputs];
+      while (inputs.length && inputs[inputs.length - 1] === null) inputs.pop();
+      for (const t of inputs) {
+        pb.string(NODE.input, t === PREV ? `${finalName}_${j - 1}` : t ? names.get(t) ?? "" : "");
+      }
+      const outName = j === chain.length - 1 ? finalName : `${finalName}_${j}`;
+      if (e.shapeInput) {
+        const shapeName = `${outName}_shape`;
+        graph.message(GRAPH.initializer, int64Tensor(shapeName, e.shapeInput));
+        initializers.push(shapeName);
+        pb.string(NODE.input, shapeName);
+      }
+      pb.string(NODE.output, outName).string(NODE.name, `${e.opType}_${i}_${j}`).string(NODE.opType, e.opType);
+      for (const [k, v] of Object.entries(e.attrs)) pb.message(NODE.attribute, attribute(k, v));
+      graph.message(GRAPH.node, pb);
+      ops.push(e.opType);
+    });
   });
   const batchParam = plan.dynamicBatch ? "N" : null;
   graph.string(GRAPH.name, "borch")

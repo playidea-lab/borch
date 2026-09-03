@@ -190,7 +190,7 @@ import {
   binaryForward,
   convGradInputGrid,
   convGradWeightGrid,
-  convGradWeightSplit, convForwardSplit, sumSplitsConv,
+  convGradWeightSplit, convForwardSplit, sumSplitsConv, type ConvEpilogue,
   convNDForwardTiled, depthwiseForward, isDepthwise,
   convNDGradInputTiled,
   convNDGradWeightTiled,
@@ -704,13 +704,18 @@ function absentDType(name: string, shown: string): never {
  */
 function convForwardRun(
   s: ConvNDShape, key: string, x: GPUBuffer, w: GPUBuffer, bias: GPUBuffer | null, out: GPUBuffer,
+  epilogue?: { relu: boolean; residual: GPUBuffer | null },
 ): void {
   const splits = convForwardSplit(s);
   const n = s.N * s.O * s.outDims.reduce((a, b) => a * b, 1);
+  const ep: ConvEpilogue | undefined = epilogue
+    ? { relu: epilogue.relu, residual: epilogue.residual !== null } : undefined;
+  const tag = ep ? `:${ep.relu ? "r" : ""}${ep.residual ? "a" : ""}` : "";
+  const tail = [...(bias ? [bias] : []), ...(epilogue?.residual ? [epilogue.residual] : []), out];
   if (splits === 1) {
     dev().run(
-      dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}`, () => convNDForwardTiled(s, bias !== null)),
-      bias ? [x, w, bias, out] : [x, w, out],
+      dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}${tag}`, () => convNDForwardTiled(s, bias !== null, ep)),
+      [x, w, ...tail],
       convTiledGrid(s),
     );
     return;
@@ -722,8 +727,8 @@ function convForwardRun(
     convTiledGrid(s),
   );
   dev().run1d(
-    dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}`, () => sumSplitsConv(s, splits, bias !== null)),
-    bias ? [parted, bias, out] : [parted, out],
+    dev().pipeline(`ssc:${key}:${bias ? "b" : "n"}${tag}`, () => sumSplitsConv(s, splits, bias !== null, ep)),
+    [parted, ...tail],
     n,
   );
 }
@@ -10679,14 +10684,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     }, () => this.convNDRaw(weight, bias, stride, padding, dilation, groups));
   }
 
-  private convNDRaw(
-    weight: Tensor,
-    bias: Tensor | null,
-    stride: number | readonly number[],
-    padding: number | readonly number[],
-    dilation: number | readonly number[],
-    groups: number,
-  ): Tensor {
+  /** The convolution's shape record — the checks torch makes, then the sizes every
+   *  kernel needs. Shared by the training convolution and the fused inference one. */
+  private convShape(
+    weight: Tensor, stride: number | readonly number[], padding: number | readonly number[],
+    dilation: number | readonly number[], groups: number,
+  ): ConvNDShape {
     const spatial = this.shape.length - 2;
     // **Groups live inside the kernel now.** They were a loop of slice → convolve → join,
     // which reads as the gradient following from the pieces and was measured as the whole
@@ -10727,6 +10730,54 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       outDims: inDims.map((d, i) =>
         convOut(d, pd[i] ?? 0, kernel[i] ?? 1, st[i] ?? 1, dl[i] ?? 1)),
     };
+    return s;
+  }
+
+  /**
+   * A convolution with its epilogue — bias, an optional residual of the output's shape,
+   * an optional relu — **in one kernel, for inference.** torch's `ConvReLU2d`,
+   * `ConvAdd2d` and `ConvAddReLU2d` (`torch.ao.nn.intrinsic`) stand on this. No
+   * gradient: the result has no parents, and a training network keeps its separate
+   * relu and add (the golden's backward asks for them).
+   *
+   * Traced for ONNX as the three nodes it stands for — Conv, Add, Relu — so the file
+   * is the same one the unfused network writes.
+   */
+  convNDFused(
+    weight: Tensor, bias: Tensor | null, stride: number | readonly number[],
+    padding: number | readonly number[], dilation: number | readonly number[], groups: number,
+    relu: boolean, residual: Tensor | null,
+  ): Tensor {
+    const spatial = this.shape.length - 2;
+    const each = (v: number | readonly number[]): number[] =>
+      typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
+    const pads = each(padding);
+    return traced("ConvFused", [this, weight, bias, residual], {
+      kernel_shape: weight.shape.slice(2), strides: each(stride), pads: [...pads, ...pads],
+      dilations: each(dilation), group: groups, relu: relu ? 1 : 0, residual: residual ? 1 : 0,
+    }, () => {
+      const s = this.convShape(weight, stride, padding, dilation, groups);
+      const outShape = [s.N, s.O, ...s.outDims];
+      if (residual && residual.shape.join(",") !== outShape.join(",")) {
+        throw new Error(`the residual must have the output's shape [${outShape}], got [${residual.shape}]`);
+      }
+      const out = dev().alloc(outShape.reduce((a, b) => a * b, 1));
+      convForwardRun(s, convNDKey(s), this.buffer, weight.buffer, bias ? bias.buffer : null, out,
+                     { relu, residual: residual ? residual.buffer : null });
+      return new Tensor(out, outShape);
+    });
+  }
+
+  private convNDRaw(
+    weight: Tensor,
+    bias: Tensor | null,
+    stride: number | readonly number[],
+    padding: number | readonly number[],
+    dilation: number | readonly number[],
+    groups: number,
+  ): Tensor {
+    const spatial = this.shape.length - 2;
+    const s = this.convShape(weight, stride, padding, dilation, groups);
     const key = convNDKey(s);
     const outShape = [s.N, s.O, ...s.outDims];
     const n = outShape.reduce((a, b) => a * b, 1);

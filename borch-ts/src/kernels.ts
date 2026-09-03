@@ -2429,7 +2429,32 @@ function suffixStrides(dims: readonly number[]): number[] {
  * uniform the compiler cannot turn those into multiplications and shifts, and a GPU has
  * no integer division hardware — in the bench that one thing separated 43% from 284%.
  */
-export function convNDForwardTiled(s: ConvNDShape, hasBias: boolean): string {
+/**
+ * What a convolution's forward may do to each value on the way out: add a residual
+ * (the same shape as the output) and clamp at zero. **torch's `ConvAddReLU2d`**, as one
+ * kernel — the calls this saves are the point: a ResNet-18 forward at batch 16 was 64
+ * dispatches for 3.0 ms of GPU work on a 4090 (5.6 ms on the clock), and 26 of the
+ * 64 were a relu or a residual add.
+ */
+export interface ConvEpilogue {
+  readonly relu: boolean;
+  readonly residual: boolean;
+}
+
+/** The epilogue's WGSL, over the variable `v` at output index `idx`. */
+function epilogueWgsl(e: ConvEpilogue | undefined, v: string, idx: string): string {
+  if (!e) return "";
+  return (e.residual ? `  ${v} = ${v} + R[${idx}];\n` : "") + (e.relu ? `  ${v} = max(${v}, 0.0);\n` : "");
+}
+
+/** The residual binding, when the epilogue takes one. It sits after the bias. */
+function residualBinding(e: ConvEpilogue | undefined, slot: number): string {
+  return e?.residual ? `@group(0) @binding(${slot}) var<storage, read> R: array<f32>;` : "";
+}
+
+export function convNDForwardTiled(
+  s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue,
+): string {
   const inStride = suffixStrides(s.inDims);
   const outStride = suffixStrides(s.outDims);
   const kStride = suffixStrides(s.kernel);
@@ -2445,12 +2470,16 @@ export function convNDForwardTiled(s: ConvNDShape, hasBias: boolean): string {
   // the bias) once more — the bias binding is not taken here in that case.
   const splits = convForwardSplit(s);
   const withBias = hasBias && splits === 1;
+  // Split, the epilogue waits for `sumSplitsConv` — a partial sum cannot be clamped.
+  const ep = splits === 1 ? epilogue : undefined;
+  const slot = withBias ? 3 : 2;
   return tiledGemm({
     M: cout, N: P, K, groups, splits,
     bindings: `@group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> Wt: array<f32>;
 ${withBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
-@group(0) @binding(${withBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;`,
+${residualBinding(ep, slot)}
+@group(0) @binding(${ep?.residual ? slot + 1 : slot}) var<storage, read_write> Out: array<f32>;`,
     // The weights run as (O, K), so one row is contiguous in its entirety.
     loadA: `          v = Wt[(grp * ${cout}u + arow) * ${K}u + kk];`,
     // im2col is built here **without being laid out in memory.**
@@ -2472,9 +2501,10 @@ ${s.outDims.map((_, d) =>
 ${s.outDims.map((size, d) =>
       `  let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`).join("\n")}
   let fo = grp * ${cout}u + f;
-  Out[${splits > 1 ? `part * ${s.N * s.O * outSpace}u + ` : ""}(bn * ${s.O}u + fo) * ${outSpace}u
-    + ${s.outDims.map((_, d) => `o${d} * ${outStride[d] ?? 1}u`).join(" + ")}]
-    = v${withBias ? " + B[fo]" : ""};`,
+  let idx = ${splits > 1 ? `part * ${s.N * s.O * outSpace}u + ` : ""}(bn * ${s.O}u + fo) * ${outSpace}u
+    + ${s.outDims.map((_, d) => `o${d} * ${outStride[d] ?? 1}u`).join(" + ")};
+  var r = v;
+${withBias ? "  r = r + B[fo];\n" : ""}${epilogueWgsl(ep, "r", "idx")}  Out[idx] = r;`,
   });
 }
 
@@ -2498,21 +2528,25 @@ export function convForwardSplit(s: ConvNDShape): number {
 }
 
 /** Sums a split forward's partials and adds the bias per output channel. */
-export function sumSplitsConv(s: ConvNDShape, splits: number, hasBias: boolean): string {
+export function sumSplitsConv(
+  s: ConvNDShape, splits: number, hasBias: boolean, epilogue?: ConvEpilogue,
+): string {
   const outSpace = s.outDims.reduce((a, b) => a * b, 1);
   const n = s.N * s.O * outSpace;
+  const slot = hasBias ? 2 : 1;
   return `
 @group(0) @binding(0) var<storage, read> Parts: array<f32>;
 ${hasBias ? "@group(0) @binding(1) var<storage, read> B: array<f32>;" : ""}
-@group(0) @binding(${hasBias ? 2 : 1}) var<storage, read_write> Out: array<f32>;
+${residualBinding(epilogue, slot)}
+@group(0) @binding(${epilogue?.residual ? slot + 1 : slot}) var<storage, read_write> Out: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  var acc = 0.0;
+  var v = 0.0;
   for (var s = 0u; s < ${splits}u; s = s + 1u) {
-    acc = acc + Parts[s * ${n}u + gid];
+    v = v + Parts[s * ${n}u + gid];
   }
-  Out[gid] = acc${hasBias ? ` + B[(gid / ${outSpace}u) % ${s.O}u]` : ""};
+${hasBias ? `  v = v + B[(gid / ${outSpace}u) % ${s.O}u];\n` : ""}${epilogueWgsl(epilogue, "v", "gid")}  Out[gid] = v;
 }`;
 }
 

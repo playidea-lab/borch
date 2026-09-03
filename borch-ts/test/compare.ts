@@ -259,9 +259,16 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
   // The same network with every batch norm folded into the convolution before it —
   // `nn.fuseConvBnEval`, torch's `fuse_conv_bn_eval`. Gated the same way first.
   model.fuse();
+  const faults0 = dev().faults.count;
   const fusedGap = maxAbsDiff(await noGrad(() => model.forward(x1)).toArray(), probe.logits);
-  lines.push(`fused (batch norms folded into the convolutions): max |logits − torch| ${fusedGap.toExponential(2)}`);
-  if (fusedGap > GATE) lines.push("**the fused network does not reproduce torch's logits**");
+  // **A validation fault and the number is not a number.** An invalid pipeline does
+  // nothing, and the output buffer then holds whatever the pool last held — measured:
+  // a fused forward "reproduced" torch at 6.7e-8 in 0.5 ms while its kernels had not
+  // compiled. The fault count is the only witness.
+  const faults = dev().faults.count - faults0;
+  lines.push(`fused (batch norms, relu and the residual add folded into the convolutions): max |logits − torch| ${fusedGap.toExponential(2)}`
+    + (faults ? ` · **${faults} validation fault(s) — the numbers below are not measurements**` : ""));
+  if (fusedGap > GATE || faults) lines.push("**the fused network does not reproduce torch's logits**");
   for (const b of batches) {
     const data = new Float32Array(b * 3 * 32 * 32);
     for (let i = 0; i < b; i++) data.set(probe.input, i * 3 * 32 * 32);
