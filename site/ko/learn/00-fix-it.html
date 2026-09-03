@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0 · 버그 고쳐 보기 — borch Learn</title>
+<meta name="description" content="배우지 못하는 학습 루프 둘, 틀린 줄은 하나씩. 페이지 안에서 Python 으로 고치면 손실이 내려갔는지 페이지가 말해 준다.">
+<link rel="alternate" hreflang="en" href="../../learn/00-fix-it.html">
+<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
+     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
+     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="0 · 버그 고쳐 보기 — borch Learn">
+<meta property="og:description" content="배우지 못하는 학습 루프 둘, 틀린 줄은 하나씩. 페이지 안에서 Python 으로 고치면 손실이 내려갔는지 페이지가 말해 준다.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/learn/00-fix-it.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <a href="../models.html">모델</a>
+      <a href="../vision.html">비전</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
+      <a href="../setup.html">GPU</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../learn/00-fix-it.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="00-fix-it.html" class="on">0 · 버그 고쳐 보기</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · 모듈</a>
+      <a href="04-training.html">4 · 학습</a>
+      <a href="05-cnn.html">5 · 합성곱</a>
+      <a href="06-save-load.html">6 · 저장과 파이썬</a>
+      <a href="07-data.html">7 · 데이터</a>
+      <a href="08-debugging.html">8 · 디버깅</a>
+      <a href="09-resnet.html">9 · 잔차</a>
+      <a href="10-vit.html">10 · 트랜스포머</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Learn · 0</p>
+    <h1>버그 고쳐 보기</h1>
+    <p class="lead">
+      배우지 못하는 학습 루프 둘. 각각 틀린 줄이 하나씩 있다. 찾아서 고치고 Run 을
+      누르면 &mdash; 손실이 내려갔는지 페이지가 말해 준다. torch 에 쓰던 그대로의
+      Python 이고, 설치할 것은 없다.
+    </p>
+
+    <h2>제자리에 선 루프</h2>
+    <p>
+      손실은 15 step 마다 찍힌다. 우선 그대로 돌려 숫자를 읽어 보자: 움직이지 않는다.
+      한 줄의 인자 하나가 이유다.
+    </p>
+    <div class="runnable" data-lang="py" data-verdict="loss<0.05">
+      <script type="text/plain">
+import borch_webgpu as torch
+
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+ys = 3 * xs + 1
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.0)
+
+for step in range(60):
+    loss = ((model(xs) - ys) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+    if step % 15 == 0 or step == 59:
+        print(f"step {step:2d}  loss {loss.item():.3f}")
+      </script>
+    </div>
+
+    <details class="note-box"><summary>막혔다면 — 답.</summary>
+      <p><code>lr=0.0</code> 은 학습률 0 이다: <code>opt.step()</code> 은 가중치를
+      <em>lr × gradient</em> 만큼 움직이는데, 0 에 무엇을 곱해도 0 이다. <code>lr=0.1</code>
+      로 바꿔 보자. 너무 큰 학습률은 그것대로 실패한다 &mdash; 다음엔 <code>1.0</code> 을
+      넣고 지켜보자.</p>
+    </details>
+
+    <h2>달아나는 루프</h2>
+    <p>
+      이번엔 학습률이 제대로 있는데도 자리에 못 앉는다. 돌려 보자: 손실이 오르내리기만
+      하고 자리를 못 잡는다 — 60 step 뒤에도 처음 그 자리다. 루프 안에서 호출 하나가 빠졌다.
+    </p>
+    <div class="runnable" data-lang="py" data-verdict="loss<0.05">
+      <script type="text/plain">
+import borch_webgpu as torch
+
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+ys = 3 * xs + 1
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+
+for step in range(60):
+    loss = ((model(xs) - ys) ** 2).mean()
+    loss.backward(); opt.step()
+    if step % 15 == 0 or step == 59:
+        print(f"step {step:2d}  loss {loss.item():.3f}")
+      </script>
+    </div>
+
+    <details class="note-box"><summary>막혔다면 — 답.</summary>
+      <p>gradient 는 <strong>쌓인다</strong>: <code>backward()</code> 는 매번
+      <code>.grad</code> 를 갈아끼우지 않고 더한다. 그래서 그 앞에 <code>opt.zero_grad()</code>
+      가 없으면 매 step 이 지금까지의 gradient 전부의 합만큼 움직인다. 루프 본문 첫 줄에
+      <code>opt.zero_grad()</code> 를 되돌려 놓자.</p>
+    </details>
+
+    <h2>지금 손에 있는 것</h2>
+    <p>
+      브라우저 탭 안에서 <code>y = 3x + 1</code> 을 배운 모델이고, import 한 줄 빼면 torch
+      코드다. 어느 서빙 런타임이든 읽는 그 파일로 내보낼 수 있다:
+    </p>
+    <div class="runnable" data-lang="py">
+      <script type="text/plain">
+import borch_webgpu as torch
+
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+ys = 3 * xs + 1
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+for step in range(60):
+    loss = ((model(xs) - ys) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+print(f"loss {loss.item():.4f}")
+
+model.eval()
+torch.onnx.export(model, xs, "/work/model.onnx")
+size = len(open("/work/model.onnx", "rb").read())
+print(f"wrote /work/model.onnx — {size} bytes, the same file ONNX Runtime reads anywhere")
+      </script>
+    </div>
+
+    <p>
+      이것이 <code>torch.onnx.export</code> 이고, 페이지 자신의 파일시스템에 쓴다. torch 와
+      다른 곳은 <a href="../python.html#changes">Python 페이지</a>에 전부 있다 — 짧다.
+    </p>
+
+    <div class="note-box">
+      <strong>다음은 어디로.</strong>
+      <a href="01-tensors.html">레슨 1</a> 은 TypeScript 쪽을 텐서부터 시작한다.
+      <a href="../playground.html">Playground</a> 는 당신의 코드를 돌린다, Python 이든
+      TypeScript 든. <a href="../models.html">Models</a> 페이지는 safetensors 로 사전학습
+      네트워크를 여기서 돌린다.
+    </div>
+
+    <div class="pager">
+      <a href="./">← 개요</a>
+      <a href="01-tensors.html" style="text-align:right">다음<b>1 · 텐서</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

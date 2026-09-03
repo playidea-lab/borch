@@ -82,6 +82,73 @@ def _visit(context, url, label, wait_ready=True):
     return adapter, ok
 
 
+FIX_A = ("lr=0.0", "lr=0.1")
+FIX_B = ("    loss.backward(); opt.step()", "    opt.zero_grad(); loss.backward(); opt.step()")
+
+
+def _run_block(page, index, code=None):
+    """Runs the lesson's `index`-th block (with `code` in the editor when given) and
+    returns its verdict line and how long the run took."""
+    boxes = page.query_selector_all(".runnable")
+    box = boxes[index]
+    if code is not None:
+        box.query_selector("textarea").fill(code)
+        box.query_selector("textarea").dispatch_event("input")
+    t0 = time.time()
+    box.query_selector("button.go").click()
+    page.wait_for_function(
+        "(i) => [...document.querySelectorAll('.runnable')[i].querySelectorAll('.out div')]"
+        ".some(d => d.className.includes('verdict') || d.className === 'err')",
+        arg=index, timeout=GIVE_UP_S * 1000)
+    took = time.time() - t0
+    lines = page.evaluate(
+        "(i) => [...document.querySelectorAll('.runnable')[i].querySelectorAll('.out div')].map(d => [d.className, d.textContent])",
+        index)
+    verdict = next((text for cls, text in lines if "verdict" in cls), None)
+    err = next((text for cls, text in lines if cls == "err"), None)
+    return verdict, err, took
+
+
+def _lesson(context, url):
+    """Lesson 0: each broken loop must be judged ✗ as written and ✓ once fixed."""
+    lesson = url.replace("index.html", "learn/00-fix-it.html")
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    opened = time.time()
+    page.goto(lesson, wait_until="load")
+    page.wait_for_selector(".runnable button.go", timeout=GIVE_UP_S * 1000)
+    ok = True
+    print("lesson 0 — fix the bug:")
+    for index, (name, fix) in enumerate((("lr = 0", FIX_A), ("no zero_grad", FIX_B))):
+        original = page.evaluate("(i) => document.querySelectorAll('.runnable')[i].querySelector('textarea').value", index)
+        v1, e1, t1 = _run_block(page, index)
+        v2, e2, t2 = _run_block(page, index, original.replace(fix[0], fix[1]))
+        bad = (v1 or "").startswith("✗") and not e1
+        good = (v2 or "").startswith("✓") and not e2
+        ok = ok and bad and good
+        print(f"  {name}: as written {'✗' if bad else 'NOT ✗'} in {t1:.1f} s · fixed {'✓' if good else 'NOT ✓'} in {t2:.1f} s")
+        for line in (v1, e1, v2, e2):
+            if line: print(f"    {line[:120]}")
+    # The third block exports the trained model — no verdict, but it must write the file.
+    boxes = page.query_selector_all(".runnable")
+    boxes[2].query_selector("button.go").click()
+    page.wait_for_function(
+        "[...document.querySelectorAll('.runnable')[2].querySelectorAll('.out div')]"
+        ".some(d => d.className === 'ok' || d.className === 'err')", timeout=GIVE_UP_S * 1000)
+    wrote = page.evaluate(
+        "[...document.querySelectorAll('.runnable')[2].querySelectorAll('.out div')].map(d => d.textContent).find(t => t.startsWith('wrote')) || ''")
+    export_ok = wrote.startswith("wrote /work/model.onnx")
+    ok = ok and export_ok
+    print(f"  export block: {'wrote the file' if export_ok else 'did NOT write the file'}" + (f" — {wrote[:80]}" if wrote else ""))
+    print(f"  lesson opened → both blocks judged and the export written: {time.time() - opened:.1f} s")
+    if errors:
+        print("  page errors: " + " | ".join(errors[:3]))
+        ok = False
+    page.close()
+    return ok
+
+
 def main():
     from playwright.sync_api import sync_playwright
     headed = "--headed" in sys.argv
@@ -100,11 +167,12 @@ def main():
                 if refuse_if_software(adapter, "the learner's first minutes"):
                     return 1
                 _a, ok2 = _visit(context, target, "revisit, click at once", wait_ready=False)
+                ok3 = _lesson(context, target)
             finally:
                 context.close()
             print(f"  page: {url or 'this checkout, served locally (network not in the clock)'}")
             print(f"  measured on: {adapter}")
-            return 0 if ok1 and ok2 else 1
+            return 0 if ok1 and ok2 and ok3 else 1
     finally:
         shutdown()
 

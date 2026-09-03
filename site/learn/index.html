@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Learn borch</title>
-<meta name="description" content="Ten lessons from tensors to a Vision Transformer. Every code block runs in the page, on your own GPU.">
+<meta name="description" content="Eleven lessons from tensors to a Vision Transformer. Every code block runs in the page, on your own GPU.">
 <link rel="alternate" hreflang="ko" href="../ko/learn/">
 <!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
      `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
@@ -14,7 +14,7 @@
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Learn borch">
-<meta property="og:description" content="Ten lessons from tensors to a Vision Transformer. Every code block runs in the page, on your own GPU.">
+<meta property="og:description" content="Eleven lessons from tensors to a Vision Transformer. Every code block runs in the page, on your own GPU.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
 <meta property="og:url" content="%OG_BASE%/site/learn/">
 <meta name="twitter:card" content="summary_large_image">
@@ -46,6 +46,7 @@
     <h4>Learn</h4>
     <nav>
       <a href="./" class="on">Overview</a>
+      <a href="00-fix-it.html">0 · Fix the bug</a>
       <a href="01-tensors.html">1 · Tensors</a>
       <a href="02-autograd.html">2 · Autograd</a>
       <a href="03-modules.html">3 · Modules</a>
@@ -61,7 +62,11 @@
 
   <main class="doc-main lesson">
     <p class="eyebrow">Learn</p>
-    <h1>Ten lessons, all of them running</h1>
+    <h1>Eleven lessons, all of them running</h1>
+    <p class="lead">
+      <strong>Lesson 0 is Python; lessons 1 to 10 are TypeScript.</strong> To stay in Python, the
+      <a href="../playground.html">Playground</a> runs it too.
+    </p>
     <p class="lead">
       Every code block on these pages executes in this tab, on your GPU, and you can
       edit it before you run it. Nothing is installed and nothing is uploaded. Start at
@@ -69,6 +74,10 @@
     </p>
 
     <div class="grid c2" style="margin:2rem 0">
+      <a class="tile" href="00-fix-it.html" style="text-decoration:none">
+        <h3>0 · Fix the bug</h3>
+        <p class="small">Python, nothing installed. Two loops that do not learn; fix them and the page says so — start here.</p>
+      </a>
       <a class="tile" href="01-tensors.html" style="text-decoration:none">
         <h3>1 · Tensors</h3>
         <p class="small">Shapes, dtypes, operations, and why reading a value is awaited.</p>

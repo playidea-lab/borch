@@ -237,6 +237,7 @@ function mount(box) {
       if (series.length > 1) stage.prepend(drawSeries(series, { name: seriesName }));
       write("");
       write(t("run.done", result.ms.toFixed(0)), "ok");
+      verdict();
     } catch (err) {
       write(describeError(err), "err");
     } finally {
@@ -246,6 +247,26 @@ function mount(box) {
     }
   }
 
+  /**
+   * **A lesson that asks the reader to fix something has to say whether it is fixed.**
+   * `data-verdict="loss<0.05"` on the box: the last `loss N` the run printed is read
+   * off the output and judged. Not `err` — the runner (`lessons.py`) reads `err` as a
+   * broken page, and a wrong answer the reader is meant to reach is not that.
+   */
+  function verdict() {
+    const rule = /^loss<([0-9.]+)$/.exec(box.dataset.verdict ?? "");
+    if (!rule) return;
+    const limit = Number(rule[1]);
+    let last = null;
+    for (const line of out.querySelectorAll("div")) {
+      const m = /loss\s+(-?[0-9.]+(?:e[-+]?\d+)?|nan|inf)/i.exec(line.textContent);
+      if (m) last = m[1];
+    }
+    if (last === null) { write(t("verdict.noLoss"), "verdict bad"); return; }
+    const value = Number(last);
+    if (Number.isFinite(value) && value < limit) write(t("verdict.learned", last, String(limit)), "verdict good");
+    else write(t("verdict.notYet", last, String(limit)), "verdict bad");
+  }
   runBtn.addEventListener("click", go);
   setCode(draft.get(lang));
 }

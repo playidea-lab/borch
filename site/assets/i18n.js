@@ -86,6 +86,12 @@ const STRINGS = {
     ko: "여기엔 WebGPU 가 없다 — 대신 numpy 코어를 wasm 으로 돌리니 손실은 그대로 내려간다. 속도는 CPU 의 것이다." },
   "hero.diffSay": { en: "The only line that is not torch is the import — what else changes →", ko: "torch 가 아닌 줄은 import 하나 — 그 밖에 바뀌는 것 →" },
   "hero.diffHref": { en: "python.html#changes", ko: "python.html#changes" },
+
+  // Lesson 0's verdicts. The number is the last loss the run printed.
+  "verdict.learned": { en: "✓ loss {0} — under {1}. It learned.", ko: "✓ loss {0} — {1} 아래. 배웠다." },
+  "verdict.notYet": { en: "✗ loss {0} after the last step — not under {1}. Find the bug, then Run again.",
+                      ko: "✗ 마지막 step 의 loss {0} — {1} 아래가 아니다. 버그를 찾고 다시 Run." },
+  "verdict.noLoss": { en: "✗ no loss line was printed — keep the print.", ko: "✗ loss 줄이 안 찍혔다 — print 는 남겨 두자." },
   "draw.rank": {
     en: "show() draws [H,W], [C,H,W] or [N,C,H,W] — this was [{0}].",
     ko: "show() 는 [H,W]·[C,H,W]·[N,C,H,W] 를 그린다 — 받은 것은 [{0}] 다." },
