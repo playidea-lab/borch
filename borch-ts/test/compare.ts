@@ -23,6 +23,7 @@
 
 import { Tensor, noGrad } from "../src/tensor.js";
 import { load } from "../src/serialize.js";
+import { exportOnnx } from "../src/onnx.js";
 import { device as dev } from "../src/tensor.js";
 import { ResNet18 } from "./bench.js";
 
@@ -162,7 +163,7 @@ interface OrtSession { run(feeds: Record<string, unknown>): Promise<Record<strin
 interface Ort {
   env: { wasm: { wasmPaths: string } };
   Tensor: new (type: string, data: Float32Array, dims: number[]) => unknown;
-  InferenceSession: { create(url: string, opts: { executionProviders: string[] }): Promise<OrtSession> };
+  InferenceSession: { create(url: string | Uint8Array, opts: { executionProviders: string[] }): Promise<OrtSession> };
 }
 
 function ort(): Ort {
@@ -270,6 +271,22 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     const d0 = d.dispatches;
     await noGrad(() => model.forward(xb)).toArray();
     lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${d.dispatches - d0} dispatches/forward`);
+  }
+
+  // The whole story on one page: the fused network leaves as ONNX — borch's own file,
+  // not torch's — and ORT Web runs it, gated against torch's logits like everything
+  // above. Training here, serving anywhere.
+  const exported = await exportOnnx(model, x1);
+  const ownSession = await o.InferenceSession.create(exported.bytes, { executionProviders: ["webgpu"] });
+  const ownOut = await ownSession.run(feed(Float32Array.from(probe.input), 1));
+  const ownGap = maxAbsDiff(ownOut["output"]?.data ?? new Float32Array(), probe.logits);
+  lines.push(`borch's own ONNX export (${exported.ops.length} nodes, ${(exported.bytes.length / 1e6).toFixed(1)} MB) run by ORT Web: max |logits − torch| ${ownGap.toExponential(2)}`);
+  if (ownGap > GATE) lines.push("**ORT running borch's export does not reproduce torch's logits**");
+  for (const b of batches) {
+    const data = new Float32Array(b * 3 * 32 * 32);
+    for (let i = 0; i < b; i++) data.set(probe.input, i * 3 * 32 * 32);
+    const ms = await timed(() => ownSession.run(feed(data, b)), 3, 20);
+    lines.push(`batch ${String(b).padStart(3)}  forward  ORT Web on borch's export ${ms.toFixed(2).padStart(8)} ms`);
   }
   return lines.join("\n");
 }

@@ -1,0 +1,95 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>onnx export — the Python binding</title>
+<body>
+<pre id="out">loading…</pre>
+<script src="/vendor/pyodide/pyodide.js"></script>
+<script src="/vendor/ort.webgpu.min.js"></script>
+<script type="module">
+  // Does `borch_webgpu.onnx.export` — Python, synchronous, writing to Pyodide's filesystem —
+  // produce a file ONNX Runtime Web runs, with the binding's own logits? The model is
+  // `tests/resnet.py`'s, built on the binding as the training comparison builds it.
+  const OUT = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); OUT.textContent = lines.join("\n"); };
+  const PACKAGES = {
+    borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
+            "_data", "_rnn", "_serialize", "autograd"],
+    borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data",
+                   "_serialize", "_onnx", "autograd"],
+  };
+  const FILES = [["/tests/resnet.py", "/work/tests/resnet.py"]];
+  for (const [pkg, mods] of Object.entries(PACKAGES)) {
+    for (const m of mods) FILES.push([`/${pkg}/${m}.py`, `/work/${pkg}/${m}.py`]);
+  }
+  const GATE = 1e-4;
+  const maxAbsDiff = (a, b) => {
+    let worst = 0;
+    for (let i = 0; i < a.length; i++) worst = Math.max(worst, Math.abs(a[i] - b[i]));
+    return a.length === b.length ? worst : Infinity;
+  };
+  try {
+    const borch = await import("/borch-ts/dist/src/index.js");
+    await borch.init();
+    globalThis.borch = borch;
+    say(`adapter: ${borch.Device.adapterInfo}`);
+    const py = await loadPyodide({ indexURL: "/vendor/pyodide/" });
+    await py.loadPackage("numpy");
+    py.FS.mkdirTree("/work/tests");
+    for (const pkg of Object.keys(PACKAGES)) py.FS.mkdirTree(`/work/${pkg}`);
+    for (const [url, dst] of FILES) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`could not fetch: ${url} (HTTP ${res.status})`);
+      py.FS.writeFile(dst, await res.text());
+    }
+    const got = JSON.parse(await py.runPythonAsync(`
+import importlib.util, json, sys
+if "/work" not in sys.path:
+    sys.path.insert(0, "/work")
+import numpy as np
+spec = importlib.util.spec_from_file_location("resnet", "/work/tests/resnet.py")
+resnet = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(resnet)
+import borch_webgpu as L
+
+model, images, labels = resnet._build(L)
+model.train()
+model(L.tensor(images))              # the running statistics move off 0 and 1
+model.eval()
+x2 = L.tensor(images[:2])
+x5 = L.tensor(images[:5])
+ours2 = model(x2).numpy().ravel().tolist()
+ours5 = model(x5).numpy().ravel().tolist()
+# **No await anywhere in this cell** — that is the binding's promise, and the file path
+# is Pyodide's filesystem, read back by the page.
+L.onnx.export(model, x2, "/work/model.onnx", input_names=["input"], output_names=["output"])
+json.dumps({"ours2": ours2, "ours5": ours5,
+            "pix2": images[:2].ravel().tolist(), "pix5": images[:5].ravel().tolist(),
+            "classes": int(resnet.CLASSES), "side": int(resnet.SIDE), "channels": int(resnet.CHANNELS)})
+`));
+    const bytes = py.FS.readFile("/work/model.onnx");
+    say(`Python wrote /work/model.onnx: ${(bytes.length / 1e6).toFixed(2)} MB`);
+    ort.env.wasm.wasmPaths = "/vendor/";
+    const session = await ort.InferenceSession.create(bytes, { executionProviders: ["webgpu"] });
+    const run = async (pix, n) => {
+      const feed = { input: new ort.Tensor("float32", Float32Array.from(pix), [n, got.channels, got.side, got.side]) };
+      return Array.from((await session.run(feed)).output.data);
+    };
+    const gap2 = maxAbsDiff(await run(got.pix2, 2), got.ours2);
+    const gap5 = maxAbsDiff(await run(got.pix5, 5), got.ours5);
+    say(`ORT Web vs borch_webgpu: batch 2 max |Δ| ${gap2.toExponential(2)} · batch 5 ${gap5.toExponential(2)} · gate ${GATE}`);
+    const checks = [
+      { name: "the binding writes an ONNX file ORT Web opens", ok: true, note: "" },
+      { name: "ORT reproduces the binding's forward at the traced batch (2)", ok: gap2 <= GATE, note: `max |Δ| ${gap2.toExponential(2)}` },
+      { name: "and at a batch it was not traced at (5)", ok: gap5 <= GATE, note: `max |Δ| ${gap5.toExponential(2)}` },
+    ];
+    const failed = checks.filter((c) => !c.ok).length;
+    say(failed ? `${failed} check(s) failed` : `all ${checks.length} binding ONNX checks passed`);
+    window.__borchOnnxBinding = { text: lines.join("\n"), checks, adapter: borch.Device.adapterInfo };
+  } catch (err) {
+    const why = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+    window.__borchOnnxBinding = { error: why };
+    say(`the binding ONNX check blew up: ${why}`);
+  }
+</script>
+</body>

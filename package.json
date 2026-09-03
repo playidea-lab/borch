@@ -47,6 +47,8 @@
     "parity:ts": "uv run --with playwright python borch-ts/test/parity.py",
     "firstrun:site": "uv run --with playwright python tests/browser/first_run.py",
     "compare:ts": "uv run --with playwright python borch-ts/test/compare.py",
+    "onnx:ts": "uv run --with playwright python borch-ts/test/onnx.py",
+    "onnx:binding": "uv run --with playwright python tests/browser/onnx_binding.py",
     "cost:ts": "uv run --with playwright python borch-ts/test/cost.py",
     "bench:ts": "uv run --with playwright python borch-ts/test/bench.py",
     "serialize:ts": "uv run --with numpy --with playwright python borch-ts/test/serialize.py",

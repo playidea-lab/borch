@@ -196,6 +196,7 @@ from ._data import (                                     # noqa: E402,F401
     set_default_device, utils,
 )
 from ._serialize import load, save                       # noqa: E402,F401
+from . import _onnx as onnx                              # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 # **Named here or `borch_webgpu.autograd` is an `AttributeError`.** A submodule is
@@ -266,6 +267,7 @@ def install(name="borch_webgpu", modules=None):
                       ("nn.functional", nn.functional),
                       ("nn.utils", nn.utils), ("nn.utils.rnn", nn.utils.rnn),
                       ("nn.utils.fusion", nn.utils.fusion),
+                      ("onnx", onnx),
                       ("optim.lr_scheduler", optim.lr_scheduler)):
         full = f"{name}.{path}"
         modules[full] = mod

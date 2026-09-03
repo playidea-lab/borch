@@ -7,6 +7,7 @@
  * constraints. Imitating it inherits someone else's detour for no reason.
  */
 
+import { traced } from "./onnx.js";
 import { backward as tapeBackward, flow as tapeFlow, gradMode, type Node }
   from "./autograd.js";
 import { Device, type DeviceKind, type InitOptions } from "./device.js";
@@ -1555,6 +1556,10 @@ export class Tensor implements Node<Tensor> {
   // ── Elementwise ───────────────────────────────────────────────────────
 
   unary(name: string): Tensor {
+    return traced(`unary:${name}`, [this], {}, () => this.unaryRaw(name));
+  }
+
+  private unaryRaw(name: string): Tensor {
     if (!hasUnary(name)) throw new Error(`unknown unary op: ${name}`);
     const n = this.size;
     const out = dev().alloc(n);
@@ -1587,6 +1592,10 @@ export class Tensor implements Node<Tensor> {
    *   comparison, it is pinned here.
    */
   binary(name: string, other: Tensor, dtype?: DType): Tensor {
+    return traced(`binary:${name}`, [this, other], {}, () => this.binaryRaw(name, other, dtype));
+  }
+
+  private binaryRaw(name: string, other: Tensor, dtype?: DType): Tensor {
     const spec = BINARY[name];
     if (!spec) throw new Error(`unknown binary op: ${name}`);
     // **With a complex operand it branches here.** This method is the only door for
@@ -1717,6 +1726,10 @@ export class Tensor implements Node<Tensor> {
    * neither had called it with a keyword. The name a caller can write is the name.
    */
   matmul(other: Tensor): Tensor {
+    return traced("MatMul", [this, other], {}, () => this.matmulRaw(other));
+  }
+
+  private matmulRaw(other: Tensor): Tensor {
     const a = this.shape.length;
     const b = other.shape.length;
     if (a === 0 || b === 0) {
@@ -2044,6 +2057,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   mean(dim?: number, keepdim = false, dtype?: DType): Tensor {
+    const attrs: Record<string, number | number[]> = { keepdims: keepdim ? 1 : 0 };
+    if (dim !== undefined) attrs["axes"] = [dim];
+    return traced("ReduceMean", [this], attrs, () => this.meanRaw(dim, keepdim, dtype));
+  }
+
+  private meanRaw(dim?: number, keepdim = false, dtype?: DType): Tensor {
     if (dtype !== undefined) {
       // **Being asked to land on an integer is refused** (measured). What `dtype=`
       // releases is the refusal on the **input** side alone — a mean whose result is an
@@ -2582,6 +2601,10 @@ export class Tensor implements Node<Tensor> {
    * evenly.
    */
   reshape(want: readonly number[]): Tensor {
+    return traced("reshape", [this], { shape: [...want] }, () => this.reshapeRaw(want));
+  }
+
+  private reshapeRaw(want: readonly number[]): Tensor {
     const hole = want.indexOf(-1);
     let shape = want;
     if (hole >= 0) {
@@ -4850,7 +4873,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `matmul` broadcasts, so the fold is no longer the caller's problem.
    */
   linear(weight: Tensor): Tensor {
-    return this.matmul(weight.transpose());
+    return traced("linear", [this, weight], {}, () => this.matmul(weight.transpose()));
   }
 
   smoothL1Loss(target: Tensor, beta = 1.0,
@@ -10615,6 +10638,24 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     groups = 1,
   ): Tensor {
     const spatial = this.shape.length - 2;
+    const each = (v: number | readonly number[]): number[] =>
+      typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
+    const pads = each(padding);
+    return traced("Conv", [this, weight, bias], {
+      kernel_shape: weight.shape.slice(2), strides: each(stride), pads: [...pads, ...pads],
+      dilations: each(dilation), group: groups,
+    }, () => this.convNDRaw(weight, bias, stride, padding, dilation, groups));
+  }
+
+  private convNDRaw(
+    weight: Tensor,
+    bias: Tensor | null,
+    stride: number | readonly number[],
+    padding: number | readonly number[],
+    dilation: number | readonly number[],
+    groups: number,
+  ): Tensor {
+    const spatial = this.shape.length - 2;
     // **Groups live inside the kernel now.** They were a loop of slice → convolve → join,
     // which reads as the gradient following from the pieces and was measured as the whole
     // cost of a depthwise network: EfficientNet-B4 at 64×64 spent 140,541 dispatches on
@@ -10910,6 +10951,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   poolND(kind: "max" | "avg", kernel: number, stride?: number,
          padding = 0, ceilMode = false, countIncludePad = true,
          divisorOverride: number | null = null, dilation = 1): Tensor {
+    const spatial = this.shape.length - 2;
+    const fill = (v: number): number[] => new Array<number>(spatial).fill(v);
+    const attrs: Record<string, number | number[] | string> = {
+      kind, kernel_shape: fill(kernel), strides: fill(stride ?? kernel),
+      pads: [...fill(padding), ...fill(padding)], dilations: fill(dilation),
+      ceil_mode: ceilMode ? 1 : 0, count_include_pad: countIncludePad ? 1 : 0,
+    };
+    if (divisorOverride !== null) attrs["divisor_override"] = divisorOverride;
+    return traced("pool", [this], attrs,
+      () => this.poolNDRaw(kind, kernel, stride, padding, ceilMode, countIncludePad, divisorOverride, dilation));
+  }
+
+  private poolNDRaw(kind: "max" | "avg", kernel: number, stride: number | undefined,
+                    padding: number, ceilMode: boolean, countIncludePad: boolean,
+                    divisorOverride: number | null, dilation: number): Tensor {
     const spatial = this.shape.length - 2;
     if (spatial < 1) throw new Error(`pooling: the shape does not match: [${this.shape}]`);
     // **`dilation` belongs to the maximum alone.** torch's `avg_pool*d` has no such
@@ -11335,7 +11391,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * are callers.
    */
   adaptiveAvgPool(outSize: number): Tensor {
-    return this.adaptivePool("avg", outSize);
+    return traced("adaptive_avg_pool", [this], { output_size: outSize },
+      () => this.adaptivePool("avg", outSize));
   }
 
   /**
@@ -11404,6 +11461,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   batchNormEval(
     mean: Tensor, variance: Tensor, weight: Tensor, bias: Tensor, eps = 1e-5,
+  ): Tensor {
+    return traced("BatchNormalization", [this, weight, bias, mean, variance], { epsilon: eps },
+      () => this.batchNormEvalRaw(mean, variance, weight, bias, eps));
+  }
+
+  private batchNormEvalRaw(
+    mean: Tensor, variance: Tensor, weight: Tensor, bias: Tensor, eps: number,
   ): Tensor {
     const [N = 1, C = 1] = this.shape;
     const S = this.shape.slice(2).reduce((a, b) => a * b, 1);

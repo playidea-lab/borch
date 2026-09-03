@@ -45,6 +45,8 @@ CHECKS = [
     ("data",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/data.py"]),
     ("device",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/device.py"]),
     ("serialize",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/serialize.py"]),
+    ("onnx",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/onnx.py"]),
+    ("onnx:binding", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/onnx_binding.py"]),
     ("example",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/readme.py"]),
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py"]),
     ("scope",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/scope_escape.py"]),

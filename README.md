@@ -70,6 +70,8 @@ measurement beside it — is listed on the landing page and pinned by
 `borch-ts/test/parity.ts`. Everything else that differs is a defect, and the ledgers
 (`tests/torch_gap.py`, `borch-ts/test/run.py`) hold zero gaps without a reason.
 
+**The file leaves as ONNX.** `onnx.exportOnnx(model, sample)` in TypeScript, `torch.onnx.export(model, x, path)` in Python — traced from one forward, written without a dependency, and checked by ONNX Runtime Web reproducing the forward (3.5e-8; see the book).
+
 ## Where things are
 
 | | |

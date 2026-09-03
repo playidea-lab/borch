@@ -1210,6 +1210,50 @@ Values always go out as float32. borch's `int64` and `bool` are labels and ride 
 the header's `__metadata__` — writing `I64` against a four-byte body breaks
 somebody else's reader.
 
+### Exporting to ONNX — `torch.onnx.export`
+
+**Training happens here; serving happens wherever the weights are wanted**, and the
+file every serving runtime reads is ONNX. torch's door is `torch.onnx.export(model,
+args, f)`; this library's is the same sentence in each language:
+
+```ts
+import { onnx } from "borch";
+model.eval();
+const { bytes, ops } = await onnx.exportOnnx(model, sample);   // an ONNX file, as bytes
+```
+
+```python
+import borch_webgpu as torch
+torch.onnx.export(model, x, "/work/model.onnx")   # Pyodide's filesystem; no await anywhere
+```
+
+**How it traces.** The tensor methods a network is built from (`convND`, `unary`,
+`binary`, `poolND`, `reshape`, `matmul`, `linear`, `mean`, `adaptiveAvgPool`,
+`batchNormEval`) each pass through one recording point that does nothing until an
+export is open — one comparison in the hot path, measured as no change to a training
+step. Then every outermost call is one node; an op built from other ops (`linear` is a
+transpose and a matmul) records itself and not its parts. The forward runs in eval
+mode under `noGrad`, and a model written in Python runs its own `forward` — the binding
+opens the trace, runs the Python, closes it, and only the tensor ops cross the wall.
+
+**The bytes are the wire format itself** — a protobuf writer of a few dozen lines, the
+same choice as writing safetensors by hand: no dependency, and the reader that matters
+is somebody else's. Two checks ask exactly that. `borch-ts/test/onnx.py` exports the
+bench's ResNet-18 (44.7 MB, 69 nodes: Conv ×20, BatchNormalization ×20, Relu ×17, Add ×9,
+GlobalAveragePool, Reshape, Gemm) and ONNX Runtime Web reproduces the forward to
+3.5e-8 at the traced batch and 2.8e-8 at a batch it was not traced at — the leading
+dimension is `N`, torch's `dynamic_axes` without the dict. After `fuse()` the same
+file has 49 nodes and no batch norms. `tests/browser/onnx_binding.py` does it from
+Python: `tests/resnet.py`'s network built on the binding, written to the virtual
+filesystem with no `await`, and read back by the page — 1.2e-7 against the binding's
+own logits.
+
+**What it refuses**, and by name. An op with no ONNX spelling here — `cannot export
+erf` — rather than a file that will not run; a training-mode network (its batch norms
+would trace the batch's statistics); an adaptive pool to anything but 1 × 1
+(`GlobalAveragePool`); a `linear` on anything but a 2-D input (`Gemm`). The core
+(numpy) has no export: there is no tracer there and the binding is Python's door.
+
 ### Where it runs
 
 WebGPU is required. **With no WebGPU at all it refuses rather than falling back to
@@ -1534,6 +1578,11 @@ remains is the convolution kernel itself: at batch 16 the GPU spends 4.3 of the
 4090's 7.6 ms inside `conv2d`, and the largest of those — 512 → 512 channels on a
 4 × 4 plane — runs at about 1 % of the card's peak. That is the next lever, and it is
 kernel work rather than a fold.
+
+And the page closes the loop: the fused network leaves as **borch's own ONNX file**
+(`exportOnnx`, 49 nodes, 44.7 MB), ORT Web runs it, and the logits land 4.5e-8 from
+torch's — at 3.1 / 5.3 ms on Apple, the same speed as the file torch exported. Train
+here, serve anywhere.
 
 That is the honest boundary: for inference alone, use ORT Web. What this library has
 that it does not is the training step above and torch's own shape of code.

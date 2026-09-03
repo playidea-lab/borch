@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>onnx export</title>
+<body>
+  <pre id="out">running…</pre>
+  <script src="../../vendor/ort.webgpu.min.js"></script>
+  <script type="module">
+    import { init } from "../dist/src/tensor.js";
+    import { Device } from "../dist/src/device.js";
+    import { report } from "../dist/test/onnx.js";
+    import { why } from "./why.js";
+    const out = document.getElementById("out");
+    try {
+      await init();
+      const { text, checks } = await report();
+      window.__borchOnnx = { text, checks, adapter: Device.adapterInfo };
+      out.textContent = text;
+    } catch (err) {
+      window.__borchOnnx = { error: String(why(err)) };
+      out.textContent = `the ONNX check blew up: ${why(err)}`;
+    }
+  </script>
+</body>
