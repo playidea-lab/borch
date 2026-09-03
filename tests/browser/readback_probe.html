@@ -179,8 +179,33 @@
     }
     say(`createComputePipelineAsync (4 distinct): ${fmt(mkA)}`);
 
+    // 9) **The submit after quiet.** No work in flight for 300 ms, then submit + map
+    // together (borch's shape — ops are batched and go out at the readback). Bare; with
+    // an empty timer alive across the whole 300 ms and the wait; and with a heartbeat —
+    // an empty command buffer submitted every 50 ms during the quiet.
+    const after = { bare: [], timer: [], beat: [] };
+    for (const kind of ["bare", "timer", "beat"]) {
+      for (let i = 0; i < 6; i++) {
+        let keep = null;
+        if (kind === "timer") keep = setInterval(() => {}, 4);
+        if (kind === "beat") keep = setInterval(() => { device.queue.submit([device.createCommandEncoder().finish()]); }, 50);
+        await sleep(300);
+        const enc = device.createCommandEncoder();
+        enc.copyBufferToBuffer(src, 0, read, 0, 16);
+        const t0 = performance.now();
+        device.queue.submit([enc.finish()]);
+        await read.mapAsync(GPUMapMode.READ);
+        after[kind].push(performance.now() - t0);
+        read.unmap();
+        if (keep !== null) clearInterval(keep);
+      }
+    }
+    say(`quiet 300 ms, then submit + map — bare: ${fmt(after.bare)}`);
+    say(`  with a 4 ms timer alive throughout: ${fmt(after.timer)}`);
+    say(`  with an empty submit every 50 ms during the quiet: ${fmt(after.beat)}`);
+
     window.__readback = { text: lines.join("\n"), adapter: `${info.vendor ?? "?"} / ${info.architecture ?? "?"}`,
-      medians: { raf: med(frames.slice(1)), map: med(wm), workDone: med(wd), dispatchMap: med(dm), rafMap: med(am), timerMap: med(tm), idleMap: med(idle), idleTimerMap: med(idleT), idleMax: Math.max(...idle), idleTimerMax: Math.max(...idleT), pipeline: med(mk), pipelineMax: Math.max(...mk), firstDispatch: med(first), firstDispatchMax: Math.max(...first), pipelineAsync: med(mkA) } };
+      medians: { raf: med(frames.slice(1)), map: med(wm), workDone: med(wd), dispatchMap: med(dm), rafMap: med(am), timerMap: med(tm), idleMap: med(idle), idleTimerMap: med(idleT), idleMax: Math.max(...idle), idleTimerMax: Math.max(...idleT), pipeline: med(mk), pipelineMax: Math.max(...mk), firstDispatch: med(first), firstDispatchMax: Math.max(...first), pipelineAsync: med(mkA), afterBare: Math.max(...after.bare), afterTimer: Math.max(...after.timer), afterBeat: Math.max(...after.beat) } };
   } catch (err) {
     window.__readback = { error: String(err && err.stack || err) };
     say(`the probe blew up: ${err}`);
