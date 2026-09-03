@@ -16,6 +16,7 @@ rather than a pass. Saying something was compared when it was not is worse than 
 
 import importlib.util
 import pathlib
+import os
 import sys
 
 import numpy as np
@@ -65,6 +66,14 @@ def load_borch():
 
 def dump(path=DEFAULT_PATH):
     """Stage one — freezes real torch's expected values. torch is needed here only."""
+    # **The golden is frozen with CUDA hidden.** A browser has no CUDA, and the cases
+    # that ask `device='cuda'` expect torch to stop the way this library stops. Frozen on
+    # a machine where torch does see a card — the first nightly on the RTX 5080 — six
+    # cases came out as "passed over there": `zeros/ones/rand/empty(device='cuda')`,
+    # `BatchNorm(device='cuda')` and `cuda.device_count() == 1`, and the browser runners
+    # disagreed on all six. The premise is written down in ROADMAP.md ("never coming");
+    # hiding the card here makes the golden say the same thing on every machine.
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
     import torch as real
 
     inp = cases_mod.golden_inputs()
