@@ -101,6 +101,28 @@
       <tr><td rowspan="2"><code>nvidia / lovelace</code><br>RTX 4090, 드라이버 550, Ubuntu (Xorg + GNOME), Chrome 143</td><td>첫 방문</td><td>1.0 s</td><td>7.1 s</td><td rowspan="2">더 오래된 카드·드라이버·Chrome 에서도 같은 모양: adapter 요청 2.9~4.0 s, 첫 readback 1.0 s. 변수 셋이 한꺼번에 바뀌었는데 수치가 안 바뀌었으니 부품이 아니라 경로다.</td></tr>
       <tr><td>재방문</td><td>1.0 s</td><td>5.0 s</td></tr>
     </table></div>
+
+    <h3>첫 학습까지 — 학습자의 시계</h3>
+    <p>
+      첫 화면은 버튼을 누르는 순간 Python 으로 모델 하나를 학습한다. 이 시계는 배포된
+      사이트에서 페이지를 여는 순간 시작하고(다운로드가 안에 들어간다), 읽는 사람이
+      느끼는 순간마다 멈춘다: 버튼 밑에 Python 준비됨, 클릭 뒤 첫 loss 줄, 배운 것 줄.
+      <code>tests/browser/learner_path.py</code> 가 매일 밤 잰다.
+    </p>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>어댑터</th><th>열고 나서 Python 준비까지</th><th>클릭 → 첫 loss 줄</th><th>클릭 → 배운 것</th><th>재방문, 바로 클릭 → 배운 것</th><th>레슨 0, 블록 셋</th></tr></thead>
+      <tbody>
+        <tr><td><code>apple / metal-3</code><br>M4 Max, Chrome</td><td>4.4 s</td><td>0.7 s</td><td>0.8 s</td><td>1.4 s</td><td>2.4 s</td></tr>
+        <tr><td><code>nvidia / lovelace</code><br>RTX 4090, 드라이버 550, Ubuntu, Chrome 143</td><td>8.6 s</td><td>3.5 s</td><td>6.5 s</td><td>6.1 s</td><td>26 s</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small muted">
+      4090 의 초는 GPU 의 것이 아니다: SGD 60 step 은 거기서 마이크로초다. 페이지가 값을
+      읽어 오는 일(<code>loss.item()</code>, 그 루프에서 일곱 번)이 그 기계에서는 한 번에
+      약 1초를 기다린다 — 위의 어댑터 핸드셰이크가 보이는 것과 같은 1초 단위 — 그래서
+      loss 를 찍는 루프는 print 하나에 1초씩 든다. 디스플레이가 가상인 기계에서 잰 것이고,
+      실제 화면이면 달라지는지는 아직 모른다.
+    </p>
     <p>
       이 라이브러리가 하는 것: 페이지가 어댑터를 한 번만 요청하고(probe 가 받은 어댑터를
       <code>init()</code> 이 그대로 쓴다), 읽는 동안 device 를 미리 만들어 클릭은 셰이더와

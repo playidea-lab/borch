@@ -71,6 +71,14 @@ No request leaves the machine. Pyodide and numpy come out of the repository
 itself (`vendor/`). English is the default and Korean is under `/site/ko/`. The
 details are in [site/README.md](site/README.md).
 
+**The first screen trains.** The landing page's demo is sixty steps of SGD on
+`y = 3x + 1` in Python — `import borch_webgpu as torch` is the only line that is not
+torch — and lesson 0 (`site/learn/00-fix-it.html`) hands the reader two loops that do
+not learn, one wrong line each, and says whether the fix worked. The reader's clock is
+`tests/browser/learner_path.py`, run nightly against the deployed site: on Apple, Python
+is ready 4.4 s after the page opens and the click reaches "learned" 0.8 s later; the
+setup page carries the table, including the 4090's slower seconds and why.
+
 ## Installing
 
 One pure-Python wheel. numpy is the only dependency, and Pyodide already has

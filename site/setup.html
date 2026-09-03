@@ -108,6 +108,30 @@
       <tr><td rowspan="2"><code>nvidia / lovelace</code><br>RTX 4090, driver 550, Ubuntu (Xorg + GNOME), Chrome 143</td><td>first</td><td>1.0 s</td><td>7.1 s</td><td rowspan="2">the same shape on an older card, driver and Chrome: the adapter request 2.9&ndash;4.0 s, the first readback 1.0 s. Three variables changed at once and the number did not, so it is the path, not the part.</td></tr>
       <tr><td>revisit</td><td>1.0 s</td><td>5.0 s</td></tr>
     </table></div>
+
+    <h3>To the first training — the learner's clock</h3>
+    <p>
+      The first screen trains a model in Python the moment its button is pressed. This
+      clock starts when the page is opened, on the deployed site (so the download is in
+      it), and stops at the moments a reader feels: Python ready under the button, the
+      first loss line after the click, the learned line. Measured by
+      <code>tests/browser/learner_path.py</code>, nightly.
+    </p>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>adapter</th><th>Python ready after opening</th><th>click → first loss line</th><th>click → learned</th><th>revisit, click at once → learned</th><th>lesson 0, three blocks</th></tr></thead>
+      <tbody>
+        <tr><td><code>apple / metal-3</code><br>M4 Max, Chrome</td><td>4.4 s</td><td>0.7 s</td><td>0.8 s</td><td>1.4 s</td><td>2.4 s</td></tr>
+        <tr><td><code>nvidia / lovelace</code><br>RTX 4090, driver 550, Ubuntu, Chrome 143</td><td>8.6 s</td><td>3.5 s</td><td>6.5 s</td><td>6.1 s</td><td>26 s</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small muted">
+      The 4090's seconds are not the GPU's: sixty steps of SGD are microseconds there.
+      Each value the page reads back (<code>loss.item()</code>, seven times in that
+      loop) waits about one second on that machine — the same one-second quantum the
+      adapter handshake above shows — so a loop that prints its loss costs a second a
+      print. Measured on a machine whose display is virtual; whether a real screen
+      changes it is not yet known.
+    </p>
     <p>
       What this library does about it: the page asks for the adapter once (the probe's
       adapter is held for <code>init()</code>) and makes the device while you are still
