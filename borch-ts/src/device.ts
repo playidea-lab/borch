@@ -406,6 +406,9 @@ export class Device {
    *
    * `count` stays the total, so everything already reading it is unchanged.
    */
+  /** How many faults the last readback had already reported — `read` throws when the
+   *  count has grown since. */
+  private faultsReported = 0;
   faults: { count: number; first: string; outOfMemory: number } =
     { count: 0, first: "", outOfMemory: 0 };
 
@@ -1199,6 +1202,23 @@ export class Device {
       // Mapped memory disappears on unmap. It is always copied before going out.
       const out = new Float32Array(stage.getMappedRange().slice(0));
       stage.unmap();
+      // **A value read after a fault is a value of nothing.** An invalid pipeline or an
+      // allocation that failed throws no exception; the command is dropped and the
+      // buffer read holds whatever the pool last held. Three times in one day that came
+      // out as a number — a forward of "0.5 ms", a loss of 0.000, a gate that passed —
+      // and only `faults.count` said otherwise. So the first readback after a new fault
+      // throws, with the first fault's words (the catch below destroys this staging
+      // buffer, as for any failure), and reading resumes after: a page may choose to go
+      // on, and the count on `device().faults` keeps the whole story.
+      if (this.faults.count > this.faultsReported) {
+        const fresh = this.faults.count - this.faultsReported;
+        this.faultsReported = this.faults.count;
+        throw new Error(
+          `${fresh} WebGPU fault(s) since the last readback — this value is of nothing.\n` +
+            `  first: ${this.faults.first}\n` +
+            "  An invalid pipeline or a failed allocation drops its command without an " +
+            "exception; the count is on device().faults.");
+      }
       // **Only a success returns it.** A failed buffer's mapping state is unknown, and
       // putting it in the pool hands the broken state to the next caller, moving the
       // cause one step further away.

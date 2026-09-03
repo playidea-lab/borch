@@ -215,9 +215,21 @@ export abstract class Optimizer {
           "some parameters appear in more than one parameter group");
       }
     }
+    const lr = init.lr ?? this.defaultLr;
+    // **A learning rate that is not a number reaches the kernel as text.** An options
+    // object in torch's positional `lr` seat — `new SGD(params, { lr: 0.05 })` — was
+    // baked into WGSL as `[object Object]`, every step's pipeline was invalid, and the
+    // loss read 0.000 against nothing (measured, tests/browser/envelope.html). torch
+    // refuses here with this sentence; so does this.
+    if (typeof lr !== "number" || !Number.isFinite(lr) || lr < 0) {
+      throw new Error(`Invalid learning rate: ${String(lr)}`);
+    }
+    if (init.weightDecay !== undefined && (typeof init.weightDecay !== "number" || !Number.isFinite(init.weightDecay) || init.weightDecay < 0)) {
+      throw new Error(`Invalid weight_decay value: ${String(init.weightDecay)}`);
+    }
     const group: ParamGroup = {
       params: [...init.params],
-      lr: init.lr ?? this.defaultLr,
+      lr,
       ...(init.weightDecay === undefined ? {} : { weightDecay: init.weightDecay }),
       ...(this.publishedMomentum === undefined
         ? {} : { momentum: this.publishedMomentum }),
@@ -481,6 +493,11 @@ export class SGD extends Optimizer {
     opts: OptimizerOptions = {},
   ) {
     super(params, lr, opts);
+    for (const [name, value] of [["momentum", momentum], ["dampening", dampening], ["weight_decay", weightDecay]] as const) {
+      if (typeof value !== "number" || !Number.isFinite(value) || (name !== "dampening" && value < 0)) {
+        throw new Error(`Invalid ${name} value: ${String(value)}`);
+      }
+    }
     if (nesterov && (momentum <= 0 || dampening !== 0)) {
       throw new Error(
         "Nesterov momentum requires a momentum and zero dampening — torch " +

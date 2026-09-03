@@ -17,6 +17,7 @@ import {
   probe,
   scope,
   Tensor,
+  optim,
 } from "../src/index.js";
 
 const CROSS_DEVICE = "Expected all tensors to be on the same device";
@@ -101,6 +102,35 @@ export async function report(): Promise<Report> {
 
   // Called in the form the README writes down — code in a document rots unless it runs.
   await init({ powerPreference: "high-performance" });
+
+  // **A value read after a fault is a value of nothing — so the readback throws.** A
+  // pipeline that will not compile is dispatched; the browser reports it asynchronously
+  // and drops the command. The first readback after that must throw with the fault's
+  // words, and the one after it must read again (a page may choose to go on).
+  {
+    const d = device();
+    const before = d.faults.count;
+    const junk = d.alloc(4);
+    d.run1d(d.pipeline("device-test:not-wgsl", () => "this is not WGSL"), [junk], 4);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    let thrown = "";
+    try {
+      await Tensor.full([4], 1).toArray();
+    } catch (err) {
+      thrown = err instanceof Error ? err.message : String(err);
+    }
+    want("a readback after a fault throws, naming the fault", thrown.includes("fault"),
+      thrown ? "" : `faults grew by ${d.faults.count - before} and nothing threw`);
+    const again = await Tensor.full([4], 2).toArray();
+    want("the readback after that reads again", again[0] === 2, `got ${again[0]}`);
+  }
+  // **A learning rate that is not a number is refused at the door**, torch's sentence.
+  // Let through, it reached WGSL as `[object Object]` and every step's pipeline was
+  // invalid (measured, tests/browser/envelope.html).
+  wantThrow("an options object in torch's positional lr seat is refused", "Invalid learning rate",
+    () => new optim.SGD([Tensor.zeros([1])], { lr: 0.05 } as unknown as number));
+  wantThrow("a NaN learning rate is refused", "Invalid learning rate",
+    () => new optim.SGD([Tensor.zeros([1])], Number.NaN));
   // Three probes above (`probe()`, `isAvailable()`, the fallback) asked three times;
   // `init()` consumed the GPU adapter the second of them held, so the count stays at
   // three instead of reaching four. The fallback probe in between must not have evicted

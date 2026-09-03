@@ -196,6 +196,11 @@ def require_installed_matches_lock(root=ROOT):
     for name in sorted(set(want) | set(have)):
         a = want.get(name, {}).get("version")
         b = have.get(name, {}).get("version")
+        # **A platform-specific optional package is absent by design.** esbuild names one
+        # per OS × CPU in the lock and npm installs only this machine's; the lock marks
+        # them `optional`. Absent-and-optional is not a disagreement.
+        if b is None and want.get(name, {}).get("optional"):
+            continue
         if a != b:
             wrong.append(f"    {name}: lock says {a or '(absent)'}, installed is {b or '(absent)'}")
     if wrong:
