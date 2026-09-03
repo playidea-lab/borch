@@ -13,8 +13,8 @@
 # differ from the project's name in all three places, and none of it is a design —
 # it is what was available.
 name = "pyborch"
-version = "1.4.0"
-description = "A thin PyTorch-shaped layer on numpy — practise the syntax in the browser with nothing installed"
+version = "1.5.0"
+description = "PyTorch's shape on numpy, and on WebGPU from Pyodide — practise, train and export in the browser with nothing installed"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
 license = { text = "Apache-2.0" }
@@ -75,7 +75,11 @@ build-backend = "hatchling.build"
 # `borch_webgpu` is not here. It is browser-only, and the borch.ts underneath it is
 # loaded by the page as an ES module (`borch` on npm).
 packages = ["borch"]
-only-include = ["borch", "borchvision.py"]
+only-include = ["borch", "borch_webgpu", "borchvision.py"]
 
 [tool.hatch.build]
-include = ["borch", "borchvision.py"]
+# `_borch.js` is built (`npm run bundle:py`) and gitignored; hatch follows the ignore
+# file unless told the file is an artifact. Without this line the wheel installs a
+# binding with no borch.ts inside — an import that fails only from the install.
+artifacts = ["borch_webgpu/_borch.js"]
+include = ["borch", "borch_webgpu", "borchvision.py"]

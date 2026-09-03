@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the wheel, in a worker</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The wheel alone, in a Web Worker** — JupyterLite's shape: Pyodide in a worker,
+  // no page-side borch.ts, nothing but `pip install`. The worker installs numpy and the
+  // wheel from this checkout, imports `borch_webgpu` (which boots its own borch.ts from
+  // the bundle it carries), trains the hero's loop, exports ONNX, and posts back what it
+  // saw. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
+  const out = document.getElementById("out");
+  const wheel = location.origin + new URLSearchParams(location.search).get("wheel");
+  // A worker made from a blob URL resolves paths against the blob, so every URL it
+  // touches is spelled out with the page's origin.
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu) + " · WebAssembly.Suspending " + (typeof WebAssembly.Suspending));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import time
+t = time.perf_counter()
+import borch_webgpu as torch
+boot = (time.perf_counter() - t) * 1000
+import js
+adapter = str(js.borch.Device.adapterInfo)
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+ys = 3 * xs + 1
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+losses = []
+for step in range(60):
+    loss = ((model(xs) - ys) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+    if step % 15 == 0 or step == 59:
+        losses.append(round(loss.item(), 4))
+w, b = [p.item() for p in model.parameters()]
+model.eval()
+data = torch.onnx.export(model, xs)
+f"import {boot:.0f} ms · adapter {adapter} · losses {losses} · learned y = {w:.2f}x + {b:.2f} · onnx {len(data)} bytes"
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

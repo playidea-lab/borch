@@ -8,7 +8,36 @@ import js as _js
 import numpy as _np
 from pyodide.ffi import run_sync as _run_sync, to_js as _to_js
 
-_ts = _js.borch
+
+def _boot():
+    """`js.borch` — the page's borch.ts if it put one there, else our own.
+
+    The site loads borch.ts as an ES module and sets `globalThis.borch` before Python
+    starts. **A notebook has no such page**: JupyterLite runs Pyodide in a worker and
+    the only thing that arrives is this wheel. So the wheel carries borch.ts as one
+    file (`_borch.js`, esbuild's bundle of the emit) and, when nothing is there, this
+    imports it through a blob URL and brings the device up — synchronously, through the
+    same `run_sync` every readback uses, so `import borch_webgpu as torch` is one line
+    with no await behind it. A machine without WebGPU fails here, by name.
+    """
+    if hasattr(_js, "borch") and _js.borch is not None:
+        return _js.borch
+    import importlib.resources as _res
+    from pyodide.code import run_js as _run_js
+    source = _res.files(__package__).joinpath("_borch.js").read_text(encoding="utf-8")
+    blob = _js.Blob.new(_to_js([source]), _to_js({"type": "text/javascript"}, dict_converter=_js.Object.fromEntries))
+    url = _js.URL.createObjectURL(blob)
+    try:
+        module = _run_sync(_run_js(f"import({url!r})"))
+    finally:
+        _js.URL.revokeObjectURL(url)
+    _js.borch = module
+    if module.currentDevice() is None:
+        _run_sync(module.init())
+    return module
+
+
+_ts = _boot()
 
 def _js_list(seq):
     """A Python list to a JS array. Passed as a proxy, the other side does not

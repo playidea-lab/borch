@@ -63,13 +63,19 @@ except ImportError as exc:                              # pragma: no cover
         "borch_webgpu only runs inside a browser — outside Pyodide there is no `js`.\n"
         "  Natively, use `borch` (numpy).") from exc
 
-if getattr(_js, "borch", None) is None:                 # pragma: no cover
-    raise ImportError(
-        "`js.borch` is missing — the page has to load borch.ts, call `await init()`,\n"
-        "  and put it in the global scope. This stops here rather than quietly "
-        "running something else.")
-
-from ._base import Tensor, tensor                        # noqa: E402,F401
+# `js.borch` is the page's borch.ts when the page loaded one. **When nothing did — a
+# notebook, a worker, a bare Pyodide — `_base` boots the borch.ts this wheel carries**
+# (`_boot`), so the import is the whole setup. What cannot be helped is a machine with
+# no WebGPU: that stops here, by name, rather than quietly running something else.
+try:
+    from ._base import Tensor, tensor                    # noqa: E402,F401
+except Exception as exc:                                 # pragma: no cover
+    if getattr(_js, "borch", None) is None:
+        raise ImportError(
+            "borch_webgpu could not bring up borch.ts: no WebGPU adapter, or the browser "
+            "has no JSPI (`run_sync`).\n  Chrome or Edge 137+ on a machine with a GPU; on "
+            f"Linux with NVIDIA, chrome://flags #enable-unsafe-webgpu and #enable-vulkan.\n  ({exc})") from exc
+    raise
 # **Named things are imported first.** The module's `__getattr__` only receives
 # names that are not here, so things whose first argument is not a tensor —
 # `linalg`, `einsum` — must not leak through to it. `linalg` did get caught as a
