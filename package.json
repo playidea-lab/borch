@@ -53,6 +53,7 @@
     "learner:site": "uv run --with playwright python tests/browser/learner_path.py",
     "wheel:py": "uv run --with playwright python tests/browser/wheel_probe.py --build",
     "lab:py": "uv run --with playwright python tests/browser/lab_probe.py --build",
+    "envelope:py": "uv run --with playwright python tests/browser/envelope.py",
     "build:lab": "python3 site/build_lab.py",
     "cost:ts": "uv run --with playwright python borch-ts/test/cost.py",
     "bench:ts": "uv run --with playwright python borch-ts/test/bench.py",

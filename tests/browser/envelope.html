@@ -1,0 +1,101 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the envelope — 224 px, a pretrained backbone, a head</title>
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "/borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.6.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.2.3?external=borch-ts,bimm-ts"
+} }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Can a laptop GPU fine-tune on 200 images of 224 px in under two minutes?** The
+  // labelling tool's design is a frozen pretrained backbone whose features are computed
+  // once per image, and a head trained on the cache. So the envelope is three numbers:
+  // the backbone's forward per image at 224 px, the head's training on 200 cached
+  // features, and the neighbour ordering over the same features. Measured, not assumed.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const want = new URLSearchParams(location.search).get("model") || "imagenet-efficientnet-b0";
+  try {
+    const [{ init, Device, Tensor, nn, optim, noGrad, device, scope }, hub] = await Promise.all([import("borch-ts"), import("borch-hub")]);
+    await init();
+    say(`adapter: ${Device.adapterInfo}`);
+    const index = await (await fetch("https://models.pilab.kr/index.json")).json();
+    const rows = (Array.isArray(index) ? index : index.models ?? index.entries ?? []).filter((r) => r.name === want);
+    if (!rows.length) throw new Error(`${want} is not in the registry; there: ${[...new Set((Array.isArray(index) ? index : index.models ?? []).map((r) => r.name))].join(", ")}`);
+    const entry = rows[rows.length - 1];
+    const t0 = performance.now();
+    const { model, manifest } = await hub.load(entry.manifestUrl);
+    say(`${entry.name} ${entry.version} · ${(entry.bytes / 1e6).toFixed(1)} MB · loaded in ${(performance.now() - t0).toFixed(0)} ms`);
+    model.eval();
+    const d0 = device();
+    say(`after load: ${d0.faults.count} faults${d0.faults.count ? ` — first: ${String(d0.faults.first).slice(0, 160)}` : ""}`);
+
+    // The backbone's forward at 224 px. Warm twice (the shaders compile), time five.
+    const d = device();
+    const timed = async (fn, warm = 2, n = 5) => { for (let i = 0; i < warm; i++) await fn(); const s = performance.now(); for (let i = 0; i < n; i++) await fn(); return (performance.now() - s) / n; };
+    // **Each forward inside a scope**, so the hundreds of intermediates a 224 px forward
+    // makes are let go at its end. Without it the first run of this page piled 17.9 GB
+    // by batch 16 and logged 414 validation faults — timings of nothing.
+    const forwards = [];
+    let featureDim = 0;
+    for (const b of [1, 4, 8, 16]) {
+      const x = Tensor.randn([b, 3, 224, 224]);
+      let shape = null;
+      const faults0 = d.faults.count;
+      const ms = await timed(async () => {
+        const values = await scope(async () => { const y = noGrad(() => model.forward(x)); shape = y.shape; return y.toArray(); });
+        return values;
+      });
+      featureDim = shape[shape.length - 1];
+      const faults = d.faults.count - faults0;
+      forwards.push({ b, ms, perImage: ms / b, faults });
+      say(`forward 224 px · batch ${String(b).padStart(2)} · ${ms.toFixed(1)} ms → ${(ms / b).toFixed(1)} ms/image · output [${shape}] · gpu ${(d.memory.bytes / 1e6).toFixed(0)} MB (+pool ${(d.pooled.bytes / 1e6).toFixed(0)})${faults ? ` · **${faults} validation faults — ${String(d.faults.first).slice(0, 120)}**` : ""}`);
+      if (faults) break;
+    }
+    const clean = forwards.filter((f) => !f.faults); const per = clean.length ? clean[clean.length - 1].perImage : NaN;
+    say(`200 images of features at batch 16: ${(200 * per / 1000).toFixed(1)} s`);
+
+    // The head, on cached features: Linear(featureDim → 5), 200 rows, 200 steps of SGD.
+    const N = 200, K = 5;
+    const feats = Tensor.randn([N, featureDim]);
+    const labels = Tensor.from(Array.from({ length: N }, (_, i) => i % K), [N]);
+    const head = new nn.Linear(featureDim, K);
+    const opt = new optim.SGD(head.parameters(), 0.05, 0.9);
+    const loss = new nn.CrossEntropyLoss();
+    const t1 = performance.now();
+    let last = 0;
+    for (let step = 0; step < 200; step++) {
+      scope(() => {
+        const l = loss.forward(head.forward(feats), labels);
+        opt.zeroGrad(); l.backward(); opt.step();
+        if (step === 199) last = l;
+      });
+    }
+    const lastLoss = (await last.toArray())[0];
+    const headMs = performance.now() - t1;
+    say(`after head: ${d.faults.count} faults${d.faults.count ? ` — first: ${String(d.faults.first).slice(0, 160)}` : ""}`);
+    say(`head: Linear(${featureDim} → ${K}) · 200 steps on ${N} cached features · ${headMs.toFixed(0)} ms · final loss ${lastLoss.toFixed(3)}`);
+
+    // Neighbour ordering: cosine similarity of every row to every row, the same features.
+    const t2 = performance.now();
+    const norm = feats.div(feats.mul(feats).sum(1, true).sqrt());
+    const sims = await noGrad(() => norm.matmul(norm.transpose())).toArray();
+    const knnMs = performance.now() - t2;
+    say(`after neighbours: ${d.faults.count} faults`);
+    say(`neighbours: ${N}×${N} cosine similarities · ${knnMs.toFixed(0)} ms (${sims.length} values)`);
+
+    const total = 200 * per / 1000 + headMs / 1000 + knnMs / 1000;
+    say(`the envelope: features + head + neighbours for 200 images ≈ ${total.toFixed(1)} s · ${total <= 120 ? "inside two minutes" : "**outside two minutes**"}`);
+    say(`validation faults: ${d.faults.count}`);
+    window.__envelope = { text: lines.join("\n"), adapter: Device.adapterInfo, perImage: per, headMs, knnMs, total, faults: d.faults.count, model: entry.name };
+  } catch (err) {
+    window.__envelope = { error: String(err && err.stack || err) };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>
