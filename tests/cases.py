@@ -5642,6 +5642,42 @@ def functional_name_cases(inp=None):
             L.tensor(bn_x), L.tensor(bn_rm.copy()), L.tensor(bn_rv.copy()),
             L.tensor(bn_w), L.tensor(bn_b), **kw)
 
+    # ── nn.utils.fusion ──
+    #
+    # A convolution and the eval-mode batch norm after it are one convolution. torch's
+    # `fuse_conv_bn_eval` builds it; here it is what makes inference one kernel a layer.
+    # The running statistics are set by hand — a fresh norm's are 0 and 1, where the
+    # folding degenerates to `γ·W` and hides a wrong mean.
+    fz_x = (np.arange(2 * 3 * 5 * 5, dtype=np.float32).reshape(2, 3, 5, 5) / 37) - 1
+    fz_w = (((np.arange(4 * 3 * 3 * 3, dtype=np.float32) % 7) / 7) - 0.5).reshape(4, 3, 3, 3)
+    fz_b = np.array([0.1, -0.2, 0.3, 0.0], dtype=np.float32)
+    fz_rm = np.array([0.1, 0.2, -0.3, 0.4], dtype=np.float32)
+    fz_rv = np.array([1.0, 2.0, 0.5, 0.25], dtype=np.float32)
+    fz_g = np.array([1.5, 0.5, 2.0, -1.0], dtype=np.float32)
+    fz_beta = np.array([0.1, -0.1, 0.2, 0.3], dtype=np.float32)
+
+    def fz_eval(L, bias=True):
+        conv = L.nn.Conv2d(3, 4, 3, padding=1, bias=bias)
+        conv.load_state_dict({"weight": L.tensor(fz_w), **({"bias": L.tensor(fz_b)} if bias else {})})
+        norm = L.nn.BatchNorm2d(4)
+        norm.load_state_dict({"weight": L.tensor(fz_g), "bias": L.tensor(fz_beta),
+                              "running_mean": L.tensor(fz_rm), "running_var": L.tensor(fz_rv)},
+                             strict=False)
+        conv.eval()
+        norm.eval()
+        return L.nn.utils.fusion.fuse_conv_bn_eval(conv, norm)(L.tensor(fz_x))
+
+    def fz_weights(L, which, bias=True, affine=True):
+        return L.nn.utils.fusion.fuse_conv_bn_weights(
+            L.tensor(fz_w), L.tensor(fz_b) if bias else None, L.tensor(fz_rm), L.tensor(fz_rv),
+            1e-3, L.tensor(fz_g) if affine else None, L.tensor(fz_beta) if affine else None)[which]
+
+    add("fuse_conv_bn_eval", lambda L: fz_eval(L))
+    add("fuse_conv_bn_eval::bias 없이", lambda L: fz_eval(L, bias=False))
+    add("fuse_conv_bn_weights::weight", lambda L: fz_weights(L, 0))
+    add("fuse_conv_bn_weights::bias", lambda L: fz_weights(L, 1))
+    add("fuse_conv_bn_weights::affine 없이", lambda L: fz_weights(L, 1, bias=False, affine=False))
+
     add("batch_norm::평가", lambda L: bn(L, training=False))
     add("batch_norm::eps=0.1", lambda L: bn(L, training=False, eps=0.1))
     add("batch_norm::학습", lambda L: bn(L, training=True))

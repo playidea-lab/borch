@@ -187,7 +187,8 @@ function maxAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number {
   return m;
 }
 
-/** Warm twice, time five, mean — the bench's shape. `run` must include the readback. */
+/** Warm, time, mean — the bench's shape. Inference forwards are short (single-digit ms), so
+ * they take twenty timed runs where a training step takes five. `run` must include the readback. */
 async function timed(run: () => Promise<unknown>, warmup = 2, steps = 5): Promise<number> {
   for (let i = 0; i < warmup; i++) await run();
   const t0 = performance.now();
@@ -233,8 +234,8 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     const data = new Float32Array(b * 3 * 32 * 32);
     for (let i = 0; i < b; i++) data.set(probe.input, i * 3 * 32 * 32);
     const xb = Tensor.from(data, [b, 3, 32, 32]);
-    const oursMs = await timed(() => noGrad(() => model.forward(xb)).toArray());
-    const theirsMs = await timed(() => session.run(feed(data, b)));
+    const oursMs = await timed(() => noGrad(() => model.forward(xb)).toArray(), 3, 20);
+    const theirsMs = await timed(() => session.run(feed(data, b)), 3, 20);
     lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts ${oursMs.toFixed(2).padStart(8)} ms · ORT Web ${theirsMs.toFixed(2).padStart(8)} ms · ratio ${(oursMs / theirsMs).toFixed(2)}× (borch/ORT)`);
     // Where our forward spends itself: dispatches per forward, and GPU time by kind of
     // kernel (a pass per dispatch while profiling, so read the share, not the total).
@@ -252,6 +253,23 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     lines.push(`           borch.ts ${dispatches} dispatches/forward · GPU time (ms, total ${total.toFixed(1)}): `
       + hot.slice(0, 8).map(([k, ms]) => `${k} ${ms.toFixed(1)}`).join(" · ")
       + (d.profileDropped ? ` · ${d.profileDropped} dropped` : ""));
+  }
+
+  // The same network with every batch norm folded into the convolution before it —
+  // `nn.fuseConvBnEval`, torch's `fuse_conv_bn_eval`. Gated the same way first.
+  model.fuse();
+  const fusedGap = maxAbsDiff(await noGrad(() => model.forward(x1)).toArray(), probe.logits);
+  lines.push(`fused (batch norms folded into the convolutions): max |logits − torch| ${fusedGap.toExponential(2)}`);
+  if (fusedGap > GATE) lines.push("**the fused network does not reproduce torch's logits**");
+  for (const b of batches) {
+    const data = new Float32Array(b * 3 * 32 * 32);
+    for (let i = 0; i < b; i++) data.set(probe.input, i * 3 * 32 * 32);
+    const xb = Tensor.from(data, [b, 3, 32, 32]);
+    const ms = await timed(() => noGrad(() => model.forward(xb)).toArray(), 3, 20);
+    const d = dev();
+    const d0 = d.dispatches;
+    await noGrad(() => model.forward(xb)).toArray();
+    lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts fused ${ms.toFixed(2).padStart(8)} ms · ${d.dispatches - d0} dispatches/forward`);
   }
   return lines.join("\n");
 }

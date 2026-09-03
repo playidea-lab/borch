@@ -4909,3 +4909,46 @@ def _install_extra_reprs():
 
 
 _install_extra_reprs()
+
+
+# ================================================================ nn.utils.fusion
+
+def fuse_conv_bn_weights(conv_w, conv_b, bn_rm, bn_rv, bn_eps, bn_w, bn_b, transpose=False):
+    """`torch.nn.utils.fusion.fuse_conv_bn_weights`. An eval-mode batch norm is a
+    per-channel scale and shift, and both fold into the filters and the bias:
+
+        scale = γ / sqrt(running_var + eps);  W' = W · scale;  b' = (b − mean) · scale + β
+
+    A convolution without a bias gets one of zeros first; a norm without affine
+    weights folds with γ = 1 and β = 0. Returned as a pair, as torch does."""
+    # A layer's running statistics are kept as plain arrays here, its weights as
+    # tensors — the caller may hand in either.
+    def arr(t):
+        return t.numpy() if hasattr(t, "numpy") else _np.asarray(t)
+    w = arr(conv_w)
+    rm, rv = arr(bn_rm), arr(bn_rv)
+    b = _np.zeros_like(rm) if conv_b is None else arr(conv_b)
+    gamma = _np.ones_like(rm) if bn_w is None else arr(bn_w)
+    beta = _np.zeros_like(rm) if bn_b is None else arr(bn_b)
+    scale = (gamma / _np.sqrt(rv + bn_eps)).astype(w.dtype)
+    shape = [1, -1] + [1] * (w.ndim - 2) if transpose else [-1, 1] + [1] * (w.ndim - 2)
+    fused_w = (w * scale.reshape(shape)).astype(w.dtype)
+    fused_b = ((b - rm) * scale + beta).astype(b.dtype)
+    return Parameter(fused_w), Parameter(fused_b)
+
+
+def fuse_conv_bn_eval(conv, bn, transpose=False):
+    """`torch.nn.utils.fusion.fuse_conv_bn_eval`. **A new convolution with the batch
+    norm folded in**, for inference — it answers `bn(conv(x))` on its own. Both layers
+    must be in eval mode (torch's sentence on refusal), and the copy is not for
+    training: the running statistics have gone into the weights."""
+    if conv.training or bn.training:
+        raise AssertionError("Fusion only for eval!")
+    if bn.running_mean is None or bn.running_var is None:
+        raise AssertionError("bn.running_mean and bn.running_var must not be None")
+    import copy as _copy
+    fused = _copy.deepcopy(conv)
+    fused.weight, fused.bias = fuse_conv_bn_weights(
+        fused.weight, fused.bias, bn.running_mean, bn.running_var, bn.eps,
+        bn.weight, bn.bias, transpose)
+    return fused

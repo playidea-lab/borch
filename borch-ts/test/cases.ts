@@ -4969,6 +4969,36 @@ function addUnpool(out: Map<string, Case>): void {
   const bnW = () => Tensor.from([1.5, 0.5, 2.0], [3]);
   const bnB = () => Tensor.from([0.1, -0.1, 0.2], [3]);
 
+  // ── nn.utils.fusion ───────────────────────────────────────────────────
+  //
+  // A convolution and the eval-mode batch norm after it are one convolution. The running
+  // statistics are set by hand — a fresh norm's are 0 and 1, where the folding degenerates
+  // to `γ·W` and hides a wrong mean.
+  const fzX = () => Tensor.from(Array.from({ length: 150 }, (_, i) => i / 37 - 1), [2, 3, 5, 5]);
+  const fzW = () => Tensor.from(Array.from({ length: 108 }, (_, i) => (i % 7) / 7 - 0.5), [4, 3, 3, 3]);
+  const fzB = () => Tensor.from([0.1, -0.2, 0.3, 0.0], [4]);
+  const fzRm = () => Tensor.from([0.1, 0.2, -0.3, 0.4], [4]);
+  const fzRv = () => Tensor.from([1.0, 2.0, 0.5, 0.25], [4]);
+  const fzG = () => Tensor.from([1.5, 0.5, 2.0, -1.0], [4]);
+  const fzBeta = () => Tensor.from([0.1, -0.1, 0.2, 0.3], [4]);
+  const fzEval = (bias: boolean) => {
+    const conv = new nn.Conv2d(3, 4, 3, 1, 1, 1, 1, bias);
+    conv.loadStateDict(bias ? { weight: fzW(), bias: fzB() } : { weight: fzW() });
+    const norm = new nn.BatchNormND(4);
+    norm.loadStateDict({ weight: fzG(), bias: fzBeta(), running_mean: fzRm(), running_var: fzRv() }, false);
+    conv.eval();
+    norm.eval();
+    return nn.fuseConvBnEval(conv, norm).forward(fzX());
+  };
+  const fzWeights = (which: 0 | 1, bias: boolean, affine: boolean) =>
+    nn.fuseConvBnWeights(fzW(), bias ? fzB() : null, fzRm(), fzRv(), 1e-3,
+                         affine ? fzG() : null, affine ? fzBeta() : null)[which];
+  out.set("fname::fuse_conv_bn_eval", () => fzEval(true));
+  out.set("fname::fuse_conv_bn_eval::bias 없이", () => fzEval(false));
+  out.set("fname::fuse_conv_bn_weights::weight", () => fzWeights(0, true, true));
+  out.set("fname::fuse_conv_bn_weights::bias", () => fzWeights(1, true, true));
+  out.set("fname::fuse_conv_bn_weights::affine 없이", () => fzWeights(1, false, false));
+
   out.set("fname::batch_norm::평가",
     () => nn.batchNorm(bnX(), bnRm(), bnRv(), bnW(), bnB(), false));
   out.set("fname::batch_norm::eps=0.1",

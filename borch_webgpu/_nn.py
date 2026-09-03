@@ -958,8 +958,35 @@ class _Rnn:
             _js.Array.new(*[handle(p) for p in parts]), batch_first, padding_value))
 
 
+class _Fusion:
+    """`nn.utils.fusion`. The folding is done over the wall — `fuseConvBnWeights` and
+    `fuseConvBnEval` in borch.ts — and this side only hands the layers across and
+    wraps what comes back as the same class the convolution went in as."""
+
+    @staticmethod
+    def fuse_conv_bn_weights(conv_w, conv_b, bn_rm, bn_rv, bn_eps, bn_w=None, bn_b=None,
+                             transpose=False):
+        pair = _ts.nn.fuseConvBnWeights(
+            handle(conv_w), None if conv_b is None else handle(conv_b),
+            handle(bn_rm), handle(bn_rv), float(bn_eps),
+            None if bn_w is None else handle(bn_w), None if bn_b is None else handle(bn_b),
+            bool(transpose))
+        return wrap(pair[0]), wrap(pair[1])
+
+    @staticmethod
+    def fuse_conv_bn_eval(conv, bn, transpose=False):
+        if transpose:
+            raise NotImplementedError("fuse_conv_bn_eval: transpose=True is not here yet")
+        fused = _ts.nn.fuseConvBnEval(conv._m, bn._m)
+        out = type(conv).__new__(type(conv))
+        Module.__init__(out, fused)
+        object.__setattr__(out, "training", False)
+        return out
+
+
 class _Utils:
     rnn = _Rnn()
+    fusion = _Fusion()
 
 
 utils = _Utils()

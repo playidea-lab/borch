@@ -6402,3 +6402,75 @@ export class Transformer extends Module {
     return Tensor.from(row, [size, size]);
   }
 }
+
+// ================================================================ nn.utils.fusion
+
+/**
+ * `torch.nn.utils.fusion.fuse_conv_bn_weights`. A convolution followed by an eval-mode
+ * batch norm is one convolution — the norm is a per-channel scale and shift, and both
+ * fold into the filters and the bias:
+ *
+ *     scale = γ / sqrt(running_var + eps)
+ *     W'    = W · scale        (per output channel)
+ *     b'    = (b − running_mean) · scale + β
+ *
+ * A convolution without a bias gets one (of zeros, before folding); a norm without
+ * affine weights folds with γ = 1 and β = 0. `transpose` puts the channel on the
+ * second axis, where a transposed convolution keeps it.
+ *
+ * Returned as a pair, as torch does, and **without a gradient**: what comes back is a
+ * weight to run, not a node to train through.
+ */
+export function fuseConvBnWeights(
+  convW: Tensor, convB: Tensor | null, bnRm: Tensor, bnRv: Tensor, bnEps: number,
+  bnW: Tensor | null, bnB: Tensor | null, transpose = false,
+): [Tensor, Tensor] {
+  return noGrad(() => {
+    const C = bnRm.shape[0] ?? 1;
+    const b = convB ?? Tensor.zeros([C]);
+    const gamma = bnW ?? Tensor.ones([C]);
+    const beta = bnB ?? Tensor.zeros([C]);
+    const scale = gamma.mul(bnRv.binary("add", Tensor.full([], bnEps)).unary("rsqrt"));
+    const tail = new Array<number>(convW.shape.length - 2).fill(1);
+    const shape = transpose ? [1, C, ...tail] : [C, 1, ...tail];
+    const w = convW.mul(scale.reshape(shape));
+    const bias = b.sub(bnRm).mul(scale).add(beta);
+    return [w, bias];
+  });
+}
+
+/**
+ * `torch.nn.utils.fusion.fuse_conv_bn_eval`. **A new convolution, the batch norm
+ * folded in**, for inference: the layer it returns answers `bn(conv(x))` on its own,
+ * one kernel where there were two (measured on ResNet-18: 76 → 56 dispatches a
+ * forward, once each of its twenty norms is folded).
+ *
+ * Both layers must be in eval mode — torch refuses with the same sentence — because a
+ * training-mode norm uses the batch's statistics, which are not known until the batch
+ * is. The result is not for training either: the running statistics are gone into the
+ * weights, and its `training` flag is off.
+ *
+ * The convolution's own configuration (stride, padding, groups …) is copied by
+ * rebuilding the layer through its class, and the weights are then replaced.
+ */
+export function fuseConvBnEval(conv: ConvND, bn: BatchNormND): ConvND {
+  if (conv.training || bn.training) throw new Error("Fusion only for eval!");
+  if (!bn.runningMean || !bn.runningVar) {
+    throw new Error("bn.running_mean and bn.running_var must not be None");
+  }
+  const [w, b] = fuseConvBnWeights(conv.weight, conv.bias, bn.runningMean, bn.runningVar,
+                                   bn["eps"], bn.weight, bn.bias);
+  type Ctor = new (
+    inChannels: number, outChannels: number, kernelSize: number, stride: number,
+    padding: number, dilation: number, groups: number, bias: boolean,
+    paddingMode: PadMode | "zeros",
+  ) => ConvND;
+  const fused = new (conv.constructor as Ctor)(
+    conv["inChannels"], conv["outChannels"], conv["kernelSize"], conv["stride"],
+    conv["padding"], conv["dilation"], conv["groups"], true, conv["paddingMode"]);
+  // `readonly` is a promise to callers, and this is the one place a new layer's
+  // weights are set from outside its constructor.
+  Object.assign(fused, { weight: w, bias: b });
+  fused.training = false;
+  return fused;
+}

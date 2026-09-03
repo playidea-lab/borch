@@ -21,10 +21,10 @@ const CIFAR_TRAIN_IMAGES = 50000;
 
 /** ResNet's basic block. The 1×1 is there only when the shortcut has to change shape. */
 export class Block extends nn.Module {
-  private readonly conv1: nn.Conv2d;
-  private readonly bn1: nn.BatchNormND;
-  private readonly conv2: nn.Conv2d;
-  private readonly bn2: nn.BatchNormND;
+  private conv1: nn.Conv2d;
+  private bn1: nn.BatchNormND;
+  private conv2: nn.Conv2d;
+  private bn2: nn.BatchNormND;
   /**
    * **Pulled out into fields.** These used to be a plain `{ conv, bn }` object written
    * into `children()` alone — and `namedChildren()` sweeps only fields that are
@@ -34,8 +34,8 @@ export class Block extends nn.Module {
    * torch does not register a layer put in a Python dict either (which is why
    * `nn.ModuleDict` exists). The library was right and this file was wrong.
    */
-  private readonly downConv: nn.Conv2d | null;
-  private readonly downBn: nn.BatchNormND | null;
+  private downConv: nn.Conv2d | null;
+  private downBn: nn.BatchNormND | null;
 
   constructor(cin: number, cout: number, stride: number) {
     super();
@@ -53,6 +53,18 @@ export class Block extends nn.Module {
     this.downBn = shrinks ? new nn.BatchNormND(cout) : null;
   }
 
+  /** Fold each batch norm into the convolution before it — inference only. */
+  fuse(): void {
+    this.conv1 = nn.fuseConvBnEval(this.conv1, this.bn1);
+    this.bn1 = new nn.Identity() as unknown as nn.BatchNormND;
+    this.conv2 = nn.fuseConvBnEval(this.conv2, this.bn2);
+    this.bn2 = new nn.Identity() as unknown as nn.BatchNormND;
+    if (this.downConv && this.downBn) {
+      this.downConv = nn.fuseConvBnEval(this.downConv, this.downBn);
+      this.downBn = new nn.Identity() as unknown as nn.BatchNormND;
+    }
+  }
+
   override forward(x: Tensor): Tensor {
     let out = this.bn1.forward(this.conv1.forward(x)).unary("relu");
     out = this.bn2.forward(this.conv2.forward(out));
@@ -68,8 +80,8 @@ export class Block extends nn.Module {
  * little is left.
  */
 export class ResNet18 extends nn.Module {
-  private readonly stem: nn.Conv2d;
-  private readonly bn: nn.BatchNormND;
+  private stem: nn.Conv2d;
+  private bn: nn.BatchNormND;
   private readonly body: nn.Sequential;
   private readonly fc: nn.Linear;
 
@@ -89,6 +101,13 @@ export class ResNet18 extends nn.Module {
   // `children()` is not overridden — all four are fields, so the default sweep finds
   // them. Overriding it opens a place to disagree with `namedChildren()`, and that
   // disagreement is what kept `Block` above from learning for six layers.
+
+  /** `fuse_conv_bn_eval` over the whole network — call after `eval()`. */
+  fuse(): void {
+    this.stem = nn.fuseConvBnEval(this.stem, this.bn);
+    this.bn = new nn.Identity() as unknown as nn.BatchNormND;
+    for (const block of this.body.children()) (block as Block).fuse();
+  }
 
   override forward(x: Tensor): Tensor {
     let h = this.bn.forward(this.stem.forward(x)).unary("relu");

@@ -11,6 +11,8 @@ from ._base import (
     _like_torch, _np,
 )
 from ._nn import (
+    fuse_conv_bn_eval as _fuse_conv_bn_eval,
+    fuse_conv_bn_weights as _fuse_conv_bn_weights,
     nn,
 )
 
@@ -59,8 +61,15 @@ class _NnUtilsRnn(_Namespace):
     pad_sequence = staticmethod(pad_sequence)
 
 
+class _NnUtilsFusion(_Namespace):
+    """`nn.utils.fusion` — the two folding functions, and nothing else."""
+    fuse_conv_bn_weights = staticmethod(_fuse_conv_bn_weights)
+    fuse_conv_bn_eval = staticmethod(_fuse_conv_bn_eval)
+
+
 class _NnUtils(_Namespace):
     rnn = _NnUtilsRnn()
+    fusion = _NnUtilsFusion()
 
 
 nn.utils = _NnUtils()

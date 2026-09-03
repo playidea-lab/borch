@@ -8,7 +8,7 @@ underneath.
 It used to belong to the TF.js implementation. That one was **5,307 lines**,
 because TF.js supplies 104 primitive operations and nothing else, so the
 autograd tape, `nn.Module` and the optimisers all had to be rebuilt in Python.
-This one is **10,984 lines** — borch.ts already has all of it, so Python's job
+This one is **11,580 lines** — borch.ts already has all of it, so Python's job
 is swapping names across.
 
 `_data.py` is nearly identical in both. It came over unchanged, sits on numpy
@@ -265,6 +265,7 @@ def install(name="borch_webgpu", modules=None):
     for path, mod in (("nn", nn), ("optim", optim), ("linalg", linalg),
                       ("nn.functional", nn.functional),
                       ("nn.utils", nn.utils), ("nn.utils.rnn", nn.utils.rnn),
+                      ("nn.utils.fusion", nn.utils.fusion),
                       ("optim.lr_scheduler", optim.lr_scheduler)):
         full = f"{name}.{path}"
         modules[full] = mod

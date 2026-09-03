@@ -249,7 +249,7 @@ from ._data import (
     default_collate, random_split, utils,
 )
 from ._rnn import (
-    _NnUtils, _NnUtilsRnn, pad_sequence,
+    _NnUtils, _NnUtilsFusion, _NnUtilsRnn, pad_sequence,
 )
 from ._serialize import (
     load, save,
