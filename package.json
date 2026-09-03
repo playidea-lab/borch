@@ -111,6 +111,7 @@
   ],
   "devDependencies": {
     "@webgpu/types": "^0.1.71",
+    "esbuild": "^0.21.5",
     "typescript": "^5.9.0"
   }
 }
