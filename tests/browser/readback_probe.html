@@ -112,8 +112,39 @@
     }
     say(`copy → mapAsync with a 0 ms interval timer ticking: ${fmt(tm)}`);
 
+    // 7) **The learner's shape**: work, then quiet, then a readback. The page does nothing
+    // for 300 ms between the submit and the map — as a Python loop printing its loss
+    // does — and asks how long the map then waits, bare, and with a 0 ms timer alive.
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const idle = [];
+    for (let i = 0; i < 6; i++) {
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(src, 0, read, 0, 16);
+      device.queue.submit([enc.finish()]);
+      await sleep(300);
+      const t0 = performance.now();
+      await read.mapAsync(GPUMapMode.READ);
+      idle.push(performance.now() - t0);
+      read.unmap();
+    }
+    say(`submit, idle 300 ms, then mapAsync: ${fmt(idle)}`);
+    const idleT = [];
+    for (let i = 0; i < 6; i++) {
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(src, 0, read, 0, 16);
+      device.queue.submit([enc.finish()]);
+      await sleep(300);
+      const keep = setInterval(() => {}, 4);
+      const t0 = performance.now();
+      await read.mapAsync(GPUMapMode.READ);
+      idleT.push(performance.now() - t0);
+      clearInterval(keep);
+      read.unmap();
+    }
+    say(`the same with a 4 ms interval timer alive during the map: ${fmt(idleT)}`);
+
     window.__readback = { text: lines.join("\n"), adapter: `${info.vendor ?? "?"} / ${info.architecture ?? "?"}`,
-      medians: { raf: med(frames.slice(1)), map: med(wm), workDone: med(wd), dispatchMap: med(dm), rafMap: med(am), timerMap: med(tm) } };
+      medians: { raf: med(frames.slice(1)), map: med(wm), workDone: med(wd), dispatchMap: med(dm), rafMap: med(am), timerMap: med(tm), idleMap: med(idle), idleTimerMap: med(idleT), idleMax: Math.max(...idle), idleTimerMax: Math.max(...idleT) } };
   } catch (err) {
     window.__readback = { error: String(err && err.stack || err) };
     say(`the probe blew up: ${err}`);

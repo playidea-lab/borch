@@ -66,12 +66,12 @@ def main(argv):
     finally:
         shutdown()
     print()
-    print(f"{'configuration':32} {'rAF':>7} {'map':>7} {'workDone':>9} {'disp→map':>9} {'rAF+map':>8} {'timer+map':>10}")
+    print(f"{'configuration':32} {'rAF':>7} {'map':>7} {'workDone':>9} {'disp→map':>9} {'rAF+map':>8} {'timer+map':>10} {'idle→map':>9} {'idle,max':>9} {'idle+timer':>11} {'its max':>8}")
     for label, m in rows:
         if m is None:
             print(f"{label:32} (blew up)")
             continue
-        print(f"{label:32} {m['raf']:7.1f} {m['map']:7.1f} {m['workDone']:9.1f} {m['dispatchMap']:9.1f} {m['rafMap']:8.1f} {m['timerMap']:10.1f}")
+        print(f"{label:32} {m['raf']:7.1f} {m['map']:7.1f} {m['workDone']:9.1f} {m['dispatchMap']:9.1f} {m['rafMap']:8.1f} {m['timerMap']:10.1f} {m['idleMap']:9.1f} {m['idleMax']:9.1f} {m['idleTimerMap']:11.1f} {m['idleTimerMax']:8.1f}")
     return 0
 
 
