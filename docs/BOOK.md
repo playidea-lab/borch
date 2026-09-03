@@ -1511,14 +1511,17 @@ inference, against **ONNX Runtime Web 1.29.0** (WebGPU execution provider, bytes
 the same way). The weights are one ResNet-18 exported from torch by
 `tests/browser/export_resnet18.py` — safetensors for borch.ts, ONNX for ORT — and the
 table is printed only after both runtimes reproduce torch's logits on a seeded input to
-1e-3 (measured: borch.ts 1.0e-7, ORT Web 6.7e-8). Forward pass, mean of five after two
-warm-ups, readback included:
+1e-3 (measured: Apple borch.ts 1.0e-7 / ORT 6.7e-8, NVIDIA 8.2e-8 / 4.5e-8). Forward pass,
+mean of five after two warm-ups, readback included:
 
-| ResNet-18 (CIFAR) forward, `apple / metal-3` | batch 1 | batch 16 |
-|---|---|---|
-| borch.ts | 9.9 ms | 18.8 ms |
-| ONNX Runtime Web 1.29.0 (WebGPU) | **3.2 ms** | **5.4 ms** |
-| ORT is faster by | 3.0× | 3.5× |
+| ResNet-18 (CIFAR) forward | adapter | batch 1 | batch 16 |
+|---|---|---|---|
+| borch.ts | `apple / metal-3` | 9.9 ms | 18.8 ms |
+| ONNX Runtime Web 1.29.0 (WebGPU) | `apple / metal-3` | **3.2 ms** | **5.4 ms** |
+| ORT is faster by | | 3.0× | 3.5× |
+| borch.ts | `nvidia / lovelace` (RTX 4090, Linux) | 6.7 ms | 14.5 ms |
+| ONNX Runtime Web 1.29.0 (WebGPU) | `nvidia / lovelace` | **3.4 ms** | **3.2 ms** |
+| ORT is faster by | | 2.0× | 4.6× |
 
 That is the honest boundary: for inference alone, use ORT Web. What this library has
 that it does not is the training step above and torch's own shape of code.

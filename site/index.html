@@ -479,15 +479,18 @@ for step in range(201):
     <h3 style="margin-top:2rem">The half this library loses — inference, same page</h3>
     <div class="scroll-x">
     <table class="data">
-      <thead><tr><th>ResNet-18 (CIFAR) forward, <code>apple / metal-3</code></th><th>batch 1</th><th>batch 16</th></tr></thead>
+      <thead><tr><th>ResNet-18 (CIFAR) forward</th><th>adapter</th><th>batch 1</th><th>batch 16</th></tr></thead>
       <tbody>
-        <tr><td>borch.ts</td><td class="num">9.9 ms</td><td class="num">18.8 ms</td></tr>
-        <tr><td>ONNX Runtime Web 1.29.0</td><td class="num"><strong>3.2 ms</strong></td><td class="num"><strong>5.4 ms</strong></td></tr>
-        <tr><td>ORT is faster by</td><td class="num">3.0×</td><td class="num">3.5×</td></tr>
+        <tr><td>borch.ts</td><td><code>apple / metal-3</code></td><td class="num">9.9 ms</td><td class="num">18.8 ms</td></tr>
+        <tr><td>ONNX Runtime Web 1.29.0</td><td><code>apple / metal-3</code></td><td class="num"><strong>3.2 ms</strong></td><td class="num"><strong>5.4 ms</strong></td></tr>
+        <tr><td>ORT is faster by</td><td></td><td class="num">3.0×</td><td class="num">3.5×</td></tr>
+        <tr><td>borch.ts</td><td><code>nvidia / lovelace</code> (RTX 4090, Linux)</td><td class="num">6.7 ms</td><td class="num">14.5 ms</td></tr>
+        <tr><td>ONNX Runtime Web 1.29.0</td><td><code>nvidia / lovelace</code></td><td class="num"><strong>3.4 ms</strong></td><td class="num"><strong>3.2 ms</strong></td></tr>
+        <tr><td>ORT is faster by</td><td></td><td class="num">2.0×</td><td class="num">4.6×</td></tr>
       </tbody>
     </table>
     </div>
-    <p class="small muted">Same weights in both (one ResNet-18 exported from torch as safetensors and as ONNX by <code>tests/browser/export_resnet18.py</code>), WebGPU execution provider, and the table is printed only after both runtimes reproduce torch's logits to 1e-3 — measured 1.0e-7 and 6.7e-8. Forward pass, mean of five after two warm-ups, readback included. For inference alone, use ORT Web; what this library has that it does not is the training step above and torch's own shape of code.</p>
+    <p class="small muted">Same weights in both (one ResNet-18 exported from torch as safetensors and as ONNX by <code>tests/browser/export_resnet18.py</code>), WebGPU execution provider, and the table is printed only after both runtimes reproduce torch's logits to 1e-3 — measured Apple 1.0e-7 / 6.7e-8, NVIDIA 8.2e-8 / 4.5e-8. Forward pass, mean of five after two warm-ups, readback included. For inference alone, use ORT Web; what this library has that it does not is the training step above and torch's own shape of code.</p>
     <p class="small muted">
       <strong>One machine, and it is not written down here.</strong> The three columns can be compared with each
       other because they were timed against each other on the same box — they cannot be compared with anyone
