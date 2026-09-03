@@ -1511,17 +1511,29 @@ inference, against **ONNX Runtime Web 1.29.0** (WebGPU execution provider, bytes
 the same way). The weights are one ResNet-18 exported from torch by
 `tests/browser/export_resnet18.py` — safetensors for borch.ts, ONNX for ORT — and the
 table is printed only after both runtimes reproduce torch's logits on a seeded input to
-1e-3 (measured: Apple borch.ts 1.0e-7 / ORT 6.7e-8, NVIDIA 8.2e-8 / 4.5e-8). Forward pass,
-mean of five after two warm-ups, readback included:
+1e-3 (measured: Apple borch.ts 7.5e-8 / ORT 6.7e-8, NVIDIA 7.5e-8 / 4.5e-8; the fused network
+3.0e-8 and 1.0e-7). Forward pass, mean of twenty after three warm-ups, readback included:
 
 | ResNet-18 (CIFAR) forward | adapter | batch 1 | batch 16 |
 |---|---|---|---|
-| borch.ts | `apple / metal-3` | 9.9 ms | 18.8 ms |
+| borch.ts, `eval()` | `apple / metal-3` | 8.2 ms | 12.5 ms |
+| borch.ts, `eval()` + `fuse_conv_bn_eval` | `apple / metal-3` | 7.6 ms | 11.1 ms |
 | ONNX Runtime Web 1.29.0 (WebGPU) | `apple / metal-3` | **3.2 ms** | **5.4 ms** |
-| ORT is faster by | | 3.0× | 3.5× |
-| borch.ts | `nvidia / lovelace` (RTX 4090, Linux) | 6.7 ms | 14.5 ms |
-| ONNX Runtime Web 1.29.0 (WebGPU) | `nvidia / lovelace` | **3.4 ms** | **3.2 ms** |
-| ORT is faster by | | 2.0× | 4.6× |
+| ORT is faster than the fused network by | | 2.4× | 2.1× |
+| borch.ts, `eval()` | `nvidia / lovelace` (RTX 4090, Linux) | 5.7 ms | 10.0 ms |
+| borch.ts, `eval()` + `fuse_conv_bn_eval` | `nvidia / lovelace` | 5.0 ms | 7.6 ms |
+| ONNX Runtime Web 1.29.0 (WebGPU) | `nvidia / lovelace` | **3.6 ms** | **3.5 ms** |
+| ORT is faster than the fused network by | | 1.4× | 2.2× |
+
+Two of ORT's advantages are now ours too. The eval-mode batch norm was six dispatches
+a layer (assembled from `sub`, `add`, `sqrt`, `div`, `mul`, `add`) and is one; and
+`nn.utils.fusion.fuse_conv_bn_eval` — torch's own name — folds each norm into the
+convolution before it, so the forward is 56 dispatches where it was 176. Before those
+two, the table read 9.9 / 18.8 ms on Apple and 6.7 / 14.5 ms on the 4090. What
+remains is the convolution kernel itself: at batch 16 the GPU spends 4.3 of the
+4090's 7.6 ms inside `conv2d`, and the largest of those — 512 → 512 channels on a
+4 × 4 plane — runs at about 1 % of the card's peak. That is the next lever, and it is
+kernel work rather than a fold.
 
 That is the honest boundary: for inference alone, use ORT Web. What this library has
 that it does not is the training step above and torch's own shape of code.

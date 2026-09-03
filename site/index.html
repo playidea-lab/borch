@@ -481,16 +481,18 @@ for step in range(201):
     <table class="data">
       <thead><tr><th>ResNet-18 (CIFAR) forward</th><th>adapter</th><th>batch 1</th><th>batch 16</th></tr></thead>
       <tbody>
-        <tr><td>borch.ts</td><td><code>apple / metal-3</code></td><td class="num">9.9 ms</td><td class="num">18.8 ms</td></tr>
+        <tr><td>borch.ts, <code>eval()</code></td><td><code>apple / metal-3</code></td><td class="num">8.2 ms</td><td class="num">12.5 ms</td></tr>
+        <tr><td>borch.ts, <code>eval()</code> + <code>fuse_conv_bn_eval</code></td><td><code>apple / metal-3</code></td><td class="num">7.6 ms</td><td class="num">11.1 ms</td></tr>
         <tr><td>ONNX Runtime Web 1.29.0</td><td><code>apple / metal-3</code></td><td class="num"><strong>3.2 ms</strong></td><td class="num"><strong>5.4 ms</strong></td></tr>
-        <tr><td>ORT is faster by</td><td></td><td class="num">3.0×</td><td class="num">3.5×</td></tr>
-        <tr><td>borch.ts</td><td><code>nvidia / lovelace</code> (RTX 4090, Linux)</td><td class="num">6.7 ms</td><td class="num">14.5 ms</td></tr>
-        <tr><td>ONNX Runtime Web 1.29.0</td><td><code>nvidia / lovelace</code></td><td class="num"><strong>3.4 ms</strong></td><td class="num"><strong>3.2 ms</strong></td></tr>
-        <tr><td>ORT is faster by</td><td></td><td class="num">2.0×</td><td class="num">4.6×</td></tr>
+        <tr><td>ORT is faster than the fused network by</td><td></td><td class="num">2.4×</td><td class="num">2.1×</td></tr>
+        <tr><td>borch.ts, <code>eval()</code></td><td><code>nvidia / lovelace</code> (RTX 4090, Linux)</td><td class="num">5.7 ms</td><td class="num">10.0 ms</td></tr>
+        <tr><td>borch.ts, <code>eval()</code> + <code>fuse_conv_bn_eval</code></td><td><code>nvidia / lovelace</code></td><td class="num">5.0 ms</td><td class="num">7.6 ms</td></tr>
+        <tr><td>ONNX Runtime Web 1.29.0</td><td><code>nvidia / lovelace</code></td><td class="num"><strong>3.6 ms</strong></td><td class="num"><strong>3.5 ms</strong></td></tr>
+        <tr><td>ORT is faster than the fused network by</td><td></td><td class="num">1.4×</td><td class="num">2.2×</td></tr>
       </tbody>
     </table>
     </div>
-    <p class="small muted">Same weights in both (one ResNet-18 exported from torch as safetensors and as ONNX by <code>tests/browser/export_resnet18.py</code>), WebGPU execution provider, and the table is printed only after both runtimes reproduce torch's logits to 1e-3 — measured Apple 1.0e-7 / 6.7e-8, NVIDIA 8.2e-8 / 4.5e-8. Forward pass, mean of five after two warm-ups, readback included. For inference alone, use ORT Web; what this library has that it does not is the training step above and torch's own shape of code.</p>
+    <p class="small muted">Same weights in both (one ResNet-18 exported from torch as safetensors and as ONNX by <code>tests/browser/export_resnet18.py</code>), WebGPU execution provider, and the table is printed only after both runtimes reproduce torch's logits to 1e-3 — measured Apple 7.5e-8 / 6.7e-8, NVIDIA 7.5e-8 / 4.5e-8. Forward pass, mean of twenty after three warm-ups, readback included. The eval-mode batch norm is one kernel now, and <code>nn.utils.fusion.fuse_conv_bn_eval</code> (torch's own name) folds each norm into the convolution before it — 176 → 56 dispatches a forward; before those two the table read Apple 9.9 / 18.8 ms and 4090 6.7 / 14.5 ms. What remains is the convolution kernel itself: at batch 16 the 4090 spends 4.3 of its 7.6 ms inside conv2d, and the largest of those (512 → 512 channels on a 4 × 4 plane) runs at about 1 % of the card's peak. The next lever is kernel work, not a fold. For inference alone, use ORT Web; what this library has that it does not is the training step above and torch's own shape of code.</p>
     <p class="small muted">
       <strong>One machine, and it is not written down here.</strong> The three columns can be compared with each
       other because they were timed against each other on the same box — they cannot be compared with anyone

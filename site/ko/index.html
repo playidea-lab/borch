@@ -472,16 +472,18 @@ for step in range(201):
     <table class="data">
       <thead><tr><th>ResNet-18 (CIFAR) forward</th><th>어댑터</th><th>batch 1</th><th>batch 16</th></tr></thead>
       <tbody>
-        <tr><td>borch.ts</td><td><code>apple / metal-3</code></td><td class="num">9.9 ms</td><td class="num">18.8 ms</td></tr>
+        <tr><td>borch.ts, <code>eval()</code></td><td><code>apple / metal-3</code></td><td class="num">8.2 ms</td><td class="num">12.5 ms</td></tr>
+        <tr><td>borch.ts, <code>eval()</code> + <code>fuse_conv_bn_eval</code></td><td><code>apple / metal-3</code></td><td class="num">7.6 ms</td><td class="num">11.1 ms</td></tr>
         <tr><td>ONNX Runtime Web 1.29.0</td><td><code>apple / metal-3</code></td><td class="num"><strong>3.2 ms</strong></td><td class="num"><strong>5.4 ms</strong></td></tr>
-        <tr><td>ORT 가 빠른 배수</td><td></td><td class="num">3.0×</td><td class="num">3.5×</td></tr>
-        <tr><td>borch.ts</td><td><code>nvidia / lovelace</code> (RTX 4090, Linux)</td><td class="num">6.7 ms</td><td class="num">14.5 ms</td></tr>
-        <tr><td>ONNX Runtime Web 1.29.0</td><td><code>nvidia / lovelace</code></td><td class="num"><strong>3.4 ms</strong></td><td class="num"><strong>3.2 ms</strong></td></tr>
-        <tr><td>ORT 가 빠른 배수</td><td></td><td class="num">2.0×</td><td class="num">4.6×</td></tr>
+        <tr><td>융합한 쪽 대비 ORT 가 빠른 배수</td><td></td><td class="num">2.4×</td><td class="num">2.1×</td></tr>
+        <tr><td>borch.ts, <code>eval()</code></td><td><code>nvidia / lovelace</code> (RTX 4090, Linux)</td><td class="num">5.7 ms</td><td class="num">10.0 ms</td></tr>
+        <tr><td>borch.ts, <code>eval()</code> + <code>fuse_conv_bn_eval</code></td><td><code>nvidia / lovelace</code></td><td class="num">5.0 ms</td><td class="num">7.6 ms</td></tr>
+        <tr><td>ONNX Runtime Web 1.29.0</td><td><code>nvidia / lovelace</code></td><td class="num"><strong>3.6 ms</strong></td><td class="num"><strong>3.5 ms</strong></td></tr>
+        <tr><td>융합한 쪽 대비 ORT 가 빠른 배수</td><td></td><td class="num">1.4×</td><td class="num">2.2×</td></tr>
       </tbody>
     </table>
     </div>
-    <p class="small muted">가중치는 둘 다 같다(ResNet-18 하나를 torch 에서 <code>tests/browser/export_resnet18.py</code> 로 safetensors 와 ONNX 로 내보냄). WebGPU 실행기. 두 런타임이 torch 로짓을 1e-3 안에서 재현한 뒤에만 표를 찍는다 — 실측 Apple 1.0e-7 / 6.7e-8, NVIDIA 8.2e-8 / 4.5e-8. forward, 워밍 2회 뒤 5회 평균, readback 포함. 추론만 필요하면 ORT Web 을 쓰라. 이 라이브러리에 있고 저쪽에 없는 것은 위의 학습 step 과 torch 모양의 코드다.</p>
+    <p class="small muted">가중치는 둘 다 같다(ResNet-18 하나를 torch 에서 <code>tests/browser/export_resnet18.py</code> 로 safetensors 와 ONNX 로 내보냄). WebGPU 실행기. 두 런타임이 torch 로짓을 1e-3 안에서 재현한 뒤에만 표를 찍는다 — 실측 Apple 7.5e-8 / 6.7e-8, NVIDIA 7.5e-8 / 4.5e-8. forward, 워밍 3회 뒤 20회 평균, readback 포함. eval 모드 batch norm 을 한 커널로 만들고 <code>nn.utils.fusion.fuse_conv_bn_eval</code>(torch 와 같은 이름)로 norm 을 앞 conv 에 접으면 forward 가 176 → 56 디스패치가 된다 — 그 전의 표는 Apple 9.9 / 18.8 ms, 4090 6.7 / 14.5 ms 였다. 남은 격차는 conv 커널 자체다: 4090 배치 16 의 7.6 ms 중 4.3 ms 가 conv2d 안이고, 가장 큰 것(4×4 평면의 512→512 채널)은 카드 피크의 약 1 % 로 돈다. 다음 레버는 접기가 아니라 커널 작업이다. 추론만 필요하면 ORT Web 을 쓰라. 이 라이브러리에 있고 저쪽에 없는 것은 위의 학습 step 과 torch 모양의 코드다.</p>
     <p class="small muted">
       <strong>기계 하나이고, 그 기계가 여기 안 적혀 있다.</strong> 세 열을 서로 비교할 수 있는 것은 같은 상자에서
       서로 맞대어 쟀기 때문이고 — 남의 수와는 비교할 수 없다. 어느 상자였는지 이 페이지가 말하지 않기 때문이다.

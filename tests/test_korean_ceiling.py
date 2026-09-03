@@ -422,7 +422,9 @@ CEILINGS = {
     # 산다)` and `linalg.matrix_rank(이웃은 산다)`, keys against `tests/cases.py` — and
     # the `파이썬` marker heading the new `modfn::` ledger row in `run.py`, which is a
     # key too (`test_alias_rows.py` reads the marker off the head of the string).
-    # 4978 → 4994. Twelve, all in `cases.ts`: the grouped-convolution mirrors — the
+    # 4990 → 4994. Four, in `cases.ts`: the two fusion case names (`bias 없이`, `affine
+    # 없이`) mirror `tests/cases.py`.
+    # 4978 → 4990. Twelve, all in `cases.ts`: the grouped-convolution mirrors — the
     # refusal case's name (`groups 가 채널을 안 나눔`, `거절`) and its answer (`받았다`) are
     # keys against `tests/cases.py` and the Python side's exception-name convention.
     "borch-ts/test": 4994,
