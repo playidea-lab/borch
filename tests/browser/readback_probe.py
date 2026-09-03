@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 
-from first_run import FLAGS, ROOT, serve
+from first_run import FLAGS, ROOT, refuse_if_screen_off, serve
 
 PAGE = "/tests/browser/readback_probe.html"
 GIVE_UP_MS = 120_000
@@ -99,6 +99,9 @@ def fresh_page(argv):
 
 def main(argv):
     from playwright.sync_api import sync_playwright
+    # The probe exists to show what a blanked monitor does, so it only says so.
+    if refuse_if_screen_off("readback probe") and "--even-off" not in argv:
+        return 1
     if "--fresh" in argv:
         return fresh_page(argv)
     if "--python" in argv:

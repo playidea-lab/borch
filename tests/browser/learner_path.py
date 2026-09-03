@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from first_run import FLAGS, GIVE_UP_S, ROOT, refuse_if_software, serve
+from first_run import FLAGS, GIVE_UP_S, ROOT, refuse_if_screen_off, refuse_if_software, serve
 
 READY_WORDS = ("Python is ready", "Python 준비됨")
 LOSS_WORDS = ("step ", "step")
@@ -166,6 +166,8 @@ def main():
     from playwright.sync_api import sync_playwright
     headed = "--headed" in sys.argv
     url = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--url=")), None)
+    if refuse_if_screen_off("the learner's first minutes"):
+        return 1
     port, shutdown = serve(ROOT)
     target = url or f"http://127.0.0.1:{port}/site/index.html"
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None

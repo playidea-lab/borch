@@ -49,7 +49,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 
-from launch import FLAGS, refuse_if_software                     # noqa: E402
+from launch import FLAGS, refuse_if_screen_off, refuse_if_software  # noqa: E402
 from run import serve                                            # noqa: E402
 
 # A cold page on a slow adapter can take this long before a person gives up; past it the
@@ -178,6 +178,8 @@ def main():
 
     headed = "--headed" in sys.argv
     url = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--url=")), None)
+    if refuse_if_screen_off("time to first run"):
+        return 1
     port, shutdown = serve(ROOT)
     target = url or f"http://127.0.0.1:{port}/site/index.html"
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None

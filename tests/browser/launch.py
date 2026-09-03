@@ -136,6 +136,40 @@ def is_software(adapter):
     return bool(adapter and _SOFTWARE.search(str(adapter)))
 
 
+def screen_is_off():
+    """On Linux with an X display: is the monitor blanked (DPMS)? `None` when unknown.
+
+    **A blanked monitor turns every GPU wait into a one-second wait.** Measured on the
+    4090 (Xorg + GNOME, monitor connected, DPMS "Monitor is Off" after GNOME's five idle
+    minutes): the adapter request took 3.0 s, every readback after a DOM write 1.0 s, a
+    training loop that prints its loss seven seconds; with the monitor woken, 52 ms,
+    46 ms and 0.56 s. A day of "NVIDIA one-second quanta" was this. The number is not
+    the GPU's and is not measured.
+    """
+    import os
+    import shutil
+    import subprocess
+    if not os.environ.get("DISPLAY") or not shutil.which("xset"):
+        return None
+    try:
+        out = subprocess.run(["xset", "q"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if "Monitor is" not in out:
+        return None
+    return "Monitor is Off" in out or "Monitor is in Standby" in out or "Monitor is in Suspend" in out
+
+
+def refuse_if_screen_off(what):
+    """**A time taken in front of a blanked monitor is void.** Returns True when void."""
+    if screen_is_off():
+        print(f"{what}: the monitor is off (DPMS) — every GPU wait on this machine then takes a "
+              f"second, and the number would be the monitor's, not the GPU's. Wake it "
+              f"(`xset dpms force on`) and measure again.", file=sys.stderr)
+        return True
+    return False
+
+
 def refuse_if_software(adapter, what):
     """**Measuring time and resources is void on a CPU.** Returns True when void.
 
