@@ -64,6 +64,32 @@ print(f"learned  y = {w:.2f}x + {b:.2f}")
     await runner.runPython(code, { onLog: (line) => { if (line.startsWith("lap")) laps2.push(line); } });
     say(`the same again: ${t(performance.now() - T4)} outside`);
     for (const l of laps2) say("  " + l);
+    // **The landing page writes a line to the DOM at every print.** The runs above kept
+    // the lines in an array. Three more runs of the same code: one writing each lap to
+    // the page as it arrives (and scrolling, as the landing does); one doing that with a
+    // requestAnimationFrame loop alive; one with the writes but a 4 ms timer alive.
+    const pre = document.createElement("pre");
+    document.body.append(pre);
+    const domRun = async (label, keepAlive) => {
+      pre.textContent = "";
+      let stop = null;
+      if (keepAlive === "raf") { let on = true; const spin = () => { if (on) requestAnimationFrame(spin); }; requestAnimationFrame(spin); stop = () => { on = false; }; }
+      if (keepAlive === "timer") { const id = setInterval(() => {}, 4); stop = () => clearInterval(id); }
+      const got = [];
+      const T = performance.now();
+      await runner.runPython(code, { onLog: (line) => {
+        const div = document.createElement("div"); div.textContent = line; pre.append(div); pre.scrollTop = pre.scrollHeight;
+        if (line.startsWith("lap")) got.push(line);
+      } });
+      const ms = performance.now() - T;
+      if (stop) stop();
+      say(`${label}: ${t(ms)} outside`);
+      for (const l of got) if (/step|parameters/.test(l)) say("  " + l);
+    };
+    await domRun("writing every line to the DOM (the landing's way)", null);
+    await domRun("the same with a requestAnimationFrame loop alive", "raf");
+    await domRun("the same with a 4 ms timer alive", "timer");
+    await domRun("writing to the DOM again, nothing alive", null);
     window.__fresh = { text: lines.join("\n"), adapter: borch.Device.adapterInfo };
   } catch (err) {
     window.__fresh = { error: String(err && err.stack || err) };
