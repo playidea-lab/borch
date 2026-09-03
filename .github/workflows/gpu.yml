@@ -88,19 +88,20 @@
 # ## What this file does **not** run — counted, because it used to say it did
 #
 # The line above read "the commands below are all of it". They are all of the *golden
-# comparison*. There are **seventeen entry points that need a browser** and this file
+# comparison*. There are **eighteen entry points that need a browser** and this file
 # names four:
 #
 #     here          run.py --lib borch · run.py --lib borch_webgpu ·
 #                   borch-ts/test/run.py · vendor.py check
 #
 #     not here      parity:ts · data:ts · device:ts · serialize:ts · example:ts ·
-#                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding
-#                                                 (ten more correctness checks)
+#                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding ·
+#                   learner:site
+#                                                 (eleven more correctness checks)
 #                   cost:ts · bench:ts · compare:ts  (measurements, not checks)
 #
-# **Nothing runs any of the seventeen automatically** — the reason above is a good one
-# and it applies to all of them equally, so the thirteen below are in exactly the position
+# **Nothing runs any of the eighteen automatically** — the reason above is a good one
+# and it applies to all of them equally, so the fourteen below are in exactly the position
 # the four above are: run when a person runs them.
 #
 # The cost of that is not hypothetical. Three commits shipped in one session with the

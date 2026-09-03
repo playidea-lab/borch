@@ -277,10 +277,23 @@ const PACKAGES = {
 };
 
 let pyodide = null;
+/** The load in flight, so a click during the warm-up joins it rather than starting a
+ *  second Pyodide (two loads would lay two `/work` trees and the later one would win). */
+let loadingPython = null;
 
-/** Brings up Pyodide, numpy and borch_webgpu once. */
-export async function loadPython(say = () => {}) {
-  if (pyodide) return pyodide;
+/** Brings up Pyodide, numpy and borch_webgpu once — and only once at a time. */
+export function loadPython(say = () => {}) {
+  if (pyodide) return Promise.resolve(pyodide);
+  if (!loadingPython) {
+    loadingPython = loadPythonFresh(say).catch((err) => {
+      loadingPython = null;
+      throw err;
+    });
+  }
+  return loadingPython;
+}
+
+async function loadPythonFresh(say) {
 
   // **The GPU is required by `borch_webgpu` and not by Python mode**, and this gate
   // used to be in front of both. Without WebGPU the whole thing stopped — including

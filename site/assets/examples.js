@@ -832,6 +832,46 @@ function localize(list) {
 export const EXAMPLES = { js: localize(JS_EXAMPLES), py: localize(PY_EXAMPLES) };
 
 /** What is pinned in the hero — short, with few places to fail. */
+/**
+ * The first screen's code — **Python, and a loss that goes down.** The visitor this page
+ * is written for has followed a torch tutorial once; a scalar's gradient in TypeScript
+ * told that visitor "not your language" on line one (the previous hero). Twenty steps
+ * of SGD on `y = 3x + 1` is the picture they already know, and the only line that is
+ * not torch is the import.
+ */
+export const HERO_PY = pick({
+  en: `import borch_webgpu as torch      # the only line that is not torch
+
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+ys = 3 * xs + 1                       # the rule to learn
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+
+for step in range(60):
+    loss = ((model(xs) - ys) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+    if step % 15 == 0 or step == 59:
+        print(f"step {step:2d}  loss {loss.item():.3f}")
+
+w, b = [p.item() for p in model.parameters()]
+print(f"learned  y = {w:.2f}x + {b:.2f}")`,
+  ko: `import borch_webgpu as torch      # torch 가 아닌 줄은 이것 하나
+
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+ys = 3 * xs + 1                       # 배워야 할 규칙
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+
+for step in range(60):
+    loss = ((model(xs) - ys) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+    if step % 15 == 0 or step == 59:
+        print(f"step {step:2d}  loss {loss.item():.3f}")
+
+w, b = [p.item() for p in model.parameters()]
+print(f"배운 것  y = {w:.2f}x + {b:.2f}")`,
+});
+
 export const HERO_CODE = pick({
   en: `await init();                       // acquire the WebGPU adapter
 

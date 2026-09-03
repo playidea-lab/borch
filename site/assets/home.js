@@ -5,9 +5,9 @@
  * written an advertisement. So the first screen offers one run, right there.
  */
 
-import { HERO_CODE } from "./examples.js";
+import { HERO_PY } from "./examples.js";
 import { t } from "./i18n.js";
-import { describeError, highlight, loadBorch, probeDevice, runCode } from "./runner.js";
+import { describeError, highlight, loadBorch, loadPython, probeDevice, runPython } from "./runner.js";
 
 const codeEl = document.getElementById("hero-code");
 const outEl = document.getElementById("hero-out");
@@ -15,7 +15,19 @@ const runBtn = document.getElementById("hero-run");
 const badge = document.getElementById("device-badge");
 const badgeText = document.getElementById("device-text");
 
-codeEl.innerHTML = highlight(HERO_CODE);
+const readyEl = document.getElementById("hero-ready");
+codeEl.innerHTML = highlight(HERO_PY, "py");
+runBtn.textContent = t("hero.run");
+
+/** Warm Python while the visitor reads. `loadPython` joins a click to the same load. */
+let warmed = false;
+function warmPython() {
+  readyEl.textContent = t("hero.warming");
+  loadPython((line) => { readyEl.textContent = line; }).then(() => {
+    warmed = true;
+    readyEl.textContent = t("hero.ready");
+  }).catch((err) => { readyEl.textContent = describeError(err); });
+}
 
 function say(text, kind = "") {
   const line = document.createElement("div");
@@ -65,7 +77,7 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
       // shaders and the readback only. `init()` is idempotent, so the click's own
       // `init()` joins this one rather than making a second device.
       if (!p.software) {
-        const warm = () => loadBorch().then((b) => b.init()).catch(() => {});
+        const warm = () => loadBorch().then((b) => b.init()).then(warmPython).catch(() => {});
         if ("requestIdleCallback" in window) requestIdleCallback(warm); else setTimeout(warm, 0);
       }
       // **One screen, one sentence.** Saying both — "that adapter is a CPU" and "Run
@@ -75,6 +87,8 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
       if (p.software) {
         say(t("device.software"), "err");
         sayLink(t("device.setupSay"), t("device.setupHref"));
+        // The training still runs on it — slowly, and the note above says whose speed.
+        warmPython();
       } else {
         say(t("device.ready"), "note");
       }
@@ -85,7 +99,10 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
       if (p.why === "no-adapter" && ON_LINUX) say(t("device.linuxFlags"), "note");
       say(t("device.noFallback"), "note");
       sayLink(t("device.setupSay"), t("device.setupHref"));
-      runBtn.disabled = true;
+      // **The training still runs** — the numpy core on wasm. A learner without WebGPU
+      // sees the loss go down, and the note says whose speed it is.
+      say(t("hero.cpu"), "note");
+      warmPython();
     }
   } catch (err) {
     badge.className = "badge off";
@@ -100,9 +117,11 @@ runBtn.addEventListener("click", async () => {
   outEl.textContent = "";
   const t0 = performance.now();
   try {
-    await runCode(HERO_CODE, { onLog: (t, k) => say(t, k) });
+    if (!warmed) say(t("hero.warming"), "note");
+    await runPython(HERO_PY, { onLog: (line, k) => say(line, k) });
     say("");
     say(t("run.doneLocal", (performance.now() - t0).toFixed(0)), "ok");
+    sayLink(t("hero.diffSay"), t("hero.diffHref"));
   } catch (err) {
     say(describeError(err), "err");
   } finally {

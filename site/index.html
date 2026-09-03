@@ -74,28 +74,22 @@
   <div class="wrap">
     <h1>PyTorch's shape,<br><span class="accent">in a browser tab.</span></h1>
     <p class="sub lead">
-      A TypeScript runtime on WebGPU with hand-written WGSL and no dependencies. No Python,
-      no server, no install &mdash; and <strong>the values are held to real PyTorch's</strong>,
-      case by case.
+      Your torch code, running in this tab &mdash; no install, no server, no account.
+      Underneath: a TypeScript runtime on WebGPU with hand-written WGSL, and
+      <strong>the values are held to real PyTorch's</strong>, case by case.
     </p>
-
-    <div class="cta-row">
-      <a class="btn primary" href="models.html">Run a pretrained model →</a>
-      <a class="btn ghost" href="playground.html">Open the Playground →</a>
-      <a class="btn ghost mono" href="#install">npm install borch-ts</a>
-    </div>
-    <p class="install">Zero runtime dependencies · 435KB gzipped ES module (1567KB raw) · safetensors checkpoints</p>
 
     <div class="card" style="margin-top:2.4rem">
       <div class="card-head">
-        <span>hero.js — running here, right now</span>
+        <span>hero.py — a training loop, running here</span>
         <span class="grow"></span>
         <span class="badge" id="device-badge"><span class="led"></span><span id="device-text">checking device…</span></span>
       </div>
       <div class="demo">
         <pre><code id="hero-code"></code></pre>
         <div class="side">
-          <button class="btn primary" id="hero-run">▶ Run</button>
+          <button class="btn primary" id="hero-run">▶ Run the training</button>
+          <p class="small muted" id="hero-ready" style="margin:.5rem 0 0"></p>
           <pre class="out" id="hero-out"></pre>
         </div>
       </div>
@@ -103,6 +97,13 @@
     <p class="small muted" style="margin-top:.9rem">
       Pressing Run sends no network request. The computation happens on your GPU and the values stay here.
     </p>
+    <p class="cta-row small" style="margin-top:1.2rem">
+      <a class="btn ghost" href="learn/">Lesson 0: fix the bug →</a>
+      <a class="btn ghost" href="playground.html">Playground →</a>
+      <a class="btn ghost" href="models.html">Pretrained models →</a>
+      <a class="btn ghost mono" href="#install">npm install borch-ts</a>
+    </p>
+    <p class="install">Zero runtime dependencies · 435KB gzipped ES module (1567KB raw) · safetensors checkpoints</p>
   </div>
 </section>
 

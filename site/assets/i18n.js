@@ -74,6 +74,18 @@ const STRINGS = {
     ko: "중지를 걸었다 — 루프가 stopped() 를 보는 자리에서 멈춘다." },
 
   "run.unknownError": { en: "unknown error", ko: "알 수 없는 오류" },
+
+  // The first screen. **One button, and it trains.** The line under it says what is
+  // being fetched while Python warms up, so a click before it is ready is a wait with a
+  // reason, not a dead button.
+  "hero.run": { en: "▶ Run the training", ko: "▶ 학습 돌려보기" },
+  "hero.warming": { en: "Python is loading in the background…", ko: "Python 을 뒤에서 싣는 중…" },
+  "hero.ready": { en: "Python is ready — press Run.", ko: "Python 준비됨 — Run 을 누르세요." },
+  "hero.cpu": {
+    en: "No WebGPU here — this runs the numpy core on wasm instead, so the loss still goes down. Speed is the CPU's.",
+    ko: "여기엔 WebGPU 가 없다 — 대신 numpy 코어를 wasm 으로 돌리니 손실은 그대로 내려간다. 속도는 CPU 의 것이다." },
+  "hero.diffSay": { en: "The only line that is not torch is the import — what else changes →", ko: "torch 가 아닌 줄은 import 하나 — 그 밖에 바뀌는 것 →" },
+  "hero.diffHref": { en: "python.html#changes", ko: "python.html#changes" },
   "draw.rank": {
     en: "show() draws [H,W], [C,H,W] or [N,C,H,W] — this was [{0}].",
     ko: "show() 는 [H,W]·[C,H,W]·[N,C,H,W] 를 그린다 — 받은 것은 [{0}] 다." },

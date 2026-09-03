@@ -55,6 +55,9 @@ CHECKS = [
     # The same clock on the deployed site, so the transfer is inside it — the visitor's number.
     ("first-run:deployed", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/first_run.py",
                             "--url=https://playidea-lab.github.io/borch/site/index.html"]),
+    # The person's clock, not the GPU's: Python ready, the click, the first loss line.
+    ("learner:site", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/learner_path.py",
+                      "--url=https://playidea-lab.github.io/borch/site/index.html"]),
 ]
 
 

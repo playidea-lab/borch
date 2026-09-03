@@ -69,28 +69,22 @@
   <div class="wrap">
     <h1>PyTorch 의 모양,<br><span class="accent">브라우저 탭 안에서.</span></h1>
     <p class="sub lead">
-      손으로 쓴 WGSL 과 의존성 0 으로 WebGPU 위에 도는 TypeScript 런타임.
-      파이썬도, 서버도, 설치도 없이 &mdash; 그리고 <strong>값은 진짜 PyTorch 의 것에 대조된다</strong>,
-      케이스 하나씩.
+      당신의 torch 코드가 이 탭에서 돈다 &mdash; 설치도, 서버도, 계정도 없이.
+      그 밑은 손으로 쓴 WGSL 로 WebGPU 위에 도는 TypeScript 런타임이고,
+      <strong>값은 진짜 PyTorch 의 것에 대조된다</strong>, 케이스 하나씩.
     </p>
-
-    <div class="cta-row">
-      <a class="btn primary" href="models.html">사전학습 모델 돌려보기 →</a>
-      <a class="btn ghost" href="playground.html">Playground 열기 →</a>
-      <a class="btn ghost mono" href="#install">npm install borch-ts</a>
-    </div>
-    <p class="install">런타임 의존성 0개 · ES 모듈 gzip 435KB(압축 전 1567KB) · 체크포인트는 safetensors</p>
 
     <div class="card" style="margin-top:2.4rem">
       <div class="card-head">
-        <span>hero.js — 이 페이지에서 지금 돈다</span>
+        <span>hero.py — 학습 루프, 이 페이지에서 돈다</span>
         <span class="grow"></span>
         <span class="badge" id="device-badge"><span class="led"></span><span id="device-text">장치 확인 중…</span></span>
       </div>
       <div class="demo">
         <pre><code id="hero-code"></code></pre>
         <div class="side">
-          <button class="btn primary" id="hero-run">▶ Run</button>
+          <button class="btn primary" id="hero-run">▶ 학습 돌려보기</button>
+          <p class="small muted" id="hero-ready" style="margin:.5rem 0 0"></p>
           <pre class="out" id="hero-out"></pre>
         </div>
       </div>
@@ -98,6 +92,13 @@
     <p class="small muted" style="margin-top:.9rem">
       누르는 순간 네트워크로 나가는 요청은 없다. 계산은 당신의 GPU 에서 나고, 값도 여기 머문다.
     </p>
+    <p class="cta-row small" style="margin-top:1.2rem">
+      <a class="btn ghost" href="learn/">레슨 0: 버그 고쳐 보기 →</a>
+      <a class="btn ghost" href="playground.html">Playground →</a>
+      <a class="btn ghost" href="models.html">사전학습 모델 →</a>
+      <a class="btn ghost mono" href="#install">npm install borch-ts</a>
+    </p>
+    <p class="install">런타임 의존성 0개 · ES 모듈 gzip 435KB(압축 전 1567KB) · 체크포인트는 safetensors</p>
   </div>
 </section>
 
