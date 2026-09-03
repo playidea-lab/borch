@@ -32,7 +32,11 @@ def _boot():
     finally:
         _js.URL.revokeObjectURL(url)
     _js.borch = module
-    if module.currentDevice() is None:
+    # Pyodide 0.27 hands a JS `null` over as `None`; 0.28 as `jsnull`, which is not
+    # `None` and is not falsy either. Measured: on 0.28 an `is None` here skipped
+    # `init()` and the first tensor said "no device".
+    device = module.currentDevice()
+    if device is None or str(type(device).__name__) in ("JsNull", "jsnull") or getattr(device, "typeof", "") == "object" and not bool(device):
         _run_sync(module.init())
     return module
 

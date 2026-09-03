@@ -882,6 +882,11 @@ def test_site_has_no_broken_relative_links():
         for raw in HREF.findall(page.read_text(encoding="utf-8")):
             if raw.startswith(("http://", "https://", "#", "data:", "mailto:")):
                 continue
+            # `site/lab/` is JupyterLite, built by `site/build_lab.py` and gitignored — the
+            # deploy builds it beside the pages. A link into it is checked by
+            # `tests/browser/lab_probe.py`, which opens the built notebook and runs it.
+            if raw.lstrip("./").startswith("lab/") or "/lab/" in raw:
+                continue
             target = (page.parent / raw.split("#")[0].split("?")[0]).resolve()
             if target.is_dir():
                 target = target / "index.html"

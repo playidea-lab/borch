@@ -82,3 +82,7 @@ borch-ts/test/out/
 # precisely because those are large.
 # esbuild's single-file borch.ts, built by `npm run bundle:py` for the wheel
 borch_webgpu/_borch.js
+# JupyterLite, built by site/build_lab.py (the deploy builds it)
+site/lab/
+site/lab-src/.jupyterlite.doit.db
+site/lab-src/_output/

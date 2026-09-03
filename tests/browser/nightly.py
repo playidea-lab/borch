@@ -49,6 +49,8 @@ CHECKS = [
     ("onnx:binding", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/onnx_binding.py"]),
     # The wheel alone, in a worker — JupyterLite's shape. Builds the wheel first.
     ("wheel",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/wheel_probe.py", "--build"]),
+    # The notebook page — JupyterLite built here, the cell pressed, the learned line read.
+    ("lab",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/lab_probe.py", "--build"]),
     ("example",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/readme.py"]),
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py"]),
     ("scope",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/scope_escape.py"]),

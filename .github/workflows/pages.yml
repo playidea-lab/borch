@@ -70,6 +70,12 @@ jobs:
       # without going through the checks.
       - run: python3 site/build_api.py
 
+      # **The notebook page is built, not committed** — JupyterLite is 70 MB of static
+      # files and the pyborch wheel goes into its index. `site/build_lab.py` is the same
+      # command a person runs; it lands in `site/lab/` and goes up with the site.
+      - uses: astral-sh/setup-uv@v5
+      - run: python3 site/build_lab.py
+
       # The tutorial data (`site/assets/data/`) is in the repository. There was a time
       # when it was rebuilt here, and that one step took 33 minutes 56 seconds of a
       # 34 minute 20 second deployment — fetching 170MB of originals and processing

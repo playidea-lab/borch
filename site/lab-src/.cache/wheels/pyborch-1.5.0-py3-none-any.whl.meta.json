@@ -1,0 +1,24 @@
+{
+  "name": "pyborch",
+  "release": {
+    "comment_text": "",
+    "digests": {
+      "md5": "ab55f3873d6be934b27e4a48db153f35",
+      "sha256": "ed834a4b830ba6bcb1f986cb00375f2a4915bc411e6dca9c3b0c4c75603580ea"
+    },
+    "downloads": -1,
+    "filename": "pyborch-1.5.0-py3-none-any.whl",
+    "has_sig": false,
+    "md5_digest": "ab55f3873d6be934b27e4a48db153f35",
+    "packagetype": "bdist_wheel",
+    "python_version": "py3",
+    "requires_python": ">=3.10",
+    "size": 967494,
+    "upload_time": "2026-09-03T12:04:47.734503Z",
+    "upload_time_iso_8601": "2026-09-03T12:04:47.734503Z",
+    "url": "./pyborch-1.5.0-py3-none-any.whl",
+    "yanked": false,
+    "yanked_reason": null
+  },
+  "version": "1.5.0"
+}

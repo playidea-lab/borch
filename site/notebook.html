@@ -1,0 +1,92 @@
+<!doctype html>
+<!--
+  borch — the Python surface.
+
+  Python used to sit at the end of lesson 6. It was parked in the save-and-load lesson for
+  want of a home of its own, and the result was that the site taught borch through **its
+  least torch-like surface** only. This page is that home.
+
+  Every number written here was measured. What could not be measured is not written.
+
+  The Korean edition is `ko/notebook.html`. They are two sets, so wording changes go into both.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook — borch</title>
+<link rel="alternate" hreflang="ko" href="ko/notebook.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Notebook — borch">
+<meta property="og:description" content="A JupyterLite notebook with pyborch already in it. Nothing installed.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/notebook.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <a href="models.html">Models</a>
+      <a href="vision.html">Vision</a>
+      <a href="api/">API</a>
+      <a href="notebook.html" class="on" aria-current="page">Python</a>
+      <a href="setup.html">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/notebook.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <main class="doc-main">
+    <p class="eyebrow">Notebook</p>
+    <h1>A notebook, nothing installed</h1>
+    <p class="lead">
+      JupyterLite in this tab, with <code>pyborch</code> already on its shelf. The kernel
+      is Python (Pyodide) in a worker; <code>import borch_webgpu as torch</code> boots
+      borch.ts on this tab's GPU. No CUDA, no Python on the machine, no account.
+    </p>
+    <p class="cta-row">
+      <a class="btn primary" href="lab/lab/index.html?path=borch.ipynb">Open the notebook →</a>
+      <a class="btn ghost" href="lab/lab/index.html">Empty JupyterLab →</a>
+    </p>
+    <h2>The two lines</h2>
+<pre><code>%pip install pyborch
+import borch_webgpu as torch</code></pre>
+    <p>
+      The same two lines work in <strong>any</strong> Pyodide — a JupyterLite you host,
+      PyScript, marimo's wasm build — because the wheel carries borch.ts inside it and
+      brings the device up on import. What torch code has to change is on the
+      <a href="python.html#changes">Python page</a>; it is short.
+    </p>
+    <h2>What a tab cannot do</h2>
+    <ul>
+      <li>Memory is the tab's, a few GB. Datasets and pretrained weights are downloads,
+        every time.</li>
+      <li>Packages are Pyodide's: no CUDA family, and some C extensions are absent.</li>
+      <li>A long training run holds the kernel. That is a notebook's shape too.</li>
+      <li>Linux with an NVIDIA card needs two Chrome flags — the
+        <a href="setup.html">GPU page</a> has them.</li>
+    </ul>
+    <p class="small muted">
+      Measured by <code>tests/browser/lab_probe.py</code>, nightly: opening this
+      notebook and pressing Shift+Enter once, apple / metal-3 sees the learned line
+      6.3 s later, the wheel's install and borch.ts's boot included.
+    </p>
+  </main>
+</div>
+
+<script type="module" src="assets/apilink.js"></script>
+</body>
+</html>

@@ -70,6 +70,8 @@ measurement beside it — is listed on the landing page and pinned by
 `borch-ts/test/parity.ts`. Everything else that differs is a defect, and the ledgers
 (`tests/torch_gap.py`, `borch-ts/test/run.py`) hold zero gaps without a reason.
 
+**Or a notebook.** `%pip install pyborch` then `import borch_webgpu as torch` in any Pyodide — the [notebook page](https://playidea-lab.github.io/borch/site/notebook.html) is JupyterLite with the wheel already on its shelf, training on the tab's GPU 6 s after opening.
+
 **The file leaves as ONNX.** `onnx.exportOnnx(model, sample)` in TypeScript, `torch.onnx.export(model, x, path)` in Python — traced from one forward, written without a dependency, and checked by ONNX Runtime Web reproducing the forward (3.5e-8; see the book).
 
 ## Where things are

@@ -71,6 +71,16 @@ No request leaves the machine. Pyodide and numpy come out of the repository
 itself (`vendor/`). English is the default and Korean is under `/site/ko/`. The
 details are in [site/README.md](site/README.md).
 
+**And a notebook, in any Pyodide.** The `pyborch` wheel carries `borch_webgpu` and
+borch.ts as one file inside it; when no page has loaded borch.ts, the import boots it
+on the tab's GPU itself. So `%pip install pyborch` and `import borch_webgpu as torch`
+are the whole setup in JupyterLite, PyScript or marimo — and `site/notebook.html` is a
+JupyterLite built by `site/build_lab.py` with the wheel already on its shelf and a
+starter notebook (`tests/browser/lab_probe.py` presses its cell nightly: 6.3 s from
+opening to the learned line on Apple). The kernel is pinned to Pyodide 0.27, the
+version the site vendors and the golden was checked on; 0.28 hands JS `null` over as
+`jsnull`, which the boot now also accepts.
+
 **The first screen trains.** The landing page's demo is sixty steps of SGD on
 `y = 3x + 1` in Python — `import borch_webgpu as torch` is the only line that is not
 torch — and lesson 0 (`site/learn/00-fix-it.html`) hands the reader two loops that do

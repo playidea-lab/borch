@@ -1,0 +1,89 @@
+<!doctype html>
+<!--
+  borch — 파이썬 표면.
+
+  파이썬은 6강 끝에 얹혀 있었다. 집이 없어서 저장·불러오기 강의에 주차된 것인데,
+  그 결과 사이트는 borch 를 **가장 torch 답지 않은 표면**으로만 가르쳤다. 이 페이지가
+  그 자리다.
+
+  여기 적힌 수는 전부 잰 것이다. 못 잰 것은 적지 않는다.
+
+  영문 판은 `../notebook.html` 이다. 두 벌이므로 문구를 고치면 같이 고친다.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>노트북 — borch</title>
+<link rel="alternate" hreflang="en" href="../notebook.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="노트북 — borch">
+<meta property="og:description" content="pyborch 가 미리 들어 있는 JupyterLite 노트북. 설치 없음.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/notebook.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">배우기</a>
+      <a href="tutorials/">튜토리얼</a>
+      <a href="models.html">모델</a>
+      <a href="vision.html">비전</a>
+      <a href="api/">API</a>
+      <a href="notebook.html" class="on" aria-current="page">파이썬</a>
+      <a href="setup.html">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../notebook.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <main class="doc-main">
+    <p class="eyebrow">Notebook</p>
+    <h1>노트북, 설치 없이</h1>
+    <p class="lead">
+      이 탭 안의 JupyterLite 이고, 선반에 <code>pyborch</code> 가 미리 올라가 있다. 커널은
+      워커 안의 Python(Pyodide) 이고, <code>import borch_webgpu as torch</code> 가 이 탭의
+      GPU 에서 borch.ts 를 띄운다. CUDA 도, 기계에 깐 Python 도, 계정도 없다.
+    </p>
+    <p class="cta-row">
+      <a class="btn primary" href="../lab/lab/index.html?path=borch.ipynb">노트북 열기 →</a>
+      <a class="btn ghost" href="../lab/lab/index.html">빈 JupyterLab →</a>
+    </p>
+    <h2>두 줄</h2>
+<pre><code>%pip install pyborch
+import borch_webgpu as torch</code></pre>
+    <p>
+      같은 두 줄이 <strong>어느</strong> Pyodide 에서든 된다 — 직접 띄운 JupyterLite, PyScript,
+      marimo 의 wasm 판. wheel 이 borch.ts 를 안에 지니고 import 때 장치를 띄우기 때문이다.
+      torch 코드에서 바뀌는 것은 <a href="python.html#changes">Python 페이지</a>에 있다 — 짧다.
+    </p>
+    <h2>탭이 못 하는 것</h2>
+    <ul>
+      <li>메모리는 탭의 것, 몇 GB. 데이터셋과 사전학습 가중치는 매번 다운로드다.</li>
+      <li>패키지는 Pyodide 의 것: CUDA 계열은 없고, 일부 C 확장도 없다.</li>
+      <li>긴 학습은 커널을 붙잡는다. 노트북이 원래 그렇다.</li>
+      <li>NVIDIA 카드를 단 리눅스는 Chrome 플래그 둘이 필요하다 — <a href="setup.html">GPU 페이지</a>에 있다.</li>
+    </ul>
+    <p class="small muted">
+      <code>tests/browser/lab_probe.py</code> 가 매일 밤 잰다: 이 노트북을 열고 Shift+Enter
+      한 번, apple / metal-3 에서 6.3 s 뒤에 배운 것 줄이 보인다 — wheel 설치와 borch.ts
+      부팅을 포함해서.
+    </p>
+  </main>
+</div>
+
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
