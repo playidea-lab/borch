@@ -132,10 +132,15 @@ def _visit(context, url, label, after_warm=False):
     opened = time.time()
     page.goto(url, wait_until="load")
     loaded = time.time()
-    # The button is disabled until the device probe answers — that wait is part of what
-    # a visitor experiences, so it is inside the clock.
-    page.wait_for_function("!document.getElementById('hero-run').disabled",
-                           timeout=GIVE_UP_S * 1000)
+    # **"Ready" is the badge, not the button.** The button starts enabled in the HTML and
+    # is only disabled by the page's script on failure, so waiting on it returned before
+    # the page had even started its probe — and on NVIDIA the click then landed ahead
+    # of the probe and paid the whole adapter request itself, which the numbers showed as
+    # a 60 ms "ready" followed by a four-second click. The badge text is set from the
+    # probe's answer, so it is the signal that the probe has returned.
+    page.wait_for_function(
+        "document.getElementById('device-text').textContent !== 'checking device…'",
+        timeout=GIVE_UP_S * 1000)
     ready = time.time()
     page.evaluate(HOOK, _lib_url(url))
     warm_s = None
