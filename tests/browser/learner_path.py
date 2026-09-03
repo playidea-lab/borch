@@ -30,11 +30,20 @@ def _has(page, words):
 
 
 def _wait(page, words, deadline):
-    while time.time() < deadline:
-        if _has(page, words):
-            return time.time()
-        page.wait_for_timeout(50)
-    return None
+    """Waits for a line starting with one of `words` — **inside the page**, with
+    `wait_for_function`, not by polling `evaluate` from outside. Polling every 50 ms
+    from the driver put a task on the page's main thread between every two of the
+    loop's readbacks, and on the 4090 that clock read 7 s where the same code through
+    a page nobody was poking took 1 s (measured; the polling version is in git)."""
+    quoted = ",".join(repr(w) for w in words)
+    remaining = max(1, int((deadline - time.time()) * 1000))
+    try:
+        page.wait_for_function(
+            f"[...document.querySelectorAll('#hero-out div')].some(d => [{quoted}].some(w => d.textContent.startsWith(w)))",
+            timeout=remaining, polling="raf")
+    except Exception:
+        return None
+    return time.time()
 
 
 def _visit(context, url, label, wait_ready=True):
@@ -56,7 +65,7 @@ def _visit(context, url, label, wait_ready=True):
             timeout=GIVE_UP_S * 1000, polling=100)
         ready = time.time()
     lib = "/borch-ts/dist/src/index.js" if "127.0.0.1" in url else url.rsplit("/site/", 1)[0] + "/borch-ts/dist/src/index.js"
-    pipelines_before = page.evaluate(f"import('{lib}').then(m => m.currentDevice() ? m.currentDevice().pipelineCount : 0)")
+    pipelines_before = page.evaluate(f"import('{lib}').then(m => (m.currentDevice() && m.currentDevice().pipelineCount) || 0)") or 0
     clicked = time.time()
     page.click("#hero-run")
     deadline = clicked + GIVE_UP_S
@@ -72,7 +81,7 @@ def _visit(context, url, label, wait_ready=True):
     print(f"{label}:")
     print(f"  probe {fmt(probed)} · Python ready {fmt(ready)} · click {fmt(clicked)} · "
           f"first loss {fmt(first_loss)} · learned {fmt(learned)} · done {fmt(done)}  (from opening the page)")
-    pipelines_after = page.evaluate(f"import('{lib}').then(m => m.currentDevice() ? m.currentDevice().pipelineCount : 0)")
+    pipelines_after = page.evaluate(f"import('{lib}').then(m => (m.currentDevice() && m.currentDevice().pipelineCount) || 0)") or 0
     if first_loss:
         print(f"  click → first loss line {first_loss - clicked:.2f} s · click → learned {(learned or first_loss) - clicked:.2f} s"
               f" · pipelines compiled during the run: {pipelines_after - pipelines_before}")
