@@ -1,0 +1,87 @@
+<!doctype html>
+<!--
+  borch — 파이썬 표면.
+
+  파이썬은 6강 끝에 얹혀 있었다. 집이 없어서 저장·불러오기 강의에 주차된 것인데,
+  그 결과 사이트는 borch 를 **가장 torch 답지 않은 표면**으로만 가르쳤다. 이 페이지가
+  그 자리다.
+
+  여기 적힌 수는 전부 잰 것이다. 못 잰 것은 적지 않는다.
+
+  영문 판은 `../workbench.html` 이다. 두 벌이므로 문구를 고치면 같이 고친다.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>작업대 — borch</title>
+<link rel="alternate" hreflang="en" href="../workbench.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="작업대 — borch">
+<meta property="og:description" content="marimo 노트북, 브라우저 안: 이미지를 올리고, 이 탭의 GPU 에서 학습하고, 모델이 의심하는 라벨을 검수하고, ONNX 로 가져간다. 설치 없음.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/workbench.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">배우기</a>
+      <a href="tutorials/">튜토리얼</a>
+      <a href="models.html">모델</a>
+      <a href="vision.html">비전</a>
+      <a href="api/">API</a>
+      <a href="notebook.html">파이썬</a>
+      <a href="setup.html">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="workbench.html" class="on" aria-current="page">Workbench</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../workbench.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <main class="doc-main">
+    <p class="eyebrow">Workbench</p>
+    <h1>작업대: 올리고, 학습하고, 검수하고, 가져간다</h1>
+    <p class="lead">
+      브라우저 안의 marimo 노트북이다 — 반응형 셀, 표와 버튼 같은 UI 요소, 그리고 자기 키를 넣는
+      AI 조수가 딸려 있다. 첫 셀이 <code>pyborch</code> 를 싣고, 나머지는 한 번의 검수 작업이다:
+      이미지 업로드 → 이 탭의 GPU 에서 학습 → 모델이 의심하는 라벨부터 보이는 검수 표 →
+      <code>torch.onnx.export</code>. 아무것도 설치하지 않는다.
+    </p>
+    <p class="cta-row">
+      <a class="btn primary" href="../marimo/index.html">작업대 열기 →</a>
+      <a class="btn ghost" href="notebook.html">Jupyter 쪽 노트북 →</a>
+    </p>
+    <h2>노트북과 어떻게 다른가</h2>
+    <ul>
+      <li><strong>반응형.</strong> 셀 하나를 바꾸면 그에 딸린 셀만 다시 돈다. 검수 표에서 행을 고르면 아래 셀이 따라온다.</li>
+      <li><strong>UI 요소.</strong> 파일 업로드, 표, 버튼이 Python 값이 된다 — 위젯 코드 없이.</li>
+      <li><strong>AI 조수.</strong> 설정에 자기 API 키를 넣으면 셀 생성·오류 고침 제안이 된다. 코드와 오류만 나가고 이미지는 나가지 않는다.</li>
+      <li><strong>같은 wheel.</strong> <code>import borch_webgpu as torch</code> 가 여기서도 borch.ts 를 띄운다.</li>
+    </ul>
+    <h2>알아 둘 것</h2>
+    <ul>
+      <li>열고 10초쯤 커널이 뜬다(Pyodide 와 marimo 를 받는 시간). 셀은 자동 실행되지 않으니 오른쪽 아래 실행 버튼을 누른다.</li>
+      <li>라벨은 파일명의 첫 <code>_</code> 앞부분이다. 아무것도 올리지 않으면 합성 3클래스로 돈다.</li>
+      <li>탭의 메모리와 Pyodide 의 패키지 범위 안에서 돈다 — <a href="notebook.html">노트북 페이지</a>의 목록과 같다.</li>
+    </ul>
+    <p class="small muted">
+      <code>tests/browser/marimo_probe.py</code> 가 매일 밤 잰다: 열고 실행을 누른 뒤 네 절(어댑터·학습·검수 표·내보내기)이 나오는 시각.
+    </p>
+  </main>
+</div>
+
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

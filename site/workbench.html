@@ -1,0 +1,88 @@
+<!doctype html>
+<!--
+  borch — the Python surface.
+
+  Python used to sit at the end of lesson 6. It was parked in the save-and-load lesson for
+  want of a home of its own, and the result was that the site taught borch through **its
+  least torch-like surface** only. This page is that home.
+
+  Every number written here was measured. What could not be measured is not written.
+
+  The Korean edition is `ko/workbench.html`. They are two sets, so wording changes go into both.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workbench — borch</title>
+<link rel="alternate" hreflang="ko" href="ko/workbench.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Workbench — borch">
+<meta property="og:description" content="A marimo notebook in the browser: upload images, train on this tab's GPU, review the labels the model doubts, take the model away as ONNX. Nothing installed.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/workbench.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <a href="models.html">Models</a>
+      <a href="vision.html">Vision</a>
+      <a href="api/">API</a>
+      <a href="notebook.html">Python</a>
+      <a href="setup.html">GPU</a>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="workbench.html" class="on" aria-current="page">Workbench</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/workbench.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <main class="doc-main">
+    <p class="eyebrow">Workbench</p>
+    <h1>Upload, train, review, take it away</h1>
+    <p class="lead">
+      A marimo notebook in the browser — reactive cells, UI elements like tables and
+      buttons, and an AI assistant you give your own key to. The first cell installs
+      <code>pyborch</code>; the rest is one review job: upload images → train on this
+      tab's GPU → a review table with the labels the model doubts first →
+      <code>torch.onnx.export</code>. Nothing is installed.
+    </p>
+    <p class="cta-row">
+      <a class="btn primary" href="marimo/index.html">Open the workbench →</a>
+      <a class="btn ghost" href="notebook.html">The Jupyter notebook instead →</a>
+    </p>
+    <h2>How it differs from the notebook</h2>
+    <ul>
+      <li><strong>Reactive.</strong> Change a cell and only what depends on it reruns. Pick a row in the review table and the cell below follows.</li>
+      <li><strong>UI elements.</strong> A file upload, a table, a button become Python values — no widget code.</li>
+      <li><strong>AI assistant.</strong> Put your own API key in the settings and cells can be generated and errors fixed on request. Code and errors leave; images do not.</li>
+      <li><strong>The same wheel.</strong> <code>import borch_webgpu as torch</code> boots borch.ts here too.</li>
+    </ul>
+    <h2>Worth knowing</h2>
+    <ul>
+      <li>The kernel takes about ten seconds to come up (Pyodide and marimo download). Cells do not run by themselves: press the run button at the bottom right.</li>
+      <li>A label is the part of the file name before the first <code>_</code>. Upload nothing and a synthetic three-class set runs instead.</li>
+      <li>It lives inside the tab's memory and Pyodide's package range — the same list as the <a href="notebook.html">notebook page</a>.</li>
+    </ul>
+    <p class="small muted">
+      Measured by <code>tests/browser/marimo_probe.py</code>, nightly: opening the page, pressing run, and the moment each of the four sections (adapter, trained, review table, export) appears.
+    </p>
+  </main>
+</div>
+
+<script type="module" src="assets/apilink.js"></script>
+</body>
+</html>

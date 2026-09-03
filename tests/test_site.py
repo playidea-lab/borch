@@ -573,7 +573,7 @@ LINK_TEXT = re.compile(r'<a [^>]*>([^<]*)</a>')
 def _pages():
     # `site/lab/` is JupyterLite (built by site/build_lab.py, gitignored) — its pages are
     # not this site's, and `site/lab-src/` is its source. Neither is checked here.
-    return sorted(p for p in SITE.rglob("*.html") if "lab" not in p.relative_to(SITE).parts[:1] and "lab-src" not in p.parts)
+    return sorted(p for p in SITE.rglob("*.html") if p.relative_to(SITE).parts[0] not in ("lab", "lab-src", "marimo", "marimo-src"))
 
 
 # **Which adapter names mean "this is the CPU" had three homes and now has two.**
@@ -887,7 +887,7 @@ def test_site_has_no_broken_relative_links():
             # `site/lab/` is JupyterLite, built by `site/build_lab.py` and gitignored — the
             # deploy builds it beside the pages. A link into it is checked by
             # `tests/browser/lab_probe.py`, which opens the built notebook and runs it.
-            if raw.lstrip("./").startswith("lab/") or "/lab/" in raw:
+            if raw.lstrip("./").startswith(("lab/", "marimo/")) or "/lab/" in raw or "/marimo/" in raw:
                 continue
             target = (page.parent / raw.split("#")[0].split("?")[0]).resolve()
             if target.is_dir():
@@ -1661,7 +1661,7 @@ _VISION_MODULES = ("vision", "vision_v2", "vision_v2_twins", "ops", "datasets")
 # So this walks every page that marks a count rather than a list of pages, and a page that
 # starts marking one is covered the moment it does.
 def _pages_marking_counts():
-    return [p for p in sorted((ROOT / "site").rglob("*.html")) if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src")
+    return [p for p in sorted((ROOT / "site").rglob("*.html")) if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src", "marimo", "marimo-src")
             if _COUNT_SPAN.search(p.read_text(encoding="utf-8"))]
 
 

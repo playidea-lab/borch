@@ -75,6 +75,8 @@ jobs:
       # command a person runs; it lands in `site/lab/` and goes up with the site.
       - uses: astral-sh/setup-uv@v5
       - run: python3 site/build_lab.py
+      # The workbench page, the same way: marimo's static export beside the wheel.
+      - run: python3 site/build_marimo.py
 
       # The tutorial data (`site/assets/data/`) is in the repository. There was a time
       # when it was rebuilt here, and that one step took 33 minutes 56 seconds of a

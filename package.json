@@ -56,6 +56,8 @@
     "envelope:py": "uv run --with playwright python tests/browser/envelope.py",
     "envelope2:py": "uv run --with playwright python tests/browser/envelope2.py",
     "build:lab": "python3 site/build_lab.py",
+    "marimo:py": "uv run --with playwright python tests/browser/marimo_probe.py --build",
+    "build:marimo": "python3 site/build_marimo.py",
     "cost:ts": "uv run --with playwright python borch-ts/test/cost.py",
     "bench:ts": "uv run --with playwright python borch-ts/test/bench.py",
     "serialize:ts": "uv run --with numpy --with playwright python borch-ts/test/serialize.py",
