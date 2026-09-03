@@ -23,6 +23,7 @@
 
 import { Tensor, noGrad } from "../src/tensor.js";
 import { load } from "../src/serialize.js";
+import { device as dev } from "../src/tensor.js";
 import { ResNet18 } from "./bench.js";
 
 // The UMD build puts `tf` on the window; this file is typed against what it uses.
@@ -235,6 +236,22 @@ export async function reportInfer(batches: readonly number[] = [1, 16]): Promise
     const oursMs = await timed(() => noGrad(() => model.forward(xb)).toArray());
     const theirsMs = await timed(() => session.run(feed(data, b)));
     lines.push(`batch ${String(b).padStart(3)}  forward  borch.ts ${oursMs.toFixed(2).padStart(8)} ms · ORT Web ${theirsMs.toFixed(2).padStart(8)} ms · ratio ${(oursMs / theirsMs).toFixed(2)}× (borch/ORT)`);
+    // Where our forward spends itself: dispatches per forward, and GPU time by kind of
+    // kernel (a pass per dispatch while profiling, so read the share, not the total).
+    // The count separates "too many calls" from "a slow kernel" — the eval-mode batch
+    // norm was the former, six dispatches a layer over twenty layers (measured here).
+    const d = dev();
+    const d0 = d.dispatches;
+    await noGrad(() => model.forward(xb)).toArray();
+    const dispatches = d.dispatches - d0;
+    await d.profile(() => noGrad(() => model.forward(xb)).toArray());
+    const hot: [string, number][] = [];
+    for (const [kind, ns] of d.nsByKind) hot.push([kind, ns / 1e6]);
+    hot.sort((p, q) => q[1] - p[1]);
+    const total = hot.reduce((a, [, ms]) => a + ms, 0);
+    lines.push(`           borch.ts ${dispatches} dispatches/forward · GPU time (ms, total ${total.toFixed(1)}): `
+      + hot.slice(0, 8).map(([k, ms]) => `${k} ${ms.toFixed(1)}`).join(" · ")
+      + (d.profileDropped ? ` · ${d.profileDropped} dropped` : ""));
   }
   return lines.join("\n");
 }

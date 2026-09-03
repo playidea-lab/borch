@@ -1,7 +1,7 @@
 """Runs the comparison bench — borch.ts and TF.js, the same training step, one page.
 
     npm run build:ts
-    uv run --with playwright python borch-ts/test/compare.py [--headed]
+    uv run --with playwright python borch-ts/test/compare.py [--headed] [--only-infer]
 
 It measures the same thing as `tests/browser/run.py --bench` without going through
 Pyodide — borch.ts is JS a browser simply reads.
@@ -70,7 +70,7 @@ def main(argv):
             page.on("console", lambda m: print(f"  [browser] {m.text}")
                     if m.type == "error" else None)
             page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
-            page.goto(f"http://127.0.0.1:{port}{PAGE}")
+            page.goto(f"http://127.0.0.1:{port}{PAGE}" + ("?only=infer" if "--only-infer" in argv else ""))
             page.wait_for_function("window.__borchCompare !== undefined",
                                    timeout=TIMEOUT_MS)
             result = page.evaluate("window.__borchCompare")

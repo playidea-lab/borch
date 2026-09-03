@@ -11392,6 +11392,44 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * price being paid.
    */
   /**
+   * Batch normalisation by **given** statistics — the eval-mode path. One kernel: the
+   * same `bna` the training path applies after computing its own statistics, here fed
+   * the running ones. The assembled form was six dispatches a layer (sub, add, sqrt,
+   * div, mul, add) and, over ResNet-18's twenty layers, more than half of an inference
+   * forward's 176 calls (measured, Apple: 176 → 76).
+   *
+   * The gradient is rarely wanted here — eval usually runs under `noGrad` — so it is
+   * composed from ordinary ops rather than given kernels of its own, and costs nothing
+   * until asked for.
+   */
+  batchNormEval(
+    mean: Tensor, variance: Tensor, weight: Tensor, bias: Tensor, eps = 1e-5,
+  ): Tensor {
+    const [N = 1, C = 1] = this.shape;
+    const S = this.shape.slice(2).reduce((a, b) => a * b, 1);
+    const key = `${N}:${C}:${S}`;
+    const out = dev().alloc(this.size);
+    dev().run1d(
+      dev().pipeline(`bna:${key}:${eps}`, () => batchNormApply(N, C, S, eps)),
+      [this.buffer, mean.buffer, variance.buffer, weight.buffer, bias.buffer, out],
+      this.size,
+    );
+    const self = this;
+    return Tensor.make(out, this.shape, [this, weight, bias], (g) => {
+      const shape4 = [1, C, ...new Array<number>(self.shape.length - 2).fill(1)];
+      const invStd = variance.binary("add", Tensor.full([], eps)).unary("rsqrt");
+      const perChannel = (v: Tensor): Tensor => v.reshape([N, C, S]).sumDim(2).sumDim(0);
+      return [
+        self.requiresGrad ? g.mul(weight.mul(invStd).reshape(shape4)) : null,
+        weight.requiresGrad
+          ? perChannel(g.mul(self.sub(mean.reshape(shape4)).mul(invStd.reshape(shape4))))
+          : null,
+        bias.requiresGrad ? perChannel(g) : null,
+      ];
+    }, "batch_norm_eval");
+  }
+
+  /**
    * Fused batch normalisation. Statistics, normalisation, scale and shift
    * in three kernels.
    *

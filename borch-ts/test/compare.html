@@ -35,12 +35,19 @@
     const out = document.getElementById("out");
     try {
       await init();
-      const ours = await report();
-      out.textContent = "borch.ts\n" + ours + "\n\nTF.js: measuring…";
-      const theirs = await reportTf();
-      out.textContent = "borch.ts\n" + ours + "\n\nTF.js\n" + theirs + "\n\ninference: measuring…";
+      // `?only=infer` skips the two training halves — the inference half alone is what
+      // a kernel change is measured against, and the training halves take minutes.
+      const onlyInfer = new URLSearchParams(location.search).get("only") === "infer";
+      let text = "";
+      if (!onlyInfer) {
+        const ours = await report();
+        out.textContent = "borch.ts\n" + ours + "\n\nTF.js: measuring…";
+        const theirs = await reportTf();
+        text = "borch.ts\n" + ours + "\n\nTF.js\n" + theirs + "\n\n";
+        out.textContent = text + "inference: measuring…";
+      }
       const infer = await reportInfer();
-      const text = "borch.ts\n" + ours + "\n\nTF.js\n" + theirs + "\n\ninference — borch.ts vs ONNX Runtime Web (WebGPU)\n" + infer;
+      text += "inference — borch.ts vs ONNX Runtime Web (WebGPU)\n" + infer;
       window.__borchCompare = { text, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {

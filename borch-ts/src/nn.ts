@@ -4663,8 +4663,6 @@ export function batchNorm(
   eps = 1e-5,
 ): Tensor {
   const channels = input.shape[1] ?? 1;
-  const spatial = input.shape.length - 2;
-  const shape = [1, channels, ...new Array<number>(spatial).fill(1)];
   const w = weight ?? Tensor.ones([channels]);
   const b = bias ?? Tensor.zeros([channels]);
   if (!training) {
@@ -4672,10 +4670,10 @@ export function batchNorm(
       // torch's own wording, so the three sides answer the same sentence.
       throw new Error("running_mean must be defined in evaluation mode");
     }
-    const centered = input.sub(runningMean.reshape(shape));
-    const scaled = centered.div(
-      runningVar.reshape(shape).binary("add", Tensor.full([], eps)).sqrt());
-    return scaled.mul(w.reshape(shape)).add(b.reshape(shape));
+    // One kernel, the training path's `bna` fed the running statistics. Assembled
+    // (sub, add, sqrt, div, mul, add) it was six dispatches a layer and more than half
+    // of an inference forward's calls (measured: 176 → 76 on ResNet-18).
+    return input.batchNormEval(runningMean, runningVar, w, b, eps);
   }
   // **This goes through a fused kernel.** The assembled form cost more than twenty
   // dispatches for one layer, and most of the 1,636 in a single ResNet step came from
