@@ -84,6 +84,41 @@ list(run_sync(t.toArray()))
     }
     say(`Python: 15 GPU ops then run_sync(toArray()), back to back: ${fmt(pl)}`);
 
+    // The hero's own loop through the site's runner, one line per step with the time it
+    // took — where a second goes on a machine where the readbacks above take 4 ms.
+    const runner = await import("/site/assets/runner.js");
+    const steps = [];
+    const hero = `
+import time
+import borch_webgpu as torch
+xs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+ys = 3 * xs + 1
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+t_prev = time.perf_counter()
+for step in range(20):
+    loss = ((model(xs) - ys) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+    if step % 5 == 0 or step == 19:
+        t_a = time.perf_counter()
+        v = loss.item()
+        t_b = time.perf_counter()
+        print(f"step {step:2d} took {(t_a - t_prev) * 1000:7.1f} ms · item() {(t_b - t_a) * 1000:7.1f} ms · loss {v:.3f}")
+        t_prev = time.perf_counter()
+    else:
+        t_now = time.perf_counter()
+        print(f"step {step:2d} took {(t_now - t_prev) * 1000:7.1f} ms")
+        t_prev = t_now
+`;
+    const t0 = performance.now();
+    await runner.runPython(hero, { onLog: (line) => { if (line.startsWith("step")) steps.push(line); } });
+    const heroMs = performance.now() - t0;
+    say(`the hero's loop through the site runner: ${heroMs.toFixed(0)} ms in all`);
+    for (const l of steps) say("  " + l);
+    const t1 = performance.now();
+    await runner.runPython(hero, { onLog: () => {} });
+    say(`the same loop a second time (pipelines warm): ${(performance.now() - t1).toFixed(0)} ms`);
+
     window.__readbackPy = { text: lines.join("\n"), adapter: borch.Device.adapterInfo,
       medians: { js: med(js), py: med(pr), pyTimer: med(pt), pyLoop: med(pl) },
       maxes: { js: Math.max(...js), py: Math.max(...pr), pyTimer: Math.max(...pt), pyLoop: Math.max(...pl) } };

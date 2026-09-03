@@ -55,6 +55,8 @@ def _visit(context, url, label, wait_ready=True):
             f"[{quoted}].some(w => document.getElementById('hero-ready').textContent.startsWith(w))",
             timeout=GIVE_UP_S * 1000, polling=100)
         ready = time.time()
+    lib = "/borch-ts/dist/src/index.js" if "127.0.0.1" in url else url.rsplit("/site/", 1)[0] + "/borch-ts/dist/src/index.js"
+    pipelines_before = page.evaluate(f"import('{lib}').then(m => m.currentDevice() ? m.currentDevice().pipelineCount : 0)")
     clicked = time.time()
     page.click("#hero-run")
     deadline = clicked + GIVE_UP_S
@@ -70,8 +72,10 @@ def _visit(context, url, label, wait_ready=True):
     print(f"{label}:")
     print(f"  probe {fmt(probed)} · Python ready {fmt(ready)} · click {fmt(clicked)} · "
           f"first loss {fmt(first_loss)} · learned {fmt(learned)} · done {fmt(done)}  (from opening the page)")
+    pipelines_after = page.evaluate(f"import('{lib}').then(m => m.currentDevice() ? m.currentDevice().pipelineCount : 0)")
     if first_loss:
-        print(f"  click → first loss line {first_loss - clicked:.2f} s · click → learned {(learned or first_loss) - clicked:.2f} s")
+        print(f"  click → first loss line {first_loss - clicked:.2f} s · click → learned {(learned or first_loss) - clicked:.2f} s"
+              f" · pipelines compiled during the run: {pipelines_after - pipelines_before}")
     for line in lines:
         if line.startswith(LOSS_WORDS) or line.startswith(LEARNED_WORDS) or "rror" in line or "Traceback" in line:
             print(f"    {line}")
