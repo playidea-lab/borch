@@ -30,11 +30,22 @@ OUTPUTS = """() => {
 KERNEL_WAIT_MS = 10_000     # the run buttons exist before the kernel does; a click at 0.6 s closed the page
 
 
+def png_bytes(rgb):
+    """An 8-bit RGB (H, W, 3) uint8 array as a PNG — zlib and struct only, so the probe
+    has no Pillow dependency (the 4090's project environment has none)."""
+    import struct
+    import zlib
+    h, w, _ = rgb.shape
+    raw = b"".join(b"\x00" + rgb[r].tobytes() for r in range(h))     # filter 0 per row
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
 def synthetic_pngs(n=90, side=64, classes=("cat", "dog", "bird")):
     """The notebook's synthetic set as PNG files: one low-frequency template per class."""
-    import io
     import numpy as np
-    from PIL import Image
     rng = np.random.default_rng(11)
     cells = 6
     templates = [rng.standard_normal((cells, cells, 3)).astype(np.float32) for _ in classes]
@@ -43,9 +54,8 @@ def synthetic_pngs(n=90, side=64, classes=("cat", "dog", "bird")):
     for i in range(n):
         k = i % len(classes)
         img = 0.5 + 0.3 * templates[k][idx][:, idx] + 0.15 * rng.standard_normal((side, side, 3)).astype(np.float32)
-        buf = io.BytesIO()
-        Image.fromarray((np.clip(img, 0, 1) * 255).astype("uint8")).save(buf, format="PNG")
-        files.append({"name": f"{classes[k]}_{i:03d}.png", "mimeType": "image/png", "buffer": buf.getvalue()})
+        files.append({"name": f"{classes[k]}_{i:03d}.png", "mimeType": "image/png",
+                      "buffer": png_bytes((np.clip(img, 0, 1) * 255).astype("uint8"))})
     return files
 
 
