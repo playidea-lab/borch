@@ -958,7 +958,7 @@ def test_every_docs_page_has_the_rail_its_grid_reserves_a_column_for():
     missing = []
     for page in _pages():
         html = page.read_text(encoding="utf-8")
-        if '<div class="docs">' in html and '<aside class="sidebar">' not in html:
+        if '<div class="docs">' in html and not re.search(r'<aside class="sidebar"[^>]*>', html):
             missing.append(str(page.relative_to(SITE)))
     assert not missing, f"`.docs` pages without their sidebar rail: {missing}"
 
