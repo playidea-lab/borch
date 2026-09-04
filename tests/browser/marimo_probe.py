@@ -30,6 +30,43 @@ OUTPUTS = """() => {
 KERNEL_WAIT_MS = 10_000     # the run buttons exist before the kernel does; a click at 0.6 s closed the page
 
 
+def synthetic_pngs(n=90, side=64, classes=("cat", "dog", "bird")):
+    """The notebook's synthetic set as PNG files: one low-frequency template per class."""
+    import io
+    import numpy as np
+    from PIL import Image
+    rng = np.random.default_rng(11)
+    cells = 6
+    templates = [rng.standard_normal((cells, cells, 3)).astype(np.float32) for _ in classes]
+    idx = np.arange(side) * cells // side
+    files = []
+    for i in range(n):
+        k = i % len(classes)
+        img = 0.5 + 0.3 * templates[k][idx][:, idx] + 0.15 * rng.standard_normal((side, side, 3)).astype(np.float32)
+        buf = io.BytesIO()
+        Image.fromarray((np.clip(img, 0, 1) * 255).astype("uint8")).save(buf, format="PNG")
+        files.append({"name": f"{classes[k]}_{i:03d}.png", "mimeType": "image/png", "buffer": buf.getvalue()})
+    return files
+
+
+def upload_pass(page, t0, deadline):
+    """Feed the PNGs to the notebook's file input and wait for the review table to show
+    their names, then the retrained accuracy. Returns (seconds, "acc% on N rows") or None."""
+    page.set_input_files('input[type="file"]', synthetic_pngs())
+    while time.time() < deadline:
+        page.wait_for_timeout(500)
+        body = page.evaluate(OUTPUTS)
+        if re.search(r"(cat|dog|bird)_\d{3}\.png", body):
+            page.wait_for_timeout(1500)
+            body = page.evaluate(OUTPUTS)
+            acc = re.search(r"agrees with the given labels on \*?\*?(\d+)%", body)
+            rows = re.search(r"(\d+) rows, 5 columns", body)
+            if acc and rows:
+                return (time.time() - t0, f"{acc.group(1)}% on {rows.group(1)} rows")
+    print("  upload pass: the table never showed the uploaded names")
+    return None
+
+
 def main(argv):
     from playwright.sync_api import sync_playwright
     headed = "--headed" in argv
@@ -72,13 +109,19 @@ def main(argv):
                         break
                 errors = [l for l in body.splitlines() if "Traceback" in l or "Error:" in l][:3]
                 if len(marks) < len(want):
-                    print("  rendered so far:", repr(body[:600]))
+                    print("  rendered so far:", repr(body[:1500]))
+                else:
+                    # Second pass: real files through `mo.ui.file` → `torch.decode_images`.
+                    # Ninety PNGs of the same three-template kind, named the way the
+                    # notebook reads labels (`cat_000.png`); marimo re-runs the cells
+                    # below the upload on its own, so the table's names change.
+                    marks["uploaded"] = upload_pass(page, t0, deadline)
             finally:
                 context.close()
     finally:
         shutdown()
-    for key in ("adapter", "trained", "queue", "export"):
-        if key in marks:
+    for key in ("adapter", "trained", "queue", "export", "uploaded"):
+        if marks.get(key):
             print(f"  {key:8s} {marks[key][0]:5.1f} s  {marks[key][1]}")
         else:
             print(f"  {key:8s}   —    (not reached)")
@@ -87,7 +130,9 @@ def main(argv):
     adapter = marks.get("adapter", (0, None))[1]
     if refuse_if_software(adapter, "the workbench page"):
         return 1
-    ok = len(marks) == 4 and int(marks["trained"][1]) >= 90 and int(marks["queue"][1]) == 90
+    ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "uploaded"))
+    ok = ok and int(marks["trained"][1]) >= 90 and int(marks["queue"][1]) == 90
+    ok = ok and int(marks["uploaded"][1].split("%")[0]) >= 90 and marks["uploaded"][1].endswith("on 90 rows")
     print("**the workbench trains, reviews and exports**" if ok else "**it did not** — see above")
     return 0 if ok else 1
 

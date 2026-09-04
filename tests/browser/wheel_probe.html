@@ -46,7 +46,11 @@ for step in range(60):
 w, b = [p.item() for p in model.parameters()]
 model.eval()
 data = torch.onnx.export(model, xs)
-f"import {boot:.0f} ms · adapter {adapter} · losses {losses} · learned y = {w:.2f}x + {b:.2f} · onnx {len(data)} bytes"
+# The review score, on the wheel: two tight clusters, one label swapped — it alone scores 1.
+import numpy as np
+feats = np.array([[1, 0], [0.9, 0.1], [1, 0.1], [0, 1], [0.1, 0.9], [0, 1.1]], dtype=np.float32)
+doubt = torch.suspects(feats, np.array([0, 0, 1, 1, 1, 1]), k=2)
+f"import {boot:.0f} ms · adapter {adapter} · losses {losses} · learned y = {w:.2f}x + {b:.2f} · onnx {len(data)} bytes · suspects {doubt.round(2).tolist()}"
 \`);
         postMessage({ done: text, ms: performance.now() - t1 });
       } catch (err) {

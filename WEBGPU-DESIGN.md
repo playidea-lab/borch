@@ -278,8 +278,11 @@ with five cases immediately.
 
 ### Data loading — the plumbing is in, and **it does not change the numbers**
 
-`utils.data` (TensorDataset and DataLoader), `fetch_cached` (an OPFS cache), and
-`decode_cifar10`.
+`utils.data` (TensorDataset and DataLoader), `fetch_cached` (an OPFS cache),
+`decode_cifar10`, and — for images a visitor already has — `decode_images` (files →
+NCHW in [0, 1], labels from the names) with `suspects` (the share of each sample's
+k nearest neighbours that disagree with its label; the workbench's review order).
+The last two are the core's; the binding only fetches Pillow in Pyodide.
 
 - **The data stays on the CPU.** All of CIFAR-10 on the GPU is 614MB and one batch
   is 3.1MB. Uploading per batch is cheaper and leaves the GPU memory to the model

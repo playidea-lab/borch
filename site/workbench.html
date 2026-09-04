@@ -74,7 +74,7 @@
     <h2>Worth knowing</h2>
     <ul>
       <li>The kernel takes about ten seconds to come up (Pyodide and marimo download). Cells do not run by themselves: press the run button at the bottom right.</li>
-      <li>A label is the part of the file name before the first <code>_</code>. Upload nothing and a synthetic three-class set runs instead.</li>
+      <li>A label is the part of the file name before the first <code>_</code>. Upload nothing and a synthetic three-class set runs instead. The two calls doing the work are the library's: <code>torch.decode_images</code> turns the files into an NCHW batch with labels from the names, and <code>torch.suspects</code> scores each label by how many of its five nearest neighbours in the model's features disagree with it — the review table's order.</li>
       <li>It lives inside the tab's memory and Pyodide's package range — the same list as the <a href="notebook.html">notebook page</a>.</li>
     </ul>
     <p class="small muted">

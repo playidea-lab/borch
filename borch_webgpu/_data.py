@@ -492,6 +492,28 @@ def decode_cifar10(raw):
     return x, y
 
 
+
+# Images a visitor already has, and which of their labels to doubt. **The computation
+# is the core's** (`borch._data`) — numpy on the CPU, the same grain as `decode_cifar10`:
+# bytes in hand become arrays, and the model is what runs on the GPU. What differs here
+# is only how Pillow arrives: Pyodide ships it as a package the page has to ask for.
+from borch._data import label_from_name, suspects                    # noqa: E402,F401
+from borch._data import decode_images as _decode_images_core         # noqa: E402
+
+
+def decode_images(files, size=64, label=label_from_name):
+    """See `borch.decode_images`. In Pyodide, fetches the `pillow` package on first
+    use (JSPI, the same `run_sync` a readback uses) — so a notebook does not need an
+    `import PIL` line of its own to get the decoder loaded."""
+    try:
+        return _decode_images_core(files, size, label)
+    except ImportError:
+        import pyodide_js
+        from pyodide.ffi import run_sync
+        run_sync(pyodide_js.loadPackage("pillow"))
+        return _decode_images_core(files, size, label)
+
+
 # `save` and `load` used to live here as a thin layer over pickle. **They moved
 # to `_serialize.py` and the format became safetensors.** They call the core's
 # codec now, so a file one side writes is a file the other side reads — which is

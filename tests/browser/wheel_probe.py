@@ -66,6 +66,9 @@ def main(argv):
     done = got.get("done") or ""
     # Judged here, not in the page: y = 3x + 1 learned to two decimals, and an ONNX file.
     ok = ("learned y = 2.9" in done or "learned y = 3.0" in done) and "x + 1.0" in done and " onnx " in done
+    # `suspects` on the wheel: the swapped label (third) is contradicted by both its
+    # neighbours; the two beside it each have it as one of their two neighbours.
+    ok = ok and "suspects [0.5, 0.5, 1.0, 0.0, 0.0, 0.0]" in done
     print("**the wheel trains and exports, in a worker**" if ok else "**it did not** — see above")
     return 0 if ok else 1
 

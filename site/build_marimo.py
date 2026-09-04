@@ -8,9 +8,11 @@ and the notebook's first cell installs it from there. The version is pinned to t
 one the spike measured.
 """
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "site" / "marimo-src"
@@ -34,8 +36,15 @@ def main():
         print("no wheel came out of `uv build`", file=sys.stderr)
         return 2
     shutil.rmtree(OUT, ignore_errors=True)
-    sh(["uv", "run", "--with", MARIMO, "marimo", "export", "html-wasm", "review.py",
-        "-o", str(OUT), "--mode", "edit"], cwd=SRC)
+    # The notebook names the wheel it installs. The name in the source is the version
+    # at the time of writing; the one that was just built wins, so a version bump in
+    # pyproject does not leave the page installing a wheel that is not beside it.
+    src = (SRC / "review.py").read_text(encoding="utf-8")
+    src = re.sub(r"pyborch-[0-9.]+-py3-none-any\.whl", wheels[-1].name, src)
+    with tempfile.TemporaryDirectory() as tmp:
+        (pathlib.Path(tmp) / "review.py").write_text(src, encoding="utf-8")
+        sh(["uv", "run", "--with", MARIMO, "marimo", "export", "html-wasm", "review.py",
+            "-o", str(OUT), "--mode", "edit"], cwd=tmp)
     shutil.copy(wheels[-1], OUT / wheels[-1].name)
     for junk in (SRC / "__marimo__",):
         if junk.is_dir():

@@ -86,6 +86,7 @@ borch_webgpu/_borch.js
 site/lab/
 site/lab-src/.jupyterlite.doit.db
 site/lab-src/_output/
+site/lab-src/.cache/
 # marimo, built by site/build_marimo.py (the deploy builds it)
 site/marimo/
 site/marimo-src/__marimo__/
