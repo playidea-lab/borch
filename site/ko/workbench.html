@@ -50,6 +50,15 @@
 </header>
 
 <div class="docs">
+  <aside class="sidebar">
+    <h4>워크벤치</h4>
+    <nav>
+      <a href="#differs">노트북과 다른 점</a>
+      <a href="#knowing">알아 둘 것</a>
+      <a href="notebook.html">노트북 →</a>
+    </nav>
+  </aside>
+
   <main class="doc-main">
     <p class="eyebrow">Workbench</p>
     <h1>작업대: 올리고, 학습하고, 검수하고, 가져간다</h1>
@@ -63,14 +72,14 @@
       <a class="btn primary" href="../marimo/index.html">작업대 열기 →</a>
       <a class="btn ghost" href="notebook.html">Jupyter 쪽 노트북 →</a>
     </p>
-    <h2>노트북과 어떻게 다른가</h2>
+    <h2 id="differs">노트북과 어떻게 다른가</h2>
     <ul>
       <li><strong>반응형.</strong> 셀 하나를 바꾸면 그에 딸린 셀만 다시 돈다. 검수 표에서 행을 고르면 아래 셀이 따라온다.</li>
       <li><strong>UI 요소.</strong> 파일 업로드, 표, 버튼이 Python 값이 된다 — 위젯 코드 없이.</li>
       <li><strong>AI 조수.</strong> 설정에 자기 API 키를 넣으면 셀 생성·오류 고침 제안이 된다. 코드와 오류만 나가고 이미지는 나가지 않는다.</li>
       <li><strong>같은 wheel.</strong> <code>import borch_webgpu as torch</code> 가 여기서도 borch.ts 를 띄운다.</li>
     </ul>
-    <h2>알아 둘 것</h2>
+    <h2 id="knowing">알아 둘 것</h2>
     <ul>
       <li>열고 10초쯤 커널이 뜬다(Pyodide 와 marimo 를 받는 시간). 셀은 자동 실행되지 않으니 오른쪽 아래 실행 버튼을 누른다.</li>
       <li>라벨은 파일명의 첫 <code>_</code> 앞부분이다. 아무것도 올리지 않으면 합성 3클래스로 돈다. 일을 하는 두 호출은 라이브러리 것이다. <code>torch.decode_images</code>가 파일을 이름에서 읽은 라벨과 함께 NCHW 배치로 만들고, <code>torch.suspects</code>가 모델 특징 공간에서 가장 가까운 이웃 다섯 개 중 라벨이 다른 비율로 각 라벨을 점수화한다 — 검수 표의 정렬 기준이다.</li>

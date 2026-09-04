@@ -50,6 +50,15 @@
 </header>
 
 <div class="docs">
+  <aside class="sidebar">
+    <h4>노트북</h4>
+    <nav>
+      <a href="#two-lines">두 줄</a>
+      <a href="#limits">탭이 못 하는 것</a>
+      <a href="workbench.html">워크벤치 →</a>
+    </nav>
+  </aside>
+
   <main class="doc-main">
     <p class="eyebrow">Notebook</p>
     <h1>노트북, 설치 없이</h1>
@@ -62,7 +71,7 @@
       <a class="btn primary" href="../lab/lab/index.html?path=borch.ipynb">노트북 열기 →</a>
       <a class="btn ghost" href="../lab/lab/index.html">빈 JupyterLab →</a>
     </p>
-    <h2>두 줄</h2>
+    <h2 id="two-lines">두 줄</h2>
 <pre><code>%pip install pyborch
 import borch_webgpu as torch</code></pre>
     <p>
@@ -70,7 +79,7 @@ import borch_webgpu as torch</code></pre>
       marimo 의 wasm 판. wheel 이 borch.ts 를 안에 지니고 import 때 장치를 띄우기 때문이다.
       torch 코드에서 바뀌는 것은 <a href="python.html#changes">Python 페이지</a>에 있다 — 짧다.
     </p>
-    <h2>탭이 못 하는 것</h2>
+    <h2 id="limits">탭이 못 하는 것</h2>
     <ul>
       <li>메모리는 탭의 것, 몇 GB. 데이터셋과 사전학습 가중치는 매번 다운로드다.</li>
       <li>패키지는 Pyodide 의 것: CUDA 계열은 없고, 일부 C 확장도 없다.</li>

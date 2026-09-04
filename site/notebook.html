@@ -50,6 +50,15 @@
 </header>
 
 <div class="docs">
+  <aside class="sidebar">
+    <h4>Notebook</h4>
+    <nav>
+      <a href="#two-lines">The two lines</a>
+      <a href="#limits">What a tab cannot do</a>
+      <a href="workbench.html">The workbench →</a>
+    </nav>
+  </aside>
+
   <main class="doc-main">
     <p class="eyebrow">Notebook</p>
     <h1>A notebook, nothing installed</h1>
@@ -62,7 +71,7 @@
       <a class="btn primary" href="lab/lab/index.html?path=borch.ipynb">Open the notebook →</a>
       <a class="btn ghost" href="lab/lab/index.html">Empty JupyterLab →</a>
     </p>
-    <h2>The two lines</h2>
+    <h2 id="two-lines">The two lines</h2>
 <pre><code>%pip install pyborch
 import borch_webgpu as torch</code></pre>
     <p>
@@ -71,7 +80,7 @@ import borch_webgpu as torch</code></pre>
       brings the device up on import. What torch code has to change is on the
       <a href="python.html#changes">Python page</a>; it is short.
     </p>
-    <h2>What a tab cannot do</h2>
+    <h2 id="limits">What a tab cannot do</h2>
     <ul>
       <li>Memory is the tab's, a few GB. Datasets and pretrained weights are downloads,
         every time.</li>

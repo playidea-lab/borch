@@ -50,6 +50,15 @@
 </header>
 
 <div class="docs">
+  <aside class="sidebar">
+    <h4>Workbench</h4>
+    <nav>
+      <a href="#differs">How it differs</a>
+      <a href="#knowing">Worth knowing</a>
+      <a href="notebook.html">The notebook →</a>
+    </nav>
+  </aside>
+
   <main class="doc-main">
     <p class="eyebrow">Workbench</p>
     <h1>Upload, train, review, take it away</h1>
@@ -64,14 +73,14 @@
       <a class="btn primary" href="marimo/index.html">Open the workbench →</a>
       <a class="btn ghost" href="notebook.html">The Jupyter notebook instead →</a>
     </p>
-    <h2>How it differs from the notebook</h2>
+    <h2 id="differs">How it differs from the notebook</h2>
     <ul>
       <li><strong>Reactive.</strong> Change a cell and only what depends on it reruns. Pick a row in the review table and the cell below follows.</li>
       <li><strong>UI elements.</strong> A file upload, a table, a button become Python values — no widget code.</li>
       <li><strong>AI assistant.</strong> Put your own API key in the settings and cells can be generated and errors fixed on request. Code and errors leave; images do not.</li>
       <li><strong>The same wheel.</strong> <code>import borch_webgpu as torch</code> boots borch.ts here too.</li>
     </ul>
-    <h2>Worth knowing</h2>
+    <h2 id="knowing">Worth knowing</h2>
     <ul>
       <li>The kernel takes about ten seconds to come up (Pyodide and marimo download). Cells do not run by themselves: press the run button at the bottom right.</li>
       <li>A label is the part of the file name before the first <code>_</code>. Upload nothing and a synthetic three-class set runs instead. The two calls doing the work are the library's: <code>torch.decode_images</code> turns the files into an NCHW batch with labels from the names, and <code>torch.suspects</code> scores each label by how many of its five nearest neighbours in the model's features disagree with it — the review table's order.</li>
