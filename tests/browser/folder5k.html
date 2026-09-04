@@ -1,0 +1,207 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>a folder of 5,000 images — decode, features, cache, head, neighbours</title>
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "/borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.6.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.2.3?external=borch-ts,bimm-ts"
+} }
+</script>
+<body>
+<p>
+  <input id="pick" type="file" multiple webkitdirectory>
+  <input id="pickfiles" type="file" multiple accept="image/*">
+</p>
+<pre id="out">waiting for a folder…</pre>
+<script type="module">
+  // **Does a folder of 5,000 images go through a tab?** Teachable Machine froze Chrome at
+  // ten classes of 500–1,000 images. The field trainer's design is: decode in batches,
+  // run a frozen backbone once per image, keep only the feature vector (a few KB) in
+  // IndexedDB, train the head on the cache, rank the neighbours over the cache. This page
+  // measures each stage on a real folder and says what the tab held at its peak.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const q = new URLSearchParams(location.search);
+  const want = q.get("model") || "imagenet-efficientnet-b0";
+  const BATCH = Number(q.get("batch") || 32);
+  const SIDE = 224;
+  const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
+  const heap = () => (performance.memory ? performance.memory.usedJSHeapSize / 1e6 : NaN);
+
+  const labelOf = (f) => {
+    const rel = f.webkitRelativePath || "";
+    const parts = rel.split("/");
+    if (parts.length >= 2) return parts[parts.length - 2];      // the folder it sits in
+    return f.name.split("_")[0];                                 // else the name's prefix
+  };
+
+  // IndexedDB: one row per batch — feature rows plus the names that go with them.
+  // **Opened inside `run`, not at the top of the module.** A top-level `await` here
+  // delayed the change listeners below past the moment the runner fed the folder in, and
+  // the page then waited forever for a pick it had already been given (measured: 300
+  // files "fed", never "picked").
+  let idb = null;
+  const openIdb = () => new Promise((resolve, reject) => {
+    const req = indexedDB.open("borch-folder5k", 1);
+    req.onupgradeneeded = () => { const db = req.result; if (db.objectStoreNames.contains("feats")) db.deleteObjectStore("feats"); db.createObjectStore("feats"); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const idbPut = (key, value) => new Promise((resolve, reject) => {
+    const tx = idb.transaction("feats", "readwrite"); tx.objectStore("feats").put(value, key);
+    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+  });
+  const idbAll = () => new Promise((resolve, reject) => {
+    const tx = idb.transaction("feats", "readonly"); const req = tx.objectStore("feats").getAll();
+    req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+  });
+  const idbClear = () => new Promise((resolve, reject) => {
+    const tx = idb.transaction("feats", "readwrite"); tx.objectStore("feats").clear();
+    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+  });
+
+  async function run(files) {
+    const { init, Device, Tensor, nn, optim, noGrad, device, scope } = await import("borch-ts");
+    const hub = await import("borch-hub");
+    await init();
+    say(`adapter: ${Device.adapterInfo}`);
+    say(`files: ${files.length} · ${(files.reduce((s, f) => s + f.size, 0) / 1e6).toFixed(0)} MB on disk`);
+    const index = await (await fetch("https://models.pilab.kr/index.json")).json();
+    const rows = (Array.isArray(index) ? index : index.models ?? index.entries ?? []).filter((r) => r.name === want);
+    if (!rows.length) throw new Error(`${want} is not in the registry`);
+    const entry = rows[rows.length - 1];
+    const tLoad = performance.now();
+    const { model } = await hub.load(entry.manifestUrl);
+    model.eval();
+    say(`${entry.name} ${entry.version} · ${(entry.bytes / 1e6).toFixed(1)} MB · loaded in ${(performance.now() - tLoad).toFixed(0)} ms`);
+    const d = device();
+    idb = await openIdb();
+    await idbClear();
+
+    // ── Stage A: decode → normalise → backbone → cache, batch by batch ──
+    const classes = [...new Set(files.map(labelOf))].sort();
+    const labels = files.map((f) => classes.indexOf(labelOf(f)));
+    const names = files.map((f) => f.name);
+    say(`classes: ${classes.length} (${classes.join(", ")})`);
+    const canvas = new OffscreenCanvas(SIDE, SIDE);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    let featureDim = 0, feats = null;
+    let decodeMs = 0, gpuMs = 0, idbMs = 0, peakGpu = 0, peakHeap = 0;
+    const tA = performance.now();
+    for (let start = 0; start < files.length; start += BATCH) {
+      const batch = files.slice(start, start + BATCH);
+      const n = batch.length;
+      const t0 = performance.now();
+      const bitmaps = await Promise.all(batch.map((f) => createImageBitmap(f, { resizeWidth: SIDE, resizeHeight: SIDE, resizeQuality: "medium" })));
+      const x = new Float32Array(n * 3 * SIDE * SIDE);
+      for (let i = 0; i < n; i++) {
+        ctx.drawImage(bitmaps[i], 0, 0, SIDE, SIDE);
+        bitmaps[i].close();
+        const px = ctx.getImageData(0, 0, SIDE, SIDE).data;
+        const base = i * 3 * SIDE * SIDE, plane = SIDE * SIDE;
+        for (let p = 0; p < plane; p++) {
+          x[base + p] = (px[p * 4] / 255 - MEAN[0]) / STD[0];
+          x[base + plane + p] = (px[p * 4 + 1] / 255 - MEAN[1]) / STD[1];
+          x[base + 2 * plane + p] = (px[p * 4 + 2] / 255 - MEAN[2]) / STD[2];
+        }
+      }
+      const t1 = performance.now();
+      decodeMs += t1 - t0;
+      const values = await scope(async () => {
+        const y = noGrad(() => model.forward(Tensor.from(x, [n, 3, SIDE, SIDE])));
+        if (!featureDim) { featureDim = y.shape[y.shape.length - 1]; feats = new Float32Array(files.length * featureDim); }
+        return y.toArray();
+      });
+      const t2 = performance.now();
+      gpuMs += t2 - t1;
+      feats.set(values, start * featureDim);
+      await idbPut(start, { names: names.slice(start, start + n), rows: values instanceof Float32Array ? values : Float32Array.from(values) });
+      idbMs += performance.now() - t2;
+      peakGpu = Math.max(peakGpu, d.memory.bytes);
+      peakHeap = Math.max(peakHeap, heap());
+      if ((start / BATCH) % 25 === 0) say(`  ${start + n}/${files.length} · decode ${(decodeMs / 1000).toFixed(1)} s · gpu ${(gpuMs / 1000).toFixed(1)} s · idb ${(idbMs / 1000).toFixed(1)} s · gpu mem ${(d.memory.bytes / 1e6).toFixed(0)} MB · heap ${heap().toFixed(0)} MB · faults ${d.faults.count}`);
+    }
+    const stageA = (performance.now() - tA) / 1000;
+    say(`A · ${files.length} images → ${featureDim}-d features: ${stageA.toFixed(1)} s (decode ${(decodeMs / 1000).toFixed(1)}, backbone ${(gpuMs / 1000).toFixed(1)}, IndexedDB ${(idbMs / 1000).toFixed(1)}) · ${(1000 * stageA / files.length).toFixed(1)} ms/image · peak gpu ${(peakGpu / 1e6).toFixed(0)} MB · peak heap ${peakHeap.toFixed(0)} MB · faults ${d.faults.count}`);
+
+    // ── Stage B: a head on the cache, 80/20 split ──
+    const N = files.length, K = classes.length;
+    const order = Array.from({ length: N }, (_, i) => i);
+    let seed = 7; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+    for (let i = N - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+    const nTrain = Math.floor(N * 0.8);
+    const gather = (idx) => { const a = new Float32Array(idx.length * featureDim); idx.forEach((i, r) => a.set(feats.subarray(i * featureDim, (i + 1) * featureDim), r * featureDim)); return a; };
+    const trIdx = order.slice(0, nTrain), teIdx = order.slice(nTrain);
+    const xTr = Tensor.from(gather(trIdx), [nTrain, featureDim]), yTr = Tensor.from(trIdx.map((i) => labels[i]), [nTrain]);
+    const xTe = Tensor.from(gather(teIdx), [N - nTrain, featureDim]);
+    const head = new nn.Linear(featureDim, K);
+    const opt = new optim.SGD(head.parameters(), 0.05, 0.9);
+    const crit = new nn.CrossEntropyLoss();
+    const tB = performance.now();
+    let last = null;
+    for (let step = 0; step < 300; step++) {
+      scope(() => { const l = crit.forward(head.forward(xTr), yTr); opt.zeroGrad(); l.backward(); opt.step(); if (step === 299) last = l; });
+    }
+    const lastLoss = (await last.toArray())[0];
+    const pred = await scope(async () => noGrad(() => head.forward(xTe)).argmax(1).toArray());
+    const acc = teIdx.reduce((s, i, r) => s + (pred[r] === labels[i] ? 1 : 0), 0) / teIdx.length;
+    const headS = (performance.now() - tB) / 1000;
+    say(`B · head Linear(${featureDim} → ${K}) · 300 steps on ${nTrain} cached rows: ${headS.toFixed(1)} s · loss ${lastLoss.toFixed(3)} · held-out ${(100 * acc).toFixed(1)}% on ${teIdx.length} · faults ${d.faults.count}`);
+
+    // ── Stage C: neighbours over all N — cosine on the GPU, top-5 on the CPU ──
+    const tC = performance.now();
+    const all = Tensor.from(feats, [N, featureDim]);
+    const sims = await scope(async () => {
+      const norm = all.div(all.mul(all).sum(1, true).sqrt());
+      return noGrad(() => norm.matmul(norm.transpose())).toArray();
+    });
+    const gpuC = (performance.now() - tC) / 1000;
+    let disagree = 0;
+    const suspect = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const row = i * N; const bestV = [-2, -2, -2, -2, -2], bestJ = [-1, -1, -1, -1, -1];
+      for (let j = 0; j < N; j++) {
+        if (j === i) continue;
+        const v = sims[row + j];
+        if (v > bestV[4]) { let k = 4; while (k > 0 && bestV[k - 1] < v) { bestV[k] = bestV[k - 1]; bestJ[k] = bestJ[k - 1]; k--; } bestV[k] = v; bestJ[k] = j; }
+      }
+      let bad = 0; for (const j of bestJ) if (labels[j] !== labels[i]) bad++;
+      suspect[i] = bad / 5; disagree += bad;
+    }
+    const knnS = (performance.now() - tC) / 1000;
+    say(`C · ${N}×${N} cosine (${(N * N * 4 / 1e6).toFixed(0)} MB) on the GPU ${gpuC.toFixed(1)} s · top-5 on the CPU ${(knnS - gpuC).toFixed(1)} s · mean disagreement ${(disagree / (5 * N)).toFixed(3)} · faults ${d.faults.count}`);
+
+    // ── Stage D: the second visit — features back from IndexedDB, head again ──
+    const tD = performance.now();
+    const stored = await idbAll();
+    const back = new Float32Array(N * featureDim); let at = 0;
+    for (const chunk of stored) { back.set(chunk.rows, at); at += chunk.rows.length; }
+    const readS = (performance.now() - tD) / 1000;
+    const head2 = new nn.Linear(featureDim, K); const opt2 = new optim.SGD(head2.parameters(), 0.05, 0.9);
+    const xAll = Tensor.from(gather(trIdx), [nTrain, featureDim]);
+    const tD2 = performance.now();
+    for (let step = 0; step < 300; step++) scope(() => { const l = crit.forward(head2.forward(xAll), yTr); opt2.zeroGrad(); l.backward(); opt2.step(); });
+    await scope(async () => head2.forward(xTe).toArray());
+    const againS = (performance.now() - tD2) / 1000;
+    say(`D · second visit: ${(at / featureDim)} rows back from IndexedDB in ${readS.toFixed(2)} s (${(at * 4 / 1e6).toFixed(0)} MB) · head retrained in ${againS.toFixed(1)} s`);
+
+    const total = stageA + headS + knnS;
+    say(`total, first visit: ${total.toFixed(1)} s for ${N} images · ${total <= 120 ? "inside two minutes" : "**outside two minutes**"} · second visit ≈ ${(readS + againS).toFixed(1)} s`);
+    say(`validation faults: ${d.faults.count} · device lost: ${d.lost ? JSON.stringify(d.lost) : "no"}`);
+    window.__folder5k = { text: lines.join("\n"), adapter: Device.adapterInfo, n: N, classes: K, featureDim, stageA, decodeMs, gpuMs, idbMs, peakGpuMB: peakGpu / 1e6, peakHeapMB: peakHeap, headS, acc, knnS, gpuC, readS, againS, total, faults: d.faults.count, lost: d.lost ?? null };
+  }
+
+  const start = (input) => async () => {
+    const files = [...input.files].filter((f) => /\.(jpe?g|png)$/i.test(f.name));
+    if (!files.length) { say(`${input.id}: no image files arrived`); return; }
+    say(`picked ${files.length} files`);
+    try { await run(files); }
+    catch (err) { window.__folder5k = { error: String(err && err.stack || err), text: lines.join("\n") }; say(`it could not be measured: ${err}`); }
+  };
+  document.getElementById("pick").addEventListener("change", start(document.getElementById("pick")));
+  document.getElementById("pickfiles").addEventListener("change", start(document.getElementById("pickfiles")));
+  window.__folder5kReady = true;
+</script>
+</body>
