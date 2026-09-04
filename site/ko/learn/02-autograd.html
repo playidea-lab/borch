@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/02-autograd.html" class="lang">English</a>
     </nav>
@@ -107,7 +112,7 @@
       이유다. 이 블록을 연달아 두 번 돌려 보라.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const w = Tensor.from([2], [], { requiresGrad: true });
@@ -117,6 +122,17 @@
 
         w.square().backward();
         log("두 번 부른 뒤: ", await w.grad.item(), " (덮어쓴 것이 아니라 더했다)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        w = torch.tensor(2.0, requires_grad=True)
+
+        (w ** 2).backward()
+        print("한 번 부른 뒤: ", w.grad.item())
+
+        (w ** 2).backward()
+        print("두 번 부른 뒤: ", w.grad.item(), " (덮어쓴 것이 아니라 더했다)")
       </script>
     </div>
 
@@ -128,7 +144,7 @@
       너머로 못 넘기기 때문이다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const w = Tensor.from([2], [], { requiresGrad: true });
@@ -139,6 +155,18 @@
         const free = noGrad(() => w.square());
         log("noGrad 안에서:    ", free.requiresGrad);
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        w = torch.tensor(2.0, requires_grad=True)
+
+        tracked = w ** 2
+        print("그냥 계산했을 때:", tracked.requires_grad)
+
+        with torch.no_grad():
+            free = w ** 2
+        print("no_grad 안에서:    ", free.requires_grad)
+      </script>
     </div>
 
     <h2>한 스텝이 아니라 사슬</h2>
@@ -147,7 +175,7 @@
       부모를 기록하고, <code>backward()</code> 가 그것을 거슬러 간다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const x = Tensor.from([1, 2, 3], [3], { requiresGrad: true });
@@ -161,6 +189,20 @@
         log("y      =", await y.item());
         log("dy/dx  =", Array.from(await x.grad.toArray()).join(", "));
         log("손으로 =", [1, 2, 3].map((v) => 6 * v + 2).join(", "));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        x = torch.tensor([1., 2., 3.], requires_grad=True)
+
+        # y = sum(3x^2 + 2x)  →  dy/dx = 6x + 2
+        y = (3 * x ** 2 + 2 * x).sum()
+
+        y.backward()
+
+        print("y      =", y.item())
+        print("dy/dx  =", ", ".join(str(v) for v in x.grad.tolist()))
+        print("손으로 =", ", ".join(str(6 * v + 2) for v in [1, 2, 3]))
       </script>
     </div>
 

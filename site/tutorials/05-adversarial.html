@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/">Learn</a>
       <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/tutorials/05-adversarial.html" class="lang">한국어</a>
     </nav>
@@ -145,6 +150,74 @@
           classes: test.classes, weights: await save(model.stateDict()), makeModel,
         };
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import js
+        from pyodide.ffi import to_js
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        # The same small network as tutorial 4, trained here so this page stands alone.
+        def make_model():
+            return nn.Sequential(
+                nn.Conv2d(3, 16, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+                nn.Conv2d(16, 32, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+                nn.Flatten(), nn.Linear(32 * 8 * 8, 10))
+
+        # The page's CIFAR-10 helper (a sprite beside the page) answers with borch.ts tensors;
+        # their values come across once and become torch tensors here.
+        async def cifar10(split, **options):
+            got = await js.borchPG.cifar10(js.borch.Tensor, split,
+                                           to_js(options, dict_converter=js.Object.fromEntries))
+            x = np.asarray((await got.x.toArray()).to_py(), dtype=np.float32).reshape(-1, 3, 32, 32)
+            y = np.asarray((await got.y.toArray()).to_py(), dtype=np.int64)
+            return x, y, list(got.classes)
+
+        train_x, train_y, classes = await cifar10("train", normalize=True)
+        dataset = torch.utils.data.TensorDataset(torch.tensor(train_x), torch.tensor(train_y))
+        loader = torch.utils.data.DataLoader(dataset, batch_size=64, shuffle=True)
+
+        model = make_model()
+        opt = optim.Adam(model.parameters(), lr=1e-3)
+        crit = nn.CrossEntropyLoss()
+
+        for epoch in range(6):
+            if stopped():
+                break
+            total, seen = 0.0, 0
+            with torch.scope():                     # the epoch's batches
+                for bx, by in loader:
+                    with torch.scope():             # one step's intermediates
+                        opt.zero_grad()
+                        loss = crit(model(bx), by)
+                        loss.backward()
+                        opt.step()
+                        total += loss.item(); seen += 1
+            plot("loss", total / seen)
+        print("trained a classifier to attack.")
+
+        # The gradients from the last training step were allocated inside that step's
+        # scope, which has closed. Accumulating into them would read freed memory, so
+        # borch refuses — clear them before asking for a different gradient.
+        opt.zero_grad()
+
+        # Now the interesting part: mark the *picture* as requiring a gradient.
+        test_x, test_y, classes = await cifar10("test", count=8, normalize=True)
+        x = torch.tensor(test_x, requires_grad=True)
+
+        loss = crit(model(x), torch.tensor(test_y))
+        loss.backward()
+
+        print("")
+        print("loss:", f"{loss.item():.4f}")
+        print("x.grad:", list(x.grad.shape) if x.grad is not None else "(none — nothing flowed)")
+        print("That gradient is the same shape as the image: one number per pixel.")
+
+        fgsm = dict(pixels=test_x, grad=x.grad.numpy(), labels=test_y, classes=classes,
+                    state=model.state_dict(), make_model=make_model)
+      </script>
     </div>
 
     <h2>2 · One step along the sign</h2>
@@ -183,6 +256,27 @@
               `           ${flipped}/8`);
         }
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        if "fgsm" not in globals():
+            raise RuntimeError("Run block 1 first.")
+        pixels, labels, grad = fgsm["pixels"], fgsm["labels"], fgsm["grad"]
+
+        model = fgsm["make_model"]()
+        model.load_state_dict(fgsm["state"])
+
+        clean = model(torch.tensor(pixels)).argmax(1).tolist()
+
+        print("  eps    still right   changed answer")
+        for eps in [0, 0.01, 0.02, 0.05, 0.1, 0.2]:
+            moved = pixels + eps * np.sign(grad)               # the whole attack
+            said = model(torch.tensor(moved)).argmax(1).tolist()
+            right = sum(int(s == l) for s, l in zip(said, labels))
+            flipped = sum(int(s != c) for s, c in zip(said, clean))
+            print(f"  {eps:.2f}      {right:2d}/8           {flipped}/8")
+      </script>
     </div>
 
     <h2>3 · Look at what changed</h2>
@@ -212,6 +306,26 @@
         await show(Tensor.from(moved, [8, 3, 32, 32]), { scale: 3, range: [-1, 1] });
         log("the difference, amplified 4x:");
         await show(Tensor.from(diff, [8, 3, 32, 32]), { scale: 3, range: [0, 1] });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        if "fgsm" not in globals():
+            raise RuntimeError("Run block 1 first.")
+        pixels, grad = fgsm["pixels"], fgsm["grad"]
+
+        eps = 0.05
+        moved = pixels + eps * np.sign(grad)
+        diff = 0.5 + (moved - pixels) * 4                      # amplified, centred
+
+        # The tensors are normalised to -1..1; show() is told that range.
+        print("original:")
+        await show(torch.tensor(pixels), scale=3, range=[-1, 1])
+        print(f"perturbed (eps = {eps}):")
+        await show(torch.tensor(moved), scale=3, range=[-1, 1])
+        print("the difference, amplified 4x:")
+        await show(torch.tensor(diff), scale=3, range=[0, 1])
       </script>
     </div>
 

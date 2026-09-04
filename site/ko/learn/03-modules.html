@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/03-modules.html" class="lang">English</a>
     </nav>
@@ -76,7 +81,7 @@
       이다. torch 와 같은 배치라 체크포인트가 전치 없이 건너간다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
 
@@ -88,6 +93,20 @@
         log("");
         log("순방향:\n" + await fc.call(x).repr());
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        fc = nn.Linear(3, 2)
+        print("weight 모양:", tuple(fc.weight.shape))
+        print("bias 모양:  ", tuple(fc.bias.shape))
+
+        x = torch.tensor([[1., 2., 3.]])
+        print("")
+        print(f"순방향:\n{fc(x)}")
+      </script>
     </div>
 
     <h2>쌓기</h2>
@@ -97,7 +116,7 @@
       <strong>예외는 안 난다.</strong>
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
 
@@ -111,6 +130,24 @@
         log("");
         log("출력 모양:", JSON.stringify(model.call(x).shape));
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        model = nn.Sequential(
+            nn.Linear(4, 8), nn.ReLU(), nn.Linear(8, 2))
+
+        params = list(model.parameters())
+        print("파라미터:", len(params), "개")
+        for p in params:
+            print("  ", tuple(p.shape))
+
+        x = torch.randn(2, 4)
+        print("")
+        print("출력 모양:", tuple(model(x).shape))
+      </script>
     </div>
 
     <h2>직접 만들 때</h2>
@@ -120,7 +157,7 @@
       안 배우므로, 밑 클래스가 그것을 말하게 한다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
 
@@ -139,6 +176,24 @@
         log("파라미터:", layer.parameters().length, "개");
         log(await layer.call(Tensor.from([1, 2, 3], [3])).repr());
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        class Scale(nn.Module):
+            def __init__(self, n):
+                super().__init__()
+                self.gain = nn.Parameter(torch.ones(n))   # Parameter 로 감싸야 배운다
+
+            def forward(self, x):
+                return x * self.gain
+
+        layer = Scale(3)
+        print("파라미터:", len(list(layer.parameters())), "개")
+        print(layer(torch.tensor([1., 2., 3.])))
+      </script>
     </div>
 
     <h2>손실</h2>
@@ -147,7 +202,7 @@
       logits 와 <code>int64</code> 정답을 받는다 — torch 와 똑같이, 원-핫이 아니다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const logits = Tensor.from([2.0, 0.5, 0.1,
@@ -159,6 +214,21 @@
         const pred = Tensor.from([1, 2, 3], [3]);
         const truth = Tensor.from([1, 2, 4], [3]);
         log("MSE:          ", await new nn.MSELoss().call(pred, truth).item());
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+
+        logits = torch.tensor([[2.0, 0.5, 0.1],
+                               [0.2, 1.9, 0.3]])
+        target = torch.tensor([0, 1])
+
+        print("교차 엔트로피:", nn.CrossEntropyLoss()(logits, target).item())
+
+        pred = torch.tensor([1., 2., 3.])
+        truth = torch.tensor([1., 2., 4.])
+        print("MSE:          ", nn.MSELoss()(pred, truth).item())
       </script>
     </div>
 

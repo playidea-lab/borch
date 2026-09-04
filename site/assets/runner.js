@@ -424,7 +424,15 @@ def show(tensor, **options):
     # "Unexpected identifier" with nothing to do with this line, and not a single runnable
     # block appears. tests/browser/runner.html had written the same warning in a comment
     # and it was stepped on anyway.
-    return _js.borchPG.show(tensor, _js.Object.fromEntries(list(options.items())))
+    #
+    # A borch_webgpu tensor goes over as its borch.ts handle. Handed the Python wrapper,
+    # the drawer's tensor.toArray() call came back into Python from JavaScript, where a
+    # readback's run_sync has no suspender — "RuntimeError: No suspender", measured on
+    # the curve-fitting tutorial's Python tab. The options cross as a real JS object for
+    # the same reason: the drawer JSON-copies them, and a proxy copies to nothing.
+    from pyodide.ffi import to_js as _to_js
+    handle = getattr(tensor, "_h", tensor)
+    return _js.borchPG.show(handle, _to_js(options, dict_converter=_js.Object.fromEntries))
 
 def stopped():
     return bool(_js.borchPG.stopped)

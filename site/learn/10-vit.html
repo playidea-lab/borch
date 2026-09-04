@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">Learn</a>
       <a href="../tutorials/">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/learn/10-vit.html" class="lang">한국어</a>
     </nav>
@@ -105,6 +110,23 @@
         const tokens = map.reshape([2, D, 4]).permute([0, 2, 1]);
         log("as tokens :", JSON.stringify(tokens.shape), " (N, tokens, D)");
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        D, PATCH = 32, 4
+        patchify = nn.Conv2d(1, D, PATCH, PATCH, 0)
+
+        x = torch.randn(2, 1, 8, 8)
+        fmap = patchify(x)
+        print("image     :", list(x.shape))
+        print("patch map :", list(fmap.shape), " (a 2x2 grid of patches)")
+
+        tokens = fmap.reshape(2, D, 4).permute(0, 2, 1)
+        print("as tokens :", list(tokens.shape), " (N, tokens, D)")
+      </script>
     </div>
 
     <h2>Attention, and a linear layer that is not batched</h2>
@@ -170,6 +192,35 @@
           return f(t.reshape([n * k, d])).reshape([n, k, dOut]);
         };
         log("folded       :", JSON.stringify(perToken(u => fc.call(u), seq, D * 2).shape));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        D = 32
+        seq = torch.randn(2, 4, D)
+
+        # torch's layer hands back a pair: the output and the attention weights.
+        att = nn.MultiheadAttention(D, 4, batch_first=True)
+        out, weights = att(seq, seq, seq)
+        print("attention out:", list(out.shape), " weights:", list(weights.shape))
+
+        fc = nn.Linear(D, D * 2)
+        try:
+            # If this ever stops throwing, say so — silence would leave the note above
+            # claiming a refusal with nothing under it.
+            print("Linear on 3-D:", list(fc(seq).shape), "— it batches now")
+        except Exception as e:
+            print("Linear on 3-D:", str(e)[:70])
+
+        # Fold [N, T, D] to [N*T, D], apply, unfold. Rows are independent either way.
+        def per_token(f, t, d_out):
+            n, k, d = t.shape
+            return f(t.reshape(n * k, d)).reshape(n, k, d_out)
+
+        print("folded       :", list(per_token(fc, seq, D * 2).shape))
       </script>
     </div>
 
@@ -284,6 +335,82 @@
           log(`accuracy: ${right}/${N}`);
         });
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        D, HEADS, PATCH, TOK, N = 32, 4, 4, 4, 24
+
+        # One bright quadrant per image; the label is which one.
+        pixels = np.zeros((N, 1, 8, 8), dtype=np.float32)
+        labels = np.zeros(N, dtype=np.int64)
+        for i in range(N):
+            q = i % 4
+            labels[i] = q
+            r0, c0 = (q >> 1) * 4, (q & 1) * 4
+            pixels[i, 0, r0:r0 + 4, c0:c0 + 4] = 1
+        x = torch.tensor(pixels)
+        y = torch.tensor(labels)
+
+        def per_token(f, t, d_out):
+            n, k, d = t.shape
+            return f(t.reshape(n * k, d)).reshape(n, k, d_out)
+
+        class Block(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.n1 = nn.LayerNorm(D)
+                self.att = nn.MultiheadAttention(D, HEADS, batch_first=True)
+                self.n2 = nn.LayerNorm(D)
+                self.fc1 = nn.Linear(D, D * 2)
+                self.fc2 = nn.Linear(D * 2, D)
+
+            def forward(self, t):
+                h = self.n1(t)
+                r = t + self.att(h, h, h)[0]          # attention, then add back
+                z = self.n2(r)
+                wide = per_token(self.fc1, z, D * 2).gelu()
+                return r + per_token(self.fc2, wide, D)
+
+        class ViT(nn.Module):
+            def __init__(self, classes):
+                super().__init__()
+                self.patchify = nn.Conv2d(1, D, PATCH, PATCH, 0)
+                self.cls = nn.Parameter(torch.randn(1, 1, D) * 0.02)
+                self.pos = nn.Parameter(torch.randn(1, TOK + 1, D) * 0.02)
+                self.block = Block()
+                self.norm = nn.LayerNorm(D)
+                self.head = nn.Linear(D, classes)
+
+            def forward(self, img):
+                n = img.shape[0]
+                patches = self.patchify(img).reshape(n, D, TOK).permute(0, 2, 1)
+                seq = torch.cat([self.cls.repeat(n, 1, 1), patches], 1) + self.pos
+                done = self.norm(self.block(seq))
+                return self.head(done.narrow(1, 0, 1).reshape(n, D))   # the class token
+
+        net = ViT(4)
+        opt = optim.Adam(net.parameters(), lr=0.01)
+        crit = nn.CrossEntropyLoss()
+
+        print("parameters:", len(list(net.parameters())))
+        for s in range(120):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(net(x), y)
+                loss.backward()
+                opt.step()
+                if s % 20 == 0 or s == 119:
+                    print(f"step {s:3d}  loss {loss.item():.4f}")
+
+        with torch.scope():
+            pred = net(x).argmax(1).numpy()
+            right = int((pred == labels).sum())
+            print(f"accuracy: {right}/{N}")
+      </script>
     </div>
 
     <h2>Make it narrower and watch it stop</h2>
@@ -378,6 +505,83 @@
           });
         }
         log(`ln(2) / 2 = ${(Math.log(2) / 2).toFixed(4)}`);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import math
+        import numpy as np
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+
+        D, HEADS, PATCH, TOK, N = 16, 2, 4, 4, 24
+
+        # One bright quadrant per image; the label is which one.
+        pixels = np.zeros((N, 1, 8, 8), dtype=np.float32)
+        labels = np.zeros(N, dtype=np.int64)
+        for i in range(N):
+            q = i % 4
+            labels[i] = q
+            r0, c0 = (q >> 1) * 4, (q & 1) * 4
+            pixels[i, 0, r0:r0 + 4, c0:c0 + 4] = 1
+        x = torch.tensor(pixels)
+        y = torch.tensor(labels)
+
+        def per_token(f, t, d_out):
+            n, k, d = t.shape
+            return f(t.reshape(n * k, d)).reshape(n, k, d_out)
+
+        class Block(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.n1 = nn.LayerNorm(D)
+                self.att = nn.MultiheadAttention(D, HEADS, batch_first=True)
+                self.n2 = nn.LayerNorm(D)
+                self.fc1 = nn.Linear(D, D * 2)
+                self.fc2 = nn.Linear(D * 2, D)
+
+            def forward(self, t):
+                h = self.n1(t)
+                r = t + self.att(h, h, h)[0]          # attention, then add back
+                z = self.n2(r)
+                wide = per_token(self.fc1, z, D * 2).gelu()
+                return r + per_token(self.fc2, wide, D)
+
+        class ViT(nn.Module):
+            def __init__(self, classes):
+                super().__init__()
+                self.patchify = nn.Conv2d(1, D, PATCH, PATCH, 0)
+                self.cls = nn.Parameter(torch.randn(1, 1, D) * 0.02)
+                self.pos = nn.Parameter(torch.randn(1, TOK + 1, D) * 0.02)
+                self.block = Block()
+                self.norm = nn.LayerNorm(D)
+                self.head = nn.Linear(D, classes)
+
+            def forward(self, img):
+                n = img.shape[0]
+                patches = self.patchify(img).reshape(n, D, TOK).permute(0, 2, 1)
+                seq = torch.cat([self.cls.repeat(n, 1, 1), patches], 1) + self.pos
+                done = self.norm(self.block(seq))
+                return self.head(done.narrow(1, 0, 1).reshape(n, D))   # the class token
+
+        print("D = 16, 2 heads — the same code, narrower")
+        for seed in [0, 1, 2]:
+            torch.manual_seed(seed)
+            net = ViT(4)
+            opt = optim.Adam(net.parameters(), lr=0.02)
+            crit = nn.CrossEntropyLoss()
+
+            for s in range(80):
+                with torch.scope():
+                    opt.zero_grad()
+                    l = crit(net(x), y)
+                    l.backward()
+                    opt.step()
+                    loss = l.item()
+            with torch.scope():
+                pred = net(x).argmax(1).numpy()
+                right = int((pred == labels).sum())
+                print(f"  seed {seed}   loss {loss:.4f}   right {right}/{N}")
+        print(f"ln(2) / 2 = {math.log(2) / 2:.4f}")
       </script>
     </div>
 

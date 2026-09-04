@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">Learn</a>
       <a href="../tutorials/">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/learn/08-debugging.html" class="lang">한국어</a>
     </nav>
@@ -94,6 +99,20 @@
         log("If that name mentions llvmpipe, SwiftShader or 'software',");
         log("any millisecond you measure here is that rasterizer's number.");
       </script>
+      <script type="text/plain" data-lang="py">
+        import js
+        import borch_webgpu as torch      # the import is the probe: it says why when it cannot
+        print("ok: True")
+        print("adapter:", torch.backend())
+
+        print("")
+        print("adapter :", torch.backend())
+        features = js.borch.Device.adapterFeatures
+        print("features:", str(features) if features else "(none reported)")
+        print("")
+        print("If that name mentions llvmpipe, SwiftShader or 'software',")
+        print("any millisecond you measure here is that rasterizer's number.")
+      </script>
     </div>
 
     <h2>Did the GPU reject anything?</h2>
@@ -119,6 +138,26 @@
         if (faults.count) log("first:", faults.first);
         log("device still alive:", device().alive);
         log("device lost:", device().lost ? JSON.stringify(device().lost) : "no");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import js
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        model = nn.Linear(8, 1)
+        x = torch.randn(4, 8)
+        with torch.scope():
+            model(x).sum().item()
+
+        dev = js.borch.device()
+        faults = dev.faults
+        print("validation errors:", faults.count)
+        if faults.count:
+            print("first:", faults.first)
+        print("device still alive:", dev.alive)
+        print("device lost:", js.JSON.stringify(dev.lost) if dev.lost else "no")
       </script>
     </div>
 
@@ -161,6 +200,37 @@
         log("");
         log(`emptyCache freed ${freed.count} buffers, ${(freed.bytes / 1024).toFixed(0)} KB`);
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        model = nn.Linear(64, 64)
+        def report(label):
+            m, p = torch.memory(), torch.pooled()
+            print(f"{label:22s} live {m['tensors']:4d} tensors {m['bytes'] / 1024:6.0f} KB   "
+                  f"pool {p['count']:3d} {p['bytes'] / 1024:6.0f} KB")
+
+        report("at the start")
+
+        # Same shape every step: the pool settles at the working set.
+        for batch in (8, 8, 8):
+            x = torch.randn(batch, 64)
+            with torch.scope():
+                model(x).sum().item()
+        report("after 3 steps of 8")
+
+        # A different shape cannot reuse those buffers.
+        wide = torch.randn(64, 64)
+        with torch.scope():
+            model(wide).sum().item()
+        report("after one step of 64")
+
+        freed = torch.empty_cache()
+        print("")
+        print(f"empty_cache freed {freed['count']} buffers, {freed['bytes'] / 1024:.0f} KB")
+      </script>
     </div>
 
     <h2>Did a gradient actually flow?</h2>
@@ -191,6 +261,23 @@
         log("53 of the conformance cases ask only this question.");
         log("Values alone cannot answer it — a cut graph still returns the right numbers.");
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        def check(label, build):
+            x = torch.tensor([1., 2., 3., 4.], requires_grad=True)
+            build(x).sum().backward()
+            arrived = x.grad is not None
+            print(f"{label:14s} gradient {'arrived' if arrived else 'DID NOT ARRIVE'}")
+
+        check("mul", lambda x: x * 3)
+        check("relu", lambda x: x.relu())
+        check("reshape", lambda x: x.reshape(2, 2))
+        check("roll", lambda x: x.roll(1))
+        print("")
+        print("53 of the conformance cases ask only this question.")
+        print("Values alone cannot answer it — a cut graph still returns the right numbers.")
+      </script>
     </div>
 
     <h2>Errors say what torch says</h2>
@@ -219,6 +306,20 @@
           Tensor.arange(3).at(7));
         shouldFail("grad on an int tensor", () =>
           Tensor.from([1, 2], [2], { dtype: "int64", requiresGrad: true }));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        def should_fail(label, body):
+            try:
+                body()
+                print(f"{label:24s} did NOT fail — that is worth knowing")
+            except Exception as e:
+                print(f"{label:24s} {type(e).__name__}: {str(e)[:70]}")
+
+        should_fail("shapes that cannot mul", lambda: torch.randn(2, 3) @ torch.randn(4, 5))
+        should_fail("index out of range", lambda: torch.arange(3)[7])
+        should_fail("grad on an int tensor", lambda: torch.tensor([1, 2], dtype=torch.int64, requires_grad=True))
       </script>
     </div>
 

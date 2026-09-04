@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">Learn</a>
       <a href="../tutorials/">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/learn/07-data.html" class="lang">한국어</a>
     </nav>
@@ -98,6 +103,25 @@
               `   first row: ${Array.from(await bx.at(0).toArray()).join(",")}`);
         }
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        data = torch.utils.data
+        torch.manual_seed(0)
+
+        x = torch.arange(20).reshape(10, 2)
+        y = torch.arange(10).reshape(10, 1)
+
+        dataset = data.TensorDataset(x, y)
+        print("rows:", len(dataset))
+
+        loader = data.DataLoader(dataset, batch_size=4, shuffle=False)
+        print("batches:", len(loader))
+
+        for bx, by in loader:
+            first = ",".join(f"{v:g}" for v in bx[0].tolist())
+            print(f"x {tuple(bx.shape)}  y {tuple(by.shape)}   first row: {first}")
+      </script>
     </div>
 
     <h2>Shuffling, and the last short batch</h2>
@@ -121,6 +145,19 @@
           log(`dropLast ${String(dropLast).padEnd(5)} → batches ${sizes.join(", ")}`);
         }
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        data = torch.utils.data
+        torch.manual_seed(0)
+
+        dataset = data.TensorDataset(torch.arange(10).reshape(10, 1))
+
+        for drop_last in (False, True):
+            loader = data.DataLoader(dataset, batch_size=4, shuffle=True, drop_last=drop_last)
+            sizes = [batch.shape[0] for (batch,) in loader]
+            print(f"drop_last {str(drop_last):5s} → batches {', '.join(map(str, sizes))}")
+      </script>
     </div>
 
     <h2>Holding a split back</h2>
@@ -143,6 +180,21 @@
 
         const loader = new data.DataLoader(train, { batchSize: 32, shuffle: true });
         log("train batches per epoch:", loader.length);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        data = torch.utils.data
+        torch.manual_seed(0)
+
+        dataset = data.TensorDataset(torch.arange(100).reshape(100, 1))
+        train, val = data.random_split(dataset, [80, 20])
+
+        print("train:", len(train), " val:", len(val))
+        print("first five val indices:", ", ".join(map(str, val.indices[:5])))
+
+        loader = data.DataLoader(train, batch_size=32, shuffle=True)
+        print("train batches per epoch:", len(loader))
       </script>
     </div>
 
@@ -172,6 +224,28 @@
         log("values:", Array.from(await out.toArray()).map((v) => v.toFixed(2)).join(", "));
         log("");
         log("describe:", tf.describe());
+      </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+        import borchvision
+        from borchvision import transforms
+
+        borchvision.use(torch)               # ToTensor builds this library's tensors
+
+        # A 2x2 single-channel image, values 0..1 as ToTensor would give them.
+        img = np.array([0, 0.25, 0.5, 1], dtype=np.float32).reshape(2, 2, 1)
+
+        tf = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),   # (x - 0.5) / 0.5  →  -1..1
+        ])
+
+        out = tf(img)
+        print("shape:", tuple(out.shape))
+        print("values:", ", ".join(f"{v:.2f}" for v in out.flatten().tolist()))
+        print("")
+        print(tf)
       </script>
     </div>
 

@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">Learn</a>
       <a href="../tutorials/">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/learn/06-save-load.html" class="lang">한국어</a>
     </nav>
@@ -109,6 +114,37 @@
         const whole = await save({ model: model.stateDict(), opt: opt.stateDict(), epoch: 3 });
         const ck = load(new Uint8Array(whole));
         log("checkpoint keys:", Object.keys(ck).join(", "), "· epoch:", ck.epoch);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import os
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        model = nn.Sequential(nn.Linear(4, 3), nn.ReLU())
+        x = torch.randn(2, 4)
+        before = model(x).sum().item()
+
+        # state → file
+        torch.save(model.state_dict(), "ckpt.safetensors")
+        print("checkpoint:", os.path.getsize("ckpt.safetensors"), "bytes of safetensors")
+
+        # a fresh model with different weights
+        fresh = nn.Sequential(nn.Linear(4, 3), nn.ReLU())
+        print(f"fresh model output: {fresh(x).sum().item():.4f}")
+
+        # file → state. You get back exactly what you saved.
+        fresh.load_state_dict(torch.load("ckpt.safetensors"))
+        print(f"after loading:      {fresh(x).sum().item():.4f}")
+        print(f"original:           {before:.4f}")
+
+        # The textbook idiom is a nested checkpoint, and it round trips as it is —
+        # numbers and strings ride along with the tensors.
+        opt = optim.Adam(model.parameters(), lr=0.01)
+        torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "epoch": 3}, "whole.safetensors")
+        ck = torch.load("whole.safetensors")
+        print("checkpoint keys:", ", ".join(ck.keys()), "· epoch:", ck["epoch"])
       </script>
     </div>
 

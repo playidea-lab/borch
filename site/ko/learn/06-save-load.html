@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/06-save-load.html" class="lang">English</a>
     </nav>
@@ -105,6 +110,37 @@
         const whole = await save({ model: model.stateDict(), opt: opt.stateDict(), epoch: 3 });
         const ck = load(new Uint8Array(whole));
         log("체크포인트 열쇠:", Object.keys(ck).join(", "), "· epoch:", ck.epoch);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import os
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        model = nn.Sequential(nn.Linear(4, 3), nn.ReLU())
+        x = torch.randn(2, 4)
+        before = model(x).sum().item()
+
+        # 상태 → 파일
+        torch.save(model.state_dict(), "ckpt.safetensors")
+        print("체크포인트:", os.path.getsize("ckpt.safetensors"), "바이트의 safetensors")
+
+        # 가중치가 다른 새 모델
+        fresh = nn.Sequential(nn.Linear(4, 3), nn.ReLU())
+        print(f"새 모델의 출력: {fresh(x).sum().item():.4f}")
+
+        # 파일 → 상태. 저장한 것이 그대로 온다.
+        fresh.load_state_dict(torch.load("ckpt.safetensors"))
+        print(f"불러온 뒤:      {fresh(x).sum().item():.4f}")
+        print(f"원래 값:        {before:.4f}")
+
+        # 교재의 관용구는 중첩된 체크포인트이고, 그것이 그대로 왕복한다 —
+        # 숫자와 글자도 텐서와 함께 간다.
+        opt = optim.Adam(model.parameters(), lr=0.01)
+        torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "epoch": 3}, "whole.safetensors")
+        ck = torch.load("whole.safetensors")
+        print("체크포인트 열쇠:", ", ".join(ck.keys()), "· epoch:", ck["epoch"])
       </script>
     </div>
 

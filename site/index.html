@@ -42,14 +42,19 @@
     <nav>
       <a href="learn/00-fix-it.html">Learn</a>
       <a href="tutorials/">Tutorials</a>
-      <a href="models.html">Models</a>
-      <a href="vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="api/">API</a>
+      <a href="vision.html">Vision</a>
+      <a href="models.html">Models</a>
       <a href="python.html">Python</a>
-      <a href="setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="playground.html">Playground</a>
       <a href="notebook.html">Notebook</a>
       <a href="workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="setup.html">GPU</a>
+      <a href="check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="ko/" class="lang">한국어</a>
     </nav>
@@ -100,10 +105,10 @@
       Pressing Run sends no network request. The computation happens on your GPU and the values stay here.
     </p>
     <p class="cta-row small" style="margin-top:1.2rem">
+      <a class="btn ghost" href="check.html">Check your GPU →</a>
+      <a class="btn ghost" href="tutorials/">Build something →</a>
       <a class="btn ghost" href="learn/">Lesson 0: fix the bug →</a>
-      <a class="btn ghost" href="playground.html">Playground →</a>
-      <a class="btn ghost" href="models.html">Pretrained models →</a>
-      <a class="btn ghost mono" href="#install">npm install borch-ts</a>
+      <a class="btn ghost mono" style="margin-left:auto" href="#install">npm install borch-ts</a>
     </p>
     <p class="install">Zero runtime dependencies · 435KB gzipped ES module (1567KB raw) · safetensors checkpoints</p>
   </div>
@@ -297,7 +302,7 @@
     <p style="margin-top:1.6rem">
       <a class="btn primary" href="learn/">Start the lessons →</a>
       <a class="btn ghost" href="tutorials/">Or build something</a>
-      <a class="btn ghost" href="playground.html">Open Playground</a>
+      <a class="btn ghost" href="check.html">Check your GPU</a>
     </p>
   </div>
 </section>
@@ -524,9 +529,9 @@ for step in range(201):
     </table>
     </div>
     <p class="small muted" style="margin-top:.8rem">
-      On top of that, <strong>4735 golden cases</strong> hold all three implementations to the same expected values.
+      On top of that, <strong>4744 golden cases</strong> hold all three implementations to the same expected values.
       Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
-      on Apple Metal — <code data-measured="golden">agreeing 4724 / 4724 [apple / metal-3]</code> — and on
+      on Apple Metal — <code data-measured="golden">agreeing 4733 / 4733 [apple / metal-3]</code> — and on
       <strong>NVIDIA</strong> too: <code>3880 / 3880 [nvidia / blackwell]</code> on an RTX 5080, in a real desktop
       session rather than a virtual framebuffer, measured on 2026-08-30 when the table held 3880 through the
       binding. <strong>The training agrees as well</strong>:

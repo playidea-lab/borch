@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/">Learn</a>
       <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/tutorials/04-image-classifier.html" class="lang">한국어</a>
     </nav>
@@ -102,6 +107,44 @@
           labels: labels.map((i) => train.classes[i]),
         });
       </script>
+      <script type="text/plain" data-lang="py">
+        import json
+        import js
+        import numpy as np
+        import borch_webgpu as torch
+
+        async def cifar10(split="train", count=0, normalize=False):
+            # The tutorials' CIFAR-10 subset: the JPEG sprite under site/assets/data/, read back
+            # through a canvas — the same file and the same steps as the JavaScript side's
+            # `datasets.cifar10`, so the two languages train on identical pixels.
+            here = js.URL.new("../assets/data/", js.location.href).href
+            meta = json.loads(await (await js.fetch(f"{here}cifar-{split}.json")).text())
+            blob = await (await js.fetch(f"{here}cifar-{split}.jpg")).blob()
+            bitmap = await js.createImageBitmap(blob)
+            canvas = js.OffscreenCanvas.new(bitmap.width, bitmap.height)
+            ctx = canvas.getContext("2d")
+            ctx.drawImage(bitmap, 0, 0)
+            sheet = np.asarray(ctx.getImageData(0, 0, bitmap.width, bitmap.height).data.to_py(), dtype=np.uint8)
+            tile = meta["tile"]
+            rows, cols = bitmap.height // tile, bitmap.width // tile
+            grid = sheet.reshape(rows * tile, cols * tile, 4)[:, :, :3]                 # H, W, RGB
+            tiles = grid.reshape(rows, tile, cols, tile, 3).transpose(0, 2, 4, 1, 3).reshape(-1, 3, tile, tile)
+            n = min(count, meta["count"]) if count > 0 else meta["count"]
+            x = tiles[:n].astype(np.float32) / 255
+            if normalize:
+                x = (x - 0.5) / 0.5
+            return dict(x=torch.tensor(x), y=torch.tensor(np.array(meta["labels"][:n], dtype=np.int64)),
+                        classes=meta["classes"], count=n, note=meta["note"]["en"])
+
+        train = await cifar10("train", count=16)
+        print("x:", list(train["x"].shape), " y:", list(train["y"].shape))
+        print("classes:", ", ".join(train["classes"]))
+        print("")
+        print(train["note"])
+
+        labels = train["y"].tolist()
+        await show(train["x"], scale=3, range=[0, 1], labels=[train["classes"][i] for i in labels])
+      </script>
     </div>
 
     <h2>2 · A small convolutional network</h2>
@@ -128,6 +171,24 @@
         const sample = Tensor.randn([2, 3, 32, 32]);
         log("a batch of 2 goes in as", JSON.stringify(sample.shape),
             "and comes out as", JSON.stringify(model.call(sample).shape));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        model = nn.Sequential(
+            nn.Conv2d(3, 16, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(16, 32, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Flatten(), nn.Linear(32 * 8 * 8, 10))
+
+        print(model)
+        print("")
+        print("parameters:", sum(p.numel() for p in model.parameters()), "numbers")
+
+        sample = torch.randn(2, 3, 32, 32)
+        print("a batch of 2 goes in as", list(sample.shape), "and comes out as", list(model(sample).shape))
       </script>
     </div>
 
@@ -175,6 +236,47 @@
         log("");
         log("weights kept for the next blocks:", (window.__cifar.byteLength / 1024).toFixed(0), "KB");
       </script>
+      <script type="text/plain" data-lang="py">
+        import os
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+        if "cifar10" not in globals():
+            raise RuntimeError("Run block 1 first — it defines cifar10().")
+
+        train = await cifar10("train", normalize=True)
+        loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(train["x"], train["y"]),
+                                             batch_size=64, shuffle=True)
+
+        model = nn.Sequential(
+            nn.Conv2d(3, 16, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(16, 32, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Flatten(), nn.Linear(32 * 8 * 8, 10))
+        opt = optim.Adam(model.parameters(), lr=1e-3)
+        crit = nn.CrossEntropyLoss()
+
+        EPOCHS = 8
+        for epoch in range(EPOCHS):
+            if stopped():
+                break
+            total, seen = 0.0, 0
+            for bx, by in loader:
+                with torch.scope():
+                    opt.zero_grad()
+                    loss = crit(model(bx), by)
+                    loss.backward()
+                    opt.step()
+                    v = loss.item()
+                    plot("loss", v)
+                    total += v
+                    seen += 1
+            print(f"epoch {epoch + 1}/{EPOCHS}   mean loss {total / seen:.4f}")
+
+        torch.save(model.state_dict(), "cifar.safetensors")
+        print("")
+        print("weights kept for the next blocks:", f"{os.path.getsize('cifar.safetensors') / 1024:.0f}", "KB")
+      </script>
     </div>
 
     <h2>4 · Accuracy, per class</h2>
@@ -213,6 +315,39 @@
         });
         window.__cifarTest = { guess, truth, test };
       </script>
+      <script type="text/plain" data-lang="py">
+        import os
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        if not os.path.exists("cifar.safetensors"):
+            raise RuntimeError("Run block 3 first — it trains the model.")
+
+        test = await cifar10("test", normalize=True)
+        model = nn.Sequential(
+            nn.Conv2d(3, 16, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(16, 32, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Flatten(), nn.Linear(32 * 8 * 8, 10))
+        model.load_state_dict(torch.load("cifar.safetensors"))
+
+        with torch.no_grad():
+            guess = model(test["x"]).argmax(1).tolist()
+        truth = test["y"].tolist()
+
+        right, total = [0] * 10, [0] * 10
+        for g, t in zip(guess, truth):
+            total[t] += 1
+            if g == t:
+                right[t] += 1
+        hits = sum(right)
+        print(f"overall: {100 * hits / len(truth):.1f}%  ({hits}/{len(truth)})")
+        print("")
+        for i, name in enumerate(test["classes"]):
+            pct = f"{100 * right[i] / total[i]:.0f}" if total[i] else "—"
+            bar = "█" * round(right[i] / (total[i] or 1) * 20)
+            print(f"  {name:<11} {pct:>3}%  {bar}")
+        cifar_eval = dict(guess=guess, truth=truth, test=test)
+      </script>
     </div>
 
     <h2>5 · The mistakes</h2>
@@ -244,6 +379,22 @@
           range: [0, 1],
           labels: wrong.map((at) => `${test.classes[guess[at]]}?`),
         });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        if "cifar_eval" not in globals():
+            raise RuntimeError("Run block 4 first.")
+        guess, truth, test = cifar_eval["guess"], cifar_eval["truth"], cifar_eval["test"]
+
+        mistakes = [i for i, (g, t) in enumerate(zip(guess, truth)) if g != t]
+        wrong = mistakes[:16]
+        print(f"{len(wrong)} shown of {len(mistakes)} mistakes")
+
+        # Pull those images back out — the tensor is normalised, so undo it to look.
+        plain = await cifar10("test")
+        await show(torch.stack([plain["x"][at] for at in wrong]), scale=3, range=[0, 1],
+                   labels=[f"{test['classes'][guess[at]]}?" for at in wrong])
       </script>
     </div>
 

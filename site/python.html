@@ -35,14 +35,19 @@
     <nav>
       <a href="learn/">Learn</a>
       <a href="tutorials/">Tutorials</a>
-      <a href="models.html">Models</a>
-      <a href="vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="api/">API</a>
+      <a href="vision.html">Vision</a>
+      <a href="models.html">Models</a>
       <a href="python.html" class="on" aria-current="page">Python</a>
-      <a href="setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="playground.html">Playground</a>
       <a href="notebook.html">Notebook</a>
       <a href="workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="setup.html">GPU</a>
+      <a href="check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="ko/python.html" class="lang">한국어</a>
     </nav>
@@ -76,7 +81,11 @@
       surface is the one that carries the awkward parts — <code>await</code> on every
       read, <code>model.call(x)</code> instead of calling the model. On the Python
       side most of that is gone, so this is the surface where the resemblance is
-      strongest, and it was the one the site barely showed.
+      strongest. This page is its reference: how the forwarding works, what it costs,
+      where it stops. To learn with it, every block in <a href="learn/">Learn</a> and
+      <a href="tutorials/">Tutorials</a> has a Python tab; to work in it, the
+      <a href="notebook.html">Notebook</a> and the <a href="workbench.html">Workbench</a>
+      are Python end to end.
     </p>
 
     <h2 id="forwards">It forwards, it does not reimplement</h2>
@@ -114,10 +123,11 @@
     </div>
 
     <div class="note-box">
-      <strong>The message above is in Korean, and that is not a bug in the page.</strong>
-      borch throws in Korean at 133 of its 168 throw sites. Reading English here and
-      Korean the moment something breaks is a real edge of using this library today,
-      so it is better said than discovered.
+      <strong>The <code>missing:</code> line above names both spellings.</strong> The
+      opening clause is torch's own wording, so a check written against torch still
+      matches; the hint after it says what borch.ts would have to be given. This page
+      used to warn that errors arrived in Korean — they did, at 133 of 168 throw sites.
+      That is over: the library's messages are English, and a test refuses a Korean one.
     </div>
 
     <h2 id="changes">What torch code has to change</h2>

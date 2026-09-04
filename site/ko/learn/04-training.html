@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/04-training.html" class="lang">English</a>
     </nav>
@@ -87,7 +92,7 @@
       있든 그것을 답으로 주지 않는다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
 
@@ -111,6 +116,31 @@
         log("");
         log("마지막 구역에서 살아남은 것:", device().lastScope.survived,
             "· 놓은 것:", device().lastScope.freed);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        x = torch.randn(64, 32)                 # 구역 밖에서 만들었으니 남는다
+        model = nn.Linear(32, 1)
+        opt = optim.SGD(model.parameters(), lr=0.01)
+        before = torch.memory()
+
+        for i in range(20):
+            with torch.scope():
+                opt.zero_grad()          # 지난 스텝의 기울기는 지난 구역에 있었다
+                out = model(x).sum()
+                out.backward()
+                opt.step()
+
+        after = torch.memory()
+        print("텐서  전:", before["tensors"], " 후:", after["tensors"])
+        print("바이트 전:", before["bytes"], "  후:", after["bytes"])
+        print("")
+        last = torch.last_scope()
+        print("마지막 구역에서 살아남은 것:", last["survived"], "· 놓은 것:", last["freed"])
       </script>
     </div>
 
@@ -196,7 +226,7 @@
       치우침에는 weight decay 를 빼는 것.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
 
@@ -220,6 +250,30 @@
           });
           sched.step();
         }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        model = nn.Linear(4, 1)
+        opt = optim.Adam(model.parameters(), lr=0.05)
+        sched = optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.5)
+
+        x = torch.randn(16, 4)
+        y = torch.randn(16, 1)
+        crit = nn.MSELoss()
+
+        for step in range(30):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                if step % 10 == 0:
+                    print(f"step {step:2d}  lr {opt.param_groups[0]['lr']:.4f}  loss {loss.item():.4f}")
+            sched.step()
       </script>
     </div>
 

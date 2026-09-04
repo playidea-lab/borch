@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/09-resnet.html" class="lang">English</a>
     </nav>
@@ -113,6 +118,39 @@
         log("그대로 블록:", JSON.stringify(h.shape), "->", JSON.stringify(same.call(h).shape),
             " 지름길 층:", same.down !== null);
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        class BasicBlock(nn.Module):
+            def __init__(self, in_c, out_c, stride):
+                super().__init__()
+                self.c1 = nn.Conv2d(in_c, out_c, 3, stride, 1)
+                self.b1 = nn.BatchNorm2d(out_c)
+                self.c2 = nn.Conv2d(out_c, out_c, 3, 1, 1)
+                self.b2 = nn.BatchNorm2d(out_c)
+                # 모양이 바뀔 때만 지름길에 층이 생긴다.
+                self.down = None
+                if stride != 1 or in_c != out_c:
+                    self.down = nn.Sequential(nn.Conv2d(in_c, out_c, 1, stride, 0), nn.BatchNorm2d(out_c))
+
+            def forward(self, x):
+                h = self.b2(self.c2(self.b1(self.c1(x)).relu()))
+                return (h + (self.down(x) if self.down is not None else x)).relu()
+
+        shrink = BasicBlock(3, 8, 2)
+        same = BasicBlock(8, 8, 1)
+
+        x = torch.randn(2, 3, 16, 16)
+        print("줄이는 블록:", list(x.shape), "->", list(shrink(x).shape),
+              " 지름길 층:", shrink.down is not None)
+
+        h = torch.randn(2, 8, 8, 8)
+        print("그대로 블록:", list(h.shape), "->", list(same(h).shape),
+              " 지름길 층:", same.down is not None)
+      </script>
     </div>
 
     <h2>지름길이 실어 나르는 것</h2>
@@ -153,6 +191,33 @@
         log("  +x 있음 :", withSkip.toFixed(4));
         log("  그냥    :", plain.toFixed(6));
         log("  배수    :", (withSkip / plain).toFixed(0) + "배");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import math
+        import borch_webgpu as torch
+
+        nn = torch.nn
+
+        def first_layer_gradient(use_skip):
+            torch.manual_seed(1)                 # 두 경우가 같은 층으로 시작하도록.
+            layers = [nn.Conv2d(4, 4, 3, 1, 1) for _ in range(8)]
+            inp = torch.randn(1, 4, 8, 8)
+            with torch.scope():
+                t = inp
+                for c in layers:
+                    t = (c(t).relu() + t) if use_skip else c(t).relu()
+                t.sum().backward()
+                g = layers[0].weight.grad
+                squared = (g * g).sum().item()
+            return math.sqrt(squared)
+
+        with_skip = first_layer_gradient(True)
+        plain = first_layer_gradient(False)
+
+        print("여덟 층 깊이에서 첫 층에 도달한 기울기 크기")
+        print(f"  +x 있음 : {with_skip:.4f}")
+        print(f"  그냥    : {plain:.6f}")
+        print(f"  배수    : {with_skip / plain:.0f}배")
       </script>
     </div>
 
@@ -219,6 +284,54 @@
             if (s % 20 === 0 || s === 59) log(`step ${String(s).padStart(2)}  loss ${(await loss.item()).toFixed(4)}`);
           });
         }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        class BasicBlock(nn.Module):
+            def __init__(self, in_c, out_c, stride):
+                super().__init__()
+                self.c1 = nn.Conv2d(in_c, out_c, 3, stride, 1)
+                self.b1 = nn.BatchNorm2d(out_c)
+                self.c2 = nn.Conv2d(out_c, out_c, 3, 1, 1)
+                self.b2 = nn.BatchNorm2d(out_c)
+                # 모양이 바뀔 때만 지름길에 층이 생긴다.
+                self.down = None
+                if stride != 1 or in_c != out_c:
+                    self.down = nn.Sequential(nn.Conv2d(in_c, out_c, 1, stride, 0), nn.BatchNorm2d(out_c))
+
+            def forward(self, x):
+                h = self.b2(self.c2(self.b1(self.c1(x)).relu()))
+                return (h + (self.down(x) if self.down is not None else x)).relu()
+
+        net = nn.Sequential(
+            nn.Conv2d(1, 8, 3, 1, 1), nn.BatchNorm2d(8), nn.ReLU(),
+            BasicBlock(8, 8, 1),
+            BasicBlock(8, 16, 2),
+            nn.AdaptiveAvgPool2d((1, 1)), nn.Flatten(), nn.Linear(16, 3))
+
+        B = 12
+        x = torch.randn(B, 1, 16, 16)
+        y = torch.tensor([i % 3 for i in range(B)], dtype=torch.int64)
+
+        opt = optim.Adam(net.parameters(), lr=0.01)
+        crit = nn.CrossEntropyLoss()
+
+        print("파라미터:", len(list(net.parameters())), "개")
+        for s in range(60):
+            with torch.scope():
+                opt.zero_grad()
+                out = net(x)
+                if s == 0:
+                    print("로짓:", list(out.shape))
+                loss = crit(out, y)
+                loss.backward()
+                opt.step()
+                if s % 20 == 0 or s == 59:
+                    print(f"step {s:2d}  loss {loss.item():.4f}")
       </script>
     </div>
 

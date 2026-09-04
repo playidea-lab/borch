@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/01-tensors.html" class="lang">English</a>
     </nav>
@@ -76,10 +81,16 @@
       내려가지 않고 거기서 멈춘다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
         log("device:", currentDevice());
         log("adapter:", Device.adapterInfo);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        print("device:", torch.get_default_device())
+        print("adapter:", torch.backend())
       </script>
     </div>
 
@@ -131,7 +142,7 @@
       <code>max(dim)</code> 이 <code>{ values, indices }</code> 를 준다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const x = Tensor.from([3, 1, 4, 1, 5, 9], [6]);
@@ -140,6 +151,16 @@
         log("the whole thing:", Array.from(await x.toArray()).join(", "));
         log("max:", await x.amax().item(), " min:", await x.amin().item());
         log("sorted:", Array.from(await x.sort().values.toArray()).join(", "));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        x = torch.tensor([3., 1., 4., 1., 5., 9.])
+
+        print("item of a 1-element tensor:", x.sum().item())
+        print("the whole thing:", ", ".join(str(v) for v in x.tolist()))
+        print("max:", x.amax().item(), " min:", x.amin().item())
+        print("sorted:", ", ".join(str(v) for v in x.sort().values.tolist()))
       </script>
     </div>
 
@@ -151,7 +172,7 @@
       가 따로 있다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const a = Tensor.from([1, 2, 3, 4], [2, 2]);
@@ -169,6 +190,24 @@
         // A scalar is a shape-[] tensor.
         log("a * 3\n" + await a.mul(Tensor.full([], 3)).repr());
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        a = torch.tensor([[1., 2.], [3., 4.]])
+        b = torch.tensor([[10., 20.], [30., 40.]])
+
+        print(f"a + b\n{a + b}")
+        print(f"a * b\n{a * b}")
+        print(f"a @ b\n{a @ b}")
+        print(f"a transposed\n{a.t()}")
+
+        # Broadcasting: [2,2] against [2] stretches the row.
+        row = torch.tensor([100., 200.])
+        print(f"a + row\n{a + row}")
+
+        # A scalar is a shape-[] tensor.
+        print(f"a * 3\n{a * torch.tensor(3.)}")
+      </script>
     </div>
 
     <h2>모양과 뷰</h2>
@@ -179,7 +218,7 @@
       값이 맞으므로, 값만 보는 검사로는 한참 뒤에야 드러난다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const t = Tensor.arange(12).reshape([3, 4]);
@@ -189,6 +228,17 @@
         log("column 2:   " + Array.from(await t.at([null, 2]).toArray()).join(", "));
         log("first 2 rows:\n" + await t.at(slice(0, 2)).repr());
         log("transposed shape: " + JSON.stringify(t.transpose().shape));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        t = torch.arange(12).reshape(3, 4)
+        print(t)
+
+        print("row 1:      " + ", ".join(str(v) for v in t[1].tolist()))
+        print("column 2:   " + ", ".join(str(v) for v in t[:, 2].tolist()))
+        print(f"first 2 rows:\n{t[0:2]}")
+        print("transposed shape:", tuple(t.t().shape))
       </script>
     </div>
 

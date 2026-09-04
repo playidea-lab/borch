@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">Learn</a>
       <a href="../tutorials/">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/learn/05-cnn.html" class="lang">한국어</a>
     </nav>
@@ -91,6 +96,21 @@
         const narrow = new nn.Conv2d(1, 4, 3, 2, 0);  // stride 2, no padding
         log("stride 2, no pad:", JSON.stringify(narrow.call(x).shape));
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        conv = nn.Conv2d(1, 4, 3, 1, 1)      # 3x3, stride 1, pad 1
+        x = torch.randn(2, 1, 8, 8)
+
+        print("in :", tuple(x.shape))
+        print("out:", tuple(conv(x).shape), " (padding 1 keeps 8x8)")
+
+        narrow = nn.Conv2d(1, 4, 3, 2, 0)    # stride 2, no padding
+        print("stride 2, no pad:", tuple(narrow(x).shape))
+      </script>
     </div>
 
     <h2>A small classifier</h2>
@@ -131,6 +151,36 @@
           });
         }
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        model = nn.Sequential(
+            nn.Conv2d(1, 8, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(8, 16, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Flatten(), nn.Linear(16 * 7 * 7, 10))
+
+        opt = optim.Adam(model.parameters(), lr=1e-3)
+        crit = nn.CrossEntropyLoss()
+
+        B = 16
+        x = torch.randn(B, 1, 28, 28)
+        y = torch.tensor([i % 10 for i in range(B)], dtype=torch.int64)
+
+        for i in range(30):
+            with torch.scope():
+                opt.zero_grad()
+                out = model(x)
+                if i == 0:
+                    print("logits:", tuple(out.shape))
+                loss = crit(out, y)
+                loss.backward()
+                opt.step()
+                if i % 10 == 0:
+                    print(f"step {i:2d}  loss {loss.item():.4f}")
+      </script>
     </div>
 
     <h2>What the GPU actually did</h2>
@@ -166,6 +216,34 @@
         log("kernel dispatches in one step:", device().dispatches - before);
         log("pipelines compiled so far:   ", device().pipelineCount);
         log("held after the scope closed: ", device().memory.tensors, "tensors");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import js
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        model = nn.Sequential(
+            nn.Conv2d(1, 8, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Flatten(), nn.Linear(8 * 14 * 14, 10))
+        opt = optim.SGD(model.parameters(), lr=0.01)
+        crit = nn.CrossEntropyLoss()
+
+        x = torch.randn(8, 1, 28, 28)
+        y = torch.tensor([0] * 8, dtype=torch.int64)
+
+        before = torch.dispatches()
+        with torch.scope():
+            opt.zero_grad()
+            loss = crit(model(x), y)
+            loss.backward()
+            opt.step()
+            loss.item()
+
+        print("kernel dispatches in one step:", torch.dispatches() - before)
+        print("pipelines compiled so far:   ", js.borch.device().pipelineCount)
+        print("held after the scope closed: ", torch.memory()["tensors"], "tensors")
       </script>
     </div>
 

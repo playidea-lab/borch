@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/10-vit.html" class="lang">English</a>
     </nav>
@@ -103,6 +108,23 @@
         const tokens = map.reshape([2, D, 4]).permute([0, 2, 1]);
         log("토큰으로:", JSON.stringify(tokens.shape), " (N, 토큰, D)");
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        D, PATCH = 32, 4
+        patchify = nn.Conv2d(1, D, PATCH, PATCH, 0)
+
+        x = torch.randn(2, 1, 8, 8)
+        fmap = patchify(x)
+        print("그림    :", list(x.shape))
+        print("패치 맵 :", list(fmap.shape), " (패치 2x2 격자)")
+
+        tokens = fmap.reshape(2, D, 4).permute(0, 2, 1)
+        print("토큰으로:", list(tokens.shape), " (N, 토큰, D)")
+      </script>
     </div>
 
     <h2>어텐션, 그리고 배치가 안 되는 선형층</h2>
@@ -166,6 +188,35 @@
           return f(t.reshape([n * k, d])).reshape([n, k, dOut]);
         };
         log("접어서 적용 :", JSON.stringify(perToken(u => fc.call(u), seq, D * 2).shape));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        D = 32
+        seq = torch.randn(2, 4, D)
+
+        # torch 의 층은 짝을 돌려준다. 출력과 어텐션 가중치다.
+        att = nn.MultiheadAttention(D, 4, batch_first=True)
+        out, weights = att(seq, seq, seq)
+        print("어텐션 출력:", list(out.shape), " 가중치:", list(weights.shape))
+
+        fc = nn.Linear(D, D * 2)
+        try:
+            # 언젠가 안 던지게 되면 그렇다고 말한다 — 조용하면 위 주석 상자가 거절을
+            # 주장하는데 그 밑에 아무 증거도 없게 된다.
+            print("3차원에 Linear:", list(fc(seq).shape), "— 이제 배치된다")
+        except Exception as e:
+            print("3차원에 Linear:", str(e)[:70])
+
+        # [N, T, D] 를 [N*T, D] 로 접고, 적용하고, 편다. 어느 쪽이든 행은 독립이다.
+        def per_token(f, t, d_out):
+            n, k, d = t.shape
+            return f(t.reshape(n * k, d)).reshape(n, k, d_out)
+
+        print("접어서 적용 :", list(per_token(fc, seq, D * 2).shape))
       </script>
     </div>
 
@@ -277,6 +328,82 @@
           log(`정확도: ${right}/${N}`);
         });
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        D, HEADS, PATCH, TOK, N = 32, 4, 4, 4, 24
+
+        # 그림마다 밝은 사분면 하나. 라벨은 어느 사분면인가다.
+        pixels = np.zeros((N, 1, 8, 8), dtype=np.float32)
+        labels = np.zeros(N, dtype=np.int64)
+        for i in range(N):
+            q = i % 4
+            labels[i] = q
+            r0, c0 = (q >> 1) * 4, (q & 1) * 4
+            pixels[i, 0, r0:r0 + 4, c0:c0 + 4] = 1
+        x = torch.tensor(pixels)
+        y = torch.tensor(labels)
+
+        def per_token(f, t, d_out):
+            n, k, d = t.shape
+            return f(t.reshape(n * k, d)).reshape(n, k, d_out)
+
+        class Block(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.n1 = nn.LayerNorm(D)
+                self.att = nn.MultiheadAttention(D, HEADS, batch_first=True)
+                self.n2 = nn.LayerNorm(D)
+                self.fc1 = nn.Linear(D, D * 2)
+                self.fc2 = nn.Linear(D * 2, D)
+
+            def forward(self, t):
+                h = self.n1(t)
+                r = t + self.att(h, h, h)[0]          # 어텐션을 하고 더한다
+                z = self.n2(r)
+                wide = per_token(self.fc1, z, D * 2).gelu()
+                return r + per_token(self.fc2, wide, D)
+
+        class ViT(nn.Module):
+            def __init__(self, classes):
+                super().__init__()
+                self.patchify = nn.Conv2d(1, D, PATCH, PATCH, 0)
+                self.cls = nn.Parameter(torch.randn(1, 1, D) * 0.02)
+                self.pos = nn.Parameter(torch.randn(1, TOK + 1, D) * 0.02)
+                self.block = Block()
+                self.norm = nn.LayerNorm(D)
+                self.head = nn.Linear(D, classes)
+
+            def forward(self, img):
+                n = img.shape[0]
+                patches = self.patchify(img).reshape(n, D, TOK).permute(0, 2, 1)
+                seq = torch.cat([self.cls.repeat(n, 1, 1), patches], 1) + self.pos
+                done = self.norm(self.block(seq))
+                return self.head(done.narrow(1, 0, 1).reshape(n, D))   # 클래스 토큰
+
+        net = ViT(4)
+        opt = optim.Adam(net.parameters(), lr=0.01)
+        crit = nn.CrossEntropyLoss()
+
+        print("파라미터:", len(list(net.parameters())), "개")
+        for s in range(120):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(net(x), y)
+                loss.backward()
+                opt.step()
+                if s % 20 == 0 or s == 119:
+                    print(f"step {s:3d}  loss {loss.item():.4f}")
+
+        with torch.scope():
+            pred = net(x).argmax(1).numpy()
+            right = int((pred == labels).sum())
+            print(f"정확도: {right}/{N}")
+      </script>
     </div>
 
     <h2>좁혀 놓고 멈추는 것을 보라</h2>
@@ -370,6 +497,83 @@
           });
         }
         log(`ln(2) / 2 = ${(Math.log(2) / 2).toFixed(4)}`);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import math
+        import numpy as np
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+
+        D, HEADS, PATCH, TOK, N = 16, 2, 4, 4, 24
+
+        # 그림마다 밝은 사분면 하나. 라벨은 어느 사분면인가다.
+        pixels = np.zeros((N, 1, 8, 8), dtype=np.float32)
+        labels = np.zeros(N, dtype=np.int64)
+        for i in range(N):
+            q = i % 4
+            labels[i] = q
+            r0, c0 = (q >> 1) * 4, (q & 1) * 4
+            pixels[i, 0, r0:r0 + 4, c0:c0 + 4] = 1
+        x = torch.tensor(pixels)
+        y = torch.tensor(labels)
+
+        def per_token(f, t, d_out):
+            n, k, d = t.shape
+            return f(t.reshape(n * k, d)).reshape(n, k, d_out)
+
+        class Block(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.n1 = nn.LayerNorm(D)
+                self.att = nn.MultiheadAttention(D, HEADS, batch_first=True)
+                self.n2 = nn.LayerNorm(D)
+                self.fc1 = nn.Linear(D, D * 2)
+                self.fc2 = nn.Linear(D * 2, D)
+
+            def forward(self, t):
+                h = self.n1(t)
+                r = t + self.att(h, h, h)[0]          # 어텐션을 하고 더한다
+                z = self.n2(r)
+                wide = per_token(self.fc1, z, D * 2).gelu()
+                return r + per_token(self.fc2, wide, D)
+
+        class ViT(nn.Module):
+            def __init__(self, classes):
+                super().__init__()
+                self.patchify = nn.Conv2d(1, D, PATCH, PATCH, 0)
+                self.cls = nn.Parameter(torch.randn(1, 1, D) * 0.02)
+                self.pos = nn.Parameter(torch.randn(1, TOK + 1, D) * 0.02)
+                self.block = Block()
+                self.norm = nn.LayerNorm(D)
+                self.head = nn.Linear(D, classes)
+
+            def forward(self, img):
+                n = img.shape[0]
+                patches = self.patchify(img).reshape(n, D, TOK).permute(0, 2, 1)
+                seq = torch.cat([self.cls.repeat(n, 1, 1), patches], 1) + self.pos
+                done = self.norm(self.block(seq))
+                return self.head(done.narrow(1, 0, 1).reshape(n, D))   # 클래스 토큰
+
+        print("D = 16, 헤드 2 — 같은 코드를 좁힌 것")
+        for seed in [0, 1, 2]:
+            torch.manual_seed(seed)
+            net = ViT(4)
+            opt = optim.Adam(net.parameters(), lr=0.02)
+            crit = nn.CrossEntropyLoss()
+
+            for s in range(80):
+                with torch.scope():
+                    opt.zero_grad()
+                    l = crit(net(x), y)
+                    l.backward()
+                    opt.step()
+                    loss = l.item()
+            with torch.scope():
+                pred = net(x).argmax(1).numpy()
+                right = int((pred == labels).sum())
+                print(f"  씨앗 {seed}   loss {loss:.4f}   맞음 {right}/{N}")
+        print(f"ln(2) / 2 = {math.log(2) / 2:.4f}")
       </script>
     </div>
 

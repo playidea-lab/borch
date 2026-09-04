@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/">Learn</a>
       <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/tutorials/03-curve-fitting.html" class="lang">한국어</a>
     </nav>
@@ -116,6 +121,40 @@
               `   line ${got[i].toFixed(2).padStart(6)}`);
         }
       </script>
+      <script type="text/plain" data-lang="py">
+        import math
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        N = 128
+        xs = [(i / (N - 1)) * 4 - 2 for i in range(N)]
+        ys = [math.sin(3 * v) * v for v in xs]
+        # One kernel for the whole page: xs and ys are still here for the next blocks.
+
+        x = torch.tensor(xs).reshape(N, 1)
+        y = torch.tensor(ys).reshape(N, 1)
+
+        model = nn.Linear(1, 1)
+        opt = optim.Adam(model.parameters(), lr=0.05)
+        crit = nn.MSELoss()
+
+        for step in range(400):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                plot("loss", loss.item())
+
+        got = model(x).reshape(N).tolist()
+        print("final loss:", f"{crit(model(x), y).item():.4f}")
+        print("")
+        print("truth vs line, every 16th point:")
+        for i in range(0, N, 16):
+            print(f"  x {xs[i]:5.2f}   truth {ys[i]:6.2f}   line {got[i]:6.2f}")
+      </script>
     </div>
 
     <h2>2 · Add one hidden layer</h2>
@@ -163,6 +202,43 @@
               `   fit ${got[i].toFixed(2).padStart(6)}`);
         }
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+        if "xs" not in globals():
+            raise RuntimeError("Run block 1 first.")
+
+        x = torch.tensor(xs).reshape(N, 1)
+        y = torch.tensor(ys).reshape(N, 1)
+
+        model = nn.Sequential(
+            nn.Linear(1, 64), nn.Tanh(),
+            nn.Linear(64, 64), nn.Tanh(),
+            nn.Linear(64, 1))
+
+        opt = optim.Adam(model.parameters(), lr=0.01)
+        crit = nn.MSELoss()
+
+        for step in range(1500):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                v = loss.item()
+                plot("loss", v)
+                if step % 300 == 0:
+                    print(f"step {step:4d}   loss {v:.5f}")
+
+        curve_state = model.state_dict()          # the next blocks rebuild the model from this
+        got = model(x).reshape(N).tolist()
+        print("")
+        print("truth vs fit, every 16th point:")
+        for i in range(0, N, 16):
+            print(f"  x {xs[i]:5.2f}   truth {ys[i]:6.2f}   fit {got[i]:6.2f}")
+      </script>
     </div>
 
     <h2>3 · Look at it</h2>
@@ -201,6 +277,36 @@
         log("red = truth, green = fit, yellow = both at the same pixel");
         await show(Tensor.from(canvas, [3, H, W]), { scale: 4, range: [0, 1] });
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        if "curve_state" not in globals():
+            raise RuntimeError("Run block 2 first.")
+
+        model = nn.Sequential(
+            nn.Linear(1, 64), nn.Tanh(),
+            nn.Linear(64, 64), nn.Tanh(),
+            nn.Linear(64, 1))
+        model.load_state_dict(curve_state)
+
+        fit = model(torch.tensor(xs).reshape(N, 1)).reshape(N).tolist()
+
+        # Paint two curves into a [3, H, W] image: truth in red, fit in green.
+        H, W = 96, N
+        canvas = np.zeros((3, H, W), dtype=np.float32)
+        lo, hi = min(ys + fit), max(ys + fit)
+        def row(v):
+            return max(0, min(H - 1, round((1 - (v - lo) / ((hi - lo) or 1)) * (H - 1))))
+
+        for i in range(W):
+            canvas[0, row(ys[i]), i] = 1      # red   = truth
+            canvas[1, row(fit[i]), i] = 1     # green = fit
+
+        print("red = truth, green = fit, yellow = both at the same pixel")
+        await show(torch.tensor(canvas), scale=4, range=[0, 1])
+      </script>
     </div>
 
     <h2>4 · Where it fails</h2>
@@ -231,6 +337,29 @@
           log(`  ${v.toFixed(1).padStart(4)}   ${truth.toFixed(3).padStart(8)}` +
               `   ${out[i].toFixed(3).padStart(8)}${inside}`);
         });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import math
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        if "curve_state" not in globals():
+            raise RuntimeError("Run block 2 first.")
+
+        model = nn.Sequential(
+            nn.Linear(1, 64), nn.Tanh(),
+            nn.Linear(64, 64), nn.Tanh(),
+            nn.Linear(64, 1))
+        model.load_state_dict(curve_state)
+
+        asked = [-3, -2.5, -2, 0, 2, 2.5, 3, 4]
+        out = model(torch.tensor(asked).reshape(len(asked), 1)).reshape(len(asked)).tolist()
+
+        print("  x        truth      model")
+        for v, got in zip(asked, out):
+            truth = math.sin(3 * v) * v
+            inside = "" if -2 <= v <= 2 else "   ← outside the training range"
+            print(f"  {v:4.1f}   {truth:8.3f}   {got:8.3f}{inside}")
       </script>
     </div>
 

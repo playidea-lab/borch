@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/">배우기</a>
       <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../tutorials/01-quickstart.html" class="lang">English</a>
     </nav>
@@ -116,6 +121,42 @@
           labels: Array.from(batch.labels).map((v) => (v ? "horizontal" : "vertical")),
         });
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        # 0 = vertical bar, 1 = horizontal bar. The bar is short and the noise is
+        # loud on purpose — a task nothing ever gets wrong teaches nothing. 0.55 was
+        # picked by measuring: 0.45 gives 96%, 0.75 gives 65%, and 0.55 lands near 91%,
+        # which is a model that plainly works while still leaving mistakes to look at.
+        def make_batch(count):
+            pixels = np.zeros((count, 1, 8, 8), dtype=np.float32)
+            labels = np.zeros(count, dtype=np.int64)
+            for i in range(count):
+                horizontal = i % 2
+                at = 1 + np.random.randint(6)                  # where the bar sits
+                length = 4 + np.random.randint(4)              # how much of it is drawn
+                start = np.random.randint(8 - length + 1)
+                pixels[i, 0] = np.random.rand(8, 8) * 0.55
+                for k in range(start, start + length):
+                    r, c = (at, k) if horizontal else (k, at)
+                    pixels[i, 0, r, c] = 0.55 + np.random.rand() * 0.45
+                labels[i] = horizontal
+            return pixels, labels
+        # The later blocks reuse this instead of repeating it — the Python blocks on a
+        # page share one namespace.
+
+        pixels, labels = make_batch(8)
+        x = torch.tensor(pixels)
+        y = torch.tensor(labels)
+
+        print("x:", list(x.shape), " y:", list(y.shape))
+
+        # show() draws tensors. [N,C,H,W] gives you a row of images.
+        show(x, scale=8, labels=["horizontal" if v else "vertical" for v in labels])
+      </script>
     </div>
 
     <h2>2 · 모델</h2>
@@ -138,6 +179,22 @@
         log("");
         log("parameters:", model.parameters().length, "tensors,",
             model.parameters().reduce((n, p) => n + p.size, 0), "numbers total");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        model = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64, 32), nn.ReLU(),
+            nn.Linear(32, 2))
+
+        print(model)
+        print("")
+        params = list(model.parameters())
+        print("parameters:", len(params), "tensors,", sum(p.numel() for p in params), "numbers total")
       </script>
     </div>
 
@@ -181,6 +238,41 @@
         log("trained. weights kept for the next block:", window.__quickstart.byteLength, "bytes");
 
       </script>
+      <script type="text/plain" data-lang="py">
+        import os
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        if "make_batch" not in globals():
+            raise RuntimeError("Run block 1 first — it defines make_batch.")
+
+        model = nn.Sequential(
+            nn.Flatten(), nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 2))
+        opt = optim.Adam(model.parameters(), lr=3e-3)
+        crit = nn.CrossEntropyLoss()
+
+        pixels, labels = make_batch(256)
+        x = torch.tensor(pixels)
+        y = torch.tensor(labels)
+
+        for step in range(200):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                v = loss.item()
+                plot("loss", v)
+                if step % 50 == 0:
+                    print(f"step {step:3d}   loss {v:.4f}")
+
+        # Keep the trained weights so the next blocks can use them.
+        torch.save(model.state_dict(), "quickstart.safetensors")
+        print("")
+        print("trained. weights kept for the next block:", os.path.getsize("quickstart.safetensors"), "bytes")
+      </script>
     </div>
 
     <h2>4 · 얼마나 맞히나</h2>
@@ -209,6 +301,28 @@
         // Keep this batch — the next block looks at the mistakes in it.
         window.__testBatch = { test, guess };
 
+      </script>
+      <script type="text/plain" data-lang="py">
+        import os
+        import borch_webgpu as torch
+
+        nn = torch.nn
+
+        if not os.path.exists("quickstart.safetensors"):
+            raise RuntimeError("Run block 3 first — it trains the model.")
+
+        model = nn.Sequential(
+            nn.Flatten(), nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 2))
+        model.load_state_dict(torch.load("quickstart.safetensors"))
+
+        test_pixels, test_labels = make_batch(400)
+        x = torch.tensor(test_pixels)
+
+        guess = model(x).argmax(1).numpy()
+        right = int((guess == test_labels).sum())
+        print(f"accuracy on 400 unseen samples: {right / 4:.1f}%  ({right}/400)")
+
+        # Keep this batch — the next block looks at the mistakes in it.
       </script>
     </div>
 
@@ -245,6 +359,25 @@
           log("is in the data, not in the model.");
         }
 
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        if "guess" not in globals():
+            raise RuntimeError("Run block 4 first — it makes the test batch.")
+
+        wrong = [i for i in range(len(test_labels)) if guess[i] != test_labels[i]][:16]
+
+        if not wrong:
+            print("no mistakes in this batch — lower the noise in make_batch and it gets easier,")
+            print("raise it and the model starts guessing. Both are worth seeing.")
+        else:
+            print(f"{len(wrong)} mistakes out of {len(test_labels)}:")
+            show(torch.tensor(test_pixels[wrong]), scale=8,
+                 labels=[f"said {'horiz' if guess[i] else 'vert'}" for i in wrong])
+            print("")
+            print("Look at them before reading on. If you cannot tell either, the ceiling")
+            print("is in the data, not in the model.")
       </script>
     </div>
 

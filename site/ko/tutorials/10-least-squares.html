@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/">배우기</a>
       <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../tutorials/10-least-squares.html" class="lang">English</a>
     </nav>
@@ -124,6 +129,51 @@
         log("  trained ", (await crit.call(model.call(x), y).item()).toFixed(6));
         log("  solved  ", (await crit.call(A.mm(Tensor.from(beta, [2, 1])), y).item()).toFixed(6));
       </script>
+      <script type="text/plain" data-lang="py">
+        import random
+        import time
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        N, SLOPE, OFFSET = 40, 2.5, -1
+        xs = [i / (N - 1) * 4 - 2 for i in range(N)]
+        ys = [SLOPE * v + OFFSET + (random.random() - 0.5) * 0.8 for v in xs]
+
+        x = torch.tensor(xs).reshape(N, 1)
+        y = torch.tensor(ys).reshape(N, 1)
+        crit = nn.MSELoss()
+
+        # The trained answer.
+        model = nn.Linear(1, 1)
+        opt = optim.Adam(model.parameters(), lr=0.05)
+        started = time.perf_counter()
+        for step in range(400):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                plot("loss", loss.item())
+        trained_ms = (time.perf_counter() - started) * 1000
+        weight, bias = model.weight.item(), model.bias.item()
+
+        # The solved answer. vander(x, 2) is the matrix [x, 1] — one column per unknown.
+        solved_at = time.perf_counter()
+        A = torch.vander(torch.tensor(xs), 2)
+        beta = torch.linalg.lstsq(A, y).solution
+        solved_ms = (time.perf_counter() - solved_at) * 1000
+        slope, offset = beta.flatten().tolist()
+
+        print(f"truth      slope {SLOPE:.4f}   offset {OFFSET:.4f}")
+        print(f"400 steps  slope {weight:.4f}   offset {bias:.4f}   {trained_ms:.0f} ms")
+        print(f"lstsq      slope {slope:.4f}   offset {offset:.4f}   {solved_ms:.0f} ms")
+        print("")
+        print("error of each fit")
+        print("  trained ", f"{crit(model(x), y).item():.6f}")
+        print("  solved  ", f"{crit(A @ beta, y).item():.6f}")
+      </script>
     </div>
     <p class="small">
       <code>lstsq</code> 는 학습된 답의 근사가 아니다. 정확한 최솟값이고, 학습된 쪽이 그리로
@@ -174,6 +224,39 @@
               `${fitted.toFixed(6).padStart(21)}   ${out.toFixed(4).padStart(23)}   ` +
               `${cond.toExponential(1).padStart(16)}`);
         }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import math
+        import random
+        import borch_webgpu as torch
+
+        nn = torch.nn
+
+        def truth(v):
+            return math.sin(1.5 * v) + 0.3 * v
+        M = 12
+        seen = [i / (M - 1) * 4 - 2 for i in range(M)]
+        noisy = [truth(v) + (random.random() - 0.5) * 0.4 for v in seen]
+        # Somewhere it has not been asked about, between the points it was given.
+        K = 200
+        dense = [i / (K - 1) * 4 - 2 for i in range(K)]
+        real = [truth(v) for v in dense]
+
+        seen_t = torch.tensor(seen)
+        dense_t = torch.tensor(dense)
+        target = torch.tensor(noisy).reshape(M, 1)
+        real_t = torch.tensor(real).reshape(K, 1)
+        crit = nn.MSELoss()
+
+        print("degree   unknowns   error on the 12 points   error on the true curve   condition number")
+        for degree in (1, 3, 5, 11):
+            A = torch.vander(seen_t, degree + 1)
+            beta = torch.linalg.lstsq(A, target).solution
+            wide = torch.vander(dense_t, degree + 1)
+            fitted = crit(A @ beta, target).item()
+            out = crit(wide @ beta, real_t).item()
+            cond = torch.linalg.cond(A).item()
+            print(f"{degree:6d}   {degree + 1:8d}   {fitted:21.6f}   {out:23.4f}   {cond:16.1e}")
       </script>
     </div>
     <p class="small">
@@ -239,6 +322,56 @@
         log("red = the cloud, green = the same points with one direction dropped");
         await show(Tensor.from(canvas, [3, G, G]), { scale: 4, range: [0, 1] });
       </script>
+      <script type="text/plain" data-lang="py">
+        import random
+        import numpy as np
+        import borch_webgpu as torch
+
+        nn = torch.nn
+
+        P = 300
+        pts = []
+        for _ in range(P):
+            along = (random.random() - 0.5) * 4              # the direction it varies in
+            across = (random.random() - 0.5) * 0.5           # and the thickness
+            pts.append([along * 0.9 - across * 0.4, along * 0.45 + across * 0.9])
+        cloud = torch.tensor(pts)
+        centred = cloud - cloud.mean(0, keepdim=True)
+
+        _, s, vt = torch.linalg.svd(centred, full_matrices=False)
+        lengths = s.tolist()
+        dirs = vt.tolist()
+
+        print("direction 1:", f"{dirs[0][0]:.3f}", f"{dirs[0][1]:.3f}", "  length", f"{lengths[0]:.2f}")
+        print("direction 2:", f"{dirs[1][0]:.3f}", f"{dirs[1][1]:.3f}", "  length", f"{lengths[1]:.2f}")
+        print("")
+        share = lengths[0] ** 2 / (lengths[0] ** 2 + lengths[1] ** 2)
+        print(f"the first direction holds {share * 100:.1f}% of the spread")
+
+        # Keep one direction and put the points back: project, then project back.
+        keep1 = torch.tensor(dirs[0]).reshape(2, 1)
+        keep2 = torch.tensor(dirs[1]).reshape(2, 1)
+        def through(axis):
+            return centred @ axis @ axis.transpose(0, 1)
+        crit = nn.MSELoss()
+        print(f"keeping direction 1 only, the points move {crit(through(keep1), centred).item():.4f}")
+        print(f"keeping direction 2 only, the points move {crit(through(keep2), centred).item():.4f}")
+
+        # Draw it: the cloud in red, the one-dimensional version in green.
+        G = 80
+        canvas = np.zeros((3, G, G), dtype=np.float32)
+        def put(channel, px, py):
+            col = round((px / 5 + 0.5) * (G - 1))
+            row = round((0.5 - py / 5) * (G - 1))
+            if 0 <= col < G and 0 <= row < G:
+                canvas[channel, row, col] = 1
+        for (fx, fy), (bx, by) in zip(centred.tolist(), through(keep1).tolist()):
+            put(0, fx, fy)
+            put(1, bx, by)
+        print("")
+        print("red = the cloud, green = the same points with one direction dropped")
+        await show(torch.tensor(canvas), scale=4, range=[0, 1])
+      </script>
     </div>
 
     <h2>4 · 실제로 몇 차원이 들어 있나</h2>
@@ -284,6 +417,32 @@
           log(`${noise.toFixed(3)}   ${s.map((v) => v.toFixed(2).padStart(7)).join("")}   ` +
               `${String(overFivePercent).padStart(7)}   ${String(rank).padStart(10)}`);
         }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import random
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        ROWS, COLS, FACTORS = 200, 8, 3
+
+        def build(noise):
+            mix = [[random.random() * 2 - 1 for _ in range(COLS)] for _ in range(FACTORS)]
+            cells = []
+            for _ in range(ROWS):
+                weight = [random.random() * 2 - 1 for _ in range(FACTORS)]
+                cells.append([sum(weight[f] * mix[f][c] for f in range(FACTORS)) + (random.random() - 0.5) * noise
+                              for c in range(COLS)])
+            return torch.tensor(cells)
+
+        print("noise    the eight singular values                             over 5%   matrix_rank")
+        for noise in (0.001, 0.05, 0.4, 2.0):
+            A = build(noise)
+            s = torch.linalg.svdvals(A).tolist()
+            biggest = max(s)
+            over_five_percent = sum(v > biggest * 0.05 for v in s)
+            rank = int(torch.linalg.matrix_rank(A).item())
+            print(f"{noise:.3f}   " + "".join(f"{v:7.2f}" for v in s) + f"   {over_five_percent:7d}   {rank:10d}")
       </script>
     </div>
     <p class="small">

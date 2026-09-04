@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/">Learn</a>
       <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/tutorials/08-attention.html" class="lang">한국어</a>
     </nav>
@@ -113,6 +118,35 @@
         log("the same thing as a picture — bright is high:");
         await show(weights, { scale: 24 });
         log("output shape:", out.shape.join("×"), "— one averaged vector per token");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import math
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        WORDS = ["the", "cat", "sat", "on", "the", "mat"]
+        D = 16
+
+        # One vector per distinct word — the two "the" tokens share theirs.
+        book = {word: torch.randn(D) for word in dict.fromkeys(WORDS)}
+        x = torch.stack([book[w] for w in WORDS])
+
+        # Attention, with Q = K = V = x. No parameters at all.
+        scores = x @ x.transpose(0, 1) / math.sqrt(D)
+        weights = scores.softmax(1)
+        out = weights @ x
+
+        w = weights.tolist()
+        print("who attends to whom (rows sum to 1):")
+        print("            " + "".join(s.rjust(6) for s in WORDS))
+        for word, row in zip(WORDS, w):
+            print(f"  {word:<6}" + "".join(f"{v:6.2f}" for v in row))
+
+        print("")
+        print("the same thing as a picture — bright is high:")
+        await show(weights, scale=24)
+        print("output shape:", "×".join(str(n) for n in out.shape), "— one averaged vector per token")
       </script>
     </div>
     <p class="small">
@@ -200,6 +234,64 @@
             (cells[(i * LEN + t) * WIDE + 1] > 0.5 ? "▲" : "·").padStart(6)).join(""));
         }
       </script>
+      <script type="text/plain" data-lang="py">
+        import random
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        LEN, WIDE = 8, 2   # each token is [value, flag]
+
+        def make_set(count):
+            cells, answer = [], []
+            for i in range(count):
+                flagged = random.randrange(LEN)
+                for t in range(LEN):
+                    value = random.random() * 2 - 1
+                    cells.append([value, 1.0 if t == flagged else 0.0])
+                    if t == flagged:
+                        answer.append([value])
+            return dict(cells=torch.tensor(cells), answer=torch.tensor(answer), count=count)
+
+        train, test = make_set(200), make_set(200)
+
+        torch.manual_seed(0)
+        D = 8
+        to_key = nn.Linear(WIDE, D)
+        to_value = nn.Linear(WIDE, D)
+        head = nn.Linear(D, 1)
+        # The query is one vector and it is learned — nothing else asks the question.
+        query = torch.tensor([[random.random() * 0.2 - 0.1] for _ in range(D)], requires_grad=True)
+
+        def forward(s):
+            weights = (to_key(s["cells"]) @ query).reshape(s["count"], LEN).softmax(1)
+            values = to_value(s["cells"]).reshape(s["count"], LEN, D)
+            return head((weights.unsqueeze(2) * values).sum(1)), weights
+
+        opt = optim.Adam([*to_key.parameters(), *to_value.parameters(), *head.parameters(), query], lr=0.02)
+        crit = nn.MSELoss()
+
+        for step in range(400):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(forward(train)[0], train["answer"])
+                loss.backward()
+                opt.step()
+                plot("loss", loss.item())
+
+        out, weights = forward(test)
+        # Predicting the average of everything is the score to beat.
+        flat = crit(torch.zeros(test["count"], 1), test["answer"]).item()
+        print("error on unseen sequences:", f"{crit(out, test['answer']).item():.4f}")
+        print("saying zero every time:   ", f"{flat:.4f}")
+
+        w = weights.tolist()
+        cells = test["cells"].tolist()
+        print("")
+        print("where it looked, for the first three sequences (flag marked ▲):")
+        for i in range(3):
+            print("  weight " + "".join(f"{w[i][t]:6.2f}" for t in range(LEN)))
+            print("  flag   " + "".join(("▲" if cells[i * LEN + t][1] > 0.5 else "·").rjust(6) for t in range(LEN)))
+      </script>
     </div>
 
     <h2>3 · The same thing, packaged</h2>
@@ -256,6 +348,41 @@
         log("the mask itself — the upper triangle is -Infinity:");
         const shown = Array.from(await mask.toArray()).map((v) => (v === 0 ? 0 : 1));
         await show(Tensor.from(new Float32Array(shown), [LEN, LEN]), { scale: 24, range: [0, 1] });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import random
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+
+        LEN, EMBED = 6, 8
+        attention = nn.MultiheadAttention(EMBED, 2)
+
+        before = [random.random() * 2 - 1 for _ in range(LEN * EMBED)]
+        after = before[:]
+        for k in range(EMBED):
+            after[(LEN - 1) * EMBED + k] = random.random() * 2 - 1
+
+        # [length, batch, embed] — torch's order, and this class's default.
+        one = torch.tensor(before).reshape(LEN, 1, EMBED)
+        two = torch.tensor(after).reshape(LEN, 1, EMBED)
+        # torch has no causal-mask helper: -inf above the diagonal, by hand.
+        mask = torch.tensor([[0.0 if c <= r else float("-inf") for c in range(LEN)] for r in range(LEN)])
+
+        # How far the first position's output moves when the last token is rewritten.
+        def moved(left, right):
+            return (left[0] - right[0]).abs().amax().item()
+
+        out, _ = attention(one, one, one)
+        print("output shape:", "×".join(str(n) for n in out.shape))
+        print("")
+        print("rewrite the last token, then look at position 0:")
+        print("  no mask      ", f"{moved(attention(one, one, one)[0], attention(two, two, two)[0]):.5f}")
+        print("  causal mask  ", f"{moved(attention(one, one, one, attn_mask=mask)[0], attention(two, two, two, attn_mask=mask)[0]):.5f}")
+        print("")
+        print("the mask itself — the upper triangle is -Infinity:")
+        await show(torch.tensor([[0.0 if c <= r else 1.0 for c in range(LEN)] for r in range(LEN)]), scale=24, range=[0, 1])
       </script>
     </div>
     <p class="small">
@@ -345,6 +472,70 @@
         for (let i = 0; i < 3; i++) {
           log("  " + Array.from({ length: LEN }, (_, t) => w[i * LEN + t].toFixed(2).padStart(6)).join(""));
         }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import math
+        import random
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        LEN, TARGET = 8, 2
+
+        # mode 0: value only · 1: value + a ramp · 2: value + sin/cos
+        def make_set(count, mode):
+            wide = 1 if mode == 0 else 2 if mode == 1 else 3
+            cells, answer = [], []
+            for i in range(count):
+                for t in range(LEN):
+                    row = [random.random() * 2 - 1]
+                    if mode == 1:
+                        row.append(t / (LEN - 1))
+                    if mode == 2:
+                        row += [math.sin(2 * math.pi * t / LEN), math.cos(2 * math.pi * t / LEN)]
+                    cells.append(row)
+                    if t == TARGET:
+                        answer.append([row[0]])
+            return dict(cells=torch.tensor(cells), answer=torch.tensor(answer), count=count, wide=wide)
+
+        def trial(name, mode):
+            torch.manual_seed(0)
+            train, test = make_set(200, mode), make_set(200, mode)
+            D = 8
+            to_key = nn.Linear(train["wide"], D)
+            to_value = nn.Linear(train["wide"], D)
+            head = nn.Linear(D, 1)
+            query = torch.tensor([[random.random() * 0.2 - 0.1] for _ in range(D)], requires_grad=True)
+
+            def forward(s):
+                weights = (to_key(s["cells"]) @ query).reshape(s["count"], LEN).softmax(1)
+                values = to_value(s["cells"]).reshape(s["count"], LEN, D)
+                return head((weights.unsqueeze(2) * values).sum(1)), weights
+
+            opt = optim.Adam([*to_key.parameters(), *to_value.parameters(), *head.parameters(), query], lr=0.02)
+            crit = nn.MSELoss()
+            for step in range(500):
+                if stopped():
+                    break
+                with torch.scope():
+                    opt.zero_grad()
+                    loss = crit(forward(train)[0], train["answer"])
+                    loss.backward()
+                    opt.step()
+            got, weights = forward(test)
+            err = crit(got, test["answer"]).item()
+            flat = crit(torch.zeros(test["count"], 1), test["answer"]).item()
+            print(f"{name:<22} error {err:.4f}   (saying zero: {flat:.4f})")
+            return weights
+
+        trial("value only", 0)
+        trial("value + ramp", 1)
+        weights = trial("value + sin/cos", 2)
+
+        w = weights.tolist()
+        print("")
+        print(f"where the last one looks — position {TARGET} is the answer:")
+        for i in range(3):
+            print("  " + "".join(f"{w[i][t]:6.2f}" for t in range(LEN)))
       </script>
     </div>
 

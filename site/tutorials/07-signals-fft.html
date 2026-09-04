@@ -29,14 +29,19 @@
     <nav>
       <a href="../learn/">Learn</a>
       <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
-      <a href="../models.html">Models</a>
-      <a href="../vision.html">Vision</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
       <a href="../python.html">Python</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/tutorials/07-signals-fft.html" class="lang">한국어</a>
     </nav>
@@ -117,6 +122,40 @@
         log("the whole spectrum — 0 cycles at the left edge, 32 at the right:");
         await show(Tensor.from(chart, [H, W]), { scale: 8, range: [0, 1] });
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        N = 64
+        t = np.arange(N)
+        wave = (np.sin(2 * np.pi * 4 * t / N)                       # 4 cycles, full size
+                + 0.5 * np.sin(2 * np.pi * 11 * t / N)).astype(np.float32)   # 11 cycles, half size
+
+        x = torch.tensor(wave)
+        spectrum = torch.fft.rfft(x)
+        print(f"{N} samples in →", spectrum.shape[0], "frequencies out, complex:", spectrum.is_complex())
+
+        # The size of a complex number is what "how much of this frequency" means.
+        size = spectrum.abs().tolist()
+        hz = torch.fft.rfftfreq(N, 1).tolist()
+
+        print("")
+        print("the bins that carry anything:")
+        for k, v in enumerate(size):
+            if v > 1:
+                print(f"  bin {k:2d}   {hz[k] * N:2.0f} cycles   size {v:.1f}")
+
+        # Each bin as a column filled from the bottom — a bar chart, painted into a tensor.
+        H, W = 48, len(size)
+        chart = np.zeros((H, W), dtype=np.float32)
+        tallest = max(size)
+        for k in range(W):
+            high = round(size[k] / tallest * (H - 1))
+            chart[H - 1 - high:, k] = 1
+        print("")
+        print("the whole spectrum — 0 cycles at the left edge, 32 at the right:")
+        await show(torch.tensor(chart), scale=8, range=[0, 1])
+      </script>
     </div>
     <p class="small">
       Two bars, at 4 and 11 cycles, in a ratio of 2:1 — which is what was put in. Nothing
@@ -175,6 +214,50 @@
         await show(against(noisy), { scale: 6, range: [0, 1] });
         log("red = clean, green = filtered");
         await show(against(back), { scale: 6, range: [0, 1] });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        if "wave" not in globals():
+            raise RuntimeError("Run block 1 first.")
+        noisy = (wave + (np.random.random(N) - 0.5) * 1.2).astype(np.float32)
+
+        clean = torch.tensor(wave)
+        dirty = torch.tensor(noisy)
+        bins = N // 2 + 1
+
+        # Keep the low frequencies, drop the rest. The mask is a tensor like any other.
+        # 12 is above both of the real components (4 and 11) and below most of the noise.
+        CUT = 12
+        keep = np.zeros(bins, dtype=np.float32)
+        keep[:CUT + 1] = 1
+
+        filtered = torch.fft.irfft(torch.fft.rfft(dirty) * torch.tensor(keep), N)
+
+        err = torch.nn.MSELoss()
+        print("error against the clean signal")
+        print("  noisy    ", f"{err(dirty, clean).item():.4f}")
+        print("  filtered ", f"{err(filtered, clean).item():.4f}")
+
+        # Draw the waveforms rather than list them: one row of pixels per value,
+        # the clean signal in red and whatever it is being compared with in green.
+        back = filtered.tolist()
+        H = 64
+        def height(v):
+            return max(0, min(H - 1, round((1 - (v + 3) / 6) * (H - 1))))
+        def against(other):
+            canvas = np.zeros((3, H, N), dtype=np.float32)
+            for i in range(N):
+                canvas[0, height(wave[i]), i] = 1      # red   = clean
+                canvas[1, height(other[i]), i] = 1     # green = the other one
+            return torch.tensor(canvas)
+
+        print("")
+        print("red = clean, green = noisy (yellow where they land on the same pixel)")
+        await show(against(noisy), scale=6, range=[0, 1])
+        print("red = clean, green = filtered")
+        await show(against(back), scale=6, range=[0, 1])
       </script>
     </div>
     <p class="small">
@@ -251,6 +334,61 @@
           log(`${String(count).padStart(13)}       ${String(wave).padStart(4)}%      ${String(spec).padStart(4)}%`);
         }
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        N, BINS = 64, 64 // 2 + 1
+        CYCLES = [5, 6, 7]
+        TEST = 90
+
+        def make_set(count):
+            raw = np.zeros((count, N), dtype=np.float32)
+            label = np.zeros(count, dtype=np.int64)
+            t = np.arange(N)
+            for i in range(count):
+                cls = i % len(CYCLES)
+                amp = 0.6 + np.random.random() * 0.8
+                phase = np.random.random() * 2 * np.pi
+                raw[i] = (amp * np.sin(2 * np.pi * CYCLES[cls] * t / N + phase)
+                          + (np.random.random(N) - 0.5) * 0.6)
+                label[i] = cls
+            return torch.tensor(raw), torch.tensor(label)
+
+        # Train the same architecture on whatever is handed in, and report test accuracy.
+        def accuracy(train_x, train_y, test_x, test_y, inputs):
+            torch.manual_seed(0)
+            model = nn.Sequential(nn.Linear(inputs, 32), nn.ReLU(), nn.Linear(32, len(CYCLES)))
+            opt = optim.Adam(model.parameters(), lr=0.01)
+            crit = nn.CrossEntropyLoss()
+
+            for step in range(300):
+                with torch.scope():
+                    opt.zero_grad()
+                    loss = crit(model(train_x), train_y)
+                    loss.backward()
+                    opt.step()
+            with torch.scope():
+                guess = model(test_x).argmax(1).tolist()
+            truth = test_y.tolist()
+            right = sum(int(g == t) for g, t in zip(guess, truth))
+            return round(100 * right / len(truth))
+
+        test_x, test_y = make_set(TEST)
+        # The spectrum of a whole batch: rfft runs along the last axis on its own.
+        test_spec = torch.fft.rfft(test_x).abs()
+
+        print("training examples   waveform   spectrum")
+        for count in [12, 24, 48, 96]:
+            if stopped():
+                break
+            train_x, train_y = make_set(count)
+            train_spec = torch.fft.rfft(train_x).abs()
+            wave_acc = accuracy(train_x, train_y, test_x, test_y, N)
+            spec_acc = accuracy(train_spec, train_y, test_spec, test_y, BINS)
+            print(f"{count:13d}       {wave_acc:4d}%      {spec_acc:4d}%")
+      </script>
     </div>
     <p class="small">
       The gap is at the small end and it closes. The waveform model has to learn that a
@@ -304,6 +442,37 @@
         log("");
         log("red = 4.0 cycles, green = 4.5, blue = 4.5 through a Hann window");
         await show(Tensor.from(chart, [3, H, bins]), { scale: 8, range: [0, 1] });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        N, bins = 64, 64 // 2 + 1
+
+        def at(cycles):
+            return torch.tensor(np.sin(2 * np.pi * cycles * np.arange(N) / N).astype(np.float32))
+
+        exact = torch.fft.rfft(at(4)).abs().tolist()
+        between = torch.fft.rfft(at(4.5)).abs().tolist()
+        windowed = torch.fft.rfft(at(4.5) * torch.hann_window(N)).abs().tolist()
+
+        print("bin   4.0 cycles   4.5 cycles   4.5 with a Hann window")
+        for k in range(2, 9):
+            print(f"{k:3d}   {exact[k]:9.2f}   {between[k]:10.2f}   {windowed[k]:12.2f}")
+
+        H = 48
+        chart = np.zeros((3, H, bins), dtype=np.float32)
+        tallest = max(exact + between + windowed)
+        def bars(channel, values):
+            for k in range(bins):
+                high = round(values[k] / tallest * (H - 1))
+                chart[channel, H - 1 - high:, k] = 1
+        bars(0, exact)
+        bars(1, between)
+        bars(2, windowed)
+        print("")
+        print("red = 4.0 cycles, green = 4.5, blue = 4.5 through a Hann window")
+        await show(torch.tensor(chart), scale=8, range=[0, 1])
       </script>
     </div>
 

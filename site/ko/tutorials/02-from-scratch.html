@@ -28,14 +28,19 @@
     <nav>
       <a href="../learn/">배우기</a>
       <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
-      <a href="../models.html">모델</a>
-      <a href="../vision.html">비전</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
       <a href="../python.html">파이썬</a>
-      <a href="../setup.html">GPU</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
       <a href="../workbench.html">Workbench</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../tutorials/02-from-scratch.html" class="lang">English</a>
     </nav>
@@ -98,6 +103,22 @@
         log("");
         log("answer to find: w = 2, b = -1");
       </script>
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        N = 64
+        xs = (np.arange(N, dtype=np.float32) / N) * 4 - 2
+        ys = 2 * xs - 1 + (np.random.rand(N).astype(np.float32) - 0.5) * 0.4
+        # The blocks below read xs, ys and N from here — Python blocks on a page share one namespace.
+
+        print("first five x:", ", ".join(f"{v:.2f}" for v in xs[:5]))
+        print("first five y:", ", ".join(f"{v:.2f}" for v in ys[:5]))
+        print("")
+        print("answer to find: w = 2, b = -1")
+      </script>
     </div>
 
     <h2>1 · 손으로</h2>
@@ -153,6 +174,40 @@
         log("");
         log("w =", (await w.item()).toFixed(4), " b =", (await b.item()).toFixed(4));
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        if "xs" not in globals():
+            raise RuntimeError("Run block 0 first.")
+
+        x = torch.tensor(xs.reshape(N, 1))
+        y = torch.tensor(ys.reshape(N, 1))
+
+        w = torch.tensor([[0.0]], requires_grad=True)
+        b = torch.tensor([0.0], requires_grad=True)
+
+        lr = 0.05
+        for step in range(200):
+            with torch.scope():
+                w.grad = None                                  # zero_grad, by hand
+                b.grad = None
+
+                pred = x.mm(w) + b                             # forward, by hand
+                loss = (pred - y).square().mean()              # MSE, by hand
+                loss.backward()
+
+                with torch.no_grad():                          # the step, by hand
+                    w.data = w - lr * w.grad
+                    b.data = b - lr * b.grad
+
+                v = loss.item()
+                plot("loss", v)
+                if step % 50 == 0:
+                    print(f"step {step:3d}   loss {v:.5f}")
+
+        print("")
+        print(f"w = {w.item():.4f}  b = {b.item():.4f}")
+      </script>
     </div>
 
     <h2>2 · nn.Linear 가 파라미터를 들게</h2>
@@ -192,6 +247,36 @@
         log("w =", (await model.weight.item()).toFixed(4),
             " b =", (await model.bias.item()).toFixed(4));
       </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn = torch.nn
+        torch.manual_seed(0)
+        if "xs" not in globals():
+            raise RuntimeError("Run block 0 first.")
+
+        x = torch.tensor(xs.reshape(N, 1))
+        y = torch.tensor(ys.reshape(N, 1))
+
+        model = nn.Linear(1, 1)
+        lr = 0.05
+
+        for step in range(200):
+            with torch.scope():
+                for p in model.parameters():
+                    p.grad = None
+
+                loss = (model(x) - y).square().mean()
+                loss.backward()
+
+                with torch.no_grad():
+                    for p in model.parameters():
+                        p.data = p - lr * p.grad
+
+                plot("loss", loss.item())
+
+        print(f"w = {model.weight.item():.4f}  b = {model.bias.item():.4f}")
+      </script>
     </div>
 
     <h2>3 · optim 이 걸음을 걷게</h2>
@@ -228,6 +313,33 @@
             " b =", (await model.bias.item()).toFixed(4));
         log("");
         log("This is the loop from lesson 4. Nothing was hidden — you wrote each piece.");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+        if "xs" not in globals():
+            raise RuntimeError("Run block 0 first.")
+
+        x = torch.tensor(xs.reshape(N, 1))
+        y = torch.tensor(ys.reshape(N, 1))
+
+        model = nn.Linear(1, 1)
+        opt = optim.SGD(model.parameters(), lr=0.05)
+        crit = nn.MSELoss()
+
+        for step in range(200):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                plot("loss", loss.item())
+
+        print(f"w = {model.weight.item():.4f}  b = {model.bias.item():.4f}")
+        print("")
+        print("This is the loop from lesson 4. Nothing was hidden — you wrote each piece.")
       </script>
     </div>
 
@@ -270,6 +382,36 @@
         log("");
         log("The curve is noisier than block 3 — each step now sees 16 points, not 64.");
         log("That noise is not a bug; it is most of why mini-batch training generalises.");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        data = torch.utils.data
+        torch.manual_seed(0)
+        if "xs" not in globals():
+            raise RuntimeError("Run block 0 first.")
+
+        dataset = data.TensorDataset(torch.tensor(xs.reshape(N, 1)), torch.tensor(ys.reshape(N, 1)))
+        loader = data.DataLoader(dataset, batch_size=16, shuffle=True)
+
+        model = nn.Linear(1, 1)
+        opt = optim.SGD(model.parameters(), lr=0.05)
+        crit = nn.MSELoss()
+
+        for epoch in range(40):
+            for bx, by in loader:
+                with torch.scope():
+                    opt.zero_grad()
+                    loss = crit(model(bx), by)
+                    loss.backward()
+                    opt.step()
+                    plot("loss", loss.item())
+
+        print(f"w = {model.weight.item():.4f}  b = {model.bias.item():.4f}")
+        print("")
+        print("The curve is noisier than block 3 — each step now sees 16 points, not 64.")
+        print("That noise is not a bug; it is most of why mini-batch training generalises.")
       </script>
     </div>
 
