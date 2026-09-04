@@ -1449,6 +1449,15 @@ class Module:
         # that survives that.
         if callable(getattr(got, "forward", None)):
             return Module(got)
+        # **A method the layer has and this class does not** — bimm's `forwardFeatures`
+        # and `forwardHead` are the first. Called through `guarded` so tensors cross as
+        # handles and come back wrapped, the way `__call__` does it; keyword arguments
+        # ride along in the order written (`forward_head(h, pre_logits=True)`).
+        if callable(got):
+            def call(*args, **kw):
+                return guarded(got, *[_arg(a) for a in args], *[_arg(v) for v in kw.values()])
+            call.__name__ = name
+            return call
         return got
 
 

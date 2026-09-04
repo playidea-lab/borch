@@ -48,9 +48,19 @@ with torch.no_grad():
         with torch.scope():
             model(x).sum().item()
     per_image = (time.perf_counter() - t) / 3 / 16 * 1000
+# timm's split, through the binding: forward == forward_head(forward_features(x)),
+# and pre_logits gives the [N, num_features] vector the field trainer caches.
+with torch.no_grad():
+    with torch.scope():
+        x2 = torch.randn(2, 3, 224, 224)
+        whole = model(x2)
+        maps = model.forward_features(x2)
+        composed = model.forward_head(maps)
+        vec = model.forward_head(maps, pre_logits=True)
+        split = f"features {tuple(maps.shape)} · pre_logits {tuple(vec.shape)} (num_features {int(model.num_features)}) · composed == forward: {bool((composed - whole).abs().max().item() < 1e-5)}"
 faults = int(js.borch.device().faults.count) - faults0
 name = model.manifest.get("name") if isinstance(model.manifest, dict) else "?"
-f"hub {name} loaded in {load_s:.1f} s · out {shape} · argmax {top} · batch 16 {per_image:.1f} ms/image · faults {faults} · adapter {adapter}"
+f"hub {name} loaded in {load_s:.1f} s · out {shape} · argmax {top} · batch 16 {per_image:.1f} ms/image · {split} · faults {faults} · adapter {adapter}"
 \`);
         postMessage({ done: text, ms: performance.now() - t1 });
       } catch (err) {

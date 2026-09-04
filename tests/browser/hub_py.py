@@ -80,6 +80,8 @@ def main(argv):
     done = got.get("done") or ""
     # Judged here, not in the page: y = 3x + 1 learned to two decimals, and an ONNX file.
     ok = "hub imagenet-efficientnet-b0 loaded" in done and "out (2, 1000)" in done and "faults 0" in done
+    # timm's split on the wheel: the pre-logits vector is (2, 1280) and composes back to forward.
+    ok = ok and "pre_logits (2, 1280) (num_features 1280)" in done and "composed == forward: True" in done
     print("**torch.hub.load works on the wheel, in a worker**" if ok else "**it did not** — see above")
     return 0 if ok else 1
 
