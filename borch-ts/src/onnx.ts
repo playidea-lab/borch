@@ -198,6 +198,8 @@ function valueInfo(name: string, shape: readonly number[], batchParam: string | 
 const UNARY: Record<string, string> = {
   relu: "Relu", sigmoid: "Sigmoid", tanh: "Tanh", exp: "Exp", log: "Log", neg: "Neg",
   abs: "Abs", sqrt: "Sqrt", floor: "Floor", ceil: "Ceil", softplus: "Softplus",
+  // MobileNetV3's pair. Both are opset 14 ops; the default here is 17.
+  hardswish: "HardSwish", hardsigmoid: "HardSigmoid",
 };
 const BINARY: Record<string, string> = {
   add: "Add", sub: "Sub", mul: "Mul", div: "Div", pow: "Pow", maximum: "Max", minimum: "Min",
@@ -218,6 +220,12 @@ interface Emitted {
 /** One traced node, spelled as ONNX (one node, or a chain) — or a refusal that names the op. */
 function emit(node: TraceNode, batch: number, dynamicBatch: boolean): Emitted[] {
   const { op, inputs, attrs } = node;
+  if (op === "unary:silu") {
+    // ONNX has no SiLU; it is `x · sigmoid(x)`, two nodes. EfficientNet is made of it —
+    // the workbench's frozen-backbone export stopped here first.
+    const [x = null] = inputs;
+    return [{ opType: "Sigmoid", inputs: [x], attrs: {} }, { opType: "Mul", inputs: [x, PREV], attrs: {} }];
+  }
   if (op.startsWith("unary:")) {
     const opType = UNARY[op.slice(6)];
     if (!opType) throw new Error(`cannot export ${op.slice(6)}: no ONNX spelling for it here`);

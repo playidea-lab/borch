@@ -72,7 +72,9 @@
       buttons, and an AI assistant you give your own key to. The first cell installs
       <code>pyborch</code>; the rest is one review job: upload images → train on this
       tab's GPU → a review table with the labels the model doubts first →
-      <code>torch.onnx.export</code>. Nothing is installed.
+      <code>torch.onnx.export</code>. Two model paths: a frozen ImageNet EfficientNet-B0 with a
+      linear head (<code>torch.hub.load</code>, one feature vector per image, hundreds of images are
+      enough) or a small CNN from scratch. Nothing is installed.
     </p>
     <p class="cta-row">
       <a class="btn primary" href="marimo/index.html">Open the workbench →</a>

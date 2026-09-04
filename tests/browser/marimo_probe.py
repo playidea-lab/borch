@@ -16,7 +16,7 @@ import time
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve
 from launch import refuse_if_software
 
-GIVE_UP_MS = 6 * 60 * 1000
+GIVE_UP_MS = 300_000     # the frozen path exports a 21 MB EfficientNet — tracing and encoding take a while
 # What the notebook rendered, and only that. `document.body.innerText` would also carry
 # every cell's source (the editors are text), so "KB of ONNX" matched at 5 s before any
 # cell had run; and the table's "90 rows, 5 columns" line lives in a shadow root, which
@@ -77,6 +77,25 @@ def upload_pass(page, t0, deadline):
     return None
 
 
+def scratch_pass(page, t0, deadline):
+    """Pick "small CNN from scratch" and wait for the retrained line and a fresh export.
+    Returns (seconds, "acc% · N KB") or None."""
+    try:
+        page.get_by_label("small CNN from scratch", exact=True).check()
+    except Exception as e:                                          # noqa: BLE001
+        print(f"  scratch pass: the radio's label did not take a check ({type(e).__name__}); clicking its text")
+        page.get_by_text("small CNN from scratch", exact=True).click()
+    while time.time() < deadline:
+        page.wait_for_timeout(500)
+        body = page.evaluate(OUTPUTS)
+        m = re.search(r"small CNN · \d+ epochs[^\n]*agrees with the given labels on \*?\*?(\d+)%", body)
+        kb = re.search(r"(\d+) KB of ONNX", body)
+        if m and kb and int(kb.group(1)) < 1000:          # the CNN's file is ~118 KB, the backbone's 16 MB
+            return (time.time() - t0, f"{m.group(1)}% · {kb.group(1)} KB")
+    print("  scratch pass: the small-CNN line never rendered; the last outputs:", repr(body[-500:]))
+    return None
+
+
 def main(argv):
     from playwright.sync_api import sync_playwright
     headed = "--headed" in argv
@@ -126,11 +145,15 @@ def main(argv):
                     # notebook reads labels (`cat_000.png`); marimo re-runs the cells
                     # below the upload on its own, so the table's names change.
                     marks["uploaded"] = upload_pass(page, t0, deadline)
+                    # Third pass: the other model path. The radio is a marimo element in
+                    # a shadow root; Playwright's text locator pierces it. marimo reruns
+                    # the cells below on its own.
+                    marks["scratch"] = scratch_pass(page, t0, deadline)
             finally:
                 context.close()
     finally:
         shutdown()
-    for key in ("adapter", "trained", "queue", "export", "uploaded"):
+    for key in ("adapter", "trained", "queue", "export", "uploaded", "scratch"):
         if marks.get(key):
             print(f"  {key:8s} {marks[key][0]:5.1f} s  {marks[key][1]}")
         else:
@@ -140,7 +163,8 @@ def main(argv):
     adapter = marks.get("adapter", (0, None))[1]
     if refuse_if_software(adapter, "the workbench page"):
         return 1
-    ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "uploaded"))
+    ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "uploaded", "scratch"))
+    ok = ok and int(marks["scratch"][1].split("%")[0]) >= 90
     ok = ok and int(marks["trained"][1]) >= 90 and int(marks["queue"][1]) == 90
     ok = ok and int(marks["uploaded"][1].split("%")[0]) >= 90 and marks["uploaded"][1].endswith("on 90 rows")
     print("**the workbench trains, reviews and exports**" if ok else "**it did not** — see above")

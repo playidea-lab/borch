@@ -4,8 +4,8 @@
 <script type="importmap">
 { "imports": {
     "borch-ts": "/borch-ts/dist/src/index.js",
-    "bimm-ts": "https://esm.sh/bimm-ts@0.6.0?external=borch-ts",
-    "borch-hub": "https://esm.sh/borch-hub@0.2.3?external=borch-ts,bimm-ts"
+    "bimm-ts": "https://esm.sh/bimm-ts@0.10.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.4.0?external=borch-ts,bimm-ts"
 } }
 </script>
 <body>
@@ -110,7 +110,8 @@
       const t1 = performance.now();
       decodeMs += t1 - t0;
       const values = await scope(async () => {
-        const y = noGrad(() => model.forward(Tensor.from(x, [n, 3, SIDE, SIDE])));
+        // The vector before the classifier (timm's pre_logits), not the 1000 logits.
+        const y = noGrad(() => model.forwardHead(model.forwardFeatures(Tensor.from(x, [n, 3, SIDE, SIDE])), true));
         if (!featureDim) { featureDim = y.shape[y.shape.length - 1]; feats = new Float32Array(files.length * featureDim); }
         return y.toArray();
       });

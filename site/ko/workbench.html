@@ -71,7 +71,9 @@
       브라우저 안의 marimo 노트북이다 — 반응형 셀, 표와 버튼 같은 UI 요소, 그리고 자기 키를 넣는
       AI 조수가 딸려 있다. 첫 셀이 <code>pyborch</code> 를 싣고, 나머지는 한 번의 검수 작업이다:
       이미지 업로드 → 이 탭의 GPU 에서 학습 → 모델이 의심하는 라벨부터 보이는 검수 표 →
-      <code>torch.onnx.export</code>. 아무것도 설치하지 않는다.
+      <code>torch.onnx.export</code>. 모델 경로는 둘이다: 동결한 ImageNet EfficientNet-B0 위의 선형
+      헤드(<code>torch.hub.load</code>, 이미지당 특징 벡터 하나, 수백 장이면 된다) 또는 처음부터 학습하는
+      소형 CNN. 아무것도 설치하지 않는다.
     </p>
     <p class="cta-row">
       <a class="btn primary" href="../marimo/index.html">작업대 열기 →</a>
