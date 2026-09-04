@@ -26,6 +26,8 @@ from launch import refuse_if_software
 
 GIVE_UP_MS = 5 * 60 * 1000
 
+from wheel_probe import wheel_is_stale  # noqa: E402
+
 
 def main(argv):
     from playwright.sync_api import sync_playwright
@@ -44,6 +46,9 @@ def main(argv):
             print("no wheel under dist/ — first: npm run bundle:py && uv build --wheel", file=sys.stderr)
             return 2
         wheel = os.path.relpath(found[-1], ROOT)
+        if wheel_is_stale(wheel):
+            print(f"{wheel} is older than the sources — run with --build (or: npm run bundle:py && uv build --wheel)", file=sys.stderr)
+            return 2
     if refuse_if_screen_off("the wheel in a worker"):
         return 1
     port, shutdown = serve(ROOT)

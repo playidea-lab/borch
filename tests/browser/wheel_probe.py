@@ -18,6 +18,22 @@ from launch import refuse_if_software
 GIVE_UP_MS = 5 * 60 * 1000
 
 
+def wheel_is_stale(wheel):
+    """Whether any source the wheel is built from is newer than the wheel.
+
+    The 4090 kept a `dist/pyborch-1.6.0` from an earlier day while the checkout had moved
+    to 1.7.0 with `torch.hub` in it; the probe picked the old wheel up and the failure came
+    out as "borch.ts does not have `hub`" — three steps from the cause. So a stale wheel
+    is refused by name unless `--build` is given.
+    """
+    built = os.path.getmtime(wheel)
+    newest = 0.0
+    for pattern in ("borch/**/*.py", "borch_webgpu/**/*.py", "borch_webgpu/_borch.js", "pyproject.toml"):
+        for p in glob.glob(str(ROOT / pattern), recursive=True):
+            newest = max(newest, os.path.getmtime(p))
+    return newest > built
+
+
 def main(argv):
     from playwright.sync_api import sync_playwright
     headed = "--headed" in argv
@@ -35,6 +51,9 @@ def main(argv):
             print("no wheel under dist/ — first: npm run bundle:py && uv build --wheel", file=sys.stderr)
             return 2
         wheel = os.path.relpath(found[-1], ROOT)
+        if wheel_is_stale(wheel):
+            print(f"{wheel} is older than the sources — run with --build (or: npm run bundle:py && uv build --wheel)", file=sys.stderr)
+            return 2
     if refuse_if_screen_off("the wheel in a worker"):
         return 1
     port, shutdown = serve(ROOT)

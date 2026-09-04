@@ -56,7 +56,7 @@
     "envelope:py": "uv run --with playwright python tests/browser/envelope.py",
     "envelope2:py": "uv run --with playwright python tests/browser/envelope2.py",
     "folder:py": "uv run --with playwright python tests/browser/folder5k.py --make=5000",
-    "hub:py": "uv run --with playwright python tests/browser/hub_py.py",
+    "hub:py": "uv run --with playwright python tests/browser/hub_py.py --build",
     "build:lab": "python3 site/build_lab.py",
     "marimo:py": "uv run --with playwright python tests/browser/marimo_probe.py --build",
     "build:marimo": "python3 site/build_marimo.py",
