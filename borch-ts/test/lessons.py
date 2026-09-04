@@ -22,8 +22,11 @@ appeared and whether an exception's wording is in it. It does not look at whethe
 values are right — that is the golden's job. What is caught here is **whether it blows
 up**, and blowing up is exactly what a renamed name does.
 
-Python blocks (`data-lang="py"`) are not pressed. They want Pyodide downloaded, which is a
-different kind of slow from the one this check is measuring.
+Python blocks (`data-lang="py"`) are pressed only with `--py`. Pyodide and numpy come from
+`vendor/`, so nothing is downloaded, but the first Python press on a page pays the Pyodide
+start — a different kind of slow from the one the JS run measures, so it is opt-in here and
+on by default in the nightly. `--only=learn/03` restricts the run to pages whose path
+contains the text (EN and KO both), for iterating on one page.
 """
 
 import pathlib
@@ -260,7 +263,7 @@ WORD_NET_EXEMPT = {
 TIMEOUT_MS = 300_000
 
 
-def run_page(page, url, rel=None):
+def run_page(page, url, rel=None, with_py=False):
     """Press every JS block on one page; return (passed, what to say).
 
     **`rel` is the site-relative path and `url` is where to fetch it**, and they are
@@ -278,16 +281,36 @@ def run_page(page, url, rel=None):
     blocks = page.query_selector_all("div.runnable")
     pressed = 0
     for i, block in enumerate(blocks):
-        # Python blocks are skipped — they download Pyodide, which is not what this
-        # measures.
-        if (block.get_attribute("data-lang") or "js") != "js":
+        # Every block is pressed in its first language. With `--py`, a block that also
+        # carries a Python source is pressed a second time on its Python tab — Pyodide
+        # and numpy come from `vendor/`, so nothing is downloaded, but the first press
+        # on a page costs the Pyodide start (a few seconds) and is left out by default.
+        langs = ["js"] if (block.get_attribute("data-lang") or "js") == "js" else ["py"]
+        # The `<script>` sources are gone once runnable.js has built the editor; the
+        # language tabs are what is left to ask.
+        if with_py and "py" not in langs and block.query_selector('button.tab[data-lang="py"]'):
+            langs.append("py")
+        if not with_py and langs == ["py"]:
             continue
         go = block.query_selector("button.go")
         if go is None:
             said.append(f"block {i} has no run button")
             continue
+        for lang in langs:
+            tab = block.query_selector(f'button.tab[data-lang="{lang}"]')
+            if tab is not None:
+                tab.click()
+            press(page, block, go, i if len(langs) == 1 else f"{i}/{lang}", rel, said)
+            pressed += 1
+    if pressed == 0:
+        # **Running 0 of them and seeing green is the worst outcome available.**
+        said.append("there was not one JS block to press — the selector may be stale")
+    return not said, pressed, said
+
+
+def press(page, block, go, i, rel, said):
+    if True:
         go.click()
-        pressed += 1
         # **It is finished when the button becomes pressable again**
         # (`runnable.js`'s `runBtn.disabled`).
         #
@@ -302,7 +325,7 @@ def run_page(page, url, rel=None):
         text = (out.inner_text() if out else "").strip()
         if not text:
             said.append(f"block {i} produced nothing")
-            continue
+            return
         # **The mark comes first.** A line the page wrote after catching an exception
         # catches here.
         for line in (out.query_selector_all(ERROR_CLASS) if out else []):
@@ -314,11 +337,6 @@ def run_page(page, url, rel=None):
                 if bad in text:
                     said.append(f"block {i} — {text.splitlines()[0][:120]}")
                     break
-
-    if pressed == 0:
-        # **Running 0 of them and seeing green is the worst outcome available.**
-        said.append("there was not one JS block to press — the selector may be stale")
-    return not said, pressed, said
 
 
 def main(argv):
@@ -335,9 +353,12 @@ def main(argv):
             page.set_default_timeout(0)
             page.on("pageerror",
                     lambda e: rows.append((False, 0, [f"page exception: {e}"])))
+            only = [a.split("=", 1)[1] for a in argv if a.startswith("--only=")]
             for rel in PAGES:
+                if only and not any(o in rel for o in only):
+                    continue
                 ok, pressed, said = run_page(
-                    page, f"http://127.0.0.1:{port}{rel}", rel)
+                    page, f"http://127.0.0.1:{port}{rel}", rel, with_py="--py" in argv)
                 rows.append((rel, ok, pressed, said))
     finally:
         stop()
@@ -345,7 +366,7 @@ def main(argv):
     bad = 0
     for rel, ok, pressed, said in rows:
         mark = "✓" if ok else "✗"
-        print(f"  {mark} {rel} — {pressed} JS blocks")
+        print(f"  {mark} {rel} — {pressed} blocks pressed")
         for line in said:
             print(f"      {line}", file=sys.stderr)
         if not ok:
