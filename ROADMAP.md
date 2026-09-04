@@ -62,7 +62,7 @@ danger.
 | **T4 bits** | identical bits | **a non-goal** | — |
 
 **Now.** The 132 above was the generated conformance table on the day; the measure
-since then is the golden — **4735 golden cases** across three implementations, held to
+since then is the golden — **4744 golden cases** across three implementations, held to
 the count by `tests/test_docs.py` so this sentence cannot go stale the way the column
 above did (it sat at 132 for three weeks while the golden passed 4,000).
 

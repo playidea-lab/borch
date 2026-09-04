@@ -7864,6 +7864,8 @@ def method_name_cases(inp=None):
         ("adjoint", lambda L, x: x.adjoint()),
         ("moveaxis", lambda L, x: x.moveaxis(0, 1)),
         ("t", lambda L, x: x.t()),
+        # `x.T` — torch's property; two lesson twins wrote it before it existed.
+        ("T", lambda L, x: x.T),
         ("det", lambda L, x: x.det()),
         ("inverse", lambda L, x: x.inverse()),
         ("matrix_exp", lambda L, x: x.matrix_exp()),
@@ -14239,6 +14241,16 @@ _INPLACE_UNARY = ("abs_", "sqrt_", "exp_", "log_", "sin_", "cos_", "tan_", "tanh
                   "log2_", "log10_", "expm1_", "log1p_", "sinh_", "cosh_")
 
 
+def _scalar_cache_after_step(L):
+    """A one-element parameter taken straight off `zeros(1)`, trained one SGD step.
+    `[p, zeros(1)]` — the parameter moved and the constant did not."""
+    p = L.zeros(1, requires_grad=True)
+    opt = L.optim.SGD([p], lr=1.0)
+    (p * 3).sum().backward()
+    opt.step()
+    return L.cat([p.detach(), L.zeros(1)])
+
+
 def inplace_cases(inp=None):
     """In-place operations. **Where the two implementations part deliberately.**
 
@@ -14267,6 +14279,14 @@ def inplace_cases(inp=None):
         run("sub_", lambda x: x.sub_(1), plain),
         run("mul_", lambda x: x.mul_(2), plain),
         run("div_", lambda x: x.div_(2), plain),
+        # **A tensor operand.** borch.ts's four took a number only, and the Python
+        # binding forwarded a tensor into them: `other * alpha` was NaN and the whole
+        # buffer was filled with it — `w -= lr * w.grad` came out nan (measured).
+        run("add_(tensor)", lambda x: x.add_(x * 2), plain),
+        run("add_(tensor, alpha)", lambda x: x.add_(x * 2, alpha=2), plain),
+        run("sub_(tensor)", lambda x: x.sub_(x * 2), plain),
+        run("mul_(tensor)", lambda x: x.mul_(x * 2), plain),
+        run("div_(tensor)", lambda x: x.div_(x + 1), plain),
         run("pow_", lambda x: x.pow_(2), plain),
         # `neg_` takes no argument and is built by the `_INPLACE_UNARY` loop below. It was here a
         # second time, and having the same name, the loop's was covering this one.
@@ -14276,6 +14296,18 @@ def inplace_cases(inp=None):
         run("clip_", lambda x: x.clip_(2, 5), plain),
         # **Chaining is the real test.** What comes back has to be itself for a chain to work.
         run("이어 부르기", lambda x: x.mul_(2).add_(1).clamp_(0, 10), plain),
+        # ── the scalar cache ──
+        #
+        # borch.ts hands every one-element constant out of a cache shared by value, so a
+        # write into such a tensor used to change what every later `zeros(1)` read
+        # (measured: `zeros(1).data = 5` → every `zeros(1)` after it read 5). These ask
+        # for a fresh constant after each way of writing into one.
+        (INPLACE_PREFIX + "scalar cache::zeros(1).add_(5) then zeros(1)",
+         lambda L: (L.zeros(1).add_(5), L.zeros(1))[1]),
+        (INPLACE_PREFIX + "scalar cache::copy_ into zeros(1) then zeros(1)",
+         lambda L: (L.zeros(1).copy_(L.tensor(np.array([5.0], dtype=np.float32))), L.zeros(1))[1]),
+        (INPLACE_PREFIX + "scalar cache::optimizer step on a one-element parameter",
+         _scalar_cache_after_step),
         # ── the seats the in-place halves were short of ──
         #
         # **In place means the same arithmetic written back**, so the two spellings of

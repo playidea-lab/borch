@@ -11000,6 +11000,12 @@ function addInplace(out: Map<string, Case>): void {
 
   each("add_", (x) => x.add_(1));
   each("add_(alpha)", (x) => x.add_(1, 2));
+  // A tensor operand — the four used to take a number only.
+  each("add_(tensor)", (x) => x.add_(x.mul(Tensor.full([], 2))));
+  each("add_(tensor, alpha)", (x) => x.add_(x.mul(Tensor.full([], 2)), 2));
+  each("sub_(tensor)", (x) => x.sub_(x.mul(Tensor.full([], 2))));
+  each("mul_(tensor)", (x) => x.mul_(x.mul(Tensor.full([], 2))));
+  each("div_(tensor)", (x) => x.div_(x.add(Tensor.full([], 1))));
   each("sub_", (x) => x.sub_(1));
   each("mul_", (x) => x.mul_(2));
   each("div_", (x) => x.div_(2));
@@ -11011,6 +11017,23 @@ function addInplace(out: Map<string, Case>): void {
   each("clip_", (x) => x.clip_(2, 5));
   // **Chaining is the real test.** Only what it returns being itself keeps the chain.
   each("이어 부르기", (x) => x.mul_(2).add_(1).clamp_(0, 10));
+  // The scalar cache: a fresh one-element constant after each way of writing into one.
+  out.set("inplace::scalar cache::zeros(1).add_(5) then zeros(1)", () => {
+    Tensor.zeros([1]).add_(5);
+    return Tensor.zeros([1]);
+  });
+  out.set("inplace::scalar cache::copy_ into zeros(1) then zeros(1)", () => {
+    Tensor.zeros([1]).copyFrom(Tensor.from([5], [1]));
+    return Tensor.zeros([1]);
+  });
+  out.set("inplace::scalar cache::optimizer step on a one-element parameter", () => {
+    const p = Tensor.zeros([1]);
+    p.requiresGrad = true;
+    const opt = new optim.SGD([p], 1.0);
+    p.mul(Tensor.full([], 3)).sum().backward();
+    opt.step();
+    return Tensor.cat([p.detach(), Tensor.zeros([1])], 0);
+  });
 
   // ── the seats the in-place halves were short of ──
   //
@@ -11307,6 +11330,7 @@ function addInplace(out: Map<string, Case>): void {
     ["adjoint", () => m2a().adjoint()],
     ["moveaxis", () => m2a().moveaxis(0, 1)],
     ["t", () => m2a().t()],
+    ["T", () => m2a().T],
     ["lgamma", () => m2a().lgamma()],
     ["digamma", () => m2a().digamma()],
     ["log_softmax", () => m2a().logSoftmax(1)],

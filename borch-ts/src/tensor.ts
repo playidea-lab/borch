@@ -757,7 +757,18 @@ export class Tensor implements Node<Tensor> {
    * read it directly** — the door from outside is the `buffer` getter, and that one
    * checks the device.
    */
-  private readonly gpu: GPUBuffer | null;
+  private gpu: GPUBuffer | null;
+  /**
+   * **Whether the buffer is the scalar cache's, not this tensor's.** `full` hands a
+   * one-element constant out of a cache shared by every tensor of that value, so a
+   * write into it — an in-place operation, an optimiser step — would change what
+   * `zeros(1)` and `x * 0` read from then on. Measured: `zeros(1).data = 5` made every
+   * later `zeros(1)` read 5. `ensureOwned()` moves a shared tensor onto its own buffer
+   * before anything writes into it.
+   */
+  private shared = false;
+  /** How many scopes were open when this was born — the frame an owned copy joins. */
+  private readonly bornDepth: number;
   /**
    * **Which life** the buffer was on when this was born. The pair of `device.ts`'s
    * `age`.
@@ -806,6 +817,7 @@ export class Tensor implements Node<Tensor> {
     this.gpu = onHost ? null : storage;
     this.host = onHost ? storage : null;
     this.age = this.gpu === null ? 0 : dev().age(this.gpu);
+    this.bornDepth = this.gpu === null ? 0 : dev().scopeDepth;
     this.shape = [...shape];
     this.size = numel(this.shape);
     this.parents = options.parents ?? [];
@@ -1022,11 +1034,11 @@ export class Tensor implements Node<Tensor> {
     // repeats the same constant every step, so they are cached by value.
     if (n === 1) {
       const hit = scalarCache.get(value);
-      if (hit) return new Tensor(hit, shape);
+      if (hit) return Tensor.sharedConstant(hit, shape);
       const buf = dev().upload(Float32Array.of(value));
       dev().keep(buf);
       scalarCache.set(value, buf);
-      return new Tensor(buf, shape);
+      return Tensor.sharedConstant(buf, shape);
     }
     // **Infinity and NaN cannot be baked into a shader.** WGSL forbids a
     // compile-time-evaluated value from becoming inf or NaN — a literal and
@@ -1071,6 +1083,27 @@ export class Tensor implements Node<Tensor> {
     const data = new Float32Array(numel(shape));
     if (value !== 0) data.fill(value);
     return new Tensor(dev().upload(data), shape);
+  }
+
+  /** A tensor over a cached buffer — see `shared`. */
+  private static sharedConstant(buf: GPUBuffer, shape: readonly number[]): Tensor {
+    const t = new Tensor(buf, shape);
+    t.shared = true;
+    return t;
+  }
+
+  /**
+   * Gives a tensor that sits on the scalar cache a buffer of its own, in the scope
+   * frame it was born in. **Called by everything that writes into a buffer** —
+   * `mutate`, `keepAlive`, an optimiser taking a parameter. Anything else is a no-op.
+   */
+  ensureOwned(): void {
+    if (!this.shared || this.gpu === null) return;
+    const own = dev().alloc(this.size, false);
+    dev().copyInto(own, this.gpu, this.size);
+    dev().rehome(own, this.bornDepth);
+    this.gpu = own;
+    this.shared = false;
   }
 
   static zeros(shape: readonly number[]): Tensor {
@@ -3120,6 +3153,15 @@ export class Tensor implements Node<Tensor> {
     const order = [...Array(rank).keys()].filter((d) => d !== from);
     order.splice(to, 0, from);
     return this.permute(order);
+  }
+
+  /**
+   * torch's `x.T`: the axes reversed. On two dimensions that is the transpose; on
+   * fewer, the tensor itself. Two lesson twins reached for it before it existed.
+   */
+  get T(): Tensor {
+    if (this.shape.length < 2) return this;
+    return this.permute(this.shape.map((_, i) => this.shape.length - 1 - i));
   }
 
   /**
@@ -7877,6 +7919,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       );
     }
     if (result.buffer !== this.buffer) {
+      this.ensureOwned();
       dev().copyInto(this.buffer, result.buffer, result.size);
     }
     this.size = result.size;
@@ -7892,23 +7935,28 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this;
   }
 
-  add_(other: number, alpha = 1): Tensor {
-    return this.mutate(() => this.binary("add", Tensor.full([], other * alpha)));
+  /**
+   * `other` is a number **or a tensor** — torch's `x.add_(y)` takes both. With a
+   * tensor here, `other * alpha` was `NaN` and the whole buffer was filled with it;
+   * the Python binding forwards `w.sub_(lr * w.grad)` to exactly this door.
+   */
+  add_(other: number | Tensor, alpha = 1): Tensor {
+    return this.mutate(() => this.binary("add", scaled(other, alpha)));
   }
 
-  sub_(other: number, alpha = 1): Tensor {
-    return this.mutate(() => this.binary("sub", Tensor.full([], other * alpha)));
+  sub_(other: number | Tensor, alpha = 1): Tensor {
+    return this.mutate(() => this.binary("sub", scaled(other, alpha)));
   }
 
-  mul_(other: number): Tensor {
-    return this.mutate(() => this.binary("mul", Tensor.full([], other)));
+  mul_(other: number | Tensor): Tensor {
+    return this.mutate(() => this.binary("mul", scaled(other, 1)));
   }
 
-  div_(other: number, roundingMode: "trunc" | "floor" | null = null): Tensor {
+  div_(other: number | Tensor, roundingMode: "trunc" | "floor" | null = null): Tensor {
     // **`div` took `roundingMode` and `div_` did not**, so the two spellings of one
     // operation had different arguments and the in-place one quietly did true
     // division where torch floors. The core had the same pair, found in the same run.
-    return this.mutate(() => this.div(Tensor.full([], other), roundingMode));
+    return this.mutate(() => this.div(scaled(other, 1), roundingMode));
   }
 
   pow_(exponent: number): Tensor {
@@ -13324,6 +13372,14 @@ export function scope<T>(
   })();
 }
 
+/** `other · alpha` as a tensor, whichever of the two `other` is. */
+function scaled(other: number | Tensor, alpha: number): Tensor {
+  if (other instanceof Tensor) {
+    return alpha === 1 ? other : other.binary("mul", Tensor.full([], alpha));
+  }
+  return Tensor.full([], other * alpha);
+}
+
 /**
  * Keeps something alive past a scope's close. Parameters and optimizer
  * state use it.
@@ -13334,6 +13390,9 @@ export function keepAlive(t: Tensor): Tensor {
   // `keepAlive(await t.cpu())` is a natural line to write, so it must not be refused
   // here.
   if (t.device === "cpu") return t;
+  // A kept tensor is one that persists and is written into — a parameter. Off the
+  // scalar cache first, or the cache is what the optimiser would be writing into.
+  t.ensureOwned();
   dev().keep(t.raw);
   return t;
 }

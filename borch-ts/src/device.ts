@@ -753,6 +753,17 @@ export class Device {
   }
 
   /**
+   * Moves a buffer `alloc` just filed under the innermost scope to the frame `depth`
+   * scopes deep — `0` is outside every scope. `Tensor.ensureOwned` uses it so an owned
+   * copy lives as long as the tensor it replaces, not as long as the scope that
+   * happened to be open when the write came.
+   */
+  rehome(buffer: GPUBuffer, depth: number): void {
+    this.scopes[this.scopes.length - 1]?.delete(buffer);
+    if (depth > 0) this.scopes[depth - 1]?.add(buffer);
+  }
+
+  /**
    * The depth of open scopes. Tests look at it for balance.
    */
   get scopeDepth(): number {

@@ -236,6 +236,8 @@ export abstract class Optimizer {
     };
     this.paramGroups.push(group);
     for (const p of group.params) {
+      // The step writes into the parameter's buffer; one off the scalar cache gets its own.
+      p.ensureOwned();
       this.params.push(p);
       this.groupOf.push(index);
     }
