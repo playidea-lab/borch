@@ -949,6 +949,20 @@ def test_no_page_wears_a_class_that_styles_nothing():
         "\n  ".join(f".{name} — {', '.join(sorted(where))}" for name, where in sorted(dangling.items())))
 
 
+def test_every_docs_page_has_the_rail_its_grid_reserves_a_column_for():
+    """`.docs` is a two-column grid: a 16rem rail, then the reading column. A page that
+    puts only `<main>` inside it lands its text in the rail and leaves four-fifths of
+    the window empty — the workbench and notebook pages shipped that way for a day, and
+    the browser probes never saw it because they look at the notebook apps, not at
+    these pages. So: a `.docs` page carries `<aside class="sidebar">`."""
+    missing = []
+    for page in _pages():
+        html = page.read_text(encoding="utf-8")
+        if '<div class="docs">' in html and '<aside class="sidebar">' not in html:
+            missing.append(str(page.relative_to(SITE)))
+    assert not missing, f"`.docs` pages without their sidebar rail: {missing}"
+
+
 def test_every_page_carries_the_same_global_nav():
     """The global nav has to be **one and the same on every page**.
 
