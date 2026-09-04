@@ -38,7 +38,7 @@
   "scripts": {
     "test": "uv run --with pytest --with numpy --with torch --with torchvision --with scipy --quiet pytest tests/ -q",
     "build:ts": "tsc -p borch-ts/tsconfig.json",
-    "bundle:py": "esbuild borch-ts/dist/src/index.js --bundle --format=esm --outfile=borch_webgpu/_borch.js --log-level=warning",
+    "bundle:py": "esbuild borch_webgpu/_entry.js --bundle --format=esm --alias:borch-ts=./borch-ts/dist/src/index.js --outfile=borch_webgpu/_borch.js --log-level=warning",
     "docs:api": "python3 site/build_api.py",
     "site": "python3 site/build_api.py && python3 site/serve.py",
     "check:ts": "tsc -p borch-ts/tsconfig.json --noEmit",
@@ -56,6 +56,7 @@
     "envelope:py": "uv run --with playwright python tests/browser/envelope.py",
     "envelope2:py": "uv run --with playwright python tests/browser/envelope2.py",
     "folder:py": "uv run --with playwright python tests/browser/folder5k.py --make=5000",
+    "hub:py": "uv run --with playwright python tests/browser/hub_py.py",
     "build:lab": "python3 site/build_lab.py",
     "marimo:py": "uv run --with playwright python tests/browser/marimo_probe.py --build",
     "build:marimo": "python3 site/build_marimo.py",
@@ -116,6 +117,8 @@
   ],
   "devDependencies": {
     "@webgpu/types": "^0.1.71",
+    "bimm-ts": "^0.8.0",
+    "borch-hub": "^0.4.0",
     "esbuild": "^0.21.5",
     "typescript": "^5.9.0"
   }

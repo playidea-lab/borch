@@ -55,6 +55,8 @@ CHECKS = [
     ("marimo",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--build"]),
     # 5,000 images through the tab: decode, backbone, cache, head, neighbours. Files made once under /tmp.
     ("folder",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/folder5k.py", "--make=5000"]),
+    # The wheel loads a catalogue model in Python (`torch.hub.load`) and runs it at 224 px.
+    ("hub",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/hub_py.py"]),
     ("example",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/readme.py"]),
     # `--py`: every Python twin on the lesson pages is pressed too (Pyodide from vendor/).
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py", "--py"]),

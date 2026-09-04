@@ -14,7 +14,7 @@ async def _():
     # script's — under `<page>/assets/` — so the page's directory is two steps up.
     href = str(js.location.href)
     base = href.split("/assets/")[0] if "/assets/" in href else str(js.location.origin)
-    await micropip.install(f"{base}/pyborch-1.6.0-py3-none-any.whl")
+    await micropip.install(f"{base}/pyborch-1.7.0-py3-none-any.whl")
     import borch_webgpu as torch
     adapter = str(js.borch.Device.adapterInfo)
     mo.md(f"**borch on `{adapter}`** — `import borch_webgpu as torch` booted borch.ts in this kernel. Nothing was installed on this machine.")

@@ -13,7 +13,7 @@
 # differ from the project's name in all three places, and none of it is a design —
 # it is what was available.
 name = "pyborch"
-version = "1.6.0"
+version = "1.7.0"
 description = "PyTorch's shape on numpy, and on WebGPU from Pyodide — practise, train and export in the browser with nothing installed"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
