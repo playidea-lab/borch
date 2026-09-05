@@ -205,6 +205,7 @@ from ._data import (                                     # noqa: E402,F401
 from ._serialize import load, save                       # noqa: E402,F401
 from . import _onnx as onnx                              # noqa: E402,F401
 from . import _hub as hub                                # noqa: E402,F401
+from ._report import report                              # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 # **Named here or `borch_webgpu.autograd` is an `AttributeError`.** A submodule is

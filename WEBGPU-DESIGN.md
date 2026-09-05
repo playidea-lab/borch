@@ -283,7 +283,10 @@ with five cases immediately.
 zipped folder, decoded on demand; `decode_images` is the same at once) with labels from
 the names or folders with `suspects` (the share of each sample's
 k nearest neighbours that disagree with its label; the workbench's review order).
-The last two are the core's; the binding only fetches Pillow in Pyodide.
+The last two are the core's; the binding only fetches Pillow in Pyodide. `report(**facts)`
+puts the machine and the run in one dictionary — adapter, faults, memory, wheel and
+bundle versions, the caller's facts, and `warnings` in words — for the file that
+answers "it does not work".
 
 - **The data stays on the CPU.** All of CIFAR-10 on the GPU is 614MB and one batch
   is 3.1MB. Uploading per batch is cheaper and leaves the GPU memory to the model

@@ -91,6 +91,7 @@
     <ul>
       <li>The kernel takes about ten seconds to come up (Pyodide and marimo download). Cells do not run by themselves: press the run button at the bottom right.</li>
       <li>A label is the part of the file name before the first <code>_</code>. Upload nothing and a synthetic three-class set runs instead. The two calls doing the work are the library's: <code>torch.decode_images</code> turns the files into an NCHW batch with labels from the names, (<code>torch.ImageFiles</code> is the same on demand — a zipped folder of thousands, decoded a batch at a time, the folder as the label), and <code>torch.suspects</code> scores each label by how many of its five nearest neighbours in the model's features disagree with it — the review table's order.</li>
+      <li>The last cell is a <strong>support report</strong>: <code>torch.report()</code> gathers the adapter, validation faults, memory and versions with this run's facts into <code>report.json</code>, and says in words when something is off (a software rasteriser, a fault, a lost device).</li>
       <li>The same notebook ships as <strong>one folder</strong> for a network that lets nothing out: <code>python3 site/build_bundle.py</code> mirrors Pyodide, marimo's packages and the backbone beside the page (75 MB), and a check presses it with every outside request refused.</li>
       <li>It lives inside the tab's memory and Pyodide's package range — the same list as the <a href="notebook.html">notebook page</a>.</li>
     </ul>

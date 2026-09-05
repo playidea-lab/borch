@@ -14,7 +14,7 @@ async def _():
     # script's — under `<page>/assets/` — so the page's directory is two steps up.
     href = str(js.location.href)
     base = href.split("/assets/")[0] if "/assets/" in href else str(js.location.origin)
-    await micropip.install(f"{base}/pyborch-1.8.0-py3-none-any.whl")
+    await micropip.install(f"{base}/pyborch-1.9.0-py3-none-any.whl")
     import borch_webgpu as torch
     adapter = str(js.borch.Device.adapterInfo)
     mo.md(f"**borch on `{adapter}`** — `import borch_webgpu as torch` booted borch.ts in this kernel. Nothing was installed on this machine.")
@@ -130,7 +130,7 @@ def _(CLASSES, FROZEN, ds, mo, np, path, torch, y):
     train_s = time.perf_counter() - t0
     acc = float((pred == y).mean())
     mo.md(f"### 2 · Trained\n{how} in **{train_s:.1f} s** · loss {losses[0]:.2f} → {losses[-1]:.3f} · agrees with the given labels on **{acc * 100:.0f}%**")
-    return acc, feats, model, pred
+    return acc, feats, how, model, pred, train_s
 
 
 @app.cell
@@ -165,6 +165,21 @@ def _(ds, mo, model, torch):
     # bytes it is written into the cell's output as base64 and the cell never comes back
     # (measured); as a callable it is fetched once, on the click.
     mo.vstack([mo.md(f"### 4 · Export\n{len(data) / 1e3:.0f} KB of ONNX (`torch.onnx.export`)"), mo.download(data=lambda: data, filename="model.onnx", label="Download model.onnx")])
+    return
+
+
+@app.cell
+def _(acc, ds, how, mo, path, torch, train_s):
+    # 5 · Report — the machine and the run as one file, for whoever is asked "it does not
+    # work". `torch.report` gathers the adapter, the faults, memory, the wheel and bundle
+    # versions; the facts of this run ride along. No file names, no pixels.
+    import json
+    rep = torch.report(images=len(ds), classes=len(ds.classes), model=path.value, train_s=round(train_s, 2), accuracy=round(acc, 4), how=how)
+    text = json.dumps(rep, indent=2)
+    warn = rep["warnings"]
+    rep_head = mo.md(f"### 5 · Report\n`{rep['adapter']}` · faults {rep['faults']} · warnings {len(warn)}" + (" — **read them before the numbers**" if warn else ""))
+    rep_body = mo.callout(mo.md("\n".join(f"- {w}" for w in warn)), kind="warn") if warn else mo.md("Nothing is off: a real GPU, no validation fault, the device alive.")
+    mo.vstack([rep_head, rep_body, mo.download(data=lambda: text, filename="report.json", label="Download report.json")])
     return
 
 

@@ -88,6 +88,8 @@ def main(argv):
     # `suspects` on the wheel: the swapped label (third) is contradicted by both its
     # neighbours; the two beside it each have it as one of their two neighbours.
     ok = ok and "suspects [0.5, 0.5, 1.0, 0.0, 0.0, 0.0]" in done
+    # `torch.report()` on the wheel: every seat present, and nothing to warn about here.
+    ok = ok and "report keys ok warnings 0" in done
     print("**the wheel trains and exports, in a worker**" if ok else "**it did not** — see above")
     return 0 if ok else 1
 

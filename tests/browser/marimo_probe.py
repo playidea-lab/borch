@@ -167,7 +167,8 @@ def main(argv):
                 page.query_selector_all('[data-testid="run-button"]')[-1].click()
                 deadline = time.time() + GIVE_UP_MS / 1000
                 want = {"adapter": r"borch on ([a-z]+ / [a-z0-9-]+)", "trained": r"agrees with the given labels on \*?\*?(\d+)%",
-                        "queue": r"(\d+) rows, 5 columns", "export": r"(\d+) KB of ONNX"}
+                        "queue": r"(\d+) rows, 5 columns", "export": r"(\d+) KB of ONNX",
+                        "report": r"faults (\d+) · warnings (\d+)"}
                 body = ""
                 while time.time() < deadline and len(marks) < len(want):
                     page.wait_for_timeout(500)
@@ -200,7 +201,7 @@ def main(argv):
         print(f"  offline: {len(phoned)} request(s) tried to leave" + (":" if phoned else ""))
         for u in phoned[:8]:
             print(f"      {u[:140]}")
-    for key in ("adapter", "trained", "queue", "export", "uploaded", "scratch"):
+    for key in ("adapter", "trained", "queue", "export", "report", "uploaded", "scratch"):
         if marks.get(key):
             print(f"  {key:8s} {marks[key][0]:5.1f} s  {marks[key][1]}")
         else:
@@ -210,7 +211,8 @@ def main(argv):
     adapter = marks.get("adapter", (0, None))[1]
     if refuse_if_software(adapter, "the workbench page"):
         return 1
-    ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "uploaded", "scratch"))
+    ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "report", "uploaded", "scratch"))
+    ok = ok and marks["report"][1] == "0"                   # faults — the warnings count rides in the text
     ok = ok and int(marks["scratch"][1].split("%")[0]) >= 90
     ok = ok and not phoned
     ok = ok and int(marks["trained"][1]) >= 90 and int(marks["queue"][1]) == 90

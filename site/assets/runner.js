@@ -273,7 +273,7 @@ const PACKAGES = {
   borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
           "_data", "_rnn", "_serialize", "autograd"],
   borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data",
-                 "_serialize", "_onnx", "_hub", "autograd"],
+                 "_serialize", "_onnx", "_hub", "_report", "autograd"],
 };
 
 let pyodide = null;
