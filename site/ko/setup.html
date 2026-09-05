@@ -326,15 +326,35 @@ const { software } = await probe();   // 그리고 무엇을 받았는지 안다
     <p>
       그 문장 밑에 서로 다른 두 상황이 숨어 있고 답이 다르다. <strong>브라우저가 소프트웨어
       어댑터라도 내주면</strong> 위 절이 당신의 경우다 — SwiftShader 도 WebGPU 이고, 코드는
-      돌고, GPU 의 것이 아닌 것은 속도뿐이다. <strong>아무것도 안 내주면</strong> borch.ts 가
-      줄 것이 없고 없는 척하는 대신 그렇다고 말한다. WebGPU 를 돌아가는 길은 없다.
+      돌고, GPU 의 것이 아닌 것은 속도뿐이다. <strong>아무것도 안 내주면</strong> — 원격
+      세션, 정책으로 꺼진 가속, 오래된 브라우저 — borch.ts 에는 한 종류의 일을 위한 두 번째
+      장치가 있고, 그것이 무엇이 아닌지도 분명히 말한다.
     </p>
     <p>
-      <a href="python.html">파이썬 쪽</a>은 다른 구현이다. 코어가 numpy 라 어댑터 없이 돈다
-      (<code>navigator.gpu</code> 를 지운 브라우저에서 측정: loss 17.2945 → 0.000001). 그것이
-      있다는 걸 아는 건 값어치가 있지만, 무엇인지는 분명히 해야 한다 — <strong>그건 GPU 에서
-      CPU 로 바꾸는 스위치가 아니라 언어를 바꾸는 일이다.</strong> 같은 TypeScript 코드가 거기서
-      도는 것이 아니다.
+      <code>cpu</code> 장치는 <strong>사전학습 체크포인트의 바이트</strong>를 WebAssembly SIMD
+      커널로 돌린다: 허브의 백본, 그 특징 위에 학습하는 선형 헤드, 검수 큐를 위한 코사인
+      이웃 — 작업대의 고정 백본 경로, 사진 수백 장을 가진 현장 학습자가 하는 일이다. 두 번째
+      <code>Tensor</code> 백엔드는 아니다: 당신의 모델, 작은 CNN, ONNX 내보내기는 여전히
+      어댑터가 필요하고, 각각이 이름을 대고 그렇다고 말한다. 페이지가 cross-origin isolated
+      이면 forward 를 워커 풀에 나눠 돈다; 이 사이트, <code>site/serve.py</code>, 그리고
+      <code>localhost</code> 의 오프라인 번들이 그렇고, <code>file://</code> 페이지는 절대
+      아니다.
+    </p>
+    <table>
+      <thead><tr><th>당신의 기계</th><th>도는 것</th><th>측정</th></tr></thead>
+      <tbody>
+        <tr><td>WebGPU 어댑터</td><td>전부</td><td>EfficientNet-B0 1.5 ms/이미지, <code>apple / metal-3</code></td></tr>
+        <tr><td>어댑터 없음, 격리된 페이지</td><td>워커 풀 위의 <code>cpu</code> 장치</td><td>B0 2.6 ms/이미지, 8 워커, M4 Max</td></tr>
+        <tr><td>어댑터 없음, 보통 페이지</td><td>한 스레드의 <code>cpu</code> 장치</td><td>B0 14 ms/이미지, M4 Max</td></tr>
+        <tr><td>소프트웨어 어댑터만</td><td>CPU 속도의 WebGPU 전부, 그 옆의 <code>cpu</code> 장치</td><td>B0 에서 SwiftShader 가 <code>cpu</code> 장치보다 25× 느리다</td></tr>
+      </tbody>
+    </table>
+    <p>
+      파이썬에서는 같은 장치가 <code>import borch_cpu</code> 다. <a href="workbench.html">작업대</a>의
+      첫 셀이 어댑터를 시도하고 없으면 스스로 여기로 내려오며, 무엇을 잡았는지와 스레드 몇 개인지를
+      말한다. <a href="python.html">파이썬 쪽</a> 뒤의 numpy 코어는 또 다른 세 번째 것이다 —
+      언어를 바꾸는 일이고, 어댑터가 필요 없고, 속도라 할 것도 없다. 위의 수치는 책의 것으로
+      각각 기계 이름이 붙어 있고, 그 수치를 낸 검사는 매일 밤 돈다.
     </p>
 
     <div class="pager">

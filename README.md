@@ -57,6 +57,20 @@ console.log(await x.mul(x).sum().toArray());   // Float32Array [14]
 Both examples are run as written by the checks (`tests/test_document_examples.py`,
 `borch-ts/test/readme.ts`), so if they stop working the build says so.
 
+## Where it runs
+
+| Your machine | What runs | Measured |
+|---|---|---|
+| A WebGPU adapter — any GPU | Everything: tensors, autograd, `nn`, training, ONNX export, the hub | EfficientNet-B0 1.5 ms/image (`apple / metal-3`) |
+| No adapter, and the page is cross-origin isolated — this site, `site/serve.py`, the offline bundle on `localhost` | The `cpu` device on a pool of workers: pretrained backbones from the hub, a linear head on their features, cosine neighbours. The workbench's frozen path. | B0 2.6 ms/image on 8 workers (M4 Max) |
+| No adapter, plain page — `file://`, `http://` from another machine, a browser without shared memory | The same `cpu` device on one thread | B0 14 ms/image (M4 Max) |
+| A software adapter only (SwiftShader) | All of the WebGPU surface at CPU speed — the badge says so — and the `cpu` device beside it, which is the faster of the two for a backbone | B0 25× slower than the `cpu` device |
+
+The `cpu` device is not a second `Tensor` backend: it runs a checkpoint's bytes, not your
+code. Training a model of your own, the small CNN, ONNX export need the adapter. From
+Python it is `import borch_cpu`; the workbench's first cell falls to it by itself. The
+numbers and the reasons are in the book under *The `cpu` device*.
+
 ## How it is guaranteed
 
 **4744 golden cases** compare all three implementations against the same answers frozen

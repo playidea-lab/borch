@@ -349,15 +349,36 @@ const { software } = await probe();   // and know which one you got</code></pre>
       Two different situations hide under that sentence, and they have different answers.
       <strong>If the browser offers a software adapter</strong>, you are covered by the
       section above — SwiftShader is still WebGPU, the code runs, and only the speeds are
-      not a GPU's. <strong>If it offers nothing at all</strong>, borch.ts has nothing to
-      give you and says so instead of pretending: there is no path that goes around WebGPU.
+      not a GPU's. <strong>If it offers nothing at all</strong> — a remote session, a policy
+      that switched acceleration off, an older browser — borch.ts has a second device for
+      one kind of work, and says plainly what it is not.
     </p>
     <p>
-      The <a href="python.html">Python surface</a> is a different implementation — the core
-      is numpy, and it runs with no adapter at all (measured in a browser with
-      <code>navigator.gpu</code> removed: loss 17.2945 → 0.000001). It is worth knowing
-      that it exists, but be clear about what it is: <strong>that is a change of language,
-      not a switch from GPU to CPU.</strong> The same TypeScript code will not run there.
+      The <code>cpu</code> device runs a <strong>pretrained checkpoint's bytes</strong> on
+      WebAssembly SIMD kernels: the hub's backbones, a linear head trained on their features,
+      cosine neighbours for the review queue — the workbench's frozen path, which is what a
+      field trainer with hundreds of images does. It is not a second <code>Tensor</code>
+      backend: your own model, the small CNN, ONNX export still need the adapter, and each
+      of those says so by name. Where the page is cross-origin isolated it spreads a forward
+      over a pool of workers; this site, <code>site/serve.py</code> and the offline bundle on
+      <code>localhost</code> are, a <code>file://</code> page never is.
+    </p>
+    <table>
+      <thead><tr><th>Your machine</th><th>What runs</th><th>Measured</th></tr></thead>
+      <tbody>
+        <tr><td>A WebGPU adapter</td><td>Everything</td><td>EfficientNet-B0 1.5 ms/image, <code>apple / metal-3</code></td></tr>
+        <tr><td>No adapter, isolated page</td><td>The <code>cpu</code> device on a pool of workers</td><td>B0 2.6 ms/image on 8 workers, M4 Max</td></tr>
+        <tr><td>No adapter, plain page</td><td>The <code>cpu</code> device on one thread</td><td>B0 14 ms/image, M4 Max</td></tr>
+        <tr><td>Software adapter only</td><td>All of WebGPU at CPU speed, and the <code>cpu</code> device beside it</td><td>SwiftShader 25× slower than the <code>cpu</code> device on B0</td></tr>
+      </tbody>
+    </table>
+    <p>
+      From Python the same device is <code>import borch_cpu</code>; the
+      <a href="workbench.html">workbench</a>'s first cell tries the adapter and falls to it by
+      itself, saying which it got and on how many threads. The numpy core behind
+      <a href="python.html">the Python surface</a> is a third thing again — a change of
+      language, no adapter needed, no speed to speak of. The numbers above are the book's,
+      each with its machine, and the checks that produced them run nightly.
     </p>
 
     <div class="pager">
