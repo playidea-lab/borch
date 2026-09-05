@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the cpu device against the gpu</title>
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "/borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.10.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.4.0?external=borch-ts,bimm-ts"
+} }
+</script>
+<body>
+  <pre id="out">running…</pre>
+  <script type="module">
+    import { report } from "../dist/test/cpu.js";
+    import { why } from "./why.js";
+
+    const out = document.getElementById("out");
+    const only = new URLSearchParams(location.search).get("model");
+    try {
+      const hub = await import("borch-hub");
+      const { text, checks } = await report(hub, "https://models.pilab.kr/index.json", only);
+      window.__borchCpu = { text, checks };
+      out.textContent = text;
+    } catch (err) {
+      window.__borchCpu = { error: String(why(err)) };
+      out.textContent = `the cpu check blew up: ${why(err)}`;
+    }
+  </script>
+</body>

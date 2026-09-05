@@ -27,7 +27,7 @@
 import { KERNELS_EXPORTS, KERNELS_WASM_BASE64, KERNELS_WASM_SHA256 } from "./kernels.js";
 
 /** The activation `biasAct` applies after adding the bias. */
-export const ACT = { none: 0, swish: 1, sigmoid: 2 } as const;
+export const ACT = { none: 0, swish: 1, sigmoid: 2, relu: 3 } as const;
 export type Act = (typeof ACT)[keyof typeof ACT];
 
 export interface CpuKernels {
@@ -53,6 +53,12 @@ export interface CpuKernels {
   scaleRows(rows: number, c: number, x: number, s: number): void;
   /** a[n] += b[n]. `n % 4 === 0`. */
   addInplace(n: number, a: number, b: number): void;
+  /** x ← max(x, 0). `n % 4 === 0`. */
+  relu(n: number, x: number): void;
+  /** NHWC im2col: in [h,w,c] → out [ho·wo, k·k·c], tap-major then channel. Any `c`. */
+  im2col(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, out: number): void;
+  /** NHWC max pool, taps outside skipped. `c % 4 === 0`. */
+  maxpool(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, out: number): void;
 }
 
 /** The module's bytes, decoded. Pure; does not instantiate. */
@@ -98,6 +104,7 @@ export function loadKernels(): Promise<CpuKernels> {
     const alloc = fn(ex, "alloc"), reset = fn(ex, "reset"), heap = fn(ex, "heap"), setHeap = fn(ex, "set_heap");
     const gemm = fn(ex, "gemm"), dwconv = fn(ex, "dwconv"), swish = fn(ex, "swish"), biasAct = fn(ex, "bias_act");
     const meanRows = fn(ex, "mean_rows"), scaleRows = fn(ex, "scale_rows"), addInplace = fn(ex, "add_inplace");
+    const relu = fn(ex, "relu"), im2col = fn(ex, "im2col"), maxpool = fn(ex, "maxpool");
     return {
       memory,
       alloc: (bytes) => alloc(bytes),
@@ -111,6 +118,9 @@ export function loadKernels(): Promise<CpuKernels> {
       meanRows: (rows, c, x, out) => { meanRows(rows, c, x, out); },
       scaleRows: (rows, c, x, s) => { scaleRows(rows, c, x, s); },
       addInplace: (n, a, b) => { addInplace(n, a, b); },
+      relu: (n, x) => { relu(n, x); },
+      im2col: (h, w, c, k, stride, pad, ho, wo, inp, out) => { im2col(h, w, c, k, stride, pad, ho, wo, inp, out); },
+      maxpool: (h, w, c, k, stride, pad, ho, wo, inp, out) => { maxpool(h, w, c, k, stride, pad, ho, wo, inp, out); },
     };
   })();
   return loading;
