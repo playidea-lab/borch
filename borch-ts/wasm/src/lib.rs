@@ -499,71 +499,66 @@ unsafe fn act_f32x4(v: v128, act: u32) -> v128 {
     else { v }
 }
 
+/// One register block of the GEMM: `R` rows of A against sixteen columns of B, the
+/// `R × 4` accumulators in registers across the whole of `k`, bias and activation applied
+/// on the way out. `R` is a compile-time constant so the arrays below are registers, not
+/// memory — measured: at `R = 4` this runs at the speed of the hand-unrolled block it
+/// replaced, in a third of the lines.
+#[inline(always)]
+unsafe fn micro<const R: usize>(k: usize, n: usize, a: *const f32, b: *const f32, c: *mut f32, j: usize, bias: *const f32, act: u32) {
+    let z = f32x4_splat(0.0);
+    let mut acc = [[z; 4]; R];
+    let mut p = 0;
+    while p < k {
+        let bp = b.add(p * n + j);
+        let b0 = v128_load(bp as *const v128);
+        let b1 = v128_load(bp.add(4) as *const v128);
+        let b2 = v128_load(bp.add(8) as *const v128);
+        let b3 = v128_load(bp.add(12) as *const v128);
+        let mut r = 0;
+        while r < R {
+            let s = f32x4_splat(*a.add(r * k + p));
+            acc[r][0] = madd(s, b0, acc[r][0]);
+            acc[r][1] = madd(s, b1, acc[r][1]);
+            acc[r][2] = madd(s, b2, acc[r][2]);
+            acc[r][3] = madd(s, b3, acc[r][3]);
+            r += 1;
+        }
+        p += 1;
+    }
+    let (bb0, bb1, bb2, bb3) = if bias.is_null() { (z, z, z, z) } else {
+        (v128_load(bias.add(j) as *const v128), v128_load(bias.add(j + 4) as *const v128),
+         v128_load(bias.add(j + 8) as *const v128), v128_load(bias.add(j + 12) as *const v128))
+    };
+    let mut r = 0;
+    while r < R {
+        let row = c.add(r * n + j);
+        v128_store(row as *mut v128, act_f32x4(f32x4_add(acc[r][0], bb0), act));
+        v128_store(row.add(4) as *mut v128, act_f32x4(f32x4_add(acc[r][1], bb1), act));
+        v128_store(row.add(8) as *mut v128, act_f32x4(f32x4_add(acc[r][2], bb2), act));
+        v128_store(row.add(12) as *mut v128, act_f32x4(f32x4_add(acc[r][3], bb3), act));
+        r += 1;
+    }
+}
+
 /// `gemm`, then `+ bias[n]` (skipped when `bias` is null) and the activation before the
-/// store. Measured: the separate `bias_act` pass was a fifth of a forward, re-reading every
-/// activation the GEMM had just written; here the sum never leaves the registers. Same
-/// contract as `gemm`: `m % 4 == 0`, `n % 16 == 0`.
+/// store — the sum never leaves the registers. Same contract as `gemm`: `m % 4 == 0`,
+/// `n % 16 == 0`.
 ///
-/// **Not blocked for the caches, and that was measured.** A version with `k` in chunks
-/// and rows in blocks — the textbook shape — ran at the same 55 GFLOPS on every ResNet-18
-/// and EfficientNet-B0 matrix as this one, B at 9 MB included. The four-row block already
-/// streams B once per four rows of A, and on these sizes that is not the bound; the
-/// micro-kernel is. It was taken out again.
+/// **Four rows by sixteen columns, and that was measured twice.** A wider block would
+/// load less per multiply-add — six rows is ten loads for twenty-four against eight for
+/// sixteen — and on paper 24 + 4 + 1 v128 fit in arm64's thirty-two. Measured on the
+/// relaxed module (M4 Max, Chrome's V8 in node): six rows 60–84 GFLOPS, five rows 55–69,
+/// four rows 97, on every ResNet-18 and B0 shape. The engine's register allocator spills
+/// past about twenty live vectors, and a spilled accumulator costs more than the loads it
+/// saves. A cache-blocked variant (`k` in chunks, rows in blocks) was measured earlier at
+/// no gain. Both are recorded here so neither is written a third time.
 #[no_mangle]
 pub unsafe extern "C" fn gemm_bias_act(m: usize, n: usize, k: usize, a: *const f32, b: *const f32, c: *mut f32, bias: *const f32, act: u32) {
     let mut i = 0;
     while i < m {
-        let a0 = a.add(i * k);
-        let a1 = a0.add(k);
-        let a2 = a1.add(k);
-        let a3 = a2.add(k);
         let mut j = 0;
-        while j < n {
-            let mut c00 = f32x4_splat(0.0); let mut c01 = c00; let mut c02 = c00; let mut c03 = c00;
-            let mut c10 = c00; let mut c11 = c00; let mut c12 = c00; let mut c13 = c00;
-            let mut c20 = c00; let mut c21 = c00; let mut c22 = c00; let mut c23 = c00;
-            let mut c30 = c00; let mut c31 = c00; let mut c32 = c00; let mut c33 = c00;
-            let mut p = 0;
-            while p < k {
-                let bp = b.add(p * n + j);
-                let b0 = v128_load(bp as *const v128);
-                let b1 = v128_load(bp.add(4) as *const v128);
-                let b2 = v128_load(bp.add(8) as *const v128);
-                let b3 = v128_load(bp.add(12) as *const v128);
-                let s0 = f32x4_splat(*a0.add(p));
-                let s1 = f32x4_splat(*a1.add(p));
-                let s2 = f32x4_splat(*a2.add(p));
-                let s3 = f32x4_splat(*a3.add(p));
-                c00 = madd(s0, b0, c00); c01 = madd(s0, b1, c01);
-                c02 = madd(s0, b2, c02); c03 = madd(s0, b3, c03);
-                c10 = madd(s1, b0, c10); c11 = madd(s1, b1, c11);
-                c12 = madd(s1, b2, c12); c13 = madd(s1, b3, c13);
-                c20 = madd(s2, b0, c20); c21 = madd(s2, b1, c21);
-                c22 = madd(s2, b2, c22); c23 = madd(s2, b3, c23);
-                c30 = madd(s3, b0, c30); c31 = madd(s3, b1, c31);
-                c32 = madd(s3, b2, c32); c33 = madd(s3, b3, c33);
-                p += 1;
-            }
-            let (bb0, bb1, bb2, bb3) = if bias.is_null() {
-                let z = f32x4_splat(0.0); (z, z, z, z)
-            } else {
-                (v128_load(bias.add(j) as *const v128), v128_load(bias.add(j + 4) as *const v128),
-                 v128_load(bias.add(j + 8) as *const v128), v128_load(bias.add(j + 12) as *const v128))
-            };
-            let r0 = c.add(i * n + j);
-            let r1 = r0.add(n);
-            let r2 = r1.add(n);
-            let r3 = r2.add(n);
-            v128_store(r0 as *mut v128, act_f32x4(f32x4_add(c00, bb0), act)); v128_store(r0.add(4) as *mut v128, act_f32x4(f32x4_add(c01, bb1), act));
-            v128_store(r0.add(8) as *mut v128, act_f32x4(f32x4_add(c02, bb2), act)); v128_store(r0.add(12) as *mut v128, act_f32x4(f32x4_add(c03, bb3), act));
-            v128_store(r1 as *mut v128, act_f32x4(f32x4_add(c10, bb0), act)); v128_store(r1.add(4) as *mut v128, act_f32x4(f32x4_add(c11, bb1), act));
-            v128_store(r1.add(8) as *mut v128, act_f32x4(f32x4_add(c12, bb2), act)); v128_store(r1.add(12) as *mut v128, act_f32x4(f32x4_add(c13, bb3), act));
-            v128_store(r2 as *mut v128, act_f32x4(f32x4_add(c20, bb0), act)); v128_store(r2.add(4) as *mut v128, act_f32x4(f32x4_add(c21, bb1), act));
-            v128_store(r2.add(8) as *mut v128, act_f32x4(f32x4_add(c22, bb2), act)); v128_store(r2.add(12) as *mut v128, act_f32x4(f32x4_add(c23, bb3), act));
-            v128_store(r3 as *mut v128, act_f32x4(f32x4_add(c30, bb0), act)); v128_store(r3.add(4) as *mut v128, act_f32x4(f32x4_add(c31, bb1), act));
-            v128_store(r3.add(8) as *mut v128, act_f32x4(f32x4_add(c32, bb2), act)); v128_store(r3.add(12) as *mut v128, act_f32x4(f32x4_add(c33, bb3), act));
-            j += 16;
-        }
+        while j < n { micro::<4>(k, n, a.add(i * k), b, c.add(i * n), j, bias, act); j += 16; }
         i += 4;
     }
 }

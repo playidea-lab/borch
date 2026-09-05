@@ -1530,8 +1530,13 @@ cache-blocked GEMM (the textbook `k`-chunks and row-blocks) ran at the same 55 G
 as the plain four-row block on every matrix in both networks and was taken out again.
 ResNet-18 is 3.6 GFLOP an image, so 69 ms was 53 GFLOPS — the strict micro-kernel's
 ceiling on this core, one thread, and 41.5 ms is 87 GFLOPS with the multiply-add fused.
-Past that lie a wider register block (the load-to-arithmetic ratio, worth perhaps a tenth)
-and threads where the page can set COOP/COEP; neither is in this tree.
+A wider register block was the next thing on paper — six rows load ten vectors for
+twenty-four multiply-adds where four rows load eight for sixteen — and it was measured:
+six rows 60–84 GFLOPS, five rows 55–69, four rows 97, on every shape in both networks.
+The engine's register allocator spills past about twenty live vectors, and a spilled
+accumulator costs more than the loads it saves; four by sixteen stays, and the kernel's
+comment records the two numbers so the block is not widened a third time. What remains is
+threads, where the page can set COOP/COEP; that is not in this tree.
 
 The SwiftShader column is the reason this device exists in this shape: WebGPU's own CPU
 path was measured first, and it spent a minute compiling shaders for every new batch
