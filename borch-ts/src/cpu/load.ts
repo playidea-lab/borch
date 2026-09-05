@@ -28,7 +28,7 @@ import { KERNELS_EXPORTS, KERNELS_WASM_BASE64, KERNELS_WASM_SHA256 } from "./ker
 
 /** The activation `biasAct` applies after adding the bias. */
 export const ACT = { none: 0, swish: 1, sigmoid: 2, relu: 3 } as const;
-export type Act = (typeof ACT)[keyof typeof ACT];
+export type Activation = (typeof ACT)[keyof typeof ACT];
 
 export interface CpuKernels {
   readonly memory: WebAssembly.Memory;
@@ -46,7 +46,7 @@ export interface CpuKernels {
   /** x ← x · sigmoid(x). `n % 4 === 0`. */
   swish(n: number, x: number): void;
   /** x[rows×c] += bias[c], then `act`. `c % 4 === 0`. */
-  biasAct(rows: number, c: number, x: number, bias: number, act: Act): void;
+  biasAct(rows: number, c: number, x: number, bias: number, act: Activation): void;
   /** out[c] = mean over rows. `c % 4 === 0`. */
   meanRows(rows: number, c: number, x: number, out: number): void;
   /** x[rows×c] *= s[c]. `c % 4 === 0`. */

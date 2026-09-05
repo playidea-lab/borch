@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 467
+  "missing": 516
  },
  "modules": [
   {
@@ -15281,6 +15281,665 @@
    "count": 33
   },
   {
+   "name": "cpu",
+   "title": "cpu",
+   "blurb": {
+    "ko": "어댑터가 전혀 없는 기계를 위한 CPU 장치 — 체크포인트 바이트에서 forward, 특징 위의 헤드 학습, 코사인 이웃. `Tensor` 백엔드가 아니다.",
+    "en": "The CPU device for machines with no adapter at all — a forward from a checkpoint's bytes, a head on its features, cosine neighbours. Not a `Tensor` backend."
+   },
+   "doc": "The `cpu` device — a classifier forward, a head on its features, and neighbours over\nthem, with no WebGPU adapter at all.\n\n## What this is, and what it is not\n\n`borch-ts` proper is a `Tensor` on WebGPU. This namespace is not a second `Tensor`\nbackend: on the machines it exists for there is no adapter, so there is no `Tensor`\nto make. It is a small set of things that run on WebAssembly SIMD kernels shipped\ninside the package (`cpu/kernels`, 8.7 KB of base64, no runtime, no imports):\n\n- `readSafetensors` — a checkpoint's bytes to host arrays, without a device\n- `GraphBuilder` / `CpuRunner` — a short graph (conv, depthwise, pool, SE, add,\n  linear; BatchNorm folded in) built from those arrays, and its forward\n- `LinearHead` / `cosineNeighbours` — a head trained on cached features, and the\n  nearest rows by cosine\n\nEverything else is absent by name. Measured against the WebGPU device on two hub\ncheckpoints (`borch-ts/test/cpu.py`; the numbers are in the book under \"The `cpu`\ndevice\"): logits within 1e-4 relative, a head's losses within 3.5e-5 step for step.\n\n## Choosing it\n\nThe site's probe already says whether the adapter is hardware, software, or absent.\n`available()` answers the one question this side adds — whether the engine runs\nWebAssembly SIMD, which every browser that ships WebGPU does and a few older ones do\nnot. An application picks: hardware adapter → `borch-ts`; otherwise, if `available()`\n→ this.",
+   "symbols": [
+    {
+     "kind": "function",
+     "name": "available",
+     "signature": "export declare function available(): boolean",
+     "doc": "Whether this engine can run the kernels — WebAssembly with the SIMD proposal.",
+     "members": []
+    }
+   ],
+   "count": 1
+  },
+  {
+   "name": "cpu/load",
+   "title": "cpu · kernels",
+   "blurb": {
+    "ko": "wasm SIMD 커널 모듈을 열고 검증하는 로더. 오프셋 위의 함수 열일곱 개.",
+    "en": "The loader that verifies and instantiates the wasm SIMD kernel module — seventeen functions over offsets."
+   },
+   "doc": "",
+   "symbols": [
+    {
+     "kind": "const",
+     "name": "ACT",
+     "signature": "export declare const ACT: { readonly none: 0; readonly swish: 1; readonly sigmoid: 2; readonly relu: 3; }",
+     "doc": "The activation `biasAct` applies after adding the bias.",
+     "members": []
+    },
+    {
+     "kind": "type",
+     "name": "Activation",
+     "signature": "export type Activation = (typeof ACT)[keyof typeof ACT]",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "interface",
+     "name": "CpuKernels",
+     "signature": "export interface CpuKernels",
+     "doc": "",
+     "members": [
+      {
+       "name": "memory",
+       "signature": "readonly memory: WebAssembly.Memory",
+       "doc": ""
+      },
+      {
+       "name": "alloc",
+       "signature": "alloc(bytes: number): number",
+       "doc": "Bump-allocate `bytes`, 16-byte aligned. Returns a byte offset, or 0 when the memory would not grow."
+      },
+      {
+       "name": "reset",
+       "signature": "reset(): void",
+       "doc": "Forget every allocation."
+      },
+      {
+       "name": "heap",
+       "signature": "heap(): number",
+       "doc": "Where the heap stands, for `setHeap` to return to."
+      },
+      {
+       "name": "setHeap",
+       "signature": "setHeap(pos: number): void",
+       "doc": "",
+       "torch": "set_heap"
+      },
+      {
+       "name": "gemm",
+       "signature": "gemm(m: number, n: number, k: number, a: number, b: number, c: number): void",
+       "doc": "C[m×n] = A[m×k] · B[k×n], f32 row-major. `m % 4 === 0`, `n % 16 === 0`."
+      },
+      {
+       "name": "dwconv",
+       "signature": "dwconv(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, wt: number, out: number): void",
+       "doc": "NHWC depthwise conv. `c % 16 === 0`."
+      },
+      {
+       "name": "swish",
+       "signature": "swish(n: number, x: number): void",
+       "doc": "x ← x · sigmoid(x). `n % 4 === 0`."
+      },
+      {
+       "name": "biasAct",
+       "signature": "biasAct(rows: number, c: number, x: number, bias: number, act: Activation): void",
+       "doc": "x[rows×c] += bias[c], then `act`. `c % 4 === 0`.",
+       "torch": "bias_act"
+      },
+      {
+       "name": "meanRows",
+       "signature": "meanRows(rows: number, c: number, x: number, out: number): void",
+       "doc": "out[c] = mean over rows. `c % 4 === 0`.",
+       "torch": "mean_rows"
+      },
+      {
+       "name": "scaleRows",
+       "signature": "scaleRows(rows: number, c: number, x: number, s: number): void",
+       "doc": "x[rows×c] *= s[c]. `c % 4 === 0`.",
+       "torch": "scale_rows"
+      },
+      {
+       "name": "addInplace",
+       "signature": "addInplace(n: number, a: number, b: number): void",
+       "doc": "a[n] += b[n]. `n % 4 === 0`.",
+       "torch": "add_inplace"
+      },
+      {
+       "name": "relu",
+       "signature": "relu(n: number, x: number): void",
+       "doc": "x ← max(x, 0). `n % 4 === 0`."
+      },
+      {
+       "name": "im2col",
+       "signature": "im2col(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, out: number): void",
+       "doc": "NHWC im2col: in [h,w,c] → out [ho·wo, k·k·c], tap-major then channel. Any `c`."
+      },
+      {
+       "name": "maxpool",
+       "signature": "maxpool(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, out: number): void",
+       "doc": "NHWC max pool, taps outside skipped. `c % 4 === 0`."
+      },
+      {
+       "name": "softmaxXentGrad",
+       "signature": "softmaxXentGrad(rows: number, c: number, cReal: number, logits: number, labels: number, grad: number, stats: number): void",
+       "doc": "Softmax cross-entropy, backward half: `grad = (softmax − onehot) / rows` over the first\n`cReal` of `c` columns, and per row `stats[2r] = max`, `stats[2r+1] = Σexp` for the host to\nfinish the loss with `ln`. Labels are class indices stored as f32.",
+       "torch": "softmax_xent_grad"
+      },
+      {
+       "name": "outerAcc",
+       "signature": "outerAcc(n: number, d: number, k: number, x: number, g: number, out: number): void",
+       "doc": "out[d×k] += Xᵀ·G for X[n×d], G[n×k]. `k % 4 === 0`. Not zeroed first.",
+       "torch": "outer_acc"
+      },
+      {
+       "name": "sgdStep",
+       "signature": "sgdStep(n: number, p: number, g: number, v: number, lr: number, momentum: number, weightDecay: number): void",
+       "doc": "torch's SGD step: `g += wd·p; v = μ·v + g; p −= lr·v`. `n % 4 === 0`.",
+       "torch": "sgd_step"
+      },
+      {
+       "name": "l2NormalizeRows",
+       "signature": "l2NormalizeRows(rows: number, c: number, x: number): void",
+       "doc": "Each row divided by its L2 norm; zero rows stay zero. `c % 4 === 0`.",
+       "torch": "l2_normalize_rows"
+      },
+      {
+       "name": "transpose",
+       "signature": "transpose(rows: number, cols: number, inp: number, out: number): void",
+       "doc": "out[cols×rows] = in[rows×cols]ᵀ."
+      },
+      {
+       "name": "zero",
+       "signature": "zero(n: number, x: number): void",
+       "doc": "x[n] ← 0. `n % 4 === 0`."
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "kernelBytes",
+     "signature": "export declare function kernelBytes(): Uint8Array<ArrayBuffer>",
+     "doc": "The module's bytes, decoded. Pure; does not instantiate.",
+     "members": [],
+     "torch": "kernel_bytes"
+    },
+    {
+     "kind": "function",
+     "name": "loadKernels",
+     "signature": "export declare function loadKernels(): Promise<CpuKernels>",
+     "doc": "Decode, verify, instantiate. Called twice, it returns the same promise — the module\nhas one memory and two copies would be two heaps.",
+     "members": [],
+     "torch": "load_kernels"
+    }
+   ],
+   "count": 26
+  },
+  {
+   "name": "cpu/safetensors",
+   "title": "cpu · safetensors",
+   "blurb": {
+    "ko": "장치 없이 체크포인트를 호스트 배열로 읽는다. F32 만.",
+    "en": "A checkpoint to host arrays, without a device. F32 only."
+   },
+   "doc": "",
+   "symbols": [
+    {
+     "kind": "interface",
+     "name": "HostTensor",
+     "signature": "export interface HostTensor",
+     "doc": "Reads a safetensors file into host arrays — without a device.\n\n`serialize.decode` does the same job and hands back `Tensor`s, which is right for the\nWebGPU side and impossible here: on the machine this device exists for there is no\nadapter, so there is no `Tensor` to hand back. This reader stops at `Float32Array`.\n\nThe format is small enough to read in full: eight bytes of little-endian header\nlength, a JSON header naming each tensor's dtype, shape and byte range, then the\nbytes. Only `F32` is accepted — the hub's checkpoints are F32 throughout, and a\nsilently widened `F16` would be a different model under the same name.",
+     "members": [
+      {
+       "name": "shape",
+       "signature": "readonly shape: readonly number[]",
+       "doc": ""
+      },
+      {
+       "name": "data",
+       "signature": "readonly data: Float32Array",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "HostStateDict",
+     "signature": "export interface HostStateDict",
+     "doc": "",
+     "members": [
+      {
+       "name": "tensors",
+       "signature": "readonly tensors: ReadonlyMap<string, HostTensor>",
+       "doc": ""
+      },
+      {
+       "name": "metadata",
+       "signature": "readonly metadata: Readonly<Record<string, string>>",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "readSafetensors",
+     "signature": "export declare function readSafetensors(bytes: Uint8Array): HostStateDict",
+     "doc": "",
+     "members": [],
+     "torch": "read_safetensors"
+    }
+   ],
+   "count": 7
+  },
+  {
+   "name": "cpu/graph",
+   "title": "cpu · graph",
+   "blurb": {
+    "ko": "CPU 장치가 실행하는 그래프와 그것을 짓는 빌더. BatchNorm 접기, 가중치 재포장, 채널 패딩이 여기서 일어난다.",
+    "en": "The graph the CPU device runs and the builder that makes it — BatchNorm folded, weights repacked, channels padded here."
+   },
+   "doc": "The graph the CPU device runs — a short list of nodes, weights already packed for the\nkernels, BatchNorm already folded in.\n\n## Why a graph and not `nn.Module`\n\nOn the machine this device is for there is no WebGPU adapter, so there is no `Tensor`\nand no `nn.Module` instance to walk. What there is: the checkpoint's bytes and the\nknowledge of what shape the network has. This file turns the two into a list the\nrunner executes. The list is deliberately small — a conv, a depthwise conv, a max\npool, squeeze-and-excite, an add, a global average pool, a linear. Every classifier\nin the catalogue is made of these; anything else is absent by name.\n\n## What the builder does at build time\n\n- **Folds BatchNorm into the convolution before it** (eval mode; `scale = γ/√(σ²+ε)`,\n  `W' = W·scale`, `b' = β − μ·scale`). One pass fewer over memory per layer.\n- **Repacks weights** from torch's `[Cout, Cin, kh, kw]` into the tap-major\n  `[kh·kw·Cin, Cout]` that `im2col` + `gemm` want, NHWC throughout.\n- **Pads channels to sixteen** and remembers both counts. Padded weight columns are\n  zero, so padded activation channels are exactly zero at every layer — which is what\n  lets the output be compared with the unpadded network digit for digit.",
+   "symbols": [
+    {
+     "kind": "const",
+     "name": "CHANNEL_PAD",
+     "signature": "export declare const CHANNEL_PAD = 16",
+     "doc": "Channels are padded to this. `dwconv` wants 16; everything else would take 4.",
+     "members": []
+    },
+    {
+     "kind": "const",
+     "name": "pad",
+     "signature": "export declare const pad: (v: number, m: number) => number",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "interface",
+     "name": "BatchNorm",
+     "signature": "export interface BatchNorm",
+     "doc": "",
+     "members": [
+      {
+       "name": "weight",
+       "signature": "readonly weight: Float32Array",
+       "doc": ""
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias: Float32Array",
+       "doc": ""
+      },
+      {
+       "name": "runningMean",
+       "signature": "readonly runningMean: Float32Array",
+       "doc": "",
+       "torch": "running_mean"
+      },
+      {
+       "name": "runningVar",
+       "signature": "readonly runningVar: Float32Array",
+       "doc": "",
+       "torch": "running_var"
+      },
+      {
+       "name": "eps",
+       "signature": "readonly eps?: number",
+       "doc": "",
+       "optional": true
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "InputNode",
+     "signature": "export interface InputNode",
+     "doc": "",
+     "members": [
+      {
+       "name": "kind",
+       "signature": "readonly kind: \"input\"",
+       "doc": ""
+      },
+      {
+       "name": "channels",
+       "signature": "readonly channels: number",
+       "doc": ""
+      },
+      {
+       "name": "channelsP",
+       "signature": "readonly channelsP: number",
+       "doc": "",
+       "torch": "channels_p"
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "ConvNode",
+     "signature": "export interface ConvNode",
+     "doc": "",
+     "members": [
+      {
+       "name": "kind",
+       "signature": "readonly kind: \"conv\"",
+       "doc": ""
+      },
+      {
+       "name": "input",
+       "signature": "readonly input: number",
+       "doc": ""
+      },
+      {
+       "name": "k",
+       "signature": "readonly k: number",
+       "doc": ""
+      },
+      {
+       "name": "stride",
+       "signature": "readonly stride: number",
+       "doc": ""
+      },
+      {
+       "name": "pad",
+       "signature": "readonly pad: number",
+       "doc": ""
+      },
+      {
+       "name": "cinP",
+       "signature": "readonly cinP: number",
+       "doc": "",
+       "torch": "cin_p"
+      },
+      {
+       "name": "cout",
+       "signature": "readonly cout: number",
+       "doc": ""
+      },
+      {
+       "name": "coutP",
+       "signature": "readonly coutP: number",
+       "doc": "",
+       "torch": "cout_p"
+      },
+      {
+       "name": "output",
+       "signature": "readonly output: number",
+       "doc": "`[k·k·cinP × coutP]`, tap-major. */ readonly weight: Float32Array;\nreadonly bias: Float32Array;\nreadonly act: Activation;\n}\nexport interface DwConvNode {\nreadonly kind: \"dwconv\";\nreadonly input: number;\nreadonly k: number;\nreadonly stride: number;\nreadonly pad: number;\nreadonly cP: number;\n `[k·k × cP]`. */ readonly weight: Float32Array;\nreadonly bias: Float32Array;\nreadonly act: Activation;\n}\nexport interface MaxPoolNode {\nreadonly kind: \"maxpool\";\nreadonly input: number;\nreadonly k: number;\nreadonly stride: number;\nreadonly pad: number;\n}\nexport interface SeNode {\nreadonly kind: \"se\";\nreadonly input: number;\nreadonly cP: number;\nreadonly cseP: number;\nreadonly w1: Float32Array;\nreadonly b1: Float32Array;\nreadonly w2: Float32Array;\nreadonly b2: Float32Array;\n}\nexport interface AddNode {\nreadonly kind: \"add\";\nreadonly input: number;\nreadonly other: number;\nreadonly act: Activation;\n}\nexport interface GapNode {\nreadonly kind: \"gap\";\nreadonly input: number;\n}\nexport interface LinearNode {\nreadonly kind: \"linear\";\nreadonly input: number;\nreadonly cinP: number;\nreadonly cout: number;\nreadonly coutP: number;\n `[cinP × coutP]`. */ readonly weight: Float32Array;\nreadonly bias: Float32Array;\nreadonly act: Activation;\n}\nexport type Node = InputNode | ConvNode | DwConvNode | MaxPoolNode | SeNode | AddNode | GapNode | LinearNode;\nexport interface CpuGraph {\nreadonly nodes: readonly Node[];\n The node whose value `forward` returns."
+      },
+      {
+       "name": "outputChannels",
+       "signature": "readonly outputChannels: number",
+       "doc": "Channels of the output, unpadded.",
+       "torch": "output_channels"
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "ConvSpec",
+     "signature": "export interface ConvSpec",
+     "doc": "",
+     "members": [
+      {
+       "name": "weight",
+       "signature": "readonly weight: Float32Array",
+       "doc": "torch layout `[cout, cin, k, k]` (or `[c, 1, k, k]` for depthwise)."
+      },
+      {
+       "name": "cout",
+       "signature": "readonly cout: number",
+       "doc": ""
+      },
+      {
+       "name": "cin",
+       "signature": "readonly cin: number",
+       "doc": ""
+      },
+      {
+       "name": "k",
+       "signature": "readonly k: number",
+       "doc": ""
+      },
+      {
+       "name": "stride",
+       "signature": "readonly stride: number",
+       "doc": ""
+      },
+      {
+       "name": "pad",
+       "signature": "readonly pad: number",
+       "doc": ""
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias?: Float32Array",
+       "doc": "",
+       "optional": true
+      },
+      {
+       "name": "bn",
+       "signature": "readonly bn?: BatchNorm",
+       "doc": "",
+       "optional": true
+      },
+      {
+       "name": "act",
+       "signature": "readonly act?: Activation",
+       "doc": "",
+       "optional": true
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "GraphBuilder",
+     "signature": "export declare class GraphBuilder",
+     "doc": "Builds a graph node by node, tracking each value's channel count and its padding.",
+     "members": [
+      {
+       "name": "input",
+       "signature": "input(channels: number): number",
+       "doc": "The image, NCHW at run time, `channels` deep (three for RGB). Never padded."
+      },
+      {
+       "name": "conv",
+       "signature": "conv(x: number, s: ConvSpec): number",
+       "doc": "A dense convolution, BatchNorm folded, weights repacked tap-major."
+      },
+      {
+       "name": "dwconv",
+       "signature": "dwconv(x: number, s: ConvSpec): number",
+       "doc": "A depthwise convolution (`groups == channels`), BatchNorm folded."
+      },
+      {
+       "name": "maxpool",
+       "signature": "maxpool(x: number, k: number, stride: number, padding: number): number",
+       "doc": ""
+      },
+      {
+       "name": "se",
+       "signature": "se(x: number, reduceW: Float32Array, reduceB: Float32Array, expandW: Float32Array, expandB: Float32Array, cse: number): number",
+       "doc": "Squeeze-and-excite: mean over the image → 1×1 `reduce` (+bias, swish) → 1×1 `expand`\n(+bias, sigmoid) → scale the input by it. Weights in torch's `[out, in, 1, 1]`."
+      },
+      {
+       "name": "add",
+       "signature": "add(a: number, b: number, act?: Activation): number",
+       "doc": "`a + b`, then `act`. Both the same shape."
+      },
+      {
+       "name": "gap",
+       "signature": "gap(x: number): number",
+       "doc": "Global average pool: `[B, H, W, C]` → `[B, C]`."
+      },
+      {
+       "name": "linear",
+       "signature": "linear(x: number, weight: Float32Array, bias: Float32Array | undefined, cout: number, act?: Activation): number",
+       "doc": "A linear layer on `[B, cin]`. Weight in torch's `[out, in]`."
+      },
+      {
+       "name": "finish",
+       "signature": "finish(output: number): CpuGraph",
+       "doc": "Seal the graph with the node whose value is the network's output."
+      }
+     ]
+    }
+   ],
+   "count": 43
+  },
+  {
+   "name": "cpu/runner",
+   "title": "cpu · runner",
+   "blurb": {
+    "ko": "그래프의 forward. 크기별 풀로 마지막 사용 시점에 버퍼를 돌려준다.",
+    "en": "A graph's forward, with a size-keyed pool returning each buffer at its last use."
+   },
+   "doc": "Runs a `CpuGraph` on the wasm kernels.\n\n## Memory\n\nThe module has one linear memory and a bump allocator. Weights go in once, at\nconstruction, and stay. Activations come and go per forward, and a bump allocator\ncannot free one in the middle — so each forward opens a pool keyed by byte size on\ntop of it, starting wherever the heap stands (so a head trained beside this runner\nkeeps its buffers): a buffer freed at its value's last use goes back to the pool, the\nnext allocation of the same size takes it, and the forward's end returns the heap to\nwhere it began. Shapes repeat block after block, so the pool\nabsorbs most of a forward; the peak is roughly the largest live set, not the sum.\nMeasured for EfficientNet-B0 at batch 16 that was 186 MB against 400 MB summed.\n\n## Layout\n\nNHWC with the batch folded into rows, every channel count padded to sixteen. The\nimage arrives NCHW (torch's convention, and `Tensor`'s) and is transposed on the way\nin; the result leaves as `[B, channels]` with the padding trimmed. Rows are padded to a\nmultiple of four for `gemm`, and the padding rows are zeroed at allocation so nothing\nstale flows into them.\n\n## In place\n\nSqueeze-and-excite scales its input where it stands and `add` accumulates into its\nfirst operand — both would otherwise cost one more pass over the largest activations.\nThe value produced takes over the buffer, and the operand that gave it up is not\nfreed on its own. That is the one subtlety in the liveness bookkeeping below.",
+   "symbols": [
+    {
+     "kind": "class",
+     "name": "CpuRunner",
+     "signature": "export declare class CpuRunner",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(K: CpuKernels, graph: CpuGraph)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(input: Float32Array, B: number, H: number, W: number): Float32Array",
+       "doc": "One forward. `input` is NCHW, `[B, channels, H, W]`; the result is `[B, outputChannels]`."
+      }
+     ]
+    }
+   ],
+   "count": 3
+  },
+  {
+   "name": "cpu/train",
+   "title": "cpu · train",
+   "blurb": {
+    "ko": "캐시된 특징 위의 선형 헤드 학습과 코사인 이웃.",
+    "en": "A linear head trained on cached features, and cosine neighbours over them."
+   },
+   "doc": "The other half of the workbench on the CPU device: a linear head trained on cached\nfeatures, and cosine neighbours over the same features.\n\n## Why only this much training\n\nThe device runs a frozen backbone forward (`runner.ts`) and stops. What a labelling\ntool trains is a head on top of the features that forward produced — a linear layer,\nsoftmax cross-entropy, SGD with momentum — and that is the whole of the training this\nfile knows. The backward of a linear layer is two products; the backward of\ncross-entropy is `softmax − onehot`. Everything past that (a second layer, a different\nloss, Adam) is absent by name, and `torch_gap` is where the reasons for absences live.\n\n## Layout\n\nFeatures `[N × D]` are uploaded once per `fit`, rows padded to four (zero) for `gemm`.\nThe weight is kept as `[D × K]` — the transpose of torch's `[K × D]` — because that is\nwhat `gemm` consumes; `stateDict()` hands it back in torch's order. Classes are padded\nto sixteen and the padding columns never receive gradient (the cross-entropy kernel\nwrites them zero), so they stay at their zero initialisation.\n\n## Memory\n\nThe head's own buffers are allocated on construction and live until the module is\n`reset`; everything a `fit` or `predict` needs is allocated above the heap mark and the\nheap is returned there after. A page that trains many heads should reuse one.",
+   "symbols": [
+    {
+     "kind": "interface",
+     "name": "HeadOptions",
+     "signature": "export interface HeadOptions",
+     "doc": "",
+     "members": [
+      {
+       "name": "lr",
+       "signature": "readonly lr: number",
+       "doc": ""
+      },
+      {
+       "name": "momentum",
+       "signature": "readonly momentum?: number",
+       "doc": "",
+       "optional": true
+      },
+      {
+       "name": "weightDecay",
+       "signature": "readonly weightDecay?: number",
+       "doc": "",
+       "optional": true,
+       "torch": "weight_decay"
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "HeadState",
+     "signature": "export interface HeadState",
+     "doc": "",
+     "members": [
+      {
+       "name": "weight",
+       "signature": "readonly weight: Float32Array",
+       "doc": "torch layout, `[numClasses × inFeatures]`."
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias: Float32Array",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "LinearHead",
+     "signature": "export declare class LinearHead",
+     "doc": "",
+     "members": [
+      {
+       "name": "inFeatures",
+       "signature": "readonly inFeatures: number",
+       "doc": "",
+       "torch": "in_features"
+      },
+      {
+       "name": "numClasses",
+       "signature": "readonly numClasses: number",
+       "doc": "",
+       "torch": "num_classes"
+      },
+      {
+       "name": "kP",
+       "signature": "readonly kP: number",
+       "doc": "",
+       "torch": "k_p"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(K: CpuKernels, inFeatures: number, numClasses: number, opts: HeadOptions, init?: HeadState)",
+       "doc": ""
+      },
+      {
+       "name": "load",
+       "signature": "load(state: HeadState): void",
+       "doc": "Overwrite the parameters from torch-layout arrays. Momentum is not reset."
+      },
+      {
+       "name": "stateDict",
+       "signature": "stateDict(): HeadState",
+       "doc": "",
+       "torch": "state_dict"
+      },
+      {
+       "name": "predict",
+       "signature": "predict(features: Float32Array, N: number): Float32Array",
+       "doc": "Logits `[N × numClasses]` for `[N × D]` features."
+      },
+      {
+       "name": "fit",
+       "signature": "fit(features: Float32Array, labels: ArrayLike<number>, N: number, steps: number): Float32Array",
+       "doc": "Full-batch SGD for `steps` steps on `[N × D]` features with integer class labels.\nReturns the mean cross-entropy before each step — the same numbers torch prints."
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "Neighbours",
+     "signature": "export interface Neighbours",
+     "doc": "",
+     "members": [
+      {
+       "name": "indices",
+       "signature": "readonly indices: Int32Array",
+       "doc": "`[N × k]` indices of the nearest rows by cosine similarity, self excluded, nearest first."
+      },
+      {
+       "name": "sims",
+       "signature": "readonly sims: Float32Array",
+       "doc": "`[N × k]` the similarities, same order."
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "cosineNeighbours",
+     "signature": "export declare function cosineNeighbours(K: CpuKernels, features: Float32Array, N: number, D: number, k: number, block?: number): Neighbours",
+     "doc": "The `k` nearest rows to every row of `[N × D]` features, by cosine similarity, self\nexcluded. Rows are normalised once; the similarity matrix is `gemm` against the\ntranspose, produced a block of rows at a time so 5,000 features do not mean a 100 MB\nmatrix — each block is read for its top `k` and dropped.",
+     "members": [],
+     "torch": "cosine_neighbours"
+    }
+   ],
+   "count": 20
+  },
+  {
    "name": "vision",
    "title": "vision",
    "blurb": {
@@ -21702,5 +22361,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 2950
+ "total": 3050
 }

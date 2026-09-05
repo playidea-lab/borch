@@ -192,6 +192,10 @@ export * as special from "./special_names.js";
 export * as nn from "./nn.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";
+// The `cpu` device — a classifier forward, a head on its features and cosine neighbours
+// on WebAssembly SIMD, for the machines where `init()` finds no adapter at all. It is not
+// a second `Tensor` backend; `cpu.ts` says what it is and what it is not.
+export * as cpu from "./cpu.js";
 // The place `torchvision.ops` occupies — box geometry, the losses over it, and the v2
 // geometry for boxes, masks and keypoints.
 //

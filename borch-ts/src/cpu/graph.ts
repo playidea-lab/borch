@@ -21,7 +21,7 @@
  *   zero, so padded activation channels are exactly zero at every layer — which is what
  *   lets the output be compared with the unpadded network digit for digit.
  */
-import { ACT, type Act } from "./load.js";
+import { ACT, type Activation } from "./load.js";
 
 /** Channels are padded to this. `dwconv` wants 16; everything else would take 4. */
 export const CHANNEL_PAD = 16;
@@ -43,23 +43,23 @@ export interface ConvNode {
   readonly k: number; readonly stride: number; readonly pad: number;
   readonly cinP: number; readonly cout: number; readonly coutP: number;
   /** `[k·k·cinP × coutP]`, tap-major. */ readonly weight: Float32Array;
-  readonly bias: Float32Array; readonly act: Act;
+  readonly bias: Float32Array; readonly act: Activation;
 }
 export interface DwConvNode {
   readonly kind: "dwconv"; readonly input: number;
   readonly k: number; readonly stride: number; readonly pad: number; readonly cP: number;
-  /** `[k·k × cP]`. */ readonly weight: Float32Array; readonly bias: Float32Array; readonly act: Act;
+  /** `[k·k × cP]`. */ readonly weight: Float32Array; readonly bias: Float32Array; readonly act: Activation;
 }
 export interface MaxPoolNode { readonly kind: "maxpool"; readonly input: number; readonly k: number; readonly stride: number; readonly pad: number }
 export interface SeNode {
   readonly kind: "se"; readonly input: number; readonly cP: number; readonly cseP: number;
   readonly w1: Float32Array; readonly b1: Float32Array; readonly w2: Float32Array; readonly b2: Float32Array;
 }
-export interface AddNode { readonly kind: "add"; readonly input: number; readonly other: number; readonly act: Act }
+export interface AddNode { readonly kind: "add"; readonly input: number; readonly other: number; readonly act: Activation }
 export interface GapNode { readonly kind: "gap"; readonly input: number }
 export interface LinearNode {
   readonly kind: "linear"; readonly input: number; readonly cinP: number; readonly cout: number; readonly coutP: number;
-  /** `[cinP × coutP]`. */ readonly weight: Float32Array; readonly bias: Float32Array; readonly act: Act;
+  /** `[cinP × coutP]`. */ readonly weight: Float32Array; readonly bias: Float32Array; readonly act: Activation;
 }
 export type Node = InputNode | ConvNode | DwConvNode | MaxPoolNode | SeNode | AddNode | GapNode | LinearNode;
 
@@ -75,7 +75,7 @@ export interface ConvSpec {
   /** torch layout `[cout, cin, k, k]` (or `[c, 1, k, k]` for depthwise). */
   readonly weight: Float32Array; readonly cout: number; readonly cin: number; readonly k: number;
   readonly stride: number; readonly pad: number;
-  readonly bias?: Float32Array; readonly bn?: BatchNorm; readonly act?: Act;
+  readonly bias?: Float32Array; readonly bn?: BatchNorm; readonly act?: Activation;
 }
 
 function fold(cout: number, bn: BatchNorm | undefined, bias: Float32Array | undefined): { scale: Float32Array; shift: Float32Array } {
@@ -165,7 +165,7 @@ export class GraphBuilder {
   }
 
   /** `a + b`, then `act`. Both the same shape. */
-  add(a: number, b: number, act: Act = ACT.none): number {
+  add(a: number, b: number, act: Activation = ACT.none): number {
     const ma = this.metaOf(a), mb = this.metaOf(b);
     if (ma.channels !== mb.channels) throw new Error(`cpu graph: add of ${ma.channels} and ${mb.channels} channels`);
     return this.push({ kind: "add", input: a, other: b, act }, ma.channels, ma.channelsP);
@@ -178,7 +178,7 @@ export class GraphBuilder {
   }
 
   /** A linear layer on `[B, cin]`. Weight in torch's `[out, in]`. */
-  linear(x: number, weight: Float32Array, bias: Float32Array | undefined, cout: number, act: Act = ACT.none): number {
+  linear(x: number, weight: Float32Array, bias: Float32Array | undefined, cout: number, act: Activation = ACT.none): number {
     const { channels: cin, channelsP: cinP } = this.metaOf(x);
     const coutP = pad(cout, CHANNEL_PAD);
     const w = new Float32Array(cinP * coutP);
