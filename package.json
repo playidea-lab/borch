@@ -38,6 +38,8 @@
   "scripts": {
     "test": "uv run --with pytest --with numpy --with torch --with torchvision --with scipy --quiet pytest tests/ -q",
     "build:ts": "tsc -p borch-ts/tsconfig.json",
+    "build:wasm": "python3 borch-ts/wasm/build.py",
+    "check:wasm": "python3 borch-ts/wasm/build.py --check",
     "bundle:py": "esbuild borch_webgpu/_entry.js --bundle --format=esm --alias:borch-ts=./borch-ts/dist/src/index.js --outfile=borch_webgpu/_borch.js --log-level=warning",
     "docs:api": "python3 site/build_api.py",
     "site": "python3 site/build_api.py && python3 site/serve.py",
