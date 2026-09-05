@@ -59,6 +59,8 @@ CHECKS = [
     ("hub",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/hub_py.py", "--build"]),
     # The offline bundle: built from the site's build, then pressed with every outside request refused.
     ("bundle",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--bundle"]),
+    # torch's two training runs, step by step, on the wheel — the loop, not the op.
+    ("trajectory", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/trajectory_py.py", "--build"]),
     ("example",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/readme.py"]),
     # `--py`: every Python twin on the lesson pages is pressed too (Pyodide from vendor/).
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py", "--py"]),

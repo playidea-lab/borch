@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the trajectory golden, on the wheel, in a worker</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The wheel alone, in a Web Worker** — JupyterLite's shape: Pyodide in a worker,
+  // no page-side borch.ts, nothing but `pip install`. The worker installs numpy and the
+  // wheel from this checkout, imports `borch_webgpu` (which boots its own borch.ts from
+  // the bundle it carries), trains the hero's loop, exports ONNX, and posts back what it
+  // saw. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
+  const out = document.getElementById("out");
+  const wheel = location.origin + new URLSearchParams(location.search).get("wheel");
+  // A worker made from a blob URL resolves paths against the blob, so every URL it
+  // touches is spelled out with the page's origin.
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu) + " · WebAssembly.Suspending " + (typeof WebAssembly.Suspending));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import json, types
+import js
+from pyodide.ffi import run_sync
+import borch_webgpu as torch
+origin = ${JSON.stringify(origin)}
+def get(path, binary=False):
+    r = run_sync(js.fetch(origin + path))
+    if not r.ok: raise RuntimeError(f"{r.status} {path}")
+    return bytes(run_sync(r.arrayBuffer()).to_py()) if binary else str(run_sync(r.text()))
+mod = types.ModuleType("trajectory"); mod.__file__ = "/tmp/trajectory.py"
+exec(compile(get("/tests/trajectory.py"), "trajectory.py", "exec"), mod.__dict__)
+frozen = json.loads(get("/tests/trajectory.json"))
+out = []
+for name in sorted(mod.RECIPES):
+    path = f"/tmp/{name}.safetensors"
+    open(path, "wb").write(get(f"/tests/trajectory/{name}.safetensors", binary=True))
+    got = mod.check(torch, name, init=mod.load_init(torch, name, path), frozen=frozen)
+    out.append(f"{name}: {got['steps']} steps · worst {got['worst_rel']:.2e} at step {got['worst_step']} (torch {got['loss_torch']:.5f}, here {got['loss_here']:.5f}) · final {got['final_here']:.5f} vs {got['final_torch']:.5f} · pred agree {got['pred_agree']:.0%}")
+adapter = str(js.borch.Device.adapterInfo)
+" | ".join(out) + f" · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>
