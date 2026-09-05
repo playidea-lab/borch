@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 689,
+  "done": 744,
   "stale": 0,
-  "missing": 519
+  "missing": 467
  },
  "modules": [
   {
@@ -15294,10 +15294,12 @@
      "name": "available",
      "signature": "export declare function available(): boolean",
      "doc": "Whether this engine can run the kernels — WebAssembly with the SIMD proposal.",
-     "members": []
+     "members": [],
+     "doc_ko": "이 엔진이 커널을 돌릴 수 있는지 — SIMD 제안이 들어간 WebAssembly."
     }
    ],
-   "count": 1
+   "count": 1,
+   "doc_ko": "`cpu` 장치 — WebGPU 어댑터가 전혀 없는 기계에서, 분류기 forward, 그 특징 위의 헤드, 그 위의 이웃.\n\n## 이것이 무엇이고 무엇이 아닌가\n\n`borch-ts` 본체는 WebGPU 위의 `Tensor` 다. 이 이름공간은 두 번째 `Tensor` 백엔드가 **아니다**: 이것이 존재하는 기계에는 어댑터가 없고, 그러니 만들 `Tensor` 도 없다. 패키지 안에 실린 WebAssembly SIMD 커널(`cpu/kernels`, base64 8.7 KB, 런타임 없음, import 없음) 위에서 도는 작은 집합이다.\n\n- `readSafetensors` — 체크포인트 바이트를 장치 없이 호스트 배열로\n- `GraphBuilder` / `CpuRunner` — 그 배열로 지은 짧은 그래프(conv, depthwise, pool, SE, add, linear; BatchNorm 은 접혀 있다)와 그 forward\n- `LinearHead` / `cosineNeighbours` — 캐시된 특징 위에 학습한 헤드와, 코사인으로 가장 가까운 행들\n\n그 밖의 것은 이름으로 없다. 허브 체크포인트 둘에서 WebGPU 장치와 대조했다(`borch-ts/test/cpu.py`; 수치는 책의 \"The `cpu` device\" 절에): 로짓은 상대 1e-4 안, 헤드의 loss 는 step 마다 3.5e-5 안.\n\n## 고르는 법\n\n사이트의 probe 가 어댑터가 하드웨어인지 소프트웨어인지 없는지를 이미 말한다. `available()` 은 이쪽이 더하는 한 가지 질문 — 이 엔진이 WebAssembly SIMD 를 돌리는가 — 에 답한다. WebGPU 를 실은 브라우저는 전부 돌리고, 오래된 몇 개는 못 돌린다. 애플리케이션이 고른다: 하드웨어 어댑터 → `borch-ts`; 아니면, `available()` 이면 → 이것."
   },
   {
    "name": "cpu/load",
@@ -15313,7 +15315,8 @@
      "name": "ACT",
      "signature": "export declare const ACT: { readonly none: 0; readonly swish: 1; readonly sigmoid: 2; readonly relu: 3; }",
      "doc": "The activation `biasAct` applies after adding the bias.",
-     "members": []
+     "members": [],
+     "doc_ko": "`biasAct` 가 bias 를 더한 뒤 적용하는 활성."
     },
     {
      "kind": "type",
@@ -15336,17 +15339,20 @@
       {
        "name": "alloc",
        "signature": "alloc(bytes: number): number",
-       "doc": "Bump-allocate `bytes`, 16-byte aligned. Returns a byte offset, or 0 when the memory would not grow."
+       "doc": "Bump-allocate `bytes`, 16-byte aligned. Returns a byte offset, or 0 when the memory would not grow.",
+       "doc_ko": "`bytes` 를 범프 할당, 16바이트 정렬. 바이트 오프셋을 돌려주고, 메모리가 안 자라면 0 을 돌려준다."
       },
       {
        "name": "reset",
        "signature": "reset(): void",
-       "doc": "Forget every allocation."
+       "doc": "Forget every allocation.",
+       "doc_ko": "모든 할당을 잊는다."
       },
       {
        "name": "heap",
        "signature": "heap(): number",
-       "doc": "Where the heap stands, for `setHeap` to return to."
+       "doc": "Where the heap stands, for `setHeap` to return to.",
+       "doc_ko": "힙이 서 있는 자리. `setHeap` 으로 되돌아올 곳."
       },
       {
        "name": "setHeap",
@@ -15357,108 +15363,127 @@
       {
        "name": "gemm",
        "signature": "gemm(m: number, n: number, k: number, a: number, b: number, c: number): void",
-       "doc": "C[m×n] = A[m×k] · B[k×n], f32 row-major. `m % 4 === 0`, `n % 16 === 0`."
+       "doc": "C[m×n] = A[m×k] · B[k×n], f32 row-major. `m % 4 === 0`, `n % 16 === 0`.",
+       "doc_ko": "C[m×n] = A[m×k] · B[k×n], f32 행 우선. `m % 4 === 0`, `n % 16 === 0`."
       },
       {
        "name": "dwconv",
        "signature": "dwconv(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, wt: number, out: number): void",
-       "doc": "NHWC depthwise conv. `c % 16 === 0`."
+       "doc": "NHWC depthwise conv. `c % 16 === 0`.",
+       "doc_ko": "NHWC depthwise conv. `c % 16 === 0`."
       },
       {
        "name": "swish",
        "signature": "swish(n: number, x: number): void",
-       "doc": "x ← x · sigmoid(x). `n % 4 === 0`."
+       "doc": "x ← x · sigmoid(x). `n % 4 === 0`.",
+       "doc_ko": "x ← x · sigmoid(x). `n % 4 === 0`."
       },
       {
        "name": "biasAct",
        "signature": "biasAct(rows: number, c: number, x: number, bias: number, act: Activation): void",
        "doc": "x[rows×c] += bias[c], then `act`. `c % 4 === 0`.",
-       "torch": "bias_act"
+       "torch": "bias_act",
+       "doc_ko": "x[rows×c] += bias[c], 그 뒤 `act`. `c % 4 === 0`."
       },
       {
        "name": "meanRows",
        "signature": "meanRows(rows: number, c: number, x: number, out: number): void",
        "doc": "out[c] = mean over rows. `c % 4 === 0`.",
-       "torch": "mean_rows"
+       "torch": "mean_rows",
+       "doc_ko": "out[c] = 행들의 평균. `c % 4 === 0`."
       },
       {
        "name": "scaleRows",
        "signature": "scaleRows(rows: number, c: number, x: number, s: number): void",
        "doc": "x[rows×c] *= s[c]. `c % 4 === 0`.",
-       "torch": "scale_rows"
+       "torch": "scale_rows",
+       "doc_ko": "x[rows×c] *= s[c]. `c % 4 === 0`."
       },
       {
        "name": "addInplace",
        "signature": "addInplace(n: number, a: number, b: number): void",
        "doc": "a[n] += b[n]. `n % 4 === 0`.",
-       "torch": "add_inplace"
+       "torch": "add_inplace",
+       "doc_ko": "a[n] += b[n]. `n % 4 === 0`."
       },
       {
        "name": "relu",
        "signature": "relu(n: number, x: number): void",
-       "doc": "x ← max(x, 0). `n % 4 === 0`."
+       "doc": "x ← max(x, 0). `n % 4 === 0`.",
+       "doc_ko": "x ← max(x, 0). `n % 4 === 0`."
       },
       {
        "name": "im2col",
        "signature": "im2col(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, out: number): void",
-       "doc": "NHWC im2col: in [h,w,c] → out [ho·wo, k·k·c], tap-major then channel. Any `c`."
+       "doc": "NHWC im2col: in [h,w,c] → out [ho·wo, k·k·c], tap-major then channel. Any `c`.",
+       "doc_ko": "NHWC im2col: in [h,w,c] → out [ho·wo, k·k·c], 탭 우선 그 다음 채널. `c` 는 아무 값."
       },
       {
        "name": "maxpool",
        "signature": "maxpool(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, out: number): void",
-       "doc": "NHWC max pool, taps outside skipped. `c % 4 === 0`."
+       "doc": "NHWC max pool, taps outside skipped. `c % 4 === 0`.",
+       "doc_ko": "NHWC max pool, 바깥 탭은 건너뛴다. `c % 4 === 0`."
       },
       {
        "name": "softmaxXentGrad",
        "signature": "softmaxXentGrad(rows: number, c: number, cReal: number, logits: number, labels: number, grad: number, stats: number): void",
        "doc": "Softmax cross-entropy, backward half: `grad = (softmax − onehot) / rows` over the first\n`cReal` of `c` columns, and per row `stats[2r] = max`, `stats[2r+1] = Σexp` for the host to\nfinish the loss with `ln`. Labels are class indices stored as f32.",
-       "torch": "softmax_xent_grad"
+       "torch": "softmax_xent_grad",
+       "doc_ko": "softmax 교차엔트로피의 backward 절반: `c` 열 중 앞 `cReal` 열에 대해 `grad = (softmax − onehot) / rows`, 그리고 행마다 `stats[2r] = max`, `stats[2r+1] = Σexp` 를 남겨 호스트가 `ln` 으로 loss 를 마무리한다. 라벨은 f32 로 담긴 클래스 인덱스."
       },
       {
        "name": "outerAcc",
        "signature": "outerAcc(n: number, d: number, k: number, x: number, g: number, out: number): void",
        "doc": "out[d×k] += Xᵀ·G for X[n×d], G[n×k]. `k % 4 === 0`. Not zeroed first.",
-       "torch": "outer_acc"
+       "torch": "outer_acc",
+       "doc_ko": "out[d×k] += Xᵀ·G, X[n×d], G[n×k]. `k % 4 === 0`. 먼저 0 으로 만들지 않는다."
       },
       {
        "name": "sgdStep",
        "signature": "sgdStep(n: number, p: number, g: number, v: number, lr: number, momentum: number, weightDecay: number): void",
        "doc": "torch's SGD step: `g += wd·p; v = μ·v + g; p −= lr·v`. `n % 4 === 0`.",
-       "torch": "sgd_step"
+       "torch": "sgd_step",
+       "doc_ko": "torch 의 SGD 한 걸음: `g += wd·p; v = μ·v + g; p −= lr·v`. `n % 4 === 0`."
       },
       {
        "name": "l2NormalizeRows",
        "signature": "l2NormalizeRows(rows: number, c: number, x: number): void",
        "doc": "Each row divided by its L2 norm; zero rows stay zero. `c % 4 === 0`.",
-       "torch": "l2_normalize_rows"
+       "torch": "l2_normalize_rows",
+       "doc_ko": "각 행을 자기 L2 노름으로 나눈다; 0 인 행은 0 으로 남는다. `c % 4 === 0`."
       },
       {
        "name": "transpose",
        "signature": "transpose(rows: number, cols: number, inp: number, out: number): void",
-       "doc": "out[cols×rows] = in[rows×cols]ᵀ."
+       "doc": "out[cols×rows] = in[rows×cols]ᵀ.",
+       "doc_ko": "out[cols×rows] = in[rows×cols]ᵀ."
       },
       {
        "name": "zero",
        "signature": "zero(n: number, x: number): void",
-       "doc": "x[n] ← 0. `n % 4 === 0`."
+       "doc": "x[n] ← 0. `n % 4 === 0`.",
+       "doc_ko": "x[n] ← 0. `n % 4 === 0`."
       },
       {
        "name": "gemmBiasAct",
        "signature": "gemmBiasAct(m: number, n: number, k: number, a: number, b: number, c: number, bias: number, act: Activation): void",
        "doc": "`gemm`, then `+ bias[n]` and `act` before the store — the sum never leaves the registers.",
-       "torch": "gemm_bias_act"
+       "torch": "gemm_bias_act",
+       "doc_ko": "`gemm`, 그 뒤 저장 전에 `+ bias[n]` 과 `act` — 합이 레지스터를 떠나지 않는다."
       },
       {
        "name": "dwconvBiasAct",
        "signature": "dwconvBiasAct(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, wt: number, out: number, bias: number, act: Activation): void",
        "doc": "`dwconv` with the bias as the starting value and `act` on each finished row.",
-       "torch": "dwconv_bias_act"
+       "torch": "dwconv_bias_act",
+       "doc_ko": "bias 를 시작값으로 삼고 끝난 행마다 `act` 를 적용하는 `dwconv`."
       },
       {
        "name": "im2colRows",
        "signature": "im2colRows(h: number, w: number, c: number, k: number, stride: number, pad: number, wo: number, row0: number, rows: number, inp: number, out: number): void",
        "doc": "`im2col` for output rows `[row0, row0 + rows)` of one image — a block at a time against one buffer.",
-       "torch": "im2col_rows"
+       "torch": "im2col_rows",
+       "doc_ko": "이미지 하나의 출력 행 `[row0, row0 + rows)` 만의 `im2col` — 버퍼 하나에 대해 한 블록씩."
       }
      ]
     },
@@ -15468,7 +15493,8 @@
      "signature": "export declare function kernelBytes(): Uint8Array<ArrayBuffer>",
      "doc": "The module's bytes, decoded. Pure; does not instantiate.",
      "members": [],
-     "torch": "kernel_bytes"
+     "torch": "kernel_bytes",
+     "doc_ko": "모듈의 바이트, 디코드된 것. 순수하다; 인스턴스화하지 않는다."
     },
     {
      "kind": "function",
@@ -15476,7 +15502,8 @@
      "signature": "export declare function loadKernels(): Promise<CpuKernels>",
      "doc": "Decode, verify, instantiate. Called twice, it returns the same promise — the module\nhas one memory and two copies would be two heaps.",
      "members": [],
-     "torch": "load_kernels"
+     "torch": "load_kernels",
+     "doc_ko": "디코드, 검증, 인스턴스화. 두 번 불러도 같은 promise 를 돌려준다 — 모듈은 메모리가 하나이고, 사본 둘은 힙 둘이 된다."
     }
    ],
    "count": 29
@@ -15506,7 +15533,8 @@
        "signature": "readonly data: Float32Array",
        "doc": ""
       }
-     ]
+     ],
+     "doc_ko": "safetensors 파일을 호스트 배열로 읽는다 — 장치 없이.\n\n`serialize.decode` 가 같은 일을 하며 `Tensor` 를 돌려주는데, WebGPU 쪽에는 그것이 맞고 여기서는 불가능하다: 이 장치가 존재하는 기계에는 어댑터가 없으니 돌려줄 `Tensor` 도 없다. 이 리더는 `Float32Array` 에서 멈춘다.\n\n형식은 통째로 읽을 만큼 작다: 리틀엔디언 헤더 길이 8바이트, 각 텐서의 dtype·모양·바이트 범위를 적은 JSON 헤더, 그 뒤 바이트. `F32` 만 받는다 — 허브의 체크포인트는 전부 F32 이고, 조용히 넓힌 `F16` 은 같은 이름의 다른 모델이 된다."
     },
     {
      "kind": "interface",
@@ -15551,7 +15579,8 @@
      "name": "CHANNEL_PAD",
      "signature": "export declare const CHANNEL_PAD = 16",
      "doc": "Channels are padded to this. `dwconv` wants 16; everything else would take 4.",
-     "members": []
+     "members": [],
+     "doc_ko": "채널을 이 수로 패딩한다. `dwconv` 는 16 을 원하고, 나머지는 4 로도 된다."
     },
     {
      "kind": "const",
@@ -15669,15 +15698,288 @@
        "torch": "cout_p"
       },
       {
+       "name": "weight",
+       "signature": "readonly weight: Float32Array",
+       "doc": "`[k·k·cinP × coutP]`, tap-major.",
+       "doc_ko": "`[k·k·cinP × coutP]`, 탭 우선."
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias: Float32Array",
+       "doc": ""
+      },
+      {
+       "name": "act",
+       "signature": "readonly act: Activation",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "DwConvNode",
+     "signature": "export interface DwConvNode",
+     "doc": "",
+     "members": [
+      {
+       "name": "kind",
+       "signature": "readonly kind: \"dwconv\"",
+       "doc": ""
+      },
+      {
+       "name": "input",
+       "signature": "readonly input: number",
+       "doc": ""
+      },
+      {
+       "name": "k",
+       "signature": "readonly k: number",
+       "doc": ""
+      },
+      {
+       "name": "stride",
+       "signature": "readonly stride: number",
+       "doc": ""
+      },
+      {
+       "name": "pad",
+       "signature": "readonly pad: number",
+       "doc": ""
+      },
+      {
+       "name": "cP",
+       "signature": "readonly cP: number",
+       "doc": "",
+       "torch": "c_p"
+      },
+      {
+       "name": "weight",
+       "signature": "readonly weight: Float32Array",
+       "doc": "`[k·k × cP]`.",
+       "doc_ko": "`[k·k × cP]`."
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias: Float32Array",
+       "doc": ""
+      },
+      {
+       "name": "act",
+       "signature": "readonly act: Activation",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "MaxPoolNode",
+     "signature": "export interface MaxPoolNode",
+     "doc": "",
+     "members": [
+      {
+       "name": "kind",
+       "signature": "readonly kind: \"maxpool\"",
+       "doc": ""
+      },
+      {
+       "name": "input",
+       "signature": "readonly input: number",
+       "doc": ""
+      },
+      {
+       "name": "k",
+       "signature": "readonly k: number",
+       "doc": ""
+      },
+      {
+       "name": "stride",
+       "signature": "readonly stride: number",
+       "doc": ""
+      },
+      {
+       "name": "pad",
+       "signature": "readonly pad: number",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "SeNode",
+     "signature": "export interface SeNode",
+     "doc": "",
+     "members": [
+      {
+       "name": "kind",
+       "signature": "readonly kind: \"se\"",
+       "doc": ""
+      },
+      {
+       "name": "input",
+       "signature": "readonly input: number",
+       "doc": ""
+      },
+      {
+       "name": "cP",
+       "signature": "readonly cP: number",
+       "doc": "",
+       "torch": "c_p"
+      },
+      {
+       "name": "cseP",
+       "signature": "readonly cseP: number",
+       "doc": "",
+       "torch": "cse_p"
+      },
+      {
+       "name": "w1",
+       "signature": "readonly w1: Float32Array",
+       "doc": ""
+      },
+      {
+       "name": "b1",
+       "signature": "readonly b1: Float32Array",
+       "doc": ""
+      },
+      {
+       "name": "w2",
+       "signature": "readonly w2: Float32Array",
+       "doc": ""
+      },
+      {
+       "name": "b2",
+       "signature": "readonly b2: Float32Array",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "AddNode",
+     "signature": "export interface AddNode",
+     "doc": "",
+     "members": [
+      {
+       "name": "kind",
+       "signature": "readonly kind: \"add\"",
+       "doc": ""
+      },
+      {
+       "name": "input",
+       "signature": "readonly input: number",
+       "doc": ""
+      },
+      {
+       "name": "other",
+       "signature": "readonly other: number",
+       "doc": ""
+      },
+      {
+       "name": "act",
+       "signature": "readonly act: Activation",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "GapNode",
+     "signature": "export interface GapNode",
+     "doc": "",
+     "members": [
+      {
+       "name": "kind",
+       "signature": "readonly kind: \"gap\"",
+       "doc": ""
+      },
+      {
+       "name": "input",
+       "signature": "readonly input: number",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "interface",
+     "name": "LinearNode",
+     "signature": "export interface LinearNode",
+     "doc": "",
+     "members": [
+      {
+       "name": "kind",
+       "signature": "readonly kind: \"linear\"",
+       "doc": ""
+      },
+      {
+       "name": "input",
+       "signature": "readonly input: number",
+       "doc": ""
+      },
+      {
+       "name": "cinP",
+       "signature": "readonly cinP: number",
+       "doc": "",
+       "torch": "cin_p"
+      },
+      {
+       "name": "cout",
+       "signature": "readonly cout: number",
+       "doc": ""
+      },
+      {
+       "name": "coutP",
+       "signature": "readonly coutP: number",
+       "doc": "",
+       "torch": "cout_p"
+      },
+      {
+       "name": "weight",
+       "signature": "readonly weight: Float32Array",
+       "doc": "`[cinP × coutP]`.",
+       "doc_ko": "`[cinP × coutP]`."
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias: Float32Array",
+       "doc": ""
+      },
+      {
+       "name": "act",
+       "signature": "readonly act: Activation",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "type",
+     "name": "Node",
+     "signature": "export type Node = InputNode | ConvNode | DwConvNode | MaxPoolNode | SeNode | AddNode | GapNode | LinearNode",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "interface",
+     "name": "CpuGraph",
+     "signature": "export interface CpuGraph",
+     "doc": "",
+     "members": [
+      {
+       "name": "nodes",
+       "signature": "readonly nodes: readonly Node[]",
+       "doc": ""
+      },
+      {
        "name": "output",
        "signature": "readonly output: number",
-       "doc": "`[k·k·cinP × coutP]`, tap-major. */ readonly weight: Float32Array;\nreadonly bias: Float32Array;\nreadonly act: Activation;\n}\nexport interface DwConvNode {\nreadonly kind: \"dwconv\";\nreadonly input: number;\nreadonly k: number;\nreadonly stride: number;\nreadonly pad: number;\nreadonly cP: number;\n `[k·k × cP]`. */ readonly weight: Float32Array;\nreadonly bias: Float32Array;\nreadonly act: Activation;\n}\nexport interface MaxPoolNode {\nreadonly kind: \"maxpool\";\nreadonly input: number;\nreadonly k: number;\nreadonly stride: number;\nreadonly pad: number;\n}\nexport interface SeNode {\nreadonly kind: \"se\";\nreadonly input: number;\nreadonly cP: number;\nreadonly cseP: number;\nreadonly w1: Float32Array;\nreadonly b1: Float32Array;\nreadonly w2: Float32Array;\nreadonly b2: Float32Array;\n}\nexport interface AddNode {\nreadonly kind: \"add\";\nreadonly input: number;\nreadonly other: number;\nreadonly act: Activation;\n}\nexport interface GapNode {\nreadonly kind: \"gap\";\nreadonly input: number;\n}\nexport interface LinearNode {\nreadonly kind: \"linear\";\nreadonly input: number;\nreadonly cinP: number;\nreadonly cout: number;\nreadonly coutP: number;\n `[cinP × coutP]`. */ readonly weight: Float32Array;\nreadonly bias: Float32Array;\nreadonly act: Activation;\n}\nexport type Node = InputNode | ConvNode | DwConvNode | MaxPoolNode | SeNode | AddNode | GapNode | LinearNode;\nexport interface CpuGraph {\nreadonly nodes: readonly Node[];\n The node whose value `forward` returns."
+       "doc": "The node whose value `forward` returns.",
+       "doc_ko": "`forward` 가 값을 돌려주는 노드."
       },
       {
        "name": "outputChannels",
        "signature": "readonly outputChannels: number",
        "doc": "Channels of the output, unpadded.",
-       "torch": "output_channels"
+       "torch": "output_channels",
+       "doc_ko": "출력의 채널 수, 패딩 없이."
       }
      ]
     },
@@ -15690,7 +15992,8 @@
       {
        "name": "weight",
        "signature": "readonly weight: Float32Array",
-       "doc": "torch layout `[cout, cin, k, k]` (or `[c, 1, k, k]` for depthwise)."
+       "doc": "torch layout `[cout, cin, k, k]` (or `[c, 1, k, k]` for depthwise).",
+       "doc_ko": "torch 레이아웃 `[cout, cin, k, k]` (depthwise 는 `[c, 1, k, k]`)."
       },
       {
        "name": "cout",
@@ -15746,17 +16049,20 @@
       {
        "name": "input",
        "signature": "input(channels: number): number",
-       "doc": "The image, NCHW at run time, `channels` deep (three for RGB). Never padded."
+       "doc": "The image, NCHW at run time, `channels` deep (three for RGB). Never padded.",
+       "doc_ko": "이미지, 실행 시점에 NCHW, `channels` 깊이(RGB 는 셋). 패딩하지 않는다."
       },
       {
        "name": "conv",
        "signature": "conv(x: number, s: ConvSpec): number",
-       "doc": "A dense convolution, BatchNorm folded, weights repacked tap-major."
+       "doc": "A dense convolution, BatchNorm folded, weights repacked tap-major.",
+       "doc_ko": "밀집 컨볼루션. BatchNorm 은 접히고, 가중치는 탭 우선으로 재포장된다."
       },
       {
        "name": "dwconv",
        "signature": "dwconv(x: number, s: ConvSpec): number",
-       "doc": "A depthwise convolution (`groups == channels`), BatchNorm folded."
+       "doc": "A depthwise convolution (`groups == channels`), BatchNorm folded.",
+       "doc_ko": "depthwise 컨볼루션(`groups == channels`). BatchNorm 은 접힌다."
       },
       {
        "name": "maxpool",
@@ -15766,32 +16072,39 @@
       {
        "name": "se",
        "signature": "se(x: number, reduceW: Float32Array, reduceB: Float32Array, expandW: Float32Array, expandB: Float32Array, cse: number): number",
-       "doc": "Squeeze-and-excite: mean over the image → 1×1 `reduce` (+bias, swish) → 1×1 `expand`\n(+bias, sigmoid) → scale the input by it. Weights in torch's `[out, in, 1, 1]`."
+       "doc": "Squeeze-and-excite: mean over the image → 1×1 `reduce` (+bias, swish) → 1×1 `expand`\n(+bias, sigmoid) → scale the input by it. Weights in torch's `[out, in, 1, 1]`.",
+       "doc_ko": "Squeeze-and-excite: 이미지 평균 → 1×1 `reduce` (+bias, swish) → 1×1 `expand` (+bias, sigmoid) → 그것으로 입력을 스케일. 가중치는 torch 의 `[out, in, 1, 1]`."
       },
       {
        "name": "add",
        "signature": "add(a: number, b: number, act?: Activation): number",
-       "doc": "`a + b`, then `act`. Both the same shape."
+       "doc": "`a + b`, then `act`. Both the same shape.",
+       "doc_ko": "`a + b`, 그 뒤 `act`. 둘은 같은 모양."
       },
       {
        "name": "gap",
        "signature": "gap(x: number): number",
-       "doc": "Global average pool: `[B, H, W, C]` → `[B, C]`."
+       "doc": "Global average pool: `[B, H, W, C]` → `[B, C]`.",
+       "doc_ko": "전역 평균 풀: `[B, H, W, C]` → `[B, C]`."
       },
       {
        "name": "linear",
        "signature": "linear(x: number, weight: Float32Array, bias: Float32Array | undefined, cout: number, act?: Activation): number",
-       "doc": "A linear layer on `[B, cin]`. Weight in torch's `[out, in]`."
+       "doc": "A linear layer on `[B, cin]`. Weight in torch's `[out, in]`.",
+       "doc_ko": "`[B, cin]` 위의 선형 층. 가중치는 torch 의 `[out, in]`."
       },
       {
        "name": "finish",
        "signature": "finish(output: number): CpuGraph",
-       "doc": "Seal the graph with the node whose value is the network's output."
+       "doc": "Seal the graph with the node whose value is the network's output.",
+       "doc_ko": "네트워크의 출력이 되는 노드로 그래프를 봉한다."
       }
-     ]
+     ],
+     "doc_ko": "그래프를 노드 하나씩 짓는다. 값마다 채널 수와 그 패딩을 추적한다."
     }
    ],
-   "count": 43
+   "count": 91,
+   "doc_ko": "CPU 장치가 실행하는 그래프 — 짧은 노드 목록, 커널용으로 이미 재포장된 가중치, 이미 접힌 BatchNorm.\n\n## 왜 `nn.Module` 이 아니라 그래프인가\n\n이 장치가 존재하는 기계에는 WebGPU 어댑터가 없으니 `Tensor` 도, 걸어 다닐 `nn.Module` 인스턴스도 없다. 있는 것은 체크포인트의 바이트와 그 네트워크가 어떤 모양인지에 대한 앎이다. 이 파일은 그 둘을 러너가 실행하는 목록으로 바꾼다. 목록은 일부러 작다 — conv, depthwise conv, max pool, squeeze-and-excite, add, 전역 평균 풀, linear. 카탈로그의 모든 분류기가 이것들로 만들어지고, 그 밖의 것은 이름으로 없다.\n\n## 빌더가 빌드 시점에 하는 일\n\n- **BatchNorm 을 앞의 컨볼루션에 접는다** (eval 모드; `scale = γ/√(σ²+ε)`, `W' = W·scale`, `b' = β − μ·scale`). 층마다 메모리 한 패스가 준다.\n- **가중치를 재포장한다** — torch 의 `[Cout, Cin, kh, kw]` 를 `im2col` + `gemm` 이 원하는 탭 우선 `[kh·kw·Cin, Cout]` 으로, 내내 NHWC.\n- **채널을 열여섯으로 패딩하고** 두 수를 다 기억한다. 패딩된 가중치 열은 0 이라 패딩된 활성 채널은 모든 층에서 정확히 0 이다 — 그래서 출력을 패딩 없는 네트워크와 자릿수까지 대조할 수 있다."
   },
   {
    "name": "cpu/runner",
@@ -15816,12 +16129,14 @@
       {
        "name": "forward",
        "signature": "forward(input: Float32Array, B: number, H: number, W: number): Float32Array",
-       "doc": "One forward. `input` is NCHW, `[B, channels, H, W]`; the result is `[B, outputChannels]`."
+       "doc": "One forward. `input` is NCHW, `[B, channels, H, W]`; the result is `[B, outputChannels]`.",
+       "doc_ko": "forward 한 번. `input` 은 NCHW `[B, channels, H, W]`; 결과는 `[B, outputChannels]`."
       }
      ]
     }
    ],
-   "count": 3
+   "count": 3,
+   "doc_ko": "`CpuGraph` 를 wasm 커널 위에서 실행한다.\n\n## 메모리\n\n모듈에는 선형 메모리 하나와 범프 할당기가 있다. 가중치는 생성 시점에 한 번 들어가 머문다. 활성은 forward 마다 오고 가는데 범프 할당기는 가운데 것을 못 풀어준다 — 그래서 forward 마다 그 위에 바이트 크기로 열쇠를 삼은 풀을 하나 연다. 힙이 서 있는 자리에서 시작하니(이 러너 옆에서 학습한 헤드는 자기 버퍼를 지킨다), 값의 마지막 사용에서 풀린 버퍼는 풀로 돌아가고, 같은 크기의 다음 할당이 그것을 가져가며, forward 의 끝은 힙을 시작한 자리로 되돌린다. 모양이 블록마다 반복되므로 풀이 forward 의 대부분을 흡수하고, 피크는 합이 아니라 대략 가장 큰 살아 있는 집합이다. 밀집 컨볼루션은 이미지 전체가 아니라 행 블록 단위로 탭을 8 MB 버퍼 하나에 펼친다 — 측정한 피크는 책에 있다.\n\n## 에필로그\n\nbias 와 활성은 결과를 두 번째로 훑는 대신 GEMM 과 depthwise 커널에 얹혀 간다(`gemm_bias_act`, `dwconv_bias_act`); 접기 전에 재었을 때 그 패스는 forward 의 5분의 1 이었다.\n\n## 레이아웃\n\nNHWC, 배치는 행에 접혀 있고, 모든 채널 수는 열여섯으로 패딩된다. 이미지는 NCHW(torch 의 관례이고 `Tensor` 의 관례)로 들어와 들어오는 길에 전치되고, 결과는 패딩을 잘라낸 `[B, channels]` 로 나간다. 행은 `gemm` 을 위해 4 의 배수로 패딩되고, 패딩 행은 할당 시점에 0 이라 오래된 것이 흘러들지 않는다.\n\n## 제자리\n\nSqueeze-and-excite 는 입력을 그 자리에서 스케일하고 `add` 는 첫 피연산자에 누적한다 — 둘 다 아니면 가장 큰 활성을 한 번 더 훑어야 한다. 만들어진 값이 버퍼를 넘겨받고, 내준 피연산자는 따로 풀리지 않는다. 아래 생존 부기의 유일한 미묘한 부분이 그것이다."
   },
   {
    "name": "cpu/train",
@@ -15867,7 +16182,8 @@
       {
        "name": "weight",
        "signature": "readonly weight: Float32Array",
-       "doc": "torch layout, `[numClasses × inFeatures]`."
+       "doc": "torch layout, `[numClasses × inFeatures]`.",
+       "doc_ko": "torch 레이아웃, `[numClasses × inFeatures]`."
       },
       {
        "name": "bias",
@@ -15908,7 +16224,8 @@
       {
        "name": "load",
        "signature": "load(state: HeadState): void",
-       "doc": "Overwrite the parameters from torch-layout arrays. Momentum is not reset."
+       "doc": "Overwrite the parameters from torch-layout arrays. Momentum is not reset.",
+       "doc_ko": "torch 레이아웃 배열로 파라미터를 덮어쓴다. momentum 은 되돌리지 않는다."
       },
       {
        "name": "stateDict",
@@ -15919,12 +16236,14 @@
       {
        "name": "predict",
        "signature": "predict(features: Float32Array, N: number): Float32Array",
-       "doc": "Logits `[N × numClasses]` for `[N × D]` features."
+       "doc": "Logits `[N × numClasses]` for `[N × D]` features.",
+       "doc_ko": "`[N × D]` 특징에 대한 로짓 `[N × numClasses]`."
       },
       {
        "name": "fit",
        "signature": "fit(features: Float32Array, labels: ArrayLike<number>, N: number, steps: number): Float32Array",
-       "doc": "Full-batch SGD for `steps` steps on `[N × D]` features with integer class labels.\nReturns the mean cross-entropy before each step — the same numbers torch prints."
+       "doc": "Full-batch SGD for `steps` steps on `[N × D]` features with integer class labels.\nReturns the mean cross-entropy before each step — the same numbers torch prints.",
+       "doc_ko": "`[N × D]` 특징과 정수 클래스 라벨로 `steps` 걸음의 전체 배치 SGD. 각 걸음 전의 평균 교차엔트로피를 돌려준다 — torch 가 찍는 것과 같은 수."
       }
      ]
     },
@@ -15937,12 +16256,14 @@
       {
        "name": "indices",
        "signature": "readonly indices: Int32Array",
-       "doc": "`[N × k]` indices of the nearest rows by cosine similarity, self excluded, nearest first."
+       "doc": "`[N × k]` indices of the nearest rows by cosine similarity, self excluded, nearest first.",
+       "doc_ko": "`[N × k]` 코사인 유사도로 가장 가까운 행들의 인덱스, 자기 자신 제외, 가까운 것부터."
       },
       {
        "name": "sims",
        "signature": "readonly sims: Float32Array",
-       "doc": "`[N × k]` the similarities, same order."
+       "doc": "`[N × k]` the similarities, same order.",
+       "doc_ko": "`[N × k]` 그 유사도, 같은 순서."
       }
      ]
     },
@@ -15952,10 +16273,12 @@
      "signature": "export declare function cosineNeighbours(K: CpuKernels, features: Float32Array, N: number, D: number, k: number, block?: number): Neighbours",
      "doc": "The `k` nearest rows to every row of `[N × D]` features, by cosine similarity, self\nexcluded. Rows are normalised once; the similarity matrix is `gemm` against the\ntranspose, produced a block of rows at a time so 5,000 features do not mean a 100 MB\nmatrix — each block is read for its top `k` and dropped.",
      "members": [],
-     "torch": "cosine_neighbours"
+     "torch": "cosine_neighbours",
+     "doc_ko": "`[N × D]` 특징의 모든 행에 대해 코사인 유사도로 가장 가까운 `k` 행, 자기 자신 제외. 행은 한 번 정규화하고, 유사도 행렬은 전치에 대한 `gemm` 을 행 블록 단위로 만들어 5,000 개 특징이 100 MB 행렬이 되지 않게 한다 — 블록마다 상위 `k` 를 읽고 버린다."
     }
    ],
-   "count": 20
+   "count": 20,
+   "doc_ko": "CPU 장치 위의 작업대의 나머지 절반: 캐시된 특징 위에 학습하는 선형 헤드, 그리고 같은 특징 위의 코사인 이웃.\n\n## 왜 학습이 이만큼만인가\n\n장치는 고정된 백본 forward(`runner.ts`)를 돌리고 멈춘다. 라벨링 도구가 학습하는 것은 그 forward 가 낸 특징 위의 헤드 — 선형 층, softmax 교차엔트로피, momentum 있는 SGD — 이고, 이 파일이 아는 학습은 그것이 전부다. 선형 층의 backward 는 곱 둘이고, 교차엔트로피의 backward 는 `softmax − onehot` 이다. 그 너머의 것(두 번째 층, 다른 loss, Adam)은 이름으로 없고, 없는 것의 까닭은 `torch_gap` 에 산다.\n\n## 레이아웃\n\n특징 `[N × D]` 는 `fit` 마다 한 번 올라가고, 행은 `gemm` 을 위해 4 로 패딩된다(0). 가중치는 `[D × K]` — torch 의 `[K × D]` 의 전치 — 로 두는데 `gemm` 이 먹는 것이 그것이라서다; `stateDict()` 는 torch 의 순서로 돌려준다. 클래스는 열여섯으로 패딩되고 패딩 열은 기울기를 받지 않으므로(교차엔트로피 커널이 0 으로 쓴다) 0 초기값에 머문다.\n\n## 메모리\n\n헤드 자신의 버퍼는 생성 시점에 할당되어 모듈이 `reset` 될 때까지 살고, `fit` 이나 `predict` 가 필요로 하는 것은 힙 표시 위에 할당되어 뒤에 힙이 그 자리로 되돌아간다. 헤드를 여럿 학습하는 페이지는 하나를 재사용해야 한다."
   },
   {
    "name": "vision",
@@ -22379,5 +22702,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3053
+ "total": 3101
 }

@@ -2754,5 +2754,225 @@
   "tensor/Tensor.matmul": {
     "ko": "torch 의 `matmul`, 즉 `@` 가 가리키는 것. 다섯 경우가 있는데 **한 규칙의 변형이 아니다** — 1 차원 쪽은 나머지에서 따라 나오지 않으므로 **추론하지 않고 torch 를 돌려 재었다.**\n\n| this | other | 결과 | 무슨 일이 일어나나 |\n|------|-------|------|------------------|\n| 1 차원 | 1 차원 | 스칼라 | 내적 |\n| 2 차원 | 2 차원 | 2 차원 | 그냥 `mm` |\n| 1 차원 | n 차원 | 하나 줄어듦 | 앞에 1 을 붙였다가 결과에서 뺀다 |\n| n 차원 | 1 차원 | 하나 줄어듦 | 뒤에 1 을 붙였다가 결과에서 뺀다 |\n| n 차원 | m 차원 | 브로드캐스트 | 앞쪽 축이 브로드캐스트되고 뒤 두 축이 곱해진다 |\n\n붙인 1 은 **결과에서 다시 빠진다.** 그래서 `[3] x [5,3,4]` 는 `[5,1,4]` 가 아니라 `[5,4]` 다. 이 비대칭이 무엇을 믿기 전에 torch 와 맞춰 봐야 할 부분이다.\n\n## 왜 새 커널이 아니라 `bmm` 위에 얹었나\n\n`bmm` 은 배치 원소마다의 `mm` 이고 `mm` 은 자기 backward 를 안다. 그래서 여기 적힌 식이 곧 그래프다 — `mm` 이 복소수 곱을 실수 곱 넷으로 가를 때 댄 것과 같은 논거다. 배치 커널은 더 빠르겠지만 별개의 일이고, 트랜스포머가 돌아가는 것이 먼저다.\n\n## 자리 이름은 `other` 이고, torch 자신의 문서는 다르게 적는다\n\n`torch.Tensor.matmul.__doc__` 는 `matmul(tensor2) -> Tensor` 로 시작하는데, 그\n키워드로 부르면 예외가 나고 `other=` 만 통한다. 두 세션이 따로 문서를 읽고 따로\n`tensor2` 에 닿았고, 그중 하나는 넣었다가 되돌렸다 — 둘 다 키워드로 불러 보지는\n않았다. **호출자가 쓸 수 있는 이름이 그 자리의 이름이다.** torch 메서드 열넷이\n문서와 런타임이 갈리며, 자유 함수 쪽은 `torch.matmul(input, other)` 로 원래부터\n`other` 다.\n",
     "src": "3970fea5ea17"
+  },
+  "cpu/": {
+    "ko": "`cpu` 장치 — WebGPU 어댑터가 전혀 없는 기계에서, 분류기 forward, 그 특징 위의 헤드, 그 위의 이웃.\n\n## 이것이 무엇이고 무엇이 아닌가\n\n`borch-ts` 본체는 WebGPU 위의 `Tensor` 다. 이 이름공간은 두 번째 `Tensor` 백엔드가 **아니다**: 이것이 존재하는 기계에는 어댑터가 없고, 그러니 만들 `Tensor` 도 없다. 패키지 안에 실린 WebAssembly SIMD 커널(`cpu/kernels`, base64 8.7 KB, 런타임 없음, import 없음) 위에서 도는 작은 집합이다.\n\n- `readSafetensors` — 체크포인트 바이트를 장치 없이 호스트 배열로\n- `GraphBuilder` / `CpuRunner` — 그 배열로 지은 짧은 그래프(conv, depthwise, pool, SE, add, linear; BatchNorm 은 접혀 있다)와 그 forward\n- `LinearHead` / `cosineNeighbours` — 캐시된 특징 위에 학습한 헤드와, 코사인으로 가장 가까운 행들\n\n그 밖의 것은 이름으로 없다. 허브 체크포인트 둘에서 WebGPU 장치와 대조했다(`borch-ts/test/cpu.py`; 수치는 책의 \"The `cpu` device\" 절에): 로짓은 상대 1e-4 안, 헤드의 loss 는 step 마다 3.5e-5 안.\n\n## 고르는 법\n\n사이트의 probe 가 어댑터가 하드웨어인지 소프트웨어인지 없는지를 이미 말한다. `available()` 은 이쪽이 더하는 한 가지 질문 — 이 엔진이 WebAssembly SIMD 를 돌리는가 — 에 답한다. WebGPU 를 실은 브라우저는 전부 돌리고, 오래된 몇 개는 못 돌린다. 애플리케이션이 고른다: 하드웨어 어댑터 → `borch-ts`; 아니면, `available()` 이면 → 이것.",
+    "src": "3c2fb8d01fd2"
+  },
+  "cpu/available": {
+    "ko": "이 엔진이 커널을 돌릴 수 있는지 — SIMD 제안이 들어간 WebAssembly.",
+    "src": "8e9df25a1552"
+  },
+  "cpu/load/ACT": {
+    "ko": "`biasAct` 가 bias 를 더한 뒤 적용하는 활성.",
+    "src": "bdf9619b7966"
+  },
+  "cpu/load/CpuKernels.alloc": {
+    "ko": "`bytes` 를 범프 할당, 16바이트 정렬. 바이트 오프셋을 돌려주고, 메모리가 안 자라면 0 을 돌려준다.",
+    "src": "e22f1c327d0b"
+  },
+  "cpu/load/CpuKernels.reset": {
+    "ko": "모든 할당을 잊는다.",
+    "src": "c0b92d89f344"
+  },
+  "cpu/load/CpuKernels.heap": {
+    "ko": "힙이 서 있는 자리. `setHeap` 으로 되돌아올 곳.",
+    "src": "487c957d8821"
+  },
+  "cpu/load/CpuKernels.gemm": {
+    "ko": "C[m×n] = A[m×k] · B[k×n], f32 행 우선. `m % 4 === 0`, `n % 16 === 0`.",
+    "src": "ec11e7a9006f"
+  },
+  "cpu/load/CpuKernels.dwconv": {
+    "ko": "NHWC depthwise conv. `c % 16 === 0`.",
+    "src": "0c2f707db5ac"
+  },
+  "cpu/load/CpuKernels.swish": {
+    "ko": "x ← x · sigmoid(x). `n % 4 === 0`.",
+    "src": "15ed8cfd931f"
+  },
+  "cpu/load/CpuKernels.biasAct": {
+    "ko": "x[rows×c] += bias[c], 그 뒤 `act`. `c % 4 === 0`.",
+    "src": "b9d5ec8b5a02"
+  },
+  "cpu/load/CpuKernels.meanRows": {
+    "ko": "out[c] = 행들의 평균. `c % 4 === 0`.",
+    "src": "1f7f2f9a9875"
+  },
+  "cpu/load/CpuKernels.scaleRows": {
+    "ko": "x[rows×c] *= s[c]. `c % 4 === 0`.",
+    "src": "fb9016f3442e"
+  },
+  "cpu/load/CpuKernels.addInplace": {
+    "ko": "a[n] += b[n]. `n % 4 === 0`.",
+    "src": "fbfcb8574ce8"
+  },
+  "cpu/load/CpuKernels.relu": {
+    "ko": "x ← max(x, 0). `n % 4 === 0`.",
+    "src": "b468bd3eb784"
+  },
+  "cpu/load/CpuKernels.im2col": {
+    "ko": "NHWC im2col: in [h,w,c] → out [ho·wo, k·k·c], 탭 우선 그 다음 채널. `c` 는 아무 값.",
+    "src": "25d3ca5b0c4d"
+  },
+  "cpu/load/CpuKernels.maxpool": {
+    "ko": "NHWC max pool, 바깥 탭은 건너뛴다. `c % 4 === 0`.",
+    "src": "319cc3c9fc15"
+  },
+  "cpu/load/CpuKernels.softmaxXentGrad": {
+    "ko": "softmax 교차엔트로피의 backward 절반: `c` 열 중 앞 `cReal` 열에 대해 `grad = (softmax − onehot) / rows`, 그리고 행마다 `stats[2r] = max`, `stats[2r+1] = Σexp` 를 남겨 호스트가 `ln` 으로 loss 를 마무리한다. 라벨은 f32 로 담긴 클래스 인덱스.",
+    "src": "02d472e4a976"
+  },
+  "cpu/load/CpuKernels.outerAcc": {
+    "ko": "out[d×k] += Xᵀ·G, X[n×d], G[n×k]. `k % 4 === 0`. 먼저 0 으로 만들지 않는다.",
+    "src": "c53ad91bb25c"
+  },
+  "cpu/load/CpuKernels.sgdStep": {
+    "ko": "torch 의 SGD 한 걸음: `g += wd·p; v = μ·v + g; p −= lr·v`. `n % 4 === 0`.",
+    "src": "77927c414415"
+  },
+  "cpu/load/CpuKernels.l2NormalizeRows": {
+    "ko": "각 행을 자기 L2 노름으로 나눈다; 0 인 행은 0 으로 남는다. `c % 4 === 0`.",
+    "src": "4b025d165011"
+  },
+  "cpu/load/CpuKernels.transpose": {
+    "ko": "out[cols×rows] = in[rows×cols]ᵀ.",
+    "src": "7524eda10c6a"
+  },
+  "cpu/load/CpuKernels.zero": {
+    "ko": "x[n] ← 0. `n % 4 === 0`.",
+    "src": "6ceb866084ff"
+  },
+  "cpu/load/CpuKernels.gemmBiasAct": {
+    "ko": "`gemm`, 그 뒤 저장 전에 `+ bias[n]` 과 `act` — 합이 레지스터를 떠나지 않는다.",
+    "src": "c676cd8d3ce5"
+  },
+  "cpu/load/CpuKernels.dwconvBiasAct": {
+    "ko": "bias 를 시작값으로 삼고 끝난 행마다 `act` 를 적용하는 `dwconv`.",
+    "src": "cca99d8e1a8d"
+  },
+  "cpu/load/CpuKernels.im2colRows": {
+    "ko": "이미지 하나의 출력 행 `[row0, row0 + rows)` 만의 `im2col` — 버퍼 하나에 대해 한 블록씩.",
+    "src": "dce409487e90"
+  },
+  "cpu/load/kernelBytes": {
+    "ko": "모듈의 바이트, 디코드된 것. 순수하다; 인스턴스화하지 않는다.",
+    "src": "1db73f2097b1"
+  },
+  "cpu/load/loadKernels": {
+    "ko": "디코드, 검증, 인스턴스화. 두 번 불러도 같은 promise 를 돌려준다 — 모듈은 메모리가 하나이고, 사본 둘은 힙 둘이 된다.",
+    "src": "604fb1652e0f"
+  },
+  "cpu/safetensors/HostTensor": {
+    "ko": "safetensors 파일을 호스트 배열로 읽는다 — 장치 없이.\n\n`serialize.decode` 가 같은 일을 하며 `Tensor` 를 돌려주는데, WebGPU 쪽에는 그것이 맞고 여기서는 불가능하다: 이 장치가 존재하는 기계에는 어댑터가 없으니 돌려줄 `Tensor` 도 없다. 이 리더는 `Float32Array` 에서 멈춘다.\n\n형식은 통째로 읽을 만큼 작다: 리틀엔디언 헤더 길이 8바이트, 각 텐서의 dtype·모양·바이트 범위를 적은 JSON 헤더, 그 뒤 바이트. `F32` 만 받는다 — 허브의 체크포인트는 전부 F32 이고, 조용히 넓힌 `F16` 은 같은 이름의 다른 모델이 된다.",
+    "src": "feb16171b01a"
+  },
+  "cpu/graph/": {
+    "ko": "CPU 장치가 실행하는 그래프 — 짧은 노드 목록, 커널용으로 이미 재포장된 가중치, 이미 접힌 BatchNorm.\n\n## 왜 `nn.Module` 이 아니라 그래프인가\n\n이 장치가 존재하는 기계에는 WebGPU 어댑터가 없으니 `Tensor` 도, 걸어 다닐 `nn.Module` 인스턴스도 없다. 있는 것은 체크포인트의 바이트와 그 네트워크가 어떤 모양인지에 대한 앎이다. 이 파일은 그 둘을 러너가 실행하는 목록으로 바꾼다. 목록은 일부러 작다 — conv, depthwise conv, max pool, squeeze-and-excite, add, 전역 평균 풀, linear. 카탈로그의 모든 분류기가 이것들로 만들어지고, 그 밖의 것은 이름으로 없다.\n\n## 빌더가 빌드 시점에 하는 일\n\n- **BatchNorm 을 앞의 컨볼루션에 접는다** (eval 모드; `scale = γ/√(σ²+ε)`, `W' = W·scale`, `b' = β − μ·scale`). 층마다 메모리 한 패스가 준다.\n- **가중치를 재포장한다** — torch 의 `[Cout, Cin, kh, kw]` 를 `im2col` + `gemm` 이 원하는 탭 우선 `[kh·kw·Cin, Cout]` 으로, 내내 NHWC.\n- **채널을 열여섯으로 패딩하고** 두 수를 다 기억한다. 패딩된 가중치 열은 0 이라 패딩된 활성 채널은 모든 층에서 정확히 0 이다 — 그래서 출력을 패딩 없는 네트워크와 자릿수까지 대조할 수 있다.",
+    "src": "f626240865f8"
+  },
+  "cpu/graph/CHANNEL_PAD": {
+    "ko": "채널을 이 수로 패딩한다. `dwconv` 는 16 을 원하고, 나머지는 4 로도 된다.",
+    "src": "ab3b09fb11fe"
+  },
+  "cpu/graph/ConvNode.weight": {
+    "ko": "`[k·k·cinP × coutP]`, 탭 우선.",
+    "src": "9533a5c831da"
+  },
+  "cpu/graph/DwConvNode.weight": {
+    "ko": "`[k·k × cP]`.",
+    "src": "d78ffce7f20a"
+  },
+  "cpu/graph/LinearNode.weight": {
+    "ko": "`[cinP × coutP]`.",
+    "src": "c77195e5ba2d"
+  },
+  "cpu/graph/CpuGraph.output": {
+    "ko": "`forward` 가 값을 돌려주는 노드.",
+    "src": "af7c4f992a52"
+  },
+  "cpu/graph/CpuGraph.outputChannels": {
+    "ko": "출력의 채널 수, 패딩 없이.",
+    "src": "725b08332d08"
+  },
+  "cpu/graph/ConvSpec.weight": {
+    "ko": "torch 레이아웃 `[cout, cin, k, k]` (depthwise 는 `[c, 1, k, k]`).",
+    "src": "d553637537f6"
+  },
+  "cpu/graph/GraphBuilder": {
+    "ko": "그래프를 노드 하나씩 짓는다. 값마다 채널 수와 그 패딩을 추적한다.",
+    "src": "230db59aa40b"
+  },
+  "cpu/graph/GraphBuilder.input": {
+    "ko": "이미지, 실행 시점에 NCHW, `channels` 깊이(RGB 는 셋). 패딩하지 않는다.",
+    "src": "f482a57f274b"
+  },
+  "cpu/graph/GraphBuilder.conv": {
+    "ko": "밀집 컨볼루션. BatchNorm 은 접히고, 가중치는 탭 우선으로 재포장된다.",
+    "src": "6f0cea61c462"
+  },
+  "cpu/graph/GraphBuilder.dwconv": {
+    "ko": "depthwise 컨볼루션(`groups == channels`). BatchNorm 은 접힌다.",
+    "src": "d0ed050f65fb"
+  },
+  "cpu/graph/GraphBuilder.se": {
+    "ko": "Squeeze-and-excite: 이미지 평균 → 1×1 `reduce` (+bias, swish) → 1×1 `expand` (+bias, sigmoid) → 그것으로 입력을 스케일. 가중치는 torch 의 `[out, in, 1, 1]`.",
+    "src": "e4b75267b5c3"
+  },
+  "cpu/graph/GraphBuilder.add": {
+    "ko": "`a + b`, 그 뒤 `act`. 둘은 같은 모양.",
+    "src": "3fe00a3bebb1"
+  },
+  "cpu/graph/GraphBuilder.gap": {
+    "ko": "전역 평균 풀: `[B, H, W, C]` → `[B, C]`.",
+    "src": "352be022b752"
+  },
+  "cpu/graph/GraphBuilder.linear": {
+    "ko": "`[B, cin]` 위의 선형 층. 가중치는 torch 의 `[out, in]`.",
+    "src": "e3a04e2bea7f"
+  },
+  "cpu/graph/GraphBuilder.finish": {
+    "ko": "네트워크의 출력이 되는 노드로 그래프를 봉한다.",
+    "src": "f3eeea0ffec8"
+  },
+  "cpu/runner/": {
+    "ko": "`CpuGraph` 를 wasm 커널 위에서 실행한다.\n\n## 메모리\n\n모듈에는 선형 메모리 하나와 범프 할당기가 있다. 가중치는 생성 시점에 한 번 들어가 머문다. 활성은 forward 마다 오고 가는데 범프 할당기는 가운데 것을 못 풀어준다 — 그래서 forward 마다 그 위에 바이트 크기로 열쇠를 삼은 풀을 하나 연다. 힙이 서 있는 자리에서 시작하니(이 러너 옆에서 학습한 헤드는 자기 버퍼를 지킨다), 값의 마지막 사용에서 풀린 버퍼는 풀로 돌아가고, 같은 크기의 다음 할당이 그것을 가져가며, forward 의 끝은 힙을 시작한 자리로 되돌린다. 모양이 블록마다 반복되므로 풀이 forward 의 대부분을 흡수하고, 피크는 합이 아니라 대략 가장 큰 살아 있는 집합이다. 밀집 컨볼루션은 이미지 전체가 아니라 행 블록 단위로 탭을 8 MB 버퍼 하나에 펼친다 — 측정한 피크는 책에 있다.\n\n## 에필로그\n\nbias 와 활성은 결과를 두 번째로 훑는 대신 GEMM 과 depthwise 커널에 얹혀 간다(`gemm_bias_act`, `dwconv_bias_act`); 접기 전에 재었을 때 그 패스는 forward 의 5분의 1 이었다.\n\n## 레이아웃\n\nNHWC, 배치는 행에 접혀 있고, 모든 채널 수는 열여섯으로 패딩된다. 이미지는 NCHW(torch 의 관례이고 `Tensor` 의 관례)로 들어와 들어오는 길에 전치되고, 결과는 패딩을 잘라낸 `[B, channels]` 로 나간다. 행은 `gemm` 을 위해 4 의 배수로 패딩되고, 패딩 행은 할당 시점에 0 이라 오래된 것이 흘러들지 않는다.\n\n## 제자리\n\nSqueeze-and-excite 는 입력을 그 자리에서 스케일하고 `add` 는 첫 피연산자에 누적한다 — 둘 다 아니면 가장 큰 활성을 한 번 더 훑어야 한다. 만들어진 값이 버퍼를 넘겨받고, 내준 피연산자는 따로 풀리지 않는다. 아래 생존 부기의 유일한 미묘한 부분이 그것이다.",
+    "src": "3f32ecdd6b91"
+  },
+  "cpu/runner/CpuRunner.forward": {
+    "ko": "forward 한 번. `input` 은 NCHW `[B, channels, H, W]`; 결과는 `[B, outputChannels]`.",
+    "src": "1beeb4b2cb16"
+  },
+  "cpu/train/": {
+    "ko": "CPU 장치 위의 작업대의 나머지 절반: 캐시된 특징 위에 학습하는 선형 헤드, 그리고 같은 특징 위의 코사인 이웃.\n\n## 왜 학습이 이만큼만인가\n\n장치는 고정된 백본 forward(`runner.ts`)를 돌리고 멈춘다. 라벨링 도구가 학습하는 것은 그 forward 가 낸 특징 위의 헤드 — 선형 층, softmax 교차엔트로피, momentum 있는 SGD — 이고, 이 파일이 아는 학습은 그것이 전부다. 선형 층의 backward 는 곱 둘이고, 교차엔트로피의 backward 는 `softmax − onehot` 이다. 그 너머의 것(두 번째 층, 다른 loss, Adam)은 이름으로 없고, 없는 것의 까닭은 `torch_gap` 에 산다.\n\n## 레이아웃\n\n특징 `[N × D]` 는 `fit` 마다 한 번 올라가고, 행은 `gemm` 을 위해 4 로 패딩된다(0). 가중치는 `[D × K]` — torch 의 `[K × D]` 의 전치 — 로 두는데 `gemm` 이 먹는 것이 그것이라서다; `stateDict()` 는 torch 의 순서로 돌려준다. 클래스는 열여섯으로 패딩되고 패딩 열은 기울기를 받지 않으므로(교차엔트로피 커널이 0 으로 쓴다) 0 초기값에 머문다.\n\n## 메모리\n\n헤드 자신의 버퍼는 생성 시점에 할당되어 모듈이 `reset` 될 때까지 살고, `fit` 이나 `predict` 가 필요로 하는 것은 힙 표시 위에 할당되어 뒤에 힙이 그 자리로 되돌아간다. 헤드를 여럿 학습하는 페이지는 하나를 재사용해야 한다.",
+    "src": "7dbf48f92aa8"
+  },
+  "cpu/train/HeadState.weight": {
+    "ko": "torch 레이아웃, `[numClasses × inFeatures]`.",
+    "src": "5ec9722bcd93"
+  },
+  "cpu/train/LinearHead.load": {
+    "ko": "torch 레이아웃 배열로 파라미터를 덮어쓴다. momentum 은 되돌리지 않는다.",
+    "src": "52309e4b1248"
+  },
+  "cpu/train/LinearHead.predict": {
+    "ko": "`[N × D]` 특징에 대한 로짓 `[N × numClasses]`.",
+    "src": "a3ab68912f0b"
+  },
+  "cpu/train/LinearHead.fit": {
+    "ko": "`[N × D]` 특징과 정수 클래스 라벨로 `steps` 걸음의 전체 배치 SGD. 각 걸음 전의 평균 교차엔트로피를 돌려준다 — torch 가 찍는 것과 같은 수.",
+    "src": "d8ee3fad680d"
+  },
+  "cpu/train/Neighbours.indices": {
+    "ko": "`[N × k]` 코사인 유사도로 가장 가까운 행들의 인덱스, 자기 자신 제외, 가까운 것부터.",
+    "src": "e54c52586ec1"
+  },
+  "cpu/train/Neighbours.sims": {
+    "ko": "`[N × k]` 그 유사도, 같은 순서.",
+    "src": "670158dcf16f"
+  },
+  "cpu/train/cosineNeighbours": {
+    "ko": "`[N × D]` 특징의 모든 행에 대해 코사인 유사도로 가장 가까운 `k` 행, 자기 자신 제외. 행은 한 번 정규화하고, 유사도 행렬은 전치에 대한 `gemm` 을 행 블록 단위로 만들어 5,000 개 특징이 100 MB 행렬이 되지 않게 한다 — 블록마다 상위 `k` 를 읽고 버린다.",
+    "src": "01eecd1bc444"
   }
 }
