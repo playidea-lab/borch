@@ -128,7 +128,7 @@
   "devDependencies": {
     "@webgpu/types": "^0.1.71",
     "bimm-ts": "^0.11.0",
-    "borch-hub": "^0.4.0",
+    "borch-hub": "^0.4.1",
     "esbuild": "^0.21.5",
     "typescript": "^5.9.0"
   }
