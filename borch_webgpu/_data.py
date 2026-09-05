@@ -498,20 +498,31 @@ def decode_cifar10(raw):
 # bytes in hand become arrays, and the model is what runs on the GPU. What differs here
 # is only how Pillow arrives: Pyodide ships it as a package the page has to ask for.
 from borch._data import label_from_name, suspects                    # noqa: E402,F401
-from borch._data import decode_images as _decode_images_core         # noqa: E402
+from borch._data import ImageFiles as _ImageFilesCore                 # noqa: E402
 
 
-def decode_images(files, size=64, label=label_from_name):
-    """See `borch.decode_images`. In Pyodide, fetches the `pillow` package on first
-    use (JSPI, the same `run_sync` a readback uses) — so a notebook does not need an
-    `import PIL` line of its own to get the decoder loaded."""
+def _pillow():
+    """Pillow's `Image` — fetched as a Pyodide package on first use (JSPI, the same
+    `run_sync` a readback uses), so a notebook needs no `import PIL` line of its own."""
     try:
-        return _decode_images_core(files, size, label)
+        from PIL import Image
     except ImportError:
         import pyodide_js
         from pyodide.ffi import run_sync
         run_sync(pyodide_js.loadPackage("pillow"))
-        return _decode_images_core(files, size, label)
+        from PIL import Image
+    return Image
+
+
+class ImageFiles(_ImageFilesCore):
+    """See `borch.ImageFiles`. Only how Pillow arrives differs here."""
+    _image_module = staticmethod(_pillow)
+
+
+def decode_images(files, size=64, label=label_from_name):
+    """See `borch.decode_images` — everything decoded at once; `ImageFiles` on demand."""
+    ds = ImageFiles(files, size, label)
+    return ds.stack(), ds.targets, ds.names, ds.classes
 
 
 # `save` and `load` used to live here as a thin layer over pickle. **They moved

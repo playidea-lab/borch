@@ -573,6 +573,93 @@ def label_from_name(name):
     return tail.split("_")[0]
 
 
+def _entries(files):
+    """`(name, bytes)` for every image among `files` — a zip is opened and its members
+    become entries under their paths, so a zipped folder keeps its folder labels.
+    Directories and macOS resource forks (`__MACOSX/`, `._x`) are left out."""
+    import io
+    import zipfile
+    for item in files:
+        name, data = _name_and_bytes(item)
+        if name.lower().endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                for info in z.infolist():
+                    base = info.filename.rsplit("/", 1)[-1]
+                    if info.is_dir() or info.filename.startswith("__MACOSX/") or base.startswith("._"):
+                        continue
+                    if base.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")):
+                        yield info.filename, z.read(info)
+        else:
+            yield name, data
+
+
+def _image_module():
+    """Pillow's `Image`, or the ImportError that says how to get it."""
+    try:
+        from PIL import Image
+    except ImportError:
+        raise ImportError("decoding images needs Pillow (`pip install pillow`) to read "
+                          "PNG/JPEG bytes") from None
+    return Image
+
+
+class ImageFiles:
+    """Image files already in hand, decoded **on demand** — the field trainer's dataset.
+
+        ds = ImageFiles(upload.value, size=224)      # uploads, (name, bytes) pairs, paths, or a zip
+        for x, idx in ds.batches(16):                # x: float32 (n, 3, size, size) in [0, 1]
+            feats[idx] = backbone(x)
+        x, y = ds[3]                                 # one image, its class index
+        ds.classes, ds.labels, ds.names, ds.targets  # sorted label strings; per-image label/name/index
+
+    Nothing is decoded until asked, so five thousand camera images cost the bytes they
+    came in as, not 3 GB of float32. `stack()` decodes everything at once — the small
+    path, for a few hundred images. A zip is a folder: its members' folder names are
+    their labels (`label_from_name`).
+    """
+
+    def __init__(self, files, size=64, label=label_from_name):
+        self.size = int(size)
+        self._items = list(_entries(files))
+        if not self._items:
+            raise ValueError("ImageFiles: no image files given")
+        self.names = [name for name, _ in self._items]
+        self.labels = [str(label(name)) for name in self.names]
+        self.classes = sorted(set(self.labels))
+        self.targets = _np.array([self.classes.index(l) for l in self.labels], dtype=_np.int64)
+
+    def __len__(self):
+        return len(self._items)
+
+    def _decode(self, i, size=None):
+        import io
+        Image = self._image_module()
+        img = Image.open(io.BytesIO(self._items[i][1])).convert("RGB").resize((size or self.size,) * 2)
+        return _np.asarray(img, dtype=_np.uint8)
+
+    # The binding replaces this: in Pyodide, Pillow is a package the page has to fetch.
+    _image_module = staticmethod(_image_module)
+
+    def __getitem__(self, i):
+        x = self._decode(i).transpose(2, 0, 1).astype(_np.float32) / 255.0
+        return x, int(self.targets[i])
+
+    def thumb(self, i, size=56):
+        """One image as `(size, size, 3)` uint8 — a thumbnail for a review table."""
+        return self._decode(i, size)
+
+    def batches(self, n=16):
+        """`(x, idx)` in order: `x` float32 `(len(idx), 3, size, size)`, `idx` the rows."""
+        for start in range(0, len(self), n):
+            idx = _np.arange(start, min(start + n, len(self)))
+            x = _np.stack([self._decode(int(i)) for i in idx]).transpose(0, 3, 1, 2).astype(_np.float32) / 255.0
+            yield x, idx
+
+    def stack(self):
+        """Every image at once: `(N, 3, size, size)` float32 — for a few hundred images."""
+        return _np.concatenate([x for x, _ in self.batches(64)])
+
+
 def decode_images(files, size=64, label=label_from_name):
     """Image files already in hand → `(x, y, names, classes)`, torch's NCHW in [0, 1].
 
@@ -581,29 +668,12 @@ def decode_images(files, size=64, label=label_from_name):
     converted to RGB and resized to `size × size` — the same thing torchvision's
     `ImageFolder` + `Resize` + `ToTensor` do, minus the folder: a browser hands over
     files, not a directory, so the label comes from the name (see `label_from_name`,
-    or pass your own `label(name)`).
+    or pass your own `label(name)`). A zip among the files is opened as a folder.
 
-    Needs Pillow for the decoding; the error says so when it is missing.
+    This decodes everything at once; `ImageFiles` is the same thing decoded on demand.
     """
-    try:
-        from PIL import Image
-    except ImportError as e:                                         # noqa: F841
-        raise ImportError("decode_images needs Pillow (`pip install pillow`) to decode "
-                          "PNG/JPEG bytes") from None
-    import io
-    names, labels, images = [], [], []
-    for item in files:
-        name, data = _name_and_bytes(item)
-        img = Image.open(io.BytesIO(data)).convert("RGB").resize((size, size))
-        names.append(name)
-        labels.append(str(label(name)))
-        images.append(_np.asarray(img, dtype=_np.float32) / 255.0)
-    if not images:
-        raise ValueError("decode_images: no files given")
-    classes = sorted(set(labels))
-    x = _np.stack(images).transpose(0, 3, 1, 2).astype(_np.float32)
-    y = _np.array([classes.index(l) for l in labels], dtype=_np.int64)
-    return x, y, names, classes
+    ds = ImageFiles(files, size, label)
+    return ds.stack(), ds.targets, ds.names, ds.classes
 
 
 def suspects(features, labels, k=5):

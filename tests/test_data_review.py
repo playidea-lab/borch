@@ -8,7 +8,7 @@ import io
 import numpy as np
 import pytest
 
-from borch._data import decode_images, label_from_name, suspects
+from borch._data import ImageFiles, decode_images, label_from_name, suspects
 
 PIL = pytest.importorskip("PIL.Image")
 
@@ -73,3 +73,32 @@ def test_suspects_takes_tensors_and_handles_tiny_inputs():
     assert suspects(np.zeros((1, 2), np.float32), np.zeros(1, np.int64)).tolist() == [0.0]
     with pytest.raises(ValueError):
         suspects(np.zeros((3, 2), np.float32), np.zeros(2, np.int64))
+
+
+def _zip_of(entries):
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, data in entries:
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_image_files_reads_a_zipped_folder_with_folder_labels_and_decodes_on_demand():
+    z = _zip_of([("cats/a.png", _png((255, 0, 0))), ("dogs/b.png", _png((0, 255, 0))),
+                 ("dogs/c.png", _png((0, 0, 255))), ("__MACOSX/cats/._a.png", b"junk"), ("notes.txt", b"x")])
+    ds = ImageFiles([("photos.zip", z)], size=4)
+    assert len(ds) == 3 and ds.classes == ["cats", "dogs"] and ds.targets.tolist() == [0, 1, 1]
+    assert ds.names == ["cats/a.png", "dogs/b.png", "dogs/c.png"]
+    x, y = ds[1]
+    assert x.shape == (3, 4, 4) and y == 1 and x[1].min() == pytest.approx(1.0)
+    assert ds.thumb(0, 2).shape == (2, 2, 3) and ds.thumb(0, 2).dtype == np.uint8
+    got = [(x.shape, idx.tolist()) for x, idx in ds.batches(2)]
+    assert got == [((2, 3, 4, 4), [0, 1]), ((1, 3, 4, 4), [2])]
+    assert ds.stack().shape == (3, 3, 4, 4)
+
+
+def test_decode_images_takes_a_zip_beside_plain_files():
+    z = _zip_of([("k/one.png", _png((1, 2, 3)))])
+    x, y, names, classes = decode_images([("a_0.png", _png((9, 9, 9))), ("folder.zip", z)], size=2)
+    assert x.shape == (2, 3, 2, 2) and classes == ["a", "k"] and y.tolist() == [0, 1]

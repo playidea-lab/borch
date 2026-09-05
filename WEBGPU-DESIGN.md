@@ -279,8 +279,9 @@ with five cases immediately.
 ### Data loading — the plumbing is in, and **it does not change the numbers**
 
 `utils.data` (TensorDataset and DataLoader), `fetch_cached` (an OPFS cache),
-`decode_cifar10`, and — for images a visitor already has — `decode_images` (files →
-NCHW in [0, 1], labels from the names) with `suspects` (the share of each sample's
+`decode_cifar10`, and — for images a visitor already has — `ImageFiles` (files, or a
+zipped folder, decoded on demand; `decode_images` is the same at once) with labels from
+the names or folders with `suspects` (the share of each sample's
 k nearest neighbours that disagree with its label; the workbench's review order).
 The last two are the core's; the binding only fetches Pillow in Pyodide.
 

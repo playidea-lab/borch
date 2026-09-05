@@ -59,10 +59,24 @@ def synthetic_pngs(n=90, side=64, classes=("cat", "dog", "bird")):
     return files
 
 
-def upload_pass(page, t0, deadline):
-    """Feed the PNGs to the notebook's file input and wait for the review table to show
-    their names, then the retrained accuracy. Returns (seconds, "acc% on N rows") or None."""
-    page.set_input_files('input[type="file"]', synthetic_pngs())
+def zipped_folder(files):
+    """The PNGs as one zip of class folders — the way thousands arrive. Labels come from
+    the folder names, so the file names inside carry no prefix of their own."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for f in files:
+            cls = f["name"].split("_")[0]
+            z.writestr(f"{cls}/{f['name']}", f["buffer"])
+    return {"name": "photos.zip", "mimeType": "application/zip", "buffer": buf.getvalue()}
+
+
+def upload_pass(page, t0, deadline, n=90):
+    """Feed a zipped folder of the PNGs to the notebook's file input and wait for the review
+    table to show their names, then the retrained accuracy. Returns (seconds, "acc% on N
+    rows") or None. A zip, not ninety files: that is how a folder reaches a tab."""
+    page.set_input_files('input[type="file"]', [zipped_folder(synthetic_pngs(n))])
     while time.time() < deadline:
         page.wait_for_timeout(500)
         body = page.evaluate(OUTPUTS)
@@ -70,9 +84,11 @@ def upload_pass(page, t0, deadline):
             page.wait_for_timeout(1500)
             body = page.evaluate(OUTPUTS)
             acc = re.search(r"agrees with the given labels on \*?\*?(\d+)%", body)
-            rows = re.search(r"(\d+) rows, 5 columns", body)
+            rows = re.search(r"([\d,]+) rows, 5 columns", body)          # "1,000 rows" past 999
+            feat = re.search(r"features for ([\d,]+) images in \*?\*?([0-9.]+) s", body)
             if acc and rows:
-                return (time.time() - t0, f"{acc.group(1)}% on {rows.group(1)} rows")
+                extra = f" · features {feat.group(2)} s" if feat else ""
+                return (time.time() - t0, f"{acc.group(1)}% on {rows.group(1).replace(',', '')} rows{extra}")
     print("  upload pass: the table never showed the uploaded names")
     return None
 
@@ -99,6 +115,8 @@ def scratch_pass(page, t0, deadline):
 def main(argv):
     from playwright.sync_api import sync_playwright
     headed = "--headed" in argv
+    # `--zip=N`: how many PNGs the upload pass zips (90 by default; 1000 for a timing).
+    zip_n = int(next((a.split("=", 1)[1] for a in argv if a.startswith("--zip=")), "90"))
     page_file = ROOT / "site" / "marimo" / "index.html"
     if "--build" in argv or not page_file.exists():
         r = subprocess.run([sys.executable, str(ROOT / "site" / "build_marimo.py")], cwd=ROOT, text=True, capture_output=True)
@@ -144,7 +162,7 @@ def main(argv):
                     # Ninety PNGs of the same three-template kind, named the way the
                     # notebook reads labels (`cat_000.png`); marimo re-runs the cells
                     # below the upload on its own, so the table's names change.
-                    marks["uploaded"] = upload_pass(page, t0, deadline)
+                    marks["uploaded"] = upload_pass(page, t0, deadline, zip_n)
                     # Third pass: the other model path. The radio is a marimo element in
                     # a shadow root; Playwright's text locator pierces it. marimo reruns
                     # the cells below on its own.
@@ -166,7 +184,7 @@ def main(argv):
     ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "uploaded", "scratch"))
     ok = ok and int(marks["scratch"][1].split("%")[0]) >= 90
     ok = ok and int(marks["trained"][1]) >= 90 and int(marks["queue"][1]) == 90
-    ok = ok and int(marks["uploaded"][1].split("%")[0]) >= 90 and marks["uploaded"][1].endswith("on 90 rows")
+    ok = ok and int(marks["uploaded"][1].split("%")[0]) >= 90 and f"on {zip_n} rows" in marks["uploaded"][1]
     print("**the workbench trains, reviews and exports**" if ok else "**it did not** — see above")
     return 0 if ok else 1
 

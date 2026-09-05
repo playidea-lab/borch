@@ -196,7 +196,7 @@ from ._ops import (                                      # noqa: E402,F401
     Generator, manual_seed, multinomial, randint, randperm,
 )
 from ._data import (                                     # noqa: E402,F401
-    ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
+    ConcatDataset, DataLoader, Dataset, ImageFiles, RandomSampler, SequentialSampler, Subset,
     TensorDataset, WeightedRandomSampler, backend, cache_get, cache_put, cuda,
     decode_cifar10, decode_images, fetch_cached, get_default_device, label_from_name,
     random_split, suspects,

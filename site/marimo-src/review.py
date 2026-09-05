@@ -14,7 +14,7 @@ async def _():
     # script's — under `<page>/assets/` — so the page's directory is two steps up.
     href = str(js.location.href)
     base = href.split("/assets/")[0] if "/assets/" in href else str(js.location.origin)
-    await micropip.install(f"{base}/pyborch-1.7.0-py3-none-any.whl")
+    await micropip.install(f"{base}/pyborch-1.8.0-py3-none-any.whl")
     import borch_webgpu as torch
     adapter = str(js.borch.Device.adapterInfo)
     mo.md(f"**borch on `{adapter}`** — `import borch_webgpu as torch` booted borch.ts in this kernel. Nothing was installed on this machine.")
@@ -23,8 +23,8 @@ async def _():
 
 @app.cell
 def _(mo):
-    upload = mo.ui.file(filetypes=[".png", ".jpg", ".jpeg"], multiple=True, label="Images to review (label = the part of the file name before the first '_')")
-    mo.vstack([mo.md("### 1 · Images"), upload, mo.md("Nothing uploaded? A synthetic set of three classes is used, so the notebook runs as it is.")])
+    upload = mo.ui.file(filetypes=[".png", ".jpg", ".jpeg", ".zip"], multiple=True, label="Images to review — files (label = the part of the name before the first '_') or a zipped folder (label = the folder)")
+    mo.vstack([mo.md("### 1 · Images"), upload, mo.md("A zip of class folders is the way to bring thousands: nothing is decoded until a batch asks for it. Nothing uploaded? A synthetic set of three classes is used, so the notebook runs as it is.")])
     return (upload,)
 
 
@@ -38,36 +38,39 @@ def _(mo):
 
 @app.cell
 def _(FROZEN, path, torch, upload):
+    import io
     import numpy as np
+    from PIL import Image
     SIDE = 224 if path.value == FROZEN else 64            # the backbone was trained at 224
     if upload.value:
-        # Files in hand → NCHW in [0, 1], labels from the names: `torch.decode_images`.
-        X, y, names, CLASSES = torch.decode_images(upload.value, size=SIDE)
-        labels = [CLASSES[i] for i in y]
+        # Files or a zipped folder → `torch.ImageFiles`: names, labels and classes now,
+        # pixels only when a batch asks. Five thousand camera images stay as their bytes.
+        ds = torch.ImageFiles(upload.value, size=SIDE)
     else:
         # Three classes: a low-frequency template each, plus noise — the same set
-        # tests/browser/envelope2.html trains on.
-        CLASSES = ["a", "b", "c"]
+        # tests/browser/envelope2.html trains on — written as ninety PNGs, so the
+        # synthetic path goes through the same dataset as an upload.
         rng = np.random.default_rng(7)
-        cells = 6
-        templates = [rng.standard_normal((cells, cells, 3)).astype(np.float32) for _ in CLASSES]
-        idx = np.arange(SIDE) * cells // SIDE
-        names, images, labels = [], [], []
+        cells, S0 = 6, 64
+        templates = [rng.standard_normal((cells, cells, 3)).astype(np.float32) for _ in "abc"]
+        idx = np.arange(S0) * cells // S0
+        files = []
         for i in range(90):
             k = i % 3
-            img = 0.5 + 0.3 * templates[k][idx][:, idx] + 0.15 * rng.standard_normal((SIDE, SIDE, 3)).astype(np.float32)
-            names.append(f"{CLASSES[k]}_{i:03d}.png"); images.append(np.clip(img, 0, 1)); labels.append(CLASSES[k])
-        X = np.stack(images).transpose(0, 3, 1, 2).astype(np.float32)        # N, 3, S, S
-        y = np.array([CLASSES.index(l) for l in labels], dtype=np.int64)
-    return CLASSES, X, labels, names, np, y
+            img = 0.5 + 0.3 * templates[k][idx][:, idx] + 0.15 * rng.standard_normal((S0, S0, 3)).astype(np.float32)
+            buf = io.BytesIO(); Image.fromarray((np.clip(img, 0, 1) * 255).astype("uint8")).save(buf, format="PNG")
+            files.append((f"{'abc'[k]}_{i:03d}.png", buf.getvalue()))
+        ds = torch.ImageFiles(files, size=SIDE)
+    CLASSES, names, labels, y = ds.classes, ds.names, ds.labels, ds.targets
+    return CLASSES, Image, ds, io, labels, names, np, y
 
 
 @app.cell
-def _(CLASSES, FROZEN, X, mo, np, path, torch, y):
+def _(CLASSES, FROZEN, ds, mo, np, path, torch, y):
     # 2 · Train. Two paths, one output: `model` (what is exported), `feats` (what the
     # review ranks on), `pred`, and a line saying how well the labels are agreed with.
     import time
-    nn, K, N = torch.nn, len(CLASSES), len(X)
+    nn, K, N = torch.nn, len(CLASSES), len(ds)
     crit = torch.nn.CrossEntropyLoss()
     t0 = time.perf_counter(); losses = []
     if path.value == FROZEN:
@@ -77,9 +80,9 @@ def _(CLASSES, FROZEN, X, mo, np, path, torch, y):
         backbone = torch.hub.load("imagenet-efficientnet-b0")
         chunks = []                                        # marimo: one name per cell, `rows` is the table's
         with torch.no_grad():
-            for s in range(0, N, 16):
+            for xb, _idx in ds.batches(16):                # decoded here, sixteen at a time
                 with torch.scope():
-                    maps = backbone.forward_features(torch.tensor(X[s:s + 16]))
+                    maps = backbone.forward_features(torch.tensor(xb))
                     chunks.append(backbone.forward_head(maps, pre_logits=True).numpy())
         feats = np.concatenate(chunks)                     # (N, 1280)
         feat_s = time.perf_counter() - t0
@@ -108,7 +111,7 @@ def _(CLASSES, FROZEN, X, mo, np, path, torch, y):
             return [nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(), nn.MaxPool2d(2)]
         model = nn.Sequential(*block(3, 16), *block(16, 32), *block(32, 64), nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(64, K))
         opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-        Xt, yt = torch.tensor(X), torch.tensor(y)
+        Xt, yt = torch.tensor(ds.stack()), torch.tensor(y)  # all of it, at 64 px
         BATCH, EPOCHS = 16, 12
         steps = max(1, N // BATCH)
         for epoch in range(EPOCHS):
@@ -131,16 +134,14 @@ def _(CLASSES, FROZEN, X, mo, np, path, torch, y):
 
 
 @app.cell
-def _(CLASSES, X, feats, labels, mo, names, np, pred, torch, y):
+def _(CLASSES, Image, ds, feats, io, labels, mo, names, np, pred, torch, y):
     # 3 · Review — the labels the model doubts, first. `torch.suspects` scores each
     # image by how many of its five nearest neighbours (cosine, on the model's
     # features) carry a different label: a wrong label sits among images that disagree.
-    import io
-    from PIL import Image          # named here so marimo loads Pillow for the thumbnails
     suspect = torch.suspects(feats, y, k=5)
     order = np.argsort(-suspect)
     def thumb(i):
-        buf = io.BytesIO(); Image.fromarray((X[i].transpose(1, 2, 0) * 255).astype("uint8")).save(buf, format="PNG"); return buf.getvalue()
+        buf = io.BytesIO(); Image.fromarray(ds.thumb(int(i), 56)).save(buf, format="PNG"); return buf.getvalue()
     rows = [{"file": names[i], "image": mo.image(thumb(i), width=56), "given": labels[i], "predicted": CLASSES[int(pred[i])],
              "suspect": round(float(suspect[i]), 2)} for i in order]
     table = mo.ui.table(rows, selection="single", page_size=10, label="review queue — most doubted first")
@@ -156,9 +157,9 @@ def _(mo, table):
 
 
 @app.cell
-def _(X, mo, model, torch):
+def _(ds, mo, model, torch):
     # 4 · Take it away — the trained model as ONNX, the file every serving runtime reads.
-    sample = torch.tensor(X[:1])
+    sample = torch.tensor(ds[0][0][None])
     data = torch.onnx.export(model, sample)
     # The frozen path's file is the whole backbone, 16 MB. Handed to `mo.download` as
     # bytes it is written into the cell's output as base64 and the cell never comes back
