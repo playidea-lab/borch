@@ -1,0 +1,32 @@
+{
+  "dataset": "isic2019",
+  "n": 10000,
+  "k": 5,
+  "backbone": "efficientnet_b0.ra_in1k pre_logits 1280-d",
+  "sets": {
+    "inject_0.1": {
+      "n": 10000,
+      "wrong": 1021,
+      "noise_rate": 0.1021,
+      "auroc": 0.8899232609247456,
+      "p@20": 0.6,
+      "p@100": 0.51,
+      "p@500": 0.434,
+      "p@wrong": 0.4250734573947111,
+      "read_for_half": 0.1207,
+      "read_for_90pct": 0.3135
+    },
+    "inject_0.2": {
+      "n": 10000,
+      "wrong": 1966,
+      "noise_rate": 0.1966,
+      "auroc": 0.8709583329851185,
+      "p@20": 0.65,
+      "p@100": 0.59,
+      "p@500": 0.568,
+      "p@wrong": 0.5905391658189216,
+      "read_for_half": 0.168,
+      "read_for_90pct": 0.4189
+    }
+  }
+}

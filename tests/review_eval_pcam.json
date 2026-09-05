@@ -1,0 +1,32 @@
+{
+  "dataset": "pcam",
+  "n": 10000,
+  "k": 5,
+  "backbone": "efficientnet_b0.ra_in1k pre_logits 1280-d",
+  "sets": {
+    "inject_0.1": {
+      "n": 10000,
+      "wrong": 1021,
+      "noise_rate": 0.1021,
+      "auroc": 0.8855939732703111,
+      "p@20": 0.65,
+      "p@100": 0.7,
+      "p@500": 0.66,
+      "p@wrong": 0.5337904015670911,
+      "read_for_half": 0.0926,
+      "read_for_90pct": 0.3933
+    },
+    "inject_0.2": {
+      "n": 10000,
+      "wrong": 1956,
+      "noise_rate": 0.1956,
+      "auroc": 0.8457435408931856,
+      "p@20": 0.75,
+      "p@100": 0.85,
+      "p@500": 0.756,
+      "p@wrong": 0.5715746421267893,
+      "read_for_half": 0.1563,
+      "read_for_90pct": 0.5125
+    }
+  }
+}

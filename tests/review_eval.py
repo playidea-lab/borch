@@ -1,6 +1,6 @@
 """Does the review queue put the real mislabels first? Measured on open data.
 
-    uv run --project ~/git/borch --with timm python tests/review_eval.py [--dataset=cifar10n|cifar100n|food101n] [--n=5000] [--inject=0.1]
+    uv run --project ~/git/borch --with timm python tests/review_eval.py [--dataset=cifar10n|cifar100n|food101n|neucls|pcam|isic2019] [--n=5000] [--inject=0.1]
 
 The field trainer's review order is `borch.suspects` — the share of a sample's five
 nearest neighbours (cosine, on a frozen EfficientNet-B0's pre-logits) that disagree with
@@ -119,7 +119,63 @@ def load_food101n(n, rng):
     return paths, clean, {"web_label": given}, "food101n"
 
 
-DATASETS = {"cifar10n": load_cifar10n, "cifar100n": load_cifar100n, "food101n": load_food101n}
+# ── the domain sets: no human-noise ground truth, so these run under `--inject` only ──
+
+def load_neucls(n, rng):
+    """NEU-CLS: 1,800 steel-surface defect photos in six classes, 200×200 grey — the
+    smallest and the closest in kind to a line's inspection camera."""
+    root = pathlib.Path.home() / "data" / "neucls"
+    paths = sorted(str(q) for q in root.rglob("images/*.jpg"))
+    classes = sorted({pathlib.Path(q).name.rsplit("_", 1)[0] for q in paths})
+    idx = np.sort(rng.choice(len(paths), size=min(n, len(paths)), replace=False))
+    picked = [paths[i] for i in idx]
+    clean = np.array([classes.index(pathlib.Path(q).name.rsplit("_", 1)[0]) for q in picked])
+    return picked, clean, {}, "neucls"
+
+
+def load_pcam(n, rng):
+    """PatchCamelyon: 96×96 H&E patches, tumour in the centre or not — one parquet shard
+    of the Hugging Face mirror (1aurent/PatchCamelyon), about twenty thousand rows."""
+    import io
+    import pyarrow.parquet as pq
+    from PIL import Image
+    root = pathlib.Path.home() / "data" / "pcam"
+    shard = next(root.rglob("train-*.parquet"))
+    table = pq.read_table(shard)
+    idx = np.sort(rng.choice(table.num_rows, size=min(n, table.num_rows), replace=False))
+    sub = table.take(idx)
+    images = np.stack([np.asarray(Image.open(io.BytesIO(row["bytes"])).convert("RGB"), dtype=np.uint8) for row in sub.column("image").to_pylist()])
+    clean = np.asarray(sub.column("label").to_pylist(), dtype=np.int64)
+    return images, clean, {}, "pcam"
+
+
+def load_isic2019(n, rng):
+    """ISIC 2019: 25,331 dermoscopy images in eight diagnoses (one-hot in the CSV). The
+    zip is 9.8 GB; only the rows drawn are extracted from it."""
+    import csv
+    import zipfile
+    root = pathlib.Path.home() / "data" / "isic2019"
+    with open(root / "ISIC_2019_Training_GroundTruth.csv", newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        rows = [(r[0], int(np.argmax([float(v) for v in r[1:]]))) for r in reader]
+    classes = header[1:]
+    idx = np.sort(rng.choice(len(rows), size=min(n, len(rows)), replace=False))
+    picked = [rows[i] for i in idx]
+    folder = root / "ISIC_2019_Training_Input"
+    missing = [name for name, _ in picked if not (folder / f"{name}.jpg").exists()]
+    if missing:
+        with zipfile.ZipFile(root / "ISIC_2019_Training_Input.zip") as z:
+            for name in missing:
+                z.extract(f"ISIC_2019_Training_Input/{name}.jpg", root)
+    paths = [str(folder / f"{name}.jpg") for name, _ in picked]
+    clean = np.array([label for _, label in picked])
+    assert clean.max() < len(classes)
+    return paths, clean, {}, "isic2019"
+
+
+DATASETS = {"cifar10n": load_cifar10n, "cifar100n": load_cifar100n, "food101n": load_food101n,
+            "neucls": load_neucls, "pcam": load_pcam, "isic2019": load_isic2019}
 
 
 def decode(paths, size=224, batch=256):
