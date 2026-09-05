@@ -1,0 +1,20 @@
+[package]
+name = "borch-cpu-kernels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The CPU kernels behind borch-ts's `cpu` device — wasm SIMD, no runtime, no glue"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+# Everything below is about the size and shape of the emitted `.wasm`, which is committed
+# into `borch-ts/src/cpu/kernels.ts` as base64 — so a byte here is a byte in the package.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true

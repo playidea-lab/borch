@@ -92,3 +92,7 @@ site/marimo/
 site/marimo-src/__marimo__/
 # The field trainer as one folder, built by site/build_bundle.py
 bundle/
+
+# The CPU kernels' Rust build. The emitted bytes are committed as base64 in
+# borch-ts/src/cpu/kernels.ts (borch-ts/wasm/build.py says why); the build tree is not.
+borch-ts/wasm/target/
