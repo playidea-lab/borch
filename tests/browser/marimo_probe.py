@@ -130,6 +130,16 @@ def main(argv):
     # failure, since a folder that phones home is not the bundle it claims to be.
     page_dir = next((a.split("=", 1)[1] for a in argv if a.startswith("--dir=")), "site/marimo")
     offline = "--offline" in argv
+    # `--no-webgpu`: the browser is started with WebGPU's service disabled
+    # (`--disable-features=WebGPU,WebGPUService`): `navigator.gpu` is still there and
+    # `requestAdapter()` answers null — the shape a remote session or a policy leaves,
+    # and the one measured to work — given **instead of** `FLAGS`, whose `--enable-unsafe-webgpu`
+    # brings the adapter back; `--disable-blink-features=WebGPU` left the API in place on
+    # Chrome 151 (measured). The notebook's first cell then fails
+    # `import borch_webgpu` by name and takes the `borch_cpu` door: the frozen backbone and
+    # the head on wasm SIMD, the review queue, the head's weights as the export. The
+    # small-CNN pass is not offered there, so it is not pressed.
+    no_webgpu = "--no-webgpu" in argv
     if "--bundle" in argv:
         # The offline bundle: built here (site/build_bundle.py records what the site's
         # build fetches and mirrors it), then pressed with the network refused.
@@ -149,7 +159,9 @@ def main(argv):
     marks = {}
     try:
         with sync_playwright() as pw:
-            context = pw.chromium.launch_persistent_context(profile, headless=not headed, channel=channel, args=list(FLAGS), timeout=60_000)
+            # Alone, without FLAGS: `--enable-unsafe-webgpu` beside it brings the adapter back (measured).
+            flags = ["--disable-features=WebGPU,WebGPUService"] if no_webgpu else list(FLAGS)
+            context = pw.chromium.launch_persistent_context(profile, headless=not headed, channel=channel, args=flags, timeout=60_000)
             try:
                 page = context.new_page()
                 if offline:
@@ -169,6 +181,9 @@ def main(argv):
                 want = {"adapter": r"borch on ([a-z]+ / [a-z0-9-]+)", "trained": r"agrees with the given labels on \*?\*?(\d+)%",
                         "queue": r"(\d+) rows, 5 columns", "export": r"(\d+) KB of ONNX",
                         "report": r"faults (\d+) · warnings (\d+)"}
+                if no_webgpu:
+                    want["adapter"] = r"borch on (the CPU)"
+                    want["export"] = r"(\d+) KB of head weights"
                 body = ""
                 while time.time() < deadline and len(marks) < len(want):
                     page.wait_for_timeout(500)
@@ -191,8 +206,8 @@ def main(argv):
                     marks["uploaded"] = upload_pass(page, t0, deadline, zip_n)
                     # Third pass: the other model path. The radio is a marimo element in
                     # a shadow root; Playwright's text locator pierces it. marimo reruns
-                    # the cells below on its own.
-                    marks["scratch"] = scratch_pass(page, t0, deadline)
+                    # the cells below on its own. Not offered without a device.
+                    marks["scratch"] = (time.time() - t0, "not offered on the CPU") if no_webgpu else scratch_pass(page, t0, deadline)
             finally:
                 context.close()
     finally:
@@ -209,15 +224,15 @@ def main(argv):
     for e in errors if "errors" in dir() else []:
         print("  error:", e[:200])
     adapter = marks.get("adapter", (0, None))[1]
-    if refuse_if_software(adapter, "the workbench page"):
+    if not no_webgpu and refuse_if_software(adapter, "the workbench page"):
         return 1
     ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "report", "uploaded", "scratch"))
     ok = ok and marks["report"][1] == "0"                   # faults — the warnings count rides in the text
-    ok = ok and int(marks["scratch"][1].split("%")[0]) >= 90
+    ok = ok and (no_webgpu or int(marks["scratch"][1].split("%")[0]) >= 90)
     ok = ok and not phoned
     ok = ok and int(marks["trained"][1]) >= 90 and int(marks["queue"][1]) == 90
     ok = ok and int(marks["uploaded"][1].split("%")[0]) >= 90 and f"on {zip_n} rows" in marks["uploaded"][1]
-    print("**the workbench trains, reviews and exports**" if ok else "**it did not** — see above")
+    print(("**the workbench trains, reviews and exports — on the CPU, with no WebGPU API**" if no_webgpu else "**the workbench trains, reviews and exports**") if ok else "**it did not** — see above")
     return 0 if ok else 1
 
 

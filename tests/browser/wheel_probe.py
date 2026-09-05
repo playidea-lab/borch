@@ -28,7 +28,7 @@ def wheel_is_stale(wheel):
     """
     built = os.path.getmtime(wheel)
     newest = 0.0
-    for pattern in ("borch/**/*.py", "borch_webgpu/**/*.py", "borch_webgpu/_borch.js", "pyproject.toml"):
+    for pattern in ("borch/**/*.py", "borch_webgpu/**/*.py", "borch_webgpu/_borch.js", "borch_cpu.py", "pyproject.toml"):
         for p in glob.glob(str(ROOT / pattern), recursive=True):
             newest = max(newest, os.path.getmtime(p))
     return newest > built

@@ -49,6 +49,10 @@ CHECKS = [
     ("onnx:binding", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/onnx_binding.py"]),
     # The CPU device against the WebGPU device — two hub checkpoints, logits compared.
     ("cpu",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/cpu.py"]),
+    # `borch_cpu` on the wheel, no device — and against the GPU where there is one.
+    ("cpu:py",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/cpu_py.py", "--build"]),
+    # The workbench with WebGPU's service disabled — the `borch_cpu` door, end to end.
+    ("marimo:cpu", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--no-webgpu"]),
     # The wheel alone, in a worker — JupyterLite's shape. Builds the wheel first.
     ("wheel",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/wheel_probe.py", "--build"]),
     # The notebook page — JupyterLite built here, the cell pressed, the learned line read.

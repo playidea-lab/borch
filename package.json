@@ -51,6 +51,7 @@
     "firstrun:site": "uv run --with playwright python tests/browser/first_run.py",
     "compare:ts": "uv run --with playwright python borch-ts/test/compare.py",
     "cpu:ts": "uv run --with playwright python borch-ts/test/cpu.py",
+    "cpu:py": "uv run --with playwright python tests/browser/cpu_py.py",
     "onnx:ts": "uv run --with playwright python borch-ts/test/onnx.py",
     "onnx:binding": "uv run --with playwright python tests/browser/onnx_binding.py",
     "learner:site": "uv run --with playwright python tests/browser/learner_path.py",
@@ -123,7 +124,7 @@
   ],
   "devDependencies": {
     "@webgpu/types": "^0.1.71",
-    "bimm-ts": "^0.10.0",
+    "bimm-ts": "^0.11.0",
     "borch-hub": "^0.4.0",
     "esbuild": "^0.21.5",
     "typescript": "^5.9.0"

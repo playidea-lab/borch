@@ -1536,6 +1536,16 @@ a backbone that learns — absent by name. The plans that turn a checkpoint into
 live in `bimm-ts` (0.11.0, `cpuGraphFor`), beside the tables that build the `nn.Module`s
 — the same table, two outputs; the check page here imports bimm's and carries no copy.
 
+**From Python, in the same browser.** The wheel carries `borch_cpu` beside `borch_webgpu`:
+the same bundle loaded without `init()`, exposing `load(name)` → `.features(x)`,
+`LinearHead(...).fit/predict/state_dict`, and the numpy core's `suspects`. The workbench's
+first cell tries `import borch_webgpu as torch` and, when that fails by name, comes here —
+the frozen backbone, the head and the review queue run; the small CNN and the ONNX export
+say they need the GPU. `tests/browser/cpu_py.py` runs it on the wheel in a Pyodide worker
+with no device brought up and, where the page has an adapter, compares its features with
+`torch.hub`'s: relative 1.0e-4 on six images (2026-09-05, `apple / metal-3`); six images
+through the backbone 137 ms, the import 240 ms, the 21 MB checkpoint 4 s from the network.
+
 ### How much it does
 
 **The golden matches on every case on Apple Metal**, and borch.ts's share of it

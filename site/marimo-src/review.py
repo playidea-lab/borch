@@ -15,10 +15,23 @@ async def _():
     href = str(js.location.href)
     base = href.split("/assets/")[0] if "/assets/" in href else str(js.location.origin)
     await micropip.install(f"{base}/pyborch-1.9.0-py3-none-any.whl")
-    import borch_webgpu as torch
-    adapter = str(js.borch.Device.adapterInfo)
-    mo.md(f"**borch on `{adapter}`** — `import borch_webgpu as torch` booted borch.ts in this kernel. Nothing was installed on this machine.")
-    return adapter, mo, torch
+    # Two doors, one notebook. `borch_webgpu` boots borch.ts and brings the WebGPU device
+    # up; where there is no adapter that fails by name, and `borch_cpu` takes the same
+    # bundle without a device — the frozen backbone and the head run on wasm SIMD instead.
+    try:
+        import borch_webgpu as torch
+        cpu = None
+        adapter = str(js.borch.Device.adapterInfo)
+        boot = f"**borch on `{adapter}`** — `import borch_webgpu as torch` booted borch.ts in this kernel. Nothing was installed on this machine."
+    except Exception as no_gpu:  # noqa: BLE001 — the reason is shown, not swallowed
+        import borch_cpu as cpu
+        torch = None
+        adapter = "cpu (no WebGPU adapter)"
+        why = str(no_gpu).removeprefix("Error: ").split(" — ")[0][:90]   # the reason, not the whole paragraph
+        boot = (f"**borch on the CPU** — no WebGPU adapter here (`{why}`), so `borch_cpu` runs the frozen backbone "
+                "and the head on WebAssembly SIMD, one thread. Slower, same numbers; the small-CNN path and the ONNX export need the GPU.")
+    mo.md(boot)
+    return adapter, cpu, mo, torch
 
 
 @app.cell
@@ -29,23 +42,23 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
+def _(mo, torch):
     FROZEN, SCRATCH = "frozen backbone + head", "small CNN from scratch"
-    path = mo.ui.radio(options=[FROZEN, SCRATCH], value=FROZEN, label="Model")
+    path = mo.ui.radio(options=[FROZEN, SCRATCH] if torch is not None else [FROZEN], value=FROZEN, label="Model")
     mo.vstack([path, mo.md("*Frozen backbone*: ImageNet EfficientNet-B0 stays as it is, one feature vector per image is computed once, and only a linear head learns — the field trainer's path, hundreds of images are enough. *From scratch*: a small CNN, every weight learns.")])
     return FROZEN, SCRATCH, path
 
 
 @app.cell
-def _(FROZEN, path, torch, upload):
+def _(FROZEN, cpu, path, torch, upload):
     import io
     import numpy as np
     from PIL import Image
     SIDE = 224 if path.value == FROZEN else 64            # the backbone was trained at 224
     if upload.value:
-        # Files or a zipped folder → `torch.ImageFiles`: names, labels and classes now,
+        # Files or a zipped folder → `torch.ImageFiles` (the numpy core's, so `borch_cpu` has it too): names, labels and classes now,
         # pixels only when a batch asks. Five thousand camera images stay as their bytes.
-        ds = torch.ImageFiles(upload.value, size=SIDE)
+        ds = (torch or cpu).ImageFiles(upload.value, size=SIDE)
     else:
         # Three classes: a low-frequency template each, plus noise — the same set
         # tests/browser/envelope2.html trains on — written as ninety PNGs, so the
@@ -60,20 +73,35 @@ def _(FROZEN, path, torch, upload):
             img = 0.5 + 0.3 * templates[k][idx][:, idx] + 0.15 * rng.standard_normal((S0, S0, 3)).astype(np.float32)
             buf = io.BytesIO(); Image.fromarray((np.clip(img, 0, 1) * 255).astype("uint8")).save(buf, format="PNG")
             files.append((f"{'abc'[k]}_{i:03d}.png", buf.getvalue()))
-        ds = torch.ImageFiles(files, size=SIDE)
+        ds = (torch or cpu).ImageFiles(files, size=SIDE)
     CLASSES, names, labels, y = ds.classes, ds.names, ds.labels, ds.targets
     return CLASSES, Image, ds, io, labels, names, np, y
 
 
 @app.cell
-def _(CLASSES, FROZEN, ds, mo, np, path, torch, y):
+def _(CLASSES, FROZEN, cpu, ds, mo, np, path, torch, y):
     # 2 · Train. Two paths, one output: `model` (what is exported), `feats` (what the
     # review ranks on), `pred`, and a line saying how well the labels are agreed with.
     import time
-    nn, K, N = torch.nn, len(CLASSES), len(ds)
-    crit = torch.nn.CrossEntropyLoss()
+    K, N = len(CLASSES), len(ds)
     t0 = time.perf_counter(); losses = []
-    if path.value == FROZEN:
+    if torch is None:
+        # No adapter: the same frozen backbone through `bimm.cpuGraphFor` + `cpu.CpuRunner`,
+        # the same head through `cpu.LinearHead` — full-batch SGD with momentum (there is
+        # no Adam on this side; the numbers land within 3.5e-5 of torch's step for step).
+        backbone = cpu.load("imagenet-efficientnet-b0", features=True)
+        chunks = [backbone.features(xb) for xb, _idx in ds.batches(16)]
+        feats = np.concatenate(chunks)                     # (N, 1280)
+        feat_s = time.perf_counter() - t0
+        head = cpu.LinearHead(backbone.num_features, K, lr=0.05, momentum=0.9)
+        all_losses = head.fit(feats, y, steps=300)
+        losses = [float(all_losses[i]) for i in list(range(0, 300, 50)) + [299]]
+        pred = head.predict(feats).argmax(1)
+        model = None                                       # nothing to export as ONNX on this side — the head's weights are in `head`
+        how = f"EfficientNet-B0 frozen, on the CPU · features for {N} images in **{feat_s:.1f} s** · head 300 steps"
+    elif path.value == FROZEN:
+        nn = torch.nn
+        crit = torch.nn.CrossEntropyLoss()
         # The backbone runs forward only, once per image, in batches of 16; what is
         # kept is the 1280-d vector before its classifier (`pre_logits`). The head is
         # the only thing that learns — 300 full-batch steps on the cached features.
@@ -107,6 +135,9 @@ def _(CLASSES, FROZEN, ds, mo, np, path, torch, y):
             pred = head(Ft).argmax(1).numpy()
         how = f"EfficientNet-B0 frozen · features for {N} images in **{feat_s:.1f} s** · head 300 steps"
     else:
+        nn = torch.nn
+        crit = torch.nn.CrossEntropyLoss()
+        head = None                                        # the small CNN has no separate head to hand on
         def block(cin, cout):
             return [nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(), nn.MaxPool2d(2)]
         model = nn.Sequential(*block(3, 16), *block(16, 32), *block(32, 64), nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(64, K))
@@ -130,15 +161,16 @@ def _(CLASSES, FROZEN, ds, mo, np, path, torch, y):
     train_s = time.perf_counter() - t0
     acc = float((pred == y).mean())
     mo.md(f"### 2 · Trained\n{how} in **{train_s:.1f} s** · loss {losses[0]:.2f} → {losses[-1]:.3f} · agrees with the given labels on **{acc * 100:.0f}%**")
-    return acc, feats, how, model, pred, train_s
+    return acc, feats, head, how, model, pred, train_s
 
 
 @app.cell
-def _(CLASSES, Image, ds, feats, io, labels, mo, names, np, pred, torch, y):
+def _(CLASSES, Image, cpu, ds, feats, io, labels, mo, names, np, pred, torch, y):
     # 3 · Review — the labels the model doubts, first. `torch.suspects` scores each
     # image by how many of its five nearest neighbours (cosine, on the model's
     # features) carry a different label: a wrong label sits among images that disagree.
-    suspect = torch.suspects(feats, y, k=5)
+    # The score is the numpy core's, so it is the same function on either side.
+    suspect = (torch or cpu).suspects(feats, y, k=5)
     order = np.argsort(-suspect)
     def thumb(i):
         buf = io.BytesIO(); Image.fromarray(ds.thumb(int(i), 56)).save(buf, format="PNG"); return buf.getvalue()
@@ -157,14 +189,25 @@ def _(mo, table):
 
 
 @app.cell
-def _(ds, mo, model, torch):
+def _(ds, head, mo, model, torch):
     # 4 · Take it away — the trained model as ONNX, the file every serving runtime reads.
-    sample = torch.tensor(ds[0][0][None])
-    data = torch.onnx.export(model, sample)
-    # The frozen path's file is the whole backbone, 16 MB. Handed to `mo.download` as
-    # bytes it is written into the cell's output as base64 and the cell never comes back
-    # (measured); as a callable it is fetched once, on the click.
-    mo.vstack([mo.md(f"### 4 · Export\n{len(data) / 1e3:.0f} KB of ONNX (`torch.onnx.export`)"), mo.download(data=lambda: data, filename="model.onnx", label="Download model.onnx")])
+    if torch is None:
+        # The CPU side exports no ONNX (the graph is bimm's, not a traced module). What
+        # leaves is the head — weight `[classes × 1280]` and bias, torch's order, as JSON —
+        # to be laid on the same EfficientNet-B0 wherever it is served. (A marimo cell has
+        # no early return, so both sides build `_view` and the cell shows it.)
+        import json as _json
+        _st = head.state_dict()
+        _head_json = _json.dumps({"backbone": "imagenet-efficientnet-b0", "weight": _st["weight"].round(6).tolist(), "bias": _st["bias"].round(6).tolist()})
+        _view = mo.vstack([mo.md(f"### 4 · Export\n{len(_head_json) / 1e3:.0f} KB of head weights (JSON) — the ONNX export runs on the WebGPU side"), mo.download(data=lambda: _head_json, filename="head.json", label="Download head.json")])
+    else:
+        sample = torch.tensor(ds[0][0][None])
+        data = torch.onnx.export(model, sample)
+        # The frozen path's file is the whole backbone, 16 MB. Handed to `mo.download` as
+        # bytes it is written into the cell's output as base64 and the cell never comes back
+        # (measured); as a callable it is fetched once, on the click.
+        _view = mo.vstack([mo.md(f"### 4 · Export\n{len(data) / 1e3:.0f} KB of ONNX (`torch.onnx.export`)"), mo.download(data=lambda: data, filename="model.onnx", label="Download model.onnx")])
+    _view
     return
 
 
@@ -174,7 +217,11 @@ def _(acc, ds, how, mo, path, torch, train_s):
     # work". `torch.report` gathers the adapter, the faults, memory, the wheel and bundle
     # versions; the facts of this run ride along. No file names, no pixels.
     import json
-    rep = torch.report(images=len(ds), classes=len(ds.classes), model=path.value, train_s=round(train_s, 2), accuracy=round(acc, 4), how=how)
+    if torch is None:
+        rep = {"adapter": "cpu (no WebGPU adapter)", "faults": 0, "warnings": ["no WebGPU adapter — the frozen backbone and the head ran on wasm SIMD, one thread; the small CNN and the ONNX export were not available"],
+               "images": len(ds), "classes": len(ds.classes), "model": path.value, "train_s": round(train_s, 2), "accuracy": round(acc, 4), "how": how}
+    else:
+        rep = torch.report(images=len(ds), classes=len(ds.classes), model=path.value, train_s=round(train_s, 2), accuracy=round(acc, 4), how=how)
     text = json.dumps(rep, indent=2)
     warn = rep["warnings"]
     rep_head = mo.md(f"### 5 · Report\n`{rep['adapter']}` · faults {rep['faults']} · warnings {len(warn)}" + (" — **read them before the numbers**" if warn else ""))

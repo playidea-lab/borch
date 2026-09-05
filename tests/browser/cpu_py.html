@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>borch_cpu — the wheel with no device</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **`borch_cpu` on the wheel, in a Web Worker.** The same shape as wheel_probe.html — Pyodide
+  // in a worker, nothing but `pip install` — except that nothing here brings a device up:
+  // `borch_cpu` loads the bundle without `init()`, pulls a checkpoint through borch-hub,
+  // runs the frozen backbone on the wasm kernels, fits a head, scores the labels. When the
+  // page does have an adapter, the same features are taken through `borch_webgpu` too and
+  // the two are compared — the check that the CPU side answers what the GPU side answers.
+  const out = document.getElementById("out");
+  const wheel = location.origin + new URLSearchParams(location.search).get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import time, json
+import numpy as np
+t = time.perf_counter()
+import borch_cpu
+boot_ms = (time.perf_counter() - t) * 1000
+avail = borch_cpu.available()
+rng = np.random.default_rng(7)
+x = rng.standard_normal((6, 3, 224, 224)).astype(np.float32)
+t = time.perf_counter()
+backbone = borch_cpu.load("imagenet-efficientnet-b0")
+load_ms = (time.perf_counter() - t) * 1000
+t = time.perf_counter()
+feats = backbone.features(x)
+feat_ms = (time.perf_counter() - t) * 1000
+labels = np.array([0, 1, 2, 0, 1, 2])
+head = borch_cpu.LinearHead(backbone.num_features, 3, lr=0.05, momentum=0.9)
+losses = head.fit(feats, labels, steps=60)
+pred = head.predict(feats).argmax(1)
+doubt = borch_cpu.suspects(feats, labels, k=2)
+st = head.state_dict()
+gpu_gap = None
+try:
+    import borch_webgpu as torch
+    m = torch.hub.load("imagenet-efficientnet-b0", verify=False)
+    with torch.no_grad():
+        g = m.forward_head(m.forward_features(torch.tensor(x)), pre_logits=True).numpy()
+    gpu_gap = float(np.abs(g - feats).max() / np.abs(g).max())
+except Exception as e:  # noqa: BLE001 — no adapter is the situation this module is for
+    gpu_gap = f"no gpu side: {type(e).__name__}"
+json.dumps({"boot_ms": round(boot_ms), "available": bool(avail), "backbone": backbone.name, "num_features": backbone.num_features,
+            "load_ms": round(load_ms), "feat_ms": round(feat_ms), "feats_shape": list(feats.shape), "finite": bool(np.isfinite(feats).all()),
+            "loss0": round(float(losses[0]), 4), "lossN": round(float(losses[-1]), 4), "fit_on_train": int((pred == labels).sum()),
+            "doubt": [round(float(v), 2) for v in doubt], "head_shape": list(st["weight"].shape), "gpu_gap": gpu_gap})
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__cpuPy = { text: lines.join("\n"), done: e.data.done }; }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__cpuPy = { text: lines.join("\n"), ok: false, error: e.data.error }; }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__cpuPy = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>
