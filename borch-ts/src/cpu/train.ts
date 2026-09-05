@@ -107,8 +107,7 @@ export class LinearHead {
       const x = this.upload(features, N);
       const y = K.alloc(x.NP * KP * 4);
       if (y === 0) throw new Error("cpu head: the wasm memory would not grow");
-      K.gemm(x.NP, KP, D, x.off, this.w, y);
-      K.biasAct(N, KP, y, this.b, ACT.none);
+      K.gemmBiasAct(x.NP, KP, D, x.off, this.w, y, this.b, ACT.none);
       const f = this.f32();
       const out = new Float32Array(N * Kc);
       for (let r = 0; r < N; r++) out.set(f.subarray(y / 4 + r * KP, y / 4 + r * KP + Kc), r * Kc);
@@ -138,8 +137,7 @@ export class LinearHead {
       }
       const losses = new Float32Array(steps);
       for (let step = 0; step < steps; step++) {
-        K.gemm(x.NP, KP, D, x.off, this.w, y);
-        K.biasAct(N, KP, y, this.b, ACT.none);
+        K.gemmBiasAct(x.NP, KP, D, x.off, this.w, y, this.b, ACT.none);
         K.softmaxXentGrad(N, KP, Kc, y, lab, g, stats);
         // loss = mean(−(l[label] − max − ln Σexp)), finished here because the module has no ln
         const f = this.f32();

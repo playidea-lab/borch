@@ -9,9 +9,16 @@
  * top of it, starting wherever the heap stands (so a head trained beside this runner
  * keeps its buffers): a buffer freed at its value's last use goes back to the pool, the
  * next allocation of the same size takes it, and the forward's end returns the heap to
- * where it began. Shapes repeat block after block, so the pool
- * absorbs most of a forward; the peak is roughly the largest live set, not the sum.
- * Measured for EfficientNet-B0 at batch 16 that was 186 MB against 400 MB summed.
+ * where it began. Shapes repeat block after block, so the pool absorbs most of a
+ * forward; the peak is roughly the largest live set, not the sum. Dense convolutions
+ * unroll their taps a block of rows at a time into one 8 MB buffer rather than the whole
+ * image — the book carries the measured peaks.
+ *
+ * ## Epilogues
+ *
+ * The bias and the activation ride on the GEMM and the depthwise kernel (`gemm_bias_act`,
+ * `dwconv_bias_act`) instead of a second pass over the result; measured before the fold,
+ * that pass was a fifth of a forward.
  *
  * ## Layout
  *
@@ -30,6 +37,9 @@
  */
 import { ACT, type CpuKernels } from "./load.js";
 import type { CpuGraph, Node } from "./graph.js";
+
+/** The im2col buffer a blocked convolution reuses. 8 MB holds 3,640 rows of a ResNet-18 first-stage column (576 wide). */
+const COL_BYTES = 8 * 1024 * 1024;
 
 interface Value {
   off: number; bytes: number;
@@ -98,8 +108,12 @@ export class CpuRunner {
 
   private f32(): Float32Array { return new Float32Array(this.K.memory.buffer); }
 
-  private value(pool: Pool, rows: number, h: number, w: number, cP: number): Value {
-    const rowsP = Math.ceil(rows / 4) * 4;
+  /**
+   * `slack` extra rows on top of the padding — a blocked convolution's last `gemm` may write
+   * up to three rows past an image's own, and for the last image that is past the value.
+   */
+  private value(pool: Pool, rows: number, h: number, w: number, cP: number, slack = 0): Value {
+    const rowsP = Math.ceil(rows / 4) * 4 + slack;
     const bytes = rowsP * cP * 4;
     const off = pool.alloc(bytes);
     if (rowsP > rows) this.f32().fill(0, off / 4 + rows * cP, off / 4 + rowsP * cP);
@@ -138,26 +152,37 @@ export class CpuRunner {
           case "conv": {
             const x = at(node.input);
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
-            const y = this.value(pool, B * ho * wo, ho, wo, node.coutP);
             if (node.k === 1 && node.stride === 1 && node.pad === 0) {
-              K.gemm(y.rowsP, node.coutP, node.cinP, x.off, w(0), y.off);
+              const y = this.value(pool, B * ho * wo, ho, wo, node.coutP);
+              K.gemmBiasAct(y.rowsP, node.coutP, node.cinP, x.off, w(0), y.off, w(1), node.act);
+              values.set(i, y);
             } else {
-              const kk = node.k * node.k * node.cinP;
-              const col = this.value(pool, B * ho * wo, ho, wo, kk);
-              for (let b = 0; b < B; b++) K.im2col(x.h, x.w, node.cinP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cinP * 4, col.off + b * ho * wo * kk * 4);
-              K.gemm(y.rowsP, node.coutP, kk, col.off, w(0), y.off);
+              // A block of output rows at a time: unroll those rows' taps into one reused
+              // buffer, multiply, write the rows in place. ResNet-18's first stage at batch 16
+              // was 116 MB of columns per layer unrolled whole; a block is COL_BYTES.
+              const kk = node.k * node.k * node.cinP, per = ho * wo;
+              const R = Math.max(4, Math.min(Math.ceil(per / 4) * 4, Math.floor(COL_BYTES / (kk * 4) / 4) * 4));
+              const y = this.value(pool, B * per, ho, wo, node.coutP, 4);
+              const col = this.value(pool, R, 1, 1, kk);
+              for (let b = 0; b < B; b++) {
+                for (let r0 = 0; r0 < per; r0 += R) {
+                  const rows = Math.min(R, per - r0);
+                  K.im2colRows(x.h, x.w, node.cinP, node.k, node.stride, node.pad, wo, r0, rows, x.off + b * x.h * x.w * node.cinP * 4, col.off);
+                  K.gemmBiasAct(Math.ceil(rows / 4) * 4, node.coutP, kk, col.off, w(0), y.off + (b * per + r0) * node.coutP * 4, w(1), node.act);
+                }
+              }
               pool.give(col.off, col.bytes);
+              // the last block may have written into the slack rows; keep them zero for whoever reads rowsP
+              if (y.rowsP > y.rows) this.f32().fill(0, y.off / 4 + y.rows * y.cP, y.off / 4 + y.rowsP * y.cP);
+              values.set(i, y);
             }
-            K.biasAct(y.rows, node.coutP, y.off, w(1), node.act);
-            values.set(i, y);
             break;
           }
           case "dwconv": {
             const x = at(node.input);
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
             const y = this.value(pool, B * ho * wo, ho, wo, node.cP);
-            for (let b = 0; b < B; b++) K.dwconv(x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4);
-            K.biasAct(y.rows, node.cP, y.off, w(1), node.act);
+            for (let b = 0; b < B; b++) K.dwconvBiasAct(x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4, w(1), node.act);
             values.set(i, y);
             break;
           }
@@ -175,11 +200,9 @@ export class CpuRunner {
             const sq = this.value(pool, B, 1, 1, node.cP);
             for (let b = 0; b < B; b++) K.meanRows(HW, node.cP, x.off + b * HW * node.cP * 4, sq.off + b * node.cP * 4);
             const r1 = this.value(pool, B, 1, 1, node.cseP);
-            K.gemm(sq.rowsP, node.cseP, node.cP, sq.off, w(0), r1.off);
-            K.biasAct(B, node.cseP, r1.off, w(1), ACT.swish);
+            K.gemmBiasAct(sq.rowsP, node.cseP, node.cP, sq.off, w(0), r1.off, w(1), ACT.swish);
             const g = this.value(pool, B, 1, 1, node.cP);
-            K.gemm(r1.rowsP, node.cP, node.cseP, r1.off, w(2), g.off);
-            K.biasAct(B, node.cP, g.off, w(3), ACT.sigmoid);
+            K.gemmBiasAct(r1.rowsP, node.cP, node.cseP, r1.off, w(2), g.off, w(3), ACT.sigmoid);
             for (let b = 0; b < B; b++) K.scaleRows(HW, node.cP, x.off + b * HW * node.cP * 4, g.off + b * node.cP * 4);
             for (const t of [sq, r1, g]) pool.give(t.off, t.bytes);
             values.set(i, { ...x, owns: true }); x.owns = false; // the value moves into x's buffer
@@ -205,8 +228,7 @@ export class CpuRunner {
           case "linear": {
             const x = at(node.input);
             const y = this.value(pool, x.rows, 1, 1, node.coutP);
-            K.gemm(y.rowsP, node.coutP, node.cinP, x.off, w(0), y.off);
-            K.biasAct(y.rows, node.coutP, y.off, w(1), node.act);
+            K.gemmBiasAct(y.rowsP, node.coutP, node.cinP, x.off, w(0), y.off, w(1), node.act);
             values.set(i, y);
             break;
           }

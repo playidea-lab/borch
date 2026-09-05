@@ -88,61 +88,13 @@ pub unsafe extern "C" fn set_heap(pos: usize) {
     HEAP = pos;
 }
 
-/// C[m×n] = A[m×k] · B[k×n]. Register block of 4 rows × 16 columns (four v128 per row),
-/// so one pass over `k` does 64 multiply-adds from 4 loads of B and 4 splats of A.
-/// A 1×1 convolution in NHWC is exactly this call: A the activations `[HW × Cin]`,
-/// B the weights `[Cin × Cout]`.
+/// C[m×n] = A[m×k] · B[k×n], row-major f32. Register block of 4 rows × 16 columns (four
+/// v128 per row), so one pass over `k` does 64 multiply-adds from 4 loads of B and 4 splats
+/// of A. A 1×1 convolution in NHWC is exactly this call: A the activations `[HW × Cin]`,
+/// B the weights `[Cin × Cout]`. One body with `gemm_bias_act` — this is that with no epilogue.
 #[no_mangle]
 pub unsafe extern "C" fn gemm(m: usize, n: usize, k: usize, a: *const f32, b: *const f32, c: *mut f32) {
-    let mut i = 0;
-    while i < m {
-        let a0 = a.add(i * k);
-        let a1 = a0.add(k);
-        let a2 = a1.add(k);
-        let a3 = a2.add(k);
-        let mut j = 0;
-        while j < n {
-            let mut c00 = f32x4_splat(0.0); let mut c01 = c00; let mut c02 = c00; let mut c03 = c00;
-            let mut c10 = c00; let mut c11 = c00; let mut c12 = c00; let mut c13 = c00;
-            let mut c20 = c00; let mut c21 = c00; let mut c22 = c00; let mut c23 = c00;
-            let mut c30 = c00; let mut c31 = c00; let mut c32 = c00; let mut c33 = c00;
-            let mut p = 0;
-            while p < k {
-                let bp = b.add(p * n + j);
-                let b0 = v128_load(bp as *const v128);
-                let b1 = v128_load(bp.add(4) as *const v128);
-                let b2 = v128_load(bp.add(8) as *const v128);
-                let b3 = v128_load(bp.add(12) as *const v128);
-                let s0 = f32x4_splat(*a0.add(p));
-                let s1 = f32x4_splat(*a1.add(p));
-                let s2 = f32x4_splat(*a2.add(p));
-                let s3 = f32x4_splat(*a3.add(p));
-                c00 = f32x4_add(c00, f32x4_mul(s0, b0)); c01 = f32x4_add(c01, f32x4_mul(s0, b1));
-                c02 = f32x4_add(c02, f32x4_mul(s0, b2)); c03 = f32x4_add(c03, f32x4_mul(s0, b3));
-                c10 = f32x4_add(c10, f32x4_mul(s1, b0)); c11 = f32x4_add(c11, f32x4_mul(s1, b1));
-                c12 = f32x4_add(c12, f32x4_mul(s1, b2)); c13 = f32x4_add(c13, f32x4_mul(s1, b3));
-                c20 = f32x4_add(c20, f32x4_mul(s2, b0)); c21 = f32x4_add(c21, f32x4_mul(s2, b1));
-                c22 = f32x4_add(c22, f32x4_mul(s2, b2)); c23 = f32x4_add(c23, f32x4_mul(s2, b3));
-                c30 = f32x4_add(c30, f32x4_mul(s3, b0)); c31 = f32x4_add(c31, f32x4_mul(s3, b1));
-                c32 = f32x4_add(c32, f32x4_mul(s3, b2)); c33 = f32x4_add(c33, f32x4_mul(s3, b3));
-                p += 1;
-            }
-            let r0 = c.add(i * n + j);
-            let r1 = r0.add(n);
-            let r2 = r1.add(n);
-            let r3 = r2.add(n);
-            v128_store(r0 as *mut v128, c00); v128_store(r0.add(4) as *mut v128, c01);
-            v128_store(r0.add(8) as *mut v128, c02); v128_store(r0.add(12) as *mut v128, c03);
-            v128_store(r1 as *mut v128, c10); v128_store(r1.add(4) as *mut v128, c11);
-            v128_store(r1.add(8) as *mut v128, c12); v128_store(r1.add(12) as *mut v128, c13);
-            v128_store(r2 as *mut v128, c20); v128_store(r2.add(4) as *mut v128, c21);
-            v128_store(r2.add(8) as *mut v128, c22); v128_store(r2.add(12) as *mut v128, c23);
-            v128_store(r3 as *mut v128, c30); v128_store(r3.add(4) as *mut v128, c31);
-            v128_store(r3.add(8) as *mut v128, c32); v128_store(r3.add(12) as *mut v128, c33);
-            j += 16;
-        }
-        i += 4;
-    }
+    gemm_bias_act(m, n, k, a, b, c, core::ptr::null(), 0)
 }
 
 /// NHWC depthwise convolution: in `[h,w,c]`, weights `[k,k,c]`, out `[ho,wo,c]`, channels
@@ -519,5 +471,177 @@ pub unsafe extern "C" fn zero(n: usize, x: *mut f32) {
     while i < n {
         v128_store(x.add(i) as *mut v128, z);
         i += 4;
+    }
+}
+
+// ---- epilogues: the bias and the activation applied where the result is still in registers ----
+
+/// The activation `bias_act` applies, on four lanes. 0 none, 1 swish, 2 sigmoid, 3 relu.
+#[inline(always)]
+unsafe fn act_f32x4(v: v128, act: u32) -> v128 {
+    if act == 1 { f32x4_mul(v, sigmoid_f32x4(v)) }
+    else if act == 2 { sigmoid_f32x4(v) }
+    else if act == 3 { f32x4_pmax(v, f32x4_splat(0.0)) }
+    else { v }
+}
+
+/// `gemm`, then `+ bias[n]` (skipped when `bias` is null) and the activation before the
+/// store. Measured: the separate `bias_act` pass was a fifth of a forward, re-reading every
+/// activation the GEMM had just written; here the sum never leaves the registers. Same
+/// contract as `gemm`: `m % 4 == 0`, `n % 16 == 0`.
+///
+/// **Not blocked for the caches, and that was measured.** A version with `k` in chunks
+/// and rows in blocks — the textbook shape — ran at the same 55 GFLOPS on every ResNet-18
+/// and EfficientNet-B0 matrix as this one, B at 9 MB included. The four-row block already
+/// streams B once per four rows of A, and on these sizes that is not the bound; the
+/// micro-kernel is. It was taken out again.
+#[no_mangle]
+pub unsafe extern "C" fn gemm_bias_act(m: usize, n: usize, k: usize, a: *const f32, b: *const f32, c: *mut f32, bias: *const f32, act: u32) {
+    let mut i = 0;
+    while i < m {
+        let a0 = a.add(i * k);
+        let a1 = a0.add(k);
+        let a2 = a1.add(k);
+        let a3 = a2.add(k);
+        let mut j = 0;
+        while j < n {
+            let mut c00 = f32x4_splat(0.0); let mut c01 = c00; let mut c02 = c00; let mut c03 = c00;
+            let mut c10 = c00; let mut c11 = c00; let mut c12 = c00; let mut c13 = c00;
+            let mut c20 = c00; let mut c21 = c00; let mut c22 = c00; let mut c23 = c00;
+            let mut c30 = c00; let mut c31 = c00; let mut c32 = c00; let mut c33 = c00;
+            let mut p = 0;
+            while p < k {
+                let bp = b.add(p * n + j);
+                let b0 = v128_load(bp as *const v128);
+                let b1 = v128_load(bp.add(4) as *const v128);
+                let b2 = v128_load(bp.add(8) as *const v128);
+                let b3 = v128_load(bp.add(12) as *const v128);
+                let s0 = f32x4_splat(*a0.add(p));
+                let s1 = f32x4_splat(*a1.add(p));
+                let s2 = f32x4_splat(*a2.add(p));
+                let s3 = f32x4_splat(*a3.add(p));
+                c00 = f32x4_add(c00, f32x4_mul(s0, b0)); c01 = f32x4_add(c01, f32x4_mul(s0, b1));
+                c02 = f32x4_add(c02, f32x4_mul(s0, b2)); c03 = f32x4_add(c03, f32x4_mul(s0, b3));
+                c10 = f32x4_add(c10, f32x4_mul(s1, b0)); c11 = f32x4_add(c11, f32x4_mul(s1, b1));
+                c12 = f32x4_add(c12, f32x4_mul(s1, b2)); c13 = f32x4_add(c13, f32x4_mul(s1, b3));
+                c20 = f32x4_add(c20, f32x4_mul(s2, b0)); c21 = f32x4_add(c21, f32x4_mul(s2, b1));
+                c22 = f32x4_add(c22, f32x4_mul(s2, b2)); c23 = f32x4_add(c23, f32x4_mul(s2, b3));
+                c30 = f32x4_add(c30, f32x4_mul(s3, b0)); c31 = f32x4_add(c31, f32x4_mul(s3, b1));
+                c32 = f32x4_add(c32, f32x4_mul(s3, b2)); c33 = f32x4_add(c33, f32x4_mul(s3, b3));
+                p += 1;
+            }
+            let (bb0, bb1, bb2, bb3) = if bias.is_null() {
+                let z = f32x4_splat(0.0); (z, z, z, z)
+            } else {
+                (v128_load(bias.add(j) as *const v128), v128_load(bias.add(j + 4) as *const v128),
+                 v128_load(bias.add(j + 8) as *const v128), v128_load(bias.add(j + 12) as *const v128))
+            };
+            let r0 = c.add(i * n + j);
+            let r1 = r0.add(n);
+            let r2 = r1.add(n);
+            let r3 = r2.add(n);
+            v128_store(r0 as *mut v128, act_f32x4(f32x4_add(c00, bb0), act)); v128_store(r0.add(4) as *mut v128, act_f32x4(f32x4_add(c01, bb1), act));
+            v128_store(r0.add(8) as *mut v128, act_f32x4(f32x4_add(c02, bb2), act)); v128_store(r0.add(12) as *mut v128, act_f32x4(f32x4_add(c03, bb3), act));
+            v128_store(r1 as *mut v128, act_f32x4(f32x4_add(c10, bb0), act)); v128_store(r1.add(4) as *mut v128, act_f32x4(f32x4_add(c11, bb1), act));
+            v128_store(r1.add(8) as *mut v128, act_f32x4(f32x4_add(c12, bb2), act)); v128_store(r1.add(12) as *mut v128, act_f32x4(f32x4_add(c13, bb3), act));
+            v128_store(r2 as *mut v128, act_f32x4(f32x4_add(c20, bb0), act)); v128_store(r2.add(4) as *mut v128, act_f32x4(f32x4_add(c21, bb1), act));
+            v128_store(r2.add(8) as *mut v128, act_f32x4(f32x4_add(c22, bb2), act)); v128_store(r2.add(12) as *mut v128, act_f32x4(f32x4_add(c23, bb3), act));
+            v128_store(r3 as *mut v128, act_f32x4(f32x4_add(c30, bb0), act)); v128_store(r3.add(4) as *mut v128, act_f32x4(f32x4_add(c31, bb1), act));
+            v128_store(r3.add(8) as *mut v128, act_f32x4(f32x4_add(c32, bb2), act)); v128_store(r3.add(12) as *mut v128, act_f32x4(f32x4_add(c33, bb3), act));
+            j += 16;
+        }
+        i += 4;
+    }
+}
+
+/// `dwconv`, then `+ bias[c]` and the activation on each finished output row. Same contract.
+#[no_mangle]
+pub unsafe extern "C" fn dwconv_bias_act(
+    h: usize, w: usize, c: usize, k: usize, stride: usize, pad: usize,
+    ho: usize, wo: usize, inp: *const f32, wt: *const f32, out: *mut f32, bias: *const f32, act: u32,
+) {
+    for oy in 0..ho {
+        for ox in 0..wo {
+            let o = out.add((oy * wo + ox) * c);
+            // start from the bias instead of zero
+            let mut ch = 0;
+            while ch < c {
+                v128_store(o.add(ch) as *mut v128, v128_load(bias.add(ch) as *const v128));
+                v128_store(o.add(ch + 4) as *mut v128, v128_load(bias.add(ch + 4) as *const v128));
+                v128_store(o.add(ch + 8) as *mut v128, v128_load(bias.add(ch + 8) as *const v128));
+                v128_store(o.add(ch + 12) as *mut v128, v128_load(bias.add(ch + 12) as *const v128));
+                ch += 16;
+            }
+            for ky in 0..k {
+                let iy = (oy * stride + ky) as isize - pad as isize;
+                if iy < 0 || iy >= h as isize { continue; }
+                for kx in 0..k {
+                    let ix = (ox * stride + kx) as isize - pad as isize;
+                    if ix < 0 || ix >= w as isize { continue; }
+                    let ip = inp.add(((iy as usize) * w + ix as usize) * c);
+                    let wp = wt.add((ky * k + kx) * c);
+                    let mut ch = 0;
+                    while ch < c {
+                        let o0 = o.add(ch) as *mut v128;
+                        let o1 = o.add(ch + 4) as *mut v128;
+                        let o2 = o.add(ch + 8) as *mut v128;
+                        let o3 = o.add(ch + 12) as *mut v128;
+                        v128_store(o0, f32x4_add(v128_load(o0), f32x4_mul(v128_load(ip.add(ch) as *const v128), v128_load(wp.add(ch) as *const v128))));
+                        v128_store(o1, f32x4_add(v128_load(o1), f32x4_mul(v128_load(ip.add(ch + 4) as *const v128), v128_load(wp.add(ch + 4) as *const v128))));
+                        v128_store(o2, f32x4_add(v128_load(o2), f32x4_mul(v128_load(ip.add(ch + 8) as *const v128), v128_load(wp.add(ch + 8) as *const v128))));
+                        v128_store(o3, f32x4_add(v128_load(o3), f32x4_mul(v128_load(ip.add(ch + 12) as *const v128), v128_load(wp.add(ch + 12) as *const v128))));
+                        ch += 16;
+                    }
+                }
+            }
+            if act != 0 {
+                let mut ch = 0;
+                while ch < c {
+                    let p = o.add(ch) as *mut v128;
+                    v128_store(p, act_f32x4(v128_load(p), act));
+                    ch += 4;
+                }
+            }
+        }
+    }
+}
+
+/// `im2col` for output rows `[row0, row0 + rows)` of one image only — so a convolution can be
+/// done a block of rows at a time against one reused buffer instead of unrolling the whole
+/// image (ResNet-18's first stage at batch 16 was 116 MB of columns per layer).
+#[no_mangle]
+pub unsafe extern "C" fn im2col_rows(
+    h: usize, w: usize, c: usize, k: usize, stride: usize, pad: usize,
+    wo: usize, row0: usize, rows: usize, inp: *const f32, out: *mut f32,
+) {
+    let kk = k * k;
+    let zero = f32x4_splat(0.0);
+    for r in 0..rows {
+        let pix = row0 + r;
+        let oy = pix / wo;
+        let ox = pix % wo;
+        let row = out.add(r * kk * c);
+        for ky in 0..k {
+            let iy = (oy * stride + ky) as isize - pad as isize;
+            for kx in 0..k {
+                let ix = (ox * stride + kx) as isize - pad as isize;
+                let dst = row.add((ky * k + kx) * c);
+                let inside = iy >= 0 && iy < h as isize && ix >= 0 && ix < w as isize;
+                if c % 4 == 0 {
+                    let mut ch = 0;
+                    if inside {
+                        let src = inp.add(((iy as usize) * w + ix as usize) * c);
+                        while ch < c { v128_store(dst.add(ch) as *mut v128, v128_load(src.add(ch) as *const v128)); ch += 4; }
+                    } else {
+                        while ch < c { v128_store(dst.add(ch) as *mut v128, zero); ch += 4; }
+                    }
+                } else if inside {
+                    let src = inp.add(((iy as usize) * w + ix as usize) * c);
+                    for ch in 0..c { *dst.add(ch) = *src.add(ch); }
+                } else {
+                    for ch in 0..c { *dst.add(ch) = 0.0; }
+                }
+            }
+        }
     }
 }
