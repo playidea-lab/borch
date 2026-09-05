@@ -59,6 +59,22 @@ export interface CpuKernels {
   im2col(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, out: number): void;
   /** NHWC max pool, taps outside skipped. `c % 4 === 0`. */
   maxpool(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, out: number): void;
+  /**
+   * Softmax cross-entropy, backward half: `grad = (softmax − onehot) / rows` over the first
+   * `cReal` of `c` columns, and per row `stats[2r] = max`, `stats[2r+1] = Σexp` for the host to
+   * finish the loss with `ln`. Labels are class indices stored as f32.
+   */
+  softmaxXentGrad(rows: number, c: number, cReal: number, logits: number, labels: number, grad: number, stats: number): void;
+  /** out[d×k] += Xᵀ·G for X[n×d], G[n×k]. `k % 4 === 0`. Not zeroed first. */
+  outerAcc(n: number, d: number, k: number, x: number, g: number, out: number): void;
+  /** torch's SGD step: `g += wd·p; v = μ·v + g; p −= lr·v`. `n % 4 === 0`. */
+  sgdStep(n: number, p: number, g: number, v: number, lr: number, momentum: number, weightDecay: number): void;
+  /** Each row divided by its L2 norm; zero rows stay zero. `c % 4 === 0`. */
+  l2NormalizeRows(rows: number, c: number, x: number): void;
+  /** out[cols×rows] = in[rows×cols]ᵀ. */
+  transpose(rows: number, cols: number, inp: number, out: number): void;
+  /** x[n] ← 0. `n % 4 === 0`. */
+  zero(n: number, x: number): void;
 }
 
 /** The module's bytes, decoded. Pure; does not instantiate. */
@@ -105,6 +121,8 @@ export function loadKernels(): Promise<CpuKernels> {
     const gemm = fn(ex, "gemm"), dwconv = fn(ex, "dwconv"), swish = fn(ex, "swish"), biasAct = fn(ex, "bias_act");
     const meanRows = fn(ex, "mean_rows"), scaleRows = fn(ex, "scale_rows"), addInplace = fn(ex, "add_inplace");
     const relu = fn(ex, "relu"), im2col = fn(ex, "im2col"), maxpool = fn(ex, "maxpool");
+    const softmaxXentGrad = fn(ex, "softmax_xent_grad"), outerAcc = fn(ex, "outer_acc"), sgdStep = fn(ex, "sgd_step");
+    const l2NormalizeRows = fn(ex, "l2_normalize_rows"), transpose = fn(ex, "transpose"), zero = fn(ex, "zero");
     return {
       memory,
       alloc: (bytes) => alloc(bytes),
@@ -121,6 +139,12 @@ export function loadKernels(): Promise<CpuKernels> {
       relu: (n, x) => { relu(n, x); },
       im2col: (h, w, c, k, stride, pad, ho, wo, inp, out) => { im2col(h, w, c, k, stride, pad, ho, wo, inp, out); },
       maxpool: (h, w, c, k, stride, pad, ho, wo, inp, out) => { maxpool(h, w, c, k, stride, pad, ho, wo, inp, out); },
+      softmaxXentGrad: (rows, c, cReal, logits, labels, grad, stats) => { softmaxXentGrad(rows, c, cReal, logits, labels, grad, stats); },
+      outerAcc: (n, d, k, x, g, out) => { outerAcc(n, d, k, x, g, out); },
+      sgdStep: (n, p, g, v, lr, momentum, weightDecay) => { sgdStep(n, p, g, v, lr, momentum, weightDecay); },
+      l2NormalizeRows: (rows, c, x) => { l2NormalizeRows(rows, c, x); },
+      transpose: (rows, cols, inp, out) => { transpose(rows, cols, inp, out); },
+      zero: (n, x) => { zero(n, x); },
     };
   })();
   return loading;

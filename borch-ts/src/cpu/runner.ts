@@ -5,9 +5,11 @@
  *
  * The module has one linear memory and a bump allocator. Weights go in once, at
  * construction, and stay. Activations come and go per forward, and a bump allocator
- * cannot free one in the middle — so the runner keeps a pool keyed by byte size on
- * top of it: a buffer freed at its value's last use goes back to the pool, and the next
- * allocation of the same size takes it. Shapes repeat block after block, so the pool
+ * cannot free one in the middle — so each forward opens a pool keyed by byte size on
+ * top of it, starting wherever the heap stands (so a head trained beside this runner
+ * keeps its buffers): a buffer freed at its value's last use goes back to the pool, the
+ * next allocation of the same size takes it, and the forward's end returns the heap to
+ * where it began. Shapes repeat block after block, so the pool
  * absorbs most of a forward; the peak is roughly the largest live set, not the sum.
  * Measured for EfficientNet-B0 at batch 16 that was 186 MB against 400 MB summed.
  *
@@ -38,7 +40,9 @@ interface Value {
 
 class Pool {
   private readonly free = new Map<number, number[]>();
-  constructor(private readonly K: CpuKernels, private readonly base: number) {}
+  private readonly base: number;
+  /** Starts at wherever the heap stands — everything below it (weights, other users' buffers) is left alone. */
+  constructor(private readonly K: CpuKernels) { this.base = K.heap(); }
   alloc(bytes: number): number {
     const list = this.free.get(bytes);
     const reused = list?.pop();
@@ -47,22 +51,21 @@ class Pool {
     if (off === 0) throw new Error(`cpu runner: the wasm memory would not grow by ${bytes} bytes`);
     return off;
   }
-  release(off: number, bytes: number): void {
+  give(off: number, bytes: number): void {
     const list = this.free.get(bytes);
     if (list) list.push(off); else this.free.set(bytes, [off]);
   }
-  reset(): void { this.free.clear(); this.K.setHeap(this.base); }
+  /** Return the heap to where this pool began. Only what the pool handed out is gone. */
+  release(): void { this.free.clear(); this.K.setHeap(this.base); }
 }
 
 export class CpuRunner {
   private readonly weights: number[] = [];
   private readonly lastUse: number[];
-  private readonly pool: Pool;
 
   constructor(private readonly K: CpuKernels, private readonly graph: CpuGraph) {
     // Weights first, so the activation arena starts above them and `reset` never touches them.
     for (const node of graph.nodes) this.weights.push(...this.upload(node));
-    this.pool = new Pool(K, K.heap());
     this.lastUse = graph.nodes.map(() => -1);
     graph.nodes.forEach((node, i) => { for (const dep of inputsOf(node)) this.lastUse[dep] = i; });
     this.lastUse[graph.output] = graph.nodes.length; // the output outlives the loop
@@ -95,10 +98,10 @@ export class CpuRunner {
 
   private f32(): Float32Array { return new Float32Array(this.K.memory.buffer); }
 
-  private value(rows: number, h: number, w: number, cP: number): Value {
+  private value(pool: Pool, rows: number, h: number, w: number, cP: number): Value {
     const rowsP = Math.ceil(rows / 4) * 4;
     const bytes = rowsP * cP * 4;
-    const off = this.pool.alloc(bytes);
+    const off = pool.alloc(bytes);
     if (rowsP > rows) this.f32().fill(0, off / 4 + rows * cP, off / 4 + rowsP * cP);
     return { off, bytes, rows, rowsP, h, w, cP, owns: true };
   }
@@ -113,7 +116,8 @@ export class CpuRunner {
     const at = (id: number): Value => { const v = values.get(id); if (!v) throw new Error(`cpu runner: node ${id} has no value`); return v; };
     const outShape = (v: Value, k: number, stride: number, pad: number): [number, number] => [Math.floor((v.h + 2 * pad - k) / stride) + 1, Math.floor((v.w + 2 * pad - k) / stride) + 1];
 
-    this.pool.reset();
+    // The activation arena begins wherever the heap stands now and ends there again.
+    const pool = new Pool(K);
     try {
       graph.nodes.forEach((node, i) => {
         const wts = offsets.get(i) ?? [];
@@ -122,7 +126,7 @@ export class CpuRunner {
           case "input": {
             const c = node.channels;
             if (input.length !== B * c * H * W) throw new Error(`cpu runner: input has ${input.length} values, expected ${B}×${c}×${H}×${W}`);
-            const v = this.value(B * H * W, H, W, c);
+            const v = this.value(pool, B * H * W, H, W, c);
             const f = this.f32(); const base = v.off / 4; const HW = H * W;
             for (let b = 0; b < B; b++) for (let ch = 0; ch < c; ch++) {
               const src = (b * c + ch) * HW; const dst = base + b * HW * c + ch;
@@ -134,15 +138,15 @@ export class CpuRunner {
           case "conv": {
             const x = at(node.input);
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
-            const y = this.value(B * ho * wo, ho, wo, node.coutP);
+            const y = this.value(pool, B * ho * wo, ho, wo, node.coutP);
             if (node.k === 1 && node.stride === 1 && node.pad === 0) {
               K.gemm(y.rowsP, node.coutP, node.cinP, x.off, w(0), y.off);
             } else {
               const kk = node.k * node.k * node.cinP;
-              const col = this.value(B * ho * wo, ho, wo, kk);
+              const col = this.value(pool, B * ho * wo, ho, wo, kk);
               for (let b = 0; b < B; b++) K.im2col(x.h, x.w, node.cinP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cinP * 4, col.off + b * ho * wo * kk * 4);
               K.gemm(y.rowsP, node.coutP, kk, col.off, w(0), y.off);
-              this.pool.release(col.off, col.bytes);
+              pool.give(col.off, col.bytes);
             }
             K.biasAct(y.rows, node.coutP, y.off, w(1), node.act);
             values.set(i, y);
@@ -151,7 +155,7 @@ export class CpuRunner {
           case "dwconv": {
             const x = at(node.input);
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
-            const y = this.value(B * ho * wo, ho, wo, node.cP);
+            const y = this.value(pool, B * ho * wo, ho, wo, node.cP);
             for (let b = 0; b < B; b++) K.dwconv(x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4);
             K.biasAct(y.rows, node.cP, y.off, w(1), node.act);
             values.set(i, y);
@@ -160,7 +164,7 @@ export class CpuRunner {
           case "maxpool": {
             const x = at(node.input);
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
-            const y = this.value(B * ho * wo, ho, wo, x.cP);
+            const y = this.value(pool, B * ho * wo, ho, wo, x.cP);
             for (let b = 0; b < B; b++) K.maxpool(x.h, x.w, x.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * x.cP * 4, y.off + b * ho * wo * x.cP * 4);
             values.set(i, y);
             break;
@@ -168,16 +172,16 @@ export class CpuRunner {
           case "se": {
             const x = at(node.input);
             const HW = x.h * x.w;
-            const sq = this.value(B, 1, 1, node.cP);
+            const sq = this.value(pool, B, 1, 1, node.cP);
             for (let b = 0; b < B; b++) K.meanRows(HW, node.cP, x.off + b * HW * node.cP * 4, sq.off + b * node.cP * 4);
-            const r1 = this.value(B, 1, 1, node.cseP);
+            const r1 = this.value(pool, B, 1, 1, node.cseP);
             K.gemm(sq.rowsP, node.cseP, node.cP, sq.off, w(0), r1.off);
             K.biasAct(B, node.cseP, r1.off, w(1), ACT.swish);
-            const g = this.value(B, 1, 1, node.cP);
+            const g = this.value(pool, B, 1, 1, node.cP);
             K.gemm(r1.rowsP, node.cP, node.cseP, r1.off, w(2), g.off);
             K.biasAct(B, node.cP, g.off, w(3), ACT.sigmoid);
             for (let b = 0; b < B; b++) K.scaleRows(HW, node.cP, x.off + b * HW * node.cP * 4, g.off + b * node.cP * 4);
-            for (const t of [sq, r1, g]) this.pool.release(t.off, t.bytes);
+            for (const t of [sq, r1, g]) pool.give(t.off, t.bytes);
             values.set(i, { ...x, owns: true }); x.owns = false; // the value moves into x's buffer
             break;
           }
@@ -193,14 +197,14 @@ export class CpuRunner {
           case "gap": {
             const x = at(node.input);
             const HW = x.h * x.w;
-            const p = this.value(B, 1, 1, x.cP);
+            const p = this.value(pool, B, 1, 1, x.cP);
             for (let b = 0; b < B; b++) K.meanRows(HW, x.cP, x.off + b * HW * x.cP * 4, p.off + b * x.cP * 4);
             values.set(i, p);
             break;
           }
           case "linear": {
             const x = at(node.input);
-            const y = this.value(x.rows, 1, 1, node.coutP);
+            const y = this.value(pool, x.rows, 1, 1, node.coutP);
             K.gemm(y.rowsP, node.coutP, node.cinP, x.off, w(0), y.off);
             K.biasAct(y.rows, node.coutP, y.off, w(1), node.act);
             values.set(i, y);
@@ -209,7 +213,7 @@ export class CpuRunner {
         }
         // Free whatever saw its last use here — except a buffer that a later value now owns.
         for (const dep of inputsOf(node)) {
-          if (this.lastUse[dep] === i) { const v = at(dep); if (v.owns) this.pool.release(v.off, v.bytes); }
+          if (this.lastUse[dep] === i) { const v = at(dep); if (v.owns) pool.give(v.off, v.bytes); }
         }
       });
       const out = at(graph.output);
@@ -218,7 +222,7 @@ export class CpuRunner {
       for (let r = 0; r < out.rows; r++) result.set(f.subarray(out.off / 4 + r * out.cP, out.off / 4 + r * out.cP + graph.outputChannels), r * graph.outputChannels);
       return result;
     } finally {
-      this.pool.reset();
+      pool.release();
     }
   }
 }

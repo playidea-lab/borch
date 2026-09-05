@@ -1502,10 +1502,20 @@ shape before running twenty-five times slower than these kernels. Plain JavaScri
 typed arrays sat at SwiftShader's speed; the difference is the SIMD, not the language,
 so there is no JavaScript backend beside this one.
 
-What it does not do, written down: train. The graph runs a classifier forward and stops;
-a head trained on cached features is the next thing it learns, and everything else
-stays absent by name. The plans that turn a checkpoint into a graph live with the test
-for now — `bimm-ts` owns the architectures and they belong beside its tables.
+**And the other half of the labelling tool.** `cpu/train` trains a linear head on cached
+features — softmax cross-entropy, SGD with momentum, torch's update order — and orders
+rows by cosine neighbours, a block of the similarity matrix at a time so five thousand
+features never become a hundred-megabyte matrix. The same page checks both against the
+GPU: forty full-batch steps of `nn.Linear` + `CrossEntropyLoss` + `SGD(0.05, 0.9)` from
+the same zero start land within 3.5e-5 relative of the CPU's losses step for step, and
+the five nearest neighbours of forty-eight rows agree with a plain reference on every
+one of the 240, similarities within 1.2e-6. The fit took 6 ms; the same features'
+forward, one thread, 1.07 s for forty-eight images.
+
+What it does not do, written down: anything else. A second layer, another loss, Adam,
+a backbone that learns — absent by name. The plans that turn a checkpoint into a graph
+live with the test for now — `bimm-ts` owns the architectures and they belong beside
+its tables.
 
 ### How much it does
 

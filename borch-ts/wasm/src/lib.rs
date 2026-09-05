@@ -383,3 +383,141 @@ pub unsafe extern "C" fn maxpool(
         }
     }
 }
+
+// ---- a head on cached features: forward is `gemm` + `bias_act`; these are the rest ----
+
+/// Softmax cross-entropy, backward half. For each of `rows` rows of `logits[rows×c]`
+/// (the first `c_real` columns are classes, the rest padding): `grad[row] = (softmax − onehot) / rows`
+/// with the padding columns written zero, and `stats[row·2] = max`, `stats[row·2+1] = Σ exp(l−max)`
+/// so the caller can take `loss = mean(−(l[label] − max − ln Σ))` — this module has no `ln`,
+/// on purpose: one scalar per row is the host's to finish. `labels` are class indices as f32.
+#[no_mangle]
+pub unsafe extern "C" fn softmax_xent_grad(
+    rows: usize, c: usize, c_real: usize, logits: *const f32, labels: *const f32, grad: *mut f32, stats: *mut f32,
+) {
+    let neg = f32x4_splat(f32::NEG_INFINITY);
+    let zero = f32x4_splat(0.0);
+    let inv_rows = 1.0 / rows as f32;
+    for r in 0..rows {
+        let row = logits.add(r * c);
+        let out = grad.add(r * c);
+        // max over the real columns
+        let mut m = neg;
+        let mut j = 0;
+        while j < c {
+            let lane = u32x4_lt(u32x4(j as u32, j as u32 + 1, j as u32 + 2, j as u32 + 3), u32x4_splat(c_real as u32));
+            m = f32x4_pmax(m, v128_bitselect(v128_load(row.add(j) as *const v128), neg, lane));
+            j += 4;
+        }
+        let mx = f32x4_extract_lane::<0>(m).max(f32x4_extract_lane::<1>(m)).max(f32x4_extract_lane::<2>(m)).max(f32x4_extract_lane::<3>(m));
+        let mv = f32x4_splat(mx);
+        // exp(l − max) into grad, sum it
+        let mut sum = zero;
+        j = 0;
+        while j < c {
+            let lane = u32x4_lt(u32x4(j as u32, j as u32 + 1, j as u32 + 2, j as u32 + 3), u32x4_splat(c_real as u32));
+            let e = v128_bitselect(exp_f32x4(f32x4_sub(v128_load(row.add(j) as *const v128), mv)), zero, lane);
+            v128_store(out.add(j) as *mut v128, e);
+            sum = f32x4_add(sum, e);
+            j += 4;
+        }
+        let s = f32x4_extract_lane::<0>(sum) + f32x4_extract_lane::<1>(sum) + f32x4_extract_lane::<2>(sum) + f32x4_extract_lane::<3>(sum);
+        *stats.add(r * 2) = mx;
+        *stats.add(r * 2 + 1) = s;
+        // (p − onehot) / rows
+        let scale = f32x4_splat(inv_rows / s);
+        j = 0;
+        while j < c {
+            let p = out.add(j) as *mut v128;
+            v128_store(p, f32x4_mul(v128_load(p), scale));
+            j += 4;
+        }
+        let label = *labels.add(r) as usize;
+        if label < c_real { *out.add(label) -= inv_rows; }
+    }
+}
+
+/// out[d×k] += Σ_n x[n,d] · g[n,k] — the weight gradient `Xᵀ·G` of a linear layer, as rank-one
+/// updates so nothing has to be transposed. `k % 4 == 0`; `out` is not zeroed here.
+#[no_mangle]
+pub unsafe extern "C" fn outer_acc(n: usize, d: usize, k: usize, x: *const f32, g: *const f32, out: *mut f32) {
+    for row in 0..n {
+        let gr = g.add(row * k);
+        let xr = x.add(row * d);
+        for dd in 0..d {
+            let s = f32x4_splat(*xr.add(dd));
+            let o = out.add(dd * k);
+            let mut kk = 0;
+            while kk < k {
+                let p = o.add(kk) as *mut v128;
+                v128_store(p, f32x4_add(v128_load(p), f32x4_mul(s, v128_load(gr.add(kk) as *const v128))));
+                kk += 4;
+            }
+        }
+    }
+}
+
+/// SGD with momentum and weight decay, torch's order: `g += wd·p; v = μ·v + g; p −= lr·v`. `n % 4 == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn sgd_step(n: usize, p: *mut f32, g: *const f32, v: *mut f32, lr: f32, momentum: f32, weight_decay: f32) {
+    let lrv = f32x4_splat(lr);
+    let mu = f32x4_splat(momentum);
+    let wd = f32x4_splat(weight_decay);
+    let mut i = 0;
+    while i < n {
+        let pp = p.add(i) as *mut v128;
+        let vp = v.add(i) as *mut v128;
+        let pv = v128_load(pp);
+        let gv = f32x4_add(v128_load(g.add(i) as *const v128), f32x4_mul(wd, pv));
+        let nv = f32x4_add(f32x4_mul(mu, v128_load(vp)), gv);
+        v128_store(vp, nv);
+        v128_store(pp, f32x4_sub(pv, f32x4_mul(lrv, nv)));
+        i += 4;
+    }
+}
+
+/// Each row of x[rows×c] divided by its L2 norm (rows of zeros stay zero). `c % 4 == 0`.
+/// Cosine similarity is then plain `gemm` against the transpose.
+#[no_mangle]
+pub unsafe extern "C" fn l2_normalize_rows(rows: usize, c: usize, x: *mut f32) {
+    for r in 0..rows {
+        let row = x.add(r * c);
+        let mut acc = f32x4_splat(0.0);
+        let mut j = 0;
+        while j < c {
+            let v = v128_load(row.add(j) as *const v128);
+            acc = f32x4_add(acc, f32x4_mul(v, v));
+            j += 4;
+        }
+        let ss = f32x4_extract_lane::<0>(acc) + f32x4_extract_lane::<1>(acc) + f32x4_extract_lane::<2>(acc) + f32x4_extract_lane::<3>(acc);
+        if ss == 0.0 { continue; }
+        let inv = f32x4_splat(1.0 / f32x4_extract_lane::<0>(f32x4_sqrt(f32x4_splat(ss))));
+        j = 0;
+        while j < c {
+            let p = row.add(j) as *mut v128;
+            v128_store(p, f32x4_mul(v128_load(p), inv));
+            j += 4;
+        }
+    }
+}
+
+/// out[cols×rows] = in[rows×cols]ᵀ. Scalar; the matrices this serves are a few megabytes.
+#[no_mangle]
+pub unsafe extern "C" fn transpose(rows: usize, cols: usize, inp: *const f32, out: *mut f32) {
+    for r in 0..rows {
+        for cidx in 0..cols {
+            *out.add(cidx * rows + r) = *inp.add(r * cols + cidx);
+        }
+    }
+}
+
+/// x[n] ← 0. For accumulators before `outer_acc`. `n % 4 == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn zero(n: usize, x: *mut f32) {
+    let z = f32x4_splat(0.0);
+    let mut i = 0;
+    while i < n {
+        v128_store(x.add(i) as *mut v128, z);
+        i += 4;
+    }
+}
