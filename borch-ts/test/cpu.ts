@@ -33,6 +33,8 @@ import { loadKernels } from "../src/cpu/load.js";
 import { GraphBuilder, type CpuGraph, type BatchNorm } from "../src/cpu/graph.js";
 import { CpuRunner } from "../src/cpu/runner.js";
 import { readSafetensors, type HostStateDict } from "../src/cpu/safetensors.js";
+import { LinearHead, cosineNeighbours } from "../src/cpu/train.js";
+import { nn, optim } from "../src/index.js";
 
 interface Check { name: string; ok: boolean; note: string }
 
@@ -41,7 +43,7 @@ export interface HubLike {
   load(manifestUrl: string, opts: { verify: boolean }): Promise<{ manifest: unknown; model: ModelLike }>;
   fetchWeights(manifest: unknown, manifestUrl: string): Promise<Uint8Array>;
 }
-export interface ModelLike { eval(): unknown; forward(x: Tensor): Tensor }
+export interface ModelLike { eval(): unknown; forward(x: Tensor): Tensor; forwardFeatures(x: Tensor): Tensor; forwardHead(h: Tensor, preLogits: boolean): Tensor }
 
 interface IndexEntry { readonly name: string; readonly version: string; readonly manifestUrl: string }
 
@@ -60,7 +62,7 @@ function bn(st: HostStateDict, prefix: string): BatchNorm {
 }
 
 /** timm `efficientnet_b0`: the table bimm's `efficientnetPlan(1, 1)` produces. */
-export function efficientnetB0Graph(st: HostStateDict): CpuGraph {
+export function efficientnetB0Graph(st: HostStateDict, features = false): CpuGraph {
   const stages: readonly [number, number, number, number, number][] = [
     // kernel, expansion, cout, repeats, stride
     [3, 1, 16, 1, 1], [3, 6, 24, 2, 2], [5, 6, 40, 2, 2], [3, 6, 80, 3, 2], [5, 6, 112, 3, 1], [5, 6, 192, 4, 2], [3, 6, 320, 1, 1],
@@ -91,6 +93,7 @@ export function efficientnetB0Graph(st: HostStateDict): CpuGraph {
   });
   h = g.conv(h, { weight: need(st, "conv_head.weight"), cout: 1280, cin, k: 1, stride: 1, pad: 0, bn: bn(st, "bn2"), act: ACT.swish });
   const pooled = g.gap(h);
+  if (features) return g.finish(pooled);
   return g.finish(g.linear(pooled, need(st, "classifier.weight"), need(st, "classifier.bias"), 1000));
 }
 
@@ -206,6 +209,85 @@ export async function report(hub: HubLike, indexUrl: string, only: string | null
       say(`batch ${B}: gpu ${gpuMs.toFixed(1)} ms (${(gpuMs / B).toFixed(2)} ms/image) · cpu ${cpuMs.toFixed(1)} ms (${(cpuMs / B).toFixed(1)} ms/image) · wasm memory ${(K.memory.buffer.byteLength / 1e6).toFixed(0)} MB`);
     }
   }
+  // ---- the workbench's second half: features → a head → neighbours ----
+  if (!only || only === "imagenet-efficientnet-b0") {
+    say(`\n== features, a head, neighbours (imagenet-efficientnet-b0) ==`);
+    const entry = entries.filter((e) => e.name === "imagenet-efficientnet-b0").pop();
+    if (!entry) throw new Error("imagenet-efficientnet-b0 left the index between two paragraphs");
+    const { manifest, model } = await hub.load(entry.manifestUrl, { verify: false });
+    model.eval();
+    const st = readSafetensors(await hub.fetchWeights(manifest, entry.manifestUrl));
+    const featureRunner = new CpuRunner(K, efficientnetB0Graph(st, true));
+    const N = 48, D = 1280, Kc = 5;
+    const arr = seeded(N * 3 * 224 * 224, 1234);
+    const x = keepAlive(Tensor.from(arr, [N, 3, 224, 224]));
+    const gpuFeat = await scope(async () => noGrad(() => model.forwardHead(model.forwardFeatures(x), true)).toArray());
+    const t0 = performance.now();
+    const cpuFeat = featureRunner.forward(arr, N, 224, 224);
+    const featMs = performance.now() - t0;
+    {
+      let worst = 0, scale = 0;
+      for (let i = 0; i < N * D; i++) { worst = Math.max(worst, Math.abs((gpuFeat[i] ?? 0) - (cpuFeat[i] ?? 0))); scale = Math.max(scale, Math.abs(gpuFeat[i] ?? 0)); }
+      const rel = worst / scale;
+      const note = `${N} images · max|Δ| ${worst.toExponential(2)} on features up to ${scale.toFixed(2)} → relative ${rel.toExponential(2)} · cpu ${featMs.toFixed(0)} ms`;
+      say(`features: ${note}`);
+      checks.push({ name: "b0 features: cpu matches gpu", ok: rel < 1e-3 && cpuFeat.length === N * D, note });
+    }
+    // The head: the same features (the CPU's), the same zero start, the same SGD, on both devices.
+    const labels = Array.from({ length: N }, (_, i) => i % Kc);
+    const STEPS = 40, LR = 0.05, MU = 0.9;
+    const gpuLosses: number[] = [];
+    {
+      const head = new nn.Linear(D, Kc);
+      head.loadStateDict({ weight: Tensor.from(new Float32Array(Kc * D), [Kc, D]), bias: Tensor.from(new Float32Array(Kc), [Kc]) });
+      const opt = new optim.SGD(head.parameters(), LR, MU);
+      const crit = new nn.CrossEntropyLoss();
+      const feats = keepAlive(Tensor.from(cpuFeat, [N, D]));
+      const y = keepAlive(Tensor.from(labels, [N], { dtype: "int64" }));
+      for (let step = 0; step < STEPS; step++) {
+        const l = await scope(async () => { const loss = crit.forward(head.forward(feats), y); opt.zeroGrad(); loss.backward(); opt.step(); return (await loss.toArray())[0] ?? NaN; });
+        gpuLosses.push(l);
+      }
+    }
+    const cpuHead = new LinearHead(K, D, Kc, { lr: LR, momentum: MU });
+    const t1 = performance.now();
+    const cpuLosses = cpuHead.fit(cpuFeat, labels, N, STEPS);
+    const fitMs = performance.now() - t1;
+    {
+      let worst = 0;
+      for (let i = 0; i < STEPS; i++) worst = Math.max(worst, Math.abs((gpuLosses[i] ?? 0) - (cpuLosses[i] ?? 0)) / Math.max(1e-6, Math.abs(gpuLosses[i] ?? 0)));
+      const note = `${STEPS} steps · loss ${cpuLosses[0]?.toFixed(4)} → ${cpuLosses[STEPS - 1]?.toFixed(4)} (gpu ${gpuLosses[0]?.toFixed(4)} → ${gpuLosses[STEPS - 1]?.toFixed(4)}) · worst relative step gap ${worst.toExponential(2)} · cpu fit ${fitMs.toFixed(0)} ms`;
+      say(`head: ${note}`);
+      checks.push({ name: "linear head: cpu loss trajectory matches gpu", ok: worst < 1e-3, note });
+      const pred = cpuHead.predict(cpuFeat, N);
+      let hit = 0; for (let r = 0; r < N; r++) { let best = 0; for (let k = 1; k < Kc; k++) if ((pred[r * Kc + k] ?? 0) > (pred[r * Kc + best] ?? 0)) best = k; if (best === labels[r]) hit++; }
+      say(`head: predicts its own training set ${hit}/${N}`);
+    }
+    // Neighbours against a plain reference on the same features.
+    {
+      const k = 5;
+      const t2 = performance.now();
+      const got = cosineNeighbours(K, cpuFeat, N, D, k);
+      const nnMs = performance.now() - t2;
+      const norms = new Float64Array(N);
+      for (let i = 0; i < N; i++) { let ss = 0; for (let d = 0; d < D; d++) ss += (cpuFeat[i * D + d] ?? 0) ** 2; norms[i] = Math.sqrt(ss); }
+      let mismatched = 0, worstSim = 0;
+      for (let i = 0; i < N; i++) {
+        const sims: { j: number; s: number }[] = [];
+        for (let j = 0; j < N; j++) { if (j === i) continue; let dot = 0; for (let d = 0; d < D; d++) dot += (cpuFeat[i * D + d] ?? 0) * (cpuFeat[j * D + d] ?? 0); sims.push({ j, s: dot / ((norms[i] ?? 1) * (norms[j] ?? 1)) }); }
+        sims.sort((a, b) => b.s - a.s);
+        const ref = new Set(sims.slice(0, k).map((e) => e.j));
+        for (let q = 0; q < k; q++) {
+          if (!ref.has(got.indices[i * k + q] ?? -1)) mismatched++;
+          worstSim = Math.max(worstSim, Math.abs((got.sims[i * k + q] ?? 0) - (sims[q]?.s ?? 0)));
+        }
+      }
+      const note = `${N} rows, k=${k} · ${mismatched} of ${N * k} neighbours differ from the reference · sims within ${worstSim.toExponential(2)} · ${nnMs.toFixed(1)} ms`;
+      say(`neighbours: ${note}`);
+      checks.push({ name: "cosine neighbours: cpu matches reference", ok: mismatched === 0 && worstSim < 1e-4, note });
+    }
+  }
+
   const failed = checks.filter((c) => !c.ok).length;
   say(`\n${checks.length - failed} / ${checks.length} checks passed`);
   return { text: lines.join("\n"), checks };
