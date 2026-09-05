@@ -95,7 +95,7 @@ export interface CpuKernels {
   /** `dwconv` with the bias as the starting value and `act` on each finished row. */
   dwconvBiasAct(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, wt: number, out: number, bias: number, act: Activation): void;
   /** `dwconvBiasAct` over output rows `oy0..oy1` only — one worker's share of an image. */
-  dwconvRows(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, oy0: number, oy1: number, inp: number, wt: number, out: number, bias: number, act: Activation): void;
+  dwconvRows(h: number, w: number, c: number, k: number, stride: number, pad: number, wo: number, oy0: number, oy1: number, inp: number, wt: number, out: number, bias: number, act: Activation): void;
   /** `im2col` for output rows `[row0, row0 + rows)` of one image — a block at a time against one buffer. */
   im2colRows(h: number, w: number, c: number, k: number, stride: number, pad: number, wo: number, row0: number, rows: number, inp: number, out: number): void;
 }
@@ -200,7 +200,7 @@ export function kernelsFromExports(ex: WebAssembly.Exports, flavor: KernelFlavor
     zero: (n, x) => { zero(n, x); },
     gemmBiasAct: (m, n, k, a, b, c, bias, act) => { gemmBiasAct(m, n, k, a, b, c, bias, act); },
     dwconvBiasAct: (h, w, c, k, stride, pad, ho, wo, inp, wt, out, bias, act) => { dwconvBiasAct(h, w, c, k, stride, pad, ho, wo, inp, wt, out, bias, act); },
-    dwconvRows: (h, w, c, k, stride, pad, ho, wo, oy0, oy1, inp, wt, out, bias, act) => { dwconvRows(h, w, c, k, stride, pad, ho, wo, oy0, oy1, inp, wt, out, bias, act); },
+    dwconvRows: (h, w, c, k, stride, pad, wo, oy0, oy1, inp, wt, out, bias, act) => { dwconvRows(h, w, c, k, stride, pad, wo, oy0, oy1, inp, wt, out, bias, act); },
     im2colRows: (h, w, c, k, stride, pad, wo, row0, rows, inp, out) => { im2colRows(h, w, c, k, stride, pad, wo, row0, rows, inp, out); },
   };
 }

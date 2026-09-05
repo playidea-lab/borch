@@ -3008,8 +3008,8 @@
     "src": "9c6c70caafec"
   },
   "cpu/threads/": {
-    "ko": "여러 워커, 하나의 메모리: forward가 커널 호출을 풀에 건네는 프로토콜.\n\n커널은 하나의 선형 메모리 속 오프셋 위의 상태 없는 함수라서 forward는 행으로 나뉜다 — GEMM의 행은 `P` 조각으로, depthwise 합성곱의 이미지는 워커마다 하나씩, im2col 블록과 그 GEMM은 한 단위로. 이 파일이 더하는 것은 브라우저에서 그것을 가능하게 하는 최소한이다: 모든 워커가 같은 모듈을 인스턴스화하는 **공유** `WebAssembly.Memory`, 할당은 메인 쪽만, 그리고 `postMessage`가 아니라 작은 제어 블록 위의 `Atomics`로 하는 인계 — forward 한 번은 백여 번의 커널 호출이고, 50–100 µs짜리 메시지 왕복 백 번은 forward보다 비싸다.\n\n제어 블록: `ctrl`(SharedArrayBuffer 위 Int32Array)은 `[0]` 세대, `[1]` 현재 세대를 끝낸 워커 수, `[2]` 작업 수, `[3]` 정지. `data`(Float64Array)는 `MAX_TASKS` 슬롯 × `SLOT` 개의 double — 호출 수, 이어서 최대 `MAX_CALLS` 개의 `[fnId, nArgs, args…]`. 작업 `t`는 언제나 워커 `t % workers`에 떨어지고, runner는 그것에 의지해 워커마다 자기 스크래치 버퍼를 준다.\n\n페이지에 필요한 것: `SharedArrayBuffer` — `Cross-Origin-Opener-Policy: same-origin`과 `Cross-Origin-Embedder-Policy: require-corp`로 서빙된 페이지에만 주어진다. `file://`로 연 페이지는 가질 수 없다. 브라우저 메인 스레드는 `Atomics.wait`를 거절하므로 거기서는 `Atomics.load`로 스핀한다.",
-    "src": "51c2ee869fad"
+    "ko": "여러 워커, 하나의 메모리: forward가 커널 호출을 풀에 건네는 프로토콜.\n\n커널은 하나의 선형 메모리 속 오프셋 위의 상태 없는 함수라서 forward는 행으로 나뉜다 — GEMM의 행은 `P` 조각으로, depthwise 합성곱의 이미지는 워커마다 하나씩, im2col 블록과 그 GEMM은 한 단위로. 이 파일이 더하는 것은 브라우저에서 그것을 가능하게 하는 최소한이다: 모든 워커가 같은 모듈을 인스턴스화하는 **공유** `WebAssembly.Memory`, 할당은 메인 쪽만, 그리고 `postMessage`가 아니라 작은 제어 블록 위의 `Atomics`로 하는 인계 — forward 한 번은 백여 번의 커널 호출이고, 50–100 µs짜리 메시지 왕복 백 번은 forward보다 비싸다.\n\n제어 블록: `ctrl`(SharedArrayBuffer 위 Int32Array)은 `[0]` 세대, `[1]` 현재 세대를 끝낸 워커 수, `[2]` 작업 수, `[3]` 정지, `[4]` 오류 — 작업이 트랩된 워커가 세운다(자기를 끝난 것으로 세어 메인이 깨어나 예외를 던지게 한다, 오지 않을 수를 기다리는 대신). 워커가 통째로 죽으면 호스트가 세운다. `data`(Float64Array)는 `MAX_TASKS` 슬롯 × `SLOT` 개의 double — 호출 수, 이어서 최대 `MAX_CALLS` 개의 `[fnId, nArgs, args…]`. 작업 `t`는 언제나 워커 `t % workers`에 떨어지고, runner는 그것에 의지해 워커마다 자기 스크래치 버퍼를 준다.\n\n페이지에 필요한 것: `SharedArrayBuffer` — `Cross-Origin-Opener-Policy: same-origin`과 `Cross-Origin-Embedder-Policy: require-corp`로 서빙된 페이지에만 주어진다. `file://`로 연 페이지는 가질 수 없다. 브라우저 메인 스레드는 `Atomics.wait`를 거절하므로 거기서는 `Atomics.load`로 스핀한다.",
+    "src": "1db91ca9bc15"
   },
   "cpu/threads/Call": {
     "ko": "커널 호출 하나: export 이름, 그 다음 숫자 인자들.",
@@ -3066,5 +3066,9 @@
   "cpu/load/CpuKernels.dwconvRows": {
     "ko": "`dwconvBiasAct`를 출력 행 `oy0..oy1`에만 — 이미지 하나 중 워커 하나의 몫.",
     "src": "0a91b8dec1bf"
+  },
+  "cpu/threads/MainSide.fail": {
+    "ko": "밖에서 풀을 실패로 표시한다 — 호스트가 워커가 죽는 것을 봤을 때. 메인 쪽이 깨어나 예외를 던진다.",
+    "src": "7417514188ba"
   }
 }

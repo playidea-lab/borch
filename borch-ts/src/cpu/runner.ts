@@ -194,13 +194,17 @@ export class CpuRunner {
               // On a pool, enough blocks that every worker gets at least two.
               if (P > 1) R = Math.max(4, Math.min(R, Math.ceil(per * B / (2 * P) / 4) * 4));
               const y = this.value(pool, B * per, ho, wo, node.coutP, 4);
-              // One column buffer per worker: task t runs on worker t % P and uses buffer t % P.
+              // One column buffer per worker. `dispatch` sends MAX_TASKS tasks at a time and a
+              // chunk's task t runs on worker t % P, so the buffer is chosen by the same index —
+              // position within the chunk — and two workers never share one. (Indexing by the
+              // global position would still be a bijection per chunk, a shift of the worker id;
+              // this says what is meant.) `threads_check.mjs` runs 300 blocks on 3 workers.
               const cols = Array.from({ length: P }, () => this.value(pool, R, 1, 1, kk));
               const tasks: Task[] = [];
               for (let b = 0; b < B; b++) {
                 for (let r0 = 0; r0 < per; r0 += R) {
                   const rows = Math.min(R, per - r0);
-                  const col = cols[tasks.length % P] ?? cols[0]!;
+                  const col = cols[(tasks.length % MAX_TASKS) % P] ?? cols[0]!;
                   tasks.push([
                     ["im2col_rows", x.h, x.w, node.cinP, node.k, node.stride, node.pad, wo, r0, rows, x.off + b * x.h * x.w * node.cinP * 4, col.off],
                     ["gemm_bias_act", rows, node.coutP, kk, col.off, w(0), y.off + (b * per + r0) * node.coutP * 4, w(1), node.act],
@@ -230,7 +234,7 @@ export class CpuRunner {
               const tasks: Task[] = [];
               for (let b = 0; b < B; b++) {
                 const xi = x.off + b * x.h * x.w * node.cP * 4, yi = y.off + b * ho * wo * node.cP * 4;
-                for (let oy = 0; oy < ho; oy += chunk) tasks.push([["dwconv_rows", x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, oy, Math.min(ho, oy + chunk), xi, w(0), yi, w(1), node.act]]);
+                for (let oy = 0; oy < ho; oy += chunk) tasks.push([["dwconv_rows", x.h, x.w, node.cP, node.k, node.stride, node.pad, wo, oy, Math.min(ho, oy + chunk), xi, w(0), yi, w(1), node.act]]);
               }
               this.dispatch(tasks);
             } else for (let b = 0; b < B; b++) K.dwconvBiasAct(x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4, w(1), node.act);

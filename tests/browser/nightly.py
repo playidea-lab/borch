@@ -103,9 +103,16 @@ def prepare(log):
     else:
         if sh(["git", "checkout", "--detach", "origin/main"], WORKTREE, log):
             return False
+    # **Its own `node_modules`, from the lock.** This used to be a symlink to the main
+    # tree's, and the main tree's was whatever somebody had last installed there — three
+    # nights of `golden:*` red (2026-09-04 → 06) because esbuild, bimm-ts and borch-hub had
+    # been added to the lock and never installed at the link's target. `npm ci` is thirty
+    # seconds and reads the lock the worktree was checked out with.
     link = WORKTREE / "node_modules"
-    if not link.exists():
-        link.symlink_to(REPO / "node_modules")
+    if link.is_symlink():
+        link.unlink()
+    if sh(["npm", "ci", "--ignore-scripts"], WORKTREE, log):
+        return False
     if sh(["npx", "tsc", "-p", "borch-ts/tsconfig.json"], WORKTREE, log):
         return False
     # The golden is not committed; every runner reads it, so it is frozen here first.
