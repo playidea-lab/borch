@@ -42,13 +42,18 @@ export interface ConvNode {
   readonly kind: "conv"; readonly input: number;
   readonly k: number; readonly stride: number; readonly pad: number;
   readonly cinP: number; readonly cout: number; readonly coutP: number;
-  /** `[k·k·cinP × coutP]`, tap-major. */ readonly weight: Float32Array;
-  readonly bias: Float32Array; readonly act: Activation;
+  /** `[k·k·cinP × coutP]`, tap-major. */
+  readonly weight: Float32Array;
+  readonly bias: Float32Array;
+  readonly act: Activation;
 }
 export interface DwConvNode {
   readonly kind: "dwconv"; readonly input: number;
   readonly k: number; readonly stride: number; readonly pad: number; readonly cP: number;
-  /** `[k·k × cP]`. */ readonly weight: Float32Array; readonly bias: Float32Array; readonly act: Activation;
+  /** `[k·k × cP]`. */
+  readonly weight: Float32Array;
+  readonly bias: Float32Array;
+  readonly act: Activation;
 }
 export interface MaxPoolNode { readonly kind: "maxpool"; readonly input: number; readonly k: number; readonly stride: number; readonly pad: number }
 export interface SeNode {
@@ -59,7 +64,10 @@ export interface AddNode { readonly kind: "add"; readonly input: number; readonl
 export interface GapNode { readonly kind: "gap"; readonly input: number }
 export interface LinearNode {
   readonly kind: "linear"; readonly input: number; readonly cinP: number; readonly cout: number; readonly coutP: number;
-  /** `[cinP × coutP]`. */ readonly weight: Float32Array; readonly bias: Float32Array; readonly act: Activation;
+  /** `[cinP × coutP]`. */
+  readonly weight: Float32Array;
+  readonly bias: Float32Array;
+  readonly act: Activation;
 }
 export type Node = InputNode | ConvNode | DwConvNode | MaxPoolNode | SeNode | AddNode | GapNode | LinearNode;
 
