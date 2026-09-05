@@ -223,9 +223,15 @@ export class CpuRunner {
             const x = at(node.input);
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
             const y = this.value(pool, B * ho * wo, ho, wo, node.cP);
-            if (this.pool && B > 1) {
+            if (this.pool) {
+              // Output rows in chunks, so that even one image gives every worker two pieces.
+              const P = this.pool.workers;
+              const chunk = Math.max(1, Math.ceil(ho * B / (2 * P)));
               const tasks: Task[] = [];
-              for (let b = 0; b < B; b++) tasks.push([["dwconv_bias_act", x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4, w(1), node.act]]);
+              for (let b = 0; b < B; b++) {
+                const xi = x.off + b * x.h * x.w * node.cP * 4, yi = y.off + b * ho * wo * node.cP * 4;
+                for (let oy = 0; oy < ho; oy += chunk) tasks.push([["dwconv_rows", x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, oy, Math.min(ho, oy + chunk), xi, w(0), yi, w(1), node.act]]);
+              }
               this.dispatch(tasks);
             } else for (let b = 0; b < B; b++) K.dwconvBiasAct(x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4, w(1), node.act);
             values.set(i, y);

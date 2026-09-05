@@ -53,6 +53,7 @@ CHECKS = [
     ("cpu:py",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/cpu_py.py", "--build"]),
     # The workbench with WebGPU's service disabled — the `borch_cpu` door, end to end.
     ("marimo:cpu", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--no-webgpu"]),
+    ("coi:site",   ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/coi_sweep.py"]),
     # The wheel alone, in a worker — JupyterLite's shape. Builds the wheel first.
     ("wheel",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/wheel_probe.py", "--build"]),
     # The notebook page — JupyterLite built here, the cell pressed, the learned line read.

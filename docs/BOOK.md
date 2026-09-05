@@ -1584,17 +1584,27 @@ bit of the single thread. From Python the same eight workers come up on the firs
 `borch_cpu.kernels()` inside the Pyodide worker — nested workers — and six images through
 the backbone take 30 ms where one thread took 137. The default is half the hardware
 threads, at most eight: past eight the measurement gained little, and efficiency cores
-would make the barrier wait for the slowest.
+would make the barrier wait for the slowest. Batch one was the case the row split left
+behind — a depthwise convolution went to the pool one image at a time, so one image was
+one worker — and `dwconv_rows` takes a range of output rows instead: B0 at batch one,
+eight workers, 6.8 → 5.0 ms (node, same machine); ResNet-18 has no depthwise layer and
+stays at 8.8, its batch-one floor being the pool and the small late layers.
 
 The third piece is the page. `SharedArrayBuffer` exists only under
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`,
 so `site/serve.py` and both test servers send them, and the whole browser suite now runs
 cross-origin isolated — module imports and `fetch` are CORS-mode and pass, which is why
 esm.sh, the registry and the Pyodide CDN still load; a plain `<img>` from another origin
-would not. Where the two headers are missing — a `file://` page, GitHub Pages without a
-service-worker shim — `threadsAvailable()` is false and the same forward runs on one
-thread; `borch_cpu.threads()` says 0 and `POOL_ERROR` says why. Pages is not done: it
-needs the shim and a pass over every cross-origin resource, and that is its own change.
+would not. Where the host cannot send them — GitHub Pages, a folder under
+`python3 -m http.server` — `site/coi.js` does: every page loads it first, and if the page
+is not isolated it registers itself as a service worker that adds the two headers to
+each response and reloads once. `tests/browser/coi_sweep.py` visits every page of the
+site both ways, headers and shim, and asks that `crossOriginIsolated` be true and nothing
+be blocked by the embedder policy. The notebook page is the one exception: JupyterLite
+owns a service worker at that scope, so it is isolated by headers only. Where none of
+this can work — `file://`, plain `http://` from another machine (a service worker needs a
+secure context) — `threadsAvailable()` is false and the same forward runs on one thread;
+`borch_cpu.threads()` says 0 and `POOL_ERROR` says why.
 
 The SwiftShader column is the reason this device exists in this shape: WebGPU's own CPU
 path was measured first, and it spent a minute compiling shaders for every new batch

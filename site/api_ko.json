@@ -3062,5 +3062,9 @@
   "cpu/threads/workerLoop": {
     "ko": "워커 쪽: 워커가 평생 돌리는 루프. `exports`는 공유 메모리 위 커널 모듈의 자기 인스턴스이고, `id`가 어느 작업이 자기 것인지 정한다. 매개변수와 전역 `Atomics`만 쓴다 — `Layout` 참조.",
     "src": "c104eae758b2"
+  },
+  "cpu/load/CpuKernels.dwconvRows": {
+    "ko": "`dwconvBiasAct`를 출력 행 `oy0..oy1`에만 — 이미지 하나 중 워커 하나의 몫.",
+    "src": "0a91b8dec1bf"
   }
 }
