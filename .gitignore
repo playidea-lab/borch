@@ -96,3 +96,5 @@ bundle/
 # The CPU kernels' Rust build. The emitted bytes are committed as base64 in
 # borch-ts/src/cpu/kernels.ts (borch-ts/wasm/build.py says why); the build tree is not.
 borch-ts/wasm/target/
+# Datasets the browser evaluations write for themselves
+tests/browser/.cache/

@@ -17,8 +17,9 @@ at run time**, and its terms. The licences are not written from memory —
 | | licence | how it was confirmed |
 |---|---|---|
 | **numpy** | BSD-3-Clause | `numpy-2.0.2.dist-info/LICENSE.txt` inside the wheel |
+| **Pillow** 10.2.0 (`vendor/pyodide/pillow-10.2.0-…whl`, the Pyodide build) | HPND (MIT-CMU) | `PIL/LICENSE` inside the wheel; it decodes the images `ImageFiles` is handed in the browser checks |
 
-That is all of it. One pure-Python wheel, and numpy is the only dependency.
+That is all of it. One pure-Python wheel; numpy is the only dependency, and Pillow is vendored for the browser checks alone.
 
 Using it in a browser needs Pyodide, and that is **something the host page
 loads** rather than something borch ships.

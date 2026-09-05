@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the review queue on CIFAR-10N, on the wheel, in a worker</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The wheel alone, in a Web Worker** — JupyterLite's shape: Pyodide in a worker,
+  // no page-side borch.ts, nothing but `pip install`. The worker installs numpy and the
+  // wheel from this checkout, imports `borch_webgpu` (which boots its own borch.ts from
+  // the bundle it carries), trains the hero's loop, exports ONNX, and posts back what it
+  // saw. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
+  const out = document.getElementById("out");
+  const wheel = location.origin + new URLSearchParams(location.search).get("wheel");
+  // A worker made from a blob URL resolves paths against the blob, so every URL it
+  // touches is spelled out with the page's origin.
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu) + " · WebAssembly.Suspending " + (typeof WebAssembly.Suspending));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import json, time, types
+import numpy as np
+import js
+from pyodide.ffi import run_sync
+import borch_webgpu as torch
+origin = ${JSON.stringify(origin)}
+def get(path, binary=False):
+    r = run_sync(js.fetch(origin + path))
+    if not r.ok: raise RuntimeError(f"{r.status} {path}")
+    return bytes(run_sync(r.arrayBuffer()).to_py()) if binary else str(run_sync(r.text()))
+ev = types.ModuleType("review_eval"); ev.__file__ = "/tmp/review_eval.py"
+exec(compile(get("/tests/review_eval.py"), "review_eval.py", "exec"), ev.__dict__)
+clean_by_name = json.loads(get("/tests/browser/.cache/cifar10n_5k_clean.json"))
+t0 = time.perf_counter()
+ds = torch.ImageFiles([("cifar10n_5k.zip", get("/tests/browser/.cache/cifar10n_5k.zip", binary=True))], size=224)
+backbone = torch.hub.load("imagenet-efficientnet-b0")
+mean = np.array([0.485, 0.456, 0.406], np.float32)[None, :, None, None]; std = np.array([0.229, 0.224, 0.225], np.float32)[None, :, None, None]
+chunks = []
+with torch.no_grad():
+    for xb, _ in ds.batches(32):
+        with torch.scope():
+            chunks.append(backbone.forward_head(backbone.forward_features(torch.tensor((xb - mean) / std)), pre_logits=True).numpy())
+feats = np.concatenate(chunks)
+feat_s = time.perf_counter() - t0
+score = torch.suspects(feats, ds.targets, k=5)
+clean = np.array([clean_by_name[n] for n in ds.names]); wrong = ds.targets != clean
+m = ev.queue_metrics(score, wrong)
+adapter = str(js.borch.Device.adapterInfo)
+f"cifar10n aggre 5000 · features {feat_s:.0f} s · noise {m['noise_rate']:.3f} · AUROC {m['auroc']:.3f} · p@20 {m['p@20']:.2f} · p@100 {m['p@100']:.2f} · p@500 {m['p@500']:.2f} · p@wrong {m['p@wrong']:.2f} · read {m['read_for_half']:.0%} for half, {m['read_for_90pct']:.0%} for 90% · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

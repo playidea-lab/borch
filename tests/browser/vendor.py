@@ -42,7 +42,7 @@ PYODIDE_BASE = f"https://cdn.jsdelivr.net/pyodide/v{PYODIDE_VERSION}/full/"
 # What Pyodide actually requests as it comes up. A missing one shows as a 404 in the console.
 PYODIDE_FILES = ["pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm",
                  "python_stdlib.zip", "pyodide-lock.json"]
-PYODIDE_PACKAGES = ["numpy"]          # the file name is looked up in the lock
+PYODIDE_PACKAGES = ["numpy", "pillow"]  # the file names are looked up in the lock; pillow decodes the images ImageFiles is handed
 
 # **TF.js, for the comparison bench and nothing else.** `borch-ts/test/compare.ts` trains
 # the same ResNet-18 step in TF.js beside borch.ts, on the same page, and the only

@@ -88,7 +88,7 @@
 # ## What this file does **not** run — counted, because it used to say it did
 #
 # The line above read "the commands below are all of it". They are all of the *golden
-# comparison*. There are **twenty-nine entry points that need a browser** and this file
+# comparison*. There are **thirty entry points that need a browser** and this file
 # names four:
 #
 #     here          run.py --lib borch · run.py --lib borch_webgpu ·
@@ -97,7 +97,7 @@
 #     not here      parity:ts · data:ts · device:ts · serialize:ts · example:ts ·
 #                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding ·
 #                   learner:site · wheel:py · lab:py · marimo:py · folder:py · hub:py · offline:py · trajectory:py ·
-#                   cpu:ts · cpu:py               (twenty more correctness checks)
+#                   cpu:ts · cpu:py · review:py   (twenty-one more correctness checks)
 #                   cost:ts · bench:ts · compare:ts · envelope:py · envelope2:py  (measurements, not checks)
 #
 #     `cpu:ts` arrived 2026-09-05: the CPU device against the WebGPU device on two hub
@@ -105,7 +105,7 @@
 #     `cpu:py` the same day: `borch_cpu` on the wheel in a Pyodide worker, no device brought up,
 #     compared with `borch_webgpu` where an adapter answers.
 #
-# **Nothing runs any of the twenty-nine automatically** — the reason above is a good one
+# **Nothing runs any of the thirty automatically** — the reason above is a good one
 # and it applies to all of them equally, so the twenty-five below are in exactly the position
 # the four above are: run when a person runs them.
 #

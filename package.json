@@ -63,6 +63,7 @@
     "hub:py": "uv run --with playwright python tests/browser/hub_py.py --build",
     "offline:py": "uv run --with playwright python tests/browser/marimo_probe.py --bundle",
     "trajectory:py": "uv run --with playwright python tests/browser/trajectory_py.py --build",
+    "review:py": "uv run --with playwright python tests/browser/review_eval_py.py --build",
     "build:lab": "python3 site/build_lab.py",
     "marimo:py": "uv run --with playwright python tests/browser/marimo_probe.py --build",
     "build:marimo": "python3 site/build_marimo.py",
