@@ -77,6 +77,7 @@ def upload_pass(page, t0, deadline, n=90):
     table to show their names, then the retrained accuracy. Returns (seconds, "acc% on N
     rows") or None. A zip, not ninety files: that is how a folder reaches a tab."""
     page.set_input_files('input[type="file"]', [zipped_folder(synthetic_pngs(n))])
+    body = ""
     while time.time() < deadline:
         page.wait_for_timeout(500)
         body = page.evaluate(OUTPUTS)
@@ -89,7 +90,11 @@ def upload_pass(page, t0, deadline, n=90):
             if acc and rows:
                 extra = f" · features {feat.group(2)} s" if feat else ""
                 return (time.time() - t0, f"{acc.group(1)}% on {rows.group(1).replace(',', '')} rows{extra}")
-    print("  upload pass: the table never showed the uploaded names")
+    # **Say whether it was the page or the clock.** The whole probe shares one deadline; a
+    # slow download in an earlier cell can spend it all, and then this pass never saw a
+    # single output — which is a different finding from a page that showed the wrong ones.
+    print("  upload pass: the table never showed the uploaded names"
+          + (" — the deadline was already spent before this pass looked" if not body else f"; the last outputs: {body[-300:]!r}"))
     return None
 
 
@@ -101,6 +106,7 @@ def scratch_pass(page, t0, deadline):
     except Exception as e:                                          # noqa: BLE001
         print(f"  scratch pass: the radio's label did not take a check ({type(e).__name__}); clicking its text")
         page.get_by_text("small CNN from scratch", exact=True).click()
+    body = ""
     while time.time() < deadline:
         page.wait_for_timeout(500)
         body = page.evaluate(OUTPUTS)
@@ -108,7 +114,8 @@ def scratch_pass(page, t0, deadline):
         kb = re.search(r"(\d+) KB of ONNX", body)
         if m and kb and int(kb.group(1)) < 1000:          # the CNN's file is ~118 KB, the backbone's 16 MB
             return (time.time() - t0, f"{m.group(1)}% · {kb.group(1)} KB")
-    print("  scratch pass: the small-CNN line never rendered; the last outputs:", repr(body[-500:]))
+    print("  scratch pass: the small-CNN line never rendered"
+          + (" — the deadline was already spent before this pass looked" if not body else f"; the last outputs: {body[-500:]!r}"))
     return None
 
 
