@@ -52,3 +52,4 @@ export function available(): boolean {
     return false;
   }
 }
+export { MainSide, makeControl, workerLoop, type Dispatcher, type Task, type Call } from "./cpu/threads.js";

@@ -4,7 +4,7 @@
  "korean": {
   "done": 747,
   "stale": 0,
-  "missing": 467
+  "missing": 469
  },
  "modules": [
   {
@@ -15519,6 +15519,14 @@
      "doc_ko": "모듈 하나의 바이트, 디코드된 것. 순수하다; 인스턴스화하지 않는다."
     },
     {
+     "kind": "function",
+     "name": "kernelsFromExports",
+     "signature": "export declare function kernelsFromExports(ex: WebAssembly.Exports, flavor: KernelFlavor, memoryIn?: WebAssembly.Memory): CpuKernels",
+     "doc": "The typed handle over an instance's exports. `loadKernels` uses it; so does a worker\nthat instantiated the same module over a shared memory (`threads.ts`) — the handle is\nthe same either way, and the checks are the same: each export a function, `memory` a\n`WebAssembly.Memory`, every name in `KERNELS_EXPORTS` present.",
+     "members": [],
+     "torch": "kernels_from_exports"
+    },
+    {
      "kind": "interface",
      "name": "LoadKernelsOptions",
      "signature": "export interface LoadKernelsOptions",
@@ -15543,7 +15551,7 @@
      "doc_ko": "디코드, 검증, 인스턴스화. 같은 맛으로 두 번 불러도 같은 promise 를 돌려준다 — 모듈은 메모리가 하나이고, 사본 둘은 힙 둘이 된다. 두 맛은 두 모듈이라 둘 다 실을 수 있고, 검사가 둘을 대조하는 길이 그것이다."
     }
    ],
-   "count": 34
+   "count": 35
   },
   {
    "name": "cpu/safetensors",
@@ -16160,8 +16168,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(K: CpuKernels, graph: CpuGraph)",
-       "doc": ""
+       "signature": "constructor(K: CpuKernels, graph: CpuGraph, pool?: Dispatcher | undefined)",
+       "doc": "`pool` is optional. Without it every kernel runs on this thread. With it the GEMMs are\ncut into row slices, the depthwise convolutions and pools into images, and an im2col\nblock with its GEMM is one task; the pool's workers instantiated the same module over\nthe same shared memory (`threads.ts`). Allocation stays here either way."
       },
       {
        "name": "forward",
@@ -22739,5 +22747,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3106
+ "total": 3107
 }
