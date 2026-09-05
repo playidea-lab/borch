@@ -1,13 +1,13 @@
-"""The trajectory golden on the wheel, in a worker — torch's training runs, step by
-step, through the binding on this tab's GPU.
+"""Segmentation in the browser: the U-Net of tests/seg_eval.py trained on Kvasir-SEG
+through the wheel, in a worker, on this tab's GPU — with a fifth of the masks corrupted,
+so the run answers both questions at once: does the browser reach torch's held-out IoU,
+and does its review queue (one minus the IoU between the model's mask and the given one)
+put the wrong masks first.
 
-    uv run --with playwright python tests/browser/trajectory_py.py [--headed] [--build]
+    uv run --with playwright python tests/browser/seg_eval_py.py [--headed] [--build] [--train=800] [--epochs=30]
 
-The same shape as wheel_probe.py: Pyodide in a worker, the wheel from this checkout. The
-page fetches tests/trajectory.py, the frozen curves and the initial weights from this
-checkout, runs every recipe on the wheel, and reports the largest relative loss deviation
-and the prediction agreement. Judged here: every step within one part in a hundred of
-torch's, predictions identical, no validation fault.
+Needs tests/browser/.cache/kvasir_96.npz (`python tests/seg_eval.py prepare`). A run
+shorter than the native reference reports its numbers and judges nothing.
 """
 import glob
 import os
@@ -17,13 +17,11 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve  # noqa: E402
 from launch import refuse_if_software  # noqa: E402
 from wheel_probe import wheel_is_stale  # noqa: E402
 
-GIVE_UP_MS = 10 * 60 * 1000
-TOL = 1e-2
+GIVE_UP_MS = 15 * 60 * 1000
 
 
 def main(argv):
@@ -44,11 +42,16 @@ def main(argv):
     if wheel_is_stale(wheel):
         print(f"{wheel} is older than the sources — run with --build", file=sys.stderr)
         return 2
-    if refuse_if_screen_off("the trajectory golden"):
+    train = int(next((a.split("=", 1)[1] for a in argv if a.startswith("--train=")), "800"))
+    epochs = int(next((a.split("=", 1)[1] for a in argv if a.startswith("--epochs=")), "30"))
+    if not (ROOT / "tests" / "browser" / ".cache" / "kvasir_96.npz").exists():
+        print("tests/browser/.cache/kvasir_96.npz is missing — `python tests/seg_eval.py prepare` makes it from ~/data/kvasir", file=sys.stderr)
+        return 2
+    if refuse_if_screen_off("segmentation on Kvasir-SEG"):
         return 1
     port, shutdown = serve(ROOT)
-    url = f"http://127.0.0.1:{port}/tests/browser/trajectory_py.html?wheel=/{wheel}"
-    profile = tempfile.mkdtemp(prefix="borch-trajectory-")
+    url = f"http://127.0.0.1:{port}/tests/browser/seg_eval_py.html?wheel=/{wheel}&train={train}&epochs={epochs}"
+    profile = tempfile.mkdtemp(prefix="borch-seg-")
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     try:
         with sync_playwright() as pw:
@@ -70,14 +73,16 @@ def main(argv):
     for line in got["text"].splitlines():
         if "adapter " in line:
             adapter = line.split("adapter ", 1)[1].split(" ·")[0]
-    if refuse_if_software(adapter, "the trajectory golden"):
+    if refuse_if_software(adapter, "segmentation on Kvasir-SEG"):
         return 1
     done = got.get("done") or ""
-    worsts = [float(v) for v in re.findall(r"worst ([0-9.e+-]+) at step", done)]
-    agrees = re.findall(r"pred agree (\d+)%", done)
-    from trajectory import RECIPES
-    ok = len(worsts) == len(RECIPES) and all(w < TOL for w in worsts) and agrees == ["100"] * len(RECIPES) and "faults 0" in done
-    print("**the wheel walks torch's training curves**" if ok else "**it did not** — see above")
+    auroc = re.search(r"AUROC ([0-9.]+)", done)
+    test_iou = re.search(r"test IoU ([0-9.]+)", done)
+    # The native reference (torch on the Mac's GPU, 800 images, 30 epochs): test IoU 0.446
+    # with a fifth of the masks wrong, queue AUROC 0.907. A shorter run only reports.
+    full = train >= 800 and epochs >= 30
+    ok = bool(auroc and test_iou) and "faults 0" in done and (not full or (float(test_iou.group(1)) >= 0.38 and float(auroc.group(1)) >= 0.85))
+    print(("**the browser learns the masks torch learns, and its queue puts the wrong ones first**" if full else "**a short run — numbers only**") if ok else "**it did not** — see above")
     return 0 if ok else 1
 
 

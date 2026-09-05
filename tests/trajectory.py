@@ -7,8 +7,9 @@
 The 4,744 golden cases ask one operation at a time. Both silent bugs of 4 September —
 the scalar cache that an in-place write poisoned, the in-place arithmetic that filled a
 buffer with NaN — passed every one of them and only showed when a loop ran: the second
-step read what the first had corrupted. So this asks the loop. Two recipes, the field
-trainer's two paths: a linear head on cached features, and a small CNN from scratch.
+step read what the first had corrupted. So this asks the loop. Three recipes, the field
+trainer's paths: a linear head on cached features, a small CNN from scratch, and a
+two-level U-Net with a skip connection — one logit per pixel.
 Everything a run depends on is pinned — the data (numpy, seeded), the initial weights
 (written by torch, loaded by both), the order (no shuffle), the optimiser — so the only
 thing free to differ is the arithmetic, and that is what is compared: the loss at every
@@ -49,6 +50,40 @@ def cnn_data():
     return x.transpose(0, 3, 1, 2).astype(np.float32), y.astype(np.int64)
 
 
+def unet_data():
+    """16 images of 3×16×16, each a bright disc on a dark ground, and the disc's mask —
+    the smallest segmentation problem that still has an encoder, a decoder and a skip."""
+    rng = np.random.default_rng(13)
+    yy, xx = np.mgrid[0:16, 0:16]
+    x, m = [], []
+    for _ in range(16):
+        cy, cx, r = rng.uniform(4, 12), rng.uniform(4, 12), rng.uniform(2.5, 4.5)
+        disc = ((yy - cy) ** 2 + (xx - cx) ** 2 <= r * r).astype(np.float32)
+        colour = rng.uniform(0.5, 1.0, 3).astype(np.float32)
+        img = 0.2 + disc[None] * colour[:, None, None] + 0.1 * rng.standard_normal((3, 16, 16)).astype(np.float32)
+        x.append(img); m.append(disc[None])
+    return np.stack(x).astype(np.float32), np.stack(m).astype(np.float32)
+
+
+def build_unet(L):
+    """A two-level U-Net: conv → pool → conv → transposed conv → concat with the skip →
+    conv → 1×1 to one logit per pixel."""
+    class UNet(L.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.enc1 = L.nn.Sequential(L.nn.Conv2d(3, 8, 3, padding=1), L.nn.ReLU())
+            self.pool = L.nn.MaxPool2d(2)
+            self.enc2 = L.nn.Sequential(L.nn.Conv2d(8, 16, 3, padding=1), L.nn.ReLU())
+            self.up = L.nn.ConvTranspose2d(16, 8, 2, stride=2)
+            self.dec = L.nn.Sequential(L.nn.Conv2d(16, 8, 3, padding=1), L.nn.ReLU(), L.nn.Conv2d(8, 1, 1))
+
+        def forward(self, x):
+            a = self.enc1(x)
+            b = self.enc2(self.pool(a))
+            return self.dec(L.cat([self.up(b), a], 1))
+    return UNet()
+
+
 RECIPES = {
     # name: (data, build, optimiser, steps)
     "head": (head_data,
@@ -65,6 +100,9 @@ RECIPES = {
                 L.nn.AdaptiveAvgPool2d(1), L.nn.Flatten(), L.nn.Linear(16, 3)),
             lambda L, params: L.optim.Adam(params, lr=1e-2),
             40),
+    "unet": (unet_data, build_unet,
+             lambda L, params: L.optim.Adam(params, lr=1e-2),
+             30),
 }
 
 
@@ -78,7 +116,7 @@ def run(L, name, init):
     model.train()
     x, y = L.tensor(x_np), L.tensor(y_np)
     opt = optimiser(L, model.parameters())
-    crit = L.nn.CrossEntropyLoss()
+    crit = L.nn.BCEWithLogitsLoss() if name == "unet" else L.nn.CrossEntropyLoss()
     losses = []
     scope = getattr(L, "scope", None)               # the browser side frees a step's buffers here
     for _ in range(steps):
@@ -98,11 +136,18 @@ def run(L, name, init):
     model.eval()
     if scope is not None:
         with scope():
-            pred = model(x).argmax(1).tolist()
+            pred = predict(name, model(x))
     else:
         with L.no_grad():
-            pred = model(x).argmax(1).tolist()
-    return losses, [int(p) for p in pred]
+            pred = predict(name, model(x))
+    return losses, pred
+
+
+def predict(name, out):
+    """The run's answer as a flat list of ints: a class per row, or a bit per pixel."""
+    if name == "unet":
+        return [int(v > 0) for v in out.flatten().tolist()]
+    return [int(p) for p in out.argmax(1).tolist()]
 
 
 def init_path(name):
@@ -130,7 +175,8 @@ def dump():
               lambda t: t.detach().cpu().numpy() if hasattr(t, "detach") else None)
         losses, pred = run(torch, name, load_init(torch, name))
         frozen[name] = {"losses": losses, "pred": pred}
-        print(f"{name}: {len(losses)} steps · loss {losses[0]:.4f} → {losses[-1]:.4f} · {sum(p == int(y) for p, y in zip(pred, RECIPES[name][0]()[1]))}/{len(pred)} right")
+        truth = RECIPES[name][0]()[1].flatten()
+        print(f"{name}: {len(losses)} steps · loss {losses[0]:.4f} → {losses[-1]:.4f} · {sum(p == int(y) for p, y in zip(pred, truth))}/{len(pred)} right")
     FROZEN.write_text(json.dumps(frozen), encoding="utf-8")
     print(f"froze → {FROZEN}")
 

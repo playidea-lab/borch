@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>segmentation on Kvasir-SEG, on the wheel, in a worker</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The wheel alone, in a Web Worker** — JupyterLite's shape: Pyodide in a worker,
+  // no page-side borch.ts, nothing but `pip install`. The worker installs numpy and the
+  // wheel from this checkout, imports `borch_webgpu` (which boots its own borch.ts from
+  // the bundle it carries), trains a U-Net on eight hundred endoscopy images with a fifth of the masks
+  // corrupted, and posts back the held-out IoU and the review queue's metrics. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  // A worker made from a blob URL resolves paths against the blob, so every URL it
+  // touches is spelled out with the page's origin.
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu) + " · WebAssembly.Suspending " + (typeof WebAssembly.Suspending));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import sys, time, types
+import numpy as np
+import js
+from pyodide.ffi import run_sync
+import borch_webgpu as torch
+origin = ${JSON.stringify(origin)}
+def get(path, binary=False):
+    r = run_sync(js.fetch(origin + path))
+    if not r.ok: raise RuntimeError(f"{r.status} {path}")
+    return bytes(run_sync(r.arrayBuffer()).to_py()) if binary else str(run_sync(r.text()))
+def module(name, path):
+    mod = types.ModuleType(name); mod.__file__ = f"/tmp/{name}.py"
+    exec(compile(get(path), f"{name}.py", "exec"), mod.__dict__); sys.modules[name] = mod
+    return mod
+module("review_eval", "/tests/review_eval.py")
+S = module("seg_eval", "/tests/seg_eval.py")
+x, m = S.load(get("/tests/browser/.cache/kvasir_96.npz", binary=True))
+say = lambda s: js.postMessage(js.Object.fromEntries(js.Map.new([["say", s]])))
+r = S.evaluate(torch, x, m, n_train=${parseInt(q.get("train") || "800")}, noise=0.2, epochs=${parseInt(q.get("epochs") || "30")}, log=say)
+q = r["queue"]
+adapter = str(js.borch.Device.adapterInfo)
+f"kvasir-seg 96px · train {r['n_train']} · epochs {r['epochs']} · {r['seconds']:.0f} s · test IoU {r['test_iou']:.3f} · queue AUROC {q['auroc']:.3f} · p@20 {q['p@20']:.2f} · p@wrong {q['p@wrong']:.2f} · read {q['read_for_90pct']:.0%} for 90% · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

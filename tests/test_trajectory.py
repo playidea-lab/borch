@@ -1,9 +1,9 @@
-"""The trajectory golden on the numpy core: torch's two training runs, step by step.
+"""The trajectory golden on the numpy core: torch's training runs, step by step.
 
 Both silent bugs of 4 September passed every single-op case and showed only in a loop;
 this holds the core's loops to torch's. Tolerances: the loss at every step within one
 part in a hundred of torch's (measured drift: 2e-4 for the head, 2.5e-3 for the CNN
-at step 40, float32 accumulation), and the final predictions identical.
+at step 40, 4e-7 for the U-Net, float32 accumulation), and the final predictions identical.
 """
 import pytest
 

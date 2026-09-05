@@ -1,0 +1,60 @@
+{
+  "dataset": "kvasir-seg 96px",
+  "device": "mps",
+  "runs": {
+    "noise_0": {
+      "n_train": 800,
+      "epochs": 30,
+      "seconds": 21.1,
+      "test_iou": 0.5521092476463522,
+      "train_iou_vs_clean": 0.7024318842010305,
+      "queue": {
+        "n": 800,
+        "wrong": 0,
+        "noise_rate": 0.0,
+        "auroc": NaN,
+        "p@20": 0.0,
+        "p@100": 0.0,
+        "p@500": 0.0,
+        "p@wrong": NaN,
+        "read_for_half": NaN,
+        "read_for_90pct": NaN
+      }
+    },
+    "noise_0.2": {
+      "n_train": 800,
+      "epochs": 30,
+      "seconds": 20.3,
+      "test_iou": 0.44615986786200096,
+      "train_iou_vs_clean": 0.5136424202994997,
+      "queue": {
+        "n": 800,
+        "wrong": 160,
+        "noise_rate": 0.2,
+        "auroc": 0.90662109375,
+        "p@20": 0.6,
+        "p@100": 0.66,
+        "p@500": 0.32,
+        "p@wrong": 0.65,
+        "read_for_half": 0.16,
+        "read_for_90pct": 0.32625
+      }
+    }
+  },
+  "browser": {
+    "probe": "tests/browser/seg_eval_py.py --headed",
+    "adapter": "apple / metal-3",
+    "n_train": 800,
+    "epochs": 30,
+    "seconds": 104,
+    "noise_0.2": {
+      "test_iou": 0.403,
+      "queue": {
+        "auroc": 0.905,
+        "p@20": 0.45,
+        "p@wrong": 0.62,
+        "read_for_90pct": 0.33
+      }
+    }
+  }
+}
