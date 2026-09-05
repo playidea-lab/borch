@@ -60,10 +60,14 @@ def entries():
     can hand them to borch-hub as they are.
     """
     base = _page_base()
+    tried = []
     for url in (base + "models/index.json", REGISTRY):
         try:
             index = _fetch_json(url)
-        except Exception:                                                # noqa: BLE001
+        except Exception as e:                                           # noqa: BLE001
+            # Both failing is reported with both reasons — the local one is the bundle's
+            # and its failure is the one to read first.
+            tried.append(f"{url} → {type(e).__name__}: {str(e)[:120]}")
             continue
         # `list` is torch's name for this function below, so the builtin is not asked here.
         rows = (index.get("models") or index.get("entries") or []) if isinstance(index, dict) else index
@@ -75,7 +79,7 @@ def entries():
                 row["manifestUrl"] = base + murl
             out.append(row)
         return out
-    raise RuntimeError(f"no model registry reachable — neither {base}models/index.json nor {REGISTRY}")
+    raise RuntimeError("no model registry reachable — " + "; ".join(tried))
 
 
 def load(name_or_url, cache=True, verify=True, timeout_ms=None):
