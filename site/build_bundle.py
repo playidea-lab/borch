@@ -107,8 +107,9 @@ def fetch(url, into):
 
 
 def main():
-    if not (SRC / "index.html").exists():
-        sh([sys.executable, str(ROOT / "site" / "build_marimo.py")])
+    # Always from a fresh workbench build: it carries the wheel, and a bundle over a
+    # stale one shipped a binding the sources had moved past (measured on the 4090).
+    sh([sys.executable, str(ROOT / "site" / "build_marimo.py")])
     shutil.rmtree(OUT, ignore_errors=True)
     shutil.copytree(SRC, OUT, ignore=shutil.ignore_patterns("CLAUDE.md", "__marimo__"))
     urls = recorded_requests(SRC)
