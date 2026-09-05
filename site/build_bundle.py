@@ -55,7 +55,10 @@ def recorded_requests(site_dir):
     urls = []
     try:
         with sync_playwright() as pw:
-            ctx = pw.chromium.launch_persistent_context(tempfile.mkdtemp(), headless=True, args=list(FLAGS), timeout=60_000)
+            # Headed where there is a display: the GPU boxes carry the full Chromium only,
+            # not the headless shell a headless launch reaches for (measured on the 4090).
+            import os
+            ctx = pw.chromium.launch_persistent_context(tempfile.mkdtemp(), headless=not os.environ.get("DISPLAY"), args=list(FLAGS), timeout=60_000)
             page = ctx.new_page()
             page.on("request", lambda r: urls.append(r.url))
             page.goto(f"http://127.0.0.1:{port}/{site_dir.relative_to(ROOT).as_posix()}/index.html", wait_until="load")
