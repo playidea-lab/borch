@@ -142,14 +142,18 @@ def _claims(got):
          "A Worker constructor that exists but cannot run would put the thread rows "
          "back on their old footing."),
 
-        ("there is no shared buffer for a thread pool to work over",
-         got["hasSharedArrayBuffer"] == "undefined" and not got["crossOriginIsolated"],
+        ("there is a shared buffer, and a thread pool works over it",
+         got["hasSharedArrayBuffer"] == "function" and got["crossOriginIsolated"],
          f"typeof SharedArrayBuffer = {got['hasSharedArrayBuffer']}, "
          f"crossOriginIsolated = {got['crossOriginIsolated']}",
-         "**This is the one to watch.** `set_num_threads` and its interop twin are "
-         "declined because threads without shared memory can only copy, and torch's "
-         "intra-op pool is threads over one buffer. If this page becomes "
-         "cross-origin-isolated, that reason is spent and the pair is buildable."),
+         "**This one flipped once, on 2026-09-05.** It read *there is no shared buffer* "
+         "and said `set_num_threads` was buildable the day the page became "
+         "cross-origin-isolated. The page did (COOP/COEP from the servers, `site/coi.js` "
+         "where a host cannot send them), the pool was built — `borch_cpu`'s "
+         "`WorkerPool` over one wasm memory — and the reason moved to what the knob "
+         "sizes: a pool of *tensor ops*, which this library does not have on the CPU. "
+         "If this ever came back false, the cpu device would be on one thread again and "
+         "`coi_sweep.py` is the check that says which page lost it."),
 
         ("a browser has a working file layer",
          got["opfsRoundTrip"] == "7,8,9",
