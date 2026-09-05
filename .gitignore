@@ -90,3 +90,5 @@ site/lab-src/.cache/
 # marimo, built by site/build_marimo.py (the deploy builds it)
 site/marimo/
 site/marimo-src/__marimo__/
+# The field trainer as one folder, built by site/build_bundle.py
+bundle/

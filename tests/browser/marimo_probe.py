@@ -125,8 +125,24 @@ def main(argv):
             return 2
     if refuse_if_screen_off("the workbench page"):
         return 1
+    # `--dir=bundle`: press the offline bundle instead of the site's build. With
+    # `--offline`, every request for another host is refused and counted — one is a
+    # failure, since a folder that phones home is not the bundle it claims to be.
+    page_dir = next((a.split("=", 1)[1] for a in argv if a.startswith("--dir=")), "site/marimo")
+    offline = "--offline" in argv
+    if "--bundle" in argv:
+        # The offline bundle: built here (site/build_bundle.py records what the site's
+        # build fetches and mirrors it), then pressed with the network refused.
+        import subprocess
+        r = subprocess.run([sys.executable, str(ROOT / "site" / "build_bundle.py")], cwd=ROOT, text=True, capture_output=True)
+        if r.returncode:
+            print(f"build_bundle failed:\n{(r.stdout + r.stderr)[-1200:]}", file=sys.stderr)
+            return 2
+        print(r.stdout.strip().splitlines()[-1])
+        page_dir, offline = "bundle", True
     port, shutdown = serve(ROOT)
-    url = f"http://127.0.0.1:{port}/site/marimo/index.html"
+    url = f"http://127.0.0.1:{port}/{page_dir}/index.html"
+    phoned = []
     profile = tempfile.mkdtemp(prefix="borch-marimo-")
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     marks = {}
@@ -135,6 +151,14 @@ def main(argv):
             context = pw.chromium.launch_persistent_context(profile, headless=not headed, channel=channel, args=list(FLAGS), timeout=60_000)
             try:
                 page = context.new_page()
+                if offline:
+                    def gate(route, request):
+                        if request.url.startswith(("http://127.0.0.1", "blob:", "data:")):
+                            route.continue_()
+                        else:
+                            phoned.append(request.url)
+                            route.abort()
+                    page.route("**/*", gate)
                 t0 = time.time()
                 page.goto(url, wait_until="load")
                 page.wait_for_selector('[data-testid="run-button"]', timeout=GIVE_UP_MS)
@@ -171,6 +195,10 @@ def main(argv):
                 context.close()
     finally:
         shutdown()
+    if offline:
+        print(f"  offline: {len(phoned)} request(s) tried to leave" + (":" if phoned else ""))
+        for u in phoned[:8]:
+            print(f"      {u[:140]}")
     for key in ("adapter", "trained", "queue", "export", "uploaded", "scratch"):
         if marks.get(key):
             print(f"  {key:8s} {marks[key][0]:5.1f} s  {marks[key][1]}")
@@ -183,6 +211,7 @@ def main(argv):
         return 1
     ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "uploaded", "scratch"))
     ok = ok and int(marks["scratch"][1].split("%")[0]) >= 90
+    ok = ok and not phoned
     ok = ok and int(marks["trained"][1]) >= 90 and int(marks["queue"][1]) == 90
     ok = ok and int(marks["uploaded"][1].split("%")[0]) >= 90 and f"on {zip_n} rows" in marks["uploaded"][1]
     print("**the workbench trains, reviews and exports**" if ok else "**it did not** — see above")

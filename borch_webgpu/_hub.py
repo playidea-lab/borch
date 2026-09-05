@@ -42,12 +42,40 @@ def _fetch_json(url):
     return _run_sync(response.json()).to_py()
 
 
+def _page_base():
+    """The page's folder as an absolute URL. The kernel may run in a worker whose
+    `location` sits under `<page>/assets/`; the page is one level up from there."""
+    href = str(_js.location.href)
+    if "/assets/" in href:
+        return href.split("/assets/")[0] + "/"
+    return href.rsplit("/", 1)[0] + "/"
+
+
 def entries():
-    """Every model the registry lists — name, version, task, bytes, manifestUrl."""
-    index = _fetch_json(REGISTRY)
-    # `list` is torch's name for this function below, so the builtin is not asked here.
-    rows = (index.get("models") or index.get("entries") or []) if isinstance(index, dict) else index
-    return [dict(row) for row in rows]
+    """Every model the registry lists — name, version, task, bytes, manifestUrl.
+
+    A `models/index.json` beside the page is asked first — that is the offline
+    bundle's catalogue, its manifest paths relative to the page — and the public
+    catalogue after it. Relative `manifestUrl`s are made absolute here so `load`
+    can hand them to borch-hub as they are.
+    """
+    base = _page_base()
+    for url in (base + "models/index.json", REGISTRY):
+        try:
+            index = _fetch_json(url)
+        except Exception:                                                # noqa: BLE001
+            continue
+        # `list` is torch's name for this function below, so the builtin is not asked here.
+        rows = (index.get("models") or index.get("entries") or []) if isinstance(index, dict) else index
+        out = []
+        for row in rows:
+            row = dict(row)
+            murl = row.get("manifestUrl", "")
+            if murl and "://" not in murl:
+                row["manifestUrl"] = base + murl
+            out.append(row)
+        return out
+    raise RuntimeError(f"no model registry reachable — neither {base}models/index.json nor {REGISTRY}")
 
 
 def load(name_or_url, cache=True, verify=True, timeout_ms=None):

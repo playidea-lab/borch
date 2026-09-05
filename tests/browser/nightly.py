@@ -57,6 +57,8 @@ CHECKS = [
     ("folder",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/folder5k.py", "--make=5000"]),
     # The wheel loads a catalogue model in Python (`torch.hub.load`) and runs it at 224 px.
     ("hub",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/hub_py.py", "--build"]),
+    # The offline bundle: built from the site's build, then pressed with every outside request refused.
+    ("bundle",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--bundle"]),
     ("example",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/readme.py"]),
     # `--py`: every Python twin on the lesson pages is pressed too (Pyodide from vendor/).
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py", "--py"]),

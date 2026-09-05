@@ -90,6 +90,7 @@
     <ul>
       <li>열고 10초쯤 커널이 뜬다(Pyodide 와 marimo 를 받는 시간). 셀은 자동 실행되지 않으니 오른쪽 아래 실행 버튼을 누른다.</li>
       <li>라벨은 파일명의 첫 <code>_</code> 앞부분이다. 아무것도 올리지 않으면 합성 3클래스로 돈다. 일을 하는 두 호출은 라이브러리 것이다. <code>torch.decode_images</code>가 파일을 이름에서 읽은 라벨과 함께 NCHW 배치로 만들고, (<code>torch.ImageFiles</code>는 같은 일을 필요할 때만 한다 — 수천 장의 zip 폴더를 배치마다 풀고 폴더명을 라벨로), <code>torch.suspects</code>가 모델 특징 공간에서 가장 가까운 이웃 다섯 개 중 라벨이 다른 비율로 각 라벨을 점수화한다 — 검수 표의 정렬 기준이다.</li>
+      <li>같은 노트북이 아무것도 못 내보내는 망을 위해 <strong>폴더 하나</strong>로 나온다: <code>python3 site/build_bundle.py</code>가 Pyodide·marimo 패키지·백본을 페이지 옆에 미러하고(75 MB), 검사가 바깥 요청을 전부 막은 채 눌러 본다.</li>
       <li>탭의 메모리와 Pyodide 의 패키지 범위 안에서 돈다 — <a href="notebook.html">노트북 페이지</a>의 목록과 같다.</li>
     </ul>
     <p class="small muted">
