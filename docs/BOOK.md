@@ -1533,8 +1533,8 @@ forward, one thread, 1.07 s for forty-eight images.
 
 What it does not do, written down: anything else. A second layer, another loss, Adam,
 a backbone that learns — absent by name. The plans that turn a checkpoint into a graph
-live with the test for now — `bimm-ts` owns the architectures and they belong beside
-its tables.
+live in `bimm-ts` (0.11.0, `cpuGraphFor`), beside the tables that build the `nn.Module`s
+— the same table, two outputs; the check page here imports bimm's and carries no copy.
 
 ### How much it does
 

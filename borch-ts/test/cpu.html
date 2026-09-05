@@ -4,7 +4,7 @@
 <script type="importmap">
 { "imports": {
     "borch-ts": "/borch-ts/dist/src/index.js",
-    "bimm-ts": "https://esm.sh/bimm-ts@0.10.0?external=borch-ts",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.11.0?external=borch-ts",
     "borch-hub": "https://esm.sh/borch-hub@0.4.0?external=borch-ts,bimm-ts"
 } }
 </script>
@@ -18,7 +18,8 @@
     const only = new URLSearchParams(location.search).get("model");
     try {
       const hub = await import("borch-hub");
-      const { text, checks } = await report(hub, "https://models.pilab.kr/index.json", only);
+      const bimm = await import("bimm-ts");
+      const { text, checks } = await report(hub, bimm, "https://models.pilab.kr/index.json", only);
       window.__borchCpu = { text, checks };
       out.textContent = text;
     } catch (err) {

@@ -10,14 +10,15 @@
  * image goes through both. If the CPU graph is wired right — BatchNorm folded, weights
  * repacked, padding channels held at zero — the two answer the same to float32 noise.
  *
- * ## The plans are written here, for now
+ * ## The plans live in bimm
  *
- * `bimm-ts` owns the architectures and builds them as `nn.Module`s; its plan tables are
- * not exported. The two conversions below carry the tables themselves, which is a copy,
- * and a copy is the shape that drifts. This is the stopgap for proving the device; the
- * conversions move into bimm beside the plans they mirror, and this file then imports
- * them. Until then, a checkpoint key this file spells wrong fails loudly with the key
- * list — that is the guard against the copy being wrong in a way that passes.
+ * `bimm-ts` owns the architectures, and since 0.11.0 its plan tables build the CPU
+ * graph too: `cpuGraphFor(name, st, opts)` beside the `efficientnetPlan` and
+ * `resnetPlan` that build the `nn.Module`s. This file carried a copy of those tables
+ * for a day to prove the device before bimm could depend on it; the copy is gone, and
+ * what is checked here is bimm's conversion against the GPU model bimm also built.
+ * The page imports bimm (esm.sh, pinned) and hands the function in, the way it hands
+ * the hub in — this package does not depend on bimm.
  *
  * ## The tolerance is measured, not chosen
  *
@@ -28,9 +29,8 @@
  * visible rather than assumed.
  */
 import { init, Device, Tensor, noGrad, scope, keepAlive } from "../src/index.js";
-import { ACT } from "../src/cpu/load.js";
 import { loadKernels } from "../src/cpu/load.js";
-import { GraphBuilder, type CpuGraph, type BatchNorm } from "../src/cpu/graph.js";
+import type { CpuGraph } from "../src/cpu/graph.js";
 import { CpuRunner } from "../src/cpu/runner.js";
 import { readSafetensors, type HostStateDict } from "../src/cpu/safetensors.js";
 import { LinearHead, cosineNeighbours } from "../src/cpu/train.js";
@@ -47,82 +47,16 @@ export interface ModelLike { eval(): unknown; forward(x: Tensor): Tensor; forwar
 
 interface IndexEntry { readonly name: string; readonly version: string; readonly manifestUrl: string }
 
-// ---- the two conversions ----
+// ---- what the page hands in from bimm ----
 
-function need(st: HostStateDict, key: string): Float32Array {
-  const t = st.tensors.get(key);
-  if (!t) {
-    const near = [...st.tensors.keys()].filter((k) => k.startsWith(key.split(".").slice(0, 2).join("."))).slice(0, 8);
-    throw new Error(`checkpoint has no "${key}" — nearby: ${near.join(", ")}`);
-  }
-  return t.data;
-}
-function bn(st: HostStateDict, prefix: string): BatchNorm {
-  return { weight: need(st, `${prefix}.weight`), bias: need(st, `${prefix}.bias`), runningMean: need(st, `${prefix}.running_mean`), runningVar: need(st, `${prefix}.running_var`) };
+/** `cpuGraphFor` as bimm-ts 0.11.0 exports it. Typed here so this package does not import bimm. */
+export interface BimmLike {
+  cpuGraphFor(name: { library: string; factory: string }, st: HostStateDict, opts: { numClasses: number; features?: boolean }): CpuGraph;
 }
 
-/** timm `efficientnet_b0`: the table bimm's `efficientnetPlan(1, 1)` produces. */
-export function efficientnetB0Graph(st: HostStateDict, features = false): CpuGraph {
-  const stages: readonly [number, number, number, number, number][] = [
-    // kernel, expansion, cout, repeats, stride
-    [3, 1, 16, 1, 1], [3, 6, 24, 2, 2], [5, 6, 40, 2, 2], [3, 6, 80, 3, 2], [5, 6, 112, 3, 1], [5, 6, 192, 4, 2], [3, 6, 320, 1, 1],
-  ];
-  const g = new GraphBuilder();
-  const x = g.input(3);
-  let h = g.conv(x, { weight: need(st, "conv_stem.weight"), cout: 32, cin: 3, k: 3, stride: 2, pad: 1, bn: bn(st, "bn1"), act: ACT.swish });
-  let cin = 32;
-  stages.forEach(([k, e, cout, repeats, s], si) => {
-    for (let i = 0; i < repeats; i++) {
-      const stride = i === 0 ? s : 1, p = `blocks.${si}.${i}`, se = Math.round(cin * 0.25), pad = (k - 1) / 2;
-      const skip = stride === 1 && cin === cout;
-      let d: number, out: number;
-      if (si === 0) {
-        d = g.dwconv(h, { weight: need(st, `${p}.conv_dw.weight`), cout: cin, cin, k, stride, pad, bn: bn(st, `${p}.bn1`), act: ACT.swish });
-        d = g.se(d, need(st, `${p}.se.conv_reduce.weight`), need(st, `${p}.se.conv_reduce.bias`), need(st, `${p}.se.conv_expand.weight`), need(st, `${p}.se.conv_expand.bias`), se);
-        out = g.conv(d, { weight: need(st, `${p}.conv_pw.weight`), cout, cin, k: 1, stride: 1, pad: 0, bn: bn(st, `${p}.bn2`) });
-      } else {
-        const mid = cin * e;
-        const ex = g.conv(h, { weight: need(st, `${p}.conv_pw.weight`), cout: mid, cin, k: 1, stride: 1, pad: 0, bn: bn(st, `${p}.bn1`), act: ACT.swish });
-        d = g.dwconv(ex, { weight: need(st, `${p}.conv_dw.weight`), cout: mid, cin: mid, k, stride, pad, bn: bn(st, `${p}.bn2`), act: ACT.swish });
-        d = g.se(d, need(st, `${p}.se.conv_reduce.weight`), need(st, `${p}.se.conv_reduce.bias`), need(st, `${p}.se.conv_expand.weight`), need(st, `${p}.se.conv_expand.bias`), se);
-        out = g.conv(d, { weight: need(st, `${p}.conv_pwl.weight`), cout, cin: mid, k: 1, stride: 1, pad: 0, bn: bn(st, `${p}.bn3`) });
-      }
-      h = skip ? g.add(out, h) : out;
-      cin = cout;
-    }
-  });
-  h = g.conv(h, { weight: need(st, "conv_head.weight"), cout: 1280, cin, k: 1, stride: 1, pad: 0, bn: bn(st, "bn2"), act: ACT.swish });
-  const pooled = g.gap(h);
-  if (features) return g.finish(pooled);
-  return g.finish(g.linear(pooled, need(st, "classifier.weight"), need(st, "classifier.bias"), 1000));
-}
-
-/** timm `resnet18`: BasicBlock ×[2,2,2,2], the table bimm's `resnetPlan("resnet18")` produces. */
-export function resnet18Graph(st: HostStateDict): CpuGraph {
-  const g = new GraphBuilder();
-  const x = g.input(3);
-  let h = g.conv(x, { weight: need(st, "conv1.weight"), cout: 64, cin: 3, k: 7, stride: 2, pad: 3, bn: bn(st, "bn1"), act: ACT.relu });
-  h = g.maxpool(h, 3, 2, 1);
-  let cin = 64;
-  [64, 128, 256, 512].forEach((width, li) => {
-    for (let i = 0; i < 2; i++) {
-      const stride = i === 0 ? (li === 0 ? 1 : 2) : 1, p = `layer${li + 1}.${i}`;
-      const a = g.conv(h, { weight: need(st, `${p}.conv1.weight`), cout: width, cin, k: 3, stride, pad: 1, bn: bn(st, `${p}.bn1`), act: ACT.relu });
-      const b = g.conv(a, { weight: need(st, `${p}.conv2.weight`), cout: width, cin: width, k: 3, stride: 1, pad: 1, bn: bn(st, `${p}.bn2`) });
-      const shortcut = (stride !== 1 || cin !== width)
-        ? g.conv(h, { weight: need(st, `${p}.downsample.0.weight`), cout: width, cin, k: 1, stride, pad: 0, bn: bn(st, `${p}.downsample.1`) })
-        : h;
-      h = g.add(b, shortcut, ACT.relu);
-      cin = width;
-    }
-  });
-  const pooled = g.gap(h);
-  return g.finish(g.linear(pooled, need(st, "fc.weight"), need(st, "fc.bias"), 1000));
-}
-
-const MODELS: readonly { hub: string; convert: (st: HostStateDict) => CpuGraph }[] = [
-  { hub: "imagenet-efficientnet-b0", convert: efficientnetB0Graph },
-  { hub: "imagenet-resnet18", convert: resnet18Graph },
+const MODELS: readonly { hub: string; factory: string }[] = [
+  { hub: "imagenet-efficientnet-b0", factory: "efficientnet_b0" },
+  { hub: "imagenet-resnet18", factory: "resnet18" },
 ];
 
 // ---- the check ----
@@ -147,7 +81,7 @@ async function median(fn: () => Promise<void> | void, n: number): Promise<number
   return t[Math.floor(t.length / 2)] ?? NaN;
 }
 
-export async function report(hub: HubLike, indexUrl: string, only: string | null): Promise<{ text: string; checks: Check[] }> {
+export async function report(hub: HubLike, bimm: BimmLike, indexUrl: string, only: string | null): Promise<{ text: string; checks: Check[] }> {
   const lines: string[] = [];
   const checks: Check[] = [];
   const say = (s: string): void => { lines.push(s); console.log(`[cpu] ${s}`); };
@@ -174,7 +108,7 @@ export async function report(hub: HubLike, indexUrl: string, only: string | null
     say(`loaded on gpu and fetched ${(bytes.length / 1e6).toFixed(1)} MB in ${(performance.now() - t0).toFixed(0)} ms`);
     const st = readSafetensors(bytes);
     const t1 = performance.now();
-    const graph = m.convert(st);
+    const graph = bimm.cpuGraphFor({ library: "timm", factory: m.factory }, st, { numClasses: 1000 });
     const runner = new CpuRunner(K, graph);
     say(`cpu graph: ${graph.nodes.length} nodes, built and uploaded in ${(performance.now() - t1).toFixed(0)} ms`);
 
@@ -217,7 +151,7 @@ export async function report(hub: HubLike, indexUrl: string, only: string | null
     const { manifest, model } = await hub.load(entry.manifestUrl, { verify: false });
     model.eval();
     const st = readSafetensors(await hub.fetchWeights(manifest, entry.manifestUrl));
-    const featureRunner = new CpuRunner(K, efficientnetB0Graph(st, true));
+    const featureRunner = new CpuRunner(K, bimm.cpuGraphFor({ library: "timm", factory: "efficientnet_b0" }, st, { numClasses: 1000, features: true }));
     const N = 48, D = 1280, Kc = 5;
     const arr = seeded(N * 3 * 224 * 224, 1234);
     const x = keepAlive(Tensor.from(arr, [N, 3, 224, 224]));
