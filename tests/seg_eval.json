@@ -43,18 +43,23 @@
   },
   "browser": {
     "probe": "tests/browser/seg_eval_py.py --headed",
-    "adapter": "apple / metal-3",
+    "adapter": "apple / metal-3 (M4 Max)",
     "n_train": 800,
     "epochs": 30,
-    "seconds": 104,
+    "seconds": 55,
     "noise_0.2": {
-      "test_iou": 0.403,
+      "test_iou": 0.419,
       "queue": {
-        "auroc": 0.905,
-        "p@20": 0.45,
-        "p@wrong": 0.62,
-        "read_for_90pct": 0.33
+        "auroc": 0.921,
+        "p@20": 0.7,
+        "p@wrong": 0.68,
+        "read_for_90pct": 0.31
       }
+    },
+    "before_batchnorm_rewrite": {
+      "seconds": 104,
+      "test_iou": 0.403,
+      "auroc": 0.905
     }
   }
 }

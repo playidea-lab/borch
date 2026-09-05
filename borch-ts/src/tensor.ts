@@ -11634,24 +11634,25 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const key = `${N}:${C}:${S}`;
     const mean = dev().alloc(C);
     const variance = dev().alloc(C);
-    dev().run1d(
+    // A workgroup per channel (see the kernel) — the grid is the channel count itself.
+    dev().run(
       dev().pipeline(`bns:${key}`, () => batchNormStats(N, C, S)),
       [this.buffer, mean, variance],
-      C,
+      [C, 1, 1],
     );
     const out = dev().alloc(this.size);
+    // The backward uses the standardised values again. They come out of the same pass as
+    // the output and are carried — building them afterwards was two more full passes.
+    const xh = dev().alloc(this.size);
     dev().run1d(
-      dev().pipeline(`bna:${key}:${eps}`, () => batchNormApply(N, C, S, eps)),
-      [this.buffer, mean, variance, weight.buffer, bias.buffer, out],
+      dev().pipeline(`bna:${key}:${eps}:xh`, () => batchNormApply(N, C, S, eps, true)),
+      [this.buffer, mean, variance, weight.buffer, bias.buffer, out, xh],
       this.size,
     );
-    // The backward uses the standardised values again. They are built once here and
-    // carried — recomputing them in the backward costs two more kernels.
     const meanT = new Tensor(mean, [C]);
     const varT = new Tensor(variance, [C]);
     const invStd = varT.binary("add", Tensor.full([], eps)).unary("rsqrt");
-    const shape4 = [1, C, ...new Array<number>(this.shape.length - 2).fill(1)];
-    const xhat = this.sub(meanT.reshape(shape4)).mul(invStd.reshape(shape4));
+    const xhat = new Tensor(xh, this.shape);
     const self = this;
     const result = Tensor.make(
       out,
@@ -11660,10 +11661,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       (g) => {
         const sumG = dev().alloc(C);
         const sumGXh = dev().alloc(C);
-        dev().run1d(
+        dev().run(
           dev().pipeline(`bnsb:${key}`, () => batchNormStatsBackward(N, C, S)),
           [xhat.buffer, g.buffer, sumG, sumGXh],
-          C,
+          [C, 1, 1],
         );
         const parts: (Tensor | null)[] = [];
         if (self.requiresGrad) {

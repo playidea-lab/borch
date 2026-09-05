@@ -3664,6 +3664,9 @@ ${flatId(n)}
 }`;
 }
 
+/** The threads one channel's statistics are spread over — a workgroup per channel. */
+export const BN_GROUP = 256;
+
 /**
  * BatchNorm's per-channel statistics — the sum and the sum of squares **in one pass.**
  *
@@ -3671,38 +3674,61 @@ ${flatId(n)}
  * divisions, a dozen or so dispatches, twenty times over per layer. Measured, most of the
  * 1,636 dispatches in one ResNet step came from here.
  *
- * One thread takes one channel and walks the whole batch and space. The order is fixed,
- * so there are no atomics and two runs give the same value.
+ * **One workgroup takes one channel.** The first version gave one *thread* a channel and
+ * had it walk the whole batch and space: with sixteen channels at 96×96 that was sixteen
+ * threads on the whole GPU, each 147,456 loads long — 6.3 ms for a memory-bound pass of
+ * 2.4 million floats, twenty-one times torch's, and the largest single cost in a U-Net
+ * step (measured 2026-09-06). Now 256 threads stride the channel and fold as a tree. The
+ * order is still fixed — each thread's stride and the tree's pairing — so there are no
+ * atomics and two runs give the same value.
  */
 export function batchNormStats(N: number, C: number, S: number): string {
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Mean: array<f32>;
 @group(0) @binding(2) var<storage, read_write> Var: array<f32>;
-@compute @workgroup_size(${WORKGROUP})
-fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-${flatId(C)}
+var<workgroup> pt: array<f32, ${BN_GROUP}>;
+var<workgroup> pq: array<f32, ${BN_GROUP}>;
+@compute @workgroup_size(${BN_GROUP})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
+  let c = w.x;
   var total = 0.0;
   var sq = 0.0;
-  for (var n = 0u; n < ${N}u; n = n + 1u) {
-    let base = (n * ${C}u + gid) * ${S}u;
-    for (var i = 0u; i < ${S}u; i = i + 1u) {
-      let v = X[base + i];
-      total = total + v;
-      sq = fma(v, v, sq);
-    }
+  for (var i = l.x; i < ${N * S}u; i = i + ${BN_GROUP}u) {
+    let n = i / ${S}u;
+    let v = X[(n * ${C}u + c) * ${S}u + (i - n * ${S}u)];
+    total = total + v;
+    sq = fma(v, v, sq);
   }
-  let m = total / ${(N * S).toFixed(1)};
-  Mean[gid] = m;
-  // **This is the biased estimate** (divided by n) — what torch's BatchNorm uses for
-  // the normalisation, and a different number from the unbiased one that goes into the
-  // running statistics. Merged into one, they diverge in evaluation mode alone.
-  Var[gid] = sq / ${(N * S).toFixed(1)} - m * m;
+  pt[l.x] = total;
+  pq[l.x] = sq;
+  workgroupBarrier();
+  var span = ${BN_GROUP / 2}u;
+  loop {
+    if (span == 0u) { break; }
+    if (l.x < span) { pt[l.x] = pt[l.x] + pt[l.x + span]; pq[l.x] = pq[l.x] + pq[l.x + span]; }
+    workgroupBarrier();
+    span = span / 2u;
+  }
+  if (l.x == 0u) {
+    let m = pt[0] / ${(N * S).toFixed(1)};
+    Mean[c] = m;
+    // **This is the biased estimate** (divided by n) — what torch's BatchNorm uses for
+    // the normalisation, and a different number from the unbiased one that goes into the
+    // running statistics. Merged into one, they diverge in evaluation mode alone.
+    Var[c] = pq[0] / ${(N * S).toFixed(1)} - m * m;
+  }
 }`;
 }
 
-/** Takes the statistics, normalises, and applies the scale and shift in one pass. */
-export function batchNormApply(N: number, C: number, S: number, eps: number): string {
+/**
+ * Takes the statistics, normalises, and applies the scale and shift in one pass.
+ *
+ * With `withXhat`, the standardised value goes out as a second output in the same pass —
+ * the training backward needs it, and building it afterwards was two more full passes
+ * over the activation (a broadcast subtract and a broadcast multiply).
+ */
+export function batchNormApply(N: number, C: number, S: number, eps: number, withXhat = false): string {
   const n = N * C * S;
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
@@ -3711,11 +3737,14 @@ export function batchNormApply(N: number, C: number, S: number, eps: number): st
 @group(0) @binding(3) var<storage, read> Wt: array<f32>;
 @group(0) @binding(4) var<storage, read> B: array<f32>;
 @group(0) @binding(5) var<storage, read_write> Out: array<f32>;
+${withXhat ? "@group(0) @binding(6) var<storage, read_write> Xh: array<f32>;" : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   let c = (gid / ${S}u) % ${C}u;
-  Out[gid] = (X[gid] - Mean[c]) * inverseSqrt(Var[c] + ${eps}) * Wt[c] + B[c];
+  let xh = (X[gid] - Mean[c]) * inverseSqrt(Var[c] + ${eps});
+  Out[gid] = xh * Wt[c] + B[c];
+${withXhat ? "  Xh[gid] = xh;" : ""}
 }`;
 }
 
@@ -3736,21 +3765,34 @@ export function batchNormStatsBackward(N: number, C: number, S: number): string 
 @group(0) @binding(1) var<storage, read> G: array<f32>;
 @group(0) @binding(2) var<storage, read_write> SumG: array<f32>;
 @group(0) @binding(3) var<storage, read_write> SumGXh: array<f32>;
-@compute @workgroup_size(${WORKGROUP})
-fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-${flatId(C)}
+var<workgroup> pg: array<f32, ${BN_GROUP}>;
+var<workgroup> px: array<f32, ${BN_GROUP}>;
+@compute @workgroup_size(${BN_GROUP})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
+  let c = w.x;
   var sg = 0.0;
   var sgx = 0.0;
-  for (var n = 0u; n < ${N}u; n = n + 1u) {
-    let base = (n * ${C}u + gid) * ${S}u;
-    for (var i = 0u; i < ${S}u; i = i + 1u) {
-      let gv = G[base + i];
-      sg = sg + gv;
-      sgx = fma(gv, Xh[base + i], sgx);
-    }
+  for (var i = l.x; i < ${N * S}u; i = i + ${BN_GROUP}u) {
+    let n = i / ${S}u;
+    let at = (n * ${C}u + c) * ${S}u + (i - n * ${S}u);
+    let gv = G[at];
+    sg = sg + gv;
+    sgx = fma(gv, Xh[at], sgx);
   }
-  SumG[gid] = sg;
-  SumGXh[gid] = sgx;
+  pg[l.x] = sg;
+  px[l.x] = sgx;
+  workgroupBarrier();
+  var span = ${BN_GROUP / 2}u;
+  loop {
+    if (span == 0u) { break; }
+    if (l.x < span) { pg[l.x] = pg[l.x] + pg[l.x + span]; px[l.x] = px[l.x] + px[l.x + span]; }
+    workgroupBarrier();
+    span = span / 2u;
+  }
+  if (l.x == 0u) {
+    SumG[c] = pg[0];
+    SumGXh[c] = px[0];
+  }
 }`;
 }
 

@@ -79,7 +79,8 @@ def main(argv):
     auroc = re.search(r"AUROC ([0-9.]+)", done)
     test_iou = re.search(r"test IoU ([0-9.]+)", done)
     # The native reference (torch on the Mac's GPU, 800 images, 30 epochs): test IoU 0.446
-    # with a fifth of the masks wrong, queue AUROC 0.907. A shorter run only reports.
+    # with a fifth of the masks wrong, queue AUROC 0.907; the browser measured 0.419 and 0.921
+    # in 55 s (2026-09-06). A shorter run only reports.
     full = train >= 800 and epochs >= 30
     ok = bool(auroc and test_iou) and "faults 0" in done and (not full or (float(test_iou.group(1)) >= 0.38 and float(auroc.group(1)) >= 0.85))
     print(("**the browser learns the masks torch learns, and its queue puts the wrong ones first**" if full else "**a short run — numbers only**") if ok else "**it did not** — see above")
