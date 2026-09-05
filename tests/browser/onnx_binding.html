@@ -16,8 +16,13 @@
     borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
             "_data", "_rnn", "_serialize", "autograd"],
     borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data",
-                   "_serialize", "_onnx", "autograd"],
+                   "_serialize", "_onnx", "_hub", "_report", "autograd"],
   };
+  // The three pages that copy the packages into Pyodide by name all carry this list, and
+  // this one fell behind when `_hub` and `_report` arrived — `__init__` imports them, so
+  // the page died at import with a message about a circular import that was really a
+  // missing file. `tests/test_browser_pages_carry_every_module.py` holds the lists to
+  // the directories now.
   const FILES = [["/tests/resnet.py", "/work/tests/resnet.py"]];
   for (const [pkg, mods] of Object.entries(PACKAGES)) {
     for (const m of mods) FILES.push([`/${pkg}/${m}.py`, `/work/${pkg}/${m}.py`]);
