@@ -1476,6 +1476,11 @@ backend: on those machines there is no `Tensor` to make. It reads a checkpoint's
 package as 6.6 KB of base64 (`cpu/kernels`, generated from `borch-ts/wasm/`). No
 runtime, no imports, one linear memory.
 
+**It is checked where there is no GPU, too.** `tests/test_cpu_device.py` runs the same
+wiring under node against a float64 reference on a small random network — every node
+kind, the head, the neighbours — on every machine `pytest` runs on, in a second. The
+browser check below asks the other question, against torch's numbers through the GPU.
+
 **It answers the same as the GPU.** `borch-ts/test/cpu.py` loads two hub checkpoints
 onto both devices and compares the logits on a seeded image, measured 2026-09-05 on
 `apple / metal-3`:
