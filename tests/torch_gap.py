@@ -510,16 +510,20 @@ SKIPPED = {
     # on the calling thread — the golden asks only what holds on both sides (a positive
     # integer), and the 1 is pinned against this library rather than against torch.
     "set_num_threads":
-        "**`SharedArrayBuffer` is `undefined` and `crossOriginIsolated` is false** — "
-        "measured in `site/index.html` by `tests/browser/platform_claims.py`, and the "
-        "published site cannot differ because GitHub Pages offers no way to set "
-        "response headers, which is what COOP/COEP are. "
-        "Workers exist, but without shared memory every hand-off is a structured-clone "
-        "copy or a transfer that takes the buffer away from the sender — and torch's "
-        "intra-op pool is threads over *one* buffer. So the knob would set a number no "
-        "pool reads: an argument accepted and never used, which is the defect class "
-        "`tests/test_unread_arguments.py` exists to refuse",
-    "set_num_interop_threads": "as `set_num_threads` — no shared buffer for a pool to work over",
+        "**`SharedArrayBuffer` is a function and `crossOriginIsolated` is true** — measured "
+        "in `site/index.html` by `tests/browser/platform_claims.py` since 2026-09-05, when "
+        "the site's servers began sending COOP/COEP and `site/coi.js` began adding them "
+        "where a host cannot (the earlier sentence here said GitHub Pages made that "
+        "impossible; a service worker makes it possible). The pool that shared memory "
+        "enables exists and is measured: `borch_cpu`'s `WorkerPool`, eight workers over one "
+        "wasm memory, a frozen backbone's forward 5.5× faster. **It is not what this knob "
+        "sizes.** torch's `set_num_threads` sizes the intra-op pool that runs *tensor ops* "
+        "on the CPU; here tensor ops run on the GPU, whose parallelism is the device's and "
+        "not a count to choose, and the cpu device is a graph runner over checkpoint bytes, "
+        "not a `Tensor` backend. So the number would still be read by no pool of tensor "
+        "ops — the defect class `tests/test_unread_arguments.py` exists to refuse. The knob "
+        "for the pool that does exist is `borch_cpu.kernels(threads=n)`",
+    "set_num_interop_threads": "as `set_num_threads` — the pool that exists is not a pool of tensor ops",
     "Stream": "device streams — there is one",
     "Event": "device events — there is one stream to measure",
     "get_device_module": "there is one device",
