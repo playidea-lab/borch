@@ -1493,8 +1493,22 @@ five, readback included:
 
 | forward | `apple / metal-3` | `cpu`, one thread | SwiftShader (for scale) |
 |---|---|---|---|
-| EfficientNet-B0, per image at batch 16 | 1.6 ms | 21 ms | 520 ms, after 64 s of compiling |
-| ResNet-18, per image at batch 16 | 1.4 ms | 68 ms | — |
+| EfficientNet-B0, per image at batch 16 | 1.5 ms | 20 ms | 520 ms, after 64 s of compiling |
+| ResNet-18, per image at batch 16 | 1.4 ms | 69 ms | — |
+
+Peak wasm memory at batch 16, fresh process: 353 MB for B0, 217 MB for ResNet-18.
+
+**Two levers were pulled after that table was first written, and both were measured.**
+Folding the bias and the activation into the GEMM's epilogue — the separate pass had
+read as a fifth of the forward in the kernel bench — bought 4–5 % on B0 and nothing on
+ResNet-18: the pass was mostly the swish arithmetic, not the memory it re-read, and
+ResNet has no swish. Unrolling a convolution's taps a block of rows at a time instead
+of the whole image took ResNet-18's peak from 545 MB to 217 MB at no cost in time. A
+cache-blocked GEMM (the textbook `k`-chunks and row-blocks) ran at the same 55 GFLOPS
+as the plain four-row block on every matrix in both networks and was taken out again.
+ResNet-18 is 3.6 GFLOP an image, so 69 ms is 53 GFLOPS — the GEMM micro-kernel's
+ceiling on this core, one thread. Past it lie a wider micro-kernel with relaxed-SIMD
+FMA, and threads where the page can set COOP/COEP; neither is in this tree.
 
 The SwiftShader column is the reason this device exists in this shape: WebGPU's own CPU
 path was measured first, and it spent a minute compiling shaders for every new batch

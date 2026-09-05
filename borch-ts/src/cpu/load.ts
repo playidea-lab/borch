@@ -75,6 +75,12 @@ export interface CpuKernels {
   transpose(rows: number, cols: number, inp: number, out: number): void;
   /** x[n] ← 0. `n % 4 === 0`. */
   zero(n: number, x: number): void;
+  /** `gemm`, then `+ bias[n]` and `act` before the store — the sum never leaves the registers. */
+  gemmBiasAct(m: number, n: number, k: number, a: number, b: number, c: number, bias: number, act: Activation): void;
+  /** `dwconv` with the bias as the starting value and `act` on each finished row. */
+  dwconvBiasAct(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, wt: number, out: number, bias: number, act: Activation): void;
+  /** `im2col` for output rows `[row0, row0 + rows)` of one image — a block at a time against one buffer. */
+  im2colRows(h: number, w: number, c: number, k: number, stride: number, pad: number, wo: number, row0: number, rows: number, inp: number, out: number): void;
 }
 
 /** The module's bytes, decoded. Pure; does not instantiate. */
@@ -123,6 +129,7 @@ export function loadKernels(): Promise<CpuKernels> {
     const relu = fn(ex, "relu"), im2col = fn(ex, "im2col"), maxpool = fn(ex, "maxpool");
     const softmaxXentGrad = fn(ex, "softmax_xent_grad"), outerAcc = fn(ex, "outer_acc"), sgdStep = fn(ex, "sgd_step");
     const l2NormalizeRows = fn(ex, "l2_normalize_rows"), transpose = fn(ex, "transpose"), zero = fn(ex, "zero");
+    const gemmBiasAct = fn(ex, "gemm_bias_act"), dwconvBiasAct = fn(ex, "dwconv_bias_act"), im2colRows = fn(ex, "im2col_rows");
     return {
       memory,
       alloc: (bytes) => alloc(bytes),
@@ -145,6 +152,9 @@ export function loadKernels(): Promise<CpuKernels> {
       l2NormalizeRows: (rows, c, x) => { l2NormalizeRows(rows, c, x); },
       transpose: (rows, cols, inp, out) => { transpose(rows, cols, inp, out); },
       zero: (n, x) => { zero(n, x); },
+      gemmBiasAct: (m, n, k, a, b, c, bias, act) => { gemmBiasAct(m, n, k, a, b, c, bias, act); },
+      dwconvBiasAct: (h, w, c, k, stride, pad, ho, wo, inp, wt, out, bias, act) => { dwconvBiasAct(h, w, c, k, stride, pad, ho, wo, inp, wt, out, bias, act); },
+      im2colRows: (h, w, c, k, stride, pad, wo, row0, rows, inp, out) => { im2colRows(h, w, c, k, stride, pad, wo, row0, rows, inp, out); },
     };
   })();
   return loading;

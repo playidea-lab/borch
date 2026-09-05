@@ -4,7 +4,7 @@
  "korean": {
   "done": 689,
   "stale": 0,
-  "missing": 516
+  "missing": 519
  },
  "modules": [
   {
@@ -15441,6 +15441,24 @@
        "name": "zero",
        "signature": "zero(n: number, x: number): void",
        "doc": "x[n] ← 0. `n % 4 === 0`."
+      },
+      {
+       "name": "gemmBiasAct",
+       "signature": "gemmBiasAct(m: number, n: number, k: number, a: number, b: number, c: number, bias: number, act: Activation): void",
+       "doc": "`gemm`, then `+ bias[n]` and `act` before the store — the sum never leaves the registers.",
+       "torch": "gemm_bias_act"
+      },
+      {
+       "name": "dwconvBiasAct",
+       "signature": "dwconvBiasAct(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, inp: number, wt: number, out: number, bias: number, act: Activation): void",
+       "doc": "`dwconv` with the bias as the starting value and `act` on each finished row.",
+       "torch": "dwconv_bias_act"
+      },
+      {
+       "name": "im2colRows",
+       "signature": "im2colRows(h: number, w: number, c: number, k: number, stride: number, pad: number, wo: number, row0: number, rows: number, inp: number, out: number): void",
+       "doc": "`im2col` for output rows `[row0, row0 + rows)` of one image — a block at a time against one buffer.",
+       "torch": "im2col_rows"
       }
      ]
     },
@@ -15461,7 +15479,7 @@
      "torch": "load_kernels"
     }
    ],
-   "count": 26
+   "count": 29
   },
   {
    "name": "cpu/safetensors",
@@ -15782,7 +15800,7 @@
     "ko": "그래프의 forward. 크기별 풀로 마지막 사용 시점에 버퍼를 돌려준다.",
     "en": "A graph's forward, with a size-keyed pool returning each buffer at its last use."
    },
-   "doc": "Runs a `CpuGraph` on the wasm kernels.\n\n## Memory\n\nThe module has one linear memory and a bump allocator. Weights go in once, at\nconstruction, and stay. Activations come and go per forward, and a bump allocator\ncannot free one in the middle — so each forward opens a pool keyed by byte size on\ntop of it, starting wherever the heap stands (so a head trained beside this runner\nkeeps its buffers): a buffer freed at its value's last use goes back to the pool, the\nnext allocation of the same size takes it, and the forward's end returns the heap to\nwhere it began. Shapes repeat block after block, so the pool\nabsorbs most of a forward; the peak is roughly the largest live set, not the sum.\nMeasured for EfficientNet-B0 at batch 16 that was 186 MB against 400 MB summed.\n\n## Layout\n\nNHWC with the batch folded into rows, every channel count padded to sixteen. The\nimage arrives NCHW (torch's convention, and `Tensor`'s) and is transposed on the way\nin; the result leaves as `[B, channels]` with the padding trimmed. Rows are padded to a\nmultiple of four for `gemm`, and the padding rows are zeroed at allocation so nothing\nstale flows into them.\n\n## In place\n\nSqueeze-and-excite scales its input where it stands and `add` accumulates into its\nfirst operand — both would otherwise cost one more pass over the largest activations.\nThe value produced takes over the buffer, and the operand that gave it up is not\nfreed on its own. That is the one subtlety in the liveness bookkeeping below.",
+   "doc": "Runs a `CpuGraph` on the wasm kernels.\n\n## Memory\n\nThe module has one linear memory and a bump allocator. Weights go in once, at\nconstruction, and stay. Activations come and go per forward, and a bump allocator\ncannot free one in the middle — so each forward opens a pool keyed by byte size on\ntop of it, starting wherever the heap stands (so a head trained beside this runner\nkeeps its buffers): a buffer freed at its value's last use goes back to the pool, the\nnext allocation of the same size takes it, and the forward's end returns the heap to\nwhere it began. Shapes repeat block after block, so the pool absorbs most of a\nforward; the peak is roughly the largest live set, not the sum. Dense convolutions\nunroll their taps a block of rows at a time into one 8 MB buffer rather than the whole\nimage — the book carries the measured peaks.\n\n## Epilogues\n\nThe bias and the activation ride on the GEMM and the depthwise kernel (`gemm_bias_act`,\n`dwconv_bias_act`) instead of a second pass over the result; measured before the fold,\nthat pass was a fifth of a forward.\n\n## Layout\n\nNHWC with the batch folded into rows, every channel count padded to sixteen. The\nimage arrives NCHW (torch's convention, and `Tensor`'s) and is transposed on the way\nin; the result leaves as `[B, channels]` with the padding trimmed. Rows are padded to a\nmultiple of four for `gemm`, and the padding rows are zeroed at allocation so nothing\nstale flows into them.\n\n## In place\n\nSqueeze-and-excite scales its input where it stands and `add` accumulates into its\nfirst operand — both would otherwise cost one more pass over the largest activations.\nThe value produced takes over the buffer, and the operand that gave it up is not\nfreed on its own. That is the one subtlety in the liveness bookkeeping below.",
    "symbols": [
     {
      "kind": "class",
@@ -22361,5 +22379,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3050
+ "total": 3053
 }
