@@ -55,9 +55,15 @@ CHECKS = [
     ("marimo:cpu", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--no-webgpu"]),
     ("coi:site",   ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/coi_sweep.py"]),
     # The wheel alone, in a worker — JupyterLite's shape. Builds the wheel first.
-    ("wheel",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/wheel_probe.py", "--build"]),
+    # **`--headed`, for the two that open WebGPU inside a Pyodide worker.** Headless Chrome
+    # hands a *worker* SwiftShader even while the page's own thread gets the real adapter
+    # (measured 2026-09-06: every main-thread row `apple / metal-3`, these two `google /
+    # swiftshader`), and both probes refuse a software adapter because their point is a
+    # number. Headed, the worker gets `apple / metal-3` (measured the same day). A window
+    # opens at 04:30 and closes; that is the price of a number that means something.
+    ("wheel",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/wheel_probe.py", "--build", "--headed"]),
     # The notebook page — JupyterLite built here, the cell pressed, the learned line read.
-    ("lab",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/lab_probe.py", "--build"]),
+    ("lab",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/lab_probe.py", "--build", "--headed"]),
     # The workbench page — marimo built here, run pressed, the four sections read.
     ("marimo",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--build"]),
     # 5,000 images through the tab: decode, backbone, cache, head, neighbours. Files made once under /tmp.
