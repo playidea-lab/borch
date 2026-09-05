@@ -1,0 +1,20 @@
+{
+  "dataset": "food101n",
+  "n": 52867,
+  "k": 5,
+  "backbone": "efficientnet_b0.ra_in1k pre_logits 1280-d",
+  "sets": {
+    "web_label": {
+      "n": 52867,
+      "wrong": 9746,
+      "noise_rate": 0.18434940511093878,
+      "auroc": 0.7668520358194116,
+      "p@20": 0.6,
+      "p@100": 0.41,
+      "p@500": 0.414,
+      "p@wrong": 0.3505027703673302,
+      "read_for_half": 0.2658558268863374,
+      "read_for_90pct": 0.5779219550948607
+    }
+  }
+}
