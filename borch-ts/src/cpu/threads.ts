@@ -15,7 +15,9 @@
  * ## The control block
  *
  * `ctrl` (Int32Array on a SharedArrayBuffer): `[0]` generation, `[1]` workers done with
- * the current generation, `[2]` task count, `[3]` stop. `data` (Float64Array on another):
+ * the current generation, `[2]` task count, `[3]` stop, `[4]` error — set by a worker whose
+ * task trapped (it still counts itself done, so the main side wakes and throws instead of
+ * waiting for a count that will never arrive) or by the host when a worker dies outright. `data` (Float64Array on another):
  * `MAX_TASKS` slots of `SLOT` doubles — a call count, then up to `MAX_CALLS` calls of
  * `[fnId, nArgs, args…]`, `fnId` an index into `KERNELS_EXPORTS`. The main side writes the
  * tasks, bumps the generation and notifies; worker `id` takes every task `t` with
@@ -55,7 +57,7 @@ export const MAX_CALLS = 4;
 export const MAX_ARGS = 16;
 const CALL = 2 + MAX_ARGS;
 export const SLOT = 1 + MAX_CALLS * CALL;
-const GEN = 0, DONE = 1, COUNT = 2, STOP = 3;
+const GEN = 0, DONE = 1, COUNT = 2, STOP = 3, ERR = 4;
 
 const FN_ID: ReadonlyMap<string, number> = new Map(KERNELS_EXPORTS.map((name, i) => [name, i]));
 
@@ -67,9 +69,9 @@ const FN_ID: ReadonlyMap<string, number> = new Map(KERNELS_EXPORTS.map((name, i)
 export interface Layout {
   readonly names: readonly string[];
   readonly slot: number; readonly call: number;
-  readonly gen: number; readonly done: number; readonly count: number; readonly stop: number;
+  readonly gen: number; readonly done: number; readonly count: number; readonly stop: number; readonly err: number;
 }
-export const CONTROL_LAYOUT: Layout = { names: KERNELS_EXPORTS, slot: SLOT, call: CALL, gen: GEN, done: DONE, count: COUNT, stop: STOP };
+export const CONTROL_LAYOUT: Layout = { names: KERNELS_EXPORTS, slot: SLOT, call: CALL, gen: GEN, done: DONE, count: COUNT, stop: STOP, err: ERR };
 
 /** The two shared buffers a pool is built on. */
 export function makeControl(): { ctrl: Int32Array<SharedArrayBuffer>; data: Float64Array<SharedArrayBuffer> } {
@@ -104,16 +106,24 @@ export class MainSide implements Dispatcher {
         for (let i = 0; i < args.length; i++) data[at + 2 + i] = args[i] ?? 0;
       });
     });
+    if (Atomics.load(ctrl, ERR)) throw new Error("cpu threads: a worker failed earlier — this pool is not usable; terminate it and spawn another");
     Atomics.store(ctrl, DONE, 0);
     Atomics.store(ctrl, COUNT, tasks.length);
     Atomics.add(ctrl, GEN, 1);
     Atomics.notify(ctrl, GEN);
     // Wait for every worker. A browser's main thread may not `Atomics.wait`; it spins.
     for (;;) {
+      if (Atomics.load(ctrl, ERR)) throw new Error("cpu threads: a worker trapped while running the tasks — this pool is not usable; terminate it and spawn another");
       const done = Atomics.load(ctrl, DONE);
       if (done >= this.workers) break;
       try { Atomics.wait(ctrl, DONE, done, 50); } catch { /* main thread: spin */ }
     }
+  }
+
+  /** Marks the pool failed from outside — the host saw a worker die. The main side wakes and throws. */
+  fail(): void {
+    Atomics.store(this.ctrl, ERR, 1);
+    Atomics.notify(this.ctrl, DONE);
   }
 
   /** Tell the workers to leave their loops. */
@@ -143,17 +153,26 @@ export function workerLoop(ctrl: Int32Array<SharedArrayBuffer>, data: Float64Arr
     if (gen === seen) continue;
     seen = gen;
     const count = Atomics.load(ctrl, layout.count);
-    for (let t = id; t < count; t += workers) {
-      const base = t * layout.slot;
-      const calls = data[base] ?? 0;
-      for (let c = 0; c < calls; c++) {
-        const at = base + 1 + c * layout.call;
-        const f = fns[data[at] ?? 0];
-        const n = data[at + 1] ?? 0;
-        const args: number[] = [];
-        for (let i = 0; i < n; i++) args.push(data[at + 2 + i] ?? 0);
-        if (f) f(...args);
+    try {
+      for (let t = id; t < count; t += workers) {
+        const base = t * layout.slot;
+        const calls = data[base] ?? 0;
+        for (let c = 0; c < calls; c++) {
+          const at = base + 1 + c * layout.call;
+          const f = fns[data[at] ?? 0];
+          const n = data[at + 1] ?? 0;
+          const args: number[] = [];
+          for (let i = 0; i < n; i++) args.push(data[at + 2 + i] ?? 0);
+          if (f) f(...args);
+        }
       }
+    } catch (e) {
+      // A trap. Say so where the main side can see it, count this worker done so it wakes,
+      // and leave — the memory may be half-written and nothing here can tell what.
+      Atomics.store(ctrl, layout.err, 1);
+      Atomics.add(ctrl, layout.done, 1);
+      Atomics.notify(ctrl, layout.done);
+      throw e;
     }
     Atomics.add(ctrl, layout.done, 1);
     Atomics.notify(ctrl, layout.done);
@@ -231,6 +250,9 @@ export class WorkerPool implements Dispatcher {
         w.postMessage({ ctrl, data, module: kernels.module, memory: kernels.memory, id, workers, stackTop, layout: CONTROL_LAYOUT });
       }));
       await Promise.all(ready);
+      // From here a worker that dies (out of memory, a trap outside the task loop) fails the
+      // pool rather than leaving the main side waiting for its count.
+      for (const w of handles) w.onerror = () => { Atomics.store(ctrl, ERR, 1); Atomics.notify(ctrl, DONE); };
     } catch (e) {
       for (const w of handles) w.terminate();
       URL.revokeObjectURL(url);

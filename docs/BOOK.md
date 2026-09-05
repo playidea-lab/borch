@@ -1578,7 +1578,10 @@ only ×2.9 on eight workers while the frames fought.
 and checks it imports exactly `env.memory`). `WorkerPool.spawn(n)` loads it, allocates a
 256 KB stack per worker out of that memory, starts the workers from a blob URL and hands
 each the compiled module, the memory and its stack top; `new CpuRunner(pool.kernels,
-graph, pool)` runs on them. In Chrome, from the check page, batch 16 of B0 (2026-09-05,
+graph, pool)` runs on them. A worker that traps raises an error slot in the control block and
+counts itself done, so the main side throws instead of waiting for a count that never
+arrives — `threads_check.mjs` traps one on purpose and times the throw. In Chrome, from the
+check page, batch 16 of B0 (2026-09-05,
 16 hardware threads): spawn 5 ms, two workers 8.0 ms an image, eight 2.6 ms, both to the
 bit of the single thread. From Python the same eight workers come up on the first
 `borch_cpu.kernels()` inside the Pyodide worker — nested workers — and six images through

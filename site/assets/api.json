@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 767,
+  "done": 768,
   "stale": 0,
   "missing": 467
  },
@@ -248,7 +248,7 @@
     {
      "kind": "const",
      "name": "VERSION",
-     "signature": "export declare const VERSION = \"0.3.0\"",
+     "signature": "export declare const VERSION = \"0.3.1\"",
      "doc": "Which build this is.\n\n## Why a constant rather than reading package.json\n\nBundlers disagree about importing it, and in a browser the file is not there at all.\nSo the number is written by hand in two places, and `tests/test_version.py` fails\nwhen they disagree — a version that has drifted is a quiet thing.\n\n## What it is for\n\nA manifest carries `runtime.ts`, a semver range saying which builds its weights run\non. The receiver can only compare that against something if it knows what it is, and\nuntil now it did not — so the field was written and never read.",
      "members": []
     }
@@ -15500,7 +15500,7 @@
       },
       {
        "name": "dwconvRows",
-       "signature": "dwconvRows(h: number, w: number, c: number, k: number, stride: number, pad: number, ho: number, wo: number, oy0: number, oy1: number, inp: number, wt: number, out: number, bias: number, act: Activation): void",
+       "signature": "dwconvRows(h: number, w: number, c: number, k: number, stride: number, pad: number, wo: number, oy0: number, oy1: number, inp: number, wt: number, out: number, bias: number, act: Activation): void",
        "doc": "`dwconvBiasAct` over output rows `oy0..oy1` only — one worker's share of an image.",
        "torch": "dwconv_rows",
        "doc_ko": "`dwconvBiasAct`를 출력 행 `oy0..oy1`에만 — 이미지 하나 중 워커 하나의 몫."
@@ -16378,7 +16378,7 @@
     "ko": "하나의 공유 메모리 위 워커 풀 — 작업 설명 블록과 `Atomics` 배리어, Web Worker 스폰. 페이지가 cross-origin isolated 일 때만.",
     "en": "A pool of workers over one shared memory — task descriptors and an `Atomics` barrier, Web Worker spawn. Only on a cross-origin isolated page."
    },
-   "doc": "Many workers, one memory: the protocol by which a forward hands kernel calls to a pool.\n\n## The shape\n\nThe kernels are stateless functions over offsets into one linear memory, so a forward\nparallelises by rows: a GEMM's rows in `P` slices, a depthwise convolution's images one\nper worker, an im2col block and its GEMM as one unit. What this file adds is the least\nthat makes that possible in a browser: the memory is a **shared** `WebAssembly.Memory`\nthat every worker instantiates the same module over, the main side allocates and the\nworkers only compute, and the hand-off is `Atomics` on a small control block rather\nthan `postMessage` — a forward is a hundred-odd kernel calls, and a hundred message\nround trips at 50–100 µs each would cost more than the forward.\n\n## The control block\n\n`ctrl` (Int32Array on a SharedArrayBuffer): `[0]` generation, `[1]` workers done with\nthe current generation, `[2]` task count, `[3]` stop. `data` (Float64Array on another):\n`MAX_TASKS` slots of `SLOT` doubles — a call count, then up to `MAX_CALLS` calls of\n`[fnId, nArgs, args…]`, `fnId` an index into `KERNELS_EXPORTS`. The main side writes the\ntasks, bumps the generation and notifies; worker `id` takes every task `t` with\n`t % workers === id`, runs its calls in order, adds one to done and notifies; the main\nside waits until done equals the worker count. Task `t` always lands on worker\n`t % workers`, and the runner relies on that to give each worker its own scratch buffer.\n\n## What it needs from the page\n\n`SharedArrayBuffer`, which a browser gives only to pages served with\n`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`.\nA page opened from `file://` cannot have them. `Atomics.wait` is refused on a browser's\nmain thread, so the main side there spins on `Atomics.load` instead — the runner usually\nlives in a worker anyway (Pyodide's), where waiting is allowed.\n\nThis file is the protocol, the two loops, and `WorkerPool`, which spawns Web Workers from\na blob URL and hands each the compiled module, the memory and its own stack. In node the\nloop is driven from `worker_threads` instead — `borch-ts/test/threads_node.mjs`.",
+   "doc": "Many workers, one memory: the protocol by which a forward hands kernel calls to a pool.\n\n## The shape\n\nThe kernels are stateless functions over offsets into one linear memory, so a forward\nparallelises by rows: a GEMM's rows in `P` slices, a depthwise convolution's images one\nper worker, an im2col block and its GEMM as one unit. What this file adds is the least\nthat makes that possible in a browser: the memory is a **shared** `WebAssembly.Memory`\nthat every worker instantiates the same module over, the main side allocates and the\nworkers only compute, and the hand-off is `Atomics` on a small control block rather\nthan `postMessage` — a forward is a hundred-odd kernel calls, and a hundred message\nround trips at 50–100 µs each would cost more than the forward.\n\n## The control block\n\n`ctrl` (Int32Array on a SharedArrayBuffer): `[0]` generation, `[1]` workers done with\nthe current generation, `[2]` task count, `[3]` stop, `[4]` error — set by a worker whose\ntask trapped (it still counts itself done, so the main side wakes and throws instead of\nwaiting for a count that will never arrive) or by the host when a worker dies outright. `data` (Float64Array on another):\n`MAX_TASKS` slots of `SLOT` doubles — a call count, then up to `MAX_CALLS` calls of\n`[fnId, nArgs, args…]`, `fnId` an index into `KERNELS_EXPORTS`. The main side writes the\ntasks, bumps the generation and notifies; worker `id` takes every task `t` with\n`t % workers === id`, runs its calls in order, adds one to done and notifies; the main\nside waits until done equals the worker count. Task `t` always lands on worker\n`t % workers`, and the runner relies on that to give each worker its own scratch buffer.\n\n## What it needs from the page\n\n`SharedArrayBuffer`, which a browser gives only to pages served with\n`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`.\nA page opened from `file://` cannot have them. `Atomics.wait` is refused on a browser's\nmain thread, so the main side there spins on `Atomics.load` instead — the runner usually\nlives in a worker anyway (Pyodide's), where waiting is allowed.\n\nThis file is the protocol, the two loops, and `WorkerPool`, which spawns Web Workers from\na blob URL and hands each the compiled module, the memory and its own stack. In node the\nloop is driven from `worker_threads` instead — `borch-ts/test/threads_node.mjs`.",
    "symbols": [
     {
      "kind": "type",
@@ -16490,6 +16490,11 @@
        "name": "stop",
        "signature": "readonly stop: number",
        "doc": ""
+      },
+      {
+       "name": "err",
+       "signature": "readonly err: number",
+       "doc": ""
       }
      ],
      "doc_ko": "워커 루프가 제어 블록에 대해 알아야 할 전부를 데이터로. 루프는 이것을 매개변수로 받고 이 모듈의 다른 것은 건드리지 않는다 — 그래서 그 소스(`workerLoop.toString()`)를 그대로 워커 스크립트에 넣을 수 있다."
@@ -16530,6 +16535,12 @@
        "name": "run",
        "signature": "run(tasks: readonly Task[]): void",
        "doc": ""
+      },
+      {
+       "name": "fail",
+       "signature": "fail(): void",
+       "doc": "Marks the pool failed from outside — the host saw a worker die. The main side wakes and throws.",
+       "doc_ko": "밖에서 풀을 실패로 표시한다 — 호스트가 워커가 죽는 것을 봤을 때. 메인 쪽이 깨어나 예외를 던진다."
       },
       {
        "name": "stop",
@@ -16612,8 +16623,8 @@
      "doc_ko": "공유 커널 모듈 위의 Web Worker 풀. `spawn`은 `shared` 커널을 읽어(또는 받아) 그 메모리에서 워커마다 스택을 할당하고, blob URL로 워커를 시작해 모두가 인스턴스화될 때까지 기다린다. 풀은 `new CpuRunner(pool.kernels, graph, pool)`에 넘기고, 끝나면 `terminate()`."
     }
    ],
-   "count": 35,
-   "doc_ko": "여러 워커, 하나의 메모리: forward가 커널 호출을 풀에 건네는 프로토콜.\n\n커널은 하나의 선형 메모리 속 오프셋 위의 상태 없는 함수라서 forward는 행으로 나뉜다 — GEMM의 행은 `P` 조각으로, depthwise 합성곱의 이미지는 워커마다 하나씩, im2col 블록과 그 GEMM은 한 단위로. 이 파일이 더하는 것은 브라우저에서 그것을 가능하게 하는 최소한이다: 모든 워커가 같은 모듈을 인스턴스화하는 **공유** `WebAssembly.Memory`, 할당은 메인 쪽만, 그리고 `postMessage`가 아니라 작은 제어 블록 위의 `Atomics`로 하는 인계 — forward 한 번은 백여 번의 커널 호출이고, 50–100 µs짜리 메시지 왕복 백 번은 forward보다 비싸다.\n\n제어 블록: `ctrl`(SharedArrayBuffer 위 Int32Array)은 `[0]` 세대, `[1]` 현재 세대를 끝낸 워커 수, `[2]` 작업 수, `[3]` 정지. `data`(Float64Array)는 `MAX_TASKS` 슬롯 × `SLOT` 개의 double — 호출 수, 이어서 최대 `MAX_CALLS` 개의 `[fnId, nArgs, args…]`. 작업 `t`는 언제나 워커 `t % workers`에 떨어지고, runner는 그것에 의지해 워커마다 자기 스크래치 버퍼를 준다.\n\n페이지에 필요한 것: `SharedArrayBuffer` — `Cross-Origin-Opener-Policy: same-origin`과 `Cross-Origin-Embedder-Policy: require-corp`로 서빙된 페이지에만 주어진다. `file://`로 연 페이지는 가질 수 없다. 브라우저 메인 스레드는 `Atomics.wait`를 거절하므로 거기서는 `Atomics.load`로 스핀한다."
+   "count": 37,
+   "doc_ko": "여러 워커, 하나의 메모리: forward가 커널 호출을 풀에 건네는 프로토콜.\n\n커널은 하나의 선형 메모리 속 오프셋 위의 상태 없는 함수라서 forward는 행으로 나뉜다 — GEMM의 행은 `P` 조각으로, depthwise 합성곱의 이미지는 워커마다 하나씩, im2col 블록과 그 GEMM은 한 단위로. 이 파일이 더하는 것은 브라우저에서 그것을 가능하게 하는 최소한이다: 모든 워커가 같은 모듈을 인스턴스화하는 **공유** `WebAssembly.Memory`, 할당은 메인 쪽만, 그리고 `postMessage`가 아니라 작은 제어 블록 위의 `Atomics`로 하는 인계 — forward 한 번은 백여 번의 커널 호출이고, 50–100 µs짜리 메시지 왕복 백 번은 forward보다 비싸다.\n\n제어 블록: `ctrl`(SharedArrayBuffer 위 Int32Array)은 `[0]` 세대, `[1]` 현재 세대를 끝낸 워커 수, `[2]` 작업 수, `[3]` 정지, `[4]` 오류 — 작업이 트랩된 워커가 세운다(자기를 끝난 것으로 세어 메인이 깨어나 예외를 던지게 한다, 오지 않을 수를 기다리는 대신). 워커가 통째로 죽으면 호스트가 세운다. `data`(Float64Array)는 `MAX_TASKS` 슬롯 × `SLOT` 개의 double — 호출 수, 이어서 최대 `MAX_CALLS` 개의 `[fnId, nArgs, args…]`. 작업 `t`는 언제나 워커 `t % workers`에 떨어지고, runner는 그것에 의지해 워커마다 자기 스크래치 버퍼를 준다.\n\n페이지에 필요한 것: `SharedArrayBuffer` — `Cross-Origin-Opener-Policy: same-origin`과 `Cross-Origin-Embedder-Policy: require-corp`로 서빙된 페이지에만 주어진다. `file://`로 연 페이지는 가질 수 없다. 브라우저 메인 스레드는 `Atomics.wait`를 거절하므로 거기서는 `Atomics.load`로 스핀한다."
   },
   {
    "name": "vision",
@@ -23037,5 +23048,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3148
+ "total": 3150
 }

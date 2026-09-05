@@ -66,3 +66,24 @@ def test_the_node_check_covers_the_three_halves(report):
     names = " ".join(c["name"] for c in report["checks"])
     for word in ("forward", "head", "neighbours"):
         assert word in names, f"the node check no longer reports on the {word}"
+
+
+def test_the_pool_survives_a_long_dispatch_and_a_trapping_worker():
+    """`borch-ts/test/threads_check.mjs`: 300 convolution blocks on three workers come out to
+    the bit of one thread (the column buffer a worker uses is chosen by its position in the
+    chunk, and three does not divide the chunk size), and a worker that traps makes the
+    main side throw instead of waiting for a count that never arrives. The second half runs
+    in a child with a ten-second limit — the main side spins synchronously, so a hang can
+    only be seen from outside it."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node")
+    stale = _stale()
+    if stale:
+        pytest.fail(stale)
+    out = subprocess.run([node, str(ROOT / "borch-ts" / "test" / "threads_check.mjs")], capture_output=True, text=True, cwd=ROOT, timeout=180)
+    assert out.stdout.strip(), f"the pool check reported nothing:\n{out.stderr[-2000:]}"
+    report = json.loads(out.stdout.strip().splitlines()[-1])
+    failed = [f"{c['name']} — {c['note']}" for c in report["checks"] if not c["ok"]]
+    assert len(report["checks"]) == 2, report
+    assert not failed, "pool checks failed:\n  " + "\n  ".join(failed)
