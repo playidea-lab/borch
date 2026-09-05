@@ -32,6 +32,7 @@ needed. The repository root is put on a temporary port here.
 import argparse
 import functools
 import http.server
+import os
 import importlib.util
 import pathlib
 import socketserver
@@ -57,6 +58,16 @@ TIMEOUT_MS = 600_000
 class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
+
+    def end_headers(self):
+        # The same two headers as site/serve.py: the browser tests run cross-origin isolated,
+        # so a resource that would break the deployed page under COEP breaks here first.
+        # BORCH_NO_COI=1 leaves them out — the way to tell a page that broke under isolation
+        # from a page that broke anyway.
+        if not os.environ.get("BORCH_NO_COI"):
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+        super().end_headers()
 
 
 def serve(root):

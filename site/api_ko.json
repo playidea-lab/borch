@@ -2976,8 +2976,8 @@
     "src": "01eecd1bc444"
   },
   "cpu/load/KernelFlavor": {
-    "ko": "어느 모듈이 돌고 있는가. `strict` 는 곱셈과 덧셈을 따로 반올림해 어느 기계에서나 같고, `relaxed` 는 둘을 접어(`f32x4.relaxed_madd`) GEMM 에서 1.7배 빠르되 마지막 비트는 하드웨어의 것이다.",
-    "src": "fca786b75741"
+    "ko": "`strict`는 연산마다 반올림하고, `relaxed`는 곱셈-덧셈을 융합하며, `shared`는 relaxed 커널을 가져온(import) 공유 메모리 위에 올린 것이다 — 워커 풀(`threads.ts`)을 위한 것이고, `SharedArrayBuffer`가 있는 곳에서만.",
+    "src": "52f15c6ab346"
   },
   "cpu/load/relaxedSimdAvailable": {
     "ko": "이 엔진이 relaxed SIMD 를 받는지 — Chrome 114+, Firefox 145+, Safari 는 Technology Preview 250 부터.",
@@ -2986,5 +2986,81 @@
   "cpu/load/LoadKernelsOptions.relaxed": {
     "ko": "`true` 는 relaxed 모듈을 요구하고 엔진에 relaxed SIMD 가 없으면 실패한다; `false` 는 결정적 모듈을 요구한다; 없으면 엔진이 받는 곳에서는 relaxed, 아니면 결정적.",
     "src": "17bac1e7ccea"
+  },
+  "cpu/load/CpuKernels.module": {
+    "ko": "컴파일된 모듈 — `shared` flavor에만 있다. 워커들이 같은 메모리 위에 이 모듈을 다시 인스턴스화한다.",
+    "src": "243b3f075d1e"
+  },
+  "cpu/load/LoadKernelsOptions.shared": {
+    "ko": "`true`는 공유 메모리 모듈(하나의 공유 `WebAssembly.Memory` 위의 relaxed 커널, 워커 풀용)을 요청하며 `sharedMemoryAvailable()`이 거짓인 곳에서는 실패한다. 메모리는 `initialMB`(기본 64)에서 시작해 `maxMB`(기본 2048)까지 자랄 수 있다 — 공유 메모리는 최대치를 처음에 선언해야 한다.",
+    "src": "93d6213e6513"
+  },
+  "cpu/load/kernelsFromExports": {
+    "ko": "인스턴스의 export 위에 얹는 타입 있는 핸들. `loadKernels`가 쓰고, 공유 메모리 위에 같은 모듈을 인스턴스화한 워커(`threads.ts`)도 쓴다 — 어느 쪽이든 핸들은 같고 검사도 같다: export마다 함수인지, `memory`가 `WebAssembly.Memory`인지, `KERNELS_EXPORTS`의 모든 이름이 있는지.",
+    "src": "b7dbf768f105"
+  },
+  "cpu/load/sharedMemoryAvailable": {
+    "ko": "이 컨텍스트가 공유 wasm 메모리를 가질 수 있는가: `SharedArrayBuffer`가 있고, 페이지가 cross-origin isolated이며(COOP `same-origin` + COEP `require-corp`; `file://` 페이지는 절대 아니다), 엔진이 공유 `WebAssembly.Memory`를 만들어 주는가. Node도 통과한다.",
+    "src": "52b52b4bde0a"
+  },
+  "cpu/runner/CpuRunner.constructor": {
+    "ko": "`pool`은 선택이다. 없으면 모든 커널이 이 스레드에서 돈다. 있으면 GEMM은 행 조각으로, depthwise 합성곱과 풀은 이미지 단위로 나뉘고, im2col 블록과 그 GEMM은 한 작업이 된다. 풀의 워커들은 같은 공유 메모리 위에 같은 모듈을 인스턴스화한 것이다(`threads.ts`). 할당은 어느 쪽이든 여기서만 한다.",
+    "src": "9c6c70caafec"
+  },
+  "cpu/threads/": {
+    "ko": "여러 워커, 하나의 메모리: forward가 커널 호출을 풀에 건네는 프로토콜.\n\n커널은 하나의 선형 메모리 속 오프셋 위의 상태 없는 함수라서 forward는 행으로 나뉜다 — GEMM의 행은 `P` 조각으로, depthwise 합성곱의 이미지는 워커마다 하나씩, im2col 블록과 그 GEMM은 한 단위로. 이 파일이 더하는 것은 브라우저에서 그것을 가능하게 하는 최소한이다: 모든 워커가 같은 모듈을 인스턴스화하는 **공유** `WebAssembly.Memory`, 할당은 메인 쪽만, 그리고 `postMessage`가 아니라 작은 제어 블록 위의 `Atomics`로 하는 인계 — forward 한 번은 백여 번의 커널 호출이고, 50–100 µs짜리 메시지 왕복 백 번은 forward보다 비싸다.\n\n제어 블록: `ctrl`(SharedArrayBuffer 위 Int32Array)은 `[0]` 세대, `[1]` 현재 세대를 끝낸 워커 수, `[2]` 작업 수, `[3]` 정지. `data`(Float64Array)는 `MAX_TASKS` 슬롯 × `SLOT` 개의 double — 호출 수, 이어서 최대 `MAX_CALLS` 개의 `[fnId, nArgs, args…]`. 작업 `t`는 언제나 워커 `t % workers`에 떨어지고, runner는 그것에 의지해 워커마다 자기 스크래치 버퍼를 준다.\n\n페이지에 필요한 것: `SharedArrayBuffer` — `Cross-Origin-Opener-Policy: same-origin`과 `Cross-Origin-Embedder-Policy: require-corp`로 서빙된 페이지에만 주어진다. `file://`로 연 페이지는 가질 수 없다. 브라우저 메인 스레드는 `Atomics.wait`를 거절하므로 거기서는 `Atomics.load`로 스핀한다.",
+    "src": "51c2ee869fad"
+  },
+  "cpu/threads/Call": {
+    "ko": "커널 호출 하나: export 이름, 그 다음 숫자 인자들.",
+    "src": "8809367c5f4f"
+  },
+  "cpu/threads/Dispatcher.run": {
+    "ko": "모든 작업을 돌린다. 작업 `t`는 워커 `t % workers`에서. 전부 끝나면 돌아온다.",
+    "src": "2ff967456471"
+  },
+  "cpu/threads/Layout": {
+    "ko": "워커 루프가 제어 블록에 대해 알아야 할 전부를 데이터로. 루프는 이것을 매개변수로 받고 이 모듈의 다른 것은 건드리지 않는다 — 그래서 그 소스(`workerLoop.toString()`)를 그대로 워커 스크립트에 넣을 수 있다.",
+    "src": "198b4957d7ed"
+  },
+  "cpu/threads/MainSide": {
+    "ko": "메인 쪽: 작업을 인코딩하고, 워커를 깨우고, 전부를 기다린다.",
+    "src": "0fdbcff4e58b"
+  },
+  "cpu/threads/MainSide.stop": {
+    "ko": "워커들에게 루프를 떠나라고 알린다.",
+    "src": "d9a784e16f4f"
+  },
+  "cpu/threads/Task": {
+    "ko": "워커 하나가 순서대로 돌리는 호출들 — 예컨대 im2col 블록과 그 GEMM.",
+    "src": "6b1164baa04a"
+  },
+  "cpu/threads/WORKER_STACK_BYTES": {
+    "ko": "워커마다의 섀도 스택. 커널은 거의 전부를 레지스터에 두므로 256 KB는 넉넉하다.",
+    "src": "b760af3fddd7"
+  },
+  "cpu/threads/WorkerPool": {
+    "ko": "공유 커널 모듈 위의 Web Worker 풀. `spawn`은 `shared` 커널을 읽어(또는 받아) 그 메모리에서 워커마다 스택을 할당하고, blob URL로 워커를 시작해 모두가 인스턴스화될 때까지 기다린다. 풀은 `new CpuRunner(pool.kernels, graph, pool)`에 넘기고, 끝나면 `terminate()`.",
+    "src": "87066078b329"
+  },
+  "cpu/threads/WorkerPool.terminate": {
+    "ko": "루프와 워커를 멈춘다. 커널과 그 메모리는 이 스레드에서 계속 쓸 수 있다.",
+    "src": "c36f652c502a"
+  },
+  "cpu/threads/defaultWorkers": {
+    "ko": "하드웨어 스레드의 절반, 최소 하나, 최대 여덟 — 여덟을 넘긴 풀은 측정에서 얻는 것이 적었다.",
+    "src": "8a45adb71f2c"
+  },
+  "cpu/threads/makeControl": {
+    "ko": "풀이 세워지는 두 공유 버퍼.",
+    "src": "575a8df186af"
+  },
+  "cpu/threads/threadsAvailable": {
+    "ko": "여기서 풀을 스폰할 수 있는가: 공유 메모리(`sharedMemoryAvailable`)와 `Worker`. Node는 앞은 있고 뒤는 없다 — 거기서는 `worker_threads`가 `workerLoop`를 직접 돌린다.",
+    "src": "8386e97273f2"
+  },
+  "cpu/threads/workerLoop": {
+    "ko": "워커 쪽: 워커가 평생 돌리는 루프. `exports`는 공유 메모리 위 커널 모듈의 자기 인스턴스이고, `id`가 어느 작업이 자기 것인지 정한다. 매개변수와 전역 `Atomics`만 쓴다 — `Layout` 참조.",
+    "src": "c104eae758b2"
   }
 }

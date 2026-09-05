@@ -68,10 +68,12 @@ def test_kernels_ts_carries_the_hash_of_the_rust_source_it_was_built_from(commit
 def test_kernels_ts_base64_decodes_to_bytes_with_the_recorded_hash(committed):
     """The loader does this too, at runtime, before instantiating. Here it runs without a
     browser, so the merge that keeps a constant and loses a line of blob is caught in `pytest`.
-    Two blobs since the relaxed module arrived; each carries its own hash."""
+    Three blobs since the relaxed and the shared modules arrived; each carries its own hash."""
     assert hashlib.sha256(committed["wasm"]).hexdigest() == committed["wasm_sha256"], "the strict base64 does not hash to KERNELS_WASM_SHA256"
     assert hashlib.sha256(committed["relaxed"]).hexdigest() == committed["relaxed_sha256"], "the relaxed base64 does not hash to KERNELS_RELAXED_WASM_SHA256"
     assert committed["wasm"] != committed["relaxed"], "the two modules are the same bytes — the relaxed build did not take"
+    assert hashlib.sha256(committed["shared"]).hexdigest() == committed["shared_sha256"], "the shared base64 does not hash to KERNELS_SHARED_WASM_SHA256"
+    assert committed["shared"] != committed["relaxed"], "the shared module is the relaxed bytes — it was not linked over an imported memory"
 
 
 def test_kernels_wasm_is_a_module_that_imports_nothing(committed):
@@ -82,11 +84,22 @@ def test_kernels_wasm_is_a_module_that_imports_nothing(committed):
     assert build.wasm_import_count(committed["relaxed"]) == 0
 
 
+def test_shared_kernels_wasm_imports_exactly_the_memory_and_exports_the_stack_pointer(committed):
+    """The shared module is the one exception: it imports its memory (so every worker can
+    instantiate it over the same buffer) and exports `__stack_pointer` (so each worker can
+    be given its own stack — without it the workers spill over each other's frames)."""
+    assert build.wasm_import_count(committed["shared"]) == build.SHARED_IMPORTS
+    names = dict(build.wasm_exports(committed["shared"]))
+    assert names.get("__stack_pointer") == "global", "the shared module does not export __stack_pointer"
+    assert "memory" not in names, "the shared module exports a memory of its own — it was meant to import one"
+
+
 def test_kernels_wasm_stays_a_few_kilobytes(committed):
     """4.7KB on 2026-09-05 for eight kernels. `MAX_WASM_BYTES` is an alarm rather than a budget;
     `build.py` refuses over it and this repeats the refusal for the committed bytes."""
     assert len(committed["wasm"]) <= build.MAX_WASM_BYTES
     assert len(committed["relaxed"]) <= build.MAX_WASM_BYTES
+    assert len(committed["shared"]) <= build.MAX_WASM_BYTES
 
 
 def test_kernels_exports_are_exactly_what_the_module_has_and_the_loader_asks_for(committed):
@@ -98,6 +111,8 @@ def test_kernels_exports_are_exactly_what_the_module_has_and_the_loader_asks_for
     assert committed["exports"] == in_module, "KERNELS_EXPORTS disagrees with the module's export section"
     in_relaxed = sorted(n for n, k in build.wasm_exports(committed["relaxed"]) if k == "func" and not n.startswith("__"))
     assert in_relaxed == in_module, "the relaxed module exports different names from the strict one"
+    in_shared = sorted(n for n, k in build.wasm_exports(committed["shared"]) if k == "func" and not n.startswith("__"))
+    assert in_shared == in_module, "the shared module exports different names from the strict one"
     asked = sorted(set(re.findall(r'fn\(ex, "(\w+)"\)', LOAD_TS.read_text(encoding="utf-8"))))
     assert asked == in_module, (
         f"load.ts asks for {asked}\n  the module exports {in_module}")

@@ -34,6 +34,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # changed and then stared at as "nothing happened" for a long while. On a
         # development server that confusion costs far more than caching saves.
         self.send_header("Cache-Control", "no-store, must-revalidate")
+        # **Cross-origin isolation, for the cpu device's worker pool.** `SharedArrayBuffer`
+        # exists only on a page served with these two; everything the page loads from other
+        # origins must then either send CORP or be fetched in CORS mode (module imports and
+        # `fetch` are; a plain `<img>` from elsewhere is not). GitHub Pages cannot set them.
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         super().end_headers()
 
     def send_error(self, code, message=None, explain=None):

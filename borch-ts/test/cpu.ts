@@ -30,6 +30,7 @@
  */
 import { init, Device, Tensor, noGrad, scope, keepAlive } from "../src/index.js";
 import { loadKernels, relaxedSimdAvailable } from "../src/cpu/load.js";
+import { WorkerPool, threadsAvailable, defaultWorkers } from "../src/cpu/threads.js";
 import type { CpuGraph } from "../src/cpu/graph.js";
 import { CpuRunner } from "../src/cpu/runner.js";
 import { readSafetensors, type HostStateDict } from "../src/cpu/safetensors.js";
@@ -235,6 +236,41 @@ export async function report(hub: HubLike, bimm: BimmLike, indexUrl: string, onl
       say(`neighbours: ${note}`);
       checks.push({ name: "cosine neighbours: cpu matches reference", ok: mismatched === 0 && worstSim < 1e-4, note });
     }
+  }
+
+  // ---- the worker pool: the same forward on N workers must match the single thread to the bit ----
+  say(`\n== worker pool ==`);
+  say(`cross-origin isolated: ${typeof crossOriginIsolated !== "undefined" ? crossOriginIsolated : "n/a"} · threads available: ${threadsAvailable()} · hardware threads ${navigator.hardwareConcurrency} · default workers ${defaultWorkers()}`);
+  if (threadsAvailable() && (!only || only === "imagenet-efficientnet-b0")) {
+    const entry = entries.filter((e) => e.name === "imagenet-efficientnet-b0").pop();
+    if (!entry) throw new Error("imagenet-efficientnet-b0 left the index");
+    const { manifest } = await hub.load(entry.manifestUrl, { verify: false });
+    const st = readSafetensors(await hub.fetchWeights(manifest, entry.manifestUrl));
+    const graph = bimm.cpuGraphFor({ library: "timm", factory: "efficientnet_b0" }, st, { numClasses: 1000 });
+    const direct = new CpuRunner(K, graph);
+    const B = 16, arr = seeded(B * 3 * 224 * 224, 7);
+    const ref = direct.forward(arr, B, 224, 224);
+    const directMs = await median(() => { direct.forward(arr, B, 224, 224); }, 3);
+    for (const P of [2, defaultWorkers()].filter((v, i, a) => a.indexOf(v) === i)) {
+      const t0 = performance.now();
+      const pool = await WorkerPool.spawn(P);
+      const spawnMs = performance.now() - t0;
+      try {
+        const runner = new CpuRunner(pool.kernels, graph, pool);
+        const out = runner.forward(arr, B, 224, 224);
+        let worst = 0;
+        for (let i = 0; i < out.length; i++) worst = Math.max(worst, Math.abs((out[i] ?? 0) - (ref[i] ?? 0)));
+        const ms = await median(() => { runner.forward(arr, B, 224, 224); }, 3);
+        say(`${P} workers: spawn ${spawnMs.toFixed(0)} ms · b${B} ${ms.toFixed(1)} ms (${(ms / B).toFixed(1)} ms/image, ×${(directMs / ms).toFixed(2)} vs ${K.flavor} on one thread ${directMs.toFixed(1)} ms) · max|Δ| ${worst.toExponential(1)} · shared memory ${(pool.kernels.memory.buffer.byteLength / 1e6).toFixed(0)} MB`);
+        checks.push({ name: `worker pool ×${P}: matches one thread to the bit`, ok: worst === 0, note: `max|Δ| ${worst.toExponential(1)}` });
+        checks.push({ name: `worker pool ×${P}: faster than one thread`, ok: ms < directMs, note: `×${(directMs / ms).toFixed(2)}` });
+      } finally {
+        pool.terminate();
+      }
+    }
+  } else {
+    say("no worker pool here — the page is not cross-origin isolated (needs COOP same-origin + COEP require-corp)");
+    checks.push({ name: "worker pool: available on this page", ok: false, note: "not cross-origin isolated" });
   }
 
   const failed = checks.filter((c) => !c.ok).length;
