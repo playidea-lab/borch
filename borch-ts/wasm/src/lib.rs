@@ -230,7 +230,7 @@ pub unsafe extern "C" fn swish(n: usize, x: *mut f32) {
     }
 }
 
-/// x[rows×c] += bias[c], then an activation: 0 none, 1 swish, 2 sigmoid. `c % 4 == 0`.
+/// x[rows×c] += bias[c], then an activation: 0 none, 1 swish, 2 sigmoid, 3 relu. `c % 4 == 0`.
 /// A folded BatchNorm's bias and the activation in one pass over memory — measured at a
 /// fifth of the forward, which is why folding it into `gemm`'s epilogue is the next lever.
 #[no_mangle]
@@ -241,7 +241,9 @@ pub unsafe extern "C" fn bias_act(rows: usize, c: usize, x: *mut f32, bias: *con
         while ch < c {
             let p = row.add(ch) as *mut v128;
             let mut v = f32x4_add(v128_load(p), v128_load(bias.add(ch) as *const v128));
-            if act == 1 { v = f32x4_mul(v, sigmoid_f32x4(v)); } else if act == 2 { v = sigmoid_f32x4(v); }
+            if act == 1 { v = f32x4_mul(v, sigmoid_f32x4(v)); }
+            else if act == 2 { v = sigmoid_f32x4(v); }
+            else if act == 3 { v = f32x4_pmax(v, f32x4_splat(0.0)); }
             v128_store(p, v);
             ch += 4;
         }
@@ -297,5 +299,87 @@ pub unsafe extern "C" fn add_inplace(n: usize, a: *mut f32, b: *const f32) {
         let p = a.add(i) as *mut v128;
         v128_store(p, f32x4_add(v128_load(p), v128_load(b.add(i) as *const v128)));
         i += 4;
+    }
+}
+
+/// x ← max(x, 0), in place. `n % 4 == 0`. ResNet's residual add is followed by this.
+#[no_mangle]
+pub unsafe extern "C" fn relu(n: usize, x: *mut f32) {
+    let zero = f32x4_splat(0.0);
+    let mut i = 0;
+    while i < n {
+        let p = x.add(i) as *mut v128;
+        v128_store(p, f32x4_pmax(v128_load(p), zero));
+        i += 4;
+    }
+}
+
+/// NHWC im2col: in `[h,w,c]` → out `[ho·wo, k·k·c]`, tap-major then channel, zeros where
+/// a tap falls outside. A dense k×k convolution is then one `gemm` against weights packed
+/// in the same tap-major order. Channels are copied four at a time when `c % 4 == 0`,
+/// one at a time otherwise — the stem's three input channels take the second path.
+#[no_mangle]
+pub unsafe extern "C" fn im2col(
+    h: usize, w: usize, c: usize, k: usize, stride: usize, pad: usize,
+    ho: usize, wo: usize, inp: *const f32, out: *mut f32,
+) {
+    let kk = k * k;
+    let zero = f32x4_splat(0.0);
+    for oy in 0..ho {
+        for ox in 0..wo {
+            let row = out.add((oy * wo + ox) * kk * c);
+            for ky in 0..k {
+                let iy = (oy * stride + ky) as isize - pad as isize;
+                for kx in 0..k {
+                    let ix = (ox * stride + kx) as isize - pad as isize;
+                    let dst = row.add((ky * k + kx) * c);
+                    let inside = iy >= 0 && iy < h as isize && ix >= 0 && ix < w as isize;
+                    if c % 4 == 0 {
+                        let mut ch = 0;
+                        if inside {
+                            let src = inp.add(((iy as usize) * w + ix as usize) * c);
+                            while ch < c { v128_store(dst.add(ch) as *mut v128, v128_load(src.add(ch) as *const v128)); ch += 4; }
+                        } else {
+                            while ch < c { v128_store(dst.add(ch) as *mut v128, zero); ch += 4; }
+                        }
+                    } else if inside {
+                        let src = inp.add(((iy as usize) * w + ix as usize) * c);
+                        for ch in 0..c { *dst.add(ch) = *src.add(ch); }
+                    } else {
+                        for ch in 0..c { *dst.add(ch) = 0.0; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// NHWC max pool, `c % 4 == 0`. Taps outside the input are skipped, which is what padding
+/// with −∞ means — torch's `MaxPool2d(3, 2, 1)` on the ResNet stem.
+#[no_mangle]
+pub unsafe extern "C" fn maxpool(
+    h: usize, w: usize, c: usize, k: usize, stride: usize, pad: usize,
+    ho: usize, wo: usize, inp: *const f32, out: *mut f32,
+) {
+    let neg = f32x4_splat(f32::NEG_INFINITY);
+    for oy in 0..ho {
+        for ox in 0..wo {
+            let o = out.add((oy * wo + ox) * c);
+            let mut ch = 0;
+            while ch < c {
+                let mut acc = neg;
+                for ky in 0..k {
+                    let iy = (oy * stride + ky) as isize - pad as isize;
+                    if iy < 0 || iy >= h as isize { continue; }
+                    for kx in 0..k {
+                        let ix = (ox * stride + kx) as isize - pad as isize;
+                        if ix < 0 || ix >= w as isize { continue; }
+                        acc = f32x4_pmax(acc, v128_load(inp.add(((iy as usize) * w + ix as usize) * c + ch) as *const v128));
+                    }
+                }
+                v128_store(o.add(ch) as *mut v128, acc);
+                ch += 4;
+            }
+        }
     }
 }

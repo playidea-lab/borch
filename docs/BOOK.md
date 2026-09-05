@@ -1424,7 +1424,7 @@ axes here and only one of them is about devices:
 |            | CPU                | GPU              |
 |------------|--------------------|------------------|
 | Python     | `borch` (numpy)    | `borch_webgpu`   |
-| TypeScript | **this**           | `borch-ts`       |
+| TypeScript | **this**, and the `cpu` device below | `borch-ts` |
 
 Sending someone to `borch` is answering a **device** question with a **language** one —
 their TypeScript does not run there. What fills the cell is Chrome's SwiftShader, which
@@ -1463,6 +1463,49 @@ sentence that stood here until 2026-09-03 still said "not measured" a week after
 setup page said otherwise. What is worth sending from a Windows machine is one line:
 `site/check.html` prints, before the golden, the first run's cost with the adapter and
 the OS beside it, and then the golden's count on that card.
+
+### The `cpu` device — when there is no adapter at all
+
+SwiftShader fills the cell above only while the browser still exposes WebGPU. Where it
+does not — a remote-desktop session with no GPU process, a policy that turned graphics
+acceleration off, a browser too old for the API — `init()` fails by name and the row
+above has nothing to offer. The `cpu` device is for that row. It is not a `Tensor`
+backend: on those machines there is no `Tensor` to make. It reads a checkpoint's bytes
+(`cpu/safetensors`), builds a short graph with BatchNorm folded and weights repacked
+(`cpu/graph`), and runs it through eight WebAssembly SIMD kernels that ship inside the
+package as 6.6 KB of base64 (`cpu/kernels`, generated from `borch-ts/wasm/`). No
+runtime, no imports, one linear memory.
+
+**It answers the same as the GPU.** `borch-ts/test/cpu.py` loads two hub checkpoints
+onto both devices and compares the logits on a seeded image, measured 2026-09-05 on
+`apple / metal-3`:
+
+| checkpoint | max Δ relative to the largest logit | argmax |
+|---|---|---|
+| `imagenet-efficientnet-b0` | 8.8e-5 | agrees |
+| `imagenet-resnet18` | 4.0e-7 | agrees |
+
+EfficientNet carries `swish`, whose `exp` is a polynomial on this side; ResNet carries
+only `relu`, and the difference between the two rows is that.
+
+**What it costs, on one thread.** The same page times both, batch 1 and 16, medians of
+five, readback included:
+
+| forward | `apple / metal-3` | `cpu`, one thread | SwiftShader (for scale) |
+|---|---|---|---|
+| EfficientNet-B0, per image at batch 16 | 1.6 ms | 21 ms | 520 ms, after 64 s of compiling |
+| ResNet-18, per image at batch 16 | 1.4 ms | 68 ms | — |
+
+The SwiftShader column is the reason this device exists in this shape: WebGPU's own CPU
+path was measured first, and it spent a minute compiling shaders for every new batch
+shape before running twenty-five times slower than these kernels. Plain JavaScript on
+typed arrays sat at SwiftShader's speed; the difference is the SIMD, not the language,
+so there is no JavaScript backend beside this one.
+
+What it does not do, written down: train. The graph runs a classifier forward and stops;
+a head trained on cached features is the next thing it learns, and everything else
+stays absent by name. The plans that turn a checkpoint into a graph live with the test
+for now — `bimm-ts` owns the architectures and they belong beside its tables.
 
 ### How much it does
 

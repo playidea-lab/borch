@@ -47,6 +47,8 @@ CHECKS = [
     ("serialize",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/serialize.py"]),
     ("onnx",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/onnx.py"]),
     ("onnx:binding", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/onnx_binding.py"]),
+    # The CPU device against the WebGPU device — two hub checkpoints, logits compared.
+    ("cpu",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/cpu.py"]),
     # The wheel alone, in a worker — JupyterLite's shape. Builds the wheel first.
     ("wheel",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/wheel_probe.py", "--build"]),
     # The notebook page — JupyterLite built here, the cell pressed, the learned line read.
