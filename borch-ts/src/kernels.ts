@@ -2482,19 +2482,19 @@ ${residualBinding(ep, slot)}
 @group(0) @binding(${ep?.residual ? slot + 1 : slot}) var<storage, read_write> Out: array<f32>;`,
     // The weights run as (O, K), so one row is contiguous in its entirety.
     loadA: `          v = Wt[(grp * ${cout}u + arow) * ${K}u + kk];`,
-    // im2col is built here **without being laid out in memory.**
+    // The column is (batch, output position) and constant per thread: resolved once.
+    prepB: `  let pb_n = (bcol / ${outSpace}u) * ${s.C * inSpace}u;
+${s.outDims.map((size, d) =>
+      `  let pb_o${d} = i32(((bcol / ${outStride[d] ?? 1}u) % ${size}u) * ${s.stride[d] ?? 1}u) - ${s.pad[d] ?? 0};`).join("\n")}`,
+    // im2col is built here **without being laid out in memory.** Per element only the
+    // kernel side — (channel, kernel position) — is left to resolve.
     loadB: `          let ch = grp * ${cin}u + kk / ${kSpace}u;
 ${s.kernel.map((size, d) =>
       `          let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`).join("\n")}
-          let bn = col / ${outSpace}u;
-${s.outDims.map((size, d) =>
-      `          let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`).join("\n")}
 ${s.outDims.map((_, d) =>
-      `          let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d} * `
-      + `${convDil(s, d)}u) - ${s.pad[d] ?? 0};`)
-      .join("\n")}
+      `          let i${d} = pb_o${d} + i32(kk${d} * ${convDil(s, d)}u);`).join("\n")}
           if (${s.inDims.map((size, d) => `i${d} >= 0 && i${d} < ${size}`).join(" && ")}) {
-            v = X[(bn * ${s.C}u + ch) * ${inSpace}u
+            v = X[pb_n + ch * ${inSpace}u
               + ${s.inDims.map((_, d) => `u32(i${d}) * ${inStride[d] ?? 1}u`).join(" + ")}];
           }`,
     emit: `  let bn = col / ${outSpace}u;
@@ -2519,7 +2519,7 @@ ${withBias ? "  r = r + B[fo];\n" : ""}${epilogueWgsl(ep, "r", "idx")}  Out[idx]
 export function convForwardSplit(s: ConvNDShape): number {
   const { groups, cin, cout } = grouped(s);
   const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
-  const tiles = Math.ceil(P / 64) * Math.ceil(cout / 64) * groups;
+  const tiles = tileCount(cout, P) * groups;
   const K = cin * s.kernel.reduce((a, b) => a * b, 1);
   const WANT = 128;
   if (tiles >= WANT) return 1;
@@ -2609,12 +2609,42 @@ export function isDepthwise(s: ConvNDShape): boolean {
   return groups > 1 && groups === s.C && s.O === s.C;
 }
 
+/**
+ * The tile's shape for a GEMM of `M` rows by `N` columns — **it follows the matrix.**
+ *
+ * The tile was 64 × 64 whatever the shape. A convolution with sixteen output channels
+ * has M = 16, so three quarters of every tile were rows that do not exist: the threads
+ * loaded zeros for them, multiplied them, and threw the result away at `emit`. Measured
+ * on the M4 Max, the 16 → 16 layer of a U-Net at 96 × 96 ran at 261 GFLOP/s of useful
+ * work against torch's 2.3 TFLOP/s, and the U-Net's early layers are all of that shape.
+ *
+ * Every shape here has 4,096 cells and 256 threads with a 4 × 4 micro-tile each, so the
+ * inner loop is the same and only the loads and the grid change. The one with the least
+ * padding wins; a tie goes to the square.
+ */
+export function tileShape(M: number, N: number): { TM: number; TN: number } {
+  let best = { TM: 64, TN: 64 };
+  let least = Math.ceil(M / 64) * Math.ceil(N / 64) * 4096;
+  for (const [TM, TN] of [[32, 128], [16, 256]] as const) {
+    const area = Math.ceil(M / TM) * Math.ceil(N / TN) * 4096;
+    if (area < least) { least = area; best = { TM, TN }; }
+  }
+  return best;
+}
+
+/** How many tiles a GEMM of `M` by `N` is — the grid before any split or group. */
+function tileCount(M: number, N: number): number {
+  const { TM, TN } = tileShape(M, N);
+  return Math.ceil(M / TM) * Math.ceil(N / TN);
+}
+
 /** The dispatch grid for the tiled conv. Rows are output channels; columns are batch
  *  and output position. */
 export function convTiledGrid(s: ConvNDShape): [number, number, number] {
   const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
   const { groups, cout } = grouped(s);
-  return [Math.ceil(P / 64), Math.ceil(cout / 64), groups * convForwardSplit(s)];
+  const { TM, TN } = tileShape(cout, P);
+  return [Math.ceil(P / TN), Math.ceil(cout / TM), groups * convForwardSplit(s)];
 }
 
 /**
@@ -2637,6 +2667,16 @@ function tiledGemm(opts: {
   readonly bindings: string;
   readonly loadA: string;
   readonly loadB: string;
+  /**
+   * A WGSL block run once per thread before the reduction loop, with `bcol` — the
+   * column this thread loads for the right tile — in scope. **In every tile shape the
+   * B column is constant per thread** (256 threads, `KT × TN` cells, `TN` divides 256),
+   * so whatever `loadB` derives from `col` alone can be derived here once instead of
+   * once per element. The convolution's gather spent six integer divisions per element
+   * resolving the column into (batch, output position) — measured, more work than the
+   * sixteen multiplies that element then feeds in a 16-row tile.
+   */
+  readonly prepB?: string;
   readonly emit: string;
   /**
    * How many pieces to split the reduction into. 1 means no split.
@@ -2667,48 +2707,65 @@ function tiledGemm(opts: {
     }
   }
   const splits = opts.splits ?? 1;
+  // The tile follows the matrix (see `tileShape`): TM × TN cells, TM/4 × TN/4 threads.
+  const { TM, TN } = tileShape(opts.M, opts.N);
+  const TX = TN / 4;
+  const TY = TM / 4;
+  // The inner tile's depth. Sixteen, except for the 16 × 256 shape: its B tile alone is
+  // 16 KB at depth sixteen, and 16 KB is WebGPU's guaranteed workgroup storage — one
+  // byte over and the pipeline is refused on the smallest adapters. Eight halves it.
+  const KT = TM === 16 ? 8 : 16;
   // How many tiles each piece takes. The last piece may take slightly fewer, so the
   // count is kept inside the boundary.
-  const allTiles = Math.ceil(opts.K / 16);
+  const allTiles = Math.ceil(opts.K / KT);
   const perSplit = Math.ceil(allTiles / splits);
+  const aCells = TM * KT;
+  const bCells = KT * TN;
+  const aLoads = Math.ceil(aCells / 256);
+  const bLoads = Math.ceil(bCells / 256);
   return `
 ${opts.bindings}
 
-var<workgroup> As: array<f32, 1024>;
-var<workgroup> Bs: array<f32, 1024>;
+var<workgroup> As: array<f32, ${aCells}>;
+var<workgroup> Bs: array<f32, ${bCells}>;
 
 fn emit(f: u32, col: u32, v: f32, grp: u32, part: u32) {
   if (f >= ${opts.M}u || col >= ${opts.N}u) { return; }
 ${opts.emit}
 }
 
-@compute @workgroup_size(16, 16)
+@compute @workgroup_size(${TX}, ${TY})
 fn main(@builtin(workgroup_id) wid: vec3<u32>,
         @builtin(local_invocation_id) lid: vec3<u32>) {
-  let tid = lid.y * 16u + lid.x;
-  let row0 = wid.y * 64u + lid.y * 4u;
-  let col0 = wid.x * 64u + lid.x * 4u;
+  let tid = lid.y * ${TX}u + lid.x;
+  let row0 = wid.y * ${TM}u + lid.y * 4u;
+  let col0 = wid.x * ${TN}u + lid.x * 4u;
 ${decl.join("\n")}
 ${zero.join("\n")}
   let grp = wid.z / ${splits}u;
   let part = wid.z % ${splits}u;
   let tFrom = part * ${perSplit}u;
   let tTo = min(tFrom + ${perSplit}u, ${allTiles}u);
+  let bcol = wid.x * ${TN}u + tid % ${TN}u;
+${opts.prepB ?? ""}
   for (var t = tFrom; t < tTo; t = t + 1u) {
-    for (var sload = 0u; sload < 4u; sload = sload + 1u) {
+    for (var sload = 0u; sload < ${aLoads}u; sload = sload + 1u) {
       let idx = sload * 256u + tid;
-      {
-        let arow = wid.y * 64u + idx / 16u;
-        let kk = t * 16u + idx % 16u;
+      if (idx < ${aCells}u) {
+        let arow = wid.y * ${TM}u + idx / ${KT}u;
+        let kk = t * ${KT}u + idx % ${KT}u;
         var v = 0.0;
         if (arow < ${opts.M}u && kk < ${opts.K}u) {
 ${opts.loadA}
         }
         As[idx] = v;
       }
-      {
-        let kk = t * 16u + idx / 64u;
-        let col = wid.x * 64u + idx % 64u;
+    }
+    for (var sload = 0u; sload < ${bLoads}u; sload = sload + 1u) {
+      let idx = sload * 256u + tid;
+      if (idx < ${bCells}u) {
+        let kk = t * ${KT}u + idx / ${TN}u;
+        let col = bcol;
         var v = 0.0;
         if (kk < ${opts.K}u && col < ${opts.N}u) {
 ${opts.loadB}
@@ -2717,15 +2774,15 @@ ${opts.loadB}
       }
     }
     workgroupBarrier();
-    for (var k = 0u; k < 16u; k = k + 1u) {
-      let a0 = As[(lid.y * 4u + 0u) * 16u + k];
-      let a1 = As[(lid.y * 4u + 1u) * 16u + k];
-      let a2 = As[(lid.y * 4u + 2u) * 16u + k];
-      let a3 = As[(lid.y * 4u + 3u) * 16u + k];
-      let b0 = Bs[k * 64u + lid.x * 4u + 0u];
-      let b1 = Bs[k * 64u + lid.x * 4u + 1u];
-      let b2 = Bs[k * 64u + lid.x * 4u + 2u];
-      let b3 = Bs[k * 64u + lid.x * 4u + 3u];
+    for (var k = 0u; k < ${KT}u; k = k + 1u) {
+      let a0 = As[(lid.y * 4u + 0u) * ${KT}u + k];
+      let a1 = As[(lid.y * 4u + 1u) * ${KT}u + k];
+      let a2 = As[(lid.y * 4u + 2u) * ${KT}u + k];
+      let a3 = As[(lid.y * 4u + 3u) * ${KT}u + k];
+      let b0 = Bs[k * ${TN}u + lid.x * 4u + 0u];
+      let b1 = Bs[k * ${TN}u + lid.x * 4u + 1u];
+      let b2 = Bs[k * ${TN}u + lid.x * 4u + 2u];
+      let b3 = Bs[k * ${TN}u + lid.x * 4u + 3u];
 ${fma.join("\n")}
     }
     workgroupBarrier();
@@ -2789,10 +2846,10 @@ export function convNDGradWeightTiled(s: ConvNDShape): string {
     // Right: im2col is built here **without being laid out in memory.** Columns are
     // (channel, kernel position) and the inner axis is (batch, output position) — the
     // same computation as the forward with the axes swapped.
-    loadB: `          let ch = grp * ${cin}u + col / ${kSpace}u;
+    prepB: `  let ch = grp * ${cin}u + bcol / ${kSpace}u;
 ${s.kernel.map((size, d) =>
-      `          let kk${d} = (col / ${suffixStrides(s.kernel)[d] ?? 1}u) % ${size}u;`).join("\n")}
-          let bn = kk / ${outSpace}u;
+      `  let kk${d} = (bcol / ${suffixStrides(s.kernel)[d] ?? 1}u) % ${size}u;`).join("\n")}`,
+    loadB: `          let bn = kk / ${outSpace}u;
 ${s.outDims.map((size, d) =>
       `          let o${d} = (kk / ${suffixStrides(s.outDims)[d] ?? 1}u) % ${size}u;`).join("\n")}
 ${c.coords}
@@ -2835,18 +2892,18 @@ export function convNDGradInputTiled(s: ConvNDShape): string {
           v = Wt[((grp * ${cout}u + oc) * ${cin}u + arow) * ${kSpace}u + kp];`,
     // Right: it finds the output positions that **reach** this input position. Nothing
     // reaching means 0.
+    prepB: `  let pb_n = (bcol / ${inSpace}u) * ${s.O * outSpace}u;
+${s.inDims.map((size, d) =>
+      `  let pb_i${d} = i32((bcol / ${inStride[d] ?? 1}u) % ${size}u) + ${s.pad[d] ?? 0};`).join("\n")}`,
     loadB: `          let oc = kk / ${kSpace}u;
 ${s.kernel.map((size, d) =>
       `          let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`).join("\n")}
-          let bn = col / ${inSpace}u;
-${s.inDims.map((size, d) =>
-      `          let i${d} = i32((col / ${inStride[d] ?? 1}u) % ${size}u);`).join("\n")}
           var ok = true;
           var off = 0u;
 ${s.inDims.map((_, d) => {
       const st = s.stride[d] ?? 1;
       return `          {
-            let t${d} = i${d} + ${s.pad[d] ?? 0} - i32(kk${d} * ${convDil(s, d)}u);
+            let t${d} = pb_i${d} - i32(kk${d} * ${convDil(s, d)}u);
             if (t${d} < 0 || t${d} % ${st} != 0) { ok = false; }
             else {
               let o${d} = t${d} / ${st};
@@ -2856,7 +2913,7 @@ ${s.inDims.map((_, d) => {
           }`;
     }).join("\n")}
           if (ok) {
-            v = G[(bn * ${s.O}u + grp * ${cout}u + oc) * ${outSpace}u + off];
+            v = G[pb_n + (grp * ${cout}u + oc) * ${outSpace}u + off];
           }`,
     emit: `  Out[col / ${inSpace}u * ${s.C * inSpace}u + (grp * ${cin}u + f) * ${inSpace}u + col % ${inSpace}u] = v;`,
   });
@@ -2878,10 +2935,10 @@ export function convGradWeightSplit(s: ConvNDShape): number {
   const cols = cin * s.kernel.reduce((a, b) => a * b, 1);
   // Every group is a tile grid of its own, so the groups count towards keeping the GPU
   // busy before any split does.
-  const tiles = Math.ceil(cols / 64) * Math.ceil(cout / 64) * groups;
+  const tiles = tileCount(cout, cols) * groups;
   const K = s.N * s.outDims.reduce((a, b) => a * b, 1);
   // Below this many workgroups the GPU is said to be idle. Above it, no split.
-  const WANT = 64;
+  const WANT = 256;
   if (tiles >= WANT) return 1;
   // A piece has to take at least this much reduction for the split to be worth it.
   const MIN_PER_SPLIT = 256;
@@ -2893,7 +2950,8 @@ export function convGradWeightSplit(s: ConvNDShape): number {
 export function convGradWeightGrid(s: ConvNDShape): [number, number, number] {
   const { groups, cin, cout } = grouped(s);
   const cols = cin * s.kernel.reduce((a, b) => a * b, 1);
-  return [Math.ceil(cols / 64), Math.ceil(cout / 64), groups * convGradWeightSplit(s)];
+  const { TM, TN } = tileShape(cout, cols);
+  return [Math.ceil(cols / TN), Math.ceil(cout / TM), groups * convGradWeightSplit(s)];
 }
 
 /** Sums the split partials. The order is fixed, so two runs give the same value. */
@@ -2917,7 +2975,8 @@ ${flatId(n)}
 export function convGradInputGrid(s: ConvNDShape): [number, number, number] {
   const cols = s.N * s.inDims.reduce((a, b) => a * b, 1);
   const { groups, cin } = grouped(s);
-  return [Math.ceil(cols / 64), Math.ceil(cin / 64), groups];
+  const { TM, TN } = tileShape(cin, cols);
+  return [Math.ceil(cols / TN), Math.ceil(cin / TM), groups];
 }
 
 

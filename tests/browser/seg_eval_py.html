@@ -7,8 +7,8 @@
   // **The wheel alone, in a Web Worker** — JupyterLite's shape: Pyodide in a worker,
   // no page-side borch.ts, nothing but `pip install`. The worker installs numpy and the
   // wheel from this checkout, imports `borch_webgpu` (which boots its own borch.ts from
-  // the bundle it carries), trains a U-Net on eight hundred endoscopy images with a fifth of the masks
-  // corrupted, and posts back the held-out IoU and the review queue's metrics. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
+  // the bundle it carries), trains a U-Net on eight hundred endoscopy images twice — on the clean masks, then
+  // with a fifth corrupted — and posts back the held-out IoU of each and the queue's metrics. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
   const out = document.getElementById("out");
   const q = new URLSearchParams(location.search);
   const wheel = location.origin + q.get("wheel");
@@ -46,10 +46,12 @@ module("review_eval", "/tests/review_eval.py")
 S = module("seg_eval", "/tests/seg_eval.py")
 x, m = S.load(get("/tests/browser/.cache/kvasir_96.npz", binary=True))
 say = lambda s: js.postMessage(js.Object.fromEntries(js.Map.new([["say", s]])))
-r = S.evaluate(torch, x, m, n_train=${parseInt(q.get("train") || "800")}, noise=0.2, epochs=${parseInt(q.get("epochs") || "30")}, log=say)
-q = r["queue"]
+n_train = ${parseInt(q.get("train") || "800")}; epochs = ${parseInt(q.get("epochs") || "30")}
+clean = S.evaluate(torch, x, m, n_train=n_train, noise=0.0, epochs=epochs, log=say)
+noisy = S.evaluate(torch, x, m, n_train=n_train, noise=0.2, epochs=epochs, log=say)
+q = noisy["queue"]
 adapter = str(js.borch.Device.adapterInfo)
-f"kvasir-seg 96px · train {r['n_train']} · epochs {r['epochs']} · {r['seconds']:.0f} s · test IoU {r['test_iou']:.3f} · queue AUROC {q['auroc']:.3f} · p@20 {q['p@20']:.2f} · p@wrong {q['p@wrong']:.2f} · read {q['read_for_90pct']:.0%} for 90% · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
+f"kvasir-seg 96px · train {n_train} · epochs {epochs} · clean masks: test IoU {clean['test_iou']:.3f} in {clean['seconds']:.0f} s · a fifth wrong: test IoU {noisy['test_iou']:.3f} in {noisy['seconds']:.0f} s · queue AUROC {q['auroc']:.3f} · p@20 {q['p@20']:.2f} · p@wrong {q['p@wrong']:.2f} · read {q['read_for_90pct']:.0%} for 90% · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
 \`);
         postMessage({ done: text, ms: performance.now() - t1 });
       } catch (err) {
@@ -62,8 +64,10 @@ f"kvasir-seg 96px · train {r['n_train']} · epochs {r['epochs']} · {r['seconds
   const show = () => { out.textContent = lines.join("\n"); };
   worker.onmessage = (e) => {
     if (e.data.say) { lines.push(e.data.say); show(); }
-    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; }
-    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; }
+    // The worker is ended once it has answered: left alive with its device up, the
+    // browser context would not close and the probe hung after every run (measured).
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
   };
   worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
 </script>
