@@ -542,8 +542,11 @@ unsafe fn micro<const R: usize>(k: usize, n: usize, a: *const f32, b: *const f32
 }
 
 /// `gemm`, then `+ bias[n]` (skipped when `bias` is null) and the activation before the
-/// store — the sum never leaves the registers. Same contract as `gemm`: `m % 4 == 0`,
-/// `n % 16 == 0`.
+/// store — the sum never leaves the registers. `n % 16 == 0`; `m` is any count: four rows
+/// at a time, then the tail (at most three rows) one row at a time. Writing exactly `m` rows
+/// matters once two threads write neighbouring row ranges of one buffer (`threads.ts`) —
+/// a padded write over the last block's tail used to land in the next image's first rows,
+/// harmless in sequence, a race in parallel.
 ///
 /// **Four rows by sixteen columns, and that was measured twice.** A wider block would
 /// load less per multiply-add — six rows is ten loads for twenty-four against eight for
@@ -556,10 +559,17 @@ unsafe fn micro<const R: usize>(k: usize, n: usize, a: *const f32, b: *const f32
 #[no_mangle]
 pub unsafe extern "C" fn gemm_bias_act(m: usize, n: usize, k: usize, a: *const f32, b: *const f32, c: *mut f32, bias: *const f32, act: u32) {
     let mut i = 0;
-    while i < m {
+    while i + 4 <= m {
         let mut j = 0;
         while j < n { micro::<4>(k, n, a.add(i * k), b, c.add(i * n), j, bias, act); j += 16; }
         i += 4;
+    }
+    // The tail (at most three rows) one row at a time: one more instantiation of `micro`,
+    // not three — the module is measured in kilobytes, and a tail is a block's last rows.
+    while i < m {
+        let mut j = 0;
+        while j < n { micro::<1>(k, n, a.add(i * k), b, c.add(i * n), j, bias, act); j += 16; }
+        i += 1;
     }
 }
 

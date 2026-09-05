@@ -128,6 +128,52 @@ function fn(exports: WebAssembly.Exports, name: string): Fn {
   return value as Fn;
 }
 
+/**
+ * The typed handle over an instance's exports. `loadKernels` uses it; so does a worker
+ * that instantiated the same module over a shared memory (`threads.ts`) — the handle is
+ * the same either way, and the checks are the same: each export a function, `memory` a
+ * `WebAssembly.Memory`, every name in `KERNELS_EXPORTS` present.
+ */
+export function kernelsFromExports(ex: WebAssembly.Exports, flavor: KernelFlavor, memoryIn?: WebAssembly.Memory): CpuKernels {
+  const memory = memoryIn ?? ex["memory"];
+  if (!(memory instanceof WebAssembly.Memory)) throw new Error('cpu kernels: export "memory" is missing');
+  for (const name of KERNELS_EXPORTS) fn(ex, name);
+  const alloc = fn(ex, "alloc"), reset = fn(ex, "reset"), heap = fn(ex, "heap"), setHeap = fn(ex, "set_heap");
+  const gemm = fn(ex, "gemm"), dwconv = fn(ex, "dwconv"), swish = fn(ex, "swish"), biasAct = fn(ex, "bias_act");
+  const meanRows = fn(ex, "mean_rows"), scaleRows = fn(ex, "scale_rows"), addInplace = fn(ex, "add_inplace");
+  const relu = fn(ex, "relu"), im2col = fn(ex, "im2col"), maxpool = fn(ex, "maxpool");
+  const softmaxXentGrad = fn(ex, "softmax_xent_grad"), outerAcc = fn(ex, "outer_acc"), sgdStep = fn(ex, "sgd_step");
+  const l2NormalizeRows = fn(ex, "l2_normalize_rows"), transpose = fn(ex, "transpose"), zero = fn(ex, "zero");
+  const gemmBiasAct = fn(ex, "gemm_bias_act"), dwconvBiasAct = fn(ex, "dwconv_bias_act"), im2colRows = fn(ex, "im2col_rows");
+  return {
+    flavor,
+    memory,
+    alloc: (bytes) => alloc(bytes),
+    reset: () => { reset(); },
+    heap: () => heap(),
+    setHeap: (pos) => { setHeap(pos); },
+    gemm: (m, n, k, a, b, c) => { gemm(m, n, k, a, b, c); },
+    dwconv: (h, w, c, k, stride, pad, ho, wo, inp, wt, out) => { dwconv(h, w, c, k, stride, pad, ho, wo, inp, wt, out); },
+    swish: (n, x) => { swish(n, x); },
+    biasAct: (rows, c, x, bias, act) => { biasAct(rows, c, x, bias, act); },
+    meanRows: (rows, c, x, out) => { meanRows(rows, c, x, out); },
+    scaleRows: (rows, c, x, s) => { scaleRows(rows, c, x, s); },
+    addInplace: (n, a, b) => { addInplace(n, a, b); },
+    relu: (n, x) => { relu(n, x); },
+    im2col: (h, w, c, k, stride, pad, ho, wo, inp, out) => { im2col(h, w, c, k, stride, pad, ho, wo, inp, out); },
+    maxpool: (h, w, c, k, stride, pad, ho, wo, inp, out) => { maxpool(h, w, c, k, stride, pad, ho, wo, inp, out); },
+    softmaxXentGrad: (rows, c, cReal, logits, labels, grad, stats) => { softmaxXentGrad(rows, c, cReal, logits, labels, grad, stats); },
+    outerAcc: (n, d, k, x, g, out) => { outerAcc(n, d, k, x, g, out); },
+    sgdStep: (n, p, g, v, lr, momentum, weightDecay) => { sgdStep(n, p, g, v, lr, momentum, weightDecay); },
+    l2NormalizeRows: (rows, c, x) => { l2NormalizeRows(rows, c, x); },
+    transpose: (rows, cols, inp, out) => { transpose(rows, cols, inp, out); },
+    zero: (n, x) => { zero(n, x); },
+    gemmBiasAct: (m, n, k, a, b, c, bias, act) => { gemmBiasAct(m, n, k, a, b, c, bias, act); },
+    dwconvBiasAct: (h, w, c, k, stride, pad, ho, wo, inp, wt, out, bias, act) => { dwconvBiasAct(h, w, c, k, stride, pad, ho, wo, inp, wt, out, bias, act); },
+    im2colRows: (h, w, c, k, stride, pad, wo, row0, rows, inp, out) => { im2colRows(h, w, c, k, stride, pad, wo, row0, rows, inp, out); },
+  };
+}
+
 const loading: Partial<Record<KernelFlavor, Promise<CpuKernels>>> = {};
 
 export interface LoadKernelsOptions {
@@ -156,44 +202,7 @@ export function loadKernels(opts: LoadKernelsOptions = {}): Promise<CpuKernels> 
       throw new Error(`cpu kernels (${flavor}): the embedded bytes hash to ${got.slice(0, 12)}…, kernels.ts says ${want.slice(0, 12)}… — run npm run build:wasm`);
     }
     const { instance } = await WebAssembly.instantiate(bytes, {});
-    const ex = instance.exports;
-    const memory = ex["memory"];
-    if (!(memory instanceof WebAssembly.Memory)) throw new Error('cpu kernels: export "memory" is missing');
-    for (const name of KERNELS_EXPORTS) fn(ex, name);
-    const alloc = fn(ex, "alloc"), reset = fn(ex, "reset"), heap = fn(ex, "heap"), setHeap = fn(ex, "set_heap");
-    const gemm = fn(ex, "gemm"), dwconv = fn(ex, "dwconv"), swish = fn(ex, "swish"), biasAct = fn(ex, "bias_act");
-    const meanRows = fn(ex, "mean_rows"), scaleRows = fn(ex, "scale_rows"), addInplace = fn(ex, "add_inplace");
-    const relu = fn(ex, "relu"), im2col = fn(ex, "im2col"), maxpool = fn(ex, "maxpool");
-    const softmaxXentGrad = fn(ex, "softmax_xent_grad"), outerAcc = fn(ex, "outer_acc"), sgdStep = fn(ex, "sgd_step");
-    const l2NormalizeRows = fn(ex, "l2_normalize_rows"), transpose = fn(ex, "transpose"), zero = fn(ex, "zero");
-    const gemmBiasAct = fn(ex, "gemm_bias_act"), dwconvBiasAct = fn(ex, "dwconv_bias_act"), im2colRows = fn(ex, "im2col_rows");
-    return {
-      flavor,
-      memory,
-      alloc: (bytes) => alloc(bytes),
-      reset: () => { reset(); },
-      heap: () => heap(),
-      setHeap: (pos) => { setHeap(pos); },
-      gemm: (m, n, k, a, b, c) => { gemm(m, n, k, a, b, c); },
-      dwconv: (h, w, c, k, stride, pad, ho, wo, inp, wt, out) => { dwconv(h, w, c, k, stride, pad, ho, wo, inp, wt, out); },
-      swish: (n, x) => { swish(n, x); },
-      biasAct: (rows, c, x, bias, act) => { biasAct(rows, c, x, bias, act); },
-      meanRows: (rows, c, x, out) => { meanRows(rows, c, x, out); },
-      scaleRows: (rows, c, x, s) => { scaleRows(rows, c, x, s); },
-      addInplace: (n, a, b) => { addInplace(n, a, b); },
-      relu: (n, x) => { relu(n, x); },
-      im2col: (h, w, c, k, stride, pad, ho, wo, inp, out) => { im2col(h, w, c, k, stride, pad, ho, wo, inp, out); },
-      maxpool: (h, w, c, k, stride, pad, ho, wo, inp, out) => { maxpool(h, w, c, k, stride, pad, ho, wo, inp, out); },
-      softmaxXentGrad: (rows, c, cReal, logits, labels, grad, stats) => { softmaxXentGrad(rows, c, cReal, logits, labels, grad, stats); },
-      outerAcc: (n, d, k, x, g, out) => { outerAcc(n, d, k, x, g, out); },
-      sgdStep: (n, p, g, v, lr, momentum, weightDecay) => { sgdStep(n, p, g, v, lr, momentum, weightDecay); },
-      l2NormalizeRows: (rows, c, x) => { l2NormalizeRows(rows, c, x); },
-      transpose: (rows, cols, inp, out) => { transpose(rows, cols, inp, out); },
-      zero: (n, x) => { zero(n, x); },
-      gemmBiasAct: (m, n, k, a, b, c, bias, act) => { gemmBiasAct(m, n, k, a, b, c, bias, act); },
-      dwconvBiasAct: (h, w, c, k, stride, pad, ho, wo, inp, wt, out, bias, act) => { dwconvBiasAct(h, w, c, k, stride, pad, ho, wo, inp, wt, out, bias, act); },
-      im2colRows: (h, w, c, k, stride, pad, wo, row0, rows, inp, out) => { im2colRows(h, w, c, k, stride, pad, wo, row0, rows, inp, out); },
-    };
+    return kernelsFromExports(instance.exports, flavor);
   })();
   loading[flavor] = promise;
   return promise;

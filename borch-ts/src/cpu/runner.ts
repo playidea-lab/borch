@@ -35,8 +35,9 @@
  * The value produced takes over the buffer, and the operand that gave it up is not
  * freed on its own. That is the one subtlety in the liveness bookkeeping below.
  */
-import { ACT, type CpuKernels } from "./load.js";
+import { ACT, type CpuKernels, type Activation } from "./load.js";
 import type { CpuGraph, Node } from "./graph.js";
+import { MAX_TASKS, type Dispatcher, type Task } from "./threads.js";
 
 /** The im2col buffer a blocked convolution reuses. 8 MB holds 3,640 rows of a ResNet-18 first-stage column (576 wide). */
 const COL_BYTES = 8 * 1024 * 1024;
@@ -73,7 +74,13 @@ export class CpuRunner {
   private readonly weights: number[] = [];
   private readonly lastUse: number[];
 
-  constructor(private readonly K: CpuKernels, private readonly graph: CpuGraph) {
+  /**
+   * `pool` is optional. Without it every kernel runs on this thread. With it the GEMMs are
+   * cut into row slices, the depthwise convolutions and pools into images, and an im2col
+   * block with its GEMM is one task; the pool's workers instantiated the same module over
+   * the same shared memory (`threads.ts`). Allocation stays here either way.
+   */
+  constructor(private readonly K: CpuKernels, private readonly graph: CpuGraph, private readonly pool?: Dispatcher) {
     // Weights first, so the activation arena starts above them and `reset` never touches them.
     for (const node of graph.nodes) this.weights.push(...this.upload(node));
     this.lastUse = graph.nodes.map(() => -1);
@@ -107,6 +114,27 @@ export class CpuRunner {
   }
 
   private f32(): Float32Array { return new Float32Array(this.K.memory.buffer); }
+
+  /** Runs the tasks on the pool, `MAX_TASKS` at a time. */
+  private dispatch(tasks: Task[]): void {
+    const pool = this.pool;
+    if (!pool) throw new Error("cpu runner: dispatch without a pool");
+    for (let i = 0; i < tasks.length; i += MAX_TASKS) pool.run(tasks.slice(i, i + MAX_TASKS));
+  }
+
+  /** A GEMM over `m` rows: one call here, or `workers` slices of rows (multiples of 4) on the pool. */
+  private gemmRows(m: number, n: number, k: number, a: number, b: number, c: number, bias: number, act: Activation): void {
+    const pool = this.pool;
+    const P = pool?.workers ?? 1;
+    if (!pool || m < 4 * P) { this.K.gemmBiasAct(m, n, k, a, b, c, bias, act); return; }
+    const per = Math.ceil(m / P / 4) * 4;
+    const tasks: Task[] = [];
+    for (let r0 = 0; r0 < m; r0 += per) {
+      const rows = Math.min(per, m - r0);
+      tasks.push([["gemm_bias_act", rows, n, k, a + r0 * k * 4, b, c + r0 * n * 4, bias, act]]);
+    }
+    pool.run(tasks);
+  }
 
   /**
    * `slack` extra rows on top of the padding — a blocked convolution's last `gemm` may write
@@ -154,24 +182,37 @@ export class CpuRunner {
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
             if (node.k === 1 && node.stride === 1 && node.pad === 0) {
               const y = this.value(pool, B * ho * wo, ho, wo, node.coutP);
-              K.gemmBiasAct(y.rowsP, node.coutP, node.cinP, x.off, w(0), y.off, w(1), node.act);
+              this.gemmRows(y.rowsP, node.coutP, node.cinP, x.off, w(0), y.off, w(1), node.act);
               values.set(i, y);
             } else {
               // A block of output rows at a time: unroll those rows' taps into one reused
               // buffer, multiply, write the rows in place. ResNet-18's first stage at batch 16
               // was 116 MB of columns per layer unrolled whole; a block is COL_BYTES.
               const kk = node.k * node.k * node.cinP, per = ho * wo;
-              const R = Math.max(4, Math.min(Math.ceil(per / 4) * 4, Math.floor(COL_BYTES / (kk * 4) / 4) * 4));
+              const P = this.pool?.workers ?? 1;
+              let R = Math.max(4, Math.min(Math.ceil(per / 4) * 4, Math.floor(COL_BYTES / (kk * 4) / 4) * 4));
+              // On a pool, enough blocks that every worker gets at least two.
+              if (P > 1) R = Math.max(4, Math.min(R, Math.ceil(per * B / (2 * P) / 4) * 4));
               const y = this.value(pool, B * per, ho, wo, node.coutP, 4);
-              const col = this.value(pool, R, 1, 1, kk);
+              // One column buffer per worker: task t runs on worker t % P and uses buffer t % P.
+              const cols = Array.from({ length: P }, () => this.value(pool, R, 1, 1, kk));
+              const tasks: Task[] = [];
               for (let b = 0; b < B; b++) {
                 for (let r0 = 0; r0 < per; r0 += R) {
                   const rows = Math.min(R, per - r0);
-                  K.im2colRows(x.h, x.w, node.cinP, node.k, node.stride, node.pad, wo, r0, rows, x.off + b * x.h * x.w * node.cinP * 4, col.off);
-                  K.gemmBiasAct(Math.ceil(rows / 4) * 4, node.coutP, kk, col.off, w(0), y.off + (b * per + r0) * node.coutP * 4, w(1), node.act);
+                  const col = cols[tasks.length % P] ?? cols[0]!;
+                  tasks.push([
+                    ["im2col_rows", x.h, x.w, node.cinP, node.k, node.stride, node.pad, wo, r0, rows, x.off + b * x.h * x.w * node.cinP * 4, col.off],
+                    ["gemm_bias_act", rows, node.coutP, kk, col.off, w(0), y.off + (b * per + r0) * node.coutP * 4, w(1), node.act],
+                  ]);
                 }
               }
-              pool.give(col.off, col.bytes);
+              if (this.pool) this.dispatch(tasks);
+              else for (const task of tasks) for (const [name, ...a] of task) {
+                if (name === "im2col_rows") K.im2colRows(a[0]!, a[1]!, a[2]!, a[3]!, a[4]!, a[5]!, a[6]!, a[7]!, a[8]!, a[9]!, a[10]!);
+                else K.gemmBiasAct(a[0]!, a[1]!, a[2]!, a[3]!, a[4]!, a[5]!, a[6]!, a[7]! as Activation);
+              }
+              for (const col of cols) pool.give(col.off, col.bytes);
               // the last block may have written into the slack rows; keep them zero for whoever reads rowsP
               if (y.rowsP > y.rows) this.f32().fill(0, y.off / 4 + y.rows * y.cP, y.off / 4 + y.rowsP * y.cP);
               values.set(i, y);
@@ -182,7 +223,11 @@ export class CpuRunner {
             const x = at(node.input);
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
             const y = this.value(pool, B * ho * wo, ho, wo, node.cP);
-            for (let b = 0; b < B; b++) K.dwconvBiasAct(x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4, w(1), node.act);
+            if (this.pool && B > 1) {
+              const tasks: Task[] = [];
+              for (let b = 0; b < B; b++) tasks.push([["dwconv_bias_act", x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4, w(1), node.act]]);
+              this.dispatch(tasks);
+            } else for (let b = 0; b < B; b++) K.dwconvBiasAct(x.h, x.w, node.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * node.cP * 4, w(0), y.off + b * ho * wo * node.cP * 4, w(1), node.act);
             values.set(i, y);
             break;
           }
@@ -190,7 +235,11 @@ export class CpuRunner {
             const x = at(node.input);
             const [ho, wo] = outShape(x, node.k, node.stride, node.pad);
             const y = this.value(pool, B * ho * wo, ho, wo, x.cP);
-            for (let b = 0; b < B; b++) K.maxpool(x.h, x.w, x.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * x.cP * 4, y.off + b * ho * wo * x.cP * 4);
+            if (this.pool && B > 1) {
+              const tasks: Task[] = [];
+              for (let b = 0; b < B; b++) tasks.push([["maxpool", x.h, x.w, x.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * x.cP * 4, y.off + b * ho * wo * x.cP * 4]]);
+              this.dispatch(tasks);
+            } else for (let b = 0; b < B; b++) K.maxpool(x.h, x.w, x.cP, node.k, node.stride, node.pad, ho, wo, x.off + b * x.h * x.w * x.cP * 4, y.off + b * ho * wo * x.cP * 4);
             values.set(i, y);
             break;
           }

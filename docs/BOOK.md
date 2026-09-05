@@ -1535,8 +1535,47 @@ twenty-four multiply-adds where four rows load eight for sixteen — and it was 
 six rows 60–84 GFLOPS, five rows 55–69, four rows 97, on every shape in both networks.
 The engine's register allocator spills past about twenty live vectors, and a spilled
 accumulator costs more than the loads it saves; four by sixteen stays, and the kernel's
-comment records the two numbers so the block is not widened a third time. What remains is
-threads, where the page can set COOP/COEP; that is not in this tree.
+comment records the two numbers so the block is not widened a third time.
+
+**Threads were measured next, and they are the first lever that moves by more than a
+factor of two.** The kernels are stateless functions over offsets into one memory, so a
+forward parallelises by rows: a GEMM's rows in slices, a depthwise convolution and a
+pool one image per worker, an im2col block with its GEMM as one unit. `src/cpu/threads.ts`
+is the protocol — a shared `WebAssembly.Memory` every worker instantiates the same module
+over, allocation on the main side only, and the hand-off through `Atomics` on a control
+block rather than `postMessage` (a forward is a hundred-odd calls; a hundred message round
+trips would cost more than the forward). `CpuRunner` takes the pool as an optional third
+argument and runs exactly as before without it. Measured with node's `worker_threads`
+standing in for Web Workers (Apple M4 Max, 12 performance cores, relaxed module, random
+weights, batch 16, median of 5; `borch-ts/test/threads_node.mjs`):
+
+| workers | EfficientNet-B0 | ResNet-18 |
+|---|---|---|
+| direct, no pool | 14.3 ms / image | 41.1 ms / image |
+| 1 | 14.4 (×0.99) | 41.2 (×1.00) |
+| 2 | 7.8 (×1.84) | 22.2 (×1.85) |
+| 4 | 4.3 (×3.31) | 11.3 (×3.62) |
+| 8 | 2.6 (×5.53) | 5.9 (×6.93) |
+| 12 | 2.3 (×6.13) | 6.1 (×6.78) |
+
+Every pool's logits match the direct forward to the bit. At batch 1 the gains are
+smaller (B0 15.0 → 6.8 ms at 8 workers, ResNet-18 42.7 → 8.8) because the depthwise
+convolutions and pools still run on the main side there — they split by image. Two
+things had to be true before the numbers were right, and both are recorded so they are
+not rediscovered. The GEMM wrote four rows at a time and a block's padded tail landed in
+the next image's first rows — harmless in sequence, a race in parallel; `gemm_bias_act`
+now writes exactly `m` rows, the tail one row at a time. And Rust's shadow stack lives in
+linear memory at the same address in every instance, so each worker is given its own
+stack through an exported `__stack_pointer` before it runs; without it the pools' results
+differed from the direct forward by 1e-5 and changed between runs, and B0 scaled to
+only ×2.9 on eight workers while the frames fought.
+
+What this tree does not do is ship it. The kernel module in `kernels.ts` exports its own
+memory; the threaded one imports a shared memory and is linked with different flags, and
+a page gets `SharedArrayBuffer` only under `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` — never from `file://`, and on GitHub Pages
+only through a service-worker shim. Those are deployment decisions, with the third module
+flavour and the Web Worker spawn on the other side of them.
 
 The SwiftShader column is the reason this device exists in this shape: WebGPU's own CPU
 path was measured first, and it spent a minute compiling shaders for every new batch
