@@ -1498,8 +1498,8 @@ five, readback included:
 
 | forward | `apple / metal-3` | `cpu` strict, one thread | `cpu` relaxed, one thread | SwiftShader (for scale) |
 |---|---|---|---|---|
-| EfficientNet-B0, per image at batch 16 | 1.5 ms | 20 ms | 15.5 ms | 520 ms, after 64 s of compiling |
-| ResNet-18, per image at batch 16 | 1.4 ms | 69 ms | 41.5 ms | — |
+| EfficientNet-B0, per image at batch 16 | 1.5 ms | 18.6 ms | 13.7 ms | 520 ms, after 64 s of compiling |
+| ResNet-18, per image at batch 16 | 1.4 ms | 67.5 ms | 40.5 ms | — |
 
 Peak wasm memory at batch 16, fresh process: 353 MB for B0, 217 MB for ResNet-18.
 
@@ -1514,8 +1514,13 @@ differ by machine, which is what the proposal's name means). Measured on the GEM
 `loadKernels({ relaxed: false })` asks for the strict one anywhere. The check page loads
 both and holds them to 1e-3 of each other, the same bound as against the GPU.
 
-**Three levers were pulled after that table was first written, and all were measured.**
-The relaxed module is the third and the one that moved the table. Before it:
+**Four levers were pulled after that table was first written, and all were measured.**
+The relaxed module is the third and the one that moved the table most; the fourth is the
+depthwise kernel, whose accumulator moved from the output row into registers — twelve
+loads and four stores per four multiply-adds became eight loads and none, 1.46× on every
+EfficientNet-B0 depthwise shape with the values unchanged to the bit, which took B0 from
+15.6 to 13.7 ms an image. That kernel had not moved at all under the fused multiply-add,
+which is what said its bound was memory and not arithmetic. Before those two:
 Folding the bias and the activation into the GEMM's epilogue — the separate pass had
 read as a fifth of the forward in the kernel bench — bought 4–5 % on B0 and nothing on
 ResNet-18: the pass was mostly the swish arithmetic, not the memory it re-read, and

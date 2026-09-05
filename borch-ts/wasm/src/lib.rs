@@ -568,53 +568,53 @@ pub unsafe extern "C" fn gemm_bias_act(m: usize, n: usize, k: usize, a: *const f
     }
 }
 
-/// `dwconv`, then `+ bias[c]` and the activation on each finished output row. Same contract.
+/// `dwconv` with the bias and the activation folded in — and **the accumulator in registers**.
+///
+/// The first version walked pixel → tap → channel and kept the running sum in the output
+/// row: every tap read the row, added, and wrote it back — twelve loads and four stores per
+/// four multiply-adds, and fusing the multiply-add (the relaxed module) moved it by 2 %,
+/// which said the arithmetic was never the bound. This walks pixel → sixteen channels →
+/// tap, holds the four accumulators in registers from the bias to the store, and applies the
+/// activation before that one store. The valid tap range is decided once per row and once
+/// per column, so the tap loop has no branch. Same contract as `dwconv`: `c % 16 == 0`. The
+/// taps are summed in the same order as before, so the strict module's values are unchanged.
 #[no_mangle]
 pub unsafe extern "C" fn dwconv_bias_act(
     h: usize, w: usize, c: usize, k: usize, stride: usize, pad: usize,
     ho: usize, wo: usize, inp: *const f32, wt: *const f32, out: *mut f32, bias: *const f32, act: u32,
 ) {
     for oy in 0..ho {
+        let y0 = oy * stride;                                   // iy = y0 + ky − pad
+        let ky_lo = if pad > y0 { pad - y0 } else { 0 };
+        let ky_hi = { let m = h + pad - y0; if m < k { m } else { k } };
         for ox in 0..wo {
+            let x0 = ox * stride;
+            let kx_lo = if pad > x0 { pad - x0 } else { 0 };
+            let kx_hi = { let m = w + pad - x0; if m < k { m } else { k } };
             let o = out.add((oy * wo + ox) * c);
-            // start from the bias instead of zero
             let mut ch = 0;
             while ch < c {
-                v128_store(o.add(ch) as *mut v128, v128_load(bias.add(ch) as *const v128));
-                v128_store(o.add(ch + 4) as *mut v128, v128_load(bias.add(ch + 4) as *const v128));
-                v128_store(o.add(ch + 8) as *mut v128, v128_load(bias.add(ch + 8) as *const v128));
-                v128_store(o.add(ch + 12) as *mut v128, v128_load(bias.add(ch + 12) as *const v128));
-                ch += 16;
-            }
-            for ky in 0..k {
-                let iy = (oy * stride + ky) as isize - pad as isize;
-                if iy < 0 || iy >= h as isize { continue; }
-                for kx in 0..k {
-                    let ix = (ox * stride + kx) as isize - pad as isize;
-                    if ix < 0 || ix >= w as isize { continue; }
-                    let ip = inp.add(((iy as usize) * w + ix as usize) * c);
-                    let wp = wt.add((ky * k + kx) * c);
-                    let mut ch = 0;
-                    while ch < c {
-                        let o0 = o.add(ch) as *mut v128;
-                        let o1 = o.add(ch + 4) as *mut v128;
-                        let o2 = o.add(ch + 8) as *mut v128;
-                        let o3 = o.add(ch + 12) as *mut v128;
-                        v128_store(o0, madd(v128_load(ip.add(ch) as *const v128), v128_load(wp.add(ch) as *const v128), v128_load(o0)));
-                        v128_store(o1, madd(v128_load(ip.add(ch + 4) as *const v128), v128_load(wp.add(ch + 4) as *const v128), v128_load(o1)));
-                        v128_store(o2, madd(v128_load(ip.add(ch + 8) as *const v128), v128_load(wp.add(ch + 8) as *const v128), v128_load(o2)));
-                        v128_store(o3, madd(v128_load(ip.add(ch + 12) as *const v128), v128_load(wp.add(ch + 12) as *const v128), v128_load(o3)));
-                        ch += 16;
+                let mut a0 = v128_load(bias.add(ch) as *const v128);
+                let mut a1 = v128_load(bias.add(ch + 4) as *const v128);
+                let mut a2 = v128_load(bias.add(ch + 8) as *const v128);
+                let mut a3 = v128_load(bias.add(ch + 12) as *const v128);
+                for ky in ky_lo..ky_hi {
+                    let row_in = inp.add((y0 + ky - pad) * w * c + ch);
+                    let row_w = wt.add(ky * k * c + ch);
+                    for kx in kx_lo..kx_hi {
+                        let ip = row_in.add((x0 + kx - pad) * c);
+                        let wp = row_w.add(kx * c);
+                        a0 = madd(v128_load(ip as *const v128), v128_load(wp as *const v128), a0);
+                        a1 = madd(v128_load(ip.add(4) as *const v128), v128_load(wp.add(4) as *const v128), a1);
+                        a2 = madd(v128_load(ip.add(8) as *const v128), v128_load(wp.add(8) as *const v128), a2);
+                        a3 = madd(v128_load(ip.add(12) as *const v128), v128_load(wp.add(12) as *const v128), a3);
                     }
                 }
-            }
-            if act != 0 {
-                let mut ch = 0;
-                while ch < c {
-                    let p = o.add(ch) as *mut v128;
-                    v128_store(p, act_f32x4(v128_load(p), act));
-                    ch += 4;
-                }
+                v128_store(o.add(ch) as *mut v128, act_f32x4(a0, act));
+                v128_store(o.add(ch + 4) as *mut v128, act_f32x4(a1, act));
+                v128_store(o.add(ch + 8) as *mut v128, act_f32x4(a2, act));
+                v128_store(o.add(ch + 12) as *mut v128, act_f32x4(a3, act));
+                ch += 16;
             }
         }
     }
