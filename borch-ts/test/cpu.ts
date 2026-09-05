@@ -29,7 +29,7 @@
  * visible rather than assumed.
  */
 import { init, Device, Tensor, noGrad, scope, keepAlive } from "../src/index.js";
-import { loadKernels } from "../src/cpu/load.js";
+import { loadKernels, relaxedSimdAvailable } from "../src/cpu/load.js";
 import type { CpuGraph } from "../src/cpu/graph.js";
 import { CpuRunner } from "../src/cpu/runner.js";
 import { readSafetensors, type HostStateDict } from "../src/cpu/safetensors.js";
@@ -88,7 +88,9 @@ export async function report(hub: HubLike, bimm: BimmLike, indexUrl: string, onl
   await init();
   say(`gpu adapter: ${Device.adapterInfo}`);
   const K = await loadKernels();
-  say(`cpu kernels: loaded, memory ${(K.memory.buffer.byteLength / 1e6).toFixed(1)} MB`);
+  say(`cpu kernels: ${K.flavor} (relaxed SIMD ${relaxedSimdAvailable() ? "accepted" : "not accepted"} by this engine), memory ${(K.memory.buffer.byteLength / 1e6).toFixed(1)} MB`);
+  // The other flavor too, so the two are timed side by side below.
+  const Kother = relaxedSimdAvailable() ? await loadKernels({ relaxed: K.flavor !== "relaxed" }) : null;
   const raw: unknown = await (await fetch(indexUrl)).json();
   // The index is `{ models: [...] }` today and was a bare array once; take either.
   const list: unknown = Array.isArray(raw) ? raw : (typeof raw === "object" && raw !== null ? ((raw as Record<string, unknown>)["models"] ?? (raw as Record<string, unknown>)["entries"]) : []);
@@ -134,13 +136,26 @@ export async function report(hub: HubLike, bimm: BimmLike, indexUrl: string, onl
       say(`batch ${B}: ${note}`);
       checks.push({ name: `${m.hub} b${B}: cpu matches gpu`, ok, note });
     }
-    // Time both, batch 1 and 16, medians of five.
+    // Time both, batch 1 and 16, medians of five — and the other kernel flavor beside it.
+    const other = Kother ? new CpuRunner(Kother, graph) : null;
     for (const B of [1, 16]) {
       const arr = seeded(B * 3 * 224 * 224, 99);
       const x = keepAlive(Tensor.from(arr, [B, 3, 224, 224]));
       const gpuMs = await median(async () => { await scope(async () => noGrad(() => model.forward(x)).toArray()); }, 5);
       const cpuMs = await median(() => { runner.forward(arr, B, 224, 224); }, B === 1 ? 5 : 3);
-      say(`batch ${B}: gpu ${gpuMs.toFixed(1)} ms (${(gpuMs / B).toFixed(2)} ms/image) · cpu ${cpuMs.toFixed(1)} ms (${(cpuMs / B).toFixed(1)} ms/image) · wasm memory ${(K.memory.buffer.byteLength / 1e6).toFixed(0)} MB`);
+      const otherMs = other ? await median(() => { other.forward(arr, B, 224, 224); }, B === 1 ? 5 : 3) : NaN;
+      const otherNote = other && Kother ? ` · cpu ${Kother.flavor} ${otherMs.toFixed(1)} ms (${(otherMs / B).toFixed(1)} ms/image)` : "";
+      say(`batch ${B}: gpu ${gpuMs.toFixed(1)} ms (${(gpuMs / B).toFixed(2)} ms/image) · cpu ${K.flavor} ${cpuMs.toFixed(1)} ms (${(cpuMs / B).toFixed(1)} ms/image)${otherNote} · wasm memory ${(K.memory.buffer.byteLength / 1e6).toFixed(0)} MB`);
+    }
+    if (other && Kother) {
+      // The two flavors have to agree with each other as closely as either agrees with the GPU.
+      const arr = seeded(2 * 3 * 224 * 224, 5);
+      const a = runner.forward(arr, 2, 224, 224), b = other.forward(arr, 2, 224, 224);
+      let worst = 0, scale = 0;
+      for (let i = 0; i < a.length; i++) { worst = Math.max(worst, Math.abs((a[i] ?? 0) - (b[i] ?? 0))); scale = Math.max(scale, Math.abs(a[i] ?? 0)); }
+      const rel = worst / scale;
+      say(`${K.flavor} vs ${Kother.flavor}: max|Δ| ${worst.toExponential(2)} → relative ${rel.toExponential(2)}`);
+      checks.push({ name: `${m.hub}: the two kernel flavors agree`, ok: rel < 1e-3, note: `relative ${rel.toExponential(2)}` });
     }
   }
   // ---- the workbench's second half: features → a head → neighbours ----

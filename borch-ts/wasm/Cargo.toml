@@ -5,6 +5,12 @@ edition = "2021"
 publish = false
 description = "The CPU kernels behind borch-ts's `cpu` device — wasm SIMD, no runtime, no glue"
 
+# `relaxed`: the multiply-add pairs become `f32x4.relaxed_madd` — one instruction, and a
+# result that may differ in its last bit by hardware (that is what "relaxed" means). Built
+# as a second module beside the strict one; the loader picks it where the engine takes it.
+[features]
+relaxed = []
+
 [lib]
 crate-type = ["cdylib"]
 path = "src/lib.rs"

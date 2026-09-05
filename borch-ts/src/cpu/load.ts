@@ -24,13 +24,21 @@
  * (or, for `memory`, a `WebAssembly.Memory`) before it is given a signature, and the
  * one assertion in this file sits right after that check.
  */
-import { KERNELS_EXPORTS, KERNELS_WASM_BASE64, KERNELS_WASM_SHA256 } from "./kernels.js";
+import { KERNELS_EXPORTS, KERNELS_RELAXED_WASM_BASE64, KERNELS_RELAXED_WASM_SHA256, KERNELS_WASM_BASE64, KERNELS_WASM_SHA256 } from "./kernels.js";
 
 /** The activation `biasAct` applies after adding the bias. */
 export const ACT = { none: 0, swish: 1, sigmoid: 2, relu: 3 } as const;
 export type Activation = (typeof ACT)[keyof typeof ACT];
 
+/**
+ * Which module is running. `strict` rounds every multiply and add separately, the same on
+ * every machine; `relaxed` fuses them (`f32x4.relaxed_madd`) and is 1.7× faster on the
+ * GEMM, with the last bit the hardware's.
+ */
+export type KernelFlavor = "strict" | "relaxed";
+
 export interface CpuKernels {
+  readonly flavor: KernelFlavor;
   readonly memory: WebAssembly.Memory;
   /** Bump-allocate `bytes`, 16-byte aligned. Returns a byte offset, or 0 when the memory would not grow. */
   alloc(bytes: number): number;
@@ -83,9 +91,25 @@ export interface CpuKernels {
   im2colRows(h: number, w: number, c: number, k: number, stride: number, pad: number, wo: number, row0: number, rows: number, inp: number, out: number): void;
 }
 
-/** The module's bytes, decoded. Pure; does not instantiate. */
-export function kernelBytes(): Uint8Array<ArrayBuffer> {
-  const text = atob(KERNELS_WASM_BASE64);
+// A module with one function, `f32x4.relaxed_madd` on its three v128 parameters — valid only
+// where the relaxed SIMD proposal is. `WebAssembly.validate` neither instantiates nor runs it.
+const RELAXED_PROBE = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 8, 1, 96, 3, 123, 123, 123, 1, 123, 3, 2, 1, 0,
+  10, 13, 1, 11, 0, 32, 0, 32, 1, 32, 2, 253, 133, 2, 11,
+]);
+
+/** Whether this engine accepts relaxed SIMD — Chrome 114+, Firefox 145+, Safari from Technology Preview 250. */
+export function relaxedSimdAvailable(): boolean {
+  try {
+    return typeof WebAssembly !== "undefined" && WebAssembly.validate(RELAXED_PROBE);
+  } catch {
+    return false;
+  }
+}
+
+/** A module's bytes, decoded. Pure; does not instantiate. */
+export function kernelBytes(flavor: KernelFlavor = "strict"): Uint8Array<ArrayBuffer> {
+  const text = atob(flavor === "relaxed" ? KERNELS_RELAXED_WASM_BASE64 : KERNELS_WASM_BASE64);
   const bytes = new Uint8Array(new ArrayBuffer(text.length));
   for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
   return bytes;
@@ -104,19 +128,32 @@ function fn(exports: WebAssembly.Exports, name: string): Fn {
   return value as Fn;
 }
 
-let loading: Promise<CpuKernels> | null = null;
+const loading: Partial<Record<KernelFlavor, Promise<CpuKernels>>> = {};
+
+export interface LoadKernelsOptions {
+  /**
+   * `true` asks for the relaxed module and fails where the engine has no relaxed SIMD;
+   * `false` asks for the strict one; absent, the relaxed one where the engine takes it
+   * and the strict one elsewhere.
+   */
+  readonly relaxed?: boolean;
+}
 
 /**
- * Decode, verify, instantiate. Called twice, it returns the same promise — the module
- * has one memory and two copies would be two heaps.
+ * Decode, verify, instantiate. Called twice for the same flavor, it returns the same
+ * promise — a module has one memory and two copies would be two heaps. The two flavors
+ * are two modules and may both be loaded, which is how a check compares them.
  */
-export function loadKernels(): Promise<CpuKernels> {
-  if (loading) return loading;
-  loading = (async () => {
-    const bytes = kernelBytes();
+export function loadKernels(opts: LoadKernelsOptions = {}): Promise<CpuKernels> {
+  const flavor: KernelFlavor = opts.relaxed === true ? "relaxed" : opts.relaxed === false ? "strict" : (relaxedSimdAvailable() ? "relaxed" : "strict");
+  const have = loading[flavor];
+  if (have) return have;
+  const promise: Promise<CpuKernels> = (async (): Promise<CpuKernels> => {
+    const bytes = kernelBytes(flavor);
+    const want = flavor === "relaxed" ? KERNELS_RELAXED_WASM_SHA256 : KERNELS_WASM_SHA256;
     const got = await sha256Hex(bytes);
-    if (got !== KERNELS_WASM_SHA256) {
-      throw new Error(`cpu kernels: the embedded bytes hash to ${got.slice(0, 12)}…, kernels.ts says ${KERNELS_WASM_SHA256.slice(0, 12)}… — run npm run build:wasm`);
+    if (got !== want) {
+      throw new Error(`cpu kernels (${flavor}): the embedded bytes hash to ${got.slice(0, 12)}…, kernels.ts says ${want.slice(0, 12)}… — run npm run build:wasm`);
     }
     const { instance } = await WebAssembly.instantiate(bytes, {});
     const ex = instance.exports;
@@ -131,6 +168,7 @@ export function loadKernels(): Promise<CpuKernels> {
     const l2NormalizeRows = fn(ex, "l2_normalize_rows"), transpose = fn(ex, "transpose"), zero = fn(ex, "zero");
     const gemmBiasAct = fn(ex, "gemm_bias_act"), dwconvBiasAct = fn(ex, "dwconv_bias_act"), im2colRows = fn(ex, "im2col_rows");
     return {
+      flavor,
       memory,
       alloc: (bytes) => alloc(bytes),
       reset: () => { reset(); },
@@ -157,5 +195,6 @@ export function loadKernels(): Promise<CpuKernels> {
       im2colRows: (h, w, c, k, stride, pad, wo, row0, rows, inp, out) => { im2colRows(h, w, c, k, stride, pad, wo, row0, rows, inp, out); },
     };
   })();
-  return loading;
+  loading[flavor] = promise;
+  return promise;
 }

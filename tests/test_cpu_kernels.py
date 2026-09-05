@@ -67,22 +67,26 @@ def test_kernels_ts_carries_the_hash_of_the_rust_source_it_was_built_from(commit
 
 def test_kernels_ts_base64_decodes_to_bytes_with_the_recorded_hash(committed):
     """The loader does this too, at runtime, before instantiating. Here it runs without a
-    browser, so the merge that keeps a constant and loses a line of blob is caught in `pytest`."""
-    got = hashlib.sha256(committed["wasm"]).hexdigest()
-    assert got == committed["wasm_sha256"], "the base64 in kernels.ts does not hash to KERNELS_WASM_SHA256"
+    browser, so the merge that keeps a constant and loses a line of blob is caught in `pytest`.
+    Two blobs since the relaxed module arrived; each carries its own hash."""
+    assert hashlib.sha256(committed["wasm"]).hexdigest() == committed["wasm_sha256"], "the strict base64 does not hash to KERNELS_WASM_SHA256"
+    assert hashlib.sha256(committed["relaxed"]).hexdigest() == committed["relaxed_sha256"], "the relaxed base64 does not hash to KERNELS_RELAXED_WASM_SHA256"
+    assert committed["wasm"] != committed["relaxed"], "the two modules are the same bytes — the relaxed build did not take"
 
 
 def test_kernels_wasm_is_a_module_that_imports_nothing(committed):
     """No imports is the property that makes it a set of kernels rather than a runtime: nothing
     to link, nothing to version against Pyodide's heap. `Vec`, `format!` or `assert!` in `lib.rs`
-    would each bring an import or a panic path — this is where that shows."""
+    would each bring an import or a panic path — this is where that shows. Both modules."""
     assert build.wasm_import_count(committed["wasm"]) == 0
+    assert build.wasm_import_count(committed["relaxed"]) == 0
 
 
 def test_kernels_wasm_stays_a_few_kilobytes(committed):
     """4.7KB on 2026-09-05 for eight kernels. `MAX_WASM_BYTES` is an alarm rather than a budget;
     `build.py` refuses over it and this repeats the refusal for the committed bytes."""
     assert len(committed["wasm"]) <= build.MAX_WASM_BYTES
+    assert len(committed["relaxed"]) <= build.MAX_WASM_BYTES
 
 
 def test_kernels_exports_are_exactly_what_the_module_has_and_the_loader_asks_for(committed):
@@ -92,6 +96,8 @@ def test_kernels_exports_are_exactly_what_the_module_has_and_the_loader_asks_for
     reverse) is what this catches."""
     in_module = sorted(n for n, k in build.wasm_exports(committed["wasm"]) if k == "func" and not n.startswith("__"))
     assert committed["exports"] == in_module, "KERNELS_EXPORTS disagrees with the module's export section"
+    in_relaxed = sorted(n for n, k in build.wasm_exports(committed["relaxed"]) if k == "func" and not n.startswith("__"))
+    assert in_relaxed == in_module, "the relaxed module exports different names from the strict one"
     asked = sorted(set(re.findall(r'fn\(ex, "(\w+)"\)', LOAD_TS.read_text(encoding="utf-8"))))
     assert asked == in_module, (
         f"load.ts asks for {asked}\n  the module exports {in_module}")

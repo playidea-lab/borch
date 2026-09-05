@@ -93,6 +93,7 @@ export async function check(): Promise<{ checks: Check[]; text: string }> {
   const lines: string[] = [];
   const say = (s: string): void => { lines.push(s); };
   const K = await loadKernels();
+  say(`kernels: ${K.flavor}`);
 
   // ---- the network ----
   const B = 2, H = 20, Wd = 20;

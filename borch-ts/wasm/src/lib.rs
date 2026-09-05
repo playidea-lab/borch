@@ -44,6 +44,20 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
 }
 
+/// `a·b + c` on four lanes. With the `relaxed` feature this is one instruction,
+/// `f32x4.relaxed_madd`, whose rounding the hardware decides (fused or not — the last bit
+/// may differ by machine, which is what the proposal's name means). Without it, the
+/// multiply and the add are two instructions with one rounding each, the same on every
+/// machine — the module the golden is measured with. Every multiply-add in this file goes
+/// through here, so the two modules differ in exactly this.
+#[inline(always)]
+unsafe fn madd(a: v128, b: v128, c: v128) -> v128 {
+    #[cfg(feature = "relaxed")]
+    { f32x4_relaxed_madd(a, b, c) }
+    #[cfg(not(feature = "relaxed"))]
+    { f32x4_add(c, f32x4_mul(a, b)) }
+}
+
 const PAGE: usize = 65536;
 static mut BASE: usize = 0;
 static mut HEAP: usize = 0;
@@ -131,10 +145,10 @@ pub unsafe extern "C" fn dwconv(
                         let o1 = o.add(ch + 4) as *mut v128;
                         let o2 = o.add(ch + 8) as *mut v128;
                         let o3 = o.add(ch + 12) as *mut v128;
-                        v128_store(o0, f32x4_add(v128_load(o0), f32x4_mul(v128_load(ip.add(ch) as *const v128), v128_load(wp.add(ch) as *const v128))));
-                        v128_store(o1, f32x4_add(v128_load(o1), f32x4_mul(v128_load(ip.add(ch + 4) as *const v128), v128_load(wp.add(ch + 4) as *const v128))));
-                        v128_store(o2, f32x4_add(v128_load(o2), f32x4_mul(v128_load(ip.add(ch + 8) as *const v128), v128_load(wp.add(ch + 8) as *const v128))));
-                        v128_store(o3, f32x4_add(v128_load(o3), f32x4_mul(v128_load(ip.add(ch + 12) as *const v128), v128_load(wp.add(ch + 12) as *const v128))));
+                        v128_store(o0, madd(v128_load(ip.add(ch) as *const v128), v128_load(wp.add(ch) as *const v128), v128_load(o0)));
+                        v128_store(o1, madd(v128_load(ip.add(ch + 4) as *const v128), v128_load(wp.add(ch + 4) as *const v128), v128_load(o1)));
+                        v128_store(o2, madd(v128_load(ip.add(ch + 8) as *const v128), v128_load(wp.add(ch + 8) as *const v128), v128_load(o2)));
+                        v128_store(o3, madd(v128_load(ip.add(ch + 12) as *const v128), v128_load(wp.add(ch + 12) as *const v128), v128_load(o3)));
                         ch += 16;
                     }
                 }
@@ -402,7 +416,7 @@ pub unsafe extern "C" fn outer_acc(n: usize, d: usize, k: usize, x: *const f32, 
             let mut kk = 0;
             while kk < k {
                 let p = o.add(kk) as *mut v128;
-                v128_store(p, f32x4_add(v128_load(p), f32x4_mul(s, v128_load(gr.add(kk) as *const v128))));
+                v128_store(p, madd(s, v128_load(gr.add(kk) as *const v128), v128_load(p)));
                 kk += 4;
             }
         }
@@ -520,14 +534,14 @@ pub unsafe extern "C" fn gemm_bias_act(m: usize, n: usize, k: usize, a: *const f
                 let s1 = f32x4_splat(*a1.add(p));
                 let s2 = f32x4_splat(*a2.add(p));
                 let s3 = f32x4_splat(*a3.add(p));
-                c00 = f32x4_add(c00, f32x4_mul(s0, b0)); c01 = f32x4_add(c01, f32x4_mul(s0, b1));
-                c02 = f32x4_add(c02, f32x4_mul(s0, b2)); c03 = f32x4_add(c03, f32x4_mul(s0, b3));
-                c10 = f32x4_add(c10, f32x4_mul(s1, b0)); c11 = f32x4_add(c11, f32x4_mul(s1, b1));
-                c12 = f32x4_add(c12, f32x4_mul(s1, b2)); c13 = f32x4_add(c13, f32x4_mul(s1, b3));
-                c20 = f32x4_add(c20, f32x4_mul(s2, b0)); c21 = f32x4_add(c21, f32x4_mul(s2, b1));
-                c22 = f32x4_add(c22, f32x4_mul(s2, b2)); c23 = f32x4_add(c23, f32x4_mul(s2, b3));
-                c30 = f32x4_add(c30, f32x4_mul(s3, b0)); c31 = f32x4_add(c31, f32x4_mul(s3, b1));
-                c32 = f32x4_add(c32, f32x4_mul(s3, b2)); c33 = f32x4_add(c33, f32x4_mul(s3, b3));
+                c00 = madd(s0, b0, c00); c01 = madd(s0, b1, c01);
+                c02 = madd(s0, b2, c02); c03 = madd(s0, b3, c03);
+                c10 = madd(s1, b0, c10); c11 = madd(s1, b1, c11);
+                c12 = madd(s1, b2, c12); c13 = madd(s1, b3, c13);
+                c20 = madd(s2, b0, c20); c21 = madd(s2, b1, c21);
+                c22 = madd(s2, b2, c22); c23 = madd(s2, b3, c23);
+                c30 = madd(s3, b0, c30); c31 = madd(s3, b1, c31);
+                c32 = madd(s3, b2, c32); c33 = madd(s3, b3, c33);
                 p += 1;
             }
             let (bb0, bb1, bb2, bb3) = if bias.is_null() {
@@ -586,10 +600,10 @@ pub unsafe extern "C" fn dwconv_bias_act(
                         let o1 = o.add(ch + 4) as *mut v128;
                         let o2 = o.add(ch + 8) as *mut v128;
                         let o3 = o.add(ch + 12) as *mut v128;
-                        v128_store(o0, f32x4_add(v128_load(o0), f32x4_mul(v128_load(ip.add(ch) as *const v128), v128_load(wp.add(ch) as *const v128))));
-                        v128_store(o1, f32x4_add(v128_load(o1), f32x4_mul(v128_load(ip.add(ch + 4) as *const v128), v128_load(wp.add(ch + 4) as *const v128))));
-                        v128_store(o2, f32x4_add(v128_load(o2), f32x4_mul(v128_load(ip.add(ch + 8) as *const v128), v128_load(wp.add(ch + 8) as *const v128))));
-                        v128_store(o3, f32x4_add(v128_load(o3), f32x4_mul(v128_load(ip.add(ch + 12) as *const v128), v128_load(wp.add(ch + 12) as *const v128))));
+                        v128_store(o0, madd(v128_load(ip.add(ch) as *const v128), v128_load(wp.add(ch) as *const v128), v128_load(o0)));
+                        v128_store(o1, madd(v128_load(ip.add(ch + 4) as *const v128), v128_load(wp.add(ch + 4) as *const v128), v128_load(o1)));
+                        v128_store(o2, madd(v128_load(ip.add(ch + 8) as *const v128), v128_load(wp.add(ch + 8) as *const v128), v128_load(o2)));
+                        v128_store(o3, madd(v128_load(ip.add(ch + 12) as *const v128), v128_load(wp.add(ch + 12) as *const v128), v128_load(o3)));
                         ch += 16;
                     }
                 }

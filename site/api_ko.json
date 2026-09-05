@@ -2756,8 +2756,8 @@
     "src": "3970fea5ea17"
   },
   "cpu/": {
-    "ko": "`cpu` 장치 — WebGPU 어댑터가 전혀 없는 기계에서, 분류기 forward, 그 특징 위의 헤드, 그 위의 이웃.\n\n## 이것이 무엇이고 무엇이 아닌가\n\n`borch-ts` 본체는 WebGPU 위의 `Tensor` 다. 이 이름공간은 두 번째 `Tensor` 백엔드가 **아니다**: 이것이 존재하는 기계에는 어댑터가 없고, 그러니 만들 `Tensor` 도 없다. 패키지 안에 실린 WebAssembly SIMD 커널(`cpu/kernels`, base64 8.7 KB, 런타임 없음, import 없음) 위에서 도는 작은 집합이다.\n\n- `readSafetensors` — 체크포인트 바이트를 장치 없이 호스트 배열로\n- `GraphBuilder` / `CpuRunner` — 그 배열로 지은 짧은 그래프(conv, depthwise, pool, SE, add, linear; BatchNorm 은 접혀 있다)와 그 forward\n- `LinearHead` / `cosineNeighbours` — 캐시된 특징 위에 학습한 헤드와, 코사인으로 가장 가까운 행들\n\n그 밖의 것은 이름으로 없다. 허브 체크포인트 둘에서 WebGPU 장치와 대조했다(`borch-ts/test/cpu.py`; 수치는 책의 \"The `cpu` device\" 절에): 로짓은 상대 1e-4 안, 헤드의 loss 는 step 마다 3.5e-5 안.\n\n## 고르는 법\n\n사이트의 probe 가 어댑터가 하드웨어인지 소프트웨어인지 없는지를 이미 말한다. `available()` 은 이쪽이 더하는 한 가지 질문 — 이 엔진이 WebAssembly SIMD 를 돌리는가 — 에 답한다. WebGPU 를 실은 브라우저는 전부 돌리고, 오래된 몇 개는 못 돌린다. 애플리케이션이 고른다: 하드웨어 어댑터 → `borch-ts`; 아니면, `available()` 이면 → 이것.",
-    "src": "3c2fb8d01fd2"
+    "ko": "`cpu` 장치 — WebGPU 어댑터가 전혀 없는 기계에서, 분류기 forward, 그 특징 위의 헤드, 그 위의 이웃.\n\n## 이것이 무엇이고 무엇이 아닌가\n\n`borch-ts` 본체는 WebGPU 위의 `Tensor` 다. 이 이름공간은 두 번째 `Tensor` 백엔드가 **아니다**: 이것이 존재하는 기계에는 어댑터가 없고, 그러니 만들 `Tensor` 도 없다. 패키지 안에 실린 WebAssembly SIMD 커널(`cpu/kernels`: 결정적·relaxed 두 모듈, 각 17 KB — `load.ts` 참조 —, 런타임 없음, import 없음) 위에서 도는 작은 집합이다.\n\n- `readSafetensors` — 체크포인트 바이트를 장치 없이 호스트 배열로\n- `GraphBuilder` / `CpuRunner` — 그 배열로 지은 짧은 그래프(conv, depthwise, pool, SE, add, linear; BatchNorm 은 접혀 있다)와 그 forward\n- `LinearHead` / `cosineNeighbours` — 캐시된 특징 위에 학습한 헤드와, 코사인으로 가장 가까운 행들\n\n그 밖의 것은 이름으로 없다. 허브 체크포인트 둘에서 WebGPU 장치와 대조했다(`borch-ts/test/cpu.py`; 수치는 책의 \"The `cpu` device\" 절에): 로짓은 상대 1e-4 안, 헤드의 loss 는 step 마다 3.5e-5 안.\n\n## 고르는 법\n\n사이트의 probe 가 어댑터가 하드웨어인지 소프트웨어인지 없는지를 이미 말한다. `available()` 은 이쪽이 더하는 한 가지 질문 — 이 엔진이 WebAssembly SIMD 를 돌리는가 — 에 답한다. WebGPU 를 실은 브라우저는 전부 돌리고, 오래된 몇 개는 못 돌린다. 애플리케이션이 고른다: 하드웨어 어댑터 → `borch-ts`; 아니면, `available()` 이면 → 이것.",
+    "src": "9368d1495c4a"
   },
   "cpu/available": {
     "ko": "이 엔진이 커널을 돌릴 수 있는지 — SIMD 제안이 들어간 WebAssembly.",
@@ -2856,12 +2856,12 @@
     "src": "dce409487e90"
   },
   "cpu/load/kernelBytes": {
-    "ko": "모듈의 바이트, 디코드된 것. 순수하다; 인스턴스화하지 않는다.",
-    "src": "1db73f2097b1"
+    "ko": "모듈 하나의 바이트, 디코드된 것. 순수하다; 인스턴스화하지 않는다.",
+    "src": "37e02627a60d"
   },
   "cpu/load/loadKernels": {
-    "ko": "디코드, 검증, 인스턴스화. 두 번 불러도 같은 promise 를 돌려준다 — 모듈은 메모리가 하나이고, 사본 둘은 힙 둘이 된다.",
-    "src": "604fb1652e0f"
+    "ko": "디코드, 검증, 인스턴스화. 같은 맛으로 두 번 불러도 같은 promise 를 돌려준다 — 모듈은 메모리가 하나이고, 사본 둘은 힙 둘이 된다. 두 맛은 두 모듈이라 둘 다 실을 수 있고, 검사가 둘을 대조하는 길이 그것이다.",
+    "src": "1600403e7bfc"
   },
   "cpu/safetensors/HostTensor": {
     "ko": "safetensors 파일을 호스트 배열로 읽는다 — 장치 없이.\n\n`serialize.decode` 가 같은 일을 하며 `Tensor` 를 돌려주는데, WebGPU 쪽에는 그것이 맞고 여기서는 불가능하다: 이 장치가 존재하는 기계에는 어댑터가 없으니 돌려줄 `Tensor` 도 없다. 이 리더는 `Float32Array` 에서 멈춘다.\n\n형식은 통째로 읽을 만큼 작다: 리틀엔디언 헤더 길이 8바이트, 각 텐서의 dtype·모양·바이트 범위를 적은 JSON 헤더, 그 뒤 바이트. `F32` 만 받는다 — 허브의 체크포인트는 전부 F32 이고, 조용히 넓힌 `F16` 은 같은 이름의 다른 모델이 된다.",
@@ -2974,5 +2974,17 @@
   "cpu/train/cosineNeighbours": {
     "ko": "`[N × D]` 특징의 모든 행에 대해 코사인 유사도로 가장 가까운 `k` 행, 자기 자신 제외. 행은 한 번 정규화하고, 유사도 행렬은 전치에 대한 `gemm` 을 행 블록 단위로 만들어 5,000 개 특징이 100 MB 행렬이 되지 않게 한다 — 블록마다 상위 `k` 를 읽고 버린다.",
     "src": "01eecd1bc444"
+  },
+  "cpu/load/KernelFlavor": {
+    "ko": "어느 모듈이 돌고 있는가. `strict` 는 곱셈과 덧셈을 따로 반올림해 어느 기계에서나 같고, `relaxed` 는 둘을 접어(`f32x4.relaxed_madd`) GEMM 에서 1.7배 빠르되 마지막 비트는 하드웨어의 것이다.",
+    "src": "fca786b75741"
+  },
+  "cpu/load/relaxedSimdAvailable": {
+    "ko": "이 엔진이 relaxed SIMD 를 받는지 — Chrome 114+, Firefox 145+, Safari 는 Technology Preview 250 부터.",
+    "src": "0f0461567666"
+  },
+  "cpu/load/LoadKernelsOptions.relaxed": {
+    "ko": "`true` 는 relaxed 모듈을 요구하고 엔진에 relaxed SIMD 가 없으면 실패한다; `false` 는 결정적 모듈을 요구한다; 없으면 엔진이 받는 곳에서는 relaxed, 아니면 결정적.",
+    "src": "17bac1e7ccea"
   }
 }

@@ -1496,14 +1496,26 @@ only `relu`, and the difference between the two rows is that.
 **What it costs, on one thread.** The same page times both, batch 1 and 16, medians of
 five, readback included:
 
-| forward | `apple / metal-3` | `cpu`, one thread | SwiftShader (for scale) |
-|---|---|---|---|
-| EfficientNet-B0, per image at batch 16 | 1.5 ms | 20 ms | 520 ms, after 64 s of compiling |
-| ResNet-18, per image at batch 16 | 1.4 ms | 69 ms | — |
+| forward | `apple / metal-3` | `cpu` strict, one thread | `cpu` relaxed, one thread | SwiftShader (for scale) |
+|---|---|---|---|---|
+| EfficientNet-B0, per image at batch 16 | 1.5 ms | 20 ms | 15.5 ms | 520 ms, after 64 s of compiling |
+| ResNet-18, per image at batch 16 | 1.4 ms | 69 ms | 41.5 ms | — |
 
 Peak wasm memory at batch 16, fresh process: 353 MB for B0, 217 MB for ResNet-18.
 
-**Two levers were pulled after that table was first written, and both were measured.**
+**Two modules from one source.** The strict one rounds every multiply and every add
+separately, the same on every machine — it is what the golden is measured with. The
+relaxed one is built with the crate's `relaxed` feature: each multiply-add is one
+`f32x4.relaxed_madd`, whose rounding the hardware decides (fused or not — the last bit may
+differ by machine, which is what the proposal's name means). Measured on the GEMM alone,
+55 → 92–100 GFLOPS on every shape in both networks; on the networks, the shares above.
+`loadKernels()` takes the relaxed module where `WebAssembly.validate` accepts it (Chrome
+114+, Firefox 145+, Safari from Technology Preview 250) and the strict one elsewhere;
+`loadKernels({ relaxed: false })` asks for the strict one anywhere. The check page loads
+both and holds them to 1e-3 of each other, the same bound as against the GPU.
+
+**Three levers were pulled after that table was first written, and all were measured.**
+The relaxed module is the third and the one that moved the table. Before it:
 Folding the bias and the activation into the GEMM's epilogue — the separate pass had
 read as a fifth of the forward in the kernel bench — bought 4–5 % on B0 and nothing on
 ResNet-18: the pass was mostly the swish arithmetic, not the memory it re-read, and
@@ -1511,9 +1523,10 @@ ResNet has no swish. Unrolling a convolution's taps a block of rows at a time in
 of the whole image took ResNet-18's peak from 545 MB to 217 MB at no cost in time. A
 cache-blocked GEMM (the textbook `k`-chunks and row-blocks) ran at the same 55 GFLOPS
 as the plain four-row block on every matrix in both networks and was taken out again.
-ResNet-18 is 3.6 GFLOP an image, so 69 ms is 53 GFLOPS — the GEMM micro-kernel's
-ceiling on this core, one thread. Past it lie a wider micro-kernel with relaxed-SIMD
-FMA, and threads where the page can set COOP/COEP; neither is in this tree.
+ResNet-18 is 3.6 GFLOP an image, so 69 ms was 53 GFLOPS — the strict micro-kernel's
+ceiling on this core, one thread, and 41.5 ms is 87 GFLOPS with the multiply-add fused.
+Past that lie a wider register block (the load-to-arithmetic ratio, worth perhaps a tenth)
+and threads where the page can set COOP/COEP; neither is in this tree.
 
 The SwiftShader column is the reason this device exists in this shape: WebGPU's own CPU
 path was measured first, and it spent a minute compiling shaders for every new batch

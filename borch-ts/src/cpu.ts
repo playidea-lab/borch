@@ -7,7 +7,8 @@
  * `borch-ts` proper is a `Tensor` on WebGPU. This namespace is not a second `Tensor`
  * backend: on the machines it exists for there is no adapter, so there is no `Tensor`
  * to make. It is a small set of things that run on WebAssembly SIMD kernels shipped
- * inside the package (`cpu/kernels`, 8.7 KB of base64, no runtime, no imports):
+ * inside the package (`cpu/kernels`: two modules of 17 KB, strict and relaxed — see
+ * `load.ts` —, no runtime, no imports):
  *
  * - `readSafetensors` — a checkpoint's bytes to host arrays, without a device
  * - `GraphBuilder` / `CpuRunner` — a short graph (conv, depthwise, pool, SE, add,
