@@ -96,7 +96,7 @@
 #
 #     not here      parity:ts · data:ts · device:ts · serialize:ts · example:ts ·
 #                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding ·
-#                   learner:site · wheel:py · lab:py · marimo:py · folder:py · hub:py · bundle:py
+#                   learner:site · wheel:py · lab:py · marimo:py · folder:py · hub:py · offline:py
 #                                                 (seventeen more correctness checks)
 #                   cost:ts · bench:ts · compare:ts · envelope:py · envelope2:py  (measurements, not checks)
 #
