@@ -13,4 +13,4 @@
  * on. The receiver can only compare that against something if it knows what it is, and
  * until now it did not — so the field was written and never read.
  */
-export const VERSION = "0.2.9";
+export const VERSION = "0.3.0";
