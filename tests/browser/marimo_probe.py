@@ -133,12 +133,13 @@ def main(argv):
     if "--bundle" in argv:
         # The offline bundle: built here (site/build_bundle.py records what the site's
         # build fetches and mirrors it), then pressed with the network refused.
-        import subprocess
-        r = subprocess.run([sys.executable, str(ROOT / "site" / "build_bundle.py")], cwd=ROOT, text=True, capture_output=True)
-        if r.returncode:
-            print(f"build_bundle failed:\n{(r.stdout + r.stderr)[-1200:]}", file=sys.stderr)
+        # In this process, not a child python: under `uv run` on the GPU boxes a child
+        # started from `sys.executable` re-entered uv's build environment, and the
+        # nesting ran to uv's limit of a hundred (measured).
+        sys.path.insert(0, str(ROOT / "site"))
+        import build_bundle
+        if build_bundle.main():
             return 2
-        print(r.stdout.strip().splitlines()[-1])
         page_dir, offline = "bundle", True
     port, shutdown = serve(ROOT)
     url = f"http://127.0.0.1:{port}/{page_dir}/index.html"

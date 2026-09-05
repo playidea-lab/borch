@@ -109,7 +109,11 @@ def fetch(url, into):
 def main():
     # Always from a fresh workbench build: it carries the wheel, and a bundle over a
     # stale one shipped a binding the sources had moved past (measured on the 4090).
-    sh([sys.executable, str(ROOT / "site" / "build_marimo.py")])
+    # Called, not spawned — see marimo_probe.py on why a child python is not started.
+    sys.path.insert(0, str(ROOT / "site"))
+    import build_marimo
+    if build_marimo.main():
+        sys.exit("the workbench did not build")
     shutil.rmtree(OUT, ignore_errors=True)
     shutil.copytree(SRC, OUT, ignore=shutil.ignore_patterns("CLAUDE.md", "__marimo__"))
     urls = recorded_requests(SRC)
