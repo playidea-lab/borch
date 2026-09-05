@@ -52,6 +52,7 @@
     "compare:ts": "uv run --with playwright python borch-ts/test/compare.py",
     "cpu:ts": "uv run --with playwright python borch-ts/test/cpu.py",
     "cpu:py": "uv run --with playwright python tests/browser/cpu_py.py",
+    "coi:site": "uv run --with playwright python tests/browser/coi_sweep.py",
     "onnx:ts": "uv run --with playwright python borch-ts/test/onnx.py",
     "onnx:binding": "uv run --with playwright python tests/browser/onnx_binding.py",
     "learner:site": "uv run --with playwright python tests/browser/learner_path.py",

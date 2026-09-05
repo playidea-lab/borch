@@ -52,7 +52,7 @@ export interface Dispatcher {
 
 export const MAX_TASKS = 256;
 export const MAX_CALLS = 4;
-export const MAX_ARGS = 14;
+export const MAX_ARGS = 16;
 const CALL = 2 + MAX_ARGS;
 export const SLOT = 1 + MAX_CALLS * CALL;
 const GEN = 0, DONE = 1, COUNT = 2, STOP = 3;

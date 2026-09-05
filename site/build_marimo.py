@@ -46,6 +46,14 @@ def main():
         sh(["uv", "run", "--with", MARIMO, "marimo", "export", "html-wasm", "review.py",
             "-o", str(OUT), "--mode", "edit"], cwd=tmp)
     shutil.copy(wheels[-1], OUT / wheels[-1].name)
+    # Cross-origin isolation where the host cannot set headers: the worker pool needs it.
+    # The file sits beside the page so the worker's scope is this folder — the bundle
+    # copies the folder whole and keeps working.
+    shutil.copy(ROOT / "site" / "coi.js", OUT / "coi.js")
+    page = OUT / "index.html"
+    html = page.read_text(encoding="utf-8")
+    if "coi.js" not in html:
+        page.write_text(html.replace("<head>", '<head><script src="coi.js"></script>', 1), encoding="utf-8")
     for junk in (SRC / "__marimo__",):
         if junk.is_dir():
             shutil.rmtree(junk)

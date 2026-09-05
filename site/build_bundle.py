@@ -203,6 +203,10 @@ def main():
         "    python3 -m http.server -d . 8000\n"
         "then http://localhost:8000/ in Chrome or Edge. It must be served: a page opened as a\n"
         "file:// cannot start the worker the kernel runs in. Nothing here reaches the network.\n"
+        "\nOn a machine with no GPU the trainer runs on the CPU, on as many threads as the page\n"
+        "can get: coi.js beside index.html turns the first load into a cross-origin isolated\n"
+        "one (a service worker adds the two headers and reloads once), which needs localhost\n"
+        "or https. Served over plain http from another machine it still runs, on one thread.\n"
         "\nWhat is inside: the marimo workbench (assets/), Pyodide and marimo's packages\n"
         "(pyodide/), the pyborch wheel, and the pretrained models (models/). See VERSION.\n", encoding="utf-8")
     size = sum(p.stat().st_size for p in OUT.rglob("*") if p.is_file()) / 1e6

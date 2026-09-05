@@ -588,7 +588,20 @@ pub unsafe extern "C" fn dwconv_bias_act(
     h: usize, w: usize, c: usize, k: usize, stride: usize, pad: usize,
     ho: usize, wo: usize, inp: *const f32, wt: *const f32, out: *mut f32, bias: *const f32, act: u32,
 ) {
-    for oy in 0..ho {
+    dwconv_rows(h, w, c, k, stride, pad, ho, wo, 0, ho, inp, wt, out, bias, act)
+}
+
+/// `dwconv_bias_act` over the output rows `oy0..oy1` only — the piece a worker of a pool
+/// takes, so that one image's depthwise convolution can be split across threads (at batch
+/// one, the whole forward is one image). `ho` still names the full output height; the
+/// rows outside the range are not touched.
+#[no_mangle]
+pub unsafe extern "C" fn dwconv_rows(
+    h: usize, w: usize, c: usize, k: usize, stride: usize, pad: usize,
+    ho: usize, wo: usize, oy0: usize, oy1: usize, inp: *const f32, wt: *const f32, out: *mut f32, bias: *const f32, act: u32,
+) {
+    let _ = ho;
+    for oy in oy0..oy1 {
         let y0 = oy * stride;                                   // iy = y0 + ky − pad
         let ky_lo = if pad > y0 { pad - y0 } else { 0 };
         let ky_hi = { let m = h + pad - y0; if m < k { m } else { k } };
