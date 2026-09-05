@@ -99,7 +99,7 @@ MODULES = [
     ("cpu", "cpu",
      {"ko": "어댑터가 전혀 없는 기계를 위한 CPU 장치 — 체크포인트 바이트에서 forward, 특징 위의 헤드 학습, 코사인 이웃. `Tensor` 백엔드가 아니다.",
       "en": "The CPU device for machines with no adapter at all — a forward from a checkpoint's bytes, a head on its features, cosine neighbours. Not a `Tensor` backend."}),
-    # The five files behind `cpu`. `cpu.ts` itself only re-exports them, and the generator
+    # The six files behind `cpu`. `cpu.ts` itself only re-exports them, and the generator
     # reads declarations where they are declared — so they are listed here by path, or the
     # reference would show one function and call it the device.
     ("cpu/load", "cpu · kernels",
@@ -117,6 +117,9 @@ MODULES = [
     ("cpu/train", "cpu · train",
      {"ko": "캐시된 특징 위의 선형 헤드 학습과 코사인 이웃.",
       "en": "A linear head trained on cached features, and cosine neighbours over them."}),
+    ("cpu/threads", "cpu · threads",
+     {"ko": "하나의 공유 메모리 위 워커 풀 — 작업 설명 블록과 `Atomics` 배리어, Web Worker 스폰. 페이지가 cross-origin isolated 일 때만.",
+      "en": "A pool of workers over one shared memory — task descriptors and an `Atomics` barrier, Web Worker spawn. Only on a cross-origin isolated page."}),
     ("vision", "vision",
      {"ko": "이미지 변환. `torchvision.transforms` 자리.",
       "en": "Image transforms. Where `torchvision.transforms` would be."}),

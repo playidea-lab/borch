@@ -28,8 +28,9 @@ async def _():
         torch = None
         adapter = "cpu (no WebGPU adapter)"
         why = str(no_gpu).removeprefix("Error: ").split(" — ")[0][:90]   # the reason, not the whole paragraph
-        boot = (f"**borch on the CPU** — no WebGPU adapter here (`{why}`), so `borch_cpu` runs the frozen backbone "
-                "and the head on WebAssembly SIMD, one thread. Slower, same numbers; the small-CNN path and the ONNX export need the GPU.")
+        workers = cpu.threads()
+        boot = (f"**borch on the CPU{f', {workers} workers' if workers else ''}** — no WebGPU adapter here (`{why}`), so `borch_cpu` runs the frozen backbone "
+                f"and the head on WebAssembly SIMD, {f'{workers} threads' if workers else 'one thread'}. Slower, same numbers; the small-CNN path and the ONNX export need the GPU.")
     mo.md(boot)
     return adapter, cpu, mo, torch
 

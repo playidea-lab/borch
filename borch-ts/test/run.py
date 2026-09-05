@@ -241,6 +241,13 @@ class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def end_headers(self):
+        # The same two headers as site/serve.py: the browser tests run cross-origin isolated,
+        # so a resource that would break the deployed page under COEP breaks here first.
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+        super().end_headers()
+
 
 def serve(root):
     """Put the repository root on a temporary port; return (port, shutdown)."""

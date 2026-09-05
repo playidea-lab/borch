@@ -28,7 +28,7 @@
  * not. An application picks: hardware adapter → `borch-ts`; otherwise, if `available()`
  * → this.
  */
-export { ACT, type Activation, type CpuKernels, loadKernels, kernelBytes } from "./cpu/load.js";
+export { ACT, type Activation, type CpuKernels, type KernelFlavor, type LoadKernelsOptions, loadKernels, kernelBytes, kernelsFromExports, relaxedSimdAvailable, sharedMemoryAvailable } from "./cpu/load.js";
 export { KERNELS_WASM_SHA256, KERNELS_WASM_BYTES, KERNELS_RUSTC } from "./cpu/kernels.js";
 export { readSafetensors, type HostStateDict, type HostTensor } from "./cpu/safetensors.js";
 export {
@@ -52,4 +52,4 @@ export function available(): boolean {
     return false;
   }
 }
-export { MainSide, makeControl, workerLoop, type Dispatcher, type Task, type Call } from "./cpu/threads.js";
+export { MainSide, WorkerPool, CONTROL_LAYOUT, makeControl, workerLoop, threadsAvailable, defaultWorkers, type Dispatcher, type Task, type Call, type Layout } from "./cpu/threads.js";

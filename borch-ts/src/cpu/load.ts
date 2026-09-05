@@ -24,7 +24,7 @@
  * (or, for `memory`, a `WebAssembly.Memory`) before it is given a signature, and the
  * one assertion in this file sits right after that check.
  */
-import { KERNELS_EXPORTS, KERNELS_RELAXED_WASM_BASE64, KERNELS_RELAXED_WASM_SHA256, KERNELS_WASM_BASE64, KERNELS_WASM_SHA256 } from "./kernels.js";
+import { KERNELS_EXPORTS, KERNELS_RELAXED_WASM_BASE64, KERNELS_RELAXED_WASM_SHA256, KERNELS_SHARED_WASM_BASE64, KERNELS_SHARED_WASM_SHA256, KERNELS_WASM_BASE64, KERNELS_WASM_SHA256 } from "./kernels.js";
 
 /** The activation `biasAct` applies after adding the bias. */
 export const ACT = { none: 0, swish: 1, sigmoid: 2, relu: 3 } as const;
@@ -35,10 +35,17 @@ export type Activation = (typeof ACT)[keyof typeof ACT];
  * every machine; `relaxed` fuses them (`f32x4.relaxed_madd`) and is 1.7× faster on the
  * GEMM, with the last bit the hardware's.
  */
-export type KernelFlavor = "strict" | "relaxed";
+/**
+ * `strict` rounds every operation; `relaxed` fuses the multiply-add; `shared` is the relaxed
+ * kernels over an imported, shared memory — for a pool of workers (`threads.ts`), and only
+ * where `SharedArrayBuffer` exists.
+ */
+export type KernelFlavor = "strict" | "relaxed" | "shared";
 
 export interface CpuKernels {
   readonly flavor: KernelFlavor;
+  /** The compiled module — present on the `shared` flavor, where workers instantiate it again over the same memory. */
+  readonly module?: WebAssembly.Module;
   readonly memory: WebAssembly.Memory;
   /** Bump-allocate `bytes`, 16-byte aligned. Returns a byte offset, or 0 when the memory would not grow. */
   alloc(bytes: number): number;
@@ -107,9 +114,28 @@ export function relaxedSimdAvailable(): boolean {
   }
 }
 
+/**
+ * Whether this context can hold a shared wasm memory: `SharedArrayBuffer` exists, the page
+ * is cross-origin isolated (COOP `same-origin` + COEP `require-corp`; a `file://` page
+ * never is), and the engine constructs a shared `WebAssembly.Memory`. Node passes too.
+ */
+export function sharedMemoryAvailable(): boolean {
+  try {
+    if (typeof SharedArrayBuffer === "undefined") return false;
+    if (typeof crossOriginIsolated !== "undefined" && !crossOriginIsolated) return false;
+    new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const BLOBS: Record<KernelFlavor, string> = { strict: KERNELS_WASM_BASE64, relaxed: KERNELS_RELAXED_WASM_BASE64, shared: KERNELS_SHARED_WASM_BASE64 };
+const HASHES: Record<KernelFlavor, string> = { strict: KERNELS_WASM_SHA256, relaxed: KERNELS_RELAXED_WASM_SHA256, shared: KERNELS_SHARED_WASM_SHA256 };
+
 /** A module's bytes, decoded. Pure; does not instantiate. */
 export function kernelBytes(flavor: KernelFlavor = "strict"): Uint8Array<ArrayBuffer> {
-  const text = atob(flavor === "relaxed" ? KERNELS_RELAXED_WASM_BASE64 : KERNELS_WASM_BASE64);
+  const text = atob(BLOBS[flavor]);
   const bytes = new Uint8Array(new ArrayBuffer(text.length));
   for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
   return bytes;
@@ -134,7 +160,7 @@ function fn(exports: WebAssembly.Exports, name: string): Fn {
  * the same either way, and the checks are the same: each export a function, `memory` a
  * `WebAssembly.Memory`, every name in `KERNELS_EXPORTS` present.
  */
-export function kernelsFromExports(ex: WebAssembly.Exports, flavor: KernelFlavor, memoryIn?: WebAssembly.Memory): CpuKernels {
+export function kernelsFromExports(ex: WebAssembly.Exports, flavor: KernelFlavor, memoryIn?: WebAssembly.Memory, module?: WebAssembly.Module): CpuKernels {
   const memory = memoryIn ?? ex["memory"];
   if (!(memory instanceof WebAssembly.Memory)) throw new Error('cpu kernels: export "memory" is missing');
   for (const name of KERNELS_EXPORTS) fn(ex, name);
@@ -147,6 +173,7 @@ export function kernelsFromExports(ex: WebAssembly.Exports, flavor: KernelFlavor
   const gemmBiasAct = fn(ex, "gemm_bias_act"), dwconvBiasAct = fn(ex, "dwconv_bias_act"), im2colRows = fn(ex, "im2col_rows");
   return {
     flavor,
+    ...(module ? { module } : {}),
     memory,
     alloc: (bytes) => alloc(bytes),
     reset: () => { reset(); },
@@ -183,7 +210,20 @@ export interface LoadKernelsOptions {
    * and the strict one elsewhere.
    */
   readonly relaxed?: boolean;
+  /**
+   * `true` asks for the shared-memory module (the relaxed kernels over one shared
+   * `WebAssembly.Memory`, for a pool of workers) and fails where `sharedMemoryAvailable()`
+   * is false. The memory starts at `initialMB` (default 64) and may grow to `maxMB`
+   * (default 2048) — a shared memory needs its maximum declared up front.
+   */
+  readonly shared?: boolean;
+  readonly initialMB?: number;
+  readonly maxMB?: number;
 }
+
+const PAGE = 64 * 1024;
+const DEFAULT_INITIAL_MB = 64;
+const DEFAULT_MAX_MB = 2048;
 
 /**
  * Decode, verify, instantiate. Called twice for the same flavor, it returns the same
@@ -191,18 +231,29 @@ export interface LoadKernelsOptions {
  * are two modules and may both be loaded, which is how a check compares them.
  */
 export function loadKernels(opts: LoadKernelsOptions = {}): Promise<CpuKernels> {
-  const flavor: KernelFlavor = opts.relaxed === true ? "relaxed" : opts.relaxed === false ? "strict" : (relaxedSimdAvailable() ? "relaxed" : "strict");
+  const flavor: KernelFlavor = opts.shared ? "shared" : opts.relaxed === true ? "relaxed" : opts.relaxed === false ? "strict" : (relaxedSimdAvailable() ? "relaxed" : "strict");
   const have = loading[flavor];
   if (have) return have;
   const promise: Promise<CpuKernels> = (async (): Promise<CpuKernels> => {
     const bytes = kernelBytes(flavor);
-    const want = flavor === "relaxed" ? KERNELS_RELAXED_WASM_SHA256 : KERNELS_WASM_SHA256;
+    const want = HASHES[flavor];
     const got = await sha256Hex(bytes);
     if (got !== want) {
       throw new Error(`cpu kernels (${flavor}): the embedded bytes hash to ${got.slice(0, 12)}…, kernels.ts says ${want.slice(0, 12)}… — run npm run build:wasm`);
     }
-    const { instance } = await WebAssembly.instantiate(bytes, {});
-    return kernelsFromExports(instance.exports, flavor);
+    if (flavor !== "shared") {
+      const { instance } = await WebAssembly.instantiate(bytes, {});
+      return kernelsFromExports(instance.exports, flavor);
+    }
+    if (!sharedMemoryAvailable()) {
+      throw new Error("cpu kernels (shared): this context has no shared memory — SharedArrayBuffer needs a cross-origin isolated page (COOP same-origin, COEP require-corp)");
+    }
+    const initial = Math.ceil((opts.initialMB ?? DEFAULT_INITIAL_MB) * 1024 * 1024 / PAGE);
+    const maximum = Math.ceil((opts.maxMB ?? DEFAULT_MAX_MB) * 1024 * 1024 / PAGE);
+    const memory = new WebAssembly.Memory({ initial, maximum, shared: true });
+    const module = await WebAssembly.compile(bytes);
+    const instance = await WebAssembly.instantiate(module, { env: { memory } });
+    return kernelsFromExports(instance.exports, flavor, memory, module);
   })();
   loading[flavor] = promise;
   return promise;

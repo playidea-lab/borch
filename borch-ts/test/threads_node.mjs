@@ -1,31 +1,22 @@
-// The cpu device on a pool of workers over one shared memory — a measurement, not a shipped
-// path. EfficientNet-B0 and ResNet-18 forwards with random weights, direct and on pools of
-// 1/2/4/8 workers, each pool's output compared with the direct one (they must match to the bit).
+// The cpu device on a pool of workers over one shared memory, measured in node. EfficientNet-B0
+// and ResNet-18 forwards with random weights, direct and on pools of 1/2/4/8 workers, each pool's
+// output compared with the direct one (they must match to the bit).
 //
 // Node's worker_threads stand in for Web Workers; the protocol (src/cpu/threads.ts) is the one a
-// page would use. The kernel module must be linked over an *imported, shared* memory, which
-// build.py does not do (the shipped blobs export their own memory). Build it once:
+// page uses through WorkerPool. The kernel module is the `shared` flavor from kernels.ts — the
+// relaxed kernels linked over an imported, shared memory (build.py, SHARED_LINK). `__stack_pointer`
+// is exported so each worker is given its own stack region before it runs: Rust's shadow stack is
+// in linear memory and every instance starts it at the same address. Without that the workers
+// spill over each other's frames — measured as results that differed from the direct forward by
+// 1e-5 and changed between runs.
 //
-//   cd borch-ts/wasm && RUSTFLAGS="-C target-feature=+simd128,+relaxed-simd,+atomics,+bulk-memory,+mutable-globals \
-//     -C link-arg=--import-memory -C link-arg=--shared-memory -C link-arg=--max-memory=4294967296 \
-//     -C link-arg=--export=__stack_pointer" \
-//     cargo build --release --target wasm32-unknown-unknown --features relaxed --target-dir /some/dir
-//   BORCH_SHARED_WASM=/some/dir/wasm32-unknown-unknown/release/borch_cpu_kernels.wasm node borch-ts/test/threads_node.mjs
-//
-//  matters: Rust's shadow stack is in linear memory and every instance
-// starts it at the same address, so each worker is given its own stack region before it runs.
-// Without it the workers spill over each other's frames — measured as results that differed
-// from the direct forward by 1e-5 and changed between runs. Env: WORKERS, BATCHES, REPS.
+//   node borch-ts/test/threads_node.mjs        (env: WORKERS=1,2,4,8 BATCHES=16,4 REPS=5)
 import { Worker, isMainThread, workerData } from "node:worker_threads";
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { kernelsFromExports } from "../dist/src/cpu/load.js";
+import { kernelBytes, kernelsFromExports } from "../dist/src/cpu/load.js";
 import { CpuRunner } from "../dist/src/cpu/runner.js";
-import { MainSide, makeControl, workerLoop } from "../dist/src/cpu/threads.js";
+import { CONTROL_LAYOUT, MainSide, makeControl, workerLoop } from "../dist/src/cpu/threads.js";
 import { cpuGraphFor } from "bimm-ts";
-
-const WASM = process.env.BORCH_SHARED_WASM;
-if (!WASM) { console.error("BORCH_SHARED_WASM=<shared-memory build of the kernels> is required — see the header"); process.exit(2); }
 
 if (!isMainThread) {
   const { ctrl, data, memory, bytes, id, workers, stackTop } = workerData;
@@ -33,7 +24,7 @@ if (!isMainThread) {
   // Rust's shadow stack lives in linear memory; every instance's __stack_pointer starts at the
   // same address, so without this the workers would spill registers over each other's frames.
   instance.exports.__stack_pointer.value = stackTop;
-  workerLoop(ctrl, data, instance.exports, id, workers);
+  workerLoop(ctrl, data, instance.exports, id, workers, CONTROL_LAYOUT);
   process.exit(0);
 }
 
@@ -48,7 +39,7 @@ const e = { "conv_stem.weight": [32, 3, 3, 3], ...bn("bn1", 32), "conv_head.weig
     else { const mid = cin * ex; Object.assign(e, { [`${p}.conv_pw.weight`]: [mid, cin, 1, 1], ...bn(`${p}.bn1`, mid), [`${p}.conv_dw.weight`]: [mid, 1, k, k], ...bn(`${p}.bn2`, mid), [`${p}.se.conv_reduce.weight`]: [se, mid, 1, 1], [`${p}.se.conv_reduce.bias`]: [se], [`${p}.se.conv_expand.weight`]: [mid, se, 1, 1], [`${p}.se.conv_expand.bias`]: [mid], [`${p}.conv_pwl.weight`]: [cout, mid, 1, 1], ...bn(`${p}.bn3`, cout) }); }
     cin = cout; } }); }
 
-const bytes = readFileSync(WASM);
+const bytes = kernelBytes("shared");
 const memory = new WebAssembly.Memory({ initial: 1024, maximum: 16384, shared: true });
 const main = new WebAssembly.Instance(new WebAssembly.Module(bytes), { env: { memory } });
 const K = kernelsFromExports(main.exports, "relaxed", memory);

@@ -1503,7 +1503,7 @@ five, readback included:
 
 Peak wasm memory at batch 16, fresh process: 353 MB for B0, 217 MB for ResNet-18.
 
-**Two modules from one source.** The strict one rounds every multiply and every add
+**Three modules from one source.** The strict one rounds every multiply and every add
 separately, the same on every machine — it is what the golden is measured with. The
 relaxed one is built with the crate's `relaxed` feature: each multiply-add is one
 `f32x4.relaxed_madd`, whose rounding the hardware decides (fused or not — the last bit may
@@ -1512,7 +1512,10 @@ differ by machine, which is what the proposal's name means). Measured on the GEM
 `loadKernels()` takes the relaxed module where `WebAssembly.validate` accepts it (Chrome
 114+, Firefox 145+, Safari from Technology Preview 250) and the strict one elsewhere;
 `loadKernels({ relaxed: false })` asks for the strict one anywhere. The check page loads
-both and holds them to 1e-3 of each other, the same bound as against the GPU.
+both and holds them to 1e-3 of each other, the same bound as against the GPU. The third,
+`shared`, is the relaxed kernels linked over an *imported, shared* memory, with
+`__stack_pointer` exported; it is what a pool of workers instantiates, one instance each
+over one buffer, and `loadKernels({ shared: true })` is the only way to ask for it.
 
 **Four levers were pulled after that table was first written, and all were measured.**
 The relaxed module is the third and the one that moved the table most; the fourth is the
@@ -1570,12 +1573,28 @@ stack through an exported `__stack_pointer` before it runs; without it the pools
 differed from the direct forward by 1e-5 and changed between runs, and B0 scaled to
 only ×2.9 on eight workers while the frames fought.
 
-What this tree does not do is ship it. The kernel module in `kernels.ts` exports its own
-memory; the threaded one imports a shared memory and is linked with different flags, and
-a page gets `SharedArrayBuffer` only under `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp` — never from `file://`, and on GitHub Pages
-only through a service-worker shim. Those are deployment decisions, with the third module
-flavour and the Web Worker spawn on the other side of them.
+**And then it was shipped, in three pieces.** The `shared` module is the third blob in
+`kernels.ts` (build.py links it with `--import-memory --shared-memory --export=__stack_pointer`
+and checks it imports exactly `env.memory`). `WorkerPool.spawn(n)` loads it, allocates a
+256 KB stack per worker out of that memory, starts the workers from a blob URL and hands
+each the compiled module, the memory and its stack top; `new CpuRunner(pool.kernels,
+graph, pool)` runs on them. In Chrome, from the check page, batch 16 of B0 (2026-09-05,
+16 hardware threads): spawn 5 ms, two workers 8.0 ms an image, eight 2.6 ms, both to the
+bit of the single thread. From Python the same eight workers come up on the first
+`borch_cpu.kernels()` inside the Pyodide worker — nested workers — and six images through
+the backbone take 30 ms where one thread took 137. The default is half the hardware
+threads, at most eight: past eight the measurement gained little, and efficiency cores
+would make the barrier wait for the slowest.
+
+The third piece is the page. `SharedArrayBuffer` exists only under
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`,
+so `site/serve.py` and both test servers send them, and the whole browser suite now runs
+cross-origin isolated — module imports and `fetch` are CORS-mode and pass, which is why
+esm.sh, the registry and the Pyodide CDN still load; a plain `<img>` from another origin
+would not. Where the two headers are missing — a `file://` page, GitHub Pages without a
+service-worker shim — `threadsAvailable()` is false and the same forward runs on one
+thread; `borch_cpu.threads()` says 0 and `POOL_ERROR` says why. Pages is not done: it
+needs the shim and a pass over every cross-origin resource, and that is its own change.
 
 The SwiftShader column is the reason this device exists in this shape: WebGPU's own CPU
 path was measured first, and it spent a minute compiling shaders for every new batch
@@ -1606,7 +1625,9 @@ the frozen backbone, the head and the review queue run; the small CNN and the ON
 say they need the GPU. `tests/browser/cpu_py.py` runs it on the wheel in a Pyodide worker
 with no device brought up and, where the page has an adapter, compares its features with
 `torch.hub`'s: relative 1.0e-4 on six images (2026-09-05, `apple / metal-3`); six images
-through the backbone 137 ms, the import 240 ms, the 21 MB checkpoint 4 s from the network.
+through the backbone 137 ms on one thread and 30 ms on the eight-worker pool the module
+spawns by default where the page is cross-origin isolated, the import 240 ms, the 21 MB
+checkpoint 4 s from the network.
 
 ### How much it does
 

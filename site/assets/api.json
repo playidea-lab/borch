@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 747,
+  "done": 766,
   "stale": 0,
-  "missing": 469
+  "missing": 467
  },
  "modules": [
   {
@@ -15328,10 +15328,10 @@
     {
      "kind": "type",
      "name": "KernelFlavor",
-     "signature": "export type KernelFlavor = \"strict\" | \"relaxed\"",
-     "doc": "Which module is running. `strict` rounds every multiply and add separately, the same on\nevery machine; `relaxed` fuses them (`f32x4.relaxed_madd`) and is 1.7× faster on the\nGEMM, with the last bit the hardware's.",
+     "signature": "export type KernelFlavor = \"strict\" | \"relaxed\" | \"shared\"",
+     "doc": "`strict` rounds every operation; `relaxed` fuses the multiply-add; `shared` is the relaxed\nkernels over an imported, shared memory — for a pool of workers (`threads.ts`), and only\nwhere `SharedArrayBuffer` exists.",
      "members": [],
-     "doc_ko": "어느 모듈이 돌고 있는가. `strict` 는 곱셈과 덧셈을 따로 반올림해 어느 기계에서나 같고, `relaxed` 는 둘을 접어(`f32x4.relaxed_madd`) GEMM 에서 1.7배 빠르되 마지막 비트는 하드웨어의 것이다."
+     "doc_ko": "`strict`는 연산마다 반올림하고, `relaxed`는 곱셈-덧셈을 융합하며, `shared`는 relaxed 커널을 가져온(import) 공유 메모리 위에 올린 것이다 — 워커 풀(`threads.ts`)을 위한 것이고, `SharedArrayBuffer`가 있는 곳에서만."
     },
     {
      "kind": "interface",
@@ -15343,6 +15343,13 @@
        "name": "flavor",
        "signature": "readonly flavor: KernelFlavor",
        "doc": ""
+      },
+      {
+       "name": "module",
+       "signature": "readonly module?: WebAssembly.Module",
+       "doc": "The compiled module — present on the `shared` flavor, where workers instantiate it again over the same memory.",
+       "optional": true,
+       "doc_ko": "컴파일된 모듈 — `shared` flavor에만 있다. 워커들이 같은 메모리 위에 이 모듈을 다시 인스턴스화한다."
       },
       {
        "name": "memory",
@@ -15511,6 +15518,15 @@
     },
     {
      "kind": "function",
+     "name": "sharedMemoryAvailable",
+     "signature": "export declare function sharedMemoryAvailable(): boolean",
+     "doc": "Whether this context can hold a shared wasm memory: `SharedArrayBuffer` exists, the page\nis cross-origin isolated (COOP `same-origin` + COEP `require-corp`; a `file://` page\nnever is), and the engine constructs a shared `WebAssembly.Memory`. Node passes too.",
+     "members": [],
+     "torch": "shared_memory_available",
+     "doc_ko": "이 컨텍스트가 공유 wasm 메모리를 가질 수 있는가: `SharedArrayBuffer`가 있고, 페이지가 cross-origin isolated이며(COOP `same-origin` + COEP `require-corp`; `file://` 페이지는 절대 아니다), 엔진이 공유 `WebAssembly.Memory`를 만들어 주는가. Node도 통과한다."
+    },
+    {
+     "kind": "function",
      "name": "kernelBytes",
      "signature": "export declare function kernelBytes(flavor?: KernelFlavor): Uint8Array<ArrayBuffer>",
      "doc": "A module's bytes, decoded. Pure; does not instantiate.",
@@ -15521,10 +15537,11 @@
     {
      "kind": "function",
      "name": "kernelsFromExports",
-     "signature": "export declare function kernelsFromExports(ex: WebAssembly.Exports, flavor: KernelFlavor, memoryIn?: WebAssembly.Memory): CpuKernels",
+     "signature": "export declare function kernelsFromExports(ex: WebAssembly.Exports, flavor: KernelFlavor, memoryIn?: WebAssembly.Memory, module?: WebAssembly.Module): CpuKernels",
      "doc": "The typed handle over an instance's exports. `loadKernels` uses it; so does a worker\nthat instantiated the same module over a shared memory (`threads.ts`) — the handle is\nthe same either way, and the checks are the same: each export a function, `memory` a\n`WebAssembly.Memory`, every name in `KERNELS_EXPORTS` present.",
      "members": [],
-     "torch": "kernels_from_exports"
+     "torch": "kernels_from_exports",
+     "doc_ko": "인스턴스의 export 위에 얹는 타입 있는 핸들. `loadKernels`가 쓰고, 공유 메모리 위에 같은 모듈을 인스턴스화한 워커(`threads.ts`)도 쓴다 — 어느 쪽이든 핸들은 같고 검사도 같다: export마다 함수인지, `memory`가 `WebAssembly.Memory`인지, `KERNELS_EXPORTS`의 모든 이름이 있는지."
     },
     {
      "kind": "interface",
@@ -15538,6 +15555,27 @@
        "doc": "`true` asks for the relaxed module and fails where the engine has no relaxed SIMD;\n`false` asks for the strict one; absent, the relaxed one where the engine takes it\nand the strict one elsewhere.",
        "optional": true,
        "doc_ko": "`true` 는 relaxed 모듈을 요구하고 엔진에 relaxed SIMD 가 없으면 실패한다; `false` 는 결정적 모듈을 요구한다; 없으면 엔진이 받는 곳에서는 relaxed, 아니면 결정적."
+      },
+      {
+       "name": "shared",
+       "signature": "readonly shared?: boolean",
+       "doc": "`true` asks for the shared-memory module (the relaxed kernels over one shared\n`WebAssembly.Memory`, for a pool of workers) and fails where `sharedMemoryAvailable()`\nis false. The memory starts at `initialMB` (default 64) and may grow to `maxMB`\n(default 2048) — a shared memory needs its maximum declared up front.",
+       "optional": true,
+       "doc_ko": "`true`는 공유 메모리 모듈(하나의 공유 `WebAssembly.Memory` 위의 relaxed 커널, 워커 풀용)을 요청하며 `sharedMemoryAvailable()`이 거짓인 곳에서는 실패한다. 메모리는 `initialMB`(기본 64)에서 시작해 `maxMB`(기본 2048)까지 자랄 수 있다 — 공유 메모리는 최대치를 처음에 선언해야 한다."
+      },
+      {
+       "name": "initialMB",
+       "signature": "readonly initialMB?: number",
+       "doc": "",
+       "optional": true,
+       "torch": "initial_m_b"
+      },
+      {
+       "name": "maxMB",
+       "signature": "readonly maxMB?: number",
+       "doc": "",
+       "optional": true,
+       "torch": "max_m_b"
       }
      ]
     },
@@ -15551,7 +15589,7 @@
      "doc_ko": "디코드, 검증, 인스턴스화. 같은 맛으로 두 번 불러도 같은 promise 를 돌려준다 — 모듈은 메모리가 하나이고, 사본 둘은 힙 둘이 된다. 두 맛은 두 모듈이라 둘 다 실을 수 있고, 검사가 둘을 대조하는 길이 그것이다."
     }
    ],
-   "count": 35
+   "count": 40
   },
   {
    "name": "cpu/safetensors",
@@ -16169,7 +16207,8 @@
       {
        "name": "constructor",
        "signature": "constructor(K: CpuKernels, graph: CpuGraph, pool?: Dispatcher | undefined)",
-       "doc": "`pool` is optional. Without it every kernel runs on this thread. With it the GEMMs are\ncut into row slices, the depthwise convolutions and pools into images, and an im2col\nblock with its GEMM is one task; the pool's workers instantiated the same module over\nthe same shared memory (`threads.ts`). Allocation stays here either way."
+       "doc": "`pool` is optional. Without it every kernel runs on this thread. With it the GEMMs are\ncut into row slices, the depthwise convolutions and pools into images, and an im2col\nblock with its GEMM is one task; the pool's workers instantiated the same module over\nthe same shared memory (`threads.ts`). Allocation stays here either way.",
+       "doc_ko": "`pool`은 선택이다. 없으면 모든 커널이 이 스레드에서 돈다. 있으면 GEMM은 행 조각으로, depthwise 합성곱과 풀은 이미지 단위로 나뉘고, im2col 블록과 그 GEMM은 한 작업이 된다. 풀의 워커들은 같은 공유 메모리 위에 같은 모듈을 인스턴스화한 것이다(`threads.ts`). 할당은 어느 쪽이든 여기서만 한다."
       },
       {
        "name": "forward",
@@ -16324,6 +16363,250 @@
    ],
    "count": 20,
    "doc_ko": "CPU 장치 위의 작업대의 나머지 절반: 캐시된 특징 위에 학습하는 선형 헤드, 그리고 같은 특징 위의 코사인 이웃.\n\n## 왜 학습이 이만큼만인가\n\n장치는 고정된 백본 forward(`runner.ts`)를 돌리고 멈춘다. 라벨링 도구가 학습하는 것은 그 forward 가 낸 특징 위의 헤드 — 선형 층, softmax 교차엔트로피, momentum 있는 SGD — 이고, 이 파일이 아는 학습은 그것이 전부다. 선형 층의 backward 는 곱 둘이고, 교차엔트로피의 backward 는 `softmax − onehot` 이다. 그 너머의 것(두 번째 층, 다른 loss, Adam)은 이름으로 없고, 없는 것의 까닭은 `torch_gap` 에 산다.\n\n## 레이아웃\n\n특징 `[N × D]` 는 `fit` 마다 한 번 올라가고, 행은 `gemm` 을 위해 4 로 패딩된다(0). 가중치는 `[D × K]` — torch 의 `[K × D]` 의 전치 — 로 두는데 `gemm` 이 먹는 것이 그것이라서다; `stateDict()` 는 torch 의 순서로 돌려준다. 클래스는 열여섯으로 패딩되고 패딩 열은 기울기를 받지 않으므로(교차엔트로피 커널이 0 으로 쓴다) 0 초기값에 머문다.\n\n## 메모리\n\n헤드 자신의 버퍼는 생성 시점에 할당되어 모듈이 `reset` 될 때까지 살고, `fit` 이나 `predict` 가 필요로 하는 것은 힙 표시 위에 할당되어 뒤에 힙이 그 자리로 되돌아간다. 헤드를 여럿 학습하는 페이지는 하나를 재사용해야 한다."
+  },
+  {
+   "name": "cpu/threads",
+   "title": "cpu · threads",
+   "blurb": {
+    "ko": "하나의 공유 메모리 위 워커 풀 — 작업 설명 블록과 `Atomics` 배리어, Web Worker 스폰. 페이지가 cross-origin isolated 일 때만.",
+    "en": "A pool of workers over one shared memory — task descriptors and an `Atomics` barrier, Web Worker spawn. Only on a cross-origin isolated page."
+   },
+   "doc": "Many workers, one memory: the protocol by which a forward hands kernel calls to a pool.\n\n## The shape\n\nThe kernels are stateless functions over offsets into one linear memory, so a forward\nparallelises by rows: a GEMM's rows in `P` slices, a depthwise convolution's images one\nper worker, an im2col block and its GEMM as one unit. What this file adds is the least\nthat makes that possible in a browser: the memory is a **shared** `WebAssembly.Memory`\nthat every worker instantiates the same module over, the main side allocates and the\nworkers only compute, and the hand-off is `Atomics` on a small control block rather\nthan `postMessage` — a forward is a hundred-odd kernel calls, and a hundred message\nround trips at 50–100 µs each would cost more than the forward.\n\n## The control block\n\n`ctrl` (Int32Array on a SharedArrayBuffer): `[0]` generation, `[1]` workers done with\nthe current generation, `[2]` task count, `[3]` stop. `data` (Float64Array on another):\n`MAX_TASKS` slots of `SLOT` doubles — a call count, then up to `MAX_CALLS` calls of\n`[fnId, nArgs, args…]`, `fnId` an index into `KERNELS_EXPORTS`. The main side writes the\ntasks, bumps the generation and notifies; worker `id` takes every task `t` with\n`t % workers === id`, runs its calls in order, adds one to done and notifies; the main\nside waits until done equals the worker count. Task `t` always lands on worker\n`t % workers`, and the runner relies on that to give each worker its own scratch buffer.\n\n## What it needs from the page\n\n`SharedArrayBuffer`, which a browser gives only to pages served with\n`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`.\nA page opened from `file://` cannot have them. `Atomics.wait` is refused on a browser's\nmain thread, so the main side there spins on `Atomics.load` instead — the runner usually\nlives in a worker anyway (Pyodide's), where waiting is allowed.\n\nThis file is the protocol, the two loops, and `WorkerPool`, which spawns Web Workers from\na blob URL and hands each the compiled module, the memory and its own stack. In node the\nloop is driven from `worker_threads` instead — `borch-ts/test/threads_node.mjs`.",
+   "symbols": [
+    {
+     "kind": "type",
+     "name": "KernelName",
+     "signature": "export type KernelName = (typeof KERNELS_EXPORTS)[number]",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "type",
+     "name": "Call",
+     "signature": "export type Call = readonly [KernelName, ...number[]]",
+     "doc": "One kernel call: the export's name, then its numeric arguments.",
+     "members": [],
+     "doc_ko": "커널 호출 하나: export 이름, 그 다음 숫자 인자들."
+    },
+    {
+     "kind": "type",
+     "name": "Task",
+     "signature": "export type Task = readonly Call[]",
+     "doc": "Calls one worker runs in order — an im2col block and its GEMM, for instance.",
+     "members": [],
+     "doc_ko": "워커 하나가 순서대로 돌리는 호출들 — 예컨대 im2col 블록과 그 GEMM."
+    },
+    {
+     "kind": "interface",
+     "name": "Dispatcher",
+     "signature": "export interface Dispatcher",
+     "doc": "",
+     "members": [
+      {
+       "name": "workers",
+       "signature": "readonly workers: number",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "run(tasks: readonly Task[]): void",
+       "doc": "Runs every task, task `t` on worker `t % workers`, and returns when all are done.",
+       "doc_ko": "모든 작업을 돌린다. 작업 `t`는 워커 `t % workers`에서. 전부 끝나면 돌아온다."
+      }
+     ]
+    },
+    {
+     "kind": "const",
+     "name": "MAX_TASKS",
+     "signature": "export declare const MAX_TASKS = 256",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "const",
+     "name": "MAX_CALLS",
+     "signature": "export declare const MAX_CALLS = 4",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "const",
+     "name": "MAX_ARGS",
+     "signature": "export declare const MAX_ARGS = 14",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "const",
+     "name": "SLOT",
+     "signature": "export declare const SLOT: number",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "interface",
+     "name": "Layout",
+     "signature": "export interface Layout",
+     "doc": "Everything the worker loop needs to know about the control block, as data. The loop\ntakes it as a parameter and touches nothing else from this module, so that its source\n(`workerLoop.toString()`) can be put in a worker script as it is.",
+     "members": [
+      {
+       "name": "names",
+       "signature": "readonly names: readonly string[]",
+       "doc": ""
+      },
+      {
+       "name": "slot",
+       "signature": "readonly slot: number",
+       "doc": ""
+      },
+      {
+       "name": "call",
+       "signature": "readonly call: number",
+       "doc": ""
+      },
+      {
+       "name": "gen",
+       "signature": "readonly gen: number",
+       "doc": ""
+      },
+      {
+       "name": "done",
+       "signature": "readonly done: number",
+       "doc": ""
+      },
+      {
+       "name": "count",
+       "signature": "readonly count: number",
+       "doc": ""
+      },
+      {
+       "name": "stop",
+       "signature": "readonly stop: number",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "워커 루프가 제어 블록에 대해 알아야 할 전부를 데이터로. 루프는 이것을 매개변수로 받고 이 모듈의 다른 것은 건드리지 않는다 — 그래서 그 소스(`workerLoop.toString()`)를 그대로 워커 스크립트에 넣을 수 있다."
+    },
+    {
+     "kind": "const",
+     "name": "CONTROL_LAYOUT",
+     "signature": "export declare const CONTROL_LAYOUT: Layout",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "makeControl",
+     "signature": "export declare function makeControl(): { ctrl: Int32Array<SharedArrayBuffer>; data: Float64Array<SharedArrayBuffer>; }",
+     "doc": "The two shared buffers a pool is built on.",
+     "members": [],
+     "torch": "make_control",
+     "doc_ko": "풀이 세워지는 두 공유 버퍼."
+    },
+    {
+     "kind": "class",
+     "name": "MainSide",
+     "signature": "export declare class MainSide implements Dispatcher",
+     "doc": "Main side: encode the tasks, wake the workers, wait for all of them.",
+     "members": [
+      {
+       "name": "workers",
+       "signature": "readonly workers: number",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(ctrl: Int32Array<SharedArrayBuffer>, data: Float64Array<SharedArrayBuffer>, workers: number)",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "run(tasks: readonly Task[]): void",
+       "doc": ""
+      },
+      {
+       "name": "stop",
+       "signature": "stop(): void",
+       "doc": "Tell the workers to leave their loops.",
+       "doc_ko": "워커들에게 루프를 떠나라고 알린다."
+      }
+     ],
+     "doc_ko": "메인 쪽: 작업을 인코딩하고, 워커를 깨우고, 전부를 기다린다."
+    },
+    {
+     "kind": "function",
+     "name": "workerLoop",
+     "signature": "export declare function workerLoop(ctrl: Int32Array<SharedArrayBuffer>, data: Float64Array<SharedArrayBuffer>, exports: WebAssembly.Exports, id: number, workers: number, layout: Layout): void",
+     "doc": "Worker side: the loop a worker runs for its whole life. `exports` is its own instance of\nthe kernel module over the shared memory; `id` decides which tasks are its. Only its\nparameters and the globals `Atomics` — see `Layout`.",
+     "members": [],
+     "torch": "worker_loop",
+     "doc_ko": "워커 쪽: 워커가 평생 돌리는 루프. `exports`는 공유 메모리 위 커널 모듈의 자기 인스턴스이고, `id`가 어느 작업이 자기 것인지 정한다. 매개변수와 전역 `Atomics`만 쓴다 — `Layout` 참조."
+    },
+    {
+     "kind": "const",
+     "name": "WORKER_STACK_BYTES",
+     "signature": "export declare const WORKER_STACK_BYTES: number",
+     "doc": "Each worker's shadow stack. The kernels keep almost everything in registers; 256 KB is generous.",
+     "members": [],
+     "doc_ko": "워커마다의 섀도 스택. 커널은 거의 전부를 레지스터에 두므로 256 KB는 넉넉하다."
+    },
+    {
+     "kind": "function",
+     "name": "threadsAvailable",
+     "signature": "export declare function threadsAvailable(): boolean",
+     "doc": "Whether a pool can be spawned here: a shared memory (`sharedMemoryAvailable`) and\n`Worker`. Node has the first and not the second — there `worker_threads` drives\n`workerLoop` directly.",
+     "members": [],
+     "torch": "threads_available",
+     "doc_ko": "여기서 풀을 스폰할 수 있는가: 공유 메모리(`sharedMemoryAvailable`)와 `Worker`. Node는 앞은 있고 뒤는 없다 — 거기서는 `worker_threads`가 `workerLoop`를 직접 돌린다."
+    },
+    {
+     "kind": "function",
+     "name": "defaultWorkers",
+     "signature": "export declare function defaultWorkers(): number",
+     "doc": "Half the hardware threads, at least one, at most eight — the pools measured past eight gained little.",
+     "members": [],
+     "torch": "default_workers",
+     "doc_ko": "하드웨어 스레드의 절반, 최소 하나, 최대 여덟 — 여덟을 넘긴 풀은 측정에서 얻는 것이 적었다."
+    },
+    {
+     "kind": "class",
+     "name": "WorkerPool",
+     "signature": "export declare class WorkerPool implements Dispatcher",
+     "doc": "A pool of Web Workers over the shared kernel module. `spawn` loads (or is given) the\n`shared` kernels, allocates a stack per worker out of that memory, starts the workers\nfrom a blob URL and waits until every one has instantiated. Hand the pool to\n`new CpuRunner(pool.kernels, graph, pool)`; `terminate()` when done with it.",
+     "members": [
+      {
+       "name": "kernels",
+       "signature": "readonly kernels: CpuKernels",
+       "doc": ""
+      },
+      {
+       "name": "workers",
+       "signature": "get workers(): number",
+       "doc": ""
+      },
+      {
+       "name": "spawn",
+       "signature": "static spawn(workers: number, opts?: LoadKernelsOptions & { kernels?: CpuKernels; }): Promise<WorkerPool>",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "run(tasks: readonly Task[]): void",
+       "doc": ""
+      },
+      {
+       "name": "terminate",
+       "signature": "terminate(): void",
+       "doc": "Stops the loops and the workers. The kernels and their memory stay usable on this thread.",
+       "doc_ko": "루프와 워커를 멈춘다. 커널과 그 메모리는 이 스레드에서 계속 쓸 수 있다."
+      }
+     ],
+     "inherited_ctor": "private constructor()",
+     "doc_ko": "공유 커널 모듈 위의 Web Worker 풀. `spawn`은 `shared` 커널을 읽어(또는 받아) 그 메모리에서 워커마다 스택을 할당하고, blob URL로 워커를 시작해 모두가 인스턴스화될 때까지 기다린다. 풀은 `new CpuRunner(pool.kernels, graph, pool)`에 넘기고, 끝나면 `terminate()`."
+    }
+   ],
+   "count": 35,
+   "doc_ko": "여러 워커, 하나의 메모리: forward가 커널 호출을 풀에 건네는 프로토콜.\n\n커널은 하나의 선형 메모리 속 오프셋 위의 상태 없는 함수라서 forward는 행으로 나뉜다 — GEMM의 행은 `P` 조각으로, depthwise 합성곱의 이미지는 워커마다 하나씩, im2col 블록과 그 GEMM은 한 단위로. 이 파일이 더하는 것은 브라우저에서 그것을 가능하게 하는 최소한이다: 모든 워커가 같은 모듈을 인스턴스화하는 **공유** `WebAssembly.Memory`, 할당은 메인 쪽만, 그리고 `postMessage`가 아니라 작은 제어 블록 위의 `Atomics`로 하는 인계 — forward 한 번은 백여 번의 커널 호출이고, 50–100 µs짜리 메시지 왕복 백 번은 forward보다 비싸다.\n\n제어 블록: `ctrl`(SharedArrayBuffer 위 Int32Array)은 `[0]` 세대, `[1]` 현재 세대를 끝낸 워커 수, `[2]` 작업 수, `[3]` 정지. `data`(Float64Array)는 `MAX_TASKS` 슬롯 × `SLOT` 개의 double — 호출 수, 이어서 최대 `MAX_CALLS` 개의 `[fnId, nArgs, args…]`. 작업 `t`는 언제나 워커 `t % workers`에 떨어지고, runner는 그것에 의지해 워커마다 자기 스크래치 버퍼를 준다.\n\n페이지에 필요한 것: `SharedArrayBuffer` — `Cross-Origin-Opener-Policy: same-origin`과 `Cross-Origin-Embedder-Policy: require-corp`로 서빙된 페이지에만 주어진다. `file://`로 연 페이지는 가질 수 없다. 브라우저 메인 스레드는 `Atomics.wait`를 거절하므로 거기서는 `Atomics.load`로 스핀한다."
   },
   {
    "name": "vision",
@@ -22747,5 +23030,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3107
+ "total": 3147
 }

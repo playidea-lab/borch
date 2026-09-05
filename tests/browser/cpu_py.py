@@ -78,6 +78,7 @@ def main(argv):
     else:
         print(f"cpu vs gpu features: {gap}")
     print(f"borch_cpu: import {r['boot_ms']} ms · load {r['load_ms']} ms · six images {r['feat_ms']} ms · head loss {r['loss0']} → {r['lossN']} · fits {r['fit_on_train']}/6")
+    print(f"borch_cpu: {r['threads']} workers" + (f" — no pool: {r['pool_error']}" if r.get("pool_error") else ""))
     print("**borch_cpu runs the frozen backbone, the head and the score with no device**" if ok else "**it did not** — see above")
     return 0 if ok else 1
 

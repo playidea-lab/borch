@@ -32,6 +32,7 @@ t = time.perf_counter()
 import borch_cpu
 boot_ms = (time.perf_counter() - t) * 1000
 avail = borch_cpu.available()
+workers = borch_cpu.threads()
 rng = np.random.default_rng(7)
 x = rng.standard_normal((6, 3, 224, 224)).astype(np.float32)
 t = time.perf_counter()
@@ -55,7 +56,7 @@ try:
     gpu_gap = float(np.abs(g - feats).max() / np.abs(g).max())
 except Exception as e:  # noqa: BLE001 — no adapter is the situation this module is for
     gpu_gap = f"no gpu side: {type(e).__name__}"
-json.dumps({"boot_ms": round(boot_ms), "available": bool(avail), "backbone": backbone.name, "num_features": backbone.num_features,
+json.dumps({"boot_ms": round(boot_ms), "available": bool(avail), "threads": int(workers), "pool_error": borch_cpu.POOL_ERROR, "backbone": backbone.name, "num_features": backbone.num_features,
             "load_ms": round(load_ms), "feat_ms": round(feat_ms), "feats_shape": list(feats.shape), "finite": bool(np.isfinite(feats).all()),
             "loss0": round(float(losses[0]), 4), "lossN": round(float(losses[-1]), 4), "fit_on_train": int((pred == labels).sum()),
             "doubt": [round(float(v), 2) for v in doubt], "head_shape": list(st["weight"].shape), "gpu_gap": gpu_gap})

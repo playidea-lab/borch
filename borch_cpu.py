@@ -3,6 +3,7 @@ machine with **no WebGPU adapter**, from Python in a browser.
 
     import borch_cpu
     borch_cpu.available()                                   # WebAssembly SIMD in this engine
+    borch_cpu.threads()                                     # workers in the pool, 0 on one thread
     backbone = borch_cpu.load("imagenet-efficientnet-b0")   # features=True by default
     feats = backbone.features(x)                            # x: (N, 3, 224, 224) float32 NCHW → (N, 1280)
     head = borch_cpu.LinearHead(backbone.num_features, classes, lr=0.05, momentum=0.9)
@@ -26,6 +27,14 @@ name, comes here. Same manifest, same bytes, same tables:
 
     adapter → hub.load() → nn.Module → WebGPU
     none    → borch_cpu.load() → cpuGraphFor() → cpu.CpuRunner
+
+## Threads
+
+Where the page is cross-origin isolated (COOP `same-origin` + COEP `require-corp` — the
+repository's servers send both; `file://` cannot) the first `kernels()` spawns a pool of
+Web Workers over one shared wasm memory and every forward is cut across them; B0 went
+from 14 to 2.6 ms an image on eight workers in the book's measurement. Elsewhere the same
+forward runs on this thread. `threads()` says which, `POOL_ERROR` says why not.
 
 ## What it does not do
 
@@ -85,6 +94,10 @@ def _bundle():
 
 _ts = _bundle()
 _kernels = None
+_pool = None
+_threads = 0
+#: Why no pool was spawned when one was asked for by default — `None` when there is a pool or none was wanted.
+POOL_ERROR = None
 
 
 def _obj(**kw):
@@ -107,12 +120,37 @@ def available():
     return bool(_ts.cpu.available())
 
 
-def kernels():
-    """The wasm kernel module, loaded once per kernel — one linear memory, so one handle."""
-    global _kernels
+def kernels(threads=None):
+    """The wasm kernel module, loaded once — one linear memory, so one handle.
+
+    `threads` decides the first call: `None` spawns a worker pool of `cpu.defaultWorkers()`
+    where the page is cross-origin isolated and runs on this thread elsewhere; a number asks
+    for that many workers and raises where a pool cannot be had; `0` never spawns one. When
+    the default spawn fails the module falls back to one thread and keeps the reason in
+    `POOL_ERROR` — the forward is the same, only slower. Later calls return the handle.
+    """
+    global _kernels, _pool, _threads, POOL_ERROR
     if _kernels is None:
-        _kernels = _run_sync(_ts.cpu.loadKernels())
+        want = threads
+        if want is None:
+            want = int(_ts.cpu.defaultWorkers()) if bool(_ts.cpu.threadsAvailable()) else 0
+        if want and int(want) > 1:
+            try:
+                _pool = _run_sync(_ts.cpu.WorkerPool.spawn(int(want)))
+                _kernels, _threads = _pool.kernels, int(want)
+            except Exception as e:  # noqa: BLE001 — the reason is kept, and an explicit ask is not swallowed
+                if threads is not None:
+                    raise
+                POOL_ERROR = f"{type(e).__name__}: {str(e)[:200]}"
+        if _kernels is None:
+            _kernels = _run_sync(_ts.cpu.loadKernels())
     return _kernels
+
+
+def threads():
+    """How many workers run the forward — 0 when it runs on this thread alone."""
+    kernels()
+    return _threads
 
 
 def _fetch_json(url):
@@ -183,7 +221,7 @@ class Backbone:
         graph = _ts.bimm.cpuGraphFor(_obj(library=arch.get("library"), factory=arch.get("factory")), state,
                                      _obj(numClasses=self.num_classes, features=bool(features)))
         self.num_features = int(graph.outputChannels)
-        self._runner = _ts.cpu.CpuRunner.new(kernels(), graph)
+        self._runner = _ts.cpu.CpuRunner.new(kernels(), graph, _pool)
         self.input_size = tuple(int(v) for v in ((self.manifest.get("preprocess") or {}).get("inputSize") or (3, 224, 224)))
 
     def features(self, x):
