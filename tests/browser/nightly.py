@@ -97,8 +97,13 @@ def sh(argv, cwd, log):
         argv = ["caffeinate", "-u", "-d", "-i", *argv]
     log.write(f"\n$ {' '.join(argv)}\n")
     log.flush()
+    # **Unbuffered, because stdout is a file here.** Python block-buffers a file, so a
+    # probe's lines land only when it exits — and a probe that never exits leaves nothing.
+    # The sweep that held the 2026-09-07 run for two hours read as silent the whole time;
+    # it had printed, into a buffer. Every child now flushes as it prints.
     done = subprocess.run(argv, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
-                          env={**os.environ, "PATH": "/opt/homebrew/bin:"
+                          env={**os.environ, "PYTHONUNBUFFERED": "1",
+                               "PATH": "/opt/homebrew/bin:"
                                + str(pathlib.Path.home() / ".local/bin") + ":"
                                + os.environ.get("PATH", "")})
     return done.returncode
