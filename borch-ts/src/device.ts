@@ -267,6 +267,8 @@ export interface Recorded {
   readonly pipeline: GPUComputePipeline;
   readonly bindGroup: GPUBindGroup;
   readonly groups: readonly [number, number, number];
+  /** The buffers behind the bind group, in binding order — what a fusion pass reads. */
+  readonly buffers: readonly GPUBuffer[];
 }
 
 /**
@@ -284,6 +286,24 @@ export class Capture {
   /** How many dispatches one replay issues. */
   get dispatches(): number {
     return this.records.length;
+  }
+
+  /**
+   * The recording as a list: each dispatch's pipeline key, its grid, and its buffers as
+   * small integers (the same buffer → the same number). What a fusion pass, or a person
+   * asking where the dispatches go, reads.
+   */
+  describe(): { key: string; groups: readonly [number, number, number]; buffers: number[]; sizes: number[] }[] {
+    const ids = new Map<GPUBuffer, number>();
+    const id = (b: GPUBuffer): number => {
+      let n = ids.get(b);
+      if (n === undefined) { n = ids.size; ids.set(b, n); }
+      return n;
+    };
+    return this.records.map((r) => ({
+      key: this.dev.keyOf(r.pipeline) ?? "?", groups: r.groups,
+      buffers: r.buffers.map(id), sizes: r.buffers.map((b) => b.size),
+    }));
   }
 
   replay(): void {
@@ -704,6 +724,12 @@ export class Device {
     return capture;
   }
 
+  /** The key a pipeline was built under, or undefined for one this device did not build. */
+  keyOf(pipeline: GPUComputePipeline): string | undefined {
+    for (const [key, p] of this.pipelines) if (p === pipeline) return key;
+    return undefined;
+  }
+
   /** Whether a capture is open. */
   get capturing(): boolean {
     return this.recording !== null;
@@ -1004,7 +1030,7 @@ export class Device {
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
     this.dispatches += 1;
-    this.recording?.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]] });
+    this.recording?.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]], buffers: [...buffers] });
     // **A batch that grows too large is dropped, and nothing says so.**
     //
     // Commands accumulate in one encoder and go out when something is read. The

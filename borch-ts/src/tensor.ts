@@ -252,6 +252,7 @@ import {
   reduceBroadcast,
   reduceBroadcastWide,
   broadcastFold,
+  foldPieces,
   FOLD_WIDE,
   reduceDim,
   type ReduceKind,
@@ -721,7 +722,7 @@ function absentDType(name: string, shown: string): never {
  */
 function convForwardRun(
   s: ConvNDShape, key: string, x: GPUBuffer, w: GPUBuffer, bias: GPUBuffer | null, out: GPUBuffer,
-  epilogue?: { relu: boolean; residual: GPUBuffer | null },
+  epilogue?: { relu: boolean; residual: GPUBuffer | null }, turned = false,
 ): void {
   const splits = convForwardSplit(s);
   const n = s.N * s.O * s.outDims.reduce((a, b) => a * b, 1);
@@ -732,12 +733,13 @@ function convForwardRun(
   if (directFits(s)) {
     // The narrow layers go direct — see `convDirect2d` for the measurement.
     dev().run(
-      dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}`, () => convDirect2d(s, bias !== null, ep)),
+      dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}${turned ? ":t" : ""}`, () => convDirect2d(s, bias !== null, ep, turned)),
       [x, w, ...tail],
       directGrid(s),
     );
     return;
   }
+  if (turned) throw new Error("turned weights are a direct-kernel matter");
   if (splits === 1) {
     dev().run(
       dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}${tag}`, () => convNDForwardTiled(s, bias !== null, ep)),
@@ -10915,7 +10917,6 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     dilation: number | readonly number[],
     groups: number,
   ): Tensor {
-    const spatial = this.shape.length - 2;
     const s = this.convShape(weight, stride, padding, dilation, groups);
     const key = convNDKey(s);
     const outShape = [s.N, s.O, ...s.outDims];
@@ -10948,17 +10949,22 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           if (unit) {
             // The forward's kernel on the turned weights — see `turnWeightsForGradInput`
             // for why this beats the dedicated gradient GEMM.
-            const kSpace = s.kernel.reduce((a, b) => a * b, 1);
-            const turned = dev().alloc(weight.size);
-            dev().run1d(
-              dev().pipeline(`cturn:${s.O}:${s.C}:${kSpace}`, () => turnWeightsForGradInput(s.O, s.C, kSpace)),
-              [weight.buffer, turned], weight.size);
             const back: ConvNDShape = {
               N: s.N, C: s.O, O: s.C, inDims: s.outDims, kernel: s.kernel, stride: s.stride,
               pad: s.kernel.map((kd, d) => kd - 1 - (s.pad[d] ?? 0)), outDims: s.inDims,
               ...(s.dilation ? { dilation: s.dilation } : {}),
             };
-            convForwardRun(back, convNDKey(back), g.buffer, turned, null, gi);
+            if (directFits(back)) {
+              // The direct kernel turns the weights as it loads them — no pass to make a copy.
+              convForwardRun(back, convNDKey(back), g.buffer, weight.buffer, null, gi, undefined, true);
+            } else {
+              const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+              const turned = dev().alloc(weight.size);
+              dev().run1d(
+                dev().pipeline(`cturn:${s.O}:${s.C}:${kSpace}`, () => turnWeightsForGradInput(s.O, s.C, kSpace)),
+                [weight.buffer, turned], weight.size);
+              convForwardRun(back, convNDKey(back), g.buffer, turned, null, gi);
+            }
           } else {
             dev().run(
               dev().pipeline(`cnxt:${key}`, () => convNDGradInputTiled(s)),
@@ -10993,9 +10999,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         if (bias) {
           // The batch and the output positions summed together. Stacking reductions
           // needs no new kernel.
-          let acc = g.sumDim(0);
-          for (let d = 0; d < spatial; d++) acc = acc.sumDim(1);
-          parts.push(bias.requiresGrad ? acc : null);
+          // One fold over every axis but the channel's (the wide broadcast fold, a
+          // workgroup per channel), where it was one `sumDim` per axis — three passes
+          // over the gradient, thirty dispatches a U-Net step (captured and counted).
+          const perChannel = [1, s.O, ...s.outDims.map(() => 1)];
+          parts.push(bias.requiresGrad ? foldTo(g, perChannel).reshape([s.O]) : null);
         }
         return parts;
       },
@@ -11771,9 +11779,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       [this.buffer, partSum, partSq],
       [C, pieces, 1],
     );
+    const invStdBuf = dev().alloc(C);
     dev().run1d(
-      dev().pipeline(`bnf:${key}`, () => batchNormFinish(N, C, S)),
-      [partSum, partSq, mean, variance],
+      dev().pipeline(`bnf:${key}:${eps}`, () => batchNormFinish(N, C, S, eps)),
+      [partSum, partSq, mean, variance, invStdBuf],
       C,
     );
     const out = dev().alloc(this.size);
@@ -11788,7 +11797,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     );
     const meanT = new Tensor(mean, [C]);
     const varT = new Tensor(variance, [C]);
-    const invStd = varT.binary("add", Tensor.full([], eps)).unary("rsqrt");
+    const invStd = new Tensor(invStdBuf, [C]);       // from the finish pass
     const xhat = new Tensor(xh, this.shape);
     const self = this;
     const result = Tensor.make(
@@ -12842,12 +12851,17 @@ function foldTo(wide: Tensor, target: readonly number[]): Tensor {
   const n = numel(small);
   const out = dev().alloc(n);
   if (broadcastFold(wide.shape, small) > FOLD_WIDE) {
-    // A long fold takes a workgroup per output element — see `reduceBroadcastWide`.
+    // A long fold takes workgroups (element, piece) — see `reduceBroadcastWide`.
+    const pieces = foldPieces(wide.shape, small);
+    const target = pieces > 1 ? dev().alloc(n * pieces) : out;
     dev().run(
       dev().pipeline(`rbw:${wide.shape}|${small}`, () => reduceBroadcastWide(wide.shape, small)),
-      [wide.buffer, out],
-      [n, 1, 1],
+      [wide.buffer, target],
+      [n, pieces, 1],
     );
+    if (pieces > 1) {
+      dev().run1d(dev().pipeline(`sumsplits:${n}:${pieces}`, () => sumSplits(n, pieces)), [target, out], n);
+    }
   } else {
     dev().run1d(
       dev().pipeline(

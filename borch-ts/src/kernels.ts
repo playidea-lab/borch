@@ -1208,6 +1208,13 @@ export const FOLD_WIDE = 64;
  * order is fixed, so two runs still give the same value. Short folds keep the thread
  * version: a workgroup for sixteen elements is the waste the other way.
  */
+/** How many workgroups share one output element's fold in `reduceBroadcastWide`: pieces of
+ *  at most 16,384, at most 64 — sixteen channels folding 147,456 each were sixteen
+ *  workgroups on the whole GPU, 1.3 ms for a bias gradient (timestamps, 2026-09-07). */
+export function foldPieces(full: readonly number[], small: readonly number[]): number {
+  return Math.max(1, Math.min(64, Math.ceil(broadcastFold(full, small) / 16384)));
+}
+
 export function reduceBroadcastWide(full: readonly number[], small: readonly number[]): string {
   const rank = full.length;
   const fullStride: number[] = new Array<number>(rank).fill(1);
@@ -1234,6 +1241,11 @@ export function reduceBroadcastWide(full: readonly number[], small: readonly num
     foldTerms.push(`((f / ${unit}u) % ${size}u) * ${fullStride[d]}u`);
     unit *= size;
   }
+  const pieces = foldPieces(full, small);
+  const per = Math.ceil(fold / pieces);
+  const n = small.reduce((a, b) => a * b, 1);
+  // Cut into pieces, workgroup (element, piece) folds its slice and writes a partial at
+  // Out[piece · n + element]; `sumSplits` adds the pieces. Unsplit, Out is the answer.
   return `
 @group(0) @binding(0) var<storage, read> G: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
@@ -1243,8 +1255,10 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
   var rest = w.x;
 ${decompose.join("\n")}
   let base = ${baseTerms.length ? baseTerms.join(" + ") : "0u"};
+  let lo = w.y * ${per}u;
+  let hi = min(lo + ${per}u, ${fold}u);
   var acc = 0.0;
-  for (var f = l.x; f < ${fold}u; f = f + ${FOLD_GROUP}u) {
+  for (var f = lo + l.x; f < hi; f = f + ${FOLD_GROUP}u) {
     acc = acc + G[base + ${foldTerms.join(" + ")}];
   }
   part[l.x] = acc;
@@ -1256,7 +1270,7 @@ ${decompose.join("\n")}
     workgroupBarrier();
     span = span / 2u;
   }
-  if (l.x == 0u) { Out[w.x] = part[0]; }
+  if (l.x == 0u) { Out[w.y * ${n}u + w.x] = part[0]; }
 }`;
 }
 
@@ -2800,7 +2814,7 @@ export function directGrid(s: ConvNDShape): [number, number, number] {
  * every position is where the GEMM's tile reuse actually pays. Removed rather than
  * kept behind a switch.
  */
-export function convDirect2d(s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue): string {
+export function convDirect2d(s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue, turned = false): string {
   const [IH = 1, IW = 1] = s.inDims;
   const [OH = 1, OW = 1] = s.outDims;
   const [KH = 1, KW = 1] = s.kernel;
@@ -2858,9 +2872,16 @@ var<workgroup> Ws: array<f32, ${wCells}>;
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let co = wid.y * ${slice}u;
   // This slice's weights, (slice, C, KH, KW), into the workgroup — rows past O are zero.
+  // Turned, the buffer is the forward's (C, O, k…) weight read as (O, C, k…) with every
+  // kernel axis reversed — the input gradient's weights, without a pass to make them.
   for (var i = lid.x; i < ${wCells}u; i = i + 256u) {
     let c = i / ${s.C * kSpace}u;
-    Ws[i] = select(0.0, Wt[(co + c) * ${s.C * kSpace}u + (i - c * ${s.C * kSpace}u)], co + c < ${s.O}u);
+    let rest = i - c * ${s.C * kSpace}u;
+    ${turned
+      ? `let ci = rest / ${kSpace}u;
+    let kk = rest - ci * ${kSpace}u;
+    Ws[i] = select(0.0, Wt[(ci * ${s.O}u + co + c) * ${kSpace}u + (${kSpace - 1}u - kk)], co + c < ${s.O}u);`
+      : `Ws[i] = select(0.0, Wt[(co + c) * ${s.C * kSpace}u + rest], co + c < ${s.O}u);`}
   }
   workgroupBarrier();
   let strip = wid.x * 256u + lid.x;
@@ -4269,13 +4290,14 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
 }
 
 /** Adds a channel's pieces and finishes the mean and the (biased) variance. */
-export function batchNormFinish(N: number, C: number, S: number): string {
+export function batchNormFinish(N: number, C: number, S: number, eps: number): string {
   const pieces = bnPieces(N, S);
   return `
 @group(0) @binding(0) var<storage, read> PartSum: array<f32>;
 @group(0) @binding(1) var<storage, read> PartSq: array<f32>;
 @group(0) @binding(2) var<storage, read_write> Mean: array<f32>;
 @group(0) @binding(3) var<storage, read_write> Var: array<f32>;
+@group(0) @binding(4) var<storage, read_write> InvStd: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(C)}
@@ -4290,7 +4312,11 @@ ${flatId(C)}
   // **This is the biased estimate** (divided by n) — what torch's BatchNorm uses for
   // the normalisation, and a different number from the unbiased one that goes into the
   // running statistics. Merged into one, they diverge in evaluation mode alone.
-  Var[gid] = sq / ${(N * S).toFixed(1)} - m * m;
+  let v = sq / ${(N * S).toFixed(1)} - m * m;
+  Var[gid] = v;
+  // The backward's 1/σ as well — it was an add and an rsqrt over C elements after this
+  // pass, two dispatches a layer for sixteen numbers (a captured step showed twenty).
+  InvStd[gid] = inverseSqrt(v + ${f32lit(eps)});
 }`;
 }
 
