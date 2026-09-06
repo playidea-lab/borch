@@ -16,14 +16,14 @@ import tempfile
 import time
 
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve
-from launch import refuse_if_software
+from launch import _headed, refuse_if_software
 
 GIVE_UP_MS = 5 * 60 * 1000
 
 
 def main(argv):
     from playwright.sync_api import sync_playwright
-    headed = "--headed" in argv
+    headed = _headed("--headed" in argv)   # a window unless --headless / BORCH_HEADLESS: headless is SwiftShader here
     lab = ROOT / "site" / "lab" / "lab" / "index.html"
     if "--build" in argv or not lab.exists():
         r = subprocess.run([sys.executable, str(ROOT / "site" / "build_lab.py")], cwd=ROOT, text=True, capture_output=True)

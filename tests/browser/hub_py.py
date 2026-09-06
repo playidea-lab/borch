@@ -22,7 +22,7 @@ import sys
 import tempfile
 
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve
-from launch import refuse_if_software
+from launch import _headed, refuse_if_software
 
 GIVE_UP_MS = 5 * 60 * 1000
 
@@ -31,7 +31,7 @@ from wheel_probe import wheel_is_stale  # noqa: E402
 
 def main(argv):
     from playwright.sync_api import sync_playwright
-    headed = "--headed" in argv
+    headed = _headed("--headed" in argv)   # a window unless --headless / BORCH_HEADLESS: headless is SwiftShader here
     wheel = next((a.split("=", 1)[1] for a in argv if a.startswith("--wheel=")), None)
     if "--build" in argv:
         import subprocess

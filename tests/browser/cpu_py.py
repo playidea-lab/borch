@@ -16,18 +16,21 @@ import glob
 import json
 import os
 import subprocess
+import pathlib
 import sys
 import tempfile
 
 from first_run import FLAGS, ROOT, serve
 from wheel_probe import wheel_is_stale
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from launch import _headed  # noqa: E402
 
 GIVE_UP_MS = 10 * 60 * 1000
 
 
 def main(argv):
     from playwright.sync_api import sync_playwright
-    headed = "--headed" in argv
+    headed = _headed("--headed" in argv)   # a window unless --headless / BORCH_HEADLESS: headless is SwiftShader here
     wheel = next((a.split("=", 1)[1] for a in argv if a.startswith("--wheel=")), None)
     if "--build" in argv:
         for cmd in (["npm", "run", "-s", "bundle:py"], ["uv", "build", "--wheel", "-q"]):
