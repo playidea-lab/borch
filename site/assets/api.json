@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 768,
+  "done": 772,
   "stale": 0,
   "missing": 467
  },
@@ -5990,7 +5990,7 @@
       },
       {
        "name": "batchNormFused",
-       "signature": "batchNormFused(weight: Tensor, bias: Tensor, eps?: number): { out: Tensor; mean: Tensor; variance: Tensor; }",
+       "signature": "batchNormFused(weight: Tensor, bias: Tensor, eps?: number, relu?: boolean): { out: Tensor; mean: Tensor; variance: Tensor; }",
        "doc": "Fused batch normalisation. Statistics, normalisation, scale and shift\nin three kernels.\n\nThe assembled version cost over twenty dispatches for one layer, and\nmost of a ResNet step's 1,636 came from there (measured). Here it is\ntwo forward and two backward.",
        "tags": [
         {
@@ -7770,6 +7770,15 @@
       }
      ],
      "doc_ko": "층을 줄줄이 세운 것. 자리 번호가 곧 이름이다."
+    },
+    {
+     "kind": "function",
+     "name": "fusesBatchNormRelu",
+     "signature": "export declare function fusesBatchNormRelu(a: Module, b: Module): boolean",
+     "doc": "Whether `a` then `b` is a training BatchNorm followed by a ReLU.",
+     "members": [],
+     "torch": "fuses_batch_norm_relu",
+     "doc_ko": "`a` 다음에 `b`가 오는 것이 학습 중인 BatchNorm 뒤의 ReLU인지."
     },
     {
      "kind": "class",
@@ -11813,7 +11822,7 @@
     {
      "kind": "function",
      "name": "batchNorm",
-     "signature": "export declare function batchNorm(input: Tensor, runningMean: Tensor | null, runningVar: Tensor | null, weight: Tensor | null, bias: Tensor | null, training?: boolean, momentum?: number, eps?: number): Tensor",
+     "signature": "export declare function batchNorm(input: Tensor, runningMean: Tensor | null, runningVar: Tensor | null, weight: Tensor | null, bias: Tensor | null, training?: boolean, momentum?: number, eps?: number, relu?: boolean): Tensor",
      "doc": "The function form of `BatchNormND`. **The layer calls this** — one copy\nof the formula.\n\n**In training it modifies the running statistics in place.** torch does,\nand the tensor you hand in comes back updated. Returning a new one leaves\nthe caller's buffer unmoved, so training runs and only eval-mode values\nare wrong.\n\n**It uses variance two ways.** Normalisation uses the biased estimate;\nthe running-statistics update uses the unbiased one. Merge them and it\ndiverges in eval mode only.",
      "members": [],
      "torch": "batch_norm",
@@ -11907,6 +11916,13 @@
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "forwardRelu",
+       "signature": "forwardRelu(x: Tensor): Tensor",
+       "doc": "The layer with the ReLU that follows it folded into its kernels — what\n`Sequential` calls for a `BatchNormNd` immediately followed by a `ReLU` while\ntraining. See `batchNormApply` for the measurement.",
+       "torch": "forward_relu",
+       "doc_ko": "뒤따르는 ReLU를 커널 안에 접어 넣은 이 층 — 학습 중 `BatchNormNd` 바로 뒤에 `ReLU`가 올 때 `Sequential`이 부르는 것. 측정치는 `batchNormApply`에."
       },
       {
        "name": "describe",
@@ -12734,7 +12750,7 @@
      "members": []
     }
    ],
-   "count": 870,
+   "count": 872,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -22100,12 +22116,26 @@
        "doc": "Optional features the adapter offers. **`timestamp-query` has to be\nhere for per-kernel timing.**\n\nA wall clock can only measure the whole step, and then there is no way\nto ask which of 429 dispatches is expensive — which is exactly where\nthis got stuck.",
        "torch": "adapter_features",
        "doc_ko": "어댑터가 주는 선택 기능들. **`timestamp-query` 가 여기 있어야 커널별 시간을 잰다.**\n\n벽시계로는 스텝 전체밖에 못 재고, 그러면 429 개 dispatch 중 어느 것이 비싼지\n물을 방법이 없다 — 실제로 그 자리에서 막혔다."
+      },
+      {
+       "name": "subgroupMatrix",
+       "signature": "static subgroupMatrix: boolean",
+       "doc": "Whether the device was built with subgroup matrices (f32, 8 × 8 × 8) — see\n `create`. `matmul` asks this before choosing its kernel.",
+       "torch": "subgroup_matrix",
+       "doc_ko": "디바이스가 subgroup 행렬(f32, 8 × 8 × 8)로 만들어졌는지 — `create` 참조. `matmul`이 커널을 고르기 전에 묻는다."
+      },
+      {
+       "name": "workgroupStorage",
+       "signature": "static workgroupStorage: number",
+       "doc": "The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple\n gives 32 KB. A kernel that stages more than the floor asks this first.",
+       "torch": "workgroup_storage",
+       "doc_ko": "어댑터의 워크그룹 저장소 바이트 수 — 보장되는 최소는 16 KB, Apple은 32 KB. 그 최소보다 많이 스테이징하는 커널은 먼저 이것을 묻는다."
       }
      ],
      "inherited_ctor": "private constructor()"
     }
    ],
-   "count": 43
+   "count": 45
   },
   {
    "name": "random",
@@ -23048,5 +23078,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3150
+ "total": 3154
 }

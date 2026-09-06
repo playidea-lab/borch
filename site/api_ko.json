@@ -3070,5 +3070,21 @@
   "cpu/threads/MainSide.fail": {
     "ko": "밖에서 풀을 실패로 표시한다 — 호스트가 워커가 죽는 것을 봤을 때. 메인 쪽이 깨어나 예외를 던진다.",
     "src": "7417514188ba"
+  },
+  "nn/fusesBatchNormRelu": {
+    "ko": "`a` 다음에 `b`가 오는 것이 학습 중인 BatchNorm 뒤의 ReLU인지.",
+    "src": "158a7e475a8a"
+  },
+  "nn/BatchNormND.forwardRelu": {
+    "ko": "뒤따르는 ReLU를 커널 안에 접어 넣은 이 층 — 학습 중 `BatchNormNd` 바로 뒤에 `ReLU`가 올 때 `Sequential`이 부르는 것. 측정치는 `batchNormApply`에.",
+    "src": "8b8d731de1f1"
+  },
+  "device/Device.subgroupMatrix": {
+    "ko": "디바이스가 subgroup 행렬(f32, 8 × 8 × 8)로 만들어졌는지 — `create` 참조. `matmul`이 커널을 고르기 전에 묻는다.",
+    "src": "4767d6599bc8"
+  },
+  "device/Device.workgroupStorage": {
+    "ko": "어댑터의 워크그룹 저장소 바이트 수 — 보장되는 최소는 16 KB, Apple은 32 KB. 그 최소보다 많이 스테이징하는 커널은 먼저 이것을 묻는다.",
+    "src": "1689cf56420c"
   }
 }

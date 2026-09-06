@@ -589,6 +589,12 @@ export class Sequential extends Module {
   }
 }
 
+/** Whether `a` then `b` is a training BatchNorm followed by a ReLU. */
+export function fusesBatchNormRelu(a: Module, b: Module): boolean {
+  return a instanceof BatchNormND && a.training
+    && (b as unknown as { fusesIntoBatchNorm?: boolean }).fusesIntoBatchNorm === true;
+}
+
 /**
  * A list of layers. The index is the name — `layers.0.weight`.
  *
@@ -596,12 +602,6 @@ export class Sequential extends Module {
  * order and how they are used is up to the holder; this side only makes the
  * parameters visible. Models whose layer count is not fixed use it.
  */
-/** Whether `a` then `b` is a training BatchNorm followed by a ReLU. */
-export function fusesBatchNormRelu(a: Module, b: Module): boolean {
-  return a instanceof BatchNormND && a.training
-    && (b as unknown as { fusesIntoBatchNorm?: boolean }).fusesIntoBatchNorm === true;
-}
-
 export class ModuleList extends Module {
   private readonly items: Module[];
 

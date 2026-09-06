@@ -1293,7 +1293,7 @@ export class Device {
   static adapterFeatures = "";
 
   /** Whether the device was built with subgroup matrices (f32, 8 × 8 × 8) — see
-   *  `create`. The GEMM kernels ask this before choosing their inner loop. */
+   *  `create`. `matmul` asks this before choosing its kernel. */
   static subgroupMatrix = false;
 
   /** The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple
