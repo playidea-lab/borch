@@ -110,6 +110,24 @@
         }
       },
       "kernels": "subgroup matmul, stride-1 input gradient as a forward, wide broadcast fold, direct cat, BatchNorm in pieces, carried gathers"
+    },
+    "two_runs_2026-09-06_night": {
+      "clean": {
+        "test_iou": 0.509,
+        "seconds": 34
+      },
+      "noise_0.2": {
+        "test_iou": 0.429,
+        "seconds": 30,
+        "queue": {
+          "auroc": 0.898,
+          "p@20": 0.7,
+          "p@wrong": 0.62,
+          "read_for_90pct": 0.36
+        }
+      },
+      "kernels": "+ BatchNorm\u2192ReLU paired in Sequential, fused BCE-with-logits",
+      "note": "the clean-mask IoU also moves with the kernels' summation order: 0.51\u20130.57 across today's versions against torch's 0.55 \u00b1 0.01"
     }
   },
   "torch_seed_spread": {
@@ -159,7 +177,9 @@
     "browser_gather_hoisted": 26.3,
     "browser_gradinput_identity_fold_cat": 22.9,
     "browser_batchnorm_pieces": 21.6,
-    "browser_carried_gathers": 21.2
+    "browser_carried_gathers": 21.2,
+    "browser_bn_relu_paired": 19.5,
+    "browser_bce_fused": 19.0
   },
   "gpu_profile_ms_b16_2026-09-06": {
     "total": 17.8,
@@ -171,5 +191,16 @@
     "unary_backward": 0.6,
     "unary": 0.56,
     "adam": 0.51
+  },
+  "gpu_profile_ms_b16_2026-09-06_night": {
+    "total": 16.6,
+    "dispatches_per_step": 262,
+    "conv_forward_and_input_gradient": 5.48,
+    "conv_weight_gradient": 4.58,
+    "batchnorm_apply_with_relu": 0.86,
+    "batchnorm_backward_apply": 0.84,
+    "maxpool_backward": 0.61,
+    "batchnorm_stats_backward": 0.51,
+    "adam": 0.47
   }
 }

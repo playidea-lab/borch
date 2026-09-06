@@ -1538,6 +1538,16 @@ class _Wrap:
         return self
 
 
+def _fuses_bn_relu(a, b):
+    """Whether `a` then `b` is a training BatchNorm followed by a ReLU — both borch.ts
+    layers, asked through the attributes the TypeScript side exposes for exactly this."""
+    try:
+        return bool(getattr(a, "training", False)) and callable(getattr(a, "forwardRelu", None)) \
+            and getattr(b, "fusesIntoBatchNorm", False) is True
+    except Exception:  # noqa: BLE001 — a layer with no such attribute answers no
+        return False
+
+
 class Sequential:
     """**Chained on the Python side.**
 
@@ -1568,8 +1578,19 @@ class Sequential:
         self.layers = flat
 
     def __call__(self, x):
-        for m in self.layers:
+        # BatchNorm → ReLU while training runs as one fused layer — the same pairing
+        # borch.ts's `Sequential` makes (see `BatchNormND.forwardRelu` there).
+        layers = self.layers
+        i = 0
+        while i < len(layers):
+            m = layers[i]
+            nxt = layers[i + 1] if i + 1 < len(layers) else None
+            if nxt is not None and _fuses_bn_relu(m, nxt):
+                x = m.forwardRelu(x)
+                i += 2
+                continue
             x = m(x)
+            i += 1
         return x
 
     def forward(self, x):

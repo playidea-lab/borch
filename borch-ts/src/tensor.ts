@@ -182,6 +182,8 @@ import {
   argReduce,
   type AxisRule,
   batchNormApply,
+  bceLogitsForward,
+  bceLogitsBackward,
   batchNormBackwardApply,
   batchNormStats,
   batchNormStatsBackward,
@@ -4851,6 +4853,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   bceWithLogits(target: Tensor, reduction: Reduction = "mean",
                 weight?: Tensor, posWeight?: Tensor): Tensor {
+    // The plain case — no weights, the target a constant of the same shape — is one
+    // kernel each way (see `bceLogitsForward`); the assembled form below stays for the
+    // rest, and for a target that asks for a gradient.
+    if (weight === undefined && posWeight === undefined && !target.requiresGrad
+      && !this.isComplex() && !target.isComplex()
+      && this.shape.length === target.shape.length && this.shape.every((d, i) => d === target.shape[i])) {
+      return this.bceLogitsEach(target).reduceAs(reduction);
+    }
     const zero = Tensor.full([], 0);
     const hinge = this.binary("maximum", zero);
     const stable = this.abs().neg().exp().unary("log1p");
@@ -4872,6 +4882,20 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // and `mseLoss`, whose `weight` divides by the sum of the weights. Measured on
     // both; a shared helper for the two rules would have to be wrong about one.
     return each.reduceAs(reduction);
+  }
+
+  /** The per-element binary cross-entropy from logits, fused — `bceWithLogits` before
+   *  its reduction. The target is taken as a constant. */
+  private bceLogitsEach(target: Tensor): Tensor {
+    const n = this.size;
+    const out = dev().alloc(n);
+    dev().run1d(dev().pipeline(`bcel:${n}`, () => bceLogitsForward(n)), [this.buffer, target.buffer, out], n);
+    const self = this;
+    return Tensor.make(out, this.shape, [this], (g) => {
+      const gi = dev().alloc(n);
+      dev().run1d(dev().pipeline(`bcelb:${n}`, () => bceLogitsBackward(n)), [self.buffer, target.buffer, g.buffer, gi], n);
+      return [new Tensor(gi, self.shape)];
+    }, "BinaryCrossEntropyWithLogitsBackward0");
   }
 
   /**
@@ -11693,7 +11717,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    *   the running statistics.
    */
   batchNormFused(
-    weight: Tensor, bias: Tensor, eps = 1e-5,
+    weight: Tensor, bias: Tensor, eps = 1e-5, relu = false,
   ): { out: Tensor; mean: Tensor; variance: Tensor } {
     const [N = 1, C = 1] = this.shape;
     const S = this.shape.slice(2).reduce((a, b) => a * b, 1);
@@ -11718,8 +11742,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // The backward uses the standardised values again. They come out of the same pass as
     // the output and are carried — building them afterwards was two more full passes.
     const xh = dev().alloc(this.size);
+    const r = relu ? ":r" : "";
     dev().run1d(
-      dev().pipeline(`bna:${key}:${eps}:xh`, () => batchNormApply(N, C, S, eps, true)),
+      dev().pipeline(`bna:${key}:${eps}:xh${r}`, () => batchNormApply(N, C, S, eps, true, relu)),
       [this.buffer, mean, variance, weight.buffer, bias.buffer, out, xh],
       this.size,
     );
@@ -11737,9 +11762,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         const sumGXh = dev().alloc(C);
         const partG = dev().alloc(C * pieces);
         const partGXh = dev().alloc(C * pieces);
+        // With the ReLU folded in, both backward kernels mask the gradient by the output.
+        const mask = relu ? [out] : [];
         dev().run(
-          dev().pipeline(`bnsb:${key}`, () => batchNormStatsBackward(N, C, S)),
-          [xhat.buffer, g.buffer, partG, partGXh],
+          dev().pipeline(`bnsb:${key}${r}`, () => batchNormStatsBackward(N, C, S, relu)),
+          [xhat.buffer, g.buffer, partG, partGXh, ...mask],
           [C, pieces, 1],
         );
         dev().run1d(
@@ -11751,8 +11778,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         if (self.requiresGrad) {
           const gi = dev().alloc(self.size);
           dev().run1d(
-            dev().pipeline(`bnba:${key}`, () => batchNormBackwardApply(N, C, S)),
-            [xhat.buffer, g.buffer, sumG, sumGXh, weight.buffer, invStd.buffer, gi],
+            dev().pipeline(`bnba:${key}${r}`, () => batchNormBackwardApply(N, C, S, relu)),
+            [xhat.buffer, g.buffer, sumG, sumGXh, weight.buffer, invStd.buffer, gi, ...mask],
             self.size,
           );
           parts.push(new Tensor(gi, self.shape));

@@ -1679,6 +1679,40 @@ ${flatId(n)}
 }`;
 }
 
+/**
+ * Binary cross-entropy from logits, per element, in one pass:
+ * `max(x, 0) − x·y + log(1 + e^−|x|)`. Assembled from tensor ops it was nine dispatches
+ * forward and a dozen back for one loss, every one a pass over the whole activation
+ * (timestamps, 2026-09-06: the unary chain alone was 1.2 ms of a U-Net step).
+ */
+export function bceLogitsForward(n: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Y: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let x = X[gid];
+  Out[gid] = max(x, 0.0) - x * Y[gid] + log(1.0 + exp(-abs(x)));
+}`;
+}
+
+/** Its backward: `dx = (σ(x) − y) · g`. */
+export function bceLogitsBackward(n: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Y: array<f32>;
+@group(0) @binding(2) var<storage, read> G: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let x = X[gid];
+  Out[gid] = (1.0 / (1.0 + exp(-x)) - Y[gid]) * G[gid];
+}`;
+}
+
 /** `sum(dim)`'s backward — expands back along the folded axis. */
 export function expandDim(outer: number, red: number, inner: number): string {
   const n = outer * red * inner;
@@ -4114,8 +4148,14 @@ ${flatId(C)}
  * With `withXhat`, the standardised value goes out as a second output in the same pass —
  * the training backward needs it, and building it afterwards was two more full passes
  * over the activation (a broadcast subtract and a broadcast multiply).
+ *
+ * With `relu`, the ReLU that follows the layer is applied here, and the two backward
+ * kernels mask the incoming gradient by this output — BatchNorm → ReLU as two kernels
+ * forward and two back instead of three and three, each pass over the whole activation.
+ * `Sequential` pairs the two layers (measured: the U-Net's ten pairs were 1.2 ms of
+ * ReLU passes in a 21 ms step).
  */
-export function batchNormApply(N: number, C: number, S: number, eps: number, withXhat = false): string {
+export function batchNormApply(N: number, C: number, S: number, eps: number, withXhat = false, relu = false): string {
   const n = N * C * S;
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
@@ -4130,7 +4170,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   let c = (gid / ${S}u) % ${C}u;
   let xh = (X[gid] - Mean[c]) * inverseSqrt(Var[c] + ${eps});
-  Out[gid] = xh * Wt[c] + B[c];
+  ${relu ? "Out[gid] = max(xh * Wt[c] + B[c], 0.0);" : "Out[gid] = xh * Wt[c] + B[c];"}
 ${withXhat ? "  Xh[gid] = xh;" : ""}
 }`;
 }
@@ -4146,7 +4186,7 @@ ${withXhat ? "  Xh[gid] = xh;" : ""}
  *
  * and the two means it needs are counted once per channel, then applied elementwise.
  */
-export function batchNormStatsBackward(N: number, C: number, S: number): string {
+export function batchNormStatsBackward(N: number, C: number, S: number, relu = false): string {
   const pieces = bnPieces(N, S);
   const per = Math.ceil((N * S) / pieces);
   return `
@@ -4154,6 +4194,7 @@ export function batchNormStatsBackward(N: number, C: number, S: number): string 
 @group(0) @binding(1) var<storage, read> G: array<f32>;
 @group(0) @binding(2) var<storage, read_write> PartG: array<f32>;
 @group(0) @binding(3) var<storage, read_write> PartGXh: array<f32>;
+${relu ? "@group(0) @binding(4) var<storage, read> Y: array<f32>;" : ""}
 var<workgroup> pg: array<f32, ${BN_GROUP}>;
 var<workgroup> px: array<f32, ${BN_GROUP}>;
 @compute @workgroup_size(${BN_GROUP})
@@ -4167,7 +4208,7 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
   for (var i = lo + l.x; i < hi; i = i + ${BN_GROUP}u) {
     let n = i / ${S}u;
     let at = (n * ${C}u + c) * ${S}u + (i - n * ${S}u);
-    let gv = G[at];
+    ${relu ? "let gv = select(0.0, G[at], Y[at] > 0.0);" : "let gv = G[at];"}
     sg = sg + gv;
     sgx = fma(gv, Xh[at], sgx);
   }
@@ -4212,7 +4253,7 @@ ${flatId(C)}
 }
 
 export function batchNormBackwardApply(
-  N: number, C: number, S: number,
+  N: number, C: number, S: number, relu = false,
 ): string {
   const n = N * C * S;
   const count = (N * S).toFixed(1);
@@ -4224,13 +4265,15 @@ export function batchNormBackwardApply(
 @group(0) @binding(4) var<storage, read> Wt: array<f32>;
 @group(0) @binding(5) var<storage, read> InvStd: array<f32>;
 @group(0) @binding(6) var<storage, read_write> Out: array<f32>;
+${relu ? "@group(0) @binding(7) var<storage, read> Y: array<f32>;" : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   let c = (gid / ${S}u) % ${C}u;
   let xh = Xh[gid];
+  ${relu ? "let gv = select(0.0, G[gid], Y[gid] > 0.0);" : "let gv = G[gid];"}
   Out[gid] = Wt[c] * InvStd[c] *
-    (G[gid] - SumG[c] / ${count} - xh * SumGXh[c] / ${count});
+    (gv - SumG[c] / ${count} - xh * SumGXh[c] / ${count});
 }`;
 }
 

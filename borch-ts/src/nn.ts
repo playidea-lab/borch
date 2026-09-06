@@ -574,7 +574,17 @@ export class Sequential extends Module {
     let cur = x;
     // It goes through `call` internally too — a recommended path the library itself
     // does not take is a recommendation erased from the example everybody reads.
-    for (const layer of this.layers) cur = layer.call(cur);
+    // BatchNorm → ReLU while training is one fused layer (see `BatchNormND.forwardRelu`).
+    for (let i = 0; i < this.layers.length; i++) {
+      const layer = this.layers[i] as Module;
+      const next = this.layers[i + 1];
+      if (next !== undefined && fusesBatchNormRelu(layer, next)) {
+        cur = (layer as unknown as { forwardRelu(t: Tensor): Tensor }).forwardRelu(cur);
+        i++;
+        continue;
+      }
+      cur = layer.call(cur);
+    }
     return cur;
   }
 }
@@ -586,6 +596,12 @@ export class Sequential extends Module {
  * order and how they are used is up to the holder; this side only makes the
  * parameters visible. Models whose layer count is not fixed use it.
  */
+/** Whether `a` then `b` is a training BatchNorm followed by a ReLU. */
+export function fusesBatchNormRelu(a: Module, b: Module): boolean {
+  return a instanceof BatchNormND && a.training
+    && (b as unknown as { fusesIntoBatchNorm?: boolean }).fusesIntoBatchNorm === true;
+}
+
 export class ModuleList extends Module {
   private readonly items: Module[];
 
@@ -1097,6 +1113,9 @@ function writeBack(x: Tensor, out: Tensor): Tensor {
  * working one from every axis this repository has.
  */
 export class ReLU extends Module {
+  /** Read by `Sequential`: a ReLU right after a training BatchNorm runs inside it. */
+  readonly fusesIntoBatchNorm = true;
+
   constructor(private readonly inplace = false) {
     super();
   }
@@ -4683,6 +4702,7 @@ export function batchNorm(
   training = false,
   momentum = 0.1,
   eps = 1e-5,
+  relu = false,
 ): Tensor {
   const channels = input.shape[1] ?? 1;
   const w = weight ?? Tensor.ones([channels]);
@@ -4700,7 +4720,7 @@ export function batchNorm(
   // **This goes through a fused kernel.** The assembled form cost more than twenty
   // dispatches for one layer, and most of the 1,636 in a single ResNet step came from
   // there (measured).
-  const { out, mean, variance } = input.batchNormFused(w, b, eps);
+  const { out, mean, variance } = input.batchNormFused(w, b, eps, relu);
   if (runningMean && runningVar) {
     // Both are updated by one kernel. The assembled form was eight dispatches per
     // layer, across twenty layers.
@@ -5229,7 +5249,7 @@ export class BatchNormND extends Module {
     return { missing, unexpected: report.unexpected };
   }
 
-  override forward(x: Tensor): Tensor {
+  private run(x: Tensor, relu: boolean): Tensor {
     if (this.training && this.trackRunningStats) this.numBatchesTracked += 1;
     // **`batchNorm` does the computation.** With the layer and the function each
     // written out, a day comes when they diverge, and the place they diverge is the
@@ -5239,7 +5259,20 @@ export class BatchNormND extends Module {
     // what `training` means to the function: there is nothing else to normalise by.
     return batchNorm(x, this.runningMean, this.runningVar, this.weight,
       this.bias, this.training || !this.trackRunningStats,
-      this.momentum, this.eps);
+      this.momentum, this.eps, relu);
+  }
+
+  override forward(x: Tensor): Tensor {
+    return this.run(x, false);
+  }
+
+  /**
+   * The layer with the ReLU that follows it folded into its kernels — what
+   * `Sequential` calls for a `BatchNormNd` immediately followed by a `ReLU` while
+   * training. See `batchNormApply` for the measurement.
+   */
+  forwardRelu(x: Tensor): Tensor {
+    return this.run(x, true);
   }
 
   /** torch's `_BatchNorm.extra_repr`, shared by the instance norms next door. */
