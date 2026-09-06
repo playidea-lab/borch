@@ -66,6 +66,7 @@
     "trajectory:py": "uv run --with playwright python tests/browser/trajectory_py.py --build",
     "review:py": "uv run --with playwright python tests/browser/review_eval_py.py --build",
     "seg:py": "uv run --with playwright python tests/browser/seg_eval_py.py --build",
+    "profile:py": "uv run --with playwright python tests/browser/profile_py.py --build",
     "build:lab": "python3 site/build_lab.py",
     "marimo:py": "uv run --with playwright python tests/browser/marimo_probe.py --build",
     "build:marimo": "python3 site/build_marimo.py",

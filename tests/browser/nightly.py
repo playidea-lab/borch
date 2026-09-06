@@ -88,6 +88,13 @@ CHECKS = [
 
 
 def sh(argv, cwd, log):
+    # **The display has to be on.** The job fires at 04:30 and every probe opens a
+    # window on a real adapter; with the display asleep, GPU work on this Mac stalls in
+    # one-second quanta and a headed run that takes two minutes awake never finishes
+    # (measured 2026-09-05: a run stopped dead at 19:12, the minute the display turned
+    # off). `caffeinate -u` wakes the display and keeps it so for the command's life.
+    if sys.platform == "darwin" and shutil.which("caffeinate"):
+        argv = ["caffeinate", "-u", "-d", "-i", *argv]
     log.write(f"\n$ {' '.join(argv)}\n")
     log.flush()
     done = subprocess.run(argv, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,

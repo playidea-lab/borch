@@ -1,0 +1,107 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>a training step under GPU timestamps, on the wheel, in a worker</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The wheel alone, in a Web Worker** — JupyterLite's shape: Pyodide in a worker,
+  // no page-side borch.ts, nothing but `pip install`. The worker installs numpy and the
+  // wheel from this checkout, imports `borch_webgpu` (which boots its own borch.ts from
+  // the bundle it carries), trains the U-Net of tests/seg_eval.py on synthetic data, times the step on the
+  // wall, then runs it under the device's timestamp profiler and posts the time per kind of kernel. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  // A worker made from a blob URL resolves paths against the blob, so every URL it
+  // touches is spelled out with the page's origin.
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu) + " · WebAssembly.Suspending " + (typeof WebAssembly.Suspending));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import sys, time, types
+import numpy as np
+import js
+from pyodide.ffi import run_sync
+import borch_webgpu as torch
+origin = ${JSON.stringify(origin)}
+def get(path, binary=False):
+    r = run_sync(js.fetch(origin + path))
+    if not r.ok: raise RuntimeError(f"{r.status} {path}")
+    return bytes(run_sync(r.arrayBuffer()).to_py()) if binary else str(run_sync(r.text()))
+def module(name, path):
+    mod = types.ModuleType(name); mod.__file__ = f"/tmp/{name}.py"
+    exec(compile(get(path), f"{name}.py", "exec"), mod.__dict__); sys.modules[name] = mod
+    return mod
+module("review_eval", "/tests/review_eval.py")
+S = module("seg_eval", "/tests/seg_eval.py")
+import time
+from pyodide.ffi import create_proxy
+batch = ${parseInt(q.get("batch") || "16")}; side = ${parseInt(q.get("size") || "96")}; steps = ${parseInt(q.get("steps") || "5")}
+# Synthetic data: the profile is of the kernels, not of a dataset, and it has to run
+# where no dataset is (the nightly's worktree).
+rng = np.random.default_rng(0)
+x = rng.random((batch, 3, side, side), dtype=np.float32); m = (rng.random((batch, 1, side, side)) > 0.7).astype(np.float32)
+crit = torch.nn.BCEWithLogitsLoss(); model = S.build_unet(torch); model.train(); opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+xb, mb = torch.tensor(x), torch.tensor(m)
+def step():
+    opt.zero_grad(); loss = crit(model(xb), mb); loss.backward(); opt.step()
+def full():
+    with torch.scope():
+        step(); float(model.out.weight.flatten()[0].item())
+for _ in range(5): full()
+trials = []
+for _ in range(3):
+    t0 = time.perf_counter()
+    for _ in range(25): full()
+    trials.append((time.perf_counter() - t0) / 25 * 1000)
+d0 = torch.dispatches(); full(); per_step = torch.dispatches() - d0
+dev = js.borch.device()
+async def body():
+    with torch.scope():
+        for _ in range(steps): step()
+        dev.flush(); await dev.synchronize()
+run_sync(dev.profile(create_proxy(body)))
+NAMES = {"cnd": "conv direct (fwd, dX)", "cnt": "conv GEMM fwd/dX", "cnwt": "conv GEMM weight grad", "cnxt": "conv GEMM input grad", "ss": "split sums", "ssc": "split sums (conv)",
+         "bns": "batchnorm stats", "bnf": "batchnorm finish", "bna": "batchnorm apply", "bnsb": "batchnorm stats bwd", "bnfb": "batchnorm finish bwd", "bnba": "batchnorm apply bwd", "rs": "running stats",
+         "u": "unary", "ub": "unary bwd", "b": "binary", "bb": "binary bwd", "rb": "broadcast fold", "rbw": "broadcast fold (wide)", "rd": "reduce dim", "rsum": "reduce sum", "pn": "pool", "pnb": "pool bwd",
+         "catc": "cat copy", "gt": "gather (narrow)", "adam": "adam step", "sgd": "sgd step", "bcel": "bce loss", "bcelb": "bce loss bwd", "cturn": "turn weights", "mm": "matmul", "mmsg": "matmul (subgroup)", "pad": "pad"}
+per = {}
+for k, ns in dev.nsByKind.entries():
+    kind = str(k).split(":")[0]; per[kind] = per.get(kind, 0) + float(ns) / 1e6 / steps
+total = sum(per.values())
+lines = [f"unet {side}px batch {batch}: step {min(trials):.1f} ms wall (trials {' / '.join(f'{t:.1f}' for t in trials)}) · {per_step} dispatches · GPU {total:.1f} ms/step · dropped {int(dev.profileDropped)}"]
+for kind, ms in sorted(per.items(), key=lambda kv: -kv[1]):
+    if ms / total < 0.005: break
+    lines.append(f"  {ms:5.2f} ms  {ms / total:4.0%}  {NAMES.get(kind, kind)} [{kind}]")
+adapter = str(js.borch.Device.adapterInfo)
+chr(10).join(lines) + chr(10) + f"faults {int(dev.faults.count)} · adapter {adapter}"
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    // The worker is ended once it has answered: left alive with its device up, the
+    // browser context would not close and the probe hung after every run (measured).
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>
