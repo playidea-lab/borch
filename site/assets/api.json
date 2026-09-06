@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 772,
+  "done": 778,
   "stale": 0,
   "missing": 467
  },
@@ -21889,6 +21889,61 @@
      "doc_ko": "WebGPU 를 쓸 수 있는가만 묻는다. `torch.cuda.is_available()` 자리다.\n\n**torch 와 달리 비동기다** — 어댑터를 얻는 것이 비동기라 피할 길이 없다. 왜 안\n되는지가 필요하면 `probe()` 를 써라."
     },
     {
+     "kind": "interface",
+     "name": "Recorded",
+     "signature": "export interface Recorded",
+     "doc": "One dispatch as recorded under a capture.",
+     "members": [
+      {
+       "name": "pipeline",
+       "signature": "readonly pipeline: GPUComputePipeline",
+       "doc": ""
+      },
+      {
+       "name": "bindGroup",
+       "signature": "readonly bindGroup: GPUBindGroup",
+       "doc": "",
+       "torch": "bind_group"
+      },
+      {
+       "name": "groups",
+       "signature": "readonly groups: readonly [number, number, number]",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "캡처 아래에서 기록된 dispatch 하나."
+    },
+    {
+     "kind": "class",
+     "name": "Capture",
+     "signature": "export declare class Capture",
+     "doc": "A recorded step. `replay()` issues its dispatches again, in order, into the current\nbatch — the values land in the same buffers, so a tensor made during the capture (the\nloss, the parameters) reads the new step's result. `dispose()` returns the memory.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(dev: Device, records: readonly Recorded[], pinned: Set<GPUBuffer>)",
+       "doc": ""
+      },
+      {
+       "name": "dispatches",
+       "signature": "get dispatches(): number",
+       "doc": "How many dispatches one replay issues.",
+       "doc_ko": "재생 한 번이 내는 dispatch 수."
+      },
+      {
+       "name": "replay",
+       "signature": "replay(): void",
+       "doc": ""
+      },
+      {
+       "name": "dispose",
+       "signature": "dispose(): void",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "기록된 스텝. `replay()`는 그 dispatch들을 같은 순서로 지금의 배치에 다시 넣는다 — 값이 같은 버퍼에 놓이므로 캡처 중에 만든 텐서(손실, 파라미터)는 새 스텝의 결과를 읽는다. `dispose()`는 메모리를 돌려준다."
+    },
+    {
      "kind": "class",
      "name": "Device",
      "signature": "export declare class Device",
@@ -21961,6 +22016,57 @@
        "torch": "begin_scope"
       },
       {
+       "name": "beginCapture",
+       "signature": "beginCapture(): void",
+       "doc": "",
+       "torch": "begin_capture",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
+       "name": "endCapture",
+       "signature": "endCapture(): Capture",
+       "doc": "",
+       "torch": "end_capture",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
+       "name": "capturing",
+       "signature": "get capturing(): boolean",
+       "doc": "Whether a capture is open.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
+       "doc_ko": "캡처가 열려 있는지."
+      },
+      {
+       "name": "replayRecorded",
+       "signature": "replayRecorded(records: readonly Recorded[]): void",
+       "doc": "Encodes recorded dispatches again, in order. Called by `Capture.replay`.",
+       "torch": "replay_recorded",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
+       "doc_ko": "기록된 dispatch들을 순서대로 다시 인코딩한다. `Capture.replay`가 부른다."
+      },
+      {
+       "name": "unpin",
+       "signature": "unpin(buffers: Iterable<GPUBuffer>): void",
+       "doc": "Hands a capture's pinned buffers back to the pool. Called by `Capture.dispose`.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
+       "doc_ko": "캡처가 붙잡아 둔 버퍼를 풀에 돌려준다. `Capture.dispose`가 부른다."
+      },
+      {
        "name": "endScope",
        "signature": "endScope(keep?: readonly GPUBuffer[]): { freed: number; survived: number; }",
        "doc": "Closes the scope and releases what was made inside it.",
@@ -21975,48 +22081,80 @@
         }
        ],
        "torch": "end_scope",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "구역을 닫고 그 안에서 만든 것을 놓는다."
       },
       {
        "name": "lastScope",
        "signature": "lastScope: { freed: number; survived: number; }",
        "doc": "The tally of the most recently closed scope. It stays here even when\nclosed via `scope()`.\n\n**A non-zero `survived` means something accumulates every step** — in a\ntraining loop that is the leak.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "가장 최근에 닫힌 구역의 셈. `scope()` 로 닫아도 여기 남는다.\n\n**`survived` 가 0 이 아니면 스텝마다 쌓인다** — 학습 루프에서 그것이 누수다."
       },
       {
        "name": "memory",
        "signature": "get memory(): { tensors: number; bytes: number; }",
        "doc": "The count and bytes of buffers currently held.\n\nA benchmark measuring leaks has to be able to ask this from outside.\nThe sister project's benchmark called `js.tf.memory()` directly, which\nties the instrumentation to TF.js and makes the same benchmark\nunrunnable against another implementation — and that is exactly why it\ncould not be run.\n\nWhat sits in `spare` is excluded. A buffer back in the pool waiting for\nthe next step is held, but it **is not leaking** — counting it reads\nsomething that is not a leak as one.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "지금 잡고 있는 버퍼의 수와 바이트.\n\n벤치가 누수를 재려면 밖에서 이것을 물을 수 있어야 한다. 자매 쪽 벤치는\n`js.tf.memory()` 를 직접 불렀는데, 그러면 계측이 TF.js 에 묶여서 같은 벤치를\n다른 구현으로 못 돌린다 — 실제로 그것 때문에 못 돌렸다.\n\n`spare` 에 든 것은 뺀다. 통에 돌아와 다음 스텝을 기다리는 버퍼는 잡고 있는\n것이 맞지만 **새는 것은 아니다** — 그것을 세면 누수가 아닌 것을 누수로 읽는다."
       },
       {
        "name": "pooled",
        "signature": "get pooled(): { count: number; bytes: number; }",
        "doc": "Buffers in the pool waiting for the next step. **What `memory`\ndeliberately excludes.**\n\nThat one asks \"is it leaking\" and this one asks \"how much is held\". Two\ndifferent questions need two numbers, and the second one was missing —\nso **nobody could ask about the real footprint.**\n\nThe pool grows when shapes change. It is split by size, so a buffer\nthat ran at batch 16 cannot serve batch 32 and simply stays. A\nbenchmark running three batch sizes in one pass leaves the first two\nsizes' worth sitting in the pool, and `memory` does not count it.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "통에서 다음 스텝을 기다리는 버퍼. **`memory` 가 일부러 빼는 그것이다.**\n\n저쪽은 \"새는가\" 를 묻고 이쪽은 \"얼마나 쥐고 있는가\" 를 묻는다. 두 물음이\n다르므로 수도 둘이어야 하는데 뒤엣것이 없었다 — 그래서 **아무도 진짜 발자국을\n못 물었다.**\n\n모양이 바뀌면 통이 자란다. 크기별로 나뉘어 있어서 배치 16 으로 돌던 버퍼는\n배치 32 에 못 쓰이고, 그대로 남는다. 벤치가 세 배치를 한 판에서 도는데 그때\n앞의 두 배치 몫이 통에 그대로 있고 `memory` 는 그것을 안 센다."
       },
       {
        "name": "emptyCache",
        "signature": "emptyCache(): { count: number; bytes: number; }",
        "doc": "Empties the pool. Where `torch.cuda.empty_cache()` goes.\n\n**The pool does not shrink on its own.** With repeating shapes, as in a\ntraining loop, that is right — remaking them each time is the cost. But\nwhen the shape **changes**, the old shape's buffers stay forever. In a\nbrowser, where GPU memory is shared between tabs, that costs more than\nit does on a desktop.\n\nA returned buffer may still be referenced by commands not yet\nsubmitted, so the release happens **after** submitting.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "통을 비운다. `torch.cuda.empty_cache()` 자리다.\n\n**통은 스스로 줄지 않는다.** 학습 루프처럼 모양이 반복되면 그것이 옳다 — 매번\n다시 만들면 그게 비용이다. 그런데 모양이 **바뀌면** 옛 모양의 버퍼가 영영\n남는다. 브라우저는 GPU 메모리를 탭이 나눠 쓰는 자리라 그 값이 데스크톱보다 크다.\n\n되돌려 준 버퍼를 아직 안 보낸 명령이 가리킬 수 있으므로 **보내고 나서** 놓는다."
       },
       {
        "name": "keep",
        "signature": "keep(buffer: GPUBuffer): void",
        "doc": "Keeps something alive regardless of scope. Parameters and optimizer\nstate use it.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다."
       },
       {
        "name": "rehome",
        "signature": "rehome(buffer: GPUBuffer, depth: number): void",
-       "doc": "Moves a buffer `alloc` just filed under the innermost scope to the frame `depth`\nscopes deep — `0` is outside every scope. `Tensor.ensureOwned` uses it so an owned\ncopy lives as long as the tensor it replaces, not as long as the scope that\nhappened to be open when the write came."
+       "doc": "Moves a buffer `alloc` just filed under the innermost scope to the frame `depth`\nscopes deep — `0` is outside every scope. `Tensor.ensureOwned` uses it so an owned\ncopy lives as long as the tensor it replaces, not as long as the scope that\nhappened to be open when the write came.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
       },
       {
        "name": "scopeDepth",
        "signature": "get scopeDepth(): number",
        "doc": "The depth of open scopes. Tests look at it for balance.",
        "torch": "scope_depth",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "열려 있는 구역의 깊이. 테스트가 균형을 본다."
       },
       {
@@ -22029,28 +22167,48 @@
          "text": "recycle whether something from the pool may be taken."
         }
        ],
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "**올리기는 꺼내 쓰면 안 된다.** `writeBuffer` 는 큐의 지금 자리에서 도는데, 우리는\n명령을 쌓아 두었다가 나중에 보낸다 — 통에서 꺼낸 버퍼를 아직 안 보낸 dispatch 가\n읽을 참이면 그것을 덮어쓰게 된다. 새로 만들면 그 자리가 아예 없다."
       },
       {
        "name": "upload",
        "signature": "upload(data: Float32Array): GPUBuffer",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
       },
       {
        "name": "word",
        "signature": "word(value: number): GPUBuffer",
-       "doc": "One `u32` for a kernel to read at run time — an offset, a padding width.\n\n**Cached by value, for the life of the device.** The first version allocated a fresh\nfour-byte buffer per dispatch; a grouped convolution issues one such dispatch per\ngroup, and an EfficientNet-B4 forward asked for 83,724 of them — which is why the\nword is not a pooled buffer either. Slices repeat their offsets far more than they\nvary them (11,042 distinct against 55,794 asked, measured on that model), so a map\nfrom value to buffer is small, and a buffer that lives outside the scopes cannot be\nreleased under a dispatch that has not run yet.\n\nIt cannot be one buffer rewritten per dispatch: the dispatches are recorded now and\nsubmitted later, and `writeBuffer` lands before the submission — every dispatch\nwould read the last value written.\n\nA storage buffer like the rest, so the shader declares `array<u32>` and no new usage\nflag or pool appears."
+       "doc": "One `u32` for a kernel to read at run time — an offset, a padding width.\n\n**Cached by value, for the life of the device.** The first version allocated a fresh\nfour-byte buffer per dispatch; a grouped convolution issues one such dispatch per\ngroup, and an EfficientNet-B4 forward asked for 83,724 of them — which is why the\nword is not a pooled buffer either. Slices repeat their offsets far more than they\nvary them (11,042 distinct against 55,794 asked, measured on that model), so a map\nfrom value to buffer is small, and a buffer that lives outside the scopes cannot be\nreleased under a dispatch that has not run yet.\n\nIt cannot be one buffer rewritten per dispatch: the dispatches are recorded now and\nsubmitted later, and `writeBuffer` lands before the submission — every dispatch\nwould read the last value written.\n\nA storage buffer like the rest, so the shader declares `array<u32>` and no new usage\nflag or pool appears.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
       },
       {
        "name": "run",
        "signature": "run(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], groups: readonly [number, number, number]): void",
        "doc": "One kernel. `groups` is the **workgroup count**, and the per-axis limit\nis rechecked here — `kernels.ts` folds the grid, but a hand-called path\nmay appear.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "커널 한 번. `groups` 는 **워크그룹 수**이고, 축당 한계를 여기서 다시 확인한다 —\n`kernels.ts` 가 격자를 접어 주지만 손으로 부르는 경로가 생길 수 있다."
       },
       {
        "name": "run1d",
        "signature": "run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number): void",
        "doc": "Runs one-dimensional work spread over a grid. Paired with the indexing\nin `kernels.ts`.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "1차원 작업을 격자로 펴서 돌린다. `kernels.ts` 의 인덱싱과 짝이다."
       },
       {
@@ -22058,6 +22216,10 @@
        "signature": "sumAll(input: GPUBuffer, n: number): GPUBuffer",
        "doc": "A full sum. It calls the same kernel again until the partial sums come\ndown to one.\n\n**It uses no atomics** — floating-point addition changes value when the\norder changes, and then the same seed run twice gives different\ntraining. The slower way is the one that reproduces.",
        "torch": "sum_all",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "전체 합. 부분합이 하나가 될 때까지 같은 커널을 다시 부른다.\n\n**원자 연산을 안 쓴다** — 부동소수 덧셈은 순서가 바뀌면 값이 달라지고, 그러면\n같은 씨앗으로 두 번 돌린 학습이 갈린다. 느린 쪽이 재현된다."
       },
       {
@@ -22065,6 +22227,10 @@
        "signature": "copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void",
        "doc": "Overwrites one buffer with another. In-place operations use it.\n\nIt is a copy, not a kernel — the result is made in a new buffer and\nthen moved back to the original slot. Reading and writing the original\nat once leaves the threads unordered and the values mixed.",
        "torch": "copy_into",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "버퍼 하나를 다른 버퍼에 덮어쓴다. 제자리 연산이 쓴다.\n\n커널이 아니라 복사다 — 결과를 새 버퍼에 만든 뒤 원래 자리로 옮긴다. 원래\n버퍼를 읽으면서 같이 쓰면 스레드끼리 순서가 없어 값이 섞인다."
       },
       {
@@ -22085,24 +22251,40 @@
        "name": "profile",
        "signature": "profile<T>(body: () => Promise<T>): Promise<T>",
        "doc": "Runs `body` while measuring. **It always turns off afterwards —\nincluding on the way out through an exception.**\n\nTurning it on and off must not be left to the caller. While profiling,\neach dispatch opens a pass and the time inflates, and if it leaks out\nstill on, **every measurement after it comes out quietly inflated.** A\nbenchmark measures several batches, so an exception in one batch makes\nthe next batch's ms/step a profiled number rather than a measurement —\nand it prints on screen looking exactly the same. There should be one\ndoor, and the door should clean up.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "`body` 를 재면서 돌린다. **끝나면 반드시 끈다 — 예외로 나가도 끈다.**\n\n켜고 끄기를 부르는 쪽에 맡기면 안 된다. 프로파일 중에는 dispatch 마다 패스를\n여느라 시간이 부풀고, 켜진 채로 새어 나가면 **그 뒤의 모든 측정이 조용히\n부풀어서** 나온다. 벤치는 배치를 여러 번 재므로, 한 배치에서 예외가 나면\n다음 배치의 ms/step 이 측정이 아니라 프로파일된 수가 된다 — 그런데 화면에는\n똑같이 생긴 수로 찍힌다. 문은 하나여야 하고 뒷정리는 문이 해야 한다."
       },
       {
        "name": "flush",
        "signature": "flush(): void",
        "doc": "Submits the stacked commands.\n\nIt has to be passed before values are read — reading the result of\nunsubmitted commands returns the old value.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "쌓아 둔 명령을 보낸다.\n\n값을 읽기 전에 반드시 지나야 한다 — 안 보낸 명령의 결과를 읽으면 옛 값이 나온다."
       },
       {
        "name": "synchronize",
        "signature": "synchronize(): Promise<void>",
        "doc": "Waits until the submitted work has **actually finished.** Where\n`torch.cuda.synchronize()` goes.\n\n`flush()` returns having only put things on the queue — time it with\nthat and the wall clock has already stopped while the GPU is still\nworking. Until now the way this repository forced completion was to\nread one value (`item()`), and that **mixes the readback round trip\ninto the measurement.** It is the place where \"am I measuring the\nkernel or the bus\" gets blurred, and this function is what separates\nthem.",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
        "doc_ko": "보낸 일이 **실제로 끝날 때까지** 기다린다. `torch.cuda.synchronize()` 자리다.\n\n`flush()` 는 큐에 넣기만 하고 돌아온다 — 그것으로 시간을 재면 GPU 가 일하는 동안\n벽시계는 이미 멈춰 있다. 지금까지 이 저장소가 완료를 강제한 방법은 값을 하나\n읽는 것(`item()`)이었는데, 그러면 **readback 왕복이 측정에 섞인다.** 재는 것이\n커널인지 버스인지가 흐려지는 자리이고, 그것을 가르는 것이 이 함수다."
       },
       {
        "name": "read",
        "signature": "read(buffer: GPUBuffer, count: number): Promise<Float32Array>",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
       },
       {
        "name": "adapterInfo",
@@ -22135,7 +22317,7 @@
      "inherited_ctor": "private constructor()"
     }
    ],
-   "count": 45
+   "count": 59
   },
   {
    "name": "random",
@@ -23078,5 +23260,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3154
+ "total": 3168
 }

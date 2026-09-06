@@ -3086,5 +3086,29 @@
   "device/Device.workgroupStorage": {
     "ko": "어댑터의 워크그룹 저장소 바이트 수 — 보장되는 최소는 16 KB, Apple은 32 KB. 그 최소보다 많이 스테이징하는 커널은 먼저 이것을 묻는다.",
     "src": "1689cf56420c"
+  },
+  "device/Recorded": {
+    "ko": "캡처 아래에서 기록된 dispatch 하나.",
+    "src": "17c1364fe8e5"
+  },
+  "device/Capture": {
+    "ko": "기록된 스텝. `replay()`는 그 dispatch들을 같은 순서로 지금의 배치에 다시 넣는다 — 값이 같은 버퍼에 놓이므로 캡처 중에 만든 텐서(손실, 파라미터)는 새 스텝의 결과를 읽는다. `dispose()`는 메모리를 돌려준다.",
+    "src": "7d27b79029f5"
+  },
+  "device/Capture.dispatches": {
+    "ko": "재생 한 번이 내는 dispatch 수.",
+    "src": "2280ef75ed89"
+  },
+  "device/Device.capturing": {
+    "ko": "캡처가 열려 있는지.",
+    "src": "86531a6d5b1a"
+  },
+  "device/Device.replayRecorded": {
+    "ko": "기록된 dispatch들을 순서대로 다시 인코딩한다. `Capture.replay`가 부른다.",
+    "src": "c0f565625f13"
+  },
+  "device/Device.unpin": {
+    "ko": "캡처가 붙잡아 둔 버퍼를 풀에 돌려준다. `Capture.dispose`가 부른다.",
+    "src": "db86a93bc754"
   }
 }

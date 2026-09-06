@@ -19,7 +19,7 @@
  * copy.
  */
 
-import { adamStep, rmspropStep, sgdStep } from "./kernels.js";
+import { adamStep, adamTick, rmspropStep, sgdStep } from "./kernels.js";
 import { RuntimeError } from "./errors.js";
 import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
@@ -615,10 +615,20 @@ export class Adam extends Optimizer {
     this.secondMax = amsgrad ? this.state(this.params) : [];
   }
 
+  /** The step count and the bias corrections, on the device — see `adamTick`. Made with
+   *  `owned`, as every optimiser state is: a cached single-element tensor is shared. */
+  private tick: { step: Tensor; corr: Tensor } | null = null;
+
   override step(): void {
-    // The bias correction depends on the step count, so it is computed once rather than
-    // per parameter.
     this.stepCount += 1;
+    // The corrections come from one kernel and a counter that lives on the GPU, so a
+    // captured step replays with the right ones.
+    // Built on first use from the count as it stands — after `loadCounters`, the loaded one.
+    this.tick ??= { step: keepAlive(Tensor.owned([1], this.stepCount - 1)), corr: keepAlive(Tensor.owned([2], 0)) };
+    const d = device();
+    d.run1d(
+      d.pipeline(`adamtick:${this.beta1}:${this.beta2}`, () => adamTick(this.beta1, this.beta2)),
+      [this.tick.step.buffer, this.tick.corr.buffer], 1);
     super.step();
   }
 
@@ -627,19 +637,19 @@ export class Adam extends Optimizer {
   }
 
   protected override loadCounters(v: Record<string, number>): void {
-    if (v.stepCount !== undefined) this.stepCount = v.stepCount;
+    if (v.stepCount !== undefined) {
+      this.stepCount = v.stepCount;
+      // The device's counter follows: rebuilt from the loaded count at the next step.
+      this.tick = null;
+    }
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const m = this.first[index];
     const v = this.second[index];
     if (!m || !v) throw new Error(`Adam: no state for parameter ${index}`);
-    // The bias correction differs every step, so it is handed across in a small buffer
-    // rather than baked into the shader.
-    const corr = Tensor.from([
-      1 - this.beta1 ** this.stepCount,
-      1 - this.beta2 ** this.stepCount,
-    ], [2]);
+    // The corrections were ticked on the device at the top of `step`.
+    const corr = (this.tick as { step: Tensor; corr: Tensor }).corr;
 
     // **The kernel is not touched.** Both decays can be written as tensor operations.
     //

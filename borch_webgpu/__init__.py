@@ -93,7 +93,7 @@ from ._ops import (                                      # noqa: E402,F401
     # only in a browser. Imitating `torch.cuda` was the other option and was
     # rejected: `is_available()` is false there, so the textbook idiom around it
     # becomes a dead line.
-    dispatches, empty_cache, keep_alive, last_scope, pooled, submits,
+    capture, dispatches, empty_cache, keep_alive, last_scope, pooled, submits,
     sum, swapdims, transpose, where, zeros,
     # Names torch offers as a second spelling — a name over a combination.
     add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,

@@ -4430,6 +4430,25 @@ ${flatId(n)}
 }
 
 /**
+ * Adam's step counter and bias corrections, **on the GPU.** One thread: the step goes up
+ * by one and `Corr` becomes `[1 − β₁ᵗ, 1 − β₂ᵗ]`. The corrections used to be a fresh
+ * two-float tensor built on the CPU every step — which a captured step would replay with
+ * the values of the step it was recorded at. One dispatch per optimiser step.
+ */
+export function adamTick(beta1: number, beta2: number): string {
+  return `
+@group(0) @binding(0) var<storage, read_write> Step: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Corr: array<f32>;
+@compute @workgroup_size(1)
+fn main() {
+  let t = Step[0] + 1.0;
+  Step[0] = t;
+  Corr[0] = 1.0 - pow(${f32lit(beta1)}, t);
+  Corr[1] = 1.0 - pow(${f32lit(beta2)}, t);
+}`;
+}
+
+/**
  * One optimiser step — **it edits the parameters and the state in place.**
  *
  * The assembled version cost four dispatches per parameter (multiply the momentum, add

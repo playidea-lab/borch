@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>a captured training step replayed, on the wheel, in a worker</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The wheel alone, in a Web Worker** — JupyterLite's shape: Pyodide in a worker,
+  // no page-side borch.ts, nothing but `pip install`. The worker installs numpy and the
+  // wheel from this checkout, imports `borch_webgpu` (which boots its own borch.ts from
+  // the bundle it carries), trains the U-Net of tests/seg_eval.py twelve steps eagerly and twelve by capturing the
+  // first and replaying it, and posts whether the two agree and what each step costs. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  // A worker made from a blob URL resolves paths against the blob, so every URL it
+  // touches is spelled out with the page's origin.
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu) + " · WebAssembly.Suspending " + (typeof WebAssembly.Suspending));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import sys, time, types
+import numpy as np
+import js
+from pyodide.ffi import run_sync
+import borch_webgpu as torch
+origin = ${JSON.stringify(origin)}
+def get(path, binary=False):
+    r = run_sync(js.fetch(origin + path))
+    if not r.ok: raise RuntimeError(f"{r.status} {path}")
+    return bytes(run_sync(r.arrayBuffer()).to_py()) if binary else str(run_sync(r.text()))
+def module(name, path):
+    mod = types.ModuleType(name); mod.__file__ = f"/tmp/{name}.py"
+    exec(compile(get(path), f"{name}.py", "exec"), mod.__dict__); sys.modules[name] = mod
+    return mod
+module("review_eval", "/tests/review_eval.py")
+S = module("seg_eval", "/tests/seg_eval.py")
+import time
+batch = ${parseInt(q.get("batch") || "16")}; side = ${parseInt(q.get("size") || "96")}; STEPS = 12
+rng = np.random.default_rng(0)
+xs = rng.random((STEPS, batch, 3, side, side), dtype=np.float32); ms = (rng.random((STEPS, batch, 1, side, side)) > 0.7).astype(np.float32)
+crit = torch.nn.BCEWithLogitsLoss()
+# eager: STEPS steps, a fresh batch each, the ordinary way
+m1 = S.build_unet(torch); m1.train(); state0 = {k: v.numpy().copy() for k, v in m1.state_dict().items()}
+o1 = torch.optim.Adam(m1.parameters(), lr=1e-3); eager = []
+for i in range(STEPS):
+    with torch.scope():
+        o1.zero_grad(); l = crit(m1(torch.tensor(xs[i])), torch.tensor(ms[i])); l.backward(); o1.step(); eager.append(float(l.item()))
+w1 = {k: v.numpy().copy() for k, v in m1.state_dict().items()}
+# captured: the same init, the first step recorded, the rest replayed with the batch copied in
+m2 = S.build_unet(torch); m2.train(); m2.load_state_dict({k: torch.tensor(v) for k, v in state0.items()})
+o2 = torch.optim.Adam(m2.parameters(), lr=1e-3)
+xb, mb = torch.tensor(xs[0]), torch.tensor(ms[0])
+with torch.capture() as step:
+    with torch.scope():
+        o2.zero_grad(); loss2 = crit(m2(xb), mb); loss2.backward(); o2.step()
+replayed = [float(loss2.item())]
+for i in range(1, STEPS):
+    xb.copy_(torch.tensor(xs[i])); mb.copy_(torch.tensor(ms[i])); step.replay(); replayed.append(float(loss2.item()))
+w2 = {k: v.numpy().copy() for k, v in m2.state_dict().items()}
+d_loss = max(abs(a - b) for a, b in zip(eager, replayed))
+d_w = max(float(np.abs(w1[k] - w2[k]).max()) for k in w1 if "num_batches" not in k)
+def wall(fn, n=25):
+    for _ in range(3): fn()
+    t0 = time.perf_counter()
+    for _ in range(n): fn()
+    return (time.perf_counter() - t0) / n * 1000
+def eager_once():
+    with torch.scope():
+        o1.zero_grad(); l = crit(m1(xb), mb); l.backward(); o1.step(); float(l.item())
+def replay_once():
+    step.replay(); float(loss2.item())
+te, tr = wall(eager_once), wall(replay_once)
+step.dispose()
+adapter = str(js.borch.Device.adapterInfo)
+f"capture: {STEPS} steps · max |Δloss| {d_loss:.1e} · max |Δparam| {d_w:.1e} · {step.dispatches} dispatches a replay · eager {te:.1f} ms · replay {tr:.1f} ms a step · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    // The worker is ended once it has answered: left alive with its device up, the
+    // browser context would not close and the probe hung after every run (measured).
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

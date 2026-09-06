@@ -262,6 +262,40 @@ function subgroupMatrixF32(adapter: GPUAdapter): boolean {
   return false;
 }
 
+/** One dispatch as recorded under a capture. */
+export interface Recorded {
+  readonly pipeline: GPUComputePipeline;
+  readonly bindGroup: GPUBindGroup;
+  readonly groups: readonly [number, number, number];
+}
+
+/**
+ * A recorded step. `replay()` issues its dispatches again, in order, into the current
+ * batch — the values land in the same buffers, so a tensor made during the capture (the
+ * loss, the parameters) reads the new step's result. `dispose()` returns the memory.
+ */
+export class Capture {
+  constructor(
+    private readonly dev: Device,
+    private readonly records: readonly Recorded[],
+    private readonly pinned: Set<GPUBuffer>,
+  ) {}
+
+  /** How many dispatches one replay issues. */
+  get dispatches(): number {
+    return this.records.length;
+  }
+
+  replay(): void {
+    this.dev.replayRecorded(this.records);
+  }
+
+  dispose(): void {
+    this.dev.unpin(this.pinned);
+    this.pinned.clear();
+  }
+}
+
 export class Device {
   private readonly device: GPUDevice;
   private readonly limits: GPUSupportedLimits;
@@ -641,6 +675,62 @@ export class Device {
     this.scopes.push(new Set());
   }
 
+  // ── Capture and replay ──────────────────────────────────────────────────────────
+  //
+  // **A training step is the same dispatches with the same buffers every time.** The
+  // Python side builds the autograd graph, allocates, and issues 262 dispatches a step,
+  // and on the M4 Max that CPU-side work is 3.4 ms of a 17.7 ms step (timestamps against
+  // the wall clock, 2026-09-07). While a capture is open, `run` records each dispatch —
+  // pipeline, bind group, grid — and every buffer allocated is pinned rather than
+  // returned to the pool when its scope closes, so the recorded bind groups keep
+  // pointing at live memory. `replay` re-encodes the list: no Python, no allocation, no
+  // bind-group creation. What has to stay the same is the caller's business: the input
+  // tensors (write the next batch into them), and anything a step varies on the CPU
+  // side — Adam's bias correction moved to a kernel for exactly this.
+  private recording: Recorded[] | null = null;
+  private pinned: Set<GPUBuffer> | null = null;
+
+  beginCapture(): void {
+    if (this.recording) throw new Error("a capture is already open");
+    this.recording = [];
+    this.pinned = new Set();
+  }
+
+  endCapture(): Capture {
+    if (!this.recording || !this.pinned) throw new Error("no capture is open");
+    const capture = new Capture(this, this.recording, this.pinned);
+    this.recording = null;
+    this.pinned = null;
+    return capture;
+  }
+
+  /** Whether a capture is open. */
+  get capturing(): boolean {
+    return this.recording !== null;
+  }
+
+  /** Encodes recorded dispatches again, in order. Called by `Capture.replay`. */
+  replayRecorded(records: readonly Recorded[]): void {
+    for (const r of records) {
+      const pass = this.openPass();
+      pass.setPipeline(r.pipeline);
+      pass.setBindGroup(0, r.bindGroup);
+      pass.dispatchWorkgroups(r.groups[0], r.groups[1], r.groups[2]);
+      this.dispatches += 1;
+    }
+  }
+
+  /** Hands a capture's pinned buffers back to the pool. Called by `Capture.dispose`. */
+  unpin(buffers: Iterable<GPUBuffer>): void {
+    for (const buf of buffers) {
+      const size = this.sizes.get(buf);
+      if (size === undefined) { buf.destroy(); continue; }
+      let pool = this.spare.get(size);
+      if (!pool) { pool = []; this.spare.set(size, pool); }
+      pool.push(buf);
+    }
+  }
+
   /**
    * Closes the scope and releases what was made inside it.
    *
@@ -665,6 +755,8 @@ export class Device {
       }
       // **They die here.** If a tensor holding this buffer leaked out, using it stops
       // from now on — otherwise it quietly reads what the next allocation overwrote.
+      // Pinned by an open capture: neither pooled nor passed outward — the capture owns it.
+      if (this.pinned?.has(buf)) continue;
       this.retire(buf);
       // Returned to the pool rather than destroyed. The next step asks for the same
       // size again.
@@ -823,11 +915,14 @@ export class Device {
       );
     }
     const size = Math.max(bytes, BYTES_PER_F32);
-    const reused = recycle ? this.spare.get(size)?.pop() : undefined;
+    // Under a capture nothing is recycled: a pooled buffer may still be bound by a
+    // recorded dispatch of this very step.
+    const reused = recycle && !this.pinned ? this.spare.get(size)?.pop() : undefined;
     const buf = reused ?? this.device.createBuffer({
       size,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
+    this.pinned?.add(buf);
     if (!reused) {
       this.made += 1;
       this.madeBytes += size;
@@ -909,6 +1004,7 @@ export class Device {
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
     this.dispatches += 1;
+    this.recording?.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]] });
     // **A batch that grows too large is dropped, and nothing says so.**
     //
     // Commands accumulate in one encoder and go out when something is read. The
