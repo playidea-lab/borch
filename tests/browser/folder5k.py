@@ -22,7 +22,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve  # noqa: E402
-from launch import refuse_if_software  # noqa: E402
+from launch import _headed, refuse_if_software  # noqa: E402
 
 GIVE_UP_MS = 1_800_000
 
@@ -58,7 +58,7 @@ def make_folder(n, side):
 
 def main(argv):
     from playwright.sync_api import sync_playwright
-    headed = "--headed" in argv
+    headed = _headed("--headed" in argv)   # a window unless --headless / BORCH_HEADLESS: headless is SwiftShader here
     folder = next((a.split("=", 1)[1] for a in argv if a.startswith("--dir=")), None)
     batch = next((a.split("=", 1)[1] for a in argv if a.startswith("--batch=")), "32")
     make = next((a.split("=", 1)[1] for a in argv if a.startswith("--make=")), None)
