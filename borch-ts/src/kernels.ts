@@ -2734,6 +2734,158 @@ ${withBias ? "  r = r + B[fo];\n" : ""}${epilogueWgsl(ep, "r", "idx")}  Out[idx]
   });
 }
 
+/** The output columns one thread of `convDirect2d` computes. */
+export const DIRECT_STRIP = 4;
+
+/** The most output channels one thread accumulates — with the strip, 64 registers. */
+const DIRECT_COUT = 16;
+
+/** Workgroup storage the weights may take in `convDirect2d`: WebGPU's guaranteed floor. */
+const DIRECT_WEIGHT_BYTES = 16384;
+
+/**
+ * How many output channels one thread of `convDirect2d` takes: the most that fit the
+ * registers and whose weights fit the workgroup, and a divisor of nothing in particular
+ * — the last slice is short.
+ */
+export function directCoutSlice(s: ConvNDShape): number {
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const perCout = s.C * kSpace * 4;
+  return Math.max(1, Math.min(DIRECT_COUT, s.O, Math.floor(DIRECT_WEIGHT_BYTES / perCout)));
+}
+
+/**
+ * Whether a convolution takes the direct kernel: two spatial axes, no groups, no
+ * dilation, a stride of one or two, at most 32 input channels, a kernel no wider than
+ * seven. Above 32 channels the GEMM's reuse wins; the boundary was measured, not chosen.
+ */
+export function directFits(s: ConvNDShape): boolean {
+  return s.inDims.length === 2 && (s.groups ?? 1) === 1 && (s.dilation ?? [1, 1]).every((d) => d === 1)
+    && s.stride.every((v) => v === 1 || v === 2) && s.C <= 32 && s.kernel.every((v) => v <= 7)
+    && s.kernel.length === 2;
+}
+
+/** The grid for `convDirect2d`: strips over (batch, output row, strip), then channel slices. */
+export function directGrid(s: ConvNDShape): [number, number, number] {
+  const [OH = 1, OW = 1] = s.outDims;
+  const strips = s.N * OH * Math.ceil(OW / DIRECT_STRIP);
+  return [Math.ceil(strips / 256), Math.ceil(s.O / directCoutSlice(s)), 1];
+}
+
+/**
+ * The direct 2-D convolution — **for the narrow layers the GEMM serves badly.**
+ *
+ * Measured on the M4 Max (2026-09-07): a 16 → 16 layer at 96 × 96, batch 16, ran its
+ * 0.68 GFLOP in 0.5 ms through the implicit GEMM — 1.4 TFLOP/s against a peak above
+ * ten, and against a memory floor of 0.06 ms. Neither arithmetic nor bandwidth: the
+ * staging through workgroup memory, the two barriers per K-tile, and the gather were
+ * the time. Winograd was costed and refused — its fourfold data expansion costs what
+ * its 2.25× fewer multiplies save when there are sixteen channels.
+ *
+ * Here one thread owns four consecutive output columns of one row for up to sixteen
+ * output channels — sixty-four accumulators in registers. The workgroup's 256 threads
+ * share one copy of the weights in workgroup memory (16 × 16 × 9 floats is 9 KB), and
+ * each thread reads the input row segment its strip needs straight into registers,
+ * once per (input channel, kernel row). No staging of the activation, no barrier after
+ * the weights land. Output channels beyond the slice are another dispatch along y.
+ *
+ * The same kernel serves the stride-1 input gradient (a forward on turned weights) and
+ * takes the forward's epilogue (bias, residual, ReLU).
+ *
+ * **The weight gradient stays on the GEMM.** A direct version was written the same day
+ * — a workgroup per 2 × 4 channel block and a piece of the positions, seventy-two
+ * accumulators a thread, a tree fold — and it agreed with the core everywhere and ran
+ * 0.4 ms slower than the GEMM over the U-Net's narrow layers (4.2 against 3.8 ms): a
+ * strip of four columns gives 3.6 multiplies per global load, and the reduction over
+ * every position is where the GEMM's tile reuse actually pays. Removed rather than
+ * kept behind a switch.
+ */
+export function convDirect2d(s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [SH = 1, SW = 1] = s.stride;
+  const [PH = 0, PW = 0] = s.pad;
+  const TS = DIRECT_STRIP;
+  const slice = directCoutSlice(s);
+  const kSpace = KH * KW;
+  const wCells = slice * s.C * kSpace;
+  // The input columns one strip touches on one row: (TS − 1)·stride + KW.
+  const L = (TS - 1) * SW + KW;
+  const stripsPerRow = Math.ceil(OW / TS);
+  const strips = s.N * OH * stripsPerRow;
+  const acc: string[] = [];
+  for (let c = 0; c < slice; c++) for (let j = 0; j < TS; j++) acc.push(`  var a${c}_${j} = 0.0;`);
+  const seg: string[] = [];
+  for (let l = 0; l < L; l++) {
+    seg.push(`      let iw${l} = iw0 + ${l};`);
+    seg.push(`      let x${l} = select(0.0, X[rowBase + u32(iw${l})], inRow && iw${l} >= 0 && iw${l} < ${IW});`);
+  }
+  const fma: string[] = [];
+  for (let kw = 0; kw < KW; kw++) {
+    fma.push(`      { let wb = wRow + ${kw}u;`);
+    for (let c = 0; c < slice; c++) {
+      fma.push(`        let w${c} = Ws[wb + ${c * s.C * kSpace}u];`);
+      for (let j = 0; j < TS; j++) {
+        fma.push(`        a${c}_${j} = fma(w${c}, x${j * SW + kw}, a${c}_${j});`);
+      }
+    }
+    fma.push("      }");
+  }
+  const store: string[] = [];
+  for (let c = 0; c < slice; c++) {
+    store.push(`  if (co + ${c}u < ${s.O}u) {`);
+    store.push(`    let ob = (n * ${s.O}u + co + ${c}u) * ${OH * OW}u + oh * ${OW}u + ow0;`);
+    for (let j = 0; j < TS; j++) {
+      store.push(`    if (ow0 + ${j}u < ${OW}u) {`);
+      store.push(`      var r = a${c}_${j};`);
+      if (hasBias) store.push(`      r = r + B[co + ${c}u];`);
+      store.push(epilogueWgsl(epilogue, "r", `ob + ${j}u`).replace(/^/gm, "    "));
+      store.push(`      Out[ob + ${j}u] = r;`);
+      store.push("    }");
+    }
+    store.push("  }");
+  }
+  const slot = hasBias ? 3 : 2;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;
+${hasBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
+${residualBinding(epilogue, slot)}
+@group(0) @binding(${epilogue?.residual ? slot + 1 : slot}) var<storage, read_write> Out: array<f32>;
+var<workgroup> Ws: array<f32, ${wCells}>;
+@compute @workgroup_size(256)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let co = wid.y * ${slice}u;
+  // This slice's weights, (slice, C, KH, KW), into the workgroup — rows past O are zero.
+  for (var i = lid.x; i < ${wCells}u; i = i + 256u) {
+    let c = i / ${s.C * kSpace}u;
+    Ws[i] = select(0.0, Wt[(co + c) * ${s.C * kSpace}u + (i - c * ${s.C * kSpace}u)], co + c < ${s.O}u);
+  }
+  workgroupBarrier();
+  let strip = wid.x * 256u + lid.x;
+  // Nothing returns before the barrier above; past the last strip a thread idles here.
+  if (strip >= ${strips}u) { return; }
+  let n = strip / ${OH * stripsPerRow}u;
+  let rest = strip - n * ${OH * stripsPerRow}u;
+  let oh = rest / ${stripsPerRow}u;
+  let ow0 = (rest - oh * ${stripsPerRow}u) * ${TS}u;
+  let iw0 = i32(ow0 * ${SW}u) - ${PW};
+${acc.join("\n")}
+  for (var ci = 0u; ci < ${s.C}u; ci = ci + 1u) {
+    for (var kh = 0u; kh < ${KH}u; kh = kh + 1u) {
+      let ih = i32(oh * ${SH}u + kh) - ${PH};
+      let inRow = ih >= 0 && ih < ${IH};
+      let rowBase = (n * ${s.C}u + ci) * ${IH * IW}u + u32(max(ih, 0)) * ${IW}u;
+${seg.join("\n")}
+      let wRow = ci * ${kSpace}u + kh * ${KW}u;
+${fma.join("\n")}
+    }
+  }
+${store.join("\n")}
+}`;
+}
+
 /**
  * How many pieces the forward's reduction is split into. The same policy as the weight
  * gradient's, for the same reason: **the late layers of a network make a tile grid too

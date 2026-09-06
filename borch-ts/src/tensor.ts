@@ -204,6 +204,9 @@ import {
   convOut,
   poolOut,
   convTiledGrid,
+  convDirect2d,
+  directFits,
+  directGrid,
   turnWeightsForGradInput,
   cumExtreme,
   cumprodBackward,
@@ -726,6 +729,15 @@ function convForwardRun(
     ? { relu: epilogue.relu, residual: epilogue.residual !== null } : undefined;
   const tag = ep ? `:${ep.relu ? "r" : ""}${ep.residual ? "a" : ""}` : "";
   const tail = [...(bias ? [bias] : []), ...(epilogue?.residual ? [epilogue.residual] : []), out];
+  if (directFits(s)) {
+    // The narrow layers go direct — see `convDirect2d` for the measurement.
+    dev().run(
+      dev().pipeline(`cnd:${key}:${bias ? "b" : "n"}${tag}`, () => convDirect2d(s, bias !== null, ep)),
+      [x, w, ...tail],
+      directGrid(s),
+    );
+    return;
+  }
   if (splits === 1) {
     dev().run(
       dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}${tag}`, () => convNDForwardTiled(s, bias !== null, ep)),

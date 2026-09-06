@@ -128,6 +128,20 @@
       },
       "kernels": "+ BatchNorm\u2192ReLU paired in Sequential, fused BCE-with-logits",
       "note": "the clean-mask IoU also moves with the kernels' summation order: 0.51\u20130.57 across today's versions against torch's 0.55 \u00b1 0.01"
+    },
+    "two_runs_2026-09-07": {
+      "clean": {
+        "test_iou": 0.509,
+        "seconds": 34
+      },
+      "noise_0.2": {
+        "test_iou": 0.429,
+        "seconds": 29,
+        "queue": {
+          "auroc": 0.898
+        }
+      },
+      "kernels": "+ direct forward convolution for layers of at most 32 input channels"
     }
   },
   "torch_seed_spread": {
@@ -179,7 +193,8 @@
     "browser_batchnorm_pieces": 21.6,
     "browser_carried_gathers": 21.2,
     "browser_bn_relu_paired": 19.5,
-    "browser_bce_fused": 19.0
+    "browser_bce_fused": 19.0,
+    "browser_direct_conv_forward": 17.7
   },
   "gpu_profile_ms_b16_2026-09-06": {
     "total": 17.8,
@@ -202,5 +217,17 @@
     "maxpool_backward": 0.61,
     "batchnorm_stats_backward": 0.51,
     "adam": 0.47
+  },
+  "gpu_profile_ms_b16_2026-09-07": {
+    "total": 15.3,
+    "conv_weight_gradient_gemm": 4.66,
+    "conv_direct_forward_and_input_gradient": 2.95,
+    "conv_gemm_wide_layers": 1.12,
+    "batchnorm_apply_with_relu": 0.86,
+    "batchnorm_backward_apply": 0.85,
+    "maxpool_backward": 0.67,
+    "batchnorm_stats_backward": 0.55,
+    "adam": 0.49,
+    "note": "Winograd F(2x2,3x3) costed and refused at these widths (fourfold data expansion); a direct weight-gradient kernel written, correct, 0.4 ms slower than the GEMM, removed"
   }
 }
