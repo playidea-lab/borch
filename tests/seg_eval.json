@@ -76,7 +76,24 @@
         "auroc": 0.873
       }
     ],
-    "note": "the held-out IoU after thirty epochs on corrupted masks moves with the summation order (torch over six seeds: 0.40\u20130.50); the time is the stable number, and the clean-mask run carries the IoU verdict in the probe"
+    "note": "the held-out IoU after thirty epochs on corrupted masks moves with the summation order (torch over six seeds: 0.40\u20130.50); the time is the stable number, and the clean-mask run carries the IoU verdict in the probe",
+    "two_runs_2026-09-06": {
+      "clean": {
+        "test_iou": 0.529,
+        "seconds": 42
+      },
+      "noise_0.2": {
+        "test_iou": 0.471,
+        "seconds": 42,
+        "queue": {
+          "auroc": 0.917,
+          "p@20": 0.65,
+          "p@wrong": 0.68,
+          "read_for_90pct": 0.35
+        }
+      },
+      "note": "the page now trains twice in one session; the corrupted run's init differs from the single-run 0.309 above, which is the variance the note describes"
+    }
   },
   "torch_seed_spread": {
     "noise_0.2": {
