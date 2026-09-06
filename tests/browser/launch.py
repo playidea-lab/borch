@@ -29,6 +29,7 @@ Nothing was missing from the machine. The window is the default now — see `_he
 """
 
 import os
+import pathlib
 import re
 import sys
 
@@ -406,6 +407,49 @@ def _headed(asked):
     if os.environ.get("BORCH_HEADLESS"):
         return False
     return "--headless" not in sys.argv
+
+
+LOCK_PATH = pathlib.Path.home() / ".cache" / "borch" / "browser-probe.lock"
+_lock_fd = None
+
+
+def probe_lock(what="a browser probe"):
+    """**One browser probe at a time on this machine.** Blocks until it is ours.
+
+    Two sessions ran probes at once on 2026-09-06 and neither finished the way it should
+    have: a headed Chromium never launched while a headless one was up (the Playwright
+    driver sat in `waitpid`), the two fought over the uv cache lock, and a cleanup by
+    process name took the other session's browser with it. A nightly run was killed the
+    same way. Etiquette by message worked for an afternoon; this is the rule as code.
+
+    Every probe serves the repository to itself first (`serve()` in the three runners),
+    so that is where this is taken. `flock` on one file, released when the process ends.
+    `BORCH_NO_PROBE_LOCK=1` skips it — for a machine nobody shares.
+    """
+    global _lock_fd
+    if _lock_fd is not None or os.environ.get("BORCH_NO_PROBE_LOCK"):
+        return
+    import fcntl                                                                  # noqa: PLC0415
+    import time                                                                   # noqa: PLC0415
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        holder = ""
+        try:
+            holder = os.read(fd, 64).decode(errors="replace").strip()
+        except OSError:
+            pass
+        print(f"  waiting: {what} — another browser probe holds the machine"
+              + (f" (pid {holder})" if holder else "") + "; one at a time here", flush=True)
+        t0 = time.time()
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        print(f"  waited {time.time() - t0:.0f}s for the browser", flush=True)
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, str(os.getpid()).encode())
+    _lock_fd = fd
 
 
 def _open(playwright, headed=False, flags=FLAGS):

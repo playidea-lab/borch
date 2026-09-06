@@ -59,6 +59,8 @@ def pages():
 
 
 def serve(headers):
+    from launch import probe_lock  # noqa: PLC0415 — one browser probe at a time on this machine
+    probe_lock("the isolation sweep")
     class Handler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *a):
             pass

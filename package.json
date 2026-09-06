@@ -42,6 +42,7 @@
     "check:wasm": "python3 borch-ts/wasm/build.py --check",
     "bundle:py": "esbuild borch_webgpu/_entry.js --bundle --format=esm --alias:borch-ts=./borch-ts/dist/src/index.js --outfile=borch_webgpu/_borch.js --log-level=warning",
     "docs:api": "python3 site/build_api.py",
+    "sync": "python3 site/build_api.py && python3 site/sync_counts.py",
     "site": "python3 site/build_api.py && python3 site/serve.py",
     "check:ts": "tsc -p borch-ts/tsconfig.json --noEmit",
     "golden:ts": "uv run --with playwright python borch-ts/test/run.py",
