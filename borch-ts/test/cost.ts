@@ -107,7 +107,14 @@ const EXPECT = {
   // Measured on `Small` at batch 4, each phase run in a scope of its own. The optimizer
   // is one fused dispatch per parameter and `Small` has five — conv weight (no bias),
   // the pair BatchNorm learns, and the pair in the Linear.
-  phases: { forward: 13, loss: 14, backward: 26, optimizer: 5 },
+  //
+  // 2026-09-07, forward 13 → 12 and backward 26 → 27, the total unmoved at 58: BatchNorm's
+  // apply pass now writes the standardised value itself (`batchNormApply` with `withXhat`),
+  // which retired the broadcast subtract and multiply that built it (−2), and its
+  // statistics are cut into pieces per channel and finished in a pass of their own
+  // (`bnPieces`: +1 forward, +1 backward). Neither is the ReLU pairing — `Small` calls
+  // `unary("relu")` by hand, not through a `Sequential`, so it still pays that dispatch.
+  phases: { forward: 12, loss: 14, backward: 27, optimizer: 5 },
 };
 
 export async function report(): Promise<Report> {
