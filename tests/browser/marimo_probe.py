@@ -14,7 +14,7 @@ import tempfile
 import time
 
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve
-from launch import refuse_if_software
+from launch import _headed, refuse_if_software
 
 GIVE_UP_MS = 300_000     # the frozen path exports a 21 MB EfficientNet — tracing and encoding take a while
 # What the notebook rendered, and only that. `document.body.innerText` would also carry
@@ -121,7 +121,7 @@ def scratch_pass(page, t0, deadline):
 
 def main(argv):
     from playwright.sync_api import sync_playwright
-    headed = "--headed" in argv
+    headed = _headed("--headed" in argv)   # a window unless --headless / BORCH_HEADLESS: headless is SwiftShader here
     # `--zip=N`: how many PNGs the upload pass zips (90 by default; 1000 for a timing).
     zip_n = int(next((a.split("=", 1)[1] for a in argv if a.startswith("--zip=")), "90"))
     page_file = ROOT / "site" / "marimo" / "index.html"

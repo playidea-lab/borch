@@ -19,7 +19,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve  # noqa: E402
-from launch import refuse_if_software  # noqa: E402
+from launch import _headed, refuse_if_software  # noqa: E402
 from wheel_probe import wheel_is_stale  # noqa: E402
 
 GIVE_UP_MS = 15 * 60 * 1000
@@ -27,7 +27,7 @@ GIVE_UP_MS = 15 * 60 * 1000
 
 def main(argv):
     from playwright.sync_api import sync_playwright
-    headed = "--headed" in argv
+    headed = _headed("--headed" in argv)   # a window unless --headless / BORCH_HEADLESS: headless is SwiftShader here
     if "--build" in argv:
         import subprocess
         for cmd in (["npm", "run", "-s", "bundle:py"], ["uv", "build", "--wheel", "-q"]):
