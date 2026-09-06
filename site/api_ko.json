@@ -3118,5 +3118,13 @@
   "device/Capture.describe": {
     "ko": "기록을 목록으로: dispatch마다 파이프라인 키, 그리드, 버퍼를 작은 정수로(같은 버퍼 → 같은 번호). 융합 패스가, 또는 dispatch가 어디로 가는지 묻는 사람이 읽는다.",
     "src": "88ea06b85860"
+  },
+  "vision_v2_twins/ScaleJitter": {
+    "ko": "**뽑은 sharpnessFactor**만큼 `targetSize` 쪽으로 리사이즈한다 — 대규모 지터 증강.",
+    "src": "032c6a9df27f"
+  },
+  "vision_v2_twins/UniformTemporalSubsample": {
+    "ko": "영상에서 `numSamples` 프레임을 길이에 걸쳐 고르게 남긴다.",
+    "src": "eb0fcbb4a64c"
   }
 }

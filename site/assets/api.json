@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 780,
+  "done": 782,
   "stale": 0,
-  "missing": 468
+  "missing": 466
  },
  "modules": [
   {
@@ -20921,7 +20921,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_ko": "**뽑은 sharpnessFactor**만큼 `targetSize` 쪽으로 리사이즈한다 — 대규모 지터 증강."
     },
     {
      "kind": "class",
@@ -20995,7 +20996,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_ko": "영상에서 `numSamples` 프레임을 길이에 걸쳐 고르게 남긴다."
     }
    ],
    "count": 134

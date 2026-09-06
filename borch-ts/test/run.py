@@ -249,8 +249,18 @@ class _Quiet(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
 
+def _probe_lock():
+    """One browser probe at a time on this machine — `tests/browser/launch.py:probe_lock`."""
+    import importlib.util  # noqa: PLC0415
+    spec = importlib.util.spec_from_file_location("bt_launch", ROOT / "tests" / "browser" / "launch.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.probe_lock()
+
+
 def serve(root):
     """Put the repository root on a temporary port; return (port, shutdown)."""
+    _probe_lock()
     handler = functools.partial(_ReportMissing, directory=str(root))
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
