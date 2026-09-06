@@ -72,6 +72,49 @@ def zipped_folder(files):
     return {"name": "photos.zip", "mimeType": "application/zip", "buffer": buf.getvalue()}
 
 
+def synthetic_seg_zip(n=64, side=96):
+    """A segmentation set as one zip — `images/` and `masks/` with the same names: a bright
+    disc on a dark, noisy ground, and the disc's mask, white where it is."""
+    import io
+    import zipfile
+    import numpy as np
+    rng = np.random.default_rng(13)
+    yy, xx = np.mgrid[0:side, 0:side]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for i in range(n):
+            cy, cx, r = rng.uniform(20, side - 20), rng.uniform(20, side - 20), rng.uniform(10, 22)
+            disc = ((yy - cy) ** 2 + (xx - cx) ** 2 <= r * r).astype(np.float32)
+            colour = rng.uniform(0.5, 1.0, 3).astype(np.float32)
+            img = 0.2 + disc[:, :, None] * colour + 0.08 * rng.standard_normal((side, side, 3)).astype(np.float32)
+            z.writestr(f"images/{i:03d}.png", png_bytes((np.clip(img, 0, 1) * 255).astype("uint8")))
+            z.writestr(f"masks/{i:03d}.png", png_bytes(np.repeat((disc[:, :, None] * 255).astype("uint8"), 3, axis=2)))
+    return {"name": "segmentation.zip", "mimeType": "application/zip", "buffer": buf.getvalue()}
+
+
+def seg_pass(page, t0, deadline, n=64):
+    """Feed a segmentation zip and wait for the U-Net's line and the mask queue. Returns
+    (seconds, "IoU x.xx on N rows") or None."""
+    page.set_input_files('input[type="file"]', [synthetic_seg_zip(n)])
+    body = ""
+    while time.time() < deadline:
+        page.wait_for_timeout(500)
+        body = page.evaluate(OUTPUTS)
+        iou = re.search(r"mean IoU with the given masks \*?\*?([0-9.]+)", body)
+        if iou and "1 − IoU" in body:
+            page.wait_for_timeout(1500)
+            body = page.evaluate(OUTPUTS)
+            rows = re.search(r"([\d,]+) rows, 5 columns", body)
+            kb = re.search(r"(\d+) KB of ONNX", body)
+            if rows and kb:
+                return (time.time() - t0, f"IoU {iou.group(1)} on {rows.group(1).replace(',', '')} rows · {kb.group(1)} KB of ONNX")
+        if "Traceback" in body:
+            break
+    print("  segmentation pass: the U-Net's line never showed"
+          + (" — the deadline was already spent before this pass looked" if not body else f"; the last outputs: {body[-300:]!r}"))
+    return None
+
+
 def upload_pass(page, t0, deadline, n=90):
     """Feed a zipped folder of the PNGs to the notebook's file input and wait for the review
     table to show their names, then the retrained accuracy. Returns (seconds, "acc% on N
@@ -215,6 +258,9 @@ def main(argv):
                     # a shadow root; Playwright's text locator pierces it. marimo reruns
                     # the cells below on its own. Not offered without a device.
                     marks["scratch"] = (time.time() - t0, "not offered on the CPU") if no_webgpu else scratch_pass(page, t0, deadline)
+                    # Fourth pass: a segmentation set — `images/` + `masks/` — through the
+                    # same file input; the notebook switches to the U-Net and the mask queue.
+                    marks["segment"] = (time.time() - t0, "not offered on the CPU") if no_webgpu else seg_pass(page, t0, deadline)
             finally:
                 context.close()
     finally:
@@ -223,7 +269,7 @@ def main(argv):
         print(f"  offline: {len(phoned)} request(s) tried to leave" + (":" if phoned else ""))
         for u in phoned[:8]:
             print(f"      {u[:140]}")
-    for key in ("adapter", "trained", "queue", "export", "report", "uploaded", "scratch"):
+    for key in ("adapter", "trained", "queue", "export", "report", "uploaded", "scratch", "segment"):
         if marks.get(key):
             print(f"  {key:8s} {marks[key][0]:5.1f} s  {marks[key][1]}")
         else:
@@ -233,9 +279,11 @@ def main(argv):
     adapter = marks.get("adapter", (0, None))[1]
     if not no_webgpu and refuse_if_software(adapter, "the workbench page"):
         return 1
-    ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "report", "uploaded", "scratch"))
+    ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "report", "uploaded", "scratch", "segment"))
     ok = ok and marks["report"][1] == "0"                   # faults — the warnings count rides in the text
     ok = ok and (no_webgpu or int(marks["scratch"][1].split("%")[0]) >= 90)
+    # Discs on a noisy ground: a U-Net that learned them reaches an IoU well above 0.8.
+    ok = ok and (no_webgpu or float(marks["segment"][1].split(" ")[1]) >= 0.8)
     ok = ok and not phoned
     ok = ok and int(marks["trained"][1]) >= 90 and int(marks["queue"][1]) == 90
     ok = ok and int(marks["uploaded"][1].split("%")[0]) >= 90 and f"on {zip_n} rows" in marks["uploaded"][1]

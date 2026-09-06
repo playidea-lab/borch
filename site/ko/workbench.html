@@ -74,7 +74,8 @@
       이미지 업로드 → 이 탭의 GPU 에서 학습 → 모델이 의심하는 라벨부터 보이는 검수 표 →
       <code>torch.onnx.export</code>. 모델 경로는 둘이다: 동결한 ImageNet EfficientNet-B0 위의 선형
       헤드(<code>torch.hub.load</code>, 이미지당 특징 벡터 하나, 수백 장이면 된다) 또는 처음부터 학습하는
-      소형 CNN. 아무것도 설치하지 않는다.
+      소형 CNN. 아무것도 설치하지 않는다. zip에 <code>images/</code>와 <code>masks/</code>가 있으면 세그멘테이션
+      작업이 된다: U-Net이 마스크로 학습하고, 검수 표는 받은 마스크와 모델 마스크를 나란히 어긋난 순서로 보여 주며, 내보내는 것은 U-Net이다.
     </p>
     <p class="cta-row">
       <a class="btn primary" href="../marimo/index.html">작업대 열기 →</a>

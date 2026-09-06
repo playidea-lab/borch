@@ -254,6 +254,8 @@ function emitOne(
 ): Emitted {
   switch (op) {
     case "Conv":
+    case "ConvTranspose":
+    case "Concat":
     case "MatMul":
     case "BatchNormalization":
     case "ReduceMean":

@@ -75,7 +75,9 @@
       tab's GPU → a review table with the labels the model doubts first →
       <code>torch.onnx.export</code>. Two model paths: a frozen ImageNet EfficientNet-B0 with a
       linear head (<code>torch.hub.load</code>, one feature vector per image, hundreds of images are
-      enough) or a small CNN from scratch. Nothing is installed.
+      enough) or a small CNN from scratch. Nothing is installed. A zip with <code>images/</code>
+      and <code>masks/</code> makes it a segmentation job instead: a U-Net trains on the masks, the
+      review table shows the given mask beside the model's, worst agreement first, and the export is the U-Net.
     </p>
     <p class="cta-row">
       <a class="btn primary" href="marimo/index.html">Open the workbench →</a>

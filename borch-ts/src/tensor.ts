@@ -2404,6 +2404,12 @@ export class Tensor implements Node<Tensor> {
     const sizes = parts.map((p) => p.shape[axis] ?? 0);
     const total = sizes.reduce((a, b) => a + b, 0);
     const outShape = first.shape.map((s, d) => (d === axis ? total : s));
+    return traced("Concat", [...parts], { axis }, () => Tensor.catRaw(parts, axis, sizes, total, outShape));
+  }
+
+  /** `cat` without the trace — the copies themselves. */
+  private static catRaw(parts: readonly Tensor[], axis: number, sizes: readonly number[], total: number, outShape: readonly number[]): Tensor {
+    const first = parts[0] as Tensor;
     const outer = first.shape.slice(0, axis).reduce((a, b) => a * b, 1);
     const inner = first.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
     const out = dev().alloc(outer * total * inner);
@@ -11020,6 +11026,26 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     groups = 1,
     dilation: number | readonly number[] = 1,
   ): Tensor {
+    // Traced as ONNX's ConvTranspose — a U-Net's decoder has to leave with the rest.
+    const spatial = this.shape.length - 2;
+    const each = (v: number | readonly number[]): number[] =>
+      typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
+    const pads = each(padding);
+    return traced("ConvTranspose", [this, weight, bias], {
+      kernel_shape: weight.shape.slice(2), strides: each(stride), pads: [...pads, ...pads],
+      output_padding: each(outputPadding), dilations: each(dilation), group: groups,
+    }, () => this.convTransposeNDRaw(weight, bias, stride, padding, outputPadding, groups, dilation));
+  }
+
+  private convTransposeNDRaw(
+    weight: Tensor,
+    bias: Tensor | null = null,
+    stride: number | readonly number[] = 1,
+    padding: number | readonly number[] = 0,
+    outputPadding: number | readonly number[] = 0,
+    groups = 1,
+    dilation: number | readonly number[] = 1,
+  ): Tensor {
     const spatial = this.shape.length - 2;
     if (groups !== 1) {
       // **The weight axes are the other way round here** — `(in, out/groups, …)` —
@@ -11036,7 +11062,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       const cin = inCh / groups;
       const parts: Tensor[] = [];
       for (let g = 0; g < groups; g++) {
-        parts.push(this.narrow(1, g * cin, cin).convTransposeND(
+        parts.push(this.narrow(1, g * cin, cin).convTransposeNDRaw(
           weight.narrow(0, g * cin, cin),
           bias === null ? null : bias.narrow(0, g * perGroupOut, perGroupOut),
           stride, padding, outputPadding, 1, dilation));

@@ -38,7 +38,7 @@ async def _():
 @app.cell
 def _(mo):
     upload = mo.ui.file(filetypes=[".png", ".jpg", ".jpeg", ".zip"], multiple=True, label="Images to review — files (label = the part of the name before the first '_') or a zipped folder (label = the folder)")
-    mo.vstack([mo.md("### 1 · Images"), upload, mo.md("A zip of class folders is the way to bring thousands: nothing is decoded until a batch asks for it. Nothing uploaded? A synthetic set of three classes is used, so the notebook runs as it is.")])
+    mo.vstack([mo.md("### 1 · Images"), upload, mo.md("A zip of class folders is the way to bring thousands: nothing is decoded until a batch asks for it. **Segmentation**: a zip with `images/` and `masks/` — the same file names in both, a mask white where the object is — and the notebook trains a U-Net and reviews the masks instead. Nothing uploaded? A synthetic set of three classes is used, so the notebook runs as it is.")])
     return (upload,)
 
 
@@ -56,7 +56,19 @@ def _(FROZEN, cpu, path, torch, upload):
     import numpy as np
     from PIL import Image
     SIDE = 224 if path.value == FROZEN else 64            # the backbone was trained at 224
-    if upload.value:
+    from borch._data import image_entries                  # the core's zip reader — both sides carry the core
+    masks = None                                           # a segmentation set carries one per image
+    entries = image_entries(upload.value) if upload.value else []
+    pairs = {name.split("/", 1)[1]: data for name, data in entries if name.startswith("images/")}
+    mask_of = {name.split("/", 1)[1]: data for name, data in entries if name.startswith("masks/")}
+    if pairs and mask_of:
+        # `images/` + `masks/`, matched by name: a segmentation set. 96 px (measured on
+        # Kvasir-SEG: 800 images × 30 epochs in 34 s on a laptop GPU), the U-Net path.
+        SIDE = 96
+        keep = sorted(k for k in pairs if k in mask_of)
+        ds = (torch or cpu).ImageFiles([(k, pairs[k]) for k in keep], size=SIDE, label=lambda _n: "image")
+        masks = (torch or cpu).ImageFiles([(k, mask_of[k]) for k in keep], size=SIDE, label=lambda _n: "mask")
+    elif upload.value:
         # Files or a zipped folder → `torch.ImageFiles` (the numpy core's, so `borch_cpu` has it too): names, labels and classes now,
         # pixels only when a batch asks. Five thousand camera images stay as their bytes.
         ds = (torch or cpu).ImageFiles(upload.value, size=SIDE)
@@ -76,17 +88,68 @@ def _(FROZEN, cpu, path, torch, upload):
             files.append((f"{'abc'[k]}_{i:03d}.png", buf.getvalue()))
         ds = (torch or cpu).ImageFiles(files, size=SIDE)
     CLASSES, names, labels, y = ds.classes, ds.names, ds.labels, ds.targets
-    return CLASSES, Image, ds, io, labels, names, np, y
+    return CLASSES, Image, ds, io, labels, masks, names, np, y
 
 
 @app.cell
-def _(CLASSES, FROZEN, cpu, ds, mo, np, path, torch, y):
-    # 2 · Train. Two paths, one output: `model` (what is exported), `feats` (what the
+def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
+    # 2 · Train. Three paths, one output: `model` (what is exported), `feats` (what the
     # review ranks on), `pred`, and a line saying how well the labels are agreed with.
     import time
     K, N = len(CLASSES), len(ds)
     t0 = time.perf_counter(); losses = []
-    if torch is None:
+    if masks is not None and torch is None:
+        raise RuntimeError("segmentation needs the WebGPU device — the CPU side runs the frozen backbone and the head only")
+    if masks is not None:
+        # Segmentation: a three-level U-Net from scratch on the given masks (the model
+        # of tests/seg_eval.py, where it is measured against torch), one logit per pixel.
+        # `pred` is the model's mask per image; `feats` carries the given masks — the
+        # review ranks masks by their disagreement with the model's, not by neighbours.
+        nn = torch.nn
+        def block(i, o):
+            return nn.Sequential(nn.Conv2d(i, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU(), nn.Conv2d(o, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU())
+        class UNet(nn.Module):
+            def __init__(self, w=16):
+                super().__init__()
+                self.e1, self.e2, self.e3 = block(3, w), block(w, 2 * w), block(2 * w, 4 * w)
+                self.pool = nn.MaxPool2d(2)
+                self.u2, self.u1 = nn.ConvTranspose2d(4 * w, 2 * w, 2, stride=2), nn.ConvTranspose2d(2 * w, w, 2, stride=2)
+                self.d2, self.d1 = block(4 * w, 2 * w), block(2 * w, w)
+                self.out = nn.Conv2d(w, 1, 1)
+            def forward(self, x):
+                a = self.e1(x); b = self.e2(self.pool(a)); c = self.e3(self.pool(b))
+                y_ = self.d2(torch.cat([self.u2(c), b], 1))
+                return self.out(self.d1(torch.cat([self.u1(y_), a], 1)))
+        model = UNet()
+        head = None
+        crit = nn.BCEWithLogitsLoss()
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        Xt = ds.stack()                                            # (N, 3, 96, 96)
+        Mt = (masks.stack()[:, :1] > 0.5).astype(np.float32)       # (N, 1, 96, 96): white is the object
+        BATCH = 16
+        EPOCHS = 30 if N <= 1000 else 15
+        steps = max(1, N // BATCH)
+        shuffled = np.random.default_rng(0).permutation(N)
+        for epoch in range(EPOCHS):
+            for s in range(steps):
+                take = shuffled[s * BATCH:(s + 1) * BATCH]
+                with torch.scope():
+                    opt.zero_grad(); loss = crit(model(torch.tensor(Xt[take])), torch.tensor(Mt[take])); loss.backward(); opt.step()
+                    last = loss.item()
+            losses.append(last)
+        model.eval()
+        pred = np.zeros((N, 1, ds.size, ds.size), np.float32)
+        with torch.no_grad():
+            for s in range(0, N, 32):
+                with torch.scope():
+                    pred[s:s + 32] = (model(torch.tensor(Xt[s:s + 32])).numpy() > 0)
+        feats = Mt
+        hit = (pred * Mt).sum(axis=(1, 2, 3)); joined = ((pred + Mt) > 0).sum(axis=(1, 2, 3))
+        ious = np.where(joined > 0, hit / np.maximum(joined, 1), 1.0)
+        acc = float(ious.mean())
+        how = f"U-Net (width 16) from scratch at {ds.size} px · {EPOCHS} epochs × {steps} steps"
+        headline = f"{how} in **{time.perf_counter() - t0:.1f} s** · loss {losses[0]:.3f} → {losses[-1]:.3f} · mean IoU with the given masks **{acc:.2f}**"
+    elif torch is None:
         # No adapter: the same frozen backbone through `bimm.cpuGraphFor` + `cpu.CpuRunner`,
         # the same head through `cpu.LinearHead` — full-batch SGD with momentum (there is
         # no Adam on this side; the numbers land within 3.5e-5 of torch's step for step).
@@ -160,26 +223,44 @@ def _(CLASSES, FROZEN, cpu, ds, mo, np, path, torch, y):
             feats = logits.numpy()
         how = f"small CNN · {EPOCHS} epochs × {steps} steps"
     train_s = time.perf_counter() - t0
-    acc = float((pred == y).mean())
-    mo.md(f"### 2 · Trained\n{how} in **{train_s:.1f} s** · loss {losses[0]:.2f} → {losses[-1]:.3f} · agrees with the given labels on **{acc * 100:.0f}%**")
+    if masks is None:
+        acc = float((pred == y).mean())
+        headline = f"{how} in **{train_s:.1f} s** · loss {losses[0]:.2f} → {losses[-1]:.3f} · agrees with the given labels on **{acc * 100:.0f}%**"
+    mo.md(f"### 2 · Trained\n{headline}")
     return acc, feats, head, how, model, pred, train_s
 
 
 @app.cell
-def _(CLASSES, Image, cpu, ds, feats, io, labels, mo, names, np, pred, torch, y):
+def _(CLASSES, Image, cpu, ds, feats, io, labels, masks, mo, names, np, pred, torch, y):
     # 3 · Review — the labels the model doubts, first. `torch.suspects` scores each
     # image by how many of its five nearest neighbours (cosine, on the model's
     # features) carry a different label: a wrong label sits among images that disagree.
     # The score is the numpy core's, so it is the same function on either side.
     # Five neighbours for a few hundred images; twenty at a few thousand — measured on
     # CIFAR-100N with 10 % of labels flipped, AUROC 0.913 at k=5 and 0.962 at k=20.
-    suspect = (torch or cpu).suspects(feats, y, k=5 if len(y) < 2000 else 20)
-    order = np.argsort(-suspect)
+    # A mask has no neighbourhood to vote in: its score is one minus the IoU between
+    # the given mask and the model's — the mask the model could not learn to reproduce
+    # (measured on Kvasir-SEG with a fifth of the masks swapped or shifted: AUROC 0.90,
+    # a third of the queue for 90 % of the wrong ones).
+    def png(arr):
+        buf = io.BytesIO(); Image.fromarray(arr).save(buf, format="PNG"); return buf.getvalue()
     def thumb(i):
-        buf = io.BytesIO(); Image.fromarray(ds.thumb(int(i), 56)).save(buf, format="PNG"); return buf.getvalue()
-    rows = [{"file": names[i], "image": mo.image(thumb(i), width=56), "given": labels[i], "predicted": CLASSES[int(pred[i])],
-             "suspect": round(float(suspect[i]), 2)} for i in order]
-    table = mo.ui.table(rows, selection="single", page_size=10, label="review queue — most doubted first")
+        return png(ds.thumb(int(i), 56))
+    if masks is not None:
+        given_m = feats
+        inter = (pred * given_m).sum(axis=(1, 2, 3)); union = ((pred + given_m) > 0).sum(axis=(1, 2, 3))
+        suspect = 1 - np.where(union > 0, inter / np.maximum(union, 1), 1.0)
+        order = np.argsort(-suspect)
+        def mask_png(m):
+            return png(np.asarray(Image.fromarray((m[0] * 255).astype("uint8")).resize((56, 56))))
+        rows = [{"file": names[i], "image": mo.image(thumb(i), width=56), "given": mo.image(mask_png(given_m[i]), width=56),
+                 "predicted": mo.image(mask_png(pred[i]), width=56), "suspect": round(float(suspect[i]), 2)} for i in order]
+    else:
+        suspect = (torch or cpu).suspects(feats, y, k=5 if len(y) < 2000 else 20)
+        order = np.argsort(-suspect)
+        rows = [{"file": names[i], "image": mo.image(thumb(i), width=56), "given": labels[i], "predicted": CLASSES[int(pred[i])],
+                 "suspect": round(float(suspect[i]), 2)} for i in order]
+    table = mo.ui.table(rows, selection="single", page_size=10, label="review queue — most doubted first" + (" (given mask · model's mask · 1 − IoU)" if masks is not None else ""))
     mo.vstack([mo.md("### 3 · Review"), table])
     return suspect, table
 
@@ -187,7 +268,9 @@ def _(CLASSES, Image, cpu, ds, feats, io, labels, mo, names, np, pred, torch, y)
 @app.cell
 def _(mo, table):
     picked = table.value
-    mo.md(f"picked: **{picked[0]['file']}** — given `{picked[0]['given']}`, predicted `{picked[0]['predicted']}`" if picked else "*pick a row above to inspect it*")
+    def _text(v):
+        return v if isinstance(v, str) else "mask"
+    mo.md(f"picked: **{picked[0]['file']}** — given `{_text(picked[0]['given'])}`, predicted `{_text(picked[0]['predicted'])}` · suspect {picked[0]['suspect']}" if picked else "*pick a row above to inspect it*")
     return
 
 
@@ -215,7 +298,7 @@ def _(ds, head, mo, model, torch):
 
 
 @app.cell
-def _(acc, ds, how, mo, path, torch, train_s):
+def _(acc, ds, how, masks, mo, path, torch, train_s):
     # 5 · Report — the machine and the run as one file, for whoever is asked "it does not
     # work". `torch.report` gathers the adapter, the faults, memory, the wheel and bundle
     # versions; the facts of this run ride along. No file names, no pixels.
@@ -224,7 +307,8 @@ def _(acc, ds, how, mo, path, torch, train_s):
         rep = {"adapter": "cpu (no WebGPU adapter)", "faults": 0, "warnings": ["no WebGPU adapter — the frozen backbone and the head ran on wasm SIMD, one thread; the small CNN and the ONNX export were not available"],
                "images": len(ds), "classes": len(ds.classes), "model": path.value, "train_s": round(train_s, 2), "accuracy": round(acc, 4), "how": how}
     else:
-        rep = torch.report(images=len(ds), classes=len(ds.classes), model=path.value, train_s=round(train_s, 2), accuracy=round(acc, 4), how=how)
+        rep = (torch.report(images=len(ds), task="segmentation", model="U-Net", train_s=round(train_s, 2), mean_iou=round(acc, 4), how=how) if masks is not None
+               else torch.report(images=len(ds), classes=len(ds.classes), model=path.value, train_s=round(train_s, 2), accuracy=round(acc, 4), how=how))
     text = json.dumps(rep, indent=2)
     warn = rep["warnings"]
     rep_head = mo.md(f"### 5 · Report\n`{rep['adapter']}` · faults {rep['faults']} · warnings {len(warn)}" + (" — **read them before the numbers**" if warn else ""))

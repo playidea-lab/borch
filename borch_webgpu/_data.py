@@ -497,7 +497,7 @@ def decode_cifar10(raw):
 # is the core's** (`borch._data`) — numpy on the CPU, the same grain as `decode_cifar10`:
 # bytes in hand become arrays, and the model is what runs on the GPU. What differs here
 # is only how Pillow arrives: Pyodide ships it as a package the page has to ask for.
-from borch._data import label_from_name, suspects                    # noqa: E402,F401
+from borch._data import image_entries, label_from_name, suspects     # noqa: E402,F401
 from borch._data import ImageFiles as _ImageFilesCore                 # noqa: E402
 
 

@@ -573,6 +573,13 @@ def label_from_name(name):
     return tail.split("_")[0]
 
 
+def image_entries(files):
+    """`(name, bytes)` for every image among `files`, a zip opened into its members —
+    what `ImageFiles` reads. Public so a notebook can split a zip by folder before
+    building datasets from the halves: `images/` and `masks/` of a segmentation set."""
+    return list(_entries(files))
+
+
 def _entries(files):
     """`(name, bytes)` for every image among `files` — a zip is opened and its members
     become entries under their paths, so a zipped folder keeps its folder labels.
