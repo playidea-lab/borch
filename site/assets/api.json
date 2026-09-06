@@ -11822,7 +11822,7 @@
     {
      "kind": "function",
      "name": "batchNorm",
-     "signature": "export declare function batchNorm(input: Tensor, runningMean: Tensor | null, runningVar: Tensor | null, weight: Tensor | null, bias: Tensor | null, training?: boolean, momentum?: number, eps?: number, relu?: boolean): Tensor",
+     "signature": "export declare function batchNorm(input: Tensor, runningMean: Tensor | null, runningVar: Tensor | null, weight: Tensor | null, bias: Tensor | null, training?: boolean, momentum?: number, eps?: number): Tensor",
      "doc": "The function form of `BatchNormND`. **The layer calls this** — one copy\nof the formula.\n\n**In training it modifies the running statistics in place.** torch does,\nand the tensor you hand in comes back updated. Returning a new one leaves\nthe caller's buffer unmoved, so training runs and only eval-mode values\nare wrong.\n\n**It uses variance two ways.** Normalisation uses the biased estimate;\nthe running-statistics update uses the unbiased one. Merge them and it\ndiverges in eval mode only.",
      "members": [],
      "torch": "batch_norm",

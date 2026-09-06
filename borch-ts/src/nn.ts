@@ -4702,7 +4702,22 @@ export function batchNorm(
   training = false,
   momentum = 0.1,
   eps = 1e-5,
-  relu = false,
+): Tensor {
+  return batchNormImpl(input, runningMean, runningVar, weight, bias, training, momentum, eps, false);
+}
+
+/** `batchNorm` with the ReLU that follows folded into its kernels — reached through
+ *  `BatchNormND.forwardRelu`; the public function keeps torch's shape. */
+function batchNormImpl(
+  input: Tensor,
+  runningMean: Tensor | null,
+  runningVar: Tensor | null,
+  weight: Tensor | null,
+  bias: Tensor | null,
+  training = false,
+  momentum = 0.1,
+  eps = 1e-5,
+  relu: boolean,
 ): Tensor {
   const channels = input.shape[1] ?? 1;
   const w = weight ?? Tensor.ones([channels]);
@@ -5257,7 +5272,7 @@ export class BatchNormND extends Module {
     //
     // **Without the statistics the batch's own are used in both modes**, which is
     // what `training` means to the function: there is nothing else to normalise by.
-    return batchNorm(x, this.runningMean, this.runningVar, this.weight,
+    return batchNormImpl(x, this.runningMean, this.runningVar, this.weight,
       this.bias, this.training || !this.trackRunningStats,
       this.momentum, this.eps, relu);
   }
