@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 778,
+  "done": 780,
   "stale": 0,
-  "missing": 470
+  "missing": 468
  },
  "modules": [
   {
@@ -21938,7 +21938,8 @@
       {
        "name": "describe",
        "signature": "describe(): { key: string; groups: readonly [number, number, number]; buffers: number[]; sizes: number[]; }[]",
-       "doc": "The recording as a list: each dispatch's pipeline key, its grid, and its buffers as\nsmall integers (the same buffer → the same number). What a fusion pass, or a person\nasking where the dispatches go, reads."
+       "doc": "The recording as a list: each dispatch's pipeline key, its grid, and its buffers as\nsmall integers (the same buffer → the same number). What a fusion pass, or a person\nasking where the dispatches go, reads.",
+       "doc_ko": "기록을 목록으로: dispatch마다 파이프라인 키, 그리드, 버퍼를 작은 정수로(같은 버퍼 → 같은 번호). 융합 패스가, 또는 dispatch가 어디로 가는지 묻는 사람이 읽는다."
       },
       {
        "name": "replay",
@@ -22053,7 +22054,8 @@
        "section": {
         "ko": "Capture and replay",
         "en": "Capture and replay"
-       }
+       },
+       "doc_ko": "파이프라인이 만들어질 때의 키. 이 디바이스가 만들지 않은 것이면 undefined."
       },
       {
        "name": "capturing",

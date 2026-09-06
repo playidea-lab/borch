@@ -3110,5 +3110,13 @@
   "device/Device.unpin": {
     "ko": "캡처가 붙잡아 둔 버퍼를 풀에 돌려준다. `Capture.dispose`가 부른다.",
     "src": "db86a93bc754"
+  },
+  "device/Device.keyOf": {
+    "ko": "파이프라인이 만들어질 때의 키. 이 디바이스가 만들지 않은 것이면 undefined.",
+    "src": "a375f877e0e4"
+  },
+  "device/Capture.describe": {
+    "ko": "기록을 목록으로: dispatch마다 파이프라인 키, 그리드, 버퍼를 작은 정수로(같은 버퍼 → 같은 번호). 융합 패스가, 또는 dispatch가 어디로 가는지 묻는 사람이 읽는다.",
+    "src": "88ea06b85860"
   }
 }
