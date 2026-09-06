@@ -243,6 +243,25 @@ function numbered(code: string): string {
     .join("\n");
 }
 
+interface SubgroupMatrixConfig {
+  readonly componentType: string;
+  readonly resultComponentType: string;
+  readonly M: number;
+  readonly N: number;
+  readonly K: number;
+}
+
+/** Whether the adapter offers subgroup matrices with the f32 8 × 8 × 8 configuration. */
+function subgroupMatrixF32(adapter: GPUAdapter): boolean {
+  if (!adapter.features.has("chromium-experimental-subgroup-matrix" as GPUFeatureName)
+    || !adapter.features.has("subgroups" as GPUFeatureName)) return false;
+  const info = adapter.info as unknown as { subgroupMatrixConfigs?: Iterable<SubgroupMatrixConfig> };
+  for (const c of info.subgroupMatrixConfigs ?? []) {
+    if (c.componentType === "f32" && c.resultComponentType === "f32" && c.M === 8 && c.N === 8 && c.K === 8) return true;
+  }
+  return false;
+}
+
 export class Device {
   private readonly device: GPUDevice;
   private readonly limits: GPUSupportedLimits;
@@ -295,10 +314,23 @@ export class Device {
     // is measuring cannot know at that moment. Requesting it on an adapter without it
     // makes `requestDevice` refuse, so it goes in only when present.
     const canTime = adapter.features.has("timestamp-query");
+    // **Subgroup matrices are taken when the adapter has them — with the f32 8×8×8
+    // configuration, which is the one the kernels are written for.** Chrome exposes the
+    // feature as `chromium-experimental-subgroup-matrix` on Metal and Vulkan (measured on
+    // the M4 Max, 2026-09-06: a GEMM on them reaches 11 TFLOP/s, torch's own number,
+    // against 4.5 for the scalar tile). D3D12, Safari and Firefox do not have it, and the
+    // scalar kernels stay as the path for them — this flag only opens the other one.
+    const sgm = subgroupMatrixF32(adapter);
+    const features: GPUFeatureName[] = [];
+    if (canTime) features.push("timestamp-query");
+    if (sgm) features.push("subgroups" as GPUFeatureName, "chromium-experimental-subgroup-matrix" as GPUFeatureName);
     const descriptor = {
       requiredLimits: want,
-      requiredFeatures: canTime ? ["timestamp-query" as GPUFeatureName] : [],
+      requiredFeatures: features,
     };
+    Device.subgroupMatrix = sgm;
+    Device.workgroupStorage = adapter.limits.maxComputeWorkgroupStorageSize;
+
     let device: GPUDevice;
     try {
       device = await adapter.requestDevice(descriptor);
@@ -1259,4 +1291,12 @@ export class Device {
    * this got stuck.
    */
   static adapterFeatures = "";
+
+  /** Whether the device was built with subgroup matrices (f32, 8 × 8 × 8) — see
+   *  `create`. The GEMM kernels ask this before choosing their inner loop. */
+  static subgroupMatrix = false;
+
+  /** The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple
+   *  gives 32 KB. A kernel that stages more than the floor asks this first. */
+  static workgroupStorage = 16384;
 }

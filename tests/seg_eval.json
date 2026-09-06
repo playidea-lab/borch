@@ -93,6 +93,23 @@
         }
       },
       "note": "the page now trains twice in one session; the corrupted run's init differs from the single-run 0.309 above, which is the variance the note describes"
+    },
+    "two_runs_2026-09-06_evening": {
+      "clean": {
+        "test_iou": 0.572,
+        "seconds": 37
+      },
+      "noise_0.2": {
+        "test_iou": 0.458,
+        "seconds": 33,
+        "queue": {
+          "auroc": 0.909,
+          "p@20": 0.45,
+          "p@wrong": 0.64,
+          "read_for_90pct": 0.32
+        }
+      },
+      "kernels": "subgroup matmul, stride-1 input gradient as a forward, wide broadcast fold, direct cat, BatchNorm in pieces, carried gathers"
     }
   },
   "torch_seed_spread": {
@@ -139,6 +156,20 @@
     "browser_batchnorm": 35.4,
     "browser_conv_tiles": 31.0,
     "browser_gradweight_split_256": 28.0,
-    "browser_gather_hoisted": 26.3
+    "browser_gather_hoisted": 26.3,
+    "browser_gradinput_identity_fold_cat": 22.9,
+    "browser_batchnorm_pieces": 21.6,
+    "browser_carried_gathers": 21.2
+  },
+  "gpu_profile_ms_b16_2026-09-06": {
+    "total": 17.8,
+    "conv_forward_and_input_gradient": 5.47,
+    "conv_weight_gradient": 4.6,
+    "batchnorm_apply": 0.88,
+    "batchnorm_backward_apply": 0.82,
+    "maxpool_backward": 0.61,
+    "unary_backward": 0.6,
+    "unary": 0.56,
+    "adam": 0.51
   }
 }

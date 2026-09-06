@@ -185,6 +185,9 @@ import {
   batchNormBackwardApply,
   batchNormStats,
   batchNormStatsBackward,
+  batchNormFinish,
+  batchNormFinishBackward,
+  bnPieces,
   BINARY,
   binaryBackward,
   binaryForward,
@@ -199,6 +202,7 @@ import {
   convOut,
   poolOut,
   convTiledGrid,
+  turnWeightsForGradInput,
   cumExtreme,
   cumprodBackward,
   cumsumBackward,
@@ -224,7 +228,12 @@ import {
   maskedScatterKernel,
   maskedScatterSourceBackward,
   matmul,
+  matmulSubgroup,
+  subgroupMatmulFits,
+  subgroupMatmulSplit,
+  subgroupMatmulTile,
   padAxis,
+  catCopy,
   poolMaxIndexBackward,
   poolMaxWithIndex,
   poolNDBackward,
@@ -236,6 +245,9 @@ import {
   poolWindowsKey,
   prodBackward,
   reduceBroadcast,
+  reduceBroadcastWide,
+  broadcastFold,
+  FOLD_WIDE,
   reduceDim,
   type ReduceKind,
   ruleKey,
@@ -1904,11 +1916,30 @@ export class Tensor implements Node<Tensor> {
         ar.mm(bi).add(ai.mm(br)));
     }
     const out = dev().alloc(M * N);
-    dev().run(
-      dev().pipeline(`mm:${M}:${K}:${N}`, () => matmul(M, K, N)),
-      [this.buffer, mat2.buffer, out],
-      [Math.ceil(N / 64), Math.ceil(M / 64), 1],
-    );
+    // The hardware's matrix multiply where the device has it and the shape is whole
+    // eights; the scalar tile otherwise. Both give the same answer (golden), the first
+    // at torch's speed (see `matmulSubgroup`).
+    if (Device.subgroupMatrix && subgroupMatmulFits(M, K, N)) {
+      const { TM, TN } = subgroupMatmulTile(M, N);
+      const splits = subgroupMatmulSplit(M, K, N);
+      // Split, the pieces land in a slab each and are summed in a fixed order.
+      const target = splits > 1 ? dev().alloc(M * N * splits) : out;
+      dev().run(
+        dev().pipeline(`mmsg:${M}:${K}:${N}`, () => matmulSubgroup(M, K, N)),
+        [this.buffer, mat2.buffer, target],
+        [N / TN, M / TM, splits],
+      );
+      if (splits > 1) {
+        // `target` is the scope's to reclaim, as every `alloc` here is.
+        dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
+      }
+    } else {
+      dev().run(
+        dev().pipeline(`mm:${M}:${K}:${N}`, () => matmul(M, K, N)),
+        [this.buffer, mat2.buffer, out],
+        [Math.ceil(N / 64), Math.ceil(M / 64), 1],
+      );
+    }
     return Tensor.make(
       out,
       [M, N],
@@ -2358,16 +2389,34 @@ export class Tensor implements Node<Tensor> {
     const axis = dim < 0 ? dim + rank : dim;
     const sizes = parts.map((p) => p.shape[axis] ?? 0);
     const total = sizes.reduce((a, b) => a + b, 0);
+    const outShape = first.shape.map((s, d) => (d === axis ? total : s));
+    const outer = first.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = first.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const out = dev().alloc(outer * total * inner);
+    // Each piece is copied into its place — one dispatch, nothing written twice (see
+    // `catCopy`). An empty piece has nothing to copy and is skipped.
+    const offsets: number[] = [];
     let before = 0;
-    let acc: Tensor | null = null;
     for (const [i, part] of parts.entries()) {
       const size = sizes[i] ?? 0;
-      const padded = part.pad(axis, before, total - before - size);
-      acc = acc === null ? padded : acc.add(padded);
+      offsets.push(before);
+      if (size > 0) {
+        dev().run1d(
+          dev().pipeline(`catc:${outer}:${total}:${size}:${inner}`, () => catCopy(outer, total, size, inner)),
+          [part.buffer, out, dev().word(before)],
+          outer * size * inner,
+        );
+      }
       before += size;
     }
-    if (!acc) throw new Error("cat got nothing to concatenate");
-    return acc;
+    return Tensor.make(
+      out,
+      outShape,
+      [...parts],
+      (g) => parts.map((part, i) => (part.requiresGrad ? g.narrow(axis, offsets[i] ?? 0, sizes[i] ?? 0) : null)),
+      "CatBackward0",
+      first.dtype,
+    );
   }
 
   /**
@@ -10853,11 +10902,28 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         const parts: (Tensor | null)[] = [];
         if (this.requiresGrad) {
           const gi = dev().alloc(this.size);
-          dev().run(
-            dev().pipeline(`cnxt:${key}`, () => convNDGradInputTiled(s)),
-            [g.buffer, weight.buffer, gi],
-            convGradInputGrid(s),
-          );
+          const unit = s.stride.every((v) => v === 1) && (s.dilation ?? []).every((v) => v === 1) && (s.groups ?? 1) === 1;
+          if (unit) {
+            // The forward's kernel on the turned weights — see `turnWeightsForGradInput`
+            // for why this beats the dedicated gradient GEMM.
+            const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+            const turned = dev().alloc(weight.size);
+            dev().run1d(
+              dev().pipeline(`cturn:${s.O}:${s.C}:${kSpace}`, () => turnWeightsForGradInput(s.O, s.C, kSpace)),
+              [weight.buffer, turned], weight.size);
+            const back: ConvNDShape = {
+              N: s.N, C: s.O, O: s.C, inDims: s.outDims, kernel: s.kernel, stride: s.stride,
+              pad: s.kernel.map((kd, d) => kd - 1 - (s.pad[d] ?? 0)), outDims: s.inDims,
+              ...(s.dilation ? { dilation: s.dilation } : {}),
+            };
+            convForwardRun(back, convNDKey(back), g.buffer, turned, null, gi);
+          } else {
+            dev().run(
+              dev().pipeline(`cnxt:${key}`, () => convNDGradInputTiled(s)),
+              [g.buffer, weight.buffer, gi],
+              convGradInputGrid(s),
+            );
+          }
           parts.push(new Tensor(gi, this.shape));
         } else parts.push(null);
         if (weight.requiresGrad) {
@@ -11634,11 +11700,19 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const key = `${N}:${C}:${S}`;
     const mean = dev().alloc(C);
     const variance = dev().alloc(C);
-    // A workgroup per channel (see the kernel) — the grid is the channel count itself.
+    // Workgroups (channel, piece) — see `bnPieces` — then a pass that finishes each channel.
+    const pieces = bnPieces(N, S);
+    const partSum = dev().alloc(C * pieces);
+    const partSq = dev().alloc(C * pieces);
     dev().run(
       dev().pipeline(`bns:${key}`, () => batchNormStats(N, C, S)),
-      [this.buffer, mean, variance],
-      [C, 1, 1],
+      [this.buffer, partSum, partSq],
+      [C, pieces, 1],
+    );
+    dev().run1d(
+      dev().pipeline(`bnf:${key}`, () => batchNormFinish(N, C, S)),
+      [partSum, partSq, mean, variance],
+      C,
     );
     const out = dev().alloc(this.size);
     // The backward uses the standardised values again. They come out of the same pass as
@@ -11661,10 +11735,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       (g) => {
         const sumG = dev().alloc(C);
         const sumGXh = dev().alloc(C);
+        const partG = dev().alloc(C * pieces);
+        const partGXh = dev().alloc(C * pieces);
         dev().run(
           dev().pipeline(`bnsb:${key}`, () => batchNormStatsBackward(N, C, S)),
-          [xhat.buffer, g.buffer, sumG, sumGXh],
-          [C, 1, 1],
+          [xhat.buffer, g.buffer, partG, partGXh],
+          [C, pieces, 1],
+        );
+        dev().run1d(
+          dev().pipeline(`bnfb:${key}`, () => batchNormFinishBackward(N, C, S)),
+          [partG, partGXh, sumG, sumGXh],
+          C,
         );
         const parts: (Tensor | null)[] = [];
         if (self.requiresGrad) {
@@ -12695,14 +12776,23 @@ function foldTo(wide: Tensor, target: readonly number[]): Tensor {
   const small = padShape(target, wide.shape.length);
   const n = numel(small);
   const out = dev().alloc(n);
-  dev().run1d(
-    dev().pipeline(
-      `rb:${wide.shape}|${small}`,
-      () => reduceBroadcast(wide.shape, small),
-    ),
-    [wide.buffer, out],
-    n,
-  );
+  if (broadcastFold(wide.shape, small) > FOLD_WIDE) {
+    // A long fold takes a workgroup per output element — see `reduceBroadcastWide`.
+    dev().run(
+      dev().pipeline(`rbw:${wide.shape}|${small}`, () => reduceBroadcastWide(wide.shape, small)),
+      [wide.buffer, out],
+      [n, 1, 1],
+    );
+  } else {
+    dev().run1d(
+      dev().pipeline(
+        `rb:${wide.shape}|${small}`,
+        () => reduceBroadcast(wide.shape, small),
+      ),
+      [wide.buffer, out],
+      n,
+    );
+  }
   return new Tensor(out, target);
 }
 

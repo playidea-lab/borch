@@ -1181,6 +1181,85 @@ ${indexPair(shape, strideA, strideB)}
  * @param small the shape to fold down to. Same rank, and each axis is
  *   either 1 or equal to `full`.
  */
+/** How many elements of `full` fold into one element of `small`. */
+export function broadcastFold(full: readonly number[], small: readonly number[]): number {
+  let fold = 1;
+  for (let d = 0; d < full.length; d++) {
+    if ((small[d] ?? 1) !== (full[d] ?? 1)) fold *= full[d] ?? 1;
+  }
+  return fold;
+}
+
+/** The threads one output element's fold is spread over in `reduceBroadcastWide`. */
+export const FOLD_GROUP = 256;
+
+/** Above this many elements per output, the fold takes a workgroup (see below). */
+export const FOLD_WIDE = 64;
+
+/**
+ * Folds a broadcast gradient back to its shape — **a workgroup per output element**,
+ * for folds that are long.
+ *
+ * `reduceBroadcast` below gives one thread one output element and has it walk every
+ * element that broadcast from it. For a bias or a scalar that is the whole activation:
+ * the U-Net step spent 2.5 ms — eleven per cent of its GPU time — in single threads
+ * summing 147,456 floats each (measured with timestamps, 2026-09-06), the same disease
+ * BatchNorm's statistics had. Here 256 threads stride the fold and meet in a tree; the
+ * order is fixed, so two runs still give the same value. Short folds keep the thread
+ * version: a workgroup for sixteen elements is the waste the other way.
+ */
+export function reduceBroadcastWide(full: readonly number[], small: readonly number[]): string {
+  const rank = full.length;
+  const fullStride: number[] = new Array<number>(rank).fill(1);
+  for (let d = rank - 2; d >= 0; d--) fullStride[d] = (fullStride[d + 1] ?? 1) * (full[d + 1] ?? 1);
+  // The output element's coordinates, and the part of the offset they fix.
+  const decompose: string[] = [];
+  const baseTerms: string[] = [];
+  const axes: { d: number; size: number }[] = [];
+  for (let d = rank - 1; d >= 0; d--) {
+    decompose.push(`  let i${d} = rest % ${small[d] ?? 1}u; rest = rest / ${small[d] ?? 1}u;`);
+  }
+  for (let d = 0; d < rank; d++) {
+    const sd = small[d] ?? 1;
+    const fd = full[d] ?? 1;
+    if (sd === fd && fd !== 1) baseTerms.push(`i${d} * ${fullStride[d]}u`);
+    else if (fd !== 1) axes.push({ d, size: fd });
+  }
+  const fold = axes.reduce((a, x) => a * x.size, 1);
+  // A fold index `f` in [0, fold) decomposes over the broadcast axes, last axis fastest.
+  const foldTerms: string[] = [];
+  let unit = 1;
+  for (let a = axes.length - 1; a >= 0; a--) {
+    const { d, size } = axes[a] as { d: number; size: number };
+    foldTerms.push(`((f / ${unit}u) % ${size}u) * ${fullStride[d]}u`);
+    unit *= size;
+  }
+  return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+var<workgroup> part: array<f32, ${FOLD_GROUP}>;
+@compute @workgroup_size(${FOLD_GROUP})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
+  var rest = w.x;
+${decompose.join("\n")}
+  let base = ${baseTerms.length ? baseTerms.join(" + ") : "0u"};
+  var acc = 0.0;
+  for (var f = l.x; f < ${fold}u; f = f + ${FOLD_GROUP}u) {
+    acc = acc + G[base + ${foldTerms.join(" + ")}];
+  }
+  part[l.x] = acc;
+  workgroupBarrier();
+  var span = ${FOLD_GROUP / 2}u;
+  loop {
+    if (span == 0u) { break; }
+    if (l.x < span) { part[l.x] = part[l.x] + part[l.x + span]; }
+    workgroupBarrier();
+    span = span / 2u;
+  }
+  if (l.x == 0u) { Out[w.x] = part[0]; }
+}`;
+}
+
 export function reduceBroadcast(
   full: readonly number[],
   small: readonly number[],
@@ -1233,6 +1312,92 @@ ${open.join("\n")}
     acc = acc + G[${offTerms.join(" + ")}];
 ${close.join("\n")}
   Out[gid] = acc;
+}`;
+}
+
+/**
+ * The tile a subgroup-matrix GEMM of `M` by `N` takes: the largest of 8/16/32 rows and
+ * 8/16/32/64 columns that divide the matrix, so no tile crosses an edge — a subgroup
+ * matrix loads and stores whole 8 × 8 blocks and has no per-element guard.
+ */
+export function subgroupMatmulTile(M: number, N: number): { TM: number; TN: number } {
+  const TM = [32, 16, 8].find((t) => M % t === 0) ?? 8;
+  const TN = [64, 32, 16, 8].find((t) => N % t === 0) ?? 8;
+  return { TM, TN };
+}
+
+/** Whether `matmulSubgroup` can take a shape: every dimension a multiple of eight. */
+export function subgroupMatmulFits(M: number, K: number, N: number): boolean {
+  return M % 8 === 0 && K % 8 === 0 && N % 8 === 0;
+}
+
+/**
+ * How many pieces the subgroup GEMM's reduction is split into — the same reasoning as
+ * `convForwardSplit`: a small output over a long K is a handful of workgroups walking
+ * 147,456 steps each. Measured, 16 × 147,456 × 144 took 8.4 ms in nine workgroups; the
+ * split brings the grid to at least sixty-four. Each piece takes whole eights of K.
+ */
+export function subgroupMatmulSplit(M: number, K: number, N: number): number {
+  const { TM, TN } = subgroupMatmulTile(M, N);
+  const tiles = (M / TM) * (N / TN);
+  const WANT = 64;
+  if (tiles >= WANT) return 1;
+  const MIN_PER_SPLIT = 256;
+  return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
+}
+
+/**
+ * The matrix product on subgroup matrices — **the hardware's 8 × 8 multiply.**
+ *
+ * One subgroup per workgroup owns a TM × TN block of the result as (TM/8)·(TN/8)
+ * accumulators and walks K eight at a time, loading both operands straight from storage.
+ * Nothing is staged and there is no barrier. Measured on the M4 Max: 2048³ at 11.0
+ * TFLOP/s against 4.5 for the scalar tile below and 10.8 for torch on Metal; the
+ * skinny 16 × 144 × 147,456 at 3.4 against 0.44.
+ *
+ * **Every offset is derived from the workgroup id alone.** The load and store builtins
+ * require a uniform offset, and one built from `local_invocation_id` is refused at
+ * compile time (measured) — which is why the workgroup is exactly one subgroup.
+ */
+export function matmulSubgroup(M: number, K: number, N: number): string {
+  const { TM, TN } = subgroupMatmulTile(M, N);
+  const splits = subgroupMatmulSplit(M, K, N);
+  // Whole eights per piece; the last piece is clipped to K.
+  const perSplit = Math.ceil(K / 8 / splits) * 8;
+  const am = TM / 8;
+  const bn = TN / 8;
+  const acc: string[] = [];
+  const mma: string[] = [];
+  const store: string[] = [];
+  for (let i = 0; i < am; i++) {
+    for (let j = 0; j < bn; j++) {
+      acc.push(`  var c${i}${j}: subgroup_matrix_result<f32, 8, 8>;`);
+      mma.push(`    c${i}${j} = subgroupMatrixMultiplyAccumulate(a${i}, b${j}, c${i}${j});`);
+      // Split, each piece lands in its own slab of the output buffer, summed afterwards.
+      store.push(`  subgroupMatrixStore(&Out, ${splits > 1 ? `wid.z * ${M * N}u + ` : ""}(row0 + ${i * 8}u) * ${N}u + col0 + ${j * 8}u, c${i}${j}, false, ${N}u);`);
+    }
+  }
+  const loadA = Array.from({ length: am }, (_, i) =>
+    `    let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&A, (row0 + ${i * 8}u) * ${K}u + k, false, ${K}u);`);
+  const loadB = Array.from({ length: bn }, (_, j) =>
+    `    let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&B, k * ${N}u + col0 + ${j * 8}u, false, ${N}u);`);
+  return `enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> B: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(32)
+fn main(@builtin(workgroup_id) wid: vec3<u32>) {
+  let row0 = wid.y * ${TM}u;
+  let col0 = wid.x * ${TN}u;
+  let kFrom = wid.z * ${perSplit}u;
+  let kTo = min(kFrom + ${perSplit}u, ${K}u);
+${acc.join("\n")}
+  for (var k = kFrom; k < kTo; k = k + 8u) {
+${loadA.join("\n")}
+${loadB.join("\n")}
+${mma.join("\n")}
+  }
+${store.join("\n")}
 }`;
 }
 
@@ -1486,6 +1651,31 @@ ${flatId(n)}
     return;
   }
   Out[gid] = A[o * ${size * inner}u + (c - before) * ${inner}u + i];
+}`;
+}
+
+/**
+ * One piece of a concatenation, copied into its place along the axis. **Nothing else is
+ * written**, so `cat` is one copy per piece into one buffer — where it was one pad to the
+ * full width per piece and an add between them: for the U-Net's two skip connections that
+ * was 1.4 ms of a 23.6 ms step in pads and adds (timestamps, 2026-09-06), all of it
+ * writing zeros and adding them back. `before` comes from `P[0]` for the reason `padAxis`
+ * gives.
+ */
+export function catCopy(outer: number, outSize: number, size: number, inner: number): string {
+  const n = outer * size * inner;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(2) var<storage, read> P: array<u32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${size * inner}u;
+  let rest = gid % ${size * inner}u;
+  let c = rest / ${inner}u;
+  let i = rest % ${inner}u;
+  Out[o * ${outSize * inner}u + (P[0] + c) * ${inner}u + i] = A[gid];
 }`;
 }
 
@@ -2457,7 +2647,6 @@ export function convNDForwardTiled(
 ): string {
   const inStride = suffixStrides(s.inDims);
   const outStride = suffixStrides(s.outDims);
-  const kStride = suffixStrides(s.kernel);
   const inSpace = s.inDims.reduce((a, b) => a * b, 1);
   const outSpace = s.outDims.reduce((a, b) => a * b, 1);
   const kSpace = s.kernel.reduce((a, b) => a * b, 1);
@@ -2469,6 +2658,7 @@ export function convNDForwardTiled(
   // Split, the partial sums land in a slab per piece and `sumSplitsConv` adds them (and
   // the bias) once more — the bias binding is not taken here in that case.
   const splits = convForwardSplit(s);
+  const KT = tileDepth(tileShape(cout, P).TM);
   const withBias = hasBias && splits === 1;
   // Split, the epilogue waits for `sumSplitsConv` — a partial sum cannot be clamped.
   const ep = splits === 1 ? epilogue : undefined;
@@ -2486,13 +2676,15 @@ ${residualBinding(ep, slot)}
     prepB: `  let pb_n = (bcol / ${outSpace}u) * ${s.C * inSpace}u;
 ${s.outDims.map((size, d) =>
       `  let pb_o${d} = i32(((bcol / ${outStride[d] ?? 1}u) % ${size}u) * ${s.stride[d] ?? 1}u) - ${s.pad[d] ?? 0};`).join("\n")}`,
-    // im2col is built here **without being laid out in memory.** Per element only the
-    // kernel side — (channel, kernel position) — is left to resolve.
-    loadB: `          let ch = grp * ${cin}u + kk / ${kSpace}u;
-${s.kernel.map((size, d) =>
-      `          let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`).join("\n")}
+    // im2col is built here **without being laid out in memory.** The kernel side of
+    // `kk` — (channel, kernel position) — is split once per K-tile and carried.
+    prepBTile: `    var kc = 0u;
+${s.kernel.map((_, d) => `    var kd${d} = 0u;`).join("\n")}
+${splitDigits(["kc", ...s.kernel.map((_, d) => `kd${d}`)], [cin, ...s.kernel], `t * ${KT}u + bkk0`, "    ")}`,
+    stepB: carryDigits(["kc", ...s.kernel.map((_, d) => `kd${d}`)], [cin, ...s.kernel], "bstep", "      "),
+    loadB: `          let ch = grp * ${cin}u + kc;
 ${s.outDims.map((_, d) =>
-      `          let i${d} = pb_o${d} + i32(kk${d} * ${convDil(s, d)}u);`).join("\n")}
+      `          let i${d} = pb_o${d} + i32(kd${d} * ${convDil(s, d)}u);`).join("\n")}
           if (${s.inDims.map((size, d) => `i${d} >= 0 && i${d} < ${size}`).join(" && ")}) {
             v = X[pb_n + ch * ${inSpace}u
               + ${s.inDims.map((_, d) => `u32(i${d}) * ${inStride[d] ?? 1}u`).join(" + ")}];
@@ -2632,6 +2824,15 @@ export function tileShape(M: number, N: number): { TM: number; TN: number } {
   return best;
 }
 
+/**
+ * The inner tile's depth. Sixteen, except for the 16 × 256 shape: its B tile alone is
+ * 16 KB at depth sixteen, and 16 KB is WebGPU's guaranteed workgroup storage — one byte
+ * over and the pipeline is refused on the smallest adapters. Eight halves it.
+ */
+export function tileDepth(TM: number): number {
+  return TM === 16 ? 8 : 16;
+}
+
 /** How many tiles a GEMM of `M` by `N` is — the grid before any split or group. */
 function tileCount(M: number, N: number): number {
   const { TM, TN } = tileShape(M, N);
@@ -2660,6 +2861,17 @@ export function convTiledGrid(s: ConvNDShape): [number, number, number] {
  *   column `col`. It lands in `v`.
  * @param emit a WGSL block writing value `v` at row `f`, column `col`.
  */
+/**
+ * **The tiled GEMMs do not use subgroup matrices, and this was measured, not assumed.**
+ * The inner loop was rewritten on them (2026-09-06: eight subgroups per workgroup over
+ * the staged As/Bs, the result through an aliased half-tile slab so the footprint stayed
+ * the scalar path's, every U-Net shape agreeing with the core to 1e-7) and the U-Net step
+ * did not move — 27.3 ms against 26.3. The multiply is not where these kernels spend
+ * their time: the im2col gather that fills the B tile is, and a faster multiply behind
+ * the same gather buys nothing. `matmulSubgroup` keeps the hardware path where it pays —
+ * a plain matrix product loads its operands straight from storage and there the same
+ * instructions reach torch's speed.
+ */
 function tiledGemm(opts: {
   readonly M: number;
   readonly N: number;
@@ -2677,6 +2889,19 @@ function tiledGemm(opts: {
    * sixteen multiplies that element then feeds in a 16-row tile.
    */
   readonly prepB?: string;
+  /**
+   * A WGSL block run once per K-tile per thread, before the B loads, with `t` and
+   * `bcol` in scope. Across the `sload` iterations that follow, this thread's `kk`
+   * advances by a fixed `bstep` (= 256 / TN) — an arithmetic progression — so
+   * whatever `loadB` derives from `kk` by division can be derived here once for the
+   * first `kk` and **carried** forward by `stepB` after every load. The convolution's
+   * gathers spent three integer divisions per element on the (batch, position) or
+   * (channel, kernel) side of `kk`; carried, that is a few compares.
+   */
+  readonly prepBTile?: string;
+  /** A WGSL block run after every B load (guarded or not), advancing what `prepBTile`
+   *  set up by `bstep`. */
+  readonly stepB?: string;
   readonly emit: string;
   /**
    * How many pieces to split the reduction into. 1 means no split.
@@ -2711,10 +2936,7 @@ function tiledGemm(opts: {
   const { TM, TN } = tileShape(opts.M, opts.N);
   const TX = TN / 4;
   const TY = TM / 4;
-  // The inner tile's depth. Sixteen, except for the 16 × 256 shape: its B tile alone is
-  // 16 KB at depth sixteen, and 16 KB is WebGPU's guaranteed workgroup storage — one
-  // byte over and the pipeline is refused on the smallest adapters. Eight halves it.
-  const KT = TM === 16 ? 8 : 16;
+  const KT = tileDepth(TM);
   // How many tiles each piece takes. The last piece may take slightly fewer, so the
   // count is kept inside the boundary.
   const allTiles = Math.ceil(opts.K / KT);
@@ -2723,6 +2945,18 @@ function tiledGemm(opts: {
   const bCells = KT * TN;
   const aLoads = Math.ceil(aCells / 256);
   const bLoads = Math.ceil(bCells / 256);
+  const inner = `    for (var k = 0u; k < ${KT}u; k = k + 1u) {
+      let a0 = As[(lid.y * 4u + 0u) * ${KT}u + k];
+      let a1 = As[(lid.y * 4u + 1u) * ${KT}u + k];
+      let a2 = As[(lid.y * 4u + 2u) * ${KT}u + k];
+      let a3 = As[(lid.y * 4u + 3u) * ${KT}u + k];
+      let b0 = Bs[k * ${TN}u + lid.x * 4u + 0u];
+      let b1 = Bs[k * ${TN}u + lid.x * 4u + 1u];
+      let b2 = Bs[k * ${TN}u + lid.x * 4u + 2u];
+      let b3 = Bs[k * ${TN}u + lid.x * 4u + 3u];
+${fma.join("\n")}
+    }`;
+  const finish = store.join("\n");
   return `
 ${opts.bindings}
 
@@ -2747,6 +2981,8 @@ ${zero.join("\n")}
   let tFrom = part * ${perSplit}u;
   let tTo = min(tFrom + ${perSplit}u, ${allTiles}u);
   let bcol = wid.x * ${TN}u + tid % ${TN}u;
+  let bstep = ${256 / TN}u;
+  let bkk0 = tid / ${TN}u;
 ${opts.prepB ?? ""}
   for (var t = tFrom; t < tTo; t = t + 1u) {
     for (var sload = 0u; sload < ${aLoads}u; sload = sload + 1u) {
@@ -2761,6 +2997,7 @@ ${opts.loadA}
         As[idx] = v;
       }
     }
+${opts.prepBTile ?? ""}
     for (var sload = 0u; sload < ${bLoads}u; sload = sload + 1u) {
       let idx = sload * 256u + tid;
       if (idx < ${bCells}u) {
@@ -2772,23 +3009,44 @@ ${opts.loadB}
         }
         Bs[idx] = v;
       }
+${opts.stepB ?? ""}
     }
     workgroupBarrier();
-    for (var k = 0u; k < ${KT}u; k = k + 1u) {
-      let a0 = As[(lid.y * 4u + 0u) * ${KT}u + k];
-      let a1 = As[(lid.y * 4u + 1u) * ${KT}u + k];
-      let a2 = As[(lid.y * 4u + 2u) * ${KT}u + k];
-      let a3 = As[(lid.y * 4u + 3u) * ${KT}u + k];
-      let b0 = Bs[k * ${TN}u + lid.x * 4u + 0u];
-      let b1 = Bs[k * ${TN}u + lid.x * 4u + 1u];
-      let b2 = Bs[k * ${TN}u + lid.x * 4u + 2u];
-      let b3 = Bs[k * ${TN}u + lid.x * 4u + 3u];
-${fma.join("\n")}
-    }
+${inner}
     workgroupBarrier();
   }
-${store.join("\n")}
+${finish}
 }`;
+}
+
+
+/**
+ * WGSL for carrying a mixed-radix index forward. `names[d]` are `var<function>` digits
+ * with radices `sizes[d]` (last fastest); `carry` is what to add. A while per digit, since
+ * the step can exceed a small radix. The digits were set from a division once per K-tile;
+ * this is what replaces the divisions on every element after (see `prepBTile`).
+ */
+function carryDigits(names: readonly string[], sizes: readonly number[], carry: string, indent: string): string {
+  const lines: string[] = [`${indent}var cy = ${carry};`];
+  for (let d = names.length - 1; d >= 0; d--) {
+    const last = d === 0;
+    lines.push(`${indent}${names[d]} = ${names[d]} + cy;`);
+    if (!last) {
+      lines.push(`${indent}cy = 0u;`);
+      lines.push(`${indent}while (${names[d]} >= ${sizes[d]}u) { ${names[d]} = ${names[d]} - ${sizes[d]}u; cy = cy + 1u; }`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** The digits of `value` in the mixed radix `sizes` (last fastest), assigned to `names`. */
+function splitDigits(names: readonly string[], sizes: readonly number[], value: string, indent: string): string {
+  const lines: string[] = [`${indent}var rest_ = ${value};`];
+  for (let d = names.length - 1; d >= 0; d--) {
+    if (d === 0) lines.push(`${indent}${names[d]} = rest_;`);
+    else lines.push(`${indent}${names[d]} = rest_ % ${sizes[d]}u; rest_ = rest_ / ${sizes[d]}u;`);
+  }
+  return lines.join("\n");
 }
 
 /** The WGSL resolving an input position (`col`) and a kernel position (`kk`) into
@@ -2849,10 +3107,12 @@ export function convNDGradWeightTiled(s: ConvNDShape): string {
     prepB: `  let ch = grp * ${cin}u + bcol / ${kSpace}u;
 ${s.kernel.map((size, d) =>
       `  let kk${d} = (bcol / ${suffixStrides(s.kernel)[d] ?? 1}u) % ${size}u;`).join("\n")}`,
-    loadB: `          let bn = kk / ${outSpace}u;
-${s.outDims.map((size, d) =>
-      `          let o${d} = (kk / ${suffixStrides(s.outDims)[d] ?? 1}u) % ${size}u;`).join("\n")}
-${c.coords}
+    // The (batch, output position) side of `kk` is split once per K-tile and carried.
+    prepBTile: `    var bn = 0u;
+${s.outDims.map((_, d) => `    var o${d} = 0u;`).join("\n")}
+${splitDigits(["bn", ...s.outDims.map((_, d) => `o${d}`)], [s.N, ...s.outDims], `t * ${tileDepth(tileShape(cout, cols).TM)}u + bkk0`, "    ")}`,
+    stepB: carryDigits(["bn", ...s.outDims.map((_, d) => `o${d}`)], [s.N, ...s.outDims], "bstep", "      "),
+    loadB: `${c.coords}
           if (${c.guard}) {
             v = X[(bn * ${s.C}u + ch) * ${inSpace}u + ${c.offset}];
           }`,
@@ -2861,6 +3121,36 @@ ${c.coords}
     // attach a summing stage.
     emit: `  Out[part * ${s.O * cols}u + (grp * ${cout}u + f) * ${cols}u + col] = v;`,
   });
+}
+
+/**
+ * The weights turned for the input gradient: `(O, C, k…)` → `(C, O, k…)` with every
+ * kernel axis reversed. Reversing the flattened kernel index reverses every axis at
+ * once, so this is one permutation whatever the rank.
+ *
+ * **Why it exists.** With stride and dilation 1, the gradient to the input is itself a
+ * convolution — of the output gradient with these turned weights, padded `k − 1 − pad`.
+ * The dedicated input-gradient GEMM below has to test, per element, which output
+ * positions reach an input position (the stride divisibility, the range), and measured
+ * on the M4 Max it ran two to three times slower than the forward at equal FLOPs — 1.0
+ * to 1.2 ms per U-Net layer against 0.3 to 0.75 for the forward. Turning the weights is
+ * a few thousand elements; the forward's gather then does the rest at the forward's
+ * speed. Strides above 1 and grouped convolutions keep the dedicated kernel.
+ */
+export function turnWeightsForGradInput(O: number, C: number, kSpace: number): string {
+  const n = O * C * kSpace;
+  return `
+@group(0) @binding(0) var<storage, read> W: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let k = gid % ${kSpace}u;
+  let oc = gid / ${kSpace}u;
+  let o = oc / ${C}u;
+  let c = oc % ${C}u;
+  Out[(c * ${O}u + o) * ${kSpace}u + (${kSpace - 1}u - k)] = W[gid];
+}`;
 }
 
 /**
@@ -3723,8 +4013,22 @@ ${flatId(n)}
 }`;
 }
 
-/** The threads one channel's statistics are spread over — a workgroup per channel. */
+/** The threads one piece of a channel's statistics are spread over. */
 export const BN_GROUP = 256;
+
+/**
+ * How many workgroups share one channel's reduction. **Sixteen channels were sixteen
+ * workgroups**: the second version of these kernels gave a channel a workgroup, and on a
+ * layer of sixteen channels at 96 × 96 that is 4,096 threads reading 2.4 million floats
+ * — a memory-bound pass with a fortieth of the GPU awake, 0.8 ms forward and 1.2 ms
+ * backward per U-Net step where torch spends 1.6 ms on all of BatchNorm (timestamps,
+ * 2026-09-06). Now a channel is cut into pieces of at most 16,384 elements, each piece a
+ * workgroup, and a pass over the pieces finishes the statistics. Every sum is in a fixed
+ * order, so the value is the same on every run.
+ */
+export function bnPieces(N: number, S: number): number {
+  return Math.max(1, Math.min(64, Math.ceil((N * S) / 16384)));
+}
 
 /**
  * BatchNorm's per-channel statistics — the sum and the sum of squares **in one pass.**
@@ -3733,27 +4037,29 @@ export const BN_GROUP = 256;
  * divisions, a dozen or so dispatches, twenty times over per layer. Measured, most of the
  * 1,636 dispatches in one ResNet step came from here.
  *
- * **One workgroup takes one channel.** The first version gave one *thread* a channel and
- * had it walk the whole batch and space: with sixteen channels at 96×96 that was sixteen
- * threads on the whole GPU, each 147,456 loads long — 6.3 ms for a memory-bound pass of
- * 2.4 million floats, twenty-one times torch's, and the largest single cost in a U-Net
- * step (measured 2026-09-06). Now 256 threads stride the channel and fold as a tree. The
- * order is still fixed — each thread's stride and the tree's pairing — so there are no
- * atomics and two runs give the same value.
+ * Workgroup `(channel, piece)` walks its slice of the channel with 256 threads striding
+ * and folding as a tree, and writes two partial sums. The first version gave one *thread*
+ * a channel (6.3 ms per layer, measured); the second a workgroup — see `bnPieces` for why
+ * that was still too few.
  */
 export function batchNormStats(N: number, C: number, S: number): string {
+  const pieces = bnPieces(N, S);
+  const per = Math.ceil((N * S) / pieces);
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
-@group(0) @binding(1) var<storage, read_write> Mean: array<f32>;
-@group(0) @binding(2) var<storage, read_write> Var: array<f32>;
+@group(0) @binding(1) var<storage, read_write> PartSum: array<f32>;
+@group(0) @binding(2) var<storage, read_write> PartSq: array<f32>;
 var<workgroup> pt: array<f32, ${BN_GROUP}>;
 var<workgroup> pq: array<f32, ${BN_GROUP}>;
 @compute @workgroup_size(${BN_GROUP})
 fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
   let c = w.x;
+  let piece = w.y;
+  let lo = piece * ${per}u;
+  let hi = min(lo + ${per}u, ${N * S}u);
   var total = 0.0;
   var sq = 0.0;
-  for (var i = l.x; i < ${N * S}u; i = i + ${BN_GROUP}u) {
+  for (var i = lo + l.x; i < hi; i = i + ${BN_GROUP}u) {
     let n = i / ${S}u;
     let v = X[(n * ${C}u + c) * ${S}u + (i - n * ${S}u)];
     total = total + v;
@@ -3770,13 +4076,35 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
     span = span / 2u;
   }
   if (l.x == 0u) {
-    let m = pt[0] / ${(N * S).toFixed(1)};
-    Mean[c] = m;
-    // **This is the biased estimate** (divided by n) — what torch's BatchNorm uses for
-    // the normalisation, and a different number from the unbiased one that goes into the
-    // running statistics. Merged into one, they diverge in evaluation mode alone.
-    Var[c] = pq[0] / ${(N * S).toFixed(1)} - m * m;
+    PartSum[c * ${pieces}u + piece] = pt[0];
+    PartSq[c * ${pieces}u + piece] = pq[0];
   }
+}`;
+}
+
+/** Adds a channel's pieces and finishes the mean and the (biased) variance. */
+export function batchNormFinish(N: number, C: number, S: number): string {
+  const pieces = bnPieces(N, S);
+  return `
+@group(0) @binding(0) var<storage, read> PartSum: array<f32>;
+@group(0) @binding(1) var<storage, read> PartSq: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Mean: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Var: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(C)}
+  var total = 0.0;
+  var sq = 0.0;
+  for (var p = 0u; p < ${pieces}u; p = p + 1u) {
+    total = total + PartSum[gid * ${pieces}u + p];
+    sq = sq + PartSq[gid * ${pieces}u + p];
+  }
+  let m = total / ${(N * S).toFixed(1)};
+  Mean[gid] = m;
+  // **This is the biased estimate** (divided by n) — what torch's BatchNorm uses for
+  // the normalisation, and a different number from the unbiased one that goes into the
+  // running statistics. Merged into one, they diverge in evaluation mode alone.
+  Var[gid] = sq / ${(N * S).toFixed(1)} - m * m;
 }`;
 }
 
@@ -3819,19 +4147,24 @@ ${withXhat ? "  Xh[gid] = xh;" : ""}
  * and the two means it needs are counted once per channel, then applied elementwise.
  */
 export function batchNormStatsBackward(N: number, C: number, S: number): string {
+  const pieces = bnPieces(N, S);
+  const per = Math.ceil((N * S) / pieces);
   return `
 @group(0) @binding(0) var<storage, read> Xh: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
-@group(0) @binding(2) var<storage, read_write> SumG: array<f32>;
-@group(0) @binding(3) var<storage, read_write> SumGXh: array<f32>;
+@group(0) @binding(2) var<storage, read_write> PartG: array<f32>;
+@group(0) @binding(3) var<storage, read_write> PartGXh: array<f32>;
 var<workgroup> pg: array<f32, ${BN_GROUP}>;
 var<workgroup> px: array<f32, ${BN_GROUP}>;
 @compute @workgroup_size(${BN_GROUP})
 fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
   let c = w.x;
+  let piece = w.y;
+  let lo = piece * ${per}u;
+  let hi = min(lo + ${per}u, ${N * S}u);
   var sg = 0.0;
   var sgx = 0.0;
-  for (var i = l.x; i < ${N * S}u; i = i + ${BN_GROUP}u) {
+  for (var i = lo + l.x; i < hi; i = i + ${BN_GROUP}u) {
     let n = i / ${S}u;
     let at = (n * ${C}u + c) * ${S}u + (i - n * ${S}u);
     let gv = G[at];
@@ -3849,9 +4182,32 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
     span = span / 2u;
   }
   if (l.x == 0u) {
-    SumG[c] = pg[0];
-    SumGXh[c] = px[0];
+    PartG[c * ${pieces}u + piece] = pg[0];
+    PartGXh[c * ${pieces}u + piece] = px[0];
   }
+}`;
+}
+
+/** Adds the backward's pieces per channel — the two sums the apply kernel and the weight
+ *  gradient read. */
+export function batchNormFinishBackward(N: number, C: number, S: number): string {
+  const pieces = bnPieces(N, S);
+  return `
+@group(0) @binding(0) var<storage, read> PartG: array<f32>;
+@group(0) @binding(1) var<storage, read> PartGXh: array<f32>;
+@group(0) @binding(2) var<storage, read_write> SumG: array<f32>;
+@group(0) @binding(3) var<storage, read_write> SumGXh: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(C)}
+  var sg = 0.0;
+  var sgx = 0.0;
+  for (var p = 0u; p < ${pieces}u; p = p + 1u) {
+    sg = sg + PartG[gid * ${pieces}u + p];
+    sgx = sgx + PartGXh[gid * ${pieces}u + p];
+  }
+  SumG[gid] = sg;
+  SumGXh[gid] = sgx;
 }`;
 }
 
