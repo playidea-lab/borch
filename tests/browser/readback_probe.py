@@ -10,11 +10,14 @@ Linux NVIDIA machine every readback waited about one second (measured through
 to the display's tick, to a timer, or to the driver.
 """
 import os
+import pathlib
 import sys
 import tempfile
 import time
 
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from launch import _headed  # noqa: E402
 
 PAGE = "/tests/browser/readback_probe.html"
 GIVE_UP_MS = 120_000
@@ -43,7 +46,7 @@ def one(pw, url, label, flags, headless):
 def python_path(argv):
     """`--python`: the same question of the Python path, under the runner's flags only."""
     from playwright.sync_api import sync_playwright
-    headed = "--headed" in argv
+    headed = _headed("--headed" in argv)   # a window unless --headless / BORCH_HEADLESS: headless is SwiftShader here
     port, shutdown = serve(ROOT)
     url = f"http://127.0.0.1:{port}/tests/browser/readback_probe_py.html"
     profile = tempfile.mkdtemp(prefix="borch-readback-py-")

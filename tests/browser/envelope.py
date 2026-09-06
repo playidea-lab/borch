@@ -11,14 +11,14 @@ import sys
 import tempfile
 
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve
-from launch import refuse_if_software
+from launch import _headed, refuse_if_software
 
 GIVE_UP_MS = 6 * 60 * 1000
 
 
 def main(argv):
     from playwright.sync_api import sync_playwright
-    headed = "--headed" in argv
+    headed = _headed("--headed" in argv)   # a window unless --headless / BORCH_HEADLESS: headless is SwiftShader here
     model = next((a.split("=", 1)[1] for a in argv if a.startswith("--model=")), "imagenet-efficientnet-b0")
     if refuse_if_screen_off("the envelope"):
         return 1
