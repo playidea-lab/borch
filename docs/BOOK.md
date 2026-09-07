@@ -630,6 +630,23 @@ first dispatched, so the first replay after it pays that — ten milliseconds on
 nothing visible on the small network (measured). What no recording can carry: a step that
 branches in Python on the step's values.
 
+**What the recording holds, and what was checked.** A buffer copy is recorded as well as
+a dispatch — every in-place operation is a copy back into its buffer, and so is AdamW's
+weight decay; left out, a replay silently skipped them and a transformer under AdamW
+drifted 3e-6 from eager while Adam's U-Net replayed bit for bit (the difference that
+found it). Fusing a product's consumers into the matmul's own kernel was tried and
+refused: the subgroup matmul is one subgroup per workgroup, and the elementwise work fell
+on thirty-two lanes per tile where a kernel of its own gives every cell a thread — fewer
+dispatches, 0.72 → 1.69 ms (measured). The compiler is held to three checks: the U-Net
+and a two-block decoder under AdamW through `torch.compiled`, the plain recording bit for
+bit against eager on every loss and parameter and the fused one within 1e-7 on the loss
+(`npm run capture:py`); a decoder recipe in the trajectory golden, torch's curve walked
+within 7e-6 with every prediction the same; and the same probes on an RTX 4090 through
+Vulkan, where the subgroup kernels are absent and every path falls to the scalar ones —
+goldens 4057 and 4733 agreeing, the U-Net replay 4.9 ms against 8.7 eager, bit for bit.
+A pretrained model from the hub holds too: ViT-tiny fine-tuning at batch 8, 48 ms eager,
+42 recorded (bit for bit), 39 fused (2165 → 1699 dispatches, the loss within 7e-8).
+
 ## If you need more than that — `borch-webgpu`
 
 This one (the core) is **up to MNIST scale, on numpy.** Crossing that boundary is
