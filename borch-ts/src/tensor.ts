@@ -1972,6 +1972,29 @@ export class Tensor implements Node<Tensor> {
         ar.mm(br).sub(ai.mm(bi)),
         ar.mm(bi).add(ai.mm(br)));
     }
+    return this.mmFlags(mat2, false, false);
+  }
+
+  /**
+   * `op(this) · op(mat2)` with either operand **read transposed in place** — `this` is
+   * `(M, K)` or, with `transA`, `(K, M)`; `mat2` is `(K, N)` or, with `transB`, `(N, K)`.
+   * The kernels load the transposed side column-major (subgroup) or swap their index
+   * arithmetic (scalar tile), so a `Linear`'s `x·Wᵀ` and a backward's `Aᵀ·G` copy
+   * nothing. The backward is the same product with the flags turned: for
+   * `C = op(A)·op(B)`, `dA = G·op(B)ᵀ` and `dB = op(A)ᵀ·G`, transposed back when the
+   * operand was. Before this every `mm` backward transposed both operands in memory
+   * and every `Linear` transposed its weight, a copy each (measured 2026-09-07: the
+   * transposes were 0.66 ms of a 21 ms GPT step, the gathers behind them 1.2 more).
+   */
+  private mmFlags(mat2: Tensor, transA: boolean, transB: boolean): Tensor {
+    const [aRows = 0, aCols = 0] = this.shape;
+    const [bRows = 0, bCols = 0] = mat2.shape;
+    const M = transA ? aCols : aRows, K = transA ? aRows : aCols;
+    const K2 = transB ? bCols : bRows, N = transB ? bRows : bCols;
+    if (K !== K2) {
+      throw new RuntimeError(`mat1 and mat2 ${TORCH.matmulShape} (${M}x${K} and ${K2}x${N})`);
+    }
+    const flags = `${transA ? "t" : "n"}${transB ? "t" : "n"}`;
     const out = dev().alloc(M * N);
     // The hardware's matrix multiply where the device has it and the shape is whole
     // eights; the scalar tile otherwise. Both give the same answer (golden), the first
@@ -1982,7 +2005,7 @@ export class Tensor implements Node<Tensor> {
       // Split, the pieces land in a slab each and are summed in a fixed order.
       const target = splits > 1 ? dev().alloc(M * N * splits) : out;
       dev().run(
-        dev().pipeline(`mmsg:${M}:${K}:${N}`, () => matmulSubgroup(M, K, N)),
+        dev().pipeline(`mmsg:${M}:${K}:${N}:${flags}`, () => matmulSubgroup(M, K, N, transA, transB)),
         [this.buffer, mat2.buffer, target],
         [N / TN, M / TM, splits],
       );
@@ -1992,7 +2015,7 @@ export class Tensor implements Node<Tensor> {
       }
     } else {
       dev().run(
-        dev().pipeline(`mm:${M}:${K}:${N}`, () => matmul(M, K, N)),
+        dev().pipeline(`mm:${M}:${K}:${N}:${flags}`, () => matmul(M, K, N, transA, transB)),
         [this.buffer, mat2.buffer, out],
         [Math.ceil(N / 64), Math.ceil(M / 64), 1],
       );
@@ -2002,8 +2025,10 @@ export class Tensor implements Node<Tensor> {
       [M, N],
       [this, mat2],
       (g) => [
-        this.requiresGrad ? g.mm(mat2.transpose()) : null,
-        mat2.requiresGrad ? this.transpose().mm(g) : null,
+        this.requiresGrad
+          ? (transA ? mat2.mmFlags(g, transB, true) : g.mmFlags(mat2, false, !transB)) : null,
+        mat2.requiresGrad
+          ? (transB ? g.mmFlags(this, true, transA) : this.mmFlags(g, !transA, false)) : null,
       ],
       "MmBackward0",
     );
@@ -5109,7 +5134,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `matmul` broadcasts, so the fold is no longer the caller's problem.
    */
   linear(weight: Tensor): Tensor {
-    return traced("linear", [this, weight], {}, () => this.matmul(weight.transpose()));
+    return traced("linear", [this, weight], {}, () => {
+      // `x·Wᵀ` with the weight read transposed in place — see `mmFlags`. A batch of
+      // rows folds its leading axes into the rows, as `matmul` does for n-D by 2-D.
+      if (weight.shape.length === 2 && this.shape.length >= 2 && !this.isComplex() && !weight.isComplex()) {
+        const K = this.shape[this.shape.length - 1] ?? 0;
+        const N = weight.shape[0] ?? 0;
+        const rows = this.size / Math.max(K, 1);
+        return this.reshape([rows, K]).mmFlags(weight, false, true).reshape([...this.shape.slice(0, -1), N]);
+      }
+      return this.matmul(weight.transpose());
+    });
   }
 
   smoothL1Loss(target: Tensor, beta = 1.0,

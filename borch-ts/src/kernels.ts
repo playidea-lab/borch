@@ -1579,7 +1579,7 @@ export function subgroupMatmulSplit(M: number, K: number, N: number): number {
  * require a uniform offset, and one built from `local_invocation_id` is refused at
  * compile time (measured) — which is why the workgroup is exactly one subgroup.
  */
-export function matmulSubgroup(M: number, K: number, N: number): string {
+export function matmulSubgroup(M: number, K: number, N: number, transA = false, transB = false): string {
   const { TM, TN } = subgroupMatmulTile(M, N);
   const splits = subgroupMatmulSplit(M, K, N);
   // Whole eights per piece; the last piece is clipped to K.
@@ -1597,10 +1597,15 @@ export function matmulSubgroup(M: number, K: number, N: number): string {
       store.push(`  subgroupMatrixStore(&Out, ${splits > 1 ? `wid.z * ${M * N}u + ` : ""}(row0 + ${i * 8}u) * ${N}u + col0 + ${j * 8}u, c${i}${j}, false, ${N}u);`);
     }
   }
-  const loadA = Array.from({ length: am }, (_, i) =>
-    `    let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&A, (row0 + ${i * 8}u) * ${K}u + k, false, ${K}u);`);
-  const loadB = Array.from({ length: bn }, (_, j) =>
-    `    let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&B, k * ${N}u + col0 + ${j * 8}u, false, ${N}u);`);
+  // A transposed operand is the same 8 × 8 block loaded column-major from the other
+  // layout — `A` stored as (K, M), `B` as (N, K) — so a `x·Wᵀ` or a backward's `Aᵀ·G`
+  // reads its operand in place; nothing is transposed in memory.
+  const loadA = Array.from({ length: am }, (_, i) => transA
+    ? `    let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&A, k * ${M}u + row0 + ${i * 8}u, true, ${M}u);`
+    : `    let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&A, (row0 + ${i * 8}u) * ${K}u + k, false, ${K}u);`);
+  const loadB = Array.from({ length: bn }, (_, j) => transB
+    ? `    let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&B, (col0 + ${j * 8}u) * ${K}u + k, true, ${K}u);`
+    : `    let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&B, k * ${N}u + col0 + ${j * 8}u, false, ${N}u);`);
   return `enable chromium_experimental_subgroup_matrix;
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> B: array<f32>;
@@ -1742,7 +1747,7 @@ ${store.join("\n")}
  * **182 vs 4,474 GFLOPS** (measured). It reads badly and it is 24×, and this kernel runs
  * at 115–217% of TF.js.
  */
-export function matmul(M: number, K: number, N: number): string {
+export function matmul(M: number, K: number, N: number, transA = false, transB = false): string {
   const decl: string[] = [];
   const zero: string[] = [];
   const fma: string[] = [];
@@ -1779,10 +1784,10 @@ ${zero.join("\n")}
       let idx = s * 256u + tid;
       let ar = idx / 16u; let ak = idx % 16u;
       let arow = wid.y * 64u + ar; let acol = t * 16u + ak;
-      As[idx] = select(0.0, A[arow * K + acol], arow < M && acol < K);
+      As[idx] = select(0.0, A[${transA ? "acol * M + arow" : "arow * K + acol"}], arow < M && acol < K);
       let bk = idx / 64u; let bc = idx % 64u;
       let brow = t * 16u + bk; let bcol = wid.x * 64u + bc;
-      Bs[idx] = select(0.0, B[brow * N + bcol], brow < K && bcol < N);
+      Bs[idx] = select(0.0, B[${transB ? "bcol * K + brow" : "brow * N + bcol"}], brow < K && bcol < N);
     }
     workgroupBarrier();
     for (var k = 0u; k < 16u; k = k + 1u) {
