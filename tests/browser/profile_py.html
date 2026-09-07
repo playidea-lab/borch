@@ -46,7 +46,7 @@ module("review_eval", "/tests/review_eval.py")
 S = module("seg_eval", "/tests/seg_eval.py")
 import time
 from pyodide.ffi import create_proxy
-batch = ${parseInt(q.get("batch") || "16")}; side = ${parseInt(q.get("size") || "96")}; steps = ${parseInt(q.get("steps") || "5")}
+batch = ${parseInt(q.get("batch") || "16")}; side = ${parseInt(q.get("size") || "96")}; steps = ${parseInt(q.get("steps") || "5")}; COMPILED = ${JSON.stringify(q.get("compiled") || "")}
 MODEL = ${JSON.stringify(q.get("model") || "unet")}
 # Synthetic data: the profile is of the kernels, not of a dataset, and it has to run
 # where no dataset is (the nightly's worktree).
@@ -102,11 +102,17 @@ elif MODEL == "vit":
     label = f"vit-tiny 224px batch {batch}"
 else:
     raise ValueError(f"model? {MODEL}")
+if COMPILED:
+    label += f" compiled {COMPILED}"
 first = next(iter(model.parameters()))
 def step():
     opt.zero_grad()
     out = model(xb, causal) if MODEL == "gpt" else model(xb)
     loss = crit(out.reshape(-1, out.shape[-1]) if MODEL == "gpt" else out, mb); loss.backward(); opt.step()
+if COMPILED:
+    # The same step through the compiler: "plain" replays the recording, "fused" runs
+    # the fusion pass over it first. The first call records; the trials replay.
+    step = torch.compiled(step, fuse=(COMPILED == "fused"))
 def full():
     with torch.scope():
         step(); float(first.flatten()[0].item())

@@ -32,6 +32,7 @@ const lines = [];
 const show = () => { out.textContent = lines.join("\n"); };
 const fill = (n, seed) => { const a = new Float32Array(n); let st = seed; for (let i = 0; i < n; i++) { st = (Math.imul(st, 1664525) + 1013904223) >>> 0; a[i] = (st / 4294967296) - 0.5; } return a; };
 const REPS = parseInt(q.get("reps") || "20"), ROUNDS = parseInt(q.get("rounds") || "5");
+const parseMM = (text) => { const m = /^(?:(\d+)@)?(\d+)x(\d+)x(\d+)$/.exec(text); return m ? { name: text, Bt: m[1] ? +m[1] : 0, M: +m[2], Kd: +m[3], Nd: +m[4] } : null; };
 const parseShape = (text) => { const m = /^(\d+)-(\d+)@(\d+)(?:x(\d+))?$/.exec(text); if (!m) throw new Error(`shape? ${text} (want cin-cout@side or cin-cout@sidexbatch)`); return { name: text, C: +m[1], O: +m[2], H: +m[3], N: m[4] ? +m[4] : 16 }; };
 const conv = (sh) => ({ N: sh.N, C: sh.C, O: sh.O, inDims: [sh.H, sh.H], kernel: [3, 3], stride: [1, 1], pad: [1, 1], outDims: [sh.H, sh.H] });
 let dev;
@@ -86,6 +87,62 @@ const BENCHES = {
     const lanes = K.lanesOf(S);
     return race([{ name: `apply (${lanes} a thread)`, key: `bna:${sh.name}`, make: () => K.batchNormApply(sh.N, sh.C, S, 1e-5, true, true), outb: Out, run: () => dev.run1d(dev.pipeline(`bna:${sh.name}`, () => K.batchNormApply(sh.N, sh.C, S, 1e-5, true, true)), [X, Mean, Var, Wt, B, Out, Xh], n / lanes) }], n);
   },
+  // The matrix product at a transformer's shapes — `--shapes=1576x192x576` (M x K x N).
+  // Subgroup matrices with the tile M's divisibility gives, the scalar tile, and the
+  // subgroup kernel with M rounded up to 32 rows (A and the output padded with zero
+  // rows, only the first M rows compared) — what a taller tile would be worth.
+  async mm(sh) {
+    if (sh.M === undefined) throw new Error(`mm wants MxKxN shapes, not ${sh.name}`);
+    const { M, Kd, Nd } = sh; const Mp = Math.ceil(M / 32) * 32;
+    const A = upload(M * Kd, 1), B = upload(Kd * Nd, 2), Out = dev.alloc(M * Nd), Out2 = dev.alloc(M * Nd), Out3 = dev.alloc(Mp * Nd);
+    const Ap = dev.alloc(Mp * Kd); dev.copyInto(Ap, A, M * Kd);
+    const gflop = 2 * M * Kd * Nd / 1e9;
+    const runs = [
+      { name: `scalar tile`, key: `mm:${sh.name}`, make: () => K.matmul(M, Kd, Nd), outb: Out2,
+        run: () => dev.run(dev.pipeline(`mm:${sh.name}`, () => K.matmul(M, Kd, Nd)), [A, B, Out2], [Math.ceil(Nd / 64), Math.ceil(M / 64), 1]) },
+    ];
+    if (Device.subgroupMatrix && K.subgroupMatmulFits(M, Kd, Nd)) {
+      const t = K.subgroupMatmulTile(M, Nd), splits = K.subgroupMatmulSplit(M, Kd, Nd);
+      if (splits !== 1) throw new Error("mm bench: a split shape");
+      runs.unshift({ name: `subgroup ${t.TM}x${t.TN}`, key: `mmsg:${sh.name}`, make: () => K.matmulSubgroup(M, Kd, Nd), outb: Out,
+        run: () => dev.run(dev.pipeline(`mmsg:${sh.name}`, () => K.matmulSubgroup(M, Kd, Nd)), [A, B, Out], [Nd / t.TN, M / t.TM, 1]) });
+      const tp = K.subgroupMatmulTile(Mp, Nd);
+      runs.push({ name: `subgroup ${tp.TM}x${tp.TN} (M padded to ${Mp})`, key: `mmsgp:${sh.name}`, make: () => K.matmulSubgroup(Mp, Kd, Nd), outb: Out3,
+        run: () => dev.run(dev.pipeline(`mmsgp:${sh.name}`, () => K.matmulSubgroup(Mp, Kd, Nd)), [Ap, B, Out3], [Nd / tp.TN, Mp / tp.TM, 1]) });
+    }
+    const text = await race(runs, M * Nd);
+    // The best of the runs, as a rate.
+    const best = Math.min(...runs.map((r) => r.best));
+    return `${text} · ${gflop.toFixed(2)} GFLOP, best ${(gflop / best * 1e3 / 1e3).toFixed(2)} TFLOP/s`;
+  },
+  // The batched product at attention's shapes — `--shapes=24@197x64x197` (batch @ M x K x N).
+  // The scalar batched kernel the shape gets today against the subgroup kernel on the
+  // same shape padded to eights (operands zero-padded, the first rows compared) — what
+  // padding would be worth. K padded needs zero columns in A and zero rows in B.
+  async bmm(sh) {
+    if (sh.M === undefined || !sh.Bt) throw new Error(`bmm wants batch@MxKxN shapes, not ${sh.name}`);
+    const { Bt, M, Kd, Nd } = sh; const e8 = (v) => Math.ceil(v / 8) * 8; const Mp = e8(M), Kp = e8(Kd), Np = e8(Nd);
+    const a = fill(Bt * M * Kd, 1), b = fill(Bt * Kd * Nd, 2);
+    const A = dev.alloc(Bt * M * Kd), B = dev.alloc(Bt * Kd * Nd); dev.writeWords(A, new Uint32Array(a.buffer)); dev.writeWords(B, new Uint32Array(b.buffer));
+    const ap = new Float32Array(Bt * Mp * Kp), bp = new Float32Array(Bt * Kp * Np);
+    for (let t = 0; t < Bt; t++) { for (let i = 0; i < M; i++) for (let k = 0; k < Kd; k++) ap[(t * Mp + i) * Kp + k] = a[(t * M + i) * Kd + k]; for (let k = 0; k < Kd; k++) for (let j = 0; j < Nd; j++) bp[(t * Kp + k) * Np + j] = b[(t * Kd + k) * Nd + j]; }
+    const Ap = dev.alloc(Bt * Mp * Kp), Bp = dev.alloc(Bt * Kp * Np); dev.writeWords(Ap, new Uint32Array(ap.buffer)); dev.writeWords(Bp, new Uint32Array(bp.buffer));
+    const Out = dev.alloc(Bt * M * Nd), Outp = dev.alloc(Bt * Mp * Np), Outc = dev.alloc(Bt * M * Nd);
+    // The padded result, gathered back to the unpadded layout so the race can compare it.
+    const rules = [{ size: Bt, stride: Mp * Np, kind: "lin", wrap: Bt }, { size: M, stride: Np, kind: "lin", wrap: M }, { size: Nd, stride: 1, kind: "lin", wrap: Nd }];
+    const runs = [
+      { name: `scalar batched`, key: `bmm:${sh.name}`, make: () => K.matmulBatched(M, Kd, Nd, false, false, false, false), outb: Out,
+        run: () => dev.run(dev.pipeline(`bmm:${sh.name}`, () => K.matmulBatched(M, Kd, Nd, false, false, false, false)), [A, B, Out], [Math.ceil(Nd / 64), Math.ceil(M / 64), Bt]) },
+    ];
+    if (Device.subgroupMatrix) {
+      const t = K.subgroupMatmulTile(Mp, Np);
+      runs.push({ name: `subgroup ${t.TM}x${t.TN} on ${Mp}x${Kp}x${Np} (+ gather back)`, key: `bmmsg:${sh.name}`, make: () => K.matmulSubgroupBatched(Mp, Kp, Np, false, false, false, false), extraKeys: [`gt:bmm:${sh.name}`], outb: Outc,
+        run: () => { dev.run(dev.pipeline(`bmmsg:${sh.name}`, () => K.matmulSubgroupBatched(Mp, Kp, Np, false, false, false, false)), [Ap, Bp, Outp], [Np / t.TN, Mp / t.TM, Bt]); dev.run1d(dev.pipeline(`gt:bmm:${sh.name}`, () => K.gather(rules)), [Outp, Outc, dev.word(0)], Bt * M * Nd / K.gatherLanes(rules)); } });
+    }
+    const gflop = 2 * Bt * M * Kd * Nd / 1e9;
+    const text = await race(runs, Bt * M * Nd);
+    return `${text} · ${gflop.toFixed(2)} GFLOP`;
+  },
   // The padded copy against a plain pass over the same input.
   async pad(sh) {
     const s = conv(sh); const n = sh.N * sh.C * sh.H * sh.H; const { Cp } = K.sgwPadded(s); const pn = sh.N * Cp * (sh.H + 2) * (sh.H + 2);
@@ -102,7 +159,7 @@ try {
   await init();
   dev = device();
   const benches = (q.get("bench") || "dw,fwd").split(",");
-  const shapes = (q.get("shapes") || "16-16@96,32-16@96,32-32@48,64-64@24").split(",").map(parseShape);
+  const shapes = (q.get("shapes") || "16-16@96,32-16@96,32-32@48,64-64@24").split(",").map((t) => parseMM(t) ?? parseShape(t));
   lines.push(`adapter ${Device.adapterInfo} · subgroup matrices ${Device.subgroupMatrix} · ${ROUNDS} rounds of ${REPS}, the minimum`); show();
   for (const b of benches) {
     if (!BENCHES[b]) throw new Error(`no bench named ${b} (have ${Object.keys(BENCHES).join(", ")})`);
