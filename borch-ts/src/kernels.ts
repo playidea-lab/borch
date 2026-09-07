@@ -1791,19 +1791,23 @@ ${flatId(n)}
  * gives.
  */
 export function catCopy(outer: number, outSize: number, size: number, inner: number): string {
-  const n = outer * size * inner;
+  // Four cells a thread when the inner run is a whole number of fours — see `lanesOf`.
+  const lanes = lanesOf(inner);
+  const n = (outer * size * inner) / lanes;
+  const T = lanes === 4 ? "vec4<f32>" : "f32";
   return `
-@group(0) @binding(0) var<storage, read> A: array<f32>;
-@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(0) var<storage, read> A: array<${T}>;
+@group(0) @binding(1) var<storage, read_write> Out: array<${T}>;
 @group(0) @binding(2) var<storage, read> P: array<u32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let o = gid / ${size * inner}u;
-  let rest = gid % ${size * inner}u;
+  let cell = gid * ${lanes}u;
+  let o = cell / ${size * inner}u;
+  let rest = cell % ${size * inner}u;
   let c = rest / ${inner}u;
   let i = rest % ${inner}u;
-  Out[o * ${outSize * inner}u + (P[0] + c) * ${inner}u + i] = A[gid];
+  Out[(o * ${outSize * inner}u + (P[0] + c) * ${inner}u + i) / ${lanes}u] = A[gid];
 }`;
 }
 
@@ -4933,22 +4937,36 @@ ${flatId(C)}
  * `Sequential` pairs the two layers (measured: the U-Net's ten pairs were 1.2 ms of
  * ReLU passes in a 21 ms step).
  */
+/**
+ * How many cells one thread of the BatchNorm passes and the concatenation copy takes:
+ * four when a plane is a whole number of fours, so the four share a channel and load as
+ * one `vec4`. Measured on the M4 Max (2026-09-07): a memory-bound pass one cell a thread
+ * ran at about half the bandwidth of the same pass four cells a thread (the padded copy
+ * for the weight gradient: 0.124 → 0.038 ms on 9.8 MB).
+ */
+export function lanesOf(S: number): 1 | 4 {
+  return S % 4 === 0 ? 4 : 1;
+}
+
 export function batchNormApply(N: number, C: number, S: number, eps: number, withXhat = false, relu = false): string {
-  const n = N * C * S;
+  const lanes = lanesOf(S);
+  const n = (N * C * S) / lanes;
+  const T = lanes === 4 ? "vec4<f32>" : "f32";
+  const zero = lanes === 4 ? "vec4(0.0)" : "0.0";
   return `
-@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(0) var<storage, read> X: array<${T}>;
 @group(0) @binding(1) var<storage, read> Mean: array<f32>;
 @group(0) @binding(2) var<storage, read> Var: array<f32>;
 @group(0) @binding(3) var<storage, read> Wt: array<f32>;
 @group(0) @binding(4) var<storage, read> B: array<f32>;
-@group(0) @binding(5) var<storage, read_write> Out: array<f32>;
-${withXhat ? "@group(0) @binding(6) var<storage, read_write> Xh: array<f32>;" : ""}
+@group(0) @binding(5) var<storage, read_write> Out: array<${T}>;
+${withXhat ? `@group(0) @binding(6) var<storage, read_write> Xh: array<${T}>;` : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let c = (gid / ${S}u) % ${C}u;
+  let c = ((gid * ${lanes}u) / ${S}u) % ${C}u;
   let xh = (X[gid] - Mean[c]) * inverseSqrt(Var[c] + ${eps});
-  ${relu ? "Out[gid] = max(xh * Wt[c] + B[c], 0.0);" : "Out[gid] = xh * Wt[c] + B[c];"}
+  ${relu ? `Out[gid] = max(xh * Wt[c] + B[c], ${zero});` : "Out[gid] = xh * Wt[c] + B[c];"}
 ${withXhat ? "  Xh[gid] = xh;" : ""}
 }`;
 }
@@ -5033,23 +5051,26 @@ ${flatId(C)}
 export function batchNormBackwardApply(
   N: number, C: number, S: number, relu = false,
 ): string {
-  const n = N * C * S;
+  const lanes = lanesOf(S);
+  const n = (N * C * S) / lanes;
+  const T = lanes === 4 ? "vec4<f32>" : "f32";
+  const zero = lanes === 4 ? "vec4(0.0)" : "0.0";
   const count = (N * S).toFixed(1);
   return `
-@group(0) @binding(0) var<storage, read> Xh: array<f32>;
-@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(0) var<storage, read> Xh: array<${T}>;
+@group(0) @binding(1) var<storage, read> G: array<${T}>;
 @group(0) @binding(2) var<storage, read> SumG: array<f32>;
 @group(0) @binding(3) var<storage, read> SumGXh: array<f32>;
 @group(0) @binding(4) var<storage, read> Wt: array<f32>;
 @group(0) @binding(5) var<storage, read> InvStd: array<f32>;
-@group(0) @binding(6) var<storage, read_write> Out: array<f32>;
-${relu ? "@group(0) @binding(7) var<storage, read> Y: array<f32>;" : ""}
+@group(0) @binding(6) var<storage, read_write> Out: array<${T}>;
+${relu ? `@group(0) @binding(7) var<storage, read> Y: array<${T}>;` : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let c = (gid / ${S}u) % ${C}u;
+  let c = ((gid * ${lanes}u) / ${S}u) % ${C}u;
   let xh = Xh[gid];
-  ${relu ? "let gv = select(0.0, G[gid], Y[gid] > 0.0);" : "let gv = G[gid];"}
+  ${relu ? `let gv = select(${zero}, G[gid], Y[gid] > ${zero});` : "let gv = G[gid];"}
   Out[gid] = Wt[c] * InvStd[c] *
     (gv - SumG[c] / ${count} - xh * SumGXh[c] / ${count});
 }`;

@@ -212,6 +212,7 @@ import {
   sgwPadded,
   sumSplitsTapped,
   gradWeightDirectFits,
+  lanesOf,
   gradWeightDirectGrid,
   gradWeightDirectSplits,
   convNDGradWeightTiled,
@@ -2446,7 +2447,7 @@ export class Tensor implements Node<Tensor> {
         dev().run1d(
           dev().pipeline(`catc:${outer}:${total}:${size}:${inner}`, () => catCopy(outer, total, size, inner)),
           [part.buffer, out, dev().word(before)],
-          outer * size * inner,
+          (outer * size * inner) / lanesOf(inner),
         );
       }
       before += size;
@@ -11816,7 +11817,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     dev().run1d(
       dev().pipeline(`bna:${key}:${eps}`, () => batchNormApply(N, C, S, eps)),
       [this.buffer, mean.buffer, variance.buffer, weight.buffer, bias.buffer, out],
-      this.size,
+      this.size / lanesOf(S),
     );
     const self = this;
     return Tensor.make(out, this.shape, [this, weight, bias], (g) => {
@@ -11875,7 +11876,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     dev().run1d(
       dev().pipeline(`bna:${key}:${eps}:xh${r}`, () => batchNormApply(N, C, S, eps, true, relu)),
       [this.buffer, mean, variance, weight.buffer, bias.buffer, out, xh],
-      this.size,
+      this.size / lanesOf(S),
     );
     const meanT = new Tensor(mean, [C]);
     const varT = new Tensor(variance, [C]);
@@ -11909,7 +11910,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           dev().run1d(
             dev().pipeline(`bnba:${key}${r}`, () => batchNormBackwardApply(N, C, S, relu)),
             [xhat.buffer, g.buffer, sumG, sumGXh, weight.buffer, invStd.buffer, gi, ...mask],
-            self.size,
+            self.size / lanesOf(S),
           );
           parts.push(new Tensor(gi, self.shape));
         } else parts.push(null);
