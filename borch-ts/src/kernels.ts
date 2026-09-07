@@ -3245,6 +3245,207 @@ ${store.join("\n")}
 }`;
 }
 
+/** Padded channel counts: the subgroup matrices are whole 8 × 8 blocks. */
+export function sgwPadded(s: ConvNDShape): { Op: number; Cp: number } {
+  return { Op: Math.ceil(s.O / 8) * 8, Cp: Math.ceil(s.C / 8) * 8 };
+}
+
+/** The widest tile dividing the output row — a tile never crosses a row, so nothing
+ *  outside the image is ever read. */
+export function sgwGlobalTile(OW: number): number {
+  for (const w of [64, 48, 40, 32, 24, 16, 8]) if (OW % w === 0) return w;
+  return 8;
+}
+
+/** How many workgroups the subgroup weight gradient aims for across the channel blocks.
+ *  Measured (below): 512 and 1024 within a few per cent of each other with the summing
+ *  counted, 2048 and up paying more in partial sums than they gain. */
+const SGW_WANT = 1024;
+const SGW_CB = 16;
+const SGW_IB = 16;
+
+/**
+ * Whether a weight gradient takes the subgroup-matrix kernel: the direct kernel's
+ * shapes, a kernel no wider than three, the output row a multiple of eight (a tile of
+ * pixels never crosses a row), the output channels a multiple of eight (the gradient
+ * is read in whole blocks of eight channels straight from its buffer — a row past the
+ * last channel would read past the buffer for the last image), and the device's
+ * subgroup matrices — the caller checks `Device.subgroupMatrix`.
+ */
+export function sgwGlobalFits(s: ConvNDShape): boolean {
+  const [, OW = 1] = s.outDims;
+  return gradWeightDirectFits(s) && s.kernel.every((v) => v <= 3) && OW % 8 === 0 && s.O % 8 === 0;
+}
+
+function sgwGlobalTiles(s: ConvNDShape): number {
+  const [OH = 1, OW = 1] = s.outDims;
+  return s.N * OH * (OW / sgwGlobalTile(OW));
+}
+
+/** The position pieces — each a partial sum `sumSplitsTapped` adds. */
+export function sgwGlobalPieces(s: ConvNDShape): number {
+  const blocks = Math.ceil(s.O / SGW_CB) * Math.ceil(s.C / SGW_IB);
+  return Math.max(1, Math.min(sgwGlobalTiles(s), Math.ceil(SGW_WANT / blocks)));
+}
+
+/** The grid: pieces, output-channel blocks, input-channel blocks. */
+export function sgwGlobalGrid(s: ConvNDShape): [number, number, number] {
+  return [sgwGlobalPieces(s), Math.ceil(s.O / SGW_CB), Math.ceil(s.C / SGW_IB)];
+}
+
+/**
+ * The padded copy of the input the subgroup weight gradient reads: `(N, Cp, IH + 2·pad,
+ * IW + 2·pad)`, zeros in the border and in the channels past C. **Four cells a thread.**
+ * Measured on the M4 Max (2026-09-07): one cell a thread copied sixteen channels at
+ * 96 × 96 (9.8 MB out) in 0.124 ms, four in 0.038 — faster than a plain ReLU over the
+ * same bytes one cell a thread (0.065). A memory-bound kernel wants several cells in
+ * flight per thread; the row's index arithmetic is done once for the four when they
+ * share a row, which they do except at a row's end.
+ */
+export function padForGradWeight(s: ConvNDShape): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [PH = 0, PW = 0] = s.pad;
+  const { Cp } = sgwPadded(s);
+  const PIH = IH + 2 * PH, PIW = IW + 2 * PW;
+  const rows = s.N * Cp * PIH;
+  const n = rows * PIW;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(Math.ceil(n / 4))}
+  let first = gid * 4u;
+  let row = first / ${PIW}u;
+  let c = (row / ${PIH}u) % ${Cp}u;
+  let b = row / ${PIH * Cp}u;
+  let y = i32(row % ${PIH}u) - ${PH};
+  let rowOk = c < ${s.C}u && y >= 0 && y < ${IH};
+  let src = ((b * ${s.C}u + c) * ${IH}u + u32(max(y, 0))) * ${IW}u;
+  for (var j = 0u; j < 4u; j = j + 1u) {
+    let i = first + j;
+    if (i >= ${n}u) { break; }
+    let x = i32(i - row * ${PIW}u) - ${PW};
+    let same = i / ${PIW}u == row;
+    let x2 = select(i32(i % ${PIW}u) - ${PW}, x, same);
+    let row2 = i / ${PIW}u;
+    let c2 = (row2 / ${PIH}u) % ${Cp}u;
+    let b2 = row2 / ${PIH * Cp}u;
+    let y2 = i32(row2 % ${PIH}u) - ${PH};
+    let ok = select(c2 < ${s.C}u && y2 >= 0 && y2 < ${IH}, rowOk, same) && x2 >= 0 && x2 < ${IW};
+    let s2 = select(((b2 * ${s.C}u + c2) * ${IH}u + u32(max(y2, 0))) * ${IW}u, src, same);
+    Out[i] = select(0.0, X[s2 + u32(max(x2, 0))], ok);
+  }
+}`;
+}
+
+/**
+ * The weight gradient on subgroup matrices **from the buffers directly** — no staging,
+ * no barriers.
+ *
+ * Measured on the M4 Max (2026-09-07, five rounds of twenty dispatches, the minimum,
+ * batch 16, the summing counted): 16 → 16 at 96 × 96 0.151 ms against the direct
+ * kernel's 0.289, 32 → 16 at 96 × 96 0.248 against 0.574, 32 → 32 at 48 × 48 0.193
+ * against 0.337, 64 → 64 at 24 × 24 0.132 against 0.234, 128 → 64 at 24 × 24 0.237
+ * against 0.500 — about twice the direct kernel everywhere, within 1e-6 of it. Four
+ * staged versions came first (the tiles in workgroup memory, the gradient staged
+ * plain or transposed, the taps or the pixels split among four subgroups) and the best
+ * of them beat the direct kernel by a tenth on the wide layers and lost on the small
+ * ones: the matrix loads from workgroup memory and the barriers were the time, not the
+ * multiplies. Read straight from the buffers the loads are the same strided 8 × 8
+ * blocks the GEMM reads at eleven TFLOP/s, and the cache carries the nine taps' reuse.
+ *
+ * The input is a copy padded by the convolution's padding and to a whole eight of
+ * channels (`padForGradWeight`), so every tap's block is a plain strided load: the
+ * gradient block (channels by pixels, stride one output plane) is the left operand,
+ * the padded input at the tap's offset (pixels by channels, stride one padded plane,
+ * column-major) the right. One subgroup per workgroup; a workgroup owns a block of
+ * sixteen output by sixteen input channels and a share of the tiles — `sgwGlobalTile`
+ * pixels of one output row each — and holds all nine taps' accumulators. Each piece's
+ * partial sums are stored tap-major in whole blocks and `sumSplitsTapped` adds the
+ * pieces in a fixed order into the weight's own layout, so the value is deterministic.
+ */
+export function convGradWeightSubgroupGlobal(s: ConvNDShape, pieces: number = sgwGlobalPieces(s), CB = SGW_CB, IB = SGW_IB): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [PH = 0, PW = 0] = s.pad;
+  const kSpace = KH * KW;
+  const { Op, Cp } = sgwPadded(s);
+  const TW = sgwGlobalTile(OW);
+  const perRow = OW / TW;
+  const T = s.N * OH * perRow;
+  const PIH = IH + 2 * PH, PIW = IW + 2 * PW;
+  const mb = CB / 8, nb = IB / 8;
+  const acc: string[] = [];
+  for (let t = 0; t < kSpace; t++) for (let i = 0; i < mb; i++) for (let n = 0; n < nb; n++) acc.push(`  var c${t}_${i}${n}: subgroup_matrix_result<f32, 8, 8>;`);
+  const loadA = Array.from({ length: mb }, (_, i) => `      let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&G, gBase + ${i * 8 * OH * OW}u + k0, false, ${OH * OW}u);`);
+  const body: string[] = [];
+  for (let t = 0; t < kSpace; t++) {
+    const kh = Math.floor(t / KW), kw = t % KW;
+    for (let n = 0; n < nb; n++) {
+      body.push(`      if (ci0 + ${n * 8}u < ${Cp}u) {`);
+      body.push(`        let b = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&Xp, xBase + ${n * 8 * PIH * PIW + kh * PIW + kw}u + k0, true, ${PIH * PIW}u);`);
+      for (let i = 0; i < mb; i++) body.push(`        c${t}_${i}${n} = subgroupMatrixMultiplyAccumulate(a${i}, b, c${t}_${i}${n});`);
+      body.push("      }");
+    }
+  }
+  const store: string[] = [];
+  for (let t = 0; t < kSpace; t++) for (let i = 0; i < mb; i++) for (let n = 0; n < nb; n++) {
+    store.push(`  if (co0 + ${i * 8}u < ${Op}u && ci0 + ${n * 8}u < ${Cp}u) { subgroupMatrixStore(&Out, ((piece * ${kSpace}u + ${t}u) * ${Op}u + co0 + ${i * 8}u) * ${Cp}u + ci0 + ${n * 8}u, c${t}_${i}${n}, false, ${Cp}u); }`);
+  }
+  return `enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> Xp: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(32)
+fn main(@builtin(workgroup_id) wid: vec3<u32>) {
+  let piece = wid.x;
+  let co0 = wid.y * ${CB}u;
+  let ci0 = wid.z * ${IB}u;
+${acc.join("\n")}
+  for (var tile = piece; tile < ${T}u; tile = tile + ${pieces}u) {
+    let n = tile / ${OH * perRow}u;
+    let rest = tile - n * ${OH * perRow}u;
+    let oh = rest / ${perRow}u;
+    let tw0 = (rest - oh * ${perRow}u) * ${TW}u;
+    let gBase = ((n * ${s.O}u + co0) * ${OH}u + oh) * ${OW}u + tw0;
+    let xBase = ((n * ${Cp}u + ci0) * ${PIH}u + oh) * ${PIW}u + tw0;
+    for (var k0 = 0u; k0 < ${TW}u; k0 = k0 + 8u) {
+${loadA.join("\n")}
+${body.join("\n")}
+    }
+  }
+${store.join("\n")}
+}`;
+}
+
+/** Adds the subgroup weight gradient's tap-major, padded partial sums into the weight's
+ *  (O, C, kh, kw) layout, in a fixed order. */
+export function sumSplitsTapped(s: ConvNDShape, pieces: number = sgwGlobalPieces(s)): string {
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const { Op, Cp } = sgwPadded(s);
+  const n = s.O * s.C * kSpace;
+  const cell = `((p * ${kSpace}u + tap) * ${Op}u + co) * ${Cp}u + ci`;
+  return `
+@group(0) @binding(0) var<storage, read> Parts: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let co = gid / ${s.C * kSpace}u;
+  let rest = gid - co * ${s.C * kSpace}u;
+  let ci = rest / ${kSpace}u;
+  let tap = rest - ci * ${kSpace}u;
+  var acc = 0.0;
+  for (var p = 0u; p < ${pieces}u; p = p + 1u) {
+    acc = acc + Parts[${cell}];
+  }
+  Out[gid] = acc;
+}`;
+}
+
 /**
  * How many pieces the forward's reduction is split into. The same policy as the weight
  * gradient's, for the same reason: **the late layers of a network make a tile grid too

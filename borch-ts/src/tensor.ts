@@ -204,6 +204,13 @@ import {
   convNDForwardTiled, depthwiseForward, isDepthwise,
   convNDGradInputTiled,
   convGradWeightDirect2d,
+  convGradWeightSubgroupGlobal,
+  padForGradWeight,
+  sgwGlobalFits,
+  sgwGlobalGrid,
+  sgwGlobalPieces,
+  sgwPadded,
+  sumSplitsTapped,
   gradWeightDirectFits,
   gradWeightDirectGrid,
   gradWeightDirectSplits,
@@ -11013,33 +11020,54 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           // A split reduction leaves one partial sum per piece, and they have to be
           // added once more.
           const direct = gradWeightDirectFits(s);
-          const splits = direct ? gradWeightDirectSplits(s) : convGradWeightSplit(s);
-          const parted = dev().alloc(weight.size * splits);
-          if (direct) {
-            // The narrow layers: staged rows, the channel pairs' taps in registers.
+          const subgroup = Device.subgroupMatrix && sgwGlobalFits(s);
+          const splits = subgroup ? sgwGlobalPieces(s) : direct ? gradWeightDirectSplits(s) : convGradWeightSplit(s);
+          if (subgroup) {
+            // Subgroup matrices straight from the buffers, the input copied padded —
+            // see `convGradWeightSubgroupGlobal`. Its partial sums have their own adder.
+            const { Op, Cp } = sgwPadded(s);
+            const [IH = 1, IW = 1] = s.inDims;
+            const [PH = 0, PW = 0] = s.pad;
+            const paddedSize = s.N * Cp * (IH + 2 * PH) * (IW + 2 * PW);
+            const padded = dev().alloc(paddedSize);
+            dev().run1d(dev().pipeline(`pdw:${key}`, () => padForGradWeight(s)), [this.buffer, padded], Math.ceil(paddedSize / 4));
+            const parted = dev().alloc(splits * s.kernel.reduce((a, b) => a * b, 1) * Op * Cp);
             dev().run(
-              dev().pipeline(`cnwd:${key}`, () => convGradWeightDirect2d(s)),
-              [this.buffer, g.buffer, parted],
-              gradWeightDirectGrid(s),
+              dev().pipeline(`cnwg:${key}`, () => convGradWeightSubgroupGlobal(s)),
+              [padded, g.buffer, parted],
+              sgwGlobalGrid(s),
             );
+            const gw = dev().alloc(weight.size);
+            dev().run1d(dev().pipeline(`sst:${key}`, () => sumSplitsTapped(s)), [parted, gw], weight.size);
+            parts.push(new Tensor(gw, weight.shape));
           } else {
-            dev().run(
-              dev().pipeline(`cnwt:${key}`, () => convNDGradWeightTiled(s)),
-              [this.buffer, g.buffer, parted],
-              convGradWeightGrid(s),
-            );
+            const parted = dev().alloc(weight.size * splits);
+            if (direct) {
+              // The narrow layers: staged rows, the channel pairs' taps in registers.
+              dev().run(
+                dev().pipeline(`cnwd:${key}`, () => convGradWeightDirect2d(s)),
+                [this.buffer, g.buffer, parted],
+                gradWeightDirectGrid(s),
+              );
+            } else {
+              dev().run(
+                dev().pipeline(`cnwt:${key}`, () => convNDGradWeightTiled(s)),
+                [this.buffer, g.buffer, parted],
+                convGradWeightGrid(s),
+              );
+            }
+            let gw = parted;
+            if (splits > 1) {
+              gw = dev().alloc(weight.size);
+              dev().run1d(
+                dev().pipeline(`ss:${weight.size}:${splits}`,
+                  () => sumSplits(weight.size, splits)),
+                [parted, gw],
+                weight.size,
+              );
+            }
+            parts.push(new Tensor(gw, weight.shape));
           }
-          let gw = parted;
-          if (splits > 1) {
-            gw = dev().alloc(weight.size);
-            dev().run1d(
-              dev().pipeline(`ss:${weight.size}:${splits}`,
-                () => sumSplits(weight.size, splits)),
-              [parted, gw],
-              weight.size,
-            );
-          }
-          parts.push(new Tensor(gw, weight.shape));
         } else parts.push(null);
         if (bias) {
           // The batch and the output positions summed together. Stacking reductions
