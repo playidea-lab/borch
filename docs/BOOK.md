@@ -565,6 +565,24 @@ calls — was 3.4 ms of a 17.7 ms U-Net step (measured with the device's timesta
 `replay()` issues it again without Python:
 
 ```python
+def train_step(x, y):
+    opt.zero_grad(); loss = crit(model(x), y); loss.backward(); opt.step(); return loss
+
+step = torch.compiled(train_step)                             # records once per input shape
+for bx, by in batches:
+    with torch.scope():
+        loss = step(torch.tensor(bx), torch.tensor(by))       # first call: eager, recorded; then: copied in, replayed
+        losses.append(loss.item())
+step.dispose()
+```
+
+`compiled` is `capture()` with the bookkeeping done: the first call for a set of input
+shapes runs the function eagerly on copies of its arguments made under the capture, keeps
+what it returned, and every later call with those shapes copies its arguments into the
+same buffers and replays; a new shape — the last, shorter batch — is recorded once more
+and kept beside the first. Underneath is the hand-driven form:
+
+```python
 x, y = torch.tensor(batch_x), torch.tensor(batch_y)          # the inputs, made once
 with torch.capture() as step:                                 # runs the step once, eagerly
     with torch.scope():
@@ -573,7 +591,7 @@ step.fuse()                                                   # elementwise tree
 for bx, by in batches:
     x.copy_(torch.tensor(bx)); y.copy_(torch.tensor(by))     # the next batch, into the same buffers
     step.replay()
-    print(loss.item())                                        # the new step's loss, same buffer
+    losses.append(loss.item())                                # the new step's loss, same buffer
 step.dispose()
 ```
 
@@ -598,8 +616,9 @@ never left unwritten — and a tree stops at the device's storage-buffer budget 
 (Metal gives ten). A hand-written GELU network: 139 → 84 dispatches, eager 4.2 ms, replayed
 1.7, fused 1.5 (`npm run fuse:py`); the fused values are within 1e-6 relative of eager, the
 difference being a multiply and an add the compiler contracts into one rounding once they
-share a kernel. What a capture cannot do: a step whose shapes change (drop the last partial
-batch), or one that branches in Python on the step's values.
+share a kernel. Each fused kernel is compiled once, some fifteen milliseconds each on the
+M4 Max — a recording's first call pays it. What no recording can carry: a step that
+branches in Python on the step's values.
 
 ## If you need more than that — `borch-webgpu`
 

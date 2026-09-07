@@ -899,6 +899,89 @@ class capture:
         self._capture.dispose()
 
 
+class compiled:
+    """**A step function that records itself once per input shape and replays after.**
+
+        step = torch.compiled(lambda x, y: train_step(model, opt, crit, x, y))
+        for bx, by in batches:
+            loss = step(torch.tensor(bx), torch.tensor(by))     # first call per shape: eager, recorded
+            print(loss.item())                                  # then: copied in, replayed
+
+    What `capture()` asks the caller to do by hand — make the inputs once, copy each batch
+    into them, keep the returned tensors — this does. The first call with a given set of
+    input shapes runs the function eagerly under a capture, on **copies** of the arguments
+    made inside the capture (so they are pinned for its life), and keeps what the function
+    returned; a later call with the same shapes copies its arguments into those buffers and
+    replays, and hands back the same returned objects, which now read the new step. A new
+    shape — the last, shorter batch — is recorded once more and kept beside the first.
+    Numbers among the arguments are part of the shape key: a value the step baked into a
+    kernel cannot change on replay.
+
+    `fuse=True` merges each recording's elementwise trees into single kernels (see
+    `capture.fuse`). What no recording can carry: a step that branches in Python on the
+    step's values, and a readback inside the step (allowed, but the replay does not run it).
+    `dispose()` returns every recording's memory.
+    """
+
+    def __init__(self, fn, fuse=True):
+        self._fn = fn
+        self._fuse = fuse
+        self._records = {}        # shape key → (capture, input tensors, returned)
+
+    @staticmethod
+    def _key(args):
+        parts = []
+        for a in args:
+            if isinstance(a, Tensor):
+                parts.append(("t", tuple(int(d) for d in a.shape), str(a.dtype)))
+            elif isinstance(a, (int, float, bool, str)) or a is None:
+                parts.append(("v", a))
+            else:
+                raise TypeError(f"compiled: arguments are tensors or plain values — got {type(a).__name__}")
+        return tuple(parts)
+
+    def __call__(self, *args):
+        key = self._key(args)
+        rec = self._records.get(key)
+        if rec is None:
+            # The first time for these shapes: copies of the tensor arguments made under the
+            # capture, so their buffers belong to it; the function runs eagerly on them.
+            cap = capture()
+            cap.__enter__()
+            try:
+                inputs = []
+                for a in args:
+                    if isinstance(a, Tensor):
+                        from ._base import tensor as _tensor
+                        held = _tensor(a.numpy())         # an upload, not a dispatch: nothing to replay
+                        inputs.append(held)
+                    else:
+                        inputs.append(a)
+                out = self._fn(*inputs)
+            finally:
+                cap.__exit__(None, None, None)
+            if self._fuse:
+                cap.fuse()
+            self._records[key] = (cap, inputs, out)
+            return out
+        cap, inputs, out = rec
+        for held, a in zip(inputs, args):
+            if isinstance(held, Tensor):
+                held.copy_(a)
+        cap.replay()
+        return out
+
+    @property
+    def shapes(self):
+        """How many input shapes have been recorded."""
+        return len(self._records)
+
+    def dispose(self):
+        for cap, _inputs, _out in self._records.values():
+            cap.dispose()
+        self._records = {}
+
+
 def keep_alive(t):
     """Keep it alive **forever**, whatever scope closes. Parameters and optimiser
     state use this.

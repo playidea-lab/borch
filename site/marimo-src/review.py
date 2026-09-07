@@ -130,24 +130,21 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         EPOCHS = 30 if N <= 1000 else 15
         steps = max(1, N // BATCH)
         shuffled = np.random.default_rng(0).permutation(N)
-        # The first step is recorded under `torch.capture()` and every other step replays
-        # it — the same dispatches, the next batch copied into the same input buffers,
-        # no Python between the kernels — after `fuse()` merged the elementwise chains into
-        # single kernels. The eager step to a rounding (measured), a sixth faster on a laptop GPU.
-        xb = torch.tensor(Xt[shuffled[:BATCH]]); mb = torch.tensor(Mt[shuffled[:BATCH]])
-        with torch.capture() as rec:
-            with torch.scope():
-                opt.zero_grad(); loss = crit(model(xb), mb); loss.backward(); opt.step()
-        rec.fuse()
+        # `torch.compiled`: the step is recorded once per input shape and replayed after —
+        # the same dispatches, the batch copied in, no Python between the kernels, the
+        # elementwise chains fused into single kernels. The eager step to a rounding
+        # (measured), a sixth faster on a laptop GPU.
+        def train_step(xb, mb):
+            opt.zero_grad(); l = crit(model(xb), mb); l.backward(); opt.step(); return l
+        run = torch.compiled(train_step)
         for epoch in range(EPOCHS):
             for s in range(steps):
-                if epoch == 0 and s == 0:
-                    continue                                   # recorded above
                 take = shuffled[s * BATCH:(s + 1) * BATCH]
-                xb.copy_(torch.tensor(Xt[take])); mb.copy_(torch.tensor(Mt[take]))
-                rec.replay()
-            losses.append(loss.item())
-        rec.dispose()
+                with torch.scope():
+                    loss = run(torch.tensor(Xt[take]), torch.tensor(Mt[take]))
+                    last = loss.item()
+            losses.append(last)
+        run.dispose()
         model.eval()
         pred = np.zeros((N, 1, ds.size, ds.size), np.float32)
         with torch.no_grad():
@@ -192,17 +189,16 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         head = nn.Linear(backbone.num_features, K)
         opt = torch.optim.Adam(head.parameters(), lr=1e-2)
         Ft, yt = torch.tensor(feats), torch.tensor(y)
-        # Full-batch: the input never changes, so the recorded step replays as it is.
-        with torch.capture() as rec:
+        # Full-batch: the input never changes, so `torch.compiled` records once and replays.
+        def head_step(F, t):
+            opt.zero_grad(); l = crit(head(F), t); l.backward(); opt.step(); return l
+        run = torch.compiled(head_step)
+        for step in range(300):
             with torch.scope():
-                opt.zero_grad(); loss = crit(head(Ft), yt); loss.backward(); opt.step()
-        rec.fuse()
-        losses.append(loss.item())
-        for step in range(1, 300):
-            rec.replay()
-            if step % 50 == 0 or step == 299:
-                losses.append(loss.item())
-        rec.dispose()
+                loss = run(Ft, yt)
+                if step % 50 == 0 or step == 299:
+                    losses.append(loss.item())
+        run.dispose()
         class Frozen(nn.Module):
             # backbone → pre-logits → head, as one module, so the export is the whole thing
             def __init__(self):
@@ -226,21 +222,17 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         Xt, yt = torch.tensor(ds.stack()), torch.tensor(y)  # all of it, at 64 px
         BATCH, EPOCHS = 16, 12
         steps = max(1, N // BATCH)
-        # One step recorded, the rest replayed with each batch copied into the captured
-        # inputs — see the U-Net path above for why.
-        xb = torch.tensor(ds.stack()[:BATCH]); yb = torch.tensor(y[:BATCH])
-        with torch.capture() as rec:
-            with torch.scope():
-                opt.zero_grad(); loss = crit(model(xb), yb); loss.backward(); opt.step()
-        rec.fuse()
+        # `torch.compiled` — see the U-Net path for what it does.
+        def train_step(xb, yb):
+            opt.zero_grad(); l = crit(model(xb), yb); l.backward(); opt.step(); return l
+        run = torch.compiled(train_step)
         for epoch in range(EPOCHS):
             for s in range(steps):
-                if epoch == 0 and s == 0:
-                    continue
-                xb.copy_(Xt[s * BATCH:(s + 1) * BATCH]); yb.copy_(yt[s * BATCH:(s + 1) * BATCH])
-                rec.replay()
-            losses.append(loss.item())
-        rec.dispose()
+                with torch.scope():
+                    loss = run(Xt[s * BATCH:(s + 1) * BATCH], yt[s * BATCH:(s + 1) * BATCH])
+                    last = loss.item()
+            losses.append(last)
+        run.dispose()
         model.eval()
         with torch.no_grad():
             logits = model(Xt)

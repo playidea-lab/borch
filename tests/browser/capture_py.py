@@ -7,6 +7,8 @@ twelve from the same weights with the first step recorded under `torch.capture()
 other eleven replayed, the batch copied into the captured inputs. Judged: every loss the
 same, every learned parameter and running statistic the same (the one thing that differs
 is BatchNorm's `num_batches_tracked`, a CPU counter the replay does not run), no fault.
+Then `torch.compiled(step)` over a sequence whose batches are sixteen and, every
+seventh, ten: two recordings, and the eager run of the same sequence bit for bit.
 Reported: the wall-clock step both ways — on the M4 Max 17.3 eager, 14.7 replayed.
 """
 import glob
@@ -72,7 +74,9 @@ def main(argv):
         return 1
     d_loss = re.search(r"\|Δloss\| ([0-9.e+-]+)", done)
     d_w = re.search(r"\|Δparam\| ([0-9.e+-]+)", done)
-    ok = "faults 0" in done and bool(d_loss and d_w) and float(d_loss.group(1)) == 0.0 and float(d_w.group(1)) == 0.0
+    comp = re.search(r"compiled two shapes: recordings (\d+) max \|Δloss\| ([0-9.e+-]+) max \|Δparam\| ([0-9.e+-]+)", done)
+    ok = "faults 0" in done and bool(d_loss and d_w and comp) and float(d_loss.group(1)) == 0.0 and float(d_w.group(1)) == 0.0
+    ok = ok and int(comp.group(1)) == 2 and float(comp.group(2)) == 0.0 and float(comp.group(3)) == 0.0
     print("**the replayed step is the eager step, bit for bit**" if ok else "**it is not** — see above")
     return 0 if ok else 1
 

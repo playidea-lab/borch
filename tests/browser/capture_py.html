@@ -81,8 +81,29 @@ def replay_once():
     step.replay(); float(loss2.item())
 te, tr = wall(eager_once), wall(replay_once)
 step.dispose()
+# torch.compiled: the same step as a wrapped function, over batches of two shapes —
+# ninety rows in sixteens leave a batch of ten — against the eager run of the same
+# sequence. Bit for bit (no fusion), two recordings.
+seq = [(xs[i % STEPS][:16 if i % 7 else 10], ms[i % STEPS][:16 if i % 7 else 10]) for i in range(14)]
+m3 = S.build_unet(torch); m3.train(); m3.load_state_dict({k: torch.tensor(v) for k, v in state0.items()})
+o3 = torch.optim.Adam(m3.parameters(), lr=1e-3); e3 = []
+for bx, bm in seq:
+    with torch.scope():
+        o3.zero_grad(); l = crit(m3(torch.tensor(bx)), torch.tensor(bm)); l.backward(); o3.step(); e3.append(float(l.item()))
+m4 = S.build_unet(torch); m4.train(); m4.load_state_dict({k: torch.tensor(v) for k, v in state0.items()})
+o4 = torch.optim.Adam(m4.parameters(), lr=1e-3)
+def train_step(bx, bm):
+    o4.zero_grad(); l = crit(m4(bx), bm); l.backward(); o4.step(); return l
+run = torch.compiled(train_step, fuse=False); c4 = []
+for bx, bm in seq:
+    with torch.scope():
+        c4.append(float(run(torch.tensor(bx), torch.tensor(bm)).item()))
+d_compiled = max(abs(a - b) for a, b in zip(e3, c4))
+d_cw = max(float(np.abs(m3.state_dict()[k].numpy() - m4.state_dict()[k].numpy()).max()) for k in m3.state_dict() if "num_batches" not in k)
+shapes = run.shapes
+run.dispose()
 adapter = str(js.borch.Device.adapterInfo)
-f"capture: {STEPS} steps · max |Δloss| {d_loss:.1e} · max |Δparam| {d_w:.1e} · {step.dispatches} dispatches a replay · eager {te:.1f} ms · replay {tr:.1f} ms a step · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
+f"capture: {STEPS} steps · max |Δloss| {d_loss:.1e} · max |Δparam| {d_w:.1e} · {step.dispatches} dispatches a replay · eager {te:.1f} ms · replay {tr:.1f} ms a step · compiled two shapes: recordings {shapes} max |Δloss| {d_compiled:.1e} max |Δparam| {d_cw:.1e} · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
 \`);
         postMessage({ done: text, ms: performance.now() - t1 });
       } catch (err) {

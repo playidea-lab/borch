@@ -728,6 +728,10 @@ export class Device {
   // side — Adam's bias correction moved to a kernel for exactly this.
   private recording: Recorded[] | null = null;
   private pinned: Set<GPUBuffer> | null = null;
+  /** Every buffer some live capture owns — a scope closing after the capture ended must
+   *  still leave them alone (measured: the loss returned from a compiled step "belonged to
+   *  a closed scope" the moment the caller's scope closed). */
+  private readonly owned = new Set<GPUBuffer>();
 
   beginCapture(): void {
     if (this.recording) throw new Error("a capture is already open");
@@ -768,6 +772,7 @@ export class Device {
   /** Hands a capture's pinned buffers back to the pool. Called by `Capture.dispose`. */
   unpin(buffers: Iterable<GPUBuffer>): void {
     for (const buf of buffers) {
+      this.owned.delete(buf);
       const size = this.sizes.get(buf);
       if (size === undefined) { buf.destroy(); continue; }
       let pool = this.spare.get(size);
@@ -801,7 +806,7 @@ export class Device {
       // **They die here.** If a tensor holding this buffer leaked out, using it stops
       // from now on — otherwise it quietly reads what the next allocation overwrote.
       // Pinned by an open capture: neither pooled nor passed outward — the capture owns it.
-      if (this.pinned?.has(buf)) continue;
+      if (this.owned.has(buf)) continue;
       this.retire(buf);
       // Returned to the pool rather than destroyed. The next step asks for the same
       // size again.
@@ -967,7 +972,7 @@ export class Device {
       size,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
-    this.pinned?.add(buf);
+    if (this.pinned) { this.pinned.add(buf); this.owned.add(buf); }
     if (!reused) {
       this.made += 1;
       this.madeBytes += size;
