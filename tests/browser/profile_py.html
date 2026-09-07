@@ -128,8 +128,9 @@ NAMES = {"cnd": "conv direct (fwd, dX)", "cnt": "conv GEMM fwd/dX", "cnwt": "con
          "u": "unary", "ub": "unary bwd", "b": "binary", "bb": "binary bwd", "rb": "broadcast fold", "rbw": "broadcast fold (wide)", "rd": "reduce dim", "rsum": "reduce sum", "pn": "pool", "pnbt": "pool bwd (tiled max)", "pnb": "pool bwd",
          "catc": "cat copy", "gt": "gather (narrow)", "adam": "adam step", "sgd": "sgd step", "bcel": "bce loss", "bcelb": "bce loss bwd", "cturn": "turn weights", "mm": "matmul", "mmsg": "matmul (subgroup)", "pad": "pad"}
 # The query set holds a fixed number of timestamps; past it dispatches run untimed and
-# are counted in `profileDropped`. Dividing by `steps` would then show a fifth of a
-# ViT step as the step — so the divisor is the number of steps actually timed.
+# are counted in profileDropped. Dividing by steps would then show a fifth of a ViT
+# step as the step — so the divisor is the number of steps actually timed. (No
+# backticks in this Python: it sits inside a JS template literal.)
 dropped = int(dev.profileDropped)
 timed_steps = (per_step * steps - dropped) / per_step
 per, count = {}, {}
