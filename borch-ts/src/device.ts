@@ -280,6 +280,9 @@ export interface Recorded {
   /** For an elementwise dispatch, what it computes — see `Elementwise`; for a reduction,
    *  what it reads once — see `Reduce`. */
   readonly meta?: Elementwise | Reduce;
+  /** The pipeline's signature at the time of recording — what the profiler files a
+   *  replayed dispatch under. Without it a replay is one kind: the last signature set. */
+  readonly sig?: string;
 }
 
 /**
@@ -824,6 +827,7 @@ export class Device {
         continue;
       }
       if (!r.pipeline || !r.bindGroup) throw new Error("a recorded dispatch without a pipeline");
+      this.currentSig = r.sig ?? "replay";
       const pass = this.openPass();
       pass.setPipeline(r.pipeline);
       pass.setBindGroup(0, r.bindGroup);
@@ -1112,7 +1116,7 @@ export class Device {
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
     this.dispatches += 1;
-    this.recording?.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]], buffers: [...buffers], ...(meta ? { meta } : {}) });
+    this.recording?.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]], buffers: [...buffers], sig: this.currentSig, ...(meta ? { meta } : {}) });
     // **A batch that grows too large is dropped, and nothing says so.**
     //
     // Commands accumulate in one encoder and go out when something is read. The

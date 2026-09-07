@@ -394,7 +394,7 @@ ${body}
   const key = `fused:${hashOf(code)}:${n}`;
   const pipeline = dev.pipeline(key, () => code);
   fusedCodes.set(key, code);
-  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, e.buffers), groups: [grid.x, grid.y, 1], buffers: e.buffers };
+  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, e.buffers), groups: [grid.x, grid.y, 1], buffers: e.buffers, sig: key };
 }
 
 /** The reduction `root` rebuilt around the tree feeding it: the tree's bindings first,
