@@ -2865,8 +2865,16 @@ ${withBias ? "  r = r + B[fo];\n" : ""}${epilogueWgsl(ep, "r", "idx")}  Out[idx]
 /** The output columns one thread of `convDirect2d` computes. */
 export const DIRECT_STRIP = 4;
 
-/** The most output channels one thread accumulates — with the strip, 64 registers. */
-const DIRECT_COUT = 16;
+/**
+ * The most output channels one thread accumulates — with the strip, thirty-two
+ * accumulators. Sixteen (sixty-four accumulators) was the first choice; measured on the
+ * M4 Max (2026-09-07, six U-Net layers, five rounds of twenty dispatches, the minimum),
+ * eight is faster on every one — 16 → 16 at 96 × 96 0.151 → 0.115 ms, 32 → 16 0.406 →
+ * 0.215, 32 → 32 at 48 × 48 0.177 → 0.112 — and eight columns by eight channels, or
+ * six by eight, gain nothing over four by eight. Fewer registers a thread, more threads
+ * in flight: the same lesson as the weight gradient's block.
+ */
+const DIRECT_COUT = 8;
 
 /** Workgroup storage the weights may take in `convDirect2d`: WebGPU's guaranteed floor. */
 const DIRECT_WEIGHT_BYTES = 16384;
@@ -2876,11 +2884,16 @@ const DIRECT_WEIGHT_BYTES = 16384;
  * registers and whose weights fit the workgroup, and a divisor of nothing in particular
  * — the last slice is short.
  */
-export function directCoutSlice(s: ConvNDShape): number {
+export function directCoutSlice(s: ConvNDShape, cfg: DirectConfig = DIRECT_DEFAULT): number {
   const kSpace = s.kernel.reduce((a, b) => a * b, 1);
   const perCout = s.C * kSpace * 4;
-  return Math.max(1, Math.min(DIRECT_COUT, s.O, Math.floor(DIRECT_WEIGHT_BYTES / perCout)));
+  return Math.max(1, Math.min(cfg.COUT, s.O, Math.floor(DIRECT_WEIGHT_BYTES / perCout)));
 }
+
+/** The direct forward's thread block: the strip of output columns and the output
+ *  channels one thread accumulates. */
+export interface DirectConfig { readonly TS: number; readonly COUT: number }
+export const DIRECT_DEFAULT: DirectConfig = { TS: DIRECT_STRIP, COUT: DIRECT_COUT };
 
 /**
  * Whether a convolution takes the direct kernel: two spatial axes, no groups, no
@@ -2894,10 +2907,10 @@ export function directFits(s: ConvNDShape): boolean {
 }
 
 /** The grid for `convDirect2d`: strips over (batch, output row, strip), then channel slices. */
-export function directGrid(s: ConvNDShape): [number, number, number] {
+export function directGrid(s: ConvNDShape, cfg: DirectConfig = DIRECT_DEFAULT): [number, number, number] {
   const [OH = 1, OW = 1] = s.outDims;
-  const strips = s.N * OH * Math.ceil(OW / DIRECT_STRIP);
-  return [Math.ceil(strips / 256), Math.ceil(s.O / directCoutSlice(s)), 1];
+  const strips = s.N * OH * Math.ceil(OW / cfg.TS);
+  return [Math.ceil(strips / 256), Math.ceil(s.O / directCoutSlice(s, cfg)), 1];
 }
 
 /**
@@ -2910,9 +2923,9 @@ export function directGrid(s: ConvNDShape): [number, number, number] {
  * the time. Winograd was costed and refused — its fourfold data expansion costs what
  * its 2.25× fewer multiplies save when there are sixteen channels.
  *
- * Here one thread owns four consecutive output columns of one row for up to sixteen
- * output channels — sixty-four accumulators in registers. The workgroup's 256 threads
- * share one copy of the weights in workgroup memory (16 × 16 × 9 floats is 9 KB), and
+ * Here one thread owns four consecutive output columns of one row for up to eight
+ * output channels — thirty-two accumulators in registers (`DIRECT_COUT`, measured). The
+ * workgroup's 256 threads share one copy of the weights in workgroup memory, and
  * each thread reads the input row segment its strip needs straight into registers,
  * once per (input channel, kernel row). No staging of the activation, no barrier after
  * the weights land. Output channels beyond the slice are another dispatch along y.
@@ -2928,14 +2941,14 @@ export function directGrid(s: ConvNDShape): [number, number, number] {
  * every position is where the GEMM's tile reuse actually pays. Removed rather than
  * kept behind a switch.
  */
-export function convDirect2d(s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue, turned = false): string {
+export function convDirect2d(s: ConvNDShape, hasBias: boolean, epilogue?: ConvEpilogue, turned = false, cfg: DirectConfig = DIRECT_DEFAULT): string {
   const [IH = 1, IW = 1] = s.inDims;
   const [OH = 1, OW = 1] = s.outDims;
   const [KH = 1, KW = 1] = s.kernel;
   const [SH = 1, SW = 1] = s.stride;
   const [PH = 0, PW = 0] = s.pad;
-  const TS = DIRECT_STRIP;
-  const slice = directCoutSlice(s);
+  const TS = cfg.TS;
+  const slice = directCoutSlice(s, cfg);
   const kSpace = KH * KW;
   const wCells = slice * s.C * kSpace;
   // The input columns one strip touches on one row: (TS − 1)·stride + KW.
