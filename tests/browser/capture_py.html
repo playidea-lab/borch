@@ -143,16 +143,16 @@ for tk in gtok:
 g_w = {k: v.numpy().copy() for k, v in gm.state_dict().items()}
 gres = {}
 for fuse in (False, True):
-    gm, gstep = gmake(); grun = torch.compiled(gstep, fuse=fuse); ls = []
+    gm, gstep = gmake(); grun = torch.compiled(gstep, fuse=fuse, check=True); ls = []
     for tk in gtok:
         with torch.scope():
             ls.append(float(grun(torch.tensor(tk[:, :-1]), torch.tensor(tk[:, 1:].reshape(-1))).item()))
         gstep.sched.step()
     w = {k: v.numpy().copy() for k, v in gm.state_dict().items()}
-    gres[fuse] = (max(abs(a - b) / max(abs(a), 1e-6) for a, b in zip(g_e, ls)), max(float(np.abs(g_w[k] - w[k]).max() / (np.abs(g_w[k]).max() + 1e-6)) for k in g_w), grun._records[next(iter(grun._records))][0].dispatches)
+    gres[fuse] = (max(abs(a - b) / max(abs(a), 1e-6) for a, b in zip(g_e, ls)), max(float(np.abs(g_w[k] - w[k]).max() / (np.abs(g_w[k]).max() + 1e-6)) for k in g_w), grun._records[next(iter(grun._records))][0].dispatches, grun.checked[0]["buffers"])
     grun.dispose()
 adapter = str(js.borch.Device.adapterInfo)
-f"capture: {STEPS} steps · max |Δloss| {d_loss:.1e} · max |Δparam| {d_w:.1e} · {step.dispatches} dispatches a replay · eager {te:.1f} ms · replay {tr:.1f} ms a step · compiled two shapes: recordings {shapes} max |Δloss| {d_compiled:.1e} max |Δparam| {d_cw:.1e} · gpt compiled plain rel|Δloss| {gres[False][0]:.1e} rel|Δparam| {gres[False][1]:.1e} {gres[False][2]} dispatches, fused rel|Δloss| {gres[True][0]:.1e} rel|Δparam| {gres[True][1]:.1e} {gres[True][2]} dispatches · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
+f"capture: {STEPS} steps · max |Δloss| {d_loss:.1e} · max |Δparam| {d_w:.1e} · {step.dispatches} dispatches a replay · eager {te:.1f} ms · replay {tr:.1f} ms a step · compiled two shapes: recordings {shapes} max |Δloss| {d_compiled:.1e} max |Δparam| {d_cw:.1e} · gpt compiled plain rel|Δloss| {gres[False][0]:.1e} rel|Δparam| {gres[False][1]:.1e} {gres[False][2]} dispatches, fused rel|Δloss| {gres[True][0]:.1e} rel|Δparam| {gres[True][1]:.1e} {gres[True][2]} dispatches · check=True passed on {gres[False][3]} live-ins · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
 \`);
         postMessage({ done: text, ms: performance.now() - t1 });
       } catch (err) {

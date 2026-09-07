@@ -292,6 +292,9 @@ export class Capture {
     private readonly dev: Device,
     private records: readonly Recorded[],
     private readonly pinned: Set<GPUBuffer>,
+    /** The buffers `upload` made under the capture — a tensor from the CPU: an input
+     *  copied in, a constant, an optimizer's counter made on its first step. */
+    private readonly uploaded: Set<GPUBuffer> = new Set(),
   ) {}
 
   /** How many dispatches one replay issues. */
@@ -319,6 +322,44 @@ export class Capture {
 
   replay(): void {
     this.dev.replayRecorded(this.records);
+  }
+
+  /**
+   * The buffers the recording reads before it writes them — the step's inputs and its
+   * state: parameters, the optimizer's moments and counters, running statistics. A
+   * replay starts from what they hold; snapshot them and the step can be run again from
+   * the same place. A dispatch without a recipe is taken to read every buffer it binds,
+   * so activations such a kernel writes are counted too — more than needed, never less.
+   */
+  liveIns(): GPUBuffer[] {
+    const written = new Set<GPUBuffer>();
+    const live = new Set<GPUBuffer>();
+    for (const r of this.records) {
+      const reads: GPUBuffer[] = [];
+      const writes: GPUBuffer[] = [];
+      if (r.copy) {
+        reads.push(r.buffers[0] as GPUBuffer); writes.push(r.buffers[1] as GPUBuffer);
+      } else if (r.meta && "expr" in r.meta) {
+        for (const inp of r.meta.inputs) reads.push(r.buffers[inp.binding] as GPUBuffer);
+        writes.push(r.buffers[r.meta.out] as GPUBuffer);
+      } else if (r.meta && "input" in r.meta) {
+        const input = r.meta.input;
+        r.buffers.forEach((b, k) => { if (k === input) reads.push(b); else writes.push(b); });
+      } else {
+        reads.push(...r.buffers); writes.push(...r.buffers);
+      }
+      for (const b of reads) if (!written.has(b)) live.add(b);
+      for (const b of writes) written.add(b);
+    }
+    // A buffer allocated under the capture is the step's own — an activation, a
+    // gradient — unless it was uploaded from the CPU: an input, a constant, a counter
+    // an optimizer made on its first step. The step's own buffers are written by the
+    // recording and count for nothing; a kernel without a recipe would have counted
+    // them as read (measured: the q, k, v slices an attention cuts from its weight,
+    // rewritten by the replay and left alone by an eager rerun, read as differences).
+    // A buffer that cannot be read back — the one-word offsets a gather carries — is a
+    // constant of the recording, not state.
+    return [...live].filter((b) => (!this.pinned.has(b) || this.uploaded.has(b)) && (b.usage & GPUBufferUsage.COPY_SRC) !== 0);
   }
 
   /**
@@ -741,6 +782,7 @@ export class Device {
   // side — Adam's bias correction moved to a kernel for exactly this.
   private recording: Recorded[] | null = null;
   private pinned: Set<GPUBuffer> | null = null;
+  private uploaded: Set<GPUBuffer> | null = null;
   /** Every buffer some live capture owns — a scope closing after the capture ended must
    *  still leave them alone (measured: the loss returned from a compiled step "belonged to
    *  a closed scope" the moment the caller's scope closed). */
@@ -750,13 +792,15 @@ export class Device {
     if (this.recording) throw new Error("a capture is already open");
     this.recording = [];
     this.pinned = new Set();
+    this.uploaded = new Set();
   }
 
   endCapture(): Capture {
     if (!this.recording || !this.pinned) throw new Error("no capture is open");
-    const capture = new Capture(this, this.recording, this.pinned);
+    const capture = new Capture(this, this.recording, this.pinned, this.uploaded ?? new Set());
     this.recording = null;
     this.pinned = null;
+    this.uploaded = null;
     return capture;
   }
 
@@ -1005,6 +1049,8 @@ export class Device {
   upload(data: Float32Array): GPUBuffer {
     const buf = this.alloc(data.length, false);
     this.device.queue.writeBuffer(buf, 0, data as unknown as BufferSource);
+    // Under a capture, remembered as an upload — see `Capture.liveIns`.
+    this.uploaded?.add(buf);
     return buf;
   }
 

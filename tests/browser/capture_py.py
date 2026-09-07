@@ -87,6 +87,8 @@ def main(argv):
     gpt = re.search(r"gpt compiled plain rel\|Δloss\| ([0-9.e+-]+) rel\|Δparam\| ([0-9.e+-]+) (\d+) dispatches, fused rel\|Δloss\| ([0-9.e+-]+) rel\|Δparam\| ([0-9.e+-]+) (\d+) dispatches", done)
     ok = ok and bool(gpt) and float(gpt.group(1)) == 0.0 and float(gpt.group(2)) == 0.0
     ok = ok and float(gpt.group(4)) <= 1e-5 and float(gpt.group(5)) <= 1e-2 and int(gpt.group(6)) < int(gpt.group(3))
+    # `check=True` ran on both recordings and raised on neither.
+    ok = ok and bool(re.search(r"check=True passed on \d+ live-ins", done))
     print("**the replayed step is the eager step, bit for bit**" if ok else "**it is not** — see above")
     return 0 if ok else 1
 

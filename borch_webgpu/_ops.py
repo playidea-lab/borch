@@ -918,6 +918,15 @@ class capture:
 class compiled:
     """**A step function that records itself once per input shape and replays after.**
 
+    `check=True` holds the recording to the eager step on the caller's own function:
+    after each recording the live-ins are snapshotted, the recording replayed, the
+    live-ins restored and the function run eagerly once more from the same place, and
+    the two are compared — bit for bit when `fuse=False`; fused, the outputs within
+    `tol` and the state within `state_tol` (a fused kernel rounds a multiply-add once
+    where two kernels round twice, and Adam magnifies that on a parameter near zero).
+    A difference raises. It costs two extra steps and a readback of the state per
+    shape; the reports are in `.checked`.
+
         step = torch.compiled(lambda x, y: train_step(model, opt, crit, x, y))
         for bx, by in batches:
             loss = step(torch.tensor(bx), torch.tensor(by))     # first call per shape: eager, recorded
@@ -939,10 +948,14 @@ class compiled:
     `dispose()` returns every recording's memory.
     """
 
-    def __init__(self, fn, fuse=True):
+    def __init__(self, fn, fuse=True, check=False, tol=1e-5, state_tol=1e-2):
         self._fn = fn
         self._fuse = fuse
+        self._check = check
+        self._tol = tol               # fused: the outputs, relative
+        self._state_tol = state_tol   # fused: the state — Adam magnifies a rounding on a value near zero
         self._records = {}        # shape key → (capture, input tensors, returned)
+        self.checked = []         # one report per recording when `check` is on
 
     @staticmethod
     def _key(args):
@@ -978,6 +991,8 @@ class compiled:
                 cap.__exit__(None, None, None)
             if self._fuse:
                 cap.fuse()
+            if self._check:
+                self.checked.append(self._verify(cap, inputs, out))
             self._records[key] = (cap, inputs, out)
             return out
         cap, inputs, out = rec
@@ -986,6 +1001,75 @@ class compiled:
                 held.copy_(a)
         cap.replay()
         return out
+
+    def _verify(self, cap, inputs, out):
+        """**The recording against the eager step, from the same place.** The step's
+        live-ins — its inputs and state: parameters, moments, counters, running
+        statistics — are read back after the recording ran; the recording is replayed
+        and the live-ins and the result read again; the live-ins are restored and the
+        function run eagerly once more; and the two runs are compared buffer by buffer.
+        Plain, they must agree bit for bit; fused, within `tol` relative. A difference
+        raises, naming how many buffers differed and the largest relative gap — the
+        contract a replay is held to, on the caller's own step."""
+        from pyodide.ffi import run_sync as _run_sync                # noqa: PLC0415
+        dev = _ts.device()
+        live = list(cap._capture.liveIns())
+        def tensors_of(value):
+            return [o for o in (value if isinstance(value, (tuple, list)) else [value]) if isinstance(o, Tensor)]
+        def snapshot():
+            # **The commands encoded so far go out first.** A read copies through its own
+            # encoder; submitted ahead of the pending step it would carry the values
+            # from before the step (the sumAll note has the same lesson).
+            dev.flush()
+            return [_np.asarray(_run_sync(dev.read(b, int(b.size) // 4)).to_py(), dtype=_np.float32).copy() for b in live]
+        outs = tensors_of(out)
+        before = snapshot()
+        out_before = [o.numpy().copy() for o in outs]
+        cap.replay()
+        replayed_state, replayed = snapshot(), [o.numpy().copy() for o in outs]
+        dev.flush()
+        for b, a in zip(live, before):
+            dev.writeWords(b, _to_js(_np.frombuffer(a.tobytes(), dtype=_np.uint32)))
+        eager_state, eager = None, None
+        with scope():
+            eager_outs = tensors_of(self._fn(*inputs))
+            eager_state, eager = snapshot(), [o.numpy().copy() for o in eager_outs]
+        # **The call stays one step.** The state goes back to where the recording left
+        # it — the replay and the eager rerun were the check's, not the caller's.
+        dev.flush()
+        for b, a in zip(live, before):
+            dev.writeWords(b, _to_js(_np.frombuffer(a.tobytes(), dtype=_np.uint32)))
+        for o, a in zip(outs, out_before):
+            dev.writeWords(o._h.buffer, _to_js(_np.frombuffer(_np.ascontiguousarray(a, dtype=_np.float32).tobytes(), dtype=_np.uint32)))
+        worst, differ, offenders = 0.0, 0, []
+        for i, (a, b) in enumerate(zip(replayed_state + replayed, eager_state + eager)):
+            limit = 0.0 if not self._fuse else (self._state_tol if i < len(live) else self._tol)
+            if a.shape != b.shape:
+                differ += 1; worst = float("inf"); continue
+            gap = float(_np.abs(a - b).max() / (_np.abs(b).max() + 1e-12)) if a.size else 0.0
+            if gap > limit:
+                differ += 1; worst = max(worst, gap)
+                offenders.append((gap, i, a.size, a[:3].tolist(), b[:3].tolist()))
+        report = {"buffers": len(live), "outputs": len(outs), "differ": differ, "worst_rel": worst}
+        if differ:
+            def who(i):
+                if i >= len(live):
+                    return "an output"
+                for w in list(Tensor._live):
+                    try:
+                        if w._h.buffer == live[i]:
+                            return f"a live tensor of shape {tuple(int(d) for d in w.shape)} requires_grad={w.requires_grad}"
+                    except Exception:  # noqa: BLE001
+                        continue
+                return "held by no Python wrapper (state)"
+            top = "; ".join(f"#{i} ({n} floats, {who(i)}) rel {g:.1e} replay {ra} eager {ea}" for g, i, n, ra, ea in sorted(offenders, reverse=True)[:3])
+            raise RuntimeError(
+                f"torch.compiled(check=True): the replay is not the eager step — {differ} of "
+                f"{len(live) + len(outs)} buffers differ, the worst by {worst:.2e} relative "
+                f"({'fused, tolerance ' + repr(self._tol) + ' on the outputs and ' + repr(self._state_tol) + ' on the state' if self._fuse else 'plain, bit for bit'}). "
+                "Something the step does is not in the recording: a value read back and used, "
+                f"a Python branch on the step's values, a hyperparameter set outside the group. Worst: {top}")
+        return report
 
     @property
     def shapes(self):

@@ -44,7 +44,7 @@ published model, checks its hash before loading it and asks the browser what it
 can do before downloading anything. Neither is a runtime, so neither has a
 ceiling of its own; both run on `borch-ts`.
 
-The lower two of the three **stand on the same kernels.** `borch-webgpu` is a 11,580 line
+The lower two of the three **stand on the same kernels.** `borch-webgpu` is a 12,244 line
 binding calling borch.ts from Python, and the difference (1.5 against 1.6 minutes)
 is the cost of one trip through Pyodide.
 
@@ -229,7 +229,7 @@ justification went first.
 
 **The public names did not change** — 197 of them, the same before and after the
 split. `import borch` gives the same thing. `borch_webgpu` has the same shape:
-11,580 lines across eight files.
+12,244 lines across eight files.
 
 It was not moved by hand. Only the cut points were chosen and a script did the
 rest — a person cutting and pasting a file that size quietly loses a line, and
@@ -629,6 +629,15 @@ share a kernel. `fuse()` itself takes a millisecond; the kernels it made are com
 first dispatched, so the first replay after it pays that — ten milliseconds on the U-Net,
 nothing visible on the small network (measured). What no recording can carry: a step that
 branches in Python on the step's values.
+
+**The contract, on your own step.** `torch.compiled(step, check=True)` holds each
+recording to the eager step: after recording, it reads the step's live-ins — the inputs
+and the state: parameters, moments, counters, running statistics — replays, reads them
+again, puts them back, runs the function eagerly once more from the same place, compares
+the two buffer by buffer (bit for bit plain; fused, the outputs within `tol` and the
+state within `state_tol`), and puts everything back once more so the call stays one
+step. A difference raises and names the worst buffer. Two extra steps and a readback per
+shape; the reports sit in `.checked`.
 
 **A schedule reaches a replay.** The learning rate, the weight decay and the momentum
 are not baked into the optimizer's kernels; each parameter group keeps them in a
