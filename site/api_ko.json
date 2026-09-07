@@ -3128,16 +3128,16 @@
     "src": "eb0fcbb4a64c"
   },
   "fuse/fuseRecords": {
-    "ko": "`records`를 원소별 트리가 융합된 목록으로 다시 쓴다. 새 목록과 접힌 dispatch 수를 돌려준다.",
-    "src": "24f990ef8253"
+    "ko": "`records`를 원소별 트리가 융합된 형태로 다시 쓴다. 새 목록, 접힌 dispatch 수, 그리고 쓰지 않고 남기는 중간값 수를 돌려준다. `held` — 호출자가 아직 쥐고 있는 버퍼들; `Capture.fuse` 참조.",
+    "src": "f457748fdcf5"
   },
   "fuse/fusedCodes": {
     "ko": "만들어진 융합 커널 전부의 WGSL, 키별로 — 패스가 무엇을 만들었는지 읽기 위해.",
     "src": "bf782fd8b079"
   },
   "device/Capture.fuse": {
-    "ko": "서로를 먹이는 원소별 dispatch들을 커널 하나로 합친다 — `fuse.ts` 참조. 기록은 제자리에서 바뀌고 `replay`는 융합된 목록을 돈다. 전후 dispatch 수를 돌려준다.",
-    "src": "bfe65ce72c85"
+    "ko": "서로를 먹이는 원소별 dispatch를 하나의 커널로, 그리고 그것을 읽는 리덕션 안으로 합친다 — `fuse.ts` 참조. 녹화는 제자리에서 다시 쓰이고 `replay`가 융합된 목록을 돌린다. dispatch가 몇이었고 몇이 되었는지, 융합 커널이 쓰지 않고 남기는 중간값이 몇인지 돌려준다.\n\n`held` — 호출자가 아직 쥐고 있는 모든 텐서의 버퍼. 주어지면 autograd가 꺼진 채 만들어져 아무도 쥐지 않고 뒤에서 아무도 읽지 않는 중간값은 쓰지 않는다; 없으면 autograd 자신의 중간값만 그렇게 한다.",
+    "src": "9b70c83a46a2"
   },
   "device/Device.bindGroupFor": {
     "ko": "`buffers`를 바인딩 순서로 묶은 `pipeline`용 바인드 그룹.",

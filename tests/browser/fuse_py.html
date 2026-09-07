@@ -99,8 +99,25 @@ for fuse in (False, True):
     dl = max(abs(a - b) / max(abs(a), 1e-6) for a, b in zip(e_losses, losses)); dw = max(float(np.abs(e_w[k] - wts[k]).max() / (np.abs(e_w[k]).max() + 1e-6)) for k in e_w)
     out[fuse] = (before, after, dl, dw, ms)
 adapter = str(js.borch.Device.adapterInfo)
+# Inference: under no_grad every intermediate of the hand-written GELUs and LayerNorm is
+# a temporary nothing can read back, so the fused kernels leave them unwritten.
+net = Net(); net.load_state_dict({k: torch.tensor(v) for k, v in state0.items()})
+with torch.no_grad():
+    e_pred = net(xb).numpy().copy()
+with torch.capture() as inf:
+    with torch.scope():
+        with torch.no_grad():
+            pred = net(xb)
+inf_before, inf_after = inf.fuse(); inf_unwritten = inf.unwritten
+inf.replay(); d_inf = float(np.abs(pred.numpy() - e_pred).max() / (np.abs(e_pred).max() + 1e-6))
+def eager_infer():
+    with torch.scope():
+        with torch.no_grad():
+            float(net(xb)[0, 0].item())
+t_inf_eager = wall(eager_infer); t_inf = wall(lambda: (inf.replay(), float(pred[0, 0].item())))
+inf.dispose()
 (f"fuse: hand-written net, {STEPS} steps · eager {te:.2f} ms · plain replay {out[False][0]} dispatches rel|Δloss| {out[False][2]:.1e} rel|Δparam| {out[False][3]:.1e} {out[False][4]:.2f} ms"
- f" · fused replay {out[True][0]} → {out[True][1]} dispatches rel|Δloss| {out[True][2]:.1e} rel|Δparam| {out[True][3]:.1e} {out[True][4]:.2f} ms · storage buffers per stage {int(js.borch.Device.storageBuffersPerStage)} · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+ f" · fused replay {out[True][0]} → {out[True][1]} dispatches rel|Δloss| {out[True][2]:.1e} rel|Δparam| {out[True][3]:.1e} {out[True][4]:.2f} ms · inference {inf_before} → {inf_after} dispatches, {inf_unwritten} intermediates unwritten, rel|Δpred| {d_inf:.1e}, eager {t_inf_eager:.2f} ms fused {t_inf:.2f} ms · storage buffers per stage {int(js.borch.Device.storageBuffersPerStage)} · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
 \`);
         postMessage({ done: text, ms: performance.now() - t1 });
       } catch (err) {

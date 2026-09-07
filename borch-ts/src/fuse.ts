@@ -12,14 +12,17 @@
  * loss built from squares and means, a normalisation someone typed — computed in one
  * kernel from its leaves.
  *
- * **Every fused node still writes its output.** A dead-intermediate elimination would
- * be the larger saving, and it cannot be done from here: a buffer that no later dispatch
- * reads may still be held by Python — a prediction kept for an accuracy, a value
- * printed after the step — and a replay that silently stopped writing it would read as
- * a wrong number, not as an error. What is saved is the launch and the read of each
- * intermediate; what is kept is that a replay leaves every buffer exactly as the eager
- * step did. The expressions are the same strings the single kernels use, on the same
- * IEEE operations in the same order, so the values are the same bit for bit (`capture:py`).
+ * **A fused node writes its output unless nothing can read it.** A buffer no later
+ * dispatch reads may still be held — by Python (a prediction kept for an accuracy, a
+ * value printed after the step) or by autograd (a forward value saved for a backward run
+ * after the capture) — and a replay that silently stopped writing it would read as a
+ * wrong number, not as an error. So what goes unwritten is what the pass can see is
+ * unreadable: autograd's own intermediates (`internal`), and, when the caller says which
+ * buffers it holds (`Capture.fuse(held)`), values made with autograd off that it does not
+ * hold (`detached`) — an inference pass keeps nothing but its answer. Everything else is
+ * left exactly as the eager step left it. The expressions are the same strings the single
+ * kernels use, on the same IEEE operations in the same order, so the values are the same
+ * bit for bit (`capture:py`).
  *
  * **A reduction takes its producers in too.** A sum, a fold along an axis, a broadcast
  * gradient folded back — each reads every element of its input exactly once, so an
@@ -55,6 +58,18 @@ function hashOf(text: string): string {
   return h1.toString(16) + h2.toString(16) + text.length.toString(16);
 }
 
+/**
+ * The longest walk one reduction thread may take with a tree inside it. A fold along an
+ * axis is one thread per output cell walking the axis; a tree evaluated in that walk
+ * runs serially where the elementwise kernel ran it across every thread, and past this
+ * many elements the reduction is slower with the tree than the two were apart. Measured
+ * on the M4 Max (2026-09-07, `fuse:py`): a LayerNorm's mean over 256 taken in — the
+ * training replay 0.95 ms, the inference pass 0.70; left out, 0.72 and 0.43. The full
+ * sum (one element a thread) and the wide broadcast fold (a piece over 256 threads)
+ * stay under the limit; the axis folds of a small network do not.
+ */
+const SERIAL_LIMIT = 64;
+
 /** The WGSL of every fused kernel built, by key — for reading what the pass made. */
 export const fusedCodes = new Map<string, string>();
 
@@ -64,11 +79,19 @@ interface Node {
   readonly meta: Elementwise;
 }
 
-/** Rewrites `records` with elementwise trees fused. Returns the new list and how many
- *  dispatches were folded away. */
-export function fuseRecords(dev: Device, records: readonly Recorded[]): { records: Recorded[]; fused: number } {
-  // Who reads and who writes each buffer, by record index. A dispatch without a recipe
-  // is taken to read and write every buffer it binds.
+/** The recording as a graph: who reads and who writes each buffer, by record index, and
+ *  which buffers the caller holds. */
+interface Graph {
+  readonly readers: Map<GPUBuffer, number[]>;
+  readonly writers: Map<GPUBuffer, number[]>;
+  readonly held?: ReadonlySet<GPUBuffer>;
+}
+
+/** Rewrites `records` with elementwise trees fused. Returns the new list, how many
+ *  dispatches were folded away, and how many intermediates go unwritten. `held` — the
+ *  buffers the caller still holds; see `Capture.fuse`. */
+export function fuseRecords(dev: Device, records: readonly Recorded[], held?: ReadonlySet<GPUBuffer>): { records: Recorded[]; fused: number; unwritten: number } {
+  // A dispatch without a recipe is taken to read and write every buffer it binds.
   const readers = new Map<GPUBuffer, number[]>();
   const writers = new Map<GPUBuffer, number[]>();
   const push = (map: Map<GPUBuffer, number[]>, b: GPUBuffer, i: number): void => {
@@ -87,6 +110,7 @@ export function fuseRecords(dev: Device, records: readonly Recorded[]): { record
       for (const b of r.buffers) { push(readers, b, i); push(writers, b, i); }
     }
   });
+  const graph: Graph = held ? { readers, writers, held } : { readers, writers };
   const producerOf = (b: GPUBuffer, before: number): number | undefined => {
     const ws = writers.get(b) ?? [];
     let last: number | undefined;
@@ -98,29 +122,32 @@ export function fuseRecords(dev: Device, records: readonly Recorded[]): { record
   const out: Recorded[] = [];
   const replaced = new Map<number, Recorded>();   // root index → the fused dispatch
   let fused = 0;
+  let unwritten = 0;
   for (let i = records.length - 1; i >= 0; i--) {
     const root = records[i] as Recorded;
     if (absorbed.has(i)) continue;
     if (elementwise(root.meta)) {
-      const tree = gather(records, i, i, 0, readers, writers, producerOf, absorbed);
+      const tree = gather(records, i, i, 0, graph, producerOf, absorbed);
       if (tree.length < 2) continue;
       for (const node of tree) if (node.index !== i) absorbed.add(node.index);
       fused += tree.length - 1;
-      replaced.set(i, build(dev, tree, readers));
+      unwritten += tree.filter((node) => !mustWrite(node, tree, graph)).length;
+      replaced.set(i, build(dev, tree, graph));
     } else if (reduction(root.meta)) {
-      const top = feeder(records, i, root.meta, readers, writers, producerOf, absorbed);
+      const top = feeder(records, i, root.meta, graph, producerOf, absorbed);
       if (top === undefined) continue;
-      const tree = gather(records, top, i, root.buffers.length - 1, readers, writers, producerOf, absorbed);
+      const tree = gather(records, top, i, root.buffers.length - 1, graph, producerOf, absorbed);
       for (const node of tree) absorbed.add(node.index);
       fused += tree.length;
-      replaced.set(i, buildReduce(dev, tree, root, i, root.meta, readers));
+      unwritten += tree.filter((node) => !mustWrite(node, tree, graph, i)).length;
+      replaced.set(i, buildReduce(dev, tree, root, i, root.meta, graph));
     }
   }
   records.forEach((r, i) => {
     if (absorbed.has(i)) return;
     out.push(replaced.get(i) ?? r);
   });
-  return { records: out, fused };
+  return { records: out, fused, unwritten };
 }
 
 /**
@@ -130,32 +157,32 @@ export function fuseRecords(dev: Device, records: readonly Recorded[]): { record
  */
 function movable(
   records: readonly Recorded[], p: number, buf: GPUBuffer, n: number, position: number,
-  readers: Map<GPUBuffer, number[]>, writers: Map<GPUBuffer, number[]>, except: ReadonlySet<number>,
+  graph: Graph, except: ReadonlySet<number>,
 ): Node | undefined {
   const prod = records[p] as Recorded;
   if (!elementwise(prod.meta) || prod.meta.n !== n) return undefined;
   if (prod.buffers[prod.meta.out] !== buf) return undefined;
-  if ((writers.get(buf) ?? []).length !== 1) return undefined;
-  const between = (readers.get(buf) ?? []).filter((r) => r > p && r < position && !except.has(r));
+  if ((graph.writers.get(buf) ?? []).length !== 1) return undefined;
+  const between = (graph.readers.get(buf) ?? []).filter((r) => r > p && r < position && !except.has(r));
   if (between.length) return undefined;
   return { index: p, rec: prod, meta: prod.meta };
 }
 
 /** The elementwise producer a reduction at `at` can take in, if it has one. */
 function feeder(
-  records: readonly Recorded[], at: number, meta: Reduce,
-  readers: Map<GPUBuffer, number[]>, writers: Map<GPUBuffer, number[]>,
+  records: readonly Recorded[], at: number, meta: Reduce, graph: Graph,
   producerOf: (b: GPUBuffer, before: number) => number | undefined,
   absorbed: Set<number>,
 ): number | undefined {
   const rec = records[at] as Recorded;
   const buf = rec.buffers[meta.input] as GPUBuffer;
+  if (meta.serial > SERIAL_LIMIT) return undefined;
   const p = producerOf(buf, at);
   if (p === undefined || absorbed.has(p)) return undefined;
-  const node = movable(records, p, buf, meta.n, at, readers, writers, new Set([at]));
+  const node = movable(records, p, buf, meta.n, at, graph, new Set([at]));
   if (!node) return undefined;
   // The reduction's own buffers count against the binding budget alongside the tree's.
-  if (bindingsOf([node], readers, at) + rec.buffers.length - 1 > Device.storageBuffersPerStage) return undefined;
+  if (bindingsOf([node], graph, at) + rec.buffers.length - 1 > Device.storageBuffersPerStage) return undefined;
   return p;
 }
 
@@ -166,7 +193,7 @@ function feeder(
  */
 function gather(
   records: readonly Recorded[], rootIndex: number, position: number, reserve: number,
-  readers: Map<GPUBuffer, number[]>, writers: Map<GPUBuffer, number[]>,
+  graph: Graph,
   producerOf: (b: GPUBuffer, before: number) => number | undefined,
   absorbed: Set<number>,
 ): Node[] {
@@ -187,11 +214,11 @@ function gather(
       // nodes already in the tree (and the consumer).
       const except = new Set(nodes.keys());
       if (consumer !== undefined) except.add(consumer);
-      const prod = movable(records, p, buf, node.meta.n, position, readers, writers, except);
+      const prod = movable(records, p, buf, node.meta.n, position, graph, except);
       if (!prod) continue;
       // Within the device's binding budget: every leaf and every node is a buffer.
       const trial = new Map(nodes); trial.set(p, prod);
-      if (bindingsOf([...trial.values()], readers, consumer) + reserve > Device.storageBuffersPerStage) continue;
+      if (bindingsOf([...trial.values()], graph, consumer) + reserve > Device.storageBuffersPerStage) continue;
       nodes.set(p, prod);
       queue.push(p);
     }
@@ -200,21 +227,26 @@ function gather(
 }
 
 /**
- * Whether a node's output has to be written: when it is not internal, or when something
- * outside the tree reads it. The root of a tree that is itself the kernel is always
- * written; the root feeding a reduction (`consumer`) is an intermediate like the rest.
+ * Whether a node's output has to be written: when something outside the tree reads it,
+ * or when it could be read by what the pass cannot see — a forward value autograd
+ * saved, or a tensor the caller holds (with `held` given, an unheld value made with
+ * autograd off is safe; without, only autograd's own intermediates are). The root of a
+ * tree that is itself the kernel is always written; the root feeding a reduction
+ * (`consumer`) is an intermediate like the rest.
  */
-function mustWrite(node: Node, tree: readonly Node[], readers: Map<GPUBuffer, number[]>, consumer?: number): boolean {
+function mustWrite(node: Node, tree: readonly Node[], graph: Graph, consumer?: number): boolean {
   const root = tree[tree.length - 1] as Node;
   if (node.index === root.index && consumer === undefined) return true;
-  if (!node.meta.internal) return true;
+  const out = node.rec.buffers[node.meta.out] as GPUBuffer;
+  const unseen = node.meta.internal || (graph.held !== undefined && node.meta.detached === true && !graph.held.has(out));
+  if (!unseen) return true;
   const inTree = new Set(tree.map((t) => t.index));
   if (consumer !== undefined) inTree.add(consumer);
-  return (readers.get(node.rec.buffers[node.meta.out] as GPUBuffer) ?? []).some((r) => !inTree.has(r));
+  return (graph.readers.get(out) ?? []).some((r) => !inTree.has(r));
 }
 
 /** How many buffers a kernel for `tree` binds: its distinct leaves plus the outputs it writes. */
-function bindingsOf(tree: readonly Node[], readers: Map<GPUBuffer, number[]>, consumer?: number): number {
+function bindingsOf(tree: readonly Node[], graph: Graph, consumer?: number): number {
   const outputs = new Set<GPUBuffer>();
   for (const node of tree) outputs.add(node.rec.buffers[node.meta.out] as GPUBuffer);
   const leaves = new Set<GPUBuffer>();
@@ -224,7 +256,7 @@ function bindingsOf(tree: readonly Node[], readers: Map<GPUBuffer, number[]>, co
       if (!outputs.has(b)) leaves.add(b);
     }
   }
-  return leaves.size + tree.filter((node) => mustWrite(node, tree, readers, consumer)).length;
+  return leaves.size + tree.filter((node) => mustWrite(node, tree, graph, consumer)).length;
 }
 
 /** The tree as WGSL: its bindings and buffers, the preludes, the body computing every
@@ -237,7 +269,7 @@ interface Emitted {
   readonly result: string;
 }
 
-function emit(tree: Node[], readers: Map<GPUBuffer, number[]>, consumer?: number): Emitted {
+function emit(tree: Node[], graph: Graph, consumer?: number): Emitted {
   const inTree = new Map<GPUBuffer, Node>();
   for (const node of tree) inTree.set(node.rec.buffers[node.meta.out] as GPUBuffer, node);
   // Bindings: leaves first (dedup by buffer), then every node's output.
@@ -280,13 +312,13 @@ function emit(tree: Node[], readers: Map<GPUBuffer, number[]>, consumer?: number
       }
     }
     value.set(node.index, `v${k}`);
-    nodeCode.push(`  var v${k}: f32;\n  { ${locals.join(" ")} v${k} = ${node.meta.expr}; }` + (mustWrite(node, tree, readers, consumer) ? `\n  O${k}[gid] = v${k};` : ""));
+    nodeCode.push(`  var v${k}: f32;\n  { ${locals.join(" ")} v${k} = ${node.meta.expr}; }` + (mustWrite(node, tree, graph, consumer) ? `\n  O${k}[gid] = v${k};` : ""));
   });
   const bindings: string[] = [];
   const buffers: GPUBuffer[] = [];
   leaves.forEach((leaf, i) => { bindings.push(`@group(0) @binding(${i}) var<storage, read> L${i}: array<f32>;`); buffers.push(leaf.buffer); });
   tree.forEach((node, k) => {
-    if (!mustWrite(node, tree, readers, consumer)) return;
+    if (!mustWrite(node, tree, graph, consumer)) return;
     bindings.push(`@group(0) @binding(${buffers.length}) var<storage, read_write> O${k}: array<f32>;`);
     buffers.push(node.rec.buffers[node.meta.out] as GPUBuffer);
   });
@@ -294,10 +326,10 @@ function emit(tree: Node[], readers: Map<GPUBuffer, number[]>, consumer?: number
 }
 
 /** One kernel for the tree: the leaves read, every node's output written. */
-function build(dev: Device, tree: Node[], readers: Map<GPUBuffer, number[]>): Recorded {
+function build(dev: Device, tree: Node[], graph: Graph): Recorded {
   const root = tree[tree.length - 1] as Node;
   const n = root.meta.n;
-  const e = emit(tree, readers);
+  const e = emit(tree, graph);
   const grid = grid1d(n);
   const code = `${e.prelude}
 ${e.bindings.join("\n")}
@@ -318,8 +350,8 @@ ${e.body}
 
 /** The reduction `root` rebuilt around the tree feeding it: the tree's bindings first,
  *  the reduction's own (its input left out) after. */
-function buildReduce(dev: Device, tree: Node[], root: Recorded, at: number, meta: Reduce, readers: Map<GPUBuffer, number[]>): Recorded {
-  const e = emit(tree, readers, at);
+function buildReduce(dev: Device, tree: Node[], root: Recorded, at: number, meta: Reduce, graph: Graph): Recorded {
+  const e = emit(tree, graph, at);
   const source: Source = {
     bindings: e.bindings.join("\n"), prelude: e.prelude, count: e.buffers.length,
     load: `fn load(gid: u32) -> f32 {\n${e.body}\n  return ${e.result};\n}`,

@@ -888,10 +888,16 @@ class capture:
 
     def fuse(self):
         """Merge the recorded elementwise kernels that feed each other into single
-        kernels — a hand-written activation or loss becomes one dispatch per tree.
-        Every intermediate is still written, so a replay leaves the buffers as the eager
-        step did. Returns `(before, after)` dispatch counts."""
-        r = self._capture.fuse()
+        kernels, and into the reductions that read them — a hand-written activation or
+        loss becomes one dispatch per tree. An intermediate is still written unless
+        nothing can read it: autograd's own, and — the pass is told which buffers Python
+        still holds — a value made under `no_grad` that no tensor holds and no later
+        kernel reads, so an inference pass writes its answer and little else. Returns
+        `(before, after)` dispatch counts; `unwritten` says how many intermediates the
+        fused kernels leave alone."""
+        held = _to_js([t._h.buffer for t in list(Tensor._live)])
+        r = self._capture.fuse(held)
+        self.unwritten = int(r.unwritten)
         return int(r.before), int(r.after)
 
     def dispose(self):

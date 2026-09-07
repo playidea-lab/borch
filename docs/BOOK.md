@@ -615,10 +615,15 @@ intermediate nothing outside the tree reads — a forward value Python may be ho
 never left unwritten — and a tree stops at the device's storage-buffer budget per stage
 (Metal gives ten). A reduction takes its producers in too: a sum, a fold along an axis, a
 broadcast gradient folded back each read every element of their input exactly once, so
-the tree feeding one is evaluated inside it — the squared difference under a loss, the
-`x²` under a variance, a gradient on its way to a bias — and written only if something
-else reads it. A hand-written GELU network: 139 → 74 dispatches, eager 4.2 ms, replayed
-1.7, fused 1.5 (`npm run fuse:py`); the fused values are within 1e-6 relative of eager, the
+the tree feeding one is evaluated inside it — the squared difference under a loss, a
+gradient on its way to a bias — and written only if something else reads it; a fold whose
+one thread walks more than sixty-four elements is left alone, the tree run serially in it
+being slower than the two kernels apart (measured). Under `no_grad` the pass goes further:
+told which buffers Python still holds, it leaves every unheld intermediate unwritten — an
+inference pass of the hand-written network is 38 → 15 dispatches with 23 intermediates
+never touching memory, 2.9 ms eager to 0.43 replayed. A hand-written GELU network's
+training step: 139 → 76 dispatches, eager 4.2 ms, replayed 0.85, fused 0.72
+(`npm run fuse:py`); the fused values are within 1e-6 relative of eager, the
 difference being a multiply and an add the compiler contracts into one rounding once they
 share a kernel. Each fused kernel is compiled once, some fifteen milliseconds each on the
 M4 Max — a recording's first call pays it. What no recording can carry: a step that

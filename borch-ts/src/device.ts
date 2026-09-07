@@ -315,15 +315,20 @@ export class Capture {
   }
 
   /**
-   * Merges elementwise dispatches that feed each other into single kernels — see
-   * `fuse.ts`. The recording is rewritten in place; `replay` runs the fused list. Returns
-   * how many dispatches there were and are.
+   * Merges elementwise dispatches that feed each other into single kernels, and into the
+   * reductions that read them — see `fuse.ts`. The recording is rewritten in place;
+   * `replay` runs the fused list. Returns how many dispatches there were and are, and
+   * how many intermediates the fused kernels leave unwritten.
+   *
+   * `held` — the buffers of every tensor the caller still holds. Given, an intermediate
+   * made with autograd off that nobody holds and nothing later reads is never written;
+   * left out, only autograd's own intermediates are.
    */
-  fuse(): { before: number; after: number; fused: number } {
+  fuse(held?: Iterable<GPUBuffer>): { before: number; after: number; fused: number; unwritten: number } {
     const before = this.records.length;
-    const { records, fused } = fuseRecords(this.dev, this.records);
+    const { records, fused, unwritten } = fuseRecords(this.dev, this.records, held ? new Set(held) : undefined);
     this.records = records;
-    return { before, after: records.length, fused };
+    return { before, after: records.length, fused, unwritten };
   }
 
   dispose(): void {
@@ -1127,7 +1132,7 @@ export class Device {
         this.pipeline(`reduceSum:${size}`, () => reduceSum(size)),
         [src, dst],
         size,
-        src === input ? { n: size, input: 0, make: (source) => reduceSum(size, source) } : undefined,
+        src === input ? { n: size, input: 0, serial: 1, make: (source) => reduceSum(size, source) } : undefined,
       );
       // **It must not be released here.** The commands accumulate and go out later, so
       // the dispatch just issued is still about to read this buffer. It returns to the

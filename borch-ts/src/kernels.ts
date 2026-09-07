@@ -1070,6 +1070,12 @@ export interface Elementwise {
    * accuracy or a print is read by no dispatch at all, and must still be there.
    */
   readonly internal?: boolean;
+  /**
+   * The output was made with autograd off — no backward closure holds it, so nothing but
+   * a caller keeping the tensor can read it after the step. A fusion pass told which
+   * buffers are held (`Capture.fuse(held)`) may leave an unheld one unwritten.
+   */
+  readonly detached?: boolean;
 }
 
 export function unaryRecipe(name: string, n: number): Elementwise {
@@ -1126,10 +1132,16 @@ export interface Source {
   readonly count: number;
 }
 
-/** What a reduction dispatch reads once, and how to rebuild it around an inlined source. */
+/**
+ * What a reduction dispatch reads once, and how to rebuild it around an inlined source.
+ * `serial` is how many elements one thread walks: a tree evaluated inside the reduction
+ * runs that many times in one thread, where the elementwise kernel it replaces ran once
+ * in each of `n` threads, so a long walk is refused — see `fuse.ts`.
+ */
 export interface Reduce {
   readonly n: number;
   readonly input: number;
+  readonly serial: number;
   readonly make: (source: Source) => string;
 }
 

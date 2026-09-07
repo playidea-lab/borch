@@ -4,6 +4,8 @@ values back **synchronously.**
 This file is fair to call the whole binding. The rest is transcribing names.
 """
 
+import weakref as _weakref
+
 import js as _js
 import numpy as _np
 from pyodide.ffi import run_sync as _run_sync, to_js as _to_js
@@ -294,10 +296,16 @@ class Tensor:
     day arrives when the two disagree about which is real.
     """
 
-    __slots__ = ("_h",)
+    __slots__ = ("_h", "__weakref__")
+
+    # Every wrapper alive, weakly. What `capture.fuse()` hands the fusion pass as the
+    # buffers Python still holds — an intermediate no wrapper holds and no later dispatch
+    # reads can go unwritten. A wrapper is made here and nowhere else.
+    _live = _weakref.WeakSet()
 
     def __init__(self, handle):
         self._h = handle
+        Tensor._live.add(self)
 
     def __setattr__(self, name, value):
         """**Attributes are written on the tensor over there.** `p.grad = g` is

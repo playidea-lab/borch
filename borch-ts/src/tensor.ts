@@ -258,6 +258,7 @@ import {
   reduceBroadcastWide,
   broadcastFold,
   foldPieces,
+  FOLD_GROUP,
   FOLD_WIDE,
   reduceDim,
   type ReduceKind,
@@ -1669,7 +1670,7 @@ export class Tensor implements Node<Tensor> {
     dev().run1d(
       dev().pipeline(`u:${name}:${n}`, () => unaryForward(name, n)),
       [this.buffer, out],
-      n, unaryRecipe(name, n),
+      n, { ...unaryRecipe(name, n), detached: !gradMode.enabled },
     );
     const result = Tensor.make(
       out,
@@ -1727,7 +1728,7 @@ export class Tensor implements Node<Tensor> {
     dev().run1d(
       dev().pipeline(`b:${name}:${key}`, () => binaryForward(name, shape, sa, sb)),
       [this.buffer, other.buffer, out],
-      n, binaryRecipe(name, shape, sa, sb),
+      n, { ...binaryRecipe(name, shape, sa, sb), detached: !gradMode.enabled },
     );
     const result = Tensor.make(
       out,
@@ -2102,7 +2103,7 @@ export class Tensor implements Node<Tensor> {
       dev().pipeline(`rd:${kind}:${key}`, () => reduceDim(kind, outer, red, inner)),
       [this.buffer, out],
       n,
-      { n: this.size, input: 0, make: (source) => reduceDim(kind, outer, red, inner, source) },
+      { n: this.size, input: 0, serial: red, make: (source) => reduceDim(kind, outer, red, inner, source) },
     );
     const result = Tensor.make(
       out,
@@ -12886,7 +12887,7 @@ function foldTo(wide: Tensor, target: readonly number[]): Tensor {
       dev().pipeline(`rbw:${wide.shape}|${small}`, () => reduceBroadcastWide(wide.shape, small)),
       [wide.buffer, target],
       [n, pieces, 1],
-      { n: numel(wide.shape), input: 0, make: (source) => reduceBroadcastWide(wide.shape, small, source) },
+      { n: numel(wide.shape), input: 0, serial: Math.ceil(broadcastFold(wide.shape, small) / pieces / FOLD_GROUP), make: (source) => reduceBroadcastWide(wide.shape, small, source) },
     );
     if (pieces > 1) {
       dev().run1d(dev().pipeline(`sumsplits:${n}:${pieces}`, () => sumSplits(n, pieces)), [target, out], n);
@@ -12899,7 +12900,7 @@ function foldTo(wide: Tensor, target: readonly number[]): Tensor {
       ),
       [wide.buffer, out],
       n,
-      { n: numel(wide.shape), input: 0, make: (source) => reduceBroadcast(wide.shape, small, source) },
+      { n: numel(wide.shape), input: 0, serial: broadcastFold(wide.shape, small), make: (source) => reduceBroadcast(wide.shape, small, source) },
     );
   }
   return new Tensor(out, target);

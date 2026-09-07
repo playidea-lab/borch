@@ -6,12 +6,16 @@ Ten steps of a network nobody fused by hand — GELU written out from tanh, a La
 means and a square root, a weighted squared loss — eagerly; then from the same weights with
 the first step recorded and the rest replayed, once as recorded and once after
 `capture.fuse()` merged the elementwise trees — into single kernels, and into the
-reductions that read them (139 → 74 dispatches). Judged: the plain replay is the eager run
+reductions that read them (139 → 76 dispatches). Judged: the plain replay is the eager run
 exactly; the fused replay within 1e-5 relative on every loss and parameter (a fused
 expression lets the shader compiler contract a multiply and an add into one rounding,
 which the separate kernels could not — the difference is that rounding); fewer dispatches
-fused than plain; no fault. Reported: the three step times. On the M4 Max: eager 5.0 ms,
-plain 0.85, fused 0.70 — a small network is Python's, not the GPU's.
+fused than plain; no fault. Then the same network's forward under `no_grad`, captured and
+fused: every intermediate of the hand-written GELUs and LayerNorm is a temporary nothing
+holds, so the fused kernels leave them unwritten — judged fewer dispatches, some unwritten,
+the prediction within 1e-5 relative of eager (38 → 15 dispatches, 23 unwritten). Reported:
+the step times. On the M4 Max: training eager 3.8 ms, plain 0.85, fused 0.72; inference
+eager 2.9, fused 0.43 — a small network is Python's, not the GPU's.
 """
 import glob
 import os
@@ -76,7 +80,11 @@ def main(argv):
         return 1
     plain = re.search(r"plain replay (\d+) dispatches rel\|Δloss\| ([0-9.e+-]+) rel\|Δparam\| ([0-9.e+-]+)", done)
     fused = re.search(r"fused replay (\d+) → (\d+) dispatches rel\|Δloss\| ([0-9.e+-]+) rel\|Δparam\| ([0-9.e+-]+)", done)
-    ok = "faults 0" in done and bool(plain and fused)
+    infer = re.search(r"inference (\d+) → (\d+) dispatches, (\d+) intermediates unwritten, rel\|Δpred\| ([0-9.e+-]+)", done)
+    ok = "faults 0" in done and bool(plain and fused and infer)
+    # The inference pass: fewer kernels, some intermediates never written, the answer
+    # within a rounding of eager.
+    ok = ok and int(infer.group(2)) < int(infer.group(1)) and int(infer.group(3)) > 0 and float(infer.group(4)) <= 1e-5
     ok = ok and float(plain.group(2)) == 0.0 and float(plain.group(3)) == 0.0
     ok = ok and float(fused.group(3)) <= 1e-5 and float(fused.group(4)) <= 1e-5 and int(fused.group(2)) < int(fused.group(1))
     print("**the fused replay is the eager run to a rounding, in fewer kernels**" if ok else "**it is not** — see above")
