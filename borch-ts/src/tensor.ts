@@ -1765,6 +1765,15 @@ export class Tensor implements Node<Tensor> {
       [this, other],
       (g) => {
         const side = (which: "a" | "b", self: Tensor): Tensor => {
+          // **A derivative of ±1 is the gradient itself.** `add` and `sub` were running
+          // a kernel that wrote `G × 1.0` at the output's size and then folding it — for
+          // a bias, the widest copy in the step (ViT-tiny: 61 of the 148 binary
+          // backwards, 0.65 ms). The fold reads `G` directly; a `−1` negates the folded
+          // side, which is the smaller one. `G` is never written by its consumers
+          // (accumulation makes a new tensor), so aliasing it is safe.
+          const derivative = which === "a" ? BINARY[name]?.da : BINARY[name]?.db;
+          if (derivative === "1.0") return foldTo(g, self.shape);
+          if (derivative === "-1.0") return foldTo(g, self.shape).neg();
           const wide = dev().alloc(n);
           dev().run1d(
             dev().pipeline(
