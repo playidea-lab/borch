@@ -5680,17 +5680,28 @@ fn main() {
  * there is nowhere for the order to mix — possible because this is an elementwise update
  * with no broadcasting and no reduction.
  */
+/**
+ * The scalars a scheduler may move — the learning rate, the weight decay, the momentum,
+ * and `1 − lr·decay` for a decoupled decay — sit in a four-float buffer per parameter
+ * group (`Optimizer.hyper`) and the optimizer kernels read them from it rather than
+ * carrying them baked. Baked, a captured step replayed with the learning rate of the
+ * step it was recorded at and no scheduler could reach it; the buffer is rewritten by
+ * `step()`, by every scheduler, and by `syncHyper()`, and a replay reads what is there.
+ * What stays baked is structure: whether there is a momentum buffer, the dampening, the
+ * betas and epsilon.
+ */
+export const HYPER_LR = 0, HYPER_DECAY = 1, HYPER_MOMENTUM = 2, HYPER_DECAY_FACTOR = 3;
+
 export function sgdStep(
-  n: number, lr: number, momentum: number, weightDecay = 0,
+  n: number, hasMomentum: boolean, hasDecay: boolean,
   dampening = 0, nesterov = false, maximize = false, first = false,
 ): string {
-  const hasMomentum = momentum !== 0;
   // **Weight decay is added into the gradient.** That is a different number from
   // shrinking the parameter separately — what differs is whether the momentum buffer
   // carries the decay along. torch's SGD is this side.
   const base = maximize ? "-G[gid]" : "G[gid]";
-  const grad = weightDecay !== 0
-    ? `${base} + P[gid] * ${weightDecay}`
+  const grad = hasDecay
+    ? `${base} + P[gid] * H[${HYPER_DECAY}]`
     : base;
   // **The first step is the raw gradient, undamped.** torch seeds the buffer with
   // the gradient itself and only damps from the second step on, so a dampening of
@@ -5702,15 +5713,16 @@ export function sgdStep(
 @group(0) @binding(0) var<storage, read_write> P: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
 ${hasMomentum ? "@group(0) @binding(2) var<storage, read_write> Buf: array<f32>;" : ""}
+@group(0) @binding(${hasMomentum ? 3 : 2}) var<storage, read> H: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   let gv = ${grad};
 ${hasMomentum
-    ? `  let b = Buf[gid] * ${momentum} + ${damped};
+    ? `  let b = Buf[gid] * H[${HYPER_MOMENTUM}] + ${damped};
   Buf[gid] = b;
-  P[gid] = P[gid] - (${nesterov ? `gv + b * ${momentum}` : "b"}) * ${lr};`
-    : `  P[gid] = P[gid] - gv * ${lr};`}
+  P[gid] = P[gid] - (${nesterov ? `gv + b * H[${HYPER_MOMENTUM}]` : "b"}) * H[${HYPER_LR}];`
+    : `  P[gid] = P[gid] - gv * H[${HYPER_LR}];`}
 }`;
 }
 
@@ -5723,7 +5735,7 @@ ${hasMomentum
  *  and then maximising is a different number, and both read plausible.
  */
 export function adamStep(
-  n: number, lr: number, beta1: number, beta2: number, eps: number,
+  n: number, beta1: number, beta2: number, eps: number,
   amsgrad = false,
 ): string {
   return `
@@ -5733,6 +5745,7 @@ export function adamStep(
 @group(0) @binding(3) var<storage, read_write> V: array<f32>;
 @group(0) @binding(4) var<storage, read> Corr: array<f32>;
 ${amsgrad ? "@group(0) @binding(5) var<storage, read_write> Vmax: array<f32>;" : ""}
+@group(0) @binding(${amsgrad ? 6 : 5}) var<storage, read> H: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
@@ -5745,7 +5758,7 @@ ${amsgrad ? `  let vd = max(Vmax[gid], v);
   Vmax[gid] = vd;` : "  let vd = v;"}
   // Corr[0] = 1-β₁ᵗ, Corr[1] = 1-β₂ᵗ. They differ every step, so they arrive rather
   // than being baked.
-  P[gid] = P[gid] - ${lr} * (m / Corr[0]) / (sqrt(vd / Corr[1]) + ${eps});
+  P[gid] = P[gid] - H[${HYPER_LR}] * (m / Corr[0]) / (sqrt(vd / Corr[1]) + ${eps});
 }`;
 }
 
@@ -5765,18 +5778,20 @@ ${amsgrad ? `  let vd = max(Vmax[gid], v);
  * the gradient is small — which is exactly where it matters.
  */
 export function rmspropStep(
-  n: number, lr: number, alpha: number, eps: number,
-  momentum = 0, centered = false,
+  n: number, alpha: number, eps: number,
+  hasMomentum = false, centered = false,
 ): string {
   let slot = 3;
   const gradAvg = centered ? slot++ : -1;
-  const buf = momentum !== 0 ? slot++ : -1;
+  const buf = hasMomentum ? slot++ : -1;
+  const hyper = slot;
   return `
 @group(0) @binding(0) var<storage, read_write> P: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
 @group(0) @binding(2) var<storage, read_write> S: array<f32>;
 ${centered ? `@group(0) @binding(${gradAvg}) var<storage, read_write> A: array<f32>;` : ""}
-${momentum !== 0 ? `@group(0) @binding(${buf}) var<storage, read_write> B: array<f32>;` : ""}
+${hasMomentum ? `@group(0) @binding(${buf}) var<storage, read_write> B: array<f32>;` : ""}
+@group(0) @binding(${hyper}) var<storage, read> H: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
@@ -5787,9 +5802,9 @@ ${centered ? `  let a = A[gid] * ${alpha} + gv * ${1 - alpha};
   A[gid] = a;
   let avg = s - a * a;` : "  let avg = s;"}
   let step = gv / (sqrt(avg) + ${eps});
-${momentum !== 0 ? `  let b = B[gid] * ${momentum} + step;
+${hasMomentum ? `  let b = B[gid] * H[${HYPER_MOMENTUM}] + step;
   B[gid] = b;
-  P[gid] = P[gid] - ${lr} * b;` : `  P[gid] = P[gid] - ${lr} * step;`}
+  P[gid] = P[gid] - H[${HYPER_LR}] * b;` : `  P[gid] = P[gid] - H[${HYPER_LR}] * step;`}
 }`;
 }
 

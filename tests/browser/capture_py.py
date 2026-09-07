@@ -9,9 +9,10 @@ same, every learned parameter and running statistic the same (the one thing that
 is BatchNorm's `num_batches_tracked`, a CPU counter the replay does not run), no fault.
 Then `torch.compiled(step)` over a sequence whose batches are sixteen and, every
 seventh, ten: two recordings, and the eager run of the same sequence bit for bit.
-Then a small transformer under AdamW — batched attention, one-kernel softmax, the
-weight decay as recorded copies — through `torch.compiled` plain (bit for bit against
-eager) and fused (within 1e-5 on the loss, fewer dispatches).
+Then a small transformer under AdamW with a StepLR schedule — batched attention,
+one-kernel softmax, the weight decay as recorded copies, the learning rate moving between
+steps through the optimizer's device scalars — through `torch.compiled` plain (bit for
+bit against eager) and fused (within 1e-5 on the loss, fewer dispatches).
 Reported: the wall-clock step both ways — on the M4 Max 17.3 eager, 14.7 replayed.
 """
 import glob

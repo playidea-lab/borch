@@ -630,6 +630,15 @@ first dispatched, so the first replay after it pays that — ten milliseconds on
 nothing visible on the small network (measured). What no recording can carry: a step that
 branches in Python on the step's values.
 
+**A schedule reaches a replay.** The learning rate, the weight decay and the momentum
+are not baked into the optimizer's kernels; each parameter group keeps them in a
+four-float buffer on the device, and every scheduler writes it as it moves the rate
+(`syncHyper`) — so `StepLR` over a `torch.compiled` step trains exactly as it does
+eagerly (checked bit for bit in `capture:py`). A value set by hand on a group between
+replays — `opt.param_groups[0]["lr"] = x` — is written through as well. The write waits
+for the commands already encoded to go out first; written before them it would reach the
+step that was meant to use the old value (the CyclicLR momentum case found that).
+
 **What the recording holds, and what was checked.** A buffer copy is recorded as well as
 a dispatch — every in-place operation is a copy back into its buffer, and so is AdamW's
 weight decay; left out, a replay silently skipped them and a transformer under AdamW

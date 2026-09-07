@@ -127,14 +127,19 @@ class GPTSmall(gnn.Module):
 gmask = torch.tensor(np.triu(np.full((GT, GT), -np.inf, np.float32), 1))
 gtok = [rng.integers(0, GV, (GB, GT + 1)).astype(np.int64) for _ in range(8)]
 def gmake():
+    # A scheduler moves the learning rate between steps — under a recording the
+    # optimizer's scalars live on the device, so the replay follows it.
     torch.manual_seed(1); m = GPTSmall(); m.train(); c = gnn.CrossEntropyLoss(); o = torch.optim.AdamW(m.parameters(), lr=3e-4)
+    sched = torch.optim.lr_scheduler.StepLR(o, step_size=2, gamma=0.5)
     def st(xb, yb):
         o.zero_grad(); out = m(xb, gmask); l = c(out.reshape(-1, GV), yb); l.backward(); o.step(); return l
+    st.sched = sched
     return m, st
 gm, gstep = gmake(); g_e = []
 for tk in gtok:
     with torch.scope():
         g_e.append(float(gstep(torch.tensor(tk[:, :-1]), torch.tensor(tk[:, 1:].reshape(-1))).item()))
+    gstep.sched.step()
 g_w = {k: v.numpy().copy() for k, v in gm.state_dict().items()}
 gres = {}
 for fuse in (False, True):
@@ -142,6 +147,7 @@ for fuse in (False, True):
     for tk in gtok:
         with torch.scope():
             ls.append(float(grun(torch.tensor(tk[:, :-1]), torch.tensor(tk[:, 1:].reshape(-1))).item()))
+        gstep.sched.step()
     w = {k: v.numpy().copy() for k, v in gm.state_dict().items()}
     gres[fuse] = (max(abs(a - b) / max(abs(a), 1e-6) for a, b in zip(g_e, ls)), max(float(np.abs(g_w[k] - w[k]).max() / (np.abs(g_w[k]).max() + 1e-6)) for k in g_w), grun._records[next(iter(grun._records))][0].dispatches)
     grun.dispose()

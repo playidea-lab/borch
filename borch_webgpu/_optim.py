@@ -115,23 +115,28 @@ class _Opt:
         the learning rate has to be **the current value every time it is read**,
         so copying it once hides whatever the scheduler changed.
         """
-        return [_Group(g) for g in self._o.paramGroups]
+        return [_Group(g, self._o) for g in self._o.paramGroups]
 
 
 class _Group:
     """One parameter group. Reads like a dict, but each value is fetched from
-    the JavaScript side as it is asked for."""
+    the JavaScript side as it is asked for. **A write goes to the device too**:
+    the optimizer keeps the group's rate, decay and momentum in a buffer its
+    kernels read, so a value set by hand reaches a replayed step as a
+    scheduler's would."""
 
-    __slots__ = ("_g",)
+    __slots__ = ("_g", "_o")
 
-    def __init__(self, g):
+    def __init__(self, g, o):
         self._g = g
+        self._o = o
 
     def __getitem__(self, key):
         return getattr(self._g, key)
 
     def __setitem__(self, key, value):
         setattr(self._g, key, value)
+        self._o.syncHyper()
 
     def get(self, key, default=None):
         got = getattr(self._g, key, None)

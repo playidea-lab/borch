@@ -19,7 +19,7 @@
  * copy.
  */
 
-import { adamStep, adamTick, rmspropStep, sgdStep } from "./kernels.js";
+import { adamStep, adamTick, HYPER_DECAY, HYPER_DECAY_FACTOR, rmspropStep, sgdStep } from "./kernels.js";
 import { RuntimeError } from "./errors.js";
 import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
@@ -154,6 +154,15 @@ export abstract class Optimizer {
 
   /** The group currently being walked while `step` runs. `lr` reads it. */
   private currentGroup = 0;
+
+  /**
+   * Per group, the scalars a scheduler may move, on the device — `[lr, weight decay,
+   * momentum, 1 − lr·decay]` (`HYPER_*` in kernels.ts). The kernels read them from
+   * here rather than carrying them baked, so a captured step replayed follows the
+   * schedule: `step()`, every scheduler and `publishMomentum` rewrite the buffer. A
+   * value set by hand on a group between replays needs `syncHyper()`.
+   */
+  private readonly hypers: Tensor[] = [];
 
   /**
    * The banks `state()` created. Adding a group adds a slot to every one of them.
@@ -307,6 +316,49 @@ export abstract class Optimizer {
     return this.paramGroups[this.currentGroup]?.lr ?? this.defaultLr;
   }
 
+  /** The device copy of the current group's scalars — see `hypers`. */
+  protected hyper(): Tensor {
+    let t = this.hypers[this.currentGroup];
+    if (!t) {
+      t = keepAlive(Tensor.owned([4], 0));
+      this.hypers[this.currentGroup] = t;
+      // A fresh buffer nothing encoded reads yet — no flush needed before the write.
+      this.writeHyper(this.currentGroup, t);
+    }
+    return t;
+  }
+
+  /** One scalar of the current group's device copy, as a `[1]` tensor — for the decay
+   *  paths written as tensor operations. */
+  protected hyperScalar(which: number): Tensor {
+    return this.hyper().narrow(0, which, 1);
+  }
+
+  private writeHyper(group: number, t: Tensor): void {
+    const g = this.paramGroups[group];
+    const lr = g?.lr ?? this.defaultLr;
+    const decay = g?.weightDecay ?? this.defaultDecay();
+    const momentum = g?.momentum ?? this.defaultMomentum();
+    device().writeWords(t.buffer, new Uint32Array(new Float32Array([lr, decay, momentum, 1 - lr * decay]).buffer));
+  }
+
+  /** Every group's device scalars rewritten from the groups. Called by `step()` and by
+   *  the schedulers; call it after changing a group's value by hand between replays. */
+  syncHyper(): void {
+    if (this.hypers.length === 0) return;
+    // **The commands already encoded go out first.** A queue write lands at once while
+    // the dispatches wait for the next submit, so written before the flush the new
+    // values would reach the step that was meant to use the old ones (measured: the
+    // CyclicLR momentum case trained to a different parameter).
+    device().flush();
+    for (const [i, t] of this.hypers.entries()) if (t) this.writeHyper(i, t);
+  }
+
+  /** What a subclass defaults to where a group set nothing — overridden by the ones
+   *  that have the field. */
+  protected defaultDecay(): number { return 0; }
+  protected defaultMomentum(): number { return 0; }
+
   /**
    * What this group set for itself, or the optimizer's default if it set
    * nothing.
@@ -336,6 +388,7 @@ export abstract class Optimizer {
   protected publishMomentum(value: number): void {
     this.publishedMomentum = value;
     for (const g of this.paramGroups) g.momentum = value;
+    this.syncHyper();
   }
 
   /**
@@ -357,6 +410,9 @@ export abstract class Optimizer {
   }
 
   step(): void {
+    // The groups' scalars as they stand now, onto the device — a scheduler or a hand
+    // may have moved them since the last step.
+    this.syncHyper();
     noGrad(() => {
       for (const [i, p] of this.params.entries()) {
         const raw = p.grad;
@@ -519,6 +575,9 @@ export class SGD extends Optimizer {
     if (momentum !== 0) this.publishMomentum(momentum);
   }
 
+  protected override defaultDecay(): number { return this.weightDecay; }
+  protected override defaultMomentum(): number { return this.momentum; }
+
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const n = param.size;
     const d = device();
@@ -542,13 +601,15 @@ export class SGD extends Optimizer {
     // takes the argument for callers outside this class; here it stays false.
     // **Read from the group, not from the field** — `CyclicLR(cycle_momentum=true)`
     // moves it every step, and the field is what the caller first said.
-    const mom = this.momentumOf(this.momentum);
+    // The values ride in the group's device scalars (`hyper`); only the structure is
+    // in the key.
+    const hasMomentum = this.momentum !== 0;
+    const hasDecay = decay !== 0;
+    buffers.push(this.hyper().buffer);
     d.run1d(
       d.pipeline(
-        `sgd:${n}:${this.lr}:${mom}:${decay}:${this.dampening}:` +
-        `${this.nesterov}:${first}`,
-        () => sgdStep(n, this.lr, mom, decay, this.dampening,
-                      this.nesterov, false, first)),
+        `sgd:${n}:${hasMomentum}:${hasDecay}:${this.dampening}:${this.nesterov}:${first}`,
+        () => sgdStep(n, hasMomentum, hasDecay, this.dampening, this.nesterov, false, first)),
       buffers,
       n,
     );
@@ -644,6 +705,8 @@ export class Adam extends Optimizer {
     }
   }
 
+  protected override defaultDecay(): number { return this.weightDecay; }
+
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const m = this.first[index];
     const v = this.second[index];
@@ -666,11 +729,13 @@ export class Adam extends Optimizer {
     const decay = this.grouped(this.weightDecay);
     let g = grad;
     if (decay !== 0) {
+      // The factor and the decay come from the group's device scalars, so a replay
+      // follows a scheduler that moves the learning rate.
       noGrad(() => {
         if (this.decoupled) {
-          param.copyFrom(param.mul(Tensor.full([], 1 - this.lr * decay)));
+          param.copyFrom(param.mul(this.hyperScalar(HYPER_DECAY_FACTOR)));
         } else {
-          g = grad.add(param.mul(Tensor.full([], decay)));
+          g = grad.add(param.mul(this.hyperScalar(HYPER_DECAY)));
         }
       });
     }
@@ -683,10 +748,11 @@ export class Adam extends Optimizer {
       if (!vmax) throw new Error(`Adam: no amsgrad state for parameter ${index}`);
       buffers.push(vmax.buffer);
     }
+    buffers.push(this.hyper().buffer);
     d.run1d(
       d.pipeline(
-        `adam:${n}:${this.lr}:${this.beta1}:${this.beta2}:${this.eps}:${this.amsgrad}`,
-        () => adamStep(n, this.lr, this.beta1, this.beta2, this.eps, this.amsgrad)),
+        `adam:${n}:${this.beta1}:${this.beta2}:${this.eps}:${this.amsgrad}`,
+        () => adamStep(n, this.beta1, this.beta2, this.eps, this.amsgrad)),
       buffers,
       n,
     );
@@ -756,6 +822,9 @@ export class RMSprop extends Optimizer {
     if (momentum !== 0) this.publishMomentum(momentum);
   }
 
+  protected override defaultDecay(): number { return this.weightDecay; }
+  protected override defaultMomentum(): number { return this.momentum; }
+
   protected override update(index: number, param: Tensor, g: Tensor): void {
     const sq = this.squares[index];
     if (!sq) throw new Error(`RMSprop: no state for parameter ${index}`);
@@ -764,7 +833,7 @@ export class RMSprop extends Optimizer {
     // gives one pipeline per `weightDecay`, since that number goes into the baked name
     // (the same judgement as `Adam`).
     const decay = this.grouped(this.weightDecay);
-    const grad = decay === 0 ? g : g.add(param.mul(Tensor.full([], decay)));
+    const grad = decay === 0 ? g : g.add(param.mul(this.hyperScalar(HYPER_DECAY)));
     const n = param.size;
     const d = device();
     const buffers = [param.buffer, grad.buffer, sq.buffer];
@@ -778,12 +847,12 @@ export class RMSprop extends Optimizer {
       if (!b) throw new Error(`RMSprop: no momentum buffer for parameter ${index}`);
       buffers.push(b.buffer);
     }
-    const mom = this.momentumOf(this.momentum);
+    const hasMomentum = this.momentum !== 0;
+    buffers.push(this.hyper().buffer);
     d.run1d(
       d.pipeline(
-        `rms:${n}:${this.lr}:${this.alpha}:${this.eps}:${mom}:${this.centered}`,
-        () => rmspropStep(n, this.lr, this.alpha, this.eps,
-                          mom, this.centered)),
+        `rms:${n}:${this.alpha}:${this.eps}:${hasMomentum}:${this.centered}`,
+        () => rmspropStep(n, this.alpha, this.eps, hasMomentum, this.centered)),
       buffers,
       n,
     );
@@ -1851,6 +1920,8 @@ export abstract class LRScheduler {
       const mine = this.bases[i] ?? first;
       group.lr = first === 0 ? value : value * (mine / first);
     }
+    // Onto the device too, so a replayed step takes the new rate.
+    this.opt.syncHyper();
   }
 
   /**
