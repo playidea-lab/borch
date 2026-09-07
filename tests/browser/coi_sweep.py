@@ -52,7 +52,12 @@ def pages():
         if parts[0] in SKIP_TOP:
             continue
         # The built folders carry their tooling's own pages; only their entry counts.
-        if parts[0] in ("lab", "marimo") and p.name != "index.html":
+        # JupyterLite's build is eleven `index.html`s, so the name alone let them all
+        # through — and four of them (`doc/tree`, `doc/workspaces`, `lab/tree`,
+        # `lab/workspaces`) are redirect stubs whose regex needs a `?query`: without one
+        # they assign `location.href` to itself and reload forever. The 09-08 nightly
+        # sat on `lab/doc/tree/index.html` for two hours and twenty minutes.
+        if parts[0] in ("lab", "marimo") and parts[1:] != ("index.html",):
             continue
         out.append(p)
     return out
