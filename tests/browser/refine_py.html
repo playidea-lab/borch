@@ -1,0 +1,178 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>refine_py — the oracle paper's data-efficient refinement, in the browser</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The refinement MLP of the HMR oracle paper (hmr_oracle §Data-Efficient Refinement),
+  // trained in a Pyodide worker through `borch_webgpu`.** A backbone's predicted 3D joints
+  // (14×3) go in, a residual comes out; the MLP is 42→128→128→64→42 with LayerNorm, ReLU,
+  // Dropout 0.1 and a zero-initialised output, L1 loss, AdamW 1e-3 / wd 1e-4, cosine over
+  // 10 epochs, batch 256, gradient clipping at 1.0 — the paper's exp803 recipe. Leave-one-
+  // sequence-out over 3DPW test's 24 sequences; the training sequences are the k nearest
+  // by mean predicted pose (no ground truth needed to pick them).
+  //
+  // Data: `?data=<url>` names an .npz with `pred` (N,14,3), `gt` (N,14,3), `seq` (N,) — the
+  // paper's cached predictions. Without it the page makes a **synthetic** set of the same
+  // shape (24 sequences, low-rank per-sequence error) so the wiring is proven before the
+  // real file arrives; synthetic numbers prove nothing about the paper. `?folds=N` limits
+  // the LOO to the first N held-out sequences (default 3; 24 is the paper's protocol).
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const data = q.get("data") ? (q.get("data").startsWith("http") ? q.get("data") : location.origin + q.get("data")) : "";
+  const folds = Number(q.get("folds") || 3);
+  const k = Number(q.get("k") || 5);
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        py.globals.set("DATA_URL", ${JSON.stringify(data)});
+        py.globals.set("FOLDS", ${folds});
+        py.globals.set("K_NEAREST", ${k});
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import io, json, math, time
+import numpy as np
+import borch_webgpu as torch
+from pyodide.http import pyfetch
+
+import js
+adapter = str(js.borch.Device.adapterInfo)
+K = 14
+
+def synthetic(seed=0):
+    """24 sequences of ~1,500 frames. GT is a smooth random walk in 42-D. The prediction error has
+    the shape the paper found: a **deterministic pose-dependent part** (F2: low-rank, learnable
+    from the prediction alone), a **sequence-level bias that follows the sequence's mean pose**
+    (so that nearest-by-centroid sequences share it — F4/F5), and noise. Numbers from this set
+    prove the wiring, not the paper."""
+    rng = np.random.default_rng(seed)
+    seqs, preds, gts = [], [], []
+    A = rng.standard_normal((42, 6)) * 0.015; B = rng.standard_normal((6, 42)) * 1.0  # rank-6 pose-dependent error, ~25 mm
+    C = rng.standard_normal((42, 42)) * 0.005                                         # bias = C @ centroid, ~10 mm
+    for s in range(24):
+        n = int(rng.integers(900, 2100))
+        walk = np.cumsum(rng.standard_normal((n, 42)) * 0.003, axis=0)
+        gt = rng.standard_normal(42) * 0.25 + walk
+        err = np.tanh(gt @ B.T) @ A.T + (C @ gt.mean(0))
+        pred = gt + err + rng.standard_normal((n, 42)) * 0.003
+        seqs.append(np.full(n, s)); preds.append(pred); gts.append(gt)
+    return np.concatenate(preds).astype(np.float32), np.concatenate(gts).astype(np.float32), np.concatenate(seqs)
+
+if DATA_URL:
+    r = await pyfetch(DATA_URL)
+    z = np.load(io.BytesIO(await r.bytes()), allow_pickle=True)
+    pred, gt, seq = z["pred"].reshape(-1, 42).astype(np.float32), z["gt"].reshape(-1, 42).astype(np.float32), z["seq"]
+    source = "file"
+else:
+    pred, gt, seq = synthetic(); source = "synthetic"
+N = len(seq); seq_ids = sorted(set(seq.tolist()))
+
+def pa_mpjpe(p, g):
+    """PA-MPJPE in mm per sample — the paper's compute_pa_mpjpe_np, vectorised over samples."""
+    p = p.reshape(-1, K, 3); g = g.reshape(-1, K, 3)
+    pc = p - p.mean(1, keepdims=True); gc = g - g.mean(1, keepdims=True)
+    sp = np.sqrt((pc**2).sum((1, 2), keepdims=True)) + 1e-8; sg = np.sqrt((gc**2).sum((1, 2), keepdims=True)) + 1e-8
+    pc = pc / sp; gc = gc / sg
+    H = np.einsum("nki,nkj->nij", pc, gc)
+    U, S, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(np.einsum("nij,njk->nik", Vt.transpose(0, 2, 1), U.transpose(0, 2, 1))))
+    D = np.tile(np.eye(3), (len(p), 1, 1)); D[:, 2, 2] = d
+    R = np.einsum("nij,njk,nkl->nil", Vt.transpose(0, 2, 1), D, U.transpose(0, 2, 1))
+    pa = sg * np.einsum("nki,nji->nkj", pc, R) + g.mean(1, keepdims=True)
+    return np.sqrt(((pa - g)**2).sum(-1)).mean(-1) * 1000
+
+class RefinementMLP(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        layers, prev = [], 42
+        for h in (128, 128, 64):
+            layers += [torch.nn.Linear(prev, h), torch.nn.LayerNorm(h), torch.nn.ReLU(), torch.nn.Dropout(0.1)]
+            prev = h
+        self.net = torch.nn.Sequential(*layers)
+        # The output layer stands apart: the binding's Sequential cannot be indexed (torch's
+        # can), and the paper zero-initialises exactly this layer so g starts as the identity.
+        self.out = torch.nn.Linear(prev, 42)
+        with torch.no_grad():
+            self.out.weight.zero_(); self.out.bias.zero_()
+    def forward(self, x):
+        return x + self.out(self.net(x))
+
+def clip_grad_norm_(params, max_norm):
+    """torch.nn.utils.clip_grad_norm_ is not in the binding; the same arithmetic in tensor ops."""
+    grads = [p.grad for p in params if p.grad is not None]
+    total = math.sqrt(sum(float(g.norm().item()) ** 2 for g in grads))
+    if total > max_norm:
+        c = max_norm / (total + 1e-6)
+        for g in grads: g.mul_(c)
+    return total
+
+def train_mlp(X, Y, epochs=10, lr=1e-3, batch=256):
+    model = RefinementMLP()
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+    ds = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(Y))
+    loader = torch.utils.data.DataLoader(ds, batch_size=batch, shuffle=True)
+    model.train(); steps = 0; last = None
+    for _ in range(epochs):
+        for xb, yb in loader:
+            loss = torch.nn.functional.l1_loss(model(xb), yb)
+            opt.zero_grad(); loss.backward()
+            clip_grad_norm_(list(model.parameters()), 1.0)
+            opt.step(); steps += 1; last = loss
+        sched.step()
+    return model, steps, float(last.item())
+
+def refine(model, X):
+    model.eval()
+    with torch.no_grad():
+        return model(torch.tensor(X)).numpy()
+
+centroids = {s: pred[seq == s].mean(0) for s in seq_ids}
+rows = []; t_train = 0.0
+for held in seq_ids[:FOLDS]:
+    test = seq == held
+    others = [s for s in seq_ids if s != held]
+    near = sorted(others, key=lambda s: float(np.linalg.norm(centroids[s] - centroids[held])))[:K_NEAREST]
+    base = float(pa_mpjpe(pred[test], gt[test]).mean())
+    tr = np.isin(seq, near)
+    t = time.time(); model, steps, loss = train_mlp(pred[tr], gt[tr]); t_train += time.time() - t
+    k5 = float(pa_mpjpe(refine(model, pred[test]), gt[test]).mean())
+    tr_all = ~test
+    t = time.time(); model_o, steps_o, _ = train_mlp(pred[tr_all], gt[tr_all]); t_train += time.time() - t
+    orc = float(pa_mpjpe(refine(model_o, pred[test]), gt[test]).mean())
+    rows.append({"seq": int(held), "n_test": int(test.sum()), "n_train_k": int(tr.sum()), "baseline": base, "k_nearest": k5, "oracle": orc, "steps": steps, "last_loss": loss})
+    print(f"seq {held}: baseline {base:.2f} → k={K_NEAREST} nearest {k5:.2f} · oracle {orc:.2f} mm  ({steps} steps)")
+
+mean = lambda key: float(np.mean([r[key] for r in rows]))
+pct = 100 * (mean("baseline") - mean("k_nearest")) / max(mean("baseline") - mean("oracle"), 1e-9)
+json.dumps({"source": source, "adapter": adapter, "N": int(N), "sequences": len(seq_ids), "folds": len(rows), "k": int(K_NEAREST),
+            "baseline": mean("baseline"), "k_nearest": mean("k_nearest"), "oracle": mean("oracle"), "pct_oracle": pct,
+            "train_s": t_train, "rows": rows})
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__refinePy = { text: lines.join("\n"), done: e.data.done }; }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__refinePy = { text: lines.join("\n"), ok: false, error: e.data.error }; }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__refinePy = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>
