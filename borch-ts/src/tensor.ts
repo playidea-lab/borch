@@ -205,6 +205,10 @@ import {
   convNDGradInputTiled,
   convGradWeightDirect2d,
   convGradWeightSubgroupGlobal,
+  convForwardSubgroup,
+  sgfFits,
+  sgfGrid,
+  tapMajorWeights,
   padForGradWeight,
   sgwGlobalFits,
   sgwGlobalGrid,
@@ -10970,12 +10974,29 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // what runs every step is the kernel.
     const buffers = bias ? [this.buffer, weight.buffer, bias.buffer, out]
       : [this.buffer, weight.buffer, out];
+    // The subgroup forward reads the input padded; the weight gradient reads the same
+    // copy, so it is kept for the backward.
+    let paddedX: GPUBuffer | null = null;
     if (isDepthwise(s)) {
       // One thread per output cell — the tiled GEMM wastes 63 rows in 64 here. Reason
       // and measurement are on `depthwiseForward`.
       dev().run1d(
         dev().pipeline(`cdw:${key}:${bias ? "b" : "n"}`, () => depthwiseForward(s, bias !== null)),
         buffers, n);
+    } else if (Device.subgroupMatrix && sgfFits(s)) {
+      // Subgroup matrices from the buffers — see `convForwardSubgroup`.
+      paddedX = padForSubgroup(s, key, this.buffer);
+      const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+      const Mp = Math.ceil(s.O / 8) * 8, Kp = Math.ceil(s.C / 8) * 8;
+      const wsize = kSpace * Mp * Kp + (bias ? Mp * 8 : 0);
+      const turned = dev().alloc(wsize);
+      dev().run1d(
+        dev().pipeline(`tmw:${key}:${bias ? "b" : "n"}`, () => tapMajorWeights(s.O, s.C, kSpace, false, bias !== null)),
+        bias ? [weight.buffer, bias.buffer, turned] : [weight.buffer, turned], wsize);
+      dev().run(
+        dev().pipeline(`cnf:${key}:${bias ? "b" : "n"}`, () => convForwardSubgroup(s, bias !== null)),
+        bias ? [paddedX, turned, onesBlockBuffer(), out] : [paddedX, turned, out],
+        sgfGrid(s));
     } else {
       convForwardRun(s, key, this.buffer, weight.buffer, bias ? bias.buffer : null, out);
     }
@@ -11027,11 +11048,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
             // Subgroup matrices straight from the buffers, the input copied padded —
             // see `convGradWeightSubgroupGlobal`. Its partial sums have their own adder.
             const { Op, Cp } = sgwPadded(s);
-            const [IH = 1, IW = 1] = s.inDims;
-            const [PH = 0, PW = 0] = s.pad;
-            const paddedSize = s.N * Cp * (IH + 2 * PH) * (IW + 2 * PW);
-            const padded = dev().alloc(paddedSize);
-            dev().run1d(dev().pipeline(`pdw:${key}`, () => padForGradWeight(s)), [this.buffer, padded], Math.ceil(paddedSize / 4));
+            const padded = paddedX ?? padForSubgroup(s, key, this.buffer);
             const parted = dev().alloc(splits * s.kernel.reduce((a, b) => a * b, 1) * Op * Cp);
             dev().run(
               dev().pipeline(`cnwg:${key}`, () => convGradWeightSubgroupGlobal(s)),
@@ -12922,6 +12939,25 @@ function noBoolAccumulate(name: string, dtype: DType): void {
   if (dtype === "bool") {
     throw new NotImplementedError(`"${name}_out_cpu" not implemented for 'Bool'`);
   }
+}
+
+/** The input copied padded — by the convolution's padding and to a whole eight of
+ *  channels — for the subgroup kernels. See `padForGradWeight`. */
+function padForSubgroup(s: ConvNDShape, key: string, x: GPUBuffer): GPUBuffer {
+  const { Cp } = sgwPadded(s);
+  const [IH = 1, IW = 1] = s.inDims;
+  const [PH = 0, PW = 0] = s.pad;
+  const size = s.N * Cp * (IH + 2 * PH) * (IW + 2 * PW);
+  const padded = dev().alloc(size);
+  dev().run1d(dev().pipeline(`pdw:${key}`, () => padForGradWeight(s)), [x, padded], Math.ceil(size / 4));
+  return padded;
+}
+
+/** An 8 × 8 block of ones, made once — the subgroup forward's bias product. */
+let onesBlockTensor: Tensor | null = null;
+function onesBlockBuffer(): GPUBuffer {
+  onesBlockTensor ??= keepAlive(Tensor.owned([64], 1));
+  return onesBlockTensor.buffer;
 }
 
 /** Folds a broadcast gradient back to the target shape. Identical shapes pass

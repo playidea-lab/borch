@@ -3425,6 +3425,147 @@ ${store.join("\n")}
 }`;
 }
 
+/**
+ * The weights laid out tap-major and padded for the subgroup forward: `(kSpace, Mp, Kp)`
+ * where the forward has `M = O` output channels over `K = C` input ones, and the input
+ * gradient — a forward on the turned weights — has `M = C` over `K = O` with the kernel
+ * reversed. Rows and columns past the real counts are zero. Behind the weights sit the
+ * bias block: `Mp × 8` with the bias in column 0, zeros elsewhere, so one more 8 × 8
+ * product against a block of ones adds it.
+ */
+export function tapMajorWeights(O: number, C: number, kSpace: number, turned: boolean, hasBias: boolean): string {
+  const M = turned ? C : O, K = turned ? O : C;
+  const Mp = Math.ceil(M / 8) * 8, Kp = Math.ceil(K / 8) * 8;
+  const n = kSpace * Mp * Kp + (hasBias ? Mp * 8 : 0);
+  return `
+@group(0) @binding(0) var<storage, read> W: array<f32>;
+${hasBias ? "@group(0) @binding(1) var<storage, read> B: array<f32>;" : ""}
+@group(0) @binding(${hasBias ? 2 : 1}) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  if (gid >= ${kSpace * Mp * Kp}u) {
+${hasBias ? `    let r = gid - ${kSpace * Mp * Kp}u;
+    let m = r / 8u;
+    Out[gid] = select(0.0, B[min(m, ${M - 1}u)], r % 8u == 0u && m < ${M}u);` : "    return;"}
+    return;
+  }
+  let t = gid / ${Mp * Kp}u;
+  let rest = gid % ${Mp * Kp}u;
+  let m = rest / ${Kp}u;
+  let kk = rest % ${Kp}u;
+  let inside = m < ${M}u && kk < ${K}u;
+  ${turned
+    ? `let o = kk; let c = m; let tap = ${kSpace - 1}u - t;`
+    : `let o = m; let c = kk; let tap = t;`}
+  Out[gid] = select(0.0, W[(min(o, ${O - 1}u) * ${C}u + min(c, ${C - 1}u)) * ${kSpace}u + tap], inside);
+}`;
+}
+
+/** The subgroup forward's tile of output pixels: the widest dividing the row. */
+const SGF_CB = 16;
+
+/**
+ * Whether a convolution takes the subgroup forward: the direct kernel's shapes at stride
+ * one, a kernel no wider than three, the output row and both channel counts in whole
+ * eights, no epilogue (the caller checks), and the device's subgroup matrices.
+ */
+export function sgfFits(s: ConvNDShape): boolean {
+  const [, OW = 1] = s.outDims;
+  return directFits(s) && s.stride.every((v) => v === 1) && s.kernel.every((v) => v <= 3)
+    && OW % 8 === 0 && s.O % 8 === 0 && s.C % 8 === 0;
+}
+
+/** The grid: tiles of a row, output-channel blocks. */
+export function sgfGrid(s: ConvNDShape, turned = false): [number, number, number] {
+  const [OH = 1, OW = 1] = s.outDims;
+  const M = turned ? s.C : s.O;
+  return [s.N * OH * (OW / sgwGlobalTile(OW)), Math.ceil(M / SGF_CB), 1];
+}
+
+/**
+ * The convolution forward on subgroup matrices, from the buffers — the weight
+ * gradient's method (`convGradWeightSubgroupGlobal`) turned around. For a tile of
+ * pixels of one output row and a block of sixteen output channels, over every input
+ * channel block and tap: the tap-major weight block (output by input channels) is the
+ * left operand, the padded input at the tap's offset (input channels by pixels, stride
+ * one padded plane, row-major) the right, and the accumulators are the output tile.
+ * The bias, when there is one, is one more product: its block against a block of ones.
+ * With `turned` the same kernel is the stride-1 input gradient — the gradient padded by
+ * `kernel − 1 − pad` as the input, the weights laid out turned.
+ */
+export function convForwardSubgroup(s: ConvNDShape, hasBias: boolean, turned = false): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [PH = 0, PW = 0] = s.pad;
+  const kSpace = KH * KW;
+  const M = turned ? s.C : s.O, K = turned ? s.O : s.C;
+  const Mp = Math.ceil(M / 8) * 8, Kp = Math.ceil(K / 8) * 8;
+  const PIH = IH + 2 * PH, PIW = IW + 2 * PW;
+  const plane = PIH * PIW;
+  const TW = sgwGlobalTile(OW);
+  const perRow = OW / TW;
+  const mb = SGF_CB / 8, nb = TW / 8;
+  const acc: string[] = [];
+  for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) acc.push(`  var c${i}${j}: subgroup_matrix_result<f32, 8, 8>;`);
+  const body: string[] = [];
+  for (let i = 0; i < mb; i++) body.push(`      let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&Wt, wBase + ${i * 8 * Kp}u, false, ${Kp}u);`);
+  for (let j = 0; j < nb; j++) {
+    body.push(`      { let b = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&Xp, xBase + ${j * 8}u, false, ${plane}u);`);
+    for (let i = 0; i < mb; i++) body.push(`        c${i}${j} = subgroupMatrixMultiplyAccumulate(a${i}, b, c${i}${j});`);
+    body.push("      }");
+  }
+  const bias: string[] = [];
+  if (hasBias) {
+    for (let i = 0; i < mb; i++) bias.push(`  let ab${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&Wt, ${kSpace * Mp * Kp}u + (co0 + ${i * 8}u) * 8u, false, 8u);`);
+    bias.push(`  let ones = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&One, 0u, false, 8u);`);
+    for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) bias.push(`  c${i}${j} = subgroupMatrixMultiplyAccumulate(ab${i}, ones, c${i}${j});`);
+  }
+  const store: string[] = [];
+  for (let i = 0; i < mb; i++) for (let j = 0; j < nb; j++) {
+    store.push(`  if (co0 + ${i * 8}u < ${M}u) { subgroupMatrixStore(&Out, oBase + ${i * 8 * OH * OW + j * 8}u, c${i}${j}, false, ${OH * OW}u); }`);
+  }
+  return `enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> Xp: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;
+${hasBias ? "@group(0) @binding(2) var<storage, read> One: array<f32>;" : ""}
+@group(0) @binding(${hasBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(32)
+fn main(@builtin(workgroup_id) wid: vec3<u32>) {
+  let tile = wid.x;
+  let co0 = wid.y * ${SGF_CB}u;
+  let n = tile / ${OH * perRow}u;
+  let rest = tile - n * ${OH * perRow}u;
+  let oh = rest / ${perRow}u;
+  let tw0 = (rest - oh * ${perRow}u) * ${TW}u;
+${acc.join("\n")}
+  for (var ci0 = 0u; ci0 < ${Kp}u; ci0 = ci0 + 8u) {
+    for (var tap = 0u; tap < ${kSpace}u; tap = tap + 1u) {
+      let kh = tap / ${KW}u;
+      let kw = tap - kh * ${KW}u;
+      let wBase = (tap * ${Mp}u + co0) * ${Kp}u + ci0;
+      let xBase = ((n * ${Kp}u + ci0) * ${PIH}u + oh + kh) * ${PIW}u + tw0 + kw;
+${body.join("\n")}
+    }
+  }
+${bias.join("\n")}
+  let oBase = ((n * ${M}u + co0) * ${OH}u + oh) * ${OW}u + tw0;
+${store.join("\n")}
+}`;
+}
+
+/** A block of ones for the bias product — eight by eight. */
+export function onesBlock(): string {
+  return `
+@group(0) @binding(0) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  Out[g.x] = 1.0;
+}`;
+}
+
 /** Adds the subgroup weight gradient's tap-major, padded partial sums into the weight's
  *  (O, C, kh, kw) layout, in a fixed order. */
 export function sumSplitsTapped(s: ConvNDShape, pieces: number = sgwGlobalPieces(s)): string {
