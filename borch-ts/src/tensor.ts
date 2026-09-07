@@ -204,6 +204,8 @@ import {
   convNDForwardTiled, depthwiseForward, isDepthwise,
   convNDGradInputTiled,
   convGradWeightDirect2d,
+  elementLanes,
+  laneable,
   convGradWeightSubgroupGlobal,
   convForwardSubgroup,
   sgfFits,
@@ -1688,7 +1690,7 @@ export class Tensor implements Node<Tensor> {
     dev().run1d(
       dev().pipeline(`u:${name}:${n}`, () => unaryForward(name, n)),
       [this.buffer, out],
-      n, { ...unaryRecipe(name, n), detached: !gradMode.enabled },
+      n / elementLanes(n, true), { ...unaryRecipe(name, n), detached: !gradMode.enabled },
     );
     const result = Tensor.make(
       out,
@@ -1699,7 +1701,7 @@ export class Tensor implements Node<Tensor> {
         dev().run1d(
           dev().pipeline(`ub:${name}:${n}`, () => unaryBackward(name, n)),
           [this.buffer, result.buffer, g.buffer, gi],
-          n, unaryBackwardRecipe(name, n),
+          n / elementLanes(n, true), unaryBackwardRecipe(name, n),
         );
         return [new Tensor(gi, this.shape)];
       },
@@ -1743,10 +1745,11 @@ export class Tensor implements Node<Tensor> {
     const n = numel(shape);
     const key = `${shape}|${sa}|${sb}`;
     const out = dev().alloc(n);
+    const lanes = elementLanes(n, laneable(shape, sa) && laneable(shape, sb));
     dev().run1d(
       dev().pipeline(`b:${name}:${key}`, () => binaryForward(name, shape, sa, sb)),
       [this.buffer, other.buffer, out],
-      n, { ...binaryRecipe(name, shape, sa, sb), detached: !gradMode.enabled },
+      n / lanes, { ...binaryRecipe(name, shape, sa, sb), detached: !gradMode.enabled },
     );
     const result = Tensor.make(
       out,
@@ -1761,7 +1764,7 @@ export class Tensor implements Node<Tensor> {
               () => binaryBackward(name, which, shape, sa, sb),
             ),
             [this.buffer, other.buffer, result.buffer, g.buffer, wide],
-            n, binaryBackwardRecipe(name, which, shape, sa, sb),
+            n / lanes, binaryBackwardRecipe(name, which, shape, sa, sb),
           );
           const wideTensor = new Tensor(wide, shape);
           return foldTo(wideTensor, self.shape);

@@ -1153,8 +1153,45 @@ ${source.bindings}
 ${source.load}`, next: source.count, at: (index) => `load(${index})` };
 }
 
+/**
+ * How many cells one thread of an elementwise kernel takes: four when the count is a
+ * whole number of fours and every operand is read contiguously, so the four load and
+ * store as one `vec4` — see `lanesOf`. The op's expression stays scalar and is applied
+ * to each component: the same IEEE operations in the same order as one cell a thread,
+ * so the values are the same bit for bit.
+ */
+export function elementLanes(n: number, contiguous: boolean): 1 | 4 {
+  return contiguous && n % 4 === 0 ? 4 : 1;
+}
+
+/** Whether an operand can ride four cells a thread: read contiguously over the output,
+ *  or one value broadcast to all of it (every stride zero — loaded once). */
+export function laneable(shape: readonly number[], strides: readonly number[]): boolean {
+  return contiguousStrides(shape, strides) || strides.every((v) => v === 0);
+}
+
+/** The four components of a `vec4` local, each through the scalar expression. A
+ *  scalar-broadcast input (in `scalars`) is the same value in every lane. */
+function perLane(inputs: readonly string[], expr: string, out = "res", scalars: readonly string[] = []): string {
+  return ["x", "y", "z", "w"].map((c) =>
+    `  { ${inputs.map((v) => scalars.includes(v) ? `let ${v} = ${v}s;` : `let ${v} = ${v}v.${c};`).join(" ")} ${out}.${c} = ${expr}; }`).join("\n");
+}
+
 export function unaryForward(name: string, n: number): string {
   const op = unarySpec(name);
+  if (elementLanes(n, true) === 4) {
+    return `${op.prelude ?? ""}
+@group(0) @binding(0) var<storage, read> A: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read_write> Out: array<vec4<f32>>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n / 4)}
+  let xv = A[gid];
+  var res: vec4<f32>;
+${perLane(["x"], op.fwd)}
+  Out[gid] = res;
+}`;
+  }
   return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
@@ -1170,6 +1207,23 @@ ${flatId(n)}
  *  it. */
 export function unaryBackward(name: string, n: number): string {
   const op = unarySpec(name);
+  if (elementLanes(n, true) === 4) {
+    return `${op.prelude ?? ""}
+@group(0) @binding(0) var<storage, read> A: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> O: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> G: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> Out: array<vec4<f32>>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n / 4)}
+  let xv = A[gid];
+  let ov = O[gid];
+  let gv = G[gid];
+  var res: vec4<f32>;
+${perLane(["x", "o", "g"], `g * (${op.bwd})`)}
+  Out[gid] = res;
+}`;
+  }
   return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> O: array<f32>;
@@ -1220,6 +1274,22 @@ export function binaryForward(
   const op = BINARY[name];
   if (!op) throw new Error(`unknown binary op: ${name}`);
   const n = shape.reduce((a, b) => a * b, 1);
+  if (elementLanes(n, laneable(shape, strideA) && laneable(shape, strideB)) === 4) {
+    const aScalar = !contiguousStrides(shape, strideA), bScalar = !contiguousStrides(shape, strideB);
+    return `${op.prelude ?? ""}
+@group(0) @binding(0) var<storage, read> A: array<${aScalar ? "f32" : "vec4<f32>"}>;
+@group(0) @binding(1) var<storage, read> B: array<${bScalar ? "f32" : "vec4<f32>"}>;
+@group(0) @binding(2) var<storage, read_write> Out: array<vec4<f32>>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n / 4)}
+  ${aScalar ? "let xs = A[0];" : "let xv = A[gid];"}
+  ${bScalar ? "let ys = B[0];" : "let yv = B[gid];"}
+  var res: vec4<f32>;
+${perLane(["x", "y"], op.fwd, "res", [...(aScalar ? ["x"] : []), ...(bScalar ? ["y"] : [])])}
+  Out[gid] = res;
+}`;
+  }
   return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> B: array<f32>;
@@ -1257,6 +1327,26 @@ export function binaryBackward(
   const op = BINARY[name];
   if (!op) throw new Error(`unknown binary op: ${name}`);
   const n = shape.reduce((a, b) => a * b, 1);
+  if (elementLanes(n, laneable(shape, strideA) && laneable(shape, strideB)) === 4) {
+    const aScalar = !contiguousStrides(shape, strideA), bScalar = !contiguousStrides(shape, strideB);
+    return `${op.prelude ?? ""}
+@group(0) @binding(0) var<storage, read> A: array<${aScalar ? "f32" : "vec4<f32>"}>;
+@group(0) @binding(1) var<storage, read> B: array<${bScalar ? "f32" : "vec4<f32>"}>;
+@group(0) @binding(2) var<storage, read> O: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> G: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read_write> Out: array<vec4<f32>>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n / 4)}
+  ${aScalar ? "let xs = A[0];" : "let xv = A[gid];"}
+  ${bScalar ? "let ys = B[0];" : "let yv = B[gid];"}
+  let ov = O[gid];
+  let gv = G[gid];
+  var res: vec4<f32>;
+${perLane(["x", "y", "o", "g"], `g * (${which === "a" ? op.da : op.db})`, "res", [...(aScalar ? ["x"] : []), ...(bScalar ? ["y"] : [])])}
+  Out[gid] = res;
+}`;
+  }
   return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> B: array<f32>;

@@ -40,7 +40,7 @@
  * milliseconds on the U-Net, nothing visible on the small network (measured).
  */
 import { Device, type Recorded } from "./device.js";
-import { contiguousStrides, type Elementwise, grid1d, type Reduce, type Source, WORKGROUP } from "./kernels.js";
+import { contiguousStrides, type Elementwise, elementLanes, grid1d, laneable, type Reduce, type Source, WORKGROUP } from "./kernels.js";
 
 function elementwise(meta: Elementwise | Reduce | undefined): meta is Elementwise {
   return meta !== undefined && "expr" in meta;
@@ -270,6 +270,9 @@ interface Emitted {
   readonly prelude: string;
   readonly body: string;
   readonly result: string;
+  /** Leaves read as one broadcast value (`L[0]`) — bound as scalars even when the
+   *  kernel takes four cells a thread: their buffers may be four bytes. */
+  readonly scalarLeaves: Set<number>;
 }
 
 function emit(tree: Node[], graph: Graph, consumer?: number): Emitted {
@@ -281,6 +284,7 @@ function emit(tree: Node[], graph: Graph, consumer?: number): Emitted {
   const leafCode: string[] = [];
   const nodeCode: string[] = [];
   const preludes = new Set<string>();
+  const scalarLeaves = new Set<number>();
   const value = new Map<number, string>();    // node index → the WGSL variable holding its value
   tree.forEach((node, k) => {
     if (node.meta.prelude) preludes.add(node.meta.prelude);
@@ -300,7 +304,11 @@ function emit(tree: Node[], graph: Graph, consumer?: number): Emitted {
       }
       // The leaf's element for this node: contiguous is `gid`; broadcast follows the strides
       // over this node's shape.
-      if (inp.strides && !contiguousStrides(node.meta.shape, inp.strides)) {
+      if (inp.strides && inp.strides.every((v) => v === 0)) {
+        // One value broadcast to the whole output.
+        scalarLeaves.add(li);
+        locals.push(`let ${inp.local} = L${li}[0];`);
+      } else if (inp.strides && !contiguousStrides(node.meta.shape, inp.strides)) {
         const lines = [`  var rest_${k}_${inp.binding} = gid;`, `  var ix_${k}_${inp.binding}: u32 = 0u;`];
         for (let d = node.meta.shape.length - 1; d >= 0; d--) {
           const size = node.meta.shape[d] ?? 1;
@@ -325,22 +333,42 @@ function emit(tree: Node[], graph: Graph, consumer?: number): Emitted {
     bindings.push(`@group(0) @binding(${buffers.length}) var<storage, read_write> O${k}: array<f32>;`);
     buffers.push(node.rec.buffers[node.meta.out] as GPUBuffer);
   });
-  return { bindings, buffers, prelude: [...preludes].join("\n"), body: [...leafCode, ...nodeCode].join("\n"), result: `v${tree.length - 1}` };
+  return { bindings, buffers, prelude: [...preludes].join("\n"), body: [...leafCode, ...nodeCode].join("\n"), result: `v${tree.length - 1}`, scalarLeaves };
 }
 
-/** One kernel for the tree: the leaves read, every node's output written. */
+/** Whether every operand of every node in the tree is read contiguously — then the
+ *  kernel can take four cells a thread (`elementLanes`). */
+function allContiguous(tree: readonly Node[]): boolean {
+  return tree.every((node) => node.meta.inputs.every((inp) => !inp.strides || laneable(node.meta.shape, inp.strides)));
+}
+
+/**
+ * One kernel for the tree: the leaves read, every node's output written. Four cells a
+ * thread when every operand is contiguous and the count allows: the scalar body is
+ * repeated per component of the `vec4` loads, so the operations and their order are
+ * those of one cell a thread, and the outputs are stored as one `vec4` each.
+ */
 function build(dev: Device, tree: Node[], graph: Graph): Recorded {
   const root = tree[tree.length - 1] as Node;
   const n = root.meta.n;
   const e = emit(tree, graph);
-  const grid = grid1d(n);
+  const lanes = elementLanes(n, allContiguous(tree));
+  const grid = grid1d(n / lanes);
+  let bindings = e.bindings.join("\n");
+  let body = e.body;
+  if (lanes === 4) {
+    bindings = e.bindings.map((line, i) => i < e.buffers.length && e.scalarLeaves.has(i) && line.includes(`L${i}:`) ? line : line.replace("array<f32>", "array<vec4<f32>>")).join("\n");
+    const outs = [...new Set([...e.body.matchAll(/O(\d+)\[gid\] = /g)].map((m) => m[1]))];
+    const lane = (c: string): string => `  {\n${e.body.replace(/L(\d+)\[gid\]/g, `L$1[gid].${c}`).replace(/O(\d+)\[gid\] = /g, `o$1.${c} = `)}\n  }`;
+    body = [...outs.map((k) => `  var o${k}: vec4<f32>;`), ...["x", "y", "z", "w"].map(lane), ...outs.map((k) => `  O${k}[gid] = o${k};`)].join("\n");
+  }
   const code = `${e.prelude}
-${e.bindings.join("\n")}
+${bindings}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   let gid = g.y * ${grid.threadsX}u + g.x;
-  if (gid >= ${n}u) { return; }
-${e.body}
+  if (gid >= ${n / lanes}u) { return; }
+${body}
 }`;
   // The key is the code: two trees of the same ops can bind differently (a leaf used
   // twice, an intermediate written or not), and a pipeline cached by op names alone was
