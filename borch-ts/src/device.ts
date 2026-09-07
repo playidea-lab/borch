@@ -263,10 +263,17 @@ function subgroupMatrixF32(adapter: GPUAdapter): boolean {
   return false;
 }
 
-/** One dispatch as recorded under a capture. */
+/**
+ * One dispatch as recorded under a capture — or one buffer copy: every in-place
+ * operation is a copy back into the original buffer (`copyInto`), and an optimizer's
+ * weight decay is one. Left out of the recording, a replay silently skipped them: AdamW
+ * trained a GPT to a loss 3e-6 away from eager while Adam's U-Net replayed bit for bit
+ * (measured 2026-09-07). A copy has `copy` set and `buffers` as `[src, dst]`.
+ */
 export interface Recorded {
-  readonly pipeline: GPUComputePipeline;
-  readonly bindGroup: GPUBindGroup;
+  readonly pipeline?: GPUComputePipeline;
+  readonly bindGroup?: GPUBindGroup;
+  readonly copy?: { readonly bytes: number };
   readonly groups: readonly [number, number, number];
   /** The buffers behind the bind group, in binding order — what a fusion pass reads. */
   readonly buffers: readonly GPUBuffer[];
@@ -305,7 +312,7 @@ export class Capture {
       return n;
     };
     return this.records.map((r) => ({
-      key: this.dev.keyOf(r.pipeline) ?? "?", groups: r.groups,
+      key: r.copy ? "copy" : (r.pipeline && this.dev.keyOf(r.pipeline)) || "?", groups: r.groups,
       buffers: r.buffers.map(id), sizes: r.buffers.map((b) => b.size),
     }));
   }
@@ -767,6 +774,12 @@ export class Device {
   /** Encodes recorded dispatches again, in order. Called by `Capture.replay`. */
   replayRecorded(records: readonly Recorded[]): void {
     for (const r of records) {
+      if (r.copy) {
+        const [src, dst] = r.buffers as [GPUBuffer, GPUBuffer];
+        this.copyInto(dst, src, r.copy.bytes / BYTES_PER_F32);
+        continue;
+      }
+      if (!r.pipeline || !r.bindGroup) throw new Error("a recorded dispatch without a pipeline");
       const pass = this.openPass();
       pass.setPipeline(r.pipeline);
       pass.setBindGroup(0, r.bindGroup);
@@ -1168,6 +1181,8 @@ export class Device {
     // A copy cannot go inside a compute pass. Closing the pass and riding the same
     // encoder keeps the order and still submits once.
     this.openEncoder().copyBufferToBuffer(src, 0, dst, 0, bytes);
+    // Under a capture the copy is part of the step — see `Recorded`.
+    this.recording?.push({ copy: { bytes }, groups: [0, 0, 0], buffers: [src, dst] });
   }
 
   /**

@@ -3088,8 +3088,8 @@
     "src": "1689cf56420c"
   },
   "device/Recorded": {
-    "ko": "캡처 아래에서 기록된 dispatch 하나.",
-    "src": "17c1364fe8e5"
+    "ko": "캡처 아래에서 녹화된 dispatch 하나 — 또는 버퍼 복사 하나. 제자리 연산은 전부 원래 버퍼로 되돌리는 복사(`copyInto`)이고 옵티마이저의 weight decay도 그렇다. 녹화에서 빠지면 replay가 조용히 건너뛰었다: AdamW의 GPT는 eager와 손실이 3e-6 어긋났고 Adam의 U-Net은 비트 단위로 같았다(2026-09-07 실측). 복사는 `copy`가 있고 `buffers`가 `[src, dst]`다.",
+    "src": "324fd46861ef"
   },
   "device/Capture": {
     "ko": "기록된 스텝. `replay()`는 그 dispatch들을 같은 순서로 지금의 배치에 다시 넣는다 — 값이 같은 버퍼에 놓이므로 캡처 중에 만든 텐서(손실, 파라미터)는 새 스텝의 결과를 읽는다. `dispose()`는 메모리를 돌려준다.",
