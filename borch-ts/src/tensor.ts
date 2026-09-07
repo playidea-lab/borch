@@ -205,6 +205,8 @@ import {
   convNDGradInputTiled,
   convGradWeightDirect2d,
   elementLanes,
+  gatherLanes,
+  invertibleRules,
   softmaxRows,
   softmaxRowsBackward,
   matmulBatched,
@@ -2778,7 +2780,7 @@ export class Tensor implements Node<Tensor> {
     // The offset rides in a one-word buffer so that slices of one shape share one shader
     // — the reason is written above `ruleKey`.
     dev().run1d(dev().pipeline(`gt:${key}`, () => gather(rules)),
-                [this.buffer, out, dev().word(offset)], n);
+                [this.buffer, out, dev().word(offset)], n / gatherLanes(rules));
     const inSize = this.size;
     const inShape = this.shape;
     return Tensor.make(
@@ -2791,7 +2793,7 @@ export class Tensor implements Node<Tensor> {
           dev().pipeline(`gb:${gradName}:${key}|${inSize}`,
                         () => gatherBackward(rules, inSize)),
           [g.buffer, gi, dev().word(offset)],
-          inSize,
+          inSize / (gatherLanes(rules) === 4 && inSize % 4 === 0 && invertibleRules(rules) ? 4 : 1),
         );
         return [new Tensor(gi, inShape)];
       },

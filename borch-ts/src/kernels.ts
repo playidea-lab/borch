@@ -2306,8 +2306,34 @@ export function ruleKey(rules: readonly AxisRule[]): string {
 // can see is the difference `convNDForwardTiled` documents; an addend costs nothing
 // either way.
 
+/**
+ * How many cells one thread of `gather` (and its inverting backward) takes: four when
+ * the last axis runs straight on at stride one over a whole number of fours, so the
+ * thread's four output cells read four consecutive input cells (four scalar loads, one
+ * `vec4` store — the offset need not be aligned). Measured on the M4 Max (2026-09-07):
+ * a permutation of 2 MB one cell a thread took 0.102 ms against 0.022 for a plain pass
+ * over the same bytes; the index arithmetic per cell was the difference.
+ */
+export function gatherLanes(rules: readonly AxisRule[]): 1 | 4 {
+  const last = rules[rules.length - 1];
+  return last && last.kind === "lin" && last.stride === 1 && last.size % 4 === 0 ? 4 : 1;
+}
+
 export function gather(rules: readonly AxisRule[]): string {
   const n = ruleCount(rules);
+  if (gatherLanes(rules) === 4) {
+    return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> P: array<u32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n / 4)}
+  let cell = gid * 4u;
+${sourceIndex(rules, "P[0]", "cell", "src")}
+  Out[gid] = vec4(A[src], A[src + 1u], A[src + 2u], A[src + 3u]);
+}`;
+  }
   return `
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
@@ -2353,6 +2379,12 @@ ${sourceIndex(rules, "P[0]", "gid", "src")}
  * @returns the axes sorted by descending stride, or `null` where the
  *   conditions do not hold.
  */
+/** Whether `gatherBackward` takes the inverting path for these rules — the caller's
+ *  dispatch count depends on it. */
+export function invertibleRules(rules: readonly AxisRule[]): boolean {
+  return invertibleAxes(rules) !== null;
+}
+
 function invertibleAxes(
   rules: readonly AxisRule[],
 ): { size: number; stride: number; outStride: number }[] | null {
@@ -2405,6 +2437,37 @@ export function gatherBackward(
         rest = rest - c * ${a.stride}u;
         t = t + c * ${a.outStride}u;
       } }`).join("");
+    // Four input cells a thread when the rules allow (`gatherLanes`) and the input is a
+    // whole number of fours: each cell inverted on its own, the four stored as one `vec4`.
+    const lanes = gatherLanes(rules) === 4 && inSize % 4 === 0 ? 4 : 1;
+    const one = (cell: string, into: string): string => `
+  {
+    var acc = 0.0;
+    if (${cell} >= P[0]) {
+      var rest = ${cell} - P[0];
+      var t = 0u;
+      var ok = true;
+${steps}
+      // Only a remainder of 0 makes this input exactly that output position. Otherwise
+      // it is a cell that was not selected.
+      if (ok && rest == 0u && t < ${outN}u) { acc = G[t]; }
+    }
+    ${into} = acc;
+  }`;
+    if (lanes === 4) {
+      return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> P: array<u32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(inSize / 4)}
+  let cell = gid * 4u;
+  var o: vec4<f32>;
+${one("cell", "o.x")}${one("cell + 1u", "o.y")}${one("cell + 2u", "o.z")}${one("cell + 3u", "o.w")}
+  Out[gid] = o;
+}`;
+    }
     return `
 @group(0) @binding(0) var<storage, read> G: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
@@ -2412,17 +2475,9 @@ export function gatherBackward(
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(inSize)}
-  var acc = 0.0;
-  if (gid >= P[0]) {
-    var rest = gid - P[0];
-    var t = 0u;
-    var ok = true;
-${steps}
-    // Only a remainder of 0 makes this input exactly that output position. Otherwise it
-    // is a cell that was not selected.
-    if (ok && rest == 0u && t < ${outN}u) { acc = G[t]; }
-  }
-  Out[gid] = acc;
+  var v = 0.0;
+${one("gid", "v")}
+  Out[gid] = v;
 }`;
   }
   return `
