@@ -147,10 +147,15 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         run.dispose()
         model.eval()
         pred = np.zeros((N, 1, ds.size, ds.size), np.float32)
+        # The prediction pass through `torch.compiled` too: under `no_grad` the fused
+        # kernels leave every intermediate unwritten, and the last, shorter batch is one
+        # more recording.
+        predict = torch.compiled(model)
         with torch.no_grad():
             for s in range(0, N, 32):
                 with torch.scope():
-                    pred[s:s + 32] = (model(torch.tensor(Xt[s:s + 32])).numpy() > 0)
+                    pred[s:s + 32] = (predict(torch.tensor(Xt[s:s + 32])).numpy() > 0)
+        predict.dispose()
         feats = Mt
         hit = (pred * Mt).sum(axis=(1, 2, 3)); joined = ((pred + Mt) > 0).sum(axis=(1, 2, 3))
         ious = np.where(joined > 0, hit / np.maximum(joined, 1), 1.0)
@@ -179,11 +184,13 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         # the only thing that learns — 300 full-batch steps on the cached features.
         backbone = torch.hub.load("imagenet-efficientnet-b0")
         chunks = []                                        # marimo: one name per cell, `rows` is the table's
+        # Recorded once per batch shape and replayed — see the U-Net path.
+        embed = torch.compiled(lambda x: backbone.forward_head(backbone.forward_features(x), pre_logits=True))
         with torch.no_grad():
             for xb, _idx in ds.batches(16):                # decoded here, sixteen at a time
                 with torch.scope():
-                    maps = backbone.forward_features(torch.tensor(xb))
-                    chunks.append(backbone.forward_head(maps, pre_logits=True).numpy())
+                    chunks.append(embed(torch.tensor(xb)).numpy())
+        embed.dispose()
         feats = np.concatenate(chunks)                     # (N, 1280)
         feat_s = time.perf_counter() - t0
         head = nn.Linear(backbone.num_features, K)
