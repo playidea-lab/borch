@@ -3039,23 +3039,68 @@ export function indexSelectBackward(
   count: number,
 ): string {
   const inN = outer * axis * inner;
+  // Four cells of the inner axis a thread when it is a whole number of fours: the four
+  // share the row, so one walk of the index serves them and the gradient loads as one
+  // `vec4` — an Embedding's backward (2048 indices over 1024 × 256) was 0.9 ms of a
+  // GPT step one cell a thread (measured 2026-09-07).
+  const lanes = lanesOf(inner);
+  const T = lanes === 4 ? "vec4<f32>" : "f32";
   return `
 @group(0) @binding(0) var<storage, read> I: array<f32>;
-@group(0) @binding(1) var<storage, read> G: array<f32>;
-@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<${T}>;
+@group(0) @binding(2) var<storage, read_write> Out: array<${T}>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-${flatId(inN)}
-  let o = gid / ${axis * inner}u;
-  let rest = gid % ${axis * inner}u;
+${flatId(inN / lanes)}
+  let cell = gid * ${lanes}u;
+  let o = cell / ${axis * inner}u;
+  let rest = cell % ${axis * inner}u;
   let r = rest / ${inner}u;
   let i = rest % ${inner}u;
-  var acc = 0.0;
+  var acc = ${lanes === 4 ? "vec4(0.0)" : "0.0"};
   for (var k = 0u; k < ${count}u; k = k + 1u) {
-    if (u32(I[k]) == r) { acc = acc + G[o * ${count * inner}u + k * ${inner}u + i]; }
+    if (u32(I[k]) == r) { acc = acc + G[(o * ${count * inner}u + k * ${inner}u + i) / ${lanes}u]; }
   }
   Out[gid] = acc;
 }`;
+}
+
+/**
+ * A fold that keeps the trailing axes and sums over the leading ones — a bias or a
+ * LayerNorm weight gradient, `(N, L, D)` to `(D)` — as **column sums**: a thread takes
+ * four columns and a slice of the rows, coalesced across the threads of a workgroup, and
+ * writes its partial; `sumSplits` adds the pieces in a fixed order. The wide fold walked
+ * such a fold with a stride of a whole row between reads (0.31 ms for 2 MB, measured
+ * 2026-09-07).
+ */
+export function columnFold(rows: number, cols: number, pieces: number): string {
+  const per = Math.ceil(rows / pieces);
+  const lanes = lanesOf(cols);
+  const T = lanes === 4 ? "vec4<f32>" : "f32";
+  const groups = cols / lanes;
+  return `
+@group(0) @binding(0) var<storage, read> G: array<${T}>;
+@group(0) @binding(1) var<storage, read_write> Out: array<${T}>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(groups * pieces)}
+  let c = gid % ${groups}u;
+  let piece = gid / ${groups}u;
+  let lo = piece * ${per}u;
+  let hi = min(lo + ${per}u, ${rows}u);
+  var acc = ${lanes === 4 ? "vec4(0.0)" : "0.0"};
+  for (var r = lo; r < hi; r = r + 1u) {
+    acc = acc + G[r * ${groups}u + c];
+  }
+  Out[piece * ${groups}u + c] = acc;
+}`;
+}
+
+/** How many row pieces `columnFold` cuts: enough threads to fill the GPU, at most one
+ *  per row. */
+export function columnFoldPieces(rows: number, cols: number): number {
+  const groups = cols / lanesOf(cols);
+  return Math.max(1, Math.min(rows, Math.ceil(8192 / groups)));
 }
 
 export function convOut(size: number, pad: number, kernel: number, stride: number,

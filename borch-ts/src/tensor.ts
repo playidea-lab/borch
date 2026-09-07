@@ -203,6 +203,8 @@ import {
   convGradWeightSplit, convForwardSplit, sumSplitsConv, type ConvEpilogue,
   convNDForwardTiled, depthwiseForward, isDepthwise,
   convNDGradInputTiled,
+  columnFold,
+  columnFoldPieces,
   convGradWeightDirect2d,
   elementLanes,
   gatherLanes,
@@ -3762,7 +3764,7 @@ export class Tensor implements Node<Tensor> {
             () => indexSelectBackward(outer, axisSize, inner, count),
           ),
           [index.buffer, g.buffer, gi],
-          this.size,
+          this.size / lanesOf(inner),
         );
         return [new Tensor(gi, shape)];
       },
@@ -13104,6 +13106,21 @@ function foldTo(wide: Tensor, target: readonly number[]): Tensor {
   const small = padShape(target, wide.shape.length);
   const n = numel(small);
   const out = dev().alloc(n);
+  // Leading axes folded, trailing axes kept — column sums, see `columnFold`.
+  const firstKept = small.findIndex((v, d) => v === (wide.shape[d] ?? 1) && (wide.shape[d] ?? 1) !== 1);
+  const suffixKept = firstKept > 0
+    && small.every((v, d) => d < firstKept ? v === 1 : v === (wide.shape[d] ?? 1));
+  if (suffixKept && broadcastFold(wide.shape, small) > FOLD_WIDE) {
+    const cols = n;
+    const rows = numel(wide.shape) / cols;
+    const pieces = columnFoldPieces(rows, cols);
+    const parts = pieces > 1 ? dev().alloc(cols * pieces) : out;
+    dev().run1d(dev().pipeline(`cf:${rows}:${cols}:${pieces}`, () => columnFold(rows, cols, pieces)), [wide.buffer, parts], (cols / lanesOf(cols)) * pieces);
+    if (pieces > 1) {
+      dev().run1d(dev().pipeline(`sumsplits:${cols}:${pieces}`, () => sumSplits(cols, pieces)), [parts, out], cols);
+    }
+    return new Tensor(out, target);
+  }
   if (broadcastFold(wide.shape, small) > FOLD_WIDE) {
     // A long fold takes workgroups (element, piece) — see `reduceBroadcastWide`.
     const pieces = foldPieces(wide.shape, small);
