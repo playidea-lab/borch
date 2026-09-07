@@ -250,10 +250,12 @@ import {
   catCopy,
   poolMaxIndexBackward,
   poolMaxWithIndex,
+  maxPoolTiledBackward,
   poolNDBackward,
   poolNDBackwardNeedsInput,
   poolNDForward,
   poolNDKey,
+  poolTiles,
   type PoolNDShape,
   type PoolWindows,
   poolWindowsKey,
@@ -11315,6 +11317,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         // Average pooling does not look at the input, so it takes no buffer either —
         // passing an unused binding makes WebGPU invalidate the whole command buffer,
         // and then the backward quietly does not run.
+        if (kind === "max" && poolTiles(p)) {
+          // Windows that tile the input: a thread per window — see `maxPoolTiledBackward`.
+          dev().run1d(
+            dev().pipeline(`pnbt:${key}`, () => maxPoolTiledBackward(p)),
+            [this.buffer, g.buffer, gi],
+            n,
+          );
+          return [new Tensor(gi, shape)];
+        }
         dev().run1d(
           dev().pipeline(`pnb:${kind}:${key}`, () => poolNDBackward(p, kind)),
           poolNDBackwardNeedsInput(kind)

@@ -2897,12 +2897,17 @@ export const DIRECT_DEFAULT: DirectConfig = { TS: DIRECT_STRIP, COUT: DIRECT_COU
 
 /**
  * Whether a convolution takes the direct kernel: two spatial axes, no groups, no
- * dilation, a stride of one or two, at most 32 input channels, a kernel no wider than
- * seven. Above 32 channels the GEMM's reuse wins; the boundary was measured, not chosen.
+ * dilation, a stride of one or two, at most 128 input channels, a kernel no wider than
+ * seven. The boundary was measured, not chosen — on the M4 Max (2026-09-07, five rounds
+ * of twenty dispatches, the minimum, batch 16) against the GEMM: 64 → 32 at 48 × 48
+ * 0.24 against 0.45 ms, 128 → 64 at 24 × 24 0.31 against 0.45, 128 → 256 at 8 × 8 0.17
+ * against 0.22, 128 → 128 at 8 × 8 a tie; at 256 channels the weights of a single
+ * output channel fill the workgroup's 16 KB, the slice is one, and the GEMM wins
+ * (256 → 256 at 8 × 8 0.54 against 0.43, 512 → 512 at 4 × 4 0.80 against 0.44).
  */
 export function directFits(s: ConvNDShape): boolean {
   return s.inDims.length === 2 && (s.groups ?? 1) === 1 && (s.dilation ?? [1, 1]).every((d) => d === 1)
-    && s.stride.every((v) => v === 1 || v === 2) && s.C <= 32 && s.kernel.every((v) => v <= 7)
+    && s.stride.every((v) => v === 1 || v === 2) && s.C <= 128 && s.kernel.every((v) => v <= 7)
     && s.kernel.length === 2;
 }
 
@@ -4105,6 +4110,67 @@ ${open.join("\n")}
 ${body}
 ${close.join("\n")}
   Out[gid] = acc;
+}`;
+}
+
+/**
+ * Whether a pooling's windows tile the input exactly — kernel and stride equal, no
+ * padding, no dilation, the input a whole number of windows — so every input cell
+ * belongs to exactly one window.
+ */
+export function poolTiles(p: PoolNDShape): boolean {
+  return p.kernel.every((k, d) => k === (p.stride[d] ?? 1) && (p.inDims[d] ?? 1) === (p.outDims[d] ?? 1) * k)
+    && (p.pad ?? []).every((v) => v === 0) && (p.dilation ?? []).every((v) => v === 1);
+}
+
+/**
+ * The maximum's backward when the windows tile the input — **one thread per window,
+ * writing every cell of it.**
+ *
+ * The general backward (`poolNDBackward`) is one thread per input cell: it finds the
+ * windows reaching the cell, and for each takes the window's maximum and then, for the
+ * tie, scans the window again — ten reads for one write on a 2 × 2 window. Measured
+ * on the M4 Max, the U-Net's two poolings took 0.62 ms of a 12.4 ms step for what is
+ * one read and one write a cell. When the windows tile the input the thread can be the
+ * window instead: it reads its cells once, keeps the first maximum (a strict comparison
+ * in the window's order — the earlier position wins a tie, as torch has it), and writes
+ * the gradient to that cell and zero to the rest. Every input cell is written exactly
+ * once; nothing is added, so the result is deterministic.
+ */
+export function maxPoolTiledBackward(p: PoolNDShape): string {
+  const inSpace = p.inDims.reduce((a, b) => a * b, 1);
+  const outSpace = p.outDims.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(p.inDims);
+  const outStride = suffixStrides(p.outDims);
+  const n = p.NC * outSpace;
+  const decode = p.outDims.map((size, d) => `  let o${d} = (r / ${outStride[d] ?? 1}u) % ${size}u;`).join("\n");
+  const base = p.outDims.map((_, d) => `o${d} * ${(p.kernel[d] ?? 1) * (inStride[d] ?? 1)}u`).join(" + ");
+  const open = p.kernel.map((size, d) => `  for (var m${d} = 0u; m${d} < ${size}u; m${d} = m${d} + 1u) {`).join("\n");
+  const close = p.kernel.map(() => "  }").join("\n");
+  const off = p.kernel.map((_, d) => `m${d} * ${inStride[d] ?? 1}u`).join(" + ");
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${outSpace}u;
+  let r = gid % ${outSpace}u;
+${decode}
+  let start = plane * ${inSpace}u + ${base};
+  var best = X[start];
+  var at = 0u;
+${open}
+    let off = ${off};
+    let v = X[start + off];
+    if (v > best) { best = v; at = off; }
+${close}
+  let gv = G[gid];
+${open}
+    let off = ${off};
+    Out[start + off] = select(0.0, gv, off == at);
+${close}
 }`;
 }
 
