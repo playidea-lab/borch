@@ -556,6 +556,51 @@ wasm, and within that, large matrix multiplication alone is unusually bad
 **Up to MNIST scale, training really happens in a browser.** Above that it is your
 own machine or remote hardware — or the GPU distribution below.
 
+### A step captured, replayed, and fused
+
+A training step is the same dispatches with the same buffers every time, and on a laptop
+GPU the Python side that issues them — the autograd graph, the allocations, 262 dispatch
+calls — was 3.4 ms of a 17.7 ms U-Net step (measured with the device's timestamp queries,
+`npm run profile:py`). `torch.capture()` records one step as the device sees it and
+`replay()` issues it again without Python:
+
+```python
+x, y = torch.tensor(batch_x), torch.tensor(batch_y)          # the inputs, made once
+with torch.capture() as step:                                 # runs the step once, eagerly
+    with torch.scope():
+        opt.zero_grad(); loss = crit(model(x), y); loss.backward(); opt.step()
+step.fuse()                                                   # elementwise trees → single kernels
+for bx, by in batches:
+    x.copy_(torch.tensor(bx)); y.copy_(torch.tensor(by))     # the next batch, into the same buffers
+    step.replay()
+    print(loss.item())                                        # the new step's loss, same buffer
+step.dispose()
+```
+
+Three things make a replay the eager step and not a photograph of it. Every buffer the
+step allocates is pinned for the capture's life, so the recorded bind groups keep pointing
+at live memory. Whatever a step varies on the CPU side moved to the device: Adam's bias
+correction is a kernel over a counter on the GPU, and the random stream's seed is a buffer
+a tick kernel advances after each draw — a replayed dropout drops fresh units. And the
+values land where they did, so the loss tensor, the parameters and the optimiser's state
+made under the capture read the new step. Twelve U-Net steps replayed are the eager twelve
+bit for bit on every loss, learned parameter and running statistic (`npm run capture:py`);
+the one thing that lags is BatchNorm's `num_batches_tracked`, a CPU counter.
+
+`fuse()` reads the recording as a graph. Every elementwise dispatch carries what it
+computed — the op's own WGSL expression, its inputs with their broadcast strides — and the
+pass pulls into each one the producers whose output it reads contiguously over the same
+count and that nothing reads in between; the producers' producers follow. A GELU written
+out from `tanh`, a LayerNorm from means and a square root, a loss from squares: each
+becomes one kernel. Every fused node still writes its output unless it is an autograd
+intermediate nothing outside the tree reads — a forward value Python may be holding is
+never left unwritten — and a tree stops at the device's storage-buffer budget per stage
+(Metal gives ten). A hand-written GELU network: 139 → 84 dispatches, eager 4.2 ms, replayed
+1.7, fused 1.5 (`npm run fuse:py`); the fused values are within 1e-6 relative of eager, the
+difference being a multiply and an add the compiler contracts into one rounding once they
+share a kernel. What a capture cannot do: a step whose shapes change (drop the last partial
+batch), or one that branches in Python on the step's values.
+
 ## If you need more than that — `borch-webgpu`
 
 This one (the core) is **up to MNIST scale, on numpy.** Crossing that boundary is
