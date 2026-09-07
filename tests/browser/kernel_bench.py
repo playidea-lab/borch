@@ -27,10 +27,11 @@ def main(argv):
     headed = _headed("--headless" not in argv)
     bench = next((a.split("=", 1)[1] for a in argv if a.startswith("--bench=")), "dw,fwd")
     shapes = next((a.split("=", 1)[1] for a in argv if a.startswith("--shapes=")), "")
+    reps = next((a.split("=", 1)[1] for a in argv if a.startswith("--reps=")), "")
     if refuse_if_screen_off("the kernel bench"):
         return 1
     port, shutdown = serve(ROOT)
-    url = f"http://127.0.0.1:{port}/tests/browser/kernel_bench.html?bench={bench}" + (f"&shapes={shapes}" if shapes else "")
+    url = f"http://127.0.0.1:{port}/tests/browser/kernel_bench.html?bench={bench}" + (f"&shapes={shapes}" if shapes else "") + (f"&reps={reps}" if reps else "")
     profile = tempfile.mkdtemp(prefix="borch-kbench-")
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     try:

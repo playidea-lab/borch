@@ -4,7 +4,7 @@
  "korean": {
   "done": 791,
   "stale": 0,
-  "missing": 476
+  "missing": 477
  },
  "modules": [
   {
@@ -22068,6 +22068,12 @@
        "doc": "For an elementwise dispatch, what it computes — see `Elementwise`; for a reduction,\n what it reads once — see `Reduce`.",
        "optional": true,
        "doc_ko": "원소별 dispatch라면 무엇을 계산했는지 — `Elementwise` 참조; 리덕션이라면 무엇을 한 번씩 읽는지 — `Reduce` 참조."
+      },
+      {
+       "name": "sig",
+       "signature": "readonly sig?: string",
+       "doc": "The pipeline's signature at the time of recording — what the profiler files a\n replayed dispatch under. Without it a replay is one kind: the last signature set.",
+       "optional": true
       }
      ],
      "doc_ko": "캡처 아래에서 녹화된 dispatch 하나 — 또는 버퍼 복사 하나. 제자리 연산은 전부 원래 버퍼로 되돌리는 복사(`copyInto`)이고 옵티마이저의 weight decay도 그렇다. 녹화에서 빠지면 replay가 조용히 건너뛰었다: AdamW의 GPT는 eager와 손실이 3e-6 어긋났고 Adam의 U-Net은 비트 단위로 같았다(2026-09-07 실측). 복사는 `copy`가 있고 `buffers`가 `[src, dst]`다."
@@ -22540,7 +22546,7 @@
      "inherited_ctor": "private constructor()"
     }
    ],
-   "count": 70
+   "count": 71
   },
   {
    "name": "random",
@@ -23483,5 +23489,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3195
+ "total": 3196
 }

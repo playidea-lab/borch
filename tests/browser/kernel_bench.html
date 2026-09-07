@@ -32,7 +32,8 @@ const lines = [];
 const show = () => { out.textContent = lines.join("\n"); };
 const fill = (n, seed) => { const a = new Float32Array(n); let st = seed; for (let i = 0; i < n; i++) { st = (Math.imul(st, 1664525) + 1013904223) >>> 0; a[i] = (st / 4294967296) - 0.5; } return a; };
 const REPS = parseInt(q.get("reps") || "20"), ROUNDS = parseInt(q.get("rounds") || "5");
-const parseMM = (text) => { const m = /^(?:(\d+)@)?(\d+)x(\d+)x(\d+)$/.exec(text); return m ? { name: text, Bt: m[1] ? +m[1] : 0, M: +m[2], Kd: +m[3], Nd: +m[4] } : null; };
+// `1576x192x768`, `24@197x64x197`, and a suffix `:tn` / `:nt` for an operand read transposed.
+const parseMM = (text) => { const m = /^(?:(\d+)@)?(\d+)x(\d+)x(\d+)(?::([nt])([nt]))?$/.exec(text); return m ? { name: text, Bt: m[1] ? +m[1] : 0, M: +m[2], Kd: +m[3], Nd: +m[4], tA: m[5] === "t", tB: m[6] === "t" } : null; };
 const parseShape = (text) => { const m = /^(\d+)-(\d+)@(\d+)(?:x(\d+))?$/.exec(text); if (!m) throw new Error(`shape? ${text} (want cin-cout@side or cin-cout@sidexbatch)`); return { name: text, C: +m[1], O: +m[2], H: +m[3], N: m[4] ? +m[4] : 16 }; };
 const conv = (sh) => ({ N: sh.N, C: sh.C, O: sh.O, inDims: [sh.H, sh.H], kernel: [3, 3], stride: [1, 1], pad: [1, 1], outDims: [sh.H, sh.H] });
 let dev;
@@ -93,22 +94,31 @@ const BENCHES = {
   // rows, only the first M rows compared) — what a taller tile would be worth.
   async mm(sh) {
     if (sh.M === undefined) throw new Error(`mm wants MxKxN shapes, not ${sh.name}`);
-    const { M, Kd, Nd } = sh; const Mp = Math.ceil(M / 32) * 32;
+    const { M, Kd, Nd, tA, tB } = sh; const Mp = Math.ceil(M / 32) * 32;
+    // A transposed operand is uploaded in the other layout — (K, M) or (N, K) — and read
+    // in place, as a backward's Aᵀ·G or a linear's x·Wᵀ does.
     const A = upload(M * Kd, 1), B = upload(Kd * Nd, 2), Out = dev.alloc(M * Nd), Out2 = dev.alloc(M * Nd), Out3 = dev.alloc(Mp * Nd);
-    const Ap = dev.alloc(Mp * Kd); dev.copyInto(Ap, A, M * Kd);
+    const Ap = dev.alloc(Mp * Kd); if (!tA) dev.copyInto(Ap, A, M * Kd);
     const gflop = 2 * M * Kd * Nd / 1e9;
     const runs = [
-      { name: `scalar tile`, key: `mm:${sh.name}`, make: () => K.matmul(M, Kd, Nd), outb: Out2,
-        run: () => dev.run(dev.pipeline(`mm:${sh.name}`, () => K.matmul(M, Kd, Nd)), [A, B, Out2], [Math.ceil(Nd / 64), Math.ceil(M / 64), 1]) },
+      { name: `scalar tile`, key: `mm:${sh.name}`, make: () => K.matmul(M, Kd, Nd, tA, tB), outb: Out2,
+        run: () => dev.run(dev.pipeline(`mm:${sh.name}`, () => K.matmul(M, Kd, Nd, tA, tB)), [A, B, Out2], [Math.ceil(Nd / 64), Math.ceil(M / 64), 1]) },
     ];
     if (Device.subgroupMatrix && K.subgroupMatmulFits(M, Kd, Nd)) {
       const t = K.subgroupMatmulTile(M, Nd), splits = K.subgroupMatmulSplit(M, Kd, Nd);
-      if (splits !== 1) throw new Error("mm bench: a split shape");
-      runs.unshift({ name: `subgroup ${t.TM}x${t.TN}`, key: `mmsg:${sh.name}`, make: () => K.matmulSubgroup(M, Kd, Nd), outb: Out,
-        run: () => dev.run(dev.pipeline(`mmsg:${sh.name}`, () => K.matmulSubgroup(M, Kd, Nd)), [A, B, Out], [Nd / t.TN, M / t.TM, 1]) });
+      const Target = splits > 1 ? dev.alloc(M * Nd * splits) : Out;
+      runs.unshift({ name: `subgroup ${t.TM}x${t.TN}${splits > 1 ? ` split ${splits} (+ sum)` : ""}`, key: `mmsg:${sh.name}`, make: () => K.matmulSubgroup(M, Kd, Nd, tA, tB), extraKeys: splits > 1 ? [`ss:${sh.name}`] : [], outb: Out,
+        run: () => { dev.run(dev.pipeline(`mmsg:${sh.name}`, () => K.matmulSubgroup(M, Kd, Nd, tA, tB)), [A, B, Target], [Nd / t.TN, M / t.TM, splits]); if (splits > 1) dev.run1d(dev.pipeline(`ss:${sh.name}`, () => K.sumSplits(M * Nd, splits)), [Target, Out], M * Nd); } });
+      if (tA) { runs.length = 2; return `${await race(runs, M * Nd)} · ${gflop.toFixed(2)} GFLOP`; }
+      // The same kernel with a tiny dispatch before each one — a training step's shape,
+      // where a product follows a bias add or a fold. If the product slows, the small
+      // kernels cost their own time and a bubble in the product's.
+      const Tiny = dev.alloc(64), TinyOut = dev.alloc(64);
+      runs.push({ name: `subgroup ${t.TM}x${t.TN} after a tiny kernel (tiny counted apart)`, key: `mmsgi:${sh.name}`, make: () => K.matmulSubgroup(M, Kd, Nd, tA, tB), extraKeys: [`u:tiny:${sh.name}`], outb: Out,
+        run: () => { dev.run1d(dev.pipeline(`u:tiny:${sh.name}`, () => K.unaryForward("relu", 64)), [Tiny, TinyOut], 64); dev.run(dev.pipeline(`mmsgi:${sh.name}`, () => K.matmulSubgroup(M, Kd, Nd, tA, tB)), [A, B, Out], [Nd / t.TN, M / t.TM, 1]); } });
       const tp = K.subgroupMatmulTile(Mp, Nd);
-      runs.push({ name: `subgroup ${tp.TM}x${tp.TN} (M padded to ${Mp})`, key: `mmsgp:${sh.name}`, make: () => K.matmulSubgroup(Mp, Kd, Nd), outb: Out3,
-        run: () => dev.run(dev.pipeline(`mmsgp:${sh.name}`, () => K.matmulSubgroup(Mp, Kd, Nd)), [Ap, B, Out3], [Nd / tp.TN, Mp / tp.TM, 1]) });
+      runs.push({ name: `subgroup ${tp.TM}x${tp.TN} (M padded to ${Mp})`, key: `mmsgp:${sh.name}`, make: () => K.matmulSubgroup(Mp, Kd, Nd, false, tB), outb: Out3,
+        run: () => dev.run(dev.pipeline(`mmsgp:${sh.name}`, () => K.matmulSubgroup(Mp, Kd, Nd, false, tB)), [Ap, B, Out3], [Nd / tp.TN, Mp / tp.TM, 1]) });
     }
     const text = await race(runs, M * Nd);
     // The best of the runs, as a rate.

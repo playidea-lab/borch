@@ -1581,9 +1581,15 @@ export function subgroupMatmulFits(M: number, K: number, N: number): boolean {
 export function subgroupMatmulSplit(M: number, K: number, N: number): number {
   const { TM, TN } = subgroupMatmulTile(M, N);
   const tiles = (M / TM) * (N / TN);
-  const WANT = 64;
+  // 512, not the 64 of the conv split: a weight gradient of a transformer's linear —
+  // 192 × 1576 × 768, 72 tiles of 32 × 64, K the tokens — ran at 2.2 TFLOP/s in the step
+  // (272 µs, four times its forward) because 72 workgroups of one subgroup each are a
+  // sliver of the GPU. Swept on the bench (`--bench=mm ... :tn`): the four dW shapes of
+  // ViT-tiny sum to 0.587 ms at 64, 0.244 at 256, 0.216 at 512, 0.214 at 1024, the
+  // summing of the slabs counted. Pieces of at least 64 of K keep the slabs small.
+  const WANT = 512;
   if (tiles >= WANT) return 1;
-  const MIN_PER_SPLIT = 256;
+  const MIN_PER_SPLIT = 64;
   return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
 }
 

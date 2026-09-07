@@ -149,6 +149,15 @@ lines = [f"{label}: step {min(trials):.1f} ms wall (trials {' / '.join(f'{t:.1f}
 for kind, ms in sorted(per.items(), key=lambda kv: -kv[1]):
     if ms / total < 0.005: break
     lines.append(f"  {ms:5.2f} ms  {ms / total:4.0%}  {count.get(kind, 0):5.0f}×  {NAMES.get(kind, kind)} [{kind}]")
+# The products one by one — the full key names M:K:N and the transposes — since one
+# kind can hide a few slow shapes among many fast ones.
+detail = {}
+for k, ns in dev.nsByKind.entries():
+    key = str(k)
+    if key.split(":")[0] in ("mmsg", "mm", "bmm", "bmmsg", "sumsplits"):
+        detail[key] = (detail.get(key, (0, 0))[0] + float(ns) / 1e6 / timed_steps, detail.get(key, (0, 0))[1] + int(dev.countByKind.get(k) or 0) / timed_steps)
+for key, (ms, c) in sorted(detail.items(), key=lambda kv: -kv[1][0])[:12]:
+    lines.append(f"    {ms:5.2f} ms  {c:4.0f}×  {ms / c * 1000 if c else 0:5.0f} us each  {key}")
 adapter = str(js.borch.Device.adapterInfo)
 chr(10).join(lines) + chr(10) + f"faults {int(dev.faults.count)} · adapter {adapter}"
 \`);
