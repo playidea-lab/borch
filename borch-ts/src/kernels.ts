@@ -3022,6 +3022,212 @@ ${store.join("\n")}
 }
 
 /**
+ * The direct weight gradient's shape: the output and input channels a workgroup takes
+ * (`CB`, `IB`), the (output, input) channel pairs one thread accumulates (`TC`, `TI`), and
+ * the widest tile — one output row — whose staged input rows with their halo and staged
+ * gradient row stay under the 32 KB of workgroup memory.
+ */
+export interface GradWeightDirectConfig {
+  readonly CB: number;
+  readonly IB: number;
+  readonly TC: number;
+  readonly TI: number;
+  readonly WIDTH: number;
+  /** How many workgroups to aim for across the channel blocks. */
+  readonly WANT: number;
+}
+const DW_THREADS = 256;
+
+/**
+ * The block for a shape. Measured on the M4 Max (2026-09-07, twenty dispatches each, the
+ * U-Net's layers at batch 16): two by two channel pairs a thread — thirty-six
+ * accumulators — beat four by two (seventy-two) everywhere, 0.28 against 0.45 ms on the
+ * 16 → 16 layer at 96 × 96; with thirty-two or more output channels a block of
+ * thirty-two of them, on a tile of forty-eight columns so the staging still fits, is
+ * a fifth faster again (0.23 against 0.28 on 32 → 32 at 48 × 48) and a block of
+ * thirty-two on sixteen output channels wastes half its threads (0.45 against 0.28).
+ */
+export function gradWeightDirectConfig(s: ConvNDShape): GradWeightDirectConfig {
+  const wide = s.O >= 32;
+  return { CB: wide ? 32 : 16, IB: 16, TC: 2, TI: 2, WIDTH: wide ? 48 : 96, WANT: 128 };
+}
+
+/**
+ * The widest input the direct weight gradient takes. Measured on the M4 Max (2026-09-07,
+ * best of two runs of twenty dispatches, batch 16) against the GEMM: 16 → 16 at 96 × 96
+ * 0.28 against 0.53–1.1 ms, 32 → 16 at 96 × 96 0.57 against 1.11, 16 → 32 at 48 × 48
+ * 0.12 against 0.20, 64 → 32 at 48 × 48 0.44 against 0.48, 64 → 64 at 24 × 24 a tie at
+ * 0.23, 128 → 64 at 24 × 24 0.46 against 0.41 — past sixty-four input channels the GEMM's
+ * tile has rows enough to reuse what it loads, and wins.
+ */
+const DW_MAX_CIN = 64;
+
+/**
+ * Whether a weight gradient takes the direct kernel: two spatial axes, no groups, no
+ * dilation, stride one, a kernel of at most 3 × 3, at most `DW_MAX_CIN` input channels —
+ * the narrow layers, where the GEMM's tile has sixteen rows and reuses nothing.
+ */
+export function gradWeightDirectFits(s: ConvNDShape): boolean {
+  return s.inDims.length === 2 && s.kernel.length === 2 && (s.groups ?? 1) === 1
+    && (s.dilation ?? [1, 1]).every((d) => d === 1) && s.stride.every((v) => v === 1)
+    && s.kernel.every((v) => v <= 3) && s.C <= DW_MAX_CIN;
+}
+
+function gradWeightDirectTiles(s: ConvNDShape, cfg: GradWeightDirectConfig): { T: number; TW: number; perRow: number } {
+  const [OH = 1, OW = 1] = s.outDims;
+  const TW = Math.min(OW, cfg.WIDTH);
+  const perRow = Math.ceil(OW / TW);
+  return { T: s.N * OH * perRow, TW, perRow };
+}
+
+/** How many position pieces the direct weight gradient is cut into: enough workgroups to
+ *  fill the GPU across the channel blocks, never more than there are tiles. */
+function gradWeightDirectPieces(s: ConvNDShape, cfg: GradWeightDirectConfig): number {
+  const blocks = Math.ceil(s.O / cfg.CB) * Math.ceil(s.C / cfg.IB);
+  return Math.max(1, Math.min(gradWeightDirectTiles(s, cfg).T, Math.ceil(cfg.WANT / blocks)));
+}
+
+/** The slices of a tile's width the workgroup's threads divide among themselves — each
+ *  slice's partial sums are a piece of their own. */
+function gradWeightDirectSlices(cfg: GradWeightDirectConfig): number {
+  return DW_THREADS / ((cfg.CB / cfg.TC) * (cfg.IB / cfg.TI));
+}
+
+/** How many partial sums `sumSplits` adds for the direct weight gradient. */
+export function gradWeightDirectSplits(s: ConvNDShape, cfg: GradWeightDirectConfig = gradWeightDirectConfig(s)): number {
+  return gradWeightDirectPieces(s, cfg) * gradWeightDirectSlices(cfg);
+}
+
+/** The grid: position pieces, output-channel blocks, input-channel blocks. */
+export function gradWeightDirectGrid(s: ConvNDShape, cfg: GradWeightDirectConfig = gradWeightDirectConfig(s)): [number, number, number] {
+  return [gradWeightDirectPieces(s, cfg), Math.ceil(s.O / cfg.CB), Math.ceil(s.C / cfg.IB)];
+}
+
+/**
+ * The weight gradient, direct — **for the narrow layers, where the GEMM's tile reuses
+ * nothing.**
+ *
+ * `dW[o, c, kh, kw] = Σ_{n, oh, ow} G[n, o, oh, ow] · X[n, c, oh + kh − pad, ow + kw − pad]`.
+ * As a GEMM this is sixteen rows (the output channels) by 144 columns over a reduction
+ * of every position — a 16 × 256 tile with 44 % of its columns empty, gathering the
+ * input nine times over. Measured on the M4 Max (2026-09-07): the 16 → 16 layer at
+ * 96 × 96, batch 16, 1.13 ms for 0.68 GFLOP — 0.6 TFLOP/s, 3.6 times slower than the
+ * same layer's forward.
+ *
+ * Here a workgroup owns a block of sixteen (or thirty-two) output by sixteen input
+ * channels and a share of the tiles — one output row of one image each. Per tile it
+ * stages the gradient row and the input rows the kernel reaches (with the halo) in
+ * workgroup memory, once; then each thread walks a slice of the row's columns for two
+ * output channels and two input channels, sliding a window of the input under the
+ * kernel's columns so a step loads two gradient values and six input values for
+ * thirty-six multiplies. Every global load is used 144 times or more. The earlier direct
+ * attempt (see `convDirect2d`) staged nothing and reused a load 3.6 times — that is the
+ * difference. Measured: the 16 → 16 layer 1.13 → 0.28 ms; the block's shape is
+ * `gradWeightDirectConfig`, the boundary against the GEMM `DW_MAX_CIN`, both measured.
+ *
+ * The threads' slices, and the workgroups' pieces, each leave a partial sum;
+ * `sumSplits` adds them in a fixed order, so the value is deterministic.
+ */
+export function convGradWeightDirect2d(s: ConvNDShape, cfg: GradWeightDirectConfig = gradWeightDirectConfig(s)): string {
+  const [IH = 1, IW = 1] = s.inDims;
+  const [OH = 1, OW = 1] = s.outDims;
+  const [KH = 1, KW = 1] = s.kernel;
+  const [PH = 0, PW = 0] = s.pad;
+  const { CB: DW_CB, IB: DW_IB, TC: DW_TC, TI: DW_TI } = cfg;
+  const { T, TW, perRow } = gradWeightDirectTiles(s, cfg);
+  const P = gradWeightDirectPieces(s, cfg);
+  const S = gradWeightDirectSlices(cfg);
+  const XW = TW + KW - 1;
+  const CPS = Math.ceil(TW / S);
+  const TPS = DW_THREADS / S;
+  const kSpace = KH * KW;
+  const cinBlocks = DW_IB / DW_TI;
+  const acc: string[] = [];
+  for (let tc = 0; tc < DW_TC; tc++) for (let ti = 0; ti < DW_TI; ti++) for (let kh = 0; kh < KH; kh++) for (let kw = 0; kw < KW; kw++) {
+    acc.push(`  var a${tc}_${ti}_${kh}_${kw} = 0.0;`);
+  }
+  // The window: for each (input channel, kernel row) the last KW input columns.
+  const win: string[] = [];
+  const prime: string[] = [];
+  const step: string[] = [];
+  for (let ti = 0; ti < DW_TI; ti++) for (let kh = 0; kh < KH; kh++) {
+    const base = `(ti0 + ${ti}u) * ${KH * XW}u + ${kh * XW}u`;
+    for (let k = 0; k < KW; k++) win.push(`  var w${ti}_${kh}_${k} = 0.0;`);
+    // The first column's step shifts before it loads, so the primed values sit one slot up.
+    for (let k = 0; k < KW - 1; k++) prime.push(`    w${ti}_${kh}_${k + 1} = Xs[${base} + cw0 + ${k}u];`);
+    for (let k = 0; k < KW - 1; k++) step.push(`      w${ti}_${kh}_${k} = w${ti}_${kh}_${k + 1};`);
+    step.push(`      w${ti}_${kh}_${KW - 1} = Xs[${base} + col + ${KW - 1}u];`);
+  }
+  const fma: string[] = [];
+  for (let tc = 0; tc < DW_TC; tc++) fma.push(`      let g${tc} = Gs[(tc0 + ${tc}u) * ${TW}u + col];`);
+  for (let tc = 0; tc < DW_TC; tc++) for (let ti = 0; ti < DW_TI; ti++) for (let kh = 0; kh < KH; kh++) for (let kw = 0; kw < KW; kw++) {
+    fma.push(`      a${tc}_${ti}_${kh}_${kw} = fma(g${tc}, w${ti}_${kh}_${kw}, a${tc}_${ti}_${kh}_${kw});`);
+  }
+  const store: string[] = [];
+  for (let tc = 0; tc < DW_TC; tc++) for (let ti = 0; ti < DW_TI; ti++) {
+    store.push(`  { let co = co0 + tc0 + ${tc}u; let ci = ci0 + ti0 + ${ti}u;`);
+    store.push(`    if (co < ${s.O}u && ci < ${s.C}u) {`);
+    store.push(`      let ob = pp * ${s.O * s.C * kSpace}u + (co * ${s.C}u + ci) * ${kSpace}u;`);
+    for (let kh = 0; kh < KH; kh++) for (let kw = 0; kw < KW; kw++) {
+      store.push(`      Out[ob + ${kh * KW + kw}u] = a${tc}_${ti}_${kh}_${kw};`);
+    }
+    store.push("    }\n  }");
+  }
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+var<workgroup> Xs: array<f32, ${DW_IB * KH * XW}>;
+var<workgroup> Gs: array<f32, ${DW_CB * TW}>;
+@compute @workgroup_size(${DW_THREADS})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let piece = wid.x;
+  let co0 = wid.y * ${DW_CB}u;
+  let ci0 = wid.z * ${DW_IB}u;
+  let slice = lid.x / ${TPS}u;
+  let t = lid.x - slice * ${TPS}u;
+  let tc0 = (t / ${cinBlocks}u) * ${DW_TC}u;
+  let ti0 = (t % ${cinBlocks}u) * ${DW_TI}u;
+  let cw0 = slice * ${CPS}u;
+${acc.join("\n")}
+${win.join("\n")}
+  // The tiles this piece takes, in a fixed order: (image, output row, width tile).
+  for (var tile = piece; tile < ${T}u; tile = tile + ${P}u) {
+    let n = tile / ${OH * perRow}u;
+    let rest = tile - n * ${OH * perRow}u;
+    let oh = rest / ${perRow}u;
+    let tw0 = (rest - oh * ${perRow}u) * ${TW}u;
+    // The last tile's arithmetic is finished before its staging is overwritten.
+    workgroupBarrier();
+    for (var i = lid.x; i < ${DW_CB * TW}u; i = i + ${DW_THREADS}u) {
+      let c = i / ${TW}u;
+      let ow = tw0 + (i - c * ${TW}u);
+      Gs[i] = select(0.0, G[((n * ${s.O}u + co0 + c) * ${OH}u + oh) * ${OW}u + ow], co0 + c < ${s.O}u && ow < ${OW}u);
+    }
+    for (var i = lid.x; i < ${DW_IB * KH * XW}u; i = i + ${DW_THREADS}u) {
+      let c = i / ${KH * XW}u;
+      let r = i - c * ${KH * XW}u;
+      let kh = r / ${XW}u;
+      let ih = i32(oh + kh) - ${PH};
+      let iw = i32(tw0 + (r - kh * ${XW}u)) - ${PW};
+      let inside = ci0 + c < ${s.C}u && ih >= 0 && ih < ${IH} && iw >= 0 && iw < ${IW};
+      Xs[i] = select(0.0, X[((n * ${s.C}u + ci0 + c) * ${IH}u + u32(max(ih, 0))) * ${IW}u + u32(max(iw, 0))], inside);
+    }
+    workgroupBarrier();
+${prime.join("\n")}
+    for (var j = 0u; j < ${CPS}u; j = j + 1u) {
+      let col = cw0 + j;
+      if (col >= ${TW}u) { break; }
+${step.join("\n")}
+${fma.join("\n")}
+    }
+  }
+  let pp = piece * ${S}u + slice;
+${store.join("\n")}
+}`;
+}
+
+/**
  * How many pieces the forward's reduction is split into. The same policy as the weight
  * gradient's, for the same reason: **the late layers of a network make a tile grid too
  * small to fill the GPU.** ResNet-18's 512 → 512 convolution on a 4 × 4 plane at batch

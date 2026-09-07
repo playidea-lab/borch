@@ -71,7 +71,7 @@ async def body():
         for _ in range(steps): step()
         dev.flush(); await dev.synchronize()
 run_sync(dev.profile(create_proxy(body)))
-NAMES = {"cnd": "conv direct (fwd, dX)", "cnt": "conv GEMM fwd/dX", "cnwt": "conv GEMM weight grad", "cnxt": "conv GEMM input grad", "ss": "split sums", "ssc": "split sums (conv)",
+NAMES = {"cnd": "conv direct (fwd, dX)", "cnt": "conv GEMM fwd/dX", "cnwt": "conv GEMM weight grad", "cnwd": "conv direct weight grad", "cnxt": "conv GEMM input grad", "ss": "split sums", "ssc": "split sums (conv)",
          "bns": "batchnorm stats", "bnf": "batchnorm finish", "bna": "batchnorm apply", "bnsb": "batchnorm stats bwd", "bnfb": "batchnorm finish bwd", "bnba": "batchnorm apply bwd", "rs": "running stats",
          "u": "unary", "ub": "unary bwd", "b": "binary", "bb": "binary bwd", "rb": "broadcast fold", "rbw": "broadcast fold (wide)", "rd": "reduce dim", "rsum": "reduce sum", "pn": "pool", "pnb": "pool bwd",
          "catc": "cat copy", "gt": "gather (narrow)", "adam": "adam step", "sgd": "sgd step", "bcel": "bce loss", "bcelb": "bce loss bwd", "cturn": "turn weights", "mm": "matmul", "mmsg": "matmul (subgroup)", "pad": "pad"}

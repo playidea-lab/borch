@@ -203,6 +203,10 @@ import {
   convGradWeightSplit, convForwardSplit, sumSplitsConv, type ConvEpilogue,
   convNDForwardTiled, depthwiseForward, isDepthwise,
   convNDGradInputTiled,
+  convGradWeightDirect2d,
+  gradWeightDirectFits,
+  gradWeightDirectGrid,
+  gradWeightDirectSplits,
   convNDGradWeightTiled,
   convNDKey,
   type ConvNDShape,
@@ -11006,13 +11010,23 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         if (weight.requiresGrad) {
           // A split reduction leaves one partial sum per piece, and they have to be
           // added once more.
-          const splits = convGradWeightSplit(s);
+          const direct = gradWeightDirectFits(s);
+          const splits = direct ? gradWeightDirectSplits(s) : convGradWeightSplit(s);
           const parted = dev().alloc(weight.size * splits);
-          dev().run(
-            dev().pipeline(`cnwt:${key}`, () => convNDGradWeightTiled(s)),
-            [this.buffer, g.buffer, parted],
-            convGradWeightGrid(s),
-          );
+          if (direct) {
+            // The narrow layers: staged rows, the channel pairs' taps in registers.
+            dev().run(
+              dev().pipeline(`cnwd:${key}`, () => convGradWeightDirect2d(s)),
+              [this.buffer, g.buffer, parted],
+              gradWeightDirectGrid(s),
+            );
+          } else {
+            dev().run(
+              dev().pipeline(`cnwt:${key}`, () => convNDGradWeightTiled(s)),
+              [this.buffer, g.buffer, parted],
+              convGradWeightGrid(s),
+            );
+          }
           let gw = parted;
           if (splits > 1) {
             gw = dev().alloc(weight.size);
