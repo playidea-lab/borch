@@ -1,4 +1,4 @@
-"""The fourteen browser checks nothing else runs, run once a night in a worktree.
+"""The thirty-one browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -73,6 +73,10 @@ CHECKS = [
     ("bundle",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--bundle"]),
     # torch's training runs — a head, a CNN, a U-Net — step by step on the wheel: the loop, not the op.
     ("trajectory", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/trajectory_py.py", "--build"]),
+    # The compiler on this GPU: a step captured and replayed bit for bit (U-Net, GPT with
+    # AdamW and StepLR under check=True), and the fused replay within a rounding.
+    ("capture:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/capture_py.py", "--build"]),
+    ("fuse:py",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/fuse_py.py", "--build"]),
     ("example",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/readme.py"]),
     # `--py`: every Python twin on the lesson pages is pressed too (Pyodide from vendor/).
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py", "--py"]),
