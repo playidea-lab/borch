@@ -47,10 +47,11 @@ def main(argv):
         return 2
     batch = next((a.split("=", 1)[1] for a in argv if a.startswith("--batch=")), "16")
     size = next((a.split("=", 1)[1] for a in argv if a.startswith("--size=")), "96")
+    model = next((a.split("=", 1)[1] for a in argv if a.startswith("--model=")), "unet")
     if refuse_if_screen_off("the step profile"):
         return 1
     port, shutdown = serve(ROOT)
-    url = f"http://127.0.0.1:{port}/tests/browser/profile_py.html?wheel=/{wheel}&batch={batch}&size={size}"
+    url = f"http://127.0.0.1:{port}/tests/browser/profile_py.html?wheel=/{wheel}&batch={batch}&size={size}&model={model}"
     profile = tempfile.mkdtemp(prefix="borch-profile-")
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     try:

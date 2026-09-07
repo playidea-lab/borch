@@ -47,17 +47,60 @@ S = module("seg_eval", "/tests/seg_eval.py")
 import time
 from pyodide.ffi import create_proxy
 batch = ${parseInt(q.get("batch") || "16")}; side = ${parseInt(q.get("size") || "96")}; steps = ${parseInt(q.get("steps") || "5")}
+MODEL = ${JSON.stringify(q.get("model") || "unet")}
 # Synthetic data: the profile is of the kernels, not of a dataset, and it has to run
 # where no dataset is (the nightly's worktree).
 rng = np.random.default_rng(0)
-x = rng.random((batch, 3, side, side), dtype=np.float32); m = (rng.random((batch, 1, side, side)) > 0.7).astype(np.float32)
-crit = torch.nn.BCEWithLogitsLoss(); model = S.build_unet(torch); model.train(); opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-xb, mb = torch.tensor(x), torch.tensor(m)
+nn = torch.nn
+if MODEL == "unet":
+    x = rng.random((batch, 3, side, side), dtype=np.float32); m = (rng.random((batch, 1, side, side)) > 0.7).astype(np.float32)
+    crit = nn.BCEWithLogitsLoss(); model = S.build_unet(torch); model.train(); opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    xb, mb = torch.tensor(x), torch.tensor(m)
+    label = f"unet {side}px batch {batch}"
+elif MODEL == "resnet":
+    # ResNet-18 for CIFAR (tests/resnet.py), 32 × 32, the batch as asked.
+    R = module("resnet_recipe", "/tests/resnet.py")
+    model, _images, _labels = R._build(torch); model.train()
+    x = rng.random((batch, 3, 32, 32), dtype=np.float32); m = rng.integers(0, 10, batch).astype(np.int64)
+    crit = nn.CrossEntropyLoss(); opt = torch.optim.SGD(model.parameters(), lr=0.05, momentum=0.9, weight_decay=1e-4)
+    xb, mb = torch.tensor(x), torch.tensor(m)
+    label = f"resnet18 cifar batch {batch}"
+elif MODEL == "gpt":
+    # A small decoder: two blocks of LayerNorm → attention → LayerNorm → GELU MLP, a
+    # tied-off LM head — the kernels a transformer spends its time in.
+    T, D, HEADS, VOCAB = ${parseInt(q.get("seq") || "128")}, ${parseInt(q.get("dim") || "256")}, 4, 1024
+    class Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.ln1 = nn.LayerNorm(D); self.attn = nn.MultiheadAttention(D, HEADS, batch_first=True)
+            self.ln2 = nn.LayerNorm(D); self.fc1 = nn.Linear(D, 4 * D); self.fc2 = nn.Linear(4 * D, D)
+        def forward(self, h, mask):
+            a = self.ln1(h); h = h + self.attn(a, a, a, attn_mask=mask, need_weights=False)[0]
+            return h + self.fc2(nn.functional.gelu(self.fc1(self.ln2(h))))
+    class GPT(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = nn.Embedding(VOCAB, D); self.pos = nn.Embedding(T, D)
+            self.blocks = nn.ModuleList([Block(), Block()]); self.ln = nn.LayerNorm(D); self.head = nn.Linear(D, VOCAB)
+        def forward(self, idx, mask):
+            h = self.emb(idx) + self.pos(torch.arange(T))
+            for b in self.blocks: h = b(h, mask)
+            return self.head(self.ln(h))
+    model = GPT(); model.train(); crit = nn.CrossEntropyLoss(); opt = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    tokens = rng.integers(0, VOCAB, (batch, T + 1)).astype(np.int64)
+    xb, mb = torch.tensor(tokens[:, :-1]), torch.tensor(tokens[:, 1:].reshape(-1))
+    causal = torch.tensor(np.triu(np.full((T, T), -np.inf, np.float32), 1))
+    label = f"gpt 2 blocks seq {T} dim {D} batch {batch}"
+else:
+    raise ValueError(f"model? {MODEL}")
+first = next(iter(model.parameters()))
 def step():
-    opt.zero_grad(); loss = crit(model(xb), mb); loss.backward(); opt.step()
+    opt.zero_grad()
+    out = model(xb, causal) if MODEL == "gpt" else model(xb)
+    loss = crit(out.reshape(-1, out.shape[-1]) if MODEL == "gpt" else out, mb); loss.backward(); opt.step()
 def full():
     with torch.scope():
-        step(); float(model.out.weight.flatten()[0].item())
+        step(); float(first.flatten()[0].item())
 for _ in range(5): full()
 trials = []
 for _ in range(3):
@@ -79,7 +122,7 @@ per = {}
 for k, ns in dev.nsByKind.entries():
     kind = str(k).split(":")[0]; per[kind] = per.get(kind, 0) + float(ns) / 1e6 / steps
 total = sum(per.values())
-lines = [f"unet {side}px batch {batch}: step {min(trials):.1f} ms wall (trials {' / '.join(f'{t:.1f}' for t in trials)}) · {per_step} dispatches · GPU {total:.1f} ms/step · dropped {int(dev.profileDropped)}"]
+lines = [f"{label}: step {min(trials):.1f} ms wall (trials {' / '.join(f'{t:.1f}' for t in trials)}) · {per_step} dispatches · GPU {total:.1f} ms/step · dropped {int(dev.profileDropped)}"]
 for kind, ms in sorted(per.items(), key=lambda kv: -kv[1]):
     if ms / total < 0.005: break
     lines.append(f"  {ms:5.2f} ms  {ms / total:4.0%}  {NAMES.get(kind, kind)} [{kind}]")
