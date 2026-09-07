@@ -88,7 +88,7 @@
 # ## What this file does **not** run — counted, because it used to say it did
 #
 # The line above read "the commands below are all of it". They are all of the *golden
-# comparison*. There are **thirty-six entry points that need a browser** and this file
+# comparison*. There are **thirty-seven entry points that need a browser** and this file
 # names four:
 #
 #     here          run.py --lib borch · run.py --lib borch_webgpu ·
@@ -98,7 +98,7 @@
 #                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding ·
 #                   learner:site · wheel:py · lab:py · marimo:py · folder:py · hub:py · offline:py · trajectory:py ·
 #                   cpu:ts · cpu:py · review:py · coi:site · seg:py · capture:py · fuse:py · refine:py   (twenty-six more correctness checks)
-#                   cost:ts · bench:ts · compare:ts · envelope:py · envelope2:py · profile:py  (measurements, not checks)
+#                   cost:ts · bench:ts · compare:ts · envelope:py · envelope2:py · profile:py · bench:kernels  (measurements, not checks)
 #
 #     `cpu:ts` arrived 2026-09-05: the CPU device against the WebGPU device on two hub
 #     checkpoints. It needs a browser for the GPU half only; the CPU half would run in node.

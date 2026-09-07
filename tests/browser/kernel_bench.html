@@ -1,0 +1,113 @@
+<!doctype html>
+<!--
+  The kernel bench: one kernel against another on one shape, from `borch-ts/dist`
+  directly — no wheel, no bundle, a rebuild of the TS emit is all a new variant needs.
+
+      npm run build:ts
+      npm run bench:kernels -- [--bench=dw,fwd,bn,pad] [--shapes=16-16@96,32-32@48x8]
+
+  Each bench times its kernels round-robin, five rounds of twenty dispatches under the
+  device's timestamp profiler, and keeps the minimum; a kernel's answer is compared with
+  the first kernel's (a relative error above 1e-4 is reported as WRONG). The signature
+  is set right before every dispatch (`dev.pipeline(key, …)` sets it; a dispatch takes
+  the last one set), which is what makes the per-kernel times attributable.
+
+  **What the numbers mean.** A minimum over rounds is the GPU's best clock state; the
+  same kernel inside a training step has measured about twice this (2026-09-07 — not
+  cache, not data, the clock). Compare kernels here; trust the step's wall clock for
+  the step.
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>borch.ts — kernel bench</title>
+<style>body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 70rem; } pre { white-space: pre-wrap; }</style>
+</head>
+<body><h1>kernel bench</h1><pre id="out">measuring…</pre>
+<script type="module">
+import { init, device, Tensor } from "/borch-ts/dist/src/tensor.js";
+import { Device } from "/borch-ts/dist/src/device.js";
+import * as K from "/borch-ts/dist/src/kernels.js";
+const out = document.getElementById("out");
+const q = new URLSearchParams(location.search);
+const lines = [];
+const show = () => { out.textContent = lines.join("\n"); };
+const fill = (n, seed) => { const a = new Float32Array(n); let st = seed; for (let i = 0; i < n; i++) { st = (Math.imul(st, 1664525) + 1013904223) >>> 0; a[i] = (st / 4294967296) - 0.5; } return a; };
+const REPS = parseInt(q.get("reps") || "20"), ROUNDS = parseInt(q.get("rounds") || "5");
+const parseShape = (text) => { const m = /^(\d+)-(\d+)@(\d+)(?:x(\d+))?$/.exec(text); if (!m) throw new Error(`shape? ${text} (want cin-cout@side or cin-cout@sidexbatch)`); return { name: text, C: +m[1], O: +m[2], H: +m[3], N: m[4] ? +m[4] : 16 }; };
+const conv = (sh) => ({ N: sh.N, C: sh.C, O: sh.O, inDims: [sh.H, sh.H], kernel: [3, 3], stride: [1, 1], pad: [1, 1], outDims: [sh.H, sh.H] });
+let dev;
+const upload = (n, seed) => { const b = dev.alloc(n); dev.writeWords(b, new Uint32Array(fill(n, seed).buffer)); return b; };
+// A run: { name, key, make, run, outb } — `run` issues the dispatches, `key`/`make` name the one timed.
+async function race(runs, size) {
+  let ref = null; const errs = [];
+  for (const r of runs) { r.run(); dev.flush(); await dev.synchronize(); const got = await new Tensor(r.outb, [size]).toArray(); if (!ref) ref = got; let err = 0, scale = 0; for (let i = 0; i < size; i++) { err = Math.max(err, Math.abs(got[i] - ref[i])); scale = Math.max(scale, Math.abs(ref[i])); } errs.push(err / scale); r.best = Infinity; r.extra = 0; }
+  for (let round = 0; round < ROUNDS; round++) for (const r of runs) {
+    await dev.profile(async () => { for (let i = 0; i < REPS; i++) { dev.pipeline(r.key, r.make); r.run(); } dev.flush(); await dev.synchronize(); });
+    const main = (dev.nsByKind.get(r.key) ?? 0) / 1e6 / REPS;
+    const extra = (r.extraKeys ?? []).reduce((a, k) => a + (dev.nsByKind.get(k) ?? 0), 0) / 1e6 / REPS;
+    if (main + extra < r.best + r.extra) { r.best = main; r.extra = extra; }
+  }
+  return runs.map((r, i) => `${r.name} ${r.best.toFixed(3)}${r.extra ? "+" + r.extra.toFixed(3) : ""}${errs[i] > 1e-4 ? " WRONG" : ""}`).join(" · ");
+}
+const BENCHES = {
+  // The weight gradient: direct against subgroup matrices, their summing counted.
+  async dw(sh) {
+    const s = conv(sh); const n = sh.N * sh.C * sh.H * sh.H, m = sh.N * sh.O * sh.H * sh.H, wsize = sh.O * sh.C * 9;
+    const X = upload(n, 1), G = upload(m, 2);
+    const dsplits = K.gradWeightDirectSplits(s); const dparts = dev.alloc(wsize * dsplits); const dout = dev.alloc(wsize);
+    const runs = [{ name: "direct", key: `cnwd:${sh.name}`, make: () => K.convGradWeightDirect2d(s), extraKeys: [`ss:${sh.name}`], outb: dout,
+      run: () => { dev.run(dev.pipeline(`cnwd:${sh.name}`, () => K.convGradWeightDirect2d(s)), [X, G, dparts], K.gradWeightDirectGrid(s)); dev.run1d(dev.pipeline(`ss:${sh.name}`, () => K.sumSplits(wsize, dsplits)), [dparts, dout], wsize); } }];
+    if (Device.subgroupMatrix && K.sgwGlobalFits(s)) {
+      const { Op, Cp } = K.sgwPadded(s); const pieces = K.sgwGlobalPieces(s); const pn = sh.N * Cp * (sh.H + 2) * (sh.H + 2);
+      const Xp = dev.alloc(pn), parts = dev.alloc(pieces * 9 * Op * Cp), sout = dev.alloc(wsize);
+      runs.push({ name: `subgroup (pieces ${pieces}, pad counted)`, key: `cnwg:${sh.name}`, make: () => K.convGradWeightSubgroupGlobal(s), extraKeys: [`pdw:${sh.name}`, `sst:${sh.name}`], outb: sout,
+        run: () => { dev.run1d(dev.pipeline(`pdw:${sh.name}`, () => K.padForGradWeight(s)), [X, Xp], Math.ceil(pn / 4)); dev.run(dev.pipeline(`cnwg:${sh.name}`, () => K.convGradWeightSubgroupGlobal(s)), [Xp, G, parts], K.sgwGlobalGrid(s)); dev.run1d(dev.pipeline(`sst:${sh.name}`, () => K.sumSplitsTapped(s)), [parts, sout], wsize); } });
+    }
+    return race(runs, wsize);
+  },
+  // The forward: direct against subgroup matrices, the padding and the weight layout counted.
+  async fwd(sh) {
+    const s = conv(sh); const n = sh.N * sh.C * sh.H * sh.H, m = sh.N * sh.O * sh.H * sh.H, wsize = sh.O * sh.C * 9;
+    const X = upload(n, 1), W = upload(wsize, 2), B = upload(sh.O, 3); const Out = dev.alloc(m);
+    const runs = [{ name: "direct", key: `cnd:${sh.name}`, make: () => K.convDirect2d(s, true), outb: Out, run: () => dev.run(dev.pipeline(`cnd:${sh.name}`, () => K.convDirect2d(s, true)), [X, W, B, Out], K.directGrid(s)) }];
+    if (Device.subgroupMatrix && K.sgfFits(s)) {
+      const { Cp } = K.sgwPadded(s); const pn = sh.N * Cp * (sh.H + 2) * (sh.H + 2); const Mp = Math.ceil(sh.O / 8) * 8;
+      const Xp = dev.alloc(pn), Wt = dev.alloc(9 * Mp * Cp + Mp * 8), One = dev.alloc(64), Out2 = dev.alloc(m);
+      dev.run1d(dev.pipeline("ones", () => K.onesBlock()), [One], 64);
+      runs.push({ name: "subgroup (pad + layout counted)", key: `cnf:${sh.name}`, make: () => K.convForwardSubgroup(s, true), extraKeys: [`pdw:${sh.name}`, `tmw:${sh.name}`], outb: Out2,
+        run: () => { dev.run1d(dev.pipeline(`pdw:${sh.name}`, () => K.padForGradWeight(s)), [X, Xp], Math.ceil(pn / 4)); dev.run1d(dev.pipeline(`tmw:${sh.name}`, () => K.tapMajorWeights(sh.O, sh.C, 9, false, true)), [W, B, Wt], 9 * Mp * Cp + Mp * 8); dev.run(dev.pipeline(`cnf:${sh.name}`, () => K.convForwardSubgroup(s, true)), [Xp, Wt, One, Out2], K.sgfGrid(s)); } });
+    }
+    return race(runs, m);
+  },
+  // BatchNorm's apply with x̂ and ReLU — the pass as it runs.
+  async bn(sh) {
+    const n = sh.N * sh.C * sh.H * sh.H, S = sh.H * sh.H;
+    const X = upload(n, 1), Mean = upload(sh.C, 2), Var = dev.alloc(sh.C), Wt = upload(sh.C, 4), B = upload(sh.C, 5), Out = dev.alloc(n), Xh = dev.alloc(n);
+    dev.writeWords(Var, new Uint32Array(new Float32Array(sh.C).fill(1).buffer));
+    const lanes = K.lanesOf(S);
+    return race([{ name: `apply (${lanes} a thread)`, key: `bna:${sh.name}`, make: () => K.batchNormApply(sh.N, sh.C, S, 1e-5, true, true), outb: Out, run: () => dev.run1d(dev.pipeline(`bna:${sh.name}`, () => K.batchNormApply(sh.N, sh.C, S, 1e-5, true, true)), [X, Mean, Var, Wt, B, Out, Xh], n / lanes) }], n);
+  },
+  // The padded copy against a plain pass over the same input.
+  async pad(sh) {
+    const s = conv(sh); const n = sh.N * sh.C * sh.H * sh.H; const { Cp } = K.sgwPadded(s); const pn = sh.N * Cp * (sh.H + 2) * (sh.H + 2);
+    const X = upload(n, 1), A = dev.alloc(pn), Y = dev.alloc(n);
+    const runs = [
+      { name: `pad (${(pn * 4 / 1e6).toFixed(1)} MB out)`, key: `pdw:${sh.name}`, make: () => K.padForGradWeight(s), outb: A, run: () => dev.run1d(dev.pipeline(`pdw:${sh.name}`, () => K.padForGradWeight(s)), [X, A], Math.ceil(pn / 4)) },
+      { name: "relu over the input", key: `u:relu:${sh.name}`, make: () => K.unaryForward("relu", n), outb: Y, run: () => dev.run1d(dev.pipeline(`u:relu:${sh.name}`, () => K.unaryForward("relu", n)), [X, Y], n) },
+    ];
+    const text = await race(runs, 1);   // different outputs: no comparison
+    return text.replace(/ WRONG/g, "");
+  },
+};
+try {
+  await init();
+  dev = device();
+  const benches = (q.get("bench") || "dw,fwd").split(",");
+  const shapes = (q.get("shapes") || "16-16@96,32-16@96,32-32@48,64-64@24").split(",").map(parseShape);
+  lines.push(`adapter ${Device.adapterInfo} · subgroup matrices ${Device.subgroupMatrix} · ${ROUNDS} rounds of ${REPS}, the minimum`); show();
+  for (const b of benches) {
+    if (!BENCHES[b]) throw new Error(`no bench named ${b} (have ${Object.keys(BENCHES).join(", ")})`);
+    for (const sh of shapes) { lines.push(`${b} ${sh.name}: ${await BENCHES[b](sh)} · faults ${dev.faults.count}`); show(); }
+  }
+  window.__bench = { text: lines.join("\n"), adapter: String(Device.adapterInfo), ok: dev.faults.count === 0 && !lines.some((l) => l.includes("WRONG")) };
+} catch (e) { window.__bench = { text: lines.join("\n"), error: String(e && e.stack || e), ok: false }; out.textContent = lines.join("\n") + "\nerror: " + (e && e.stack || e); }
+</script></body></html>

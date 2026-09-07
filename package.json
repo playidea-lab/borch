@@ -77,6 +77,7 @@
     "build:bundle": "python3 site/build_bundle.py",
     "cost:ts": "uv run --with playwright python borch-ts/test/cost.py",
     "bench:ts": "uv run --with playwright python borch-ts/test/bench.py",
+    "bench:kernels": "uv run --with playwright python tests/browser/kernel_bench.py",
     "serialize:ts": "uv run --with numpy --with playwright python borch-ts/test/serialize.py",
     "data:ts": "uv run --with playwright python borch-ts/test/data.py",
     "lessons:ts": "uv run --with playwright python borch-ts/test/lessons.py",
