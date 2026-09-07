@@ -32,6 +32,16 @@
  * difference, the `x²` under a variance, a gradient on its way to a bias never touch
  * memory.
  *
+ * **Not an epilogue of the matmul.** Fusing the tree that consumes a product into the
+ * product's kernel — the lanes walking the tile they stored, the tile still in cache —
+ * was written and measured (2026-09-07): the hand-written network's fused replay went
+ * from 76 to 62 dispatches and from 0.72 to 1.69 ms, the GPT step not at all. The
+ * subgroup matmul is one subgroup a workgroup, so the elementwise work fell on thirty-two
+ * lanes per tile, sixty-four cells each in series, where an elementwise kernel gives
+ * every cell a thread; the launch it saved cost less than the parallelism it lost.
+ * Removed rather than kept behind a switch. A product's consumers stay a kernel of
+ * their own, fused among themselves as above.
+ *
  * Measured on the M4 Max (2026-09-07): the U-Net step, already fused by hand where it
  * counts (BatchNorm with its ReLU, the loss with its sigmoid), has ten elementwise
  * dispatches of 223 and gives this pass three; a hand-written GELU network gives it
