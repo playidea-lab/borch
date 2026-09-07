@@ -630,6 +630,17 @@ first dispatched, so the first replay after it pays that — ten milliseconds on
 nothing visible on the small network (measured). What no recording can carry: a step that
 branches in Python on the step's values.
 
+**One kind hides a few slow shapes among many fast ones.** The profile of a ViT-tiny
+step (`profile:py --model=vit`, batch 8) put 48% of its GPU time in the subgroup matmul,
+147 of them, and the kernel bench said the same products ran at torch's rate. The
+products listed by their full key told it differently: a linear's *weight gradient* —
+192 × 1576 × 768, the tokens on K, 72 tiles of 32 × 64 — took 272 µs, four times its own
+forward, because the split of the reduction only kicked in below 64 tiles and 72
+workgroups of one subgroup each are a sliver of the GPU. Swept on the bench with the
+slab summing counted, the four dW shapes sum to 0.587 ms at 64 and 0.216 at 512; the
+target is 512 now. The fused ViT step went 34.4 → 27.9 ms, the GPT profile 16.7 → 13.9.
+torch on MPS runs the same ViT step in 16.7 ms.
+
 **A shape operation's backward is a fold, not a walk.** Every shape operation is one
 gather kernel over a plan of axis rules, and its backward inverts the plan when it can —
 slices, transposes, `select`, `permute`. Where it cannot (`expand` reads one input from
