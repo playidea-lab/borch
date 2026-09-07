@@ -630,6 +630,17 @@ first dispatched, so the first replay after it pays that — ten milliseconds on
 nothing visible on the small network (measured). What no recording can carry: a step that
 branches in Python on the step's values.
 
+**A shape operation's backward is a fold, not a walk.** Every shape operation is one
+gather kernel over a plan of axis rules, and its backward inverts the plan when it can —
+slices, transposes, `select`, `permute`. Where it cannot (`expand` reads one input from
+many outputs, `repeat` wraps, `flip` runs backwards) the general kernel walked the whole
+output for every input cell, input × output, deterministic and fine at tens of elements.
+Inside a training step it is not fine: at 1024×1024 (`fold_probe.py`, M-series) the walk
+was 163 ms for `expand`, 391 ms for `repeat`, 3.2 s for `flip`. Each of the three now
+passes its backward as a fold on kernels that already exist — a reduction, a reduction, another
+flip — and the same three cost 1.25, 0.51 and 0.55 ms. `unfold`, `roll`, `rot90` and
+`repeat_interleave` still walk.
+
 **The contract, on your own step.** `torch.compiled(step, check=True)` holds each
 recording to the eager step: after recording, it reads the step's live-ins — the inputs
 and the state: parameters, moments, counters, running statistics — replays, reads them

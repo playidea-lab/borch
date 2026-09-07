@@ -91,6 +91,15 @@ elif MODEL == "gpt":
     xb, mb = torch.tensor(tokens[:, :-1]), torch.tensor(tokens[:, 1:].reshape(-1))
     causal = torch.tensor(np.triu(np.full((T, T), -np.inf, np.float32), 1))
     label = f"gpt 2 blocks seq {T} dim {D} batch {batch}"
+elif MODEL == "vit":
+    # The hub's ViT-tiny (bimm, 5.7M parameters), fine-tuned at 224 px on the batch as
+    # asked — the transformer the hub actually ships, not a toy.
+    from borch_webgpu import hub
+    model = hub.load("imagenet-vit-tiny-patch16-224", verify=False); model.train()
+    x = rng.random((batch, 3, 224, 224), dtype=np.float32); m = rng.integers(0, 1000, batch).astype(np.int64)
+    crit = nn.CrossEntropyLoss(); opt = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    xb, mb = torch.tensor(x), torch.tensor(m)
+    label = f"vit-tiny 224px batch {batch}"
 else:
     raise ValueError(f"model? {MODEL}")
 first = next(iter(model.parameters()))
@@ -118,14 +127,21 @@ NAMES = {"cnd": "conv direct (fwd, dX)", "cnt": "conv GEMM fwd/dX", "cnwt": "con
          "bns": "batchnorm stats", "bnf": "batchnorm finish", "bna": "batchnorm apply", "bnsb": "batchnorm stats bwd", "bnfb": "batchnorm finish bwd", "bnba": "batchnorm apply bwd", "rs": "running stats",
          "u": "unary", "ub": "unary bwd", "b": "binary", "bb": "binary bwd", "rb": "broadcast fold", "rbw": "broadcast fold (wide)", "rd": "reduce dim", "rsum": "reduce sum", "pn": "pool", "pnbt": "pool bwd (tiled max)", "pnb": "pool bwd",
          "catc": "cat copy", "gt": "gather (narrow)", "adam": "adam step", "sgd": "sgd step", "bcel": "bce loss", "bcelb": "bce loss bwd", "cturn": "turn weights", "mm": "matmul", "mmsg": "matmul (subgroup)", "pad": "pad"}
-per = {}
+# The query set holds a fixed number of timestamps; past it dispatches run untimed and
+# are counted in `profileDropped`. Dividing by `steps` would then show a fifth of a
+# ViT step as the step — so the divisor is the number of steps actually timed.
+dropped = int(dev.profileDropped)
+timed_steps = (per_step * steps - dropped) / per_step
+per, count = {}, {}
 for k, ns in dev.nsByKind.entries():
-    kind = str(k).split(":")[0]; per[kind] = per.get(kind, 0) + float(ns) / 1e6 / steps
+    kind = str(k).split(":")[0]; per[kind] = per.get(kind, 0) + float(ns) / 1e6 / timed_steps
+for k, c in dev.countByKind.entries():
+    kind = str(k).split(":")[0]; count[kind] = count.get(kind, 0) + int(c) / timed_steps
 total = sum(per.values())
-lines = [f"{label}: step {min(trials):.1f} ms wall (trials {' / '.join(f'{t:.1f}' for t in trials)}) · {per_step} dispatches · GPU {total:.1f} ms/step · dropped {int(dev.profileDropped)}"]
+lines = [f"{label}: step {min(trials):.1f} ms wall (trials {' / '.join(f'{t:.1f}' for t in trials)}) · {per_step} dispatches · GPU {total:.1f} ms/step over {timed_steps:.2f} timed steps (dropped {dropped})"]
 for kind, ms in sorted(per.items(), key=lambda kv: -kv[1]):
     if ms / total < 0.005: break
-    lines.append(f"  {ms:5.2f} ms  {ms / total:4.0%}  {NAMES.get(kind, kind)} [{kind}]")
+    lines.append(f"  {ms:5.2f} ms  {ms / total:4.0%}  {count.get(kind, 0):5.0f}×  {NAMES.get(kind, kind)} [{kind}]")
 adapter = str(js.borch.Device.adapterInfo)
 chr(10).join(lines) + chr(10) + f"faults {int(dev.faults.count)} · adapter {adapter}"
 \`);

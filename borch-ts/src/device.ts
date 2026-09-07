@@ -1257,6 +1257,8 @@ export class Device {
    * GPU time in nanoseconds accumulated per kernel kind, when enabled.
    */
   readonly nsByKind = new Map<string, number>();
+  /** Dispatches counted per kernel kind, when enabled — the pair to `nsByKind`. */
+  readonly countByKind = new Map<string, number>();
   private querySet: GPUQuerySet | null = null;
   private queryUsed = 0;
   private queryKinds: string[] = [];
@@ -1297,6 +1299,7 @@ export class Device {
   async profile<T>(body: () => Promise<T>): Promise<T> {
     this.profiling = true;
     this.nsByKind.clear();
+    this.countByKind.clear();
     this.queryUsed = 0;
     this.queryKinds = [];
     this.profileDropped = 0;
@@ -1382,6 +1385,7 @@ export class Device {
       const end = times[i * 2 + 1];
       if (start === undefined || end === undefined || end <= start) continue;
       this.nsByKind.set(kind, (this.nsByKind.get(kind) ?? 0) + Number(end - start));
+      this.countByKind.set(kind, (this.countByKind.get(kind) ?? 0) + 1);
     }
   }
 

@@ -1,0 +1,97 @@
+<!doctype html>
+<!--
+  The fold probe: the backward of `expand`, `repeat` and `flip` — a fold on existing
+  kernels — against the walking kernel it replaced, from `borch-ts/dist` directly.
+
+      npm run build:ts
+      uv run --with playwright python tests/browser/fold_probe.py [--side=1024]
+
+  Each case builds the gradient the way autograd does (`.sum().backward()` through the
+  operation), synchronizes, and reports wall time; the walking kernel is dispatched by
+  hand on the same rules. Both answers are compared with the closed form.
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>borch.ts — fold probe</title>
+<style>body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 70rem; } pre { white-space: pre-wrap; }</style>
+</head>
+<body><h1>fold probe</h1><pre id="out">measuring…</pre>
+<script type="module">
+import { init, device, Tensor } from "/borch-ts/dist/src/tensor.js";
+import { Device } from "/borch-ts/dist/src/device.js";
+import * as K from "/borch-ts/dist/src/kernels.js";
+const out = document.getElementById("out");
+const q = new URLSearchParams(location.search);
+const SIDE = parseInt(q.get("side") || "1024");
+const lines = [];
+let ok = true;
+const same = (got, want, name) => {
+  let worst = 0;
+  for (let i = 0; i < got.length; i++) worst = Math.max(worst, Math.abs(got[i] - want[i]) / Math.max(1, Math.abs(want[i])));
+  if (worst > 1e-5) { ok = false; lines.push(`  WRONG ${name}: rel ${worst.toExponential(1)}`); }
+  return worst;
+};
+try {
+  await init();
+  const dev = device();
+  // A case: the operation on a leaf, summed, backward — the fold path — timed by the wall.
+  const timeFold = async (make, leafShape) => {
+    const x = Tensor.randn(leafShape); x.requiresGrad = true;
+    make(x).sum().backward(); await dev.synchronize();          // warm: pipelines compiled
+    const t0 = performance.now();
+    const reps = 5;
+    for (let r = 0; r < reps; r++) { x.grad = null; make(x).sum().backward(); }
+    await dev.synchronize();
+    const ms = (performance.now() - t0) / reps;
+    return { ms, grad: await x.grad.toArray() };
+  };
+  // The walking kernel by hand: the same rules, the gradient all ones.
+  const timeWalk = async (rules, inSize) => {
+    const outN = rules.reduce((a, r) => a * r.size, 1);
+    const g = dev.alloc(outN); dev.writeWords(g, new Uint32Array(new Float32Array(outN).fill(1).buffer));
+    const gi = dev.alloc(inSize);
+    const run = () => dev.run1d(dev.pipeline(`probe-walk:${K.ruleKey(rules)}|${inSize}`, () => K.gatherBackward(rules, inSize)), [g, gi, dev.word(0)], inSize);
+    run(); await dev.synchronize();
+    const t0 = performance.now();
+    run(); await dev.synchronize();
+    const ms = performance.now() - t0;
+    const got = await dev.read(gi, inSize);
+    return { ms, grad: got };
+  };
+  const N = SIDE;
+  // expand: a row [1, N] stretched to [N, N] — the gradient is N in every cell.
+  {
+    const rules = [{ size: N, stride: 0, kind: "lin", wrap: N }, { size: N, stride: 1, kind: "lin", wrap: N }];
+    const want = new Float32Array(N).fill(N);
+    const fold = await timeFold((x) => x.expand(N, N), [1, N]);
+    const walk = await timeWalk(rules, N);
+    same(fold.grad, want, "expand fold"); same(walk.grad, want, "expand walk");
+    lines.push(`expand [1,${N}] → [${N},${N}]: fold ${fold.ms.toFixed(2)} ms · walk ${walk.ms.toFixed(1)} ms`);
+  }
+  // repeat: [N/4, N/4] repeated 4×4 — the gradient is 16 everywhere.
+  {
+    const s = N / 4;
+    const rules = [{ size: N, stride: s, kind: "mod", wrap: s }, { size: N, stride: 1, kind: "mod", wrap: s }];
+    const want = new Float32Array(s * s).fill(16);
+    const fold = await timeFold((x) => x.repeat(4, 4), [s, s]);
+    const walk = await timeWalk(rules, s * s);
+    same(fold.grad, want, "repeat fold"); same(walk.grad, want, "repeat walk");
+    lines.push(`repeat [${s},${s}] ×4×4: fold ${fold.ms.toFixed(2)} ms · walk ${walk.ms.toFixed(1)} ms`);
+  }
+  // flip: [N, N] along the last axis, weighted by a ramp so the order shows.
+  {
+    const rules = [{ size: N, stride: N, kind: "lin", wrap: N }, { size: N, stride: 1, kind: "rev", wrap: N }];
+    const want = new Float32Array(N * N).fill(1);
+    const fold = await timeFold((x) => x.flip(1), [N, N]);
+    const walk = await timeWalk(rules, N * N);
+    same(fold.grad, want, "flip fold"); same(walk.grad, want, "flip walk");
+    lines.push(`flip [${N},${N}] axis 1: fold ${fold.ms.toFixed(2)} ms · walk ${walk.ms.toFixed(1)} ms`);
+  }
+  lines.push(`faults ${dev.faults.count} · adapter ${Device.adapterInfo}`);
+  window.__bench = { text: lines.join("\n"), ok: ok && dev.faults.count === 0, adapter: String(Device.adapterInfo) };
+} catch (err) {
+  lines.push("error: " + (err && err.stack || err));
+  window.__bench = { text: lines.join("\n"), ok: false, error: String(err && err.stack || err) };
+}
+out.textContent = lines.join("\n");
+</script>
+</body></html>

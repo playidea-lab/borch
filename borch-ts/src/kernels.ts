@@ -2356,8 +2356,9 @@ ${sourceIndex(rules, "P[0]", "gid", "src")}
  *
  * The cost instead is **input size × output size.** At the places it is used today (the
  * backward of a shape operation, tens of elements) that is fine, and this kernel must not
- * end up inside a training loop. For that there are per-operation ways to fold (`expand`
- * is a reduction, `flip` is another flip).
+ * end up inside a training loop. `expand`, `repeat` and `flip` no longer come here — each
+ * passes `stridedView` a fold on existing kernels (a reduction, a reduction, another
+ * flip), `O(output)`; `unfold`, `roll`, `rot90` and `repeat_interleave` still walk.
  *
  * Adding the overlapping positions properly is the point — unfolding a length of 5 with
  * `unfold(3, 1)` gives the gradient `[1,2,3,2,1]`. It piles up by the overlap, and
