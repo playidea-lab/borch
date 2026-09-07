@@ -1082,6 +1082,11 @@ export class Device {
     this.run(pipeline, buffers, [g.x, g.y, 1], meta);
   }
 
+  /** Writes `words` at the start of `buffer` — a seed, a counter. */
+  writeWords(buffer: GPUBuffer, words: Uint32Array<ArrayBuffer>): void {
+    this.device.queue.writeBuffer(buffer, 0, words);
+  }
+
   /** A bind group for `pipeline` over `buffers`, in binding order. */
   bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[]): GPUBindGroup {
     let layout = this.layouts.get(pipeline);

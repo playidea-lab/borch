@@ -1564,8 +1564,8 @@
     "src": "3101c142c39f"
   },
   "tensor/Tensor.dropoutSeed": {
-    "ko": "dropout 이 쓰는 씨앗. 부를 때마다 오른다 — 같은 자리를 두 번 떨구지 않으려고.",
-    "src": "84c8225ebf77"
+    "ko": "dropout이 쓰는 시드. 호출마다 올라가 같은 자리를 두 번 떨구지 않는다. **진실은 디바이스가 가진다**: `seedBuffer`가 싣고, tick 커널이 매 추출 전에 올리며, 이 필드는 `manualSeed`가 정한 값을 비출 뿐 — `seedTick` 참조.",
+    "src": "a8126d0a8b37"
   },
   "tensor/Tensor.dtype": {
     "ko": "**이름표다.** 값은 언제나 float32 버퍼에 있다 — 자세한 사정은 `src/dtype.ts`.",
@@ -3150,5 +3150,17 @@
   "device/Recorded.meta": {
     "ko": "원소별 dispatch라면 무엇을 계산했는지 — `Elementwise` 참조.",
     "src": "77a88d1a5d7a"
+  },
+  "device/Device.writeWords": {
+    "ko": "`buffer`의 앞에 `words`를 쓴다 — 시드, 카운터.",
+    "src": "cae397bd8fac"
+  },
+  "tensor/Tensor.seedBuffer": {
+    "ko": "디바이스의 시드 버퍼 — 처음 요청되거나 다시 시드될 때 `dropoutSeed`에서 써진다.",
+    "src": "352a75608ff1"
+  },
+  "tensor/Tensor.reseed": {
+    "ko": "디바이스의 스트림을 다시 시드한다 — `manualSeed`가 부르는 것.",
+    "src": "3e4a96d36b82"
   }
 }

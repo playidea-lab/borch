@@ -186,6 +186,7 @@ import {
   binaryRecipe,
   unaryBackwardRecipe,
   unaryRecipe,
+  seedTick,
   bceLogitsForward,
   bceLogitsBackward,
   batchNormBackwardApply,
@@ -4358,12 +4359,11 @@ export class Tensor implements Node<Tensor> {
     const n = numel(shape);
     const out = dev().alloc(n);
     dev().run1d(
-      dev().pipeline(`uni:${n}:${lower}:${upper}:${Tensor.dropoutSeed}`,
-        () => uniformFill(n, lower, upper, Tensor.dropoutSeed)),
-      [out],
+      dev().pipeline(`uni:${n}:${lower}:${upper}`, () => uniformFill(n, lower, upper)),
+      [Tensor.seedBuffer(), out],
       n,
     );
-    Tensor.dropoutSeed = (Tensor.dropoutSeed + 1) >>> 0;
+    Tensor.tickSeed();
     return new Tensor(out, shape);
   }
 
@@ -4395,12 +4395,11 @@ export class Tensor implements Node<Tensor> {
     const n = this.size;
     const out = dev().alloc(n);
     dev().run1d(
-      dev().pipeline(`uni:${n}:${lower}:${upper}:${Tensor.dropoutSeed}`,
-        () => uniformFill(n, lower, upper, Tensor.dropoutSeed)),
-      [out],
+      dev().pipeline(`uni:${n}:${lower}:${upper}`, () => uniformFill(n, lower, upper)),
+      [Tensor.seedBuffer(), out],
       n,
     );
-    Tensor.dropoutSeed = (Tensor.dropoutSeed + 1) >>> 0;
+    Tensor.tickSeed();
     const slope = new Tensor(out, this.shape);
     const positive = this.binary("gt", Tensor.full([], 0));
     return this.where(positive, this.mul(slope));
@@ -4803,24 +4802,48 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const n = this.size;
     const d = dev();
     const mask = d.alloc(n);
+    // The seed comes from the device's buffer, ticked just before — one pipeline per
+    // (n, p), and a captured step draws fresh slots on every replay.
     d.run1d(
-      // With the seed in the name, a new shader is baked every step. Only `p` is baked
-      // as a constant and the seed stays out of the name — one pipeline is reused
-      // instead.
-      d.pipeline(`drop:${n}:${p}:${Tensor.dropoutSeed}`,
-        () => dropoutMask(n, p, Tensor.dropoutSeed)),
-      [mask],
+      d.pipeline(`drop:${n}:${p}`, () => dropoutMask(n, p)),
+      [Tensor.seedBuffer(), mask],
       n,
     );
-    Tensor.dropoutSeed = (Tensor.dropoutSeed + 1) >>> 0;
+    Tensor.tickSeed();
     return this.mul(new Tensor(mask, this.shape));
   }
 
   /**
    * The seed dropout uses. It rises on every call, so as not to drop the
-   * same slots twice.
+   * same slots twice. **The device holds the truth**: `seedBuffer` carries it, a tick
+   * kernel advances it before every draw, and this field only mirrors what
+   * `manualSeed` set — see `seedTick`.
    */
   static dropoutSeed = 1;
+
+  private static seedBuf: GPUBuffer | null = null;
+
+  /** The device's seed buffer, written from `dropoutSeed` when first asked or reseeded. */
+  static seedBuffer(): GPUBuffer {
+    if (!Tensor.seedBuf) {
+      Tensor.seedBuf = dev().alloc(1, false);
+      dev().writeWords(Tensor.seedBuf, new Uint32Array([Tensor.dropoutSeed >>> 0]));
+    }
+    return Tensor.seedBuf;
+  }
+
+  /** Reseeds the device's stream — what `manualSeed` reaches for. */
+  static reseed(seed: number): void {
+    Tensor.dropoutSeed = seed >>> 0;
+    if (Tensor.seedBuf) dev().writeWords(Tensor.seedBuf, new Uint32Array([Tensor.dropoutSeed]));
+  }
+
+  /** Advances the device's seed by one — after a draw, so the first draw after a
+   *  `manualSeed` uses that seed itself, as it did when the seed was baked in. */
+  private static tickSeed(): void {
+    dev().run1d(dev().pipeline("seedtick", () => seedTick()), [Tensor.seedBuffer()], 1);
+    Tensor.dropoutSeed = (Tensor.dropoutSeed + 1) >>> 0;
+  }
 
   /**
    * Length to 1 along an axis. `eps` stops the division blowing up on a

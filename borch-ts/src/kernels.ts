@@ -4745,23 +4745,41 @@ fn rand01(gid: u32, seed: u32) -> f32 {
  * here in training mode.
  */
 export function uniformFill(n: number, lo: number, hi: number,
-                            seed: number): string {
+                            ): string {
   return `${RANDOM_PRELUDE}
-@group(0) @binding(0) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(0) var<storage, read> Seed: array<u32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  Out[gid] = ${f32lit(lo)} + rand01(gid, ${seed >>> 0}u) * ${f32lit(hi - lo)};
+  Out[gid] = ${f32lit(lo)} + rand01(gid, Seed[0]) * ${f32lit(hi - lo)};
 }`;
 }
 
-export function dropoutMask(n: number, p: number, seed: number): string {
+/**
+ * The random stream's seed, **on the device.** One thread, one increment. Dropout and
+ * the uniform fills read the seed from this buffer and this runs before each of them,
+ * so a captured step draws fresh numbers on every replay (the seed used to be baked
+ * into the shader's text — a new pipeline compiled per call, and a replay that dropped
+ * the same units every step).
+ */
+export function seedTick(): string {
+  return `
+@group(0) @binding(0) var<storage, read_write> Seed: array<u32>;
+@compute @workgroup_size(1)
+fn main() {
+  Seed[0] = Seed[0] + 1u;
+}`;
+}
+
+export function dropoutMask(n: number, p: number): string {
   const keep = f32lit(1 / (1 - p));
   return `${RANDOM_PRELUDE}
-@group(0) @binding(0) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(0) var<storage, read> Seed: array<u32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  Out[gid] = select(0.0, ${keep}, rand01(gid, ${seed >>> 0}u) >= ${f32lit(p)});
+  Out[gid] = select(0.0, ${keep}, rand01(gid, Seed[0]) >= ${f32lit(p)});
 }`;
 }

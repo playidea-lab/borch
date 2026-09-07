@@ -81,7 +81,7 @@ function pyFloat(v: number): string {
 // variance. Mixing once with the golden-ratio constant keeps the two streams (the host
 // xorshift and the GPU hash) from starting at the same number and moving together by
 // coincidence.
-onSeed((seed) => { Tensor.dropoutSeed = ((seed ^ 0x9e3779b9) >>> 0) || 1; });
+onSeed((seed) => { Tensor.reseed(((seed ^ 0x9e3779b9) >>> 0) || 1); });
 
 export { manualSeed } from "./random.js";
 
