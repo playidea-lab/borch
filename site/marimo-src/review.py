@@ -132,12 +132,13 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         shuffled = np.random.default_rng(0).permutation(N)
         # The first step is recorded under `torch.capture()` and every other step replays
         # it — the same dispatches, the next batch copied into the same input buffers,
-        # no Python between the kernels. Bit-identical to stepping eagerly (measured),
-        # and a sixth faster on a laptop GPU.
+        # no Python between the kernels — after `fuse()` merged the elementwise chains into
+        # single kernels. The eager step to a rounding (measured), a sixth faster on a laptop GPU.
         xb = torch.tensor(Xt[shuffled[:BATCH]]); mb = torch.tensor(Mt[shuffled[:BATCH]])
         with torch.capture() as rec:
             with torch.scope():
                 opt.zero_grad(); loss = crit(model(xb), mb); loss.backward(); opt.step()
+        rec.fuse()
         for epoch in range(EPOCHS):
             for s in range(steps):
                 if epoch == 0 and s == 0:
@@ -195,6 +196,7 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         with torch.capture() as rec:
             with torch.scope():
                 opt.zero_grad(); loss = crit(head(Ft), yt); loss.backward(); opt.step()
+        rec.fuse()
         losses.append(loss.item())
         for step in range(1, 300):
             rec.replay()
@@ -230,6 +232,7 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         with torch.capture() as rec:
             with torch.scope():
                 opt.zero_grad(); loss = crit(model(xb), yb); loss.backward(); opt.step()
+        rec.fuse()
         for epoch in range(EPOCHS):
             for s in range(steps):
                 if epoch == 0 and s == 0:

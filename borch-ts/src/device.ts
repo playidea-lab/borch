@@ -17,7 +17,8 @@
  * looked at, so here the limits are **measured in advance and exceeding one throws.**
  */
 
-import { grid1d, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
+import { type Elementwise, grid1d, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
+import { fuseRecords } from "./fuse.js";
 
 const BYTES_PER_F32 = 4;
 
@@ -269,6 +270,8 @@ export interface Recorded {
   readonly groups: readonly [number, number, number];
   /** The buffers behind the bind group, in binding order — what a fusion pass reads. */
   readonly buffers: readonly GPUBuffer[];
+  /** For an elementwise dispatch, what it computes — see `Elementwise`. */
+  readonly meta?: Elementwise;
 }
 
 /**
@@ -279,7 +282,7 @@ export interface Recorded {
 export class Capture {
   constructor(
     private readonly dev: Device,
-    private readonly records: readonly Recorded[],
+    private records: readonly Recorded[],
     private readonly pinned: Set<GPUBuffer>,
   ) {}
 
@@ -308,6 +311,18 @@ export class Capture {
 
   replay(): void {
     this.dev.replayRecorded(this.records);
+  }
+
+  /**
+   * Merges elementwise dispatches that feed each other into single kernels — see
+   * `fuse.ts`. The recording is rewritten in place; `replay` runs the fused list. Returns
+   * how many dispatches there were and are.
+   */
+  fuse(): { before: number; after: number; fused: number } {
+    const before = this.records.length;
+    const { records, fused } = fuseRecords(this.dev, this.records);
+    this.records = records;
+    return { before, after: records.length, fused };
   }
 
   dispose(): void {
@@ -362,7 +377,11 @@ export class Device {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
       maxBufferSize: adapter.limits.maxBufferSize,
       maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
+      // A fused kernel binds one buffer per leaf and per node of its tree; the guaranteed
+      // eight would hold three or four nodes. Apple offers 31, NVIDIA far more.
+      maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
     };
+    Device.storageBuffersPerStage = adapter.limits.maxStorageBuffersPerShaderStage;
     // **`timestamp-query` is taken when it is there.** Requested and unused it costs
     // nothing, and switching it on later means building the device again — which whoever
     // is measuring cannot know at that moment. Requesting it on an adapter without it
@@ -1006,6 +1025,7 @@ export class Device {
     pipeline: GPUComputePipeline,
     buffers: readonly GPUBuffer[],
     groups: readonly [number, number, number],
+    meta?: Elementwise,
   ): void {
     const cap = this.limits.maxComputeWorkgroupsPerDimension;
     for (const [axis, count] of groups.entries()) {
@@ -1016,21 +1036,13 @@ export class Device {
         );
       }
     }
-    let layout = this.layouts.get(pipeline);
-    if (!layout) {
-      layout = pipeline.getBindGroupLayout(0);
-      this.layouts.set(pipeline, layout);
-    }
-    const bindGroup = this.device.createBindGroup({
-      layout,
-      entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
-    });
+    const bindGroup = this.bindGroupFor(pipeline, buffers);
     const pass = this.openPass();
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
     this.dispatches += 1;
-    this.recording?.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]], buffers: [...buffers] });
+    this.recording?.push({ pipeline, bindGroup, groups: [groups[0], groups[1], groups[2]], buffers: [...buffers], ...(meta ? { meta } : {}) });
     // **A batch that grows too large is dropped, and nothing says so.**
     //
     // Commands accumulate in one encoder and go out when something is read. The
@@ -1065,9 +1077,22 @@ export class Device {
    * Runs one-dimensional work spread over a grid. Paired with the indexing
    * in `kernels.ts`.
    */
-  run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number): void {
+  run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number, meta?: Elementwise): void {
     const g = grid1d(n);
-    this.run(pipeline, buffers, [g.x, g.y, 1]);
+    this.run(pipeline, buffers, [g.x, g.y, 1], meta);
+  }
+
+  /** A bind group for `pipeline` over `buffers`, in binding order. */
+  bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[]): GPUBindGroup {
+    let layout = this.layouts.get(pipeline);
+    if (!layout) {
+      layout = pipeline.getBindGroupLayout(0);
+      this.layouts.set(pipeline, layout);
+    }
+    return this.device.createBindGroup({
+      layout,
+      entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+    });
   }
 
   /**
@@ -1421,4 +1446,8 @@ export class Device {
   /** The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple
    *  gives 32 KB. A kernel that stages more than the floor asks this first. */
   static workgroupStorage = 16384;
+
+  /** How many storage buffers one compute stage may bind — 8 is the guaranteed floor.
+   *  The fusion pass sizes its trees by this. */
+  static storageBuffersPerStage = 8;
 }

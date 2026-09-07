@@ -3126,5 +3126,29 @@
   "vision_v2_twins/UniformTemporalSubsample": {
     "ko": "영상에서 `numSamples` 프레임을 길이에 걸쳐 고르게 남긴다.",
     "src": "eb0fcbb4a64c"
+  },
+  "fuse/fuseRecords": {
+    "ko": "`records`를 원소별 트리가 융합된 목록으로 다시 쓴다. 새 목록과 접힌 dispatch 수를 돌려준다.",
+    "src": "24f990ef8253"
+  },
+  "fuse/fusedCodes": {
+    "ko": "만들어진 융합 커널 전부의 WGSL, 키별로 — 패스가 무엇을 만들었는지 읽기 위해.",
+    "src": "bf782fd8b079"
+  },
+  "device/Capture.fuse": {
+    "ko": "서로를 먹이는 원소별 dispatch들을 커널 하나로 합친다 — `fuse.ts` 참조. 기록은 제자리에서 바뀌고 `replay`는 융합된 목록을 돈다. 전후 dispatch 수를 돌려준다.",
+    "src": "bfe65ce72c85"
+  },
+  "device/Device.bindGroupFor": {
+    "ko": "`buffers`를 바인딩 순서로 묶은 `pipeline`용 바인드 그룹.",
+    "src": "2b05be36daa6"
+  },
+  "device/Device.storageBuffersPerStage": {
+    "ko": "컴퓨트 스테이지 하나가 묶을 수 있는 storage 버퍼 수 — 보장되는 최소는 8. 융합 패스가 트리 크기를 이것으로 정한다.",
+    "src": "98d3881150ac"
+  },
+  "device/Recorded.meta": {
+    "ko": "원소별 dispatch라면 무엇을 계산했는지 — `Elementwise` 참조.",
+    "src": "77a88d1a5d7a"
   }
 }

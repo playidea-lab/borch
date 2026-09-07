@@ -88,7 +88,7 @@
 # ## What this file does **not** run — counted, because it used to say it did
 #
 # The line above read "the commands below are all of it". They are all of the *golden
-# comparison*. There are **thirty-four entry points that need a browser** and this file
+# comparison*. There are **thirty-five entry points that need a browser** and this file
 # names four:
 #
 #     here          run.py --lib borch · run.py --lib borch_webgpu ·
@@ -97,7 +97,7 @@
 #     not here      parity:ts · data:ts · device:ts · serialize:ts · example:ts ·
 #                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding ·
 #                   learner:site · wheel:py · lab:py · marimo:py · folder:py · hub:py · offline:py · trajectory:py ·
-#                   cpu:ts · cpu:py · review:py · coi:site · seg:py · capture:py   (twenty-four more correctness checks)
+#                   cpu:ts · cpu:py · review:py · coi:site · seg:py · capture:py · fuse:py   (twenty-five more correctness checks)
 #                   cost:ts · bench:ts · compare:ts · envelope:py · envelope2:py · profile:py  (measurements, not checks)
 #
 #     `cpu:ts` arrived 2026-09-05: the CPU device against the WebGPU device on two hub
@@ -112,9 +112,11 @@
 #     kind of kernel — the instrument behind two days of kernel work; a measurement, not a check.
 #     `capture:py` the same day: a step recorded under `torch.capture()` and replayed eleven times
 #     against the eager run — every loss and parameter the same, bit for bit.
+#     `fuse:py` the same day: the capture's elementwise trees fused into single kernels on a
+#     hand-written GELU/LayerNorm network — the eager run to a rounding, in fewer kernels.
 #
-# **Nothing runs any of the thirty-four automatically** — the reason above is a good one
-# and it applies to all of them equally, so the twenty-eight below are in exactly the position
+# **Nothing runs any of the thirty-five automatically** — the reason above is a good one
+# and it applies to all of them equally, so the twenty-nine below are in exactly the position
 # the four above are: run when a person runs them.
 #
 # The cost of that is not hypothetical. Three commits shipped in one session with the

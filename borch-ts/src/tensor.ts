@@ -182,6 +182,10 @@ import {
   argReduce,
   type AxisRule,
   batchNormApply,
+  binaryBackwardRecipe,
+  binaryRecipe,
+  unaryBackwardRecipe,
+  unaryRecipe,
   bceLogitsForward,
   bceLogitsBackward,
   batchNormBackwardApply,
@@ -1664,7 +1668,7 @@ export class Tensor implements Node<Tensor> {
     dev().run1d(
       dev().pipeline(`u:${name}:${n}`, () => unaryForward(name, n)),
       [this.buffer, out],
-      n,
+      n, unaryRecipe(name, n),
     );
     const result = Tensor.make(
       out,
@@ -1675,7 +1679,7 @@ export class Tensor implements Node<Tensor> {
         dev().run1d(
           dev().pipeline(`ub:${name}:${n}`, () => unaryBackward(name, n)),
           [this.buffer, result.buffer, g.buffer, gi],
-          n,
+          n, unaryBackwardRecipe(name, n),
         );
         return [new Tensor(gi, this.shape)];
       },
@@ -1722,7 +1726,7 @@ export class Tensor implements Node<Tensor> {
     dev().run1d(
       dev().pipeline(`b:${name}:${key}`, () => binaryForward(name, shape, sa, sb)),
       [this.buffer, other.buffer, out],
-      n,
+      n, binaryRecipe(name, shape, sa, sb),
     );
     const result = Tensor.make(
       out,
@@ -1737,7 +1741,7 @@ export class Tensor implements Node<Tensor> {
               () => binaryBackward(name, which, shape, sa, sb),
             ),
             [this.buffer, other.buffer, result.buffer, g.buffer, wide],
-            n,
+            n, binaryBackwardRecipe(name, which, shape, sa, sb),
           );
           const wideTensor = new Tensor(wide, shape);
           return foldTo(wideTensor, self.shape);

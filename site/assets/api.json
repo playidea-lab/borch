@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 782,
+  "done": 788,
   "stale": 0,
-  "missing": 466
+  "missing": 467
  },
  "modules": [
   {
@@ -15064,6 +15064,36 @@
    "doc_ko": "데이터셋과 적재기 — `torch.utils.data` 자리.\n\n## 없으면 이야기가 반쯤 거짓이 된다\n\n이 저장소는 \"브라우저에서 학습한다\" 고 말하는데, 여기가 비어 있으면 그 학습이\n**배치를 손으로 자르는 것**으로 끝난다. 실제로 저장소 안의 정확도 러너가 뽑기·섞기를\n직접 짜고 있었다 — 쓰는 사람은 누구나 같은 것을 다시 짜게 된다.\n\n## 무엇을 안 만들었나\n\n**`sampler` 옵션이 없다.** torch 에 있는 이름이지만 지금 받쳐 줄 것이 없다. 이름만\n놓으면 `paramGroups` 가 그랬던 꼴이 된다 — 모양은 torch 인데 속이 비어서, 쓰는\n사람이 넣은 것이 조용히 무시되는 자리. 없는 것은 없다고 둔다.\n\n`num_workers` 도 없다. 워커를 띄우면 GPU 손잡이가 그쪽으로 안 건너간다.\n\n## torch 와 갈리는 두 자리\n\n**배치는 GPU 텐서라 `scope()` 안에서 받아야 한다.** 적재기가 대신 감쌀 수가 없다 —\n텐서가 구역 밖으로 나가는 것이 목적이기 때문이다. 안 감싸면 한 에폭이 만드는 배치가\n전부 남는다.\n\n```ts\nfor (const [x, y] of loader) {\n  await scope(async () => {\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n  });\n}\n```\n\n`x` 와 `y` 는 구역 **밖에서** 만들어졌으므로 살려 둘 것으로 표시할 필요가 없다.\n구역이 놓는 것은 그 안에서 만든 중간 버퍼다.\n\n**섞기가 `manualSeed` 를 따른다.** torch 는 DataLoader 에 별도 generator 를 두는데\n여기서는 호스트 줄기 하나를 쓴다(`random.ts`) — 씨앗 하나가 층 초기화·dropout·\n텐서 팩토리에 이어 배치 순서까지 되돌린다. 문을 늘리지 않는 쪽을 골랐다."
   },
   {
+   "name": "fuse",
+   "title": "fuse",
+   "blurb": {
+    "ko": "캡처된 스텝 위의 융합 — 서로를 먹이는 원소별 커널들이 하나가 된다. `Capture.fuse()`가 부른다.",
+    "en": "Fusion over a captured step — elementwise kernels that feed each other become one. Called by `Capture.fuse()`."
+   },
+   "doc": "Fusion over a captured step — **elementwise kernels that feed each other become one.**\n\nA capture (`device.ts`) is the step as the device saw it: a list of dispatches with\ntheir buffers, and, for an elementwise one, what it computed (`Elementwise` in\n`kernels.ts`). This pass reads that list as a graph and, for each elementwise dispatch\n— the root — pulls its elementwise producers into it: a producer whose output the root\nreads contiguously over the same element count, whose output nobody reads *between*\nthe two (moving it to the root's position would make such a reader see an unwritten\nbuffer), and whose output is written exactly once. The producers' producers follow by\nthe same rule, so what fuses is a tree of expressions — a GELU written out by hand, a\nloss built from squares and means, a normalisation someone typed — computed in one\nkernel from its leaves.\n\n**Every fused node still writes its output.** A dead-intermediate elimination would\nbe the larger saving, and it cannot be done from here: a buffer that no later dispatch\nreads may still be held by Python — a prediction kept for an accuracy, a value\nprinted after the step — and a replay that silently stopped writing it would read as\na wrong number, not as an error. What is saved is the launch and the read of each\nintermediate; what is kept is that a replay leaves every buffer exactly as the eager\nstep did. The expressions are the same strings the single kernels use, on the same\nIEEE operations in the same order, so the values are the same bit for bit (`capture:py`).\n\nMeasured on the M4 Max (2026-09-07): the U-Net step, already fused by hand where it\ncounts, gives this pass fifteen of 224 dispatches; a hand-written GELU network gives\nit far more — see `fuse:py`.",
+   "symbols": [
+    {
+     "kind": "const",
+     "name": "fusedCodes",
+     "signature": "export declare const fusedCodes: Map<string, string>",
+     "doc": "The WGSL of every fused kernel built, by key — for reading what the pass made.",
+     "members": [],
+     "torch": "fused_codes",
+     "doc_ko": "만들어진 융합 커널 전부의 WGSL, 키별로 — 패스가 무엇을 만들었는지 읽기 위해."
+    },
+    {
+     "kind": "function",
+     "name": "fuseRecords",
+     "signature": "export declare function fuseRecords(dev: Device, records: readonly Recorded[]): { records: Recorded[]; fused: number; }",
+     "doc": "Rewrites `records` with elementwise trees fused. Returns the new list and how many\n dispatches were folded away.",
+     "members": [],
+     "torch": "fuse_records",
+     "doc_ko": "`records`를 원소별 트리가 융합된 목록으로 다시 쓴다. 새 목록과 접힌 dispatch 수를 돌려준다."
+    }
+   ],
+   "count": 2
+  },
+  {
    "name": "onnx",
    "title": "onnx",
    "blurb": {
@@ -21916,6 +21946,13 @@
        "name": "buffers",
        "signature": "readonly buffers: readonly GPUBuffer[]",
        "doc": "The buffers behind the bind group, in binding order — what a fusion pass reads."
+      },
+      {
+       "name": "meta",
+       "signature": "readonly meta?: Elementwise",
+       "doc": "For an elementwise dispatch, what it computes — see `Elementwise`.",
+       "optional": true,
+       "doc_ko": "원소별 dispatch라면 무엇을 계산했는지 — `Elementwise` 참조."
       }
      ],
      "doc_ko": "캡처 아래에서 기록된 dispatch 하나."
@@ -21947,6 +21984,12 @@
        "name": "replay",
        "signature": "replay(): void",
        "doc": ""
+      },
+      {
+       "name": "fuse",
+       "signature": "fuse(): { before: number; after: number; fused: number; }",
+       "doc": "Merges elementwise dispatches that feed each other into single kernels — see\n`fuse.ts`. The recording is rewritten in place; `replay` runs the fused list. Returns\nhow many dispatches there were and are.",
+       "doc_ko": "서로를 먹이는 원소별 dispatch들을 커널 하나로 합친다 — `fuse.ts` 참조. 기록은 제자리에서 바뀌고 `replay`는 융합된 목록을 돈다. 전후 dispatch 수를 돌려준다."
       },
       {
        "name": "dispose",
@@ -22217,7 +22260,7 @@
       },
       {
        "name": "run",
-       "signature": "run(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], groups: readonly [number, number, number]): void",
+       "signature": "run(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], groups: readonly [number, number, number], meta?: Elementwise): void",
        "doc": "One kernel. `groups` is the **workgroup count**, and the per-axis limit\nis rechecked here — `kernels.ts` folds the grid, but a hand-called path\nmay appear.",
        "section": {
         "ko": "Capture and replay",
@@ -22227,13 +22270,24 @@
       },
       {
        "name": "run1d",
-       "signature": "run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number): void",
+       "signature": "run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number, meta?: Elementwise): void",
        "doc": "Runs one-dimensional work spread over a grid. Paired with the indexing\nin `kernels.ts`.",
        "section": {
         "ko": "Capture and replay",
         "en": "Capture and replay"
        },
        "doc_ko": "1차원 작업을 격자로 펴서 돌린다. `kernels.ts` 의 인덱싱과 짝이다."
+      },
+      {
+       "name": "bindGroupFor",
+       "signature": "bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[]): GPUBindGroup",
+       "doc": "A bind group for `pipeline` over `buffers`, in binding order.",
+       "torch": "bind_group_for",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       },
+       "doc_ko": "`buffers`를 바인딩 순서로 묶은 `pipeline`용 바인드 그룹."
       },
       {
        "name": "sumAll",
@@ -22336,12 +22390,19 @@
        "doc": "The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple\n gives 32 KB. A kernel that stages more than the floor asks this first.",
        "torch": "workgroup_storage",
        "doc_ko": "어댑터의 워크그룹 저장소 바이트 수 — 보장되는 최소는 16 KB, Apple은 32 KB. 그 최소보다 많이 스테이징하는 커널은 먼저 이것을 묻는다."
+      },
+      {
+       "name": "storageBuffersPerStage",
+       "signature": "static storageBuffersPerStage: number",
+       "doc": "How many storage buffers one compute stage may bind — 8 is the guaranteed floor.\n The fusion pass sizes its trees by this.",
+       "torch": "storage_buffers_per_stage",
+       "doc_ko": "컴퓨트 스테이지 하나가 묶을 수 있는 storage 버퍼 수 — 보장되는 최소는 8. 융합 패스가 트리 크기를 이것으로 정한다."
       }
      ],
      "inherited_ctor": "private constructor()"
     }
    ],
-   "count": 62
+   "count": 66
   },
   {
    "name": "random",
@@ -23284,5 +23345,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3171
+ "total": 3177
 }

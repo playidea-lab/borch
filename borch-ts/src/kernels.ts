@@ -1045,6 +1045,71 @@ function unarySpec(name: string): UnarySpec {
 
 /** An elementwise unary forward. The element count is baked in as a constant — the
  *  bounds check folds away. */
+/**
+ * What an elementwise dispatch computes, **said in a form a fusion pass can compose.**
+ *
+ * Under a capture every dispatch is recorded; the ones that carry one of these can be
+ * merged: where one kernel's output is read by exactly one other elementwise kernel, as
+ * a same-shape contiguous input, the two are one kernel with the intermediate never
+ * written. `locals` names the inputs the way the op's expression spells them (`x`, `y`,
+ * `o`, `g`) — the same strings `UNARY` and `BINARY` hold, so a fused kernel and the
+ * kernel it replaces compute the same IEEE operations in the same order. `strides` on an
+ * input is its broadcast indexing over the output's `shape`; absent means contiguous.
+ */
+export interface Elementwise {
+  readonly n: number;
+  readonly shape: readonly number[];
+  readonly inputs: readonly { readonly binding: number; readonly local: string; readonly strides?: readonly number[] }[];
+  readonly out: number;
+  readonly expr: string;
+  readonly prelude?: string;
+  /**
+   * The output is an autograd intermediate — made inside a backward closure, never
+   * handed to Python. A fused kernel may leave it unwritten when nothing outside the
+   * tree reads it. A forward result never carries this: a value the caller kept for an
+   * accuracy or a print is read by no dispatch at all, and must still be there.
+   */
+  readonly internal?: boolean;
+}
+
+export function unaryRecipe(name: string, n: number): Elementwise {
+  const op = unarySpec(name);
+  return { n, shape: [n], inputs: [{ binding: 0, local: "x" }], out: 1, expr: op.fwd, ...(op.prelude ? { prelude: op.prelude } : {}) };
+}
+
+export function unaryBackwardRecipe(name: string, n: number): Elementwise {
+  const op = unarySpec(name);
+  return { n, shape: [n], inputs: [{ binding: 0, local: "x" }, { binding: 1, local: "o" }, { binding: 2, local: "g" }], out: 3,
+    expr: `g * (${op.bwd})`, internal: true, ...(op.prelude ? { prelude: op.prelude } : {}) };
+}
+
+export function binaryRecipe(name: string, shape: readonly number[], strideA: readonly number[], strideB: readonly number[]): Elementwise {
+  const op = BINARY[name];
+  if (!op) throw new Error(`unknown binary op: ${name}`);
+  const n = shape.reduce((a, b) => a * b, 1);
+  return { n, shape, inputs: [{ binding: 0, local: "x", strides: strideA }, { binding: 1, local: "y", strides: strideB }], out: 2,
+    expr: op.fwd, ...(op.prelude ? { prelude: op.prelude } : {}) };
+}
+
+export function binaryBackwardRecipe(name: string, which: "a" | "b", shape: readonly number[], strideA: readonly number[], strideB: readonly number[]): Elementwise {
+  const op = BINARY[name];
+  if (!op) throw new Error(`unknown binary op: ${name}`);
+  const n = shape.reduce((a, b) => a * b, 1);
+  return { n, shape, inputs: [{ binding: 0, local: "x", strides: strideA }, { binding: 1, local: "y", strides: strideB }, { binding: 2, local: "o" }, { binding: 3, local: "g" }], out: 4,
+    expr: `g * (${which === "a" ? op.da : op.db})`, internal: true, ...(op.prelude ? { prelude: op.prelude } : {}) };
+}
+
+/** Whether a broadcast stride pattern is the contiguous one for `shape`. */
+export function contiguousStrides(shape: readonly number[], strides: readonly number[]): boolean {
+  let expect = 1;
+  for (let d = shape.length - 1; d >= 0; d--) {
+    const size = shape[d] ?? 1;
+    if (size !== 1 && strides[d] !== expect) return false;
+    expect *= size;
+  }
+  return true;
+}
+
 export function unaryForward(name: string, n: number): string {
   const op = unarySpec(name);
   return `${op.prelude ?? ""}

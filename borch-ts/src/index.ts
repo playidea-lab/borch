@@ -511,3 +511,5 @@ export function getNumThreads(): number {
 export function getNumInteropThreads(): number {
   return 1;
 }
+
+export { fusedCodes } from "./fuse.js";

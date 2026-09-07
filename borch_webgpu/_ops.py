@@ -886,6 +886,14 @@ class capture:
         """The recorded step again, into the current batch of commands."""
         self._capture.replay()
 
+    def fuse(self):
+        """Merge the recorded elementwise kernels that feed each other into single
+        kernels — a hand-written activation or loss becomes one dispatch per tree.
+        Every intermediate is still written, so a replay leaves the buffers as the eager
+        step did. Returns `(before, after)` dispatch counts."""
+        r = self._capture.fuse()
+        return int(r.before), int(r.after)
+
     def dispose(self):
         """Returns the step's memory to the pool. The captured tensors are not to be used after."""
         self._capture.dispose()

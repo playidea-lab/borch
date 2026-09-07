@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>a captured step with its elementwise trees fused, on the wheel, in a worker</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The wheel alone, in a Web Worker** — JupyterLite's shape: Pyodide in a worker,
+  // no page-side borch.ts, nothing but `pip install`. The worker installs numpy and the
+  // wheel from this checkout, imports `borch_webgpu` (which boots its own borch.ts from
+  // the bundle it carries), trains a hand-written GELU/LayerNorm network ten steps eagerly, then replayed plain and
+  // replayed with its elementwise trees fused into single kernels, and posts agreement and cost. WebGPU in a worker is Chrome's; JSPI in a worker is what `run_sync` needs.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  // A worker made from a blob URL resolves paths against the blob, so every URL it
+  // touches is spelled out with the page's origin.
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker · navigator.gpu " + (typeof navigator.gpu) + " · WebAssembly.Suspending " + (typeof WebAssembly.Suspending));
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const t1 = performance.now();
+        const text = await py.runPythonAsync(\`
+import sys, time, types
+import numpy as np
+import js
+from pyodide.ffi import run_sync
+import borch_webgpu as torch
+origin = ${JSON.stringify(origin)}
+def get(path, binary=False):
+    r = run_sync(js.fetch(origin + path))
+    if not r.ok: raise RuntimeError(f"{r.status} {path}")
+    return bytes(run_sync(r.arrayBuffer()).to_py()) if binary else str(run_sync(r.text()))
+def module(name, path):
+    mod = types.ModuleType(name); mod.__file__ = f"/tmp/{name}.py"
+    exec(compile(get(path), f"{name}.py", "exec"), mod.__dict__); sys.modules[name] = mod
+    return mod
+module("review_eval", "/tests/review_eval.py")
+S = module("seg_eval", "/tests/seg_eval.py")
+import time
+rng = np.random.default_rng(0)
+nn = torch.nn
+# A network nobody fused by hand: GELU written out, a LayerNorm written out, a
+# weighted squared loss written out — the shape of code a user types.
+def gelu(t):
+    return 0.5 * t * (1.0 + torch.tanh(0.7978845608 * (t + 0.044715 * t * t * t)))
+def layer_norm(t, eps=1e-5):
+    mu = t.mean(1, keepdim=True); var = ((t - mu) * (t - mu)).mean(1, keepdim=True)
+    return (t - mu) / torch.sqrt(var + eps)
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__(); self.f1 = nn.Linear(64, 256); self.f2 = nn.Linear(256, 256); self.f3 = nn.Linear(256, 10)
+    def forward(self, t):
+        h = gelu(self.f1(t)); h = layer_norm(h); h = gelu(self.f2(h)); return self.f3(h)
+B, STEPS = 64, 10
+xs = rng.standard_normal((STEPS, B, 64)).astype(np.float32); ys = rng.standard_normal((STEPS, B, 10)).astype(np.float32); w = rng.random((1, 10)).astype(np.float32)
+def loss_fn(pred, y, wt):
+    d = pred - y
+    return ((d * d) * wt).mean()
+net0 = Net(); state0 = {k: v.numpy().copy() for k, v in net0.state_dict().items()}
+net = Net(); net.load_state_dict({k: torch.tensor(v) for k, v in state0.items()})
+opt = torch.optim.Adam(net.parameters(), lr=1e-3); wt = torch.tensor(w); e_losses = []
+for i in range(STEPS):
+    with torch.scope():
+        opt.zero_grad(); l = loss_fn(net(torch.tensor(xs[i])), torch.tensor(ys[i]), wt); l.backward(); opt.step(); e_losses.append(float(l.item()))
+e_w = {k: v.numpy().copy() for k, v in net.state_dict().items()}
+xb, yb = torch.tensor(xs[0]), torch.tensor(ys[0])
+def wall(fn, n=100):
+    for _ in range(10): fn()
+    t0 = time.perf_counter()
+    for _ in range(n): fn()
+    return (time.perf_counter() - t0) / n * 1000
+def eager_once():
+    with torch.scope():
+        opt.zero_grad(); l = loss_fn(net(xb), yb, wt); l.backward(); opt.step(); float(l.item())
+te = wall(eager_once)
+out = {}
+for fuse in (False, True):
+    net = Net(); net.load_state_dict({k: torch.tensor(v) for k, v in state0.items()})
+    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+    xb, yb = torch.tensor(xs[0]), torch.tensor(ys[0])
+    with torch.capture() as rec:
+        with torch.scope():
+            opt.zero_grad(); l = loss_fn(net(xb), yb, wt); l.backward(); opt.step()
+    before, after = rec.fuse() if fuse else (rec.dispatches, rec.dispatches)
+    losses = [float(l.item())]
+    for i in range(1, STEPS):
+        xb.copy_(torch.tensor(xs[i])); yb.copy_(torch.tensor(ys[i])); rec.replay(); losses.append(float(l.item()))
+    wts = {k: v.numpy().copy() for k, v in net.state_dict().items()}
+    ms = wall(lambda: (rec.replay(), float(l.item())))
+    rec.dispose()
+    dl = max(abs(a - b) / max(abs(a), 1e-6) for a, b in zip(e_losses, losses)); dw = max(float(np.abs(e_w[k] - wts[k]).max() / (np.abs(e_w[k]).max() + 1e-6)) for k in e_w)
+    out[fuse] = (before, after, dl, dw, ms)
+adapter = str(js.borch.Device.adapterInfo)
+(f"fuse: hand-written net, {STEPS} steps · eager {te:.2f} ms · plain replay {out[False][0]} dispatches rel|Δloss| {out[False][2]:.1e} rel|Δparam| {out[False][3]:.1e} {out[False][4]:.2f} ms"
+ f" · fused replay {out[True][0]} → {out[True][1]} dispatches rel|Δloss| {out[True][2]:.1e} rel|Δparam| {out[True][3]:.1e} {out[True][4]:.2f} ms · storage buffers per stage {int(js.borch.Device.storageBuffersPerStage)} · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t1 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    // The worker is ended once it has answered: left alive with its device up, the
+    // browser context would not close and the probe hung after every run (measured).
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: e.data.done }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>
