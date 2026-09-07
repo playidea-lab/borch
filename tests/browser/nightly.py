@@ -54,6 +54,7 @@ CHECKS = [
     # The workbench with WebGPU's service disabled — the `borch_cpu` door, end to end.
     ("marimo:cpu", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/marimo_probe.py", "--no-webgpu"]),
     ("coi:site",   ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/coi_sweep.py"]),
+    ("refine:py",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/refine_py.py", "--build", "--folds=3"]),
     # The wheel alone, in a worker — JupyterLite's shape. Builds the wheel first.
     # No `--headed` here: every probe opens a window by default (launch.py `_headed`), and
     # headless is asked for with `--headless` or BORCH_HEADLESS. Five probes had kept the
