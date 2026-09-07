@@ -613,7 +613,11 @@ out from `tanh`, a LayerNorm from means and a square root, a loss from squares: 
 becomes one kernel. Every fused node still writes its output unless it is an autograd
 intermediate nothing outside the tree reads — a forward value Python may be holding is
 never left unwritten — and a tree stops at the device's storage-buffer budget per stage
-(Metal gives ten). A hand-written GELU network: 139 → 84 dispatches, eager 4.2 ms, replayed
+(Metal gives ten). A reduction takes its producers in too: a sum, a fold along an axis, a
+broadcast gradient folded back each read every element of their input exactly once, so
+the tree feeding one is evaluated inside it — the squared difference under a loss, the
+`x²` under a variance, a gradient on its way to a bias — and written only if something
+else reads it. A hand-written GELU network: 139 → 74 dispatches, eager 4.2 ms, replayed
 1.7, fused 1.5 (`npm run fuse:py`); the fused values are within 1e-6 relative of eager, the
 difference being a multiply and an add the compiler contracts into one rounding once they
 share a kernel. Each fused kernel is compiled once, some fifteen milliseconds each on the

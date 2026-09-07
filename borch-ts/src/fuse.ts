@@ -21,12 +21,28 @@
  * step did. The expressions are the same strings the single kernels use, on the same
  * IEEE operations in the same order, so the values are the same bit for bit (`capture:py`).
  *
+ * **A reduction takes its producers in too.** A sum, a fold along an axis, a broadcast
+ * gradient folded back — each reads every element of its input exactly once, so an
+ * elementwise tree feeding it is evaluated inside the reduction (`Reduce` in
+ * `kernels.ts`: the kernel rebuilt around a `load(i)`) under the same rules, and the
+ * tree's own output is written only when something else reads it — a loss's squared
+ * difference, the `x²` under a variance, a gradient on its way to a bias never touch
+ * memory.
+ *
  * Measured on the M4 Max (2026-09-07): the U-Net step, already fused by hand where it
  * counts, gives this pass fifteen of 224 dispatches; a hand-written GELU network gives
  * it far more — see `fuse:py`.
  */
 import { Device, type Recorded } from "./device.js";
-import { contiguousStrides, type Elementwise, grid1d, WORKGROUP } from "./kernels.js";
+import { contiguousStrides, type Elementwise, grid1d, type Reduce, type Source, WORKGROUP } from "./kernels.js";
+
+function elementwise(meta: Elementwise | Reduce | undefined): meta is Elementwise {
+  return meta !== undefined && "expr" in meta;
+}
+
+function reduction(meta: Elementwise | Reduce | undefined): meta is Reduce {
+  return meta !== undefined && "make" in meta;
+}
 
 /** A short, stable hash of a string — the fused kernels' cache key. */
 function hashOf(text: string): string {
@@ -60,9 +76,13 @@ export function fuseRecords(dev: Device, records: readonly Recorded[]): { record
     if (list) list.push(i); else map.set(b, [i]);
   };
   records.forEach((r, i) => {
-    if (r.meta) {
+    if (elementwise(r.meta)) {
       for (const inp of r.meta.inputs) push(readers, r.buffers[inp.binding] as GPUBuffer, i);
       push(writers, r.buffers[r.meta.out] as GPUBuffer, i);
+    } else if (reduction(r.meta)) {
+      const input = r.meta.input;
+      push(readers, r.buffers[input] as GPUBuffer, i);
+      r.buffers.forEach((b, k) => { if (k !== input) push(writers, b, i); });
     } else {
       for (const b of r.buffers) { push(readers, b, i); push(writers, b, i); }
     }
@@ -80,12 +100,21 @@ export function fuseRecords(dev: Device, records: readonly Recorded[]): { record
   let fused = 0;
   for (let i = records.length - 1; i >= 0; i--) {
     const root = records[i] as Recorded;
-    if (!root.meta || absorbed.has(i)) continue;
-    const tree = gather(records, i, readers, writers, producerOf, absorbed);
-    if (tree.length < 2) continue;
-    for (const node of tree) if (node.index !== i) absorbed.add(node.index);
-    fused += tree.length - 1;
-    replaced.set(i, build(dev, tree, readers));
+    if (absorbed.has(i)) continue;
+    if (elementwise(root.meta)) {
+      const tree = gather(records, i, i, 0, readers, writers, producerOf, absorbed);
+      if (tree.length < 2) continue;
+      for (const node of tree) if (node.index !== i) absorbed.add(node.index);
+      fused += tree.length - 1;
+      replaced.set(i, build(dev, tree, readers));
+    } else if (reduction(root.meta)) {
+      const top = feeder(records, i, root.meta, readers, writers, producerOf, absorbed);
+      if (top === undefined) continue;
+      const tree = gather(records, top, i, root.buffers.length - 1, readers, writers, producerOf, absorbed);
+      for (const node of tree) absorbed.add(node.index);
+      fused += tree.length;
+      replaced.set(i, buildReduce(dev, tree, root, i, root.meta, readers));
+    }
   }
   records.forEach((r, i) => {
     if (absorbed.has(i)) return;
@@ -94,14 +123,55 @@ export function fuseRecords(dev: Device, records: readonly Recorded[]): { record
   return { records: out, fused };
 }
 
-/** The root and every producer it can pull in, in original order. */
+/**
+ * Whether the producer `p` of `buf` can be evaluated at `position` instead: an
+ * elementwise dispatch of `n` elements writing `buf` and nothing else writing it, with no
+ * reader of `buf` between the two except `except`.
+ */
+function movable(
+  records: readonly Recorded[], p: number, buf: GPUBuffer, n: number, position: number,
+  readers: Map<GPUBuffer, number[]>, writers: Map<GPUBuffer, number[]>, except: ReadonlySet<number>,
+): Node | undefined {
+  const prod = records[p] as Recorded;
+  if (!elementwise(prod.meta) || prod.meta.n !== n) return undefined;
+  if (prod.buffers[prod.meta.out] !== buf) return undefined;
+  if ((writers.get(buf) ?? []).length !== 1) return undefined;
+  const between = (readers.get(buf) ?? []).filter((r) => r > p && r < position && !except.has(r));
+  if (between.length) return undefined;
+  return { index: p, rec: prod, meta: prod.meta };
+}
+
+/** The elementwise producer a reduction at `at` can take in, if it has one. */
+function feeder(
+  records: readonly Recorded[], at: number, meta: Reduce,
+  readers: Map<GPUBuffer, number[]>, writers: Map<GPUBuffer, number[]>,
+  producerOf: (b: GPUBuffer, before: number) => number | undefined,
+  absorbed: Set<number>,
+): number | undefined {
+  const rec = records[at] as Recorded;
+  const buf = rec.buffers[meta.input] as GPUBuffer;
+  const p = producerOf(buf, at);
+  if (p === undefined || absorbed.has(p)) return undefined;
+  const node = movable(records, p, buf, meta.n, at, readers, writers, new Set([at]));
+  if (!node) return undefined;
+  // The reduction's own buffers count against the binding budget alongside the tree's.
+  if (bindingsOf([node], readers, at) + rec.buffers.length - 1 > Device.storageBuffersPerStage) return undefined;
+  return p;
+}
+
+/**
+ * The root and every producer it can pull in, in original order. The tree is evaluated
+ * at `position` — the root's own index, or that of the reduction consuming the root —
+ * with `reserve` bindings of the consumer's own to leave room for.
+ */
 function gather(
-  records: readonly Recorded[], rootIndex: number,
+  records: readonly Recorded[], rootIndex: number, position: number, reserve: number,
   readers: Map<GPUBuffer, number[]>, writers: Map<GPUBuffer, number[]>,
   producerOf: (b: GPUBuffer, before: number) => number | undefined,
   absorbed: Set<number>,
 ): Node[] {
   const root = records[rootIndex] as Recorded;
+  const consumer = position === rootIndex ? undefined : position;
   const nodes = new Map<number, Node>();
   nodes.set(rootIndex, { index: rootIndex, rec: root, meta: root.meta as Elementwise });
   const queue = [rootIndex];
@@ -113,35 +183,38 @@ function gather(
       const buf = node.rec.buffers[inp.binding] as GPUBuffer;
       const p = producerOf(buf, at);
       if (p === undefined || nodes.has(p) || absorbed.has(p)) continue;
-      const prod = records[p] as Recorded;
-      if (!prod.meta || prod.meta.n !== node.meta.n) continue;
-      if (prod.buffers[prod.meta.out] !== buf) continue;
-      // Written once, and read by nobody between the producer and the root except nodes
-      // already in the tree.
-      if ((writers.get(buf) ?? []).length !== 1) continue;
-      const between = (readers.get(buf) ?? []).filter((r) => r > p && r < rootIndex && !nodes.has(r));
-      if (between.length) continue;
+      // Written once, and read by nobody between the producer and the position except
+      // nodes already in the tree (and the consumer).
+      const except = new Set(nodes.keys());
+      if (consumer !== undefined) except.add(consumer);
+      const prod = movable(records, p, buf, node.meta.n, position, readers, writers, except);
+      if (!prod) continue;
       // Within the device's binding budget: every leaf and every node is a buffer.
-      const trial = new Map(nodes); trial.set(p, { index: p, rec: prod, meta: prod.meta });
-      if (bindingsOf([...trial.values()], readers) > Device.storageBuffersPerStage) continue;
-      nodes.set(p, { index: p, rec: prod, meta: prod.meta });
+      const trial = new Map(nodes); trial.set(p, prod);
+      if (bindingsOf([...trial.values()], readers, consumer) + reserve > Device.storageBuffersPerStage) continue;
+      nodes.set(p, prod);
       queue.push(p);
     }
   }
   return [...nodes.values()].sort((a, b) => a.index - b.index);
 }
 
-/** Whether a node's output has to be written: the root's always; an intermediate's
- *  when it is not internal, or when something outside the tree reads it. */
-function mustWrite(node: Node, tree: readonly Node[], readers: Map<GPUBuffer, number[]>): boolean {
+/**
+ * Whether a node's output has to be written: when it is not internal, or when something
+ * outside the tree reads it. The root of a tree that is itself the kernel is always
+ * written; the root feeding a reduction (`consumer`) is an intermediate like the rest.
+ */
+function mustWrite(node: Node, tree: readonly Node[], readers: Map<GPUBuffer, number[]>, consumer?: number): boolean {
   const root = tree[tree.length - 1] as Node;
-  if (node.index === root.index || !node.meta.internal) return true;
+  if (node.index === root.index && consumer === undefined) return true;
+  if (!node.meta.internal) return true;
   const inTree = new Set(tree.map((t) => t.index));
+  if (consumer !== undefined) inTree.add(consumer);
   return (readers.get(node.rec.buffers[node.meta.out] as GPUBuffer) ?? []).some((r) => !inTree.has(r));
 }
 
 /** How many buffers a kernel for `tree` binds: its distinct leaves plus the outputs it writes. */
-function bindingsOf(tree: readonly Node[], readers: Map<GPUBuffer, number[]>): number {
+function bindingsOf(tree: readonly Node[], readers: Map<GPUBuffer, number[]>, consumer?: number): number {
   const outputs = new Set<GPUBuffer>();
   for (const node of tree) outputs.add(node.rec.buffers[node.meta.out] as GPUBuffer);
   const leaves = new Set<GPUBuffer>();
@@ -151,13 +224,20 @@ function bindingsOf(tree: readonly Node[], readers: Map<GPUBuffer, number[]>): n
       if (!outputs.has(b)) leaves.add(b);
     }
   }
-  return leaves.size + tree.filter((node) => mustWrite(node, tree, readers)).length;
+  return leaves.size + tree.filter((node) => mustWrite(node, tree, readers, consumer)).length;
 }
 
-/** One kernel for the tree: the leaves read, every node's output written. */
-function build(dev: Device, tree: Node[], readers: Map<GPUBuffer, number[]>): Recorded {
-  const root = tree[tree.length - 1] as Node;
-  const n = root.meta.n;
+/** The tree as WGSL: its bindings and buffers, the preludes, the body computing every
+ *  node at element `gid`, and the variable holding the root's value. */
+interface Emitted {
+  readonly bindings: string[];
+  readonly buffers: GPUBuffer[];
+  readonly prelude: string;
+  readonly body: string;
+  readonly result: string;
+}
+
+function emit(tree: Node[], readers: Map<GPUBuffer, number[]>, consumer?: number): Emitted {
   const inTree = new Map<GPUBuffer, Node>();
   for (const node of tree) inTree.set(node.rec.buffers[node.meta.out] as GPUBuffer, node);
   // Bindings: leaves first (dedup by buffer), then every node's output.
@@ -200,25 +280,32 @@ function build(dev: Device, tree: Node[], readers: Map<GPUBuffer, number[]>): Re
       }
     }
     value.set(node.index, `v${k}`);
-    nodeCode.push(`  var v${k}: f32;\n  { ${locals.join(" ")} v${k} = ${node.meta.expr}; }` + (mustWrite(node, tree, readers) ? `\n  O${k}[gid] = v${k};` : ""));
+    nodeCode.push(`  var v${k}: f32;\n  { ${locals.join(" ")} v${k} = ${node.meta.expr}; }` + (mustWrite(node, tree, readers, consumer) ? `\n  O${k}[gid] = v${k};` : ""));
   });
   const bindings: string[] = [];
   const buffers: GPUBuffer[] = [];
   leaves.forEach((leaf, i) => { bindings.push(`@group(0) @binding(${i}) var<storage, read> L${i}: array<f32>;`); buffers.push(leaf.buffer); });
   tree.forEach((node, k) => {
-    if (!mustWrite(node, tree, readers)) return;
+    if (!mustWrite(node, tree, readers, consumer)) return;
     bindings.push(`@group(0) @binding(${buffers.length}) var<storage, read_write> O${k}: array<f32>;`);
     buffers.push(node.rec.buffers[node.meta.out] as GPUBuffer);
   });
+  return { bindings, buffers, prelude: [...preludes].join("\n"), body: [...leafCode, ...nodeCode].join("\n"), result: `v${tree.length - 1}` };
+}
+
+/** One kernel for the tree: the leaves read, every node's output written. */
+function build(dev: Device, tree: Node[], readers: Map<GPUBuffer, number[]>): Recorded {
+  const root = tree[tree.length - 1] as Node;
+  const n = root.meta.n;
+  const e = emit(tree, readers);
   const grid = grid1d(n);
-  const code = `${[...preludes].join("\n")}
-${bindings.join("\n")}
+  const code = `${e.prelude}
+${e.bindings.join("\n")}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   let gid = g.y * ${grid.threadsX}u + g.x;
   if (gid >= ${n}u) { return; }
-${leafCode.join("\n")}
-${nodeCode.join("\n")}
+${e.body}
 }`;
   // The key is the code: two trees of the same ops can bind differently (a leaf used
   // twice, an intermediate written or not), and a pipeline cached by op names alone was
@@ -226,5 +313,21 @@ ${nodeCode.join("\n")}
   const key = `fused:${hashOf(code)}:${n}`;
   const pipeline = dev.pipeline(key, () => code);
   fusedCodes.set(key, code);
-  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, buffers), groups: [grid.x, grid.y, 1], buffers };
+  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, e.buffers), groups: [grid.x, grid.y, 1], buffers: e.buffers };
+}
+
+/** The reduction `root` rebuilt around the tree feeding it: the tree's bindings first,
+ *  the reduction's own (its input left out) after. */
+function buildReduce(dev: Device, tree: Node[], root: Recorded, at: number, meta: Reduce, readers: Map<GPUBuffer, number[]>): Recorded {
+  const e = emit(tree, readers, at);
+  const source: Source = {
+    bindings: e.bindings.join("\n"), prelude: e.prelude, count: e.buffers.length,
+    load: `fn load(gid: u32) -> f32 {\n${e.body}\n  return ${e.result};\n}`,
+  };
+  const code = meta.make(source);
+  const buffers = [...e.buffers, ...root.buffers.filter((_, k) => k !== meta.input)];
+  const key = `fused:${hashOf(code)}:${meta.n}`;
+  const pipeline = dev.pipeline(key, () => code);
+  fusedCodes.set(key, code);
+  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, buffers), groups: root.groups, buffers };
 }

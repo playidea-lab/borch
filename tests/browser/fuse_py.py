@@ -5,7 +5,8 @@
 Ten steps of a network nobody fused by hand — GELU written out from tanh, a LayerNorm from
 means and a square root, a weighted squared loss — eagerly; then from the same weights with
 the first step recorded and the rest replayed, once as recorded and once after
-`capture.fuse()` merged the elementwise trees. Judged: the plain replay is the eager run
+`capture.fuse()` merged the elementwise trees — into single kernels, and into the
+reductions that read them (139 → 74 dispatches). Judged: the plain replay is the eager run
 exactly; the fused replay within 1e-5 relative on every loss and parameter (a fused
 expression lets the shader compiler contract a multiply and an add into one rounding,
 which the separate kernels could not — the difference is that rounding); fewer dispatches

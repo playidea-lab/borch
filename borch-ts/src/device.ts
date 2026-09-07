@@ -17,7 +17,7 @@
  * looked at, so here the limits are **measured in advance and exceeding one throws.**
  */
 
-import { type Elementwise, grid1d, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
+import { type Elementwise, grid1d, type Reduce, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
 import { fuseRecords } from "./fuse.js";
 
 const BYTES_PER_F32 = 4;
@@ -270,8 +270,9 @@ export interface Recorded {
   readonly groups: readonly [number, number, number];
   /** The buffers behind the bind group, in binding order — what a fusion pass reads. */
   readonly buffers: readonly GPUBuffer[];
-  /** For an elementwise dispatch, what it computes — see `Elementwise`. */
-  readonly meta?: Elementwise;
+  /** For an elementwise dispatch, what it computes — see `Elementwise`; for a reduction,
+   *  what it reads once — see `Reduce`. */
+  readonly meta?: Elementwise | Reduce;
 }
 
 /**
@@ -1030,7 +1031,7 @@ export class Device {
     pipeline: GPUComputePipeline,
     buffers: readonly GPUBuffer[],
     groups: readonly [number, number, number],
-    meta?: Elementwise,
+    meta?: Elementwise | Reduce,
   ): void {
     const cap = this.limits.maxComputeWorkgroupsPerDimension;
     for (const [axis, count] of groups.entries()) {
@@ -1082,7 +1083,7 @@ export class Device {
    * Runs one-dimensional work spread over a grid. Paired with the indexing
    * in `kernels.ts`.
    */
-  run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number, meta?: Elementwise): void {
+  run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number, meta?: Elementwise | Reduce): void {
     const g = grid1d(n);
     this.run(pipeline, buffers, [g.x, g.y, 1], meta);
   }
@@ -1121,10 +1122,12 @@ export class Device {
       const parts = reduceParts(count);
       const dst = this.alloc(parts);
       const size = count;
+      // The first pass reads the input once each; a fusion pass may inline its producer.
       this.run1d(
         this.pipeline(`reduceSum:${size}`, () => reduceSum(size)),
         [src, dst],
         size,
+        src === input ? { n: size, input: 0, make: (source) => reduceSum(size, source) } : undefined,
       );
       // **It must not be released here.** The commands accumulate and go out later, so
       // the dispatch just issued is still about to read this buffer. It returns to the

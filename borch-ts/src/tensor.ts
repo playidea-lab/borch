@@ -2102,6 +2102,7 @@ export class Tensor implements Node<Tensor> {
       dev().pipeline(`rd:${kind}:${key}`, () => reduceDim(kind, outer, red, inner)),
       [this.buffer, out],
       n,
+      { n: this.size, input: 0, make: (source) => reduceDim(kind, outer, red, inner, source) },
     );
     const result = Tensor.make(
       out,
@@ -12885,6 +12886,7 @@ function foldTo(wide: Tensor, target: readonly number[]): Tensor {
       dev().pipeline(`rbw:${wide.shape}|${small}`, () => reduceBroadcastWide(wide.shape, small)),
       [wide.buffer, target],
       [n, pieces, 1],
+      { n: numel(wide.shape), input: 0, make: (source) => reduceBroadcastWide(wide.shape, small, source) },
     );
     if (pieces > 1) {
       dev().run1d(dev().pipeline(`sumsplits:${n}:${pieces}`, () => sumSplits(n, pieces)), [target, out], n);
@@ -12897,6 +12899,7 @@ function foldTo(wide: Tensor, target: readonly number[]): Tensor {
       ),
       [wide.buffer, out],
       n,
+      { n: numel(wide.shape), input: 0, make: (source) => reduceBroadcast(wide.shape, small, source) },
     );
   }
   return new Tensor(out, target);

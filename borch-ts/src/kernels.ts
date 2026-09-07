@@ -1110,6 +1110,37 @@ export function contiguousStrides(shape: readonly number[], strides: readonly nu
   return true;
 }
 
+/**
+ * A reduction's source, **as the fusion pass inlines it.** A reduction reads every element
+ * of its input exactly once, so when that input is the output of an elementwise tree the
+ * tree can be evaluated inside the reduction — `load(i)` in place of `A[i]` — and the
+ * intermediate is never read back. A kernel that carries a `Reduce` builds itself again
+ * from a `Source`: the tree's leaf and output bindings come first (`count` of them), the
+ * kernel's own remaining buffers after.
+ */
+export interface Source {
+  readonly bindings: string;
+  readonly prelude: string;
+  /** `fn load(gid: u32) -> f32` — the tree's value at element `gid`, its outputs written. */
+  readonly load: string;
+  readonly count: number;
+}
+
+/** What a reduction dispatch reads once, and how to rebuild it around an inlined source. */
+export interface Reduce {
+  readonly n: number;
+  readonly input: number;
+  readonly make: (source: Source) => string;
+}
+
+/** A reduction kernel's head: the source's bindings, and the read of one element. */
+function sourced(source: Source | undefined, name: string): { head: string; next: number; at: (index: string) => string } {
+  if (!source) return { head: `@group(0) @binding(0) var<storage, read> ${name}: array<f32>;`, next: 1, at: (index) => `${name}[${index}]` };
+  return { head: `${source.prelude}
+${source.bindings}
+${source.load}`, next: source.count, at: (index) => `load(${index})` };
+}
+
 export function unaryForward(name: string, n: number): string {
   const op = unarySpec(name);
   return `${op.prelude ?? ""}
@@ -1280,8 +1311,9 @@ export function foldPieces(full: readonly number[], small: readonly number[]): n
   return Math.max(1, Math.min(64, Math.ceil(broadcastFold(full, small) / 16384)));
 }
 
-export function reduceBroadcastWide(full: readonly number[], small: readonly number[]): string {
+export function reduceBroadcastWide(full: readonly number[], small: readonly number[], source?: Source): string {
   const rank = full.length;
+  const s = sourced(source, "G");
   const fullStride: number[] = new Array<number>(rank).fill(1);
   for (let d = rank - 2; d >= 0; d--) fullStride[d] = (fullStride[d + 1] ?? 1) * (full[d + 1] ?? 1);
   // The output element's coordinates, and the part of the offset they fix.
@@ -1312,8 +1344,8 @@ export function reduceBroadcastWide(full: readonly number[], small: readonly num
   // Cut into pieces, workgroup (element, piece) folds its slice and writes a partial at
   // Out[piece · n + element]; `sumSplits` adds the pieces. Unsplit, Out is the answer.
   return `
-@group(0) @binding(0) var<storage, read> G: array<f32>;
-@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+${s.head}
+@group(0) @binding(${s.next}) var<storage, read_write> Out: array<f32>;
 var<workgroup> part: array<f32, ${FOLD_GROUP}>;
 @compute @workgroup_size(${FOLD_GROUP})
 fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
@@ -1324,7 +1356,7 @@ ${decompose.join("\n")}
   let hi = min(lo + ${per}u, ${fold}u);
   var acc = 0.0;
   for (var f = lo + l.x; f < hi; f = f + ${FOLD_GROUP}u) {
-    acc = acc + G[base + ${foldTerms.join(" + ")}];
+    acc = acc + ${s.at(`base + ${foldTerms.join(" + ")}`)};
   }
   part[l.x] = acc;
   workgroupBarrier();
@@ -1342,7 +1374,9 @@ ${decompose.join("\n")}
 export function reduceBroadcast(
   full: readonly number[],
   small: readonly number[],
+  source?: Source,
 ): string {
+  const s = sourced(source, "G");
   if (full.length !== small.length) {
     throw new Error(`rank mismatch: ${full.length} vs ${small.length}`);
   }
@@ -1378,8 +1412,8 @@ export function reduceBroadcast(
   }
 
   return `
-@group(0) @binding(0) var<storage, read> G: array<f32>;
-@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+${s.head}
+@group(0) @binding(${s.next}) var<storage, read_write> Out: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
@@ -1388,7 +1422,7 @@ ${decompose.join("\n")}
   let base = ${baseTerms.length > 0 ? baseTerms.join(" + ") : "0u"};
   var acc = 0.0;
 ${open.join("\n")}
-    acc = acc + G[${offTerms.join(" + ")}];
+    acc = acc + ${s.at(offTerms.join(" + "))};
 ${close.join("\n")}
   Out[gid] = acc;
 }`;
@@ -1556,11 +1590,12 @@ ${store.join("\n")}
  * from the same seed train differently. Calling again until one partial sum is left is
  * slower and **deterministic**, and this project takes the reproducible side.
  */
-export function reduceSum(n: number): string {
+export function reduceSum(n: number, source?: Source): string {
   const g = grid1d(n);
+  const s = sourced(source, "A");
   return `
-@group(0) @binding(0) var<storage, read> A: array<f32>;
-@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+${s.head}
+@group(0) @binding(${s.next}) var<storage, read_write> Out: array<f32>;
 const N: u32 = ${n}u;
 var<workgroup> part: array<f32, ${WORKGROUP}>;
 @compute @workgroup_size(${WORKGROUP})
@@ -1571,7 +1606,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>,
   // together, and a thread outside the range returning makes the control flow non-uniform
   // and the result undefined.
   let gid = g.y * ${g.threadsX}u + g.x;
-  part[l.x] = select(0.0, A[gid], gid < N);
+${source ? "  var v = 0.0;\n  if (gid < N) { v = load(gid); }\n  part[l.x] = v;" : "  part[l.x] = select(0.0, A[gid], gid < N);"}
   workgroupBarrier();
   var span = ${WORKGROUP / 2}u;
   loop {
@@ -1615,11 +1650,11 @@ export type ReduceKind = "sum" | "max" | "min" | "prod";
  * answer is more accurate. A reduction's length is always at least 1, so the first
  * element is always there.
  */
-const REDUCE_INIT: Readonly<Record<ReduceKind, string>> = {
-  sum: "0.0",
-  prod: "1.0",
-  max: "A[base]",
-  min: "A[base]",
+const REDUCE_INIT: Readonly<Record<ReduceKind, (first: string) => string>> = {
+  sum: () => "0.0",
+  prod: () => "1.0",
+  max: (first) => first,
+  min: (first) => first,
 };
 
 /** When the starting value is the first element, that position is not counted
@@ -1640,20 +1675,22 @@ export function reduceDim(
   outer: number,
   red: number,
   inner: number,
+  source?: Source,
 ): string {
   const n = outer * inner;
+  const s = sourced(source, "A");
   return `
-@group(0) @binding(0) var<storage, read> A: array<f32>;
-@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+${s.head}
+@group(0) @binding(${s.next}) var<storage, read_write> Out: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   let o = gid / ${inner}u;
   let i = gid % ${inner}u;
   let base = o * ${red * inner}u + i;
-  var acc = ${REDUCE_INIT[kind]};
+  var acc = ${REDUCE_INIT[kind](s.at("base"))};
   for (var r = ${REDUCE_FROM[kind]}u; r < ${red}u; r = r + 1u) {
-    let v = A[base + r * ${inner}u];
+    let v = ${s.at(`base + r * ${inner}u`)};
     ${REDUCE_STEP[kind]}
   }
   Out[gid] = acc;

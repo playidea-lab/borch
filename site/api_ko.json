@@ -3148,8 +3148,8 @@
     "src": "98d3881150ac"
   },
   "device/Recorded.meta": {
-    "ko": "원소별 dispatch라면 무엇을 계산했는지 — `Elementwise` 참조.",
-    "src": "77a88d1a5d7a"
+    "ko": "원소별 dispatch라면 무엇을 계산했는지 — `Elementwise` 참조; 리덕션이라면 무엇을 한 번씩 읽는지 — `Reduce` 참조.",
+    "src": "e7a0e2479603"
   },
   "device/Device.writeWords": {
     "ko": "`buffer`의 앞에 `words`를 쓴다 — 시드, 카운터.",
