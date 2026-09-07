@@ -1,46 +1,64 @@
-"""One browser probe at a time on this machine — `tests/browser/launch.py:probe_lock`.
-
-Two sessions ran browser probes at once on 2026-09-06 and neither finished the way it
-should have (a headed browser that never launched, a uv cache lock fought over, a nightly
-killed by a cleanup). The lock is taken where every probe begins — `serve()` — and this
-holds that a second taker waits for the first and says so.
-"""
+"""`tests/browser/launch.py:probe_lock` — one browser probe per machine, but never a process
+waiting on itself. Three runners load `launch.py` by path, so the module-level guard is one
+per copy; the environment carries the holder's pid across copies."""
+import importlib.util
 import os
 import pathlib
 import subprocess
 import sys
-import time
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-LAUNCH = ROOT / "tests" / "browser" / "launch.py"
+import pytest
 
-HOLDER = f"""
-import sys, time
-sys.path.insert(0, {str(LAUNCH.parent)!r})
-import launch
-launch.probe_lock("the holder")
+LAUNCH = pathlib.Path(__file__).resolve().parents[1] / "tests" / "browser" / "launch.py"
+CHILD = """
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX)
+os.write(fd, str(os.getpid()).encode())
 print("held", flush=True)
-time.sleep(1.5)
+time.sleep(float(sys.argv[2]))
 """
 
 
-def test_a_second_probe_waits_for_the_first_and_says_so(tmp_path, monkeypatch):
-    env = {**os.environ, "HOME": str(tmp_path)}          # the lock file lives under ~/.cache
-    env.pop("BORCH_NO_PROBE_LOCK", None)
-    holder = subprocess.Popen([sys.executable, "-c", HOLDER], env=env, stdout=subprocess.PIPE, text=True)
-    assert holder.stdout.readline().strip() == "held"
-    t0 = time.time()
-    taker = subprocess.run([sys.executable, "-c", HOLDER.replace("the holder", "the taker").replace("time.sleep(1.5)", "")],
-                           env=env, capture_output=True, text=True, timeout=30)
-    waited = time.time() - t0
-    holder.wait(timeout=10)
-    assert taker.returncode == 0, taker.stderr
-    assert "waiting: the taker" in taker.stdout, taker.stdout
-    assert waited >= 1.0, f"the taker did not wait ({waited:.2f}s)"
+def _fresh_copy(lock_path):
+    spec = importlib.util.spec_from_file_location(f"bt_launch_{id(lock_path)}_{os.urandom(2).hex()}", LAUNCH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.LOCK_PATH = lock_path
+    return mod
 
 
-def test_the_lock_can_be_declined_for_a_machine_nobody_shares(tmp_path):
-    env = {**os.environ, "HOME": str(tmp_path), "BORCH_NO_PROBE_LOCK": "1"}
-    out = subprocess.run([sys.executable, "-c", HOLDER.replace("time.sleep(1.5)", "")], env=env, capture_output=True, text=True, timeout=30)
-    assert out.returncode == 0 and "held" in out.stdout
-    assert not (tmp_path / ".cache" / "borch" / "browser-probe.lock").exists()
+@pytest.fixture
+def lock_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("BORCH_PROBE_LOCK_PID", raising=False)
+    monkeypatch.delenv("BORCH_NO_PROBE_LOCK", raising=False)
+    return tmp_path / "probe.lock"
+
+
+def test_probe_lock_taken_twice_by_two_copies_in_one_process_returns_at_once(lock_env):
+    first, second = _fresh_copy(lock_env), _fresh_copy(lock_env)
+    first.probe_lock()
+    assert lock_env.read_text() == str(os.getpid())
+    assert os.environ["BORCH_PROBE_LOCK_PID"] == str(os.getpid())
+    second.probe_lock()  # 09-08: this blocked forever, waiting on our own pid
+    assert second._lock_fd is None, "the second copy must not open a descriptor of its own"
+
+
+def test_probe_lock_with_a_dead_holder_pid_in_the_environment_still_takes_the_lock(lock_env, monkeypatch):
+    dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setenv("BORCH_PROBE_LOCK_PID", dead)
+    mod = _fresh_copy(lock_env)
+    mod.probe_lock()
+    assert mod._lock_fd is not None and lock_env.read_text() == str(os.getpid())
+
+
+def test_probe_lock_held_by_a_live_ancestor_pid_is_not_taken_again(lock_env, monkeypatch):
+    child = subprocess.Popen([sys.executable, "-c", CHILD, str(lock_env), "30"], stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == "held"
+        monkeypatch.setenv("BORCH_PROBE_LOCK_PID", str(child.pid))  # as if that process were our parent
+        mod = _fresh_copy(lock_env)
+        mod.probe_lock()  # would block until the child exits if the pid were not honoured
+        assert mod._lock_fd is None
+    finally:
+        child.kill(); child.wait()

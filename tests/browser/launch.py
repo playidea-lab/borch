@@ -427,7 +427,7 @@ def probe_lock(what="a browser probe"):
     `BORCH_NO_PROBE_LOCK=1` skips it — for a machine nobody shares.
     """
     global _lock_fd
-    if _lock_fd is not None or os.environ.get("BORCH_NO_PROBE_LOCK"):
+    if _lock_fd is not None or os.environ.get("BORCH_NO_PROBE_LOCK") or _held_by_this_process():
         return
     import fcntl                                                                  # noqa: PLC0415
     import time                                                                   # noqa: PLC0415
@@ -449,7 +449,29 @@ def probe_lock(what="a browser probe"):
     os.ftruncate(fd, 0)
     os.lseek(fd, 0, os.SEEK_SET)
     os.write(fd, str(os.getpid()).encode())
+    os.environ["BORCH_PROBE_LOCK_PID"] = str(os.getpid())
     _lock_fd = fd
+
+
+def _held_by_this_process():
+    """**A process must not wait on itself.** `run.py` and `borch-ts/test/run.py` load this
+    file by path, so `_lock_fd` above is one guard per copy, not per process. On 2026-09-08
+    `marimo_probe --bundle` took the lock once through `site/build_bundle.py` (which serves
+    the site to record its external requests) and asked again through its own copy — a
+    second `flock` on a new descriptor blocks even against the same process, and the
+    nightly sat in `bundle` for thirty-five minutes printing its own pid as the holder.
+    The pid goes into the environment on acquisition, where every copy in this process —
+    and any child this process waits on — can see that the machine is already ours."""
+    pid = os.environ.get("BORCH_PROBE_LOCK_PID")
+    if not pid:
+        return False
+    if pid == str(os.getpid()):
+        return True
+    try:
+        os.kill(int(pid), 0)  # an ancestor that is still running still holds it
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _open(playwright, headed=False, flags=FLAGS):
