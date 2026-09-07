@@ -9,6 +9,9 @@ same, every learned parameter and running statistic the same (the one thing that
 is BatchNorm's `num_batches_tracked`, a CPU counter the replay does not run), no fault.
 Then `torch.compiled(step)` over a sequence whose batches are sixteen and, every
 seventh, ten: two recordings, and the eager run of the same sequence bit for bit.
+Then a small transformer under AdamW — batched attention, one-kernel softmax, the
+weight decay as recorded copies — through `torch.compiled` plain (bit for bit against
+eager) and fused (within 1e-5 on the loss, fewer dispatches).
 Reported: the wall-clock step both ways — on the M4 Max 17.3 eager, 14.7 replayed.
 """
 import glob
@@ -77,6 +80,12 @@ def main(argv):
     comp = re.search(r"compiled two shapes: recordings (\d+) max \|Δloss\| ([0-9.e+-]+) max \|Δparam\| ([0-9.e+-]+)", done)
     ok = "faults 0" in done and bool(d_loss and d_w and comp) and float(d_loss.group(1)) == 0.0 and float(d_w.group(1)) == 0.0
     ok = ok and int(comp.group(1)) == 2 and float(comp.group(2)) == 0.0 and float(comp.group(3)) == 0.0
+    # The small transformer under AdamW: the plain recording bit for bit (its weight
+    # decay is recorded copies), the fused one within 1e-5 on the loss; the fused
+    # parameters are judged loosely — Adam magnifies a rounding on a bias near zero.
+    gpt = re.search(r"gpt compiled plain rel\|Δloss\| ([0-9.e+-]+) rel\|Δparam\| ([0-9.e+-]+) (\d+) dispatches, fused rel\|Δloss\| ([0-9.e+-]+) rel\|Δparam\| ([0-9.e+-]+) (\d+) dispatches", done)
+    ok = ok and bool(gpt) and float(gpt.group(1)) == 0.0 and float(gpt.group(2)) == 0.0
+    ok = ok and float(gpt.group(4)) <= 1e-5 and float(gpt.group(5)) <= 1e-2 and int(gpt.group(6)) < int(gpt.group(3))
     print("**the replayed step is the eager step, bit for bit**" if ok else "**it is not** — see above")
     return 0 if ok else 1
 

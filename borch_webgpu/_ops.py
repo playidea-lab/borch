@@ -842,6 +842,16 @@ class scope:                                             # noqa: N801
         return False
 
 
+def _buffer_of(t):
+    """A live wrapper's buffer, or None for one whose scope has closed — its handle
+    refuses the question, and a wrapper Python still holds over a freed buffer is not
+    holding anything the pass has to write."""
+    try:
+        return t._h.buffer
+    except Exception:  # noqa: BLE001 — the handle's refusal is the answer
+        return None
+
+
 class capture:
     """**Record one training step, replay it without Python.**
 
@@ -895,7 +905,7 @@ class capture:
         kernel reads, so an inference pass writes its answer and little else. Returns
         `(before, after)` dispatch counts; `unwritten` says how many intermediates the
         fused kernels leave alone."""
-        held = _to_js([t._h.buffer for t in list(Tensor._live)])
+        held = _to_js([b for b in (_buffer_of(t) for t in list(Tensor._live)) if b is not None])
         r = self._capture.fuse(held)
         self.unwritten = int(r.unwritten)
         return int(r.before), int(r.after)
