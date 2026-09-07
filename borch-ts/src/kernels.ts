@@ -1441,12 +1441,17 @@ export function reduceBroadcastWide(full: readonly number[], small: readonly num
     unit *= size;
   }
   const pieces = foldPieces(full, small);
-  const per = Math.ceil(fold / pieces);
+  // Four cells a thread when the innermost axis is folded, contiguous, and a whole
+  // number of fours — then four consecutive fold indices are four consecutive cells.
+  const last = axes[axes.length - 1];
+  const lanes = !source && last !== undefined && last.d === rank - 1 && last.size % 4 === 0 ? 4 : 1;
+  const per = Math.ceil(fold / pieces / lanes) * lanes;
   const n = small.reduce((a, b) => a * b, 1);
+  const head = lanes === 4 ? s.head.replace("array<f32>", "array<vec4<f32>>") : s.head;
   // Cut into pieces, workgroup (element, piece) folds its slice and writes a partial at
   // Out[piece · n + element]; `sumSplits` adds the pieces. Unsplit, Out is the answer.
   return `
-${s.head}
+${head}
 @group(0) @binding(${s.next}) var<storage, read_write> Out: array<f32>;
 var<workgroup> part: array<f32, ${FOLD_GROUP}>;
 @compute @workgroup_size(${FOLD_GROUP})
@@ -1456,11 +1461,11 @@ ${decompose.join("\n")}
   let base = ${baseTerms.length ? baseTerms.join(" + ") : "0u"};
   let lo = w.y * ${per}u;
   let hi = min(lo + ${per}u, ${fold}u);
-  var acc = 0.0;
-  for (var f = lo + l.x; f < hi; f = f + ${FOLD_GROUP}u) {
-    acc = acc + ${s.at(`base + ${foldTerms.join(" + ")}`)};
+  var acc = ${lanes === 4 ? "vec4(0.0)" : "0.0"};
+  for (var f = lo + l.x * ${lanes}u; f < hi; f = f + ${FOLD_GROUP * lanes}u) {
+    acc = acc + ${lanes === 4 ? `G[(base + ${foldTerms.join(" + ")}) / 4u]` : s.at(`base + ${foldTerms.join(" + ")}`)};
   }
-  part[l.x] = acc;
+  part[l.x] = ${lanes === 4 ? "acc.x + acc.y + acc.z + acc.w" : "acc"};
   workgroupBarrier();
   var span = ${FOLD_GROUP / 2}u;
   loop {
@@ -5086,9 +5091,13 @@ export function bnPieces(N: number, S: number): number {
  */
 export function batchNormStats(N: number, C: number, S: number): string {
   const pieces = bnPieces(N, S);
-  const per = Math.ceil((N * S) / pieces);
+  // Four cells a thread when a plane is a whole number of fours (`lanesOf`): the four
+  // sit in one channel and load as one `vec4`; a piece is then a whole number of fours.
+  const lanes = lanesOf(S);
+  const per = Math.ceil((N * S) / pieces / lanes) * lanes;
+  const T = lanes === 4 ? "vec4<f32>" : "f32";
   return `
-@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(0) var<storage, read> X: array<${T}>;
 @group(0) @binding(1) var<storage, read_write> PartSum: array<f32>;
 @group(0) @binding(2) var<storage, read_write> PartSq: array<f32>;
 var<workgroup> pt: array<f32, ${BN_GROUP}>;
@@ -5099,16 +5108,16 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
   let piece = w.y;
   let lo = piece * ${per}u;
   let hi = min(lo + ${per}u, ${N * S}u);
-  var total = 0.0;
-  var sq = 0.0;
-  for (var i = lo + l.x; i < hi; i = i + ${BN_GROUP}u) {
+  var total = ${lanes === 4 ? "vec4(0.0)" : "0.0"};
+  var sq = ${lanes === 4 ? "vec4(0.0)" : "0.0"};
+  for (var i = lo + l.x * ${lanes}u; i < hi; i = i + ${BN_GROUP * lanes}u) {
     let n = i / ${S}u;
-    let v = X[(n * ${C}u + c) * ${S}u + (i - n * ${S}u)];
+    let v = X[((n * ${C}u + c) * ${S}u + (i - n * ${S}u)) / ${lanes}u];
     total = total + v;
     sq = fma(v, v, sq);
   }
-  pt[l.x] = total;
-  pq[l.x] = sq;
+  pt[l.x] = ${lanes === 4 ? "total.x + total.y + total.z + total.w" : "total"};
+  pq[l.x] = ${lanes === 4 ? "sq.x + sq.y + sq.z + sq.w" : "sq"};
   workgroupBarrier();
   var span = ${BN_GROUP / 2}u;
   loop {
@@ -5215,13 +5224,16 @@ ${withXhat ? "  Xh[gid] = xh;" : ""}
  */
 export function batchNormStatsBackward(N: number, C: number, S: number, relu = false): string {
   const pieces = bnPieces(N, S);
-  const per = Math.ceil((N * S) / pieces);
+  const lanes = lanesOf(S);
+  const per = Math.ceil((N * S) / pieces / lanes) * lanes;
+  const T = lanes === 4 ? "vec4<f32>" : "f32";
+  const zero = lanes === 4 ? "vec4(0.0)" : "0.0";
   return `
-@group(0) @binding(0) var<storage, read> Xh: array<f32>;
-@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(0) var<storage, read> Xh: array<${T}>;
+@group(0) @binding(1) var<storage, read> G: array<${T}>;
 @group(0) @binding(2) var<storage, read_write> PartG: array<f32>;
 @group(0) @binding(3) var<storage, read_write> PartGXh: array<f32>;
-${relu ? "@group(0) @binding(4) var<storage, read> Y: array<f32>;" : ""}
+${relu ? `@group(0) @binding(4) var<storage, read> Y: array<${T}>;` : ""}
 var<workgroup> pg: array<f32, ${BN_GROUP}>;
 var<workgroup> px: array<f32, ${BN_GROUP}>;
 @compute @workgroup_size(${BN_GROUP})
@@ -5230,17 +5242,17 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
   let piece = w.y;
   let lo = piece * ${per}u;
   let hi = min(lo + ${per}u, ${N * S}u);
-  var sg = 0.0;
-  var sgx = 0.0;
-  for (var i = lo + l.x; i < hi; i = i + ${BN_GROUP}u) {
+  var sg = ${zero};
+  var sgx = ${zero};
+  for (var i = lo + l.x * ${lanes}u; i < hi; i = i + ${BN_GROUP * lanes}u) {
     let n = i / ${S}u;
-    let at = (n * ${C}u + c) * ${S}u + (i - n * ${S}u);
-    ${relu ? "let gv = select(0.0, G[at], Y[at] > 0.0);" : "let gv = G[at];"}
+    let at = ((n * ${C}u + c) * ${S}u + (i - n * ${S}u)) / ${lanes}u;
+    ${relu ? `let gv = select(${zero}, G[at], Y[at] > ${zero});` : "let gv = G[at];"}
     sg = sg + gv;
     sgx = fma(gv, Xh[at], sgx);
   }
-  pg[l.x] = sg;
-  px[l.x] = sgx;
+  pg[l.x] = ${lanes === 4 ? "sg.x + sg.y + sg.z + sg.w" : "sg"};
+  px[l.x] = ${lanes === 4 ? "sgx.x + sgx.y + sgx.z + sgx.w" : "sgx"};
   workgroupBarrier();
   var span = ${BN_GROUP / 2}u;
   loop {
