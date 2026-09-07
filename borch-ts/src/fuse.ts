@@ -33,8 +33,11 @@
  * memory.
  *
  * Measured on the M4 Max (2026-09-07): the U-Net step, already fused by hand where it
- * counts, gives this pass fifteen of 224 dispatches; a hand-written GELU network gives
- * it far more — see `fuse:py`.
+ * counts (BatchNorm with its ReLU, the loss with its sigmoid), has ten elementwise
+ * dispatches of 223 and gives this pass three; a hand-written GELU network gives it
+ * sixty-three of 139 — see `fuse:py`. `fuse()` itself is a millisecond; the shaders it
+ * made are compiled when first dispatched, which the first replay pays — ten
+ * milliseconds on the U-Net, nothing visible on the small network (measured).
  */
 import { Device, type Recorded } from "./device.js";
 import { contiguousStrides, type Elementwise, grid1d, type Reduce, type Source, WORKGROUP } from "./kernels.js";

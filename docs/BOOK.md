@@ -625,8 +625,9 @@ never touching memory, 2.9 ms eager to 0.43 replayed. A hand-written GELU networ
 training step: 139 → 76 dispatches, eager 4.2 ms, replayed 0.85, fused 0.72
 (`npm run fuse:py`); the fused values are within 1e-6 relative of eager, the
 difference being a multiply and an add the compiler contracts into one rounding once they
-share a kernel. Each fused kernel is compiled once, some fifteen milliseconds each on the
-M4 Max — a recording's first call pays it. What no recording can carry: a step that
+share a kernel. `fuse()` itself takes a millisecond; the kernels it made are compiled when
+first dispatched, so the first replay after it pays that — ten milliseconds on the U-Net,
+nothing visible on the small network (measured). What no recording can carry: a step that
 branches in Python on the step's values.
 
 ## If you need more than that — `borch-webgpu`
