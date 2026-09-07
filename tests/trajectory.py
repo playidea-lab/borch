@@ -84,6 +84,61 @@ def build_unet(L):
     return UNet()
 
 
+def gpt_data():
+    """4 sequences of 16 tokens over a vocabulary of 64 — each token the previous plus a
+    fixed step, modulo 64, with a little noise — and the next token as the target: the
+    smallest language-model problem that still has attention, a mask and a decoder."""
+    rng = np.random.default_rng(14)
+    x = np.zeros((4, 16), np.int64)
+    y = np.zeros((4, 16), np.int64)
+    for b in range(4):
+        start, step = rng.integers(0, 64), rng.integers(1, 5)
+        seq = (start + step * np.arange(17) + rng.integers(0, 2, 17)) % 64
+        x[b], y[b] = seq[:-1], seq[1:]
+    return x, y.reshape(-1)
+
+
+def build_gpt(L):
+    """Two decoder blocks — LayerNorm, causal multi-head attention, a GELU MLP — over token
+    and position embeddings, the logits flattened to (rows, vocabulary) for the loss. The
+    causal mask is a constant made inside the forward, so the model takes one input."""
+    T, D, H, V = 16, 32, 2, 64
+    mask = np.triu(np.full((T, T), -1e9, np.float32), 1)
+    nn = L.nn
+
+    class Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.ln1 = nn.LayerNorm(D)
+            self.attn = nn.MultiheadAttention(D, H, batch_first=True)
+            self.ln2 = nn.LayerNorm(D)
+            self.fc1 = nn.Linear(D, 4 * D)
+            self.fc2 = nn.Linear(4 * D, D)
+
+        def forward(self, h, m):
+            a = self.ln1(h)
+            h = h + self.attn(a, a, a, attn_mask=m, need_weights=False)[0]
+            return h + self.fc2(nn.functional.gelu(self.fc1(self.ln2(h))))
+
+    class GPT(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = nn.Embedding(V, D)
+            self.pos = nn.Embedding(T, D)
+            self.blocks = nn.ModuleList([Block(), Block()])
+            self.ln = nn.LayerNorm(D)
+            self.head = nn.Linear(D, V)
+
+        def forward(self, idx):
+            m = L.tensor(mask)
+            h = self.emb(idx) + self.pos(L.arange(T))
+            for b in self.blocks:
+                h = b(h, m)
+            return self.head(self.ln(h)).reshape(-1, V)
+
+    return GPT()
+
+
 RECIPES = {
     # name: (data, build, optimiser, steps)
     "head": (head_data,
@@ -103,6 +158,10 @@ RECIPES = {
     "unet": (unet_data, build_unet,
              lambda L, params: L.optim.Adam(params, lr=1e-2),
              30),
+    # AdamW, so the weight decay — a recorded copy under a capture — is on the curve too.
+    "gpt": (gpt_data, build_gpt,
+            lambda L, params: L.optim.AdamW(params, lr=3e-3),
+            30),
 }
 
 
