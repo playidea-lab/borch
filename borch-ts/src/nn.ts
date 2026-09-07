@@ -22,8 +22,7 @@ import { runningStats } from "./kernels.js";
 import { onSeed, uniform as uniform01, uniformArray } from "./random.js";
 import {
   device, type InterpolateMode, keepAlive, noGrad, type PadMode, type Reduction,
-  Tensor,
-} from "./tensor.js";
+  Tensor, batchedMatmul } from "./tensor.js";
 
 /**
  * A number printed the way Python prints a float — `2.0`, not `2`.
@@ -2006,12 +2005,24 @@ export function scaledDotProductAttention(
   };
 
   if (rank === 2) return one(query, key, value);
-  const batch = query.shape[0] ?? 1;
-  const outs: Tensor[] = [];
-  for (let b = 0; b < batch; b++) {
-    outs.push(one(query.select(0, b), key.select(0, b), value.select(0, b)));
+  // Every batch entry (and head) at once: the leading axes fold into one batch and the
+  // two products are batched matmuls, the key read transposed in place — see
+  // `batchedMatmul`. A mask with leading axes is spread to the batch's and folded the
+  // same way.
+  const lead = query.shape.slice(0, -2);
+  const batch = lead.reduce((x, y) => x * y, 1);
+  const q = query.reshape([batch, len, dim]);
+  const k = key.reshape([batch, keyLen, dim]);
+  const v = value.reshape([batch, keyLen, value.shape[value.shape.length - 1] ?? dim]);
+  let scores = batchedMatmul(q, k, false, true).binary("mul", scaleT);
+  if (causal) scores = scores.add(causal);
+  if (attnMask) {
+    const m = attnMask.shape.length > 2
+      ? attnMask.expand(...lead, len, keyLen).reshape([batch, len, keyLen]) : attnMask;
+    scores = scores.add(m);
   }
-  return Tensor.stack(outs, 0);
+  const out = batchedMatmul(scores.softmax(-1).dropout(dropoutP, true), v, false, false);
+  return out.reshape([...lead, len, out.shape[2] ?? dim]);
 }
 
 // **`refuseUnwiredPooling` stood here and is gone, and so has the paragraph that
@@ -5842,40 +5853,39 @@ export function multiHeadAttentionForward(
   }
   const S2 = src;
 
-  const rows: Tensor[] = [];
-  const allWeights: Tensor[] = [];
-  for (let n = 0; n < N; n++) {
-    const perHead: Tensor[] = [];
-    const perHeadWeights: Tensor[] = [];
-    const pad = keyPaddingMask ? keyPaddingMask.select(0, n).reshape([1, S2]) : null;
-    for (let h = 0; h < numHeads; h++) {
-      const cut = (t: Tensor, len: number) =>
-        t.select(0, n).narrow(1, h * head, head).reshape([len, head]);
-      let scores = cut(q, L).mm(cut(k, S2).transpose()).binary("mul", scale);
-      if (attnMask) scores = scores.add(attnMask);
-      if (pad) scores = scores.add(pad);
-      // **Dropout on the attention, torch's way round.** The binding took
-      // `dropout_p` and `training` and dropped them both, so a layer built to
-      // drop half its attention dropped none of it and said nothing — the kind
-      // of difference that shows up as a model that trains a little too well.
-      //
-      // torch drops *after* the softmax and hands back the dropped weights, not
-      // the ones before, so `need_weights=True` and the value matmul agree on
-      // what was attended to. At `dropoutP = 0` this is the identity, which is
-      // why every existing golden case is untouched by it.
-      const w = scores.softmax(1).dropout(dropoutP, training);
-      perHeadWeights.push(w.reshape([1, L, S2]));
-      perHead.push(w.mm(cut(v, S2)));
-    }
-    rows.push(Tensor.cat(perHead, 1));                 // (L, E)
-    allWeights.push(Tensor.cat(perHeadWeights, 0).reshape([1, numHeads, L, S2]));
+  // **Every batch entry and every head at once.** The heads are split by one
+  // permutation each — `(N, len, H, d)` to `(N·H, len, d)` — and the two products are
+  // batched matmuls with the key read transposed in place (`batchedMatmul`). This was a
+  // loop over the batch and the heads with a product each, sixty-four of them at batch
+  // 16 and four heads, about twenty dispatches apiece (measured 2026-09-07).
+  const split = (t: Tensor, len: number): Tensor =>
+    t.reshape([N, len, numHeads, head]).permute([0, 2, 1, 3]).reshape([N * numHeads, len, head]);
+  let scores = batchedMatmul(split(q, L), split(k, S2), false, true).binary("mul", scale);
+  if (attnMask) {
+    // torch's mask is `(L, S)` for every entry or `(N·H, L, S)` — both broadcast here.
+    scores = scores.add(attnMask);
   }
-  const merged = Tensor.stack(rows, 0).reshape([N * L, E]);
+  if (keyPaddingMask) {
+    // `(N, S)`: the same row for every head and every query of an entry.
+    scores = scores.reshape([N, numHeads, L, S2]).add(keyPaddingMask.reshape([N, 1, 1, S2])).reshape([N * numHeads, L, S2]);
+  }
+  // **Dropout on the attention, torch's way round.** The binding took `dropout_p`
+  // and `training` and dropped them both, so a layer built to drop half its attention
+  // dropped none of it and said nothing — the kind of difference that shows up as a
+  // model that trains a little too well.
+  //
+  // torch drops *after* the softmax and hands back the dropped weights, not the ones
+  // before, so `need_weights=True` and the value matmul agree on what was attended
+  // to. At `dropoutP = 0` this is the identity, which is why every existing golden
+  // case is untouched by it.
+  const w = scores.softmax(2).dropout(dropoutP, training);   // (N·H, L, S)
+  const merged = batchedMatmul(w, split(v, S2), false, false)  // (N·H, L, d)
+    .reshape([N, numHeads, L, head]).permute([0, 2, 1, 3]).reshape([N * L, E]);
+  const weights = w.reshape([N, numHeads, L, S2]);
   if (!outWeight) throw new Error("multiHeadAttentionForward needs outProjWeight");
   const projected = merged.linear(outWeight);
   const out = (outBias ? projected.add(outBias) : projected)
     .reshape([N, L, E]).permute([1, 0, 2]);
-  const weights = Tensor.cat(allWeights, 0);           // (N, H, L, S)
   return {
     output: out,
     // torch hands back `None` rather than weights nobody asked for.

@@ -1622,6 +1622,119 @@ ${store.join("\n")}
 }
 
 /**
+ * The batched matrix product on subgroup matrices — `matmulSubgroup` with a batch on
+ * the grid's third axis and **either operand read transposed**, so a `q·kᵀ` or a
+ * backward's `Aᵀ·G` is one dispatch over every batch entry with nothing transposed in
+ * memory. A transposed operand is loaded column-major: the same 8 × 8 block, the other
+ * stride. `A` is `(B, M, K)` or, transposed, `(B, K, M)`; `B` is `(B, K, N)` or `(B, N,
+ * K)`; an operand with `broadcast` has no batch axis and is read for every entry. No
+ * split of K: the batched shapes this serves (attention's, at most a few hundred deep)
+ * fill the GPU by their batch.
+ */
+export function matmulSubgroupBatched(
+  M: number, K: number, N: number, transA: boolean, transB: boolean,
+  broadcastA = false, broadcastB = false,
+): string {
+  const { TM, TN } = subgroupMatmulTile(M, N);
+  const am = TM / 8, bn = TN / 8;
+  const acc: string[] = [], mma: string[] = [], store: string[] = [];
+  for (let i = 0; i < am; i++) for (let j = 0; j < bn; j++) {
+    acc.push(`  var c${i}${j}: subgroup_matrix_result<f32, 8, 8>;`);
+    mma.push(`    c${i}${j} = subgroupMatrixMultiplyAccumulate(a${i}, b${j}, c${i}${j});`);
+    store.push(`  subgroupMatrixStore(&Out, oBase + (row0 + ${i * 8}u) * ${N}u + col0 + ${j * 8}u, c${i}${j}, false, ${N}u);`);
+  }
+  const loadA = Array.from({ length: am }, (_, i) => transA
+    ? `    let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&A, aBase + k * ${M}u + row0 + ${i * 8}u, true, ${M}u);`
+    : `    let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&A, aBase + (row0 + ${i * 8}u) * ${K}u + k, false, ${K}u);`);
+  const loadB = Array.from({ length: bn }, (_, j) => transB
+    ? `    let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&B, bBase + (col0 + ${j * 8}u) * ${K}u + k, true, ${K}u);`
+    : `    let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&B, bBase + k * ${N}u + col0 + ${j * 8}u, false, ${N}u);`);
+  return `enable chromium_experimental_subgroup_matrix;
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> B: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(32)
+fn main(@builtin(workgroup_id) wid: vec3<u32>) {
+  let row0 = wid.y * ${TM}u;
+  let col0 = wid.x * ${TN}u;
+  let aBase = ${broadcastA ? "0u" : `wid.z * ${M * K}u`};
+  let bBase = ${broadcastB ? "0u" : `wid.z * ${K * N}u`};
+  let oBase = wid.z * ${M * N}u;
+${acc.join("\n")}
+  for (var k = 0u; k < ${K}u; k = k + 8u) {
+${loadA.join("\n")}
+${loadB.join("\n")}
+${mma.join("\n")}
+  }
+${store.join("\n")}
+}`;
+}
+
+/**
+ * The batched matrix product on the scalar tile — `matmul` below with a batch on the
+ * grid's third axis and either operand read transposed (the index arithmetic swaps;
+ * the staging and the accumulators are the same). The path for a device without
+ * subgroup matrices and for shapes that are not whole eights.
+ */
+export function matmulBatched(
+  M: number, K: number, N: number, transA: boolean, transB: boolean,
+  broadcastA = false, broadcastB = false,
+): string {
+  const decl: string[] = [], zero: string[] = [], fma: string[] = [], store: string[] = [];
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    decl.push(`  var c${i}${j}: f32;`);
+    zero.push(`  c${i}${j} = 0.0;`);
+    fma.push(`      c${i}${j} = fma(a${i}, b${j}, c${i}${j});`);
+    store.push(`  { let r = row0 + ${i}u; let c = col0 + ${j}u; if (r < M && c < N) { Out[oBase + r * N + c] = c${i}${j}; } }`);
+  }
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> B: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+const M: u32 = ${M}u; const K: u32 = ${K}u; const N: u32 = ${N}u;
+var<workgroup> As: array<f32, 1024>;
+var<workgroup> Bs: array<f32, 1024>;
+@compute @workgroup_size(16, 16)
+fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(local_invocation_id) lid: vec3<u32>) {
+  let tid = lid.y * 16u + lid.x;
+  let row0 = wid.y * 64u + lid.y * 4u;
+  let col0 = wid.x * 64u + lid.x * 4u;
+  let aBase = ${broadcastA ? "0u" : `wid.z * ${M * K}u`};
+  let bBase = ${broadcastB ? "0u" : `wid.z * ${K * N}u`};
+  let oBase = wid.z * ${M * N}u;
+${decl.join("\n")}
+${zero.join("\n")}
+  let tiles = (K + 15u) / 16u;
+  for (var t = 0u; t < tiles; t = t + 1u) {
+    for (var s = 0u; s < 4u; s = s + 1u) {
+      let idx = s * 256u + tid;
+      let ar = idx / 16u; let ak = idx % 16u;
+      let arow = wid.y * 64u + ar; let acol = t * 16u + ak;
+      As[idx] = select(0.0, A[aBase + ${transA ? "acol * M + arow" : "arow * K + acol"}], arow < M && acol < K);
+      let bk = idx / 64u; let bc = idx % 64u;
+      let brow = t * 16u + bk; let bcol = wid.x * 64u + bc;
+      Bs[idx] = select(0.0, B[bBase + ${transB ? "bcol * K + brow" : "brow * N + bcol"}], brow < K && bcol < N);
+    }
+    workgroupBarrier();
+    for (var k = 0u; k < 16u; k = k + 1u) {
+      let a0 = As[(lid.y * 4u + 0u) * 16u + k];
+      let a1 = As[(lid.y * 4u + 1u) * 16u + k];
+      let a2 = As[(lid.y * 4u + 2u) * 16u + k];
+      let a3 = As[(lid.y * 4u + 3u) * 16u + k];
+      let b0 = Bs[k * 64u + lid.x * 4u + 0u];
+      let b1 = Bs[k * 64u + lid.x * 4u + 1u];
+      let b2 = Bs[k * 64u + lid.x * 4u + 2u];
+      let b3 = Bs[k * 64u + lid.x * 4u + 3u];
+${fma.join("\n")}
+    }
+    workgroupBarrier();
+  }
+${store.join("\n")}
+}`;
+}
+
+/**
  * The matrix product. **The sixteen accumulators are spread into named scalars.**
  *
  * Held in an `array<f32,16>` and indexed by a variable as `acc[i*4+j]`, WGSL cannot keep
@@ -2653,8 +2766,11 @@ ${flatId(n)}
  * `gather(dim, index)`'s backward — collects back to the positions that were read.
  *
  * A position read several times accumulates that many times. Each input position walks
- * the output in ascending order, so there are no atomics and two runs give the same
- * value. The cost is input × output.
+ * **the output positions that can reach it** — the same outer row and inner column,
+ * every entry along the gathered axis — in ascending order, so there are no atomics
+ * and two runs give the same value. It walked the whole output once, input × output:
+ * a cross-entropy's gather over (2048, 1024) logits with one index a row was 4 billion
+ * comparisons and 9 ms of a step (measured 2026-09-07); the row's one entry is 2 million.
  */
 export function gatherIndexBackward(
   outer: number,
@@ -2663,7 +2779,6 @@ export function gatherIndexBackward(
   outAxis: number,
 ): string {
   const inN = outer * axis * inner;
-  const outN = outer * outAxis * inner;
   return `
 @group(0) @binding(0) var<storage, read> I: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
@@ -2671,13 +2786,14 @@ export function gatherIndexBackward(
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(inN)}
+  let o = gid / ${axis * inner}u;
+  let rest = gid % ${axis * inner}u;
+  let a = rest / ${inner}u;
+  let i = rest % ${inner}u;
   var acc = 0.0;
-  for (var t = 0u; t < ${outN}u; t = t + 1u) {
-    let o = t / ${outAxis * inner}u;
-    let rest = t % ${outAxis * inner}u;
-    let i = rest % ${inner}u;
-    let src = o * ${axis * inner}u + u32(I[t]) * ${inner}u + i;
-    if (src == gid) { acc = acc + G[t]; }
+  for (var j = 0u; j < ${outAxis}u; j = j + 1u) {
+    let t = (o * ${outAxis}u + j) * ${inner}u + i;
+    if (u32(I[t]) == a) { acc = acc + G[t]; }
   }
   Out[gid] = acc;
 }`;

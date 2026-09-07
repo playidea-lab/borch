@@ -205,6 +205,8 @@ import {
   convNDGradInputTiled,
   convGradWeightDirect2d,
   elementLanes,
+  matmulBatched,
+  matmulSubgroupBatched,
   laneable,
   convGradWeightSubgroupGlobal,
   convForwardSubgroup,
@@ -5456,13 +5458,46 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (this.shape.length !== 3 || mat2.shape.length !== 3) {
       throw new Error(`bmm is 3-D by 3-D: [${this.shape}] x [${mat2.shape}]`);
     }
-    const batch = this.shape[0] ?? 0;
-    const parts: Tensor[] = [];
-    for (let b = 0; b < batch; b++) {
-      parts.push(this.select(0, b).mm(mat2.select(0, b)));
-    }
-    return Tensor.stack(parts, 0);
+    return batchedMatmul(this, mat2, false, false);
   }
+
+  /** See `batchedMatmul` — the module-level function delegates here, where `make` is reachable. */
+  static batchedMatmul(a: Tensor, b: Tensor, transA: boolean, transB: boolean): Tensor {
+    const broadcastA = a.shape.length === 2, broadcastB = b.shape.length === 2;
+    const [aRows, aCols] = a.shape.slice(-2) as [number, number];
+    const [bRows, bCols] = b.shape.slice(-2) as [number, number];
+    const M = transA ? aCols : aRows, K = transA ? aRows : aCols;
+    const K2 = transB ? bCols : bRows, N = transB ? bRows : bCols;
+    if (K !== K2) throw new RuntimeError(`batched matmul: inner sizes differ (${M}x${K} and ${K2}x${N})`);
+    const batch = broadcastA ? (b.shape[0] ?? 1) : (a.shape[0] ?? 1);
+    if (!broadcastA && !broadcastB && a.shape[0] !== b.shape[0]) {
+      throw new RuntimeError(`batched matmul: batch sizes differ ([${a.shape}] x [${b.shape}])`);
+    }
+    const out = dev().alloc(batch * M * N);
+    const key = `${batch}:${M}:${K}:${N}:${transA ? "t" : "n"}${transB ? "t" : "n"}${broadcastA ? "a" : ""}${broadcastB ? "b" : ""}`;
+    if (Device.subgroupMatrix && subgroupMatmulFits(M, K, N)) {
+      const { TM, TN } = subgroupMatmulTile(M, N);
+      dev().run(
+        dev().pipeline(`bmmsg:${key}`, () => matmulSubgroupBatched(M, K, N, transA, transB, broadcastA, broadcastB)),
+        [a.buffer, b.buffer, out], [N / TN, M / TM, batch]);
+    } else {
+      dev().run(
+        dev().pipeline(`bmm:${key}`, () => matmulBatched(M, K, N, transA, transB, broadcastA, broadcastB)),
+        [a.buffer, b.buffer, out], [Math.ceil(N / 64), Math.ceil(M / 64), batch]);
+    }
+    const outShape = [batch, M, N];
+    const foldBack = (g: Tensor, wasBroadcast: boolean, shape: readonly number[]): Tensor =>
+      wasBroadcast ? g.sumDim(0, false).reshape(shape) : g;
+    return Tensor.make(out, outShape, [a, b], (g) => [
+      a.requiresGrad
+        ? foldBack(transA ? batchedMatmul(b, g, transB, true) : batchedMatmul(g, b, false, !transB), broadcastA, a.shape)
+        : null,
+      b.requiresGrad
+        ? foldBack(transB ? batchedMatmul(g, a, true, transA) : batchedMatmul(a, g, !transA, false), broadcastB, b.shape)
+        : null,
+    ], "BmmBackward0");
+  }
+
 
   // ── The addmm family ──────────────────────────────────────────────────
   //
@@ -12954,6 +12989,21 @@ function noBoolAccumulate(name: string, dtype: DType): void {
   if (dtype === "bool") {
     throw new NotImplementedError(`"${name}_out_cpu" not implemented for 'Bool'`);
   }
+}
+
+/**
+ * The batched matrix product **with either operand read transposed** — one dispatch
+ * over every batch entry, nothing transposed in memory. `a` is `(B, M, K)` or, with
+ * `transA`, `(B, K, M)`; `b` is `(B, K, N)` or, with `transB`, `(B, N, K)`; a 2-D
+ * operand is read for every entry. Attention's `q·kᵀ`, its `w·v`, and the backward of
+ * each are this — where they were a product per batch entry and per head, unpacked and
+ * stacked (a two-block GPT at batch 16: 6,478 dispatches a step, measured 2026-09-07).
+ *
+ * The backward is the same kernel with the flags turned: for `C = op(A)·op(B)`,
+ * `dA = G·op(B)ᵀ` and `dB = op(A)ᵀ·G`, transposed back when the operand was.
+ */
+export function batchedMatmul(a: Tensor, b: Tensor, transA: boolean, transB: boolean): Tensor {
+  return Tensor.batchedMatmul(a, b, transA, transB);
 }
 
 /** The input copied padded — by the convolution's padding and to a whole eight of
