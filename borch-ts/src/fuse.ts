@@ -40,7 +40,7 @@
  * milliseconds on the U-Net, nothing visible on the small network (measured).
  */
 import { Device, type Recorded } from "./device.js";
-import { contiguousStrides, type Elementwise, elementLanes, grid1d, laneable, type Reduce, type Source, WORKGROUP } from "./kernels.js";
+import { contiguousStrides, type Elementwise, elementLanes, grid1d, laneable, laneMode, type Reduce, type Source, WORKGROUP } from "./kernels.js";
 
 function elementwise(meta: Elementwise | Reduce | undefined): meta is Elementwise {
   return meta !== undefined && "expr" in meta;
@@ -309,6 +309,10 @@ function emit(tree: Node[], graph: Graph, consumer?: number): Emitted {
         scalarLeaves.add(li);
         locals.push(`let ${inp.local} = L${li}[0];`);
       } else if (inp.strides && !contiguousStrides(node.meta.shape, inp.strides)) {
+        // Four cells a thread: a leaf whose last stride is zero shares one value across
+        // the four (a scalar binding, the index of the first cell); one whose last
+        // stride is one has them consecutive (a `vec4` at the index over four).
+        if (laneMode(node.meta.shape, inp.strides) === "same") scalarLeaves.add(li);
         const lines = [`  var rest_${k}_${inp.binding} = gid;`, `  var ix_${k}_${inp.binding}: u32 = 0u;`];
         for (let d = node.meta.shape.length - 1; d >= 0; d--) {
           const size = node.meta.shape[d] ?? 1;
@@ -359,7 +363,11 @@ function build(dev: Device, tree: Node[], graph: Graph): Recorded {
   if (lanes === 4) {
     bindings = e.bindings.map((line, i) => i < e.buffers.length && e.scalarLeaves.has(i) && line.includes(`L${i}:`) ? line : line.replace("array<f32>", "array<vec4<f32>>")).join("\n");
     const outs = [...new Set([...e.body.matchAll(/O(\d+)\[gid\] = /g)].map((m) => m[1]))];
-    const lane = (c: string): string => `  {\n${e.body.replace(/L(\d+)\[gid\]/g, `L$1[gid].${c}`).replace(/O(\d+)\[gid\] = /g, `o$1.${c} = `)}\n  }`;
+    const lane = (c: string): string => `  {\n${e.body
+      .replace(/var (rest_\w+) = gid;/g, "var $1 = gid * 4u;")
+      .replace(/L(\d+)\[gid\]/g, `L$1[gid].${c}`)
+      .replace(/L(\d+)\[(ix_\w+)\]/g, (m, li: string, ix: string) => e.scalarLeaves.has(Number(li)) ? m : `L${li}[${ix} / 4u].${c}`)
+      .replace(/O(\d+)\[gid\] = /g, `o$1.${c} = `)}\n  }`;
     body = [...outs.map((k) => `  var o${k}: vec4<f32>;`), ...["x", "y", "z", "w"].map(lane), ...outs.map((k) => `  O${k}[gid] = o${k};`)].join("\n");
   }
   const code = `${e.prelude}

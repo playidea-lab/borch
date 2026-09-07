@@ -1164,10 +1164,24 @@ export function elementLanes(n: number, contiguous: boolean): 1 | 4 {
   return contiguous && n % 4 === 0 ? 4 : 1;
 }
 
-/** Whether an operand can ride four cells a thread: read contiguously over the output,
- *  or one value broadcast to all of it (every stride zero — loaded once). */
+/**
+ * How an operand rides four cells a thread over the output's last axis (a whole number
+ * of fours): `"vec"` when its last stride is one — the four cells are four consecutive
+ * values, one `vec4` load at the cell's index; `"same"` when its last stride is zero —
+ * the four cells share one value, one scalar load; `null` otherwise. A contiguous
+ * operand is `"vec"` whatever the last axis, over the flat array.
+ */
+export function laneMode(shape: readonly number[], strides: readonly number[]): "vec" | "same" | null {
+  if (contiguousStrides(shape, strides)) return "vec";
+  const last = shape.length - 1;
+  if ((shape[last] ?? 1) % 4 !== 0) return null;
+  const st = strides[last] ?? 1;
+  return st === 1 ? "vec" : st === 0 ? "same" : null;
+}
+
+/** Whether an operand can ride four cells a thread — see `laneMode`. */
 export function laneable(shape: readonly number[], strides: readonly number[]): boolean {
-  return contiguousStrides(shape, strides) || strides.every((v) => v === 0);
+  return laneMode(shape, strides) !== null;
 }
 
 /** The four components of a `vec4` local, each through the scalar expression. A
@@ -1274,8 +1288,12 @@ export function binaryForward(
   const op = BINARY[name];
   if (!op) throw new Error(`unknown binary op: ${name}`);
   const n = shape.reduce((a, b) => a * b, 1);
-  if (elementLanes(n, laneable(shape, strideA) && laneable(shape, strideB)) === 4) {
-    const aScalar = !contiguousStrides(shape, strideA), bScalar = !contiguousStrides(shape, strideB);
+  const modeA = laneMode(shape, strideA), modeB = laneMode(shape, strideB);
+  if (modeA && modeB && elementLanes(n, true) === 4) {
+    // The cell is the first of the thread's four; its operand indices come from the
+    // same decomposition as one cell a thread, and a `"vec"` operand's four values sit
+    // at that index over four.
+    const aScalar = modeA === "same", bScalar = modeB === "same";
     return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<${aScalar ? "f32" : "vec4<f32>"}>;
 @group(0) @binding(1) var<storage, read> B: array<${bScalar ? "f32" : "vec4<f32>"}>;
@@ -1283,8 +1301,9 @@ export function binaryForward(
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n / 4)}
-  ${aScalar ? "let xs = A[0];" : "let xv = A[gid];"}
-  ${bScalar ? "let ys = B[0];" : "let yv = B[gid];"}
+${indexPair(shape, strideA, strideB).replace("var rest = gid;", "var rest = gid * 4u;")}
+  ${aScalar ? "let xs = A[ia];" : "let xv = A[ia / 4u];"}
+  ${bScalar ? "let ys = B[ib];" : "let yv = B[ib / 4u];"}
   var res: vec4<f32>;
 ${perLane(["x", "y"], op.fwd, "res", [...(aScalar ? ["x"] : []), ...(bScalar ? ["y"] : [])])}
   Out[gid] = res;
@@ -1327,8 +1346,9 @@ export function binaryBackward(
   const op = BINARY[name];
   if (!op) throw new Error(`unknown binary op: ${name}`);
   const n = shape.reduce((a, b) => a * b, 1);
-  if (elementLanes(n, laneable(shape, strideA) && laneable(shape, strideB)) === 4) {
-    const aScalar = !contiguousStrides(shape, strideA), bScalar = !contiguousStrides(shape, strideB);
+  const modeA = laneMode(shape, strideA), modeB = laneMode(shape, strideB);
+  if (modeA && modeB && elementLanes(n, true) === 4) {
+    const aScalar = modeA === "same", bScalar = modeB === "same";
     return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<${aScalar ? "f32" : "vec4<f32>"}>;
 @group(0) @binding(1) var<storage, read> B: array<${bScalar ? "f32" : "vec4<f32>"}>;
@@ -1338,8 +1358,9 @@ export function binaryBackward(
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n / 4)}
-  ${aScalar ? "let xs = A[0];" : "let xv = A[gid];"}
-  ${bScalar ? "let ys = B[0];" : "let yv = B[gid];"}
+${indexPair(shape, strideA, strideB).replace("var rest = gid;", "var rest = gid * 4u;")}
+  ${aScalar ? "let xs = A[ia];" : "let xv = A[ia / 4u];"}
+  ${bScalar ? "let ys = B[ib];" : "let yv = B[ib / 4u];"}
   let ov = O[gid];
   let gv = G[gid];
   var res: vec4<f32>;
@@ -1736,6 +1757,94 @@ ${fma.join("\n")}
     workgroupBarrier();
   }
 ${store.join("\n")}
+}`;
+}
+
+/** The threads one row of `softmaxRows` takes. */
+export const SOFTMAX_GROUP = 256;
+
+/**
+ * Softmax (or log-softmax) over the last axis — **one workgroup per row, one pass.**
+ *
+ * Composed from tensor ops it was five dispatches — the row maximum, a subtraction, the
+ * exponential, a row sum, a division — each a pass over the whole activation, and a
+ * two-block GPT spent 3.9 ms of a 13 ms step in them (measured 2026-09-07). Here the
+ * row's threads each take a strided share of it, meet twice in a tree (the maximum,
+ * then the sum of exponentials, both in a fixed order), and write the row. The
+ * log-softmax writes `x − m − log Σ` rather than the exponential's quotient — small
+ * probabilities keep their logarithm instead of becoming 0.
+ */
+export function softmaxRows(_rows: number, C: number, log: boolean): string {
+  const G = SOFTMAX_GROUP;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+var<workgroup> part: array<f32, ${G}>;
+@compute @workgroup_size(${G})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
+  let base = w.x * ${C}u;
+  var m = -3.0e38;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) { m = max(m, X[base + i]); }
+  part[l.x] = m;
+  workgroupBarrier();
+  var span = ${G / 2}u;
+  loop {
+    if (span == 0u) { break; }
+    if (l.x < span) { part[l.x] = max(part[l.x], part[l.x + span]); }
+    workgroupBarrier();
+    span = span / 2u;
+  }
+  let rowMax = part[0];
+  workgroupBarrier();
+  var s = 0.0;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) { s = s + exp(X[base + i] - rowMax); }
+  part[l.x] = s;
+  workgroupBarrier();
+  span = ${G / 2}u;
+  loop {
+    if (span == 0u) { break; }
+    if (l.x < span) { part[l.x] = part[l.x] + part[l.x + span]; }
+    workgroupBarrier();
+    span = span / 2u;
+  }
+  let total = part[0];
+  ${log ? "let logTotal = log(total);" : ""}
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) {
+    ${log ? "Out[base + i] = X[base + i] - rowMax - logTotal;" : "Out[base + i] = exp(X[base + i] - rowMax) / total;"}
+  }
+}`;
+}
+
+/**
+ * The backward of `softmaxRows`: with `y` the forward's output and `g` the gradient,
+ * softmax gives `y · (g − Σ g·y)` over the row and log-softmax `g − exp(y) · Σ g` —
+ * one row sum, then the row, one workgroup per row.
+ */
+export function softmaxRowsBackward(_rows: number, C: number, log: boolean): string {
+  const G = SOFTMAX_GROUP;
+  return `
+@group(0) @binding(0) var<storage, read> Y: array<f32>;
+@group(0) @binding(1) var<storage, read> Gr: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+var<workgroup> part: array<f32, ${G}>;
+@compute @workgroup_size(${G})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
+  let base = w.x * ${C}u;
+  var s = 0.0;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) { s = s + ${log ? "Gr[base + i]" : "Gr[base + i] * Y[base + i]"}; }
+  part[l.x] = s;
+  workgroupBarrier();
+  var span = ${G / 2}u;
+  loop {
+    if (span == 0u) { break; }
+    if (l.x < span) { part[l.x] = part[l.x] + part[l.x + span]; }
+    workgroupBarrier();
+    span = span / 2u;
+  }
+  let total = part[0];
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) {
+    ${log ? "Out[base + i] = Gr[base + i] - exp(Y[base + i]) * total;" : "Out[base + i] = Y[base + i] * (Gr[base + i] - total);"}
+  }
 }`;
 }
 

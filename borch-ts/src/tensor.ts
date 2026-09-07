@@ -205,6 +205,8 @@ import {
   convNDGradInputTiled,
   convGradWeightDirect2d,
   elementLanes,
+  softmaxRows,
+  softmaxRowsBackward,
   matmulBatched,
   matmulSubgroupBatched,
   laneable,
@@ -4028,9 +4030,38 @@ export class Tensor implements Node<Tensor> {
       }
       return this.castFirst(dtype).softmax(dim).to(dtype);
     }
+    const rows = this.softmaxRowsOrNull(dim, false);
+    if (rows) return rows;
     const m = this.amax(dim, true).detach();
     const e = this.sub(m).exp();
     return e.div(e.sumDim(dim, true));
+  }
+
+  /**
+   * Softmax or log-softmax over the last axis in one kernel — `softmaxRows` — with its
+   * own backward; `null` when the axis is not the last one or the tensor is not real
+   * float32, which keeps the composed path.
+   */
+  private softmaxRowsOrNull(dim: number, log: boolean): Tensor | null {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    if (rank === 0 || axis !== rank - 1 || this.dtype !== "float32" || this.isComplex()) return null;
+    const C = this.shape[rank - 1] ?? 1;
+    const rows = this.size / Math.max(C, 1);
+    if (C === 0 || rows === 0) return null;
+    const out = dev().alloc(this.size);
+    dev().run(
+      dev().pipeline(`smx:${log ? "log" : "p"}:${rows}:${C}`, () => softmaxRows(rows, C, log)),
+      [this.buffer, out], [rows, 1, 1]);
+    const shape = this.shape;
+    const result: Tensor = Tensor.make(out, shape, [this], (g) => {
+      const gi = dev().alloc(this.size);
+      dev().run(
+        dev().pipeline(`smxb:${log ? "log" : "p"}:${rows}:${C}`, () => softmaxRowsBackward(rows, C, log)),
+        [result.buffer, g.buffer, gi], [rows, 1, 1]);
+      return [new Tensor(gi, shape)];
+    }, log ? "LogSoftmaxBackward0" : "SoftmaxBackward0");
+    return result;
   }
 
   /**
@@ -4051,6 +4082,8 @@ export class Tensor implements Node<Tensor> {
       }
       return this.castFirst(dtype).logSoftmax(dim).to(dtype);
     }
+    const rows = this.softmaxRowsOrNull(dim, true);
+    if (rows) return rows;
     return this.sub(this.logsumexp(dim, true));
   }
 
