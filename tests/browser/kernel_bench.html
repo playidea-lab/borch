@@ -100,9 +100,11 @@ const BENCHES = {
     const A = upload(M * Kd, 1), B = upload(Kd * Nd, 2), Out = dev.alloc(M * Nd), Out2 = dev.alloc(M * Nd), Out3 = dev.alloc(Mp * Nd);
     const Ap = dev.alloc(Mp * Kd); if (!tA) dev.copyInto(Ap, A, M * Kd);
     const gflop = 2 * M * Kd * Nd / 1e9;
+    const ssplits = K.scalarMatmulSplit(M, Kd, Nd);
+    const Slab = ssplits > 1 ? dev.alloc(M * Nd * ssplits) : Out2;
     const runs = [
-      { name: `scalar tile`, key: `mm:${sh.name}`, make: () => K.matmul(M, Kd, Nd, tA, tB), outb: Out2,
-        run: () => dev.run(dev.pipeline(`mm:${sh.name}`, () => K.matmul(M, Kd, Nd, tA, tB)), [A, B, Out2], [Math.ceil(Nd / 64), Math.ceil(M / 64), 1]) },
+      { name: `scalar tile${ssplits > 1 ? ` split ${ssplits} (+ sum)` : ""}`, key: `mm:${sh.name}`, make: () => K.matmul(M, Kd, Nd, tA, tB, ssplits), extraKeys: ssplits > 1 ? [`sss:${sh.name}`] : [], outb: Out2,
+        run: () => { dev.run(dev.pipeline(`mm:${sh.name}`, () => K.matmul(M, Kd, Nd, tA, tB, ssplits)), [A, B, Slab], [Math.ceil(Nd / 64), Math.ceil(M / 64), ssplits]); if (ssplits > 1) dev.run1d(dev.pipeline(`sss:${sh.name}`, () => K.sumSplits(M * Nd, ssplits)), [Slab, Out2], M * Nd); } },
     ];
     if (Device.subgroupMatrix && K.subgroupMatmulFits(M, Kd, Nd)) {
       const t = K.subgroupMatmulTile(M, Nd), splits = K.subgroupMatmulSplit(M, Kd, Nd);

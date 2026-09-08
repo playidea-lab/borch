@@ -274,6 +274,7 @@ import {
   matmulSubgroup,
   subgroupMatmulFits,
   subgroupMatmulSplit,
+  scalarMatmulSplit,
   subgroupMatmulTile,
   padAxis,
   catCopy,
@@ -2036,11 +2037,17 @@ export class Tensor implements Node<Tensor> {
         dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
       }
     } else {
+      // The scalar tile splits its reduction the same way — see `scalarMatmulSplit`.
+      const splits = scalarMatmulSplit(M, K, N);
+      const target = splits > 1 ? dev().alloc(M * N * splits) : out;
       dev().run(
-        dev().pipeline(`mm:${M}:${K}:${N}:${flags}`, () => matmul(M, K, N, transA, transB)),
-        [this.buffer, mat2.buffer, out],
-        [Math.ceil(N / 64), Math.ceil(M / 64), 1],
+        dev().pipeline(`mm:${M}:${K}:${N}:${flags}:${splits}`, () => matmul(M, K, N, transA, transB, splits)),
+        [this.buffer, mat2.buffer, target],
+        [Math.ceil(N / 64), Math.ceil(M / 64), splits],
       );
+      if (splits > 1) {
+        dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
+      }
     }
     return Tensor.make(
       out,
