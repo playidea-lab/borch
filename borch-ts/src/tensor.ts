@@ -211,6 +211,11 @@ import {
   invertibleRules,
   softmaxRows,
   softmaxRowsSubgroup,
+  layerNormRows,
+  layerNormRowsBackward,
+  reduceRowsSubgroup,
+  reduceRowsFits,
+  REDUCE_SG_GROUP,
   softmaxRowsBackwardSubgroup,
   softmaxRowsBackward,
   matmulBatched,
@@ -2176,12 +2181,22 @@ export class Tensor implements Node<Tensor> {
     const n = outer * inner;
     const out = dev().alloc(n);
     const key = `${outer}:${red}:${inner}`;
-    dev().run1d(
-      dev().pipeline(`rd:${kind}:${key}`, () => reduceDim(kind, outer, red, inner)),
-      [this.buffer, out],
-      n,
-      { n: this.size, input: 0, serial: red, make: (source) => reduceDim(kind, outer, red, inner, source) },
-    );
+    if (Device.subgroups && reduceRowsFits(inner, red)) {
+      // A row on subgroup operations — see `reduceRowsSubgroup`. One workgroup a row.
+      dev().run(
+        dev().pipeline(`rd:${kind}:${key}:sg`, () => reduceRowsSubgroup(kind, outer, red)),
+        [this.buffer, out],
+        [outer, 1, 1],
+        { n: this.size, input: 0, serial: Math.ceil(red / REDUCE_SG_GROUP), make: (source) => reduceRowsSubgroup(kind, outer, red, source) },
+      );
+    } else {
+      dev().run1d(
+        dev().pipeline(`rd:${kind}:${key}`, () => reduceDim(kind, outer, red, inner)),
+        [this.buffer, out],
+        n,
+        { n: this.size, input: 0, serial: red, make: (source) => reduceDim(kind, outer, red, inner, source) },
+      );
+    }
     const result = Tensor.make(
       out,
       outShape,
@@ -5118,10 +5133,47 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * differs from `var()`'s default.
    */
   layerNorm(dim = -1, eps = 1e-5): Tensor {
+    const rank = this.shape.length;
+    if (rank > 0 && (dim === -1 || dim === rank - 1) && this.dtype === "float32" && !this.isComplex()) {
+      return this.layerNormNative(null, null, eps);
+    }
     const m = this.mean(dim, true);
     const centered = this.sub(m);
     const v = centered.square().mean(dim, true);
     return centered.div(v.binary("add", Tensor.full([], eps)).sqrt());
+  }
+
+  /**
+   * LayerNorm over the last axis with the affine folded in — **one kernel each way**,
+   * see `layerNormRows`. `weight` and `bias` are the last axis's length or absent.
+   * The gradient for the weight is `g · x̂` folded over the rows, for the bias `g`
+   * folded; the backward kernel writes `g · x̂` as it goes.
+   */
+  layerNormNative(weight: Tensor | null, bias: Tensor | null, eps = 1e-5): Tensor {
+    const C = this.shape[this.shape.length - 1] ?? 1;
+    const rows = this.size / Math.max(C, 1);
+    const shape = this.shape;
+    const out = dev().alloc(this.size);
+    const mean = dev().alloc(rows);
+    const rstd = dev().alloc(rows);
+    const hasW = weight !== null, hasB = bias !== null;
+    const bufs = [this.buffer, ...(hasW ? [weight.buffer] : []), ...(hasB ? [bias.buffer] : []), out, mean, rstd];
+    dev().run(
+      dev().pipeline(`ln:${C}:${eps}:${hasW ? "w" : ""}${hasB ? "b" : ""}`, () => layerNormRows(C, eps, hasW, hasB)),
+      bufs, [rows, 1, 1]);
+    const parents = [this, ...(hasW ? [weight] : []), ...(hasB ? [bias] : [])];
+    return Tensor.make(out, shape, parents, (g) => {
+      const dx = dev().alloc(this.size);
+      const gx = hasW ? dev().alloc(this.size) : null;
+      dev().run(
+        dev().pipeline(`lnb:${C}:${hasW ? "w" : ""}`, () => layerNormRowsBackward(C, hasW)),
+        [this.buffer, mean, rstd, ...(hasW ? [weight.buffer] : []), g.buffer, dx, ...(gx ? [gx] : [])],
+        [rows, 1, 1]);
+      const grads: (Tensor | null)[] = [new Tensor(dx, shape)];
+      if (hasW) grads.push(weight.requiresGrad && gx ? foldTo(new Tensor(gx, [rows, C]), [C]) : null);
+      if (hasB) grads.push(bias.requiresGrad ? foldTo(new Tensor(g.buffer, [rows, C]), [C]) : null);
+      return grads;
+    }, "NativeLayerNormBackward0");
   }
 
   /**

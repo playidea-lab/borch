@@ -175,6 +175,18 @@ const BENCHES = {
       run: () => dev.run(dev.pipeline(`smxbsg:${sh.name}`, () => K.softmaxRowsBackwardSubgroup(C, false)), [Y, G, Out2], [rows, 1, 1]) });
     return race(runs, n);
   },
+  // A row reduction (sum over the last axis) at `rows x red x 1`: one thread a row
+  // against one workgroup a row on subgroup operations.
+  async rd(sh) {
+    if (sh.M === undefined) throw new Error(`rd wants rowsxredx1 shapes, not ${sh.name}`);
+    const rows = sh.M, red = sh.Kd, n = rows * red;
+    const X = upload(n, 1), Out = dev.alloc(rows), Out2 = dev.alloc(rows);
+    const runs = [{ name: `one thread a row`, key: `rd:${sh.name}`, make: () => K.reduceDim("sum", rows, red, 1), outb: Out,
+      run: () => dev.run1d(dev.pipeline(`rd:${sh.name}`, () => K.reduceDim("sum", rows, red, 1)), [X, Out], rows) }];
+    if (Device.subgroups && K.reduceRowsFits(1, red)) runs.push({ name: `subgroup (${K.REDUCE_SG_GROUP} a row)`, key: `rdsg:${sh.name}`, make: () => K.reduceRowsSubgroup("sum", rows, red), outb: Out2,
+      run: () => dev.run(dev.pipeline(`rdsg:${sh.name}`, () => K.reduceRowsSubgroup("sum", rows, red)), [X, Out2], [rows, 1, 1]) });
+    return race(runs, rows);
+  },
   // The padded copy against a plain pass over the same input.
   async pad(sh) {
     const s = conv(sh); const n = sh.N * sh.C * sh.H * sh.H; const { Cp } = K.sgwPadded(s); const pn = sh.N * Cp * (sh.H + 2) * (sh.H + 2);

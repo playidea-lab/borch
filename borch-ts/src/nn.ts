@@ -2632,6 +2632,17 @@ export class LayerNorm extends Module {
         `Given normalized_shape=[${this.shape}], expected input with shape `
         + `[*, ${this.shape}]`);
     }
+    // One kernel each way, the affine folded in — the trailing axes seen as one row.
+    if (x.dtype === "float32" && !x.isComplex()) {
+      const rank = x.shape.length;
+      const lead = x.shape.slice(0, rank - this.dims).reduce((a, b) => a * b, 1);
+      const C = x.size / Math.max(lead, 1);
+      const rowsView = this.dims === 1 ? x : x.reshape([lead, C]);
+      const w = this.weight ? (this.dims === 1 ? this.weight : this.weight.reshape([C])) : null;
+      const b = this.bias ? (this.dims === 1 ? this.bias : this.bias.reshape([C])) : null;
+      const y = rowsView.layerNormNative(w, b, this.eps);
+      return this.dims === 1 ? y : y.reshape(x.shape);
+    }
     const normed = x.layerNormOver(this.dims, this.eps);
     if (!this.weight) return normed;
     const out = normed.mul(this.weight);

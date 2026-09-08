@@ -2109,6 +2109,178 @@ ${flatId(n)}
 }`;
 }
 
+/** The threads one row of `reduceRowsSubgroup` takes. */
+export const REDUCE_SG_GROUP = 64;
+
+/** Whether a reduction over the last axis takes `reduceRowsSubgroup`: a row long enough
+ *  to share, short enough for one workgroup. Measured (M-series, sum): 1576 × 192 is
+ *  0.021 ms either way and 2048 × 256 the same — a short row is at the dispatch's floor
+ *  whichever kernel — while 2048 × 1024 goes 0.079 → 0.043 and 64 × 4096 0.053 → 0.010. */
+export function reduceRowsFits(inner: number, red: number): boolean {
+  return inner === 1 && red >= 1024 && red <= 16384;
+}
+
+const REDUCE_SG: Readonly<Record<ReduceKind, string>> = {
+  sum: "subgroupAdd", prod: "subgroupMul", max: "subgroupMax", min: "subgroupMin",
+};
+
+/**
+ * `reduceDim` over the last axis on subgroup operations — **one workgroup a row.**
+ *
+ * `reduceDim` gives one thread one output cell and has it walk the whole axis: for a
+ * LayerNorm's statistics over 192 that is 1,576 threads on the GPU, walking 192 each —
+ * 26 µs a dispatch, 46 GB/s (measured, ViT-tiny). Here 64 threads share the row, each
+ * subgroup reduces with the hardware's operation and the few subgroup results meet once
+ * in workgroup memory, in a fixed order. A tree fused into it walks `red / 64` elements
+ * a thread rather than `red`, which is what lets a long row's producers in at all.
+ */
+export function reduceRowsSubgroup(
+  kind: ReduceKind,
+  outer: number,
+  red: number,
+  source?: Source,
+): string {
+  const G = REDUCE_SG_GROUP;
+  const s = sourced(source, "A");
+  const init = REDUCE_INIT[kind](s.at("base + l.x"));
+  return `enable subgroups;
+${s.head}
+@group(0) @binding(${s.next}) var<storage, read_write> Out: array<f32>;
+var<workgroup> part: array<f32, 16>;
+@compute @workgroup_size(${G})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>,
+        @builtin(subgroup_id) sid: u32, @builtin(subgroup_size) ssz: u32, @builtin(subgroup_invocation_id) siv: u32) {
+  if (w.x >= ${outer}u) { return; }
+  let base = w.x * ${red}u;
+  // Every thread has a first element (the row is at least ${G} long), so the start is
+  // its own first element and the walk begins after it — max and min then never see a
+  // value from outside the row, and sum and prod start from their unit.
+  var acc = ${init};
+  for (var r = l.x + ${REDUCE_FROM[kind] * G}u; r < ${red}u; r = r + ${G}u) {
+    let v = ${s.at("base + r")};
+    ${REDUCE_STEP[kind]}
+  }
+  acc = ${REDUCE_SG[kind]}(acc);
+  if (siv == 0u) { part[sid] = acc; }
+  workgroupBarrier();
+  let groups = ${G}u / ssz;
+  var total = part[0];
+  for (var j = 1u; j < groups; j = j + 1u) { let v = part[j]; ${REDUCE_STEP[kind].replace(/acc/g, "total")} }
+  if (l.x == 0u) { Out[w.x] = total; }
+}`;
+}
+
+/** The threads one row of `layerNormRows` takes. */
+export const LAYERNORM_GROUP = 64;
+
+/**
+ * LayerNorm over the last axis — **one workgroup a row, one dispatch.**
+ *
+ * Composed from tensor ops it was nine dispatches forward (a mean, a subtraction, a
+ * square, a mean, an epsilon, a square root, a division, the weight, the bias) and a
+ * dozen backward, each a pass over the activation; a ViT-tiny step has twenty-five of
+ * them. Here the row's threads sum it in a tree, centre and sum the squares in a second,
+ * and write the normalised row with the affine folded in; the mean and the reciprocal
+ * deviation are kept for the backward. The variance is the biased one, as torch's.
+ */
+export function layerNormRows(C: number, eps: number, weight: boolean, bias: boolean): string {
+  const G = LAYERNORM_GROUP;
+  let b = 1;
+  const decl = [`@group(0) @binding(0) var<storage, read> X: array<f32>;`];
+  if (weight) decl.push(`@group(0) @binding(${b++}) var<storage, read> W: array<f32>;`);
+  if (bias) decl.push(`@group(0) @binding(${b++}) var<storage, read> Bi: array<f32>;`);
+  decl.push(`@group(0) @binding(${b++}) var<storage, read_write> Out: array<f32>;`);
+  decl.push(`@group(0) @binding(${b++}) var<storage, read_write> Mean: array<f32>;`);
+  decl.push(`@group(0) @binding(${b++}) var<storage, read_write> Rstd: array<f32>;`);
+  // The tree is inlined twice, so its counter is declared once, below.
+  const tree = `
+  workgroupBarrier();
+  span = ${G / 2}u;
+  loop {
+    if (span == 0u) { break; }
+    if (l.x < span) { part[l.x] = part[l.x] + part[l.x + span]; }
+    workgroupBarrier();
+    span = span / 2u;
+  }`;
+  return `
+${decl.join("\n")}
+var<workgroup> part: array<f32, ${G}>;
+@compute @workgroup_size(${G})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
+  let base = w.x * ${C}u;
+  var span: u32;
+  var s = 0.0;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) { s = s + X[base + i]; }
+  part[l.x] = s;${tree}
+  let mean = part[0] / ${C}.0;
+  workgroupBarrier();
+  var q = 0.0;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) { let d = X[base + i] - mean; q = q + d * d; }
+  part[l.x] = q;${tree}
+  let rstd = inverseSqrt(part[0] / ${C}.0 + ${eps.toExponential()});
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) {
+    Out[base + i] = (X[base + i] - mean) * rstd${weight ? " * W[i]" : ""}${bias ? " + Bi[i]" : ""};
+  }
+  if (l.x == 0u) { Mean[w.x] = mean; Rstd[w.x] = rstd; }
+}`;
+}
+
+/**
+ * The backward of `layerNormRows` for the input, one workgroup a row: with `x̂` the
+ * normalised row and `gw = g · w`, `dx = rstd · (gw − mean(gw) − x̂ · mean(gw · x̂))` —
+ * two row sums in one tree pass. It also writes `g · x̂`, which folded over the rows is
+ * the weight's gradient (the bias's is `g` folded), so the folds read no second pass.
+ */
+export function layerNormRowsBackward(C: number, weight: boolean): string {
+  const G = LAYERNORM_GROUP;
+  let b = 3;
+  const decl = [
+    `@group(0) @binding(0) var<storage, read> X: array<f32>;`,
+    `@group(0) @binding(1) var<storage, read> Mean: array<f32>;`,
+    `@group(0) @binding(2) var<storage, read> Rstd: array<f32>;`,
+  ];
+  if (weight) decl.push(`@group(0) @binding(${b++}) var<storage, read> W: array<f32>;`);
+  decl.push(`@group(0) @binding(${b++}) var<storage, read> G: array<f32>;`);
+  decl.push(`@group(0) @binding(${b++}) var<storage, read_write> Out: array<f32>;`);
+  if (weight) decl.push(`@group(0) @binding(${b++}) var<storage, read_write> GX: array<f32>;`);
+  return `
+${decl.join("\n")}
+var<workgroup> pa: array<f32, ${G}>;
+var<workgroup> pb: array<f32, ${G}>;
+@compute @workgroup_size(${G})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>) {
+  let base = w.x * ${C}u;
+  let mean = Mean[w.x];
+  let rstd = Rstd[w.x];
+  var a = 0.0;
+  var bsum = 0.0;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) {
+    let xh = (X[base + i] - mean) * rstd;
+    let gw = G[base + i]${weight ? " * W[i]" : ""};
+    a = a + gw;
+    bsum = bsum + gw * xh;
+  }
+  pa[l.x] = a;
+  pb[l.x] = bsum;
+  workgroupBarrier();
+  var span = ${G / 2}u;
+  loop {
+    if (span == 0u) { break; }
+    if (l.x < span) { pa[l.x] = pa[l.x] + pa[l.x + span]; pb[l.x] = pb[l.x] + pb[l.x + span]; }
+    workgroupBarrier();
+    span = span / 2u;
+  }
+  let ma = pa[0] / ${C}.0;
+  let mb = pb[0] / ${C}.0;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) {
+    let xh = (X[base + i] - mean) * rstd;
+    let gw = G[base + i]${weight ? " * W[i]" : ""};
+    Out[base + i] = rstd * (gw - ma - xh * mb);
+    ${weight ? "GX[base + i] = G[base + i] * xh;" : ""}
+  }
+}`;
+}
+
 /**
  * Reduces, and produces **the position rather than the value.**
  *
