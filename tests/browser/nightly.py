@@ -1,4 +1,4 @@
-"""The thirty-one browser checks nothing else runs, run once a night in a worktree.
+"""The thirty-four browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -77,6 +77,11 @@ CHECKS = [
     # AdamW and StepLR under check=True), and the fused replay within a rounding.
     ("capture:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/capture_py.py", "--build"]),
     ("fuse:py",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/fuse_py.py", "--build"]),
+    # The step's clock, three models through the compiler, one timed step each — the
+    # numbers land in the log as `@<model>_fused_ms=` lines, a curve when they are kept.
+    ("step:unet",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/profile_py.py", "--build", "--model=unet", "--steps=1", "--compiled=fused"]),
+    ("step:gpt",   ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/profile_py.py", "--build", "--model=gpt", "--steps=1", "--compiled=fused"]),
+    ("step:vit",   ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/profile_py.py", "--build", "--model=vit", "--batch=8", "--steps=1", "--compiled=fused"]),
     ("example",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/readme.py"]),
     # `--py`: every Python twin on the lesson pages is pressed too (Pyodide from vendor/).
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py", "--py"]),

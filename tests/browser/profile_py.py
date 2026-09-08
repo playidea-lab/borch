@@ -16,6 +16,7 @@ on this machine; the wall-clock step and this table are what to trust.
 import glob
 import os
 import pathlib
+import re
 import sys
 import tempfile
 
@@ -78,6 +79,13 @@ def main(argv):
         return 1
     ok = "faults 0" in done and " ms  " in done
     print("**the table above is where the step's GPU time goes**" if ok else "**no table** — see above")
+    # The step as one metric line — `@key=value`, the form cq's harness reads off stdout —
+    # so a nightly that runs this leaves a curve, and a kernel that quietly costs a third
+    # more shows up on it rather than in someone's memory of last week's number.
+    m = re.search(r": step ([0-9.]+) ms wall .*?· (\d+) dispatches", done)
+    if ok and m:
+        mode = compiled or "eager"
+        print(f"@{model}_{mode}_ms={m.group(1)} @{model}_{mode}_dispatches={m.group(2)}", flush=True)
     return 0 if ok else 1
 
 
