@@ -8,6 +8,7 @@ import json
 import pathlib
 import re
 import sys
+import textwrap
 
 import pytest
 
@@ -99,7 +100,7 @@ def test_the_python_smoke_tests_in_agents_md_run_on_the_numpy_core():
     for lang, body in FENCE.findall((ROOT / "AGENTS.md").read_text(encoding="utf-8")):
         if lang != "python" or body.lstrip().startswith("%pip") or "borch_webgpu" in body:
             continue  # the notebook cell needs Pyodide and a GPU; the browser checks cover it
-        exec(compile(body, "AGENTS.md", "exec"), {})  # noqa: S102 — the document's own block
+        exec(compile(textwrap.dedent(body), "AGENTS.md", "exec"), {})  # noqa: S102 — the document's own block
         ran += 1
     assert ran >= 1, "AGENTS.md has no Python block the core can run — the smoke test is gone"
 
@@ -155,7 +156,7 @@ def test_the_support_check_snippet_in_agents_md_reads_the_index_and_names_the_ab
     monkeypatch.setattr(urllib.request, "urlopen", lambda url: io.BytesIO(local.read_bytes()))
     blocks = [b for lang, b in FENCE.findall((ROOT / "AGENTS.md").read_text(encoding="utf-8")) if lang == "python" and "api-index.json" in b]
     assert len(blocks) == 1
-    exec(compile(blocks[0], "AGENTS.md", "exec"), {})  # noqa: S102
+    exec(compile(textwrap.dedent(blocks[0]), "AGENTS.md", "exec"), {})  # noqa: S102
     out = capsys.readouterr().out
     for name in ("AdamW", "LayerNorm", "MultiheadAttention", "stft"):
         assert re.search(rf"^{name}\s+\S", out, re.M) and "not in borch" not in re.search(rf"^{name}.*$", out, re.M).group(0), f"{name} should resolve"

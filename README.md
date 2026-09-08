@@ -15,6 +15,9 @@ PyTorch's values, errors and printed form within the range a curriculum uses.
   site root lists these documents in the order to read them.
   In Claude Code: `/plugin marketplace add playidea-lab/borch` then `/plugin install borch@borch`
   gives the session the `borch` skill — the same page as a skill, with recipes.
+  Any MCP-capable editor can add `https://gitmcp.io/playidea-lab/borch` as a server — GitMCP
+  serves this repository's `llms.txt` and README; nothing to register. Context7 indexes it as
+  `/playidea-lab/borch`.
 
 ## What it is not
 

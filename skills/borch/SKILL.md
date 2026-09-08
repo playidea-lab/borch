@@ -24,9 +24,17 @@ Never `%pip install torch` in Pyodide — real PyTorch has no Pyodide build, and
 
 ## 2. Rules that save a rewrite
 
-1. Alias, do not shadow: `import borch as torch`. For `from borch.nn import Linear` call
-   `borch.install("borch")` first — `install()` with no argument plants it as `torch` and
-   intercepts every other library's `import torch`.
+1. Alias, do not shadow: `import borch as torch`. For `from borch.nn import Linear` plant the
+   paths under borch's own name first — the argument matters:
+
+   ```python
+   import borch
+   borch.install("borch")   # then: from borch.nn import Linear
+   ```
+
+   `borch.install()` with no argument plants it as `torch` and intercepts every other
+   library's `import torch` — only when the user asks for exactly that.
+
 2. Check a name before writing it: fetch `api-index.json` (name → module path,
    `"AdamW": "optim.AdamW"`). A name that is not there is not implemented — say so, do not
    polyfill it quietly.
