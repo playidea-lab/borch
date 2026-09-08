@@ -51,11 +51,12 @@ def main(argv):
     model = next((a.split("=", 1)[1] for a in argv if a.startswith("--model=")), "unet")
     steps = next((a.split("=", 1)[1] for a in argv if a.startswith("--steps=")), "5")
     compiled = next((a.split("=", 1)[1] for a in argv if a.startswith("--compiled=")), "")
+    want = next((a.split("=", 1)[1] for a in argv if a.startswith("--want=")), "")
     scalar = "--scalar" in argv
     if refuse_if_screen_off("the step profile"):
         return 1
     port, shutdown = serve(ROOT)
-    url = f"http://127.0.0.1:{port}/tests/browser/profile_py.html?wheel=/{wheel}&batch={batch}&size={size}&model={model}&steps={steps}&compiled={compiled}" + ("&scalar=1" if scalar else "")
+    url = f"http://127.0.0.1:{port}/tests/browser/profile_py.html?wheel=/{wheel}&batch={batch}&size={size}&model={model}&steps={steps}&compiled={compiled}" + (f"&want={want}" if want else "") + ("&scalar=1" if scalar else "")
     profile = tempfile.mkdtemp(prefix="borch-profile-")
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     try:

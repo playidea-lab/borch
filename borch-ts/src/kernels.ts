@@ -1587,7 +1587,7 @@ export function subgroupMatmulSplit(M: number, K: number, N: number): number {
   // sliver of the GPU. Swept on the bench (`--bench=mm ... :tn`): the four dW shapes of
   // ViT-tiny sum to 0.587 ms at 64, 0.244 at 256, 0.216 at 512, 0.214 at 1024, the
   // summing of the slabs counted. Pieces of at least 64 of K keep the slabs small.
-  const WANT = 512;
+  const WANT = Number((globalThis as { BORCH_SG_WANT?: number }).BORCH_SG_WANT ?? 512);
   if (tiles >= WANT) return 1;
   const MIN_PER_SPLIT = 64;
   return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
@@ -1942,9 +1942,9 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
  */
 export function scalarMatmulSplit(M: number, K: number, N: number): number {
   const tiles = Math.ceil(M / 64) * Math.ceil(N / 64);
-  const WANT = 256;
+  const WANT = Number((globalThis as { BORCH_SCALAR_WANT?: number }).BORCH_SCALAR_WANT ?? 256);
   if (tiles >= WANT) return 1;
-  const MIN_PER_SPLIT = 64;
+  const MIN_PER_SPLIT = Number((globalThis as { BORCH_SCALAR_MIN?: number }).BORCH_SCALAR_MIN ?? 64);
   return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
 }
 

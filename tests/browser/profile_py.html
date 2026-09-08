@@ -50,6 +50,10 @@ batch = ${parseInt(q.get("batch") || "16")}; side = ${parseInt(q.get("size") || 
 if SCALAR:
     # What a card without subgroup matrices runs — the scalar tile for every product.
     js.borch.Device.subgroupMatrix = False
+WANT = ${parseInt(q.get("want") || "0")}
+if WANT:
+    js.globalThis.BORCH_SCALAR_WANT = WANT
+    js.globalThis.BORCH_SG_WANT = WANT
 MODEL = ${JSON.stringify(q.get("model") || "unet")}
 # Synthetic data: the profile is of the kernels, not of a dataset, and it has to run
 # where no dataset is (the nightly's worktree).
