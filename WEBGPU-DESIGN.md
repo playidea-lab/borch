@@ -549,3 +549,64 @@ the graph is disposed.
   is a precondition**
 - **the API name** — go with `import borch_webgpu as torch`, or use the same name as
   the core through a separate import
+
+## 10. ADRs from the transformer day (2026-09-08)
+
+Measured on the M-series against torch on MPS, the same step: ViT-tiny at batch 8
+34.3 → 21.2 ms (torch 16.7), the two-block GPT 8.3 → 7.1 (torch 5.2). Four levers were
+taken (the weight gradient's split, `add`/`sub` folding the gradient itself, softmax on
+subgroups, a LayerNorm kernel) and four rejected on their numbers (a taller matmul tile,
+a fused attention, padding attention to eights, a 32 tile for the batched product). What
+remains is not a kernel. The two decisions below are the ones left, written before they
+are taken.
+
+### ADR-001: Views — a shape operation that copies nothing
+
+- **상태**: 제안
+- **맥락**: `reshape` is free, but `permute`, `transpose`, `select`, `narrow` and `cat`
+  each run a gather and materialise. In a ViT-tiny step that is 151 dispatches and 2.1 ms
+  (forward 0.9, backward 1.2: the backward of three `select`s zero-fills the 3.6 MB base
+  three times and adds); in the GPT 0.7 ms. torch pays the backward the same way — its
+  gain is the forward only. Every kernel here binds whole buffers and assumes a contiguous
+  operand.
+- **결정 (제안)**: a tensor carries a layout (`base buffer, offset, strides`) and a shape
+  operation returns a new layout on the same buffer, no dispatch. A consumer that can read
+  strides — `matmul`/`bmm` (the subgroup loads take a row stride already; the scalar tile
+  takes an index expression), the elementwise kernels (`alignStrides` is a stride array
+  already) — reads in place; every other consumer materialises through the gather it runs
+  today, at the moment it binds. `.buffer` stays the choke point: it materialises.
+- **근거**: the forward copies vanish where they are read by a product or an elementwise
+  op — the attention head split, `k.transpose(-2, -1)`, the merge — and nothing else
+  changes. Measured ceiling in ViT-tiny 0.9 ms forward, ~1.6 ms with `unbind` as one
+  kernel; in the GPT 0.4 ms.
+- **대안**: (a) `unbind` as one kernel with three outputs and one gather back — half the
+  gain, no view semantics (rejected as not general); (b) a fused attention op — timm's
+  `fused_attn` off is 16.1 ms against 16.6 on, so torch's speed is not there (rejected).
+- **결과 / 미해결**: in-place through a view. `x[:, 0].add_(1)` must write the base. The
+  proposal: an in-place op on an unmaterialised view materialises, runs, and scatters back
+  by the inverting gather (`invertibleRules`) — three dispatches on a rare path; a
+  non-invertible view (`expand`) refuses in place, as torch does for overlapping memory.
+  And a view materialised earlier must see a later in-place write to its base: the
+  materialised copy is invalidated when the base is written (a weak set of views per
+  buffer). Neither is built; both are the cost of the 0.9 ms.
+
+### ADR-002: Parameters in one arena — the optimizer as one dispatch
+
+- **상태**: 제안
+- **맥락**: `SGD.step` is one dispatch per parameter: 152 in ViT-tiny (0.9 ms), 30 Adam
+  dispatches in the GPT. A WebGPU dispatch binds at most eight to ten storage buffers, so a
+  multi-tensor step needs the parameters in one buffer.
+- **결정 (제안)**: a `Module`'s parameters allocated from one arena, each a 256-byte
+  aligned slice bound through `GPUBufferBinding {offset, size}` — every kernel unchanged,
+  since a binding with an offset is the same buffer to WGSL. The optimizer runs one
+  kernel over the arena with a table of (offset, count, group).
+- **근거**: the 152 dispatches become one; `zero_grad`, gradient clipping, EMA and
+  `state_dict` become one pass each.
+- **대안**: `foreach`-style batching of a few parameters per dispatch (up to eight) —
+  152 → 19, without the arena. Cheaper, and probably the first step.
+- **결과 / 미해결**: **the gradients.** They are produced by autograd into fresh buffers,
+  one per parameter; a one-dispatch step needs them in an arena too, which means the
+  last accumulation writes into a placed output. Without that, packing the parameters
+  moves 152 optimizer dispatches into 152 copies. So the order is: placed outputs in
+  autograd first (a `Tensor.make` that takes a destination), then the arena. Not
+  started; the measured ceiling is 0.9 ms in ViT-tiny, 0.2 in the GPT.
