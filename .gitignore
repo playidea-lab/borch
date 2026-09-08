@@ -101,3 +101,6 @@ tests/browser/.cache/
 
 # Every document in one file for agents, built by site/build_llms.py
 llms-full.txt
+
+# The page list at deploy time, built by site/build_sitemap.py
+sitemap.xml
