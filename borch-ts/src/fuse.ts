@@ -49,7 +49,7 @@
  * made are compiled when first dispatched, which the first replay pays — ten
  * milliseconds on the U-Net, nothing visible on the small network (measured).
  */
-import { Device, type Recorded, type Slot } from "./device.js";
+import { Device, type Recorded, type BindSlot } from "./device.js";
 import { contiguousStrides, type Elementwise, elementLanes, grid1d, laneable, laneMode, type Reduce, type Source, WORKGROUP } from "./kernels.js";
 
 function elementwise(meta: Elementwise | Reduce | undefined): meta is Elementwise {
@@ -95,36 +95,36 @@ interface Node {
 /** The recording as a graph: who reads and who writes each buffer, by record index, and
  *  which buffers the caller holds. */
 interface Graph {
-  readonly readers: Map<Slot, number[]>;
-  readonly writers: Map<Slot, number[]>;
-  readonly held?: ReadonlySet<Slot>;
+  readonly readers: Map<BindSlot, number[]>;
+  readonly writers: Map<BindSlot, number[]>;
+  readonly held?: ReadonlySet<BindSlot>;
 }
 
 /** Rewrites `records` with elementwise trees fused. Returns the new list, how many
  *  dispatches were folded away, and how many intermediates go unwritten. `held` — the
  *  buffers the caller still holds; see `Capture.fuse`. */
-export function fuseRecords(dev: Device, records: readonly Recorded[], held?: ReadonlySet<Slot>): { records: Recorded[]; fused: number; unwritten: number } {
+export function fuseRecords(dev: Device, records: readonly Recorded[], held?: ReadonlySet<BindSlot>): { records: Recorded[]; fused: number; unwritten: number } {
   // A dispatch without a recipe is taken to read and write every buffer it binds.
-  const readers = new Map<Slot, number[]>();
-  const writers = new Map<Slot, number[]>();
-  const push = (map: Map<Slot, number[]>, b: Slot, i: number): void => {
+  const readers = new Map<BindSlot, number[]>();
+  const writers = new Map<BindSlot, number[]>();
+  const push = (map: Map<BindSlot, number[]>, b: BindSlot, i: number): void => {
     const list = map.get(b);
     if (list) list.push(i); else map.set(b, [i]);
   };
   records.forEach((r, i) => {
     if (elementwise(r.meta)) {
-      for (const inp of r.meta.inputs) push(readers, r.buffers[inp.binding] as Slot, i);
-      push(writers, r.buffers[r.meta.out] as Slot, i);
+      for (const inp of r.meta.inputs) push(readers, r.buffers[inp.binding] as BindSlot, i);
+      push(writers, r.buffers[r.meta.out] as BindSlot, i);
     } else if (reduction(r.meta)) {
       const input = r.meta.input;
-      push(readers, r.buffers[input] as Slot, i);
+      push(readers, r.buffers[input] as BindSlot, i);
       r.buffers.forEach((b, k) => { if (k !== input) push(writers, b, i); });
     } else {
       for (const b of r.buffers) { push(readers, b, i); push(writers, b, i); }
     }
   });
   const graph: Graph = held ? { readers, writers, held } : { readers, writers };
-  const producerOf = (b: Slot, before: number): number | undefined => {
+  const producerOf = (b: BindSlot, before: number): number | undefined => {
     const ws = writers.get(b) ?? [];
     let last: number | undefined;
     for (const w of ws) if (w < before) last = w;
@@ -169,7 +169,7 @@ export function fuseRecords(dev: Device, records: readonly Recorded[], held?: Re
  * reader of `buf` between the two except `except`.
  */
 function movable(
-  records: readonly Recorded[], p: number, buf: Slot, n: number, position: number,
+  records: readonly Recorded[], p: number, buf: BindSlot, n: number, position: number,
   graph: Graph, except: ReadonlySet<number>,
 ): Node | undefined {
   const prod = records[p] as Recorded;
@@ -184,11 +184,11 @@ function movable(
 /** The elementwise producer a reduction at `at` can take in, if it has one. */
 function feeder(
   records: readonly Recorded[], at: number, meta: Reduce, graph: Graph,
-  producerOf: (b: Slot, before: number) => number | undefined,
+  producerOf: (b: BindSlot, before: number) => number | undefined,
   absorbed: Set<number>,
 ): number | undefined {
   const rec = records[at] as Recorded;
-  const buf = rec.buffers[meta.input] as Slot;
+  const buf = rec.buffers[meta.input] as BindSlot;
   if (meta.serial > SERIAL_LIMIT) return undefined;
   const p = producerOf(buf, at);
   if (p === undefined || absorbed.has(p)) return undefined;
@@ -207,7 +207,7 @@ function feeder(
 function gather(
   records: readonly Recorded[], rootIndex: number, position: number, reserve: number,
   graph: Graph,
-  producerOf: (b: Slot, before: number) => number | undefined,
+  producerOf: (b: BindSlot, before: number) => number | undefined,
   absorbed: Set<number>,
 ): Node[] {
   const root = records[rootIndex] as Recorded;

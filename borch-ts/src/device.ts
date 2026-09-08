@@ -270,6 +270,21 @@ function subgroupMatrixF32(adapter: GPUAdapter): boolean {
  * trained a GPT to a loss 3e-6 away from eager while Adam's U-Net replayed bit for bit
  * (measured 2026-09-07). A copy has `copy` set and `buffers` as `[src, dst]`.
  */
+export interface Recorded {
+  readonly pipeline?: GPUComputePipeline;
+  readonly bindGroup?: GPUBindGroup;
+  readonly copy?: { readonly bytes: number };
+  readonly groups: readonly [number, number, number];
+  /** The buffers behind the bind group, in binding order — what a fusion pass reads. */
+  readonly buffers: readonly BindSlot[];
+  /** For an elementwise dispatch, what it computes — see `Elementwise`; for a reduction,
+   *  what it reads once — see `Reduce`. */
+  readonly meta?: Elementwise | Reduce;
+  /** The pipeline's signature at the time of recording — what the profiler files a
+   *  replayed dispatch under. Without it a replay is one kind: the last signature set. */
+  readonly sig?: string;
+}
+
 /**
  * What a dispatch binds at one slot: a whole buffer, or a `{buffer, offset, size}`
  * sub-range of one. The **object itself is the identity** the fusion pass and the
@@ -277,26 +292,11 @@ function subgroupMatrixF32(adapter: GPUAdapter): boolean {
  * and two tensors sharing one arena buffer at different offsets are two different keys
  * because they are two different objects. A tensor caches its slot so the key is stable.
  */
-export type Slot = GPUBuffer | { readonly buffer: GPUBuffer; readonly offset: number; readonly size: number };
+export type BindSlot = GPUBuffer | { readonly buffer: GPUBuffer; readonly offset: number; readonly size: number };
 
 /** The GPUBuffer behind a slot — for a usage or pool check, never for identity. */
-export function bufOf(s: Slot): GPUBuffer {
+export function bufOf(s: BindSlot): GPUBuffer {
   return s instanceof GPUBuffer ? s : s.buffer;
-}
-
-export interface Recorded {
-  readonly pipeline?: GPUComputePipeline;
-  readonly bindGroup?: GPUBindGroup;
-  readonly copy?: { readonly bytes: number };
-  readonly groups: readonly [number, number, number];
-  /** The buffers behind the bind group, in binding order — what a fusion pass reads. */
-  readonly buffers: readonly Slot[];
-  /** For an elementwise dispatch, what it computes — see `Elementwise`; for a reduction,
-   *  what it reads once — see `Reduce`. */
-  readonly meta?: Elementwise | Reduce;
-  /** The pipeline's signature at the time of recording — what the profiler files a
-   *  replayed dispatch under. Without it a replay is one kind: the last signature set. */
-  readonly sig?: string;
 }
 
 /**
@@ -325,8 +325,8 @@ export class Capture {
    * asking where the dispatches go, reads.
    */
   describe(): { key: string; groups: readonly [number, number, number]; buffers: number[]; sizes: number[] }[] {
-    const ids = new Map<Slot, number>();
-    const id = (b: Slot): number => {
+    const ids = new Map<BindSlot, number>();
+    const id = (b: BindSlot): number => {
       let n = ids.get(b);
       if (n === undefined) { n = ids.size; ids.set(b, n); }
       return n;
@@ -349,16 +349,16 @@ export class Capture {
    * so activations such a kernel writes are counted too — more than needed, never less.
    */
   liveIns(): GPUBuffer[] {
-    const written = new Set<Slot>();
-    const live = new Set<Slot>();
+    const written = new Set<BindSlot>();
+    const live = new Set<BindSlot>();
     for (const r of this.records) {
-      const reads: Slot[] = [];
-      const writes: Slot[] = [];
+      const reads: BindSlot[] = [];
+      const writes: BindSlot[] = [];
       if (r.copy) {
-        reads.push(r.buffers[0] as Slot); writes.push(r.buffers[1] as Slot);
+        reads.push(r.buffers[0] as BindSlot); writes.push(r.buffers[1] as BindSlot);
       } else if (r.meta && "expr" in r.meta) {
-        for (const inp of r.meta.inputs) reads.push(r.buffers[inp.binding] as Slot);
-        writes.push(r.buffers[r.meta.out] as Slot);
+        for (const inp of r.meta.inputs) reads.push(r.buffers[inp.binding] as BindSlot);
+        writes.push(r.buffers[r.meta.out] as BindSlot);
       } else if (r.meta && "input" in r.meta) {
         const input = r.meta.input;
         r.buffers.forEach((b, k) => { if (k === input) reads.push(b); else writes.push(b); });
@@ -1117,7 +1117,7 @@ export class Device {
    */
   run(
     pipeline: GPUComputePipeline,
-    buffers: readonly Slot[],
+    buffers: readonly BindSlot[],
     groups: readonly [number, number, number],
     meta?: Elementwise | Reduce,
   ): void {
@@ -1171,7 +1171,7 @@ export class Device {
    * Runs one-dimensional work spread over a grid. Paired with the indexing
    * in `kernels.ts`.
    */
-  run1d(pipeline: GPUComputePipeline, buffers: readonly Slot[], n: number, meta?: Elementwise | Reduce): void {
+  run1d(pipeline: GPUComputePipeline, buffers: readonly BindSlot[], n: number, meta?: Elementwise | Reduce): void {
     const g = grid1d(n);
     this.run(pipeline, buffers, [g.x, g.y, 1], meta);
   }
@@ -1182,7 +1182,7 @@ export class Device {
   }
 
   /** A bind group for `pipeline` over `buffers`, in binding order. */
-  bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly Slot[]): GPUBindGroup {
+  bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly BindSlot[]): GPUBindGroup {
     let layout = this.layouts.get(pipeline);
     if (!layout) {
       layout = pipeline.getBindGroupLayout(0);
