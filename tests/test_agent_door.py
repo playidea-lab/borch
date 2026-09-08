@@ -130,7 +130,13 @@ def test_context7_json_is_valid_and_its_rules_are_the_agents_md_rules_in_short()
     cfg = json.loads((ROOT / "context7.json").read_text(encoding="utf-8"))
     assert cfg["$schema"].endswith("/context7.json")
     assert 8 <= len(cfg["rules"]) <= 15
-    assert all(len(r) < 500 and "\n" not in r for r in cfg["rules"]), "a rule is a line, not a page"
+    # Context7 validates on submission: description at most 200 characters, a rule at most 255.
+    # The first submission (2026-09-08) was accepted with the file rejected — two rules and the
+    # description over the limit, so the agent would have got no rules at all.
+    assert len(cfg["description"]) <= 200, f"description is {len(cfg['description'])} chars; Context7 allows 200"
+    long = [(i, len(r)) for i, r in enumerate(cfg["rules"]) if len(r) > 255]
+    assert not long, f"rules over Context7's 255 characters: {long}"
+    assert all("\n" not in r for r in cfg["rules"]), "a rule is a line, not a page"
     for built in ("node_modules", "vendor", "site/lab", "site/marimo", "borch-ts/dist"):
         assert built in cfg["excludeFolders"], f"{built} would be indexed as documentation"
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
