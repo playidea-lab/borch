@@ -1,0 +1,41 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "borch",
+  "description": "PyTorch's shape in a browser tab: a numpy core (import borch as torch), a TypeScript runtime on WebGPU (borch-ts), and a Python binding for Pyodide (borch_webgpu), all held to real PyTorch's values, error messages and printed form. pip install pyborch / npm install borch-ts.",
+  "folders": [],
+  "excludeFolders": [
+    "node_modules",
+    "vendor",
+    "dist",
+    "bundle",
+    "borch-ts/dist",
+    "borch-ts/test",
+    "site/lab",
+    "site/lab-src",
+    "site/marimo",
+    "site/marimo-src",
+    "site/assets",
+    "tests",
+    ".github",
+    "**/__pycache__"
+  ],
+  "excludeFiles": [
+    "THIRD-PARTY.md",
+    "package-lock.json",
+    "uv.lock",
+    "CLAUDE.md"
+  ],
+  "rules": [
+    "Pick by where the code runs: Python on a machine -> `import borch as torch` (pip install pyborch); Pyodide/JupyterLite with WebGPU -> `import borch_webgpu as torch` (same wheel, %pip install pyborch); a TypeScript page -> `import { init, Tensor, nn, optim, scope } from \"borch-ts\"` and `await init()` first.",
+    "Alias, do not shadow: `import borch as torch`. For `from borch.nn import Linear` call `borch.install(\"borch\")` first; `install()` with no argument plants it as `torch` and intercepts every other library's `import torch`.",
+    "Check a name before writing it in site/assets/api-index.json (name -> module). A name that is not there is not implemented; say so rather than polyfilling it.",
+    "Absent by design and never coming: CUDA, mixed precision, distributed training, torch.compile. Do not write .to(\"cuda\"), autocast or DistributedDataParallel.",
+    "borch-ts differs from torch in six places: `await init()` first; `await loss.item()` is the only asynchronous read; wrap each training step in `using s = scope()` and mark what leaves it with `s.keep(t)` or `keepAlive`; call modules with `model.call(x)`; 'cpu' is where values are put down, not a compute device; `await opt.step(closure)` for LBFGS alone.",
+    "borch_webgpu hides init, item, scope and call: Python reads like torch with no await, but the page must enter Python asynchronously (JupyterLite, marimo and the site's pages already do).",
+    "`init()` refuses a software adapter (SwiftShader, llvmpipe) rather than pretending a CPU rasteriser is a GPU; the switch to ask for one on purpose is in InitOptions, and `probe().software` says what you got.",
+    "Errors are torch's own, same type and message, and a refusal is loud on purpose: do not catch it and continue with a substitute.",
+    "borch-ts computes in float32 (WGSL has no f64); complex is complex64 only in all three implementations.",
+    "In Pyodide install the wheel, never torch: real PyTorch has no Pyodide build, so `%pip install torch` fails and a `try: import torch` fallback never succeeds there.",
+    "Export with `torch.onnx.export(model, x, path)` in Python or `onnx.exportOnnx(model, sample)` in TypeScript; the file is checked against ONNX Runtime Web."
+  ]
+}
