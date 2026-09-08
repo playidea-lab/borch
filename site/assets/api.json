@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 791,
+  "done": 790,
   "stale": 0,
-  "missing": 481
+  "missing": 482
  },
  "modules": [
   {
@@ -22058,7 +22058,7 @@
       },
       {
        "name": "copy",
-       "signature": "readonly copy?: { readonly bytes: number; }",
+       "signature": "readonly copy?: { readonly bytes: number; readonly srcOff?: number; readonly dstOff?: number; }",
        "doc": "",
        "optional": true
       },
@@ -22464,15 +22464,24 @@
        "doc_ko": "전체 합. 부분합이 하나가 될 때까지 같은 커널을 다시 부른다.\n\n**원자 연산을 안 쓴다** — 부동소수 덧셈은 순서가 바뀌면 값이 달라지고, 그러면\n같은 씨앗으로 두 번 돌린 학습이 갈린다. 느린 쪽이 재현된다."
       },
       {
+       "name": "copyRange",
+       "signature": "copyRange(dst: GPUBuffer, dstOff: number, src: GPUBuffer, srcOff: number, bytes: number): void",
+       "doc": "A copy between sub-ranges — `srcOff`/`dstOff` bytes in, `bytes` long. `copyInto` is\nthe whole-buffer case; this is what an arena's gather and scatter ride (a byte offset\nmust be a multiple of 4, which every f32 slice is). Recorded with its offsets so a\ncaptured step replays the same slices.",
+       "torch": "copy_range",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
+      },
+      {
        "name": "copyInto",
        "signature": "copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void",
-       "doc": "Overwrites one buffer with another. In-place operations use it.\n\nIt is a copy, not a kernel — the result is made in a new buffer and\nthen moved back to the original slot. Reading and writing the original\nat once leaves the threads unordered and the values mixed.",
+       "doc": "",
        "torch": "copy_into",
        "section": {
         "ko": "Capture and replay",
         "en": "Capture and replay"
-       },
-       "doc_ko": "버퍼 하나를 다른 버퍼에 덮어쓴다. 제자리 연산이 쓴다.\n\n커널이 아니라 복사다 — 결과를 새 버퍼에 만든 뒤 원래 자리로 옮긴다. 원래\n버퍼를 읽으면서 같이 쓰면 스레드끼리 순서가 없어 값이 섞인다."
+       }
       },
       {
        "name": "nsByKind",
@@ -22576,7 +22585,7 @@
      "inherited_ctor": "private constructor()"
     }
    ],
-   "count": 74
+   "count": 75
   },
   {
    "name": "random",
@@ -23519,5 +23528,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3200
+ "total": 3201
 }
