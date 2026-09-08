@@ -134,7 +134,10 @@ def main(argv):
     print(f"{len(todo)} pages · isolation waited up to {ISOLATION_S}s · {SETTLE_S:.0f}s settle")
     failures = 0
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=not headed)
+        # The channel the other runners take (`BORCH_CHROME_CHANNEL=chrome` on the 4090,
+        # where Playwright's own Chromium is not installed and this launch failed nightly
+        # with "Executable doesn't exist").
+        browser = pw.chromium.launch(headless=not headed, channel=os.environ.get("BORCH_CHROME_CHANNEL") or None)
         for mode, headers in (("headers", True), ("shim", False)):
             port, stop = serve(headers)
             context = browser.new_context()
