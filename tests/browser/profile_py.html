@@ -129,7 +129,7 @@ async def body():
         for _ in range(steps): step()
         dev.flush(); await dev.synchronize()
 run_sync(dev.profile(create_proxy(body)))
-NAMES = {"cnd": "conv direct (fwd, dX)", "cnt": "conv GEMM fwd/dX", "cnwt": "conv GEMM weight grad", "cnwd": "conv direct weight grad", "cnwg": "conv subgroup weight grad", "smx": "softmax (rows)", "cf": "column fold", "smxb": "softmax bwd (rows)", "cnf": "conv subgroup fwd", "tmw": "tap-major weights", "pdw": "pad for weight grad", "sst": "tapped sums", "cnxt": "conv GEMM input grad", "ss": "split sums", "ssc": "split sums (conv)",
+NAMES = {"cnd": "conv direct (fwd, dX)", "cnt": "conv GEMM fwd/dX", "cnwt": "conv GEMM weight grad", "cnwd": "conv direct weight grad", "cnwg": "conv subgroup weight grad", "smx": "softmax (rows)", "fusedr": "fused reduction", "cf": "column fold", "smxb": "softmax bwd (rows)", "cnf": "conv subgroup fwd", "tmw": "tap-major weights", "pdw": "pad for weight grad", "sst": "tapped sums", "cnxt": "conv GEMM input grad", "ss": "split sums", "ssc": "split sums (conv)",
          "bns": "batchnorm stats", "bnf": "batchnorm finish", "bna": "batchnorm apply", "bnsb": "batchnorm stats bwd", "bnfb": "batchnorm finish bwd", "bnba": "batchnorm apply bwd", "rs": "running stats",
          "u": "unary", "ub": "unary bwd", "b": "binary", "bb": "binary bwd", "rb": "broadcast fold", "rbw": "broadcast fold (wide)", "rd": "reduce dim", "rsum": "reduce sum", "pn": "pool", "pnbt": "pool bwd (tiled max)", "pnb": "pool bwd",
          "catc": "cat copy", "gt": "gather (narrow)", "adam": "adam step", "sgd": "sgd step", "bcel": "bce loss", "bcelb": "bce loss bwd", "cturn": "turn weights", "mm": "matmul", "mmsg": "matmul (subgroup)", "pad": "pad"}
@@ -154,9 +154,9 @@ for kind, ms in sorted(per.items(), key=lambda kv: -kv[1]):
 detail = {}
 for k, ns in dev.nsByKind.entries():
     key = str(k)
-    if key.split(":")[0] in ("mmsg", "mm", "bmm", "bmmsg", "sumsplits", "bb", "b", "gb", "gt"):
+    if True:
         detail[key] = (detail.get(key, (0, 0))[0] + float(ns) / 1e6 / timed_steps, detail.get(key, (0, 0))[1] + int(dev.countByKind.get(k) or 0) / timed_steps)
-for key, (ms, c) in sorted(detail.items(), key=lambda kv: -kv[1][0])[:24]:
+for key, (ms, c) in sorted(detail.items(), key=lambda kv: -kv[1][0])[:32]:
     lines.append(f"    {ms:5.2f} ms  {c:4.0f}×  {ms / c * 1000 if c else 0:5.0f} us each  {key}")
 adapter = str(js.borch.Device.adapterInfo)
 chr(10).join(lines) + chr(10) + f"faults {int(dev.faults.count)} · adapter {adapter}"

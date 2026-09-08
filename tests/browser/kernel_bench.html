@@ -153,6 +153,28 @@ const BENCHES = {
     const text = await race(runs, Bt * M * Nd);
     return `${text} · ${gflop.toFixed(2)} GFLOP`;
   },
+  // Row softmax at `rows x C x 1`: the workgroup tree against subgroup operations; the
+  // backward pair likewise (`smxb`).
+  async smx(sh) {
+    if (sh.M === undefined) throw new Error(`smx wants rowsxCx1 shapes, not ${sh.name}`);
+    const rows = sh.M, C = sh.Kd, n = rows * C;
+    const X = upload(n, 1), Out = dev.alloc(n), Out2 = dev.alloc(n);
+    const runs = [{ name: `tree (${K.SOFTMAX_GROUP} threads a row)`, key: `smx:${sh.name}`, make: () => K.softmaxRows(rows, C, false), outb: Out,
+      run: () => dev.run(dev.pipeline(`smx:${sh.name}`, () => K.softmaxRows(rows, C, false)), [X, Out], [rows, 1, 1]) }];
+    if (Device.subgroups) runs.push({ name: `subgroup (${K.SOFTMAX_SG_GROUP} a row)`, key: `smxsg:${sh.name}`, make: () => K.softmaxRowsSubgroup(C, false), outb: Out2,
+      run: () => dev.run(dev.pipeline(`smxsg:${sh.name}`, () => K.softmaxRowsSubgroup(C, false)), [X, Out2], [rows, 1, 1]) });
+    return race(runs, n);
+  },
+  async smxb(sh) {
+    if (sh.M === undefined) throw new Error(`smxb wants rowsxCx1 shapes, not ${sh.name}`);
+    const rows = sh.M, C = sh.Kd, n = rows * C;
+    const Y = upload(n, 1), G = upload(n, 2), Out = dev.alloc(n), Out2 = dev.alloc(n);
+    const runs = [{ name: `tree`, key: `smxb:${sh.name}`, make: () => K.softmaxRowsBackward(rows, C, false), outb: Out,
+      run: () => dev.run(dev.pipeline(`smxb:${sh.name}`, () => K.softmaxRowsBackward(rows, C, false)), [Y, G, Out], [rows, 1, 1]) }];
+    if (Device.subgroups) runs.push({ name: `subgroup`, key: `smxbsg:${sh.name}`, make: () => K.softmaxRowsBackwardSubgroup(C, false), outb: Out2,
+      run: () => dev.run(dev.pipeline(`smxbsg:${sh.name}`, () => K.softmaxRowsBackwardSubgroup(C, false)), [Y, G, Out2], [rows, 1, 1]) });
+    return race(runs, n);
+  },
   // The padded copy against a plain pass over the same input.
   async pad(sh) {
     const s = conv(sh); const n = sh.N * sh.C * sh.H * sh.H; const { Cp } = K.sgwPadded(s); const pn = sh.N * Cp * (sh.H + 2) * (sh.H + 2);

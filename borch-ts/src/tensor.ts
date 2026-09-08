@@ -210,6 +210,8 @@ import {
   gatherLanes,
   invertibleRules,
   softmaxRows,
+  softmaxRowsSubgroup,
+  softmaxRowsBackwardSubgroup,
   softmaxRowsBackward,
   matmulBatched,
   matmulSubgroupBatched,
@@ -4090,14 +4092,18 @@ export class Tensor implements Node<Tensor> {
     const rows = this.size / Math.max(C, 1);
     if (C === 0 || rows === 0) return null;
     const out = dev().alloc(this.size);
+    // On subgroup operations where the device has them — see `softmaxRowsSubgroup`.
+    const sg = Device.subgroups;
     dev().run(
-      dev().pipeline(`smx:${log ? "log" : "p"}:${rows}:${C}`, () => softmaxRows(rows, C, log)),
+      dev().pipeline(`smx:${log ? "log" : "p"}:${rows}:${C}${sg ? ":sg" : ""}`,
+                     () => sg ? softmaxRowsSubgroup(C, log) : softmaxRows(rows, C, log)),
       [this.buffer, out], [rows, 1, 1]);
     const shape = this.shape;
     const result: Tensor = Tensor.make(out, shape, [this], (g) => {
       const gi = dev().alloc(this.size);
       dev().run(
-        dev().pipeline(`smxb:${log ? "log" : "p"}:${rows}:${C}`, () => softmaxRowsBackward(rows, C, log)),
+        dev().pipeline(`smxb:${log ? "log" : "p"}:${rows}:${C}${sg ? ":sg" : ""}`,
+                       () => sg ? softmaxRowsBackwardSubgroup(C, log) : softmaxRowsBackward(rows, C, log)),
         [result.buffer, g.buffer, gi], [rows, 1, 1]);
       return [new Tensor(gi, shape)];
     }, log ? "LogSoftmaxBackward0" : "SoftmaxBackward0");

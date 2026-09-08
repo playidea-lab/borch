@@ -453,12 +453,18 @@ export class Device {
     const sgm = subgroupMatrixF32(adapter);
     const features: GPUFeatureName[] = [];
     if (canTime) features.push("timestamp-query");
-    if (sgm) features.push("subgroups" as GPUFeatureName, "chromium-experimental-subgroup-matrix" as GPUFeatureName);
+    // Subgroups on their own are wider than subgroup matrices: Vulkan without the
+    // matrix extension still has them, and a row reduction (softmax) is 5× faster on
+    // them than through workgroup memory and a barrier tree.
+    const sg = adapter.features.has("subgroups" as GPUFeatureName);
+    if (sg) features.push("subgroups" as GPUFeatureName);
+    if (sgm) features.push("chromium-experimental-subgroup-matrix" as GPUFeatureName);
     const descriptor = {
       requiredLimits: want,
       requiredFeatures: features,
     };
     Device.subgroupMatrix = sgm;
+    Device.subgroups = sg;
     Device.workgroupStorage = adapter.limits.maxComputeWorkgroupStorageSize;
 
     let device: GPUDevice;
@@ -1529,6 +1535,8 @@ export class Device {
   /** Whether the device was built with subgroup matrices (f32, 8 × 8 × 8) — see
    *  `create`. `matmul` asks this before choosing its kernel. */
   static subgroupMatrix = false;
+  /** Whether the device has subgroup operations (`subgroupAdd`, `subgroupMax`). */
+  static subgroups = false;
 
   /** The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple
    *  gives 32 KB. A kernel that stages more than the floor asks this first. */

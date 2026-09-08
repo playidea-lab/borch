@@ -410,5 +410,5 @@ function buildReduce(dev: Device, tree: Node[], root: Recorded, at: number, meta
   const key = `fused:${hashOf(code)}:${meta.n}`;
   const pipeline = dev.pipeline(key, () => code);
   fusedCodes.set(key, code);
-  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, buffers), groups: root.groups, buffers };
+  return { pipeline, bindGroup: dev.bindGroupFor(pipeline, buffers), groups: root.groups, buffers, sig: key.replace("fused:", "fusedr:") };
 }

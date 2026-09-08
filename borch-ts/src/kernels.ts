@@ -1821,6 +1821,78 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: ve
 }`;
 }
 
+/** The threads one row of `softmaxRowsSubgroup` takes — a few subgroups of any size. */
+export const SOFTMAX_SG_GROUP = 64;
+
+/**
+ * `softmaxRows` on subgroup operations — **the row's maximum and sum meet in the
+ * subgroup, not in workgroup memory.**
+ *
+ * The tree above costs a row of 197 sixteen barriers over 256 threads, most of them idle;
+ * measured 81 µs a dispatch for 4728 rows, 92 GB/s. Here 64 threads take the row, each
+ * subgroup reduces its share with `subgroupMax`/`subgroupAdd`, and the few subgroup
+ * results meet once in workgroup memory, in a fixed order. The subgroup size is read at
+ * run time, so a 32-wide Apple or NVIDIA subgroup and a 64-wide AMD one both work.
+ */
+export function softmaxRowsSubgroup(C: number, log: boolean): string {
+  const G = SOFTMAX_SG_GROUP;
+  return `enable subgroups;
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+var<workgroup> part: array<f32, 16>;
+@compute @workgroup_size(${G})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>,
+        @builtin(subgroup_id) sid: u32, @builtin(subgroup_size) ssz: u32, @builtin(subgroup_invocation_id) siv: u32) {
+  let base = w.x * ${C}u;
+  let groups = ${G}u / ssz;
+  var m = -3.0e38;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) { m = max(m, X[base + i]); }
+  m = subgroupMax(m);
+  if (siv == 0u) { part[sid] = m; }
+  workgroupBarrier();
+  var rowMax = part[0];
+  for (var j = 1u; j < groups; j = j + 1u) { rowMax = max(rowMax, part[j]); }
+  workgroupBarrier();
+  var s = 0.0;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) { s = s + exp(X[base + i] - rowMax); }
+  s = subgroupAdd(s);
+  if (siv == 0u) { part[sid] = s; }
+  workgroupBarrier();
+  var total = 0.0;
+  for (var j = 0u; j < groups; j = j + 1u) { total = total + part[j]; }
+  ${log ? "let logTotal = log(total);" : ""}
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) {
+    ${log ? "Out[base + i] = X[base + i] - rowMax - logTotal;" : "Out[base + i] = exp(X[base + i] - rowMax) / total;"}
+  }
+}`;
+}
+
+/** The backward of `softmaxRowsSubgroup` — one row sum on subgroup operations. */
+export function softmaxRowsBackwardSubgroup(C: number, log: boolean): string {
+  const G = SOFTMAX_SG_GROUP;
+  return `enable subgroups;
+@group(0) @binding(0) var<storage, read> Y: array<f32>;
+@group(0) @binding(1) var<storage, read> Gr: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+var<workgroup> part: array<f32, 16>;
+@compute @workgroup_size(${G})
+fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) w: vec3<u32>,
+        @builtin(subgroup_id) sid: u32, @builtin(subgroup_size) ssz: u32, @builtin(subgroup_invocation_id) siv: u32) {
+  let base = w.x * ${C}u;
+  let groups = ${G}u / ssz;
+  var s = 0.0;
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) { s = s + ${log ? "Gr[base + i]" : "Gr[base + i] * Y[base + i]"}; }
+  s = subgroupAdd(s);
+  if (siv == 0u) { part[sid] = s; }
+  workgroupBarrier();
+  var total = 0.0;
+  for (var j = 0u; j < groups; j = j + 1u) { total = total + part[j]; }
+  for (var i = l.x; i < ${C}u; i = i + ${G}u) {
+    ${log ? "Out[base + i] = Gr[base + i] - exp(Y[base + i]) * total;" : "Out[base + i] = Y[base + i] * (Gr[base + i] - total);"}
+  }
+}`;
+}
+
 /**
  * The backward of `softmaxRows`: with `y` the forward's output and `g` the gradient,
  * softmax gives `y · (g − Σ g·y)` over the row and log-softmax `g − exp(y) · Σ g` —
