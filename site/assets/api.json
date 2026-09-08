@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 791,
+  "done": 790,
   "stale": 0,
-  "missing": 479
+  "missing": 481
  },
  "modules": [
   {
@@ -15201,7 +15201,7 @@
     {
      "kind": "function",
      "name": "fuseRecords",
-     "signature": "export declare function fuseRecords(dev: Device, records: readonly Recorded[], held?: ReadonlySet<GPUBuffer>): { records: Recorded[]; fused: number; unwritten: number; }",
+     "signature": "export declare function fuseRecords(dev: Device, records: readonly Recorded[], held?: ReadonlySet<Slot>): { records: Recorded[]; fused: number; unwritten: number; }",
      "doc": "Rewrites `records` with elementwise trees fused. Returns the new list, how many\n dispatches were folded away, and how many intermediates go unwritten. `held` — the\n buffers the caller still holds; see `Capture.fuse`.",
      "members": [],
      "torch": "fuse_records",
@@ -22038,10 +22038,25 @@
      "doc_ko": "WebGPU 를 쓸 수 있는가만 묻는다. `torch.cuda.is_available()` 자리다.\n\n**torch 와 달리 비동기다** — 어댑터를 얻는 것이 비동기라 피할 길이 없다. 왜 안\n되는지가 필요하면 `probe()` 를 써라."
     },
     {
+     "kind": "type",
+     "name": "Slot",
+     "signature": "export type Slot = GPUBuffer | { readonly buffer: GPUBuffer; readonly offset: number; readonly size: number; }",
+     "doc": "What a dispatch binds at one slot: a whole buffer, or a `{buffer, offset, size}`\nsub-range of one. The **object itself is the identity** the fusion pass and the\ncapture's live-in analysis key on — a whole buffer is its own key (as it always was),\nand two tensors sharing one arena buffer at different offsets are two different keys\nbecause they are two different objects. A tensor caches its slot so the key is stable.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "bufOf",
+     "signature": "export declare function bufOf(s: Slot): GPUBuffer",
+     "doc": "The GPUBuffer behind a slot — for a usage or pool check, never for identity.",
+     "members": [],
+     "torch": "buf_of"
+    },
+    {
      "kind": "interface",
      "name": "Recorded",
      "signature": "export interface Recorded",
-     "doc": "One dispatch as recorded under a capture — or one buffer copy: every in-place\noperation is a copy back into the original buffer (`copyInto`), and an optimizer's\nweight decay is one. Left out of the recording, a replay silently skipped them: AdamW\ntrained a GPT to a loss 3e-6 away from eager while Adam's U-Net replayed bit for bit\n(measured 2026-09-07). A copy has `copy` set and `buffers` as `[src, dst]`.",
+     "doc": "",
      "members": [
       {
        "name": "pipeline",
@@ -22069,7 +22084,7 @@
       },
       {
        "name": "buffers",
-       "signature": "readonly buffers: readonly GPUBuffer[]",
+       "signature": "readonly buffers: readonly Slot[]",
        "doc": "The buffers behind the bind group, in binding order — what a fusion pass reads."
       },
       {
@@ -22085,8 +22100,7 @@
        "doc": "The pipeline's signature at the time of recording — what the profiler files a\n replayed dispatch under. Without it a replay is one kind: the last signature set.",
        "optional": true
       }
-     ],
-     "doc_ko": "캡처 아래에서 녹화된 dispatch 하나 — 또는 버퍼 복사 하나. 제자리 연산은 전부 원래 버퍼로 되돌리는 복사(`copyInto`)이고 옵티마이저의 weight decay도 그렇다. 녹화에서 빠지면 replay가 조용히 건너뛰었다: AdamW의 GPT는 eager와 손실이 3e-6 어긋났고 Adam의 U-Net은 비트 단위로 같았다(2026-09-07 실측). 복사는 `copy`가 있고 `buffers`가 `[src, dst]`다."
+     ]
     },
     {
      "kind": "class",
@@ -22397,7 +22411,7 @@
       },
       {
        "name": "run",
-       "signature": "run(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], groups: readonly [number, number, number], meta?: Elementwise | Reduce): void",
+       "signature": "run(pipeline: GPUComputePipeline, buffers: readonly Slot[], groups: readonly [number, number, number], meta?: Elementwise | Reduce): void",
        "doc": "One kernel. `groups` is the **workgroup count**, and the per-axis limit\nis rechecked here — `kernels.ts` folds the grid, but a hand-called path\nmay appear.",
        "section": {
         "ko": "Capture and replay",
@@ -22407,7 +22421,7 @@
       },
       {
        "name": "run1d",
-       "signature": "run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number, meta?: Elementwise | Reduce): void",
+       "signature": "run1d(pipeline: GPUComputePipeline, buffers: readonly Slot[], n: number, meta?: Elementwise | Reduce): void",
        "doc": "Runs one-dimensional work spread over a grid. Paired with the indexing\nin `kernels.ts`.",
        "section": {
         "ko": "Capture and replay",
@@ -22428,7 +22442,7 @@
       },
       {
        "name": "bindGroupFor",
-       "signature": "bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[]): GPUBindGroup",
+       "signature": "bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly Slot[]): GPUBindGroup",
        "doc": "A bind group for `pipeline` over `buffers`, in binding order.",
        "torch": "bind_group_for",
        "section": {
@@ -22561,7 +22575,7 @@
      "inherited_ctor": "private constructor()"
     }
    ],
-   "count": 72
+   "count": 74
   },
   {
    "name": "random",
@@ -23504,5 +23518,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3198
+ "total": 3200
 }

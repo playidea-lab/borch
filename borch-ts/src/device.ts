@@ -270,13 +270,27 @@ function subgroupMatrixF32(adapter: GPUAdapter): boolean {
  * trained a GPT to a loss 3e-6 away from eager while Adam's U-Net replayed bit for bit
  * (measured 2026-09-07). A copy has `copy` set and `buffers` as `[src, dst]`.
  */
+/**
+ * What a dispatch binds at one slot: a whole buffer, or a `{buffer, offset, size}`
+ * sub-range of one. The **object itself is the identity** the fusion pass and the
+ * capture's live-in analysis key on — a whole buffer is its own key (as it always was),
+ * and two tensors sharing one arena buffer at different offsets are two different keys
+ * because they are two different objects. A tensor caches its slot so the key is stable.
+ */
+export type Slot = GPUBuffer | { readonly buffer: GPUBuffer; readonly offset: number; readonly size: number };
+
+/** The GPUBuffer behind a slot — for a usage or pool check, never for identity. */
+export function bufOf(s: Slot): GPUBuffer {
+  return s instanceof GPUBuffer ? s : s.buffer;
+}
+
 export interface Recorded {
   readonly pipeline?: GPUComputePipeline;
   readonly bindGroup?: GPUBindGroup;
   readonly copy?: { readonly bytes: number };
   readonly groups: readonly [number, number, number];
   /** The buffers behind the bind group, in binding order — what a fusion pass reads. */
-  readonly buffers: readonly GPUBuffer[];
+  readonly buffers: readonly Slot[];
   /** For an elementwise dispatch, what it computes — see `Elementwise`; for a reduction,
    *  what it reads once — see `Reduce`. */
   readonly meta?: Elementwise | Reduce;
@@ -311,15 +325,15 @@ export class Capture {
    * asking where the dispatches go, reads.
    */
   describe(): { key: string; groups: readonly [number, number, number]; buffers: number[]; sizes: number[] }[] {
-    const ids = new Map<GPUBuffer, number>();
-    const id = (b: GPUBuffer): number => {
+    const ids = new Map<Slot, number>();
+    const id = (b: Slot): number => {
       let n = ids.get(b);
       if (n === undefined) { n = ids.size; ids.set(b, n); }
       return n;
     };
     return this.records.map((r) => ({
       key: r.copy ? "copy" : (r.pipeline && this.dev.keyOf(r.pipeline)) || "?", groups: r.groups,
-      buffers: r.buffers.map(id), sizes: r.buffers.map((b) => b.size),
+      buffers: r.buffers.map(id), sizes: r.buffers.map((b) => bufOf(b).size),
     }));
   }
 
@@ -335,16 +349,16 @@ export class Capture {
    * so activations such a kernel writes are counted too — more than needed, never less.
    */
   liveIns(): GPUBuffer[] {
-    const written = new Set<GPUBuffer>();
-    const live = new Set<GPUBuffer>();
+    const written = new Set<Slot>();
+    const live = new Set<Slot>();
     for (const r of this.records) {
-      const reads: GPUBuffer[] = [];
-      const writes: GPUBuffer[] = [];
+      const reads: Slot[] = [];
+      const writes: Slot[] = [];
       if (r.copy) {
-        reads.push(r.buffers[0] as GPUBuffer); writes.push(r.buffers[1] as GPUBuffer);
+        reads.push(r.buffers[0] as Slot); writes.push(r.buffers[1] as Slot);
       } else if (r.meta && "expr" in r.meta) {
-        for (const inp of r.meta.inputs) reads.push(r.buffers[inp.binding] as GPUBuffer);
-        writes.push(r.buffers[r.meta.out] as GPUBuffer);
+        for (const inp of r.meta.inputs) reads.push(r.buffers[inp.binding] as Slot);
+        writes.push(r.buffers[r.meta.out] as Slot);
       } else if (r.meta && "input" in r.meta) {
         const input = r.meta.input;
         r.buffers.forEach((b, k) => { if (k === input) reads.push(b); else writes.push(b); });
@@ -362,7 +376,7 @@ export class Capture {
     // rewritten by the replay and left alone by an eager rerun, read as differences).
     // A buffer that cannot be read back — the one-word offsets a gather carries — is a
     // constant of the recording, not state.
-    return [...live].filter((b) => (!this.pinned.has(b) || this.uploaded.has(b)) && (b.usage & GPUBufferUsage.COPY_SRC) !== 0);
+    return [...live].map(bufOf).filter((b) => (!this.pinned.has(b) || this.uploaded.has(b)) && (b.usage & GPUBufferUsage.COPY_SRC) !== 0);
   }
 
   /**
@@ -828,7 +842,7 @@ export class Device {
   replayRecorded(records: readonly Recorded[]): void {
     for (const r of records) {
       if (r.copy) {
-        const [src, dst] = r.buffers as [GPUBuffer, GPUBuffer];
+        const [src, dst] = r.buffers as [GPUBuffer, GPUBuffer];  // copies bind whole buffers
         this.copyInto(dst, src, r.copy.bytes / BYTES_PER_F32);
         continue;
       }
@@ -1103,7 +1117,7 @@ export class Device {
    */
   run(
     pipeline: GPUComputePipeline,
-    buffers: readonly GPUBuffer[],
+    buffers: readonly Slot[],
     groups: readonly [number, number, number],
     meta?: Elementwise | Reduce,
   ): void {
@@ -1157,7 +1171,7 @@ export class Device {
    * Runs one-dimensional work spread over a grid. Paired with the indexing
    * in `kernels.ts`.
    */
-  run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number, meta?: Elementwise | Reduce): void {
+  run1d(pipeline: GPUComputePipeline, buffers: readonly Slot[], n: number, meta?: Elementwise | Reduce): void {
     const g = grid1d(n);
     this.run(pipeline, buffers, [g.x, g.y, 1], meta);
   }
@@ -1168,7 +1182,7 @@ export class Device {
   }
 
   /** A bind group for `pipeline` over `buffers`, in binding order. */
-  bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[]): GPUBindGroup {
+  bindGroupFor(pipeline: GPUComputePipeline, buffers: readonly Slot[]): GPUBindGroup {
     let layout = this.layouts.get(pipeline);
     if (!layout) {
       layout = pipeline.getBindGroupLayout(0);
@@ -1176,7 +1190,10 @@ export class Device {
     }
     return this.device.createBindGroup({
       layout,
-      entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+      entries: buffers.map((b, binding) => ({
+        binding,
+        resource: b instanceof GPUBuffer ? { buffer: b } : { buffer: b.buffer, offset: b.offset, size: b.size },
+      })),
     });
   }
 
