@@ -29,10 +29,22 @@ One wheel, `pyborch`, carries `borch`, `borch_webgpu`, `borchvision` and `borch_
 ## Ten rules that save a rewrite
 
 1. **Alias, do not shadow.** `import borch as torch` covers attribute access
-   (`torch.nn.Linear`). For `from borch.nn import Linear` call `borch.install("borch")` first —
-   the argument matters: `install()` with no argument plants it as `torch`, which, like
-   `sys.modules["torch"] = borch`, intercepts every other library's `import torch` — only
-   when the user asks for exactly that.
+   (`torch.nn.Linear`). For `from borch.nn import Linear` plant the submodule paths under
+   borch's own name first:
+
+   ```python
+   import borch
+   borch.install("borch")   # then: from borch.nn import Linear
+   ```
+
+   The argument matters. Both of the following intercept every other library's
+   `import torch` and are for a practice environment only, when the user asks for exactly that:
+
+   ```text
+   borch.install()                  # no argument = plants it as `torch`
+   sys.modules["torch"] = borch     # the same, by hand
+   ```
+
 2. **Check a name before writing it.** [`site/assets/api-index.json`](https://playidea-lab.github.io/borch/site/assets/api-index.json)
    maps every public name to its module (`"AdamW": "optim.AdamW"`);
    [`api.json`](https://playidea-lab.github.io/borch/site/assets/api.json) carries signatures and docs. A name that is not
