@@ -582,6 +582,21 @@ are taken.
 - **대안**: (a) `unbind` as one kernel with three outputs and one gather back — half the
   gain, no view semantics (rejected as not general); (b) a fused attention op — timm's
   `fused_attn` off is 16.1 ms against 16.6 on, so torch's speed is not there (rejected).
+- **2026-09-08, Phase A attempted and reverted — the base's lifetime is not deferrable.**
+  The plan was: a contiguous offset view (`narrow`/`select` on axis 0) whose `.buffer`
+  materialises, so an unconverted consumer copies (correct) and only the hot ones read
+  `.slot`. It was built (Tensor `isView`/`viewOffsetBytes`, a `.slot` getter, a
+  materialising `.buffer`/`.raw`, `outerView` with a scatter backward) and the TS golden
+  passed — but the binding golden and the trajectory failed at once: **"this tensor
+  belongs to a closed scope — its buffer went back to the pool."** A view holds its
+  base's *buffer*, and autograd carries the view (an activation, or its lazy
+  materialisation) across the forward→backward scope boundary, by which point the base
+  has been pooled and reused. The old gather made an independent buffer immediately and
+  never had this. So a lazy view cannot ship until the base is kept alive as long as any
+  view references it (keepAlive the base at view creation, or a per-buffer registry of
+  live views that blocks the base's return to the pool) — which is the same lifetime
+  work the in-place case below needs. Reverted to the gather; the BindSlot primitive and
+  `copyRange` stay (the SGD arena uses them).
 - **결과 / 미해결**: in-place through a view. `x[:, 0].add_(1)` must write the base. The
   proposal: an in-place op on an unmaterialised view materialises, runs, and scatters back
   by the inverting gather (`invertibleRules`) — three dispatches on a rare path; a
