@@ -98,3 +98,6 @@ bundle/
 borch-ts/wasm/target/
 # Datasets the browser evaluations write for themselves
 tests/browser/.cache/
+
+# Every document in one file for agents, built by site/build_llms.py
+llms-full.txt

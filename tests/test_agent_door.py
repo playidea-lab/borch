@@ -1,0 +1,86 @@
+"""The agent door — `AGENTS.md`, `llms.txt`, `site/build_llms.py` and the two manifests.
+
+An agent reads these instead of the repository, so a link that 404s or a code block that
+no longer runs is a wrong answer handed to every agent at once. The checks read the
+documents rather than repeating their contents here.
+"""
+import json
+import pathlib
+import re
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+PAGES = "https://playidea-lab.github.io/borch/"
+# Deployed by `pages.yml` but absent from a checkout: the build makes them.
+BUILT = {"llms-full.txt", "site/assets/api.json", "site/assets/api-index.json", "site/lab/", "site/marimo/"}
+LINK = re.compile(r"\]\(([^)\s]+)\)")
+FENCE = re.compile(r"```(\w+)\n(.*?)```", re.S)
+
+
+def _links(path):
+    return LINK.findall((ROOT / path).read_text(encoding="utf-8"))
+
+
+def _repo_path(url):
+    """A Pages URL or a relative link, as the path it names in this checkout — or None for a foreign host."""
+    if url.startswith(PAGES):
+        return url[len(PAGES):].split("#")[0]
+    if url.startswith(("http://", "https://")):
+        return None
+    return url.split("#")[0]
+
+
+@pytest.mark.parametrize("doc", ["llms.txt", "AGENTS.md"])
+def test_every_link_names_a_file_in_the_checkout_or_one_the_build_makes(doc):
+    missing = []
+    for url in _links(doc):
+        rel = _repo_path(url)
+        if rel is None or rel == "":
+            continue
+        if rel in BUILT or any(rel.startswith(b) for b in BUILT if b.endswith("/")):
+            continue
+        target = ROOT / rel
+        if rel.endswith("/"):
+            target = target / "index.html"
+        if not target.exists():
+            missing.append(url)
+    assert not missing, f"{doc} links to nothing at: {missing}"
+
+
+def test_llms_txt_lists_every_tutorial_and_no_page_that_is_not_there():
+    listed = {l.rsplit("/", 1)[1] for l in _links("llms.txt") if "/site/tutorials/" in l and l.endswith(".html")}
+    on_disk = {p.name for p in (ROOT / "site" / "tutorials").glob("*.html")} - {"index.html"}
+    assert listed == on_disk, f"llms.txt tutorials {sorted(listed ^ on_disk)} disagree with site/tutorials/"
+
+
+def test_the_python_smoke_tests_in_agents_md_run_on_the_numpy_core():
+    sys.path.insert(0, str(ROOT))
+    ran = 0
+    for lang, body in FENCE.findall((ROOT / "AGENTS.md").read_text(encoding="utf-8")):
+        if lang != "python" or body.lstrip().startswith("%pip") or "borch_webgpu" in body:
+            continue  # the notebook cell needs Pyodide and a GPU; the browser checks cover it
+        exec(compile(body, "AGENTS.md", "exec"), {})  # noqa: S102 — the document's own block
+        ran += 1
+    assert ran >= 1, "AGENTS.md has no Python block the core can run — the smoke test is gone"
+
+
+def test_the_two_manifests_carry_the_same_keywords():
+    npm = json.loads((ROOT / "package.json").read_text())["keywords"]
+    toml = (ROOT / "pyproject.toml").read_text()
+    m = re.search(r"^keywords = (\[.*\])$", toml, re.M)
+    assert m, "pyproject.toml has no keywords line"
+    assert set(npm) == set(json.loads(m.group(1))), "npm and PyPI would be found by different words"
+    assert {"pytorch", "webgpu", "pyodide"} <= set(npm)
+
+
+def test_build_llms_concatenates_the_documents_llms_txt_names(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT / "site"))
+    import build_llms  # noqa: PLC0415
+    monkeypatch.setattr(build_llms, "OUT", tmp_path / "llms-full.txt")
+    assert build_llms.main() == 0
+    text = (tmp_path / "llms-full.txt").read_text(encoding="utf-8")
+    for rel in build_llms.PARTS:
+        assert f"===== {rel} =====" in text, f"{rel} is not in llms-full.txt"
+    assert text.count("=====") == 2 * len(build_llms.PARTS)
