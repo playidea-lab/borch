@@ -71,6 +71,8 @@ jobs:
       - run: python3 site/build_api.py
       # `llms-full.txt` — the documents in one file for agents; built so it is the deployed book.
       - run: python3 site/build_llms.py
+      # `sitemap.xml` — the page list at deploy time, for the crawlers robots.txt invites.
+      - run: python3 site/build_sitemap.py
 
       # **The notebook page is built, not committed** — JupyterLite is 70 MB of static
       # files and the pyborch wheel goes into its index. `site/build_lab.py` is the same
@@ -114,7 +116,7 @@ jobs:
           # after writing it answered 404 to every one of them — this step copies a list, not
           # the repository, and the list had none of them. `tests/test_agent_door.py` now
           # reads this list and refuses a link it does not cover.
-          cp README.md AGENTS.md llms.txt llms-full.txt BORCH-TS.md ROADMAP.md _site/
+          cp README.md AGENTS.md llms.txt llms-full.txt BORCH-TS.md ROADMAP.md robots.txt sitemap.xml _site/
           mkdir -p _site/docs && cp docs/BOOK.md _site/docs/BOOK.md
           # Sends the root to the site. The cheapest way that touches no relative path.
           cat > _site/index.html <<'HTML'

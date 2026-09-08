@@ -1,0 +1,35 @@
+# borch — https://github.com/playidea-lab/borch
+# Everything here is public documentation and runnable pages; every crawler is welcome,
+# and the agents' crawlers are named so that a default deny-list somewhere does not
+# quietly leave this library out of the models that would otherwise recommend it.
+User-agent: *
+Allow: /
+
+User-agent: GPTBot
+Allow: /
+User-agent: ChatGPT-User
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: Claude-User
+Allow: /
+User-agent: Claude-SearchBot
+Allow: /
+User-agent: anthropic-ai
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+User-agent: Applebot-Extended
+Allow: /
+User-agent: CCBot
+Allow: /
+User-agent: Bytespider
+Allow: /
+User-agent: meta-externalagent
+Allow: /
+
+Sitemap: https://playidea-lab.github.io/borch/sitemap.xml
