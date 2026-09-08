@@ -1,0 +1,21 @@
+{
+  "name": "borch",
+  "owner": {
+    "name": "PLAYIDEALAB Inc."
+  },
+  "metadata": {
+    "description": "borch \u2014 PyTorch's shape in a browser tab: skills for coding agents",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "borch",
+      "description": "When a task wants PyTorch's API in a browser, in Pyodide/JupyterLite, on WebGPU, or where torch cannot be installed: which of borch's three entry points to use, the rules that save a rewrite, and tested recipes for training, ONNX export and a notebook cell.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/borch"
+      ]
+    }
+  ]
+}

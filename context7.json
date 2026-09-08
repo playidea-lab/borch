@@ -38,6 +38,6 @@
     "Errors are torch's own, same type and message, and a refusal is loud on purpose: do not catch it and continue with a substitute.",
     "borch-ts computes in float32 (WGSL has no f64); complex is complex64 only in all three implementations.",
     "In Pyodide install the wheel, never torch: real PyTorch has no Pyodide build, so `%pip install torch` fails and a `try: import torch` fallback never succeeds there.",
-    "Export with `torch.onnx.export(model, x, path)` in Python or `onnx.exportOnnx(model, sample)` in TypeScript; the file is checked against ONNX Runtime Web."
+    "Export with `torch.onnx.export(model, x, path)` in borch_webgpu or `onnx.exportOnnx(model, sample)` in TypeScript — the numpy core has no ONNX export; the file is checked against ONNX Runtime Web."
   ]
 }

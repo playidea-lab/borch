@@ -1,0 +1,19 @@
+{
+  "name": "borch",
+  "version": "1.0.0",
+  "description": "PyTorch's API in a browser tab \u2014 pick the right borch entry point, follow the ten rules, and start from a recipe that the site's own checks run every night.",
+  "author": {
+    "name": "PLAYIDEALAB Inc."
+  },
+  "homepage": "https://playidea-lab.github.io/borch/",
+  "repository": "https://github.com/playidea-lab/borch",
+  "license": "Apache-2.0",
+  "keywords": [
+    "pytorch",
+    "webgpu",
+    "pyodide",
+    "jupyterlite",
+    "browser",
+    "onnx"
+  ]
+}
