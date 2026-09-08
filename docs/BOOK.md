@@ -97,24 +97,18 @@ One pure-Python wheel. numpy is the only dependency, and Pyodide already has
 numpy. It contains the `borch` package and the `borchvision` module.
 
 ```bash
-uv add ./pyborch-1.4.0-py3-none-any.whl        # the file from a release
+uv pip install pyborch        # PyPI; `pip install pyborch` works the same
 ```
 
-In a browser (Pyodide), the wheel's bytes are written into the virtual filesystem
-and installed with `micropip`.
+In a browser (Pyodide), `micropip` installs the same wheel from PyPI — `%pip install pyborch`
+in a JupyterLite or marimo cell, or from JavaScript:
 
 ```js
-// The filename has to be kept — micropip reads the package name and version from it.
-py.FS.writeFile("/pyborch-1.4.0-py3-none-any.whl", new Uint8Array(wheelBytes));
 await py.runPythonAsync(`
 import micropip
-await micropip.install("emfs:/pyborch-1.4.0-py3-none-any.whl")
+await micropip.install("pyborch")
 `);
 ```
-
-> **The repository is private, so a release URL cannot go straight into
-> `micropip.install()`.** An anonymous request gets a 404 — found out by trying it.
-> Once it is public, one URL is the whole of it.
 
 ```python
 import borch as torch

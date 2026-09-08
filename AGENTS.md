@@ -76,6 +76,31 @@ LambdaLR, ReduceLROnPlateau · data: `Dataset`, `TensorDataset`, `DataLoader`,
 
 Absent and refused, with a reason each: `tests/torch_gap.py` prints the ledger.
 
+## Checking support before writing code
+
+Two files are deployed with the site and regenerated on every deployment from the
+TypeScript declarations (`site/build_api.py`), so they are never older than the runtime:
+
+- [`api-index.json`](https://playidea-lab.github.io/borch/site/assets/api-index.json) — a flat object, public name →
+  module path in borch-ts (`"AdamW": "optim.AdamW"`, `"LayerNorm": "nn.LayerNorm"`,
+  `"stft": "fft.stft"`). Under 100 KB; the quick answer to "does this exist".
+- [`api.json`](https://playidea-lab.github.io/borch/site/assets/api.json) — `{source, note, modules[], total}`; each
+  module is `{name, title, blurb{en,ko}, doc, symbols[], count}` and each symbol
+  `{kind, name, signature, doc, members}`. Signatures and TSDoc for the whole surface.
+
+The Python core and the binding follow torch's names, so a borch-ts name under `nn.`,
+`optim.`, `fft.`, `data.` or `linalg.` is `torch.nn.…`, `torch.optim.…` and so on in Python.
+
+```python
+import json
+import urllib.request
+
+INDEX = "https://playidea-lab.github.io/borch/site/assets/api-index.json"
+index = json.load(urllib.request.urlopen(INDEX))      # {"AdamW": "optim.AdamW", ...}
+for name in ["AdamW", "LayerNorm", "MultiheadAttention", "stft", "autocast", "compile"]:
+    print(f"{name:22s} {index.get(name, '— not in borch: say so, do not polyfill')}")
+```
+
 ## Smoke tests — copy, run, judge
 
 **Python, anywhere** (no browser, no GPU):
@@ -109,6 +134,11 @@ w = torch.tensor(3.0, requires_grad=True)
 ((w - 5.0) ** 2).backward()
 print(w.grad.item())            # -4.0
 ```
+
+**WebGPU, from a checkout** (needs Playwright; opens a real browser and refuses a software
+adapter): `uv run --with playwright python tests/browser/wheel_probe.py --build` builds the
+wheel, installs it in Pyodide inside a worker, trains, exports ONNX, and prints the adapter's
+name with the losses — the line to trust is the one that names the adapter.
 
 A training loop in torch's shape — `nn.Sequential`, `CrossEntropyLoss`, `Adam`, a
 `DataLoader` — runs unchanged on the numpy core and the binding; on borch-ts add the six
