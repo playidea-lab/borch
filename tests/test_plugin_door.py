@@ -37,8 +37,8 @@ def test_the_python_recipes_in_the_skill_run_on_the_numpy_core():
     sys.path.insert(0, str(ROOT))
     ran = 0
     for lang, body in FENCE.findall(SKILL.read_text(encoding="utf-8")):
-        if lang != "python" or body.lstrip().startswith("%pip") or "borch_webgpu" in body:
-            continue  # the notebook cell and the ONNX export are the binding's; the browser checks cover them
+        if lang != "python" or body.lstrip().startswith("%pip") or re.search(r"^import borch_webgpu", body, re.M):
+            continue  # the notebook cell and the ONNX export import the binding; the browser checks cover them
         exec(compile(body, "SKILL.md", "exec"), {})  # noqa: S102 — the recipe as written
         ran += 1
     assert ran >= 1, "the training loop has to run on the core"
