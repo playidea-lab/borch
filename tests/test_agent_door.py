@@ -136,3 +136,22 @@ def test_context7_json_is_valid_and_its_rules_are_the_agents_md_rules_in_short()
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     for needle in ("borch.install(\"borch\")", "api-index.json", "torch.compile", "using s = scope()", "complex64", "exportOnnx"):
         assert needle in agents and any(needle in r for r in cfg["rules"]), f"{needle!r} is in one document and not the other"
+
+
+def test_the_support_check_snippet_in_agents_md_reads_the_index_and_names_the_absent(monkeypatch, capsys):
+    """The snippet fetches api-index.json; here it is handed the checkout's copy. Names the
+    range promises have to resolve, and the two that are absent by design have to say so."""
+    import io
+    import urllib.request
+    local = ROOT / "site" / "assets" / "api-index.json"
+    if not local.exists():
+        pytest.skip("site/assets/api-index.json is built by site/build_api.py")
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url: io.BytesIO(local.read_bytes()))
+    blocks = [b for lang, b in FENCE.findall((ROOT / "AGENTS.md").read_text(encoding="utf-8")) if lang == "python" and "api-index.json" in b]
+    assert len(blocks) == 1
+    exec(compile(blocks[0], "AGENTS.md", "exec"), {})  # noqa: S102
+    out = capsys.readouterr().out
+    for name in ("AdamW", "LayerNorm", "MultiheadAttention", "stft"):
+        assert re.search(rf"^{name}\s+\S", out, re.M) and "not in borch" not in re.search(rf"^{name}.*$", out, re.M).group(0), f"{name} should resolve"
+    for name in ("autocast", "compile"):
+        assert re.search(rf"^{name}\s+— not in borch", out, re.M), f"{name} is absent by design and must say so"

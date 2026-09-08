@@ -1,6 +1,6 @@
 {
   "name": "borch-ts",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "keywords": ["pytorch", "webgpu", "wgsl", "pyodide", "jupyterlite", "onnx", "autograd", "tensor", "deep-learning", "in-browser-ml", "browser"],
   "description": "A PyTorch-shaped tensor library running on WebGPU in the browser — no dependencies",
   "license": "Apache-2.0",
