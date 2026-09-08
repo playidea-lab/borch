@@ -122,3 +122,17 @@ def test_build_llms_concatenates_the_documents_llms_txt_names(tmp_path, monkeypa
     for rel in build_llms.PARTS:
         assert f"===== {rel} =====" in text, f"{rel} is not in llms-full.txt"
     assert text.count("=====") == 2 * len(build_llms.PARTS)
+
+
+def test_context7_json_is_valid_and_its_rules_are_the_agents_md_rules_in_short():
+    """`context7.json` is what Context7 hands an agent verbatim, so its rules are AGENTS.md's ten
+    in one line each. The file has to parse, exclude the built folders, and carry every rule."""
+    cfg = json.loads((ROOT / "context7.json").read_text(encoding="utf-8"))
+    assert cfg["$schema"].endswith("/context7.json")
+    assert 8 <= len(cfg["rules"]) <= 15
+    assert all(len(r) < 500 and "\n" not in r for r in cfg["rules"]), "a rule is a line, not a page"
+    for built in ("node_modules", "vendor", "site/lab", "site/marimo", "borch-ts/dist"):
+        assert built in cfg["excludeFolders"], f"{built} would be indexed as documentation"
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    for needle in ("borch.install(\"borch\")", "api-index.json", "torch.compile", "using s = scope()", "complex64", "exportOnnx"):
+        assert needle in agents and any(needle in r for r in cfg["rules"]), f"{needle!r} is in one document and not the other"
