@@ -1253,6 +1253,15 @@ export class Device {
    * then moved back to the original slot. Reading and writing the original
    * at once leaves the threads unordered and the values mixed.
    */
+  copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void {
+    const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
+    // A copy cannot go inside a compute pass. Closing the pass and riding the same
+    // encoder keeps the order and still submits once.
+    this.openEncoder().copyBufferToBuffer(src, 0, dst, 0, bytes);
+    // Under a capture the copy is part of the step — see `Recorded`.
+    this.recording?.push({ copy: { bytes }, groups: [0, 0, 0], buffers: [src, dst] });
+  }
+
   /**
    * A copy between sub-ranges — `srcOff`/`dstOff` bytes in, `bytes` long. `copyInto` is
    * the whole-buffer case; this is what an arena's gather and scatter ride (a byte offset
@@ -1262,15 +1271,6 @@ export class Device {
   copyRange(dst: GPUBuffer, dstOff: number, src: GPUBuffer, srcOff: number, bytes: number): void {
     this.openEncoder().copyBufferToBuffer(src, srcOff, dst, dstOff, bytes);
     this.recording?.push({ copy: { bytes, srcOff, dstOff }, groups: [0, 0, 0], buffers: [src, dst] });
-  }
-
-  copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void {
-    const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
-    // A copy cannot go inside a compute pass. Closing the pass and riding the same
-    // encoder keeps the order and still submits once.
-    this.openEncoder().copyBufferToBuffer(src, 0, dst, 0, bytes);
-    // Under a capture the copy is part of the step — see `Recorded`.
-    this.recording?.push({ copy: { bytes }, groups: [0, 0, 0], buffers: [src, dst] });
   }
 
   /**
