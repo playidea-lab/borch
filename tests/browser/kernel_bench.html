@@ -111,16 +111,8 @@ const BENCHES = {
       const Target = splits > 1 ? dev.alloc(M * Nd * splits) : Out;
       runs.unshift({ name: `subgroup ${t.TM}x${t.TN}${splits > 1 ? ` split ${splits} (+ sum)` : ""}`, key: `mmsg:${sh.name}`, make: () => K.matmulSubgroup(M, Kd, Nd, tA, tB), extraKeys: splits > 1 ? [`ss:${sh.name}`] : [], outb: Out,
         run: () => { dev.run(dev.pipeline(`mmsg:${sh.name}`, () => K.matmulSubgroup(M, Kd, Nd, tA, tB)), [A, B, Target], [Nd / t.TN, M / t.TM, splits]); if (splits > 1) dev.run1d(dev.pipeline(`ss:${sh.name}`, () => K.sumSplits(M * Nd, splits)), [Target, Out], M * Nd); } });
-      if (tA) { runs.length = 2; return `${await race(runs, M * Nd)} · ${gflop.toFixed(2)} GFLOP`; }
-      // The same kernel with a tiny dispatch before each one — a training step's shape,
-      // where a product follows a bias add or a fold. If the product slows, the small
-      // kernels cost their own time and a bubble in the product's.
-      const Tiny = dev.alloc(64), TinyOut = dev.alloc(64);
-      runs.push({ name: `subgroup ${t.TM}x${t.TN} after a tiny kernel (tiny counted apart)`, key: `mmsgi:${sh.name}`, make: () => K.matmulSubgroup(M, Kd, Nd, tA, tB), extraKeys: [`u:tiny:${sh.name}`], outb: Out,
-        run: () => { dev.run1d(dev.pipeline(`u:tiny:${sh.name}`, () => K.unaryForward("relu", 64)), [Tiny, TinyOut], 64); dev.run(dev.pipeline(`mmsgi:${sh.name}`, () => K.matmulSubgroup(M, Kd, Nd, tA, tB)), [A, B, Out], [Nd / t.TN, M / t.TM, 1]); } });
-      const tp = K.subgroupMatmulTile(Mp, Nd);
-      runs.push({ name: `subgroup ${tp.TM}x${tp.TN} (M padded to ${Mp})`, key: `mmsgp:${sh.name}`, make: () => K.matmulSubgroup(Mp, Kd, Nd, false, tB), outb: Out3,
-        run: () => dev.run(dev.pipeline(`mmsgp:${sh.name}`, () => K.matmulSubgroup(Mp, Kd, Nd, false, tB)), [Ap, B, Out3], [Nd / tp.TN, Mp / tp.TM, 1]) });
+
+
     }
     const text = await race(runs, M * Nd);
     // The best of the runs, as a rate.

@@ -1994,7 +1994,12 @@ ${decl.join("\n")}
 ${zero.join("\n")}
   let kFrom = wid.z * ${perSplit}u;
   let kTo = min(kFrom + ${perSplit}u, K);
-  let tiles = (kTo - kFrom + 15u) / 16u;
+  // A piece past the end contributes nothing. The split rounds perSplit up, so the last
+  // pieces of a short, finely-split K can start beyond it; kTo - kFrom would then
+  // underflow u32 and the tile loop would run billions of times (a GPU hang that on Metal
+  // froze and rebooted the machine, measured on 192 x 1576 x 192, 24 pieces). Its
+  // accumulators stay zero and its slab is summed as 0.
+  let tiles = select(0u, (kTo - kFrom + 15u) / 16u, kFrom < kTo);
   for (var t = 0u; t < tiles; t = t + 1u) {
     for (var s = 0u; s < 4u; s = s + 1u) {
       let idx = s * 256u + tid;

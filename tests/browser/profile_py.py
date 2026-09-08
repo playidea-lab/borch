@@ -1,7 +1,7 @@
 """Where a training step's time goes — **GPU timestamps per kind of kernel**, on the wheel,
 in a worker, on this tab's GPU.
 
-    uv run --with playwright python tests/browser/profile_py.py [--build] [--batch=16] [--size=96] [--steps=5] [--compiled=plain|fused] [--headless]
+    uv run --with playwright python tests/browser/profile_py.py [--build] [--batch=16] [--size=96] [--steps=5] [--compiled=plain|fused] [--scalar] [--headless]
 
 The U-Net of tests/seg_eval.py on synthetic data (no dataset: this runs in the nightly's
 worktree). It prints the wall-clock step, the dispatch count, and the device profiler's
@@ -51,10 +51,11 @@ def main(argv):
     model = next((a.split("=", 1)[1] for a in argv if a.startswith("--model=")), "unet")
     steps = next((a.split("=", 1)[1] for a in argv if a.startswith("--steps=")), "5")
     compiled = next((a.split("=", 1)[1] for a in argv if a.startswith("--compiled=")), "")
+    scalar = "--scalar" in argv
     if refuse_if_screen_off("the step profile"):
         return 1
     port, shutdown = serve(ROOT)
-    url = f"http://127.0.0.1:{port}/tests/browser/profile_py.html?wheel=/{wheel}&batch={batch}&size={size}&model={model}&steps={steps}&compiled={compiled}"
+    url = f"http://127.0.0.1:{port}/tests/browser/profile_py.html?wheel=/{wheel}&batch={batch}&size={size}&model={model}&steps={steps}&compiled={compiled}" + ("&scalar=1" if scalar else "")
     profile = tempfile.mkdtemp(prefix="borch-profile-")
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     try:

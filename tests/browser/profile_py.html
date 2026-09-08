@@ -46,7 +46,10 @@ module("review_eval", "/tests/review_eval.py")
 S = module("seg_eval", "/tests/seg_eval.py")
 import time
 from pyodide.ffi import create_proxy
-batch = ${parseInt(q.get("batch") || "16")}; side = ${parseInt(q.get("size") || "96")}; steps = ${parseInt(q.get("steps") || "5")}; COMPILED = ${JSON.stringify(q.get("compiled") || "")}
+batch = ${parseInt(q.get("batch") || "16")}; side = ${parseInt(q.get("size") || "96")}; steps = ${parseInt(q.get("steps") || "5")}; COMPILED = ${JSON.stringify(q.get("compiled") || "")}; SCALAR = ${q.get("scalar") ? "True" : "False"}
+if SCALAR:
+    # What a card without subgroup matrices runs — the scalar tile for every product.
+    js.borch.Device.subgroupMatrix = False
 MODEL = ${JSON.stringify(q.get("model") || "unet")}
 # Synthetic data: the profile is of the kernels, not of a dataset, and it has to run
 # where no dataset is (the nightly's worktree).
@@ -104,6 +107,8 @@ else:
     raise ValueError(f"model? {MODEL}")
 if COMPILED:
     label += f" compiled {COMPILED}"
+if SCALAR:
+    label += " scalar"
 first = next(iter(model.parameters()))
 def step():
     opt.zero_grad()
