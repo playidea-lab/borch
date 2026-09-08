@@ -57,6 +57,56 @@ fwd_ref = sum(base_np[i] @ w_np[i] for i in range(3))
 report.append(("select3 grad", rel(g, g_ref)))
 report.append(("select3 fwd", rel(acc.numpy(), fwd_ref)))
 
+# ── Pattern 1b: three narrows of one weight, each into a LINEAR (transposed), summed ──
+# MHA's exact shape: inWeight[3E,E] narrowed into q/k/v projection weights, x.linear(w).
+# linear reads w transposed, so this is a view feeding a transposed matmul — what
+# Pattern 1's plain matmul did not cover, and what diverged the GPT trajectory.
+E = 4
+xL = rng.standard_normal((6, E)).astype(np.float32)
+W_np = rng.standard_normal((3 * E, E)).astype(np.float32)
+xt = torch.tensor(xL)
+W = torch.tensor(W_np, requires_grad=True)
+accL = None
+for slot in range(3):
+    w = W.narrow(0, slot * E, E)          # [E, E] view of the weight
+    p = xt.linear(w)                      # x @ w^T  -> [6, E]
+    accL = p if accL is None else accL + p
+lossL = accL.sum(); lossL.backward()
+gW = W.grad.numpy()
+# ref: linear grad for w is ones(6,E)^T @ x = x.sum(0) broadcast; d/dW[slot] = ones(6,E)^T @ x
+gslot = np.ones((6, E), np.float32).T @ xL      # [E, E]
+gW_ref = np.concatenate([gslot, gslot, gslot], axis=0)
+report.append(("narrow3-linear grad", rel(gW, gW_ref)))
+fwdL_ref = sum(xL @ W_np[slot * E:(slot + 1) * E].T for slot in range(3))
+report.append(("narrow3-linear fwd", rel(accL.numpy(), fwdL_ref)))
+
+# ── Pattern 1c: 1-D narrow of a bias, broadcast-added, three times (MHA's inBias) ──
+bflat_np = rng.standard_normal((3 * E,)).astype(np.float32)
+xb_np = rng.standard_normal((5, E)).astype(np.float32)
+bflat = torch.tensor(bflat_np, requires_grad=True)
+xb = torch.tensor(xb_np)
+accb = None
+for slot in range(3):
+    bv = bflat.narrow(0, slot * E, E)      # [E] 1-D view
+    p = xb.add(bv)                          # broadcast add [5,E] + [E]
+    accb = p if accb is None else accb + p
+accb.sum().backward()
+gb1 = bflat.grad.numpy()
+# ref: each slot's bias gets grad = sum over the 5 rows of ones = 5 per element.
+gb1_ref = np.full((3 * E,), 5.0, np.float32)
+report.append(("narrow1d-bcast grad", rel(gb1, gb1_ref)))
+
+# ── Pattern 1d: a single-element narrow at an offset (AdamW's hyperScalar) ──
+# hyperScalar(i) = hyper().narrow(0, i, 1). If the view reads the wrong slot the
+# decay factor is wrong and AdamW drifts — cnn(SGD) is fine, GPT(AdamW) is not.
+hh = torch.tensor(np.array([10., 20., 30., 40.], np.float32))
+picks = [float(hh.narrow(0, i, 1).numpy()[0]) for i in range(4)]
+report.append(("narrow1-scalar", rel(np.array(picks, np.float32), np.array([10, 20, 30, 40], np.float32))))
+# and used as a broadcast multiplier, like param.mul(hyperScalar(3))
+pm = torch.tensor(np.ones((2, 3), np.float32))
+scaled = pm.mul(hh.narrow(0, 3, 1)).numpy()   # should be all 40
+report.append(("narrow1-mul", rel(scaled, np.full((2, 3), 40.0, np.float32))))
+
 # ── Pattern 2: narrow into a reshape into a matmul (a view feeding a shape op) ──
 # base[a:b] is a contiguous sub-block; reshape then matmul. grad flows to that slice only.
 R, C = 6, 4
@@ -74,10 +124,32 @@ gslice = (np.ones((2, N), np.float32) @ w2_np.T).reshape(4, C)
 g2_ref = np.zeros((R, C), np.float32); g2_ref[2:6] = gslice
 report.append(("narrow-reshape grad", rel(g2, g2_ref)))
 
+# ── Pattern 2b: multi-step AdamW where the weight is narrowed each step ──
+# view path (w.narrow) vs a path that breaks the alias (w.narrow then *1, a fresh copy).
+# If the view aliases wrongly across the in-place optimizer updates, they drift apart.
+def train_narrow(break_alias):
+    W2 = torch.tensor(W_np.copy(), requires_grad=True)
+    opt = torch.optim.AdamW([W2], lr=0.1)
+    one = torch.full([], 1.0)
+    for _ in range(8):
+        opt.zero_grad()
+        acc = None
+        for slot in range(3):
+            w = W2.narrow(0, slot * E, E)
+            if break_alias:
+                w = w.mul(one)            # a fresh buffer — no alias to W2
+            p = xt.linear(w)
+            acc = p if acc is None else acc + p
+        acc.sum().backward(); opt.step()
+    return W2.numpy()
+w_view = train_narrow(False)
+w_copy = train_narrow(True)
+report.append(("narrow view-vs-copy 8 AdamW steps", rel(w_view, w_copy)))
+
 # ── Pattern 3: the same select-3 pattern inside torch.compiled(check=True) ──
 # A step that cuts a base three ways and updates it; check=True holds the replay to the
 # eager step, and the recording must not throw on the aliased views.
-def cap_case(use_select, use_arena):
+def cap_case(use_select, use_arena, fuse=True):
     p = torch.tensor(base_np.copy(), requires_grad=True)
     opt = (torch.optim.SGD if use_arena else torch.optim.Adam)([p], lr=0.1)
     ws3 = [torch.tensor(x) for x in w_np]
@@ -93,7 +165,7 @@ def cap_case(use_select, use_arena):
         a.backward(); opt.step()
         return a
     try:
-        fn = torch.compiled(step, check=True)
+        fn = torch.compiled(step, check=True, fuse=fuse)
         with torch.scope():
             fn(); fn()
         return "ok"
