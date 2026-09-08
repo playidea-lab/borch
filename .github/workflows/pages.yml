@@ -109,6 +109,13 @@ jobs:
           # locally; one relative path that works in both places.
           mkdir -p _site/tests && cp tests/golden.json _site/tests/golden.json
           cp borchvision.py THIRD-PARTY.md LICENSE _site/
+          # **The documents an agent reads go up too.** `llms.txt` points at the site root for
+          # README, AGENTS.md, the book, BORCH-TS.md and ROADMAP.md, and the first deployment
+          # after writing it answered 404 to every one of them — this step copies a list, not
+          # the repository, and the list had none of them. `tests/test_agent_door.py` now
+          # reads this list and refuses a link it does not cover.
+          cp README.md AGENTS.md llms.txt llms-full.txt BORCH-TS.md ROADMAP.md _site/
+          mkdir -p _site/docs && cp docs/BOOK.md _site/docs/BOOK.md
           # Sends the root to the site. The cheapest way that touches no relative path.
           cat > _site/index.html <<'HTML'
           <!doctype html>

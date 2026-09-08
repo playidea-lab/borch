@@ -49,6 +49,44 @@ def test_every_link_names_a_file_in_the_checkout_or_one_the_build_makes(doc):
     assert not missing, f"{doc} links to nothing at: {missing}"
 
 
+def _gathered_by_pages():
+    """The names `pages.yml`'s gather step copies into `_site` — the deployment is that list, not the checkout."""
+    text = (ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
+    block = text[text.index("gather what goes up"):text.index("upload-pages-artifact")]
+    names = set()
+    for line in block.splitlines():
+        line = line.strip()
+        if line.startswith("cp ") and not line.startswith("cp -r"):
+            names.update(line.split()[1:-1])
+        elif line.startswith("cp -r "):
+            names.update(line.split()[2:-1])
+        elif line.startswith("mkdir -p _site/") and "&& cp " in line:
+            names.add(line.split("&& cp ")[1].split()[0])
+    return names
+
+
+@pytest.mark.parametrize("doc", ["llms.txt", "AGENTS.md"])
+def test_every_pages_url_names_something_the_deployment_actually_copies(doc):
+    """The first deployment after llms.txt was written answered 404 to README, AGENTS.md, the
+    book, BORCH-TS.md and ROADMAP.md: Pages ships what the gather step lists, and the link
+    check above only asked whether the file exists in the checkout."""
+    gathered = _gathered_by_pages()
+    not_shipped = []
+    for url in _links(doc):
+        if not url.startswith(PAGES):
+            continue
+        rel = url[len(PAGES):].split("#")[0]
+        if rel == "" or rel in BUILT:
+            continue
+        top = rel.split("/")[0]
+        if rel in gathered or top in gathered or f"{top}/" in {g.split("/")[0] + "/" for g in gathered}:
+            continue
+        if any(rel.startswith(g.rstrip("/") + "/") for g in gathered):
+            continue
+        not_shipped.append(url)
+    assert not not_shipped, f"{doc} links to Pages URLs the gather step in pages.yml never copies: {not_shipped}"
+
+
 def test_llms_txt_lists_every_tutorial_and_no_page_that_is_not_there():
     listed = {l.rsplit("/", 1)[1] for l in _links("llms.txt") if "/site/tutorials/" in l and l.endswith(".html")}
     on_disk = {p.name for p in (ROOT / "site" / "tutorials").glob("*.html")} - {"index.html"}
