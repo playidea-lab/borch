@@ -58,8 +58,9 @@ One wheel, `pyborch`, carries `borch`, `borch_webgpu`, `borchvision` and `borch_
 9. **In Pyodide, install the wheel, never torch.** `%pip install pyborch` goes through
    micropip; real PyTorch has no Pyodide build, so `%pip install torch` fails and no
    `try: import torch` fallback will ever succeed there.
-10. **Ship what leaves as ONNX:** `torch.onnx.export(model, x, path)` in Python,
-    `onnx.exportOnnx(model, sample)` in TypeScript — traced from one forward, checked
+10. **Ship what leaves as ONNX:** `torch.onnx.export(model, x, path)` in `borch_webgpu`,
+    `onnx.exportOnnx(model, sample)` in TypeScript — the numpy core has no ONNX export.
+    Traced from one forward, checked
     against ONNX Runtime Web.
 
 ## Supported range (short form; the long form is the book)

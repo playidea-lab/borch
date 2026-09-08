@@ -13,6 +13,8 @@ PyTorch's values, errors and printed form within the range a curriculum uses.
 - **For agents:** [`AGENTS.md`](AGENTS.md) is the one page a coding agent needs — which
   of the three to use, ten rules that save a rewrite, three smoke tests. `llms.txt` at the
   site root lists these documents in the order to read them.
+  In Claude Code: `/plugin marketplace add playidea-lab/borch` then `/plugin install borch@borch`
+  gives the session the `borch` skill — the same page as a skill, with recipes.
 
 ## What it is not
 
@@ -89,7 +91,7 @@ measurement beside it — is listed on the landing page and pinned by
 
 **Or a notebook.** `%pip install pyborch` then `import borch_webgpu as torch` in any Pyodide — the [notebook page](https://playidea-lab.github.io/borch/site/notebook.html) is JupyterLite with the wheel already on its shelf, training on the tab's GPU 6 s after opening.
 
-**The file leaves as ONNX.** `onnx.exportOnnx(model, sample)` in TypeScript, `torch.onnx.export(model, x, path)` in Python — traced from one forward, written without a dependency, and checked by ONNX Runtime Web reproducing the forward (3.5e-8; see the book).
+**The file leaves as ONNX.** `onnx.exportOnnx(model, sample)` in TypeScript, `torch.onnx.export(model, x, path)` in Python from `borch_webgpu` (the numpy core does not export) — traced from one forward, written without a dependency, and checked by ONNX Runtime Web reproducing the forward (3.5e-8; see the book).
 
 ## Where things are
 
