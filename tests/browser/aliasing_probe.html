@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>views and aliasing — the patterns a golden of single ops misses</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The patterns that break when narrow/select return a view instead of a copy.** The
+  // golden tests each op alone on a fresh contiguous tensor, so it never sees several
+  // views of one base flowing through a chain and summing their gradients back — the
+  // shape a transformer's qkv split has, and the shape that diverged the GPT trajectory
+  // three times. Here the same shape is checked against a numpy reference (exact, not a
+  // second borch path), and once through the compiler with check=True. It passes today
+  // because the ops copy; it becomes the net that catches a view wired wrong.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import numpy as np, js
+import borch_webgpu as torch
+
+rng = np.random.default_rng(0)
+report = []
+
+def rel(got, ref):
+    return float(np.abs(got - ref).max() / (np.abs(ref).max() + 1e-6))
+
+# ── Pattern 1: three selects of one base, each into a matmul, gradients summed back ──
+# base[i] feeds product i; base.grad[i] = ones(M,N) @ w_i^T. This is the qkv split's
+# shape (one tensor cut three ways, three backward paths meeting on the base) isolated.
+M, K, N = 5, 4, 3
+base_np = rng.standard_normal((3, M, K)).astype(np.float32)
+w_np = [rng.standard_normal((K, N)).astype(np.float32) for _ in range(3)]
+base = torch.tensor(base_np, requires_grad=True)
+ws = [torch.tensor(x) for x in w_np]
+parts = [base.select(0, i) for i in range(3)]
+acc = parts[0].matmul(ws[0])
+for i in (1, 2):
+    acc = acc + parts[i].matmul(ws[i])
+loss = acc.sum()
+loss.backward()
+g = base.grad.numpy()
+g_ref = np.stack([np.ones((M, N), np.float32) @ w_np[i].T for i in range(3)])
+# forward value too: acc = sum_i base[i] @ w_i
+fwd_ref = sum(base_np[i] @ w_np[i] for i in range(3))
+report.append(("select3 grad", rel(g, g_ref)))
+report.append(("select3 fwd", rel(acc.numpy(), fwd_ref)))
+
+# ── Pattern 2: narrow into a reshape into a matmul (a view feeding a shape op) ──
+# base[a:b] is a contiguous sub-block; reshape then matmul. grad flows to that slice only.
+R, C = 6, 4
+b2_np = rng.standard_normal((R, C)).astype(np.float32)
+w2_np = rng.standard_normal((C * 2, N)).astype(np.float32)
+b2 = torch.tensor(b2_np, requires_grad=True)
+w2 = torch.tensor(w2_np)
+sl = b2.narrow(0, 2, 4)                 # rows 2..5  -> [4, C]
+z = sl.reshape([2, C * 2]).matmul(w2)   # [2, N]
+loss2 = z.sum()
+loss2.backward()
+g2 = b2.grad.numpy()
+# ref: only rows 2..5 get a gradient; it is ones(2,N) @ w2^T reshaped to [4,C].
+gslice = (np.ones((2, N), np.float32) @ w2_np.T).reshape(4, C)
+g2_ref = np.zeros((R, C), np.float32); g2_ref[2:6] = gslice
+report.append(("narrow-reshape grad", rel(g2, g2_ref)))
+
+# ── Pattern 3: the same select-3 pattern inside torch.compiled(check=True) ──
+# A step that cuts a base three ways and updates it; check=True holds the replay to the
+# eager step, and the recording must not throw on the aliased views.
+def cap_case(use_select, use_arena):
+    p = torch.tensor(base_np.copy(), requires_grad=True)
+    opt = (torch.optim.SGD if use_arena else torch.optim.Adam)([p], lr=0.1)
+    ws3 = [torch.tensor(x) for x in w_np]
+    wfull = torch.tensor(rng.standard_normal((K, N)).astype(np.float32))
+    def step():
+        opt.zero_grad()
+        if use_select:
+            a = p.select(0, 0).matmul(ws3[0]).sum()
+            a = a + p.select(0, 1).matmul(ws3[1]).sum()
+            a = a + p.select(0, 2).matmul(ws3[2]).sum()
+        else:
+            a = p.matmul(wfull).sum()   # no select — whole base through matmul
+        a.backward(); opt.step()
+        return a
+    try:
+        fn = torch.compiled(step, check=True)
+        with torch.scope():
+            fn(); fn()
+        return "ok"
+    except Exception as e:
+        return "ERR " + str(e)[:80]
+cap_note = ("SGD+sel " + cap_case(True, True) + " | Adam+sel " + cap_case(True, False)
+            + " | SGD+nosel " + cap_case(False, True))
+
+worst = max(v for _, v in report)
+adapter = str(js.borch.Device.adapterInfo)
+"aliasing: " + " · ".join(f"{n} {v:.1e}" for n, v in report) + " · " + cap_note + \\
+    f" · worst {worst:.1e} · faults {int(js.borch.device().faults.count)} · adapter {adapter}"
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: true }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

@@ -652,7 +652,12 @@ export class SGD extends Optimizer {
   override step(): void {
     // One group is one set of scalars, so the whole step fits one dispatch over the arena.
     // More than one group keeps the per-parameter path, where each reads its own group.
-    if (this.paramGroups.length === 1) {
+    // One group is one dispatch over the arena. But not while capturing: the arena is
+    // built lazily on the first step, and inside a recording that one-time build is
+    // recorded and re-run on every replay, resetting the arena's state (the compiled
+    // step then diverged — caught by aliasing_probe). A captured step takes the
+    // per-parameter path, which records and replays like any other dispatch.
+    if (this.paramGroups.length === 1 && !device().capturing) {
       this.arenaStep();
     } else {
       super.step();

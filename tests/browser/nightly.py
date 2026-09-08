@@ -1,4 +1,4 @@
-"""The thirty-four browser checks nothing else runs, run once a night in a worktree.
+"""The thirty-five browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -77,6 +77,9 @@ CHECKS = [
     # AdamW and StepLR under check=True), and the fused replay within a rounding.
     ("capture:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/capture_py.py", "--build"]),
     ("fuse:py",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/fuse_py.py", "--build"]),
+    # The aliasing patterns a golden of single ops misses — several views of one base
+    # summing gradients back, and an optimizer step through the compiler with check=True.
+    ("aliasing:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/aliasing_probe.py", "--build"]),
     # The step's clock, three models through the compiler, one timed step each — the
     # numbers land in the log as `@<model>_fused_ms=` lines, a curve when they are kept.
     ("step:unet",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/profile_py.py", "--build", "--model=unet", "--steps=1", "--compiled=fused"]),
