@@ -69,6 +69,8 @@ jobs:
       # `tests/test_site.py` checks the same thing, and a deployment can be pressed
       # without going through the checks.
       - run: python3 site/build_api.py
+      # `llms-full.txt` — the documents in one file for agents; built so it is the deployed book.
+      - run: python3 site/build_llms.py
 
       # **The notebook page is built, not committed** — JupyterLite is 70 MB of static
       # files and the pyborch wheel goes into its index. `site/build_lab.py` is the same

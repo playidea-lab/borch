@@ -1,0 +1,55 @@
+# borch
+
+> PyTorch's shape in a browser tab. Three implementations of one API — a numpy core (`import borch as torch`), a TypeScript runtime on WebGPU (`borch-ts`), and a Python binding over it for Pyodide (`borch_webgpu`) — held to real PyTorch's values, error messages and printed form on thousands of golden cases. Nothing to install in the browser; `pip install pyborch` or `npm install borch-ts` elsewhere.
+
+Pick by where the code runs: Python on a machine → `borch`; Pyodide/JupyterLite with WebGPU → `borch_webgpu`; a TypeScript page → `borch-ts`. CUDA, mixed precision, distributed training and `torch.compile` are absent by design and refused loudly. Check a name in `api-index.json` before writing it.
+
+## Start here
+
+- [AGENTS.md](https://playidea-lab.github.io/borch/AGENTS.md): the one page a coding agent needs — which of the three to use, ten rules that save a rewrite, three smoke tests, where the truth is
+- [README](https://playidea-lab.github.io/borch/README.md): the door — thirty seconds in Python and in TypeScript, where it runs, how it is guaranteed
+
+## The long document
+
+- [docs/BOOK.md](https://playidea-lab.github.io/borch/docs/BOOK.md): installing and naming, the design principle, how the values are guaranteed, the supported range, borch.ts and its six differences from torch, the binding, the `cpu` device, what is deliberately not supported, conformance
+- [BORCH-TS.md](https://playidea-lab.github.io/borch/BORCH-TS.md): the TypeScript runtime on its own
+- [ROADMAP.md](https://playidea-lab.github.io/borch/ROADMAP.md): what conformance means here, and what will not be done
+
+## Reference
+
+- [api-index.json](https://playidea-lab.github.io/borch/site/assets/api-index.json): every public name to its module — the quick "does this exist" check
+- [api.json](https://playidea-lab.github.io/borch/site/assets/api.json): signatures and docs for the whole surface
+- [API reference](https://playidea-lab.github.io/borch/site/api/): the same, browsable
+
+## Examples that run in the page
+
+- [1 · Quickstart](https://playidea-lab.github.io/borch/site/tutorials/01-quickstart.html)
+- [2 · From scratch](https://playidea-lab.github.io/borch/site/tutorials/02-from-scratch.html)
+- [3 · Curve fitting](https://playidea-lab.github.io/borch/site/tutorials/03-curve-fitting.html)
+- [4 · Image classifier](https://playidea-lab.github.io/borch/site/tutorials/04-image-classifier.html)
+- [5 · Adversarial](https://playidea-lab.github.io/borch/site/tutorials/05-adversarial.html)
+- [6 · Char RNN](https://playidea-lab.github.io/borch/site/tutorials/06-char-rnn.html)
+- [7 · Signals and the FFT](https://playidea-lab.github.io/borch/site/tutorials/07-signals-fft.html)
+- [8 · Attention](https://playidea-lab.github.io/borch/site/tutorials/08-attention.html)
+- [9 · Autoencoder](https://playidea-lab.github.io/borch/site/tutorials/09-autoencoder.html)
+- [10 · Least squares](https://playidea-lab.github.io/borch/site/tutorials/10-least-squares.html)
+
+## Lessons
+
+- [0 · Fix the bug](https://playidea-lab.github.io/borch/site/learn/00-fix-it.html)
+- [1 · Tensors](https://playidea-lab.github.io/borch/site/learn/01-tensors.html)
+- [Autograd](https://playidea-lab.github.io/borch/site/learn/02-autograd.html)
+- [Modules](https://playidea-lab.github.io/borch/site/learn/03-modules.html)
+- [Training](https://playidea-lab.github.io/borch/site/learn/04-training.html)
+- [Convolution](https://playidea-lab.github.io/borch/site/learn/05-cnn.html)
+- [Saving and loading](https://playidea-lab.github.io/borch/site/learn/06-save-load.html)
+- [7 · Data](https://playidea-lab.github.io/borch/site/learn/07-data.html)
+- [8 · Debugging](https://playidea-lab.github.io/borch/site/learn/08-debugging.html)
+- [Residual networks](https://playidea-lab.github.io/borch/site/learn/09-resnet.html)
+- [Vision Transformer](https://playidea-lab.github.io/borch/site/learn/10-vit.html)
+
+## Optional
+
+- [llms-full.txt](https://playidea-lab.github.io/borch/llms-full.txt): README, AGENTS.md, the book, BORCH-TS.md and ROADMAP.md in one file
+- [The site](https://playidea-lab.github.io/borch/site/): the playground trains on your GPU; the notebook page is JupyterLite with the wheel on its shelf
+- [Source](https://github.com/playidea-lab/borch): Apache-2.0

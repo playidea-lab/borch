@@ -19,6 +19,7 @@ requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
 license = { text = "Apache-2.0" }
 readme = "README.md"
+keywords = ["pytorch", "webgpu", "wgsl", "pyodide", "jupyterlite", "onnx", "autograd", "tensor", "deep-learning", "in-browser-ml", "browser"]
 authors = [{ name = "PLAYIDEALAB Inc." }]
 
 # **어디 사는지 적는다.** 없으면 PyPI 페이지에 링크가 하나도 안 나오고, 설치한 사람은

@@ -10,6 +10,9 @@ PyTorch's values, errors and printed form within the range a curriculum uses.
 - **The long document** — how the values are guaranteed, the supported range, what is
   deliberately absent and why, borch.ts's design, conformance — is
   [`docs/BOOK.md`](docs/BOOK.md). This page is the door; that one is the house.
+- **For agents:** [`AGENTS.md`](AGENTS.md) is the one page a coding agent needs — which
+  of the three to use, ten rules that save a rewrite, three smoke tests. `llms.txt` at the
+  site root lists these documents in the order to read them.
 
 ## What it is not
 
