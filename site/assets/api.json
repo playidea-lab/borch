@@ -13771,7 +13771,7 @@
       {
        "name": "syncHyper",
        "signature": "syncHyper(): void",
-       "doc": "Every group's device scalars rewritten from the groups. Called by `step()` and by\n the schedulers; call it after changing a group's value by hand between replays.",
+       "doc": "Every group's device scalars rewritten from the groups where they moved. Called by\n `step()` and by the schedulers; call it after changing a group's value by hand\n between replays.",
        "torch": "sync_hyper"
       },
       {

@@ -98,11 +98,20 @@ const EXPECT = {
   //
   // So the phases are frozen too. They sum to the total, and if one moves the report
   // names it instead of leaving the next reader the search this one could not finish.
-  dispatches: 58,
+  //
+  // 2026-09-08, 58 → 37 (forward 12 → 9, loss 14 → 8, backward 27 → 15, the optimizer
+  // unmoved): the backward of `add` and `sub` no longer runs a kernel writing G × ±1 and
+  // folds G itself (21711b5) — `Small`'s loss and backward are where those copies were.
+  // The forward's three: measured between 4177abb (2026-09-03, the last night at 58) and
+  // this day; see the commits touching borch-ts/src in that range.
+  dispatches: 37,
   // **One step is one submit.** The commands pile up and go in a single send when the
   // loss is read, so this number rising means a place appeared that waits on the GPU
   // mid-step — the kind that leaves the values alone and makes the step slower, which the
   // golden can never see.
+  // 2026-09-08 it rose to 2: `Optimizer.step()` rewrote the groups' device scalars every
+  // step, flushing first so the write could not overtake the encoded dispatches. It
+  // writes only when a scalar moved now, and the step is one submit again.
   submits: 1,
   // Measured on `Small` at batch 4, each phase run in a scope of its own. The optimizer
   // is one fused dispatch per parameter and `Small` has five — conv weight (no bias),
@@ -114,7 +123,7 @@ const EXPECT = {
   // statistics are cut into pieces per channel and finished in a pass of their own
   // (`bnPieces`: +1 forward, +1 backward). Neither is the ReLU pairing — `Small` calls
   // `unary("relu")` by hand, not through a `Sequential`, so it still pays that dispatch.
-  phases: { forward: 12, loss: 14, backward: 27, optimizer: 5 },
+  phases: { forward: 9, loss: 8, backward: 15, optimizer: 5 },
 };
 
 export async function report(): Promise<Report> {

@@ -334,24 +334,41 @@ export abstract class Optimizer {
     return this.hyper().narrow(0, which, 1);
   }
 
-  private writeHyper(group: number, t: Tensor): void {
+  /** What each group's scalars were when last written — a step whose scalars did not
+   *  move writes nothing and, above all, submits nothing. */
+  private written: (string | undefined)[] = [];
+
+  private hyperWords(group: number): Float32Array {
     const g = this.paramGroups[group];
     const lr = g?.lr ?? this.defaultLr;
     const decay = g?.weightDecay ?? this.defaultDecay();
     const momentum = g?.momentum ?? this.defaultMomentum();
-    device().writeWords(t.buffer, new Uint32Array(new Float32Array([lr, decay, momentum, 1 - lr * decay]).buffer));
+    return new Float32Array([lr, decay, momentum, 1 - lr * decay]);
   }
 
-  /** Every group's device scalars rewritten from the groups. Called by `step()` and by
-   *  the schedulers; call it after changing a group's value by hand between replays. */
+  private writeHyper(group: number, t: Tensor): void {
+    const words = this.hyperWords(group);
+    const raw = new Uint32Array(words.length);
+    new Float32Array(raw.buffer).set(words);
+    device().writeWords(t.buffer, raw);
+    this.written[group] = words.join(",");
+  }
+
+  /** Every group's device scalars rewritten from the groups where they moved. Called by
+   *  `step()` and by the schedulers; call it after changing a group's value by hand
+   *  between replays. */
   syncHyper(): void {
     if (this.hypers.length === 0) return;
+    const moved = this.hypers.map((t, i) => t !== null && this.written[i] !== this.hyperWords(i).join(","));
+    if (!moved.some(Boolean)) return;
     // **The commands already encoded go out first.** A queue write lands at once while
     // the dispatches wait for the next submit, so written before the flush the new
     // values would reach the step that was meant to use the old ones (measured: the
-    // CyclicLR momentum case trained to a different parameter).
+    // CyclicLR momentum case trained to a different parameter). Only when something
+    // moved: an unconditional flush here was a second submit on every step (the cost
+    // check, 2026-09-08).
     device().flush();
-    for (const [i, t] of this.hypers.entries()) if (t) this.writeHyper(i, t);
+    for (const [i, t] of this.hypers.entries()) if (t && moved[i]) this.writeHyper(i, t);
   }
 
   /** What a subclass defaults to where a group set nothing — overridden by the ones
