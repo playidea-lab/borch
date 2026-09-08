@@ -33,7 +33,12 @@ const show = () => { out.textContent = lines.join("\n"); };
 const fill = (n, seed) => { const a = new Float32Array(n); let st = seed; for (let i = 0; i < n; i++) { st = (Math.imul(st, 1664525) + 1013904223) >>> 0; a[i] = (st / 4294967296) - 0.5; } return a; };
 const REPS = parseInt(q.get("reps") || "20"), ROUNDS = parseInt(q.get("rounds") || "5");
 // `1576x192x768`, `24@197x64x197`, and a suffix `:tn` / `:nt` for an operand read transposed.
-const parseMM = (text) => { const m = /^(?:(\d+)@)?(\d+)x(\d+)x(\d+)(?::([nt])([nt]))?$/.exec(text); return m ? { name: text, Bt: m[1] ? +m[1] : 0, M: +m[2], Kd: +m[3], Nd: +m[4], tA: m[5] === "t", tB: m[6] === "t" } : null; };
+const parseMM = (text) => {
+  const c = /^(\d+)@(\d+)$/.exec(text);            // count@elems, for the optim bench
+  if (c) return { name: text, Bt: +c[1], M: +c[2] };
+  const m = /^(?:(\d+)@)?(\d+)x(\d+)x(\d+)(?::([nt])([nt]))?$/.exec(text);
+  return m ? { name: text, Bt: m[1] ? +m[1] : 0, M: +m[2], Kd: +m[3], Nd: +m[4], tA: m[5] === "t", tB: m[6] === "t" } : null;
+};
 const parseShape = (text) => { const m = /^(\d+)-(\d+)@(\d+)(?:x(\d+))?$/.exec(text); if (!m) throw new Error(`shape? ${text} (want cin-cout@side or cin-cout@sidexbatch)`); return { name: text, C: +m[1], O: +m[2], H: +m[3], N: m[4] ? +m[4] : 16 }; };
 const conv = (sh) => ({ N: sh.N, C: sh.C, O: sh.O, inDims: [sh.H, sh.H], kernel: [3, 3], stride: [1, 1], pad: [1, 1], outDims: [sh.H, sh.H] });
 let dev;
@@ -180,6 +185,32 @@ const BENCHES = {
     if (Device.subgroups && K.reduceRowsFits(1, red)) runs.push({ name: `subgroup (${K.REDUCE_SG_GROUP} a row)`, key: `rdsg:${sh.name}`, make: () => K.reduceRowsSubgroup("sum", rows, red), outb: Out2,
       run: () => dev.run(dev.pipeline(`rdsg:${sh.name}`, () => K.reduceRowsSubgroup("sum", rows, red)), [X, Out2], [rows, 1, 1]) });
     return race(runs, rows);
+  },
+  // The optimizer step: 152 tiny per-parameter dispatches against one dispatch over an
+  // arena that gathers the gradients in and scatters the parameters out by copy. The
+  // question ADR-002 turns on — is the per-parameter dispatch overhead worth an arena.
+  // Shape `--shapes=152@37632` is (param count) @ (elements each); a real ViT-tiny is a
+  // spread but the per-dispatch overhead rides on the count, not the sizes.
+  async optim(sh) {
+    if (sh.M === undefined || !sh.Bt) throw new Error(`optim wants count@elems, not ${sh.name}`);
+    const count = sh.Bt, elems = sh.M, total = count * elems;
+    const H = dev.alloc(4); dev.writeWords(H, new Uint32Array(new Float32Array([0.01, 0, 0.9, 1]).buffer));
+    // Per-parameter: each its own param, grad, momentum buffer.
+    const params = [], grads = [], moms = [];
+    for (let i = 0; i < count; i++) { params.push(upload(elems, i + 1)); grads.push(upload(elems, i + 1000)); moms.push(dev.alloc(elems)); }
+    const perParam = () => { for (let i = 0; i < count; i++) dev.run1d(dev.pipeline(`sgd:${elems}`, () => K.sgdStep(elems, true, false, 0, false, false, false)), [params[i], grads[i], moms[i], H], elems); };
+    // Arena: one buffer each, gradients copied in, parameters copied out.
+    const pArena = dev.alloc(total), gArena = dev.alloc(total), mArena = dev.alloc(total);
+    for (let i = 0; i < count; i++) dev.copyRange(pArena, i * elems * 4, params[i], 0, elems * 4);
+    const arena = () => {
+      for (let i = 0; i < count; i++) dev.copyRange(gArena, i * elems * 4, grads[i], 0, elems * 4);
+      dev.run1d(dev.pipeline(`sgd:${total}`, () => K.sgdStep(total, true, false, 0, false, false, false)), [pArena, gArena, mArena, H], total);
+      for (let i = 0; i < count; i++) dev.copyRange(params[i], 0, pArena, i * elems * 4, elems * 4);
+    };
+    // Warm, then time each by the wall over REPS.
+    const timeWall = async (fn) => { fn(); dev.flush(); await dev.synchronize(); const t0 = performance.now(); for (let r = 0; r < REPS; r++) fn(); dev.flush(); await dev.synchronize(); return (performance.now() - t0) / REPS; };
+    const perMs = await timeWall(perParam), arMs = await timeWall(arena);
+    return `${count} params x ${elems}: per-param ${count} dispatches ${perMs.toFixed(2)} ms · arena 1 dispatch + ${2 * count} copies ${arMs.toFixed(2)} ms`;
   },
   // The padded copy against a plain pass over the same input.
   async pad(sh) {

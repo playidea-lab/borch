@@ -273,7 +273,7 @@ function subgroupMatrixF32(adapter: GPUAdapter): boolean {
 export interface Recorded {
   readonly pipeline?: GPUComputePipeline;
   readonly bindGroup?: GPUBindGroup;
-  readonly copy?: { readonly bytes: number };
+  readonly copy?: { readonly bytes: number; readonly srcOff?: number; readonly dstOff?: number };
   readonly groups: readonly [number, number, number];
   /** The buffers behind the bind group, in binding order — what a fusion pass reads. */
   readonly buffers: readonly BindSlot[];
@@ -843,7 +843,11 @@ export class Device {
     for (const r of records) {
       if (r.copy) {
         const [src, dst] = r.buffers as [GPUBuffer, GPUBuffer];  // copies bind whole buffers
-        this.copyInto(dst, src, r.copy.bytes / BYTES_PER_F32);
+        if (r.copy.srcOff !== undefined || r.copy.dstOff !== undefined) {
+          this.copyRange(dst, r.copy.dstOff ?? 0, src, r.copy.srcOff ?? 0, r.copy.bytes);
+        } else {
+          this.copyInto(dst, src, r.copy.bytes / BYTES_PER_F32);
+        }
         continue;
       }
       if (!r.pipeline || !r.bindGroup) throw new Error("a recorded dispatch without a pipeline");
@@ -1249,6 +1253,17 @@ export class Device {
    * then moved back to the original slot. Reading and writing the original
    * at once leaves the threads unordered and the values mixed.
    */
+  /**
+   * A copy between sub-ranges — `srcOff`/`dstOff` bytes in, `bytes` long. `copyInto` is
+   * the whole-buffer case; this is what an arena's gather and scatter ride (a byte offset
+   * must be a multiple of 4, which every f32 slice is). Recorded with its offsets so a
+   * captured step replays the same slices.
+   */
+  copyRange(dst: GPUBuffer, dstOff: number, src: GPUBuffer, srcOff: number, bytes: number): void {
+    this.openEncoder().copyBufferToBuffer(src, srcOff, dst, dstOff, bytes);
+    this.recording?.push({ copy: { bytes, srcOff, dstOff }, groups: [0, 0, 0], buffers: [src, dst] });
+  }
+
   copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void {
     const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
     // A copy cannot go inside a compute pass. Closing the pass and riding the same
