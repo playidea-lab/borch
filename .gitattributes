@@ -1,0 +1,8 @@
+# The vendored runtimes are compared byte-for-byte against tests/browser/assets.lock
+# (`tests/browser/vendor.py check`). Git for Windows ships with core.autocrlf=true, which
+# rewrites every .js/.mjs to CRLF on checkout — and on 2026-09-09 the first checkout on a
+# Windows machine failed that check on six files that had not changed. These are not text
+# to be normalised; they are the bytes the lock names.
+vendor/** -text
+tests/golden.json -text
+site/assets/*.json -text
