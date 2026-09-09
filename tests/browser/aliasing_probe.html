@@ -174,6 +174,25 @@ def cap_case(use_select, use_arena, fuse=True):
 cap_note = ("SGD+sel " + cap_case(True, True) + " | Adam+sel " + cap_case(True, False)
             + " | SGD+nosel " + cap_case(False, True))
 
+# ── Regression: no_grad restores prior state (nesting) ──
+with torch.no_grad():
+    inner_ok = not torch.is_grad_enabled()
+    with torch.no_grad():
+        pass
+    outer_still = not torch.is_grad_enabled()   # must still be no_grad after inner exits
+report.append(("no_grad nests", 0.0 if (inner_ok and outer_still) else 1.0))
+
+# ── Regression: an SGD parameter that gets no gradient must not drift (arena zeroing) ──
+pg = torch.tensor(rng.standard_normal((5,)).astype(np.float32), requires_grad=True)
+pf = torch.tensor(rng.standard_normal((4,)).astype(np.float32), requires_grad=True)  # frozen: never gets a grad
+pf0 = pf.numpy().copy()
+optf = torch.optim.SGD([pg, pf], lr=0.1, momentum=0.9)
+for _ in range(4):
+    optf.zero_grad()
+    pg.sum().backward()      # only pg gets a gradient; pf gets none
+    optf.step()
+report.append(("frozen SGD param unchanged", rel(pf.numpy(), pf0)))
+
 worst = max(v for _, v in report)
 adapter = str(js.borch.Device.adapterInfo)
 "aliasing: " + " · ".join(f"{n} {v:.1e}" for n, v in report) + " · " + cap_note + \\
@@ -190,7 +209,7 @@ adapter = str(js.borch.Device.adapterInfo)
   const show = () => { out.textContent = lines.join("\n"); };
   worker.onmessage = (e) => {
     if (e.data.say) { lines.push(e.data.say); show(); }
-    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: true }; worker.terminate(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
     if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
   };
   worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };

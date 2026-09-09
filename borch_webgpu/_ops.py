@@ -1204,11 +1204,16 @@ class no_grad:                                           # noqa: N801
     """
 
     def __enter__(self):
+        # **Restore the previous state, do not hard-code it on.** `no_grad` nests —
+        # `load_state_dict`, parameter assignment and the optimizer all open a `no_grad`
+        # internally, and setting `enabled = True` on the way out would silently turn grad
+        # back on inside a caller's outer `no_grad`.
+        self._prev = bool(_ts.gradMode.enabled)
         _ts.gradMode.enabled = False
         return self
 
     def __exit__(self, *exc):
-        _ts.gradMode.enabled = True
+        _ts.gradMode.enabled = self._prev
         return False
 
 

@@ -713,6 +713,12 @@ export class SGD extends Optimizer {
     const pA = d.alloc(total), gA = d.alloc(total);
     const mA = this.momentum !== 0 ? d.alloc(total) : null;
     const zero = d.alloc(max);   // a slab of zeros to clear a slice that lost its gradient
+    // **A pooled `alloc` is not zero-initialised.** `gA` is read whole by `sgdStep`, so a
+    // parameter that gets no gradient on the first step (a frozen or sparse head) would
+    // otherwise read stale pool bytes as its gradient; and the clear path below copies
+    // from `zero`, which must actually be zero. Seed both.
+    d.writeWords(gA, new Uint32Array(total));
+    d.writeWords(zero, new Uint32Array(max));
     for (const [i, p] of this.params.entries()) {
       d.copyRange(pA, (offs[i] ?? 0) * 4, p.buffer, 0, (sizes[i] ?? 0) * 4);
       if (mA) d.copyRange(mA, (offs[i] ?? 0) * 4, (this.buffers[i] as Tensor).buffer, 0, (sizes[i] ?? 0) * 4);
