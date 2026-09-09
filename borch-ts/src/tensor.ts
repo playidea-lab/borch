@@ -2319,6 +2319,10 @@ export class Tensor implements Node<Tensor> {
       },
       kind === "sum" ? "SumBackward1" : "AmaxBackward0",
       kind === "sum" || kind === "prod" ? accumulated(this.dtype) : this.dtype,
+      // `prod` reads the input; `max`/`min` read the input and the output (to place the
+      // gradient where the extreme was); `sum` reads neither. Save what each reads.
+      kind === "sum" ? [] : [this],
+      kind === "max" || kind === "min",
     );
     return result;
   }
@@ -3694,6 +3698,8 @@ export class Tensor implements Node<Tensor> {
       },
       kind === "sum" ? "CumsumBackward0" : "CumprodBackward0",
       accumulated(this.dtype),
+      // `cumprod`'s backward reads the input; `cumsum`'s reads only the gradient.
+      kind === "sum" ? [] : [this],
     );
   }
 
@@ -11333,6 +11339,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       convForwardRun(s, key, this.buffer, weight.buffer, bias ? bias.buffer : null, out);
     }
     const parents = bias ? [this, weight, bias] : [this, weight];
+    // Like matmul: the input's gradient reads the weight, the weight's gradient reads the
+    // input, and neither the output nor the bias is read. Save each for the side that reads
+    // it, so an in-place edit of a conv input or weight before backward is caught.
+    const saved: Tensor[] = [];
+    if (this.requiresGrad) saved.push(weight);
+    if (weight.requiresGrad) saved.push(this);
     return Tensor.make(
       out,
       outShape,
@@ -11431,6 +11443,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         return parts;
       },
       "ConvolutionBackward0",
+      "float32",
+      saved,
     );
   }
 

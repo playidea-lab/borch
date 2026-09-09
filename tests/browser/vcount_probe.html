@@ -32,6 +32,7 @@ import numpy as np, js
 import borch_webgpu as torch
 
 xv = np.array([0.3, -0.7, 1.2, 0.1], np.float32)
+xv2 = np.array([[0.3, -0.7, 1.2, 0.1], [1.5, 0.4, -0.9, 2.0]], np.float32)
 av = np.array([2., 3., 4., 5.], np.float32)
 fails = []
 
@@ -109,11 +110,47 @@ def m_layernorm_in():  # layer_norm's backward reads the input; use a non-leaf s
         s.backward()
     return go
 
+def m_amax_out():     # amax reads the input and the output (to place the gradient)
+    def go():
+        x = torch.tensor(xv2, requires_grad=True)
+        z = x.amax(1)
+        s = z.sum()
+        z.mul_(0.0)
+        s.backward()
+    return go
+
+def m_prod_in():      # prod reads the input; mutate a non-leaf input
+    def go():
+        x = non_leaf(xv2)
+        s = x.prod(1).sum()
+        x.mul_(0.0)
+        s.backward()
+    return go
+
+def m_cumprod_in():
+    def go():
+        x = non_leaf(xv2)
+        s = x.cumprod(1).sum()
+        x.mul_(0.0)
+        s.backward()
+    return go
+
+def m_conv_weight():  # conv's input gradient reads the weight; mutate a const weight
+    def go():
+        w = torch.tensor(rng_mm.standard_normal((2, 3, 3, 3)).astype(np.float32))
+        x = torch.tensor(rng_mm.standard_normal((1, 3, 8, 8)).astype(np.float32), requires_grad=True)
+        s = torch.nn.functional.conv2d(x, w).sum()
+        w.mul_(0.0)
+        s.backward()
+    return go
+
 rng_mm = np.random.default_rng(11)
 MUST_RAISE = [("tanh-out", m_out("tanh")), ("sigmoid-out", m_out("sigmoid")),
               ("exp-out", m_out("exp")), ("mul-in", m_in_mul()), ("div-in", m_in_div()),
               ("mm-in", m_in_mm()), ("bmm-in", m_in_bmm()),
-              ("softmax-out", m_softmax_out()), ("layernorm-in", m_layernorm_in())]
+              ("softmax-out", m_softmax_out()), ("layernorm-in", m_layernorm_in()),
+              ("amax-out", m_amax_out()), ("prod-in", m_prod_in()),
+              ("cumprod-in", m_cumprod_in()), ("conv-weight", m_conv_weight())]
 for name, fn in MUST_RAISE:
     with torch.scope():
         if raised(fn) is None:
@@ -155,8 +192,16 @@ def a_mm_out():       # matmul does not save its output — mutating it is legal
     # grad_x = ones(2,3) @ wᵀ = row sums of w, broadcast to each of the 2 rows
     return x.grad.numpy(), np.tile(np.full((4, 3), 2.0, np.float32).sum(1), (2, 1))
 
+def a_sum_out():      # sum saves nothing — mutating its output is legal, grad is ones
+    x = torch.tensor(xv2, requires_grad=True)
+    z = x.sum(1)
+    s = z.sum()
+    z.mul_(0.0)
+    s.backward()
+    return x.grad.numpy(), np.ones_like(xv2)
+
 MUST_ALLOW = [("add", a_add), ("relu-after-bwd", a_relu_after), ("reshape", a_reshape),
-              ("mm-out", a_mm_out)]
+              ("mm-out", a_mm_out), ("sum-out", a_sum_out)]
 for name, fn in MUST_ALLOW:
     with torch.scope():
         try:
