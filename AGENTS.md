@@ -21,6 +21,7 @@ The site trains on the visitor's GPU: https://playidea-lab.github.io/borch/site/
 | in Python on a machine or CI, no GPU needed, torch unavailable | `borch` — the numpy core | `uv pip install pyborch` (or `pip install pyborch`) | `import borch as torch` |
 | in Pyodide / JupyterLite / marimo, with WebGPU in the tab | `borch_webgpu` — the same wheel | `%pip install pyborch` | `import borch_webgpu as torch` |
 | in Pyodide without WebGPU | `borch` — the numpy core, same wheel | `%pip install pyborch` | `import borch as torch` |
+| a page with **no build step** (a doc page, a demo, a paper) | `borch-ts` from a CDN | nothing to install | `import { init, Tensor } from "https://cdn.jsdelivr.net/npm/borch-ts@0.3/+esm"` |
 | in a web page, TypeScript or JavaScript | `borch-ts` | `npm install borch-ts` | `import { init, Tensor, nn, optim, scope } from "borch-ts"; await init();` |
 | in a page with **no** GPU adapter and only needs a pretrained backbone from the hub | the `cpu` device (`import borch_cpu` / `cpu` namespace) | in the wheel / in `borch-ts` | not for training a model of your own |
 
@@ -135,6 +136,16 @@ import { init, Tensor } from "borch-ts";
 await init();                                 // a WebGPU adapter, never a software one
 const x = Tensor.from([1, 2, 3], [3]);
 console.log(await x.mul(x).sum().toArray());   // Float32Array [14]
+```
+
+**A page with no build step** (save as `x.html`, double-click it):
+
+```html
+<script type="module">
+  import { init, Tensor } from "https://cdn.jsdelivr.net/npm/borch-ts@0.3/+esm";
+  await init();                                  // refuses a software adapter
+  console.log(await Tensor.from([1, 2, 3], [3]).mul(Tensor.from([1, 2, 3], [3])).sum().toArray());
+</script>
 ```
 
 **Pyodide notebook cell:**

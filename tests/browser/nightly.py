@@ -1,4 +1,4 @@
-"""The thirty-nine browser checks nothing else runs, run once a night in a worktree.
+"""The forty browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -61,6 +61,9 @@ CHECKS = [
     # old rule — a window only on `--headed` — and came off SwiftShader in the first nightly
     # that ran them (2026-09-06); they follow the launcher now.
     ("wheel",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/wheel_probe.py", "--build"]),
+    # The published package from a CDN, in a file opened from disk — the entry point a
+    # reader with no bundler takes. An unreachable CDN is not a failure; the probe says so.
+    ("cdn",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/cdn_probe.py"]),
     # The notebook page — JupyterLite built here, the cell pressed, the learned line read.
     ("lab",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/lab_probe.py", "--build"]),
     # The workbench page — marimo built here, run pressed, the four sections read.
