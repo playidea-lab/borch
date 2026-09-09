@@ -68,3 +68,22 @@ def test_pages_yml_ships_robots_and_the_sitemap():
     assert "python3 site/build_sitemap.py" in text
     gather = text[text.index("gather what goes up"):text.index("upload-pages-artifact")]
     assert "robots.txt" in gather and "sitemap.xml" in gather
+
+
+def test_the_search_console_file_is_at_the_root_and_the_deployment_copies_it():
+    """Search Console re-checks the file it verified with; losing it un-verifies the property,
+    and the loss is silent — the console simply stops reporting one day."""
+    files = sorted(ROOT.glob("google*.html"))
+    assert len(files) == 1, f"expected exactly one Search Console file at the root, found {files}"
+    name = files[0].name
+    assert files[0].read_text(encoding="utf-8").strip() == f"google-site-verification: {name}"
+    gather = (ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
+    gather = gather[gather.index("gather what goes up"):gather.index("upload-pages-artifact")]
+    assert "cp google*.html _site/" in gather, "the verification file is not copied into the deployment"
+
+
+def test_the_sitemap_does_not_advertise_the_verification_file():
+    """It is a token for one reader, not a page of this site."""
+    sys.path.insert(0, str(ROOT / "site"))
+    import build_sitemap  # noqa: PLC0415
+    assert not any(p.startswith("google") for p in build_sitemap.pages() + list(build_sitemap.DOCUMENTS))

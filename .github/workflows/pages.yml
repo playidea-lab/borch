@@ -117,6 +117,10 @@ jobs:
           # the repository, and the list had none of them. `tests/test_agent_door.py` now
           # reads this list and refuses a link it does not cover.
           cp README.md AGENTS.md llms.txt llms-full.txt BORCH-TS.md ROADMAP.md robots.txt sitemap.xml _site/
+          # Google Search Console verifies a URL-prefix property by fetching one file from it.
+          # `playidea-lab.github.io` has no root site, so the property is the `/borch/` prefix and
+          # the file has to be served from there; it is what tells Search Console this site is ours.
+          cp google*.html _site/
           mkdir -p _site/docs && cp docs/BOOK.md _site/docs/BOOK.md
           # Sends the root to the site. The cheapest way that touches no relative path.
           cat > _site/index.html <<'HTML'
