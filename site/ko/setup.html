@@ -263,7 +263,26 @@
       <strong>어느 윈도우냐에 따라 답이 둘</strong>이고, 그중 하나만 여기서 봤다.
     </p>
 
-    <h2>폰과 태블릿</h2>
+    <h3 id="windows-laptop">GPU 가 둘인 노트북</h3>
+<p>
+  <strong>2026-09-09 RTX 5050 을 단 윈도우 노트북에서 측정 — 배지가 <code>intel / gen-12lp</code>
+  로 왔다.</strong> 내장 GPU 다. 페이지의 수치는 전부 그것의 것이었다. 페이지는
+  <code>high-performance</code> 어댑터를 요청하지만 윈도우의 크롬은 그 요청을 들어줄 수 없다 —
+  WebGPU 는 윈도우가 <code>chrome.exe</code> 에 배정한 GPU 에서 돌고, 브라우저의 기본값은 절전용이다.
+  두 번째 카드가 있는지는 페이지가 볼 수 없으므로, 배지는 판정이 아니라 안내를 띄운다.
+</p>
+<ol>
+  <li>설정 → 시스템 → 디스플레이 → <strong>그래픽</strong>.</li>
+  <li><em>앱 추가</em> → <code>chrome.exe</code> 를 찾아 넣는다
+    (보통 <code>C:\Program Files\Google\Chrome\Application\chrome.exe</code>).</li>
+  <li>Chrome → <em>옵션</em> → <strong>고성능</strong> → 저장.</li>
+  <li>크롬을 완전히 끝내고 — 트레이의 백그라운드 프로세스까지 — 페이지를 다시 연다. 배지에 외장
+    카드 이름이 와야 한다.</li>
+</ol>
+<p>
+  NVIDIA 카드라면 NVIDIA 제어판의 <em>3D 설정 관리 → 프로그램 설정</em> 도 같은 일을 한다. 둘 중 하나면 된다.
+</p>
+<h2>폰과 태블릿</h2>
     <p>
       <strong>iOS 에서는 돈다.</strong> iPhone 13 mini 에서 측정 — 배지에 Apple 어댑터가 왔고
       <strong>실제로 돌았다.</strong> 어댑터를 얻은 것에서 그치지 않고 화면에 결과가 나왔다는

@@ -282,7 +282,28 @@
       depending on which Windows, and only one of them has been seen here.
     </p>
 
-    <h2>Phones and tablets</h2>
+    <h3 id="windows-laptop">A laptop with two GPUs</h3>
+<p>
+  <strong>Measured 2026-09-09 on a Windows notebook with an RTX 5050: the badge said
+  <code>intel / gen-12lp</code>.</strong> That is the integrated GPU, and every number on the
+  page was its. The page asks for a <code>high-performance</code> adapter; Chrome on Windows
+  cannot honour that, because WebGPU runs on whichever GPU Windows assigned to
+  <code>chrome.exe</code>, and the default for a browser is the power-saving one. Nothing a page
+  can see says whether a second card exists, so the badge shows a hint rather than a verdict.
+</p>
+<ol>
+  <li>Settings → System → Display → <strong>Graphics</strong>.</li>
+  <li><em>Add an app</em> → browse to <code>chrome.exe</code>
+    (usually <code>C:\Program Files\Google\Chrome\Application\chrome.exe</code>).</li>
+  <li>Chrome → <em>Options</em> → <strong>High performance</strong> → Save.</li>
+  <li>Quit Chrome completely — the tray process too — and open the page again. The badge should
+    now name the discrete card.</li>
+</ol>
+<p>
+  The NVIDIA Control Panel's <em>Manage 3D settings → Program Settings</em> does the same for an
+  NVIDIA card. Either one is enough.
+</p>
+<h2>Phones and tablets</h2>
     <p>
       <strong>iOS runs it.</strong> Measured on an iPhone 13 mini: the badge came back with
       an Apple adapter and the code actually ran — not merely an adapter obtained, but

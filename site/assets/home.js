@@ -64,6 +64,7 @@ function sayLink(text, href) {
 
 /** Linux, where Chrome's blocklist is what stands between the page and the driver. */
 const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+const ON_WINDOWS = /Windows/.test(navigator.userAgent);
 
 (async () => {
   try {
@@ -91,6 +92,13 @@ const ON_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigato
         warmPython();
       } else {
         say(t("device.ready"), "note");
+        // An integrated Intel adapter on Windows: right for a machine that has nothing else,
+        // and the wrong card on a laptop that also has a discrete one. The page cannot tell
+        // the two apart, so it says what the second kind of visitor should try.
+        if (ON_WINDOWS && /\bintel\b/i.test(p.adapter || "") && !/\barc\b/i.test(p.adapter || "")) {
+          say(t("device.integratedOnWindows"), "note");
+          sayLink(t("device.setupSay"), t("device.setupHref") + "#windows-laptop");
+        }
       }
     } else {
       badge.className = "badge off";

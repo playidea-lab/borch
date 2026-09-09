@@ -56,6 +56,19 @@ const STRINGS = {
     ko: "저 어댑터는 GPU 가 아니라 CPU 래스터라이저다. 돌기도 하고 골든과 값도 맞는다 — "
       + "다만 여기서 나오는 속도는 전부 CPU 의 것이다." },
 
+  // **A laptop with two GPUs hands Chrome the integrated one.** Measured 2026-09-09 on a
+  // Windows notebook with an RTX 5050: the badge said `intel / gen-12lp`. The page asks for
+  // `high-performance` and Chrome on Windows cannot honour it — WebGPU runs on whichever GPU
+  // Windows assigned to chrome.exe, and the default for a browser is the power-saving one.
+  // Nothing on the page can see the other card, so this is a hint, not a verdict.
+  "device.integratedOnWindows": {
+    en: "That is an integrated Intel GPU. If this laptop also has an NVIDIA or AMD card, Windows "
+      + "gave Chrome the power-saving one — Settings → System → Display → Graphics, add "
+      + "chrome.exe, choose High performance, restart Chrome.",
+    ko: "저건 인텔 내장 GPU 다. 이 노트북에 NVIDIA 나 AMD 카드도 있다면 윈도우가 크롬에 절전용을 "
+      + "줬다 — 설정 → 시스템 → 디스플레이 → 그래픽에서 chrome.exe 를 추가하고 고성능을 고른 뒤 "
+      + "크롬을 다시 연다." },
+
   "run.done": {
     en: "done — {0} ms", ko: "끝 — {0} ms" },
   "run.doneLocal": {
