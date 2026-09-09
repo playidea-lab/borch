@@ -866,6 +866,11 @@ export class Device {
       this.owned.delete(buf);
       const size = this.sizes.get(buf);
       if (size === undefined) { buf.destroy(); continue; }
+      // **Retire like `endScope` does.** Pooling without bumping the age leaves a tensor
+      // that outlived the capture (an output the caller kept) passing `refuseIfDead` on a
+      // buffer now back in the pool — the "9,9,9,9" silent read. Bumping the age makes
+      // that tensor fail the guard instead.
+      this.retire(buf);
       let pool = this.spare.get(size);
       if (!pool) { pool = []; this.spare.set(size, pool); }
       pool.push(buf);
@@ -1194,10 +1199,20 @@ export class Device {
     }
     return this.device.createBindGroup({
       layout,
-      entries: buffers.map((b, binding) => ({
-        binding,
-        resource: b instanceof GPUBuffer ? { buffer: b } : { buffer: b.buffer, offset: b.offset, size: b.size },
-      })),
+      entries: buffers.map((b, binding) => {
+        if (!(b instanceof GPUBuffer) && b.offset % this.limits.minStorageBufferOffsetAlignment !== 0) {
+          // A storage binding offset must be a multiple of the device alignment (256 on
+          // the cards here). An unaligned sub-range is a WebGPU validation error the
+          // uncaptured-error handler would swallow, leaving the output silently zero — so
+          // stop loudly here. A view whose offset is not aligned must materialise before
+          // it is bound.
+          throw new Error(
+            `bind offset ${b.offset} is not a multiple of ${this.limits.minStorageBufferOffsetAlignment} ` +
+              "— an unaligned sub-range cannot be bound; materialise the view first.",
+          );
+        }
+        return { binding, resource: b instanceof GPUBuffer ? { buffer: b } : { buffer: b.buffer, offset: b.offset, size: b.size } };
+      }),
     });
   }
 

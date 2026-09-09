@@ -847,7 +847,8 @@ export class Tensor implements Node<Tensor> {
    * tensor reaches for its value after that, the two numbers disagree — and then it is
    * **a tensor that is already dead**.
    */
-  private readonly age: number;
+  /** Not readonly: `ensureOwned` re-points `gpu` to a fresh buffer and updates this. */
+  private age: number;
   /** The array when the value is on the host, `null` when it is on the GPU. */
   private readonly host: Float32Array | null;
   requiresGrad: boolean;
@@ -1173,6 +1174,7 @@ export class Tensor implements Node<Tensor> {
     dev().copyInto(own, this.gpu, this.size);
     dev().rehome(own, this.bornDepth);
     this.gpu = own;
+    this.age = dev().age(own);   // the new buffer's life, or `refuseIfDead` compares against the old one's
     this.shared = false;
   }
 
