@@ -6252,3 +6252,141 @@ ${flatId(n)}
   Out[gid] = select(0.0, ${keep}, rand01(gid, Seed[0]) >= ${f32lit(p)});
 }`;
 }
+
+// ── Complex kernels ────────────────────────────────────────────────────
+//
+// Every one is **one thread per complex cell.** So `i` is always a complex index and
+// the f32 positions are `i*2` (real) and `i*2+1` (imaginary). Attaching a thread to an
+// f32 cell instead makes the pair unreadable at once, and then multiplication cannot be
+// written.
+
+/**
+ * The frame for a 1-D complex kernel. **The grid-folding line is written once.**
+ *
+ * Close to ten kernels share this head, and written out ten times by hand, a day comes
+ * when one of them is written differently — this repository has been bitten by that kind
+ * several times already.
+ *
+ * @param names the binding names. **The last is the output** and only it is
+ *   writable.
+ */
+export function complexShader(n: number, names: readonly string[], body: string): string {
+  const decls = names.map((nm, i) => {
+    const mode = i === names.length - 1 ? "read_write" : "read";
+    return `@group(0) @binding(${i}) var<storage, ${mode}> ${nm}: array<f32>;`;
+  }).join("\n");
+  const stride = Math.min(Math.max(1, Math.ceil(n / 64)), 65535) * 64;
+  return `
+${decls}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let gid = g.y * ${stride}u + g.x;
+  if (gid >= ${n}u) { return; }
+  let i = gid * 2u;
+${body}
+}`;
+}
+
+/** Weaves a real and an imaginary part into the interleaved form. */
+export function complexPack(n: number): string {
+  return complexShader(n, ["Re", "Im", "Out"],
+    "  Out[i] = Re[gid];\n  Out[i + 1u] = Im[gid];");
+}
+
+/** From a magnitude and an angle into the interleaved form. */
+export function complexPolar(n: number): string {
+  return complexShader(n, ["R", "T", "Out"],
+    "  Out[i] = R[gid] * cos(T[gid]);\n  Out[i + 1u] = R[gid] * sin(T[gid]);");
+}
+
+/** Takes out the real part (`off=0`) or the imaginary part (`off=1`). */
+export function complexPart(n: number, off: 0 | 1): string {
+  return complexShader(n, ["Z", "Out"], `  Out[gid] = Z[i + ${off}u];`);
+}
+
+/** A real into `x + 0i`. */
+export function complexFromReal(n: number): string {
+  return complexShader(n, ["A", "Out"],
+    "  Out[i] = A[gid];\n  Out[i + 1u] = 0.0;");
+}
+
+/** A real into `0 + xi`. */
+export function complexFromImag(n: number): string {
+  return complexShader(n, ["A", "Out"],
+    "  Out[i] = 0.0;\n  Out[i + 1u] = A[gid];");
+}
+
+/** The conjugate. It flips the imaginary part alone. */
+export function complexConj(n: number): string {
+  return complexShader(n, ["Z", "Out"],
+    "  Out[i] = Z[i];\n  Out[i + 1u] = -Z[i + 1u];");
+}
+
+/** Sign flip. It flips both — an easy place to confuse with the conjugate. */
+export function complexNeg(n: number): string {
+  return complexShader(n, ["Z", "Out"],
+    "  Out[i] = -Z[i];\n  Out[i + 1u] = -Z[i + 1u];");
+}
+
+/** The magnitude. The result is one real cell. */
+export function complexAbs(n: number): string {
+  return complexShader(n, ["Z", "Out"],
+    "  Out[gid] = sqrt(Z[i] * Z[i] + Z[i + 1u] * Z[i + 1u]);");
+}
+
+/** The angle. `atan2(im, re)` — the arguments the other way round give a quietly
+ *  different angle. */
+export function complexAngle(n: number): string {
+  return complexShader(n, ["Z", "Out"], "  Out[gid] = atan2(Z[i + 1u], Z[i]);");
+}
+
+/**
+ * `abs`'s backward. **No conjugate** — `abs` produces a real, so it is not holomorphic.
+ *
+ * At 0 there is no direction. torch gives 0 there too — with the divisor replaced by 1,
+ * the numerator is 0 and the result comes out 0.
+ */
+export function complexAbsBackward(n: number): string {
+  return complexShader(n, ["Z", "G", "Out"], `
+  let re = Z[i];
+  let im = Z[i + 1u];
+  let m = sqrt(re * re + im * im);
+  let s = select(1.0, m, m > 0.0);
+  Out[i] = G[gid] * re / s;
+  Out[i + 1u] = G[gid] * im / s;`);
+}
+
+/** Complex arithmetic. Only operands of matching shape arrive. */
+export function complexBinary(name: "add" | "sub" | "mul" | "div", n: number): string {
+  const head = `
+  let ar = A[i];
+  let ai = A[i + 1u];
+  let br = B[i];
+  let bi = B[i + 1u];`;
+  const body: Readonly<Record<string, string>> = {
+    add: "\n  Out[i] = ar + br;\n  Out[i + 1u] = ai + bi;",
+    sub: "\n  Out[i] = ar - br;\n  Out[i + 1u] = ai - bi;",
+    mul: "\n  Out[i] = ar * br - ai * bi;\n  Out[i + 1u] = ar * bi + ai * br;",
+    div: `
+  let d = br * br + bi * bi;
+  Out[i] = (ar * br + ai * bi) / d;
+  Out[i + 1u] = (ai * br - ar * bi) / d;`,
+  };
+  return complexShader(n, ["A", "B", "Out"], head + (body[name] ?? ""));
+}
+
+/** The 2-D transpose kernel. The shape is a constant, so no division survives. */
+export function transposeKernel(M: number, N: number): string {
+  const n = M * N;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let gid = g.y * ${Math.min(Math.max(1, Math.ceil(n / 64)), 65535) * 64}u + g.x;
+  if (gid >= ${n}u) { return; }
+  let r = gid / ${N}u;
+  let c = gid % ${N}u;
+  Out[c * ${M}u + r] = A[gid];
+}`;
+}
