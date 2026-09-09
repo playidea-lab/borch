@@ -94,7 +94,7 @@
 
     <h3>첫 실행이 얼마나 걸리나 — 어댑터별</h3>
     <p>
-      <code>tests/browser/first_run.py</code> 로 2026-09-03 에 잰 값. 랜딩 페이지를 새로 열고, 장치를
+      <code>tests/browser/first_run.py</code> 로 2026-09-03 (위 세 행) 과 2026-09-09 (윈도우 노트북) 에 잰 값. 랜딩 페이지를 새로 열고, 장치를
       probe 하고, Run 을 눌러 done 줄까지. "페이지 안" 은 페이지 자신의 타이머, "열기→done" 은
       페이지를 연 시점부터의 벽시계. 배포 행은 GitHub Pages 전송이 더해진다.
     </p>
@@ -106,7 +106,10 @@
       <tr><td rowspan="2"><code>nvidia / lovelace</code><br>RTX 4090, 드라이버 550, Ubuntu (Xorg + GNOME), Chrome 143, <strong>모니터 켠 상태</strong></td><td>첫 방문</td><td>1.60 s</td><td>1.8 s</td><td rowspan="2">Apple 과 같다: adapter 14 ms, device 15 ms, 셰이더 22 개 1 ms, 첫 readback 28 ms. <strong>켜진 모니터 앞에서 잰 값</strong> — 같은 기계가 화면이 꺼진 채로는 무엇을 읽었는지는 아래 주석에.</td></tr>
       <tr><td>재방문</td><td>1.51 s</td><td>1.6 s</td></tr>
       <tr><td><code>nvidia / blackwell</code><br>RTX 5080, 드라이버 580, Ubuntu (Xorg + GNOME), Chrome 151</td><td colspan="3">화면을 켠 상태로 다시 잴 것</td><td>이전 행(첫 방문 2.1 s, "1초 단위 3초 핸드셰이크")은 ssh 로 꺼진 모니터 앞에서 잰 것이고, 그것이 잰 것은 모니터였다 — 철회.</td></tr>
-    </table></div>
+      <tr><td rowspan="3"><code>nvidia / blackwell</code><br>RTX 5050 Laptop, 드라이버 581, Windows 11, Chrome (D3D12), <strong>윈도우 그래픽 설정에서 Chrome 을 고성능으로</strong> 둔 상태 — <a href="#windows-laptop">노트북 주석</a> 참조</td><td>첫 방문</td><td>3.32 s</td><td>4.2 s</td><td rowspan="3">어댑터는 200–450 ms, 셰이더 17 개는 1–4 ms 에 답한다. 그 둘을 빼고도 <strong>2.5 s 이상이 설명되지 않은 채</strong> 매 방문마다 남는다 — 캐시가 따뜻해도. 크롬 D3D12 경로의 첫 실행 비용인데, 이 페이지는 아직 그 이름을 모른다. 노트북의 CQ 워커가 페이지를 로컬로 서빙하고 창을 띄워 잰 값.</td></tr>
+  <tr><td>재방문</td><td>2.57 s</td><td>3.3 s</td></tr>
+  <tr><td>워밍업 뒤 클릭</td><td>3.57 s</td><td>4.3 s</td></tr>
+</table></div>
 
     <h3>첫 학습까지 — 학습자의 시계</h3>
     <p>

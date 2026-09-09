@@ -100,7 +100,7 @@
 
     <h3>What the first run costs, per adapter</h3>
     <p>
-      Measured by <code>tests/browser/first_run.py</code> on 2026-09-03: the landing page opened
+      Measured by <code>tests/browser/first_run.py</code> on 2026-09-03 (the first three rows) and 2026-09-09 (the Windows laptop): the landing page opened
       cold, the device probed, Run pressed, until the done line. "In the page" is the page's own
       timer; "open&rarr;done" is the wall clock from opening the page. The deployed row adds
       the transfer from GitHub Pages. Since the first screen became a Python training loop,
@@ -115,7 +115,10 @@
       <tr><td rowspan="2"><code>nvidia / lovelace</code><br>RTX 4090, driver 550, Ubuntu (Xorg + GNOME), Chrome 143, <strong>monitor on</strong></td><td>first</td><td>1.60 s</td><td>1.8 s</td><td rowspan="2">the same as Apple: adapter 14 ms, device 15 ms, 22 shaders 1 ms, the first readback 28 ms. <strong>Measured in front of a lit monitor</strong> &mdash; see the note below for what the same machine read with its screen blanked.</td></tr>
       <tr><td>revisit</td><td>1.51 s</td><td>1.6 s</td></tr>
       <tr><td><code>nvidia / blackwell</code><br>RTX 5080, driver 580, Ubuntu (Xorg + GNOME), Chrome 151</td><td colspan="3">to be measured again with its screen on</td><td>its earlier row here (2.1 s first, "a 3 s handshake in one-second steps") was taken over ssh in front of a blanked monitor, and that is what it measured &mdash; withdrawn.</td></tr>
-    </table></div>
+      <tr><td rowspan="3"><code>nvidia / blackwell</code><br>RTX 5050 Laptop, driver 581, Windows 11, Chrome (D3D12), <strong>Chrome set to High performance</strong> in Windows Graphics settings — see <a href="#windows-laptop">the laptop note</a></td><td>first</td><td>3.32 s</td><td>4.2 s</td><td rowspan="3">the adapter answers in 200–450 ms and the 17 shaders in 1–4 ms; <strong>2.5 s and more is left unexplained</strong> after those, on every visit, warm cache included — a first-run cost of Chrome's D3D12 path this page cannot yet name. Measured by the CQ worker on the laptop, the page served locally, a window open.</td></tr>
+  <tr><td>revisit</td><td>2.57 s</td><td>3.3 s</td></tr>
+  <tr><td>revisit, click after warm-up</td><td>3.57 s</td><td>4.3 s</td></tr>
+</table></div>
 
     <h3>To the first training — the learner's clock</h3>
     <p>
