@@ -875,6 +875,12 @@ export class Device {
   unpin(buffers: Iterable<GPUBuffer>): void {
     for (const buf of buffers) {
       this.owned.delete(buf);
+      // **A kept buffer survives, as it does in `endScope`.** A scalar constant first
+      // created inside the recording (the scalar cache's `keep`) is pinned like the step's
+      // scratch, but it is permanent — pooling and retiring it here made the next use of
+      // that cached value read a dead buffer (the compiled small-CNN's eval forward threw on
+      // an `eps`/one constant). Leave it to the cache that owns it.
+      if (this.kept.has(buf)) continue;
       const size = this.sizes.get(buf);
       if (size === undefined) { buf.destroy(); continue; }
       // **Retire like `endScope` does.** Pooling without bumping the age leaves a tensor

@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>train under torch.compiled, then read the model — the workbench's scratch pass</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **A capture disposed must not take persistent buffers with it.** A compiled training
+  // step is captured on its first call; `dispose()` retires and pools everything the
+  // capture pinned. But a scalar constant first created inside that recording (the scalar
+  // cache's `keep` — an eps, a one) is pinned like the step's scratch while being permanent,
+  // so retiring it left the next use reading a dead buffer: the workbench's "small CNN from
+  // scratch" pass threw the dead-tensor guard on `model(x)` right after training (the 09-10
+  // nightly). This trains a BatchNorm CNN and a scalar parameter under torch.compiled in a
+  // per-step scope, disposes, and then reads the model and the parameter — which must all
+  // still be alive. `unpin` now skips kept buffers, as `endScope` already did.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import numpy as np, js, traceback
+import borch_webgpu as torch
+
+nn = torch.nn
+fails = []
+rng = np.random.default_rng(0)
+
+# ── A BatchNorm CNN trained under torch.compiled, then read in eval ──
+K, N = 3, 32
+X = rng.standard_normal((N, 3, 16, 16)).astype(np.float32)
+y = rng.integers(0, K, N).astype(np.int64)
+def blk(cin, cout):
+    return [nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(), nn.MaxPool2d(2)]
+model = nn.Sequential(*blk(3, 8), *blk(8, 16), nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(16, K))
+crit = nn.CrossEntropyLoss()
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+Xt, yt = torch.tensor(X), torch.tensor(y)
+def train_step(xb, yb):
+    opt.zero_grad(); l = crit(model(xb), yb); l.backward(); opt.step(); return l
+run = torch.compiled(train_step)
+try:
+    for epoch in range(3):
+        for s in range(N // 16):
+            with torch.scope():
+                loss = run(Xt[s * 16:(s + 1) * 16], yt[s * 16:(s + 1) * 16])
+                last = float(loss.item())
+    run.dispose()
+    model.eval()
+    with torch.no_grad():
+        pred = model(Xt).argmax(1).numpy()      # reads params, running stats, scalar constants
+    if pred.shape[0] != N:
+        fails.append("cnn: wrong pred shape " + str(pred.shape))
+except Exception as e:
+    fails.append("cnn threw after training: " + str(e).splitlines()[0][:80])
+
+# ── A size-1 (shared-constant) parameter trained under compile: its ensureOwned buffer and
+# the constants around it must survive dispose too ──
+try:
+    scalar = torch.zeros([1], requires_grad=True)
+    sopt = torch.optim.SGD([scalar], lr=0.1, momentum=0.9)
+    def sstep():
+        sopt.zero_grad(); l = scalar.mul(scalar).add(scalar).sum(); l.backward(); sopt.step(); return l
+    srun = torch.compiled(sstep)
+    for _ in range(3):
+        with torch.scope():
+            srun()
+    srun.dispose()
+    _ = float(scalar.numpy()[0])
+except Exception as e:
+    fails.append("scalar-param threw after training: " + str(e).splitlines()[0][:80])
+
+adapter = str(js.borch.Device.adapterInfo)
+("compiled-train: " + ("all read alive after dispose" if not fails else "FAILS: " + " | ".join(fails))
+ + f" · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

@@ -1,4 +1,4 @@
-"""The thirty-eight browser checks nothing else runs, run once a night in a worktree.
+"""The thirty-nine browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -89,6 +89,9 @@ CHECKS = [
     # A non-leaf saved for backward, then changed in place, must raise (as torch does) rather
     # than compute a silently wrong gradient — and an op that saved nothing must still allow it.
     ("vcount:py",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/vcount_probe.py", "--build"]),
+    # A BatchNorm CNN and a scalar parameter trained under torch.compiled, then read after
+    # dispose — the capture must not retire a kept buffer (the workbench's scratch/segment).
+    ("compiled-train:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/compiled_train_probe.py", "--build"]),
     # The step's clock, three models through the compiler, one timed step each — the
     # numbers land in the log as `@<model>_fused_ms=` lines, a curve when they are kept.
     ("step:unet",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/profile_py.py", "--build", "--model=unet", "--steps=1", "--compiled=fused"]),
