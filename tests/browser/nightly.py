@@ -1,4 +1,4 @@
-"""The thirty-seven browser checks nothing else runs, run once a night in a worktree.
+"""The thirty-eight browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -86,6 +86,9 @@ CHECKS = [
     # The pool filled with a loud sentinel, then a backward that scatters into a full buffer
     # — its gradient must still match numpy, so nothing reads a byte it did not write.
     ("churn:py",   ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/churn_probe.py", "--build"]),
+    # A non-leaf saved for backward, then changed in place, must raise (as torch does) rather
+    # than compute a silently wrong gradient — and an op that saved nothing must still allow it.
+    ("vcount:py",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/vcount_probe.py", "--build"]),
     # The step's clock, three models through the compiler, one timed step each — the
     # numbers land in the log as `@<model>_fused_ms=` lines, a curve when they are kept.
     ("step:unet",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/profile_py.py", "--build", "--model=unet", "--steps=1", "--compiled=fused"]),

@@ -307,7 +307,9 @@ import {
   f32lit,
   hasUnary,
   UNARY,
+  binaryBackwardReads,
   unaryBackward,
+  unaryBackwardReads,
   unaryForward,
   unaryWith,
   unpoolFromIndex,
@@ -803,6 +805,21 @@ function convForwardRun(
   );
 }
 
+/** The values a binary op saves for its backward, gated by which operand needs a gradient.
+ *  `mul`'s da is `y` and db is `x`, so with both sides differentiable both operands are
+ *  saved; with only one side, only the value that side reads. Returns the pair `make` takes
+ *  after `dtype`: the saved inputs, and whether the output is saved. */
+function binarySaved(name: string, a: Tensor, b: Tensor): [readonly Tensor[], boolean] {
+  const r = binaryBackwardReads(name);
+  const readsX = (a.requiresGrad && r.da.x) || (b.requiresGrad && r.db.x);
+  const readsY = (a.requiresGrad && r.da.y) || (b.requiresGrad && r.db.y);
+  const readsO = (a.requiresGrad && r.da.o) || (b.requiresGrad && r.db.o);
+  const saved: Tensor[] = [];
+  if (readsX) saved.push(a);
+  if (readsY) saved.push(b);
+  return [saved, readsO];
+}
+
 export class Tensor implements Node<Tensor> {
   /**
    * **Not `readonly`** — one place, `mutate`, edits it.
@@ -869,6 +886,20 @@ export class Tensor implements Node<Tensor> {
   parents: readonly Tensor[];
   backwardFn: ((grad: Tensor) => readonly (Tensor | null)[]) | null;
   gradName: string;
+  /**
+   * **How many times the values here have been overwritten in place.** It rises on every
+   * `mutate` (`add_`, `copy_`, `zero_`, `transpose_`, …). torch keeps the same counter for
+   * the same reason: an operation that saved this tensor's values for its backward records
+   * the number it saw, and if the number has moved by the time backward runs, the saved
+   * values are gone and the gradient would be silently wrong. See `checkSaved`.
+   */
+  version = 0;
+  /** The tensors whose values this node's backward reads, and the version each was at when
+   *  the node was made. Set only for ops that actually read a value (elementwise ops that
+   *  need an input or the output); undefined otherwise, so an op that saves nothing — `add`,
+   *  `reshape` — never refuses an in-place edit downstream of it. */
+  private savedTensors?: readonly Tensor[];
+  private savedVersions?: readonly number[];
 
   constructor(
     storage: GPUBuffer | Float32Array,
@@ -900,6 +931,30 @@ export class Tensor implements Node<Tensor> {
     this.requiresGrad = options.requiresGrad ?? inherited;
     this.backwardFn =
       this.requiresGrad && options.backwardFn ? options.backwardFn : null;
+  }
+
+  /**
+   * **The version guard, called by the tape just before this node's backward.** For each
+   * value the forward saved, the version it was at then is compared with the version it is
+   * at now; a mismatch means an in-place operation has overwritten a value the backward is
+   * about to read, and the gradient would be wrong with nothing to say so. torch raises the
+   * same, and points at the same cause.
+   */
+  checkSaved(): void {
+    const saved = this.savedTensors, versions = this.savedVersions;
+    if (!saved || !versions) return;
+    for (let i = 0; i < saved.length; i++) {
+      const t = saved[i];
+      if (t && t.version !== versions[i]) {
+        const which = t === this ? "the output" : "an input";
+        throw new RuntimeError(
+          `one of the variables needed for gradient computation has been modified by an ` +
+            `in-place operation: ${which} of ${this.gradName || "an operation"} was at ` +
+            `version ${versions[i]}, and is now at version ${t.version}. The saved value it ` +
+            `read is gone, so the gradient would be wrong.`,
+        );
+      }
+    }
   }
 
   /**
@@ -1023,11 +1078,23 @@ export class Tensor implements Node<Tensor> {
     backwardFn: (grad: Tensor) => readonly (Tensor | null)[],
     gradName: string,
     dtype: DType = "float32",
+    saved?: readonly Tensor[],
+    savesOutput = false,
   ): Tensor {
     if (!gradMode.enabled || !parents.some((p) => p.requiresGrad)) {
       return new Tensor(buffer, shape, { requiresGrad: false, dtype });
     }
-    return new Tensor(buffer, shape, { parents, backwardFn, gradName, dtype });
+    const result = new Tensor(buffer, shape, { parents, backwardFn, gradName, dtype });
+    // **Record what the backward will read, and the version it is at now.** Only the values
+    // the op actually reads are saved, so an op that reads none refuses no later in-place
+    // edit. The output, when it is what the backward reads, is saved as itself.
+    if ((saved && saved.length) || savesOutput) {
+      const list = saved ? [...saved] : [];
+      if (savesOutput) list.push(result);
+      result.savedTensors = list;
+      result.savedVersions = list.map((t) => t.version);
+    }
+    return result;
   }
 
   /**
@@ -1724,6 +1791,11 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, this.shape)];
       },
       `${name[0]?.toUpperCase()}${name.slice(1)}Backward0`,
+      "float32",
+      // The backward reads the input, the output, both, or neither — save exactly those, so
+      // an in-place edit of a value it will read is caught and one it ignores is not.
+      unaryBackwardReads(name).input ? [this] : [],
+      unaryBackwardReads(name).output,
     );
     return result;
   }
@@ -1803,6 +1875,7 @@ export class Tensor implements Node<Tensor> {
       },
       `${name[0]?.toUpperCase()}${name.slice(1)}Backward0`,
       outType,
+      ...binarySaved(name, this, other),
     );
     return result;
   }
@@ -8305,6 +8378,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       || result.shape.some((n, i) => n !== this.shape[i])) {
       this.shape = [...result.shape];
     }
+    // **The values (or the frame) have changed in place.** Anything that saved this tensor
+    // for its backward saw an earlier version; the bump is what lets `checkSaved` notice.
+    this.version += 1;
     return this;
   }
 

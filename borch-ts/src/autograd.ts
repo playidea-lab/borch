@@ -44,6 +44,13 @@ export interface Node<T> {
    */
   readonly backwardFn: ((grad: T) => readonly (T | null)[]) | null;
   /**
+   * Called just before `backwardFn`, if present. Throws when a value this node saved for
+   * its backward has since been changed by an in-place operation — the version guard.
+   * Left off the graph data structure's own concern (it holds no tensors), it is the one
+   * place the tape reaches back into the tensor to ask.
+   */
+  checkSaved?(): void;
+  /**
    * torch's `grad_fn` name. Error messages and the golden `repr::` cases
    * use it.
    */
@@ -194,6 +201,7 @@ export function flow<T>(
     if (!node.backwardFn || node.parents.length === 0) continue;
     if (node.freed && options.onSecondPass) options.onSecondPass();
     if (!options.retainGraph) node.freed = true;
+    node.checkSaved?.();
     const parts = node.backwardFn(g);
     if (parts.length !== node.parents.length) {
       // It stops rather than being quietly wrong. A derivative that omits one parent has

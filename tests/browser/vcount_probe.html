@@ -1,0 +1,139 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>in-place mutation of a saved value — backward must refuse, not go quietly wrong</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **A non-leaf saved for backward, then changed in place, is the gap this closes.** A
+  // leaf that requires grad already refuses an in-place edit; a non-leaf did not, so
+  // `y = x.tanh()` then `y.mul_(0)` left backward reading zeros where it needed tanh(x), and
+  // the gradient came out wrong with nothing said. Each op's backward reads a known set of
+  // values — its derivative names them (`tanh`'s is `1 - o*o`, `mul`'s is the other operand)
+  // — and those are versioned: mutate one after it was saved and backward raises, as torch
+  // does. The other half of the test matters as much: an op that saves nothing (`add`,
+  // `sub`, `reshape`) must still allow the edit, or real in-place training breaks.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import numpy as np, js
+import borch_webgpu as torch
+
+xv = np.array([0.3, -0.7, 1.2, 0.1], np.float32)
+av = np.array([2., 3., 4., 5.], np.float32)
+fails = []
+
+def raised(fn):
+    try:
+        fn(); return None
+    except Exception as e:
+        return str(e)
+
+# ── Must RAISE: a value the backward reads is mutated after it was saved ──
+# non_leaf(x) makes a non-leaf that carries a gradient (x is a leaf; x*1 is not), so the
+# in-place edit is not stopped by the leaf guard and the version guard is what must catch it.
+def non_leaf(v):
+    return torch.tensor(v, requires_grad=True).mul(torch.tensor(np.ones_like(v)))
+
+def m_out(op):        # output-saved unary: mutate the output
+    def go():
+        x = torch.tensor(xv, requires_grad=True)
+        y = getattr(x, op)()
+        s = y.sum()
+        y.mul_(0.0)
+        s.backward()
+    return go
+
+def m_in_mul():       # input-saved binary: mutate the other operand
+    def go():
+        a = torch.tensor(av); x = torch.tensor(xv, requires_grad=True)
+        s = a.mul(x).sum()
+        a.mul_(0.0)
+        s.backward()
+    return go
+
+def m_in_div():
+    def go():
+        a = torch.tensor(av); x = torch.tensor(xv, requires_grad=True)
+        s = x.div(a).sum()
+        a.mul_(0.0)
+        s.backward()
+    return go
+
+MUST_RAISE = [("tanh-out", m_out("tanh")), ("sigmoid-out", m_out("sigmoid")),
+              ("exp-out", m_out("exp")), ("mul-in", m_in_mul()), ("div-in", m_in_div())]
+for name, fn in MUST_RAISE:
+    with torch.scope():
+        if raised(fn) is None:
+            fails.append(name + " did NOT raise (silent wrong grad)")
+
+# ── Must ALLOW: the op saves nothing the edit touches; the gradient stays right ──
+def a_add():          # add's backward is the gradient itself — the result is not saved
+    x = torch.tensor(xv, requires_grad=True)
+    z = x.add(torch.tensor(np.ones_like(xv)))
+    s = z.sum()
+    z.mul_(0.0)       # legal: nothing read this
+    s.backward()
+    return x.grad.numpy(), np.ones_like(xv)
+
+def a_relu_after():   # mutate AFTER backward — always legal
+    x = torch.tensor(xv, requires_grad=True)
+    y = x.relu(); s = y.sum(); s.backward()
+    g = x.grad.numpy()
+    y.mul_(0.0)       # after backward, no longer needed
+    return g, (xv > 0).astype(np.float32)
+
+def a_reshape():      # reshape saves nothing; mutating the view is torch-legal
+    x = torch.tensor(xv, requires_grad=True)
+    z = x.mul(torch.tensor(np.full_like(xv, 2.0)))   # grad path
+    v = z.reshape([2, 2])
+    s = z.sum()
+    v.add_(1.0)       # touches z's buffer, but add/reshape saved nothing of it
+    s.backward()
+    return x.grad.numpy(), np.full_like(xv, 2.0)
+
+MUST_ALLOW = [("add", a_add), ("relu-after-bwd", a_relu_after), ("reshape", a_reshape)]
+for name, fn in MUST_ALLOW:
+    with torch.scope():
+        try:
+            g, ref = fn()
+        except Exception as e:
+            fails.append(name + " wrongly RAISED: " + str(e)[:50]); continue
+        if not np.allclose(g, ref, atol=1e-5):
+            fails.append(name + " allowed but grad wrong " + str(np.round(g, 3).tolist()))
+
+adapter = str(js.borch.Device.adapterInfo)
+n = len(MUST_RAISE) + len(MUST_ALLOW)
+("vcount: " + str(n - len(fails)) + "/" + str(n) + " ok"
+ + (" · FAILS: " + " | ".join(fails) if fails else " · raises on saved edits, allows the rest")
+ + f" · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

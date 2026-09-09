@@ -1043,6 +1043,46 @@ function unarySpec(name: string): UnarySpec {
   return op;
 }
 
+/** Whether an identifier appears as a whole word in a WGSL derivative expression. The
+ *  derivative strings name their operands `x` (the input), `y` (a binary's other input)
+ *  and `o` (the output) — `\\b` keeps `x` from matching inside `exp` or `max`. */
+function usesIdent(expr: string, ident: string): boolean {
+  return new RegExp(`\\b${ident}\\b`).test(expr);
+}
+
+const UNARY_READS = new Map<string, { input: boolean; output: boolean }>();
+/** Which values a unary's backward reads, read off its derivative: `exp`'s is `o` (the
+ *  output alone), `log`'s is `1.0 / x` (the input alone), `rsqrt`'s uses both. This is what
+ *  says whether mutating that input or output in place before backward corrupts the
+ *  gradient — the version guard saves exactly these and no more, so an op that reads
+ *  neither (`neg`, `sign`) never falsely refuses an in-place edit. */
+export function unaryBackwardReads(name: string): { input: boolean; output: boolean } {
+  let r = UNARY_READS.get(name);
+  if (!r) {
+    const bwd = unarySpec(name).bwd;
+    r = { input: usesIdent(bwd, "x"), output: usesIdent(bwd, "o") };
+    UNARY_READS.set(name, r);
+  }
+  return r;
+}
+
+const BINARY_READS = new Map<string, { da: { x: boolean; y: boolean; o: boolean }; db: { x: boolean; y: boolean; o: boolean } }>();
+/** Which values each side of a binary's backward reads. `mul`'s da is `y` and db is `x`, so
+ *  each operand is needed for the other's gradient; `add`'s are both `1.0`, so neither is
+ *  needed and an in-place edit of either operand or the result is safe. Reported per side so
+ *  the caller can drop a side whose operand does not require grad. */
+export function binaryBackwardReads(name: string): { da: { x: boolean; y: boolean; o: boolean }; db: { x: boolean; y: boolean; o: boolean } } {
+  let r = BINARY_READS.get(name);
+  if (!r) {
+    const op = BINARY[name];
+    if (!op) throw new Error(`unknown binary op: ${name}`);
+    const of = (e: string) => ({ x: usesIdent(e, "x"), y: usesIdent(e, "y"), o: usesIdent(e, "o") });
+    r = { da: of(op.da), db: of(op.db) };
+    BINARY_READS.set(name, r);
+  }
+  return r;
+}
+
 /** An elementwise unary forward. The element count is baked in as a constant — the
  *  bounds check folds away. */
 /**
