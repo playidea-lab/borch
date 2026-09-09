@@ -1,0 +1,149 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>every op class through the compiler, checked against eager</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The gap the arena bug fell through: the op surface never ran under the compiler.**
+  // check=True only ran on a handful of hand-built models, so an op correct eager but
+  // wrong under capture/fuse was invisible unless it happened to appear in one of them.
+  // This runs one representative model per op class through torch.compiled(step,
+  // check=True) — which holds the replay to the eager step buffer by buffer, plain bit
+  // for bit and fused within tol — under both SGD-with-momentum (the arena path) and
+  // Adam (a device step counter driving bias correction), and also diffs the compiled
+  // loss curve against a fresh eager one. A class that miscompiles fails here, named.
+  //
+  // The step's shape mirrors the passing GPT case in capture_py: the input is an
+  // argument (copied into the capture), the leaves are closed over (live-ins), and the
+  // step returns the loss tensor with .item() taken outside — a readback mid-capture is
+  // not part of the step, so it does not belong inside the recorded function.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import numpy as np, js
+import borch_webgpu as torch
+
+fails = []
+
+def opt_for(which, params):
+    return torch.optim.SGD(params, lr=0.05, momentum=0.9) if which == "SGD" else torch.optim.Adam(params, lr=0.01)
+
+# Each builder is seeded by name so the compiled build and the eager build see the same
+# leaves and the same two input draws — the loss curves are comparable number for number.
+# It returns (step, [x1, x2]); step(x) -> scalar loss; the optimiser is closed over.
+def build(name, which):
+    seed = abs(hash(name)) % (2 ** 31)
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)    # so a module's own random init (conv's kaiming) is the same both builds
+    def t(shape, grad=False):
+        return torch.tensor(rng.standard_normal(shape).astype(np.float32), requires_grad=grad)
+
+    if name == "elementwise":
+        w = t([8, 16], True); opt = opt_for(which, [w])
+        def step(x):
+            opt.zero_grad(); l = x.mul(w).relu().tanh().sum(); l.backward(); opt.step(); return l
+        xs = [t([8, 16]), t([8, 16])]
+    elif name == "matmul":
+        w = t([16, 12], True); b = t([12], True); opt = opt_for(which, [w, b])
+        def step(x):
+            opt.zero_grad(); l = x.matmul(w).add(b).relu().sum(); l.backward(); opt.step(); return l
+        xs = [t([8, 16]), t([8, 16])]
+    elif name == "reductions":
+        p = t([8, 16], True); opt = opt_for(which, [p])
+        def step(x):
+            z = x.mul(p); opt.zero_grad(); l = z.sum().add(z.mean()).add(z.amax(1).sum()); l.backward(); opt.step(); return l
+        xs = [t([8, 16]), t([8, 16])]
+    elif name == "softmax":
+        p = t([8, 16], True); opt = opt_for(which, [p])
+        def step(x):
+            opt.zero_grad(); l = x.softmax(-1).mul(p).sum(); l.backward(); opt.step(); return l
+        xs = [t([8, 16]), t([8, 16])]
+    elif name == "layernorm":
+        ln = torch.nn.LayerNorm(16); opt = opt_for(which, list(ln.parameters()))
+        def step(x):
+            opt.zero_grad(); l = ln(x).sum(); l.backward(); opt.step(); return l
+        xs = [t([8, 16]), t([8, 16])]
+    elif name == "conv":
+        conv = torch.nn.Conv2d(3, 4, 3, padding=1); opt = opt_for(which, list(conv.parameters()))
+        def step(x):
+            opt.zero_grad(); l = conv(x).relu().sum(); l.backward(); opt.step(); return l
+        xs = [t([2, 3, 8, 8]), t([2, 3, 8, 8])]
+    elif name == "shape":     # narrow / reshape / select / transpose into a matmul — the aliasing shapes
+        w = t([8, 5], True); opt = opt_for(which, [w])
+        def step(x):
+            a = x.narrow(0, 1, 4).reshape([2, 2 * 4, 8]).select(0, 0)   # [8, 8]
+            opt.zero_grad(); l = a.matmul(w).transpose(0, 1).sum(); l.backward(); opt.step(); return l
+        xs = [t([6, 4, 8]), t([6, 4, 8])]
+    elif name == "cat":
+        w = t([16, 5], True); opt = opt_for(which, [w])
+        def step(x):
+            c = torch.cat([x.narrow(1, 0, 8), x.narrow(1, 8, 8)], 1)    # [4, 16]
+            opt.zero_grad(); l = c.matmul(w).sum(); l.backward(); opt.step(); return l
+        xs = [t([4, 16]), t([4, 16])]
+    return step, xs
+
+CASES = ["elementwise", "matmul", "reductions", "softmax", "layernorm", "conv", "shape", "cat"]
+
+for name in CASES:
+    for which in ("SGD", "Adam"):
+        # compiled plain: check=True holds the replay to the eager step, bit for bit.
+        try:
+            step_c, xs = build(name, which)
+            fn = torch.compiled(step_c, check=True, fuse=False)
+            with torch.scope():
+                lc = [float(fn(x).item()) for x in xs]
+        except Exception as e:
+            fails.append(name + "/" + which + " plain: " + str(e)[:150]); continue
+        # a fresh eager build with the same seed -> the same curve, number for number.
+        step_e, xe = build(name, which)
+        with torch.scope():
+            le = [float(step_e(x).item()) for x in xe]
+        d = max(abs(a - b) / (abs(b) + 1e-6) for a, b in zip(lc, le))
+        if d > 1e-4:
+            fails.append(f"{name}/{which} eager-vs-compiled {d:.1e}"); continue
+        # compiled fused: check=True again, within tolerance on outputs and state.
+        try:
+            step_f, xf = build(name, which)
+            ff = torch.compiled(step_f, check=True, fuse=True)
+            with torch.scope():
+                [ff(x) for x in xf]
+            ff.dispose()
+        except Exception as e:
+            fails.append(name + "/" + which + " fused: " + str(e)[:70])
+
+adapter = str(js.borch.Device.adapterInfo)
+n = len(CASES) * 2
+("compiled: " + str(n - len(fails)) + "/" + str(n) + " ok"
+ + (" · FAILS: " + " | ".join(fails) if fails else "")
+ + f" · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

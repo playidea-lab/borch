@@ -811,6 +811,17 @@ export class Device {
    *  a closed scope" the moment the caller's scope closed). */
   private readonly owned = new Set<GPUBuffer>();
 
+  /** **The single-parameter-group optimizer arena, held off.** A captured step takes the
+   *  per-parameter path (its momentum lives in the optimizer's own buffers); the arena
+   *  keeps momentum in a separate slab it fills lazily. `torch.compiled(check=True)`
+   *  reruns the step eagerly to compare against the replay — and that rerun, not being
+   *  captured, would otherwise take the arena and leave the per-parameter momentum buffer
+   *  the replay wrote untouched, so the two disagree on a buffer that in fact holds the
+   *  same values in different places (measured: single-group `SGD(momentum=…)` raised a
+   *  spurious "the replay is not the eager step"). The verify rerun sets this so it takes
+   *  the same per-parameter path the recording did. */
+  suppressArena = false;
+
   beginCapture(): void {
     if (this.recording) throw new Error("a capture is already open");
     this.recording = [];

@@ -1031,9 +1031,19 @@ class compiled:
         for b, a in zip(live, before):
             dev.writeWords(b, _to_js(_np.frombuffer(a.tobytes(), dtype=_np.uint32)))
         eager_state, eager = None, None
-        with scope():
-            eager_outs = tensors_of(self._fn(*inputs))
-            eager_state, eager = snapshot(), [o.numpy().copy() for o in eager_outs]
+        # **The rerun takes the path the recording did.** A captured step used the
+        # optimizer's per-parameter path; the single-group arena, which this uncaptured
+        # rerun would otherwise take, keeps its momentum elsewhere and would read as a
+        # spurious difference on a buffer that holds the same values (measured on
+        # single-group SGD with momentum). Holding the arena off makes the comparison
+        # like for like.
+        dev.suppressArena = True
+        try:
+            with scope():
+                eager_outs = tensors_of(self._fn(*inputs))
+                eager_state, eager = snapshot(), [o.numpy().copy() for o in eager_outs]
+        finally:
+            dev.suppressArena = False
         # **The call stays one step.** The state goes back to where the recording left
         # it — the replay and the eager rerun were the check's, not the caller's.
         dev.flush()

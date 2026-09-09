@@ -657,7 +657,7 @@ export class SGD extends Optimizer {
     // recorded and re-run on every replay, resetting the arena's state (the compiled
     // step then diverged — caught by aliasing_probe). A captured step takes the
     // per-parameter path, which records and replays like any other dispatch.
-    if (this.paramGroups.length === 1 && !device().capturing) {
+    if (this.paramGroups.length === 1 && !device().capturing && !device().suppressArena) {
       this.arenaStep();
     } else {
       super.step();
