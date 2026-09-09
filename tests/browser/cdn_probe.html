@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>borch from a CDN — no install, no build step</title>
+<pre id="out">opening…</pre>
+<script type="module">
+// The page a stranger writes: one file, opened from disk, no npm and no bundler. The
+// import specifier is handed in as `?from=` so the runner decides which CDN and which
+// version is under test; the shape of the page is the documented shape.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += s + "\n"; };
+const from = new URL(location.href).searchParams.get("from");
+window.__done = null;
+try {
+  const t0 = performance.now();
+  const borch = await import(from);
+  const imported = performance.now() - t0;
+  log(`imported ${Object.keys(borch).length} names in ${imported.toFixed(0)} ms`);
+
+  await borch.init();                                  // refuses a software adapter
+  log(`adapter: ${borch.Device.adapterInfo}`);
+
+  const x = borch.Tensor.from([1, 2, 3], [3]);
+  const sum = (await x.mul(x).sum().toArray())[0];
+  log(`x*x sum = ${sum}`);
+
+  // **A training loop, not a tensor.** An import that resolves proves the file is
+  // there; a loss that falls proves the kernels, the autograd and the optimiser came
+  // with it. `y = 3x + 1` from four points is the smallest thing that needs all three.
+  const model = new borch.nn.Linear(1, 1);
+  const opt = new borch.optim.SGD(model.parameters(), 0.1);
+  const crit = new borch.nn.MSELoss();
+  const xs = borch.keepAlive(borch.Tensor.from([0, 1, 2, 3], [4, 1]));
+  const ys = borch.keepAlive(borch.Tensor.from([1, 4, 7, 10], [4, 1]));
+  let loss = 0;
+  for (let step = 0; step < 60; step++) {
+    using s = borch.scope();
+    opt.zeroGrad();
+    const l = crit.call(model.call(xs), ys);
+    l.backward();
+    opt.step();
+    if (step === 59) loss = await l.item();
+  }
+  log(`trained 60 steps · final loss ${loss.toFixed(4)}`);
+  window.__done = {
+    ok: true, adapter: borch.Device.adapterInfo, names: Object.keys(borch).length,
+    imported_ms: Math.round(imported), sum, loss,
+  };
+} catch (e) {
+  log("FAILED: " + e.message);
+  window.__done = { ok: false, error: String(e && e.message || e) };
+}
+</script>

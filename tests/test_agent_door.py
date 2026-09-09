@@ -162,3 +162,16 @@ def test_the_support_check_snippet_in_agents_md_reads_the_index_and_names_the_ab
         assert re.search(rf"^{name}\s+\S", out, re.M) and "not in borch" not in re.search(rf"^{name}.*$", out, re.M).group(0), f"{name} should resolve"
     for name in ("autocast", "compile"):
         assert re.search(rf"^{name}\s+— not in borch", out, re.M), f"{name} is absent by design and must say so"
+
+
+def test_the_documented_cdn_url_is_the_published_line_of_this_package():
+    """The documents hand a reader a CDN URL. It carries a version range, and a range that
+    no longer covers this package sends them to the previous minor without saying so."""
+    version = json.loads((ROOT / "package.json").read_text())["version"]
+    major_minor = ".".join(version.split(".")[:2])
+    want = f"borch-ts@{major_minor}/+esm"
+    for doc in ("README.md", "AGENTS.md", "skills/borch/SKILL.md"):
+        text = (ROOT / doc).read_text(encoding="utf-8")
+        assert want in text, f"{doc} does not offer {want} — borch-ts is {version} now"
+    assert "cdn:py" in json.loads((ROOT / "package.json").read_text())["scripts"], (
+        "the CDN entry point is documented and nothing runs it")

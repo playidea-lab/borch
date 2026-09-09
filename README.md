@@ -54,6 +54,22 @@ print(x.grad)           # tensor([2., 4., 6.])
 npm install borch-ts
 ```
 
+**Or a page with no build step.** One file, opened from disk — no npm, no bundler, no
+server. The published package is on the CDNs as an ES module.
+
+```html
+<script type="module">
+  import { init, Tensor } from "https://cdn.jsdelivr.net/npm/borch-ts@0.3/+esm";
+  await init();
+  const x = Tensor.from([1, 2, 3], [3]);
+  console.log(await x.mul(x).sum().toArray());   // Float32Array [14]
+</script>
+```
+
+Checked nightly against the published package (`npm run cdn:py`), training loop included —
+what breaks this is a refactor, and every other check here reads the tree rather than the
+tarball.
+
 ```ts
 import { init, Tensor } from "borch-ts";
 

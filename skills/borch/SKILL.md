@@ -18,6 +18,7 @@ https://playidea-lab.github.io/borch/site/assets/api-index.json. This skill is t
 | Pyodide / JupyterLite / marimo, WebGPU in the tab | `borch_webgpu` (same wheel) | `%pip install pyborch` | `import borch_webgpu as torch` |
 | Pyodide without WebGPU | `borch` (same wheel) | `%pip install pyborch` | `import borch as torch` |
 | a web page, TypeScript/JavaScript | `borch-ts` | `npm install borch-ts` | `await init()` first |
+| a page with **no build step** | `borch-ts` from a CDN | nothing to install | `import { init, Tensor } from "https://cdn.jsdelivr.net/npm/borch-ts@0.3/+esm"` |
 
 Never `%pip install torch` in Pyodide — real PyTorch has no Pyodide build, and a
 `try: import torch` fallback never succeeds there.
