@@ -12864,8 +12864,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (this.gpu === null) return this;
     // **It is `floats`.** Complex holds two per cell, so reading by `size` truncates
     // the second half — and the shape and dtype come out attached unchanged, so the
-    // truncation is invisible.
-    return new Tensor(await dev().read(this.gpu, this.floats), this.shape, {
+    // truncation is invisible. **Read through `raw`, not `gpu`** — `raw` runs the
+    // dead-tensor guard (`toArray` already does), so a tensor whose buffer went back to
+    // the pool stops here instead of handing back whatever now occupies it.
+    return new Tensor(await dev().read(this.raw, this.floats), this.shape, {
       dtype: this.dtype,
     });
   }
