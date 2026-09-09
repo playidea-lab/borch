@@ -2124,6 +2124,13 @@ export class Tensor implements Node<Tensor> {
         dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
       }
     }
+    // **The backward reads the other operand's values, not the output.** `dA = G·Bᵀ`
+    // reads `mat2`, `dB = Aᵀ·G` reads `this` — so each is saved only when the side that
+    // reads it wants a gradient. Mutating a matmul input in place before backward would
+    // otherwise give a silently wrong gradient (see `checkSaved`).
+    const saved: Tensor[] = [];
+    if (mat2.requiresGrad) saved.push(this);
+    if (this.requiresGrad) saved.push(mat2);
     return Tensor.make(
       out,
       [M, N],
@@ -2135,6 +2142,8 @@ export class Tensor implements Node<Tensor> {
           ? (transB ? g.mmFlags(this, true, transA) : this.mmFlags(g, !transA, false)) : null,
       ],
       "MmBackward0",
+      "float32",
+      saved,
     );
   }
 
@@ -5744,6 +5753,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const outShape = [batch, M, N];
     const foldBack = (g: Tensor, wasBroadcast: boolean, shape: readonly number[]): Tensor =>
       wasBroadcast ? g.sumDim(0, false).reshape(shape) : g;
+    // As in `mmFlags`: `a`'s gradient reads `b`, `b`'s reads `a`, the output is not read —
+    // save each only for the side that reads it, so the version guard catches an in-place
+    // edit of a batched-matmul input without refusing one it never touches.
+    const saved: Tensor[] = [];
+    if (b.requiresGrad) saved.push(a);
+    if (a.requiresGrad) saved.push(b);
     return Tensor.make(out, outShape, [a, b], (g) => [
       a.requiresGrad
         ? foldBack(transA ? batchedMatmul(b, g, transB, true) : batchedMatmul(g, b, false, !transB), broadcastA, a.shape)
@@ -5751,7 +5766,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       b.requiresGrad
         ? foldBack(transB ? batchedMatmul(g, a, true, transA) : batchedMatmul(a, g, !transA, false), broadcastB, b.shape)
         : null,
-    ], "BmmBackward0");
+    ], "BmmBackward0", "float32", saved);
   }
 
 

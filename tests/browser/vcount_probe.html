@@ -72,8 +72,28 @@ def m_in_div():
         s.backward()
     return go
 
+def m_in_mm():        # matmul saves the operands: mutating one corrupts the other's grad
+    def go():
+        w = torch.tensor(rng_mm.standard_normal((4, 3)).astype(np.float32))
+        x = torch.tensor(rng_mm.standard_normal((2, 4)).astype(np.float32), requires_grad=True)
+        s = x.mm(w).sum()
+        w.mul_(0.0)
+        s.backward()
+    return go
+
+def m_in_bmm():
+    def go():
+        w = torch.tensor(rng_mm.standard_normal((2, 4, 3)).astype(np.float32))
+        x = torch.tensor(rng_mm.standard_normal((2, 2, 4)).astype(np.float32), requires_grad=True)
+        s = x.bmm(w).sum()
+        w.mul_(0.0)
+        s.backward()
+    return go
+
+rng_mm = np.random.default_rng(11)
 MUST_RAISE = [("tanh-out", m_out("tanh")), ("sigmoid-out", m_out("sigmoid")),
-              ("exp-out", m_out("exp")), ("mul-in", m_in_mul()), ("div-in", m_in_div())]
+              ("exp-out", m_out("exp")), ("mul-in", m_in_mul()), ("div-in", m_in_div()),
+              ("mm-in", m_in_mm()), ("bmm-in", m_in_bmm())]
 for name, fn in MUST_RAISE:
     with torch.scope():
         if raised(fn) is None:
@@ -104,7 +124,19 @@ def a_reshape():      # reshape saves nothing; mutating the view is torch-legal
     s.backward()
     return x.grad.numpy(), np.full_like(xv, 2.0)
 
-MUST_ALLOW = [("add", a_add), ("relu-after-bwd", a_relu_after), ("reshape", a_reshape)]
+def a_mm_out():       # matmul does not save its output — mutating it is legal, grad stands
+    w = torch.tensor(np.full((4, 3), 2.0, np.float32))
+    xm = rng_mm.standard_normal((2, 4)).astype(np.float32)
+    x = torch.tensor(xm, requires_grad=True)
+    z = x.mm(w)
+    s = z.sum()
+    z.mul_(0.0)       # legal: mm reads the operands, never the output
+    s.backward()
+    # grad_x = ones(2,3) @ wᵀ = row sums of w, broadcast to each of the 2 rows
+    return x.grad.numpy(), np.tile(np.full((4, 3), 2.0, np.float32).sum(1), (2, 1))
+
+MUST_ALLOW = [("add", a_add), ("relu-after-bwd", a_relu_after), ("reshape", a_reshape),
+              ("mm-out", a_mm_out)]
 for name, fn in MUST_ALLOW:
     with torch.scope():
         try:
