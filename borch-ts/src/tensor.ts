@@ -3196,20 +3196,21 @@ export class Tensor implements Node<Tensor> {
         { size: rows, stride: rowStride, kind: "rev", wrap: rows },
         { size: cols, stride: colStride, kind: "rev", wrap: cols },
       ];
-      return this.stridedView(rules, 0, [rows, cols], "Rot90Backward0");
+      // The adjoint of a rotation is the opposite rotation — a fold, not the walk.
+      return this.stridedView(rules, 0, [rows, cols], "Rot90Backward0", (g) => g.rot90(4 - turns, dims));
     }
     if (turns === 1) {
       const rules: AxisRule[] = [
         { size: cols, stride: colStride, kind: "rev", wrap: cols },
         { size: rows, stride: rowStride, kind: "lin", wrap: rows },
       ];
-      return this.stridedView(rules, 0, [cols, rows], "Rot90Backward0");
+      return this.stridedView(rules, 0, [cols, rows], "Rot90Backward0", (g) => g.rot90(4 - turns, dims));
     }
     const rules: AxisRule[] = [
       { size: cols, stride: colStride, kind: "lin", wrap: cols },
       { size: rows, stride: rowStride, kind: "rev", wrap: rows },
     ];
-    return this.stridedView(rules, 0, [cols, rows], "Rot90Backward0");
+    return this.stridedView(rules, 0, [cols, rows], "Rot90Backward0", (g) => g.rot90(4 - turns, dims));
   }
 
   /**
@@ -3432,7 +3433,8 @@ export class Tensor implements Node<Tensor> {
       wrap: s,
       ...(d === axis ? { bias } : {}),
     }));
-    return this.stridedView(rules, 0, this.shape, "RollBackward0");
+    // The adjoint of a roll is the opposite roll — O(output), not the walking O(n²).
+    return this.stridedView(rules, 0, this.shape, "RollBackward0", (g) => g.roll(-shifts, dims));
   }
 
   /**
@@ -3853,7 +3855,13 @@ export class Tensor implements Node<Tensor> {
       wrap: d === axis ? repeats : size,
     }));
     const outShape = this.shape.map((s, d) => (d === axis ? s * repeats : s));
-    return this.stridedView(rules, 0, outShape, "RepeatInterleaveBackward0");
+    const inShape = this.shape;
+    // The adjoint sums each run of `repeats` back to one — reshape the axis to
+    // [size, repeats] and sum that inner axis. O(output), not the walking O(n²).
+    const split: number[] = [];
+    for (const [d, sz] of inShape.entries()) { if (d === axis) split.push(sz, repeats); else split.push(sz); }
+    const fold = (g: Tensor): Tensor => g.reshape(split).sumDim(axis + 1, false).reshape(inShape);
+    return this.stridedView(rules, 0, outShape, "RepeatInterleaveBackward0", fold);
   }
 
   /**
