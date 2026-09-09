@@ -90,10 +90,30 @@ def m_in_bmm():
         s.backward()
     return go
 
+def m_softmax_out():  # softmax's backward reads its output probabilities
+    def go():
+        x = torch.tensor(xv, requires_grad=True)
+        z = x.softmax(-1)
+        s = z.sum()
+        z.mul_(0.0)
+        s.backward()
+    return go
+
+def m_layernorm_in():  # layer_norm's backward reads the input; use a non-leaf so the leaf
+    def go():           # guard is not what stops it — the version guard must
+        x = torch.tensor(np.arange(8).astype(np.float32).reshape(2, 4), requires_grad=True) \\
+            .mul(torch.tensor(np.ones((2, 4), np.float32)))    # a non-leaf input
+        y = torch.nn.functional.layer_norm(x, (4,))
+        s = y.sum()
+        x.mul_(0.0)
+        s.backward()
+    return go
+
 rng_mm = np.random.default_rng(11)
 MUST_RAISE = [("tanh-out", m_out("tanh")), ("sigmoid-out", m_out("sigmoid")),
               ("exp-out", m_out("exp")), ("mul-in", m_in_mul()), ("div-in", m_in_div()),
-              ("mm-in", m_in_mm()), ("bmm-in", m_in_bmm())]
+              ("mm-in", m_in_mm()), ("bmm-in", m_in_bmm()),
+              ("softmax-out", m_softmax_out()), ("layernorm-in", m_layernorm_in())]
 for name, fn in MUST_RAISE:
     with torch.scope():
         if raised(fn) is None:

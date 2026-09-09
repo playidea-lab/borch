@@ -4220,7 +4220,10 @@ export class Tensor implements Node<Tensor> {
                        () => sg ? softmaxRowsBackwardSubgroup(C, log) : softmaxRowsBackward(rows, C, log)),
         [result.buffer, g.buffer, gi], [rows, 1, 1]);
       return [new Tensor(gi, shape)];
-    }, log ? "LogSoftmaxBackward0" : "SoftmaxBackward0");
+      // The backward reads the softmax output (`result`), not the input — save the output,
+      // so mutating the softmax result in place before backward raises rather than feeding
+      // the backward corrupted probabilities.
+    }, log ? "LogSoftmaxBackward0" : "SoftmaxBackward0", "float32", undefined, true);
     return result;
   }
 
@@ -5261,6 +5264,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       dev().pipeline(`ln:${C}:${eps}:${hasW ? "w" : ""}${hasB ? "b" : ""}`, () => layerNormRows(C, eps, hasW, hasB)),
       bufs, [rows, 1, 1]);
     const parents = [this, ...(hasW ? [weight] : []), ...(hasB ? [bias] : [])];
+    // The backward reads the input (for `dx`) and the weight (when present); the output is
+    // not read, and `mean`/`rstd` are internal buffers no Python tensor can mutate. Save the
+    // input and the weight so an in-place edit of either before backward is caught.
+    const saved: Tensor[] = [this];
+    if (hasW && weight) saved.push(weight);
     return Tensor.make(out, shape, parents, (g) => {
       const dx = dev().alloc(this.size);
       const gx = hasW ? dev().alloc(this.size) : null;
@@ -5272,7 +5280,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       if (hasW) grads.push(weight.requiresGrad && gx ? foldTo(new Tensor(gx, [rows, C]), [C]) : null);
       if (hasB) grads.push(bias.requiresGrad ? foldTo(new Tensor(g.buffer, [rows, C]), [C]) : null);
       return grads;
-    }, "NativeLayerNormBackward0");
+    }, "NativeLayerNormBackward0", "float32", saved);
   }
 
   /**
