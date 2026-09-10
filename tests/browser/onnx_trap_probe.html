@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ONNX export refuses an op it cannot trace, instead of freezing it silently</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The exporter traces a fixed set of ops; anything else used to vanish quietly.** A
+  // value a traced op did not make was treated as a weight and frozen into the file as a
+  // constant — so a model with layer_norm, softmax, attention, transpose or flatten in the
+  // middle exported a graph that loaded in ONNX Runtime and produced plausible, wrong
+  // numbers, with the untraced op and everything upstream of it gone. Only a ResNet (whose
+  // ops are all traced) was ever tested. The fix runs the trace with the tape on and refuses
+  // at export when a computed value reaches the graph untraced. This checks the refusal
+  // fires on a layer_norm in the middle, and that an all-traced model still exports.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import numpy as np, js
+import borch_webgpu as torch
+nn = torch.nn
+fails = []
+x = torch.tensor(np.random.default_rng(0).standard_normal((2, 8)).astype(np.float32))
+
+# ── Must REFUSE: layer_norm sits between two linears, so it is a computed value the graph
+# would freeze. Before the fix this exported a wrong-but-loadable file. ──
+mid = nn.Sequential(nn.Linear(8, 8), nn.LayerNorm(8), nn.Linear(8, 4))
+try:
+    torch.onnx.export(mid, x)
+    fails.append("layer_norm in the middle exported WITHOUT error (silently frozen)")
+    threw = ""
+except Exception as e:
+    threw = str(e)
+    if "ONNX tracing" not in threw and "traced" not in threw:
+        fails.append("it threw, but not the tracing refusal: " + threw.splitlines()[0][:80])
+
+# ── Must EXPORT: every op here is traced (linear, relu). ──
+ok_model = nn.Sequential(nn.Linear(8, 8), nn.ReLU(), nn.Linear(8, 4))
+try:
+    data = torch.onnx.export(ok_model, x)
+    n = len(data) if data is not None else 0
+    if n < 32:
+        fails.append("the all-traced model exported no bytes (" + str(n) + ")")
+except Exception as e:
+    fails.append("the all-traced model wrongly refused: " + str(e).splitlines()[0][:80])
+
+adapter = str(js.borch.Device.adapterInfo)
+("onnx-trap: " + ("refuses the untraced op, exports the traced one" if not fails
+                  else "FAILS: " + " | ".join(fails))
+ + " · refusal msg: " + (threw.splitlines()[0][:70] if threw else "(none)")
+ + f" · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

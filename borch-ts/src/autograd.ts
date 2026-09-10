@@ -88,6 +88,24 @@ export function noGrad<R>(body: () => R): R {
   }
 }
 
+/**
+ * `torch.enable_grad()` — the inverse of `noGrad`, and restoring the same way. The ONNX
+ * tracer runs the forward under this rather than `noGrad`: with the tape on, a value a
+ * traced op did not make carries its parents, and the exporter can tell a computed
+ * intermediate an op forgot to trace from a genuine leaf weight — the two are
+ * indistinguishable with the tape off, and the untraced one was silently frozen into the
+ * graph as a constant.
+ */
+export function enableGrad<R>(body: () => R): R {
+  const before = gradMode.enabled;
+  gradMode.enabled = true;
+  try {
+    return body();
+  } finally {
+    gradMode.enabled = before;
+  }
+}
+
 /** A topological sort. It lays them out so a parent always comes after its child.
  *
  * **Several roots**, which is `grad([y1, y2], x)`. A node reached again from a

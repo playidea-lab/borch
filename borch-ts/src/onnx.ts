@@ -11,7 +11,8 @@
  * `batchNormEval`) each pass through `traced`, which does nothing until an export is
  * open. Then every outermost call is one node — an op built from other ops (a
  * `linear` is a transpose and a matmul) records itself and not its parts. The
- * forward runs under `noGrad`, in eval mode.
+ * forward runs under `enableGrad`, in eval mode — the tape is on so the exporter can tell
+ * an untraced computed value from a leaf weight (see `planOnnx`).
  *
  * **What it refuses.** An op with no ONNX spelling here (`cannot export …`, naming
  * it), a training-mode network (its batch norms would trace the batch's statistics),
@@ -23,7 +24,7 @@
  * the checker that matters is whether somebody else's reader (ORT Web, `onnx.checker`)
  * opens the file. `test/onnx.ts` asks exactly that.
  */
-import { noGrad } from "./autograd.js";
+import { enableGrad } from "./autograd.js";
 import type { Module } from "./nn.js";
 import type { Tensor } from "./tensor.js";
 
@@ -402,6 +403,21 @@ export function planOnnx(
     for (const t of e.inputs) {
       if (!t || t === PREV || t === sample || produced.has(t) || seen.has(t)) continue;
       seen.add(t);
+      // **A computed value no traced op made would be frozen as a constant.** With the tape
+      // on (the tracer runs the forward under `enableGrad`), a genuine weight — a parameter,
+      // a buffer, a literal — is a leaf, while an intermediate an op forgot to trace carries
+      // its parents. Treating the latter as a weight drops the op that made it and cuts
+      // everything upstream: the graph loads and is quietly wrong (softmax, layer_norm,
+      // attention, transpose and flatten are the ops with no tracing here). Stop loudly.
+      if (t.parents.length > 0) {
+        const made = t.gradName ? ` (its backward is ${t.gradName})` : "";
+        throw new Error(
+          "cannot export: a value reaching the graph was computed by an operation with no " +
+          `ONNX tracing${made}. The exporter records only the ops wrapped in traced() — ` +
+          "left untraced, this value would be frozen into the file as a constant and the " +
+          "operation that made it, with everything feeding it, dropped. Add tracing for " +
+          "the op, or keep it out of the exported forward.");
+      }
       if (!names.has(t)) names.set(t, `const_${++constants}`);
       weights.push(t);
     }
@@ -417,7 +433,7 @@ export function traceOnnx(model: Module, sample: Tensor, options: ExportOptions 
   let output: Tensor;
   let nodes: TraceNode[];
   try {
-    output = noGrad(() => model.forward(sample));
+    output = enableGrad(() => model.forward(sample));
   } finally {
     nodes = endTrace();
     if (wasTraining) model.train();
@@ -481,7 +497,7 @@ export function encodeOnnx(plan: OnnxPlan, read: (t: Tensor) => Float32Array): E
 
 /**
  * Traces `model.forward(sample)` and returns the ONNX file. The model is run in
- * eval mode under `noGrad`, and put back the way it was.
+ * eval mode under `enableGrad`, and put back the way it was.
  */
 export async function exportOnnx(
   model: Module, sample: Tensor, options: ExportOptions = {},

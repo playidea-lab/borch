@@ -59,8 +59,12 @@ def export(model, args, f=None, *, input_names=None, output_names=None,
     model.eval()
     _ts.onnx.beginTrace()
     try:
-        from ._ops import no_grad
-        with no_grad():
+        # **The tape is on during the trace** (not `no_grad`, as it was): with it on, a value
+        # a traced op did not make carries its parents, and `planOnnx` can refuse a computed
+        # intermediate an op forgot to trace instead of freezing it into the file as a
+        # constant. The values are the same either way — `enable_grad` only attaches parents.
+        from ._ops import enable_grad
+        with enable_grad():
             out = model(args)
     finally:
         nodes = _ts.onnx.endTrace()

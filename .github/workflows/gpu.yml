@@ -88,7 +88,7 @@
 # ## What this file does **not** run — counted, because it used to say it did
 #
 # The line above read "the commands below are all of it". They are all of the *golden
-# comparison*. There are **forty-five entry points that need a browser** and this file
+# comparison*. There are **forty-six entry points that need a browser** and this file
 # names four:
 #
 #     here          run.py --lib borch · run.py --lib borch_webgpu ·
@@ -98,7 +98,7 @@
 #                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding ·
 #                   learner:site · wheel:py · lab:py · marimo:py · folder:py · hub:py · offline:py · trajectory:py ·
 #                   cpu:ts · cpu:py · review:py · coi:site · seg:py · capture:py · fuse:py · refine:py · cdn:py · weight:py ·
-#                   aliasing:py · compiled:py · churn:py · vcount:py · compiled-train:py · invariants:py   (thirty-four more correctness checks)
+#                   aliasing:py · compiled:py · churn:py · vcount:py · compiled-train:py · invariants:py · onnx-trap:py   (thirty-five more correctness checks)
 #                   cost:ts · bench:ts · compare:ts · envelope:py · envelope2:py · profile:py · bench:kernels  (measurements, not checks)
 #
 #     `cpu:ts` arrived 2026-09-05: the CPU device against the WebGPU device on two hub
@@ -129,8 +129,8 @@
 #     added to that page is paid by everyone before they are told anything, and every other
 #     check here reads what the page says rather than what it weighs.
 #
-# **Nothing runs any of the forty-five automatically** — the reason above is a good one
-# and it applies to all of them equally, so the forty-one below are in exactly the position
+# **Nothing runs any of the forty-six automatically** — the reason above is a good one
+# and it applies to all of them equally, so the forty-two below are in exactly the position
 # the four above are: run when a person runs them.
 #
 # The cost of that is not hypothetical. Three commits shipped in one session with the

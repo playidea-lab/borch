@@ -1,4 +1,4 @@
-"""The forty-two browser checks nothing else runs, run once a night in a worktree.
+"""The forty-three browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -100,6 +100,9 @@ CHECKS = [
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),
+    # ONNX export refuses an op it cannot trace (layer_norm/softmax/attention) rather than
+    # freezing it into the file as a constant — the silent-drop a non-CNN model used to hit.
+    ("onnx-trap:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/onnx_trap_probe.py", "--build"]),
     # The step's clock, three models through the compiler, one timed step each — the
     # numbers land in the log as `@<model>_fused_ms=` lines, a curve when they are kept.
     ("step:unet",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/profile_py.py", "--build", "--model=unet", "--steps=1", "--compiled=fused"]),
