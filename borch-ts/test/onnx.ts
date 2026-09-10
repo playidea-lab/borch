@@ -10,7 +10,7 @@
 import { Tensor, noGrad } from "../src/tensor.js";
 import { manualSeed } from "../src/random.js";
 import { exportOnnx } from "../src/onnx.js";
-import { LayerNorm } from "../src/nn.js";
+import { LayerNorm, Linear, Module } from "../src/nn.js";
 import { ResNet18 } from "./bench.js";
 
 interface OrtTensorLike { data: Float32Array }
@@ -53,6 +53,28 @@ async function agree(session: OrtSession, model: ResNet18, batch: number, seed: 
     ?? new Float32Array();
   if (theirs.length !== ours.length) return Infinity;
   return maxAbsDiff(ours, theirs);
+}
+
+/** A transformer encoder layer on `[B, T, D]` — the ops a CNN never uses: layer_norm,
+ *  the projections as batched `linear`, attention's batched matmuls and softmax, and an
+ *  FFN. Every one now traces, so the whole layer exports and ORT reproduces it. */
+class EncoderLayer extends Module {
+  ln1 = new LayerNorm(8);
+  ln2 = new LayerNorm(8);
+  wq = new Linear(8, 8);
+  wk = new Linear(8, 8);
+  wv = new Linear(8, 8);
+  wo = new Linear(8, 8);
+  fc1 = new Linear(8, 16);
+  fc2 = new Linear(16, 8);
+  override forward(x: Tensor): Tensor {
+    const h = this.ln1.forward(x);
+    const q = this.wq.forward(h), k = this.wk.forward(h), v = this.wv.forward(h);  // [B, T, 8]
+    const ctx = q.bmm(k.transpose(1, 2)).softmax(-1).bmm(v);                        // [B, T, 8]
+    const a = x.add(this.wo.forward(ctx));                                         // residual
+    const f = this.fc2.forward(this.fc1.forward(this.ln2.forward(a)).relu());       // FFN
+    return a.add(f);
+  }
 }
 
 export async function report(): Promise<{ text: string; checks: Check[] }> {
@@ -98,37 +120,29 @@ export async function report(): Promise<{ text: string; checks: Check[] }> {
                 note: `${fused.ops.length} nodes · max |Δ| ${gapF.toExponential(2)}` });
   lines.push(`after fuse(): ${fused.ops.length} nodes (${plain.ops.length} before) · max |Δ| ${gapF.toExponential(2)}`);
 
-  // ── A transformer-shaped block — layer_norm, batched matmul, transpose, softmax ──
-  // None of these four was traced until now, so a model built from them exported a graph
-  // with the ops frozen out and everything upstream dropped. Here they run as ONNX
-  // LayerNormalization / MatMul / Transpose / Softmax and ORT reproduces the forward.
+  // ── A transformer encoder layer on [B, T, D] — the ops a CNN never uses ──
+  // layer_norm, batched `linear` projections, attention's batched matmuls and softmax, an
+  // FFN. None was traced until now, so this whole layer exported with them frozen out;
+  // now it runs as LayerNormalization / MatMul / Transpose / Softmax / Relu / Add / Gemm
+  // and ORT reproduces the forward.
   manualSeed(11);
-  const ln = new LayerNorm(8);
+  const enc = new EncoderLayer();
+  enc.eval();
   const B = 2, T = 4, D = 8;
-  const attn = {
-    training: false, eval() { return this; }, train() { return this; },
-    namedParameters: () => ln.namedParameters(),
-    namedBuffers: () => ln.namedBuffers(),
-    forward: (x: Tensor): Tensor => {
-      const h = ln.forward(x);                    // [B, T, D]
-      const scores = h.bmm(h.transpose(1, 2));    // [B, T, T]
-      return scores.softmax(-1).bmm(h);           // [B, T, D]
-    },
-  };
   const adata = pixels(B, 11).subarray(0, B * T * D);
   const asample = Tensor.from(adata, [B, T, D]);
-  const attnPlan = await exportOnnx(attn as unknown as ResNet18, asample);
-  lines.push(`exported attn block: ${attnPlan.ops.length} nodes · ${[...new Set(attnPlan.ops)].join(", ")}`);
-  const asession = await o.InferenceSession.create(attnPlan.bytes, { executionProviders: ["webgpu"] });
-  const aours = await noGrad(() => attn.forward(Tensor.from(adata, [B, T, D]))).toArray();
-  const atheirs = (await asession.run({ input: new o.Tensor("float32", adata, [B, T, D]) }))["output"]?.data
+  const encPlan = await exportOnnx(enc, asample);
+  lines.push(`exported encoder layer: ${encPlan.ops.length} nodes · ${[...new Set(encPlan.ops)].join(", ")}`);
+  const esession = await o.InferenceSession.create(encPlan.bytes, { executionProviders: ["webgpu"] });
+  const eours = await noGrad(() => enc.forward(Tensor.from(adata, [B, T, D]))).toArray();
+  const etheirs = (await esession.run({ input: new o.Tensor("float32", adata, [B, T, D]) }))["output"]?.data
     ?? new Float32Array();
-  const agap = atheirs.length === aours.length ? maxAbsDiff(aours, atheirs) : Infinity;
+  const egap = etheirs.length === eours.length ? maxAbsDiff(eours, etheirs) : Infinity;
   const wanted = ["LayerNormalization", "MatMul", "Transpose", "Softmax"];
-  const present = wanted.every((k) => attnPlan.ops.includes(k));
-  checks.push({ name: "ORT reproduces a layer_norm + attention block", ok: agap <= GATE && present,
-                note: `${attnPlan.ops.length} nodes · max |Δ| ${agap.toExponential(2)}` });
-  lines.push(`attn block ORT vs borch.ts: max |Δ| ${agap.toExponential(2)}`);
+  const present = wanted.every((k) => encPlan.ops.includes(k));
+  checks.push({ name: "ORT reproduces a transformer encoder layer", ok: egap <= GATE && present,
+                note: `${encPlan.ops.length} nodes · max |Δ| ${egap.toExponential(2)}` });
+  lines.push(`encoder layer ORT vs borch.ts: max |Δ| ${egap.toExponential(2)}`);
 
   // A refusal names the op rather than writing a file that will not run.
   let refusal = "";

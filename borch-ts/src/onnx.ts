@@ -237,6 +237,18 @@ function emit(node: TraceNode, batch: number, dynamicBatch: boolean): Emitted[] 
     if (!opType) throw new Error(`cannot export ${op.slice(7)}: no ONNX spelling for it here`);
     return [{ opType, inputs, attrs: {} }];
   }
+  if (op === "linear") {
+    // 2-D reaches `Gemm` (below); a batch of rows — `[.., K] × (N, K)` — does not, so it
+    // folds to a `MatMul` against the weight transposed. The weight is a constant, so ORT
+    // folds the `Transpose`. This is the shape a transformer's projections take.
+    const [x = null, w = null] = inputs;
+    if (x && x.shape.length > 2) {
+      return [
+        { opType: "Transpose", inputs: [w], attrs: { perm: [1, 0] } },
+        { opType: "MatMul", inputs: [x, PREV], attrs: {} },
+      ];
+    }
+  }
   if (op === "ConvFused") {
     // The file is the unfused network's: the epilogue is written as the ops it stands
     // for, so a reader that knows Conv, Add and Relu needs nothing else.
