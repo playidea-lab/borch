@@ -104,7 +104,17 @@ const EXPECT = {
   // folds G itself (21711b5) — `Small`'s loss and backward are where those copies were.
   // The forward's three: measured between 4177abb (2026-09-03, the last night at 58) and
   // this day; see the commits touching borch-ts/src in that range.
-  dispatches: 37,
+  //
+  // 2026-09-11, 37 → 34 (forward 9 → 10, optimizer 5 → 1, loss and backward unmoved). Two
+  // moves crossed and the net hid them, which is what the phase freezes are for. First up
+  // by one, then down by four:
+  //   · forward +1 (cf819f8, measured at 984fd83): the scalar tile splits its reduction, so
+  //     `Small`'s linear — [4,256]×[256,3], a short output over a long K, exactly the split's
+  //     case — runs a fold pass on top. This is the software-adapter path CI takes; on a
+  //     subgroup card it would not. A dispatch bought for a faster reduction, not a leak.
+  //   · optimizer 5 → 1 (efd0c51): a single-group SGD step packs all parameters into one
+  //     arena and steps them in one dispatch, where it was one per parameter (Small has five).
+  dispatches: 34,
   // **One step is one submit.** The commands pile up and go in a single send when the
   // loss is read, so this number rising means a place appeared that waits on the GPU
   // mid-step — the kind that leaves the values alone and makes the step slower, which the
@@ -123,7 +133,10 @@ const EXPECT = {
   // statistics are cut into pieces per channel and finished in a pass of their own
   // (`bnPieces`: +1 forward, +1 backward). Neither is the ReLU pairing — `Small` calls
   // `unary("relu")` by hand, not through a `Sequential`, so it still pays that dispatch.
-  phases: { forward: 9, loss: 8, backward: 15, optimizer: 5 },
+  //
+  // 2026-09-11, forward 9 → 10 and optimizer 5 → 1 — the two moves the total's 37 → 34 above
+  // spells out. Loss and backward hold: their matmuls are not the shape the split fires on.
+  phases: { forward: 10, loss: 8, backward: 15, optimizer: 1 },
 };
 
 export async function report(): Promise<Report> {
