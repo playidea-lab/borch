@@ -1099,6 +1099,25 @@ export class Device {
   }
 
   /**
+   * The inverse of {@link keep}, for a caller that owns a kept buffer's whole life and is
+   * done with it — the SGD arena on a resume, where the next step rebuilds it. It leaves
+   * `kept` and is destroyed; a pending command may still bind it, so the destroy waits
+   * behind a flush, the order {@link emptyCache} uses. The `made`/`madeBytes` tally is
+   * corrected as `emptyCache` does, so a released buffer stops counting as held.
+   */
+  unkeep(buffer: GPUBuffer): void {
+    if (!this.kept.delete(buffer)) return;
+    this.flush();
+    const size = this.sizes.get(buffer);
+    if (size !== undefined) {
+      this.made -= 1;
+      this.madeBytes -= size;
+      this.sizes.delete(buffer);
+    }
+    buffer.destroy();
+  }
+
+  /**
    * Moves a buffer `alloc` just filed under the innermost scope to the frame `depth`
    * scopes deep — `0` is outside every scope. `Tensor.ensureOwned` uses it so an owned
    * copy lives as long as the tensor it replaces, not as long as the scope that

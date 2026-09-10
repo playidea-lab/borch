@@ -27,7 +27,13 @@ import numpy as np
 # The dispatch and submit counts one step makes. **Measured and then written in.**
 # Same model and same batch as borch.ts's `cost.ts`, so **the numbers have to match** — a
 # divergence means the binding is making more kernel calls, and that is itself the answer.
-EXPECT = {"dispatches": 53, "submits": 1}
+#
+# 2026-09-11, 53 → 34, matching cost.ts. The 53 predated this month's three step-shrinking
+# changes (the add/sub backward folding its gradient, the scalar tile splitting its
+# reduction, the single-dispatch SGD arena), and this check was wired into nothing, so
+# nothing made it move. It is in the nightly from now on — and the same day's arena fix is
+# what lets the step after `empty_cache` below survive to be counted rather than fault.
+EXPECT = {"dispatches": 34, "submits": 1}
 
 
 def _model(L):
@@ -138,9 +144,16 @@ def report(L):
     want("empty_cache empties the pool",
          freed["count"] == held["count"] and L.pooled()["count"] == 0,
          f"gave back {freed['count']} buffers · {freed['bytes'] // 1024}KB")
-    # Training has to run after emptying too — emptying the pool must not break the device.
-    one()
-    want("a step runs after the pool is emptied", L.dispatches() > 0, f"{L.dispatches()}")
+    # **A training step after emptying, not arithmetic.** Emptying the pool must not break
+    # the device — and a step is what did break: the SGD arena's buffers were pooled at the
+    # step's own scope close, so empty_cache destroyed them and the next step submitted a
+    # destroyed buffer (the fault surfaces here as an exception from `one()`). The arena is
+    # kept now; a finite loss with the count still moving is the proof it survived.
+    d0 = L.dispatches()
+    after_empty = one()
+    want("a training step runs after emptyCache",
+         L.dispatches() > d0 and np.isfinite(after_empty),
+         f"loss {after_empty:.4f}")
 
     bad = [c for c in checks if not c[1]]
     lines = [f"  {'✓' if ok else '✗'} {name}{f' — {note}' if note else ''}"

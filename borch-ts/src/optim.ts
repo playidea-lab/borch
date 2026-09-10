@@ -713,6 +713,12 @@ export class SGD extends Optimizer {
     const pA = d.alloc(total), gA = d.alloc(total);
     const mA = this.momentum !== 0 ? d.alloc(total) : null;
     const zero = d.alloc(max);   // a slab of zeros to clear a slice that lost its gradient
+    // **The arena outlives the caller's scope.** Every `alloc` joins the open scope's
+    // frame, so without this the step's own `scope()` pools these four at its close and
+    // `emptyCache` then destroys buffers the arena still steps against — measured: a step
+    // after `empty_cache()` submitted a destroyed buffer. Kept, they skip the pool
+    // entirely; `dropArena` frees them, since a kept buffer is the holder's to release.
+    d.keep(pA); d.keep(gA); if (mA) d.keep(mA); d.keep(zero);
     // **A pooled `alloc` is not zero-initialised.** `gA` is read whole by `sgdStep`, so a
     // parameter that gets no gradient on the first step (a frozen or sparse head) would
     // otherwise read stale pool bytes as its gradient; and the clear path below copies
@@ -741,6 +747,17 @@ export class SGD extends Optimizer {
     return super.stateDict();
   }
 
+  /** Frees the arena's four buffers and forgets it. They were `keep`-ed in `buildArena`
+   *  so the pool and `emptyCache` leave them alone while the optimizer steps, which makes
+   *  releasing them the optimizer's job rather than the scope's. */
+  private dropArena(): void {
+    const a = this.arena;
+    if (!a) return;
+    const d = device();
+    d.unkeep(a.pA); d.unkeep(a.gA); if (a.mA) d.unkeep(a.mA); d.unkeep(a.zero);
+    this.arena = null;
+  }
+
   /** After a resume the arena is stale — drop it, and the next step rebuilds it from the
    *  loaded parameters and `this.buffers`. */
   override loadStateDict(state: {
@@ -748,7 +765,7 @@ export class SGD extends Optimizer {
     numbers: Record<string, number>;
   }): void {
     super.loadStateDict(state);
-    this.arena = null;
+    this.dropArena();
   }
 }
 

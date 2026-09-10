@@ -391,6 +391,19 @@ export async function report(): Promise<Report> {
     const value = (await still.toArray())[0] ?? -1;
     dev.endScope([]);
     want("arithmetic runs after the pool is emptied", value === 7, `${value}`);
+
+    // **A training step after emptyCache, not arithmetic.** The line above proves the
+    // device still adds; it does not prove a step survives, and a step is what broke — the
+    // SGD arena's buffers were pooled at the step's own scope close, so `emptyCache`
+    // destroyed them and the next step submitted a destroyed buffer. Arithmetic never
+    // touched the arena, which is why that check stayed green through it. The arena is kept
+    // now; this asks the step that exercises it.
+    const faultsBefore = dev.faults.count;
+    dev.emptyCache();
+    const afterEmpty = await step();
+    want("a training step runs after emptyCache",
+      dev.faults.count === faultsBefore && Number.isFinite(afterEmpty),
+      `loss ${afterEmpty.toFixed(4)} · ${dev.faults.count - faultsBefore} fault(s)`);
   }
 
   const bad = checks.filter((c) => !c.ok);
