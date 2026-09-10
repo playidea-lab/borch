@@ -1989,6 +1989,22 @@ exists and now has to be asked for; when it is used the score line says
 on Ubuntu 24.04 under Xvfb. That is borch.ts's written share at the time of that run,
 not the whole table.
 
+**And the graphics API underneath is the other half of the vendor.** The same card
+reaches WGSL through Vulkan on Linux and Direct3D 12 on Windows — a different compiler
+again, under the same vendor's name — so `nvidia / blackwell` had been two claims wearing
+one label. On 2026-09-10 the Windows one was measured for the first time, on an RTX 5050
+Laptop under Windows 11, driven from a CQ worker on that machine rather than from a
+desk:
+
+```
+passed 4057 / failed 0                       [nvidia / blackwell]      borch.ts, D3D12
+borch_webgpu: agreeing 4753/4753             [borch.ts — nvidia / blackwell]
+```
+
+Zero GPU validation errors on either. What this adds is not a bigger number but a
+second path through the same vendor: until then every claim about NVIDIA here came
+through Vulkan.
+
 This line has said three different things. It said *not since these kernels were
 written*, which reads as though it had been measured before them; then it said *never*,
 which was true; now it names a run. The one it never got to say is the one it implied
