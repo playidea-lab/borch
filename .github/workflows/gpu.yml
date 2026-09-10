@@ -88,7 +88,7 @@
 # ## What this file does **not** run — counted, because it used to say it did
 #
 # The line above read "the commands below are all of it". They are all of the *golden
-# comparison*. There are **forty-three entry points that need a browser** and this file
+# comparison*. There are **forty-four entry points that need a browser** and this file
 # names four:
 #
 #     here          run.py --lib borch · run.py --lib borch_webgpu ·
@@ -97,8 +97,8 @@
 #     not here      parity:ts · data:ts · device:ts · serialize:ts · example:ts ·
 #                   lessons:ts · scope:py · firstrun:site · onnx:ts · onnx:binding ·
 #                   learner:site · wheel:py · lab:py · marimo:py · folder:py · hub:py · offline:py · trajectory:py ·
-#                   cpu:ts · cpu:py · review:py · coi:site · seg:py · capture:py · fuse:py · refine:py · cdn:py ·
-#                   aliasing:py · compiled:py · churn:py · vcount:py · compiled-train:py   (thirty-two more correctness checks)
+#                   cpu:ts · cpu:py · review:py · coi:site · seg:py · capture:py · fuse:py · refine:py · cdn:py · weight:py ·
+#                   aliasing:py · compiled:py · churn:py · vcount:py · compiled-train:py   (thirty-three more correctness checks)
 #                   cost:ts · bench:ts · compare:ts · envelope:py · envelope2:py · profile:py · bench:kernels  (measurements, not checks)
 #
 #     `cpu:ts` arrived 2026-09-05: the CPU device against the WebGPU device on two hub
@@ -123,9 +123,14 @@
 #     reads the tarball, so a refactor that breaks the shape a browser can follow (an
 #     `exports` map, `.js` on relative imports) is caught where a reader would meet it.
 #     A CDN that does not answer prints that and passes: the module never arrived.
+#     `weight:py` the same day: what the landing page costs a visitor in bytes, and how much
+#     of it lands before the badge names their device. The verdict was 0.62 MB of the first
+#     `done`'s 10.20 MB, and only the first number has to stay small — a font or a library
+#     added to that page is paid by everyone before they are told anything, and every other
+#     check here reads what the page says rather than what it weighs.
 #
-# **Nothing runs any of the forty-three automatically** — the reason above is a good one
-# and it applies to all of them equally, so the thirty-nine below are in exactly the position
+# **Nothing runs any of the forty-four automatically** — the reason above is a good one
+# and it applies to all of them equally, so the forty below are in exactly the position
 # the four above are: run when a person runs them.
 #
 # The cost of that is not hypothetical. Three commits shipped in one session with the

@@ -63,6 +63,7 @@
     "learner:site": "uv run --with playwright python tests/browser/learner_path.py",
     "wheel:py": "uv run --with playwright python tests/browser/wheel_probe.py --build",
     "cdn:py": "uv run --with playwright python tests/browser/cdn_probe.py",
+    "weight:py": "uv run --with playwright python tests/browser/weight_probe.py",
     "lab:py": "uv run --with playwright python tests/browser/lab_probe.py --build",
     "envelope:py": "uv run --with playwright python tests/browser/envelope.py",
     "envelope2:py": "uv run --with playwright python tests/browser/envelope2.py",

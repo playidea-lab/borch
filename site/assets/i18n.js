@@ -159,10 +159,10 @@ const STRINGS = {
     en: "loading borch.ts and acquiring the adapter…",
     ko: "borch.ts 를 올리고 어댑터를 잡는 중…" },
   "load.pyodide": {
-    en: "loading Pyodide… (served from this repository, once)",
-    ko: "Pyodide 를 올리는 중… (저장소 안에서 온다, 처음 한 번만)" },
+    en: "loading Pyodide… (6 MB, served from this repository, once)",
+    ko: "Pyodide 를 올리는 중… (6 MB, 이 저장소에서, 한 번만)" },
   "load.numpy": {
-    en: "loading numpy…", ko: "numpy 를 올리는 중…" },
+    en: "loading numpy… (3 MB)", ko: "numpy 를 올리는 중… (3 MB)" },
   "load.binding": {
     en: "loading borch_webgpu…", ko: "borch_webgpu 를 싣는 중…" },
   // **What loads when there is no adapter.** The core is numpy and does not want one,
