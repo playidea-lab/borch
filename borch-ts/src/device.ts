@@ -131,11 +131,18 @@ export type Availability =
 // On that Safari the remaining cause was the feature flag being off. Guidance is usually
 // saying something true and then becomes **wrong for exactly one person**, and that one
 // person is the one reading it. So the place to switch it on is written out.
+// **The message a visitor sees when their browser has none, so it has to name their
+// browser.** It said "Chrome/Edge 113+ or Safari 18+" and was wrong twice: Firefox has
+// had WebGPU since 141 and was not named at all, so a Firefox reader was told to go and
+// get another browser; and Safari turned it on by default in 26, not 18 — 18 through 25
+// have it behind the flag this names. Versions from MDN's browser-compat-data,
+// `api/GPU.json`, read 2026-09-10; the same table is on the setup page, and
+// `test_site.py` holds the two to each other.
 const NO_API =
-  "There is no WebGPU. Chrome/Edge 113+ or Safari 18+ is required. " +
-  "**Seeing this on a version that matches means it is switched off** — on Safari, " +
-  "Settings → Advanced → Feature Flags → WebGPU; on Linux Chrome, " +
-  "Unsafe WebGPU in chrome://flags. It has to be https or localhost.";
+  "There is no WebGPU here. It is in Chrome and Edge from 113, Firefox from 141, and " +
+  "Safari from 26 — Safari 18 to 25 have it behind Settings → Advanced → Feature Flags → " +
+  "WebGPU. **Seeing this on a version that has it means it is switched off**: on Linux " +
+  "Chrome, Unsafe WebGPU in chrome://flags. It has to be https or localhost.";
 
 const NO_ADAPTER =
   "No WebGPU adapter could be obtained — a driver blocklist, a virtual machine, or a " +

@@ -84,7 +84,26 @@
       누군가가 가진 기계에서 나왔고, 그래서 그중 하나가 몇 달 동안 틀려 있었다.
     </p>
 
-    <h2>macOS</h2>
+    <h3 id="browsers">어느 브라우저에 WebGPU 가 있나</h3>
+<p>
+  MDN 의 <a href="https://github.com/mdn/browser-compat-data/blob/main/api/GPU.json">browser-compat-data</a>,
+  2026-09-10 에 읽음. <strong><em>읽음</em> 이라고 적힌 행은 읽은 것이지 본 것이 아니다</strong> —
+  이 페이지의 다른 측정은 전부 여기 누군가가 가진 기계에서 나왔고, 그 둘은 아니다.
+</p>
+<div style="overflow-x:auto"><table>
+  <tr><th>브라우저</th><th>WebGPU 시작</th><th>여기서는</th></tr>
+  <tr><td>Chrome, Edge</td><td>113 (부분), 144 완전</td><td><strong>측정</strong> — 아래 모든 행</td></tr>
+  <tr><td>안드로이드 Chrome</td><td>121</td><td><strong>측정</strong> — Galaxy Z Flip 6</td></tr>
+  <tr><td>iOS Safari</td><td>Safari 를 따라간다</td><td><strong>측정</strong> — iPhone 13 mini</td></tr>
+  <tr><td>macOS Safari</td><td>26 · 18~25 는 Feature Flag 뒤</td><td><em>읽음</em> — 위 아이폰과 같은 엔진이지만, 여기서 그 위에 열어 본 사람은 없다</td></tr>
+  <tr><td>Firefox</td><td>141 (부분)</td><td><em>읽음</em> — 열어 보지 않았고, <em>부분</em> 은 이 라이브러리가 쓰는 표면이 다 있다는 약속이 아니다</td></tr>
+  <tr><td>안드로이드 Firefox</td><td>없음</td><td>—</td></tr>
+</table></div>
+<p>
+  Safari 나 Firefox 에서 열었는데 배지에 어댑터 이름이 뜬다면, 이 페이지는 인용보다 그 행을 원한다.
+  배지 글자가 보고서 전부다.
+</p>
+<h2>macOS</h2>
     <p>
       할 일이 없다. Apple M4 Max 에서 측정 — 어댑터가 <code>apple / metal-3</code> 으로 오고,
       플래그도 설치도 설정도 없이 Run 이 돈다. 이 사이트에서 <code>apple / metal-3</code> 이라
