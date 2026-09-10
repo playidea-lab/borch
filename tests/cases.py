@@ -8268,6 +8268,37 @@ def rnn_top_cases(inp=None):
         add(f"{name}(num_layers=2) 마지막 상태",
             lambda L, f=call, w=two, s=state2: f(L, w=w, layers=2, state=s)[1])
 
+        # ── The recurrence's **gradient**, compared to torch — never asked before. ──
+        # The forward is right and every existing case is a forward or a `repr`. The backward
+        # accumulates a gradient into each weight at every one of the unrolled timesteps and
+        # threads it back through the carried hidden (and cell) state; a single dropped or
+        # mis-summed contribution trains subtly wrong while the forward stays exact.
+        def input_grad(L, n=name, w=ws):
+            xin = L.tensor(x.copy(), requires_grad=True)
+            tens = [L.tensor(v.copy()) for v in w]
+            hx = ((L.tensor(h1.copy()), L.tensor(c1.copy())) if n == "lstm" else L.tensor(h1.copy()))
+            getattr(L, n)(xin, hx, tens, True, 1, 0.0, False, False, False)[0].sum().backward()
+            return _grad_of(xin, f"{n} 입력 기울기")
+        add(f"{name} grad::input", input_grad)
+
+        def weight_grad(L, n=name, w=ws):
+            tens = [L.tensor(v.copy(), requires_grad=True) for v in w]
+            hx = ((L.tensor(h1.copy()), L.tensor(c1.copy())) if n == "lstm" else L.tensor(h1.copy()))
+            getattr(L, n)(L.tensor(x.copy()), hx, tens, True, 1, 0.0, False, False, False)[0].sum().backward()
+            return _grad_of(tens[0], f"{n} w_ih 기울기")
+        add(f"{name} grad::w_ih", weight_grad)
+
+        def hidden_grad(L, n=name, w=ws):
+            tens = [L.tensor(v.copy()) for v in w]
+            h = L.tensor(h1.copy(), requires_grad=True)
+            if n == "lstm":
+                c = L.tensor(c1.copy(), requires_grad=True)
+                getattr(L, n)(L.tensor(x.copy()), (h, c), tens, True, 1, 0.0, False, False, False)[0].sum().backward()
+            else:
+                getattr(L, n)(L.tensor(x.copy()), h, tens, True, 1, 0.0, False, False, False)[0].sum().backward()
+            return _grad_of(h, f"{n} h0 기울기")
+        add(f"{name} grad::h0", hidden_grad)
+
     CELLS = [("lstm_cell", 4), ("gru_cell", 3),
              ("rnn_tanh_cell", 1), ("rnn_relu_cell", 1)]
     for name, gates in CELLS:
@@ -8372,6 +8403,31 @@ def rnn_top_cases(inp=None):
         add(f"lstm(proj_size 와 양방향)[{_p}]",
             lambda L, p=_p: top_flag(L, "lstm", p, layers=2, proj=2,
                                      bidirectional=True))
+
+    # ── The **bidirectional** gradient — the reverse pass's seam, compared to torch. ──
+    # The reverse direction runs the sequence backwards and its gradient has to be threaded
+    # back forwards; nothing had ever compared it. `which` picks the leaf: the input, or the
+    # forward direction's `weight_ih_l0`.
+    def top_flag_grad(L, name, which, bidirectional=True):
+        gates, hidden, width = _RT_GATES[name], 4, 3
+        dirs = 2 if bidirectional else 1
+        specs = []
+        for _ in range(dirs):
+            specs += [(gates * hidden, width), (gates * hidden, hidden),
+                      (gates * hidden,), (gates * hidden,)]
+        want_input = which == "input"
+        xin = L.tensor(_RT_X.copy(), requires_grad=want_input)
+        tens = [L.tensor(_rt_ramp(s), requires_grad=(not want_input and i == 0))
+                for i, s in enumerate(specs)]
+        hx = ((L.tensor(np.zeros((dirs, 2, hidden), np.float32)),
+               L.tensor(np.zeros((dirs, 2, hidden), np.float32)))
+              if name == "lstm" else L.tensor(np.zeros((dirs, 2, hidden), np.float32)))
+        getattr(L, name)(xin, hx, tens, True, 1, 0.0, False, bidirectional, False)[0].sum().backward()
+        return _grad_of(xin if want_input else tens[0], f"{name} 양방향 {which} 기울기")
+
+    for _n in ("lstm", "gru", "rnn_tanh", "rnn_relu"):
+        add(f"{_n}(양방향) grad::input", lambda L, n=_n: top_flag_grad(L, n, "input"))
+        add(f"{_n}(양방향) grad::w_ih", lambda L, n=_n: top_flag_grad(L, n, "w_ih"))
     return cases
 
 

@@ -944,6 +944,14 @@ NOT_PORTED = {
     # different message from a different place. A Python-side rule, as `pad::` below.
     "linalg::": (8, "없음 — `lstsq` 의 나머지 세 필드와, 파이썬 쪽에서 하는 두 검사"),
     "grad::": (12, "별칭 — a vjp is `backward(seed)`, and parity asks it already"),
+    # The twenty recurrence-gradient cases added on the Python side (`rnntop::… grad::…`,
+    # LSTM/GRU/RNN input/weight/hidden grads, uni- and bidirectional). The binding golden
+    # already runs every one through borch.ts's kernels and agrees with torch, so the
+    # values are verified; a TS body would add this side's argument surface, worth doing
+    # but not done — so the owed marker, not the declined or python one.
+    "rnntop::": (20, "아직 — the recurrence gradient cases. The binding golden verifies "
+                     "borch.ts's recurrent backward on all of them; the TS surface body "
+                     "is a backlog, not a hole"),
     "cplx::": (10, "파이썬 — a complex `repr` belongs to Python's formatter"),
     # Five of the ten buffer cases were ported (registration, keeping one out of the
     # state, listing, a value round trip) and five are left. **The reason parts in two for

@@ -97,7 +97,7 @@ numbers and the reasons are in the book under *The `cpu` device*.
 
 ## How it is guaranteed
 
-**4744 golden cases** compare all three implementations against the same answers frozen
+**4764 golden cases** compare all three implementations against the same answers frozen
 from real torch — values, shapes, gradients, exception types and messages, and `repr`.
 The core runs them natively and in Pyodide; the binding and borch.ts run them in a
 browser on a real GPU, and every number they print carries the adapter's name, because a
