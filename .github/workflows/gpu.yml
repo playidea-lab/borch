@@ -124,8 +124,8 @@
 #     `exports` map, `.js` on relative imports) is caught where a reader would meet it.
 #     A CDN that does not answer prints that and passes: the module never arrived.
 #
-# **Nothing runs any of the forty-one automatically** — the reason above is a good one
-# and it applies to all of them equally, so the twenty-nine below are in exactly the position
+# **Nothing runs any of the forty-three automatically** — the reason above is a good one
+# and it applies to all of them equally, so the thirty-nine below are in exactly the position
 # the four above are: run when a person runs them.
 #
 # The cost of that is not hypothetical. Three commits shipped in one session with the

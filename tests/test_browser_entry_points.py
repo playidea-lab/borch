@@ -117,3 +117,45 @@ def test_the_written_count_is_the_number_of_entry_points():
         f"    {len(_direct_steps())} the workflow runs itself: "
         + ", ".join(sorted(f"{p} {t}".strip() for p, t in _direct_steps()))
         + "\n\n  Update the word and the two rows under it in the same commit.")
+
+
+# **The count is said four times and only one of them was read.** The headline was gated
+# from the start; the three numbers in the rows under it were not, and they drifted apart
+# — on 2026-09-10 the file said forty-three entry points, forty-one run automatically and
+# twenty-nine below the four above, which cannot all be true of one list. The first of
+# them (4fba4fc) was consistent: thirteen entry points, thirteen automatically, nine
+# below, seven correctness — 4 + 9 = 13 and 7 + 2 = 9. So the relationships are exact and
+# a test can hold them, which is cheaper than asking the next reader to notice.
+_HERE = re.compile(r"^#\s+here\s+(.*?)^#\s+not here", re.M | re.S)
+_CORRECTNESS = re.compile(r"\(([a-z-]+) more correctness checks\)")
+_MEASUREMENTS = re.compile(r"^#\s+(\S.*?)\s+\(measurements, not checks\)", re.M)
+_AUTOMATICALLY = re.compile(r"any of the ([a-z-]+) automatically")
+_BELOW = re.compile(r"so the ([a-z-]+) below")
+
+
+def _row_items(segment):
+    """The names on a row, which is written as `a · b · c` and may wrap across lines."""
+    flat = " ".join(line.lstrip("# ").strip() for line in segment.splitlines())
+    return [x.strip() for x in flat.split("·") if x.strip()]
+
+
+def test_the_three_counts_under_the_headline_are_the_same_list_counted():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    total = WORDS[re.search(r"\*\*([a-z-]+) entry points that need a browser\*\*", text).group(1)]
+    here = len(_row_items(_HERE.search(text).group(1)))
+    correctness = WORDS[_CORRECTNESS.search(text).group(1)]
+    measurements = len(_row_items(_MEASUREMENTS.search(text).group(1)))
+    automatically = WORDS[_AUTOMATICALLY.search(text).group(1)]
+    below = WORDS[_BELOW.search(text).group(1)]
+
+    said = (f"    headline {total} · here {here} · correctness {correctness} · "
+            f"measurements {measurements} · automatically {automatically} · below {below}")
+    assert here + below == total, (
+        "the row above and the row below do not add up to the headline:\n" + said)
+    assert correctness + measurements == below, (
+        "the two `not here` rows do not add up to the count that names them:\n" + said)
+    assert automatically == total, (
+        "`nothing runs any of the N automatically` is the whole list, and this N is not "
+        "it:\n" + said + "\n  It went wrong by being edited with a delta rather than "
+        "recounted — the same fault the book records: a number that appears twice is a "
+        "number that will disagree with itself.")
