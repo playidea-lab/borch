@@ -878,26 +878,36 @@ export class Device {
     }
   }
 
+  /**
+   * **The one door a buffer goes back to the spare pool through.** `endScope` and `unpin`
+   * both release buffers, and each used to carry its own copy of this decision — which is
+   * how they drifted: `unpin` pooled a `kept` scalar constant that `endScope` would have
+   * spared, and the next use of that cached value read a dead buffer (the compiled
+   * small-CNN's eval forward threw after training). With the decision in one place no
+   * release path can miss part of it:
+   *
+   * - A **kept** buffer (the scalar cache's own) is permanent — never pooled, never
+   *   retired, so its age stays put for the tensors that share it.
+   * - Pooling **retires** the buffer (bumps its age), so a tensor that outlived its scope
+   *   fails `refuseIfDead` rather than quietly reading what the next allocation wrote.
+   * - A buffer `alloc` did not size is not ours to pool; it is destroyed once pending
+   *   commands that might point at it have gone out.
+   */
+  private returnToPool(buf: GPUBuffer): void {
+    if (this.kept.has(buf)) return;
+    this.retire(buf);
+    const size = this.sizes.get(buf);
+    if (size === undefined) { this.flush(); buf.destroy(); return; }
+    let pool = this.spare.get(size);
+    if (!pool) { pool = []; this.spare.set(size, pool); }
+    pool.push(buf);
+  }
+
   /** Hands a capture's pinned buffers back to the pool. Called by `Capture.dispose`. */
   unpin(buffers: Iterable<GPUBuffer>): void {
     for (const buf of buffers) {
       this.owned.delete(buf);
-      // **A kept buffer survives, as it does in `endScope`.** A scalar constant first
-      // created inside the recording (the scalar cache's `keep`) is pinned like the step's
-      // scratch, but it is permanent — pooling and retiring it here made the next use of
-      // that cached value read a dead buffer (the compiled small-CNN's eval forward threw on
-      // an `eps`/one constant). Leave it to the cache that owns it.
-      if (this.kept.has(buf)) continue;
-      const size = this.sizes.get(buf);
-      if (size === undefined) { buf.destroy(); continue; }
-      // **Retire like `endScope` does.** Pooling without bumping the age leaves a tensor
-      // that outlived the capture (an output the caller kept) passing `refuseIfDead` on a
-      // buffer now back in the pool — the "9,9,9,9" silent read. Bumping the age makes
-      // that tensor fail the guard instead.
-      this.retire(buf);
-      let pool = this.spare.get(size);
-      if (!pool) { pool = []; this.spare.set(size, pool); }
-      pool.push(buf);
+      this.returnToPool(buf);
     }
   }
 
@@ -927,23 +937,9 @@ export class Device {
       // from now on — otherwise it quietly reads what the next allocation overwrote.
       // Pinned by an open capture: neither pooled nor passed outward — the capture owns it.
       if (this.owned.has(buf)) continue;
-      this.retire(buf);
-      // Returned to the pool rather than destroyed. The next step asks for the same
-      // size again.
-      const size = this.sizes.get(buf);
-      if (size === undefined) {
-        // What arrives here is a buffer `alloc` did not build. Unsubmitted commands may
-        // point at it, so it is released after they go out.
-        this.flush();
-        buf.destroy();
-      } else {
-        let pool = this.spare.get(size);
-        if (!pool) {
-          pool = [];
-          this.spare.set(size, pool);
-        }
-        pool.push(buf);
-      }
+      // Retired and pooled, or destroyed if `alloc` did not build it — the one release
+      // path `unpin` shares, so the two cannot decide it differently again.
+      this.returnToPool(buf);
       freed += 1;
     }
     // **The last count is kept.** There was a place calling `beginScope`/`endScope`
