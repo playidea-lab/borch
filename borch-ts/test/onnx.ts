@@ -10,6 +10,7 @@
 import { Tensor, noGrad } from "../src/tensor.js";
 import { manualSeed } from "../src/random.js";
 import { exportOnnx } from "../src/onnx.js";
+import { LayerNorm } from "../src/nn.js";
 import { ResNet18 } from "./bench.js";
 
 interface OrtTensorLike { data: Float32Array }
@@ -96,6 +97,38 @@ export async function report(): Promise<{ text: string; checks: Check[] }> {
   checks.push({ name: "the fused network exports without batch norms and agrees", ok: gapF <= GATE && !fused.ops.includes("BatchNormalization"),
                 note: `${fused.ops.length} nodes · max |Δ| ${gapF.toExponential(2)}` });
   lines.push(`after fuse(): ${fused.ops.length} nodes (${plain.ops.length} before) · max |Δ| ${gapF.toExponential(2)}`);
+
+  // ── A transformer-shaped block — layer_norm, batched matmul, transpose, softmax ──
+  // None of these four was traced until now, so a model built from them exported a graph
+  // with the ops frozen out and everything upstream dropped. Here they run as ONNX
+  // LayerNormalization / MatMul / Transpose / Softmax and ORT reproduces the forward.
+  manualSeed(11);
+  const ln = new LayerNorm(8);
+  const B = 2, T = 4, D = 8;
+  const attn = {
+    training: false, eval() { return this; }, train() { return this; },
+    namedParameters: () => ln.namedParameters(),
+    namedBuffers: () => ln.namedBuffers(),
+    forward: (x: Tensor): Tensor => {
+      const h = ln.forward(x);                    // [B, T, D]
+      const scores = h.bmm(h.transpose(1, 2));    // [B, T, T]
+      return scores.softmax(-1).bmm(h);           // [B, T, D]
+    },
+  };
+  const adata = pixels(B, 11).subarray(0, B * T * D);
+  const asample = Tensor.from(adata, [B, T, D]);
+  const attnPlan = await exportOnnx(attn as unknown as ResNet18, asample);
+  lines.push(`exported attn block: ${attnPlan.ops.length} nodes · ${[...new Set(attnPlan.ops)].join(", ")}`);
+  const asession = await o.InferenceSession.create(attnPlan.bytes, { executionProviders: ["webgpu"] });
+  const aours = await noGrad(() => attn.forward(Tensor.from(adata, [B, T, D]))).toArray();
+  const atheirs = (await asession.run({ input: new o.Tensor("float32", adata, [B, T, D]) }))["output"]?.data
+    ?? new Float32Array();
+  const agap = atheirs.length === aours.length ? maxAbsDiff(aours, atheirs) : Infinity;
+  const wanted = ["LayerNormalization", "MatMul", "Transpose", "Softmax"];
+  const present = wanted.every((k) => attnPlan.ops.includes(k));
+  checks.push({ name: "ORT reproduces a layer_norm + attention block", ok: agap <= GATE && present,
+                note: `${attnPlan.ops.length} nodes · max |Δ| ${agap.toExponential(2)}` });
+  lines.push(`attn block ORT vs borch.ts: max |Δ| ${agap.toExponential(2)}`);
 
   // A refusal names the op rather than writing a file that will not run.
   let refusal = "";

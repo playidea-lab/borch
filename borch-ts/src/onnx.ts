@@ -260,7 +260,18 @@ function emitOne(
     case "MatMul":
     case "BatchNormalization":
     case "ReduceMean":
+    // The transformer ops: the same spelling on both sides. Softmax's `axis`, Transpose's
+    // `perm` and LayerNormalization's `axis`/`epsilon` carry through the attrs. Batched
+    // matmul (`bmm`) records as `MatMul` — ONNX MatMul broadcasts the batch itself.
+    case "Softmax":
+    case "Transpose":
       return { opType: op, inputs, attrs };
+    case "LayerNormalization": {
+      // ONNX LayerNormalization (opset 17) is `[X, Scale, B?]`. borch's affine form has
+      // both; without a scale there is nothing to hand it, so that stays unexportable.
+      if (!inputs[1]) throw new Error("cannot export layer_norm without an affine weight");
+      return { opType: "LayerNormalization", inputs, attrs };
+    }
     case "linear": {
       const x = inputs[0];
       if (x && x.shape.length === 2) return { opType: "Gemm", inputs, attrs: { transB: 1 } };

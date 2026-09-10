@@ -2187,16 +2187,18 @@ export class Tensor implements Node<Tensor> {
         "Pass the two dimensions, as torch does — transpose(dim0, dim1).",
       );
     }
-    const M = this.shape[0] ?? 0;
-    const N = this.shape[1] ?? 0;
-    const out = dev().alloc(M * N);
-    dev().run1d(
-      dev().pipeline(`t:${M}:${N}`, () => transposeKernel(M, N)),
-      [this.buffer, out],
-      M * N,
-    );
-    return Tensor.make(out, [N, M], [this], (g) => [g.transpose()], "TBackward0",
-      this.dtype);
+    return traced("Transpose", [this], { perm: [1, 0] }, () => {
+      const M = this.shape[0] ?? 0;
+      const N = this.shape[1] ?? 0;
+      const out = dev().alloc(M * N);
+      dev().run1d(
+        dev().pipeline(`t:${M}:${N}`, () => transposeKernel(M, N)),
+        [this.buffer, out],
+        M * N,
+      );
+      return Tensor.make(out, [N, M], [this], (g) => [g.transpose()], "TBackward0",
+        this.dtype);
+    });
   }
 
   // ── Reductions ────────────────────────────────────────────────────────
@@ -3103,17 +3105,19 @@ export class Tensor implements Node<Tensor> {
     const rank = this.shape.length;
     const i = axis0 < 0 ? axis0 + rank : axis0;
     const j = axis1 < 0 ? axis1 + rank : axis1;
-    const own = this.strides();
     const order = [...Array(rank).keys()];
     order[i] = j;
     order[j] = i;
-    const rules: AxisRule[] = order.map((src) => ({
-      size: this.shape[src] ?? 1,
-      stride: own[src] ?? 1,
-      kind: "lin" as const,
-      wrap: this.shape[src] ?? 1,
-    }));
-    return this.stridedView(rules, 0, order.map((src) => this.shape[src] ?? 1), "TransposeBackward0");
+    return traced("Transpose", [this], { perm: [...order] }, () => {
+      const own = this.strides();
+      const rules: AxisRule[] = order.map((src) => ({
+        size: this.shape[src] ?? 1,
+        stride: own[src] ?? 1,
+        kind: "lin" as const,
+        wrap: this.shape[src] ?? 1,
+      }));
+      return this.stridedView(rules, 0, order.map((src) => this.shape[src] ?? 1), "TransposeBackward0");
+    });
   }
 
   /**
@@ -3473,14 +3477,16 @@ export class Tensor implements Node<Tensor> {
    * Reorders the axes wholesale.
    */
   permute(order: readonly number[]): Tensor {
-    const own = this.strides();
-    const rules: AxisRule[] = order.map((s) => ({
-      size: this.shape[s] ?? 1,
-      stride: own[s] ?? 1,
-      kind: "lin" as const,
-      wrap: this.shape[s] ?? 1,
-    }));
-    return this.stridedView(rules, 0, order.map((s) => this.shape[s] ?? 1), "PermuteBackward0");
+    return traced("Transpose", [this], { perm: [...order] }, () => {
+      const own = this.strides();
+      const rules: AxisRule[] = order.map((s) => ({
+        size: this.shape[s] ?? 1,
+        stride: own[s] ?? 1,
+        kind: "lin" as const,
+        wrap: this.shape[s] ?? 1,
+      }));
+      return this.stridedView(rules, 0, order.map((s) => this.shape[s] ?? 1), "PermuteBackward0");
+    });
   }
 
   /**
@@ -4204,11 +4210,14 @@ export class Tensor implements Node<Tensor> {
       }
       return this.castFirst(dtype).softmax(dim).to(dtype);
     }
-    const rows = this.softmaxRowsOrNull(dim, false);
-    if (rows) return rows;
-    const m = this.amax(dim, true).detach();
-    const e = this.sub(m).exp();
-    return e.div(e.sumDim(dim, true));
+    const axis = dim < 0 ? dim + this.shape.length : dim;
+    return traced("Softmax", [this], { axis }, () => {
+      const rows = this.softmaxRowsOrNull(dim, false);
+      if (rows) return rows;
+      const m = this.amax(dim, true).detach();
+      const e = this.sub(m).exp();
+      return e.div(e.sumDim(dim, true));
+    });
   }
 
   /**
@@ -5270,6 +5279,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * folded; the backward kernel writes `g · x̂` as it goes.
    */
   layerNormNative(weight: Tensor | null, bias: Tensor | null, eps = 1e-5): Tensor {
+    // Records as ONNX `LayerNormalization` (opset 17): `[X, Scale, B]` over the last axis.
+    return traced("LayerNormalization", [this, weight, bias], { axis: -1, epsilon: eps }, () => {
     const C = this.shape[this.shape.length - 1] ?? 1;
     const rows = this.size / Math.max(C, 1);
     const shape = this.shape;
@@ -5299,6 +5310,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       if (hasB) grads.push(bias.requiresGrad ? foldTo(new Tensor(g.buffer, [rows, C]), [C]) : null);
       return grads;
     }, "NativeLayerNormBackward0", "float32", saved);
+    });
   }
 
   /**
@@ -5749,7 +5761,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (this.shape.length !== 3 || mat2.shape.length !== 3) {
       throw new Error(`bmm is 3-D by 3-D: [${this.shape}] x [${mat2.shape}]`);
     }
-    return batchedMatmul(this, mat2, false, false);
+    // ONNX MatMul broadcasts the leading (batch) dimension itself, so a batched matmul is
+    // one MatMul node — the same spelling the 2-D `matmul` records.
+    return traced("MatMul", [this, mat2], {}, () => batchedMatmul(this, mat2, false, false));
   }
 
   /** See `batchedMatmul` — the module-level function delegates here, where `make` is reachable. */
