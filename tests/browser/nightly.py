@@ -178,12 +178,50 @@ def prepare(log):
                "tests/golden.py", "dump"], WORKTREE, log) == 0
 
 
+# **The list that runs is the list this file had when it started, and it starts before the
+# worktree is updated.** `CHECKS` is read at import; `prepare()` then moves the worktree to
+# `origin/main`, rewriting this very file underneath a process that has already read it. So
+# every night ran the previous day's rows against the current day's code, and nobody saw it
+# because the rows that were missing had no line to be missing from. Measured 2026-09-11:
+# the run said "36 of 38" while the file in the worktree it had just checked out held
+# forty-two, and `cdn`, `weight` and `claims` — merged after the previous 04:30 — went
+# unrun for a day each.
+REEXEC = "BORCH_NIGHTLY_ON_CURRENT"
+
+
+def _become_current():
+    """Bring the worktree to `origin/main`, then start again from the file that lands there.
+
+    Once only, guarded by the environment: the second process finds the variable set and
+    goes on to the run. `prepare()` still does its own fetch and checkout, which is then a
+    few seconds against a worktree already there — cheap, and it keeps the log's account of
+    the night complete rather than splitting it across a process that exited.
+    """
+    here = pathlib.Path(__file__).resolve()
+    # **Only the copy the checkout rewrites has anything to reload.** Run from somebody's own
+    # checkout — which the launcher never does — this file is not the one that just moved, so
+    # starting again would read the same rows twice and say it had refreshed them.
+    if os.environ.get(REEXEC) or not here.is_relative_to(WORKTREE):
+        return
+    for argv in (["git", "fetch", "origin"], ):
+        subprocess.run(argv, cwd=REPO, check=False)
+    if WORKTREE.exists():
+        subprocess.run(["git", "checkout", "--detach", "origin/main"], cwd=WORKTREE, check=False)
+    else:
+        subprocess.run(["git", "worktree", "add", "--detach", str(WORKTREE), "origin/main"],
+                       cwd=REPO, check=False)
+    os.environ[REEXEC] = "1"
+    print(f"starting again from {here} — the rows that run are the rows on origin/main", flush=True)
+    os.execv(sys.executable, [sys.executable, str(here), *sys.argv[1:]])
+
+
 def main():
     if "--list" in sys.argv:
         print(f"repo      {REPO}\nworktree  {WORKTREE}\nlogs      {LOGS}\nchecks    {len(CHECKS)}")
         for label, argv in CHECKS:
             print(f"  {label:16s} {' '.join(argv[-3:])}")
         return 0
+    _become_current()
     LOGS.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
     path = LOGS / f"{stamp}.log"
