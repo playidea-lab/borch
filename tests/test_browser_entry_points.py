@@ -43,7 +43,7 @@ WORDS = {
     "twenty-five": 25, "twenty-six": 26, "twenty-seven": 27, "twenty-eight": 28,
     "twenty-nine": 29, "thirty": 30, "thirty-one": 31, "thirty-two": 32, "thirty-three": 33,
     "thirty-four": 34, "thirty-five": 35, "thirty-six": 36, "thirty-seven": 37, "thirty-eight": 38,
-    "thirty-nine": 39, "forty": 40, "forty-one": 41, "forty-two": 42, "forty-three": 43, "forty-four": 44, "forty-five": 45, "forty-six": 46,
+    "thirty-nine": 39, "forty": 40, "forty-one": 41, "forty-two": 42, "forty-three": 43, "forty-four": 44, "forty-five": 45, "forty-six": 46, "forty-seven": 47, "forty-eight": 48,
 }
 
 
@@ -181,7 +181,6 @@ KIND = {
 UNWIRED = {
     "clipped.py": ("check", "whether anything on the site is cut off rather than narrow"),
     "fold_probe.py": ("check", "the backward of expand, repeat and flip against the walking kernel"),
-    "platform_claims.py": ("check", "the reasons in torch_gap.py that claim something about the browser, re-measured"),
     "sync_probe.py": ("check", "whether borch.ts can be called synchronously from Python on Pyodide"),
     "cost.py": ("check", "one binding step's dispatches and buffers; reached by `run.py --cost`, which nothing passes"),
     "bench.py": ("tool", "the timed training step behind `run.py --bench`, a measurement rather than a verdict"),
@@ -191,10 +190,10 @@ UNWIRED = {
     "why_failing.py": ("on-demand", "groups already-failed golden cases by reason; nothing to run when they pass"),
 }
 
-# The four standalone checks above plus `cost.py`. **Frozen so that a fifth has to be
+# The three standalone checks above plus `cost.py`. **Frozen so that a fifth has to be
 # argued for**, not so that these five are acceptable: each is a question somebody wrote
 # down and nothing asks. Lower it by wiring one in.
-UNWIRED_CHECKS = 5
+UNWIRED_CHECKS = 4
 
 
 def _module_entry_points():

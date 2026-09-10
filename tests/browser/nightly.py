@@ -1,4 +1,4 @@
-"""The forty-three browser checks nothing else runs, run once a night in a worktree.
+"""The forty-two browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -66,6 +66,8 @@ CHECKS = [
     ("cdn",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/cdn_probe.py"]),
     # What the deployed page costs in bytes, and how much of it comes before the verdict.
     ("weight",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/weight_probe.py"]),
+    # The reasons in torch_gap.py that claim something about the browser, re-measured.
+    ("claims",     ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/platform_claims.py"]),
     # The notebook page — JupyterLite built here, the cell pressed, the learned line read.
     ("lab",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/lab_probe.py", "--build"]),
     # The workbench page — marimo built here, run pressed, the four sections read.

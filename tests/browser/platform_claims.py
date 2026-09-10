@@ -133,7 +133,7 @@ def _claims(got):
         ("a tab has a thread count to read",
          isinstance(got["hardwareConcurrency"], int) and got["hardwareConcurrency"] > 1,
          f"navigator.hardwareConcurrency = {got['hardwareConcurrency']}",
-         "If this ever came back 1 or absent, the *original* reason for the four thread "
+         "If this ever came back 1 or absent, the *original* reason for the two thread "
          "rows would be true again and these sentences would be the wrong ones."),
 
         ("a second thread actually runs",
@@ -207,8 +207,13 @@ def _claims(got):
 # The rows above defend these, by name. **When a row is gone, its claim goes with it** —
 # an assertion protecting a decision nobody makes any more passes forever about nothing,
 # which is the failure this repository keeps finding in its own checks.
-DEFENDS = ("get_num_threads", "set_num_threads",
-           "get_num_interop_threads", "set_num_interop_threads", "from_file",
+# **`get_num_threads` and its interop pair came off this list on 2026-09-11**, the first
+# time anything ran this file in months: they are built now (`borch/_ops.py`,
+# `borch_webgpu/_ops.py`) and `torch_gap.py` says so at the row that used to decline them,
+# so the claims below were defending a decision nobody makes any more — which is the exact
+# failure this file exists to catch, sitting in it. The `set_` pair is still declined, so
+# the thread claims stay and keep their two.
+DEFENDS = ("set_num_threads", "set_num_interop_threads", "from_file",
            # The three fp8 rows, all under *that hardware is not here*, and `autocast`,
            # whose row rests on f16 being present rather than absent.
            "scaled_mm", "grouped_mm", "scaled_grouped_mm", "autocast")
