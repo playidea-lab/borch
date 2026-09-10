@@ -754,6 +754,14 @@ export class Device {
    * turned on by the invariants probe, which trains and captures with it watching.
    */
   auditPool = false;
+  /**
+   * The buffers currently sitting in `spare`, mirrored here so a double-return is O(1) to
+   * catch — added on the push into the pool, removed on the pop back out. Returning a
+   * buffer that is already pooled would hand the same memory to two allocations (the
+   * "9,9,9,9" silent read); this is the one pool invariant cheap enough to check always,
+   * not only under {@link auditPool}.
+   */
+  private readonly inPool = new WeakSet<GPUBuffer>();
   /** How many bytes a buffer actually is. Which pool it returns to comes from here. */
   private readonly sizes = new WeakMap<GPUBuffer, number>();
 
@@ -901,12 +909,19 @@ export class Device {
    */
   private returnToPool(buf: GPUBuffer): void {
     if (this.kept.has(buf)) return;
+    if (this.inPool.has(buf)) {
+      throw new Error(
+        "a buffer was returned to the pool while already in it — the same memory would be " +
+          "handed to two allocations (a release path ran twice for one buffer).",
+      );
+    }
     this.retire(buf);
     const size = this.sizes.get(buf);
     if (size === undefined) { this.flush(); buf.destroy(); return; }
     let pool = this.spare.get(size);
     if (!pool) { pool = []; this.spare.set(size, pool); }
     pool.push(buf);
+    this.inPool.add(buf);
   }
 
   /**
@@ -1125,6 +1140,7 @@ export class Device {
     // Under a capture nothing is recycled: a pooled buffer may still be bound by a
     // recorded dispatch of this very step.
     const reused = recycle && !this.pinned ? this.spare.get(size)?.pop() : undefined;
+    if (reused) this.inPool.delete(reused);   // out of the pool — no longer a double-return risk
     const buf = reused ?? this.device.createBuffer({
       size,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
