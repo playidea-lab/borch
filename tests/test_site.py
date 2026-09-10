@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -386,8 +387,30 @@ KB = re.compile(r"(\d{2,5})\s*KB")
 
 
 def _bundle_sizes():
-    """The ES module the browser loads, as (raw, gzip) sizes in KB."""
-    raw = b"".join(p.read_bytes() for p in sorted(DECL.glob("*.js")))
+    """The ES module the browser actually loads, as (raw, gzip) KB — bundled and minified
+    the way jsDelivr's `borch-ts@0.4/+esm` serves it (its Rollup + esbuild), which is what
+    an `import` downloads. **Not** the concatenated `dist/src/*.js` source: that was the old
+    measure and it read ~2.7× larger (503 against the CDN's 186 KB gzipped), so the page
+    was overstating its own weight against the number a user meets. A local esbuild lands
+    within a kilobyte of jsDelivr's, and the 5% tolerance covers the version gap.
+
+    Returns None when esbuild is not on hand — the caller skips rather than fall back to a
+    measure that names the wrong thing.
+    """
+    esbuild = ROOT / "node_modules" / ".bin" / "esbuild"
+    cmd = [str(esbuild)] if esbuild.exists() else ["npx", "--no-install", "esbuild"]
+    with tempfile.TemporaryDirectory() as d:
+        out = pathlib.Path(d) / "esm.js"
+        try:
+            r = subprocess.run(
+                cmd + [str(DECL / "index.js"), "--bundle", "--format=esm", "--minify",
+                       f"--outfile={out}", "--log-level=error"],
+                cwd=ROOT, capture_output=True, text=True)
+        except OSError:
+            return None
+        if r.returncode != 0 or not out.exists():
+            return None
+        raw = out.read_bytes()
     return len(raw) / 1024, len(gzip.compress(raw, 9)) / 1024
 
 
@@ -401,7 +424,10 @@ def test_docs_do_not_name_a_stale_bundle_size():
     if not DECL.exists():
         pytest.skip(f"no declaration files ({DECL.relative_to(ROOT)}) — run npm run build:ts first")
 
-    raw_kb, gzip_kb = _bundle_sizes()
+    sizes = _bundle_sizes()
+    if sizes is None:
+        pytest.skip("esbuild not available to bundle the ES module the way the CDN serves it")
+    raw_kb, gzip_kb = sizes
     ok = lambda said: any(abs(said - real) <= real * SIZE_TOLERANCE
                           for real in (raw_kb, gzip_kb))
 
@@ -422,7 +448,8 @@ def test_docs_do_not_name_a_stale_bundle_size():
                     f"{gzip_kb:.0f}KB gzipped")
     assert not stale, (
         "the bundle sizes the documentation claims are stale:\n  " + "\n  ".join(stale) +
-        "\n\nmeasure and fix: cat borch-ts/dist/src/*.js | wc -c")
+        "\n\nmeasure and fix: npx esbuild borch-ts/dist/src/index.js --bundle "
+        "--format=esm --minify | wc -c (the +esm bundle the CDN serves)")
 
 
 # ── where a page quotes another document's heading ────────────────────
