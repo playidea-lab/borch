@@ -1804,3 +1804,36 @@ def test_a_reported_run_covers_the_cases_that_exist_now(name):
         "  the measurement is older than the thing it measured. Re-run it on a real GPU\n"
         "  and put the new figure here — editing the number alone would be a claim\n"
         "  about a run nobody made.")
+
+
+# **The version a visitor is told is the version they act on.** The message the library
+# raises when `navigator.gpu` is absent said "Chrome/Edge 113+ or Safari 18+" and was wrong
+# twice at once: Firefox has had WebGPU since 141 and was not named, so a Firefox reader was
+# sent to fetch another browser; and Safari turned it on by default in 26, not 18. Two places
+# now carry the same three numbers, and a number in two places is one that will disagree with
+# itself unless something reads both.
+_WEBGPU_FROM = {"Chrome": "113", "Firefox": "141", "Safari": "26"}
+
+
+def test_the_no_webgpu_message_names_every_engine_that_has_it():
+    """The three engines, with the version each got it in, in the string the visitor reads."""
+    source = (ROOT / "borch-ts" / "src" / "device.ts").read_text(encoding="utf-8")
+    message = re.search(r"const NO_API =\s*(.*?);\n", source, re.S).group(1)
+    for engine, version in _WEBGPU_FROM.items():
+        assert engine in message, (
+            f"the no-WebGPU message does not name {engine}. A reader on it is told to go and "
+            f"get a browser they are already using.")
+        assert version in message, f"the message names {engine} without saying from which version"
+
+
+@pytest.mark.parametrize("name", ["setup.html", "ko/setup.html"])
+def test_the_setup_pages_browser_table_agrees_with_the_message(name):
+    """The table and the message are the same three facts, so they move together."""
+    page = (SITE / name).read_text(encoding="utf-8")
+    assert 'id="browsers"' in page, f"site/{name} has no browser-support table to hold the message to"
+    table = page[page.index('id="browsers"'):]
+    table = table[:table.index("</table>")]
+    for engine, version in _WEBGPU_FROM.items():
+        assert engine in table, f"site/{name}'s table does not have a {engine} row"
+        assert version in table, f"site/{name}'s table names {engine} without the version"
+    assert "browser-compat-data" in page, "the table's numbers are read from somewhere; say where"

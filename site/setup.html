@@ -89,7 +89,26 @@
       one of them was wrong for months.
     </p>
 
-    <h2>macOS</h2>
+    <h3 id="browsers">Which browsers have WebGPU</h3>
+<p>
+  From MDN's <a href="https://github.com/mdn/browser-compat-data/blob/main/api/GPU.json">browser-compat-data</a>,
+  read 2026-09-10. <strong>The rows marked <em>read</em> are read and not seen</strong> — every
+  other measurement on this page came from a machine somebody here owns, and these two did not.
+</p>
+<div style="overflow-x:auto"><table>
+  <tr><th>browser</th><th>WebGPU from</th><th>here</th></tr>
+  <tr><td>Chrome, Edge</td><td>113 (partial), 144 complete</td><td><strong>measured</strong> — every row below</td></tr>
+  <tr><td>Chrome on Android</td><td>121</td><td><strong>measured</strong> — a Galaxy Z Flip 6</td></tr>
+  <tr><td>Safari on iOS</td><td>mirrors Safari</td><td><strong>measured</strong> — an iPhone 13 mini</td></tr>
+  <tr><td>Safari on macOS</td><td>26 · 18–25 behind the Feature Flag</td><td><em>read</em> — the same engine as the iPhone above, on a machine nobody here opened it on</td></tr>
+  <tr><td>Firefox</td><td>141 (partial)</td><td><em>read</em> — not opened here, and <em>partial</em> is not a promise that this library's surface is all there</td></tr>
+  <tr><td>Firefox on Android</td><td>not supported</td><td>—</td></tr>
+</table></div>
+<p>
+  If you open it on a Safari or a Firefox and the badge names an adapter, that is a row this
+  page would rather have than a citation. The badge text is the whole report.
+</p>
+<h2>macOS</h2>
     <p>
       Nothing to do. Measured on an Apple M4 Max: the adapter comes back
       <code>apple / metal-3</code> and Run works with no flags, no install, no settings.
