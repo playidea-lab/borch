@@ -390,6 +390,27 @@ actually use it is 5–10×, and that is not felt.
 The boundary is **"up to MNIST scale".** CIFAR and ResNet scale belong on your own
 machine or on remote hardware, and that is itself what chapter 8 (GPUs) teaches.
 
+#### The WebGPU path is a different story — and it is not slow
+
+The table above is the wasm/BLAS backend. On the WebGPU backend the matrix
+product runs on subgroup matrices, and profiling the transformer path
+(`tests/browser/profile_py.py --model=gpt|vit`) on an M4 Max settled three things
+worth not re-deriving:
+
+- **Aligned matmul already beats torch.** The subgroup GEMM measured 11.0 TFLOP/s
+  against torch-on-Metal's 10.8 (2048³); a compiled GPT step (2 blocks, seq 128,
+  dim 256, batch 16) is **7.2 ms** and its matmul runs near that shape's roofline.
+  There is no cheap general lever left — compiling the step (eager 12.5 → 7.4 ms)
+  and fusion (7.4 → 7.2 ms) are already spent.
+- **The one perf cliff is a shape one.** A sequence length that is not a multiple
+  of 8 fails `subgroupMatmulFits`, so attention's batched matmul drops to the
+  scalar tile (4.5 TFLOP/s, 2.4× slower). Measured, that is **18 % of a ViT-tiny
+  step** (197 tokens) and **zero** of the GPT step (128). Recovering it means
+  padding the odd axis to an eight and slicing back — a narrow win for
+  odd-sequence models (ViT, audio) only, weighed and deferred 2026-09-11.
+- What is left after matmul is a long tail of cheap small dispatches (gather,
+  sumsplits, reductions), none over 9 %.
+
 ### Why a fast runtime is not the goal
 
 Making it fast would mean rewriting in Rust or C++ and compiling to wasm. At that

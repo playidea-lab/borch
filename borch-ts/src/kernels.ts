@@ -1608,6 +1608,11 @@ export function subgroupMatmulTile(M: number, N: number): { TM: number; TN: numb
 }
 
 /** Whether `matmulSubgroup` can take a shape: every dimension a multiple of eight. */
+// The 8 × 8 hardware multiply needs every axis a whole eight, so a matmul off an
+// eight takes the scalar tile below (4.5 TFLOP/s against 11.0). Measured, that is
+// how a non-multiple-of-8 sequence sends attention's `bmm` to the slow path — 18 %
+// of a ViT-197 step, none of a GPT-128 one (ROADMAP "the WebGPU path"). Recovering
+// it means padding the odd axis and slicing back; weighed and deferred 2026-09-11.
 export function subgroupMatmulFits(M: number, K: number, N: number): boolean {
   return M % 8 === 0 && K % 8 === 0 && N % 8 === 0;
 }
