@@ -4,7 +4,7 @@
  "korean": {
   "done": 791,
   "stale": 0,
-  "missing": 488
+  "missing": 490
  },
  "modules": [
   {
@@ -22235,6 +22235,12 @@
        "doc_ko": "지금까지 구운 셰이더 수. 캐시가 도는지 테스트가 본다."
       },
       {
+       "name": "auditPool",
+       "signature": "auditPool: boolean",
+       "doc": "Whether {@link auditInvariants} runs at each scope and capture boundary. Off in\nproduction — the scan is O(pool) and a training step closes a scope every time — and\nturned on by the invariants probe, which trains and captures with it watching.",
+       "torch": "audit_pool"
+      },
+      {
        "name": "age",
        "signature": "age(buffer: GPUBuffer): number",
        "doc": "This buffer's current life. A tensor compares this number at birth\nagainst its value at use.",
@@ -22303,6 +22309,16 @@
         "en": "Capture and replay"
        },
        "doc_ko": "기록된 dispatch들을 순서대로 다시 인코딩한다. `Capture.replay`가 부른다."
+      },
+      {
+       "name": "auditInvariants",
+       "signature": "auditInvariants(where: string): number",
+       "doc": "**The pool's invariants, checked rather than trusted.** {@link returnToPool} is the one\ndoor a buffer takes back to `spare`; this is the assertion that the door was not\nbypassed. A buffer sitting in the pool must be:\n\n - **not kept** — a permanent scalar-cache buffer that reached the pool would be handed\n   out and overwritten (the class the compiled-training regression was in);\n - **not owned** — a buffer an open capture still needs would be reused under it;\n - **in the bucket its size names** — a wrong bucket hands back a buffer of the wrong\n   length, and WebGPU writes only part of it;\n - **in the pool once** — the same buffer pooled twice is handed to two allocations,\n   the \"9,9,9,9\" silent read the age guard exists to stop.\n\nThrown loudly with the boundary that found it, so a future release path that skips part\nof `returnToPool`'s decision is caught where it happened rather than as a wrong value a\nhundred dispatches later. Returns how many pooled buffers it checked — a caller that\nexpects a stirred pool can refuse a vacuous zero. Off the hot path (`auditPool`).",
+       "torch": "audit_invariants",
+       "section": {
+        "ko": "Capture and replay",
+        "en": "Capture and replay"
+       }
       },
       {
        "name": "unpin",
@@ -22615,7 +22631,7 @@
      "inherited_ctor": "private constructor()"
     }
    ],
-   "count": 76
+   "count": 78
   },
   {
    "name": "random",
@@ -23565,5 +23581,5 @@
    "doc_ko": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다."
   }
  ],
- "total": 3207
+ "total": 3209
 }

@@ -1,4 +1,4 @@
-"""The forty-one browser checks nothing else runs, run once a night in a worktree.
+"""The forty-two browser checks nothing else runs, run once a night in a worktree.
 
     uv run --project /Users/changmin/git/borch python tests/browser/nightly.py
 
@@ -97,6 +97,9 @@ CHECKS = [
     # A BatchNorm CNN and a scalar parameter trained under torch.compiled, then read after
     # dispose — the capture must not retire a kept buffer (the workbench's scratch/segment).
     ("compiled-train:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/compiled_train_probe.py", "--build"]),
+    # The buffer pool's invariants watched through a real training run — no kept or
+    # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
+    ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),
     # The step's clock, three models through the compiler, one timed step each — the
     # numbers land in the log as `@<model>_fused_ms=` lines, a curve when they are kept.
     ("step:unet",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/profile_py.py", "--build", "--model=unet", "--steps=1", "--compiled=fused"]),

@@ -81,6 +81,7 @@
     "churn:py": "uv run --with playwright python tests/browser/churn_probe.py --build",
     "vcount:py": "uv run --with playwright python tests/browser/vcount_probe.py --build",
     "compiled-train:py": "uv run --with playwright python tests/browser/compiled_train_probe.py --build",
+    "invariants:py": "uv run --with playwright python tests/browser/invariants_probe.py --build",
     "build:lab": "python3 site/build_lab.py",
     "marimo:py": "uv run --with playwright python tests/browser/marimo_probe.py --build",
     "build:marimo": "python3 site/build_marimo.py",

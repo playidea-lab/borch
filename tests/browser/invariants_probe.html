@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the buffer pool's invariants, watched through a real training run</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **returnToPool is the one door a buffer takes back to the pool; this watches the door.**
+  // The buffer-lifetime invariants — a kept buffer never pooled, a capture's owned buffer
+  // never pooled, every pooled buffer in its size's bucket and there only once — used to
+  // live implicitly across endScope and unpin, and drifted (the compiled small-CNN read a
+  // dead constant when unpin pooled a kept one). device.auditInvariants asserts them; with
+  // auditPool on it runs at every scope and capture boundary. This trains a BatchNorm CNN
+  // under torch.compiled and disposes it — the workload that churns the pool hardest — with
+  // the audit watching, so a release path that skips part of the decision throws where it
+  // happens. The final count proves the pool was actually stirred, not vacuously empty.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import numpy as np, js, traceback
+import borch_webgpu as torch
+
+nn = torch.nn
+dev = js.borch.device()
+dev.auditPool = True     # the audit now runs at every endScope and every unpin
+fails = []
+rng = np.random.default_rng(0)
+
+# ── A BatchNorm CNN trained under torch.compiled, then disposed and read in eval ──
+# The step opens a scope each iteration (endScope audits), and dispose unpins (unpin audits).
+K, N = 3, 32
+X = rng.standard_normal((N, 3, 16, 16)).astype(np.float32)
+y = rng.integers(0, K, N).astype(np.int64)
+def blk(cin, cout):
+    return [nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(), nn.MaxPool2d(2)]
+model = nn.Sequential(*blk(3, 8), *blk(8, 16), nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(16, K))
+crit = nn.CrossEntropyLoss()
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+Xt, yt = torch.tensor(X), torch.tensor(y)
+def step(xb, yb):
+    opt.zero_grad(); l = crit(model(xb), yb); l.backward(); opt.step(); return l
+run = torch.compiled(step)
+try:
+    for epoch in range(3):
+        for s in range(N // 16):
+            with torch.scope():
+                loss = run(Xt[s * 16:(s + 1) * 16], yt[s * 16:(s + 1) * 16]); loss.item()
+    run.dispose()
+    model.eval()
+    with torch.no_grad():
+        model(Xt).argmax(1).numpy()
+except Exception as e:
+    fails.append("compiled CNN: " + str(e).splitlines()[0][:90])
+
+# ── Views and aliasing in and out of scopes — narrow/select/reshape churn the pool ──
+try:
+    for _ in range(20):
+        with torch.scope():
+            x = torch.tensor(rng.standard_normal((6, 8)).astype(np.float32), requires_grad=True)
+            a = x.narrow(0, 1, 4).reshape([2, 2, 8]).select(0, 0)
+            b = a.matmul(torch.tensor(rng.standard_normal((8, 5)).astype(np.float32)))
+            b.sum().backward()
+            _ = x.grad.numpy()
+except Exception as e:
+    fails.append("views: " + str(e).splitlines()[0][:90])
+
+# The pool was actually stirred — a vacuous empty pool would prove nothing.
+checked = int(dev.auditInvariants("final"))
+if checked == 0:
+    fails.append("VACUOUS: the pool was empty, the audit checked nothing")
+
+adapter = str(js.borch.Device.adapterInfo)
+("invariants: " + ("held over " + str(checked) + " pooled buffers, audited every boundary"
+                   if not fails else "FAILS: " + " | ".join(fails))
+ + f" · faults {int(dev.faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

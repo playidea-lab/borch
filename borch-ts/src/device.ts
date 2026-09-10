@@ -748,6 +748,12 @@ export class Device {
    * that to once.
    */
   private readonly spare = new Map<number, GPUBuffer[]>();
+  /**
+   * Whether {@link auditInvariants} runs at each scope and capture boundary. Off in
+   * production — the scan is O(pool) and a training step closes a scope every time — and
+   * turned on by the invariants probe, which trains and captures with it watching.
+   */
+  auditPool = false;
   /** How many bytes a buffer actually is. Which pool it returns to comes from here. */
   private readonly sizes = new WeakMap<GPUBuffer, number>();
 
@@ -903,12 +909,46 @@ export class Device {
     pool.push(buf);
   }
 
+  /**
+   * **The pool's invariants, checked rather than trusted.** {@link returnToPool} is the one
+   * door a buffer takes back to `spare`; this is the assertion that the door was not
+   * bypassed. A buffer sitting in the pool must be:
+   *
+   *  - **not kept** — a permanent scalar-cache buffer that reached the pool would be handed
+   *    out and overwritten (the class the compiled-training regression was in);
+   *  - **not owned** — a buffer an open capture still needs would be reused under it;
+   *  - **in the bucket its size names** — a wrong bucket hands back a buffer of the wrong
+   *    length, and WebGPU writes only part of it;
+   *  - **in the pool once** — the same buffer pooled twice is handed to two allocations,
+   *    the "9,9,9,9" silent read the age guard exists to stop.
+   *
+   * Thrown loudly with the boundary that found it, so a future release path that skips part
+   * of `returnToPool`'s decision is caught where it happened rather than as a wrong value a
+   * hundred dispatches later. Returns how many pooled buffers it checked — a caller that
+   * expects a stirred pool can refuse a vacuous zero. Off the hot path (`auditPool`).
+   */
+  auditInvariants(where: string): number {
+    const seen = new Set<GPUBuffer>();
+    for (const [size, bucket] of this.spare) {
+      for (const buf of bucket) {
+        if (this.kept.has(buf)) throw new Error(`pool invariant (${where}): a kept buffer is in the pool — it would be handed out and overwritten`);
+        if (this.owned.has(buf)) throw new Error(`pool invariant (${where}): a buffer an open capture owns is in the pool — the replay would reuse it`);
+        const actual = this.sizes.get(buf);
+        if (actual !== size) throw new Error(`pool invariant (${where}): a ${actual}-byte buffer sits in the ${size}-byte bucket`);
+        if (seen.has(buf)) throw new Error(`pool invariant (${where}): the same buffer is in the pool twice — it would be handed to two allocations`);
+        seen.add(buf);
+      }
+    }
+    return seen.size;
+  }
+
   /** Hands a capture's pinned buffers back to the pool. Called by `Capture.dispose`. */
   unpin(buffers: Iterable<GPUBuffer>): void {
     for (const buf of buffers) {
       this.owned.delete(buf);
       this.returnToPool(buf);
     }
+    if (this.auditPool) this.auditInvariants("unpin");
   }
 
   /**
@@ -942,6 +982,7 @@ export class Device {
       this.returnToPool(buf);
       freed += 1;
     }
+    if (this.auditPool) this.auditInvariants("endScope");
     // **The last count is kept.** There was a place calling `beginScope`/`endScope`
     // directly rather than `scope()` because it needed this value — the bench, measuring
     // leaks. A recommended path that hides something is a recommendation nobody keeps.
