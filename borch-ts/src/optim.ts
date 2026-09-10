@@ -225,11 +225,11 @@ export abstract class Optimizer {
       }
     }
     const lr = init.lr ?? this.defaultLr;
-    // **A learning rate that is not a number reaches the kernel as text.** An options
-    // object in torch's positional `lr` seat — `new SGD(params, { lr: 0.05 })` — was
-    // baked into WGSL as `[object Object]`, every step's pipeline was invalid, and the
-    // loss read 0.000 against nothing (measured, tests/browser/envelope.html). torch
-    // refuses here with this sentence; so does this.
+    // **A learning rate that is not a number is refused here, with torch's own sentence.**
+    // The accident this closed: an options object in torch's positional `lr` seat — `new
+    // SGD(params, { lr: 0.05 })` — once baked into WGSL as `[object Object]`, every step's
+    // pipeline invalid and the loss reading 0.000 against nothing (measured,
+    // tests/browser/envelope.html). The guard below is why that cannot happen now.
     if (typeof lr !== "number" || !Number.isFinite(lr) || lr < 0) {
       throw new Error(`Invalid learning rate: ${String(lr)}`);
     }
