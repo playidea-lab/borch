@@ -175,3 +175,20 @@ def test_the_documented_cdn_url_is_the_published_line_of_this_package():
         assert want in text, f"{doc} does not offer {want} — borch-ts is {version} now"
     assert "cdn:py" in json.loads((ROOT / "package.json").read_text())["scripts"], (
         "the CDN entry point is documented and nothing runs it")
+
+
+def test_both_registry_summaries_say_what_only_this_library_claims():
+    """**The summary is the line a search result shows, and it is where a reader decides.**
+    Measured 2026-09-10: asked for a pure-Python package that prints the same values and the
+    same error messages as torch — which is this library's own sentence — an agent searched,
+    found nothing, and answered that no such package exists. Neither summary said "error
+    messages"; both led with the browser, which is not what that question asks about."""
+    toml = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    npm = json.loads((ROOT / "package.json").read_text())["description"]
+    py = re.search(r'^description = "(.*)"$', toml, re.M).group(1)
+    for what, text in (("pyproject.toml", py), ("package.json", npm)):
+        assert "error message" in text, (
+            f"{what}'s summary does not say it matches torch's error messages, which is the "
+            f"claim no competitor makes:\n    {text}")
+        assert "torch" in text.lower(), f"{what}'s summary does not name torch"
+        assert len(text) <= 300, f"{what}'s summary is {len(text)} chars; PyPI truncates a long one"

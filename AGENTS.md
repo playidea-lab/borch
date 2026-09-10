@@ -76,6 +76,21 @@ One wheel, `pyborch`, carries `borch`, `borch_webgpu`, `borchvision` and `borch_
     Traced from one forward, checked
     against ONNX Runtime Web.
 
+## Reading the source, if you go there
+
+**The comments narrate defects that were fixed, in the past tense, and the sentence after
+the story says what happens now.** This repository writes down what went wrong and why,
+beside the code that stops it — so a comment can describe a silent wrong answer at length
+and be followed by one line saying it now raises.
+
+Measured 2026-09-10: an agent reading `borch-ts/src/optim.ts` carried the story of an
+options object reaching the kernel as `[object Object]` into its answer as a live warning
+that training would silently do nothing. It has raised `Invalid learning rate: [object
+Object]` since the day that comment was written, in the same paragraph.
+
+If a comment tells you something misbehaves, run it before you warn anyone. Nothing here is
+a changelog; the guard is usually three lines below the story of why it exists.
+
 ## Supported range (short form; the long form is the book)
 
 tensors (broadcasting, dtype promotion, indexing, views, `gather`, `masked_select` …) ·
