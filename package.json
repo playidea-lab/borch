@@ -1,6 +1,6 @@
 {
   "name": "borch-ts",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "keywords": ["pytorch", "webgpu", "wgsl", "pyodide", "jupyterlite", "onnx", "autograd", "tensor", "deep-learning", "in-browser-ml", "browser"],
   "description": "PyTorch's API in a browser tab: a WebGPU runtime held to real torch's values, error messages and printed form \u2014 tensors, autograd, nn, optim, ONNX export, no dependencies",
   "license": "Apache-2.0",

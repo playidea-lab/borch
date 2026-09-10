@@ -59,7 +59,7 @@ server. The published package is on the CDNs as an ES module.
 
 ```html
 <script type="module">
-  import { init, Tensor } from "https://cdn.jsdelivr.net/npm/borch-ts@0.3/+esm";
+  import { init, Tensor } from "https://cdn.jsdelivr.net/npm/borch-ts@0.4/+esm";
   await init();
   const x = Tensor.from([1, 2, 3], [3]);
   console.log(await x.mul(x).sum().toArray());   // Float32Array [14]
