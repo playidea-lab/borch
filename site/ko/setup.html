@@ -92,7 +92,7 @@
 </p>
 <div style="overflow-x:auto"><table>
   <tr><th>브라우저</th><th>WebGPU 시작</th><th>여기서는</th></tr>
-  <tr><td>Chrome, Edge</td><td>113 (부분), 144 완전</td><td><strong>측정</strong> — 아래 모든 행</td></tr>
+  <tr><td>Chrome, Edge</td><td>113 (부분), 144 완전</td><td><strong>측정</strong> — 아래 모든 행, 그리고 그 아래 그래픽 API 셋 모두에서 골든이 통과한다: Metal, Vulkan, Direct3D 12 (윈도우 11 노트북, 2026-09-10)</td></tr>
   <tr><td>안드로이드 Chrome</td><td>121</td><td><strong>측정</strong> — Galaxy Z Flip 6</td></tr>
   <tr><td>iOS Safari</td><td>Safari 를 따라간다</td><td><strong>측정</strong> — iPhone 13 mini</td></tr>
   <tr><td>macOS Safari</td><td>26 · 18~25 는 Feature Flag 뒤</td><td><em>읽음</em> — 위 아이폰과 같은 엔진이지만, 여기서 그 위에 열어 본 사람은 없다</td></tr>
@@ -303,6 +303,11 @@
 </ol>
 <p>
   NVIDIA 카드라면 NVIDIA 제어판의 <em>3D 설정 관리 → 프로그램 설정</em> 도 같은 일을 한다. 둘 중 하나면 된다.
+</p>
+<p>
+  <strong>골든도 거기서 돈다.</strong> 같은 노트북에서, 그 위의 CQ 워커가 돌린 결과:
+  borch.ts <code>passed 4057 / failed 0</code>, 바인딩 <code>agreeing 4753/4753</code>, GPU 검증 오류 0 —
+  이 저장소가 Metal 이나 Vulkan 이 아니라 Direct3D 12 를 지나 값을 잰 첫 사례다.
 </p>
 <h2>폰과 태블릿</h2>
     <p>

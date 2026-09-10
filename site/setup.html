@@ -97,7 +97,7 @@
 </p>
 <div style="overflow-x:auto"><table>
   <tr><th>browser</th><th>WebGPU from</th><th>here</th></tr>
-  <tr><td>Chrome, Edge</td><td>113 (partial), 144 complete</td><td><strong>measured</strong> — every row below</td></tr>
+  <tr><td>Chrome, Edge</td><td>113 (partial), 144 complete</td><td><strong>measured</strong> — every row below, and the golden passes on both graphics APIs underneath: Metal, Vulkan, and Direct3D 12 (a Windows 11 laptop, 2026-09-10)</td></tr>
   <tr><td>Chrome on Android</td><td>121</td><td><strong>measured</strong> — a Galaxy Z Flip 6</td></tr>
   <tr><td>Safari on iOS</td><td>mirrors Safari</td><td><strong>measured</strong> — an iPhone 13 mini</td></tr>
   <tr><td>Safari on macOS</td><td>26 · 18–25 behind the Feature Flag</td><td><em>read</em> — the same engine as the iPhone above, on a machine nobody here opened it on</td></tr>
@@ -324,6 +324,12 @@
 <p>
   The NVIDIA Control Panel's <em>Manage 3D settings → Program Settings</em> does the same for an
   NVIDIA card. Either one is enough.
+</p>
+<p>
+  <strong>The golden runs there too.</strong> On the same laptop, driven from a CQ worker on it:
+  borch.ts <code>passed 4057 / failed 0</code> and the binding <code>agreeing 4753/4753</code>, zero GPU
+  validation errors — the first time this repository measured its values through Direct3D 12
+  rather than Metal or Vulkan.
 </p>
 <h2>Phones and tablets</h2>
     <p>
