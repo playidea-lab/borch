@@ -84,7 +84,7 @@
     <p class="sub lead">
       Your torch code, running in this tab &mdash; no install, no server, no account.
       Underneath: a TypeScript runtime on WebGPU with hand-written WGSL, and
-      <strong>the values are held to real PyTorch's</strong>, case by case.
+      <strong>the values, error messages and printed form are held to real PyTorch's</strong>, case by case.
     </p>
 
     <div class="card" style="margin-top:2.4rem">
@@ -111,7 +111,7 @@
       <a class="btn ghost" href="learn/">Lesson 0: fix the bug →</a>
       <a class="btn ghost mono" style="margin-left:auto" href="#install">npm install borch-ts</a>
     </p>
-    <p class="install">Zero runtime dependencies · 484KB gzipped ES module (1739KB raw) · safetensors checkpoints</p>
+    <p class="install">Zero runtime dependencies · 503KB gzipped ES module (1809KB raw) · safetensors checkpoints</p>
   </div>
 </section>
 
@@ -393,6 +393,8 @@ for step in range(201):
             <td>transforms, <code>v2</code>, functional, <code>ops</code> and 15 datasets — every value compared against real torchvision</td></tr>
         <tr><td><strong>Model I/O</strong></td><td><span class="state now">here</span></td>
             <td>safetensors — the Python borch, numpy and HF tools read the same file</td></tr>
+        <tr><td><strong>ONNX export</strong></td><td><span class="state now">here</span></td>
+            <td><code>exportOnnx(model, sample)</code> traces one forward and writes the file with no dependency — a CNN, or a whole transformer encoder layer (layer_norm, attention's batched matmuls, softmax); ONNX Runtime Web reproduces the forward (max |Δ| 2.4e-7)</td></tr>
         <tr><td>Model catalogue (<code>bimm</code>)</td><td><span class="state soon">partial</span></td>
             <td><code>createModel(library, name, args)</code> builds. On npm as <code>bimm-ts</code>; the catalogue is five families deep, not timm's hundreds</td></tr>
         <tr><td>Learn (interactive tutorials)</td><td><span class="state now">here</span></td>
@@ -484,6 +486,9 @@ for step in range(201):
     </table>
     </div>
     <p class="small muted"><code>borch-ts/test/compare.ts</code> trains the same step in TF.js 4.22.0 (its own layers API and NHWC layout, WebGPU backend, bytes pinned by <code>tests/browser/assets.lock</code>) right after borch.ts on one page. Held equal: architecture, SGD 0.05/0.9, cross-entropy, the seeded batch, two warm-up steps then five timed, a loss readback every step. <code>npm run compare:ts</code> reproduces it.</p>
+
+    <h3 style="margin-top:2rem">The matmul underneath — measured against torch itself</h3>
+    <p>The tables above are against another browser runtime. Against <em>torch</em>, on the same Mac GPU and at one shape (2048³), the subgroup-matrix GEMM measured <strong>11.0 TFLOP/s to torch-on-Metal's 10.8</strong> — on an aligned matrix the kernel is not paying to be in a browser. A compiled transformer step (a two-block GPT, sequence 128, width 256, batch 16) is <strong>7.2 ms</strong>, its matmul near that shape's roofline. The bounds are stated so the number is not misread: this is torch's <em>Metal</em> backend, not its faster CUDA one, and one shape on one machine — and a sequence length that is not a multiple of eight drops attention's batched matmul to a slower tile (measured, 18% of a ViT-tiny step). Instrument: <code>tests/browser/profile_py.py</code>; the derivation is in <code>ROADMAP.md</code>, "Speed — measured".</p>
 
     <h3 style="margin-top:2rem">The half this library loses — inference, same page</h3>
     <div class="scroll-x">

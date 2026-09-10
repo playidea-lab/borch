@@ -79,7 +79,7 @@
     <p class="sub lead">
       당신의 torch 코드가 이 탭에서 돈다 &mdash; 설치도, 서버도, 계정도 없이.
       그 밑은 손으로 쓴 WGSL 로 WebGPU 위에 도는 TypeScript 런타임이고,
-      <strong>값은 진짜 PyTorch 의 것에 대조된다</strong>, 케이스 하나씩.
+      <strong>값·에러 메시지·출력형이 진짜 PyTorch 의 것에 대조된다</strong>, 케이스 하나씩.
     </p>
 
     <div class="card" style="margin-top:2.4rem">
@@ -106,7 +106,7 @@
       <a class="btn ghost" href="learn/">레슨 0: 버그 고쳐 보기 →</a>
       <a class="btn ghost mono" style="margin-left:auto" href="#install">npm install borch-ts</a>
     </p>
-    <p class="install">런타임 의존성 0개 · ES 모듈 gzip 484KB(압축 전 1739KB) · 체크포인트는 safetensors</p>
+    <p class="install">런타임 의존성 0개 · ES 모듈 gzip 503KB(압축 전 1809KB) · 체크포인트는 safetensors</p>
   </div>
 </section>
 
@@ -384,10 +384,12 @@ for step in range(201):
             <td>transforms · <code>v2</code> · functional · <code>ops</code>, 그리고 데이터셋 15개 — 값을 전부 진짜 torchvision 과 대조했다</td></tr>
         <tr><td><strong>모델 I/O</strong></td><td><span class="state now">있다</span></td>
             <td>safetensors — 파이썬 쪽 borch·numpy·HF 도구가 같은 파일을 읽는다</td></tr>
+        <tr><td><strong>ONNX 내보내기</strong></td><td><span class="state now">있다</span></td>
+            <td><code>exportOnnx(model, sample)</code> 가 순방향 한 번을 추적해 의존성 없이 파일로 쓴다 — CNN 도, 트랜스포머 인코더 레이어 전체(layer_norm·어텐션의 배치 matmul·softmax)도. ONNX Runtime Web 이 순방향을 재현한다(max |Δ| 2.4e-7)</td></tr>
         <tr><td>모델 카탈로그 (<code>bimm</code>)</td><td><span class="state soon">일부</span></td>
             <td><code>createModel(라이브러리, 이름, 인자)</code> 로 만들어진다. npm 에 <code>bimm-ts</code> 로 올라가 있다. 카탈로그는 다섯 계열이고, timm 의 수백 개가 아니다</td></tr>
         <tr><td>Learn (인터랙티브 튜토리얼)</td><td><span class="state now">있다</span></td>
-            <td>레슨 열에 튜토리얼 여섯, 모든 코드 블록이 페이지 안에서 돈다 — 텐서부터 ResNet 과 비전 트랜스포머까지</td></tr>
+            <td>레슨 열하나에 튜토리얼 열, 모든 코드 블록이 페이지 안에서 돈다 — 텐서부터 ResNet 과 비전 트랜스포머까지</td></tr>
         <tr><td>Hub (<code>borch-hub</code>)</td><td><span class="state soon">일부</span></td>
             <td>매니페스트·해시 대조·환경 판정. 가중치는 브라우저에서 실제로 받아진다 — 44.7MB safetensors 에 <code>access-control-allow-origin: *</code>, 실측. npm 에 <code>borch-hub</code> 로 올라가 있다 — <a href="models.html">이 사이트가 목차를 읽고 모델을 받아 검증한다</a>. 개수는 여기 안 적는다, 움직이니까</td></tr>
         <tr><td>WebGPU 없이 — 파이썬 모드가 wasm 위에서</td><td><span class="state now">있다</span></td>
@@ -475,6 +477,9 @@ for step in range(201):
     </table>
     </div>
     <p class="small muted"><code>borch-ts/test/compare.ts</code> 가 같은 step 을 TF.js 4.22.0(자체 layers API·NHWC, WebGPU 백엔드, <code>tests/browser/assets.lock</code> 으로 바이트 고정)으로 borch.ts 바로 뒤에 같은 페이지에서 돌린다. 같게 둔 것: 구조, SGD 0.05/0.9, 교차엔트로피, 같은 시드 배치, 워밍 2회 뒤 5회 측정, 매 step 손실 readback. <code>npm run compare:ts</code> 로 재현.</p>
+
+    <h3 style="margin-top:2rem">그 밑의 matmul — torch 자체와 견줘 잰 것</h3>
+    <p>위 표들은 다른 브라우저 런타임과의 비교다. <em>torch</em> 자체와, 같은 Mac GPU 에서 한 가지 모양(2048³)으로 재면, 서브그룹 행렬 GEMM 이 <strong>11.0 TFLOP/s 로 torch-on-Metal 의 10.8</strong> 에 견줬다 — 정렬된 행렬에서는 커널이 브라우저에 있다는 대가를 치르지 않는다. 컴파일된 트랜스포머 스텝(2블록 GPT, 시퀀스 128, 폭 256, 배치 16)은 <strong>7.2 ms</strong>, 그 matmul 은 해당 모양의 roofline 근처다. 오독을 막으려 경계를 밝힌다: 이건 torch 의 <em>Metal</em> 백엔드지 더 빠른 CUDA 가 아니고, 한 기계의 한 모양이며 — 시퀀스 길이가 8 의 배수가 아니면 어텐션의 배치 matmul 이 느린 타일로 떨어진다(실측, ViT-tiny 스텝의 18%). 계측기는 <code>tests/browser/profile_py.py</code>, 유도는 <code>ROADMAP.md</code> "Speed — measured".</p>
 
     <h3 style="margin-top:2rem">이 라이브러리가 지는 반쪽 — 추론, 같은 페이지</h3>
     <div class="scroll-x">

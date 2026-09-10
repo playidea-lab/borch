@@ -755,7 +755,7 @@ The design and the measurements are in [WEBGPU-DESIGN.md](WEBGPU-DESIGN.md).
 | | |
 |---|---|
 | **tensors** | shapes, broadcasting, dtype promotion, indexing, reshape/view/permute/squeeze, split, chunk, flip, roll, gather, narrow, index_select, masked_select |
-| **autograd** | `requires_grad`, `backward()`, `.grad`, `no_grad()`, `detach()`, accumulation |
+| **autograd** | `requires_grad`, `backward()`, `.grad`, `no_grad()`, `detach()`, accumulation; an in-place edit of a value saved for backward **raises** rather than returning a silently wrong gradient |
 | **reductions** | `sum`, `mean`, `max`, `min`, `prod`, `median`, `norm`, `cumsum`, `topk`, `sort`, `unique`, `std` — backward included |
 | **nn** | `Module`, `Linear`, `Conv1d/2d/3d`, `MaxPool1d/2d/3d`, `Upsample`, `Embedding`, `LayerNorm`, `BatchNorm1d/2d/3d`, `Dropout`, `Sequential`, `ModuleList` |
 | **recurrence** | `RNN`, `LSTM`, `GRU` — multi-layer, `batch_first`, an initial state. **The top-level function forms too** (`torch.lstm`, `lstm_cell` and six others) — they take the weights as a list. Bidirectionality and inter-layer dropout are refused |
@@ -1374,7 +1374,8 @@ torch.onnx.export(model, x, "/work/model.onnx")   # Pyodide's filesystem; no awa
 
 **How it traces.** The tensor methods a network is built from (`convND`, `unary`,
 `binary`, `poolND`, `reshape`, `matmul`, `linear`, `mean`, `adaptiveAvgPool`,
-`batchNormEval`) each pass through one recording point that does nothing until an
+`batchNormEval`, and — so a transformer traces too — `softmax`, `layerNormNative`,
+`transpose`/`permute`, the batched `bmm`) each pass through one recording point that does nothing until an
 export is open — one comparison in the hot path, measured as no change to a training
 step. Then every outermost call is one node; an op built from other ops (`linear` is a
 transpose and a matmul) records itself and not its parts. The forward runs in eval
@@ -1393,11 +1394,21 @@ Python: `tests/resnet.py`'s network built on the binding, written to the virtual
 filesystem with no `await`, and read back by the page — 1.2e-7 against the binding's
 own logits.
 
+**A transformer exports too, not only a CNN.** With `softmax`, `layer_norm`,
+`transpose`/`permute` and the batched `matmul` all tracing, and a `linear` on a 3-D
+input writing a `Transpose` of its weight and a `MatMul` (a constant `Transpose` ONNX
+Runtime folds), a whole encoder layer — the QKV/O projections, attention's batched
+matmuls and softmax, the two layer norms, the FFN — exports as `LayerNormalization` /
+`MatMul` / `Transpose` / `Softmax` / `Relu` / `Add` / `Gemm`, and ONNX Runtime Web
+reproduces the forward to 2.4e-7 (`borch-ts/test/onnx.ts`). What is not yet spelled is
+`gelu` and `Embedding` — the FFN traces with `relu`, and an integer-input gather is the
+next op to add.
+
 **What it refuses**, and by name. An op with no ONNX spelling here — `cannot export
 erf` — rather than a file that will not run; a training-mode network (its batch norms
 would trace the batch's statistics); an adaptive pool to anything but 1 × 1
-(`GlobalAveragePool`); a `linear` on anything but a 2-D input (`Gemm`). The core
-(numpy) has no export: there is no tracer there and the binding is Python's door.
+(`GlobalAveragePool`). The core (numpy) has no export: there is no tracer there and the
+binding is Python's door.
 
 ### Where it runs
 

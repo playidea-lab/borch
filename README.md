@@ -6,7 +6,7 @@ and a Python binding over that runtime for Pyodide (`borch_webgpu`) — held to 
 PyTorch's values, errors and printed form within the range a curriculum uses.
 
 - **See it run:** https://playidea-lab.github.io/borch/site/ — the playground trains
-  on your GPU; ten lessons and ten tutorials run every code block in the page.
+  on your GPU; eleven lessons and ten tutorials run every code block in the page.
 - **The long document** — how the values are guaranteed, the supported range, what is
   deliberately absent and why, borch.ts's design, conformance — is
   [`docs/BOOK.md`](docs/BOOK.md). This page is the door; that one is the house.
