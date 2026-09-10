@@ -196,15 +196,35 @@ UNWIRED = {
 UNWIRED_CHECKS = 4
 
 
-def _module_entry_points():
-    """Modules `run.py` loads into the page behind a flag — reachable, and not scripts.
+def _flag_entry_points():
+    """{module file: the `run.py` flags that load it} — `cost.py` is run as `run.py --cost`.
 
-    Kept to names that are files in that directory: the same line also imports the standard
-    library's own `importlib`, which is not a probe of ours.
+    **A module reached only through a flag has no path of its own in any command**, so the
+    path match below cannot see it however it is wired. That is not hypothetical: `cost.py`
+    has no `__main__` on purpose, because the page loads it, and on 2026-09-11 there was no
+    way to wire it that this file would recognise.
+
+    The pairing is already written in `run.py` and is read rather than listed here, so a new
+    flag needs no edit: `if args.<flag> and not args.probe:` is followed by the
+    `import <module>, importlib` that flag builds. Kept to names that are files in this
+    directory — `--resnet` builds its probe from `tests/resnet.py` by path, which is outside
+    it, and the same line imports the standard library's own `importlib`.
     """
     text = (ROOT / "tests" / "browser" / "run.py").read_text(encoding="utf-8")
-    found = set(re.findall(r"import (\w+), importlib", text))
-    return {n for n in found if (ROOT / "tests" / "browser" / f"{n}.py").exists()}
+    pairs = {}
+    for hit in re.finditer(r"if args\.(\w+) and not args\.probe:", text):
+        after = re.search(r"import (\w+), importlib", text[hit.end():hit.end() + 800])
+        if not after:
+            continue
+        module = f"{after.group(1)}.py"
+        if (ROOT / "tests" / "browser" / module).exists():
+            pairs.setdefault(module, set()).add(hit.group(1))
+    return pairs
+
+
+def _module_entry_points():
+    """The module files `run.py` can load — the keys of the pairing above."""
+    return {name[:-3] for name in _flag_entry_points()}
 
 
 def _runnable():
@@ -217,15 +237,36 @@ def _runnable():
     return out
 
 
-def _is_wired(name):
-    """Named by an npm script, a nightly row, or one of gpu.yml's own run steps."""
-    rel = f"tests/browser/{name}"
+def _commands():
+    """Every place a check is invoked from, one command per entry.
+
+    Line by line for the two files, because both write one invocation per line and the pair
+    of tokens the flag rule looks for has to be in **the same** command — `run.py` on one
+    nightly row and `--cost` on another is two commands and neither runs cost.py.
+    """
     scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
-    if any(rel in command for command in scripts.values()):
-        return True
+    out = list(scripts.values())
     for path in (ROOT / "tests" / "browser" / "nightly.py", WORKFLOW):
-        if rel in path.read_text(encoding="utf-8"):
-            return True
+        out += path.read_text(encoding="utf-8").splitlines()
+    return out
+
+
+def _is_wired(name):
+    """Named by an npm script, a nightly row, or one of gpu.yml's own run steps.
+
+    A module that only a flag reaches is wired when one command carries **both** the runner's
+    path and one of that module's flags. Both, because `--bench` on its own also appears in
+    `npm run bench:kernels` (`kernel_bench.py --bench=mm`), which does not run `bench.py` —
+    a matcher that is politely wrong is worse here than one that is narrow.
+    """
+    rel = f"tests/browser/{name}"
+    commands = _commands()
+    if any(rel in command for command in commands):
+        return True
+    flags = _flag_entry_points().get(name)
+    if flags:
+        runner = "tests/browser/run.py"
+        return any(runner in c and any(f"--{flag}" in c for flag in flags) for c in commands)
     return False
 
 
