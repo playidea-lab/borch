@@ -95,6 +95,17 @@ jobs:
           BORCH_HEADLESS: "1"
         run: uv run --with playwright python tests/browser/clipped.py
 
+      # **The screen for a visitor who has no WebGPU was the one nothing looked at.** Every
+      # other browser check asks for an adapter, so it runs where there is one. A person
+      # opened the Korean home page in Safari 18 and found the badge in Korean over an
+      # English paragraph carrying `**` as characters — and, once this existed, a third
+      # thing: `"gpu" in navigator` is true of a key defined as undefined, so that shape
+      # reached `Cannot read properties of undefined` instead of the sentence.
+      #
+      # It needs the API to be absent, so it wants no GPU and takes six seconds.
+      - name: what a visitor with no WebGPU reads, in both languages
+        run: uv run --with playwright python tests/browser/no_webgpu_page.py
+
       # **Some declined names are declined because of what a browser cannot do, and a
       # browser can start doing it.** Four of them said a tab has no thread count to
       # choose; the tab has sixteen cores and runs workers, and that sentence had been
