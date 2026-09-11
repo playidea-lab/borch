@@ -159,6 +159,7 @@
       <div class="code-foot">
         <button class="btn primary" id="run" disabled>▶ Run this code</button>
         <button class="btn ghost" id="toplay" disabled title="Open this model and its features in the full Playground editor">↗ Open in Playground</button>
+        <button class="btn ghost" id="onnxbtn" disabled title="Export the backbone + head as one ONNX file (image → logits)">⬇ ONNX</button>
         <span id="runstat">—</span>
       </div>
     </div>
@@ -179,7 +180,7 @@
 </footer>
 
 <script type="module">
-import { init, Tensor, nn, optim, noGrad, scope, keepAlive, Device } from "borch-ts";
+import { init, Tensor, nn, optim, noGrad, scope, keepAlive, Device, onnx } from "borch-ts";
 import * as hub from "borch-hub";
 
 const $ = (s)=>document.querySelector(s);
@@ -421,6 +422,25 @@ function openInPlayground(){
   window.open("playground.html#from=tmplus","_blank");
 }
 
+/* ── export the whole classifier (backbone + head) as one ONNX file ── */
+async function exportModelOnnx(){
+  if(!backbone || !head || task==="anomaly") return;
+  $("#onnxbtn").disabled=true; $("#runstat").textContent="exporting ONNX…";
+  try{
+    // 백본과 학습된 헤드를 하나의 모듈로 묶는다: 이미지 [1,3,224,224] → 로짓/점수
+    const bb=backbone, h=head;
+    const model=new (class extends nn.Module { constructor(){super(); this.bb=bb; this.head=h;} forward(x){ return this.head.forward(this.bb.forward(x)); } })();
+    const sample=Tensor.from(new Float32Array(3*224*224),[1,3,224,224]);
+    const ex=await onnx.exportOnnx(model, sample);
+    const blob=new Blob([ex.bytes],{type:"application/octet-stream"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="tmplus-"+task+".onnx"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    logLine("exported "+(ex.bytes.length/1e6).toFixed(1)+" MB ONNX — input: ImageNet-normalized 1×3×224×224.","note");
+    $("#runstat").textContent="ONNX saved";
+  }catch(e){ logLine("ONNX export failed: "+String(e&&e.message||e),"err"); $("#runstat").textContent="export error"; }
+  finally{ $("#onnxbtn").disabled=false; }
+}
+
 /* ── run the head code (isolated blob, borch surface) ── */
 const brdg={ stopped:false, log:(m,c)=>logLine(m,c), plot:(n,v)=>plot(n,v) }; globalThis.__tmpg=brdg;
 async function runHeadCode(){
@@ -441,7 +461,7 @@ async function runHeadCode(){
 let busy=false;
 async function train(){
   if(busy) return; const data=buildData(); if(!data){ logLine("Not enough examples for this task yet.","note"); return; }
-  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#train").disabled=true; $("#run").disabled=true; $("#toplay").disabled=true; $("#runstat").textContent="extracting features…";
+  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#train").disabled=true; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="extracting features…";
   try{
     logLine("extracting features from "+(data.tr.length+data.te.length)+" examples through the backbone…");
     const featTr=[], featTe=[];
@@ -456,7 +476,7 @@ async function train(){
     $("#runstat").textContent="training head…";
     await runHeadCode();
     head=globalThis.__tm.head;
-    $("#runstat").textContent="done"; $("#run").disabled=false; $("#toplay").disabled=false;
+    $("#runstat").textContent="done"; $("#run").disabled=false; $("#toplay").disabled=false; $("#onnxbtn").disabled=(task==="anomaly");
     enablePredict();
   }catch(e){ logLine(String(e&&e.message?e.message:e),"err"); $("#runstat").textContent="error"; }
   finally{ busy=false; $("#train").disabled=false; }
@@ -525,7 +545,7 @@ function setTask(t){
   stopLive(); head=null; globalThis.__tm=null;
   classes=defaultClasses(); renderBuckets();
   $("#code").value="// train a model first (Train), and the head's code appears here to edit.";
-  $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#runstat").textContent="—";
+  $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="—";
 }
 function applyPreset(id){
   const p=PRESETS[id]; if(!p||!p.task) return;
@@ -540,7 +560,7 @@ const presetSel=$("#preset");
 for(const [id,p] of Object.entries(PRESETS)){ const o=document.createElement("option"); o.value=id; o.textContent=p.label; presetSel.appendChild(o); }
 presetSel.onchange=()=>applyPreset(presetSel.value);
 $("#addclass").onclick=()=>{ classes.push({name:TASKS.classify.defName(classes.length),imgs:[],thumbs:[]}); renderBuckets(); };
-$("#train").onclick=train; $("#run").onclick=rerun; $("#toplay").onclick=openInPlayground;
+$("#train").onclick=train; $("#run").onclick=rerun; $("#toplay").onclick=openInPlayground; $("#onnxbtn").onclick=exportModelOnnx;
 $("#cambtn").onclick=async()=>{ if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null;$("#cam").style.display="none";stopLive();renderBuckets();return;}
   try{ camStream=await navigator.mediaDevices.getUserMedia({video:true}); $("#cam").srcObject=camStream; $("#cam").style.display="block"; renderBuckets(); if(globalThis.__tm) enablePredict(); }
   catch(e){ logLine("Camera unavailable — use upload instead.","note"); } };
