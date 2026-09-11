@@ -144,6 +144,28 @@ export async function report(): Promise<{ text: string; checks: Check[] }> {
                 note: `${encPlan.ops.length} nodes · max |Δ| ${egap.toExponential(2)}` });
   lines.push(`encoder layer ORT vs borch.ts: max |Δ| ${egap.toExponential(2)}`);
 
+  // ── GELU, the exact (erf) form a transformer's FFN uses — one opset-20 `Gelu` node ──
+  // The encoder above runs a ReLU FFN; the real one is GELU, and torch's default `gelu`
+  // is the erf form, which `Gelu(approximate="none")` is. This exports it and ORT runs it.
+  manualSeed(13);
+  const gnet = new (class extends Module {
+    fc = new Linear(8, 8);
+    override forward(x: Tensor): Tensor { return this.fc.forward(x).gelu(); }
+  })();
+  gnet.eval();
+  const gdata = pixels(2, 13).subarray(0, 2 * 8);
+  const gsample = Tensor.from(gdata, [2, 8]);
+  const gPlan = await exportOnnx(gnet, gsample);
+  const gsession = await o.InferenceSession.create(gPlan.bytes, { executionProviders: ["webgpu"] });
+  const gours = await noGrad(() => gnet.forward(Tensor.from(gdata, [2, 8]))).toArray();
+  const gtheirs = (await gsession.run({ input: new o.Tensor("float32", gdata, [2, 8]) }))["output"]?.data
+    ?? new Float32Array();
+  const ggap = gtheirs.length === gours.length ? maxAbsDiff(gours, gtheirs) : Infinity;
+  checks.push({ name: "ORT reproduces the exact GELU (an opset-20 Gelu node)",
+                ok: ggap <= GATE && gPlan.ops.includes("Gelu"),
+                note: `${gPlan.ops.join(", ")} · max |Δ| ${ggap.toExponential(2)}` });
+  lines.push(`gelu ORT vs borch.ts: ${gPlan.ops.join(", ")} · max |Δ| ${ggap.toExponential(2)}`);
+
   // A refusal names the op rather than writing a file that will not run.
   let refusal = "";
   try {

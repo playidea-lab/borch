@@ -149,8 +149,11 @@ const TENSOR_TYPE = { elemType: 1, shape: 2 };
 const SHAPE = { dim: 1 };
 const DIM = { value: 1, param: 2 };
 
-const IR_VERSION = 8;
-const DEFAULT_OPSET = 17;
+// opset 20 (2024) is the floor for the `Gelu` op a transformer's FFN needs; it requires
+// ir_version ≥ 9. Everything else emitted here existed well before 20 and is unchanged by
+// the bump — opset is cumulative.
+const IR_VERSION = 9;
+const DEFAULT_OPSET = 20;
 /** Attributes ONNX types as `float`; every other number here is an `int`. */
 const FLOAT_ATTRS = new Set(["epsilon", "alpha", "beta", "momentum"]);
 
@@ -226,6 +229,13 @@ function emit(node: TraceNode, batch: number, dynamicBatch: boolean): Emitted[] 
     // the workbench's frozen-backbone export stopped here first.
     const [x = null] = inputs;
     return [{ opType: "Sigmoid", inputs: [x], attrs: {} }, { opType: "Mul", inputs: [x, PREV], attrs: {} }];
+  }
+  if (op === "unary:gelu" || op === "unary:geluTanh") {
+    // ONNX's `Gelu` (opset 20) is one node, and `approximate` picks the form: the exact
+    // erf `gelu` from the tanh `geluTanh`, matching the two borch offers. It is why the
+    // file's opset is 20 — a transformer's FFN is the caller.
+    const [x = null] = inputs;
+    return [{ opType: "Gelu", inputs: [x], attrs: { approximate: op === "unary:geluTanh" ? "tanh" : "none" } }];
   }
   if (op.startsWith("unary:")) {
     const opType = UNARY[op.slice(6)];
