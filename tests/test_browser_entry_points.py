@@ -30,6 +30,13 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "gpu.yml"
+# **The other file that runs checks.** `gpu.yml` holds the census, and for a while this
+# file read only that one — so `clipped.py`, which `test.yml` has run on every push, was
+# counted as a check nobody runs. It was written down as unwired for a week while it was
+# the one making CI red. The headline count stays gpu.yml's, because that census is about
+# what the GPU boxes are asked to do; being *run at all* is a different question and this
+# is the second place that answers it.
+PUSH_WORKFLOW = ROOT / ".github" / "workflows" / "test.yml"
 
 # The three that `gpu.yml` runs directly rather than through npm. They are read off
 # its own `run:` steps below rather than listed here, so this is only the pattern.
@@ -179,9 +186,6 @@ KIND = {
 }
 
 UNWIRED = {
-    "clipped.py": ("check", "whether anything on the site is cut off rather than narrow"),
-    "fold_probe.py": ("check", "the backward of expand, repeat and flip against the walking kernel"),
-    "sync_probe.py": ("check", "whether borch.ts can be called synchronously from Python on Pyodide"),
     "bench.py": ("tool", "the timed training step behind `run.py --bench`, a measurement rather than a verdict"),
     "export_resnet18.py": ("tool", "writes the ResNet-18 weights the inference comparison shares — run when they change"),
     "features_probe.py": ("diagnostic", "prints what this adapter offers; there is no right answer to fail"),
@@ -189,11 +193,16 @@ UNWIRED = {
     "why_failing.py": ("on-demand", "groups already-failed golden cases by reason; nothing to run when they pass"),
 }
 
-# The three standalone checks above — clipped, fold_probe, sync_probe. **Frozen so that a
-# fourth has to be argued for**, not so that these three are acceptable: each is a question
-# somebody wrote down and nothing asks. Lower it by wiring one in — `cost.py` was the last,
-# wired through the nightly's `run.py --cost` row.
-UNWIRED_CHECKS = 3
+# **Zero, and that is the point of the number rather than the end of it.** Nothing above is
+# a check now: what is left produces something, prints something, or only means anything
+# when another check has already failed. The four that were here went out one at a time —
+# `cost.py` through the nightly's `run.py --cost` row, `platform_claims.py` and
+# `fold_probe.py` and `sync_probe.py` as nightly rows of their own — and `clipped.py` turned
+# out to have been run by `test.yml` the whole time and only looked unwired because this
+# file was not reading that workflow.
+#
+# A check arriving here again is not a failure; writing one down without lowering this is.
+UNWIRED_CHECKS = 0
 
 
 def _flag_entry_points():
@@ -246,7 +255,7 @@ def _commands():
     """
     scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
     out = list(scripts.values())
-    for path in (ROOT / "tests" / "browser" / "nightly.py", WORKFLOW):
+    for path in (ROOT / "tests" / "browser" / "nightly.py", WORKFLOW, PUSH_WORKFLOW):
         out += path.read_text(encoding="utf-8").splitlines()
     return out
 
@@ -297,8 +306,9 @@ def test_the_written_down_ones_are_still_there_and_still_unwired():
 def test_the_number_of_checks_nobody_runs_is_the_number_that_was_argued_for():
     """**Every one of these is a question somebody wrote down and nothing asks.**
 
-    Frozen so a sixth cannot arrive quietly. The way to change it downwards is to wire one
-    in; the way to change it upwards is to explain, in the commit, what is being given up.
+    At zero this asks a narrower question — that nothing arrives quietly. The way to change
+    it downwards is to wire one in; the way to change it upwards is to explain, in the
+    commit, what is being given up.
     """
     checks = sorted(n for n, (kind, _) in UNWIRED.items() if kind == "check")
     assert len(checks) == UNWIRED_CHECKS, (
