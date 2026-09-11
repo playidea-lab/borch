@@ -155,8 +155,12 @@ const NO_ADAPTER =
  *  them. */
 function describe(adapter: GPUAdapter): string {
   const info: Partial<GPUAdapterInfo> = adapter.info ?? {};
-  return [info.vendor, info.architecture, info.device, info.description]
-    .filter(Boolean).join(" / ") || "(unknown)";
+  // **A repeat is not a field.** Chrome fills these with four different things and the
+  // badge reads `apple / metal-3`; Safari 26 answers `apple` to all four and the badge
+  // read `apple / apple / apple / apple` (measured, 2026-09-12). Saying the same word
+  // four times is not more information than saying it once.
+  const said = [info.vendor, info.architecture, info.device, info.description].filter(Boolean);
+  return [...new Set(said)].join(" / ") || "(unknown)";
 }
 
 function askAdapter(options: InitOptions): Promise<GPUAdapter | null> {

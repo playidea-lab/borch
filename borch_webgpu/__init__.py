@@ -63,6 +63,18 @@ except ImportError as exc:                              # pragma: no cover
         "borch_webgpu only runs inside a browser — outside Pyodide there is no `js`.\n"
         "  Natively, use `borch` (numpy).") from exc
 
+# **JSPI is asked for here, not at the first readback.** Every value that comes back from
+# the GPU goes through `pyodide.ffi.run_sync`, which stands on WebAssembly's promise
+# integration. Safari has WebGPU from 26 and no JSPI, so an import succeeded, a model
+# trained, and `.item()` raised `WebAssembly stack switching not enabled` from inside
+# `_read` — a traceback four frames deep in this package for a fact about the browser
+# that was knowable before the first line ran (measured on Safari 26, 2026-09-12).
+if getattr(getattr(_js, "WebAssembly", None), "Suspending", None) is None:  # pragma: no cover
+    raise ImportError(
+        "borch_webgpu needs JSPI (WebAssembly stack switching) to read a value back from "
+        "the GPU, and this browser has none — Chrome or Edge 137+ has it.\n"
+        "  `import borch as torch` is the same API on the numpy core and runs here.")
+
 # `js.borch` is the page's borch.ts when the page loaded one. **When nothing did — a
 # notebook, a worker, a bare Pyodide — `_base` boots the borch.ts this wheel carries**
 # (`_boot`), so the import is the whole setup. What cannot be helped is a machine with
