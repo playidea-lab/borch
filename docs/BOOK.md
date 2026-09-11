@@ -1402,9 +1402,11 @@ matmuls and softmax, the two layer norms, the FFN — exports as `LayerNormaliza
 `MatMul` / `Transpose` / `Softmax` / `Relu` / `Add` / `Gemm`, and ONNX Runtime Web
 reproduces the forward to 2.4e-7 (`borch-ts/test/onnx.ts`). The FFN's real activation
 exports too: torch's exact `gelu` is an opset-20 `Gelu` node (`approximate="none"`),
-round-tripped to 1.19e-7. What is not yet spelled is `Embedding` — an integer-input
-gather, which the exporter's float-input assumption has to widen for first, the next op
-to add.
+round-tripped to 1.19e-7. And a text transformer's first layer: `Embedding` is one
+`Gather` of the table by the indices, for which the exporter now declares an int64 input
+where before it declared every input float — a lookup round-trips exactly, 0.0. So a
+whole transformer exports, embedding through the GELU FFN; the numpy core still does not
+(there is no tracer there).
 
 **What it refuses**, and by name. An op with no ONNX spelling here — `cannot export
 erf` — rather than a file that will not run; a training-mode network (its batch norms
