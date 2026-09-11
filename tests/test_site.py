@@ -1864,3 +1864,63 @@ def test_the_setup_pages_browser_table_agrees_with_the_message(name):
         assert engine in table, f"site/{name}'s table does not have a {engine} row"
         assert version in table, f"site/{name}'s table names {engine} without the version"
     assert "browser-compat-data" in page, "the table's numbers are read from somewhere; say where"
+
+
+def _js_concatenated(text, start, end=None):
+    """The literals of a JS value joined, in order — `"a" + "b"` is `ab`.
+
+    **The end has to be given where the value is not a statement.** Reading to the next
+    `;` is right for `const NAME = ... ;` and wrong inside an object literal, where the
+    next semicolon is the end of the whole file: the first draft of this swallowed every
+    remaining entry and compared them as one string.
+
+    Only double-quoted parts: every one of these is written that way, and a matcher that
+    also took backticks would start reading template placeholders as text.
+    """
+    body = text[start:end if end is not None else text.index(";", start)]
+    return "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', body))
+
+
+def test_the_no_webgpu_sentences_on_the_page_are_the_librarys_own():
+    """**The page carries a second copy of two library messages, and this is why it may.**
+
+    A visitor without WebGPU reads one sentence saying what to do about it. It comes from
+    `device.ts`, and `/ko/` needs it in Korean — so `i18n.js` holds both languages. That
+    is two copies of the English, and two copies disagree in silence: on 2026-09-12 the
+    Korean home page printed the English one, because the page translated its own words
+    and passed the library's straight through.
+
+    So the English side is held equal here. Change the message in `device.ts` and this
+    fails until the Korean is written too, which is the whole point of the duplication
+    being allowed.
+    """
+    device = (ROOT / "borch-ts" / "src" / "device.ts").read_text(encoding="utf-8")
+    i18n = (ROOT / "site" / "assets" / "i18n.js").read_text(encoding="utf-8")
+    for const, key in (("NO_API", "device.noApiHow"), ("NO_ADAPTER", "device.noAdapterHow")):
+        said = _js_concatenated(device, device.index(f"const {const} ="))
+        entry = i18n.index(f'"{key}"')
+        en_at, ko_at = i18n.index("en:", entry), i18n.index("ko:", entry)
+        page = _js_concatenated(i18n, en_at, ko_at)
+        assert said and page, f"could not read {const} or {key}"
+        assert said == page, (
+            f"{key} in i18n.js is not {const} in device.ts any more:\n"
+            f"  device.ts: {said}\n  i18n.js:   {page}\n\n"
+            "  Update the English here and write the Korean beside it in the same commit.")
+        korean = _js_concatenated(i18n, ko_at, i18n.index("},", ko_at))
+        assert korean and korean != said, f"{key} has no Korean of its own"
+
+
+def test_no_runtime_message_carries_markdown():
+    """**The asterisks were for a reader of the source and reached a visitor's screen.**
+
+    `**...**` is how this repo emphasises a sentence in a comment. `NO_API` had a clause
+    wrapped that way and Safari 18 showed it with the asterisks in it — nothing that
+    renders these is a markdown renderer: a browser console, a Python traceback, a `<pre>`.
+    """
+    device = (ROOT / "borch-ts" / "src" / "device.ts").read_text(encoding="utf-8")
+    bad = []
+    for const in ("NO_API", "NO_ADAPTER"):
+        said = _js_concatenated(device, device.index(f"const {const} ="))
+        if "**" in said or "`" in said:
+            bad.append(f"{const}: {said}")
+    assert not bad, "these are shown to a person as they are, so they hold no markup:\n  " + "\n  ".join(bad)

@@ -24,6 +24,26 @@ const STRINGS = {
   "device.ready": {
     en: "WebGPU is up. Run executes on this tab's GPU.",
     ko: "WebGPU 를 잡았다. Run 을 누르면 이 탭의 GPU 에서 돈다." },
+  // **A library message is not the site's prose, and the Korean page printed it in
+  // English.** Measured on Safari 18, 2026-09-12: the badge read `WebGPU 없음 (브라우저)`
+  // in Korean and the sentence under it was English — the page translated its own words
+  // and then handed the library's through untouched. `probe()` returns exactly two of
+  // these and says which in `why`, so that is enough to choose. `test_site.py` holds the
+  // English side equal to `device.ts`: two copies that can disagree is the fault this
+  // would otherwise introduce, and the test is what makes it one copy with a translation.
+  "device.noApiHow": {
+    en: "There is no WebGPU here. It is in Chrome and Edge from 113, Firefox from 141, and "
+      + "Safari from 26 — Safari 18 to 25 have it behind Settings → Advanced → Feature Flags → "
+      + "WebGPU. Seeing this on a version that has it means it is switched off: on Linux "
+      + "Chrome, Unsafe WebGPU in chrome://flags. It has to be https or localhost.",
+    ko: "여기엔 WebGPU 가 없다. Chrome 과 Edge 는 113 부터, Firefox 는 141 부터, Safari 는 26 "
+      + "부터 있다 — Safari 18~25 는 설정 → 고급 → 기능 플래그 → WebGPU 뒤에 있다. 있는 버전에서 "
+      + "이 문장이 보인다면 꺼져 있다는 뜻이다: Linux Chrome 이면 chrome://flags 의 Unsafe WebGPU. "
+      + "https 나 localhost 여야 한다." },
+  "device.noAdapterHow": {
+    en: "No WebGPU adapter could be obtained — a driver blocklist, a virtual machine, or a "
+      + "headless environment with no GPU.",
+    ko: "WebGPU 어댑터를 얻지 못했다 — 드라이버 차단 목록, 가상 머신, 또는 GPU 가 없는 헤드리스 환경." },
   "device.noFallback": {
     en: "borch does not fall back — better not to run than to quietly go slow.",
     ko: "borch 는 폴백하지 않는다 — 조용히 느려지느니 안 도는 편이 낫다." },

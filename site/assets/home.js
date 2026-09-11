@@ -103,7 +103,7 @@ const ON_WINDOWS = /Windows/.test(navigator.userAgent);
     } else {
       badge.className = "badge off";
       badgeText.textContent = t(p.why === "no-api" ? "device.noApi" : "device.noAdapter");
-      say(p.message, "err");
+      say(t(p.why === "no-api" ? "device.noApiHow" : "device.noAdapterHow"), "err");
       if (p.why === "no-adapter" && ON_LINUX) say(t("device.linuxFlags"), "note");
       say(t("device.noFallback"), "note");
       sayLink(t("device.setupSay"), t("device.setupHref"));

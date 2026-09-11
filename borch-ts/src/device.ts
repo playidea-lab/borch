@@ -138,10 +138,13 @@ export type Availability =
 // have it behind the flag this names. Versions from MDN's browser-compat-data,
 // `api/GPU.json`, read 2026-09-10; the same table is on the setup page, and
 // `test_site.py` holds the two to each other.
+// **No markdown in a runtime message.** The asterisks around one clause were written for
+// a reader of this file and reached a visitor's screen as characters — Safari 18 on the
+// Korean home page, 2026-09-12. Nothing that renders this is a markdown renderer.
 const NO_API =
   "There is no WebGPU here. It is in Chrome and Edge from 113, Firefox from 141, and " +
   "Safari from 26 — Safari 18 to 25 have it behind Settings → Advanced → Feature Flags → " +
-  "WebGPU. **Seeing this on a version that has it means it is switched off**: on Linux " +
+  "WebGPU. Seeing this on a version that has it means it is switched off: on Linux " +
   "Chrome, Unsafe WebGPU in chrome://flags. It has to be https or localhost.";
 
 const NO_ADAPTER =
@@ -207,7 +210,13 @@ async function adapterFor(options: InitOptions): Promise<GPUAdapter | null> {
  * on its own.
  */
 export async function probe(options: InitOptions = {}): Promise<Availability> {
-  if (!("gpu" in navigator)) return { ok: false, why: "no-api", message: NO_API };
+  // **The question is whether there is an API to call, not whether a key exists.** This
+  // asked `"gpu" in navigator`, which is true of a property defined as undefined — and
+  // then `askAdapter` read `.requestAdapter` off it and the visitor got
+  // `Cannot read properties of undefined` where the sentence above was meant to go.
+  // Safari with the flag off does remove the property, so this was only ever wrong for
+  // the shapes a policy or an extension leaves; it is one test for all of them now.
+  if (!navigator.gpu) return { ok: false, why: "no-api", message: NO_API };
   const adapter = await askAdapter(options);
   if (!adapter) return { ok: false, why: "no-adapter", message: NO_ADAPTER };
   held.set(optionsKey(options), adapter);
@@ -438,7 +447,7 @@ export class Device {
   }
 
   static async create(options: InitOptions = {}): Promise<Device> {
-    if (!("gpu" in navigator)) throw new Error(NO_API);
+    if (!navigator.gpu) throw new Error(NO_API);          // see probe(): the key can be there and undefined
     const adapter = await adapterFor(options);
     if (!adapter) throw new Error(NO_ADAPTER);
     // **A measured number means something only once you know which device it came
