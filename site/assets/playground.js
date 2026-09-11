@@ -121,8 +121,47 @@ editor.addEventListener("scroll", syncScroll);
 
 /* ── what to open with ──────────────────────────────────────────────── */
 
+/** base64(Float32Array bytes) -> Float32Array. The TM++ handoff carries features this way:
+ *  JSON blows a float array up ~3x, base64 of the raw bytes is ~1.33x and fits localStorage. */
+function f32FromB64(b64) {
+  const bin = atob(b64);
+  const u8 = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new Float32Array(u8.buffer);
+}
+
+/** TM++ hands a trained model over in localStorage (same origin) and navigates here with
+ *  `#from=tmplus`. The head code is the editor's; the features come back as `globalThis.__tm`,
+ *  the exact global that code reads — so pressing Run continues the training in the fuller editor. */
+function openHandoff() {
+  let raw = null;
+  try { raw = localStorage.getItem("borch.tmplus.handoff"); } catch { return false; }
+  if (!raw) return false;
+  try {
+    const h = JSON.parse(raw);
+    globalThis.__tm = {
+      D: h.D, K: h.K, N: h.N, Nt: h.Nt, names: h.names,
+      labels: h.labels, testLabels: h.testLabels,
+      features: f32FromB64(h.features), testFeatures: f32FromB64(h.testFeatures),
+      head: null,
+    };
+    setLang("js", { keepCode: true });
+    editor.value = h.code;
+    repaint();
+    saveCode();
+    say(t("editor.opened", t("editor.fromTmplus")), "note");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { localStorage.removeItem("borch.tmplus.handoff"); } catch { /* one-shot either way */ }
+  }
+}
+
 function boot() {
   const hash = new URLSearchParams(location.hash.slice(1));
+
+  // The TM++ handoff is the most specific intent, so it wins over a saved buffer or an example.
+  if (hash.get("from") === "tmplus" && openHandoff()) return;
 
   const shared = hash.get("code");
   if (shared) {

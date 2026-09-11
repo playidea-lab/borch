@@ -124,6 +124,7 @@
       <textarea id="code" spellcheck="false" autocomplete="off" wrap="off"></textarea>
       <div class="code-foot">
         <button class="btn primary" id="run" disabled>▶ Run this code</button>
+        <button class="btn ghost" id="toplay" disabled title="Open this model and its features in the full Playground editor">↗ Open in Playground</button>
         <span id="runstat">—</span>
       </div>
     </div>
@@ -278,11 +279,24 @@ async function runHeadCode(){
   try{ await import(url); } finally { URL.revokeObjectURL(url); }
 }
 
+/* ── hand off to the full Playground editor (same borch surface, same __tm global) ── */
+function f32b64(f32){ const u8=new Uint8Array(f32.buffer,f32.byteOffset,f32.byteLength); let bin=""; const CH=0x8000;
+  for(let i=0;i<u8.length;i+=CH) bin+=String.fromCharCode.apply(null,u8.subarray(i,i+CH)); return btoa(bin); }
+function openInPlayground(){
+  const tm=globalThis.__tm; if(!tm) return;
+  const payload={ code:$("#code").value, D:tm.D, K:tm.K, N:tm.N, Nt:tm.Nt, names:tm.names,
+    labels:Array.from(tm.labels), testLabels:Array.from(tm.testLabels),
+    features:f32b64(tm.features), testFeatures:f32b64(tm.testFeatures) };
+  try{ localStorage.setItem("borch.tmplus.handoff", JSON.stringify(payload)); }
+  catch(e){ logLine("Dataset too large to hand off — trim photos or edit here.","err"); return; }
+  window.open("playground.html#from=tmplus","_blank");
+}
+
 /* ── train: extract features, then run the head code ── */
 let busy=false;
 async function train(){
   if(busy) return; const data=buildData(); if(!data){ logLine("Add ≥2 classes with ≥2 photos each.","note"); return; }
-  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#train").disabled=true; $("#run").disabled=true; $("#runstat").textContent="extracting features…";
+  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#train").disabled=true; $("#run").disabled=true; $("#toplay").disabled=true; $("#runstat").textContent="extracting features…";
   try{
     logLine("extracting features from "+(data.tr.length+data.te.length)+" photos through the backbone…");
     const featTr=[], featTe=[];
@@ -296,7 +310,7 @@ async function train(){
     $("#runstat").textContent="training head…";
     await runHeadCode();
     head=globalThis.__tm.head;
-    $("#runstat").textContent="done"; $("#run").disabled=false;
+    $("#runstat").textContent="done"; $("#run").disabled=false; $("#toplay").disabled=false;
     enablePredict();
   }catch(e){ logLine(String(e&&e.message?e.message:e),"err"); $("#runstat").textContent="error"; }
   finally{ busy=false; $("#train").disabled=false; }
@@ -330,7 +344,7 @@ function logLine(m,cls=""){ const s=document.createElement("span"); s.className=
 
 /* ── wire ── */
 $("#addclass").onclick=()=>{ classes.push({name:"class "+(classes.length+1),imgs:[],thumbs:[]}); renderBuckets(); };
-$("#train").onclick=train; $("#run").onclick=rerun;
+$("#train").onclick=train; $("#run").onclick=rerun; $("#toplay").onclick=openInPlayground;
 $("#cambtn").onclick=async()=>{ if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null;$("#cam").style.display="none";renderBuckets();return;}
   try{ camStream=await navigator.mediaDevices.getUserMedia({video:true}); $("#cam").srcObject=camStream; $("#cam").style.display="block"; renderBuckets(); }
   catch(e){ logLine("Camera unavailable — use upload instead.","note"); } };

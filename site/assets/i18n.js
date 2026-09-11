@@ -121,6 +121,9 @@ const STRINGS = {
     en: "{0} — ⌘/Ctrl + Enter to run.", ko: "{0} — ⌘/Ctrl + Enter 로 돌린다." },
   "editor.fromLink": {
     en: "Opened code from a link", ko: "링크로 받은 코드를 열었다" },
+  "editor.fromTmplus": {
+    en: "Opened your TM++ model — the trained features are here as __tm. Press Run.",
+    ko: "TM++ 모델을 열었다 — 학습된 특징이 __tm 으로 여기 있다. Run 을 누른다." },
   "editor.lastTime": {
     en: "Opened what you were typing last time", ko: "지난번에 치던 것을 열었다" },
   "editor.pyFirstRun": {
