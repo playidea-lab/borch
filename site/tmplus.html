@@ -35,6 +35,8 @@
 </script>
 <style>
   .tm { max-width:1240px; margin:0 auto; padding:1.1rem; }
+  /* 이 페이지의 .btn 등은 display를 지정해 UA의 [hidden]을 이긴다 — 스코프 리셋으로 hidden을 되살린다. */
+  .tm [hidden] { display:none !important; }
   .tm h1 { font-size:1.4rem; margin:.2rem 0; }
   .tm .lead { color:var(--fg-muted); font-size:.9rem; max-width:74ch; margin:0 0 .5rem; }
   .tm .lead b { color:var(--fg); }
@@ -64,7 +66,7 @@
   #cam { width:100%; border-radius:8px; display:none; margin-top:.5rem; background:#000; }
   #meter { width:100%; height:8px; border-radius:4px; background:var(--line-soft); overflow:hidden; display:none; margin-top:.5rem; }
   #meter > i { display:block; height:100%; width:0; background:var(--accent,#ff7a3d); transition:width .05s; }
-  #spec { width:100%; height:88px; border-radius:8px; display:none; margin-top:.5rem; background:#111; }
+  #spec { width:100%; height:88px; border-radius:8px; margin-top:.5rem; background:#111; }
   .cm { padding:.5rem .7rem; }
   .cm .h { color:var(--fg-faint); font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:.3rem; }
   .cm table { border-collapse:collapse; font-size:.72rem; }
