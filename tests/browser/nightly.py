@@ -115,6 +115,10 @@ CHECKS = [
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py", "--py"]),
     ("scope",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/scope_escape.py"]),
     ("cost",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/cost.py"]),
+    # The binding's own cost, the path a user walks — one more leaky place than the TS side
+    # (a Python object can hold a JS handle). Reached through `run.py --cost`; running it by
+    # hand on 2026-09-11 is what found the empty_cache device fault.
+    ("cost:binding", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/run.py", "--lib", "borch_webgpu", "--cost"]),
     ("first-run",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/first_run.py"]),
     # The same clock on the deployed site, so the transfer is inside it — the visitor's number.
     ("first-run:deployed", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/first_run.py",

@@ -322,6 +322,13 @@ def main():
         print("-- probe --")
         print(probed)
         print()
+    # **`--cost` is a check, not a printout.** It sets the probe to cost.py's report, which
+    # names its own divergences ("N diverged"). Without this, run.py would exit on the golden
+    # alone and a leak or a frozen-count drift on the binding would print in green — the TS
+    # cost gates the same way through its own runner. A device fault (empty_cache) already
+    # stops the run by throwing; this catches the quieter failures the report only prints.
+    if args.cost and probed is not None and "diverged" in probed:
+        return 1
     # **A training run that only prints is a comment.** Both `--resnet` flags return the
     # same key/value lines the native run prints, and until this was here reading them was
     # left to whoever remembered to look. They are judged against the answers real torch

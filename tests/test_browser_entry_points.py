@@ -182,7 +182,6 @@ UNWIRED = {
     "clipped.py": ("check", "whether anything on the site is cut off rather than narrow"),
     "fold_probe.py": ("check", "the backward of expand, repeat and flip against the walking kernel"),
     "sync_probe.py": ("check", "whether borch.ts can be called synchronously from Python on Pyodide"),
-    "cost.py": ("check", "one binding step's dispatches and buffers; reached by `run.py --cost`, which nothing passes"),
     "bench.py": ("tool", "the timed training step behind `run.py --bench`, a measurement rather than a verdict"),
     "export_resnet18.py": ("tool", "writes the ResNet-18 weights the inference comparison shares — run when they change"),
     "features_probe.py": ("diagnostic", "prints what this adapter offers; there is no right answer to fail"),
@@ -190,10 +189,11 @@ UNWIRED = {
     "why_failing.py": ("on-demand", "groups already-failed golden cases by reason; nothing to run when they pass"),
 }
 
-# The three standalone checks above plus `cost.py`. **Frozen so that a fifth has to be
-# argued for**, not so that these five are acceptable: each is a question somebody wrote
-# down and nothing asks. Lower it by wiring one in.
-UNWIRED_CHECKS = 4
+# The three standalone checks above — clipped, fold_probe, sync_probe. **Frozen so that a
+# fourth has to be argued for**, not so that these three are acceptable: each is a question
+# somebody wrote down and nothing asks. Lower it by wiring one in — `cost.py` was the last,
+# wired through the nightly's `run.py --cost` row.
+UNWIRED_CHECKS = 3
 
 
 def _flag_entry_points():
