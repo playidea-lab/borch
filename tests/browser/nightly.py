@@ -114,6 +114,13 @@ CHECKS = [
     # `--py`: every Python twin on the lesson pages is pressed too (Pyodide from vendor/).
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py", "--py"]),
     ("scope",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/scope_escape.py"]),
+    # The backward of expand, repeat and flip: the folded kernel against the walking one,
+    # which is the only thing that says the fold is an optimisation and not a new answer.
+    ("fold",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/fold_probe.py"]),
+    # The floor `borch_webgpu` stands on: whether Pyodide can call borch.ts synchronously.
+    # Nothing else here fails if JSPI goes away — every binding row just gets slower or
+    # hangs, and this is the row that would say why.
+    ("sync",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/sync_probe.py"]),
     ("cost",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/cost.py"]),
     # The binding's own cost, the path a user walks — one more leaky place than the TS side
     # (a Python object can hold a JS handle). Reached through `run.py --cost`; running it by
