@@ -63,7 +63,16 @@
   .toolbar { display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.6rem; }
   #cam { width:100%; border-radius:8px; display:none; margin-top:.5rem; background:#000; }
   #meter { width:100%; height:8px; border-radius:4px; background:var(--line-soft); overflow:hidden; display:none; margin-top:.5rem; }
-  #meter > i { display:block; height:100%; width:0; background:var(--accent,#ff7a3d); }
+  #meter > i { display:block; height:100%; width:0; background:var(--accent,#ff7a3d); transition:width .05s; }
+  #spec { width:100%; height:88px; border-radius:8px; display:none; margin-top:.5rem; background:#111; }
+  .cm { padding:.5rem .7rem; }
+  .cm .h { color:var(--fg-faint); font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; margin-bottom:.3rem; }
+  .cm table { border-collapse:collapse; font-size:.72rem; }
+  .cm th, .cm td { padding:.18rem .42rem; text-align:center; border:1px solid var(--line-soft); font-variant-numeric:tabular-nums; }
+  .cm th { color:var(--fg-faint); font-weight:600; }
+  .cm th.rowlbl { text-align:right; }
+  .cm td.d { background:color-mix(in srgb,#2c9a4a 20%,transparent); font-weight:700; }
+  .cm td.m { background:color-mix(in srgb,#e5484d 16%,transparent); }
   #train { width:100%; margin-top:.7rem; }
   .wedge { margin-top:.7rem; padding:.55rem .7rem; border-left:3px solid var(--accent,#ff7a3d); background:color-mix(in srgb,var(--accent,#ff7a3d) 8%,transparent); border-radius:0 8px 8px 0; font-size:.8rem; color:var(--fg-muted); }
   .wedge b { color:var(--fg); }
@@ -147,6 +156,7 @@
           <button class="btn ghost" id="micbtn" hidden>microphone</button>
         </div>
         <video id="cam" autoplay playsinline muted></video>
+        <canvas id="spec" hidden></canvas>
         <div id="meter"><i></i></div>
         <button class="btn primary" id="train" disabled>▶ Train</button>
         <div class="wedge" id="wedge"><b>Hit a wall?</b> The panel only does the preset task. Want a different head, another loss, a threshold? Edit the code and run it — same examples.</div>
@@ -169,6 +179,7 @@
       <pre id="console"></pre>
       <div class="cap" id="chartcap">loss</div>
       <canvas id="chart"></canvas>
+      <div id="cm" class="cm" hidden></div>
       <div id="predict"><div id="predbar" class="muted small">train a model, then turn on the webcam or microphone to predict live</div></div>
     </div>
   </div>
@@ -254,14 +265,19 @@ async function micOn(){
   const src=audioCtx.createMediaStreamSource(micStream);
   analyser=audioCtx.createAnalyser(); analyser.fftSize=1024; analyser.smoothingTimeConstant=0.2;
   src.connect(analyser); freqData=new Uint8Array(analyser.frequencyBinCount);
-  ring=[];
+  ring=[]; let tick=0;
   sampler=setInterval(()=>{ analyser.getByteFrequencyData(freqData); ring.push(freqData.slice());
     if(ring.length>SPEC_T*2) ring.shift();
     let m=0; for(const v of freqData) m=Math.max(m,v); const bar=$("#meter").firstElementChild; if(bar) bar.style.width=(100*m/255)+"%";
+    if((++tick%4)===0) drawSpecPreview();   // ~30ms 마다 라이브 스펙트로그램 미리보기 갱신
   }, SPEC_STEP);
+  $("#meter").style.display="block"; $("#spec").hidden=false;
 }
 function micOff(){ if(sampler){clearInterval(sampler);sampler=null;} if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;}
-  if(audioCtx){audioCtx.close();audioCtx=null;} analyser=null; ring=[]; $("#meter").style.display="none"; }
+  if(audioCtx){audioCtx.close();audioCtx=null;} analyser=null; ring=[]; $("#meter").style.display="none"; $("#spec").hidden=true; }
+function drawSpecPreview(){ const cv=$("#spec"); if(cv.hidden||!ring.length) return;
+  const src=specCanvas(ring.slice(-SPEC_T)); const w=cv.clientWidth||300, h=88;
+  cv.width=w; cv.height=h; cv.getContext("2d").drawImage(src,0,0,w,h); }
 function specCanvas(frames){   // frames: Uint8Array(bins)[] -> canvas (freq on Y, time on X)
   const bins=frames[0].length, T=frames.length;
   const cv=document.createElement("canvas"); cv.width=T; cv.height=bins;
@@ -461,7 +477,7 @@ async function runHeadCode(){
 let busy=false;
 async function train(){
   if(busy) return; const data=buildData(); if(!data){ logLine("Not enough examples for this task yet.","note"); return; }
-  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#train").disabled=true; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="extracting features…";
+  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#cm").hidden=true; $("#train").disabled=true; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="extracting features…";
   try{
     logLine("extracting features from "+(data.tr.length+data.te.length)+" examples through the backbone…");
     const featTr=[], featTe=[];
@@ -477,12 +493,12 @@ async function train(){
     await runHeadCode();
     head=globalThis.__tm.head;
     $("#runstat").textContent="done"; $("#run").disabled=false; $("#toplay").disabled=false; $("#onnxbtn").disabled=(task==="anomaly");
-    enablePredict();
+    enablePredict(); await showConfusion();
   }catch(e){ logLine(String(e&&e.message?e.message:e),"err"); $("#runstat").textContent="error"; }
   finally{ busy=false; $("#train").disabled=false; }
 }
 async function rerun(){ if(busy||!globalThis.__tm) return; busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#run").disabled=true; $("#runstat").textContent="running…";
-  try{ await runHeadCode(); head=globalThis.__tm.head; $("#runstat").textContent="done"; enablePredict(); }
+  try{ await runHeadCode(); head=globalThis.__tm.head; $("#runstat").textContent="done"; enablePredict(); await showConfusion(); }
   catch(e){ logLine(String(e&&e.message?e.message:e),"err"); $("#runstat").textContent="error"; }
   finally{ busy=false; $("#run").disabled=false; } }
 
@@ -519,6 +535,27 @@ function enablePredict(){
   else { stopLive(); $("#predbar").innerHTML='<span class="muted small">turn on the '+(modality==="audio"?"microphone":"webcam")+' to predict live'+(task==="classify"?', or it scored the held-out set above':'')+'</span>'; }
 }
 
+/* ── held-out confusion matrix (classify only) ── */
+async function showConfusion(){
+  const tm=globalThis.__tm; const cm=$("#cm");
+  if(task!=="classify" || !head || !tm || !tm.Nt){ cm.hidden=true; return; }
+  const {D,Nt,names,testFeatures,testLabels}=tm; const K=names.length;
+  const preds=await scope(async()=>noGrad(()=>head.call(Tensor.from(testFeatures,[Nt,D])).argmax(1)).toArray());
+  const M=Array.from({length:K},()=>new Array(K).fill(0));
+  for(let i=0;i<Nt;i++) M[testLabels[i]][preds[i]]++;
+  const short=(s)=>s.length>7?s.slice(0,6)+"…":s;
+  const el=(tag,cls,txt,title)=>{ const e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; if(title) e.title=title; return e; };
+  cm.textContent="";
+  cm.appendChild(el("div","h","held-out confusion · rows = true, cols = predicted"));
+  const tbl=document.createElement("table");
+  const hr=document.createElement("tr"); hr.appendChild(el("th"));
+  for(let j=0;j<K;j++) hr.appendChild(el("th",null,short(names[j]),names[j]));
+  tbl.appendChild(hr);
+  for(let i=0;i<K;i++){ const tr=document.createElement("tr"); tr.appendChild(el("th","rowlbl",short(names[i]),names[i]));
+    for(let j=0;j<K;j++) tr.appendChild(el("td", i===j?"d":(M[i][j]>0?"m":null), M[i][j])); tbl.appendChild(tr); }
+  cm.appendChild(tbl); cm.hidden=false;
+}
+
 /* ── plot + console ── */
 function plot(n,v){ series.push(v); drawChart(); }
 function drawChart(){ const dpr=window.devicePixelRatio||1,w=chart.clientWidth||300,h=120; chart.width=w*dpr;chart.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
@@ -535,8 +572,10 @@ function setModality(m){
   // 모달리티 전환 시 캡처 장치 정리
   if(m!=="image" && camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; $("#cam").style.display="none"; }
   if(m!=="audio") micOff();
-  stopLive();
+  stopLive(); head=null; globalThis.__tm=null;
   classes=defaultClasses(); renderBuckets();
+  $("#code").value="// train a model first (Train), and the head's code appears here to edit.";
+  $("#cm").hidden=true; $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="—";
 }
 function setTask(t){
   if(t===task) return; task=t;
@@ -545,7 +584,7 @@ function setTask(t){
   stopLive(); head=null; globalThis.__tm=null;
   classes=defaultClasses(); renderBuckets();
   $("#code").value="// train a model first (Train), and the head's code appears here to edit.";
-  $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="—";
+  $("#cm").hidden=true; $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="—";
 }
 function applyPreset(id){
   const p=PRESETS[id]; if(!p||!p.task) return;
