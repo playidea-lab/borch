@@ -12099,21 +12099,29 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const spatial = this.shape.length - 2;
     const sizes = typeof outSize === "number"
       ? new Array<number>(spatial).fill(outSize) : [...outSize];
-    let out: Tensor = this;
-    for (let k = 0; k < spatial; k++) {
-      const axis = 2 + k;
-      const n = out.shape[axis] ?? 1;
-      const want = sizes[k] ?? 1;
-      const parts: Tensor[] = [];
-      for (let i = 0; i < want; i++) {
-        const start = Math.floor((i * n) / want);
-        const end = Math.ceil(((i + 1) * n) / want);
-        const window = out.narrow(axis, start, end - start);
-        parts.push(kind === "avg" ? window.mean(axis, true) : window.amax(axis, true));
+    // One traced node: global average is `GlobalAveragePool` and emit refuses the rest by
+    // name. Untraced, the `narrow`/`mean`/`cat` below reach an ONNX export as a value with
+    // a `SliceBackward0` and no producing node — which, before this was traced, the
+    // exporter froze as a constant while dropping the pool, a quietly wrong file (the
+    // workbench's small CNN handed one out until the loud refusal found it).
+    const op = kind === "avg" ? "adaptive_avg_pool" : "adaptive_max_pool";
+    return traced(op, [this], { output_size: sizes.every((s) => s === 1) ? 1 : sizes.join(",") }, () => {
+      let out: Tensor = this;
+      for (let k = 0; k < spatial; k++) {
+        const axis = 2 + k;
+        const n = out.shape[axis] ?? 1;
+        const want = sizes[k] ?? 1;
+        const parts: Tensor[] = [];
+        for (let i = 0; i < want; i++) {
+          const start = Math.floor((i * n) / want);
+          const end = Math.ceil(((i + 1) * n) / want);
+          const window = out.narrow(axis, start, end - start);
+          parts.push(kind === "avg" ? window.mean(axis, true) : window.amax(axis, true));
+        }
+        out = Tensor.cat(parts, axis);
       }
-      out = Tensor.cat(parts, axis);
-    }
-    return out;
+      return out;
+    });
   }
 
   /**

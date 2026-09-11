@@ -10,7 +10,7 @@
 import { Tensor, noGrad } from "../src/tensor.js";
 import { manualSeed } from "../src/random.js";
 import { exportOnnx } from "../src/onnx.js";
-import { Embedding, LayerNorm, Linear, Module } from "../src/nn.js";
+import { AdaptiveAvgPool2d, Conv2d, Embedding, Flatten, LayerNorm, Linear, MaxPool2d, Module } from "../src/nn.js";
 import { ResNet18 } from "./bench.js";
 
 interface OrtTensorLike { data: Float32Array }
@@ -188,6 +188,37 @@ export async function report(): Promise<{ text: string; checks: Check[] }> {
                 ok: embGap <= GATE && embPlan.ops.includes("Gather"),
                 note: `${embPlan.ops.join(", ")} · max |Δ| ${embGap.toExponential(2)}` });
   lines.push(`embedding ORT vs borch.ts: ${embPlan.ops.join(", ")} · max |Δ| ${embGap.toExponential(2)}`);
+
+  // ── A small CNN whose global pool is `AdaptiveAvgPool2d` on an intermediate ──
+  // The workbench's section-4 model. `AdaptiveAvgPool2d` slices its input into bins and
+  // averages each — untraced, that slice reached the export as a `SliceBackward0` with no
+  // producer and the exporter refused (or, before it refused, froze it wrong). Now the
+  // pool is one traced `GlobalAveragePool` node and the whole CNN exports.
+  manualSeed(19);
+  const cnn = new (class extends Module {
+    conv = new Conv2d(3, 4, 3, 1, 1);
+    pool = new MaxPool2d(2);
+    gap = new AdaptiveAvgPool2d(1);
+    flat = new Flatten();
+    fc = new Linear(4, 3);
+    override forward(x: Tensor): Tensor {
+      const h = this.pool.forward(this.conv.forward(x).unary("relu"));
+      return this.fc.forward(this.flat.forward(this.gap.forward(h)));
+    }
+  })();
+  cnn.eval();
+  const cdata = pixels(1, 19).subarray(0, 1 * 3 * 8 * 8);
+  const csample = Tensor.from(cdata, [1, 3, 8, 8]);
+  const cPlan = await exportOnnx(cnn, csample);
+  const csession = await o.InferenceSession.create(cPlan.bytes, { executionProviders: ["webgpu"] });
+  const cours = await noGrad(() => cnn.forward(Tensor.from(cdata, [1, 3, 8, 8]))).toArray();
+  const ctheirs = (await csession.run({ input: new o.Tensor("float32", cdata, [1, 3, 8, 8]) }))["output"]?.data
+    ?? new Float32Array();
+  const cgap = ctheirs.length === cours.length ? maxAbsDiff(cours, ctheirs) : Infinity;
+  checks.push({ name: "a small CNN with AdaptiveAvgPool2d on an intermediate exports and agrees",
+                ok: cgap <= GATE && cPlan.ops.includes("GlobalAveragePool"),
+                note: `${cPlan.ops.join(", ")} · max |Δ| ${cgap.toExponential(2)}` });
+  lines.push(`small CNN ORT vs borch.ts: max |Δ| ${cgap.toExponential(2)}`);
 
   // A refusal names the op rather than writing a file that will not run.
   let refusal = "";
