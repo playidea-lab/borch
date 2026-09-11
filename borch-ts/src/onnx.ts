@@ -238,6 +238,15 @@ function emit(node: TraceNode, batch: number, dynamicBatch: boolean): Emitted[] 
     const [x = null] = inputs;
     return [{ opType: "Gelu", inputs: [x], attrs: { approximate: op === "unary:geluTanh" ? "tanh" : "none" } }];
   }
+  if (op === "unary:hardsigmoid") {
+    // ONNX HardSigmoid is `max(0, min(1, alpha·x + beta))`, and its defaults are
+    // alpha=0.2, beta=0.5 — but torch's (and borch's) hardsigmoid is `x/6 + 0.5`
+    // clamped, i.e. alpha=1/6. Emit the attributes, or ORT runs a different slope and
+    // MobileNetV3's SE gates come out wrong: the file loads, the throw-guard is happy,
+    // and the features are off by ~5 (measured against ORT on the hub backbone).
+    const [x = null] = inputs;
+    return [{ opType: "HardSigmoid", inputs: [x], attrs: { alpha: 1 / 6, beta: 0.5 } }];
+  }
   if (op.startsWith("unary:")) {
     const opType = UNARY[op.slice(6)];
     if (!opType) throw new Error(`cannot export ${op.slice(6)}: no ONNX spelling for it here`);

@@ -10,7 +10,7 @@
 import { Tensor, noGrad } from "../src/tensor.js";
 import { manualSeed } from "../src/random.js";
 import { exportOnnx } from "../src/onnx.js";
-import { AdaptiveAvgPool2d, Conv2d, Embedding, Flatten, LayerNorm, Linear, MaxPool2d, Module } from "../src/nn.js";
+import { AdaptiveAvgPool2d, Conv2d, Embedding, Flatten, Hardsigmoid, Hardswish, LayerNorm, Linear, MaxPool2d, Module } from "../src/nn.js";
 import { ResNet18 } from "./bench.js";
 
 interface OrtTensorLike { data: Float32Array }
@@ -219,6 +219,30 @@ export async function report(): Promise<{ text: string; checks: Check[] }> {
                 ok: cgap <= GATE && cPlan.ops.includes("GlobalAveragePool"),
                 note: `${cPlan.ops.join(", ")} · max |Δ| ${cgap.toExponential(2)}` });
   lines.push(`small CNN ORT vs borch.ts: max |Δ| ${cgap.toExponential(2)}`);
+
+  // ── MobileNetV3's activations: HardSwish and HardSigmoid ──
+  // ONNX HardSigmoid is `max(0, min(1, alpha·x + beta))` and defaults to alpha=0.2, but
+  // torch's (and borch's) is `x/6 + 0.5` clamped — alpha=1/6. Emitted without the
+  // attribute, the file loaded and the throw-guard was happy, yet ORT ran a steeper gate
+  // and the hub MobileNetV3's features came out ~5 off. The exporter now writes alpha/beta.
+  const hdata = pixels(1, 23).subarray(0, 1 * 3 * 8 * 8).map((v) => v * 4);   // span the clip regions
+  const act = new (class extends Module {
+    hs = new Hardsigmoid();
+    hw = new Hardswish();
+    override forward(x: Tensor): Tensor { return this.hw.forward(this.hs.forward(x)); }
+  })();
+  act.eval();
+  const hsample = Tensor.from(hdata, [1, 3, 8, 8]);
+  const hPlan = await exportOnnx(act, hsample);
+  const hsession = await o.InferenceSession.create(hPlan.bytes, { executionProviders: ["webgpu"] });
+  const hours = await noGrad(() => act.forward(Tensor.from(hdata, [1, 3, 8, 8]))).toArray();
+  const htheirs = (await hsession.run({ input: new o.Tensor("float32", hdata, [1, 3, 8, 8]) }))["output"]?.data
+    ?? new Float32Array();
+  const hgap = htheirs.length === hours.length ? maxAbsDiff(hours, htheirs) : Infinity;
+  checks.push({ name: "ORT reproduces HardSigmoid (alpha=1/6) and HardSwish",
+                ok: hgap <= GATE && hPlan.ops.includes("HardSigmoid") && hPlan.ops.includes("HardSwish"),
+                note: `${hPlan.ops.join(", ")} · max |Δ| ${hgap.toExponential(2)}` });
+  lines.push(`hard activations ORT vs borch.ts: max |Δ| ${hgap.toExponential(2)}`);
 
   // A refusal names the op rather than writing a file that will not run.
   let refusal = "";
