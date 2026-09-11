@@ -1,0 +1,349 @@
+<!doctype html>
+<!--
+  TM++ — teach an image classifier from your own photos, in this tab, on your GPU.
+  Real transfer learning: a frozen MobileNetV3 backbone (from borch-hub) turns each
+  photo into 1024 features, and a small head learns your classes on top. Then the head's
+  real torch-shaped code is editable — the door a fixed no-code trainer never opens.
+  Nothing is uploaded; the photos and the model stay in this tab.
+  Korean edition: ko/tmplus.html.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TM++ — teach a model in your tab</title>
+<link rel="alternate" hreflang="ko" href="ko/tmplus.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="TM++ — teach a model in your tab">
+<meta property="og:description" content="Teach an image classifier from your own photos in the browser, then edit the real torch code it trained.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/tmplus.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "../borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.6.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.2.3?external=borch-ts,bimm-ts"
+} }
+</script>
+<style>
+  .tm { max-width:1240px; margin:0 auto; padding:1.1rem; }
+  .tm h1 { font-size:1.4rem; margin:.2rem 0; }
+  .tm .lead { color:var(--fg-muted); font-size:.9rem; max-width:70ch; margin:0 0 .5rem; }
+  .tm .lead b { color:var(--fg); }
+  .grid { display:grid; grid-template-columns:300px 1fr 320px; gap:1rem; margin-top:1rem; align-items:start; }
+  @media (max-width:960px){ .grid{ grid-template-columns:1fr; } }
+  .card { border:1px solid var(--line-soft); border-radius:12px; overflow:hidden; }
+  .card>h3 { margin:0; padding:.55rem .8rem; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--fg-faint); border-bottom:1px solid var(--line-soft); }
+  .card .body { padding:.75rem; }
+  .bucket { border:1px solid var(--line-soft); border-radius:10px; padding:.5rem; margin-bottom:.55rem; }
+  .bucket .top { display:flex; gap:.4rem; align-items:center; margin-bottom:.4rem; }
+  .bucket input.name { flex:1; background:transparent; border:0; border-bottom:1px solid transparent; color:var(--fg); font-weight:600; font-size:.86rem; padding:.1rem 0; }
+  .bucket input.name:focus { outline:none; border-bottom-color:var(--accent,#ff7a3d); }
+  .bucket .n { color:var(--fg-faint); font-size:.74rem; }
+  .thumbs { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:.4rem; min-height:26px; }
+  .thumbs canvas { width:26px; height:26px; border-radius:4px; object-fit:cover; }
+  .drop { border:1.5px dashed var(--line-soft); border-radius:8px; padding:.4rem; text-align:center; color:var(--fg-faint); font-size:.75rem; cursor:pointer; }
+  .drop.over { border-color:var(--accent,#ff7a3d); color:var(--accent,#ff7a3d); }
+  .rowbtns { display:flex; gap:.35rem; margin-top:.4rem; }
+  .toolbar { display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.6rem; }
+  #cam { width:100%; border-radius:8px; display:none; margin-top:.5rem; background:#000; }
+  #train { width:100%; margin-top:.7rem; }
+  .wedge { margin-top:.7rem; padding:.55rem .7rem; border-left:3px solid var(--accent,#ff7a3d); background:color-mix(in srgb,var(--accent,#ff7a3d) 8%,transparent); border-radius:0 8px 8px 0; font-size:.8rem; color:var(--fg-muted); }
+  .wedge b { color:var(--fg); }
+  #code { width:100%; height:400px; resize:vertical; border:0; background:var(--code-bg,#f4f1ea); color:var(--fg); padding:.75rem; font:12.5px/1.5 ui-monospace,Menlo,monospace; tab-size:2; white-space:pre; overflow:auto; outline:none; }
+  .code-foot { display:flex; gap:.5rem; align-items:center; padding:.5rem .7rem; border-top:1px solid var(--line-soft); }
+  #runstat { margin-left:auto; color:var(--fg-faint); font-size:.78rem; }
+  #console { margin:0; padding:.6rem .8rem; height:150px; overflow:auto; white-space:pre-wrap; font:12px/1.5 ui-monospace,Menlo,monospace; border-bottom:1px solid var(--line-soft); }
+  #console .err{color:#e5484d;} #console .note{color:var(--accent,#ff7a3d);}
+  #chart { width:100%; height:120px; display:block; }
+  .cap { padding:.5rem .7rem 0; color:var(--fg-faint); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; }
+  #predict { border-top:1px solid var(--line-soft); padding:.6rem .8rem; }
+  #predbar { font-size:.85rem; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="api/">API</a>
+      <a href="vision.html">Vision</a>
+      <a href="models.html">Models</a>
+      <a href="python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="workbench.html">Workbench</a>
+      <a href="tmplus.html" class="on" aria-current="page">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="setup.html">GPU</a>
+      <a href="check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/tmplus.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<main class="tm">
+  <h1>Teach an image classifier — from your own photos, in this tab.</h1>
+  <p class="lead">
+    Add a few photos per class (webcam or upload), press <b>Train</b>, and a small model learns them on your GPU —
+    real transfer learning on a frozen <b>MobileNetV3</b> backbone, nothing uploaded. Then the head's
+    <b>real torch code</b> is on the right: change the model or the task and run it again.
+    <span class="badge" id="badge" style="margin-left:.3rem"><span class="led"></span><span id="badge-txt">loading…</span></span>
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>1 · Classes &amp; photos</h3>
+      <div class="body">
+        <div id="buckets"></div>
+        <div class="toolbar">
+          <button class="btn ghost" id="addclass">+ class</button>
+          <button class="btn ghost" id="cambtn">webcam</button>
+        </div>
+        <video id="cam" autoplay playsinline muted></video>
+        <button class="btn primary" id="train" disabled>▶ Train</button>
+        <div class="wedge"><b>Hit a wall?</b> The panel only classifies. Want a score, a different head, another loss? Edit the code and run it — same photos.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>2 · The head — real torch code (edit me)</h3>
+      <textarea id="code" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+      <div class="code-foot">
+        <button class="btn primary" id="run" disabled>▶ Run this code</button>
+        <span id="runstat">—</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>3 · Watch it learn · then point the camera</h3>
+      <pre id="console"></pre>
+      <div class="cap">loss</div>
+      <canvas id="chart"></canvas>
+      <div id="predict"><div id="predbar" class="muted small">train a model, then use webcam capture to predict live</div></div>
+    </div>
+  </div>
+</main>
+
+<footer style="padding:.6rem 1rem;border-top:1px solid var(--line-soft);font-size:.75rem;color:var(--fg-faint)">
+  Built on <a href="https://github.com/playidea-lab/borch">borch</a>. The backbone is fetched from
+  <a href="models.html">borch-hub</a> and re-hashed; your photos never leave this tab. Small models — this is the browser.
+</footer>
+
+<script type="module">
+import { init, Tensor, nn, optim, noGrad, scope, keepAlive, Device } from "borch-ts";
+import * as hub from "borch-hub";
+
+const $ = (s)=>document.querySelector(s);
+const CATALOG = "https://models.pilab.kr/index.json";
+const MEAN=[0.485,0.456,0.406], STD=[0.229,0.224,0.225];
+
+/* ── preprocessing: any image source -> ImageNet-normalized [1,3,224,224] (the verified recipe) ── */
+const c224=document.createElement("canvas"); c224.width=224; c224.height=224;
+const g224=c224.getContext("2d",{willReadFrequently:true}); g224.imageSmoothingEnabled=true;
+function toInput(src){
+  g224.drawImage(src,0,0,224,224);
+  const d=g224.getImageData(0,0,224,224).data, out=new Float32Array(3*224*224);
+  for(let p=0;p<224*224;p++) for(let ch=0;ch<3;ch++) out[ch*224*224+p]=((d[p*4+ch]/255)-MEAN[ch])/STD[ch];
+  return out;
+}
+function thumbOf(src){ const t=document.createElement("canvas"); t.width=48; t.height=48; t.getContext("2d").drawImage(src,0,0,48,48); return t; }
+
+/* ── state ── */
+let classes=[{name:"class 1",imgs:[],thumbs:[]},{name:"class 2",imgs:[],thumbs:[]}];
+let backbone=null, head=null;
+let series=[]; const chart=$("#chart"), ctx=chart.getContext("2d");
+
+/* ── backbone (load once) ── */
+async function loadBackbone(){
+  const idx=await (await fetch(CATALOG)).json();
+  const smallest=idx.models.slice().sort((a,b)=>a.bytes-b.bytes)[0];
+  logLine("fetching backbone "+smallest.name+" ("+(smallest.bytes/1e6).toFixed(1)+" MB)…","note");
+  const { model }=await hub.load(smallest.manifestUrl);
+  model.eval(); model.classifier=new nn.Identity();     // forward(x) -> 1024-d features
+  backbone=model;
+  logLine("backbone ready.","note");
+}
+async function featureOf(input){   // input: Float32Array [3*224*224]
+  const x=Tensor.from(input,[1,3,224,224]);
+  return await scope(async ()=>noGrad(()=>backbone.forward(x)).toArray());   // [1024]
+}
+
+/* ── buckets UI ── */
+function addImages(ci, srcs){ for(const s of srcs){ classes[ci].imgs.push(toInput(s)); classes[ci].thumbs.push(thumbOf(s)); } renderBuckets(); }
+async function addFiles(ci, files){ for(const f of files){ if(!f.type.startsWith("image/")) continue; const b=await createImageBitmap(f).catch(()=>null); if(b){ addImages(ci,[b]); b.close&&b.close(); } } }
+let camStream=null;
+function renderBuckets(){
+  const el=$("#buckets"); el.innerHTML="";
+  classes.forEach((cls,ci)=>{
+    const b=document.createElement("div"); b.className="bucket";
+    const top=document.createElement("div"); top.className="top";
+    const nm=document.createElement("input"); nm.className="name"; nm.value=cls.name; nm.oninput=()=>cls.name=nm.value;
+    const n=document.createElement("span"); n.className="n"; n.textContent=cls.imgs.length+" photos";
+    top.append(nm,n); b.appendChild(top);
+    const th=document.createElement("div"); th.className="thumbs";
+    cls.thumbs.slice(-10).forEach(c=>{ const cc=c.cloneNode(); cc.getContext("2d").drawImage(c,0,0); th.appendChild(cc); });
+    b.appendChild(th);
+    const drop=document.createElement("label"); drop.className="drop"; drop.textContent="drop photos or click to add";
+    const inp=document.createElement("input"); inp.type="file"; inp.accept="image/*"; inp.multiple=true; inp.style.display="none";
+    inp.onchange=()=>addFiles(ci,inp.files); drop.appendChild(inp);
+    drop.ondragover=e=>{e.preventDefault();drop.classList.add("over");}; drop.ondragleave=()=>drop.classList.remove("over");
+    drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");addFiles(ci,e.dataTransfer.files);};
+    b.appendChild(drop);
+    const rb=document.createElement("div"); rb.className="rowbtns";
+    if(camStream){ const cap=document.createElement("button"); cap.className="btn ghost small"; cap.textContent="📸 capture"; cap.onclick=()=>addImages(ci,[$("#cam")]); rb.appendChild(cap); }
+    const del=document.createElement("button"); del.className="btn ghost small"; del.textContent="remove"; del.onclick=()=>{classes.splice(ci,1);renderBuckets();}; rb.appendChild(del);
+    b.appendChild(rb);
+    el.appendChild(b);
+  });
+  const ready = backbone && classes.filter(c=>c.imgs.length>=2).length>=2;
+  $("#train").disabled=!ready;
+}
+
+/* ── build features + the editable head code ── */
+function buildData(){
+  const usable=classes.filter(c=>c.imgs.length>=2);
+  if(usable.length<2) return null;
+  const trF=[], trY=[], teF=[], teY=[]; // features filled at train time; here we just hold raw inputs + split
+  const tr=[], te=[], names=[];
+  usable.forEach((c,li)=>{ const nT=Math.max(1,Math.floor(c.imgs.length*0.2));
+    c.imgs.forEach((im,i)=>{ (i<nT?te:tr).push({im,li}); }); names.push(c.name); });
+  return { tr, te, K:usable.length, names };
+}
+function headCode(){
+  return `await init();
+const TM = globalThis.__tm;              // 1024-d features from the frozen backbone — your photos, in the tab
+const D = TM.D, K = TM.K, N = TM.N;
+
+const x = keepAlive(Tensor.from(TM.features, [N, D]));
+const y = keepAlive(Tensor.from(TM.labels, [N], { dtype: "int64" }));
+
+// The head on top of the backbone's features. Edit this — e.g. a 0-1 score:
+// make it Linear(D, 1) and swap CrossEntropyLoss for nn.MSELoss.
+const head = new nn.Linear(D, K);
+const opt  = new optim.Adam(head.parameters(), 0.01);
+const crit = new nn.CrossEntropyLoss();
+
+for (let epoch = 0; epoch <= 80 && !stopped(); epoch++) {
+  await scope(async () => {
+    opt.zeroGrad();
+    const loss = crit.call(head.call(x), y);
+    loss.backward();
+    opt.step();
+    const v = await loss.item();
+    plot("loss", v);
+    if (epoch % 20 === 0) log("epoch " + epoch + "   loss " + v.toFixed(4));
+  });
+}
+
+// held-out accuracy on photos it never trained on
+if (TM.Nt > 0) await scope(async () => {
+  const xt = Tensor.from(TM.testFeatures, [TM.Nt, D]);
+  const pred = await head.call(xt).argmax(1).toArray();
+  let right = 0; for (let i = 0; i < TM.Nt; i++) if (pred[i] === TM.testLabels[i]) right++;
+  log("held-out accuracy: " + right + "/" + TM.Nt + "  (" + (100*right/TM.Nt).toFixed(0) + "%)");
+});
+
+globalThis.__tm.head = head;             // keep it, so the webcam can predict live
+log("done — point the webcam and press Predict.");
+`;
+}
+
+/* ── run the head code (isolated blob, borch surface) ── */
+const brdg={ stopped:false, log:(m,c)=>logLine(m,c), plot:(n,v)=>plot(n,v) }; globalThis.__tmpg=brdg;
+async function runHeadCode(){
+  const code=$("#code").value;
+  const src=[
+    'import * as borch from "borch-ts";',
+    "const { init, Tensor, nn, optim, scope, keepAlive, noGrad } = borch;",
+    "const __pg=globalThis.__tmpg;",
+    "const log=(...a)=>__pg.log(a.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' '));",
+    "const plot=(n,v)=>__pg.plot(n,v); const stopped=()=>__pg.stopped;",
+    "", code,
+  ].join("\n");
+  const url=URL.createObjectURL(new Blob([src],{type:"text/javascript"}));
+  try{ await import(url); } finally { URL.revokeObjectURL(url); }
+}
+
+/* ── train: extract features, then run the head code ── */
+let busy=false;
+async function train(){
+  if(busy) return; const data=buildData(); if(!data){ logLine("Add ≥2 classes with ≥2 photos each.","note"); return; }
+  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#train").disabled=true; $("#run").disabled=true; $("#runstat").textContent="extracting features…";
+  try{
+    logLine("extracting features from "+(data.tr.length+data.te.length)+" photos through the backbone…");
+    const featTr=[], featTe=[];
+    for(const {im} of data.tr) featTr.push(await featureOf(im));
+    for(const {im} of data.te) featTe.push(await featureOf(im));
+    const D=featTr[0].length;
+    const pack=(a)=>{ const o=new Float32Array(a.length*D); a.forEach((f,i)=>o.set(f,i*D)); return o; };
+    globalThis.__tm={ features:pack(featTr), labels:data.tr.map(r=>r.li), N:featTr.length, D, K:data.K,
+                      testFeatures:pack(featTe), testLabels:data.te.map(r=>r.li), Nt:featTe.length, names:data.names, head:null };
+    $("#code").value=headCode();
+    $("#runstat").textContent="training head…";
+    await runHeadCode();
+    head=globalThis.__tm.head;
+    $("#runstat").textContent="done"; $("#run").disabled=false;
+    enablePredict();
+  }catch(e){ logLine(String(e&&e.message?e.message:e),"err"); $("#runstat").textContent="error"; }
+  finally{ busy=false; $("#train").disabled=false; }
+}
+async function rerun(){ if(busy||!globalThis.__tm) return; busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#run").disabled=true; $("#runstat").textContent="training…";
+  try{ await runHeadCode(); head=globalThis.__tm.head; $("#runstat").textContent="done"; enablePredict(); }
+  catch(e){ logLine(String(e&&e.message?e.message:e),"err"); $("#runstat").textContent="error"; }
+  finally{ busy=false; $("#run").disabled=false; } }
+
+/* ── live prediction from webcam ── */
+function enablePredict(){
+  const names=globalThis.__tm.names;
+  $("#predict").innerHTML = camStream
+    ? '<button class="btn primary" id="predbtn">📷 Predict from webcam</button><div id="predbar" class="small" style="margin-top:.4rem">—</div>'
+    : '<div id="predbar" class="small muted">turn on the webcam to predict live, or it predicted the held-out set above</div>';
+  const pb=$("#predbtn"); if(pb) pb.onclick=async()=>{
+    if(!head) return; const feat=await featureOf(toInput($("#cam")));
+    const logits=await scope(async()=>noGrad(()=>head.call(Tensor.from(feat,[1,feat.length]))).toArray());
+    let bi=0; for(let i=1;i<logits.length;i++) if(logits[i]>logits[bi]) bi=i;
+    $("#predbar").textContent='prediction: "'+names[bi]+'"';
+  };
+}
+
+/* ── plot + console ── */
+function plot(n,v){ series.push(v); drawChart(); }
+function drawChart(){ const dpr=window.devicePixelRatio||1,w=chart.clientWidth||300,h=120; chart.width=w*dpr;chart.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+  if(series.length<2)return; const mx=Math.max(...series),mn=Math.min(...series),sp=(mx-mn)||1;
+  ctx.strokeStyle=(getComputedStyle(document.documentElement).getPropertyValue('--accent')||'#ff7a3d').trim(); ctx.lineWidth=1.5; ctx.beginPath();
+  series.forEach((v,i)=>{const px=(i/(series.length-1))*(w-8)+4,py=h-8-((v-mn)/sp)*(h-16);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}); ctx.stroke(); }
+function logLine(m,cls=""){ const s=document.createElement("span"); s.className=cls; s.textContent=m+"\n"; $("#console").appendChild(s); $("#console").scrollTop=$("#console").scrollHeight; }
+
+/* ── wire ── */
+$("#addclass").onclick=()=>{ classes.push({name:"class "+(classes.length+1),imgs:[],thumbs:[]}); renderBuckets(); };
+$("#train").onclick=train; $("#run").onclick=rerun;
+$("#cambtn").onclick=async()=>{ if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null;$("#cam").style.display="none";renderBuckets();return;}
+  try{ camStream=await navigator.mediaDevices.getUserMedia({video:true}); $("#cam").srcObject=camStream; $("#cam").style.display="block"; renderBuckets(); }
+  catch(e){ logLine("Camera unavailable — use upload instead.","note"); } };
+
+/* ── start ── */
+$("#code").value = "// train a model first (Train), and the head's code appears here to edit.";
+renderBuckets();
+(async()=>{
+  try{
+    await init(); $("#badge-txt").textContent=Device.adapterInfo||"GPU ready"; $("#badge").classList.add("ok");
+    await loadBackbone(); renderBuckets();
+  }catch(e){ $("#badge-txt").textContent="no GPU / load failed"; $("#badge").classList.add("bad"); logLine(String(e&&e.message?e.message:e),"err"); }
+})();
+</script>
+</body>
+</html>
