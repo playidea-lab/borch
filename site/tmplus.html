@@ -78,7 +78,8 @@
   #train { width:100%; margin-top:.7rem; }
   .wedge { margin-top:.7rem; padding:.55rem .7rem; border-left:3px solid var(--accent,#ff7a3d); background:color-mix(in srgb,var(--accent,#ff7a3d) 8%,transparent); border-radius:0 8px 8px 0; font-size:.8rem; color:var(--fg-muted); }
   .wedge b { color:var(--fg); }
-  #code { width:100%; height:400px; resize:vertical; border:0; background:var(--code-bg,#f4f1ea); color:var(--fg); padding:.75rem; font:12.5px/1.5 ui-monospace,Menlo,monospace; tab-size:2; white-space:pre; overflow:auto; outline:none; }
+  #code { width:100%; height:150px; resize:vertical; border:0; background:var(--code-bg,#f4f1ea); color:var(--fg); padding:.75rem; font:12.5px/1.5 ui-monospace,Menlo,monospace; tab-size:2; white-space:pre; overflow:auto; outline:none; transition:height .2s; }
+  #code.armed { height:400px; }
   .code-foot { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; padding:.5rem .7rem; border-top:1px solid var(--line-soft); }
   #runstat { margin-left:auto; color:var(--fg-faint); font-size:.78rem; }
   #console { margin:0; padding:.6rem .8rem; height:150px; overflow:auto; white-space:pre-wrap; font:12px/1.5 ui-monospace,Menlo,monospace; border-bottom:1px solid var(--line-soft); }
@@ -163,7 +164,7 @@
         <canvas id="spec" hidden></canvas>
         <div id="meter"><i></i></div>
         <button class="btn primary" id="train" disabled>▶ Train</button>
-        <div class="wedge" id="wedge"><b>Hit a wall?</b> The panel only does the preset task. Want a different head, another loss, a threshold? Edit the code and run it — same examples.</div>
+        <div class="wedge" id="wedge" hidden><b>Hit a wall?</b> The panel only does the preset task. Want a different head, another loss, a threshold? Edit the code and run it — same examples.</div>
       </div>
     </div>
 
@@ -171,7 +172,7 @@
       <h3>2 · The head — real torch code (edit me)</h3>
       <textarea id="code" spellcheck="false" autocomplete="off" wrap="off"></textarea>
       <div class="code-foot">
-        <button class="btn primary" id="run" disabled>▶ Run this code</button>
+        <button class="btn" id="run" disabled>▶ Run this code</button>
         <button class="btn ghost" id="toplay" disabled title="Open this model and its features in the full Playground editor">↗ Open in Playground</button>
         <button class="btn ghost" id="onnxbtn" disabled title="Export the backbone + head as one ONNX file (image → logits)">⬇ ONNX</button>
         <span id="runstat">—</span>
@@ -181,8 +182,8 @@
     <div class="card">
       <h3>3 · Watch it learn · then point the camera / mic</h3>
       <pre id="console"></pre>
-      <div class="cap" id="chartcap">loss</div>
-      <canvas id="chart"></canvas>
+      <div class="cap" id="chartcap" hidden>loss</div>
+      <canvas id="chart" hidden></canvas>
       <div id="cm" class="cm" hidden></div>
       <div id="predict"><div id="predbar" class="muted small">train a model, then turn on the webcam or microphone to predict live</div></div>
     </div>
@@ -481,7 +482,7 @@ async function runHeadCode(){
 let busy=false;
 async function train(){
   if(busy) return; const data=buildData(); if(!data){ logLine("Not enough examples for this task yet.","note"); return; }
-  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#cm").hidden=true; $("#train").disabled=true; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="extracting features…";
+  busy=true; series=[]; drawChart(); $("#console").textContent=""; $("#cm").hidden=true; $("#chart").hidden=true; $("#chartcap").hidden=true; $("#train").disabled=true; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="extracting features…";
   try{
     logLine("extracting features from "+(data.tr.length+data.te.length)+" examples through the backbone…");
     const featTr=[], featTe=[];
@@ -497,6 +498,7 @@ async function train(){
     await runHeadCode();
     head=globalThis.__tm.head;
     $("#runstat").textContent="done"; $("#run").disabled=false; $("#toplay").disabled=false; $("#onnxbtn").disabled=(task==="anomaly");
+    $("#code").classList.add("armed"); $("#wedge").hidden=false;
     enablePredict(); await showConfusion();
   }catch(e){ logLine(String(e&&e.message?e.message:e),"err"); $("#runstat").textContent="error"; }
   finally{ busy=false; $("#train").disabled=false; }
@@ -561,7 +563,7 @@ async function showConfusion(){
 }
 
 /* ── plot + console ── */
-function plot(n,v){ series.push(v); drawChart(); }
+function plot(n,v){ if($("#chart").hidden){ $("#chart").hidden=false; $("#chartcap").hidden=false; } series.push(v); drawChart(); }
 function drawChart(){ const dpr=window.devicePixelRatio||1,w=chart.clientWidth||300,h=120; chart.width=w*dpr;chart.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
   if(series.length<2)return; const mx=Math.max(...series),mn=Math.min(...series),sp=(mx-mn)||1;
   ctx.strokeStyle=(getComputedStyle(document.documentElement).getPropertyValue('--accent')||'#ff7a3d').trim(); ctx.lineWidth=1.5; ctx.beginPath();
@@ -579,7 +581,7 @@ function setModality(m){
   stopLive(); head=null; globalThis.__tm=null;
   classes=defaultClasses(); renderBuckets();
   $("#code").value="// train a model first (Train), and the head's code appears here to edit.";
-  $("#cm").hidden=true; $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="—";
+  $("#cm").hidden=true; $("#wedge").hidden=true; $("#chart").hidden=true; $("#chartcap").hidden=true; $("#code").classList.remove("armed"); $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="—";
 }
 function setTask(t){
   if(t===task) return; task=t;
@@ -588,7 +590,7 @@ function setTask(t){
   stopLive(); head=null; globalThis.__tm=null;
   classes=defaultClasses(); renderBuckets();
   $("#code").value="// train a model first (Train), and the head's code appears here to edit.";
-  $("#cm").hidden=true; $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="—";
+  $("#cm").hidden=true; $("#wedge").hidden=true; $("#chart").hidden=true; $("#chartcap").hidden=true; $("#code").classList.remove("armed"); $("#predbar").textContent="—"; $("#run").disabled=true; $("#toplay").disabled=true; $("#onnxbtn").disabled=true; $("#runstat").textContent="—";
 }
 function applyPreset(id){
   const p=PRESETS[id]; if(!p||!p.task) return;
