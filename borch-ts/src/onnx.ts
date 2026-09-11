@@ -184,7 +184,8 @@ function int64Tensor(name: string, values: readonly number[]): Pb {
     .string(TENSOR.name, name).bytes(TENSOR.rawData, raw);
 }
 
-function valueInfo(name: string, shape: readonly number[], batchParam: string | null): Pb {
+function valueInfo(name: string, shape: readonly number[], batchParam: string | null,
+                   elemType: number = DATA_TYPE.FLOAT): Pb {
   const dims = new Pb();
   shape.forEach((d, i) => {
     const dim = new Pb();
@@ -192,7 +193,7 @@ function valueInfo(name: string, shape: readonly number[], batchParam: string | 
     else dim.int(DIM.value, d);
     dims.message(SHAPE.dim, dim);
   });
-  const tensorType = new Pb().int(TENSOR_TYPE.elemType, DATA_TYPE.FLOAT).message(TENSOR_TYPE.shape, dims);
+  const tensorType = new Pb().int(TENSOR_TYPE.elemType, elemType).message(TENSOR_TYPE.shape, dims);
   return new Pb().string(VALUE_INFO.name, name)
     .message(VALUE_INFO.type, new Pb().message(TYPE.tensorType, tensorType));
 }
@@ -287,6 +288,9 @@ function emitOne(
     // matmul (`bmm`) records as `MatMul` — ONNX MatMul broadcasts the batch itself.
     case "Softmax":
     case "Transpose":
+    // `Gather` is `Embedding` — the table and the index list, `axis` 0. The index input is
+    // int64, which the graph input is declared as (see `valueInfo`); the table is a weight.
+    case "Gather":
       return { opType: op, inputs, attrs };
     case "LayerNormalization": {
       // ONNX LayerNormalization (opset 17) is `[X, Scale, B?]`. borch's affine form has
@@ -517,8 +521,11 @@ export function encodeOnnx(plan: OnnxPlan, read: (t: Tensor) => Float32Array): E
     });
   });
   const batchParam = plan.dynamicBatch ? "N" : null;
+  // The input is float unless the model reads indices — an `Embedding` first takes int64,
+  // and ORT rejects a file that declares them float. The output stays float.
+  const inputType = plan.sample.dtype === "int64" ? DATA_TYPE.INT64 : DATA_TYPE.FLOAT;
   graph.string(GRAPH.name, "borch")
-    .message(GRAPH.input, valueInfo(plan.inputName, plan.sample.shape, batchParam))
+    .message(GRAPH.input, valueInfo(plan.inputName, plan.sample.shape, batchParam, inputType))
     .message(GRAPH.output, valueInfo(plan.outputName, plan.output.shape, batchParam));
 
   const model = new Pb().int(MODEL.irVersion, IR_VERSION)

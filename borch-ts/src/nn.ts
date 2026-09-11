@@ -19,6 +19,7 @@
 
 import { NotImplementedError, RuntimeError, ValueError } from "./errors.js";
 import { runningStats } from "./kernels.js";
+import { traced } from "./onnx.js";
 import { onSeed, uniform as uniform01, uniformArray } from "./random.js";
 import {
   device, type InterpolateMode, keepAlive, noGrad, type PadMode, type Reduction,
@@ -4826,11 +4827,18 @@ export function embedding(input: Tensor, weight: Tensor,
       + "browser subset.");
   }
   const dim = weight.shape[1] ?? 1;
-  if (maxNorm !== null) renormRows(weight, input, maxNorm, normType);
-  let table = paddingIdx === null ? weight : detachRow(weight, paddingIdx);
-  if (scaleGradByFreq) table = scaleRowsByCount(table, input);
-  const picked = table.indexSelect(0, input.reshape([input.size]));
-  return picked.reshape([...input.shape, dim]);
+  // For ONNX this is one `Gather` of the table by the indices, axis 0 — the node torch
+  // exports too. The traced inputs are the raw `weight` and `input`: `detachRow` and
+  // `scaleRowsByCount` are value-for-value the weight (a gradient split, by their own
+  // proof), so the forward the file reproduces is `Gather(weight, input)`, and `weight`
+  // stays an initializer rather than a computed tensor the exporter would refuse.
+  return traced("Gather", [weight, input], { axis: 0 }, () => {
+    if (maxNorm !== null) renormRows(weight, input, maxNorm, normType);
+    let table = paddingIdx === null ? weight : detachRow(weight, paddingIdx);
+    if (scaleGradByFreq) table = scaleRowsByCount(table, input);
+    const picked = table.indexSelect(0, input.reshape([input.size]));
+    return picked.reshape([...input.shape, dim]);
+  });
 }
 
 /**

@@ -10,7 +10,7 @@
 import { Tensor, noGrad } from "../src/tensor.js";
 import { manualSeed } from "../src/random.js";
 import { exportOnnx } from "../src/onnx.js";
-import { LayerNorm, Linear, Module } from "../src/nn.js";
+import { Embedding, LayerNorm, Linear, Module } from "../src/nn.js";
 import { ResNet18 } from "./bench.js";
 
 interface OrtTensorLike { data: Float32Array }
@@ -18,7 +18,7 @@ interface OrtSession { run(feeds: Record<string, unknown>): Promise<Record<strin
 interface Ort {
   env: { wasm: { wasmPaths: string } };
   InferenceSession: { create(model: Uint8Array, options: { executionProviders: string[] }): Promise<OrtSession> };
-  Tensor: new (type: string, data: Float32Array, dims: number[]) => unknown;
+  Tensor: new (type: string, data: Float32Array | BigInt64Array, dims: number[]) => unknown;
 }
 function ort(): Ort {
   return (globalThis as unknown as { ort: Ort }).ort;
@@ -165,6 +165,29 @@ export async function report(): Promise<{ text: string; checks: Check[] }> {
                 ok: ggap <= GATE && gPlan.ops.includes("Gelu"),
                 note: `${gPlan.ops.join(", ")} · max |Δ| ${ggap.toExponential(2)}` });
   lines.push(`gelu ORT vs borch.ts: ${gPlan.ops.join(", ")} · max |Δ| ${ggap.toExponential(2)}`);
+
+  // ── Embedding — a `Gather` on an int64 input, a text transformer's first layer ──
+  // The input is token indices, not floats, so the file declares it int64; ORT is handed a
+  // BigInt64Array to match. The table is the weight; one Gather reproduces the lookup.
+  manualSeed(17);
+  const VOCAB = 16, D2 = 8;
+  const enet = new (class extends Module {
+    emb = new Embedding(VOCAB, D2);
+    override forward(idx: Tensor): Tensor { return this.emb.forward(idx); }
+  })();
+  enet.eval();
+  const tokens = [3, 1, 14, 0, 7, 2, 9, 5];   // [4, 2] of int64 indices < VOCAB
+  const idx = Tensor.from(tokens, [4, 2], { dtype: "int64" });
+  const embPlan = await exportOnnx(enet, idx);
+  const embSession = await o.InferenceSession.create(embPlan.bytes, { executionProviders: ["webgpu"] });
+  const embOurs = await noGrad(() => enet.forward(Tensor.from(tokens, [4, 2], { dtype: "int64" }))).toArray();
+  const int64Input = new o.Tensor("int64", BigInt64Array.from(tokens.map((t) => BigInt(t))), [4, 2]);
+  const embTheirs = (await embSession.run({ input: int64Input }))["output"]?.data ?? new Float32Array();
+  const embGap = embTheirs.length === embOurs.length ? maxAbsDiff(embOurs, embTheirs) : Infinity;
+  checks.push({ name: "ORT reproduces Embedding as a Gather on an int64 input",
+                ok: embGap <= GATE && embPlan.ops.includes("Gather"),
+                note: `${embPlan.ops.join(", ")} · max |Δ| ${embGap.toExponential(2)}` });
+  lines.push(`embedding ORT vs borch.ts: ${embPlan.ops.join(", ")} · max |Δ| ${embGap.toExponential(2)}`);
 
   // A refusal names the op rather than writing a file that will not run.
   let refusal = "";
