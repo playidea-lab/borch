@@ -1400,9 +1400,11 @@ input writing a `Transpose` of its weight and a `MatMul` (a constant `Transpose`
 Runtime folds), a whole encoder layer — the QKV/O projections, attention's batched
 matmuls and softmax, the two layer norms, the FFN — exports as `LayerNormalization` /
 `MatMul` / `Transpose` / `Softmax` / `Relu` / `Add` / `Gemm`, and ONNX Runtime Web
-reproduces the forward to 2.4e-7 (`borch-ts/test/onnx.ts`). What is not yet spelled is
-`gelu` and `Embedding` — the FFN traces with `relu`, and an integer-input gather is the
-next op to add.
+reproduces the forward to 2.4e-7 (`borch-ts/test/onnx.ts`). The FFN's real activation
+exports too: torch's exact `gelu` is an opset-20 `Gelu` node (`approximate="none"`),
+round-tripped to 1.19e-7. What is not yet spelled is `Embedding` — an integer-input
+gather, which the exporter's float-input assumption has to widen for first, the next op
+to add.
 
 **What it refuses**, and by name. An op with no ONNX spelling here — `cannot export
 erf` — rather than a file that will not run; a training-mode network (its batch norms
