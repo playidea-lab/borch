@@ -112,6 +112,44 @@ def run():
         ok.append(_say("module function" in str(e),
                        "a module function is reported as one", str(e)))
 
+    # 13) **A model has to outlive the compiled run that trained it.** The workbench
+    #     trains through `torch.compiled`, disposes the run, and then predicts with the
+    #     same model — and no probe had that order. `capture_py` disposes last, after it
+    #     has read every weight, so a parameter dying at `dispose()` was invisible to it.
+    #     When `unpin` began retiring buffers the caller still held, every parameter went
+    #     dead at that line, and the only thing that saw it was the workbench probe:
+    #     headed, on a real adapter, five minutes, and all it says is "the small-CNN line
+    #     never rendered". Measured: this case refuses at 12dcae2 with the closed-scope
+    #     message and passes once "a disposed capture must not retire a kept buffer" is in.
+    import numpy as np
+    nn = torch.nn
+    K, N, BATCH, EPOCHS = 3, 90, 16, 12
+    rng = np.random.default_rng(0)
+    xs = torch.tensor(rng.random((N, 3, 64, 64), dtype=np.float32))
+    ys = torch.tensor((np.arange(N) % K).astype(np.int64))
+    def block(cin, cout):
+        return [nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(), nn.MaxPool2d(2)]
+    net = nn.Sequential(*block(3, 16), *block(16, 32), *block(32, 64),
+                        nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(64, K))
+    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+    crit = nn.CrossEntropyLoss()
+    def train_step(xb, yb):
+        opt.zero_grad(); loss = crit(net(xb), yb); loss.backward(); opt.step(); return loss
+    compiled_step = torch.compiled(train_step)
+    outlived, why = True, ""
+    try:
+        for _ in range(EPOCHS):
+            for i in range(max(1, N // BATCH)):
+                with torch.scope():
+                    compiled_step(xs[i * BATCH:(i + 1) * BATCH], ys[i * BATCH:(i + 1) * BATCH]).item()
+        compiled_step.dispose()
+        net.eval()
+        with torch.no_grad():
+            net(xs).argmax(1).numpy()
+    except Exception as e:                                          # noqa: BLE001
+        outlived, why = False, f"{type(e).__name__}: {str(e)[:200]}"
+    ok.append(_say(outlived, "a model outlives the compiled run that trained it", why))
+
     head = "scope escape works" if all(ok) else "**something does not work**"
     # **The verdict crosses as data, not as a sentence.** `scope_escape.py` used to
     # decide its exit code by matching the head line, and the head line is prose:
