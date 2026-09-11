@@ -130,7 +130,12 @@ header.top {
    fit, and scrolls horizontally when even that overflows. */
 @media (max-width: 700px) {
   .top .wrap { flex-wrap: wrap; height: auto; padding-block: .5rem; gap: .5rem 1rem; }
-  .top nav { width: 100%; margin-left: 0; overflow-x: auto; gap: 1rem; padding-bottom: .15rem; }
+  /* The bar scrolls as one row (more entries than a phone fits — see the guard). A
+     right-edge fade signals there is more to swipe to, so the last visible entry does
+     not read as a hard cut. */
+  .top nav { width: 100%; margin-left: 0; overflow-x: auto; gap: 1rem; padding-bottom: .15rem;
+    -webkit-mask-image: linear-gradient(to right, #000 91%, transparent);
+    mask-image: linear-gradient(to right, #000 91%, transparent); }
   .top nav a { white-space: nowrap; }
   /* The header is no longer 58px tall, so whatever was pinned to that number is
      detached from it. */
