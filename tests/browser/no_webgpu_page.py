@@ -22,11 +22,21 @@ the other:
   `Cannot read properties of undefined` where the sentence was meant to go.
 - `no-adapter` — the object is there and `requestAdapter()` answers null. What a VM or
   `--disable-features=WebGPU` leaves; measured in `marimo_probe`.
+
+And one shape that is the opposite — the adapter is real and the way back from it is not:
+
+- `no-jspi` — WebGPU is up and `WebAssembly.Suspending` is gone. Safari from 26 is exactly
+  this, and there the hero trained and then died inside `.item()` with a Pyodide traceback.
+  **This one needs an adapter**, so it is skipped, out loud, where there is none — which is
+  every CI runner. The nightly runs it on a machine with a GPU.
 """
 
 import pathlib
 import re
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from first_run import FLAGS                                          # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 PAGES = {"en": "site/index.html", "ko": "site/ko/index.html"}
@@ -45,6 +55,35 @@ def read(page):
     badge = page.inner_text("#device-text").strip()
     lines = [t.strip() for t in page.locator("#hero-out div").all_inner_texts() if t.strip()]
     return badge, lines
+
+
+def press_run(page):
+    """Click Run and wait for the last line the snippet prints.
+
+    **The sentence on the screen is a promise and this is the promise.** The page said the
+    core would run instead, and the snippet it showed opened with `import borch_webgpu`,
+    which is not loaded on this path: Run answered `ModuleNotFoundError` under that
+    sentence. Reading the note is not enough — something has to press the button.
+    """
+    page.click("#hero-run")
+    page.wait_for_function(
+        "() => document.getElementById('hero-out').innerText.includes('learned')", timeout=180_000)
+    return [l for l in page.inner_text("#hero-out").splitlines() if "learned" in l][0].strip()
+
+
+def judge_jspi(lang, badge, lines):
+    """The adapter is named and the Python path says why it is not the binding's."""
+    said = " ".join(lines)
+    bad = []
+    if "Traceback" in said or "PythonError" in said:
+        bad.append(f"{lang}/no-jspi: a traceback reached the screen — {said[:120]}")
+    if "JSPI" not in said and "jspi" not in said:
+        bad.append(f"{lang}/no-jspi: nothing said why the binding is not in use — {said[:120]}")
+    if lang == "ko" and said and not HANGUL.search(said):
+        bad.append(f"{lang}/no-jspi: the Korean page said it in English — {said[:90]}")
+    if not badge or "no " in badge or "없" in badge:
+        bad.append(f"{lang}/no-jspi: the badge does not name the adapter — {badge!r}")
+    return bad
 
 
 def judge(lang, shape, badge, lines):
@@ -98,9 +137,50 @@ def main(argv):
                         for line in lines[:2]:
                             print(f"      {line[:120]}")
                         problems += judge(lang, shape, badge, lines)
+                        # One press per shape, on the English page: the snippet is the
+                        # same code and the claim is the same claim.
+                        if lang == "en":
+                            try:
+                                print(f"      run → {press_run(page)}")
+                            except Exception as e:                   # noqa: BLE001
+                                problems.append(f"en/{shape}: Run never reached the learned line ({type(e).__name__})")
                         page.close()
             finally:
                 browser.close()
+
+            # **The other direction: the adapter is real and the readback is not.**
+            with_gpu = pw.chromium.launch(headless=True, args=list(FLAGS))
+            try:
+                page = with_gpu.new_page()
+                page.goto(f"http://127.0.0.1:{port}/{PAGES['en']}", wait_until="load")
+                page.wait_for_function(
+                    "() => document.getElementById('hero-out').children.length > 0", timeout=30_000)
+                has_adapter = "no " not in read(page)[0]
+                page.close()
+                if not has_adapter:
+                    print("  -- no-jspi: skipped, there is no adapter on this machine")
+                else:
+                    for lang, rel in PAGES.items():
+                        page = with_gpu.new_page()
+                        page.add_init_script("try { delete WebAssembly.Suspending; } catch (e) {}")
+                        page.goto(f"http://127.0.0.1:{port}/{rel}", wait_until="load")
+                        page.wait_for_function(
+                            "() => document.getElementById('hero-out').children.length > 1",
+                            timeout=30_000)
+                        page.wait_for_timeout(1500)
+                        badge, lines = read(page)
+                        print(f"  {lang:2s} {'no-jspi':10s} badge {badge!r}")
+                        for line in lines[:3]:
+                            print(f"      {line[:120]}")
+                        problems += judge_jspi(lang, badge, lines)
+                        if lang == "en":
+                            try:
+                                print(f"      run → {press_run(page)}")
+                            except Exception as e:                   # noqa: BLE001
+                                problems.append(f"en/no-jspi: Run never reached the learned line ({type(e).__name__})")
+                        page.close()
+            finally:
+                with_gpu.close()
     finally:
         shutdown()
 

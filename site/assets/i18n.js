@@ -44,6 +44,17 @@ const STRINGS = {
     en: "No WebGPU adapter could be obtained — a driver blocklist, a virtual machine, or a "
       + "headless environment with no GPU.",
     ko: "WebGPU 어댑터를 얻지 못했다 — 드라이버 차단 목록, 가상 머신, 또는 GPU 가 없는 헤드리스 환경." },
+  // **The adapter is there and the way back from it is not.** Safari has WebGPU from 26
+  // and no JSPI, so `borch_webgpu` reaches its first `.item()` and dies inside Pyodide.
+  // The page takes the core instead; this is the one line that says so, and it does not
+  // repeat what the badge already says about the GPU.
+  "device.noJspi": {
+    en: "This browser cannot suspend WebAssembly (JSPI), which is how Python reads a "
+      + "value back from the GPU — Chrome and Edge 137+ have it. The numpy core runs here "
+      + "instead: the same API and the same values, at the CPU's speed.",
+    ko: "이 브라우저는 WebAssembly 를 중단(JSPI)하지 못한다 — 파이썬이 GPU 에서 값을 읽어 오는 "
+      + "방법이 그것이다. Chrome·Edge 137+ 에 있다. 대신 numpy 코어가 돈다: 같은 API, 같은 값, "
+      + "CPU 의 속도로." },
   "device.noFallback": {
     en: "borch does not fall back — better not to run than to quietly go slow.",
     ko: "borch 는 폴백하지 않는다 — 조용히 느려지느니 안 도는 편이 낫다." },

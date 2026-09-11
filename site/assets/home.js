@@ -7,7 +7,7 @@
 
 import { HERO_PY } from "./examples.js";
 import { t } from "./i18n.js";
-import { describeError, highlight, loadBorch, loadPython, probeDevice, runPython } from "./runner.js";
+import { bindingUsable, describeError, HAS_JSPI, highlight, loadBorch, loadPython, probeDevice, runPython } from "./runner.js";
 
 const codeEl = document.getElementById("hero-code");
 const outEl = document.getElementById("hero-out");
@@ -16,7 +16,18 @@ const badge = document.getElementById("device-badge");
 const badgeText = document.getElementById("device-text");
 
 const readyEl = document.getElementById("hero-ready");
-codeEl.innerHTML = highlight(HERO_PY, "py");
+
+// **The page ran code it had not loaded the module for.** Without an adapter — or without
+// JSPI — `borch_webgpu` is not written into Pyodide at all, on purpose: a reader who
+// imports it should be told there is no such module rather than meet a device error deep
+// in their own line. But the hero's snippet is the page's, not the reader's, and it opened
+// with that import: pressing Run on a machine with no WebGPU answered
+// `ModuleNotFoundError` under a sentence promising the core would run instead (measured,
+// 2026-09-12). So the hero runs the import it can, and shows the one it runs. Padded, so
+// the comment beside it does not move.
+const CORE_IMPORT = "import borch as torch".padEnd("import borch_webgpu as torch".length);
+let heroCode = HERO_PY;
+codeEl.innerHTML = highlight(heroCode, "py");
 runBtn.textContent = t("hero.run");
 
 /** Warm Python while the visitor reads. `loadPython` joins a click to the same load. */
@@ -27,6 +38,13 @@ function warmPython() {
     warmed = true;
     readyEl.textContent = t("hero.ready");
   }).catch((err) => { readyEl.textContent = describeError(err); });
+}
+
+/** The snippet follows what will actually be loaded. */
+function useCoreIfNeeded(probed) {
+  if (bindingUsable(probed)) return;
+  heroCode = HERO_PY.replace("import borch_webgpu as torch", CORE_IMPORT);
+  codeEl.innerHTML = highlight(heroCode, "py");
 }
 
 function say(text, kind = "") {
@@ -100,6 +118,12 @@ const ON_WINDOWS = /Windows/.test(navigator.userAgent);
           sayLink(t("device.setupSay"), t("device.setupHref") + "#windows-laptop");
         }
       }
+      // **Whichever of those two it was, the readback is a separate question.** The
+      // adapter is real — the badge names it and the sentence above is about its speed;
+      // what this says is that Python cannot read a value back from it here, so the
+      // core runs instead. Safari from 26 is exactly this pair.
+      if (!HAS_JSPI) say(t("device.noJspi"), "note");
+      useCoreIfNeeded(p);
     } else {
       badge.className = "badge off";
       badgeText.textContent = t(p.why === "no-api" ? "device.noApi" : "device.noAdapter");
@@ -110,6 +134,7 @@ const ON_WINDOWS = /Windows/.test(navigator.userAgent);
       // **The training still runs** — the numpy core on wasm. A learner without WebGPU
       // sees the loss go down, and the note says whose speed it is.
       say(t("hero.cpu"), "note");
+      useCoreIfNeeded(p);
       warmPython();
     }
   } catch (err) {
@@ -126,7 +151,7 @@ runBtn.addEventListener("click", async () => {
   const t0 = performance.now();
   try {
     if (!warmed) say(t("hero.warming"), "note");
-    await runPython(HERO_PY, { onLog: (line, k) => say(line, k) });
+    await runPython(heroCode, { onLog: (line, k) => say(line, k) });
     say("");
     say(t("run.doneLocal", (performance.now() - t0).toFixed(0)), "ok");
     sayLink(t("hero.diffSay"), t("hero.diffHref"));

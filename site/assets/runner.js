@@ -293,6 +293,19 @@ export function loadPython(say = () => {}) {
   return loadingPython;
 }
 
+/** Whether this browser can suspend wasm — what `pyodide.ffi.run_sync` is built on. */
+export const HAS_JSPI = typeof WebAssembly.Suspending === "function";
+
+/** Whether `import borch_webgpu` will work here — an adapter **and** a way back from it.
+ *
+ *  **One predicate, because the page has to agree with itself.** `loadPythonFresh` decides
+ *  which modules to write and the hero decides which import to show and run; written twice
+ *  they disagree, and the disagreement is `ModuleNotFoundError: No module named
+ *  'borch_webgpu'` on a page that has just said the core runs instead. */
+export function bindingUsable(probed) {
+  return Boolean(probed && probed.ok) && HAS_JSPI;
+}
+
 async function loadPythonFresh(say) {
 
   // **The GPU is required by `borch_webgpu` and not by Python mode**, and this gate
@@ -309,7 +322,13 @@ async function loadPythonFresh(say) {
   // is lost is `borch_webgpu`; what remains is `import borch as torch`.
   const borch = await loadBorch();
   const probed = await borch.probe();
-  const onGpu = probed.ok;
+  // **An adapter is not the only thing the binding needs.** `borch_webgpu` reads a value
+  // back with Pyodide's `run_sync`, which stands on JSPI, and Safari has none — so with
+  // WebGPU switched on the hero trained and then died inside `.item()` with a Pyodide
+  // traceback where a sentence belongs (measured on Safari 26, 2026-09-12). The adapter
+  // is real and the badge still names it; what is missing is the way back from it, so
+  // the same door the no-adapter case takes is taken here: `import borch as torch`.
+  const onGpu = bindingUsable(probed);
 
   if (onGpu) {
     say(t("load.borchTs"));

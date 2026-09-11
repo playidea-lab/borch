@@ -102,8 +102,13 @@ jobs:
       # thing: `"gpu" in navigator` is true of a key defined as undefined, so that shape
       # reached `Cannot read properties of undefined` instead of the sentence.
       #
-      # It needs the API to be absent, so it wants no GPU and takes six seconds.
-      - name: what a visitor with no WebGPU reads, in both languages
+      # It presses Run as well as reading the screen, and that is where the fourth thing
+      # was: the hero's snippet opens `import borch_webgpu`, which is deliberately not
+      # loaded without an adapter — so Run answered `ModuleNotFoundError` directly under a
+      # sentence promising the core would run instead.
+      #
+      # It needs the API to be absent, so it wants no GPU and takes about ten seconds.
+      - name: what a visitor with no WebGPU reads and gets when they press Run
         run: uv run --with playwright python tests/browser/no_webgpu_page.py
 
       # **Some declined names are declined because of what a browser cannot do, and a
