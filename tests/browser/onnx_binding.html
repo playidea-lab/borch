@@ -14,9 +14,9 @@
   const say = (s) => { lines.push(s); OUT.textContent = lines.join("\n"); };
   const PACKAGES = {
     borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
-            "_data", "_rnn", "_serialize", "autograd"],
+            "_data", "_rnn", "_serialize", "_workbench", "autograd"],
     borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data",
-                   "_serialize", "_onnx", "_hub", "_report", "autograd"],
+                   "_serialize", "_onnx", "_hub", "_report", "_workbench", "autograd"],
   };
   // The three pages that copy the packages into Pyodide by name all carry this list, and
   // this one fell behind when `_hub` and `_report` arrived — `__init__` imports them, so

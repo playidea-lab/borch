@@ -55,6 +55,7 @@ import pathlib as _pathlib
 import numpy as _np
 
 from borch._data import ImageFiles, decode_images, label_from_name, suspects  # noqa: F401 — the files, the decoder and the review score: the numpy core's, no device needed
+from borch._workbench import Session as _Session  # the workbench's recipe: the core's, no device needed
 
 try:
     import js as _js
@@ -271,3 +272,20 @@ class LinearHead:
         return {"weight": _back(st.weight).reshape(self.num_classes, self.in_features), "bias": _back(st.bias)}
 
     __call__ = predict
+
+
+class _Workbench:
+    """`workbench.setup` on the CPU door — spelled the same as on the WebGPU one.
+
+    A namespace rather than a `workbench_setup` function, because the reader who moves
+    between the two surfaces should be able to move the line without editing it.
+    """
+
+    @staticmethod
+    def setup(files, **config):
+        import borch_cpu
+
+        return _Session(borch_cpu, files, **config)
+
+
+workbench = _Workbench()

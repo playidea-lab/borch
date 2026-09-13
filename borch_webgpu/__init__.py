@@ -219,6 +219,9 @@ from ._serialize import load, save                       # noqa: E402,F401
 from . import _onnx as onnx                              # noqa: E402,F401
 from . import _hub as hub                                # noqa: E402,F401
 from ._report import report                              # noqa: E402,F401
+# One call carrying every setting — a namespace, not a top-level name, because this
+# module is imported `as torch` and `torch.setup` is not a door torch has.
+from . import _workbench as workbench                    # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 # **Named here or `borch_webgpu.autograd` is an `AttributeError`.** A submodule is
