@@ -87,7 +87,7 @@
 
         manualSeed(1);
         const sgdModel = new nn.Linear(4, 1);
-        const sgd = new optim.SGD(sgdModel.parameters(), 0.001);   // small, or the big feature blows up
+        const sgd = new optim.SGD(sgdModel.parameters(), 0.00001);   // a larger rate diverges on the 30x feature; even this only crawls
         let sgdLoss = 0;
         for (let i = 0; i < 200; i++) {
           await scope(async () => {
@@ -128,7 +128,7 @@
 
         torch.manual_seed(1)
         sgd_model = nn.Linear(4, 1)
-        sgd = optim.SGD(sgd_model.parameters(), lr=0.001)   # small, or the big feature blows up
+        sgd = optim.SGD(sgd_model.parameters(), lr=0.00001)   # a larger rate diverges on the 30x feature; even this only crawls
         sgd_loss = 0.0
         for i in range(200):
             with torch.scope():
@@ -205,11 +205,11 @@
     <h2>직접: Adam 에 학습률 주기</h2>
     <p>
       아래 모델은 직선 <code>y = 3x + 1</code> 을 배워야 하지만, 스텝 크기가 0 인 동안은
-      Adam 도 못 움직인다. 진짜 학습률을 넣어라 — Adam 은 자기 스텝을 정규화하므로 여기서는
-      <code>0.1</code> 이 안전한 기본값이다 — 그러면 잡았을 때 페이지가 말해 준다.
+      Adam 도 못 움직인다. 진짜 학습률을 넣어라 — <code>0.2</code> 면 스텝 예산 안에 넉넉히
+      들어온다 — 그러면 잡았을 때 페이지가 말해 준다.
     </p>
 
-    <div class="runnable" data-lang="js" data-verdict="loss<0.05">
+    <div class="runnable" data-lang="js" data-verdict="loss<0.05" data-verdict-fix="lr=0.2">
       <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
@@ -219,7 +219,7 @@
         const model = new nn.Linear(1, 1);
 
         // Adam cannot move while the step size is zero. Give it a real rate.
-        const lr = 0;                     // <-- fix me (try 0.1)
+        const lr = 0;                     // <-- fix me (try 0.2)
         const opt = new optim.Adam(model.parameters(), lr);
 
         let last = 0;
@@ -244,7 +244,7 @@
         model = nn.Linear(1, 1)
 
         # Adam cannot move while the step size is zero. Give it a real rate.
-        lr = 0                            # <-- fix me (try 0.1)
+        lr = 0                            # <-- fix me (try 0.2)
         opt = optim.Adam(model.parameters(), lr=lr)
 
         last = 0.0

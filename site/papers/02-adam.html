@@ -89,7 +89,7 @@
 
         manualSeed(1);
         const sgdModel = new nn.Linear(4, 1);
-        const sgd = new optim.SGD(sgdModel.parameters(), 0.001);   // small, or the big feature blows up
+        const sgd = new optim.SGD(sgdModel.parameters(), 0.00001);   // a larger rate diverges on the 30x feature; even this only crawls
         let sgdLoss = 0;
         for (let i = 0; i < 200; i++) {
           await scope(async () => {
@@ -130,7 +130,7 @@
 
         torch.manual_seed(1)
         sgd_model = nn.Linear(4, 1)
-        sgd = optim.SGD(sgd_model.parameters(), lr=0.001)   # small, or the big feature blows up
+        sgd = optim.SGD(sgd_model.parameters(), lr=0.00001)   # a larger rate diverges on the 30x feature; even this only crawls
         sgd_loss = 0.0
         for i in range(200):
             with torch.scope():
@@ -208,11 +208,11 @@
     <h2>Your turn: give Adam a learning rate</h2>
     <p>
       The model below should learn the line <code>y = 3x + 1</code>, but Adam cannot move
-      while the step size is zero. Set a real rate — Adam normalises its own steps, so
-      <code>0.1</code> is a safe default here — and the page says when it has it.
+      while the step size is zero. Set a real rate — <code>0.2</code> lands it well inside
+      the step budget here — and the page says when it has it.
     </p>
 
-    <div class="runnable" data-lang="js" data-verdict="loss<0.05">
+    <div class="runnable" data-lang="js" data-verdict="loss<0.05" data-verdict-fix="lr=0.2">
       <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
@@ -222,7 +222,7 @@
         const model = new nn.Linear(1, 1);
 
         // Adam cannot move while the step size is zero. Give it a real rate.
-        const lr = 0;                     // <-- fix me (try 0.1)
+        const lr = 0;                     // <-- fix me (try 0.2)
         const opt = new optim.Adam(model.parameters(), lr);
 
         let last = 0;
@@ -247,7 +247,7 @@
         model = nn.Linear(1, 1)
 
         # Adam cannot move while the step size is zero. Give it a real rate.
-        lr = 0                            # <-- fix me (try 0.1)
+        lr = 0                            # <-- fix me (try 0.2)
         opt = optim.Adam(model.parameters(), lr=lr)
 
         last = 0.0
