@@ -147,3 +147,29 @@ def test_onnx_on_a_surface_without_an_exporter_names_the_one_that_has_it(files):
     s = Session(borch, files, size=32, batch=8, epochs=2).fit()
     with pytest.raises(RuntimeError, match="borch_webgpu"):
         s.onnx()
+
+
+def test_a_set_already_decoded_is_taken_as_it_is(files):
+    """A page that decoded a folder once should not decode it twice to use this."""
+    from borch._data import ImageFiles
+
+    ds = ImageFiles(files, size=32)
+    s = Session(borch, ds, epochs=2, batch=8)
+    assert s.data is ds and s.config["size"] == 32
+
+
+def test_a_size_that_contradicts_the_set_is_refused(files):
+    from borch._data import ImageFiles
+
+    ds = ImageFiles(files, size=32)
+    with pytest.raises(ValueError, match="decoded at 32"):
+        Session(borch, ds, size=96)
+
+
+def test_how_names_the_model_that_actually_trained(files):
+    """**The page's line quotes this.** It said "your model" for the small CNN as well,
+    because the check was on a field `fit()` had just filled in either way."""
+    nn = borch.nn
+    mine = nn.Sequential(nn.Flatten(), nn.Linear(3 * 32 * 32, 3))
+    assert Session(borch, files, size=32, batch=8, epochs=2).fit().how.startswith("small CNN")
+    assert Session(borch, files, size=32, batch=8, epochs=2).fit(mine).how.startswith("your model")
