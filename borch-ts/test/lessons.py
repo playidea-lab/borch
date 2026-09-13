@@ -100,6 +100,8 @@ PAGES = [
     "/site/ko/foundations/05-chain-rule.html",
     "/site/papers/01-lora.html",
     "/site/ko/papers/01-lora.html",
+    "/site/papers/02-adam.html",
+    "/site/ko/papers/02-adam.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page

@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adam: an adaptive optimizer — borch Learn</title>
+<meta name="description" content="SGD versus Adam (Kingma & Ba, 2014): a per-parameter rate that converges on an ill-conditioned problem where plain SGD crawls — running in the page, both languages.">
+<link rel="alternate" hreflang="ko" href="../ko/papers/02-adam.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Adam: an adaptive optimizer — borch Learn">
+<meta property="og:description" content="SGD versus Adam (Kingma & Ba, 2014): a per-parameter rate that converges on an ill-conditioned problem where plain SGD crawls — running in the page, both languages.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/papers/02-adam.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/papers/02-adam.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Paper case studies</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-lora.html">1 · LoRA</a>
+      <a href="02-adam.html" class="on">2 · Adam</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Paper case studies · 2</p>
+    <h1>Adam: an adaptive optimizer</h1>
+    <p class="lead">
+      Plain SGD takes the same step size for every parameter. Adam — Kingma &amp; Ba,
+      2014 — keeps a running average of each parameter's gradient and of its square, and
+      steps by their ratio, so a weight with small but steady gradients still moves. On an
+      ill-conditioned problem it converges where SGD crawls. Everything below runs in this
+      page — edit any block and press Run.
+    </p>
+
+    <h2>One loop, two optimizers</h2>
+    <p>
+      Here one feature is thirty times larger than the others. SGD has to keep its step
+      small enough for that big feature, which leaves the rest barely moving; Adam gives
+      each parameter its own effective rate. Same model, same data, same steps — only the
+      optimiser differs.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const raw = keepAlive(Tensor.randn([64, 4]));
+        const scale = keepAlive(Tensor.from([1, 1, 1, 30], [1, 4]));   // one feature 30x bigger
+        const x = keepAlive(raw.mul(scale));
+        const y = keepAlive(x.linear(keepAlive(Tensor.randn([1, 4]))));
+
+        manualSeed(1);
+        const sgdModel = new nn.Linear(4, 1);
+        const sgd = new optim.SGD(sgdModel.parameters(), 0.001);   // small, or the big feature blows up
+        let sgdLoss = 0;
+        for (let i = 0; i < 200; i++) {
+          await scope(async () => {
+            sgd.zeroGrad();
+            const l = sgdModel.call(x).sub(y).square().mean();
+            l.backward(); sgd.step();
+            sgdLoss = await l.item();
+          });
+        }
+
+        manualSeed(1);
+        const adamModel = new nn.Linear(4, 1);
+        const adam = new optim.Adam(adamModel.parameters(), 0.1);   // a rate per parameter
+        let adamLoss = 0;
+        for (let i = 0; i < 200; i++) {
+          await scope(async () => {
+            adam.zeroGrad();
+            const l = adamModel.call(x).sub(y).square().mean();
+            l.backward(); adam.step();
+            adamLoss = await l.item();
+          });
+        }
+
+        log("after 200 steps —");
+        log("  SGD  loss:", sgdLoss.toFixed(4));
+        log("  Adam loss:", adamLoss.toFixed(4), " (adapts to the feature scales)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        raw = torch.randn(64, 4)
+        scale = torch.tensor([[1., 1., 1., 30.]])          # one feature 30x bigger
+        x = raw * scale
+        y = x @ torch.randn(1, 4).t()
+
+        torch.manual_seed(1)
+        sgd_model = nn.Linear(4, 1)
+        sgd = optim.SGD(sgd_model.parameters(), lr=0.001)   # small, or the big feature blows up
+        sgd_loss = 0.0
+        for i in range(200):
+            with torch.scope():
+                sgd.zero_grad()
+                l = ((sgd_model(x) - y) ** 2).mean()
+                l.backward(); sgd.step()
+                sgd_loss = l.item()
+
+        torch.manual_seed(1)
+        adam_model = nn.Linear(4, 1)
+        adam = optim.Adam(adam_model.parameters(), lr=0.1)   # a rate per parameter
+        adam_loss = 0.0
+        for i in range(200):
+            with torch.scope():
+                adam.zero_grad()
+                l = ((adam_model(x) - y) ** 2).mean()
+                l.backward(); adam.step()
+                adam_loss = l.item()
+
+        print("after 200 steps —")
+        print("  SGD  loss:", round(sgd_loss, 4))
+        print("  Adam loss:", round(adam_loss, 4), " (adapts to the feature scales)")
+      </script>
+    </div>
+
+    <h2>A rate per parameter</h2>
+    <p>
+      Adam keeps two running averages for every weight: the gradient <code>m</code> and its
+      square <code>v</code>. The update is <code>m / (sqrt(v) + eps)</code>, so a parameter
+      is scaled by how large its own gradients have been. <code>betas</code> are the two
+      averages' decay rates — the defaults <code>[0.9, 0.999]</code> are what the paper
+      recommends and rarely need changing.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Linear(8, 1);
+        const x = keepAlive(Tensor.randn([32, 8]));
+        const y = keepAlive(x.linear(keepAlive(Tensor.randn([1, 8]))));
+
+        const opt = new optim.Adam(model.parameters(), 0.1, [0.9, 0.999]);
+        for (let i = 0; i < 60; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const l = model.call(x).sub(y).square().mean();
+            l.backward(); opt.step();
+            if (i % 15 === 0) log("step", i, " loss", await l.item());
+          });
+        }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        model = nn.Linear(8, 1)
+        x = torch.randn(32, 8)
+        y = x @ torch.randn(1, 8).t()
+
+        opt = optim.Adam(model.parameters(), lr=0.1, betas=(0.9, 0.999))
+        for i in range(60):
+            with torch.scope():
+                opt.zero_grad()
+                l = ((model(x) - y) ** 2).mean()
+                l.backward(); opt.step()
+                if i % 15 == 0:
+                    print("step", i, " loss", l.item())
+      </script>
+    </div>
+
+    <h2>Your turn: give Adam a learning rate</h2>
+    <p>
+      The model below should learn the line <code>y = 3x + 1</code>, but Adam cannot move
+      while the step size is zero. Set a real rate — Adam normalises its own steps, so
+      <code>0.1</code> is a safe default here — and the page says when it has it.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.05">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const xs = keepAlive(Tensor.from([0, 1, 2, 3], [4, 1]));
+        const ys = keepAlive(xs.mul(Tensor.full([], 3)).add(Tensor.full([], 1)));   // y = 3x + 1
+        const model = new nn.Linear(1, 1);
+
+        // Adam cannot move while the step size is zero. Give it a real rate.
+        const lr = 0;                     // <-- fix me (try 0.1)
+        const opt = new optim.Adam(model.parameters(), lr);
+
+        let last = 0;
+        for (let i = 0; i < 150; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const l = model.call(xs).sub(ys).square().mean();
+            l.backward(); opt.step();
+            last = await l.item();
+          });
+        }
+        log("loss", last);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        xs = torch.tensor([[0.], [1.], [2.], [3.]])
+        ys = 3 * xs + 1                    # y = 3x + 1
+        model = nn.Linear(1, 1)
+
+        # Adam cannot move while the step size is zero. Give it a real rate.
+        lr = 0                            # <-- fix me (try 0.1)
+        opt = optim.Adam(model.parameters(), lr=lr)
+
+        last = 0.0
+        for i in range(150):
+            with torch.scope():
+                opt.zero_grad()
+                l = ((model(xs) - ys) ** 2).mean()
+                l.backward(); opt.step()
+                last = l.item()
+        print("loss", last)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="01-lora.html">← 1 · LoRA</a>
+      <a href="../tutorials/" style="text-align:right">More<b>Tutorials</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
