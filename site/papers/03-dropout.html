@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dropout: training with noise — borch Learn</title>
+<meta name="description" content="Dropout (Srivastava et al., 2014) zeros activations at random while training and turns into the identity at eval — the mode switch beginners forget. Runs in the page, both languages.">
+<link rel="alternate" hreflang="ko" href="../ko/papers/03-dropout.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Dropout: training with noise — borch Learn">
+<meta property="og:description" content="Dropout (Srivastava et al., 2014) zeros activations at random while training and turns into the identity at eval — the mode switch beginners forget. Runs in the page, both languages.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/papers/03-dropout.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/papers/03-dropout.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Paper case studies</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-lora.html">1 · LoRA</a>
+      <a href="02-adam.html">2 · Adam</a>
+      <a href="03-dropout.html" class="on">3 · Dropout</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Paper case studies · 3</p>
+    <h1>Dropout: training with noise</h1>
+    <p class="lead">
+      Dropout — Srivastava et al., 2014 — zeros activations at random while training, so
+      the network cannot lean on any single unit; it is cheap, strong regularisation. At
+      evaluation it switches off and becomes the identity — and forgetting that switch is
+      the single most common beginner bug. Everything below runs in this page, in both
+      languages.
+    </p>
+
+    <h2>It zeros activations at random</h2>
+    <p>
+      A <code>Dropout(0.5)</code> layer, while training, keeps each value with probability
+      <code>1 - p</code> and zeros the rest — then scales the survivors by
+      <code>1 / (1 - p)</code> so the average magnitude is unchanged (inverted dropout).
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const x = keepAlive(Tensor.ones([12]));
+        const d = new nn.Dropout(0.5);
+
+        log("input  :", Array.from(await x.toArray()).map((v) => v.toFixed(1)).join(" "));
+        log("dropped:", Array.from(await d.call(x).toArray()).map((v) => v.toFixed(1)).join(" "));
+        log("(about half go to 0; the survivors are scaled to 1/(1-p) = 2)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        x = torch.ones(12)
+        d = torch.nn.Dropout(0.5)
+
+        print("input  :", " ".join(f"{v:.1f}" for v in x.tolist()))
+        print("dropped:", " ".join(f"{v:.1f}" for v in d(x).tolist()))
+        print("(about half go to 0; the survivors are scaled to 1/(1-p) = 2)")
+      </script>
+    </div>
+
+    <h2>Different every run — until eval()</h2>
+    <p>
+      Because the mask is random, two forward passes in training mode disagree. Call
+      <code>eval()</code> and the layer becomes the identity: the same input gives the same
+      output, every time. <code>train()</code> switches it back on.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const x = keepAlive(Tensor.ones([8]));
+        const d = new nn.Dropout(0.5);
+
+        d.train();
+        log("train, run 1:", Array.from(await d.call(x).toArray()).map((v) => v.toFixed(0)).join(" "));
+        log("train, run 2:", Array.from(await d.call(x).toArray()).map((v) => v.toFixed(0)).join(" "), " (a different mask)");
+
+        d.eval();
+        log("eval,  run 1:", Array.from(await d.call(x).toArray()).map((v) => v.toFixed(0)).join(" "));
+        log("eval,  run 2:", Array.from(await d.call(x).toArray()).map((v) => v.toFixed(0)).join(" "), " (identity: same every time)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        x = torch.ones(8)
+        d = torch.nn.Dropout(0.5)
+
+        d.train()
+        print("train, run 1:", " ".join(f"{v:.0f}" for v in d(x).tolist()))
+        print("train, run 2:", " ".join(f"{v:.0f}" for v in d(x).tolist()), " (a different mask)")
+
+        d.eval()
+        print("eval,  run 1:", " ".join(f"{v:.0f}" for v in d(x).tolist()))
+        print("eval,  run 2:", " ".join(f"{v:.0f}" for v in d(x).tolist()), " (identity: same every time)")
+      </script>
+    </div>
+
+    <h2>Your turn: measure in eval mode</h2>
+    <p>
+      The block measures the same input twice and reports the gap between the two runs. It
+      should be zero — a measurement must be repeatable — but the layer is still dropping.
+      Switch it to <code>eval()</code> so the two runs agree.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const x = keepAlive(Tensor.ones([1000]));
+        const d = new nn.Dropout(0.5);
+
+        d.train();                        // <-- fix me: measuring, so this should be eval()
+
+        const a = await d.call(x).toArray();
+        const b = await d.call(x).toArray();
+
+        let gap = 0;
+        for (let i = 0; i < a.length; i++) gap = Math.max(gap, Math.abs(a[i] - b[i]));
+        log("gap between two runs:", gap);
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        x = torch.ones(1000)
+        d = torch.nn.Dropout(0.5)
+
+        d.train()                         # <-- fix me: measuring, so this should be eval()
+
+        a = d(x).tolist()
+        b = d(x).tolist()
+
+        gap = max(abs(ai - bi) for ai, bi in zip(a, b))
+        print("gap between two runs:", gap)
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="02-adam.html">← 2 · Adam</a>
+      <a href="../tutorials/" style="text-align:right">More<b>Tutorials</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
