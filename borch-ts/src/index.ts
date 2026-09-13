@@ -190,6 +190,10 @@ export * as linalg from "./linalg.js";
 // of these stand on**; the file says so at its head.
 export * as special from "./special_names.js";
 export * as nn from "./nn.js";
+// **borch's own, not torch's.** torch.nn has no LoRA, so parameter-efficient
+// fine-tuning lives under its own name rather than as a door in `nn` that real torch
+// would not open. See borch-ts/src/peft.ts.
+export * as peft from "./peft.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";
 // The `cpu` device — a classifier forward, a head on its features and cosine neighbours

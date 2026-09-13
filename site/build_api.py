@@ -90,6 +90,11 @@ MODULES = [
     ("optim", "optim",
      {"ko": "옵티마이저와 학습률 스케줄러. `torch.optim` 자리.",
       "en": "Optimizers and learning-rate schedulers. Where `torch.optim` would be."}),
+    # **borch's own, not a torch namespace.** torch.nn has no LoRA, so it is not a door
+    # in `nn`; the HuggingFace name `peft` says plainly it is non-torch.
+    ("peft", "peft",
+     {"ko": "파라미터 효율 파인튜닝(LoRA) — borch 고유. torch 엔 없다.",
+      "en": "Parameter-efficient fine-tuning (LoRA) — borch's own; torch has no such thing."}),
     ("data", "data",
      {"ko": "데이터셋과 배치. `torch.utils.data` 자리.",
       "en": "Datasets and batching. Where `torch.utils.data` would be."}),
