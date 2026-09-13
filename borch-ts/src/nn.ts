@@ -880,6 +880,102 @@ export class Linear extends Module {
   }
 }
 
+/** Options for {@link LoRALinear}. `alpha` defaults to `r` (scaling 1). */
+export interface LoRAOptions { r?: number; alpha?: number; bias?: boolean; }
+
+/**
+ * A `Linear` whose base weight is frozen and adapted by a trainable low-rank pair:
+ *
+ *     y = x·Wᵀ + b  +  (x·Aᵀ)·Bᵀ · (alpha / r)
+ *
+ * `A` is `(r, in)` and `B` is `(out, r)` with `r ≪ min(in, out)`; only `A` and `B`
+ * train. The base `W`, `b` are frozen — registered as buffers, so they stay in
+ * `stateDict()` but out of `parameters()`, and an optimiser touches only the adapter.
+ * `B` starts at zero, so before the first step the layer is exactly the base `Linear`
+ * (the standard LoRA init, Hu et al. 2021).
+ *
+ * **torch.nn has no LoRA**, so there is no golden to match against; correctness is the
+ * invariants — zero-init identity, gradients reaching only the adapter, and a `merge()`
+ * that folds the update back into a plain `Linear`. It is here for fine-tuning a frozen
+ * backbone and for federating a KB-sized update ({@link adapterState}) rather than a
+ * whole model.
+ */
+export class LoRALinear extends Module {
+  readonly weight: Tensor;       // frozen base (out, in)
+  readonly bias: Tensor | null;  // frozen base
+  readonly loraA: Tensor;        // (r, in), trained
+  readonly loraB: Tensor;        // (out, r), trained, starts at zero
+  readonly r: number;
+  readonly alpha: number;
+  readonly scaling: number;      // alpha / r
+
+  constructor(inFeatures: number, outFeatures: number, options: LoRAOptions = {}) {
+    super();
+    const { r = 8, alpha = r, bias = true } = options;
+    if (r <= 0) throw new ValueError(`LoRALinear needs r >= 1, got ${r}`);
+    const bound = 1 / Math.sqrt(Math.max(1, inFeatures));
+    // Base — planted from outside like Linear's, frozen and saved as a buffer.
+    this.weight = uniform([outFeatures, inFeatures], bound);
+    this.bias = bias ? uniform([outFeatures], bound) : null;
+    this.weight.requiresGrad = false;
+    this.registerBuffer("weight", this.weight);
+    if (this.bias) { this.bias.requiresGrad = false; this.registerBuffer("bias", this.bias); }
+    // Adapter — A spread like a Linear, B at zero so the initial update is nothing.
+    this.loraA = uniform([r, inFeatures], bound);
+    this.loraB = Tensor.zeros([outFeatures, r]);
+    this.claim(this.loraA, this.loraB);   // the trainable pair
+    this.r = r; this.alpha = alpha; this.scaling = alpha / r;
+  }
+
+  /** Wrap an existing (trained) `Linear`: its weight/bias become the frozen base. */
+  static fromLinear(linear: Linear, options: LoRAOptions = {}): LoRALinear {
+    const [out, inF] = [linear.weight.shape[0] ?? 0, linear.weight.shape[1] ?? 0];
+    const lora = new LoRALinear(inF, out, { ...options, bias: linear.bias != null });
+    const w = lora as { weight: Tensor; bias: Tensor | null };
+    w.weight = linear.weight; w.weight.requiresGrad = false; lora.registerBuffer("weight", w.weight);
+    if (linear.bias) { w.bias = linear.bias; w.bias.requiresGrad = false; lora.registerBuffer("bias", w.bias); }
+    return lora;
+  }
+
+  /** The adapter alone — the KB-sized pair a federated round sends. */
+  adapterState(): Record<string, Tensor> {
+    return { lora_A: this.loraA, lora_B: this.loraB };
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return { lora_A: this.loraA, lora_B: this.loraB };
+  }
+
+  override forward(x: Tensor): Tensor {
+    const base = this.bias ? x.linear(this.weight).add(this.bias) : x.linear(this.weight);
+    const delta = x.linear(this.loraA).linear(this.loraB).mul(Tensor.full([], this.scaling));
+    return base.add(delta);
+  }
+
+  /**
+   * Fold the adapter into the base and return a plain `Linear`. The low-rank path is
+   * gone, so the result is what you export to ONNX or run at inference:
+   *   W' = W + (alpha/r)·(B·A),  b' = b.
+   */
+  merge(): Linear {
+    const [out, inF] = [this.weight.shape[0] ?? 0, this.weight.shape[1] ?? 0];
+    const merged = new Linear(inF, out, this.bias != null);
+    const m = merged as { weight: Tensor; bias: Tensor | null };
+    noGrad(() => {
+      const dW = this.loraB.matmul(this.loraA).mul(Tensor.full([], this.scaling)); // (out,in)
+      m.weight = this.weight.add(dW);
+      if (this.bias) m.bias = this.bias;
+    });
+    return merged;
+  }
+
+  override describe(): string {
+    const [out, inF] = [this.weight.shape[0] ?? 0, this.weight.shape[1] ?? 0];
+    return `LoRALinear(in_features=${inF}, out_features=${out}, r=${this.r}, `
+      + `alpha=${this.alpha}, bias=${this.bias ? "True" : "False"})`;
+  }
+}
+
 /**
  * A convolution layer independent of dimensionality. `spatial` is the
  * number of spatial axes.

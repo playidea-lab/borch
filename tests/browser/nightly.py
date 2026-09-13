@@ -47,6 +47,7 @@ CHECKS = [
     ("serialize",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/serialize.py"]),
     ("onnx",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/onnx.py"]),
     ("onnx:binding", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/onnx_binding.py"]),
+    ("lora",       ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lora.py"]),
     # The CPU device against the WebGPU device — two hub checkpoints, logits compared.
     ("cpu",        ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/cpu.py"]),
     # `borch_cpu` on the wheel, no device — and against the GPU where there is one.
