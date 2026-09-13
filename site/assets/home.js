@@ -7,7 +7,7 @@
 
 import { HERO_PY } from "./examples.js";
 import { t } from "./i18n.js";
-import { bindingUsable, describeError, HAS_JSPI, highlight, loadBorch, loadPython, probeDevice, runPython } from "./runner.js";
+import { bindingUsable, describeError, forThisBrowser, HAS_JSPI, highlight, loadBorch, loadPython, probeDevice, runPython } from "./runner.js";
 
 const codeEl = document.getElementById("hero-code");
 const outEl = document.getElementById("hero-out");
@@ -25,7 +25,6 @@ const readyEl = document.getElementById("hero-ready");
 // `ModuleNotFoundError` under a sentence promising the core would run instead (measured,
 // 2026-09-12). So the hero runs the import it can, and shows the one it runs. Padded, so
 // the comment beside it does not move.
-const CORE_IMPORT = "import borch as torch".padEnd("import borch_webgpu as torch".length);
 let heroCode = HERO_PY;
 codeEl.innerHTML = highlight(heroCode, "py");
 runBtn.textContent = t("hero.run");
@@ -43,7 +42,7 @@ function warmPython() {
 /** The snippet follows what will actually be loaded. */
 function useCoreIfNeeded(probed) {
   if (bindingUsable(probed)) return;
-  heroCode = HERO_PY.replace("import borch_webgpu as torch", CORE_IMPORT);
+  heroCode = forThisBrowser(HERO_PY, false);
   codeEl.innerHTML = highlight(heroCode, "py");
 }
 

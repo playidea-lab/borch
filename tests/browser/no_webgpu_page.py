@@ -40,6 +40,13 @@ from first_run import FLAGS                                          # noqa: E40
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 PAGES = {"en": "site/index.html", "ko": "site/ko/index.html"}
+# **The lessons offer a Run button too, and fifty of their snippets open `import
+# borch_webgpu`.** Two are pressed here: one whose Python runs on the core once the import
+# is swapped, and one about the device itself, which cannot — it has to say so in a
+# sentence rather than answer with a traceback. Seven of the seventeen lesson pages are of
+# the second kind (`scope`, `memory`, `backend`, `pooled`), measured 2026-09-14.
+LESSONS = {"site/learn/02-autograd.html": "runs", "site/learn/01-tensors.html": "explains",
+           "site/ko/learn/01-tensors.html": "explains"}
 HANGUL = re.compile(r"[가-힣]")
 # One runs before the page's scripts, so the page boots into the shape rather than being
 # changed under it.
@@ -69,6 +76,31 @@ def press_run(page):
     page.wait_for_function(
         "() => document.getElementById('hero-out').innerText.includes('learned')", timeout=180_000)
     return [l for l in page.inner_text("#hero-out").splitlines() if "learned" in l][0].strip()
+
+
+def press_lesson(page, kind):
+    """Click the python tab of the first block, press Run, and say what came back."""
+    box = page.locator(".runnable").first
+    tab = box.locator('button.tab[data-lang="py"]')
+    if tab.count():
+        tab.first.click()
+        page.wait_for_timeout(400)
+    shown = box.locator("textarea").input_value().splitlines()[0]
+    box.locator("button.go").click()
+    page.wait_for_function(
+        "() => /done —|binding's|바인딩의|Traceback/.test(document.querySelector('.runnable').innerText)",
+        timeout=180_000)
+    text = box.inner_text()
+    bad = []
+    if "Traceback" in text or "ModuleNotFoundError" in text:
+        bad.append(f"a traceback reached the screen — {text[-160:]}")
+    if "import borch_webgpu" in shown:
+        bad.append(f"the snippet still opens the binding: {shown!r}")
+    if kind == "runs" and "done —" not in text:
+        bad.append(f"it never finished — {text[-160:]}")
+    if kind == "explains" and not ("binding's" in text or "바인딩의" in text):
+        bad.append(f"nothing said which name it wanted — {text[-160:]}")
+    return shown, text, bad
 
 
 def judge_jspi(lang, badge, lines):
@@ -181,6 +213,21 @@ def main(argv):
                         page.close()
             finally:
                 with_gpu.close()
+
+            # The lesson pages, with no adapter: the snippet has to be one they can run,
+            # and the ones about the device have to say so.
+            lessons = pw.chromium.launch(headless=True, args=["--disable-features=WebGPU,WebGPUService"])
+            try:
+                for rel, kind in LESSONS.items():
+                    page = lessons.new_page()
+                    page.goto(f"http://127.0.0.1:{port}/{rel}", wait_until="load")
+                    page.wait_for_timeout(1200)
+                    shown, _text, bad = press_lesson(page, kind)
+                    print(f"  {kind:8s} {rel.split('site/')[1]:28s} {shown.strip()!r}")
+                    problems += [f"{rel}: {b}" for b in bad]
+                    page.close()
+            finally:
+                lessons.close()
     finally:
         shutdown()
 

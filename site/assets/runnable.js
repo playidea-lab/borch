@@ -30,7 +30,7 @@
  */
 
 import { drawSeries, drawTensor } from "./render.js";
-import { describeError, encodeCode, highlight, requestStop, runCode, runPython } from "./runner.js";
+import { bindingReady, coreGapName, describeError, encodeCode, forThisBrowser, highlight, requestStop, runCode, runPython } from "./runner.js";
 import { t } from "./i18n.js";
 import { markDone } from "./progress.js";
 
@@ -240,7 +240,12 @@ function mount(box) {
       write(t("run.done", result.ms.toFixed(0)), "ok");
       verdict();
     } catch (err) {
-      write(describeError(err), "err");
+      // **A lesson about the device, read on a machine without one.** Seven of the
+      // seventeen lesson pages use a name only the binding has — `scope`, `memory`,
+      // `backend`, `pooled` — which is what those lessons are for. The core answers
+      // `AttributeError` and that is true; a traceback is not how to say it.
+      const missing = coreGapName(err);
+      write(missing ? t("run.bindingOnly", missing) : describeError(err), "err");
     } finally {
       busy = false;
       runBtn.disabled = false;
@@ -272,6 +277,21 @@ function mount(box) {
   }
   runBtn.addEventListener("click", go);
   setCode(draft.get(lang));
+
+  // **A block offers Run, so its snippet has to be one this browser can run.** Asked once
+  // for the whole page and applied late rather than awaited: the buttons appear at once
+  // and the swap lands a few tens of milliseconds later, before anyone has read the line.
+  // An edited draft is left alone — the reader's text is theirs.
+  if (original.has("py")) {
+    bindingReady().then((usable) => {
+      const was = original.get("py");
+      const now = forThisBrowser(was, usable);
+      if (now === was) return;
+      original.set("py", now);
+      if (draft.get("py") === was) draft.set("py", now);
+      if (lang === "py") setCode(draft.get("py"));
+    });
+  }
 }
 
 /** Strips the indentation inside `<script>`. HTML indentation mixed into the code kills Python. */
