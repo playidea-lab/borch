@@ -865,3 +865,53 @@ a.api-link code { color: var(--ember-text); }
 /* Lesson 0's verdict under a run. `good` is the `ok` green; `bad` is a warning, not an error. */
 .out .verdict { font-weight: 600; margin-top: .3rem; }
 .out .verdict.bad { color: var(--warn, #c9873a); }
+
+/* ── The course home (site/learn/index.html), rendered from curriculum.json by
+   course.js. These classes are set through `className` on built nodes, not written as
+   `class="…"` in the page, so the style-axis check neither defines nor flags them; they
+   still need real rules or the tree renders as unstyled text. ── */
+
+/* Overall progress: a thin track the reader watches fill as lessons are checked off. */
+.c-bar { height: 8px; border-radius: 999px; background: var(--surface-2);
+  border: 1px solid var(--line-soft); overflow: hidden; }
+.c-bar i { display: block; height: 100%; background: var(--ember);
+  border-radius: 999px; transition: width .3s ease; }
+.c-stat { margin: .5rem 0 0; color: var(--fg-dim); font-size: .9rem;
+  font-variant-numeric: tabular-nums; }
+.c-resume { color: var(--ember-text); font-weight: 600; }
+
+/* One part of the tree, its lessons under it. */
+.c-part { margin: 2rem 0; }
+.c-part-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 1rem; border-bottom: 1px solid var(--line-soft); padding-bottom: .35rem; }
+.c-part-head h2 { margin: 0; font-size: 1.15rem; }
+.c-frac { font: .82rem/1 var(--mono); color: var(--fg-faint);
+  font-variant-numeric: tabular-nums; flex: none; }
+.c-blurb { margin: .5rem 0 .9rem; color: var(--fg-dim); font-size: .9rem; }
+
+/* The lesson rows. Each is a link to the lesson; the check in front toggles completion
+   and does not follow the link. */
+.c-lessons { display: flex; flex-direction: column; gap: .3rem; }
+.c-lesson { display: flex; align-items: center; gap: .7rem;
+  padding: .55rem .7rem; border: 1px solid var(--line-soft); border-radius: 10px;
+  text-decoration: none; color: var(--fg); background: transparent;
+  transition: border-color .15s ease, background .15s ease; }
+a.c-lesson:hover { border-color: var(--line); background: var(--bg-soft); }
+.c-lesson.soon { color: var(--fg-faint); cursor: default; }
+.c-title { flex: 1 1 auto; min-width: 0; }
+
+/* The mark: ✓ done, ○ open, ◇ not written yet. As a button it is keyboard-reachable
+   for toggling; `soon` has nothing to toggle. */
+.c-check { flex: none; width: 1.5rem; height: 1.5rem; display: grid; place-items: center;
+  border-radius: 999px; border: 1px solid var(--line); background: transparent;
+  font-size: .85rem; line-height: 1; cursor: pointer; color: var(--fg-faint);
+  padding: 0; }
+.c-check.done { color: var(--bg); background: var(--ember); border-color: var(--ember); }
+.c-check.todo:hover { border-color: var(--ember); color: var(--ember-text); }
+.c-check.soon { cursor: default; }
+
+/* Small pills at the end of a row. */
+.c-badge { flex: none; font: .68rem/1 var(--mono); letter-spacing: .04em;
+  padding: .2rem .4rem; border-radius: 5px; text-transform: uppercase; }
+.c-badge.new { color: var(--bg); background: var(--ember); }
+.c-badge.soon { color: var(--fg-faint); border: 1px solid var(--line-soft); }

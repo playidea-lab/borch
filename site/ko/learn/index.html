@@ -5,7 +5,7 @@
 <script src="../../coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>borch 배우기</title>
-<meta name="description" content="열한 강. 모든 코드 블록이 그 자리에서, 당신의 GPU 에서 돈다.">
+<meta name="description" content="borch 러닝 트리 — 기초에서 트랜스포머까지, 모든 코드 블록이 그 자리에서 당신의 GPU 로 돈다.">
 <link rel="alternate" hreflang="en" href="../../learn/">
 <!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
      `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
@@ -14,7 +14,7 @@
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="ko_KR">
 <meta property="og:title" content="borch 배우기">
-<meta property="og:description" content="열한 강. 모든 코드 블록이 그 자리에서, 당신의 GPU 에서 돈다.">
+<meta property="og:description" content="borch 러닝 트리 — 기초에서 트랜스포머까지, 모든 코드 블록이 그 자리에서 당신의 GPU 로 돈다.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
 <meta property="og:url" content="%OG_BASE%/site/ko/learn/">
 <meta name="twitter:card" content="summary_large_image">
@@ -72,63 +72,30 @@
 
   <main class="doc-main lesson">
     <p class="eyebrow">배우기</p>
-    <h1>열한 강, 전부 도는 것</h1>
+    <h1>러닝 트리, 전부 도는 것</h1>
     <p class="lead">
       <strong>모든 블록은 두 번 쓰여 있다 — JavaScript 탭과 Python 탭, 같은 일을 각각.</strong>
-      0 강은 Python 으로 열리고, 나머지는 JavaScript 로 열려 한 번 눌러 바꾼다.
+      대부분 JavaScript 로 열려 한 번 눌러 바꾸고, 몇 개는 Python 으로 열린다.
       <a href="../playground.html">Playground</a> 도 둘 다 받는다.
     </p>
     <p class="lead">
       이 페이지들의 모든 코드 블록은 이 탭에서, 당신의 GPU 에서 돈다. 돌리기 전에 고쳐도
-      된다. 설치하는 것도 올려 보내는 것도 없다. borch 가 처음이면 위에서부터 —
-      한 강에 몇 분이면 된다.
+      된다. 설치하는 것도 올려 보내는 것도 없다. borch 가 처음이면 트리를 위에서부터 걸어도
+      되고, 아무 레슨의 동그라미를 눌러 체크해 둬도 된다 — 진도는 이 브라우저에 남고, 계정은
+      없다.
     </p>
 
-    <div class="grid c2" style="margin:2rem 0">
-      <a class="tile" href="00-fix-it.html" style="text-decoration:none">
-        <h3>0 · 버그 고쳐 보기</h3>
-        <p class="small">Python, 설치 없이. 배우지 못하는 루프 둘을 고치면 페이지가 판정한다 — 여기서 시작.</p>
-      </a>
-      <a class="tile" href="01-tensors.html" style="text-decoration:none">
-        <h3>1 · 텐서</h3>
-        <p class="small">모양·dtype·연산, 그리고 값을 읽는 것이 왜 await 인가.</p>
-      </a>
-      <a class="tile" href="02-autograd.html" style="text-decoration:none">
-        <h3>2 · Autograd</h3>
-        <p class="small">backward()·누적·noGrad, 그리고 기울기가 정말 흘렀는지 아는 법.</p>
-      </a>
-      <a class="tile" href="03-modules.html" style="text-decoration:none">
-        <h3>3 · 모듈</h3>
-        <p class="small">Linear·Sequential, 층을 직접 만들기, 손실.</p>
-      </a>
-      <a class="tile" href="04-training.html" style="text-decoration:none">
-        <h3>4 · 학습</h3>
-        <p class="small">루프·옵티마이저·스케줄러, 그리고 장치를 안 채우는 구역.</p>
-      </a>
-      <a class="tile" href="05-cnn.html" style="text-decoration:none">
-        <h3>5 · 합성곱</h3>
-        <p class="small">Conv2d·풀링·평탄화, 그리고 GPU 가 한 일을 세는 법.</p>
-      </a>
-      <a class="tile" href="06-save-load.html" style="text-decoration:none">
-        <h3>6 · 저장과 파이썬</h3>
-        <p class="small">safetensors 체크포인트, 그리고 같은 커널을 파이썬에서 부르기.</p>
-      </a>
-      <a class="tile" href="07-data.html" style="text-decoration:none">
-        <h3>7 · 데이터</h3>
-        <p class="small">데이터셋·배치·섞기·검증 분리, 그리고 이미지 변환.</p>
-      </a>
-      <a class="tile" href="08-debugging.html" style="text-decoration:none">
-        <h3>8 · 디버깅</h3>
-        <p class="small">수가 틀렸는데 아무것도 안 터졌을 때 장치에 물어볼 것들.</p>
-      </a>
-      <a class="tile" href="09-resnet.html" style="text-decoration:none">
-        <h3>9 · 잔차</h3>
-        <p class="small">지름길 연결, BasicBlock, 그리고 그것이 실어 나르는 기울기를 직접 재기.</p>
-      </a>
-      <a class="tile" href="10-vit.html" style="text-decoration:none">
-        <h3>10 · 트랜스포머</h3>
-        <p class="small">패치를 토큰으로, 어텐션, 클래스 토큰 — 그리고 borch.ts 가 torch 보다 좁은 곳.</p>
-      </a>
+    <!-- 코스는 `../../assets/curriculum.json` 을 course.js 가 읽어 그린다: 파트와 레슨,
+         그리고 읽는 사람 본인의 진도. 스크립트나 매니페스트가 안 실리면 아래 대체 링크가
+         남는다. course.js 가 #course-root 를 통째로 갈아 끼우므로 여기 내용은 매니페스트와
+         맞춰 둘 필요가 없다. -->
+    <section id="course-head"></section>
+    <div id="course-root">
+      <p class="small">
+        <a href="01-tensors.html">텐서</a>에서 시작하거나
+        <a href="../tutorials/">프로젝트 튜토리얼</a>로 건너뛴다. (대화형 코스 지도는
+        JavaScript 가 필요하고, 이 두 링크는 아니다.)
+      </p>
     </div>
 
     <h2>필요한 것</h2>
@@ -162,6 +129,7 @@
   </main>
 </div>
 
+<script type="module" src="../../assets/course.js"></script>
 <script type="module" src="../../assets/runnable.js"></script>
 <script type="module" src="../../assets/apilink.js"></script>
 </body>

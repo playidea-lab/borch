@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "note": "The learning tree, as data. One SSOT: the course home, progress, and What's-new all render from here. Add a lesson = add an entry. `added` for the lessons that predate this manifest is a single baseline (2026-06-01); new leaves carry their real date. `status`: exists (live) | new (planned/being authored, no url yet).",
+  "parts": [
+    { "id": "onboarding",   "title": { "en": "Start here",   "ko": "시작하기" },   "blurb": { "en": "See it work in two minutes.",                         "ko": "2분 만에 돌아가는 걸 본다." } },
+    { "id": "foundations",  "title": { "en": "Foundations",  "ko": "기초 수학" },   "blurb": { "en": "The math, run — vectors to the chain rule.",           "ko": "수학을 직접 돌린다 — 벡터에서 연쇄법칙까지." } },
+    { "id": "basics",       "title": { "en": "DL Basics",    "ko": "딥러닝 기초" }, "blurb": { "en": "From a tensor to a training loop.",                    "ko": "텐서에서 학습 루프까지." } },
+    { "id": "depth",        "title": { "en": "Depth",        "ko": "실전 깊이" },   "blurb": { "en": "Real networks, data, and debugging.",                 "ko": "진짜 망·데이터·디버깅." } },
+    { "id": "transformers", "title": { "en": "Sequences & Transformers", "ko": "시퀀스와 트랜스포머" }, "blurb": { "en": "Attention, and building a transformer.",  "ko": "어텐션, 그리고 트랜스포머 조립." } },
+    { "id": "extras",       "title": { "en": "Extras",       "ko": "곁가지" },     "blurb": { "en": "Side branches off the main line.",                    "ko": "본선에서 갈라지는 심화." } }
+  ],
+  "lessons": [
+    { "id": "quickstart",    "part": "onboarding",  "order": 1, "prereq": [],                     "title": { "en": "Quickstart",          "ko": "빠른 시작" },       "url": "tutorials/01-quickstart.html",   "ko_url": "ko/tutorials/01-quickstart.html",   "added": "2026-06-01", "verdict": false, "status": "exists" },
+    { "id": "from-scratch",  "part": "onboarding",  "order": 2, "prereq": [],                     "title": { "en": "From scratch",        "ko": "밑바닥부터" },     "url": "tutorials/02-from-scratch.html", "ko_url": "ko/tutorials/02-from-scratch.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
+
+    { "id": "f-vectors",     "part": "foundations", "order": 1, "prereq": [],                     "title": { "en": "Vectors & dot products", "ko": "벡터와 내적" },  "url": null, "ko_url": null, "added": null, "verdict": true, "status": "new" },
+    { "id": "f-matmul",      "part": "foundations", "order": 2, "prereq": ["f-vectors"],          "title": { "en": "Matrices & matrix multiply", "ko": "행렬과 행렬곱" }, "url": null, "ko_url": null, "added": null, "verdict": true, "status": "new" },
+    { "id": "f-broadcast",   "part": "foundations", "order": 3, "prereq": ["f-matmul"],           "title": { "en": "Broadcasting & shapes", "ko": "브로드캐스팅과 모양" }, "url": null, "ko_url": null, "added": null, "verdict": true, "status": "new" },
+    { "id": "f-norms",       "part": "foundations", "order": 4, "prereq": ["f-vectors"],          "title": { "en": "Norms, distance & projection", "ko": "norm·거리·투영" }, "url": null, "ko_url": null, "added": null, "verdict": true, "status": "new" },
+    { "id": "f-chain-rule",  "part": "foundations", "order": 5, "prereq": ["f-matmul"],           "title": { "en": "Derivatives & the chain rule", "ko": "미분과 연쇄법칙" }, "url": null, "ko_url": null, "added": null, "verdict": true, "status": "new" },
+
+    { "id": "tensors",       "part": "basics",      "order": 1, "prereq": ["f-chain-rule"],       "title": { "en": "Tensors",             "ko": "텐서" },           "url": "learn/01-tensors.html",  "ko_url": "ko/learn/01-tensors.html",  "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "autograd",      "part": "basics",      "order": 2, "prereq": ["tensors", "f-chain-rule"], "title": { "en": "Autograd",       "ko": "Autograd" },       "url": "learn/02-autograd.html", "ko_url": "ko/learn/02-autograd.html", "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "modules",       "part": "basics",      "order": 3, "prereq": ["autograd"],           "title": { "en": "Modules",             "ko": "모듈" },           "url": "learn/03-modules.html",  "ko_url": "ko/learn/03-modules.html",  "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "training",      "part": "basics",      "order": 4, "prereq": ["modules"],            "title": { "en": "Training",            "ko": "학습" },           "url": "learn/04-training.html", "ko_url": "ko/learn/04-training.html", "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "fix-it",        "part": "basics",      "order": 5, "prereq": ["training"],           "title": { "en": "Fix the bug",         "ko": "버그 고쳐 보기" }, "url": "learn/00-fix-it.html",   "ko_url": "ko/learn/00-fix-it.html",   "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "curve-fitting", "part": "basics",      "order": 6, "prereq": ["training"],           "title": { "en": "Curve fitting",       "ko": "곡선 맞추기" },     "url": "tutorials/03-curve-fitting.html", "ko_url": "ko/tutorials/03-curve-fitting.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
+
+    { "id": "cnn",           "part": "depth",       "order": 1, "prereq": ["training"],           "title": { "en": "Convolution",         "ko": "합성곱" },         "url": "learn/05-cnn.html",      "ko_url": "ko/learn/05-cnn.html",      "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "data",          "part": "depth",       "order": 2, "prereq": ["training"],           "title": { "en": "Data",                "ko": "데이터" },         "url": "learn/07-data.html",     "ko_url": "ko/learn/07-data.html",     "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "debugging",     "part": "depth",       "order": 3, "prereq": ["training"],           "title": { "en": "Debugging",           "ko": "디버깅" },         "url": "learn/08-debugging.html","ko_url": "ko/learn/08-debugging.html","added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "save-load",     "part": "depth",       "order": 4, "prereq": ["training"],           "title": { "en": "Saving and loading",  "ko": "저장하고 불러오기" }, "url": "learn/06-save-load.html", "ko_url": "ko/learn/06-save-load.html", "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "resnet",        "part": "depth",       "order": 5, "prereq": ["cnn"],                "title": { "en": "Residual networks",   "ko": "잔차 신경망" },     "url": "learn/09-resnet.html",   "ko_url": "ko/learn/09-resnet.html",   "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "image-classifier", "part": "depth",   "order": 6, "prereq": ["cnn"],                "title": { "en": "Image classifier",    "ko": "이미지 분류기" },   "url": "tutorials/04-image-classifier.html", "ko_url": "ko/tutorials/04-image-classifier.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
+    { "id": "adversarial",   "part": "depth",       "order": 7, "prereq": ["image-classifier"],   "title": { "en": "Adversarial examples","ko": "적대적 예제" },     "url": "tutorials/05-adversarial.html", "ko_url": "ko/tutorials/05-adversarial.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
+
+    { "id": "char-rnn",      "part": "transformers","order": 1, "prereq": ["training"],           "title": { "en": "Character RNN",       "ko": "문자 RNN" },       "url": "tutorials/06-char-rnn.html", "ko_url": "ko/tutorials/06-char-rnn.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
+    { "id": "attention",     "part": "transformers","order": 2, "prereq": ["char-rnn"],           "title": { "en": "Attention",           "ko": "어텐션" },         "url": "tutorials/08-attention.html", "ko_url": "ko/tutorials/08-attention.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
+    { "id": "vit",           "part": "transformers","order": 3, "prereq": ["attention", "cnn"],   "title": { "en": "Vision Transformer",  "ko": "비전 트랜스포머" }, "url": "learn/10-vit.html",      "ko_url": "ko/learn/10-vit.html",      "added": "2026-06-01", "verdict": true, "status": "exists" },
+    { "id": "autoencoder",   "part": "transformers","order": 4, "prereq": ["modules"],            "title": { "en": "Autoencoder",         "ko": "오토인코더" },     "url": "tutorials/09-autoencoder.html", "ko_url": "ko/tutorials/09-autoencoder.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
+    { "id": "mini-transformer", "part": "transformers", "order": 5, "prereq": ["attention"],      "title": { "en": "Build a mini-transformer", "ko": "미니 트랜스포머 조립" }, "url": null, "ko_url": null, "added": null, "verdict": true, "status": "new" },
+
+    { "id": "signals-fft",   "part": "extras",      "order": 1, "prereq": ["tensors"],            "title": { "en": "Signals and the FFT", "ko": "신호와 FFT" },     "url": "tutorials/07-signals-fft.html", "ko_url": "ko/tutorials/07-signals-fft.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
+    { "id": "least-squares", "part": "extras",      "order": 2, "prereq": ["f-matmul"],           "title": { "en": "Least squares",       "ko": "최소제곱" },       "url": "tutorials/10-least-squares.html", "ko_url": "ko/tutorials/10-least-squares.html", "added": "2026-06-01", "verdict": false, "status": "exists" }
+  ]
+}

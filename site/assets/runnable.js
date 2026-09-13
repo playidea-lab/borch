@@ -32,6 +32,7 @@
 import { drawSeries, drawTensor } from "./render.js";
 import { describeError, encodeCode, highlight, requestStop, runCode, runPython } from "./runner.js";
 import { t } from "./i18n.js";
+import { markDone } from "./progress.js";
 
 const LABEL = {
   run: { en: "▶ Run", ko: "▶ 실행" },
@@ -264,8 +265,10 @@ function mount(box) {
     }
     if (last === null) { write(t("verdict.noLoss"), "verdict bad"); return; }
     const value = Number(last);
-    if (Number.isFinite(value) && value < limit) write(t("verdict.learned", last, String(limit)), "verdict good");
-    else write(t("verdict.notYet", last, String(limit)), "verdict bad");
+    if (Number.isFinite(value) && value < limit) {
+      write(t("verdict.learned", last, String(limit)), "verdict good");
+      markDone();   // this lesson's exercise passed → mark it complete on the course home
+    } else write(t("verdict.notYet", last, String(limit)), "verdict bad");
   }
   runBtn.addEventListener("click", go);
   setCode(draft.get(lang));

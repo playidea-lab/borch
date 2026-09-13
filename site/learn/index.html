@@ -5,7 +5,7 @@
 <script src="../coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Learn borch</title>
-<meta name="description" content="Eleven lessons from tensors to a Vision Transformer. Every code block runs in the page, on your own GPU.">
+<meta name="description" content="The borch learning tree — foundations through transformers, every code block running in the page on your own GPU.">
 <link rel="alternate" hreflang="ko" href="../ko/learn/">
 <!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
      `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
@@ -15,7 +15,7 @@
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Learn borch">
-<meta property="og:description" content="Eleven lessons from tensors to a Vision Transformer. Every code block runs in the page, on your own GPU.">
+<meta property="og:description" content="The borch learning tree — foundations through transformers, every code block running in the page on your own GPU.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
 <meta property="og:url" content="%OG_BASE%/site/learn/">
 <meta name="twitter:card" content="summary_large_image">
@@ -73,63 +73,30 @@
 
   <main class="doc-main lesson">
     <p class="eyebrow">Learn</p>
-    <h1>Eleven lessons, all of them running</h1>
+    <h1>The learning tree, all of it running</h1>
     <p class="lead">
       <strong>Every block is written twice — a JavaScript tab and a Python tab, the same
-      work on each.</strong> Lesson 0 opens in Python; the others open in JavaScript and switch
-      with one click. The <a href="../playground.html">Playground</a> takes both as well.
+      work on each.</strong> Most open in JavaScript and switch with one click; a few open in
+      Python. The <a href="../playground.html">Playground</a> takes both as well.
     </p>
     <p class="lead">
       Every code block on these pages executes in this tab, on your GPU, and you can
-      edit it before you run it. Nothing is installed and nothing is uploaded. Start at
-      the top if borch is new to you; each lesson takes a few minutes.
+      edit it before you run it. Nothing is installed and nothing is uploaded. Walk the tree
+      top to bottom if borch is new to you, or press the circle on any lesson to check it
+      off — your progress stays in this browser, no account.
     </p>
 
-    <div class="grid c2" style="margin:2rem 0">
-      <a class="tile" href="00-fix-it.html" style="text-decoration:none">
-        <h3>0 · Fix the bug</h3>
-        <p class="small">Python, nothing installed. Two loops that do not learn; fix them and the page says so — start here.</p>
-      </a>
-      <a class="tile" href="01-tensors.html" style="text-decoration:none">
-        <h3>1 · Tensors</h3>
-        <p class="small">Shapes, dtypes, operations, and why reading a value is awaited.</p>
-      </a>
-      <a class="tile" href="02-autograd.html" style="text-decoration:none">
-        <h3>2 · Autograd</h3>
-        <p class="small">backward(), accumulation, noGrad, and how to tell a gradient actually flowed.</p>
-      </a>
-      <a class="tile" href="03-modules.html" style="text-decoration:none">
-        <h3>3 · Modules</h3>
-        <p class="small">Linear, Sequential, writing your own layer, and the losses.</p>
-      </a>
-      <a class="tile" href="04-training.html" style="text-decoration:none">
-        <h3>4 · Training</h3>
-        <p class="small">The loop, optimizers, schedulers — and the scope that keeps the device from filling.</p>
-      </a>
-      <a class="tile" href="05-cnn.html" style="text-decoration:none">
-        <h3>5 · Convolution</h3>
-        <p class="small">Conv2d, pooling, flatten, and counting what the GPU was asked to do.</p>
-      </a>
-      <a class="tile" href="06-save-load.html" style="text-decoration:none">
-        <h3>6 · Saving</h3>
-        <p class="small">safetensors checkpoints, and the same kernels called from Python.</p>
-      </a>
-      <a class="tile" href="07-data.html" style="text-decoration:none">
-        <h3>7 · Data</h3>
-        <p class="small">Datasets, batching, shuffling, a held-out split, and image transforms.</p>
-      </a>
-      <a class="tile" href="08-debugging.html" style="text-decoration:none">
-        <h3>8 · Debugging</h3>
-        <p class="small">What to ask the device when the numbers are wrong and nothing threw.</p>
-      </a>
-      <a class="tile" href="09-resnet.html" style="text-decoration:none">
-        <h3>9 · Residual</h3>
-        <p class="small">Skip connections, a BasicBlock, and measuring the gradient they carry.</p>
-      </a>
-      <a class="tile" href="10-vit.html" style="text-decoration:none">
-        <h3>10 · Transformer</h3>
-        <p class="small">Patches as tokens, attention, a class token — and where borch.ts is narrower than torch.</p>
-      </a>
+    <!-- The course, rendered from `../assets/curriculum.json` by course.js: the parts and
+         lessons, with the reader's own progress on them. If the script or the manifest
+         does not load, the fallback below is what remains. course.js replaces #course-root
+         wholesale, so nothing here has to be kept in step with the manifest. -->
+    <section id="course-head"></section>
+    <div id="course-root">
+      <p class="small">
+        Start at <a href="01-tensors.html">Tensors</a>, or jump to the
+        <a href="../tutorials/">project tutorials</a>. (The interactive course map needs
+        JavaScript; these two links do not.)
+      </p>
     </div>
 
     <h2>What you need</h2>
@@ -165,6 +132,7 @@
   </main>
 </div>
 
+<script type="module" src="../assets/course.js"></script>
 <script type="module" src="../assets/runnable.js"></script>
 <script type="module" src="../assets/apilink.js"></script>
 </body>
