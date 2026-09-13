@@ -177,75 +177,17 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         model = None                                       # nothing to export as ONNX on this side — the head's weights are in `head`
         how = f"EfficientNet-B0 frozen, on the CPU · features for {N} images in **{feat_s:.1f} s** · head 300 steps"
     elif path.value == FROZEN:
-        nn = torch.nn
-        crit = torch.nn.CrossEntropyLoss()
-        # The backbone runs forward only, once per image, in batches of 16; what is
-        # kept is the 1280-d vector before its classifier (`pre_logits`). The head is
-        # the only thing that learns — 300 full-batch steps on the cached features.
-        backbone = torch.hub.load("imagenet-efficientnet-b0")
-        chunks = []                                        # marimo: one name per cell, `rows` is the table's
-        # Recorded once per batch shape and replayed — see the U-Net path.
-        embed = torch.compiled(lambda x: backbone.forward_head(backbone.forward_features(x), pre_logits=True))
-        with torch.no_grad():
-            for xb, _idx in ds.batches(16):                # decoded here, sixteen at a time
-                with torch.scope():
-                    chunks.append(embed(torch.tensor(xb)).numpy())
-        embed.dispose()
-        feats = np.concatenate(chunks)                     # (N, 1280)
-        feat_s = time.perf_counter() - t0
-        head = nn.Linear(backbone.num_features, K)
-        opt = torch.optim.Adam(head.parameters(), lr=1e-2)
-        Ft, yt = torch.tensor(feats), torch.tensor(y)
-        # Full-batch: the input never changes, so `torch.compiled` records once and replays.
-        def head_step(F, t):
-            opt.zero_grad(); l = crit(head(F), t); l.backward(); opt.step(); return l
-        run = torch.compiled(head_step)
-        for step in range(300):
-            with torch.scope():
-                loss = run(Ft, yt)
-                if step % 50 == 0 or step == 299:
-                    losses.append(loss.item())
-        run.dispose()
-        class Frozen(nn.Module):
-            # backbone → pre-logits → head, as one module, so the export is the whole thing
-            def __init__(self):
-                super().__init__()
-                self.head = head
-            def forward(self, x):
-                return self.head(backbone.forward_head(backbone.forward_features(x), pre_logits=True))
-        model = Frozen()
-        model.eval()
-        with torch.no_grad():
-            pred = head(Ft).argmax(1).numpy()
+        # **The recipe is the library's now.** `workbench.setup` carries every setting in
+        # one call and `fit()` runs it: the backbone forward-only in batches, the 1280-d
+        # pre-logits kept, a linear head the only thing that learns. What is here is the
+        # two lines this page chooses, not the loop it used to keep a copy of.
+        s = torch.workbench.setup(ds, backbone="imagenet-efficientnet-b0", epochs=300, batch=16, lr=1e-2).fit()
+        model, head, feats, pred, losses = s.model, s.head, s.features, s.predicted, s.losses
+        feat_s = s.seconds
         how = f"EfficientNet-B0 frozen · features for {N} images in **{feat_s:.1f} s** · head 300 steps"
     else:
-        nn = torch.nn
-        crit = torch.nn.CrossEntropyLoss()
-        head = None                                        # the small CNN has no separate head to hand on
-        def block(cin, cout):
-            return [nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(), nn.MaxPool2d(2)]
-        model = nn.Sequential(*block(3, 16), *block(16, 32), *block(32, 64), nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(64, K))
-        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-        Xt, yt = torch.tensor(ds.stack()), torch.tensor(y)  # all of it, at 64 px
-        BATCH, EPOCHS = 16, 12
-        steps = max(1, N // BATCH)
-        # `torch.compiled` — see the U-Net path for what it does.
-        def train_step(xb, yb):
-            opt.zero_grad(); l = crit(model(xb), yb); l.backward(); opt.step(); return l
-        run = torch.compiled(train_step)
-        for epoch in range(EPOCHS):
-            for s in range(steps):
-                with torch.scope():
-                    loss = run(Xt[s * BATCH:(s + 1) * BATCH], yt[s * BATCH:(s + 1) * BATCH])
-                    last = loss.item()
-            losses.append(last)
-        run.dispose()
-        model.eval()
-        with torch.no_grad():
-            logits = model(Xt)
-            pred = logits.argmax(1).numpy()
-            feats = logits.numpy()
-        how = f"small CNN · {EPOCHS} epochs × {steps} steps"
+        s = torch.workbench.setup(ds, epochs=12, batch=16, lr=1e-3).fit()
+        model, head, feats, pred, losses, how = s.model, None, s.features, s.predicted, s.losses, s.how
     train_s = time.perf_counter() - t0
     if masks is None:
         acc = float((pred == y).mean())

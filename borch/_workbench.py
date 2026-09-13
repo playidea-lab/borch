@@ -43,6 +43,20 @@ def _small_cnn(nn, classes):
                          nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(64, classes))
 
 
+def _Frozen(nn, backbone, head):
+    """backbone → pre-logits → head as one module, so the export is the whole thing."""
+
+    class Frozen(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.head = head
+
+        def forward(self, x):
+            return self.head(backbone.forward_head(backbone.forward_features(x), pre_logits=True))
+
+    return Frozen()
+
+
 class Session:
     """What `setup()` returns: the settings, and the run once `fit()` has been called.
 
@@ -68,7 +82,20 @@ class Session:
                 "Use borch_webgpu (a browser tab with an adapter), or leave backbone out for "
                 "the small CNN, which trains here.")
         self.torch = torch
-        self.data = ImageFiles(files, size=size, label=label)
+        # **A dataset already in hand is taken as it is.** A page that has decoded a folder
+        # once should not decode it again to use this; `size` is then the set's, and a
+        # different one asked for here is a contradiction rather than a resize.
+        # Asked by what it offers, not by its class: `borch._data` reaches a session under
+        # two module paths in some runs, and then `isinstance` says no to the very object
+        # this branch is for. `suspects` reads its inputs the same way.
+        if all(hasattr(files, name) for name in ("stack", "batches", "targets", "classes", "size")):
+            if size != files.size and size != 64:
+                raise ValueError(
+                    f"workbench: the set was decoded at {files.size} px and size={size} was asked "
+                    "for — make a new ImageFiles at that size, or leave size out.")
+            self.data, size = files, files.size
+        else:
+            self.data = ImageFiles(files, size=size, label=label)
         self.config = {
             "size": int(size), "batch": int(batch), "epochs": int(epochs), "lr": float(lr),
             "optimizer": optimizer, "backbone": backbone, "val": float(val), "seed": int(seed),
@@ -110,8 +137,9 @@ class Session:
         if cfg["backbone"] is not None and model is None:
             self._fit_head(classes, train_rows, y_all)
         else:
-            self.model = model if model is not None else _small_cnn(torch.nn, classes)
-            self._fit_model(train_rows, y_all)
+            mine = model is not None
+            self.model = model if mine else _small_cnn(torch.nn, classes)
+            self._fit_model(train_rows, y_all, mine)
 
         self.seconds = time.perf_counter() - started
         self.predicted = self._predict()
@@ -159,7 +187,7 @@ class Session:
         raise NotImplementedError                                # set by the two paths
 
     # -- path one: a small CNN (or yours) on the images ---------------------------
-    def _fit_model(self, train_rows, y_all):
+    def _fit_model(self, train_rows, y_all, mine):
         torch, cfg = self.torch, self.config
         xs = torch.tensor(self.data.stack()[train_rows])
         ys = torch.tensor(y_all[train_rows])
@@ -177,7 +205,10 @@ class Session:
 
         self._batch = lambda rows, s: (xs[s * batch:(s + 1) * batch], ys[s * batch:(s + 1) * batch])
         self._run_steps(step, train_rows, self._steps(train_rows))
-        self.how = (f"{'your model' if self.model is not None else 'small CNN'} · "
+        # **Which model trained, read off what was passed.** This asked `self.model is not
+        # None`, which `fit()` has just filled in either way, so it said "your model" for
+        # the small CNN too — caught by the workbench page, whose line names the model.
+        self.how = (f"{'your model' if mine else 'small CNN'} · "
                     f"{cfg['epochs']} epochs × {self._steps(train_rows)} steps")
 
     # -- path two: a frozen backbone, and only the head learns -------------------
@@ -207,6 +238,12 @@ class Session:
         # Full batch: the features never change, so there is one shape and one recording.
         self._batch = lambda rows, s: (ft, ys)
         self._run_steps(step, train_rows, 1)
+        # **The exported thing is the whole net, not the head.** The head alone is weights
+        # against features nobody outside this tab can produce; a file that cannot be run
+        # elsewhere is the wrong answer this library refuses. The page composed these two
+        # by hand to export them — that is the eight lines this is.
+        self.model = _Frozen(torch.nn, net, head)
+        self.model.eval()
         self.how = f"{cfg['backbone']} frozen · head {cfg['epochs']} steps"
 
     # -- what came out -----------------------------------------------------------
@@ -236,9 +273,7 @@ class Session:
     def onnx(self):
         """The trained model as ONNX bytes. Needs a surface with an exporter."""
         if self.model is None:
-            raise RuntimeError(
-                "workbench: there is nothing to export — a frozen backbone's head is "
-                "weights, not a graph. Train without a backbone, or export the head yourself.")
+            raise RuntimeError("workbench: call fit() before exporting")
         exporter = getattr(self.torch, "onnx", None)
         if exporter is None:
             raise RuntimeError(
