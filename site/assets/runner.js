@@ -306,6 +306,44 @@ export function bindingUsable(probed) {
   return Boolean(probed && probed.ok) && HAS_JSPI;
 }
 
+const BINDING_IMPORT = "import borch_webgpu as torch";
+// Padded, so a comment beside the import does not move when the line shortens.
+const CORE_IMPORT = "import borch as torch".padEnd(BINDING_IMPORT.length);
+
+/** A snippet with the import this browser can actually load.
+ *
+ *  **The page's snippets are the page's, not the reader's.** Somebody who types
+ *  `import borch_webgpu` should be told there is no such module — that is true and it is
+ *  why the binding's files are left off this path. But a snippet the page wrote and then
+ *  offers a Run button for has to be one the page can run: on a machine with no adapter,
+ *  or Safari with no JSPI, pressing Run answered `ModuleNotFoundError` under a sentence
+ *  saying the core would run instead. Measured on the landing page 2026-09-12, and the
+ *  fifty lesson snippets are the same shape.
+ */
+export function forThisBrowser(code, usable) {
+  return usable ? code : code.replace(BINDING_IMPORT, CORE_IMPORT);
+}
+
+// `module 'borch' has no attribute 'scope'` — the core answering for a name only the
+// binding has. Read off the message rather than predicted from a list: a list of the
+// binding's extra names would have to be kept in step with two packages from JavaScript,
+// and the true statement is the one the run just made.
+const CORE_GAP = /module 'borch' has no attribute '(\w+)'/;
+
+/** The binding-only name a snippet asked the core for, or null. */
+export function coreGapName(err) {
+  const found = CORE_GAP.exec(String((err && err.message) || err));
+  return found ? found[1] : null;
+}
+
+let ready = null;
+
+/** Whether the binding is usable here — probed once, shared by every block on the page. */
+export function bindingReady() {
+  if (!ready) ready = probeDevice().then(bindingUsable).catch(() => false);
+  return ready;
+}
+
 async function loadPythonFresh(say) {
 
   // **The GPU is required by `borch_webgpu` and not by Python mode**, and this gate

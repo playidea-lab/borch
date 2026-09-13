@@ -55,6 +55,15 @@ const STRINGS = {
     ko: "이 브라우저는 WebAssembly 를 중단(JSPI)하지 못한다 — 파이썬이 GPU 에서 값을 읽어 오는 "
       + "방법이 그것이다. Chrome·Edge 137+ 에 있다. 대신 numpy 코어가 돈다: 같은 API, 같은 값, "
       + "CPU 의 속도로." },
+  // What a device lesson says on a machine with no device: the name it wanted, and where
+  // that name lives. Not a traceback — the reader did nothing wrong.
+  "run.bindingOnly": {
+    en: "This example uses torch.{0}, which is the WebGPU binding's — it is what this "
+      + "lesson is about. The rest of the page runs here on the numpy core; for this "
+      + "block you need a browser with WebGPU, and Chrome or Edge 137+ for the Python side.",
+    ko: "이 예제는 torch.{0} 을 쓴다. WebGPU 바인딩의 이름이고, 이 레슨이 다루는 것이 그것이다. "
+      + "페이지의 나머지는 여기서 numpy 코어로 돌지만, 이 블록에는 WebGPU 가 있는 브라우저가 "
+      + "필요하고 파이썬 쪽은 Chrome·Edge 137+ 여야 한다." },
   "device.noFallback": {
     en: "borch does not fall back — better not to run than to quietly go slow.",
     ko: "borch 는 폴백하지 않는다 — 조용히 느려지느니 안 도는 편이 낫다." },
