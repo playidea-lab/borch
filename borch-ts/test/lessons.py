@@ -106,6 +106,8 @@ PAGES = [
     "/site/ko/papers/03-dropout.html",
     "/site/papers/04-batchnorm.html",
     "/site/ko/papers/04-batchnorm.html",
+    "/site/papers/05-layernorm.html",
+    "/site/ko/papers/05-layernorm.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page

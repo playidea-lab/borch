@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레이어 정규화 — borch 배우기</title>
+<meta name="description" content="레이어 정규화 (Ba et al., 2016) 는 각 샘플을 자기 feature 들로 정규화한다 — 배치 무관, train·eval 동일이라 트랜스포머가 쓴다. 페이지 안에서, 양 언어로.">
+<link rel="alternate" hreflang="en" href="../../papers/05-layernorm.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="레이어 정규화 — borch 배우기">
+<meta property="og:description" content="레이어 정규화 (Ba et al., 2016) 는 각 샘플을 자기 feature 들로 정규화한다 — 배치 무관, train·eval 동일이라 트랜스포머가 쓴다. 페이지 안에서, 양 언어로.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/papers/05-layernorm.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../papers/05-layernorm.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>논문 사례</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-lora.html">1 · LoRA</a>
+      <a href="02-adam.html">2 · Adam</a>
+      <a href="03-dropout.html">3 · Dropout</a>
+      <a href="04-batchnorm.html">4 · Batch norm</a>
+      <a href="05-layernorm.html" class="on">5 · Layer norm</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">논문 사례 · 5</p>
+    <h1>레이어 정규화</h1>
+    <p class="lead">
+      레이어 정규화 — Ba, Kiros &amp; Hinton, 2016 — 는 배치 정규화처럼 배치 전체가 아니라
+      각 샘플을 자기 feature 들로 정규화한다. 그래서 배치 크기와 무관하고 train·eval 에서
+      동일하다 — 그래서 트랜스포머가 대신 이걸 쓴다. 아래 모든 것은 이 페이지에서, 양
+      언어로 돈다.
+    </p>
+
+    <h2>각 행을 자기 feature 들로 정규화</h2>
+    <p>
+      평균과 퍼짐이 제각각인 행들을 준다. <code>LayerNorm([4])</code> 는 <em>각 행을 따로</em>,
+      그 네 feature 에 걸쳐 중심화하고 스케일한다 — 그래서 출력의 모든 행이 평균 약 0 으로
+      나온다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const ln = new nn.LayerNorm([4]);
+        const x = keepAlive(Tensor.from([10, 12, 14, 16, -5, -3, -1, 1, 100, 200, 300, 400], [3, 4]));
+        const out = ln.call(x);
+
+        log("input  row 0:", Array.from(await x.at(0).toArray()).join(", "));
+        log("output row 0:", Array.from(await out.at(0).toArray()).map((v) => v.toFixed(2)).join(", "));
+        log("row means (output):", Array.from(await out.mean(1).toArray()).map((v) => v.toFixed(3)).join("  "), " (each ~0)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        ln = torch.nn.LayerNorm(4)
+        x = torch.tensor([[10., 12., 14., 16.], [-5., -3., -1., 1.], [100., 200., 300., 400.]])
+        out = ln(x)
+
+        print("input  row 0:", ", ".join(str(v) for v in x[0].tolist()))
+        print("output row 0:", ", ".join(f"{v:.2f}" for v in out[0].tolist()))
+        print("row means (output):", "  ".join(f"{v:.3f}" for v in out.mean(1).tolist()), " (each ~0)")
+      </script>
+    </div>
+
+    <h2>배치 무관, 그리고 train·eval 동일</h2>
+    <p>
+      각 행이 따로 정규화되므로, 한 행의 답은 주변 배치에 의존하지 않는다 — 그리고 running
+      통계가 없어서 <code>train()</code> 과 <code>eval()</code> 이 같은 일을 한다. 이것이 바로
+      배치 정규화에 없는 성질이다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const ln = new nn.LayerNorm([3]);
+        // The same query row [1, 2, 3], in two very different batches.
+        const batchA = keepAlive(Tensor.from([1, 2, 3, 0, 0, 0], [2, 3]));
+        const batchB = keepAlive(Tensor.from([1, 2, 3, 50, 60, 70], [2, 3]));
+
+        ln.train();
+        log("train — q in batch A:", Array.from(await ln.call(batchA).at(0).toArray()).map((v) => v.toFixed(3)).join("  "));
+        log("train — q in batch B:", Array.from(await ln.call(batchB).at(0).toArray()).map((v) => v.toFixed(3)).join("  "), " (identical: it ignores the batch)");
+
+        ln.eval();
+        log("eval  — q in batch A:", Array.from(await ln.call(batchA).at(0).toArray()).map((v) => v.toFixed(3)).join("  "), " (same again: no train/eval split)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        ln = torch.nn.LayerNorm(3)
+        # The same query row [1, 2, 3], in two very different batches.
+        batchA = torch.tensor([[1., 2., 3.], [0., 0., 0.]])
+        batchB = torch.tensor([[1., 2., 3.], [50., 60., 70.]])
+
+        ln.train()
+        print("train - q in batch A:", "  ".join(f"{v:.3f}" for v in ln(batchA)[0].tolist()))
+        print("train - q in batch B:", "  ".join(f"{v:.3f}" for v in ln(batchB)[0].tolist()), " (identical: it ignores the batch)")
+
+        ln.eval()
+        print("eval  - q in batch A:", "  ".join(f"{v:.3f}" for v in ln(batchA)[0].tolist()), " (same again: no train/eval split)")
+      </script>
+    </div>
+
+    <h2>직접: 행을 중심화하기</h2>
+    <p>
+      이 블록은 출력의 가장 큰 행 평균을 보고한다. 날것의 행은 큰 평균을 지녀 0 에서 멀다 —
+      <code>x</code> 를 <code>LayerNorm</code> 에 통과시켜 각 행을 중심화하면 가장 큰 행
+      평균이 0 으로 떨어진다.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const ln = new nn.LayerNorm([4]);
+        const x = keepAlive(Tensor.from([10, 12, 14, 16, -5, -3, -1, 1, 100, 200, 300, 400], [3, 4]));
+
+        const out = x;                     // <-- fix me: run x through the layer (ln.call(x))
+
+        const gap = await out.mean(1).abs().amax().item();
+        log("largest row mean:", gap);
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        ln = torch.nn.LayerNorm(4)
+        x = torch.tensor([[10., 12., 14., 16.], [-5., -3., -1., 1.], [100., 200., 300., 400.]])
+
+        out = x                            # <-- fix me: run x through the layer (ln(x))
+
+        gap = out.mean(1).abs().amax().item()
+        print("largest row mean:", gap)
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
+      테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을
+      누른다.
+    </div>
+
+    <div class="pager">
+      <a href="04-batchnorm.html">← 4 · Batch norm</a>
+      <a href="../tutorials/" style="text-align:right">더 보기<b>튜토리얼</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layer normalization — borch Learn</title>
+<meta name="description" content="Layer norm (Ba et al., 2016) normalizes each sample across its own features — batch-independent and the same in train and eval, which is why transformers use it. Runs in the page, both languages.">
+<link rel="alternate" hreflang="ko" href="../ko/papers/05-layernorm.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Layer normalization — borch Learn">
+<meta property="og:description" content="Layer norm (Ba et al., 2016) normalizes each sample across its own features — batch-independent and the same in train and eval, which is why transformers use it. Runs in the page, both languages.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/papers/05-layernorm.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/papers/05-layernorm.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Paper case studies</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-lora.html">1 · LoRA</a>
+      <a href="02-adam.html">2 · Adam</a>
+      <a href="03-dropout.html">3 · Dropout</a>
+      <a href="04-batchnorm.html">4 · Batch norm</a>
+      <a href="05-layernorm.html" class="on">5 · Layer norm</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Paper case studies · 5</p>
+    <h1>Layer normalization</h1>
+    <p class="lead">
+      Layer normalization — Ba, Kiros &amp; Hinton, 2016 — normalizes each sample across
+      its own features, not across the batch the way batch norm does. That makes it
+      independent of batch size and identical in train and eval — which is why transformers
+      reach for it instead. Everything below runs in this page, in both languages.
+    </p>
+
+    <h2>It normalizes each row across its features</h2>
+    <p>
+      Give it rows with wildly different means and spreads. <code>LayerNorm([4])</code>
+      centres and scales <em>each row on its own</em>, over its four features — so every
+      row of the output comes out with mean about zero.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const ln = new nn.LayerNorm([4]);
+        const x = keepAlive(Tensor.from([10, 12, 14, 16, -5, -3, -1, 1, 100, 200, 300, 400], [3, 4]));
+        const out = ln.call(x);
+
+        log("input  row 0:", Array.from(await x.at(0).toArray()).join(", "));
+        log("output row 0:", Array.from(await out.at(0).toArray()).map((v) => v.toFixed(2)).join(", "));
+        log("row means (output):", Array.from(await out.mean(1).toArray()).map((v) => v.toFixed(3)).join("  "), " (each ~0)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        ln = torch.nn.LayerNorm(4)
+        x = torch.tensor([[10., 12., 14., 16.], [-5., -3., -1., 1.], [100., 200., 300., 400.]])
+        out = ln(x)
+
+        print("input  row 0:", ", ".join(str(v) for v in x[0].tolist()))
+        print("output row 0:", ", ".join(f"{v:.2f}" for v in out[0].tolist()))
+        print("row means (output):", "  ".join(f"{v:.3f}" for v in out.mean(1).tolist()), " (each ~0)")
+      </script>
+    </div>
+
+    <h2>Batch-independent, and the same in train and eval</h2>
+    <p>
+      Because each row is normalised on its own, a row's answer does not depend on the
+      batch around it — and there are no running statistics, so <code>train()</code> and
+      <code>eval()</code> do the same thing. This is exactly the property batch norm lacks.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const ln = new nn.LayerNorm([3]);
+        // The same query row [1, 2, 3], in two very different batches.
+        const batchA = keepAlive(Tensor.from([1, 2, 3, 0, 0, 0], [2, 3]));
+        const batchB = keepAlive(Tensor.from([1, 2, 3, 50, 60, 70], [2, 3]));
+
+        ln.train();
+        log("train — q in batch A:", Array.from(await ln.call(batchA).at(0).toArray()).map((v) => v.toFixed(3)).join("  "));
+        log("train — q in batch B:", Array.from(await ln.call(batchB).at(0).toArray()).map((v) => v.toFixed(3)).join("  "), " (identical: it ignores the batch)");
+
+        ln.eval();
+        log("eval  — q in batch A:", Array.from(await ln.call(batchA).at(0).toArray()).map((v) => v.toFixed(3)).join("  "), " (same again: no train/eval split)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        ln = torch.nn.LayerNorm(3)
+        # The same query row [1, 2, 3], in two very different batches.
+        batchA = torch.tensor([[1., 2., 3.], [0., 0., 0.]])
+        batchB = torch.tensor([[1., 2., 3.], [50., 60., 70.]])
+
+        ln.train()
+        print("train - q in batch A:", "  ".join(f"{v:.3f}" for v in ln(batchA)[0].tolist()))
+        print("train - q in batch B:", "  ".join(f"{v:.3f}" for v in ln(batchB)[0].tolist()), " (identical: it ignores the batch)")
+
+        ln.eval()
+        print("eval  - q in batch A:", "  ".join(f"{v:.3f}" for v in ln(batchA)[0].tolist()), " (same again: no train/eval split)")
+      </script>
+    </div>
+
+    <h2>Your turn: centre the rows</h2>
+    <p>
+      The block reports the largest row mean of its output. Raw rows carry big means, so it
+      is far from zero — pass <code>x</code> through the <code>LayerNorm</code> so each row
+      is centred and the largest row mean drops to zero.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const ln = new nn.LayerNorm([4]);
+        const x = keepAlive(Tensor.from([10, 12, 14, 16, -5, -3, -1, 1, 100, 200, 300, 400], [3, 4]));
+
+        const out = x;                     // <-- fix me: run x through the layer (ln.call(x))
+
+        const gap = await out.mean(1).abs().amax().item();
+        log("largest row mean:", gap);
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        ln = torch.nn.LayerNorm(4)
+        x = torch.tensor([[10., 12., 14., 16.], [-5., -3., -1., 1.], [100., 200., 300., 400.]])
+
+        out = x                            # <-- fix me: run x through the layer (ln(x))
+
+        gap = out.mean(1).abs().amax().item()
+        print("largest row mean:", gap)
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="04-batchnorm.html">← 4 · Batch norm</a>
+      <a href="../tutorials/" style="text-align:right">More<b>Tutorials</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
