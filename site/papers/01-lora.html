@@ -198,8 +198,9 @@
         const ys = keepAlive(xs.mul(Tensor.full([], 3)));       // target line y = 3x
         const layer = new peft.LoRALinear(1, 1, { r: 1, bias: false });
 
-        // The adapter cannot learn while the step size is zero. Give it a real rate.
-        const lr = 0;                     // <-- fix me (try 0.1)
+        // The adapter cannot learn while the step size is zero. Give it a real rate —
+        // small enough not to diverge (0.1 overshoots here; 0.01 lands it).
+        const lr = 0;                     // <-- fix me (try 0.01)
         const opt = new optim.SGD(layer.parameters(), lr);
 
         let last = 0;
