@@ -30,6 +30,7 @@ contains the text (EN and KO both), for iterating on one page.
 """
 
 import pathlib
+import re
 import sys
 
 import run as runner
@@ -307,7 +308,7 @@ def run_page(page, url, rel=None, with_py=False):
 
     said = []
     blocks = page.query_selector_all("div.runnable")
-    pressed = 0
+    pressed = fixed = 0
     for i, block in enumerate(blocks):
         # Every block is pressed in its first language. With `--py`, a block that also
         # carries a Python source is pressed a second time on its Python tab — Pyodide
@@ -328,12 +329,56 @@ def run_page(page, url, rel=None, with_py=False):
             tab = block.query_selector(f'button.tab[data-lang="{lang}"]')
             if tab is not None:
                 tab.click()
-            press(page, block, go, i if len(langs) == 1 else f"{i}/{lang}", rel, said)
+            label = i if len(langs) == 1 else f"{i}/{lang}"
+            press(page, block, go, label, rel, said)
             pressed += 1
+            # A block that ships broken on purpose is pressed twice: as shipped, and with
+            # the value its own comment offers.
+            if block.get_attribute("data-verdict"):
+                fixed += press_the_fix(page, block, go, label, said)
     if pressed == 0:
         # **Running 0 of them and seeing green is the worst outcome available.**
         said.append("there was not one JS block to press — the selector may be stale")
-    return not said, pressed, said
+    return not said, pressed, fixed, said
+
+
+# `const lr = 0;   // <-- fix me (try 0.2)` — the line a learner reads, in either
+# language's comment. **The hint is the thing being checked**, so it is read from the page
+# rather than declared somewhere beside it: an author who writes a value that does not pass
+# has written it exactly here.
+FIX_HINT = re.compile(
+    r"^(?P<head>\s*(?:const |let |var )?\w+\s*=\s*)(?P<val>[^;#/\n]+?)"
+    r"(?P<tail>\s*;?\s*(?://|#)\s*<--\s*fix me \(try (?P<fix>[^)]+)\).*)$", re.M)
+
+
+def press_the_fix(page, block, go, i, said):
+    """Apply the block's own hint and press it again. Returns 1 if there was one.
+
+    **Nothing had ever pressed the fixed path.** A `data-verdict` block ships broken on
+    purpose, the nightly presses it as shipped, and `verdict bad` is the right answer — so
+    a hint that does not work is invisible. Measured on 2026-09-14: of the three blocks
+    carrying a `try` value, two of them failed their own verdict. `try 0.1` on the LoRA
+    leaf diverged to `null`, and `try 0.1` on the Adam leaf stopped at 0.0805 against a
+    limit of 0.05. A learner who follows the hint gets ✗ and no way to know why.
+    """
+    area = block.query_selector("textarea")
+    if area is None:
+        return 0
+    code = area.input_value()
+    found = FIX_HINT.search(code)
+    if not found:
+        return 0
+    area.fill(code[:found.start()] + found.group("head") + found.group("fix")
+              + found.group("tail") + code[found.end():])
+    go.click()
+    page.wait_for_function("el => !el.disabled", arg=go, timeout=TIMEOUT_MS)
+    out = block.query_selector("pre.out, .out")
+    if out is not None and out.query_selector(".verdict.good") is not None:
+        return 1
+    bad = out.query_selector(".verdict.bad") if out is not None else None
+    why = bad.inner_text().strip().splitlines()[0][:120] if bad is not None else "no verdict at all"
+    said.append(f"block {i} — its own hint `try {found.group('fix')}` does not pass: {why}")
+    return 1
 
 
 def press(page, block, go, i, rel, said):
@@ -380,21 +425,22 @@ def main(argv):
             page = browser.new_page()
             page.set_default_timeout(0)
             page.on("pageerror",
-                    lambda e: rows.append((False, 0, [f"page exception: {e}"])))
+                    lambda e: rows.append(("(page)", False, 0, 0, [f"page exception: {e}"])))
             only = [a.split("=", 1)[1] for a in argv if a.startswith("--only=")]
             for rel in PAGES:
                 if only and not any(o in rel for o in only):
                     continue
-                ok, pressed, said = run_page(
+                ok, pressed, fixed, said = run_page(
                     page, f"http://127.0.0.1:{port}{rel}", rel, with_py="--py" in argv)
-                rows.append((rel, ok, pressed, said))
+                rows.append((rel, ok, pressed, fixed, said))
     finally:
         stop()
 
     bad = 0
-    for rel, ok, pressed, said in rows:
+    for rel, ok, pressed, fixed, said in rows:
         mark = "✓" if ok else "✗"
-        print(f"  {mark} {rel} — {pressed} blocks pressed")
+        hints = f", {fixed} hint{'s' if fixed != 1 else ''} followed" if fixed else ""
+        print(f"  {mark} {rel} — {pressed} blocks pressed{hints}")
         for line in said:
             print(f"      {line}", file=sys.stderr)
         if not ok:
