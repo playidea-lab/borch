@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5 · Derivatives & the chain rule — borch Learn</title>
+<meta name="description" content="Derivatives with autograd: backward() and .grad, and the chain rule that makes them agree with the hand calculation.">
+<link rel="alternate" hreflang="ko" href="../ko/foundations/05-chain-rule.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="5 · Derivatives & the chain rule — borch Learn">
+<meta property="og:description" content="Derivatives with autograd: backward() and .grad, and the chain rule that makes them agree with the hand calculation.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/foundations/05-chain-rule.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/foundations/05-chain-rule.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Foundations</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-vectors.html">1 · Vectors</a>
+      <a href="02-matmul.html">2 · Matrices</a>
+      <a href="03-broadcasting.html">3 · Broadcasting</a>
+      <a href="04-norms.html">4 · Norms</a>
+      <a href="05-chain-rule.html" class="on">5 · Chain rule</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Foundations · 5</p>
+    <h1>Derivatives &amp; the chain rule</h1>
+    <p class="lead">A derivative is the slope of a function — how fast the output moves when the input nudges. borch computes them for you with <code>backward()</code>; the chain rule is the engine underneath, and it is where the next chapter's autograd comes from.</p>
+
+    <h2>A derivative, by autograd</h2>
+    <p>Mark an input with <code>requiresGrad</code>, build an expression, call <code>backward()</code>, and read <code>.grad</code>. For <code>y = x²</code> the slope is <code>2x</code>.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const x = Tensor.from([3], [], { requiresGrad: true });
+        const y = x.square();
+        y.backward();
+        log("y = x^2    at x=3 :", await y.item());
+        log("dy/dx = 2x at x=3 :", await x.grad.item(), "  (by hand: 6)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        x = torch.tensor(3.0, requires_grad=True)
+        y = x ** 2
+        y.backward()
+        print("y = x^2    at x=3 :", y.item())
+        print("dy/dx = 2x at x=3 :", x.grad.item(), "  (by hand: 6)")
+      </script>
+    </div>
+
+    <h2>The chain rule</h2>
+    <p>For a composition <code>f(g(x))</code> the slopes multiply: <code>f'(g(x)) · g'(x)</code>. For <code>sin(x²)</code> that is <code>cos(x²) · 2x</code> — and autograd agrees to the last digit.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const x = Tensor.from([1.5], [], { requiresGrad: true });
+        const y = x.square().sin();          // f(x) = sin(x^2)
+        y.backward();
+        const byHand = Math.cos(1.5 * 1.5) * 2 * 1.5;
+        log("autograd dy/dx =", await x.grad.item());
+        log("by hand        =", byHand.toFixed(6), "  cos(x^2) * 2x");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        x = torch.tensor(1.5, requires_grad=True)
+        y = (x ** 2).sin()          # f(x) = sin(x^2)
+        y.backward()
+        by_hand = torch.tensor(1.5 * 1.5).cos().item() * 2 * 1.5
+        print("autograd dy/dx =", x.grad.item())
+        print("by hand        =", round(by_hand, 6), "  cos(x^2) * 2x")
+      </script>
+    </div>
+
+    <h2>Your turn: finish the chain rule</h2>
+    <p>The hand derivative of <code>sin(x²)</code> below is missing the inner factor from the chain rule. Add it so it matches what autograd computed.</p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const x = Tensor.from([0.8], [], { requiresGrad: true });
+        const y = x.square().sin();          // f(x) = sin(x^2)
+        y.backward();
+        const auto = await x.grad.item();
+        const inner = 0.8 * 0.8;
+        // Finish the hand derivative of sin(x^2). Chain rule: cos(inner) times d(inner)/dx.
+        const byHand = Math.cos(inner);      // <-- missing the * 2x
+        const gap = Math.abs(auto - byHand);
+        log("autograd =", auto);
+        log("by hand  =", byHand);
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        x = torch.tensor(0.8, requires_grad=True)
+        y = (x ** 2).sin()          # f(x) = sin(x^2)
+        y.backward()
+        auto = x.grad.item()
+        inner = 0.8 * 0.8
+        # Finish the hand derivative of sin(x^2). Chain rule: cos(inner) times d(inner)/dx.
+        by_hand = torch.tensor(inner).cos().item()      # <-- missing the * 2x
+        gap = abs(auto - by_hand)
+        print("autograd =", auto)
+        print("by hand  =", by_hand)
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on this page runs against the same library the tests run against — nothing here is a screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="04-norms.html">← 4 · Norms</a>
+      <a href="../learn/01-tensors.html" style="text-align:right">Next<b>1 · Tensors</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

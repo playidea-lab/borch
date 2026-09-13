@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5 · 미분과 연쇄법칙 — borch 배우기</title>
+<meta name="description" content="autograd 로 미분: backward() 와 .grad, 그리고 손 계산과 맞게 하는 연쇄법칙.">
+<link rel="alternate" hreflang="en" href="../../foundations/05-chain-rule.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="5 · 미분과 연쇄법칙 — borch 배우기">
+<meta property="og:description" content="autograd 로 미분: backward() 와 .grad, 그리고 손 계산과 맞게 하는 연쇄법칙.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/foundations/05-chain-rule.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../foundations/05-chain-rule.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>기초 수학</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-vectors.html">1 · 벡터</a>
+      <a href="02-matmul.html">2 · 행렬</a>
+      <a href="03-broadcasting.html">3 · 브로드캐스팅</a>
+      <a href="04-norms.html">4 · Norm</a>
+      <a href="05-chain-rule.html" class="on">5 · 연쇄법칙</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">기초 수학 · 5</p>
+    <h1>미분과 연쇄법칙</h1>
+    <p class="lead">미분은 함수의 기울기다 — 입력을 살짝 밀 때 출력이 얼마나 빨리 움직이는가. borch 는 <code>backward()</code> 로 대신 구해준다. 그 밑의 엔진이 연쇄법칙이고, 다음 장의 autograd 가 여기서 나온다.</p>
+
+    <h2>미분, autograd 로</h2>
+    <p>입력을 <code>requiresGrad</code> 로 표시하고, 식을 세우고, <code>backward()</code> 를 부르고, <code>.grad</code> 를 읽는다. <code>y = x²</code> 의 기울기는 <code>2x</code>.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const x = Tensor.from([3], [], { requiresGrad: true });
+        const y = x.square();
+        y.backward();
+        log("y = x^2    at x=3 :", await y.item());
+        log("dy/dx = 2x at x=3 :", await x.grad.item(), "  (by hand: 6)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        x = torch.tensor(3.0, requires_grad=True)
+        y = x ** 2
+        y.backward()
+        print("y = x^2    at x=3 :", y.item())
+        print("dy/dx = 2x at x=3 :", x.grad.item(), "  (by hand: 6)")
+      </script>
+    </div>
+
+    <h2>연쇄법칙</h2>
+    <p>합성 <code>f(g(x))</code> 의 기울기는 곱해진다: <code>f'(g(x)) · g'(x)</code>. <code>sin(x²)</code> 라면 <code>cos(x²) · 2x</code> — autograd 가 마지막 자리까지 같다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const x = Tensor.from([1.5], [], { requiresGrad: true });
+        const y = x.square().sin();          // f(x) = sin(x^2)
+        y.backward();
+        const byHand = Math.cos(1.5 * 1.5) * 2 * 1.5;
+        log("autograd dy/dx =", await x.grad.item());
+        log("by hand        =", byHand.toFixed(6), "  cos(x^2) * 2x");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        x = torch.tensor(1.5, requires_grad=True)
+        y = (x ** 2).sin()          # f(x) = sin(x^2)
+        y.backward()
+        by_hand = torch.tensor(1.5 * 1.5).cos().item() * 2 * 1.5
+        print("autograd dy/dx =", x.grad.item())
+        print("by hand        =", round(by_hand, 6), "  cos(x^2) * 2x")
+      </script>
+    </div>
+
+    <h2>직접: 연쇄법칙 완성</h2>
+    <p>아래 <code>sin(x²)</code> 의 손 계산 미분에는 연쇄법칙의 안쪽 인수가 빠져 있다. autograd 가 구한 값과 맞도록 그것을 더하라.</p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const x = Tensor.from([0.8], [], { requiresGrad: true });
+        const y = x.square().sin();          // f(x) = sin(x^2)
+        y.backward();
+        const auto = await x.grad.item();
+        const inner = 0.8 * 0.8;
+        // Finish the hand derivative of sin(x^2). Chain rule: cos(inner) times d(inner)/dx.
+        const byHand = Math.cos(inner);      // <-- missing the * 2x
+        const gap = Math.abs(auto - byHand);
+        log("autograd =", auto);
+        log("by hand  =", byHand);
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        x = torch.tensor(0.8, requires_grad=True)
+        y = (x ** 2).sin()          # f(x) = sin(x^2)
+        y.backward()
+        auto = x.grad.item()
+        inner = 0.8 * 0.8
+        # Finish the hand derivative of sin(x^2). Chain rule: cos(inner) times d(inner)/dx.
+        by_hand = torch.tensor(inner).cos().item()      # <-- missing the * 2x
+        gap = abs(auto - by_hand)
+        print("autograd =", auto)
+        print("by hand  =", by_hand)
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는 테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을 누른다.
+    </div>
+
+    <div class="pager">
+      <a href="04-norms.html">← 4 · Norm</a>
+      <a href="../learn/01-tensors.html" style="text-align:right">다음<b>1 · 텐서</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

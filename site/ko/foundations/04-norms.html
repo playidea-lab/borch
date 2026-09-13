@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4 · norm·거리·투영 — borch 배우기</title>
+<meta name="description" content="norm 은 길이를 준다: 차의 norm 으로서의 거리, 단위벡터, 그리고 방향으로의 투영.">
+<link rel="alternate" hreflang="en" href="../../foundations/04-norms.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="4 · norm·거리·투영 — borch 배우기">
+<meta property="og:description" content="norm 은 길이를 준다: 차의 norm 으로서의 거리, 단위벡터, 그리고 방향으로의 투영.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/foundations/04-norms.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../foundations/04-norms.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>기초 수학</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-vectors.html">1 · 벡터</a>
+      <a href="02-matmul.html">2 · 행렬</a>
+      <a href="03-broadcasting.html">3 · 브로드캐스팅</a>
+      <a href="04-norms.html" class="on">4 · Norm</a>
+      <a href="05-chain-rule.html">5 · 연쇄법칙</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">기초 수학 · 4</p>
+    <h1>Norm · 거리 · 투영</h1>
+    <p class="lead">norm 은 벡터를 하나의 길이로 바꾼다. 거기서 거리(차의 norm), 단위벡터(norm 으로 나누기), 투영(한 벡터가 다른 벡터 방향으로 얼마나 뻗는가)이 나온다.</p>
+
+    <h2>L2 norm 은 길이</h2>
+    <p><code>v.norm()</code> 은 제곱합의 제곱근 — 원점에서 벡터까지의 직선 길이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const v = Tensor.from([3, 4, 12], [3]);
+        log("norm(v) =", await v.norm().item(), "  (sqrt(9 + 16 + 144) = 13)");
+        log("by hand =", Math.sqrt(await v.square().sum().item()).toFixed(4));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        v = torch.tensor([3., 4., 12.])
+        print("norm(v) =", v.norm().item(), "  (sqrt(9 + 16 + 144) = 13)")
+        print("by hand =", round(v.square().sum().item() ** 0.5, 4))
+      </script>
+    </div>
+
+    <h2>거리는 차의 norm</h2>
+    <p>두 점 사이 거리는 <code>‖a − b‖</code>. 같은 연산, 앞에 뺄셈 하나.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const a = Tensor.from([1, 2], [2]);
+        const b = Tensor.from([4, 6], [2]);
+        log("distance ||a - b|| =", await a.sub(b).norm().item(), "  (sqrt(9 + 16) = 5)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        a = torch.tensor([1., 2.])
+        b = torch.tensor([4., 6.])
+        print("distance ||a - b|| =", (a - b).norm().item(), "  (sqrt(9 + 16) = 5)")
+      </script>
+    </div>
+
+    <h2>투영</h2>
+    <p>a 를 b 에 투영한 스칼라는 <code>a·b / ‖b‖</code> — a 가 b 방향으로 얼마나 가는가. 단위 축에 대해서는 그 좌표 그 자체다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const a = Tensor.from([2, 3], [2]);
+        const b = Tensor.from([1, 0], [2]);   // the x-axis
+        const proj = (await a.dot(b).item()) / (await b.norm().item());
+        log("projection of a onto the x-axis =", proj, "  (a's x coordinate)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        a = torch.tensor([2., 3.])
+        b = torch.tensor([1., 0.])   # the x-axis
+        proj = torch.dot(a, b).item() / b.norm().item()
+        print("projection of a onto the x-axis =", proj, "  (a's x coordinate)")
+      </script>
+    </div>
+
+    <h2>직접: 단위벡터 만들기</h2>
+    <p>단위벡터는 같은 방향을 가리키되 길이가 1 이다. <code>v</code> 를 자신의 norm 으로 나눠 <code>‖u‖ = 1</code> 이 되게 하라.</p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const v = Tensor.from([3, 4], [2]);
+        // Divide v by its own length so the result has norm 1.
+        const u = v;                         // <-- not normalised yet
+        const gap = Math.abs(await u.norm().item() - 1);
+        log("||u|| =", await u.norm().item());
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        v = torch.tensor([3., 4.])
+        # Divide v by its own length so the result has norm 1.
+        u = v                         # <-- not normalised yet
+        gap = abs(u.norm().item() - 1)
+        print("||u|| =", u.norm().item())
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는 테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을 누른다.
+    </div>
+
+    <div class="pager">
+      <a href="03-broadcasting.html">← 3 · 브로드캐스팅</a>
+      <a href="05-chain-rule.html" style="text-align:right">다음<b>5 · 연쇄법칙</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

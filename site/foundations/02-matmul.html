@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2 · Matrices & matrix multiply — borch Learn</title>
+<meta name="description" content="Matrices as linear maps: matrix times vector, matrix times matrix as composition, and why order matters.">
+<link rel="alternate" hreflang="ko" href="../ko/foundations/02-matmul.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="2 · Matrices & matrix multiply — borch Learn">
+<meta property="og:description" content="Matrices as linear maps: matrix times vector, matrix times matrix as composition, and why order matters.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/foundations/02-matmul.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/foundations/02-matmul.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Foundations</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-vectors.html">1 · Vectors</a>
+      <a href="02-matmul.html" class="on">2 · Matrices</a>
+      <a href="03-broadcasting.html">3 · Broadcasting</a>
+      <a href="04-norms.html">4 · Norms</a>
+      <a href="05-chain-rule.html">5 · Chain rule</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Foundations · 2</p>
+    <h1>Matrices &amp; matrix multiply</h1>
+    <p class="lead">A matrix is a grid of numbers that acts on vectors — it stretches, rotates, and mixes their components. Matrix multiply is how you apply and compose those actions.</p>
+
+    <h2>A matrix times a vector</h2>
+    <p><code>M.mv(v)</code> sends a vector to a new one — each output entry is a dot product of a row of M with v.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const M = Tensor.from([0, -1, 1, 0], [2, 2]);   // rotate 90 degrees
+        const v = Tensor.from([2, 1], [2]);
+        log("M =\n" + await M.repr());
+        log("M . v =", Array.from(await M.mv(v).toArray()).join(", "), "  (rotated)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        M = torch.tensor([[0., -1.], [1., 0.]])   # rotate 90 degrees
+        v = torch.tensor([2., 1.])
+        print("M =\n", M)
+        print("M . v =", torch.mv(M, v).tolist(), "  (rotated)")
+      </script>
+    </div>
+
+    <h2>Matrix times matrix is composition</h2>
+    <p><code>A.matmul(B)</code> is the single map that does B first, then A. Order matters — <code>A@B</code> and <code>B@A</code> are usually different.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const A = Tensor.from([2, 0, 0, 3], [2, 2]);   // scale x by 2, y by 3
+        const B = Tensor.from([0, -1, 1, 0], [2, 2]);  // rotate 90 degrees
+        log("A @ B =\n" + await A.matmul(B).repr());
+        log("B @ A =\n" + await B.matmul(A).repr(), "  (different)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[2., 0.], [0., 3.]])   # scale x by 2, y by 3
+        B = torch.tensor([[0., -1.], [1., 0.]])  # rotate 90 degrees
+        print("A @ B =\n", A @ B)
+        print("B @ A =\n", B @ A, "  (different)")
+      </script>
+    </div>
+
+    <h2>Shapes have to line up</h2>
+    <p><code>[m, k] @ [k, n] → [m, n]</code>. The inner sizes must match; the outer two become the result's shape.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const P = Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
+        const Q = Tensor.from([1, 0, 0, 1, 1, 1], [3, 2]);
+        log("[2,3] @ [3,2] -> " + JSON.stringify(P.matmul(Q).shape));
+        log(await P.matmul(Q).repr());
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        P = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+        Q = torch.tensor([[1., 0.], [0., 1.], [1., 1.]])
+        print("[2,3] @ [3,2] ->", tuple((P @ Q).shape))
+        print(P @ Q)
+      </script>
+    </div>
+
+    <h2>Your turn: get the order right</h2>
+    <p>Applying B then A to a vector is the same as multiplying by <code>A@B</code> first. The block below composes them in the wrong order — fix it so the composed map matches the step-by-step one.</p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const A = Tensor.from([2, 0, 0, 3], [2, 2]);
+        const B = Tensor.from([0, -1, 1, 0], [2, 2]);
+        const v = Tensor.from([1, 1], [2]);
+        // "Apply B, then A" is the single map A@B. Fix the order below to match.
+        const composed = B.matmul(A);        // <-- wrong order
+        const stepwise = A.mv(B.mv(v));      // B first, then A
+        const gap = await composed.mv(v).sub(stepwise).norm().item();
+        log("composed . v =", Array.from(await composed.mv(v).toArray()).join(", "));
+        log("stepwise     =", Array.from(await stepwise.toArray()).join(", "));
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[2., 0.], [0., 3.]])
+        B = torch.tensor([[0., -1.], [1., 0.]])
+        v = torch.tensor([1., 1.])
+        # "Apply B, then A" is the single map A@B. Fix the order below to match.
+        composed = B @ A          # <-- wrong order
+        stepwise = A @ (B @ v)    # B first, then A
+        gap = (composed @ v - stepwise).norm().item()
+        print("composed . v =", (composed @ v).tolist())
+        print("stepwise     =", stepwise.tolist())
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on this page runs against the same library the tests run against — nothing here is a screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="01-vectors.html">← 1 · Vectors</a>
+      <a href="03-broadcasting.html" style="text-align:right">Next<b>3 · Broadcasting</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

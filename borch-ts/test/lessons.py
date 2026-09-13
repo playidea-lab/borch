@@ -88,6 +88,16 @@ PAGES = [
     "/site/ko/tutorials/06-char-rnn.html",
     "/site/python.html",
     "/site/ko/python.html",
+    "/site/foundations/01-vectors.html",
+    "/site/ko/foundations/01-vectors.html",
+    "/site/foundations/02-matmul.html",
+    "/site/ko/foundations/02-matmul.html",
+    "/site/foundations/03-broadcasting.html",
+    "/site/ko/foundations/03-broadcasting.html",
+    "/site/foundations/04-norms.html",
+    "/site/ko/foundations/04-norms.html",
+    "/site/foundations/05-chain-rule.html",
+    "/site/ko/foundations/05-chain-rule.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page

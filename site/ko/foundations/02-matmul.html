@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2 · 행렬과 행렬곱 — borch 배우기</title>
+<meta name="description" content="행렬을 선형 사상으로: 행렬×벡터, 합성으로서의 행렬×행렬, 그리고 순서가 왜 중요한가.">
+<link rel="alternate" hreflang="en" href="../../foundations/02-matmul.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="2 · 행렬과 행렬곱 — borch 배우기">
+<meta property="og:description" content="행렬을 선형 사상으로: 행렬×벡터, 합성으로서의 행렬×행렬, 그리고 순서가 왜 중요한가.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/foundations/02-matmul.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../foundations/02-matmul.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>기초 수학</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-vectors.html">1 · 벡터</a>
+      <a href="02-matmul.html" class="on">2 · 행렬</a>
+      <a href="03-broadcasting.html">3 · 브로드캐스팅</a>
+      <a href="04-norms.html">4 · Norm</a>
+      <a href="05-chain-rule.html">5 · 연쇄법칙</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">기초 수학 · 2</p>
+    <h1>행렬과 행렬곱</h1>
+    <p class="lead">행렬은 벡터에 작용하는 수의 격자다 — 늘이고, 회전하고, 성분을 섞는다. 행렬곱은 그 작용을 적용하고 합성하는 방법이다.</p>
+
+    <h2>행렬 × 벡터</h2>
+    <p><code>M.mv(v)</code> 는 벡터를 새 벡터로 보낸다 — 출력의 각 성분은 M 의 한 행과 v 의 내적이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const M = Tensor.from([0, -1, 1, 0], [2, 2]);   // rotate 90 degrees
+        const v = Tensor.from([2, 1], [2]);
+        log("M =\n" + await M.repr());
+        log("M . v =", Array.from(await M.mv(v).toArray()).join(", "), "  (rotated)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        M = torch.tensor([[0., -1.], [1., 0.]])   # rotate 90 degrees
+        v = torch.tensor([2., 1.])
+        print("M =\n", M)
+        print("M . v =", torch.mv(M, v).tolist(), "  (rotated)")
+      </script>
+    </div>
+
+    <h2>행렬 × 행렬은 합성</h2>
+    <p><code>A.matmul(B)</code> 는 B 를 먼저, 그다음 A 를 하는 하나의 사상이다. 순서가 중요하다 — <code>A@B</code> 와 <code>B@A</code> 는 보통 다르다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const A = Tensor.from([2, 0, 0, 3], [2, 2]);   // scale x by 2, y by 3
+        const B = Tensor.from([0, -1, 1, 0], [2, 2]);  // rotate 90 degrees
+        log("A @ B =\n" + await A.matmul(B).repr());
+        log("B @ A =\n" + await B.matmul(A).repr(), "  (different)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[2., 0.], [0., 3.]])   # scale x by 2, y by 3
+        B = torch.tensor([[0., -1.], [1., 0.]])  # rotate 90 degrees
+        print("A @ B =\n", A @ B)
+        print("B @ A =\n", B @ A, "  (different)")
+      </script>
+    </div>
+
+    <h2>모양이 맞아야 한다</h2>
+    <p><code>[m, k] @ [k, n] → [m, n]</code>. 안쪽 크기가 맞아야 하고, 바깥 둘이 결과의 모양이 된다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const P = Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
+        const Q = Tensor.from([1, 0, 0, 1, 1, 1], [3, 2]);
+        log("[2,3] @ [3,2] -> " + JSON.stringify(P.matmul(Q).shape));
+        log(await P.matmul(Q).repr());
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        P = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+        Q = torch.tensor([[1., 0.], [0., 1.], [1., 1.]])
+        print("[2,3] @ [3,2] ->", tuple((P @ Q).shape))
+        print(P @ Q)
+      </script>
+    </div>
+
+    <h2>직접: 순서 바로잡기</h2>
+    <p>벡터에 B 를 먼저, A 를 그다음 적용하는 것은 먼저 <code>A@B</code> 를 곱하는 것과 같다. 아래 블록은 순서를 틀리게 합성했다 — 합성한 사상이 단계별 결과와 맞도록 고쳐라.</p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const A = Tensor.from([2, 0, 0, 3], [2, 2]);
+        const B = Tensor.from([0, -1, 1, 0], [2, 2]);
+        const v = Tensor.from([1, 1], [2]);
+        // "Apply B, then A" is the single map A@B. Fix the order below to match.
+        const composed = B.matmul(A);        // <-- wrong order
+        const stepwise = A.mv(B.mv(v));      // B first, then A
+        const gap = await composed.mv(v).sub(stepwise).norm().item();
+        log("composed . v =", Array.from(await composed.mv(v).toArray()).join(", "));
+        log("stepwise     =", Array.from(await stepwise.toArray()).join(", "));
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[2., 0.], [0., 3.]])
+        B = torch.tensor([[0., -1.], [1., 0.]])
+        v = torch.tensor([1., 1.])
+        # "Apply B, then A" is the single map A@B. Fix the order below to match.
+        composed = B @ A          # <-- wrong order
+        stepwise = A @ (B @ v)    # B first, then A
+        gap = (composed @ v - stepwise).norm().item()
+        print("composed . v =", (composed @ v).tolist())
+        print("stepwise     =", stepwise.tolist())
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는 테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을 누른다.
+    </div>
+
+    <div class="pager">
+      <a href="01-vectors.html">← 1 · 벡터</a>
+      <a href="03-broadcasting.html" style="text-align:right">다음<b>3 · 브로드캐스팅</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

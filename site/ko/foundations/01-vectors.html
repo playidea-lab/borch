@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>1 · 벡터와 내적 — borch 배우기</title>
+<meta name="description" content="벡터를 1차원 텐서로: 더하고 스칼라배하고, 내적을 구하고, 두 방향 사이 각도를 읽는다.">
+<link rel="alternate" hreflang="en" href="../../foundations/01-vectors.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="1 · 벡터와 내적 — borch 배우기">
+<meta property="og:description" content="벡터를 1차원 텐서로: 더하고 스칼라배하고, 내적을 구하고, 두 방향 사이 각도를 읽는다.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/foundations/01-vectors.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../foundations/01-vectors.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>기초 수학</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-vectors.html" class="on">1 · 벡터</a>
+      <a href="02-matmul.html">2 · 행렬</a>
+      <a href="03-broadcasting.html">3 · 브로드캐스팅</a>
+      <a href="04-norms.html">4 · Norm</a>
+      <a href="05-chain-rule.html">5 · 연쇄법칙</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">기초 수학 · 1</p>
+    <h1>벡터와 내적</h1>
+    <p class="lead">벡터는 방향과 길이를 가진 수의 나열이다. 아래 모든 것은 이 페이지에서 돈다 — 블록을 고쳐 Run 을 누르거나 ⌘/Ctrl + Enter.</p>
+
+    <h2>벡터는 1차원 텐서</h2>
+    <p>축 하나, 수 몇 개. 그 길이 — L2 <code>norm</code> — 는 제곱합의 제곱근이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const v = Tensor.from([3, 4], [2]);
+        log("v      =", await v.repr());
+        log("shape  =", JSON.stringify(v.shape));
+        log("length =", await v.norm().item(), "  (sqrt(3^2 + 4^2) = 5)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        v = torch.tensor([3., 4.])
+        print("v      =", v)
+        print("shape  =", tuple(v.shape))
+        print("length =", v.norm().item(), "  (sqrt(3^2 + 4^2) = 5)")
+      </script>
+    </div>
+
+    <h2>더하기와 스칼라배</h2>
+    <p>두 벡터는 성분별로 더한다. 하나를 수로 늘린다. borch.ts 에서 연산자는 텐서를 받으므로 스칼라는 <code>Tensor.full([], k)</code> 로 쓴다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const a = Tensor.from([1, 2, 3], [3]);
+        const b = Tensor.from([10, 20, 30], [3]);
+        log("a + b =", Array.from(await a.add(b).toArray()).join(", "));
+        log("2a    =", Array.from(await a.mul(Tensor.full([], 2)).toArray()).join(", "));
+        log("a - b =", Array.from(await a.sub(b).toArray()).join(", "));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        a = torch.tensor([1., 2., 3.])
+        b = torch.tensor([10., 20., 30.])
+        print("a + b =", (a + b).tolist())
+        print("2a    =", (a * 2).tolist())
+        print("a - b =", (a - b).tolist())
+      </script>
+    </div>
+
+    <h2>내적</h2>
+    <p><code>a.dot(b)</code> 는 짝지은 성분을 곱해 더한다 — 수 하나. 기하로는 <code>|a||b|cos θ</code>, 즉 두 방향 사이 각도를 읽는다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const a = Tensor.from([1, 2, 3], [3]);
+        const b = Tensor.from([4, 5, 6], [3]);
+        log("a.dot(b)    =", await a.dot(b).item());
+        log("(a*b).sum() =", await a.mul(b).sum().item(), "  (same, by hand)");
+        const cos = (await a.dot(b).item()) / ((await a.norm().item()) * (await b.norm().item()));
+        log("cos(angle)  =", cos.toFixed(4));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        a = torch.tensor([1., 2., 3.])
+        b = torch.tensor([4., 5., 6.])
+        print("a.dot(b)    =", torch.dot(a, b).item())
+        print("(a*b).sum() =", (a * b).sum().item(), "  (same, by hand)")
+        cos = torch.dot(a, b).item() / (a.norm().item() * b.norm().item())
+        print("cos(angle)  =", round(cos, 4))
+      </script>
+    </div>
+
+    <h2>직접: 수직으로 만들기</h2>
+    <p>두 벡터가 수직인 것은 내적이 0 일 때뿐이다. 아래 <code>b</code> 를 <code>a · b = 0</code> 이 되도록 바꾸면 페이지가 맞다고 한다.</p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const a = Tensor.from([1, 2, 2], [3]);
+        // Change b so it is perpendicular to a — that is, a . b = 0.
+        const b = Tensor.from([1, 0, 0], [3]);
+        const gap = await a.dot(b).abs().item();
+        log("a . b =", await a.dot(b).item());
+        log("loss", gap);   // 0 exactly when b is perpendicular to a
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        a = torch.tensor([1., 2., 2.])
+        # Change b so it is perpendicular to a — that is, a . b = 0.
+        b = torch.tensor([1., 0., 0.])
+        gap = torch.dot(a, b).abs().item()
+        print("a . b =", torch.dot(a, b).item())
+        print("loss", gap)   # 0 exactly when b is perpendicular to a
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는 테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을 누른다.
+    </div>
+
+    <div class="pager">
+      <a href="../learn/">← 길잡이</a>
+      <a href="02-matmul.html" style="text-align:right">다음<b>2 · 행렬</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

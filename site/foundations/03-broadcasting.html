@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3 · Broadcasting & shapes — borch Learn</title>
+<meta name="description" content="Broadcasting rules and shapes: stretch a row across a matrix, and use keepdim to subtract a reduction back.">
+<link rel="alternate" hreflang="ko" href="../ko/foundations/03-broadcasting.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="3 · Broadcasting & shapes — borch Learn">
+<meta property="og:description" content="Broadcasting rules and shapes: stretch a row across a matrix, and use keepdim to subtract a reduction back.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/foundations/03-broadcasting.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/foundations/03-broadcasting.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Foundations</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-vectors.html">1 · Vectors</a>
+      <a href="02-matmul.html">2 · Matrices</a>
+      <a href="03-broadcasting.html" class="on">3 · Broadcasting</a>
+      <a href="04-norms.html">4 · Norms</a>
+      <a href="05-chain-rule.html">5 · Chain rule</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Foundations · 3</p>
+    <h1>Broadcasting &amp; shapes</h1>
+    <p class="lead">Broadcasting lets an operation between different shapes work without copying data — a row is stretched across a matrix, a scalar across everything. Getting the shapes right is most of the battle in real code.</p>
+
+    <h2>A row stretches across the rows</h2>
+    <p>Adding a shape-<code>[3]</code> vector to a <code>[2,3]</code> matrix adds it to every row. Trailing axes line up from the right.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const X = Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
+        const row = Tensor.from([10, 20, 30], [3]);
+        log("X =\n" + await X.repr());
+        log("X + row =\n" + await X.add(row).repr(), "  (row added to every row)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        X = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+        row = torch.tensor([10., 20., 30.])
+        print("X =\n", X)
+        print("X + row =\n", X + row, "  (row added to every row)")
+      </script>
+    </div>
+
+    <h2>keepdim: the shape you subtract back</h2>
+    <p>A reduction drops the axis it collapses. <code>keepdim=true</code> keeps it as size 1 — the shape you need to broadcast the result back against the original.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const X = Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
+        log("mean over rows, keepdim=false -> " + JSON.stringify(X.mean(0).shape));
+        log("mean over rows, keepdim=true  -> " + JSON.stringify(X.mean(0, true).shape));
+        log("the means:", Array.from(await X.mean(0).toArray()).join(", "));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        X = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+        print("mean over rows, keepdim=False ->", tuple(X.mean(0).shape))
+        print("mean over rows, keepdim=True  ->", tuple(X.mean(0, keepdim=True).shape))
+        print("the means:", X.mean(0).tolist())
+      </script>
+    </div>
+
+    <h2>Your turn: centre the columns</h2>
+    <p>Centring means subtracting each column's mean so every column ends up averaging zero. The block subtracts the wrong mean — fix it to the per-column mean.</p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        const X = Tensor.from([1, 2, 10, 3, 4, 20], [2, 3]);
+        // Subtract the per-column mean so each column ends up averaging zero.
+        const mu = X.mean();                 // <-- global mean; fix to per-column
+        const centred = X.sub(mu);
+        const gap = await centred.mean(0).abs().amax().item();
+        log("column means after centring:", Array.from(await centred.mean(0).toArray()).join(", "));
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        X = torch.tensor([[1., 2., 10.], [3., 4., 20.]])
+        # Subtract the per-column mean so each column ends up averaging zero.
+        mu = X.mean()                 # <-- global mean; fix to per-column
+        centred = X - mu
+        gap = centred.mean(0).abs().amax().item()
+        print("column means after centring:", centred.mean(0).tolist())
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on this page runs against the same library the tests run against — nothing here is a screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="02-matmul.html">← 2 · Matrices</a>
+      <a href="04-norms.html" style="text-align:right">Next<b>4 · Norms</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
