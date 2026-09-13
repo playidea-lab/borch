@@ -7,6 +7,7 @@
     { "id": "basics",       "title": { "en": "DL Basics",    "ko": "딥러닝 기초" }, "blurb": { "en": "From a tensor to a training loop.",                    "ko": "텐서에서 학습 루프까지." } },
     { "id": "depth",        "title": { "en": "Depth",        "ko": "실전 깊이" },   "blurb": { "en": "Real networks, data, and debugging.",                 "ko": "진짜 망·데이터·디버깅." } },
     { "id": "transformers", "title": { "en": "Sequences & Transformers", "ko": "시퀀스와 트랜스포머" }, "blurb": { "en": "Attention, and building a transformer.",  "ko": "어텐션, 그리고 트랜스포머 조립." } },
+    { "id": "papers",       "title": { "en": "Paper case studies", "ko": "논문 사례" }, "blurb": { "en": "One idea from a paper, wrapped in code you run.", "ko": "논문 한 편의 아이디어를, 직접 돌리는 코드로." } },
     { "id": "extras",       "title": { "en": "Extras",       "ko": "곁가지" },     "blurb": { "en": "Side branches off the main line.",                    "ko": "본선에서 갈라지는 심화." } }
   ],
   "lessons": [
@@ -39,6 +40,8 @@
     { "id": "vit",           "part": "transformers","order": 3, "prereq": ["attention", "cnn"],   "title": { "en": "Vision Transformer",  "ko": "비전 트랜스포머" }, "url": "learn/10-vit.html",      "ko_url": "ko/learn/10-vit.html",      "added": "2026-06-01", "verdict": true, "status": "exists" },
     { "id": "autoencoder",   "part": "transformers","order": 4, "prereq": ["modules"],            "title": { "en": "Autoencoder",         "ko": "오토인코더" },     "url": "tutorials/09-autoencoder.html", "ko_url": "ko/tutorials/09-autoencoder.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
     { "id": "mini-transformer", "part": "transformers", "order": 5, "prereq": ["attention"],      "title": { "en": "Build a mini-transformer", "ko": "미니 트랜스포머 조립" }, "url": null, "ko_url": null, "added": null, "verdict": true, "status": "new" },
+
+    { "id": "lora",          "part": "papers",      "order": 1, "prereq": ["training", "modules"], "title": { "en": "LoRA: low-rank adapters", "ko": "LoRA: 저랭크 어댑터" }, "url": "papers/01-lora.html", "ko_url": "ko/papers/01-lora.html", "added": "2026-09-14", "verdict": true, "status": "exists" },
 
     { "id": "signals-fft",   "part": "extras",      "order": 1, "prereq": ["tensors"],            "title": { "en": "Signals and the FFT", "ko": "신호와 FFT" },     "url": "tutorials/07-signals-fft.html", "ko_url": "ko/tutorials/07-signals-fft.html", "added": "2026-06-01", "verdict": false, "status": "exists" },
     { "id": "least-squares", "part": "extras",      "order": 2, "prereq": ["f-matmul"],           "title": { "en": "Least squares",       "ko": "최소제곱" },       "url": "tutorials/10-least-squares.html", "ko_url": "ko/tutorials/10-least-squares.html", "added": "2026-06-01", "verdict": false, "status": "exists" }

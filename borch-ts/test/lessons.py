@@ -98,6 +98,8 @@ PAGES = [
     "/site/ko/foundations/04-norms.html",
     "/site/foundations/05-chain-rule.html",
     "/site/ko/foundations/05-chain-rule.html",
+    "/site/papers/01-lora.html",
+    "/site/ko/papers/01-lora.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page

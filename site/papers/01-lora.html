@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LoRA: low-rank adapters — borch Learn</title>
+<meta name="description" content="Freeze a trained layer, train a tiny low-rank adapter beside it, then fold it back — LoRA (Hu et al., 2021) in borch.peft, running in the page.">
+<link rel="alternate" hreflang="ko" href="../ko/papers/01-lora.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="LoRA: low-rank adapters — borch Learn">
+<meta property="og:description" content="Freeze a trained layer, train a tiny low-rank adapter beside it, then fold it back — LoRA (Hu et al., 2021) in borch.peft, running in the page.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/papers/01-lora.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/papers/01-lora.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Paper case studies</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-lora.html" class="on">1 · LoRA</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Paper case studies · 1</p>
+    <h1>LoRA: low-rank adapters</h1>
+    <p class="lead">
+      LoRA — Low-Rank Adaptation (Hu et al., 2021) — freezes a big trained layer and
+      trains a tiny low-rank pair of matrices beside it. You get most of full fine-tuning
+      for a fraction of the trainable parameters, and the adapter is a KB-sized thing you
+      can ship on its own. It lives in <code>borch.peft</code> — a namespace torch does
+      not have.
+    </p>
+
+    <div class="note-box">
+      <strong>This lesson is borch.ts only.</strong> Unlike the rest of Learn there is no
+      Python tab: <code>borch.peft</code> lands in borch.ts first, and the numpy core and
+      the Python binding mirror it when the transfer-learning direction earns the build.
+      That split is written down in <code>peft.ts</code> rather than left silent.
+    </div>
+
+    <h2>A cheap adapter beside a frozen base</h2>
+    <p>
+      A <code>LoRALinear</code> holds a frozen base weight (a buffer, out of
+      <code>parameters()</code>) and a trainable pair <code>A</code>·<code>B</code> of
+      rank <code>r</code>. <code>B</code> starts at zero, so before any training the layer
+      is <em>exactly</em> its base.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        const { peft } = borch;
+
+        const layer = new peft.LoRALinear(64, 64, { r: 4 });
+
+        // Only the low-rank adapter trains; the base weight and bias are frozen buffers.
+        let adapter = 0;
+        for (const p of layer.parameters()) adapter += p.size;
+
+        log("base weight (frozen):", layer.weight.size, "params");   // 64 * 64 = 4096
+        log("trainable adapter   :", adapter, "params  (r = 4)");     // 64*4 + 4*64 = 512
+        log("loraB starts at zero :", (await layer.loraB.amax().item()) === 0,
+            " — so the layer begins exactly as its base");
+      </script>
+    </div>
+
+    <h2>Train only the adapter</h2>
+    <p>
+      Hand <code>layer.parameters()</code> to an optimiser and it touches only
+      <code>A</code> and <code>B</code>. Here the target is the base's own output plus a
+      small linear shift — something a full-rank adapter can reach — and the base weight
+      is unchanged at the end because it is frozen.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        const { peft } = borch;
+
+        const layer = new peft.LoRALinear(4, 4, { r: 4 });
+        const x = keepAlive(Tensor.randn([16, 4]));
+        const y0 = keepAlive(layer.call(x));                          // = base(x), since B is zero
+        const shift = keepAlive(Tensor.randn([4, 4]).mul(Tensor.full([], 0.5)));
+        const y = keepAlive(y0.add(x.linear(shift)));                 // a target the adapter can reach
+
+        const baseBefore = await layer.weight.sum().item();
+        const opt = new optim.SGD(layer.parameters(), 0.1);
+
+        for (let i = 0; i < 120; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = layer.call(x).sub(y).square().mean();
+            loss.backward();
+            opt.step();
+            if (i % 40 === 0) log("step", i, " loss", await loss.item());
+          });
+        }
+
+        log("");
+        log("base weight sum — before:", baseBefore.toFixed(4),
+            " after:", (await layer.weight.sum().item()).toFixed(4), " (frozen: unchanged)");
+      </script>
+    </div>
+
+    <h2>Fold it back for inference</h2>
+    <p>
+      A trained adapter is two matrices sitting beside the base. <code>merge()</code>
+      folds them into one plain <code>Linear</code> — <code>W' = W + (alpha/r)·B·A</code> —
+      so inference and ONNX export see an ordinary layer, with no adapter branch left to
+      run.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        const { peft } = borch;
+
+        const layer = new peft.LoRALinear(8, 8, { r: 2 });
+        const x = keepAlive(Tensor.randn([4, 8]));
+
+        // Train the adapter a little so it actually changes the output.
+        const opt = new optim.SGD(layer.parameters(), 0.1);
+        const shift = keepAlive(Tensor.randn([8, 8]).mul(Tensor.full([], 0.3)));
+        const y = keepAlive(layer.call(x).add(x.linear(shift)));
+        for (let i = 0; i < 40; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            layer.call(x).sub(y).square().mean().backward();
+            opt.step();
+          });
+        }
+
+        const adapted = Array.from(await layer.call(x).toArray());
+        const plain = layer.merge();                    // fold the adapter into a plain Linear
+        const folded = Array.from(await plain.call(x).toArray());
+
+        let maxDiff = 0;
+        for (let i = 0; i < adapted.length; i++) {
+          maxDiff = Math.max(maxDiff, Math.abs(adapted[i] - folded[i]));
+        }
+        log("max |adapted - folded| =", maxDiff.toExponential(2), " — merge is exact");
+      </script>
+    </div>
+
+    <h2>Your turn: give the adapter a learning rate</h2>
+    <p>
+      The layer below should learn the line <code>y = 3x</code> by adapting a frozen base —
+      but it cannot move while the step size is zero. Set a real learning rate and the page
+      says when the adapter has it.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.05">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        const { peft } = borch;
+
+        const xs = keepAlive(Tensor.from([0, 1, 2, 3], [4, 1]));
+        const ys = keepAlive(xs.mul(Tensor.full([], 3)));       // target line y = 3x
+        const layer = new peft.LoRALinear(1, 1, { r: 1, bias: false });
+
+        // The adapter cannot learn while the step size is zero. Give it a real rate.
+        const lr = 0;                     // <-- fix me (try 0.1)
+        const opt = new optim.SGD(layer.parameters(), lr);
+
+        let last = 0;
+        for (let i = 0; i < 200; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const l = layer.call(xs).sub(ys).square().mean();
+            l.backward();
+            opt.step();
+            last = await l.item();
+          });
+        }
+        log("loss", last);
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="../learn/">← Overview</a>
+      <a href="../tutorials/" style="text-align:right">More<b>Tutorials</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

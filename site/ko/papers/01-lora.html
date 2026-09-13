@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LoRA: 저랭크 어댑터 — borch 배우기</title>
+<meta name="description" content="학습된 층을 얼리고 그 옆에 작은 저랭크 어댑터를 학습한 뒤 다시 접는다 — LoRA (Hu et al., 2021) 를 borch.peft 로, 페이지 안에서.">
+<link rel="alternate" hreflang="en" href="../../papers/01-lora.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="LoRA: 저랭크 어댑터 — borch 배우기">
+<meta property="og:description" content="학습된 층을 얼리고 그 옆에 작은 저랭크 어댑터를 학습한 뒤 다시 접는다 — LoRA (Hu et al., 2021) 를 borch.peft 로, 페이지 안에서.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/papers/01-lora.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../papers/01-lora.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>논문 사례</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-lora.html" class="on">1 · LoRA</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">논문 사례 · 1</p>
+    <h1>LoRA: 저랭크 어댑터</h1>
+    <p class="lead">
+      LoRA — Low-Rank Adaptation (Hu et al., 2021) — 는 크고 학습된 층을 얼리고 그 옆에
+      작은 저랭크 행렬 한 쌍을 학습한다. 전체 파인튜닝의 대부분을 학습 파라미터의 일부만으로
+      얻고, 어댑터는 따로 실어 보낼 수 있는 KB 크기의 것이 된다. 이건 <code>borch.peft</code>
+      에 있다 — torch 에는 없는 네임스페이스다.
+    </p>
+
+    <div class="note-box">
+      <strong>이 레슨은 borch.ts 전용이다.</strong> 나머지 Learn 과 달리 Python 탭이 없다:
+      <code>borch.peft</code> 는 borch.ts 에 먼저 들어왔고, numpy 코어와 Python 바인딩은
+      전이학습 방향이 빌드를 정당화할 때 이를 반영한다. 그 분리는 조용히 두지 않고
+      <code>peft.ts</code> 에 적어 뒀다.
+    </div>
+
+    <h2>얼린 base 옆의 값싼 어댑터</h2>
+    <p>
+      <code>LoRALinear</code> 는 얼린 base 가중치(버퍼, <code>parameters()</code> 밖)와
+      랭크 <code>r</code> 의 학습 쌍 <code>A</code>·<code>B</code> 를 든다. <code>B</code> 는
+      0 에서 시작하므로, 학습 전에는 층이 <em>정확히</em> base 그 자체다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        const { peft } = borch;
+
+        const layer = new peft.LoRALinear(64, 64, { r: 4 });
+
+        // Only the low-rank adapter trains; the base weight and bias are frozen buffers.
+        let adapter = 0;
+        for (const p of layer.parameters()) adapter += p.size;
+
+        log("base weight (frozen):", layer.weight.size, "params");   // 64 * 64 = 4096
+        log("trainable adapter   :", adapter, "params  (r = 4)");     // 64*4 + 4*64 = 512
+        log("loraB starts at zero :", (await layer.loraB.amax().item()) === 0,
+            " — so the layer begins exactly as its base");
+      </script>
+    </div>
+
+    <h2>어댑터만 학습</h2>
+    <p>
+      <code>layer.parameters()</code> 를 옵티마이저에 넘기면 <code>A</code> 와 <code>B</code>
+      만 건드린다. 여기 타깃은 base 자신의 출력에 작은 선형 이동을 더한 것 — 완전 랭크
+      어댑터가 도달할 수 있는 것 — 이고, base 가중치는 얼려 있으므로 끝나도 그대로다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        const { peft } = borch;
+
+        const layer = new peft.LoRALinear(4, 4, { r: 4 });
+        const x = keepAlive(Tensor.randn([16, 4]));
+        const y0 = keepAlive(layer.call(x));                          // = base(x), since B is zero
+        const shift = keepAlive(Tensor.randn([4, 4]).mul(Tensor.full([], 0.5)));
+        const y = keepAlive(y0.add(x.linear(shift)));                 // a target the adapter can reach
+
+        const baseBefore = await layer.weight.sum().item();
+        const opt = new optim.SGD(layer.parameters(), 0.1);
+
+        for (let i = 0; i < 120; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = layer.call(x).sub(y).square().mean();
+            loss.backward();
+            opt.step();
+            if (i % 40 === 0) log("step", i, " loss", await loss.item());
+          });
+        }
+
+        log("");
+        log("base weight sum — before:", baseBefore.toFixed(4),
+            " after:", (await layer.weight.sum().item()).toFixed(4), " (frozen: unchanged)");
+      </script>
+    </div>
+
+    <h2>추론을 위해 다시 접기</h2>
+    <p>
+      학습된 어댑터는 base 옆의 두 행렬이다. <code>merge()</code> 는 그것을 하나의 평범한
+      <code>Linear</code> 로 접는다 — <code>W' = W + (alpha/r)·B·A</code> — 그래서 추론과
+      ONNX 내보내기는 어댑터 가지 없이 평범한 층 하나만 본다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        const { peft } = borch;
+
+        const layer = new peft.LoRALinear(8, 8, { r: 2 });
+        const x = keepAlive(Tensor.randn([4, 8]));
+
+        // Train the adapter a little so it actually changes the output.
+        const opt = new optim.SGD(layer.parameters(), 0.1);
+        const shift = keepAlive(Tensor.randn([8, 8]).mul(Tensor.full([], 0.3)));
+        const y = keepAlive(layer.call(x).add(x.linear(shift)));
+        for (let i = 0; i < 40; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            layer.call(x).sub(y).square().mean().backward();
+            opt.step();
+          });
+        }
+
+        const adapted = Array.from(await layer.call(x).toArray());
+        const plain = layer.merge();                    // fold the adapter into a plain Linear
+        const folded = Array.from(await plain.call(x).toArray());
+
+        let maxDiff = 0;
+        for (let i = 0; i < adapted.length; i++) {
+          maxDiff = Math.max(maxDiff, Math.abs(adapted[i] - folded[i]));
+        }
+        log("max |adapted - folded| =", maxDiff.toExponential(2), " — merge is exact");
+      </script>
+    </div>
+
+    <h2>직접: 어댑터에 학습률 주기</h2>
+    <p>
+      아래 층은 얼린 base 를 적응시켜 직선 <code>y = 3x</code> 를 배워야 하지만, 스텝 크기가
+      0 인 동안은 움직이지 못한다. 진짜 학습률을 넣으면 어댑터가 그것을 잡았을 때 페이지가
+      말해 준다.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.05">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        const { peft } = borch;
+
+        const xs = keepAlive(Tensor.from([0, 1, 2, 3], [4, 1]));
+        const ys = keepAlive(xs.mul(Tensor.full([], 3)));       // target line y = 3x
+        const layer = new peft.LoRALinear(1, 1, { r: 1, bias: false });
+
+        // The adapter cannot learn while the step size is zero. Give it a real rate.
+        const lr = 0;                     // <-- fix me (try 0.1)
+        const opt = new optim.SGD(layer.parameters(), lr);
+
+        let last = 0;
+        for (let i = 0; i < 200; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const l = layer.call(xs).sub(ys).square().mean();
+            l.backward();
+            opt.step();
+            last = await l.item();
+          });
+        }
+        log("loss", last);
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
+      테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을
+      누른다.
+    </div>
+
+    <div class="pager">
+      <a href="../learn/">← 길잡이</a>
+      <a href="../tutorials/" style="text-align:right">더 보기<b>튜토리얼</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>
