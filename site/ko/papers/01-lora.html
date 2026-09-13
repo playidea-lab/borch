@@ -115,9 +115,9 @@
 
         const layer = new peft.LoRALinear(4, 4, { r: 4 });
         const x = keepAlive(Tensor.randn([16, 4]));
-        const y0 = keepAlive(layer.call(x));                          // = base(x), since B is zero
+        const y0 = keepAlive(noGrad(() => layer.call(x)));           // = base(x) as a constant, B is zero
         const shift = keepAlive(Tensor.randn([4, 4]).mul(Tensor.full([], 0.5)));
-        const y = keepAlive(y0.add(x.linear(shift)));                 // a target the adapter can reach
+        const y = keepAlive(noGrad(() => y0.add(x.linear(shift)))); // a fixed target the adapter can reach
 
         const baseBefore = await layer.weight.sum().item();
         const opt = new optim.SGD(layer.parameters(), 0.1);
@@ -157,7 +157,7 @@
         // Train the adapter a little so it actually changes the output.
         const opt = new optim.SGD(layer.parameters(), 0.1);
         const shift = keepAlive(Tensor.randn([8, 8]).mul(Tensor.full([], 0.3)));
-        const y = keepAlive(layer.call(x).add(x.linear(shift)));
+        const y = keepAlive(noGrad(() => layer.call(x).add(x.linear(shift))));
         for (let i = 0; i < 40; i++) {
           await scope(async () => {
             opt.zeroGrad();
