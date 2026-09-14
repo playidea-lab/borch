@@ -190,6 +190,14 @@
       switch and compare there.
     </p>
 
+    <h2>What to remember</h2>
+    <ul>
+      <li>safetensors saves a module's <code>stateDict</code> (its weights); <code>load</code> restores them.</li>
+      <li>Save the weights, not the Python object — the architecture is code, the checkpoint is data.</li>
+      <li>The same checkpoint loads into the numpy core, the WebGPU runtime and the Python binding.</li>
+      <li>In borch: <code>save(model.stateDict(), …)</code> and <code>load(…)</code>.</li>
+    </ul>
+
     <div class="note-box">
       <strong>Where to go next.</strong> The <a href="../playground.html">playground</a>
       gives you the same runtime with a bigger editor, a loss curve and the GPU counters.

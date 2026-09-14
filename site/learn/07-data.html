@@ -253,6 +253,36 @@
       </script>
     </div>
 
+    <h2>A batch, drawn</h2>
+    <p>Six samples stacked on axis 0, drawn as a strip. A model does not see one example at a time — it sees a whole batch at once, which is what makes training on a GPU fast.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const batch = Tensor.linspace(0, 1, 6 * 64).reshape([6, 1, 8, 8]);
+        log("batch shape:", JSON.stringify(batch.shape), " (6 samples · 1 channel · 8×8)");
+        await show(batch, { scale: 10 });
+        log("a batch is many samples stacked on axis 0 — the network sees them all at once");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        batch = torch.linspace(0, 1, 6 * 64).reshape(6, 1, 8, 8)
+        print("batch shape:", tuple(batch.shape), " (6 samples, 1 channel, 8x8)")
+        show(batch, scale=10)
+        print("a batch is many samples stacked on axis 0 - the network sees them all at once")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>A dataset yields samples; batching stacks them on axis 0 and shuffling reorders them each epoch.</li>
+      <li>Hold out a validation split and never train on it — that is how overfitting is caught.</li>
+      <li>Transforms (crop, flip, normalise) augment the training data.</li>
+      <li>The network sees a whole batch at once.</li>
+    </ul>
+
     <div class="note-box">
       <strong>Augmentation is measured, not assumed.</strong> On the CIFAR ResNet-18
       benchmark this repository reports 64.6% with augmentation on and 59.3% with it off,

@@ -327,6 +327,14 @@
       </script>
     </div>
 
+    <h2>What to remember</h2>
+    <ul>
+      <li>When numbers are wrong but nothing threw, ask the device: check shapes, dtypes, and for NaN/Inf.</li>
+      <li>Confirm gradients actually flow — a zero or missing <code>.grad</code> is a broken graph.</li>
+      <li>Read the intermediate values (print or <code>show</code> them); do not guess.</li>
+      <li>A flat or exploding loss is a signal, not a mystery (see <em>Fix the bug</em>).</li>
+    </ul>
+
     <div class="note-box">
       <strong>Where this leaves you.</strong> Green is not the same as correct, and this
       repository keeps a list of seven places where a passing test could still be lying —

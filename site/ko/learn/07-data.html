@@ -245,6 +245,36 @@
       </script>
     </div>
 
+    <h2>배치, 그려보기</h2>
+    <p>축 0 에 쌓은 여섯 샘플을 띠로 그렸다. 모델은 한 번에 한 예제를 보지 않는다 — 배치 전체를 한꺼번에 본다. 그게 GPU 학습을 빠르게 한다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const batch = Tensor.linspace(0, 1, 6 * 64).reshape([6, 1, 8, 8]);
+        log("batch shape:", JSON.stringify(batch.shape), " (6 samples · 1 channel · 8×8)");
+        await show(batch, { scale: 10 });
+        log("a batch is many samples stacked on axis 0 — the network sees them all at once");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        batch = torch.linspace(0, 1, 6 * 64).reshape(6, 1, 8, 8)
+        print("batch shape:", tuple(batch.shape), " (6 samples, 1 channel, 8x8)")
+        show(batch, scale=10)
+        print("a batch is many samples stacked on axis 0 - the network sees them all at once")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>데이터셋은 샘플을 내주고, 배치는 축 0 에 쌓으며, 셔플은 에폭마다 순서를 섞는다.</li>
+      <li>검증 분리를 떼어 두고 절대 학습에 쓰지 말 것 — 그게 과적합을 잡는 법.</li>
+      <li>변환(크롭·플립·정규화)은 학습 데이터를 증강한다.</li>
+      <li>망은 배치 전체를 한꺼번에 본다.</li>
+    </ul>
+
     <div class="note-box">
       <strong>늘리기는 가정이 아니라 실측이다.</strong> CIFAR ResNet-18 벤치에서 이
       저장소는 늘리기를 켠 64.6% 와 끈 59.3% 를 **둘 다** 적는다. 두 번째 수가 자매

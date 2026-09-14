@@ -359,6 +359,46 @@
       못 하는 것이다.
     </p>
 
+    <h2>깊이엔 왜 skip 이 필요한가</h2>
+    <p>입력을 조금씩 줄이는 층을 쌓으면 기울기가 굶는다: 점점 깊게 쌓으며 입력에 도달하는 양을 그려라 — 0 으로 떨어진다. skip 연결이 그 해법이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        // stack N halve-then-relu layers; how much gradient reaches the input?
+        for (let N = 1; N <= 20; N++) {
+          const x = Tensor.from([1], [], { requiresGrad: true });
+          let h = x;
+          for (let i = 0; i < N; i++) h = h.mul(Tensor.full([], 0.7)).relu();
+          h.backward();
+          plot("gradient reaching the input", await x.grad.item());
+        }
+        log("with no skip the gradient shrinks toward 0 as depth grows — a skip (y = f(x) + x) keeps it near 1, which is what lets ResNets go deep");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        # stack N halve-then-relu layers; how much gradient reaches the input?
+        for N in range(1, 21):
+            x = torch.tensor(1.0, requires_grad=True)
+            h = x
+            for i in range(N):
+                h = (h * 0.7).relu()
+            h.backward()
+            plot("gradient reaching the input", x.grad.item())
+        print("with no skip the gradient shrinks toward 0 as depth grows - a skip (y = f(x) + x) keeps it near 1, which is what lets ResNets go deep")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>skip 연결은 입력을 다시 더한다 — <code>y = f(x) + x</code> — 그래서 기울기가 앞 층에 바로 도달한다.</li>
+      <li>없으면 기울기가 깊이에 따라 줄어든다(위에 그린 vanishing gradient).</li>
+      <li><code>BasicBlock</code> 은 conv → BN → relu → conv → BN, 거기에 skip, 그다음 relu.</li>
+      <li>지름길은 모양이 바뀔 때만 1×1 conv 를 얻는다.</li>
+    </ul>
+
     <div class="pager">
       <a href="08-debugging.html">← 8 · 디버깅</a>
       <a href="10-vit.html" style="text-align:right">다음<b>10 · 트랜스포머</b></a>

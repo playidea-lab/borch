@@ -363,6 +363,46 @@
       what the adaptive pool buys, and what a fixed one cannot do.
     </p>
 
+    <h2>Why depth needs a skip</h2>
+    <p>A stack of layers that each shrink their input a little starves the gradient: run it deeper and deeper and plot how much reaches the input — it falls toward zero. A skip connection is the fix.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        // stack N halve-then-relu layers; how much gradient reaches the input?
+        for (let N = 1; N <= 20; N++) {
+          const x = Tensor.from([1], [], { requiresGrad: true });
+          let h = x;
+          for (let i = 0; i < N; i++) h = h.mul(Tensor.full([], 0.7)).relu();
+          h.backward();
+          plot("gradient reaching the input", await x.grad.item());
+        }
+        log("with no skip the gradient shrinks toward 0 as depth grows — a skip (y = f(x) + x) keeps it near 1, which is what lets ResNets go deep");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        # stack N halve-then-relu layers; how much gradient reaches the input?
+        for N in range(1, 21):
+            x = torch.tensor(1.0, requires_grad=True)
+            h = x
+            for i in range(N):
+                h = (h * 0.7).relu()
+            h.backward()
+            plot("gradient reaching the input", x.grad.item())
+        print("with no skip the gradient shrinks toward 0 as depth grows - a skip (y = f(x) + x) keeps it near 1, which is what lets ResNets go deep")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>A skip connection adds the input back — <code>y = f(x) + x</code> — so gradients reach early layers directly.</li>
+      <li>Without it, gradients shrink with depth (the vanishing gradient drawn above).</li>
+      <li>A <code>BasicBlock</code> is conv → BN → relu → conv → BN, plus the skip, then relu.</li>
+      <li>The shortcut gets a 1×1 conv only when the shape changes.</li>
+    </ul>
+
     <div class="pager">
       <a href="08-debugging.html">← 8 · Debugging</a>
       <a href="10-vit.html" style="text-align:right">Next<b>10 · Transformer</b></a>

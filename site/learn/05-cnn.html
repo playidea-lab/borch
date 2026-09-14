@@ -251,6 +251,38 @@
       </script>
     </div>
 
+    <h2>A conv layer is a bank of kernels</h2>
+    <p>Each output channel is one little learnable filter. Here are six 3×3 kernels at initialisation, drawn — random now; training turns each into a detector for some pattern (an edge, a texture, a colour).</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const conv = new nn.Conv2d(1, 6, 3, 1, 1);   // 6 output channels → 6 kernels
+        log("kernel bank shape:", JSON.stringify(conv.weight.shape));   // [6, 1, 3, 3]
+        await show(conv.weight, { scale: 22 });
+        log("six 3×3 filters, random at initialisation — training tunes each to a pattern");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+        conv = torch.nn.Conv2d(1, 6, 3, 1, 1)   # 6 output channels -> 6 kernels
+        print("kernel bank shape:", tuple(conv.weight.shape))   # [6, 1, 3, 3]
+        show(conv.weight, scale=22)
+        print("six 3x3 filters, random at initialisation - training tunes each to a pattern")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li><code>Conv2d</code> slides a small learnable kernel across the input; the same weights are reused at every position.</li>
+      <li>Stride and padding set the output size; pooling downsamples; <code>flatten</code> hands the map to a <code>Linear</code> head.</li>
+      <li>A conv layer is a bank of kernels — each learns to respond to one pattern.</li>
+      <li>In borch: <code>nn.Conv2d(inC, outC, kernel, stride, padding)</code>.</li>
+    </ul>
+
     <div class="note-box">
       <strong>1-D and 3-D convolution exist here and not in the numpy core.</strong>
       That is deliberate: the core refuses 53 cases the browser side answers, and asking
