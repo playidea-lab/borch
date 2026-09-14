@@ -54,6 +54,54 @@ picked = sorted((r for r in newest.values() if r.get("bytes", 0) <= BUDGET),
                 key=lambda r: r.get("bytes", 0))
 log("under budget: " + ", ".join(f"{r['name']} {r['bytes']/1e6:.0f}MB" for r in picked))
 
+# **A leaderboard on a real folder, not only a load test.** The sweep above says which
+# backbones run; this says what they are worth on labelled photographs — the thing a
+# comparison in a tab actually answers.
+if ${(q.get("compare") === "1") ? "True" : "False"}:
+    import zipfile
+    members = []
+    if ${(q.get("cifar") === "1") ? "True" : "False"}:
+        # **A task with something to learn.** The photographs upstairs carry one image per
+        # ImageNet class, so any grouping of them is arbitrary and every model scores at
+        # chance — which is the right answer to a question with no answer, and says
+        # nothing about the models. CIFAR-10 is in this repository as a sprite sheet with
+        # its labels: ten classes, and a linear probe on frozen features is the standard
+        # way to compare backbones.
+        meta = json.loads(get("/site/assets/data/cifar-train.json"))
+        sheet = Image.open(io.BytesIO(get("/site/assets/data/cifar-train.jpg", True))).convert("RGB")
+        tile, cols = int(meta["tile"]), int(meta["cols"])
+        for i, label in enumerate(meta["labels"][:LIMIT]):
+            x, y = (i % cols) * tile, (i // cols) * tile
+            crop = sheet.crop((x, y, x + tile, y + tile))
+            out = io.BytesIO()
+            crop.save(out, format="PNG")
+            cls = meta["classes"][int(label)]
+            members.append((f"{cls}/{cls}_{i:04d}.png", out.getvalue()))
+        log(f"CIFAR-10: {len(members)} tiles, {len(set(m[0].split('/')[0] for m in members))} classes")
+    else:
+        for row in index[:LIMIT]:
+            cls = f"c{row['class'] % 3}"
+            members.append((f"{cls}/{cls}_{row['file']}", get(BASE + row["file"], True)))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, data in members:
+            z.writestr(name, data)
+    folder = [("set.zip", buf.getvalue())]
+    t0 = time.perf_counter()
+    board = torch.workbench.compare(folder, budget_mb=${parseInt(q.get("budget") || "25")},
+                                    val=0.25, seed=0, epochs=200, lr=1e-2)
+    log(f"compare over {len(board)} candidates in {time.perf_counter() - t0:.1f} s")
+    for r in board:
+        if "error" in r:
+            log(f"  {r['name']:32s} {r['mb']:6.1f}MB  refused: {r['error'][:70]}")
+        else:
+            log(f"  {r['name']:32s} {r['mb']:6.1f}MB  acc {r['accuracy']:.3f} "
+                f"({r['measured_on']})  {r['features']}d  {r['seconds']}s")
+    name, tried = torch.workbench.pick(folder, at_least=0.8,
+                                       budget_mb=${parseInt(q.get("budget") || "25")},
+                                       val=0.25, seed=0, epochs=200, lr=1e-2)
+    log(f"pick(at_least=0.8) → {name} after {len(tried)} candidate(s)")
+
 rows = []
 for row in picked:
     name = row["name"]

@@ -7,6 +7,7 @@ refuses for by name. The import is inside the call because this module is import
 """
 
 from borch._workbench import Session                     # noqa: F401 — re-exported below
+from borch._workbench import candidates as _candidates, compare as _compare, pick as _pick
 
 
 def setup(files, **config):
@@ -14,3 +15,24 @@ def setup(files, **config):
     import borch_webgpu
 
     return Session(borch_webgpu, files, **config)
+
+
+def candidates(budget_mb=60, task="image-classification"):
+    """The registry's models this data could be handed to, smallest first."""
+    import borch_webgpu
+
+    return _candidates(borch_webgpu, budget_mb=budget_mb, task=task)
+
+
+def compare(files, **config):
+    """Every candidate under the budget, same split, best first."""
+    import borch_webgpu
+
+    return _compare(borch_webgpu, files, **config)
+
+
+def pick(files, **config):
+    """The smallest backbone that clears the bar — `(name, rows)`."""
+    import borch_webgpu
+
+    return _pick(borch_webgpu, files, **config)

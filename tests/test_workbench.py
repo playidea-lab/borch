@@ -202,3 +202,184 @@ def test_the_original_photograph_is_reachable_for_a_transform_that_resizes_itsel
     ds = ImageFiles(files, size=16)
     assert ds[0][0].shape == (3, 16, 16)
     assert ds.raw(0).size == (32, 32)          # the synthetic set is 32 px square
+
+
+# -- standardising the cached features ----------------------------------------------
+
+def test_the_scaling_is_learned_from_the_training_rows_alone(files):
+    """**Statistics taken from everything let the held-out rows set their own bar.**
+
+    A small leak, and the kind that makes a number look better than it is. It is checked
+    by construction: the mean of the *training* rows lands on zero, and the mean of all
+    the rows does not have to.
+    """
+    s = Session(borch, files, size=32, batch=8, epochs=2, val=0.25, seed=5)
+    s.features = np.vstack([np.full((18, 4), 1.0, dtype=np.float32),
+                            np.full((6, 4), 9.0, dtype=np.float32)])
+    train, scored = s._split()
+    s.features[scored] = 9.0                       # the held-out rows are far away
+    s.features[train] = 1.0
+    s._standardise(train)
+    assert np.allclose(s.features[train].mean(axis=0), 0.0, atol=1e-5)
+    assert not np.allclose(s.features[scored].mean(axis=0), 0.0, atol=1e-5), \
+        "the held-out rows moved to zero too — the statistics saw them"
+
+
+def test_a_dimension_that_never_varies_does_not_become_an_infinity(files):
+    s = Session(borch, files, size=32, batch=8, epochs=2)
+    s.features = np.hstack([np.random.default_rng(0).normal(size=(24, 3)).astype(np.float32),
+                            np.full((24, 1), 7.0, dtype=np.float32)])
+    s._standardise(np.arange(24))
+    assert np.isfinite(s.features).all()
+
+
+# -- comparing and picking ----------------------------------------------------------
+
+class _Row(dict):
+    pass
+
+
+class _FakeHub:
+    """A registry with three models: two that could take a photograph and one that could not."""
+
+    @staticmethod
+    def list():
+        return [
+            {"name": "small", "bytes": 10_000_000, "task": "image-classification"},
+            {"name": "large", "bytes": 40_000_000, "task": "image-classification"},
+            {"name": "huge", "bytes": 400_000_000, "task": "image-classification"},
+            {"name": "speech", "bytes": 5_000_000, "task": "audio-classification"},
+        ]
+
+
+def test_candidates_are_smallest_first_of_the_task_asked_for_and_under_the_budget():
+    """**The budget belongs here, not in the caller.**
+
+    It was a parameter this function accepted and never read — `compare` filtered
+    afterwards — so `candidates(budget_mb=10)` handed back everything. Caught by
+    `test_unread_arguments.py`, which exists for exactly that.
+    """
+    import types
+
+    from borch._workbench import candidates
+
+    fake = types.SimpleNamespace(hub=_FakeHub)
+    assert [r["name"] for r in candidates(fake, budget_mb=60)] == ["small", "large"]
+    assert [r["name"] for r in candidates(fake, budget_mb=500)] == ["small", "large", "huge"]
+    assert [r["name"] for r in candidates(fake, budget_mb=12)] == ["small"]
+    # `speech` is 5 MB and under every budget above; it is another task.
+    assert all("speech" not in r["name"] for r in candidates(fake, budget_mb=500))
+
+
+def test_a_comparison_without_held_out_rows_is_refused(files):
+    import types
+
+    from borch._workbench import compare
+
+    fake = types.SimpleNamespace(hub=_FakeHub)
+    with pytest.raises(ValueError, match="held-out"):
+        compare(fake, files, val=0.0)
+
+
+class _FakeSession:
+    """Stands in for a fit: says what it was asked for and how well it did."""
+
+    tried = []
+    scores = {}
+
+    def __init__(self, torch, files, **config):
+        self.config = dict(config)
+        self.config.setdefault("size", 224)
+        self.accuracy = self.scores.get(config["backbone"], 0.5)
+        self.measured_on = "held-out"
+        self.seconds = 1.0
+        self.features = np.zeros((4, 8), dtype=np.float32)
+
+    def fit(self):
+        _FakeSession.tried.append(self.config["backbone"])
+        return self
+
+
+def _with_fake_sessions(monkeypatch, scores):
+    import borch._workbench as wb
+
+    _FakeSession.tried, _FakeSession.scores = [], scores
+    monkeypatch.setattr(wb, "Session", _FakeSession)
+    return _FakeSession
+
+
+def test_compare_tries_every_candidate_under_the_budget_and_no_more(monkeypatch, files):
+    import types
+
+    from borch._workbench import compare
+
+    fake = _with_fake_sessions(monkeypatch, {"small": 0.7, "large": 0.8})
+    rows = compare(types.SimpleNamespace(hub=_FakeHub), files, budget_mb=60)
+    assert fake.tried == ["small", "large"], fake.tried       # huge is 400 MB
+    assert [r["name"] for r in rows] == ["small", "large"]
+    assert all(r["measured_on"] == "held-out" for r in rows)
+
+
+def test_every_candidate_sees_the_same_split(monkeypatch, files):
+    """**A leaderboard where the models saw different held-out rows ranks the splits.**"""
+    import types
+
+    from borch._workbench import compare
+
+    seen = []
+
+    class _Recording(_FakeSession):
+        def __init__(self, torch, files, **config):
+            super().__init__(torch, files, **config)
+            seen.append((config["val"], config["seed"]))
+
+    import borch._workbench as wb
+
+    _Recording.tried, _Recording.scores = [], {}
+    monkeypatch.setattr(wb, "Session", _Recording)
+    compare(types.SimpleNamespace(hub=_FakeHub), files, budget_mb=60, val=0.25, seed=11)
+    assert seen == [(0.25, 11), (0.25, 11)], seen
+
+
+def test_pick_stops_at_the_first_that_clears_and_never_fetches_the_rest(monkeypatch, files):
+    """The reason `pick` exists: the larger weights are never downloaded."""
+    import types
+
+    from borch._workbench import pick
+
+    fake = _with_fake_sessions(monkeypatch, {"small": 0.93, "large": 0.99})
+    name, rows = pick(types.SimpleNamespace(hub=_FakeHub), files, at_least=0.9, budget_mb=60)
+    assert name == "small"
+    assert fake.tried == ["small"], "it went on after the bar was cleared"
+    assert len(rows) == 1
+
+
+def test_pick_says_nothing_cleared_rather_than_handing_back_the_best_of_a_bad_set(monkeypatch, files):
+    import types
+
+    from borch._workbench import pick
+
+    _with_fake_sessions(monkeypatch, {"small": 0.4, "large": 0.5})
+    name, rows = pick(types.SimpleNamespace(hub=_FakeHub), files, at_least=0.9, budget_mb=60)
+    assert name is None and len(rows) == 2
+
+
+def test_a_candidate_that_refuses_is_kept_in_the_rows_rather_than_dropped(monkeypatch, files):
+    """`cifar10-resnet18` refuses every photograph, and knowing that is part of the answer."""
+    import types
+
+    import borch._workbench as wb
+    from borch._workbench import compare
+
+    class _Refusing(_FakeSession):
+        def fit(self):
+            if self.config["backbone"] == "small":
+                raise ValueError("this manifest prepares a 3x32x32 image")
+            return super().fit()
+
+    _Refusing.tried, _Refusing.scores = [], {"large": 0.8}
+    monkeypatch.setattr(wb, "Session", _Refusing)
+    rows = compare(types.SimpleNamespace(hub=_FakeHub), files, budget_mb=60)
+    assert [r["name"] for r in rows] == ["small", "large"]
+    assert "error" in rows[0] and "3x32x32" in rows[0]["error"]
+    assert rows[1]["accuracy"] == 0.8

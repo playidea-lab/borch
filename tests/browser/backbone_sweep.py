@@ -61,6 +61,14 @@ def main(argv):
         print(f"{wheel} is older than the sources — run with --build", file=sys.stderr)
         return 2
     budget = next((a.split("=", 1)[1] for a in argv if a.startswith("--budget=")), "50")
+    # `--compare` also runs `workbench.compare` and `pick` over the same candidates on a
+    # folder built from these photographs — the load test says they run, this says what
+    # they are worth.
+    compare = "1" if "--compare" in argv else "0"
+    # `--cifar`: build the folder from the CIFAR-10 sprite sheet in this repository
+    # instead of the ImageNetV2 photographs, which are one per class and so have no
+    # grouping to learn.
+    cifar = "1" if "--cifar" in argv else "0"
     limit = next((a.split("=", 1)[1] for a in argv if a.startswith("--limit=")), "48")
 
     if refuse_if_screen_off("the backbone sweep"):
@@ -68,7 +76,7 @@ def main(argv):
     probe_lock("the backbone sweep")
     port, shutdown = serve(ROOT)
     url = (f"http://127.0.0.1:{port}/tests/browser/backbone_sweep.html"
-           f"?wheel=/{wheel}&budget={budget}&limit={limit}")
+           f"?wheel=/{wheel}&budget={budget}&limit={limit}&compare={compare}&cifar={cifar}")
     try:
         with sync_playwright() as pw:
             context = pw.chromium.launch_persistent_context(

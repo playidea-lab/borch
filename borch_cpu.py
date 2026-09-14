@@ -287,5 +287,21 @@ class _Workbench:
 
         return _Session(borch_cpu, files, **config)
 
+    @staticmethod
+    def compare(files, **config):
+        import borch_cpu
+
+        from borch._workbench import compare as _compare
+
+        return _compare(borch_cpu, files, **config)
+
+    @staticmethod
+    def pick(files, **config):
+        import borch_cpu
+
+        from borch._workbench import pick as _pick
+
+        return _pick(borch_cpu, files, **config)
+
 
 workbench = _Workbench()
