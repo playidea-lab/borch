@@ -1,21 +1,21 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<script src="../../coi.js"></script>
+<script src="../coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>레이어 정규화 — borch 배우기</title>
-<meta name="description" content="레이어 정규화 (Ba et al., 2016) 는 각 샘플을 자기 feature 들로 정규화한다 — 배치 무관, train·eval 동일이라 트랜스포머가 쓴다. 페이지 안에서, 양 언어로.">
-<link rel="alternate" hreflang="en" href="../../papers/05-layernorm.html">
+<title>Layer normalization — borch Learn</title>
+<meta name="description" content="Layer norm (Ba et al., 2016) normalizes each sample across its own features — batch-independent and the same in train and eval, which is why transformers use it. Runs in the page, both languages.">
+<link rel="alternate" hreflang="ko" href="../ko/techniques/04-layernorm.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
-<meta property="og:locale" content="ko_KR">
-<meta property="og:title" content="레이어 정규화 — borch 배우기">
-<meta property="og:description" content="레이어 정규화 (Ba et al., 2016) 는 각 샘플을 자기 feature 들로 정규화한다 — 배치 무관, train·eval 동일이라 트랜스포머가 쓴다. 페이지 안에서, 양 언어로.">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Layer normalization — borch Learn">
+<meta property="og:description" content="Layer norm (Ba et al., 2016) normalizes each sample across its own features — batch-independent and the same in train and eval, which is why transformers use it. Runs in the page, both languages.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
-<meta property="og:url" content="%OG_BASE%/site/ko/papers/05-layernorm.html">
+<meta property="og:url" content="%OG_BASE%/site/techniques/04-layernorm.html">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="stylesheet" href="../../assets/style.css">
+<link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
 <!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
 <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
@@ -26,13 +26,13 @@
   <div class="wrap">
     <a class="brand" href="../"><span class="dot"></span>borch</a>
     <nav>
-      <a href="../learn/" class="on" aria-current="page">배우기</a>
-      <a href="../tutorials/">튜토리얼</a>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
-      <a href="../vision.html">비전</a>
-      <a href="../models.html">모델</a>
-      <a href="../python.html">파이썬</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
@@ -40,42 +40,41 @@
       <a href="../tmplus.html">TM++</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="../setup.html">GPU</a>
-      <a href="../check.html">확인</a>
+      <a href="../check.html">Check</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
-      <a href="../../papers/05-layernorm.html" class="lang">English</a>
+      <a href="../ko/techniques/04-layernorm.html" class="lang">한국어</a>
     </nav>
   </div>
 </header>
 
 <div class="docs">
   <aside class="sidebar">
-    <h4>논문 사례</h4>
+    <h4>Core techniques</h4>
     <nav>
-      <a href="../learn/">길잡이</a>
-      <a href="01-lora.html">1 · LoRA</a>
-      <a href="02-adam.html">2 · Adam</a>
-      <a href="03-dropout.html">3 · Dropout</a>
-      <a href="04-batchnorm.html">4 · Batch norm</a>
-      <a href="05-layernorm.html" class="on">5 · Layer norm</a>
+      <a href="../learn/">Overview</a>
+      <a href="01-adam.html">1 · Adam</a>
+      <a href="02-dropout.html">2 · Dropout</a>
+      <a href="03-batchnorm.html">3 · Batch norm</a>
+      <a href="04-layernorm.html" class="on">4 · Layer norm</a>
     </nav>
   </aside>
 
   <main class="doc-main lesson">
-    <p class="eyebrow">논문 사례 · 5</p>
-    <h1>레이어 정규화</h1>
+    <p class="eyebrow">Core techniques · 4</p>
+    <h1>Layer normalization</h1>
     <p class="lead">
-      레이어 정규화 — Ba, Kiros &amp; Hinton, 2016 — 는 배치 정규화처럼 배치 전체가 아니라
-      각 샘플을 자기 feature 들로 정규화한다. 그래서 배치 크기와 무관하고 train·eval 에서
-      동일하다 — 그래서 트랜스포머가 대신 이걸 쓴다. 아래 모든 것은 이 페이지에서, 양
-      언어로 돈다.
+      Layer normalization — Ba, Kiros &amp; Hinton, 2016 — normalizes each sample across
+      its own features, not across the batch the way batch norm does. That makes it
+      independent of batch size and identical in train and eval — which is why transformers
+      reach for it instead. Everything below runs in this page, in both languages.
     </p>
 
-    <h2>각 행을 자기 feature 들로 정규화</h2>
+    <h2>It normalizes each row across its features</h2>
     <p>
-      평균과 퍼짐이 제각각인 행들을 준다. <code>LayerNorm([4])</code> 는 <em>각 행을 따로</em>,
-      그 네 feature 에 걸쳐 중심화하고 스케일한다 — 그래서 출력의 모든 행이 평균 약 0 으로
-      나온다.
+      Give it rows with wildly different means and spreads. <code>LayerNorm([4])</code>
+      centres and scales <em>each row on its own</em>, over its four features — so every
+      row of the output comes out with mean about zero.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -103,11 +102,11 @@
       </script>
     </div>
 
-    <h2>배치 무관, 그리고 train·eval 동일</h2>
+    <h2>Batch-independent, and the same in train and eval</h2>
     <p>
-      각 행이 따로 정규화되므로, 한 행의 답은 주변 배치에 의존하지 않는다 — 그리고 running
-      통계가 없어서 <code>train()</code> 과 <code>eval()</code> 이 같은 일을 한다. 이것이 바로
-      배치 정규화에 없는 성질이다.
+      Because each row is normalised on its own, a row's answer does not depend on the
+      batch around it — and there are no running statistics, so <code>train()</code> and
+      <code>eval()</code> do the same thing. This is exactly the property batch norm lacks.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -143,11 +142,11 @@
       </script>
     </div>
 
-    <h2>직접: 행을 중심화하기</h2>
+    <h2>Your turn: centre the rows</h2>
     <p>
-      이 블록은 출력의 가장 큰 행 평균을 보고한다. 날것의 행은 큰 평균을 지녀 0 에서 멀다 —
-      <code>x</code> 를 <code>LayerNorm</code> 에 통과시켜 각 행을 중심화하면 가장 큰 행
-      평균이 0 으로 떨어진다.
+      The block reports the largest row mean of its output. Raw rows carry big means, so it
+      is far from zero — pass <code>x</code> through the <code>LayerNorm</code> so each row
+      is centred and the largest row mean drops to zero.
     </p>
 
     <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
@@ -178,19 +177,19 @@
     </div>
 
     <div class="note-box">
-      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
-      테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을
-      누른다.
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
     </div>
 
     <div class="pager">
-      <a href="04-batchnorm.html">← 4 · Batch norm</a>
-      <a href="../tutorials/" style="text-align:right">더 보기<b>튜토리얼</b></a>
+      <a href="03-batchnorm.html">← 3 · Batch norm</a>
+      <a href="../tutorials/" style="text-align:right">More<b>Tutorials</b></a>
     </div>
   </main>
 </div>
 
-<script type="module" src="../../assets/runnable.js"></script>
-<script type="module" src="../../assets/apilink.js"></script>
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
 </body>
 </html>

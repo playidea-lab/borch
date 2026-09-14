@@ -1,21 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
 <meta charset="utf-8">
-<script src="../coi.js"></script>
+<script src="../../coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Adam: an adaptive optimizer — borch Learn</title>
-<meta name="description" content="SGD versus Adam (Kingma & Ba, 2014): a per-parameter rate that converges on an ill-conditioned problem where plain SGD crawls — running in the page, both languages.">
-<link rel="alternate" hreflang="ko" href="../ko/papers/02-adam.html">
+<title>Adam: 적응형 옵티마이저 — borch 배우기</title>
+<meta name="description" content="SGD 대 Adam (Kingma & Ba, 2014): 나쁜 조건수의 문제에서 SGD 가 기는 동안 수렴하는 파라미터별 학습률 — 페이지 안에서, 양 언어로.">
+<link rel="alternate" hreflang="en" href="../../techniques/01-adam.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
-<meta property="og:locale" content="en_US">
-<meta property="og:title" content="Adam: an adaptive optimizer — borch Learn">
-<meta property="og:description" content="SGD versus Adam (Kingma & Ba, 2014): a per-parameter rate that converges on an ill-conditioned problem where plain SGD crawls — running in the page, both languages.">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="Adam: 적응형 옵티마이저 — borch 배우기">
+<meta property="og:description" content="SGD 대 Adam (Kingma & Ba, 2014): 나쁜 조건수의 문제에서 SGD 가 기는 동안 수렴하는 파라미터별 학습률 — 페이지 안에서, 양 언어로.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
-<meta property="og:url" content="%OG_BASE%/site/papers/02-adam.html">
+<meta property="og:url" content="%OG_BASE%/site/ko/techniques/01-adam.html">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../../assets/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
 <!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
 <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
@@ -26,13 +26,13 @@
   <div class="wrap">
     <a class="brand" href="../"><span class="dot"></span>borch</a>
     <nav>
-      <a href="../learn/" class="on" aria-current="page">Learn</a>
-      <a href="../tutorials/">Tutorials</a>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="../api/">API</a>
-      <a href="../vision.html">Vision</a>
-      <a href="../models.html">Models</a>
-      <a href="../python.html">Python</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="../playground.html">Playground</a>
       <a href="../notebook.html">Notebook</a>
@@ -40,44 +40,41 @@
       <a href="../tmplus.html">TM++</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="../setup.html">GPU</a>
-      <a href="../check.html">Check</a>
+      <a href="../check.html">확인</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
-      <a href="../ko/papers/02-adam.html" class="lang">한국어</a>
+      <a href="../../techniques/01-adam.html" class="lang">English</a>
     </nav>
   </div>
 </header>
 
 <div class="docs">
   <aside class="sidebar">
-    <h4>Paper case studies</h4>
+    <h4>핵심 기법</h4>
     <nav>
-      <a href="../learn/">Overview</a>
-      <a href="01-lora.html">1 · LoRA</a>
-      <a href="02-adam.html" class="on">2 · Adam</a>
-      <a href="03-dropout.html">3 · Dropout</a>
-      <a href="04-batchnorm.html">4 · Batch norm</a>
-      <a href="05-layernorm.html">5 · Layer norm</a>
+      <a href="../learn/">길잡이</a>
+      <a href="01-adam.html" class="on">1 · Adam</a>
+      <a href="02-dropout.html">2 · Dropout</a>
+      <a href="03-batchnorm.html">3 · Batch norm</a>
+      <a href="04-layernorm.html">4 · Layer norm</a>
     </nav>
   </aside>
 
   <main class="doc-main lesson">
-    <p class="eyebrow">Paper case studies · 2</p>
-    <h1>Adam: an adaptive optimizer</h1>
+    <p class="eyebrow">핵심 기법 · 1</p>
+    <h1>Adam: 적응형 옵티마이저</h1>
     <p class="lead">
-      Plain SGD takes the same step size for every parameter. Adam — Kingma &amp; Ba,
-      2014 — keeps a running average of each parameter's gradient and of its square, and
-      steps by their ratio, so a weight with small but steady gradients still moves. On an
-      ill-conditioned problem it converges where SGD crawls. Everything below runs in this
-      page — edit any block and press Run.
+      평범한 SGD 는 모든 파라미터에 같은 스텝 크기를 쓴다. Adam — Kingma &amp; Ba, 2014 —
+      은 각 파라미터의 기울기와 그 제곱의 이동평균을 들고, 그 비율로 스텝을 밟는다. 그래서
+      작지만 꾸준한 기울기를 가진 가중치도 움직인다. 나쁜 조건수의 문제에서는 SGD 가 길 때
+      Adam 은 수렴한다. 아래 모든 것은 이 페이지에서 돈다 — 블록을 고쳐 Run 을 눌러라.
     </p>
 
-    <h2>One loop, two optimizers</h2>
+    <h2>같은 루프, 두 옵티마이저</h2>
     <p>
-      Here one feature is thirty times larger than the others. SGD has to keep its step
-      small enough for that big feature, which leaves the rest barely moving; Adam gives
-      each parameter its own effective rate. Same model, same data, same steps — only the
-      optimiser differs.
+      여기서 한 feature 는 나머지보다 서른 배 크다. SGD 는 그 큰 feature 에 맞춰 스텝을
+      작게 유지해야 하고, 그러면 나머지는 거의 안 움직인다. Adam 은 각 파라미터에 자기만의
+      실효 학습률을 준다. 같은 모델·같은 데이터·같은 스텝 수 — 옵티마이저만 다르다.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -159,13 +156,12 @@
       </script>
     </div>
 
-    <h2>A rate per parameter</h2>
+    <h2>파라미터별 학습률</h2>
     <p>
-      Adam keeps two running averages for every weight: the gradient <code>m</code> and its
-      square <code>v</code>. The update is <code>m / (sqrt(v) + eps)</code>, so a parameter
-      is scaled by how large its own gradients have been. <code>betas</code> are the two
-      averages' decay rates — the defaults <code>[0.9, 0.999]</code> are what the paper
-      recommends and rarely need changing.
+      Adam 은 가중치마다 이동평균 둘을 든다: 기울기 <code>m</code> 과 그 제곱 <code>v</code>.
+      갱신은 <code>m / (sqrt(v) + eps)</code> 라, 각 파라미터는 자기 기울기가 얼마나 컸는지로
+      스케일된다. <code>betas</code> 는 두 평균의 감쇠율 — 기본값 <code>[0.9, 0.999]</code> 는
+      논문이 권하는 값이고 바꿀 일이 드물다.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -208,11 +204,11 @@
       </script>
     </div>
 
-    <h2>Your turn: give Adam a learning rate</h2>
+    <h2>직접: Adam 에 학습률 주기</h2>
     <p>
-      The model below should learn the line <code>y = 3x + 1</code>, but Adam cannot move
-      while the step size is zero. Set a real rate — <code>0.2</code> lands it well inside
-      the step budget here — and the page says when it has it.
+      아래 모델은 직선 <code>y = 3x + 1</code> 을 배워야 하지만, 스텝 크기가 0 인 동안은
+      Adam 도 못 움직인다. 진짜 학습률을 넣어라 — <code>0.2</code> 면 스텝 예산 안에 넉넉히
+      들어온다 — 그러면 잡았을 때 페이지가 말해 준다.
     </p>
 
     <div class="runnable" data-lang="js" data-verdict="loss<0.05">
@@ -265,19 +261,19 @@
     </div>
 
     <div class="note-box">
-      <strong>If a block above errors, that is worth knowing.</strong> Every example on
-      this page runs against the same library the tests run against — nothing here is a
-      screenshot. Press Reset to get the original code back.
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
+      테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을
+      누른다.
     </div>
 
     <div class="pager">
-      <a href="01-lora.html">← 1 · LoRA</a>
-      <a href="../tutorials/" style="text-align:right">More<b>Tutorials</b></a>
+      <a href="../learn/">← 길잡이</a>
+      <a href="02-dropout.html" style="text-align:right">다음<b>2 · Dropout</b></a>
     </div>
   </main>
 </div>
 
-<script type="module" src="../assets/runnable.js"></script>
-<script type="module" src="../assets/apilink.js"></script>
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
 </body>
 </html>

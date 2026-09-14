@@ -74,14 +74,24 @@ from a paper, wrapped in code you run) → extras.**
 
 Lessons are plain static HTML under `site/`, one file per language:
 
-| Section | Directory | English + Korean |
+| Directory | Holds | English + Korean |
 |---|---|---|
-| Basics / depth / transformers | `site/learn/` | `learn/NN-slug.html`, `ko/learn/NN-slug.html` |
-| Project walk-throughs | `site/tutorials/` | `tutorials/NN-slug.html`, `ko/tutorials/…` |
-| Foundations (math) | `site/foundations/` | `foundations/NN-slug.html`, `ko/foundations/…` |
-| Paper case studies | `site/papers/` | `papers/NN-slug.html`, `ko/papers/…` |
+| `site/learn/` | the numbered main-line lessons | `learn/NN-slug.html`, `ko/learn/NN-slug.html` |
+| `site/tutorials/` | project walk-throughs | `tutorials/NN-slug.html`, `ko/tutorials/…` |
+| `site/foundations/` | the math track | `foundations/NN-slug.html`, `ko/foundations/…` |
+| `site/techniques/` | core techniques (Adam, dropout, the norms) | `techniques/NN-slug.html`, `ko/techniques/…` |
+| `site/papers/` | genuine advanced case studies (LoRA) | `papers/NN-slug.html`, `ko/papers/…` |
 
-**Foundations and papers are deliberately their own directories, not part of `learn/`.** A
+**A lesson's directory is not its `part`.** The directory is where the file lives and what its
+on-page sidebar groups it with; the **`part`** is where the course home files it in the
+learning arc. They are often the same, but not always: the `techniques/` lessons sit together
+in one directory (browsable as a cluster) while the manifest files each into the arc where it
+is *used* — Adam into basics, dropout and batch norm into depth, layer norm into transformers.
+Only genuinely advanced case studies stay in the `papers` part. Group by directory for
+neighbours a reader browses; file by `part` for the order a reader learns.
+
+**Foundations, techniques and papers are deliberately their own directories, not part of
+`learn/`.** A
 site guard (`tests/test_site.py::test_the_site_counts_the_pages_it_links_to`) checks every
 "N lessons" claim on the site against the number of files in `site/learn/`, and several pages
 say *eleven lessons*. Dropping new files into `learn/` would silently break those claims. The
