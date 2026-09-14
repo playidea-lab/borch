@@ -57,6 +57,14 @@ LESSONS = {
     "site/foundations/06-eig-svd.html": "runs",
     "site/techniques/05-softmax-ce.html": "runs",
     "site/capstones/01-mini-transformer.html": "runs",
+    # **Two more for the figures' sake, and only two.** `show` paints from values the core
+    # computed, which is a claim that held until the drawer read a borch.ts-only method
+    # off a core tensor and every figure on an adapterless machine stopped. The pages
+    # above cover a single heatmap and a curve; these two cover the layouts nothing else
+    # does — a bank of six kernels from one `conv.weight`, and two `show` calls in one
+    # block for a before and an after.
+    "site/learn/05-cnn.html": "runs",
+    "site/techniques/03-batchnorm.html": "runs",
 }
 HANGUL = re.compile(r"[가-힣]")
 # One runs before the page's scripts, so the page boots into the shape rather than being
