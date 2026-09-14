@@ -18,6 +18,8 @@ browser can get weights it can verify.
 import js as _js
 from pyodide.ffi import run_sync as _run_sync, to_js as _to_js
 
+from borch._preprocess import transform_for as _transform_for
+
 from ._nn import Module
 from ._ops import _ts
 
@@ -104,8 +106,27 @@ def load(name_or_url, cache=True, verify=True, timeout_ms=None):
     model = Module(loaded.model)
     model.eval()
     manifest = loaded.manifest
-    object.__setattr__(model, "manifest", manifest.to_py() if hasattr(manifest, "to_py") else manifest)
+    manifest = manifest.to_py() if hasattr(manifest, "to_py") else manifest
+    object.__setattr__(model, "manifest", manifest)
+    # **The weights and the preparation they were trained under arrive together.** They
+    # were separable before, and everything that loaded a backbone here prepared its
+    # images some other way — 64px and unnormalised in the workbench, the numbers copied
+    # into the page in TM++. Measured, that is worth up to 63 points of top-1
+    # (`tests/browser/preprocess_cost.py`), so the two travel as one thing now.
+    object.__setattr__(model, "transform", _transform_for(manifest.get("preprocess")))
     return model
+
+
+def transform_for(manifest_or_preprocess):
+    """The preparation a manifest asks for, as a callable — timm's `create_transform`.
+
+    Takes a whole manifest or just its `preprocess` block, so `hub.transform_for(model.manifest)`
+    and `hub.transform_for(model.manifest["preprocess"])` both read.
+    """
+    pre = manifest_or_preprocess
+    if isinstance(pre, dict) and "preprocess" in pre:
+        pre = pre["preprocess"]
+    return _transform_for(pre)
 
 
 # torch's spelling. The builtin is not used after this line.
