@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Softmax &amp; cross-entropy — borch Learn</title>
+<meta name="description" content="Softmax turns raw scores into a probability distribution; cross-entropy measures how far it is from the true label — how nearly every classifier is trained. Runs in the page, both languages.">
+<link rel="alternate" hreflang="ko" href="../ko/techniques/05-softmax-ce.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Softmax &amp; cross-entropy — borch Learn">
+<meta property="og:description" content="Softmax turns raw scores into a probability distribution; cross-entropy measures how far it is from the true label — how nearly every classifier is trained. Runs in the page, both languages.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/techniques/05-softmax-ce.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/techniques/05-softmax-ce.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Core techniques</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-adam.html">1 · Adam</a>
+      <a href="02-dropout.html">2 · Dropout</a>
+      <a href="03-batchnorm.html">3 · Batch norm</a>
+      <a href="04-layernorm.html">4 · Layer norm</a>
+      <a href="05-softmax-ce.html" class="on">5 · Softmax &amp; CE</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Core techniques · 5</p>
+    <h1>Softmax &amp; cross-entropy</h1>
+    <p class="lead">
+      A classifier outputs raw scores — <em>logits</em>. Softmax turns them into a
+      probability distribution that sums to 1, and cross-entropy measures how far that
+      distribution is from the true label. Together they are how nearly every classifier is
+      trained. Everything below runs in this page, in both languages.
+    </p>
+
+    <h2>Softmax: scores to probabilities</h2>
+    <p>
+      <code>softmax</code> exponentiates each score and divides by the total, so the outputs
+      are positive and sum to 1 — the largest logit gets the largest probability, but every
+      class keeps some.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const logits = Tensor.from([2, 1, 0.1], [3]);
+        const probs = logits.softmax(0);
+
+        log("logits:", Array.from(await logits.toArray()).join(", "));
+        log("probs :", Array.from(await probs.toArray()).map((v) => v.toFixed(3)).join(", "));
+        log("sum   :", (await probs.sum().item()).toFixed(4), " (softmax always sums to 1)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        logits = torch.tensor([2., 1., 0.1])
+        probs = torch.softmax(logits, 0)
+
+        print("logits:", ", ".join(str(v) for v in logits.tolist()))
+        print("probs :", ", ".join(f"{v:.3f}" for v in probs.tolist()))
+        print("sum   :", f"{probs.sum().item():.4f}", " (softmax always sums to 1)")
+      </script>
+    </div>
+
+    <h2>Cross-entropy: the distance to the truth</h2>
+    <p>
+      For a one-hot label, cross-entropy is just <code>−log(p)</code> of the probability the
+      model gave the <em>true</em> class. It is small when the model already favours the right
+      answer and large when it does not — which is exactly the signal training pushes down.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const logits = Tensor.from([1, 3, 0, 2], [4]);   // raw scores for 4 classes
+        const probs = logits.softmax(0);
+        log("probabilities:", Array.from(await probs.toArray()).map((v) => v.toFixed(3)).join(", "));
+
+        const ceRight = -Math.log(await probs.at(1).item());   // true class = 1 (the model's favourite)
+        const ceWrong = -Math.log(await probs.at(2).item());   // true class = 2 (given little mass)
+        log("cross-entropy if true = 1:", ceRight.toFixed(3), " (low: already favoured)");
+        log("cross-entropy if true = 2:", ceWrong.toFixed(3), " (high: barely predicted)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        logits = torch.tensor([1., 3., 0., 2.])   # raw scores for 4 classes
+        probs = torch.softmax(logits, 0)
+        print("probabilities:", ", ".join(f"{v:.3f}" for v in probs.tolist()))
+
+        ce_right = -probs[1].log().item()         # true class = 1 (the model's favourite)
+        ce_wrong = -probs[2].log().item()         # true class = 2 (given little mass)
+        print("cross-entropy if true = 1:", f"{ce_right:.3f}", " (low: already favoured)")
+        print("cross-entropy if true = 2:", f"{ce_wrong:.3f}", " (high: barely predicted)")
+      </script>
+    </div>
+
+    <h2>Your turn: make it a distribution</h2>
+    <p>
+      The block reports the sum of its "probabilities", which must be 1 for a real
+      distribution. Right now it is summing the raw logits. Turn them into probabilities
+      with <code>softmax</code>.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const logits = Tensor.from([2, 1, 0, 3, 1], [5]);
+
+        const probs = logits;              // <-- fix me: turn scores into probabilities (logits.softmax(0))
+
+        const gap = Math.abs(await probs.sum().item() - 1);
+        log("sum of probs:", await probs.sum().item());
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        logits = torch.tensor([2., 1., 0., 3., 1.])
+
+        probs = logits                     # <-- fix me: turn scores into probabilities (torch.softmax(logits, 0))
+
+        gap = abs(probs.sum().item() - 1)
+        print("sum of probs:", probs.sum().item())
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="04-layernorm.html">← 4 · Layer norm</a>
+      <a href="../tutorials/" style="text-align:right">More<b>Tutorials</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Softmax 과 교차 엔트로피 — borch 배우기</title>
+<meta name="description" content="Softmax 는 원점수를 합이 1 인 확률 분포로 바꾸고, 교차 엔트로피는 그것이 정답에서 얼마나 먼지를 잰다 — 거의 모든 분류기가 학습되는 방식. 페이지 안에서, 양 언어로.">
+<link rel="alternate" hreflang="en" href="../../techniques/05-softmax-ce.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="Softmax 과 교차 엔트로피 — borch 배우기">
+<meta property="og:description" content="Softmax 는 원점수를 합이 1 인 확률 분포로 바꾸고, 교차 엔트로피는 그것이 정답에서 얼마나 먼지를 잰다 — 거의 모든 분류기가 학습되는 방식. 페이지 안에서, 양 언어로.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/techniques/05-softmax-ce.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../techniques/05-softmax-ce.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>핵심 기법</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-adam.html">1 · Adam</a>
+      <a href="02-dropout.html">2 · Dropout</a>
+      <a href="03-batchnorm.html">3 · Batch norm</a>
+      <a href="04-layernorm.html">4 · Layer norm</a>
+      <a href="05-softmax-ce.html" class="on">5 · Softmax &amp; CE</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">핵심 기법 · 5</p>
+    <h1>Softmax 과 교차 엔트로피</h1>
+    <p class="lead">
+      분류기는 원점수 — <em>logit</em> — 를 낸다. Softmax 는 이를 합이 1 인 확률 분포로
+      바꾸고, 교차 엔트로피는 그 분포가 정답에서 얼마나 먼지를 잰다. 둘이 함께 거의 모든
+      분류기가 학습되는 방식이다. 아래 모든 것은 이 페이지에서, 양 언어로 돈다.
+    </p>
+
+    <h2>Softmax: 점수를 확률로</h2>
+    <p>
+      <code>softmax</code> 는 각 점수를 지수화한 뒤 총합으로 나눈다. 그래서 출력은 모두
+      양수이고 합이 1 이다 — 가장 큰 logit 이 가장 큰 확률을 갖되, 모든 클래스가 얼마간의
+      확률을 유지한다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const logits = Tensor.from([2, 1, 0.1], [3]);
+        const probs = logits.softmax(0);
+
+        log("logits:", Array.from(await logits.toArray()).join(", "));
+        log("probs :", Array.from(await probs.toArray()).map((v) => v.toFixed(3)).join(", "));
+        log("sum   :", (await probs.sum().item()).toFixed(4), " (softmax always sums to 1)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        logits = torch.tensor([2., 1., 0.1])
+        probs = torch.softmax(logits, 0)
+
+        print("logits:", ", ".join(str(v) for v in logits.tolist()))
+        print("probs :", ", ".join(f"{v:.3f}" for v in probs.tolist()))
+        print("sum   :", f"{probs.sum().item():.4f}", " (softmax always sums to 1)")
+      </script>
+    </div>
+
+    <h2>교차 엔트로피: 정답까지의 거리</h2>
+    <p>
+      원-핫 라벨에 대해 교차 엔트로피는 모델이 <em>정답</em> 클래스에 준 확률의
+      <code>−log(p)</code> 일 뿐이다. 모델이 이미 정답을 선호하면 작고, 아니면 크다 — 그것이
+      바로 학습이 밀어 내리는 신호다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const logits = Tensor.from([1, 3, 0, 2], [4]);   // raw scores for 4 classes
+        const probs = logits.softmax(0);
+        log("probabilities:", Array.from(await probs.toArray()).map((v) => v.toFixed(3)).join(", "));
+
+        const ceRight = -Math.log(await probs.at(1).item());   // true class = 1 (the model's favourite)
+        const ceWrong = -Math.log(await probs.at(2).item());   // true class = 2 (given little mass)
+        log("cross-entropy if true = 1:", ceRight.toFixed(3), " (low: already favoured)");
+        log("cross-entropy if true = 2:", ceWrong.toFixed(3), " (high: barely predicted)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        logits = torch.tensor([1., 3., 0., 2.])   # raw scores for 4 classes
+        probs = torch.softmax(logits, 0)
+        print("probabilities:", ", ".join(f"{v:.3f}" for v in probs.tolist()))
+
+        ce_right = -probs[1].log().item()         # true class = 1 (the model's favourite)
+        ce_wrong = -probs[2].log().item()         # true class = 2 (given little mass)
+        print("cross-entropy if true = 1:", f"{ce_right:.3f}", " (low: already favoured)")
+        print("cross-entropy if true = 2:", f"{ce_wrong:.3f}", " (high: barely predicted)")
+      </script>
+    </div>
+
+    <h2>직접: 분포로 만들기</h2>
+    <p>
+      이 블록은 자기 "확률"의 합을 보고하는데, 진짜 분포라면 그 값이 1 이어야 한다. 지금은
+      원점수(logit)를 그냥 더하고 있다. <code>softmax</code> 로 확률로 바꿔라.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const logits = Tensor.from([2, 1, 0, 3, 1], [5]);
+
+        const probs = logits;              // <-- fix me: turn scores into probabilities (logits.softmax(0))
+
+        const gap = Math.abs(await probs.sum().item() - 1);
+        log("sum of probs:", await probs.sum().item());
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        logits = torch.tensor([2., 1., 0., 3., 1.])
+
+        probs = logits                     # <-- fix me: turn scores into probabilities (torch.softmax(logits, 0))
+
+        gap = abs(probs.sum().item() - 1)
+        print("sum of probs:", probs.sum().item())
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
+      테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을
+      누른다.
+    </div>
+
+    <div class="pager">
+      <a href="04-layernorm.html">← 4 · Layer norm</a>
+      <a href="../tutorials/" style="text-align:right">더 보기<b>튜토리얼</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

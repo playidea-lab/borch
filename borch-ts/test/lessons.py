@@ -112,6 +112,8 @@ PAGES = [
     "/site/ko/techniques/03-batchnorm.html",
     "/site/techniques/04-layernorm.html",
     "/site/ko/techniques/04-layernorm.html",
+    "/site/techniques/05-softmax-ce.html",
+    "/site/ko/techniques/05-softmax-ce.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page
