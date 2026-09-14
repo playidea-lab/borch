@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <script src="../coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>5 · Derivatives & the chain rule — borch Learn</title>
+<title>7 · Derivatives & the chain rule — borch Learn</title>
 <meta name="description" content="Derivatives with autograd: backward() and .grad, and the chain rule that makes them agree with the hand calculation.">
-<link rel="alternate" hreflang="ko" href="../ko/foundations/05-chain-rule.html">
+<link rel="alternate" hreflang="ko" href="../ko/foundations/07-chain-rule.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="en_US">
-<meta property="og:title" content="5 · Derivatives & the chain rule — borch Learn">
+<meta property="og:title" content="7 · Derivatives & the chain rule — borch Learn">
 <meta property="og:description" content="Derivatives with autograd: backward() and .grad, and the chain rule that makes them agree with the hand calculation.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
-<meta property="og:url" content="%OG_BASE%/site/foundations/05-chain-rule.html">
+<meta property="og:url" content="%OG_BASE%/site/foundations/07-chain-rule.html">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
@@ -43,7 +43,7 @@
       <a href="../check.html">Check</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
-      <a href="../ko/foundations/05-chain-rule.html" class="lang">한국어</a>
+      <a href="../ko/foundations/07-chain-rule.html" class="lang">한국어</a>
     </nav>
   </div>
 </header>
@@ -57,12 +57,14 @@
       <a href="02-matmul.html">2 · Matrices</a>
       <a href="03-broadcasting.html">3 · Broadcasting</a>
       <a href="04-norms.html">4 · Norms</a>
-      <a href="05-chain-rule.html" class="on">5 · Chain rule</a>
+      <a href="05-linear-systems.html">5 · Linear systems</a>
+      <a href="06-eig-svd.html">6 · Eigen & SVD</a>
+      <a href="07-chain-rule.html" class="on">7 · Chain rule</a>
     </nav>
   </aside>
 
   <main class="doc-main lesson">
-    <p class="eyebrow">Foundations · 5</p>
+    <p class="eyebrow">Foundations · 7</p>
     <h1>Derivatives &amp; the chain rule</h1>
     <p class="lead">A derivative is the slope of a function — how fast the output moves when the input nudges. borch computes them for you with <code>backward()</code>; the chain rule is the engine underneath, and it is where the next chapter's autograd comes from.</p>
 
@@ -154,7 +156,7 @@
     </div>
 
     <div class="pager">
-      <a href="04-norms.html">← 4 · Norms</a>
+      <a href="06-eig-svd.html">← 6 · Eigen & SVD</a>
       <a href="../learn/01-tensors.html" style="text-align:right">Next<b>1 · Tensors</b></a>
     </div>
   </main>

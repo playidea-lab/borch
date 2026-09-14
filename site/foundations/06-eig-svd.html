@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>6 · Eigenvalues &amp; the SVD — borch Learn</title>
+<meta name="description" content="Eigenvectors are the directions a matrix only stretches (Av = λv); the SVD factors any matrix into a rotation, a scaling and a rotation. Runs in the page, both languages.">
+<link rel="alternate" hreflang="ko" href="../ko/foundations/06-eig-svd.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="6 · Eigenvalues &amp; the SVD — borch Learn">
+<meta property="og:description" content="Eigenvectors are the directions a matrix only stretches (Av = λv); the SVD factors any matrix into a rotation, a scaling and a rotation. Runs in the page, both languages.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/foundations/06-eig-svd.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/foundations/06-eig-svd.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Foundations</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-vectors.html">1 · Vectors</a>
+      <a href="02-matmul.html">2 · Matrices</a>
+      <a href="03-broadcasting.html">3 · Broadcasting</a>
+      <a href="04-norms.html">4 · Norms</a>
+      <a href="05-linear-systems.html">5 · Linear systems</a>
+      <a href="06-eig-svd.html" class="on">6 · Eigen & SVD</a>
+      <a href="07-chain-rule.html">7 · Chain rule</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Foundations · 6</p>
+    <h1>Eigenvalues &amp; the SVD</h1>
+    <p class="lead">
+      An eigenvector is a direction a matrix only <em>stretches</em>, never turns:
+      <code>A v = λ v</code>. The singular value decomposition generalises that to
+      <em>any</em> matrix, factoring it into a rotation, a scaling, and a rotation
+      (<code>A = U diag(S) Vᵀ</code>) — the workhorse behind PCA, low-rank approximation and
+      much else. Everything below runs in this page, in both languages.
+    </p>
+
+    <h2>Eigenvectors: the directions a matrix only stretches</h2>
+    <p>
+      For a symmetric matrix the eigenvalues are real and <code>eigh</code> returns them
+      with their eigenvectors (as the columns of <code>vectors</code>). Take the first pair
+      and check that <code>A·v</code> is just <code>λ·v</code> — same direction, scaled.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([2, 1, 1, 2], [2, 2]);   // symmetric
+        const { values, vectors } = await A.eigh();
+        log("eigenvalues:", Array.from(await values.toArray()).map((v) => v.toFixed(3)).join(", "));
+
+        const v0 = vectors.at([null, 0]);              // first eigenvector (column 0)
+        const lam0 = values.at(0);
+        log("A·v0   =", Array.from(await A.mv(v0).toArray()).map((v) => v.toFixed(3)).join(", "));
+        log("λ·v0   =", Array.from(await v0.mul(lam0).toArray()).map((v) => v.toFixed(3)).join(", "), " (same direction)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[2., 1.], [1., 2.]])   # symmetric
+        values, vectors = torch.linalg.eigh(A)
+        print("eigenvalues:", ", ".join(f"{v:.3f}" for v in values.tolist()))
+
+        v0 = vectors[:, 0]                       # first eigenvector (column 0)
+        lam0 = values[0]
+        print("A@v0   =", ", ".join(f"{v:.3f}" for v in (A @ v0).tolist()))
+        print("lam*v0 =", ", ".join(f"{v:.3f}" for v in (v0 * lam0).tolist()), " (same direction)")
+      </script>
+    </div>
+
+    <h2>The SVD factors any matrix</h2>
+    <p>
+      <code>A.svd()</code> returns <code>U</code>, the singular values <code>S</code>, and
+      <code>V</code>. Multiplying them back — <code>U diag(S) Vᵀ</code> — returns the
+      original matrix, even though <code>A</code> is not square.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
+        const { u, s, v } = await A.svd();
+        log("singular values:", Array.from(await s.toArray()).map((val) => val.toFixed(3)).join(", "));
+
+        const recon = u.matmul(s.diag()).matmul(v.transpose());
+        log("max |A - U diag(S) Vᵀ| =", (await A.sub(recon).abs().amax().item()).toExponential(2));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+        u, s, v = torch.svd(A)
+        print("singular values:", ", ".join(f"{val:.3f}" for val in s.tolist()))
+
+        recon = u @ torch.diag(s) @ v.t()
+        print("max |A - U diag(S) V^T| =", f"{(A - recon).abs().amax().item():.2e}")
+      </script>
+    </div>
+
+    <h2>Your turn: rebuild A from its SVD</h2>
+    <p>
+      The block reconstructs <code>A</code> from <code>U</code>, <code>S</code> and
+      <code>V</code>, and reports how far it lands from the original. The transpose on
+      <code>V</code> is missing — add it so <code>U diag(S) Vᵀ</code> returns <code>A</code>.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([4, 0, 3, -5], [2, 2]);
+        const { u, s, v } = await A.svd();
+
+        const recon = u.matmul(s.diag()).matmul(v);   // <-- fix me: V needs a transpose (v.transpose())
+
+        const gap = await A.sub(recon).abs().amax().item();
+        log("max |A - reconstruction|:", gap);
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[4., 0.], [3., -5.]])
+        u, s, v = torch.svd(A)
+
+        recon = u @ torch.diag(s) @ v          # <-- fix me: V needs a transpose (v.t())
+
+        gap = (A - recon).abs().amax().item()
+        print("max |A - reconstruction|:", gap)
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="05-linear-systems.html">← 5 · Linear systems</a>
+      <a href="07-chain-rule.html" style="text-align:right">Next<b>7 · Chain rule</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

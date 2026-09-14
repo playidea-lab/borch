@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <script src="../../coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>5 · 미분과 연쇄법칙 — borch 배우기</title>
+<title>7 · 미분과 연쇄법칙 — borch 배우기</title>
 <meta name="description" content="autograd 로 미분: backward() 와 .grad, 그리고 손 계산과 맞게 하는 연쇄법칙.">
-<link rel="alternate" hreflang="en" href="../../foundations/05-chain-rule.html">
+<link rel="alternate" hreflang="en" href="../../foundations/07-chain-rule.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="ko_KR">
-<meta property="og:title" content="5 · 미분과 연쇄법칙 — borch 배우기">
+<meta property="og:title" content="7 · 미분과 연쇄법칙 — borch 배우기">
 <meta property="og:description" content="autograd 로 미분: backward() 와 .grad, 그리고 손 계산과 맞게 하는 연쇄법칙.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
-<meta property="og:url" content="%OG_BASE%/site/ko/foundations/05-chain-rule.html">
+<meta property="og:url" content="%OG_BASE%/site/ko/foundations/07-chain-rule.html">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="../../assets/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
@@ -43,7 +43,7 @@
       <a href="../check.html">확인</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
-      <a href="../../foundations/05-chain-rule.html" class="lang">English</a>
+      <a href="../../foundations/07-chain-rule.html" class="lang">English</a>
     </nav>
   </div>
 </header>
@@ -57,12 +57,14 @@
       <a href="02-matmul.html">2 · 행렬</a>
       <a href="03-broadcasting.html">3 · 브로드캐스팅</a>
       <a href="04-norms.html">4 · Norm</a>
-      <a href="05-chain-rule.html" class="on">5 · 연쇄법칙</a>
+      <a href="05-linear-systems.html">5 · 선형계</a>
+      <a href="06-eig-svd.html">6 · 고윳값·SVD</a>
+      <a href="07-chain-rule.html" class="on">7 · 연쇄법칙</a>
     </nav>
   </aside>
 
   <main class="doc-main lesson">
-    <p class="eyebrow">기초 수학 · 5</p>
+    <p class="eyebrow">기초 수학 · 7</p>
     <h1>미분과 연쇄법칙</h1>
     <p class="lead">미분은 함수의 기울기다 — 입력을 살짝 밀 때 출력이 얼마나 빨리 움직이는가. borch 는 <code>backward()</code> 로 대신 구해준다. 그 밑의 엔진이 연쇄법칙이고, 다음 장의 autograd 가 여기서 나온다.</p>
 
@@ -154,7 +156,7 @@
     </div>
 
     <div class="pager">
-      <a href="04-norms.html">← 4 · Norm</a>
+      <a href="06-eig-svd.html">← 6 · 고윳값·SVD</a>
       <a href="../learn/01-tensors.html" style="text-align:right">다음<b>1 · 텐서</b></a>
     </div>
   </main>

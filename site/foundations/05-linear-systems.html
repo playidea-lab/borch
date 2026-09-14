@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5 · Linear systems — borch Learn</title>
+<meta name="description" content="Solve a linear system Ax = b exactly, and fit the best answer with least squares when there is no exact one. Runs in the page, both languages.">
+<link rel="alternate" hreflang="ko" href="../ko/foundations/05-linear-systems.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="5 · Linear systems — borch Learn">
+<meta property="og:description" content="Solve a linear system Ax = b exactly, and fit the best answer with least squares when there is no exact one. Runs in the page, both languages.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/foundations/05-linear-systems.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/foundations/05-linear-systems.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Foundations</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-vectors.html">1 · Vectors</a>
+      <a href="02-matmul.html">2 · Matrices</a>
+      <a href="03-broadcasting.html">3 · Broadcasting</a>
+      <a href="04-norms.html">4 · Norms</a>
+      <a href="05-linear-systems.html" class="on">5 · Linear systems</a>
+      <a href="06-eig-svd.html">6 · Eigen & SVD</a>
+      <a href="07-chain-rule.html">7 · Chain rule</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Foundations · 5</p>
+    <h1>Linear systems</h1>
+    <p class="lead">
+      A linear system <code>A x = b</code> asks which combination of the columns of
+      <code>A</code> produces <code>b</code>. When there is an exact answer, <code>solve</code>
+      finds it; when there are more equations than unknowns and no exact answer exists,
+      least squares finds the closest one. Everything below runs in this page, in both
+      languages.
+    </p>
+
+    <h2>Solving A x = b exactly</h2>
+    <p>
+      With a square, invertible <code>A</code>, <code>A.solve(b)</code> returns the one
+      <code>x</code> that lands on <code>b</code>. Reading the result is awaited, like any
+      value coming back from the GPU.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([2, 1, 1, 1, 3, 2, 1, 0, 0], [3, 3]);
+        const b = Tensor.from([4, 5, 6], [3]);
+
+        const x = await A.solve(b);
+        log("x   =", Array.from(await x.toArray()).map((v) => v.toFixed(3)).join(", "));
+        log("A·x =", Array.from(await A.matmul(x).toArray()).map((v) => v.toFixed(3)).join(", "), " (back to b = 4, 5, 6)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[2., 1., 1.], [1., 3., 2.], [1., 0., 0.]])
+        b = torch.tensor([4., 5., 6.])
+
+        x = torch.linalg.solve(A, b)
+        print("x   =", ", ".join(f"{v:.3f}" for v in x.tolist()))
+        print("A@x =", ", ".join(f"{v:.3f}" for v in (A @ x).tolist()), " (back to b = 4, 5, 6)")
+      </script>
+    </div>
+
+    <h2>No exact answer: least squares</h2>
+    <p>
+      Four points, a line with two unknowns (intercept and slope): no line passes through
+      all four, so there is no exact <code>x</code>. <code>lstsq</code> returns the one that
+      misses by the least — the best fit.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        // columns: a 1s column (intercept) and an x column (slope), rows are the four points
+        const A = Tensor.from([1, 0, 1, 1, 1, 2, 1, 3], [4, 2]);
+        const b = Tensor.from([1, 2, 2, 4], [4]);   // the y values
+
+        const sol = await A.lstsq(b);
+        log("best-fit [intercept, slope] =", Array.from(await sol.toArray()).map((v) => v.toFixed(3)).join(", "));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        # columns: a 1s column (intercept) and an x column (slope), rows are the four points
+        A = torch.tensor([[1., 0.], [1., 1.], [1., 2.], [1., 3.]])
+        b = torch.tensor([1., 2., 2., 4.])   # the y values
+
+        sol = torch.linalg.lstsq(A, b).solution
+        print("best-fit [intercept, slope] =", ", ".join(f"{v:.3f}" for v in sol.tolist()))
+      </script>
+    </div>
+
+    <h2>Your turn: solve the system</h2>
+    <p>
+      The block reports the residual <code>max|A·x − b|</code>, which is zero only when
+      <code>x</code> actually solves the system. Right now <code>x</code> is just
+      <code>b</code>. Replace it with the real solution.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([3, 2, 1, 2], [2, 2]);
+        const b = Tensor.from([7, 4], [2]);
+
+        const x = b;                       // <-- fix me: solve the system (await A.solve(b))
+
+        const gap = await A.matmul(x).sub(b).abs().amax().item();
+        log("residual max|A·x - b|:", gap);
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[3., 2.], [1., 2.]])
+        b = torch.tensor([7., 4.])
+
+        x = b                              # <-- fix me: solve the system (torch.linalg.solve(A, b))
+
+        gap = (A @ x - b).abs().amax().item()
+        print("residual max|A@x - b|:", gap)
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="04-norms.html">← 4 · Norms</a>
+      <a href="06-eig-svd.html" style="text-align:right">Next<b>6 · Eigen & SVD</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

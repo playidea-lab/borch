@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5 · 선형계 — borch 배우기</title>
+<meta name="description" content="선형계 Ax = b 를 정확히 풀고, 정확한 해가 없을 때는 최소제곱으로 가장 가까운 답을 맞춘다. 페이지 안에서, 양 언어로.">
+<link rel="alternate" hreflang="en" href="../../foundations/05-linear-systems.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="5 · 선형계 — borch 배우기">
+<meta property="og:description" content="선형계 Ax = b 를 정확히 풀고, 정확한 해가 없을 때는 최소제곱으로 가장 가까운 답을 맞춘다. 페이지 안에서, 양 언어로.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/foundations/05-linear-systems.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../foundations/05-linear-systems.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>기초 수학</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-vectors.html">1 · 벡터</a>
+      <a href="02-matmul.html">2 · 행렬</a>
+      <a href="03-broadcasting.html">3 · 브로드캐스팅</a>
+      <a href="04-norms.html">4 · Norm</a>
+      <a href="05-linear-systems.html" class="on">5 · 선형계</a>
+      <a href="06-eig-svd.html">6 · 고윳값·SVD</a>
+      <a href="07-chain-rule.html">7 · 연쇄법칙</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">기초 수학 · 5</p>
+    <h1>선형계</h1>
+    <p class="lead">
+      선형계 <code>A x = b</code> 는 <code>A</code> 의 열들을 어떻게 조합해야 <code>b</code> 가
+      되는지 묻는다. 정확한 답이 있으면 <code>solve</code> 가 찾고, 방정식이 미지수보다 많아
+      정확한 답이 없으면 최소제곱이 가장 가까운 답을 찾는다. 아래 모든 것은 이 페이지에서,
+      양 언어로 돈다.
+    </p>
+
+    <h2>A x = b 를 정확히 풀기</h2>
+    <p>
+      정사각·가역인 <code>A</code> 라면 <code>A.solve(b)</code> 가 <code>b</code> 에 도달하는
+      유일한 <code>x</code> 를 준다. 결과를 읽는 것은 GPU 에서 오는 값이라 await 다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([2, 1, 1, 1, 3, 2, 1, 0, 0], [3, 3]);
+        const b = Tensor.from([4, 5, 6], [3]);
+
+        const x = await A.solve(b);
+        log("x   =", Array.from(await x.toArray()).map((v) => v.toFixed(3)).join(", "));
+        log("A·x =", Array.from(await A.matmul(x).toArray()).map((v) => v.toFixed(3)).join(", "), " (back to b = 4, 5, 6)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[2., 1., 1.], [1., 3., 2.], [1., 0., 0.]])
+        b = torch.tensor([4., 5., 6.])
+
+        x = torch.linalg.solve(A, b)
+        print("x   =", ", ".join(f"{v:.3f}" for v in x.tolist()))
+        print("A@x =", ", ".join(f"{v:.3f}" for v in (A @ x).tolist()), " (back to b = 4, 5, 6)")
+      </script>
+    </div>
+
+    <h2>정확한 답이 없을 때: 최소제곱</h2>
+    <p>
+      네 점, 미지수 둘(절편과 기울기)인 직선: 네 점을 모두 지나는 직선은 없으니 정확한
+      <code>x</code> 도 없다. <code>lstsq</code> 는 가장 적게 빗나가는 답 — 최적합 — 을 준다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        // columns: a 1s column (intercept) and an x column (slope), rows are the four points
+        const A = Tensor.from([1, 0, 1, 1, 1, 2, 1, 3], [4, 2]);
+        const b = Tensor.from([1, 2, 2, 4], [4]);   // the y values
+
+        const sol = await A.lstsq(b);
+        log("best-fit [intercept, slope] =", Array.from(await sol.toArray()).map((v) => v.toFixed(3)).join(", "));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        # columns: a 1s column (intercept) and an x column (slope), rows are the four points
+        A = torch.tensor([[1., 0.], [1., 1.], [1., 2.], [1., 3.]])
+        b = torch.tensor([1., 2., 2., 4.])   # the y values
+
+        sol = torch.linalg.lstsq(A, b).solution
+        print("best-fit [intercept, slope] =", ", ".join(f"{v:.3f}" for v in sol.tolist()))
+      </script>
+    </div>
+
+    <h2>직접: 선형계 풀기</h2>
+    <p>
+      이 블록은 잔차 <code>max|A·x − b|</code> 를 보고하는데, 이 값은 <code>x</code> 가 실제로
+      선형계를 풀 때만 0 이다. 지금 <code>x</code> 는 그냥 <code>b</code> 다. 진짜 해로 바꿔라.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([3, 2, 1, 2], [2, 2]);
+        const b = Tensor.from([7, 4], [2]);
+
+        const x = b;                       // <-- fix me: solve the system (await A.solve(b))
+
+        const gap = await A.matmul(x).sub(b).abs().amax().item();
+        log("residual max|A·x - b|:", gap);
+        log("loss", gap);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[3., 2.], [1., 2.]])
+        b = torch.tensor([7., 4.])
+
+        x = b                              # <-- fix me: solve the system (torch.linalg.solve(A, b))
+
+        gap = (A @ x - b).abs().amax().item()
+        print("residual max|A@x - b|:", gap)
+        print("loss", gap)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
+      테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을
+      누른다.
+    </div>
+
+    <div class="pager">
+      <a href="04-norms.html">← 4 · Norm</a>
+      <a href="06-eig-svd.html" style="text-align:right">다음<b>6 · 고윳값·SVD</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>
