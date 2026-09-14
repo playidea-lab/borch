@@ -245,7 +245,12 @@ function mount(box) {
       // `backend`, `pooled` — which is what those lessons are for. The core answers
       // `AttributeError` and that is true; a traceback is not how to say it.
       const missing = coreGapName(err);
-      write(missing ? t("run.bindingOnly", missing) : describeError(err), "err");
+      // **The class says what kind of line this is; the words say it to a reader.** A
+      // check that has to recognise the sentence has to know it in both languages, and
+      // the one watching this spent three minutes waiting for an English phrase on the
+      // Korean page.
+      write(missing ? t("run.bindingOnly", missing) : describeError(err),
+            missing ? "err binding-only" : "err");
     } finally {
       busy = false;
       runBtn.disabled = false;

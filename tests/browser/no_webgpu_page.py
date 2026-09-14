@@ -89,29 +89,66 @@ def press_run(page):
     return [l for l in page.inner_text("#hero-out").splitlines() if "learned" in l][0].strip()
 
 
-def press_lesson(page, kind):
-    """Click the python tab of the first block, press Run, and say what came back."""
-    box = page.locator(".runnable").first
+def press_block(page, box, index, where):
+    """Press one block's Python and say what came back: (first line shown, text, problems).
+
+    **Every block, not the first one.** A page's figures and its worked example are
+    different code on the same page, and the figures went in after this probe did — so on
+    a machine with no adapter they were the one thing nobody had run. Pyodide is already
+    up by the second block, so the extra presses cost their own run and not another boot.
+    """
     tab = box.locator('button.tab[data-lang="py"]')
     if tab.count():
         tab.first.click()
-        page.wait_for_timeout(400)
-    shown = box.locator("textarea").input_value().splitlines()[0]
-    box.locator("button.go").click()
+        page.wait_for_timeout(300)
+    area = box.locator("textarea")
+    shown = area.input_value().splitlines()[0] if area.count() else ""
+    box.locator("button.go").first.click()
+    # **It is finished when the button can be pressed again**, which is `runnable.js`'s
+    # own `runBtn.disabled`. Waiting for particular words instead means this file has to
+    # know their spelling, and it hung for three minutes on a block whose error was
+    # phrased in neither language it had been told to expect. `lessons.py` learned the
+    # same thing and says so at more length.
     page.wait_for_function(
-        "() => /done —|binding's|바인딩의|Traceback/.test(document.querySelector('.runnable').innerText)",
-        timeout=180_000)
+        "i => !document.querySelectorAll('.runnable')[i].querySelector('button.go').disabled",
+        arg=index, timeout=180_000)
+    page.wait_for_timeout(150)
     text = box.inner_text()
+    # **By class, not by wording.** The finished line and the refusal are both translated,
+    # so a check that reads them has to know two languages and goes quiet when a third
+    # arrives. `runnable.js` marks the binding-only refusal; everything else with `err` is
+    # a failure whatever it says.
+    stopped = box.locator(".err:not(.binding-only)")
+    explained = box.locator(".binding-only")
     bad = []
     if "Traceback" in text or "ModuleNotFoundError" in text:
-        bad.append(f"a traceback reached the screen — {text[-160:]}")
+        bad.append(f"{where}: a traceback reached the screen — {text[-160:]}")
     if "import borch_webgpu" in shown:
-        bad.append(f"the snippet still opens the binding: {shown!r}")
-    if kind == "runs" and "done —" not in text:
-        bad.append(f"it never finished — {text[-160:]}")
-    if kind == "explains" and not ("binding's" in text or "바인딩의" in text):
-        bad.append(f"nothing said which name it wanted — {text[-160:]}")
-    return shown, text, bad
+        bad.append(f"{where}: the snippet still opens the binding: {shown!r}")
+    if stopped.count():
+        bad.append(f"{where}: it stopped — {stopped.first.inner_text()[:140]}")
+    return shown, text, bad, explained.count() > 0
+
+
+def press_lesson(page, kind):
+    """Press every block on the page; the first one also has to be of the declared kind."""
+    boxes = page.locator(".runnable")
+    count = boxes.count()
+    if count == 0:
+        return "", "", ["the page has no runnable block"]
+    first_shown = first_text = ""
+    bad = []
+    for i in range(count):
+        box = boxes.nth(i)
+        shown, text, problems, explained = press_block(page, box, i, f"block {i}")
+        bad += problems
+        if i == 0:
+            first_shown, first_text = shown, text
+            if kind == "runs" and explained:
+                bad.append(f"block 0: it wanted a binding-only name — {text[-160:]}")
+            if kind == "explains" and not explained:
+                bad.append(f"block 0: nothing said which name it wanted — {text[-160:]}")
+    return first_shown, first_text, bad
 
 
 def judge_jspi(lang, badge, lines):
@@ -233,8 +270,9 @@ def main(argv):
                     page = lessons.new_page()
                     page.goto(f"http://127.0.0.1:{port}/{rel}", wait_until="load")
                     page.wait_for_timeout(1200)
+                    blocks = page.locator(".runnable").count()
                     shown, _text, bad = press_lesson(page, kind)
-                    print(f"  {kind:8s} {rel.split('site/')[1]:28s} {shown.strip()!r}")
+                    print(f"  {kind:8s} {rel.split('site/')[1]:34s} {blocks} blocks · {shown.strip()!r}")
                     problems += [f"{rel}: {b}" for b in bad]
                     page.close()
             finally:
