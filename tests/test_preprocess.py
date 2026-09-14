@@ -69,3 +69,12 @@ def test_an_interpolation_this_runtime_does_not_have_is_named():
 def test_a_value_range_other_than_unit_is_refused():
     with pytest.raises(ValueError, match="value range"):
         transform_for({**MANIFEST, "valueRange": "signed"})
+
+
+def test_a_picture_is_taken_as_well_as_an_array():
+    """What holds a photograph in a browser is PIL; what these transforms take is numpy."""
+    from borch._data import _image_module
+
+    Image = _image_module()
+    picture = Image.fromarray(_picture(300, 500))
+    assert transform_for(MANIFEST)(picture).shape == (3, 224, 224)

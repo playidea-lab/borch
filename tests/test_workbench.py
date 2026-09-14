@@ -173,3 +173,32 @@ def test_how_names_the_model_that_actually_trained(files):
     mine = nn.Sequential(nn.Flatten(), nn.Linear(3 * 32 * 32, 3))
     assert Session(borch, files, size=32, batch=8, epochs=2).fit().how.startswith("small CNN")
     assert Session(borch, files, size=32, batch=8, epochs=2).fit(mine).how.startswith("your model")
+
+
+def test_a_backbone_and_a_size_together_are_refused_as_the_contradiction_they_are(files):
+    """**The manifest says what its weights were trained on.** Asking for another size is
+    not a preference, it is a disagreement — and measured, losing that argument costs up
+    to sixty-three points of top-1."""
+    with pytest.raises(ValueError, match="prepares its own images"):
+        Session(borch, files, backbone="imagenet-efficientnet-b0", size=64)
+
+
+def test_without_a_backbone_the_size_is_the_callers_and_defaults_to_64(files):
+    assert Session(borch, files).config["size"] == 64
+    assert Session(borch, files, size=96).config["size"] == 96
+
+
+def test_a_set_already_decoded_still_settles_the_size(files):
+    from borch._data import ImageFiles
+
+    ds = ImageFiles(files, size=32)
+    assert Session(borch, ds).config["size"] == 32
+
+
+def test_the_original_photograph_is_reachable_for_a_transform_that_resizes_itself(files):
+    """`ImageFiles` hands back squares; a manifest's pipeline needs what arrived."""
+    from borch._data import ImageFiles
+
+    ds = ImageFiles(files, size=16)
+    assert ds[0][0].shape == (3, 16, 16)
+    assert ds.raw(0).size == (32, 32)          # the synthetic set is 32 px square

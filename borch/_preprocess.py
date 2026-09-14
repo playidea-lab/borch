@@ -81,7 +81,12 @@ def transform_for(pre, vision=None):
         # composed the ordinary way the division never happens and every value arrives 255
         # times too large. The manifest's pipeline is defined on an image, and the number
         # it records was measured through PIL, whose resize also hands back eight bits.
-        out = geometry(image) if geometry is not None else image
+        # **A photograph arrives as a picture, and these transforms take arrays.**
+        # `borchvision`'s `Resize` refuses anything but (H, W, C) numpy — which is right
+        # for it — and what holds a photograph in a browser is PIL. Converted here, so the
+        # caller hands over what it has rather than learning which of the two this wants.
+        arr = _np.asarray(image)
+        out = geometry(arr) if geometry is not None else arr
         arr = _np.asarray(out)
         if arr.dtype != _np.uint8:
             arr = _np.clip(_np.rint(arr), 0, 255).astype(_np.uint8)
