@@ -246,6 +246,34 @@
       </script>
     </div>
 
+    <h2>텐서, 그려보기</h2>
+    <p>텐서는 모양을 가진 수일 뿐이다. 여기 64 개를 8×8 격자로 놓고 값에서 바로 그렸다 — 밝을수록 크다. 이 책의 모든 이미지·가중치·활성값이 이런 격자다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const t = Tensor.linspace(0, 1, 64).reshape([8, 8]);
+        log("shape:", JSON.stringify(t.shape));
+        await show(t, { scale: 24 });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        t = torch.linspace(0, 1, 64).reshape(8, 8)
+        print("shape:", tuple(t.shape))
+        show(t, scale=24)
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>텐서는 모양·dtype·device(GPU)를 가진다.</li>
+      <li>팩토리: <code>zeros</code>·<code>ones</code>·<code>arange</code>·<code>randn</code>·<code>eye</code>·<code>linspace</code>.</li>
+      <li>값을 읽는 것은 GPU 에서 되돌아오는 일이라 <code>item()</code>·<code>toArray()</code>는 await.</li>
+      <li>성분별 연산은 브로드캐스트; <code>reshape</code>·<code>transpose</code>·<code>slice</code>는 저장소를 공유하는 뷰.</li>
+    </ul>
+
     <div class="note-box">
       <strong>위 블록이 빨개지면 그것도 알 만한 것이다.</strong> 이 페이지의 예제는
       테스트가 도는 그 라이브러리를 그대로 부른다 — 화면 그림이 아니다. 되돌리기를

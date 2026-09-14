@@ -215,6 +215,41 @@
       </script>
     </div>
 
+    <h2>The gradient, drawn</h2>
+    <p>autograd does not give one slope, it gives the slope at every input. Here is <code>d/dx x²</code> plotted across x — the straight line <code>2x</code>, read straight from <code>.grad</code>.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        for (let i = 0; i <= 40; i++) {
+          const xv = -2 + i * 0.1;
+          const x = Tensor.from([xv], [], { requiresGrad: true });
+          x.square().backward();
+          plot("d/dx x²", await x.grad.item());
+        }
+        log("a straight line of slope 2 — the derivative of x², at every x");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        for i in range(41):
+            xv = -2 + i * 0.1
+            x = torch.tensor(xv, requires_grad=True)
+            (x ** 2).backward()
+            plot("d/dx x^2", x.grad.item())
+        print("a straight line of slope 2 - the derivative of x^2, at every x")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>Mark a leaf with <code>requiresGrad</code>, build an expression, call <code>backward()</code>, read <code>.grad</code>.</li>
+      <li>Gradients accumulate — zero them (<code>zeroGrad</code>) between steps or they add up.</li>
+      <li><code>noGrad</code> turns tracking off for inference.</li>
+      <li>Backward is synchronous; only reading <code>.grad</code> back is awaited.</li>
+    </ul>
+
     <div class="note-box">
       <strong>Values being right does not prove the graph is connected.</strong>
       An operation can return the correct numbers while quietly dropping the gradient,

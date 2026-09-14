@@ -210,6 +210,41 @@
       </script>
     </div>
 
+    <h2>기울기, 그려보기</h2>
+    <p>autograd 는 기울기 하나가 아니라 모든 입력에서의 기울기를 준다. 여기 <code>d/dx x²</code> 를 x 에 걸쳐 그렸다 — 직선 <code>2x</code>, <code>.grad</code> 에서 바로 읽었다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        for (let i = 0; i <= 40; i++) {
+          const xv = -2 + i * 0.1;
+          const x = Tensor.from([xv], [], { requiresGrad: true });
+          x.square().backward();
+          plot("d/dx x²", await x.grad.item());
+        }
+        log("a straight line of slope 2 — the derivative of x², at every x");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        for i in range(41):
+            xv = -2 + i * 0.1
+            x = torch.tensor(xv, requires_grad=True)
+            (x ** 2).backward()
+            plot("d/dx x^2", x.grad.item())
+        print("a straight line of slope 2 - the derivative of x^2, at every x")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>잎을 <code>requiresGrad</code> 로 표시하고, 식을 세우고, <code>backward()</code> 를 부르고, <code>.grad</code> 를 읽는다.</li>
+      <li>기울기는 누적된다 — 스텝 사이에 <code>zeroGrad</code> 로 비우지 않으면 더해진다.</li>
+      <li><code>noGrad</code> 는 추론을 위해 추적을 끈다.</li>
+      <li>backward 는 동기; <code>.grad</code> 를 읽는 것만 await.</li>
+    </ul>
+
     <div class="note-box">
       <strong>값이 맞는다고 그래프가 이어져 있는 것은 아니다.</strong> 연산이 옳은 수를
       내면서 기울기를 조용히 떨어뜨릴 수 있고, 그때 값만 대조하는 검사는 전부 통과한다.

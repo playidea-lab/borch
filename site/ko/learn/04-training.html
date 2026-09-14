@@ -281,6 +281,56 @@
       </script>
     </div>
 
+    <h2>손실이 떨어지는 것 보기</h2>
+    <p>학습 루프는 매번 같은 네 줄이다: 기울기 0, forward, backward, step. 작은 직선 맞추기에 돌리고 손실을 그려라 — 떨어진다. 그것이 배움의 모습이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const xs = keepAlive(Tensor.from([0, 1, 2, 3], [4, 1]));
+        const ys = keepAlive(xs.mul(Tensor.full([], 3)).add(Tensor.full([], 1)));   // y = 3x + 1
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.SGD(model.parameters(), 0.1);
+        for (let step = 0; step < 60; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = model.call(xs).sub(ys).square().mean();
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+        log("the loss falls toward zero — the model has learned y = 3x + 1");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+        xs = torch.tensor([[0.], [1.], [2.], [3.]])
+        ys = 3 * xs + 1                       # y = 3x + 1
+        model = nn.Linear(1, 1)
+        opt = optim.SGD(model.parameters(), lr=0.1)
+        for step in range(60):
+            with torch.scope():
+                opt.zero_grad()
+                loss = ((model(xs) - ys) ** 2).mean()
+                loss.backward(); opt.step()
+                plot("loss", loss.item())
+        print("the loss falls toward zero - the model has learned y = 3x + 1")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>루프: <code>zeroGrad</code> → forward → loss → <code>backward()</code> → <code>step()</code>, 반복.</li>
+      <li>옵티마이저(<code>SGD</code>·<code>Adam</code>)가 기울기를 갱신으로; 스케줄러가 학습률을 조절.</li>
+      <li>각 스텝을 <code>scope()</code> 로 감싸 중간 텐서를 해제한다.</li>
+      <li>손실이 떨어지면 배우는 중; 평평하거나 오르면 버그(<em>버그 고쳐 보기</em> 참고).</li>
+    </ul>
+
     <div class="note-box">
       <strong>keepAlive 를 까먹는 것이 한동안 조용했다.</strong> 표시 없이 구역 밖으로
       들고 나간 텐서를 읽으면 그 버퍼가 이미 남에게 넘어간 뒤였다 —

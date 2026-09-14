@@ -289,6 +289,56 @@
       </script>
     </div>
 
+    <h2>Watch the loss fall</h2>
+    <p>The training loop is the same four lines every time: zero the gradients, forward, backward, step. Run it on a tiny line-fit and plot the loss — it falls, which is what learning looks like.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const xs = keepAlive(Tensor.from([0, 1, 2, 3], [4, 1]));
+        const ys = keepAlive(xs.mul(Tensor.full([], 3)).add(Tensor.full([], 1)));   // y = 3x + 1
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.SGD(model.parameters(), 0.1);
+        for (let step = 0; step < 60; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = model.call(xs).sub(ys).square().mean();
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+        log("the loss falls toward zero — the model has learned y = 3x + 1");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+        xs = torch.tensor([[0.], [1.], [2.], [3.]])
+        ys = 3 * xs + 1                       # y = 3x + 1
+        model = nn.Linear(1, 1)
+        opt = optim.SGD(model.parameters(), lr=0.1)
+        for step in range(60):
+            with torch.scope():
+                opt.zero_grad()
+                loss = ((model(xs) - ys) ** 2).mean()
+                loss.backward(); opt.step()
+                plot("loss", loss.item())
+        print("the loss falls toward zero - the model has learned y = 3x + 1")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>The loop: <code>zeroGrad</code> → forward → loss → <code>backward()</code> → <code>step()</code>, repeated.</li>
+      <li>Optimisers (<code>SGD</code>, <code>Adam</code>) turn gradients into updates; schedulers adjust the rate.</li>
+      <li>Wrap each step in <code>scope()</code> so its intermediate tensors are freed.</li>
+      <li>A falling loss means it is learning; a flat or rising one is a bug (see <em>Fix the bug</em>).</li>
+    </ul>
+
     <div class="note-box">
       <strong>Forgetting keepAlive used to be silent.</strong> A tensor carried out of a
       scope without being marked was read after its buffer had been handed to something

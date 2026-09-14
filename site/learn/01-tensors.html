@@ -254,6 +254,34 @@
       </script>
     </div>
 
+    <h2>A tensor, drawn</h2>
+    <p>A tensor is just numbers with a shape. Here are 64 of them as an 8×8 grid, drawn straight from the values — brighter is larger. Every image, weight and activation in this book is a grid like this.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const t = Tensor.linspace(0, 1, 64).reshape([8, 8]);
+        log("shape:", JSON.stringify(t.shape));
+        await show(t, { scale: 24 });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        t = torch.linspace(0, 1, 64).reshape(8, 8)
+        print("shape:", tuple(t.shape))
+        show(t, scale=24)
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>A tensor has a shape, a dtype and a device (the GPU).</li>
+      <li>Factories: <code>zeros</code>, <code>ones</code>, <code>arange</code>, <code>randn</code>, <code>eye</code>, <code>linspace</code>.</li>
+      <li>Reading a value crosses back from the GPU, so <code>item()</code> and <code>toArray()</code> are awaited.</li>
+      <li>Elementwise ops broadcast; <code>reshape</code>, <code>transpose</code>, <code>slice</code> give views that share storage.</li>
+    </ul>
+
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on
       this page runs against the same library the tests run against — nothing here is a

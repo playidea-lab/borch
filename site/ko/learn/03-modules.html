@@ -237,6 +237,36 @@
     </div>
 
 
+    <h2>층은 가중치 행렬</h2>
+    <p><code>Linear</code> 층은 학습할 가중치 행렬(과 bias)이다. 여기 초기화 직후의 16×16 하나를 그렸다 — 지금은 무작위·무구조; 구조를 주는 것이 학습이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const layer = new nn.Linear(16, 16);
+        log("weight shape:", JSON.stringify(layer.weight.shape), " · trainable tensors:", layer.parameters().length);
+        await show(layer.weight, { scale: 12 });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+        layer = torch.nn.Linear(16, 16)
+        print("weight shape:", tuple(layer.weight.shape), " · trainable tensors:", len(list(layer.parameters())))
+        show(layer.weight, scale=12)
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>모듈은 파라미터와 <code>forward()</code> 를 묶는다; <code>nn.Linear</code>·<code>nn.Sequential</code> 이 기본.</li>
+      <li><code>parameters()</code> 가 학습 대상을 옵티마이저에 넘긴다.</li>
+      <li>서브클래싱하고 <code>forward()</code> 를 정의해 자기 층을 만든다.</li>
+      <li>손실(MSE·교차 엔트로피)이 출력과 정답을 최소화할 한 수로 바꾼다.</li>
+    </ul>
+
     <div class="pager">
       <a href="02-autograd.html">← 2 · Autograd</a>
       <a href="04-training.html" style="text-align:right">다음<b>4 · 학습</b></a>

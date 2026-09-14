@@ -243,6 +243,36 @@
       </script>
     </div>
 
+    <h2>A layer is a matrix of weights</h2>
+    <p>A <code>Linear</code> layer is a weight matrix (plus a bias) that it will learn. Here is a fresh 16×16 one at initialisation, drawn — random and structureless now; training is what gives it structure.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const layer = new nn.Linear(16, 16);
+        log("weight shape:", JSON.stringify(layer.weight.shape), " · trainable tensors:", layer.parameters().length);
+        await show(layer.weight, { scale: 12 });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+        layer = torch.nn.Linear(16, 16)
+        print("weight shape:", tuple(layer.weight.shape), " · trainable tensors:", len(list(layer.parameters())))
+        show(layer.weight, scale=12)
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>A module bundles parameters with a <code>forward()</code>; <code>nn.Linear</code> and <code>nn.Sequential</code> are the basics.</li>
+      <li><code>parameters()</code> hands the learnables to an optimiser.</li>
+      <li>Write your own layer by subclassing and defining <code>forward()</code>.</li>
+      <li>A loss (MSE, cross-entropy) turns outputs and targets into the one number to minimise.</li>
+    </ul>
+
     <div class="pager">
       <a href="02-autograd.html">← 2 · Autograd</a>
       <a href="04-training.html" style="text-align:right">Next<b>4 · Training</b></a>
