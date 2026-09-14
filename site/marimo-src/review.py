@@ -163,18 +163,13 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
         how = f"U-Net (width 16) from scratch at {ds.size} px · {EPOCHS} epochs × {steps} steps"
         headline = f"{how} in **{time.perf_counter() - t0:.1f} s** · loss {losses[0]:.3f} → {losses[-1]:.3f} · mean IoU with the given masks **{acc:.2f}**"
     elif torch is None:
-        # No adapter: the same frozen backbone through `bimm.cpuGraphFor` + `cpu.CpuRunner`,
-        # the same head through `cpu.LinearHead` — full-batch SGD with momentum (there is
-        # no Adam on this side; the numbers land within 3.5e-5 of torch's step for step).
-        backbone = cpu.load("imagenet-efficientnet-b0", features=True)
-        chunks = [backbone.features(xb) for xb, _idx in ds.batches(16)]
-        feats = np.concatenate(chunks)                     # (N, 1280)
-        feat_s = time.perf_counter() - t0
-        head = cpu.LinearHead(backbone.num_features, K, lr=0.05, momentum=0.9)
-        all_losses = head.fit(feats, y, steps=300)
-        losses = [float(all_losses[i]) for i in list(range(0, 300, 50)) + [299]]
-        pred = head.predict(feats).argmax(1)
-        model = None                                       # nothing to export as ONNX on this side — the head's weights are in `head`
+        # No adapter: the same recipe through the same call. `workbench` asks the surface
+        # what it can do — this door has a frozen forward and a head that fits itself, and
+        # no autograd — and prepares the photographs the way the manifest asks.
+        s = cpu.workbench.setup(ds, backbone="imagenet-efficientnet-b0", epochs=300).fit()
+        feats, pred, losses = s.features, s.predicted, s.losses
+        head, model = s.head, None                         # the head's weights go on; there is no graph to export
+        feat_s = s.seconds
         how = f"EfficientNet-B0 frozen, on the CPU · features for {N} images in **{feat_s:.1f} s** · head 300 steps"
     elif path.value == FROZEN:
         # **The recipe is the library's now.** `workbench.setup` carries every setting in

@@ -64,11 +64,38 @@ class Session:
     so by being absent rather than by being zero.
     """
 
-    def __init__(self, torch, files, *, size=None, batch=16, epochs=12, lr=1e-3,
-                 optimizer="adam", backbone=None, val=0.0, seed=0, k=None,
+    def __init__(self, torch, files, *, size=None, batch=16, epochs=12, lr=None,
+                 optimizer=None, backbone=None, val=0.0, seed=0, k=None,
                  label=label_from_name):
+        # **The CPU door is a different library, not a slower one.** `borch_cpu` has no
+        # `nn`, no `optim` and no autograd: what it has is a frozen backbone's forward and
+        # a linear head that fits itself. So the surface is asked what it can do rather
+        # than what it is called, and a caller who wants the other path is told which door
+        # they are at instead of meeting `module has no attribute 'nn'` inside the loop.
+        eager = hasattr(torch, "nn") and hasattr(torch, "optim")
+        cpu_door = hasattr(torch, "LinearHead")
+        if optimizer is None:
+            optimizer = "adam" if eager else "sgd"
+        if lr is None:
+            lr = 1e-3 if eager else 0.05
         if optimizer not in _OPTIMIZERS:
             raise ValueError(f"workbench: optimizer {optimizer!r} is not one of {list(_OPTIMIZERS)}")
+        if cpu_door and not eager:
+            if backbone is None:
+                raise ValueError(
+                    f"workbench: {torch.__name__} trains a linear head on a frozen backbone and "
+                    "nothing else — there is no autograd on this door. Name a backbone, or use "
+                    "borch_webgpu (a tab with an adapter) for a model of your own.")
+            if optimizer != "sgd":
+                raise ValueError(
+                    f"workbench: {torch.__name__}'s head fits with SGD and momentum; "
+                    f"optimizer={optimizer!r} is not on this door.")
+        self._eager = eager
+        self._cpu_head = None
+        if not eager and not cpu_door:
+            raise ValueError(
+                f"workbench: {torch.__name__} offers neither nn/optim nor a LinearHead — "
+                "there is nothing here to train with.")
         if not 0.0 <= val < 1.0:
             raise ValueError(f"workbench: val must be in [0, 1), not {val!r}")
         if epochs < 1 or batch < 1:
@@ -83,7 +110,10 @@ class Session:
                 f"workbench: backbone={backbone!r} prepares its own images the way its "
                 f"weights were trained, and size={size} asks for something else. Leave "
                 "size out with a backbone, or leave the backbone out to choose the size.")
-        if backbone is not None and not hasattr(torch, "hub"):
+        # **`load` is not the name to ask for.** The numpy core has `torch.load` and it
+        # reads a checkpoint; the CPU door's is a backbone. `LinearHead` belongs to that
+        # door alone, so it is the one that says which door this is.
+        if backbone is not None and not (hasattr(torch, "hub") or hasattr(torch, "LinearHead")):
             # **Said here rather than at the first batch.** The numpy core has no hub, so a
             # backbone asked for there can never arrive; the surface is named so the reader
             # knows which door they are at.
@@ -139,13 +169,20 @@ class Session:
         was named at setup.
         """
         torch, cfg = self.torch, self.config
-        torch.manual_seed(cfg["seed"])
+        if self._eager:
+            torch.manual_seed(cfg["seed"])
         classes = len(self.data.classes)
         started = time.perf_counter()
         train_rows, scored_rows = self._split()
         y_all = self.data.targets
 
-        if cfg["backbone"] is not None and model is None:
+        if not self._eager:
+            if model is not None:
+                raise ValueError(
+                    f"workbench: {torch.__name__} cannot train a model of your own — there is "
+                    "no autograd on this door. It fits a linear head on a frozen backbone.")
+            self._fit_head_cpu(classes, train_rows, y_all)
+        elif cfg["backbone"] is not None and model is None:
             self._fit_head(classes, train_rows, y_all)
         else:
             mine = model is not None
@@ -279,9 +316,33 @@ class Session:
         self.model.eval()
         self.how = f"{cfg['backbone']} frozen · head {cfg['epochs']} steps"
 
+    # -- the CPU door: a frozen forward and a head that fits itself ---------------
+    def _fit_head_cpu(self, classes, train_rows, y_all):
+        torch, cfg = self.torch, self.config
+        net = torch.load(cfg["backbone"], features=True)
+        from ._preprocess import transform_for                # noqa: PLC0415
+
+        transform = transform_for((net.manifest or {}).get("preprocess"))
+        self.config["size"] = int(net.input_size[1])
+        chunks = [net.features(xb) for xb, _idx in self._prepared(transform, cfg["batch"])]
+        self.features = _np.concatenate(chunks)
+        # `epochs` is steps here: the head sees every cached feature at once, so an epoch
+        # and a step are the same thing — as they are on the other door's frozen path.
+        # **`head` is the thing that learned, whichever door this is.** On the other one it
+        # is an `nn.Linear`; here it is a `LinearHead` that fits itself. A caller that
+        # hands the head on — the workbench page exports its weights — should not have to
+        # ask which kind it got.
+        self._cpu_head = self.head = torch.LinearHead(net.num_features, classes, lr=cfg["lr"], momentum=0.9)
+        every = self._cpu_head.fit(self.features[train_rows], y_all[train_rows], steps=cfg["epochs"])
+        marks = _np.linspace(0, len(every) - 1, min(len(every), 6)).astype(int)
+        self.losses = [float(every[i]) for i in marks]
+        self.how = f"{cfg['backbone']} frozen, on the CPU · head {cfg['epochs']} steps"
+
     # -- what came out -----------------------------------------------------------
     def _predict(self):
         torch = self.torch
+        if self._cpu_head is not None:
+            return self._cpu_head.predict(self.features).argmax(1)
         with torch.no_grad():
             if self.head is not None:
                 logits = self.head(torch.tensor(self.features)).numpy()
@@ -305,6 +366,10 @@ class Session:
 
     def onnx(self):
         """The trained model as ONNX bytes. Needs a surface with an exporter."""
+        if self._cpu_head is not None:
+            raise RuntimeError(
+                f"workbench: {self.torch.__name__} has the head's weights and no graph to "
+                "export — read them with `state_dict()`, or train on a door with an exporter.")
         if self.model is None:
             raise RuntimeError("workbench: call fit() before exporting")
         exporter = getattr(self.torch, "onnx", None)
