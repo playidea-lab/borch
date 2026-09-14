@@ -55,7 +55,8 @@ import pathlib as _pathlib
 import numpy as _np
 
 from borch._data import ImageFiles, decode_images, label_from_name, suspects  # noqa: F401 — the files, the decoder and the review score: the numpy core's, no device needed
-from borch._workbench import Session as _Session  # the workbench's recipe: the core's, no device needed
+from borch._workbench import Session as _Session
+from borch._workbench import interval, resolution, say  # noqa: F401 — the board's own words  # the workbench's recipe: the core's, no device needed
 
 try:
     import js as _js

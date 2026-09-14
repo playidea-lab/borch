@@ -8,6 +8,7 @@ refuses for by name. The import is inside the call because this module is import
 
 from borch._workbench import Session                     # noqa: F401 — re-exported below
 from borch._workbench import candidates as _candidates, compare as _compare, pick as _pick
+from borch._workbench import interval, resolution, say   # noqa: F401 — read as they are
 
 
 def setup(files, **config):

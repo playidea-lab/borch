@@ -292,6 +292,7 @@ class _FakeSession:
         self.config.setdefault("size", 224)
         self.accuracy = self.scores.get(config["backbone"], 0.5)
         self.measured_on = "held-out"
+        self.held_out = 100
         self.seconds = 1.0
         self.features = np.zeros((4, 8), dtype=np.float32)
 
@@ -383,3 +384,55 @@ def test_a_candidate_that_refuses_is_kept_in_the_rows_rather_than_dropped(monkey
     assert [r["name"] for r in rows] == ["small", "large"]
     assert "error" in rows[0] and "3x32x32" in rows[0]["error"]
     assert rows[1]["accuracy"] == 0.8
+
+
+# -- what a short board can and cannot say ------------------------------------------
+
+def test_the_interval_is_wider_than_the_gaps_this_workbench_measured():
+    """**The board it produced over CIFAR-10 does not rank anything**, and this says so.
+
+    0.720, 0.670 and 0.760 on a hundred held-out rows: nine points apart, against an
+    interval of about eight and a half on each one and a resolution of twelve between two
+    of them. Ordering those three by accuracy is ordering the split.
+    """
+    from borch._workbench import interval, resolution
+
+    assert 0.08 < interval(0.75, 100) < 0.09
+    assert 0.11 < resolution(100) < 0.13
+    assert resolution(100) > (0.760 - 0.670), "the measured spread is inside the noise"
+    # More rows, a finer instrument.
+    assert resolution(1000) < resolution(100) < resolution(50)
+    assert 0.03 < resolution(1000) < 0.04
+
+
+def test_a_board_within_the_resolution_is_marked_as_one_answer(monkeypatch, files):
+    import types
+
+    from borch._workbench import compare
+
+    _with_fake_sessions(monkeypatch, {"small": 0.72, "large": 0.76})
+    rows = compare(types.SimpleNamespace(hub=_FakeHub), files, budget_mb=60, val=0.25)
+    assert all(r["ties_with_best"] for r in rows), \
+        "four points apart on a handful of rows is not a ranking"
+
+
+def test_a_board_that_is_far_apart_is_not_marked_as_tied(monkeypatch, files):
+    import types
+
+    from borch._workbench import compare
+
+    _with_fake_sessions(monkeypatch, {"small": 0.20, "large": 0.95})
+    rows = compare(types.SimpleNamespace(hub=_FakeHub), files, budget_mb=60, val=0.25)
+    by = {r["name"]: r for r in rows}
+    assert by["large"]["ties_with_best"] and not by["small"]["ties_with_best"]
+
+
+def test_the_board_says_out_loud_what_it_cannot_separate(monkeypatch, files):
+    import types
+
+    from borch._workbench import compare, say
+
+    _with_fake_sessions(monkeypatch, {"small": 0.72, "large": 0.76})
+    text = say(compare(types.SimpleNamespace(hub=_FakeHub), files, budget_mb=60, val=0.25))
+    assert "points apart and no closer" in text
+    assert "does not rank" in text and "take the smallest" in text

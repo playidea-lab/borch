@@ -147,6 +147,10 @@ class Session:
         self.model = self.head = self._sample = None
         self.losses = self.features = self.predicted = None
         self.accuracy = self.measured_on = self.seconds = self.how = None
+        # How many rows the accuracy was measured on. **A number without its denominator
+        # is not a measurement**, and a board built from these has to say how finely it
+        # can separate anything (see `resolution`).
+        self.held_out = None
 
     # -- the split ---------------------------------------------------------------
     def _split(self):
@@ -193,6 +197,7 @@ class Session:
         self.seconds = time.perf_counter() - started
         self.predicted = self._predict()
         self.accuracy = float((self.predicted[scored_rows] == y_all[scored_rows]).mean())
+        self.held_out = int(len(scored_rows))
         self.measured_on = "held-out" if cfg["val"] > 0 else "the training images"
         return self
 
@@ -441,6 +446,35 @@ def candidates(torch, budget_mb=60, task="image-classification"):
     return sorted(out, key=lambda r: r.get("bytes", 0))
 
 
+# 1.96 standard errors — the ordinary ninety-five per cent.
+_CONFIDENT = 1.96
+
+
+def interval(accuracy, held_out):
+    """How far an accuracy measured on `held_out` rows could be from the truth, in points.
+
+    A share measured on a sample carries `sqrt(p(1-p)/n)` of standard error, and at a
+    hundred rows that is eight and a half points at ninety-five per cent. The workbench's
+    own board over CIFAR-10 read 0.720, 0.670 and 0.760 on a hundred held-out rows — nine
+    points apart, which is **less than the width of any one of them.**
+    """
+    if held_out <= 0:
+        return 1.0
+    p = min(max(float(accuracy), 0.0), 1.0)
+    return _CONFIDENT * ((p * (1.0 - p) / held_out) ** 0.5)
+
+
+def resolution(held_out, around=0.75):
+    """The smallest difference two models have to show before it is more than the split.
+
+    Two independent estimates, so the difference carries `sqrt(2)` times one interval:
+    seventeen points at fifty rows, twelve at a hundred, five at five hundred. **A board
+    whose spread is under this is a board of one answer**, and saying otherwise ranks the
+    rows the split happened to hand out.
+    """
+    return (2.0 ** 0.5) * interval(around, held_out)
+
+
 def compare(torch, files, *, budget_mb=60, val=0.2, seed=0, stop_at=None, **config):
     """Train the same head on each backbone under the budget; return the rows, best first.
 
@@ -463,7 +497,8 @@ def compare(torch, files, *, budget_mb=60, val=0.2, seed=0, stop_at=None, **conf
         got = {"name": row["name"], "mb": round(row.get("bytes", 0) / 1e6, 1)}
         try:
             s = Session(torch, files, backbone=row["name"], val=val, seed=seed, **config).fit()
-            got.update(accuracy=s.accuracy, measured_on=s.measured_on,
+            got.update(accuracy=s.accuracy, measured_on=s.measured_on, held_out=s.held_out,
+                       interval=round(interval(s.accuracy, s.held_out), 4),
                        seconds=round(s.seconds, 1), features=int(s.features.shape[1]),
                        size=s.config["size"])
         except Exception as e:                                   # noqa: BLE001
@@ -473,6 +508,25 @@ def compare(torch, files, *, budget_mb=60, val=0.2, seed=0, stop_at=None, **conf
         rows.append(got)
         if stop_at is not None and got.get("accuracy", -1.0) >= stop_at:
             break
+    return _mark_ties(rows)
+
+
+def _mark_ties(rows):
+    """Say which rows the evidence cannot separate from the best one.
+
+    **A leaderboard is a claim, and a short one cannot support it.** Every row that sits
+    within the resolution of the leader carries `ties_with_best`, so a reader ordering by
+    accuracy can see that the order is not the finding. The smallest of a tie is the one
+    worth taking, which is what `pick` does by trying them in that order.
+    """
+    scored = [r for r in rows if "accuracy" in r]
+    if not scored:
+        return rows
+    best = max(r["accuracy"] for r in scored)
+    for r in scored:
+        gap = resolution(r.get("held_out", 0))
+        r["ties_with_best"] = bool(best - r["accuracy"] < gap)
+        r["resolution"] = round(gap, 4)
     return rows
 
 
@@ -491,3 +545,24 @@ def pick(torch, files, *, at_least=0.9, budget_mb=60, val=0.2, seed=0, **config)
                    stop_at=at_least, **config)
     cleared = [r for r in rows if r.get("accuracy", -1.0) >= at_least]
     return (cleared[-1]["name"] if cleared else None), rows
+
+
+def say(rows):
+    """The board as lines a person reads, with what the evidence can and cannot say."""
+    out = []
+    scored = [r for r in rows if "accuracy" in r]
+    for r in rows:
+        if "error" in r:
+            out.append(f"  {r['name']:32s} {r['mb']:6.1f} MB   refused: {r['error'][:60]}")
+            continue
+        tie = "  = best" if r.get("ties_with_best") else ""
+        out.append(f"  {r['name']:32s} {r['mb']:6.1f} MB   {r['accuracy']:.3f}"
+                   f" ± {r['interval'] * 100:.0f} points on {r['held_out']} held out{tie}")
+    if scored:
+        gap = resolution(scored[0].get("held_out", 0))
+        tied = [r["name"] for r in scored if r.get("ties_with_best")]
+        out.append(f"  {scored[0].get('held_out', 0)} held-out rows separate models"
+                   f" {gap * 100:.0f} points apart and no closer")
+        if len(tied) > 1:
+            out.append(f"  this board does not rank {len(tied)} of them — take the smallest")
+    return "\n".join(out)
