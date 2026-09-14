@@ -35,7 +35,9 @@ export async function drawTensor(tensor, options = {}) {
     throw new Error(t("draw.channels", c));
   }
 
-  const values = await tensor.toArray();
+  // borch.ts tensors read back with toArray(); a core (numpy) tensor arrives from the
+  // Python path already unpacked as a plain { data, shape } (see runner.js show).
+  const values = tensor.toArray ? await tensor.toArray() : tensor.data;
   const count = Math.min(n, max);
   // How many per row. It wraps once the row grows too long.
   const cols = Math.min(count, Math.max(1, Math.floor(width / (w * scale + 4))));

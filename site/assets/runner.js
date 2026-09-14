@@ -488,7 +488,14 @@ def show(tensor, **options):
     # the curve-fitting tutorial's Python tab. The options cross as a real JS object for
     # the same reason: the drawer JSON-copies them, and a proxy copies to nothing.
     from pyodide.ffi import to_js as _to_js
-    handle = getattr(tensor, "_h", tensor)
+    handle = getattr(tensor, "_h", None)
+    if handle is None:
+        # A core (numpy) tensor has no borch.ts .toArray, so the drawer cannot read it the
+        # borch.ts way. Extract the values here — where we know it is a core tensor — and
+        # hand the drawer a plain { data, shape } instead. An adapter-less visitor reaches
+        # show() through the core (not borch.ts), and no_webgpu_page presses that path.
+        handle = _to_js({"data": tensor.reshape(-1).tolist(), "shape": list(tensor.shape)},
+                        dict_converter=_js.Object.fromEntries)
     return _js.borchPG.show(handle, _to_js(options, dict_converter=_js.Object.fromEntries))
 
 def stopped():
