@@ -64,7 +64,7 @@ class Session:
     so by being absent rather than by being zero.
     """
 
-    def __init__(self, torch, files, *, size=64, batch=16, epochs=12, lr=1e-3,
+    def __init__(self, torch, files, *, size=None, batch=16, epochs=12, lr=1e-3,
                  optimizer="adam", backbone=None, val=0.0, seed=0, k=None,
                  label=label_from_name):
         if optimizer not in _OPTIMIZERS:
@@ -73,6 +73,16 @@ class Session:
             raise ValueError(f"workbench: val must be in [0, 1), not {val!r}")
         if epochs < 1 or batch < 1:
             raise ValueError("workbench: epochs and batch are at least 1")
+        # **A backbone brings its own size, so asking for one here is a contradiction.**
+        # The manifest says what its weights were trained on — 224 for most of the
+        # registry, 448 for EfficientNet-B5 — and measured, feeding one a 64px square
+        # without normalising costs 63 points of top-1 (tests/browser/preprocess_cost.py).
+        # `size` is the from-scratch path's, where there is nothing to disagree with.
+        if backbone is not None and size is not None:
+            raise ValueError(
+                f"workbench: backbone={backbone!r} prepares its own images the way its "
+                f"weights were trained, and size={size} asks for something else. Leave "
+                "size out with a backbone, or leave the backbone out to choose the size.")
         if backbone is not None and not hasattr(torch, "hub"):
             # **Said here rather than at the first batch.** The numpy core has no hub, so a
             # backbone asked for there can never arrive; the surface is named so the reader
@@ -89,20 +99,21 @@ class Session:
         # two module paths in some runs, and then `isinstance` says no to the very object
         # this branch is for. `suspects` reads its inputs the same way.
         if all(hasattr(files, name) for name in ("stack", "batches", "targets", "classes", "size")):
-            if size != files.size and size != 64:
+            if size is not None and size != files.size:
                 raise ValueError(
                     f"workbench: the set was decoded at {files.size} px and size={size} was asked "
                     "for — make a new ImageFiles at that size, or leave size out.")
             self.data, size = files, files.size
         else:
-            self.data = ImageFiles(files, size=size, label=label)
+            self.data = ImageFiles(files, size=64 if size is None else size, label=label)
+            size = self.data.size
         self.config = {
             "size": int(size), "batch": int(batch), "epochs": int(epochs), "lr": float(lr),
             "optimizer": optimizer, "backbone": backbone, "val": float(val), "seed": int(seed),
             "images": len(self.data), "classes": list(self.data.classes),
         }
         self.k = k
-        self.model = self.head = None
+        self.model = self.head = self._sample = None
         self.losses = self.features = self.predicted = None
         self.accuracy = self.measured_on = self.seconds = self.how = None
 
@@ -212,15 +223,37 @@ class Session:
                     f"{cfg['epochs']} epochs × {self._steps(train_rows)} steps")
 
     # -- path two: a frozen backbone, and only the head learns -------------------
+    def _prepared(self, transform, batch):
+        """The photographs, prepared the way this backbone's weights were trained.
+
+        **From the originals, not from what this set decoded.** `ImageFiles` hands back a
+        square at its own size; the manifest asks for its own resize and centre crop, and
+        running that over an already-squashed square is two resizes of which neither is
+        the one that was measured.
+        """
+        for start in range(0, len(self.data), batch):
+            idx = _np.arange(start, min(start + batch, len(self.data)))
+            yield _np.stack([transform(self.data.raw(int(i))) for i in idx]), idx
+
     def _fit_head(self, classes, train_rows, y_all):
         torch, cfg = self.torch, self.config
         net = torch.hub.load(cfg["backbone"])
+        transform = getattr(net, "transform", None)
+        if transform is None:
+            raise RuntimeError(
+                f"workbench: {cfg['backbone']} arrived without the preparation its weights "
+                "were trained under — `hub.load` attaches it as `.transform`, and an older "
+                "wheel does not. Feeding it something else is worth up to sixty points.")
+        self.config["size"] = int(net.manifest["preprocess"]["inputSize"][1])
         chunks = []
         with torch.no_grad():
-            for xb, _idx in self.data.batches(cfg["batch"]):
+            for xb, _idx in self._prepared(transform, cfg["batch"]):
                 chunks.append(net.forward_head(net.forward_features(torch.tensor(xb)),
                                                pre_logits=True).numpy())
         self.features = _np.concatenate(chunks)
+        # One prepared photograph, kept for the export: the composed net takes the
+        # manifest's size, not this set's.
+        self._sample = next(iter(self._prepared(transform, 1)))[0]
         self.head = torch.nn.Linear(net.num_features, classes)
         ft = torch.tensor(self.features[train_rows])
         ys = torch.tensor(y_all[train_rows])
@@ -278,7 +311,9 @@ class Session:
         if exporter is None:
             raise RuntimeError(
                 f"workbench: {self.torch.__name__} has no ONNX exporter; borch_webgpu does.")
-        return exporter.export(self.model, self.torch.tensor(self.data.stack()[:1]))
+        # The frozen net takes the manifest's size; the from-scratch one takes this set's.
+        sample = self._sample if self._sample is not None else self.data.stack()[:1]
+        return exporter.export(self.model, self.torch.tensor(sample))
 
     def facts(self):
         """The settings and the result, flat — what `torch.report(**facts)` could not know."""

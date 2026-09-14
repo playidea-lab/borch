@@ -651,6 +651,20 @@ class ImageFiles:
         x = self._decode(i).transpose(2, 0, 1).astype(_np.float32) / 255.0
         return x, int(self.targets[i])
 
+    def raw(self, i):
+        """The image as it arrived — no resize, no scaling.
+
+        **A transform that does its own geometry needs the photograph, not a square.**
+        Everything else here hands back `size x size` because that is what a training loop
+        wants; a pretrained backbone's manifest asks for its own resize and centre crop,
+        and giving it an image this class has already squashed applies two resizes and
+        neither is the one the weights were trained under.
+        """
+        import io
+
+        Image = self._image_module()
+        return Image.open(io.BytesIO(self._items[i][1])).convert("RGB")
+
     def thumb(self, i, size=56):
         """One image as `(size, size, 3)` uint8 — a thumbnail for a review table."""
         return self._decode(i, size)
