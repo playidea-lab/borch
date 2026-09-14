@@ -14,6 +14,7 @@ Pick by where the code runs: Python on a machine → `borch`; Pyodide/JupyterLit
 - [docs/BOOK.md](https://playidea-lab.github.io/borch/docs/BOOK.md): installing and naming, the design principle, how the values are guaranteed, the supported range, borch.ts and its six differences from torch, the binding, the `cpu` device, what is deliberately not supported, conformance
 - [BORCH-TS.md](https://playidea-lab.github.io/borch/BORCH-TS.md): the TypeScript runtime on its own
 - [ROADMAP.md](https://playidea-lab.github.io/borch/ROADMAP.md): what conformance means here, and what will not be done
+- [docs/curriculum.md](https://playidea-lab.github.io/borch/docs/curriculum.md): how the learning tree is organised — the `curriculum.json` manifest, where lessons live, the checklist for adding one, and the verdict conventions
 
 ## Reference
 
