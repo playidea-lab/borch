@@ -261,6 +261,59 @@
       </script>
     </div>
 
+    <h2>Adam 이 수렴하는 것 보기</h2>
+    <p>위 비교는 수 둘을 줬고, 여기는 곡선이다. 평범한 SGD 가 기기만 하던 그 나쁜-조건수 문제에서 Adam 은 손실을 끌어내린다 — 파라미터별 학습률이 그 차이를 눈에 보이게 한다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const raw = keepAlive(Tensor.randn([64, 4]));
+        const scale = keepAlive(Tensor.from([1, 1, 1, 30], [1, 4]));   // one feature 30x bigger
+        const x = keepAlive(raw.mul(scale));
+        const y = keepAlive(x.linear(keepAlive(Tensor.randn([1, 4]))));
+        const model = new nn.Linear(4, 1);
+        const opt = new optim.Adam(model.parameters(), 0.1);
+        for (let step = 0; step < 100; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = model.call(x).sub(y).square().mean();
+            loss.backward(); opt.step();
+            plot("Adam loss", await loss.item());
+          });
+        }
+        log("Adam drives the loss down on the same 30x-scaled problem where plain SGD crawled");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+        raw = torch.randn(64, 4)
+        scale = torch.tensor([[1., 1., 1., 30.]])          # one feature 30x bigger
+        x = raw * scale
+        y = x @ torch.randn(1, 4).t()
+        model = nn.Linear(4, 1)
+        opt = optim.Adam(model.parameters(), lr=0.1)
+        for step in range(100):
+            with torch.scope():
+                opt.zero_grad()
+                loss = ((model(x) - y) ** 2).mean()
+                loss.backward(); opt.step()
+                plot("Adam loss", loss.item())
+        print("Adam drives the loss down on the same 30x-scaled problem where plain SGD crawled")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>Adam 은 파라미터마다 이동평균 둘 — 기울기와 그 제곱 — 을 들고 그 비율로 스텝을 밟는다.</li>
+      <li>그래서 각 파라미터가 자기 실효 학습률을 갖고, 나쁜-조건수 문제에서 SGD 가 길 때 수렴한다.</li>
+      <li><code>betas</code>(<code>[0.9, 0.999]</code>)는 두 평균의 감쇠; 기본값을 바꿀 일은 드물다.</li>
+      <li>Adam 은 자기 스텝을 정규화하므로 SGD 보다 넓은 학습률을 견딘다.</li>
+    </ul>
+
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
       테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을

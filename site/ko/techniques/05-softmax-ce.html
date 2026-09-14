@@ -165,6 +165,38 @@
       </script>
     </div>
 
+    <h2>분포, 그려보기</h2>
+    <p>다섯 원점수가 다섯 확률이 되어 띠로 그려진다 — 밝을수록 확률이 크고, 다섯의 합은 1 이다. 분류기 출력이 늘 취하는 모양이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const logits = Tensor.from([1, 3, 0, 2, 0.5], [1, 5]);
+        const probs = logits.softmax(1);
+        log("probabilities:", Array.from(await probs.toArray()).map((v) => v.toFixed(2)).join(" "));
+        await show(probs, { scale: 40 });
+        log("brighter = more probable — softmax turns scores into a distribution that sums to 1");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        logits = torch.tensor([[1., 3., 0., 2., 0.5]])
+        probs = torch.softmax(logits, 1)
+        print("probabilities:", " ".join(f"{v:.2f}" for v in probs[0].tolist()))
+        show(probs, scale=40)
+        print("brighter = more probable - softmax turns scores into a distribution that sums to 1")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>logit 은 원점수; <code>softmax</code> 가 합이 1 인 분포로 바꾼다.</li>
+      <li>원-핫 라벨의 교차 엔트로피는 정답 클래스의 <code>−log(p)</code> — 모델이 확신하고 맞을 때 작다.</li>
+      <li>softmax 와 교차 엔트로피가 함께 거의 모든 분류기를 학습시킨다.</li>
+      <li>borch 에서는 <code>logits.softmax(dim)</code>; 학습 땐 logit 을 교차 엔트로피에 바로 넣는 게 수치적으로 안정적이다.</li>
+    </ul>
+
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
       테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을

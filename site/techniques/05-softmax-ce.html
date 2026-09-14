@@ -167,6 +167,38 @@
       </script>
     </div>
 
+    <h2>The distribution, drawn</h2>
+    <p>Five raw scores become five probabilities, drawn as a strip — brighter is more likely, and the five sum to 1. This is the shape a classifier's output always takes.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const logits = Tensor.from([1, 3, 0, 2, 0.5], [1, 5]);
+        const probs = logits.softmax(1);
+        log("probabilities:", Array.from(await probs.toArray()).map((v) => v.toFixed(2)).join(" "));
+        await show(probs, { scale: 40 });
+        log("brighter = more probable — softmax turns scores into a distribution that sums to 1");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        logits = torch.tensor([[1., 3., 0., 2., 0.5]])
+        probs = torch.softmax(logits, 1)
+        print("probabilities:", " ".join(f"{v:.2f}" for v in probs[0].tolist()))
+        show(probs, scale=40)
+        print("brighter = more probable - softmax turns scores into a distribution that sums to 1")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>Logits are raw scores; <code>softmax</code> turns them into a distribution that sums to 1.</li>
+      <li>Cross-entropy for a one-hot label is <code>−log(p)</code> of the true class — low when the model is confident and right.</li>
+      <li>Together, softmax and cross-entropy are how nearly every classifier is trained.</li>
+      <li>In borch: <code>logits.softmax(dim)</code>; for training, feeding logits to cross-entropy directly is the numerically stable path.</li>
+    </ul>
+
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on
       this page runs against the same library the tests run against — nothing here is a

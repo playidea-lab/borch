@@ -264,6 +264,59 @@
       </script>
     </div>
 
+    <h2>Watch Adam converge</h2>
+    <p>The comparison above gave two numbers; here is the curve. Adam drives the loss down on the same ill-conditioned problem where plain SGD only crawled — its per-parameter rate is what makes the difference visible.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const raw = keepAlive(Tensor.randn([64, 4]));
+        const scale = keepAlive(Tensor.from([1, 1, 1, 30], [1, 4]));   // one feature 30x bigger
+        const x = keepAlive(raw.mul(scale));
+        const y = keepAlive(x.linear(keepAlive(Tensor.randn([1, 4]))));
+        const model = new nn.Linear(4, 1);
+        const opt = new optim.Adam(model.parameters(), 0.1);
+        for (let step = 0; step < 100; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = model.call(x).sub(y).square().mean();
+            loss.backward(); opt.step();
+            plot("Adam loss", await loss.item());
+          });
+        }
+        log("Adam drives the loss down on the same 30x-scaled problem where plain SGD crawled");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+        raw = torch.randn(64, 4)
+        scale = torch.tensor([[1., 1., 1., 30.]])          # one feature 30x bigger
+        x = raw * scale
+        y = x @ torch.randn(1, 4).t()
+        model = nn.Linear(4, 1)
+        opt = optim.Adam(model.parameters(), lr=0.1)
+        for step in range(100):
+            with torch.scope():
+                opt.zero_grad()
+                loss = ((model(x) - y) ** 2).mean()
+                loss.backward(); opt.step()
+                plot("Adam loss", loss.item())
+        print("Adam drives the loss down on the same 30x-scaled problem where plain SGD crawled")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>Adam keeps two running averages per parameter — the gradient and its square — and steps by their ratio.</li>
+      <li>That gives each parameter its own effective rate, so it converges where SGD crawls on ill-conditioned problems.</li>
+      <li><code>betas</code> (<code>[0.9, 0.999]</code>) are the averages' decay; the defaults rarely need changing.</li>
+      <li>Adam normalises its own steps, so it tolerates a wider learning rate than SGD.</li>
+    </ul>
+
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on
       this page runs against the same library the tests run against — nothing here is a
