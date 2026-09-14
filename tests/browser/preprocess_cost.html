@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>what wrong preprocessing costs a pretrained backbone</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // The wheel in a worker — the workbench's own door. `borch_webgpu` carries borch.ts and
+  // borch-hub in its bundle, so the manifest and the weights come from the same place the
+  // workbench gets them, not from a CDN this test would then depend on.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        await py.loadPackage("numpy");
+        await py.loadPackage("pillow");
+        await py.loadPackage(${JSON.stringify(origin + q.get("wheel"))});
+        say("wheel and Pillow in");
+        const text = await py.runPythonAsync(\`
+import io, json, time
+import numpy as np
+import js
+from pyodide.ffi import run_sync
+from PIL import Image
+import borch_webgpu as torch
+
+origin = ${JSON.stringify(origin)}
+LIMIT = ${parseInt(q.get("limit") || "1000")}
+BATCH = ${parseInt(q.get("batch") || "16")}
+
+def log(line):
+    js.postMessage(str(line))
+
+
+def get(path, binary=False):
+    r = run_sync(js.fetch(origin + path))
+    if not r.ok:
+        raise RuntimeError(f"{r.status} {path}")
+    return bytes(run_sync(r.arrayBuffer()).to_py()) if binary else str(run_sync(r.text()))
+
+BASE = "/tests/browser/.cache/imagenetv2-1perclass/"
+index = json.loads(get(BASE + "index.json"))["images"][:LIMIT]
+log(f"{len(index)} photographs, one per class")
+
+# **The adapter is named before any work.** A software one answers with the same numbers
+# and takes hours: the first run of this took thirty minutes on SwiftShader and produced
+# nothing. The runner stops on this line rather than after five conditions.
+js.postMessage(js.JSON.parse(json.dumps({"adapter": str(js.borch.Device.adapterInfo)})))
+model = torch.hub.load("imagenet-efficientnet-b0")
+pre = model.manifest["preprocess"]
+log("manifest asks for " + json.dumps(pre))
+
+t_decode = time.perf_counter()
+RAW = [Image.open(io.BytesIO(get(BASE + row["file"], True))).convert("RGB") for row in index]
+truth = np.array([row["class"] for row in index], dtype=np.int64)
+log(f"fetched and decoded in {time.perf_counter() - t_decode:.1f} s")
+
+MEAN = np.array(pre["mean"], dtype=np.float32).reshape(3, 1, 1)
+STD = np.array(pre["std"], dtype=np.float32).reshape(3, 1, 1)
+SIDE = int(pre["inputSize"][1])
+BICUBIC = Image.BICUBIC
+
+def to_chw(img):
+    return np.asarray(img, dtype=np.float32).transpose(2, 0, 1) / 255.0
+
+def square(img, side):
+    """What the workbench does today: one resize to a square, aspect thrown away."""
+    return to_chw(img.resize((side, side), BICUBIC))
+
+def short_side_then_crop(img, short, crop):
+    # **No backticks in this Python.** It sits inside a JS template literal, and one of
+    # them closes it — the page then fails to parse and nothing runs at all.
+    """What the manifest asks for: the short side scaled, then the middle cropped."""
+    w, h = img.size
+    scale = short / min(w, h)
+    img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))), BICUBIC)
+    w, h = img.size
+    left, top = (w - crop) // 2, (h - crop) // 2
+    return to_chw(img.crop((left, top, left + crop, top + crop)))
+
+def norm(x):
+    return (x - MEAN) / STD
+
+CONDITIONS = [
+    ("manifest", lambda im: norm(short_side_then_crop(im, int(pre["resize"]["shortSide"]), int(pre["centerCrop"][0])))),
+    ("square-norm", lambda im: norm(square(im, SIDE))),
+    ("square-raw", lambda im: square(im, SIDE)),
+    ("64-norm", lambda im: norm(square(im, 64))),
+    ("64-raw", lambda im: square(im, 64)),
+]
+
+rows = []
+for name, prep in CONDITIONS:
+    t0 = time.perf_counter()
+    hit1 = hit5 = 0
+    for start in range(0, len(RAW), BATCH):
+        chunk = RAW[start:start + BATCH]
+        x = np.stack([prep(im) for im in chunk])
+        with torch.no_grad():
+            with torch.scope():
+                logits = model(torch.tensor(x)).numpy()
+        want = truth[start:start + len(chunk)]
+        hit1 += int((logits.argmax(1) == want).sum())
+        top5 = np.argsort(-logits, axis=1)[:, :5]
+        hit5 += int((top5 == want[:, None]).any(axis=1).sum())
+    n = len(RAW)
+    rows.append({"name": name, "top1": hit1 / n, "top5": hit5 / n, "seconds": time.perf_counter() - t0})
+    log(f"  {name:12s} top1 {hit1 / n:.3f}  top5 {hit5 / n:.3f}  {time.perf_counter() - t0:5.1f} s")
+
+json.dumps({
+    "rows": rows,
+    "n": len(RAW),
+    "recorded": model.manifest.get("metrics", {}).get("values", {}).get("top1_imagenetv2"),
+    "adapter": str(js.borch.Device.adapterInfo),
+    "faults": int(js.borch.device().faults.count),
+})
+\`);
+        postMessage({ done: text });
+      } catch (err) {
+        postMessage({ error: String((err && err.stack) || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  worker.onmessage = (e) => {
+    if (typeof e.data === "string") { out.textContent += "\n" + e.data; return; }
+    if (e.data.adapter !== undefined) { window.__adapter = e.data.adapter; out.textContent += "\nadapter: " + e.data.adapter; return; }
+    if (e.data.say !== undefined) out.textContent += "\n" + e.data.say;
+    if (e.data.done !== undefined) window.__cost = e.data.done;
+    if (e.data.error !== undefined) window.__cost = JSON.stringify({ error: e.data.error });
+  };
+</script>
