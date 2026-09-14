@@ -190,6 +190,40 @@
       </script>
     </div>
 
+    <h2>Dropout, drawn</h2>
+    <p>A grid of ones through a dropout layer in training mode: about half the cells go dark (zeroed) and the rest brighten (scaled up). Run it again for a different mask — that randomness is the regularisation.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const d = new nn.Dropout(0.5);
+        d.train();
+        const grid = keepAlive(Tensor.ones([16, 16]));
+        await show(d.call(grid), { scale: 14 });
+        log("about half the cells are zeroed (dark), the survivors scaled up — a fresh random mask each run");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+        d = torch.nn.Dropout(0.5)
+        d.train()
+        grid = torch.ones(16, 16)
+        show(d(grid), scale=14)
+        print("about half the cells are zeroed (dark), the survivors scaled up - a fresh random mask each run")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>Dropout zeros each activation with probability <code>p</code> while training, and scales the survivors by <code>1/(1-p)</code>.</li>
+      <li>It stops the network leaning on any single unit — cheap, strong regularisation.</li>
+      <li>At <code>eval()</code> it turns off and becomes the identity; forgetting the switch is the classic bug.</li>
+      <li>In borch: <code>nn.Dropout(p)</code>, toggled by <code>train()</code> / <code>eval()</code>.</li>
+    </ul>
+
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on
       this page runs against the same library the tests run against — nothing here is a

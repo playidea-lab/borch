@@ -204,6 +204,48 @@
       </script>
     </div>
 
+    <h2>Before and after, drawn</h2>
+    <p>A batch with large, uneven column means goes in (top) and comes out centred and scaled (bottom). Batch norm evens the columns so the next layer sees a well-behaved distribution.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const bn = new nn.BatchNorm1d(8);
+        bn.train();
+        const x = keepAlive(Tensor.randn([32, 8]).mul(Tensor.full([], 4)).add(Tensor.full([], 6)));
+        log("input  column means:", Array.from(await x.mean(0).toArray()).map((v) => v.toFixed(1)).join(" "));
+        await show(x, { scale: 8 });
+        const out = bn.call(x);
+        log("output column means:", Array.from(await out.mean(0).toArray()).map((v) => v.toFixed(1)).join(" "), " (~0)");
+        await show(out, { scale: 8 });
+        log("top: the raw batch (uneven columns) · bottom: after batch norm (each column centred)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+        bn = torch.nn.BatchNorm1d(8)
+        bn.train()
+        x = torch.randn(32, 8) * 4 + 6
+        print("input  column means:", " ".join(f"{v:.1f}" for v in x.mean(0).tolist()))
+        show(x, scale=8)
+        out = bn(x)
+        print("output column means:", " ".join(f"{v:.1f}" for v in out.mean(0).tolist()), " (~0)")
+        show(out, scale=8)
+        print("top: the raw batch (uneven columns) - bottom: after batch norm (each column centred)")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>Batch norm normalises each feature across the batch to mean 0, variance 1.</li>
+      <li>It lets deeper networks train at higher learning rates.</li>
+      <li><code>train</code> uses the batch's own statistics; <code>eval</code> uses fixed running statistics — a sample's answer must not depend on its batch at inference.</li>
+      <li>In borch: <code>nn.BatchNorm1d</code> / <code>2d</code>, toggled by <code>train()</code> / <code>eval()</code>.</li>
+    </ul>
+
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on
       this page runs against the same library the tests run against — nothing here is a

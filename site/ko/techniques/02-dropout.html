@@ -189,6 +189,40 @@
       </script>
     </div>
 
+    <h2>Dropout, 그려보기</h2>
+    <p>1 로 채운 격자를 학습 모드의 dropout 층에 통과시키면 — 절반쯤은 어두워지고(0) 나머지는 밝아진다(스케일업). 다시 돌리면 다른 마스크 — 그 무작위성이 정규화다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const d = new nn.Dropout(0.5);
+        d.train();
+        const grid = keepAlive(Tensor.ones([16, 16]));
+        await show(d.call(grid), { scale: 14 });
+        log("about half the cells are zeroed (dark), the survivors scaled up — a fresh random mask each run");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+        d = torch.nn.Dropout(0.5)
+        d.train()
+        grid = torch.ones(16, 16)
+        show(d(grid), scale=14)
+        print("about half the cells are zeroed (dark), the survivors scaled up - a fresh random mask each run")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>Dropout 은 학습 중 각 활성값을 확률 <code>p</code> 로 0 으로 만들고, 남은 것을 <code>1/(1-p)</code> 로 키운다.</li>
+      <li>망이 어느 한 유닛에 기대지 못하게 한다 — 값싸고 강한 정규화.</li>
+      <li><code>eval()</code> 에서는 꺼져 항등이 된다; 그 전환을 잊는 게 고전적 버그.</li>
+      <li>borch 에서는 <code>nn.Dropout(p)</code>, <code>train()</code> / <code>eval()</code> 로 전환.</li>
+    </ul>
+
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
       테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을
