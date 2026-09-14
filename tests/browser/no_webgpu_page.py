@@ -45,8 +45,19 @@ PAGES = {"en": "site/index.html", "ko": "site/ko/index.html"}
 # is swapped, and one about the device itself, which cannot — it has to say so in a
 # sentence rather than answer with a traceback. Seven of the seventeen lesson pages are of
 # the second kind (`scope`, `memory`, `backend`, `pooled`), measured 2026-09-14.
-LESSONS = {"site/learn/02-autograd.html": "runs", "site/learn/01-tensors.html": "explains",
-           "site/ko/learn/01-tensors.html": "explains"}
+LESSONS = {
+    "site/learn/02-autograd.html": "runs",
+    "site/learn/01-tensors.html": "explains",
+    "site/ko/learn/01-tensors.html": "explains",
+    # **The lessons whose subject is the mathematics, not the device.** These were written
+    # to run on either side, and the names they use — `linalg.solve`, `svd`, `softmax`,
+    # `triu` — are the numpy core's as much as the binding's. That is a claim about two
+    # packages, and it is worth one press each rather than a reading of both.
+    "site/foundations/05-linear-systems.html": "runs",
+    "site/foundations/06-eig-svd.html": "runs",
+    "site/techniques/05-softmax-ce.html": "runs",
+    "site/capstones/01-mini-transformer.html": "runs",
+}
 HANGUL = re.compile(r"[가-힣]")
 # One runs before the page's scripts, so the page boots into the shape rather than being
 # changed under it.
