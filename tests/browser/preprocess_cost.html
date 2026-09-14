@@ -85,7 +85,14 @@ def short_side_then_crop(img, short, crop):
 def norm(x):
     return (x - MEAN) / STD
 
+# **The library's own, and the reason this row is first.** Everything else here is a copy
+# of the manifest's pipeline written inside this page, which is exactly the second source
+# of truth this measurement exists to argue against. This row is hub.transform_for, and
+# whether it lands on the recorded number is the whole question.
+LIBRARY = torch.hub.transform_for(model.manifest)
+
 CONDITIONS = [
+    ("library", lambda im: LIBRARY(np.asarray(im))),
     ("manifest", lambda im: norm(short_side_then_crop(im, int(pre["resize"]["shortSide"]), int(pre["centerCrop"][0])))),
     ("square-norm", lambda im: norm(square(im, SIDE))),
     ("square-raw", lambda im: square(im, SIDE)),

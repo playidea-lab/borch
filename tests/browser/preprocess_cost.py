@@ -130,6 +130,14 @@ def main(argv):
     if recorded is None:
         print("  the manifest records no top1_imagenetv2 — the gate below cannot be read")
         return 0
+    # The library's row is held to the same number the hand-written one is, because the
+    # point of the library's existing is that a caller does not write this by hand.
+    if "library" in rows:
+        gap = abs(rows["library"]["top1"] - recorded) * 100
+        print(f"  hub.transform_for lands at {rows['library']['top1']:.3f} ({gap:.1f} points from the record)")
+        if gap > AGREE_POINTS:
+            print("**hub.transform_for is not building the pipeline the manifest describes**", file=sys.stderr)
+            return 1
     off = abs(rows["manifest"]["top1"] - recorded) * 100
     print(f"  the manifest records {recorded:.3f} for this model on this set; "
           f"the `manifest` row is {rows['manifest']['top1']:.3f} ({off:.1f} points away)")

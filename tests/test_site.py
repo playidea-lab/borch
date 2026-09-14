@@ -1924,3 +1924,33 @@ def test_no_runtime_message_carries_markdown():
         if "**" in said or "`" in said:
             bad.append(f"{const}: {said}")
     assert not bad, "these are shown to a person as they are, so they hold no markup:\n  " + "\n  ".join(bad)
+
+
+def test_no_page_puts_a_backtick_inside_its_python():
+    """**A backtick in that Python closes the template literal, and the page stops parsing.**
+
+    Several probes carry Python inside a JS template literal, and inside that a second one
+    holds the source handed to `runPythonAsync`. A backtick anywhere in the Python ends it
+    early: the browser reports `missing ) after argument list`, nothing in the file runs,
+    and the runner waits for a result that is never coming.
+
+    It cost three separate runs on 2026-09-14 — thirty minutes, ten and ten — and the
+    warning was already written in `site/marimo-src/review.py`, where the same shape bit
+    somebody before. A sentence in a comment did not prevent the third one; this does.
+    """
+    bad = []
+    for page in sorted((ROOT / "tests" / "browser").glob("*.html")):
+        text = page.read_text(encoding="utf-8")
+        if "runPythonAsync(\\`" not in text:
+            continue
+        # The two escaped backticks that open and close the Python are the delimiters;
+        # every other one is inside it.
+        body = text.split("runPythonAsync(\\`", 1)[1]
+        python = body.split("\\`", 1)[0]
+        for n, line in enumerate(python.splitlines(), 1):
+            if "`" in line:
+                bad.append(f"{page.relative_to(ROOT)}:{n} — {line.strip()[:80]}")
+    assert not bad, (
+        "these lines put a backtick in Python that lives inside a JS template literal:\n  "
+        + "\n  ".join(bad)
+        + "\n\n  One of them ends the literal, the page fails to parse, and nothing runs.")
