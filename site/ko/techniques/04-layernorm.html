@@ -177,6 +177,46 @@
       </script>
     </div>
 
+    <h2>행이 중심화되는 것, 그려보기</h2>
+    <p>행 평균이 들쭉날쭉한 배치가 들어가(위) 모든 행이 중심화되어 나온다(아래). 배치 정규화가 열을 고르게 했다면, 레이어 정규화는 행을 고르게 한다 — 각 샘플을 따로, 그래서 배치가 필요 없다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const ln = new nn.LayerNorm([8]);
+        const x = keepAlive(Tensor.randn([6, 8]).mul(Tensor.full([], 4)).add(Tensor.full([], 6)));
+        log("input  row means:", Array.from(await x.mean(1).toArray()).map((v) => v.toFixed(1)).join(" "));
+        await show(x, { scale: 14 });
+        const out = ln.call(x);
+        log("output row means:", Array.from(await out.mean(1).toArray()).map((v) => v.toFixed(1)).join(" "), " (~0)");
+        await show(out, { scale: 14 });
+        log("top: raw rows (uneven) · bottom: after layer norm — each ROW centred (batch norm centred columns)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+        ln = torch.nn.LayerNorm(8)
+        x = torch.randn(6, 8) * 4 + 6
+        print("input  row means:", " ".join(f"{v:.1f}" for v in x.mean(1).tolist()))
+        show(x, scale=14)
+        out = ln(x)
+        print("output row means:", " ".join(f"{v:.1f}" for v in out.mean(1).tolist()), " (~0)")
+        show(out, scale=14)
+        print("top: raw rows (uneven) - bottom: after layer norm - each ROW centred (batch norm centred columns)")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>레이어 정규화는 각 샘플을 자기 feature(행)로 정규화한다, 배치가 아니라.</li>
+      <li>그래서 배치 무관하고 train·eval 이 같다 — running 통계가 없다.</li>
+      <li>그래서 트랜스포머가 쓴다: 어텐션엔 정규화할 고정 배치 구조가 없다.</li>
+      <li>borch 에서는 <code>nn.LayerNorm([features])</code>.</li>
+    </ul>
+
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
       테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을

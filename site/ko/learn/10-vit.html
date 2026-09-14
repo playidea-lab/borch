@@ -601,6 +601,14 @@
       같은 런타임이다.
     </p>
 
+    <h2>기억할 것</h2>
+    <ul>
+      <li>비전 트랜스포머는 이미지를 패치로 자르고, 각 패치를 토큰으로 보고, 그 위로 트랜스포머를 돌린다.</li>
+      <li>학습된 클래스 토큰이 이미지 전체 정보를 모아 예측한다.</li>
+      <li>위치 임베딩이 각 패치가 어디서 왔는지 알려준다.</li>
+      <li>borch.ts 의 트랜스포머 부품(<code>MultiheadAttention</code>·<code>LayerNorm</code>)을 실제 모델에서 돌리고, borch.ts 가 torch 보다 좁은 곳을 짚는다.</li>
+    </ul>
+
     <div class="pager">
       <a href="09-resnet.html">← 9 · 잔차</a>
       <a href="../playground.html" style="text-align:right">그다음<b>Playground</b></a>

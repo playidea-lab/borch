@@ -237,6 +237,45 @@
       </script>
     </div>
 
+    <h2>인과 마스크, 그려보기</h2>
+    <p>어텐션 가중치를 히트맵으로: 밝은 하삼각과 어두운 상삼각. 각 행이 한 토큰이고, 어두운 칸은 봐선 안 되는 미래다. 이 한 장의 그림이 트랜스포머를 언어 모델로 만든다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const T = 6, D = 16;
+        const x = keepAlive(Tensor.randn([T, D]));
+        const scores = x.mm(x.transpose()).div(Tensor.full([], Math.sqrt(D)));
+        const mask = Tensor.full([T, T], -1e9).triu(1);
+        const weights = scores.add(mask).softmax(1);
+        await show(weights, { scale: 30 });
+        log("the causal attention matrix — lower-triangular: each token (row) attends only to itself and its past, never the future (dark upper triangle)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        torch.manual_seed(0)
+        T, D = 6, 16
+        x = torch.randn(T, D)
+        scores = x @ x.transpose(0, 1) / math.sqrt(D)
+        mask = torch.full((T, T), -1e9).triu(1)
+        weights = (scores + mask).softmax(1)
+        show(weights, scale=30)
+        print("the causal attention matrix - lower-triangular: each token (row) attends only to itself and its past, never the future (dark upper triangle)")
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>셀프-어텐션은 각 위치가 다른 위치들의 정보를 관련도로 가중해 섞게 한다.</li>
+      <li>인과 마스크(softmax 전, 대각선 위 −∞)가 언어 모델로 만든다: 토큰은 자기 과거만 본다.</li>
+      <li>트랜스포머 블록은 어텐션 + FFN + 잔차 + 레이어 정규화; 쌓으면 GPT.</li>
+      <li>여기서는 <code>mm</code>·<code>softmax</code>·<code>triu</code> 마스크로 만들었다 — <code>nn.MultiheadAttention</code> 이 감싸는 그 산술.</li>
+    </ul>
+
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
       테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을

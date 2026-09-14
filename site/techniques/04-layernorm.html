@@ -177,6 +177,46 @@
       </script>
     </div>
 
+    <h2>Rows centred, drawn</h2>
+    <p>A batch with uneven row means goes in (top) and comes out with every row centred (bottom). Where batch norm evened the columns, layer norm evens the rows — each sample on its own, which is why it needs no batch.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const ln = new nn.LayerNorm([8]);
+        const x = keepAlive(Tensor.randn([6, 8]).mul(Tensor.full([], 4)).add(Tensor.full([], 6)));
+        log("input  row means:", Array.from(await x.mean(1).toArray()).map((v) => v.toFixed(1)).join(" "));
+        await show(x, { scale: 14 });
+        const out = ln.call(x);
+        log("output row means:", Array.from(await out.mean(1).toArray()).map((v) => v.toFixed(1)).join(" "), " (~0)");
+        await show(out, { scale: 14 });
+        log("top: raw rows (uneven) · bottom: after layer norm — each ROW centred (batch norm centred columns)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+        ln = torch.nn.LayerNorm(8)
+        x = torch.randn(6, 8) * 4 + 6
+        print("input  row means:", " ".join(f"{v:.1f}" for v in x.mean(1).tolist()))
+        show(x, scale=14)
+        out = ln(x)
+        print("output row means:", " ".join(f"{v:.1f}" for v in out.mean(1).tolist()), " (~0)")
+        show(out, scale=14)
+        print("top: raw rows (uneven) - bottom: after layer norm - each ROW centred (batch norm centred columns)")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>Layer norm normalises each sample across its own features (its row), not across the batch.</li>
+      <li>So it is batch-independent and identical in train and eval — there are no running statistics.</li>
+      <li>That is why transformers use it: attention has no fixed batch structure to normalise over.</li>
+      <li>In borch: <code>nn.LayerNorm([features])</code>.</li>
+    </ul>
+
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on
       this page runs against the same library the tests run against — nothing here is a

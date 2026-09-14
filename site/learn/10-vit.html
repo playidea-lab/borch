@@ -612,6 +612,14 @@
       runtime with nothing written in it yet.
     </p>
 
+    <h2>What to remember</h2>
+    <ul>
+      <li>A Vision Transformer cuts an image into patches, treats each as a token, and runs a transformer over them.</li>
+      <li>A learned class token gathers the whole image's information for the prediction.</li>
+      <li>Positional embeddings tell the model where each patch came from.</li>
+      <li>It runs borch.ts's transformer parts (<code>MultiheadAttention</code>, <code>LayerNorm</code>) on a real model — and marks where borch.ts is narrower than torch.</li>
+    </ul>
+
     <div class="pager">
       <a href="09-resnet.html">← 9 · Residual</a>
       <a href="../playground.html" style="text-align:right">Then<b>Playground</b></a>

@@ -239,6 +239,45 @@
       </script>
     </div>
 
+    <h2>The causal mask, drawn</h2>
+    <p>The attention weights as a heatmap: a lower triangle of light and a dark upper triangle. Each row is a token; the dark cells are the future it is forbidden to see. This one picture is what makes a transformer a language model.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const T = 6, D = 16;
+        const x = keepAlive(Tensor.randn([T, D]));
+        const scores = x.mm(x.transpose()).div(Tensor.full([], Math.sqrt(D)));
+        const mask = Tensor.full([T, T], -1e9).triu(1);
+        const weights = scores.add(mask).softmax(1);
+        await show(weights, { scale: 30 });
+        log("the causal attention matrix — lower-triangular: each token (row) attends only to itself and its past, never the future (dark upper triangle)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        torch.manual_seed(0)
+        T, D = 6, 16
+        x = torch.randn(T, D)
+        scores = x @ x.transpose(0, 1) / math.sqrt(D)
+        mask = torch.full((T, T), -1e9).triu(1)
+        weights = (scores + mask).softmax(1)
+        show(weights, scale=30)
+        print("the causal attention matrix - lower-triangular: each token (row) attends only to itself and its past, never the future (dark upper triangle)")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>Self-attention lets each position mix information from the others, weighted by relevance.</li>
+      <li>A causal mask (−∞ above the diagonal, before the softmax) makes it a language model: a token sees only its past.</li>
+      <li>A transformer block is attention + a feed-forward net, with residual connections and layer norm; stack them for a GPT.</li>
+      <li>Built here from <code>mm</code>, <code>softmax</code> and a <code>triu</code> mask — the arithmetic <code>nn.MultiheadAttention</code> wraps.</li>
+    </ul>
+
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on
       this page runs against the same library the tests run against — nothing here is a
