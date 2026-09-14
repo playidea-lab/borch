@@ -91,12 +91,8 @@ if ${(q.get("compare") === "1") ? "True" : "False"}:
     board = torch.workbench.compare(folder, budget_mb=${parseInt(q.get("budget") || "25")},
                                     val=0.25, seed=0, epochs=200, lr=1e-2)
     log(f"compare over {len(board)} candidates in {time.perf_counter() - t0:.1f} s")
-    for r in board:
-        if "error" in r:
-            log(f"  {r['name']:32s} {r['mb']:6.1f}MB  refused: {r['error'][:70]}")
-        else:
-            log(f"  {r['name']:32s} {r['mb']:6.1f}MB  acc {r['accuracy']:.3f} "
-                f"({r['measured_on']})  {r['features']}d  {r['seconds']}s")
+    for line in torch.workbench.say(board).splitlines():
+        log(line)
     name, tried = torch.workbench.pick(folder, at_least=0.8,
                                        budget_mb=${parseInt(q.get("budget") || "25")},
                                        val=0.25, seed=0, epochs=200, lr=1e-2)
