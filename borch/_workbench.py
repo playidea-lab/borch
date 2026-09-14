@@ -66,7 +66,7 @@ class Session:
 
     def __init__(self, torch, files, *, size=None, batch=16, epochs=12, lr=None,
                  optimizer=None, backbone=None, val=0.0, seed=0, k=None,
-                 label=label_from_name):
+                 standardise=True, label=label_from_name):
         # **The CPU door is a different library, not a slower one.** `borch_cpu` has no
         # `nn`, no `optim` and no autograd: what it has is a frozen backbone's forward and
         # a linear head that fits itself. So the surface is asked what it can do rather
@@ -140,6 +140,7 @@ class Session:
         self.config = {
             "size": int(size), "batch": int(batch), "epochs": int(epochs), "lr": float(lr),
             "optimizer": optimizer, "backbone": backbone, "val": float(val), "seed": int(seed),
+            "standardise": bool(standardise),
             "images": len(self.data), "classes": list(self.data.classes),
         }
         self.k = k
@@ -259,6 +260,26 @@ class Session:
         self.how = (f"{'your model' if mine else 'small CNN'} · "
                     f"{cfg['epochs']} epochs × {self._steps(train_rows)} steps")
 
+    def _standardise(self, train_rows):
+        """Centre and scale the cached features, **from the training rows alone.**
+
+        Measured across the registry's backbones, the features' spread runs 0.18 to 3.68 —
+        twentyfold (`tests/browser/backbone_sweep.py`). One learning rate over all of them
+        ranks which model happens to suit that rate, so a comparison that does not do this
+        is measuring the rate.
+
+        The statistics come from the rows the head trains on. Taking them from everything
+        lets the held-out rows inform the scaling that the model is then judged under —
+        a small leak, and the kind that makes a number look better than it is.
+        """
+        train = self.features[train_rows]
+        mean = train.mean(axis=0, keepdims=True)
+        # A dimension that never varies carries nothing; dividing by its zero would carry
+        # an infinity into every row instead.
+        spread = train.std(axis=0, keepdims=True)
+        spread = _np.where(spread > 1e-6, spread, 1.0)
+        self.features = ((self.features - mean) / spread).astype(_np.float32)
+
     # -- path two: a frozen backbone, and only the head learns -------------------
     def _prepared(self, transform, batch):
         """The photographs, prepared the way this backbone's weights were trained.
@@ -288,6 +309,8 @@ class Session:
                 chunks.append(net.forward_head(net.forward_features(torch.tensor(xb)),
                                                pre_logits=True).numpy())
         self.features = _np.concatenate(chunks)
+        if cfg["standardise"]:
+            self._standardise(train_rows)
         # One prepared photograph, kept for the export: the composed net takes the
         # manifest's size, not this set's.
         self._sample = next(iter(self._prepared(transform, 1)))[0]
@@ -326,6 +349,8 @@ class Session:
         self.config["size"] = int(net.input_size[1])
         chunks = [net.features(xb) for xb, _idx in self._prepared(transform, cfg["batch"])]
         self.features = _np.concatenate(chunks)
+        if cfg["standardise"]:
+            self._standardise(train_rows)
         # `epochs` is steps here: the head sees every cached feature at once, so an epoch
         # and a step are the same thing — as they are on the other door's frozen path.
         # **`head` is the thing that learned, whichever door this is.** On the other one it
@@ -394,3 +419,75 @@ class Session:
 def setup(torch, files, **config):
     """Every setting in one call. Returns a `Session`; `fit()` runs it."""
     return Session(torch, files, **config)
+
+
+def candidates(torch, budget_mb=60, task="image-classification"):
+    """The registry's models this data could be handed to, smallest first.
+
+    **The task is not the filter.** `cifar10-resnet18` is image-classification too, and
+    its manifest asks for no resize because it was trained on 32px tiles that arrive at
+    that size — handed a photograph it refuses, which is right and is not a candidate
+    (measured, `tests/browser/backbone_sweep.py`). What makes a model able to take an
+    arbitrary picture is that its manifest carries a resize.
+
+    The newest version of each name, because the registry lists every version.
+    """
+    newest = {}
+    for row in torch.hub.list():
+        newest[row.get("name")] = row
+    ceiling = budget_mb * 1_000_000
+    out = [row for row in newest.values()
+           if row.get("task") == task and row.get("bytes", 0) <= ceiling]
+    return sorted(out, key=lambda r: r.get("bytes", 0))
+
+
+def compare(torch, files, *, budget_mb=60, val=0.2, seed=0, stop_at=None, **config):
+    """Train the same head on each backbone under the budget; return the rows, best first.
+
+    **Every candidate sees the same photographs and the same split**, because `val` and
+    `seed` are fixed here rather than left to each call — a leaderboard where the models
+    saw different held-out rows is a leaderboard of the splits.
+
+    The features are standardised per model from the training rows (see `_standardise`);
+    without it the ranking follows whichever backbone's feature scale happens to suit the
+    learning rate.
+
+    `stop_at` is what `pick` passes: the first candidate to reach it ends the run, so the
+    rest are never fetched. Rows come back in the order they were tried — smallest first —
+    with the failures kept, because a model that refuses says something about itself.
+    """
+    if val <= 0:
+        raise ValueError("workbench.compare: a ranking needs held-out rows — val must be above 0")
+    rows = []
+    for row in candidates(torch, budget_mb=budget_mb):
+        got = {"name": row["name"], "mb": round(row.get("bytes", 0) / 1e6, 1)}
+        try:
+            s = Session(torch, files, backbone=row["name"], val=val, seed=seed, **config).fit()
+            got.update(accuracy=s.accuracy, measured_on=s.measured_on,
+                       seconds=round(s.seconds, 1), features=int(s.features.shape[1]),
+                       size=s.config["size"])
+        except Exception as e:                                   # noqa: BLE001
+            # One refusal is not the end of a comparison — `cifar10-resnet18` refuses
+            # every photograph, and knowing that is part of the answer.
+            got["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        rows.append(got)
+        if stop_at is not None and got.get("accuracy", -1.0) >= stop_at:
+            break
+    return rows
+
+
+def pick(torch, files, *, at_least=0.9, budget_mb=60, val=0.2, seed=0, **config):
+    """The smallest backbone under the budget that reaches `at_least` on the held-out rows.
+
+    **The question a tab actually asks.** A leaderboard is a table to read; this is the
+    answer to "what should I use", and it fetches less: the candidates are tried smallest
+    first and the first one to clear the bar ends it, so the larger weights are never
+    downloaded.
+
+    Returns `(name, rows)` — the rows are every candidate tried, so the reader can see
+    what it cost. `name` is None when nothing cleared the bar.
+    """
+    rows = compare(torch, files, budget_mb=budget_mb, val=val, seed=seed,
+                   stop_at=at_least, **config)
+    cleared = [r for r in rows if r.get("accuracy", -1.0) >= at_least]
+    return (cleared[-1]["name"] if cleared else None), rows
