@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notation — borch Learn</title>
+<meta name="description" content="The symbols, shapes and shorthand the lessons use — tensors and shapes, vectors and matrices, and the training vocabulary — in one place to flip back to.">
+<link rel="alternate" hreflang="ko" href="../ko/book/notation.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Notation — borch Learn">
+<meta property="og:description" content="The symbols, shapes and shorthand the lessons use — tensors and shapes, vectors and matrices, and the training vocabulary — in one place to flip back to.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/book/notation.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/book/notation.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">Learn</p>
+    <h1>Notation</h1>
+    <p class="lead">
+      The shorthand the lessons lean on, in one place. Nothing here is unusual — it is
+      torch's vocabulary — but it helps to have the symbols named once so a chapter can move
+      quickly.
+    </p>
+
+    <h2>Reading the lessons</h2>
+    <ul>
+      <li><strong>Run</strong> — execute the box; ⌘/Ctrl + Enter does the same. Edit first if you like; <strong>Reset</strong> restores the original.</li>
+      <li><strong>JavaScript / Python tabs</strong> — the same work in both; press to compare the numbers.</li>
+      <li><strong>○ → ✓</strong> — a lesson's completion circle on the course home; press it, or pass the lesson's exercise, to mark it done.</li>
+      <li><strong>Your turn</strong> — an exercise that ships with one line to fix; the page says <em>learned</em> when it is right.</li>
+      <li><code>await</code> — reading a value back from the GPU is asynchronous in JavaScript (<code>await x.item()</code>); Python reads directly.</li>
+    </ul>
+
+    <h2>Tensors and shapes</h2>
+    <ul>
+      <li><code>[N, C, H, W]</code> — a shape: batch, channels, height, width. A vector is <code>[n]</code>, a matrix <code>[m, n]</code>.</li>
+      <li><code>dtype</code> — the element type (e.g. <code>float32</code>); <code>device</code> — where it lives (the GPU).</li>
+      <li><code>[m, k] @ [k, n] → [m, n]</code> — the shape rule for matrix multiply: inner sizes match, outer two become the result.</li>
+      <li>A scalar is a shape-<code>[]</code> tensor; in JavaScript a constant is <code>Tensor.full([], k)</code>.</li>
+    </ul>
+
+    <h2>Vectors and matrices</h2>
+    <ul>
+      <li><code>a · b</code> — the dot product, <code>a.dot(b)</code>: matching entries multiplied and summed.</li>
+      <li><code>‖v‖</code> — the L2 norm (length), <code>v.norm()</code>; distance is <code>‖a − b‖</code>.</li>
+      <li><code>Aᵀ</code> — transpose, <code>A.transpose()</code>; <code>A @ B</code> — matrix multiply, <code>A.matmul(B)</code> (or <code>mm</code>).</li>
+      <li><code>A v = λ v</code> — an eigenvector <code>v</code> and eigenvalue <code>λ</code>; <code>A = U diag(S) Vᵀ</code> — the SVD, with singular values <code>S</code>.</li>
+    </ul>
+
+    <h2>Training</h2>
+    <ul>
+      <li><strong>logits</strong> — a model's raw output scores, before they are turned into probabilities.</li>
+      <li><code>softmax</code> — logits to a probability distribution that sums to 1; <strong>cross-entropy</strong> — the loss <code>−log p</code> of the true class.</li>
+      <li><code>requiresGrad</code>, <code>backward()</code>, <code>.grad</code> — mark an input, run the backward pass, read the gradient.</li>
+      <li><strong>train / eval</strong> — a module's mode; dropout and batch norm behave differently in each.</li>
+    </ul>
+
+    <div class="pager">
+      <a href="preface.html">← How to read this book</a>
+      <a href="../foundations/01-vectors.html" style="text-align:right">Start<b>1 · Vectors</b></a>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

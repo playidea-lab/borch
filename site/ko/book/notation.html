@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>표기법 — borch 배우기</title>
+<meta name="description" content="레슨이 쓰는 기호·모양·약칭을 한곳에 — 텐서와 모양, 벡터와 행렬, 학습 어휘 — 언제든 돌아와 볼 수 있도록.">
+<link rel="alternate" hreflang="en" href="../../book/notation.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="표기법 — borch 배우기">
+<meta property="og:description" content="레슨이 쓰는 기호·모양·약칭을 한곳에 — 텐서와 모양, 벡터와 행렬, 학습 어휘 — 언제든 돌아와 볼 수 있도록.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/book/notation.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../book/notation.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">배우기</p>
+    <h1>표기법</h1>
+    <p class="lead">
+      레슨이 기대는 약칭을 한곳에 모았다. 특별한 것은 없다 — torch 의 어휘다 — 다만 기호를
+      한 번 이름 붙여 두면 각 장이 빠르게 나아갈 수 있다.
+    </p>
+
+    <h2>레슨 읽기</h2>
+    <ul>
+      <li><strong>Run</strong> — 상자를 실행; ⌘/Ctrl + Enter 도 같다. 원하면 먼저 고치고, <strong>Reset</strong> 으로 원본 복구.</li>
+      <li><strong>JavaScript / Python 탭</strong> — 둘 다 같은 일; 눌러서 수를 비교한다.</li>
+      <li><strong>○ → ✓</strong> — 코스 홈의 레슨 완료 동그라미; 누르거나 레슨 연습을 통과해 완료 표시.</li>
+      <li><strong>직접</strong> — 고칠 한 줄이 든 연습; 맞으면 페이지가 <em>learned</em> 라 한다.</li>
+      <li><code>await</code> — GPU 에서 값을 읽는 것은 JavaScript 에서 비동기(<code>await x.item()</code>); Python 은 바로 읽는다.</li>
+    </ul>
+
+    <h2>텐서와 모양</h2>
+    <ul>
+      <li><code>[N, C, H, W]</code> — 모양: 배치·채널·높이·너비. 벡터는 <code>[n]</code>, 행렬은 <code>[m, n]</code>.</li>
+      <li><code>dtype</code> — 원소 타입(예: <code>float32</code>); <code>device</code> — 있는 곳(GPU).</li>
+      <li><code>[m, k] @ [k, n] → [m, n]</code> — 행렬곱 모양 규칙: 안쪽 크기가 맞고, 바깥 둘이 결과가 된다.</li>
+      <li>스칼라는 모양 <code>[]</code> 텐서; JavaScript 에서 상수는 <code>Tensor.full([], k)</code>.</li>
+    </ul>
+
+    <h2>벡터와 행렬</h2>
+    <ul>
+      <li><code>a · b</code> — 내적, <code>a.dot(b)</code>: 짝지은 성분을 곱해 더함.</li>
+      <li><code>‖v‖</code> — L2 norm(길이), <code>v.norm()</code>; 거리는 <code>‖a − b‖</code>.</li>
+      <li><code>Aᵀ</code> — 전치, <code>A.transpose()</code>; <code>A @ B</code> — 행렬곱, <code>A.matmul(B)</code>(또는 <code>mm</code>).</li>
+      <li><code>A v = λ v</code> — 고유벡터 <code>v</code> 와 고윳값 <code>λ</code>; <code>A = U diag(S) Vᵀ</code> — SVD, 특이값 <code>S</code>.</li>
+    </ul>
+
+    <h2>학습</h2>
+    <ul>
+      <li><strong>logit</strong> — 모델의 원점수, 확률로 바뀌기 전.</li>
+      <li><code>softmax</code> — logit 을 합이 1 인 확률 분포로; <strong>교차 엔트로피</strong> — 정답 클래스의 손실 <code>−log p</code>.</li>
+      <li><code>requiresGrad</code>·<code>backward()</code>·<code>.grad</code> — 입력을 표시하고, 역전파를 돌리고, 기울기를 읽는다.</li>
+      <li><strong>train / eval</strong> — 모듈의 모드; dropout 과 배치 정규화가 각각 다르게 동작한다.</li>
+    </ul>
+
+    <div class="pager">
+      <a href="preface.html">← 이 책을 읽는 법</a>
+      <a href="../foundations/01-vectors.html" style="text-align:right">시작<b>1 · 벡터</b></a>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

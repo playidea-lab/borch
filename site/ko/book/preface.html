@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>이 책을 읽는 법 — borch 배우기</title>
+<meta name="description" content="돌려 보는 교과서: 모든 예제가 이 탭에서 당신의 GPU 로 실행되고, JavaScript 와 Python 이 나란히 있으며, 진도는 브라우저에 남는다.">
+<link rel="alternate" hreflang="en" href="../../book/preface.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="이 책을 읽는 법 — borch 배우기">
+<meta property="og:description" content="돌려 보는 교과서: 모든 예제가 이 탭에서 당신의 GPU 로 실행되고, JavaScript 와 Python 이 나란히 있으며, 진도는 브라우저에 남는다.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/book/preface.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../book/preface.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap" style="padding:3rem 0 5rem">
+  <main class="lesson" style="margin-inline:auto">
+    <p class="eyebrow">배우기</p>
+    <h1>이 책을 읽는 법</h1>
+    <p class="lead">
+      이 책은 <em>돌려 보는</em> 교과서다. 영상도 PDF 도 아니다 — 모든 예제가 이 탭에서,
+      당신의 GPU 로 실행되고, 돌리기 전에 고칠 수 있다. 핵심은 이렇다: 설명 옆에 있으나
+      돌아가지 않는 코드는 그림일 뿐이다. 여기서는 눌러 보면 진짜로 돈다.
+    </p>
+
+    <h2>모든 것이 돈다, 두 언어로</h2>
+    <p>
+      각 예제는 <strong>Run</strong> 버튼이 있는 상자에 들어 있고(⌘/Ctrl + Enter 도 된다),
+      돌리기 전에 코드를 고칠 수 있다. 대부분의 상자는 탭 둘을 든다 —
+      <strong>JavaScript</strong> 판과 <strong>Python</strong> 판, 같은 일을 각각 — 그래서
+      "값이 같다"를 믿는 대신 둘 다 눌러 수를 비교할 수 있다. GPU 에서 값을 읽는 것은
+      JavaScript 에서는 await 다(<code>await x.item()</code>); Python 은 바로 읽는다.
+    </p>
+
+    <h2>진도는 당신의 것</h2>
+    <p>
+      <a href="../learn/">코스 홈</a>에서 각 레슨 앞에는 동그라미가 있다. 그것을 눌러 레슨을
+      체크하거나, 레슨의 <em>직접</em> 연습이 대신하게 두면 된다 — 당신의 수정이 페이지에
+      <em>learned</em> 를 띄우면 그 레슨은 표시된다. 진도는 이 브라우저에만 남는다: 계정도,
+      업로드도 없고, 사이트 데이터를 지우면 언제든 초기화된다.
+    </p>
+
+    <h2>경로</h2>
+    <p>
+      레슨은 트리를 이루고, 본선은 의존 순서로 흐른다:
+      <strong>기초 수학</strong>(수학을 직접 돌린다 — 벡터에서 연쇄법칙까지) →
+      <strong>딥러닝 기초</strong>(텐서에서 학습 루프까지) → <strong>실전 깊이</strong>(진짜
+      망·데이터·디버깅) → <strong>시퀀스와 트랜스포머</strong>, 그리고 곁에 <strong>논문
+      사례</strong>와 끝에 캡스톤. borch 가 처음이면 위에서부터 걷고, 아니면 필요한 곳으로
+      건너뛰어라 — 각 레슨은 무엇에 기대는지 밝힌다.
+    </p>
+
+    <h2>필요한 것</h2>
+    <ul>
+      <li>WebGPU 가 되는 브라우저. 없으면 페이지가 그렇게 분명히 말한다 — 더 느린 것으로
+        내려가 시치미 떼지 않는다.</li>
+      <li>그 밖에는 없다 — 설치도, 계정도, 서버도.</li>
+    </ul>
+
+    <p>
+      레슨이 쓰는 기호와 약칭은 <a href="notation.html">표기법</a> 페이지에 모아 뒀다;
+      낯선 표기를 만나면 언제든 그리로 돌아가라.
+    </p>
+
+    <div class="pager">
+      <a href="../learn/">← 코스 홈</a>
+      <a href="notation.html" style="text-align:right">다음<b>표기법</b></a>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>
