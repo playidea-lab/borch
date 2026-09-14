@@ -1,0 +1,107 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>which pretrained backbones actually load, and what they cost</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // The wheel in a worker — the door `workbench` uses, so what this learns is what a
+  // comparison would meet.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        await py.loadPackage("numpy");
+        await py.loadPackage("pillow");
+        await py.loadPackage(${JSON.stringify(origin + q.get("wheel"))});
+        const text = await py.runPythonAsync(\`
+import io, json, time
+import numpy as np
+import js
+from pyodide.ffi import run_sync
+from PIL import Image
+import borch_webgpu as torch
+
+origin = ${JSON.stringify(origin)}
+BUDGET = ${parseInt(q.get("budget") || "50")} * 1_000_000
+LIMIT = ${parseInt(q.get("limit") || "48")}
+BATCH = ${parseInt(q.get("batch") || "8")}
+
+def log(line):
+    js.postMessage(str(line))
+
+def get(path, binary=False):
+    r = run_sync(js.fetch(origin + path))
+    if not r.ok:
+        raise RuntimeError(f"{r.status} {path}")
+    return bytes(run_sync(r.arrayBuffer()).to_py()) if binary else str(run_sync(r.text()))
+
+js.postMessage(js.JSON.parse(json.dumps({"adapter": str(js.borch.Device.adapterInfo)})))
+
+BASE = "/tests/browser/.cache/imagenetv2-1perclass/"
+index = json.loads(get(BASE + "index.json"))["images"][:LIMIT]
+PHOTOS = [Image.open(io.BytesIO(get(BASE + row["file"], True))).convert("RGB") for row in index]
+log(f"{len(PHOTOS)} photographs")
+
+# The newest version of every name the registry lists, smallest first, under the budget.
+newest = {}
+for row in torch.hub.list():
+    newest[row["name"]] = row
+picked = sorted((r for r in newest.values() if r.get("bytes", 0) <= BUDGET),
+                key=lambda r: r.get("bytes", 0))
+log("under budget: " + ", ".join(f"{r['name']} {r['bytes']/1e6:.0f}MB" for r in picked))
+
+rows = []
+for row in picked:
+    name = row["name"]
+    got = {"name": name, "mb": round(row.get("bytes", 0) / 1e6, 1)}
+    try:
+        t0 = time.perf_counter()
+        net = torch.hub.load(name, verify=False)
+        got["load_s"] = round(time.perf_counter() - t0, 1)
+        got["features"] = int(net.num_features)
+        got["size"] = int(net.manifest["preprocess"]["inputSize"][1])
+        t1 = time.perf_counter()
+        chunks = []
+        with torch.no_grad():
+            for start in range(0, len(PHOTOS), BATCH):
+                batch = PHOTOS[start:start + BATCH]
+                x = np.stack([net.transform(p) for p in batch])
+                with torch.scope():
+                    chunks.append(net.forward_head(net.forward_features(torch.tensor(x)),
+                                                   pre_logits=True).numpy())
+        feats = np.concatenate(chunks)
+        got["feature_s"] = round(time.perf_counter() - t1, 1)
+        got["shape"] = list(feats.shape)
+        # **A matrix of the right shape can still be nothing.** A backbone that answers
+        # with zeros, or with the same row for every photograph, has loaded and not run.
+        got["finite"] = bool(np.isfinite(feats).all())
+        got["spread"] = round(float(feats.std(axis=0).mean()), 4)
+        log(f"  {name:32s} {got['mb']:6.1f}MB  {got['size']}px  {got['features']:5d}d  "
+            f"load {got['load_s']:5.1f}s  features {got['feature_s']:5.1f}s  spread {got['spread']}")
+    except Exception as e:
+        got["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        log(f"  {name:32s} {got['mb']:6.1f}MB  FAILED  {got['error'][:120]}")
+    rows.append(got)
+
+json.dumps({"rows": rows, "n": len(PHOTOS),
+            "adapter": str(js.borch.Device.adapterInfo),
+            "faults": int(js.borch.device().faults.count)})
+\`);
+        postMessage({ done: text });
+      } catch (err) {
+        postMessage({ error: String((err && err.stack) || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  worker.onmessage = (e) => {
+    if (typeof e.data === "string") { out.textContent += "\n" + e.data; return; }
+    if (e.data.adapter !== undefined) { window.__adapter = e.data.adapter; out.textContent += "\nadapter: " + e.data.adapter; return; }
+    if (e.data.done !== undefined) window.__sweep = e.data.done;
+    if (e.data.error !== undefined) window.__sweep = JSON.stringify({ error: e.data.error });
+  };
+</script>

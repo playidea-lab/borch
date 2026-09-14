@@ -190,6 +190,9 @@ UNWIRED = {
     "export_resnet18.py": ("tool", "writes the ResNet-18 weights the inference comparison shares — run when they change"),
     "features_probe.py": ("diagnostic", "prints what this adapter offers; there is no right answer to fail"),
     "readback_probe.py": ("diagnostic", "how long one value takes to come back from bare WebGPU, no borch in it"),
+    "backbone_sweep.py": ("diagnostic", "which of the registry's models load and what each costs — "
+                                        "a row per model and no verdict, and it wants the same "
+                                        "thousand photographs preprocess_cost does"),
     "preprocess_cost.py": ("diagnostic", "what a backbone loses when it is fed images prepared the wrong way — "
                                          "five numbers and no verdict, and it wants a thousand photographs that "
                                          "are not in this repository"),
