@@ -114,6 +114,8 @@ PAGES = [
     "/site/ko/techniques/04-layernorm.html",
     "/site/techniques/05-softmax-ce.html",
     "/site/ko/techniques/05-softmax-ce.html",
+    "/site/capstones/01-mini-transformer.html",
+    "/site/ko/capstones/01-mini-transformer.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page

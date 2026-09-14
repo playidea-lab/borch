@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>미니 트랜스포머 조립 — borch 배우기</title>
+<meta name="description" content="부품에서 인과적 셀프-어텐션 블록을 조립한다: 어텐션 가중치, 언어모델로 만드는 인과 마스크, 그리고 잔차 연결. 페이지 안에서, 양 언어로.">
+<link rel="alternate" hreflang="en" href="../../capstones/01-mini-transformer.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="미니 트랜스포머 조립 — borch 배우기">
+<meta property="og:description" content="부품에서 인과적 셀프-어텐션 블록을 조립한다: 어텐션 가중치, 언어모델로 만드는 인과 마스크, 그리고 잔차 연결. 페이지 안에서, 양 언어로.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/capstones/01-mini-transformer.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../capstones/01-mini-transformer.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>캡스톤</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-mini-transformer.html" class="on">1 · 미니 트랜스포머</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">캡스톤 · 1</p>
+    <h1>미니 트랜스포머 조립</h1>
+    <p class="lead">
+      트랜스포머는 <em>셀프-어텐션</em>으로 시퀀스 전체를 한 번에 읽는다: 각 위치가 다른
+      위치들의 정보를, 얼마나 관련 있는지로 가중해 끌어온다. <em>인과 마스크</em>가 그것을
+      언어 모델로 만든다 — 토큰은 자기 과거만 볼 수 있다. 여기서는 이미 만난 부품들로 인과
+      어텐션 블록 하나를 조립한다. 모든 것이 이 페이지에서, 양 언어로 돈다.
+    </p>
+
+    <h2>셀프-어텐션: 모든 위치가 서로를 저울질한다</h2>
+    <p>
+      각 위치 쌍을 내적(√D 로 스케일)으로 점수 매기고, 각 행을 <code>softmax</code> 로 분포로
+      만든다. 행 <code>i</code> 는 토큰 <code>i</code> 가 — 자기 자신을 포함해 — 모든 토큰에서
+      얼마나 끌어오는지를 말한다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const T = 4, D = 8;
+        const x = keepAlive(Tensor.randn([T, D]));   // T token vectors (stand-ins for embeddings)
+        const scores = x.mm(x.transpose()).div(Tensor.full([], Math.sqrt(D)));
+        const weights = scores.softmax(1);
+
+        log("attention weights (each row sums to 1):");
+        for (let i = 0; i < T; i++) {
+          log("  token " + i + ":", Array.from(await weights.at(i).toArray()).map((v) => v.toFixed(2)).join(" "));
+        }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        torch.manual_seed(0)
+
+        T, D = 4, 8
+        x = torch.randn(T, D)                        # T token vectors (stand-ins for embeddings)
+        scores = x @ x.transpose(0, 1) / math.sqrt(D)
+        weights = scores.softmax(1)
+
+        print("attention weights (each row sums to 1):")
+        for i in range(T):
+            print("  token", i, ":", " ".join(f"{v:.2f}" for v in weights[i].tolist()))
+      </script>
+    </div>
+
+    <h2>인과 마스크: 앞을 훔쳐보지 않기</h2>
+    <p>
+      softmax 전에 대각선 위쪽 모든 점수에 <code>−1e9</code> 를 더해, 그 미래 위치들이 0
+      가중치를 받게 한다. 결과는 하삼각이다: 토큰 <code>i</code> 는 토큰 <code>0…i</code> 만
+      본다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const T = 4, D = 8;
+        const x = keepAlive(Tensor.randn([T, D]));
+        const scores = x.mm(x.transpose()).div(Tensor.full([], Math.sqrt(D)));
+
+        const mask = Tensor.full([T, T], -1e9).triu(1);   // -1e9 above the diagonal (the future)
+        const weights = scores.add(mask).softmax(1);
+
+        log("causal attention weights (lower-triangular):");
+        for (let i = 0; i < T; i++) {
+          log("  token " + i + ":", Array.from(await weights.at(i).toArray()).map((v) => v.toFixed(2)).join(" "));
+        }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        torch.manual_seed(0)
+
+        T, D = 4, 8
+        x = torch.randn(T, D)
+        scores = x @ x.transpose(0, 1) / math.sqrt(D)
+
+        mask = torch.full((T, T), -1e9).triu(1)      # -1e9 above the diagonal (the future)
+        weights = (scores + mask).softmax(1)
+
+        print("causal attention weights (lower-triangular):")
+        for i in range(T):
+            print("  token", i, ":", " ".join(f"{v:.2f}" for v in weights[i].tolist()))
+      </script>
+    </div>
+
+    <h2>블록 조립</h2>
+    <p>
+      각 위치의 값 벡터를 어텐션 가중치로 섞은 뒤, 입력을 다시 더한다 — 잔차 연결이다.
+      시퀀스가 들어가 시퀀스가 나오고, 각 토큰은 이제 자기 과거의 요약을 지닌다. 이 블록을
+      몇 번 쌓으면 GPT 의 핵심이 된다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const T = 5, D = 16;
+        const x = keepAlive(Tensor.randn([T, D]));
+
+        const scores = x.mm(x.transpose()).div(Tensor.full([], Math.sqrt(D)));
+        const mask = Tensor.full([T, T], -1e9).triu(1);
+        const weights = scores.add(mask).softmax(1);
+        const context = weights.mm(x);        // weighted sum over each token's past
+        const out = context.add(x);           // residual connection
+
+        log("input  shape:", JSON.stringify(x.shape));
+        log("output shape:", JSON.stringify(out.shape), " (sequence in, sequence out)");
+        log("token 0 attends to:", Array.from(await weights.at(0).toArray()).map((v) => v.toFixed(2)).join(" "), " (only itself)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        torch.manual_seed(0)
+
+        T, D = 5, 16
+        x = torch.randn(T, D)
+
+        scores = x @ x.transpose(0, 1) / math.sqrt(D)
+        mask = torch.full((T, T), -1e9).triu(1)
+        weights = (scores + mask).softmax(1)
+        context = weights @ x                 # weighted sum over each token's past
+        out = context + x                     # residual connection
+
+        print("input  shape:", tuple(x.shape))
+        print("output shape:", tuple(out.shape), " (sequence in, sequence out)")
+        print("token 0 attends to:", " ".join(f"{v:.2f}" for v in weights[0].tolist()), " (only itself)")
+      </script>
+    </div>
+
+    <h2>직접: 인과적으로 만들기</h2>
+    <p>
+      이 블록은 토큰 0 이 미래(위치 1…T−1)에 얼마나 가중치를 주는지 보고한다. 언어 모델이라면
+      그 값은 0 이어야 한다 — 첫 토큰은 자기 뒤에 오는 것을 볼 수 없다. 빈 마스크를 인과
+      마스크로 바꿔라.
+    </p>
+
+    <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const T = 4, D = 8;
+        const x = keepAlive(Tensor.randn([T, D]));
+        const scores = x.mm(x.transpose()).div(Tensor.full([], Math.sqrt(D)));
+
+        const mask = Tensor.zeros([T, T]);   // <-- fix me: block the future — Tensor.full([T, T], -1e9).triu(1)
+        const weights = scores.add(mask).softmax(1);
+
+        const future = await weights.at(0).at(slice(1, T)).sum().item();
+        log("token 0's weight on the future:", future);
+        log("loss", future);
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        torch.manual_seed(0)
+
+        T, D = 4, 8
+        x = torch.randn(T, D)
+        scores = x @ x.transpose(0, 1) / math.sqrt(D)
+
+        mask = torch.zeros(T, T)             # <-- fix me: block the future — torch.full((T, T), -1e9).triu(1)
+        weights = (scores + mask).softmax(1)
+
+        future = weights[0][1:].sum().item()
+        print("token 0's weight on the future:", future)
+        print("loss", future)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
+      테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을
+      누른다.
+    </div>
+
+    <div class="pager">
+      <a href="../learn/">← 길잡이</a>
+      <a href="../tutorials/08-attention.html" style="text-align:right">더 깊이<b>어텐션</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>
