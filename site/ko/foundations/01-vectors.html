@@ -137,6 +137,28 @@
       </script>
     </div>
 
+    <h2>정렬 보기: 그램 행렬</h2>
+    <p>벡터 몇 개를 행으로 쌓고 전치와 곱하면 — 칸 <code>(i, j)</code> 는 벡터 <code>i</code> 와 <code>j</code> 의 내적이다. 밝을수록 더 정렬됐고, 대각선은 각 벡터의 제곱 길이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const V = Tensor.from([1, 0, 1, 1, 0, 1, -1, 1], [4, 2]);   // four 2-D vectors, one per row
+        const gram = V.matmul(V.transpose());                       // gram[i][j] = v_i · v_j
+        await show(gram, { scale: 24 });
+        log("bright = aligned (large dot product), dark = opposed");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        V = torch.tensor([[1., 0.], [1., 1.], [0., 1.], [-1., 1.]])   # four 2-D vectors, one per row
+        gram = V @ V.transpose(0, 1)                                  # gram[i][j] = v_i . v_j
+        show(gram, scale=24)
+        print("bright = aligned (large dot product), dark = opposed")
+      </script>
+    </div>
+
     <h2>직접: 수직으로 만들기</h2>
     <p>두 벡터가 수직인 것은 내적이 0 일 때뿐이다. 아래 <code>b</code> 를 <code>a · b = 0</code> 이 되도록 바꾸면 페이지가 맞다고 한다.</p>
 
@@ -161,6 +183,14 @@
         print("loss", gap)   # 0 exactly when b is perpendicular to a
       </script>
     </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>벡터는 1차원 텐서이고, 길이는 L2 <code>norm</code> — 제곱합의 제곱근이다.</li>
+      <li>내적 <code>a·b</code> 는 짝지은 성분 곱의 합 — 정렬을 재는 한 수(<code>|a||b|cos θ</code>).</li>
+      <li>두 벡터가 수직인 것은 내적이 정확히 0 일 때뿐이다.</li>
+      <li>borch 에서는 <code>a.dot(b)</code>·<code>a.norm()</code>; 값은 <code>await</code> 로 읽는다.</li>
+    </ul>
 
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는 테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을 누른다.

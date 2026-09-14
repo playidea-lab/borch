@@ -127,6 +127,30 @@
       </script>
     </div>
 
+    <h2>Seeing distance: the pairwise matrix</h2>
+    <p>Take four points and measure every point-to-point distance — <code>‖P_i − P_j‖</code>, built with broadcasting. The diagonal is dark (a point is distance 0 from itself); the far-apart pairs are bright.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const P = Tensor.from([0, 0, 1, 0, 0, 1, 3, 3], [4, 2]);   // four 2-D points (rows)
+        const d = P.reshape([4, 1, 2]).sub(P.reshape([1, 4, 2]));  // pairwise differences (broadcast)
+        const dist = d.square().sum(2).sqrt();                     // [4,4] distances
+        await show(dist, { scale: 30 });
+        log("dark on the diagonal (distance 0), bright where points are far apart");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        P = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [3., 3.]])   # four 2-D points (rows)
+        d = P.reshape(4, 1, 2) - P.reshape(1, 4, 2)                  # pairwise differences (broadcast)
+        dist = (d ** 2).sum(2).sqrt()                                # [4,4] distances
+        show(dist, scale=30)
+        print("dark on the diagonal (distance 0), bright where points are far apart")
+      </script>
+    </div>
+
     <h2>Your turn: make a unit vector</h2>
     <p>A unit vector points the same way but has length 1. Divide <code>v</code> by its own norm so that <code>‖u‖ = 1</code>.</p>
 
@@ -151,6 +175,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>The L2 <code>norm</code> is a vector's length, the square root of the sum of squares.</li>
+      <li>Distance between two points is the norm of their difference, <code>‖a − b‖</code>.</li>
+      <li>A unit vector is <code>v</code> divided by its norm; the projection of <code>a</code> onto <code>b</code> is <code>a·b / ‖b‖</code>.</li>
+      <li>In borch: <code>v.norm()</code>, <code>a.sub(b).norm()</code>.</li>
+    </ul>
 
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on this page runs against the same library the tests run against — nothing here is a screenshot. Press Reset to get the original code back.

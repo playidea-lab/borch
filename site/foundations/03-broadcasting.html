@@ -110,6 +110,30 @@
       </script>
     </div>
 
+    <h2>Seeing a broadcast: the sum table</h2>
+    <p>A column <code>[8,1]</code> plus a row <code>[1,8]</code> broadcasts to an <code>[8,8]</code> grid — every cell is row + column. The smooth gradient is the broadcast made visible: neither input was copied, yet every pair was combined.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const col = Tensor.from([0, 1, 2, 3, 4, 5, 6, 7], [8, 1]);
+        const row = Tensor.from([0, 1, 2, 3, 4, 5, 6, 7], [1, 8]);
+        const grid = col.add(row);            // [8,1] + [1,8] -> [8,8]
+        await show(grid, { scale: 24 });
+        log("[8,1] + [1,8] broadcasts to [8,8] — each cell is row + column");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        col = torch.arange(8).reshape(8, 1).float()
+        row = torch.arange(8).reshape(1, 8).float()
+        grid = col + row                      # [8,1] + [1,8] -> [8,8]
+        show(grid, scale=24)
+        print("[8,1] + [1,8] broadcasts to [8,8] - each cell is row + column")
+      </script>
+    </div>
+
     <h2>Your turn: centre the columns</h2>
     <p>Centring means subtracting each column's mean so every column ends up averaging zero. The block subtracts the wrong mean — fix it to the per-column mean.</p>
 
@@ -136,6 +160,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>Broadcasting combines different shapes without copying; trailing axes line up from the right.</li>
+      <li>A size-1 (or missing) axis stretches to match the other.</li>
+      <li><code>keepdim</code> keeps a reduced axis at size 1, so the result can broadcast back against the original.</li>
+      <li>In borch: elementwise ops broadcast like torch's; reach for <code>mean(dim, keepdim)</code> when you need the shape back.</li>
+    </ul>
 
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on this page runs against the same library the tests run against — nothing here is a screenshot. Press Reset to get the original code back.

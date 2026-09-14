@@ -116,6 +116,35 @@
       </script>
     </div>
 
+    <h2>기울기 보기: 그려진 미분</h2>
+    <p>autograd 는 수 하나만 주지 않는다 — 여러 입력에서 부르면 미분 곡선 전체가 나온다. 여기 <code>d/dx sin(x²) = cos(x²)·2x</code> 를 <code>.grad</code> 에서 바로 그렸다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        // autograd gives the slope at every x — plot the whole derivative of sin(x²)
+        for (let i = 0; i <= 40; i++) {
+          const xv = -3 + i * 0.15;
+          const x = Tensor.from([xv], [], { requiresGrad: true });
+          x.square().sin().backward();
+          plot("d/dx sin(x²)", await x.grad.item());
+        }
+        log("each point is autograd's slope at that x — the derivative, drawn");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        # autograd gives the slope at every x — plot the whole derivative of sin(x^2)
+        for i in range(41):
+            xv = -3 + i * 0.15
+            x = torch.tensor(xv, requires_grad=True)
+            (x ** 2).sin().backward()
+            plot("d/dx sin(x^2)", x.grad.item())
+        print("each point is autograd's slope at that x - the derivative, drawn")
+      </script>
+    </div>
+
     <h2>직접: 연쇄법칙 완성</h2>
     <p>아래 <code>sin(x²)</code> 의 손 계산 미분에는 연쇄법칙의 안쪽 인수가 빠져 있다. autograd 가 구한 값과 맞도록 그것을 더하라.</p>
 
@@ -150,6 +179,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>미분은 함수의 기울기; 연쇄법칙은 중첩된 함수의 기울기를 곱한다: <code>f'(g(x))·g'(x)</code>.</li>
+      <li>입력을 <code>requiresGrad</code> 로 표시하고, 식을 세우고, <code>backward()</code> 를 부르고, <code>.grad</code> 를 읽는다.</li>
+      <li>이것이 다음 장 autograd 가 돌리는 바로 그 엔진이다.</li>
+      <li>borch 에서는 <code>Tensor.from(v, [], { requiresGrad: true })</code>·<code>backward()</code>·<code>.grad</code>.</li>
+    </ul>
 
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는 테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을 누른다.

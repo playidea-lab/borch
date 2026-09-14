@@ -131,6 +131,36 @@
       </script>
     </div>
 
+    <h2>A matrix as motion: rotation traces a circle</h2>
+    <p>A rotation matrix turns a vector by a fixed angle. Apply it over and over and the vector walks around a circle — plotted here as its x-coordinate, a clean cosine.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const th = Math.PI / 8;
+        const R = Tensor.from([Math.cos(th), -Math.sin(th), Math.sin(th), Math.cos(th)], [2, 2]);
+        let p = keepAlive(Tensor.from([1, 0], [2]));
+        for (let i = 0; i < 24; i++) {
+          plot("x-coordinate", await p.at(0).item());
+          p = keepAlive(R.mv(p));
+        }
+        log("a rotation matrix applied 24 times — the x-coordinate traces a cosine");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        th = math.pi / 8
+        R = torch.tensor([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+        p = torch.tensor([1., 0.])
+        for i in range(24):
+            plot("x-coordinate", p[0].item())
+            p = torch.mv(R, p)
+        print("a rotation matrix applied 24 times - the x-coordinate traces a cosine")
+      </script>
+    </div>
+
     <h2>Your turn: get the order right</h2>
     <p>Applying B then A to a vector is the same as multiplying by <code>A@B</code> first. The block below composes them in the wrong order — fix it so the composed map matches the step-by-step one.</p>
 
@@ -163,6 +193,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>A matrix maps vectors to vectors; each entry of <code>M.mv(v)</code> is a dot product of a row of <code>M</code> with <code>v</code>.</li>
+      <li>Matrix multiply composes maps: <code>A.matmul(B)</code> does <code>B</code> then <code>A</code> — order matters.</li>
+      <li>Shapes must line up: <code>[m, k] @ [k, n] → [m, n]</code>.</li>
+      <li>In borch: <code>mv</code>, <code>matmul</code> (or <code>mm</code>).</li>
+    </ul>
 
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on this page runs against the same library the tests run against — nothing here is a screenshot. Press Reset to get the original code back.

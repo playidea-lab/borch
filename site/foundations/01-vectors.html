@@ -137,6 +137,28 @@
       </script>
     </div>
 
+    <h2>Seeing alignment: the Gram matrix</h2>
+    <p>Stack a few vectors as rows and multiply by the transpose — cell <code>(i, j)</code> is the dot product of vector <code>i</code> and vector <code>j</code>. Brighter means more aligned; the diagonal is each vector's squared length.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const V = Tensor.from([1, 0, 1, 1, 0, 1, -1, 1], [4, 2]);   // four 2-D vectors, one per row
+        const gram = V.matmul(V.transpose());                       // gram[i][j] = v_i · v_j
+        await show(gram, { scale: 24 });
+        log("bright = aligned (large dot product), dark = opposed");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        V = torch.tensor([[1., 0.], [1., 1.], [0., 1.], [-1., 1.]])   # four 2-D vectors, one per row
+        gram = V @ V.transpose(0, 1)                                  # gram[i][j] = v_i . v_j
+        show(gram, scale=24)
+        print("bright = aligned (large dot product), dark = opposed")
+      </script>
+    </div>
+
     <h2>Your turn: make them perpendicular</h2>
     <p>Two vectors are perpendicular exactly when their dot product is zero. Change <code>b</code> below so that <code>a · b = 0</code> — then the page says you have it.</p>
 
@@ -161,6 +183,14 @@
         print("loss", gap)   # 0 exactly when b is perpendicular to a
       </script>
     </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>A vector is a 1-D tensor; its length is the L2 <code>norm</code>, the square root of the sum of squares.</li>
+      <li>The dot product <code>a·b</code> sums the products of matching entries — one number measuring alignment (<code>|a||b|cos θ</code>).</li>
+      <li>Two vectors are perpendicular exactly when their dot product is zero.</li>
+      <li>In borch: <code>a.dot(b)</code>, <code>a.norm()</code>; values read back with <code>await</code>.</li>
+    </ul>
 
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on this page runs against the same library the tests run against — nothing here is a screenshot. Press Reset to get the original code back.

@@ -110,6 +110,30 @@
       </script>
     </div>
 
+    <h2>브로드캐스트 보기: 합 표</h2>
+    <p>열 <code>[8,1]</code> 에 행 <code>[1,8]</code> 을 더하면 <code>[8,8]</code> 격자로 브로드캐스트된다 — 각 칸은 행 + 열. 매끈한 그라데이션이 브로드캐스트를 눈에 보이게 한다: 어느 입력도 복사되지 않았지만 모든 쌍이 결합됐다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const col = Tensor.from([0, 1, 2, 3, 4, 5, 6, 7], [8, 1]);
+        const row = Tensor.from([0, 1, 2, 3, 4, 5, 6, 7], [1, 8]);
+        const grid = col.add(row);            // [8,1] + [1,8] -> [8,8]
+        await show(grid, { scale: 24 });
+        log("[8,1] + [1,8] broadcasts to [8,8] — each cell is row + column");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        col = torch.arange(8).reshape(8, 1).float()
+        row = torch.arange(8).reshape(1, 8).float()
+        grid = col + row                      # [8,1] + [1,8] -> [8,8]
+        show(grid, scale=24)
+        print("[8,1] + [1,8] broadcasts to [8,8] - each cell is row + column")
+      </script>
+    </div>
+
     <h2>직접: 열을 중심화</h2>
     <p>중심화는 각 열의 평균을 빼서 모든 열의 평균이 0 이 되게 하는 것이다. 블록은 틀린 평균을 뺀다 — 열별 평균으로 고쳐라.</p>
 
@@ -136,6 +160,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>브로드캐스팅은 복사 없이 다른 모양을 결합한다; 뒤쪽 축부터 오른쪽으로 맞춘다.</li>
+      <li>크기 1(또는 없는) 축이 상대에 맞춰 늘어난다.</li>
+      <li><code>keepdim</code> 은 축소한 축을 크기 1 로 남겨, 결과를 원본에 되-브로드캐스트할 수 있게 한다.</li>
+      <li>borch 에서는 성분별 연산이 torch 처럼 브로드캐스트되고, 되돌릴 땐 <code>mean(dim, keepdim)</code>.</li>
+    </ul>
 
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는 테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을 누른다.

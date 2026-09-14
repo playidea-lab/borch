@@ -134,6 +134,32 @@
       </script>
     </div>
 
+    <h2>Seeing the fit: the least-squares line</h2>
+    <p>The four points do not lie on one line, so <code>lstsq</code> finds the line nearest all of them. Plotted here, it is the straight line least-squares chose — the best compromise.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([1, 0, 1, 1, 1, 2, 1, 3], [4, 2]);   // rows are [1, x]
+        const b = Tensor.from([1, 2, 2, 4], [4]);                  // the y values
+        const c = Array.from(await (await A.lstsq(b)).toArray());  // [intercept, slope]
+        for (let i = 0; i <= 30; i++) { const x = i * 0.1; plot("fitted line", c[0] + c[1] * x); }
+        log("least squares draws the line closest to the four points y = 1, 2, 2, 4");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[1., 0.], [1., 1.], [1., 2.], [1., 3.]])   # rows are [1, x]
+        b = torch.tensor([1., 2., 2., 4.])                          # the y values
+        c = torch.linalg.lstsq(A, b).solution.tolist()             # [intercept, slope]
+        for i in range(31):
+            x = i * 0.1
+            plot("fitted line", c[0] + c[1] * x)
+        print("least squares draws the line closest to the four points y = 1, 2, 2, 4")
+      </script>
+    </div>
+
     <h2>Your turn: solve the system</h2>
     <p>
       The block reports the residual <code>max|A·x − b|</code>, which is zero only when
@@ -167,6 +193,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>A square system <code>A x = b</code> with invertible <code>A</code> has one exact solution: <code>A.solve(b)</code>.</li>
+      <li>With more equations than unknowns there is usually no exact answer; <code>A.lstsq(b)</code> returns the closest fit.</li>
+      <li>Least squares minimises the sum of squared residuals — the line nearest every point.</li>
+      <li>In borch: <code>A.solve(b)</code>, <code>A.lstsq(b)</code>; both awaited.</li>
+    </ul>
 
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on

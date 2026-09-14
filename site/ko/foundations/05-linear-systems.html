@@ -131,6 +131,32 @@
       </script>
     </div>
 
+    <h2>적합 보기: 최소제곱 직선</h2>
+    <p>네 점은 한 직선 위에 있지 않으므로 <code>lstsq</code> 가 그 모두에 가장 가까운 직선을 찾는다. 여기 그린 것이 최소제곱이 고른 직선 — 최선의 타협이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const A = Tensor.from([1, 0, 1, 1, 1, 2, 1, 3], [4, 2]);   // rows are [1, x]
+        const b = Tensor.from([1, 2, 2, 4], [4]);                  // the y values
+        const c = Array.from(await (await A.lstsq(b)).toArray());  // [intercept, slope]
+        for (let i = 0; i <= 30; i++) { const x = i * 0.1; plot("fitted line", c[0] + c[1] * x); }
+        log("least squares draws the line closest to the four points y = 1, 2, 2, 4");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        A = torch.tensor([[1., 0.], [1., 1.], [1., 2.], [1., 3.]])   # rows are [1, x]
+        b = torch.tensor([1., 2., 2., 4.])                          # the y values
+        c = torch.linalg.lstsq(A, b).solution.tolist()             # [intercept, slope]
+        for i in range(31):
+            x = i * 0.1
+            plot("fitted line", c[0] + c[1] * x)
+        print("least squares draws the line closest to the four points y = 1, 2, 2, 4")
+      </script>
+    </div>
+
     <h2>직접: 선형계 풀기</h2>
     <p>
       이 블록은 잔차 <code>max|A·x − b|</code> 를 보고하는데, 이 값은 <code>x</code> 가 실제로
@@ -163,6 +189,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>정사각·가역 <code>A</code> 의 <code>A x = b</code> 는 정확한 해 하나: <code>A.solve(b)</code>.</li>
+      <li>방정식이 미지수보다 많으면 대개 정확한 답이 없다; <code>A.lstsq(b)</code> 가 가장 가까운 적합을 준다.</li>
+      <li>최소제곱은 잔차 제곱합을 최소화한다 — 모든 점에 가장 가까운 직선.</li>
+      <li>borch 에서는 <code>A.solve(b)</code>·<code>A.lstsq(b)</code>; 둘 다 await.</li>
+    </ul>
 
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는

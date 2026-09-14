@@ -131,6 +131,36 @@
       </script>
     </div>
 
+    <h2>움직임으로서의 행렬: 회전은 원을 그린다</h2>
+    <p>회전 행렬은 벡터를 일정 각도로 돌린다. 반복 적용하면 벡터가 원을 따라 걷는다 — 여기서는 그 x 좌표를 그렸고, 깔끔한 코사인이다.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        const th = Math.PI / 8;
+        const R = Tensor.from([Math.cos(th), -Math.sin(th), Math.sin(th), Math.cos(th)], [2, 2]);
+        let p = keepAlive(Tensor.from([1, 0], [2]));
+        for (let i = 0; i < 24; i++) {
+          plot("x-coordinate", await p.at(0).item());
+          p = keepAlive(R.mv(p));
+        }
+        log("a rotation matrix applied 24 times — the x-coordinate traces a cosine");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        th = math.pi / 8
+        R = torch.tensor([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+        p = torch.tensor([1., 0.])
+        for i in range(24):
+            plot("x-coordinate", p[0].item())
+            p = torch.mv(R, p)
+        print("a rotation matrix applied 24 times - the x-coordinate traces a cosine")
+      </script>
+    </div>
+
     <h2>직접: 순서 바로잡기</h2>
     <p>벡터에 B 를 먼저, A 를 그다음 적용하는 것은 먼저 <code>A@B</code> 를 곱하는 것과 같다. 아래 블록은 순서를 틀리게 합성했다 — 합성한 사상이 단계별 결과와 맞도록 고쳐라.</p>
 
@@ -163,6 +193,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>행렬은 벡터를 벡터로 보낸다; <code>M.mv(v)</code> 의 각 성분은 <code>M</code> 의 한 행과 <code>v</code> 의 내적이다.</li>
+      <li>행렬곱은 사상을 합성한다: <code>A.matmul(B)</code> 는 <code>B</code> 먼저 <code>A</code> 나중 — 순서가 중요.</li>
+      <li>모양이 맞아야 한다: <code>[m, k] @ [k, n] → [m, n]</code>.</li>
+      <li>borch 에서는 <code>mv</code>·<code>matmul</code>(또는 <code>mm</code>).</li>
+    </ul>
 
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는 테스트가 도는 그 라이브러리를 상대로 돈다 — 스크린샷이 아니다. 되돌리려면 Reset 을 누른다.

@@ -116,6 +116,35 @@
       </script>
     </div>
 
+    <h2>Seeing the slope: the derivative, drawn</h2>
+    <p>autograd does not just give one number — call it at many inputs and you get the whole derivative curve. Here is <code>d/dx sin(x²) = cos(x²)·2x</code>, plotted straight from <code>.grad</code>.</p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+
+        // autograd gives the slope at every x — plot the whole derivative of sin(x²)
+        for (let i = 0; i <= 40; i++) {
+          const xv = -3 + i * 0.15;
+          const x = Tensor.from([xv], [], { requiresGrad: true });
+          x.square().sin().backward();
+          plot("d/dx sin(x²)", await x.grad.item());
+        }
+        log("each point is autograd's slope at that x — the derivative, drawn");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        # autograd gives the slope at every x — plot the whole derivative of sin(x^2)
+        for i in range(41):
+            xv = -3 + i * 0.15
+            x = torch.tensor(xv, requires_grad=True)
+            (x ** 2).sin().backward()
+            plot("d/dx sin(x^2)", x.grad.item())
+        print("each point is autograd's slope at that x - the derivative, drawn")
+      </script>
+    </div>
+
     <h2>Your turn: finish the chain rule</h2>
     <p>The hand derivative of <code>sin(x²)</code> below is missing the inner factor from the chain rule. Add it so it matches what autograd computed.</p>
 
@@ -150,6 +179,14 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>A derivative is a function's slope; the chain rule multiplies the slopes of nested functions: <code>f'(g(x))·g'(x)</code>.</li>
+      <li>Mark an input with <code>requiresGrad</code>, build an expression, call <code>backward()</code>, read <code>.grad</code>.</li>
+      <li>This is exactly the engine the next chapter's autograd runs on.</li>
+      <li>In borch: <code>Tensor.from(v, [], { requiresGrad: true })</code>, <code>backward()</code>, <code>.grad</code>.</li>
+    </ul>
 
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on this page runs against the same library the tests run against — nothing here is a screenshot. Press Reset to get the original code back.
