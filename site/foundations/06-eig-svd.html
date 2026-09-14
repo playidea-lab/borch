@@ -5,13 +5,13 @@
 <script src="../coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>6 · Eigenvalues &amp; the SVD — borch Learn</title>
-<meta name="description" content="Eigenvectors are the directions a matrix only stretches (Av = λv); the SVD factors any matrix into a rotation, a scaling and a rotation. Runs in the page, both languages.">
+<meta name="description" content="Eigenvectors are the directions a matrix only stretches; the SVD factors any matrix into a rotation, a scaling and a rotation — and a plotted spectrum shows why a few numbers carry most of it.">
 <link rel="alternate" hreflang="ko" href="../ko/foundations/06-eig-svd.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="6 · Eigenvalues &amp; the SVD — borch Learn">
-<meta property="og:description" content="Eigenvectors are the directions a matrix only stretches (Av = λv); the SVD factors any matrix into a rotation, a scaling and a rotation. Runs in the page, both languages.">
+<meta property="og:description" content="Eigenvectors are the directions a matrix only stretches; the SVD factors any matrix into a rotation, a scaling and a rotation — and a plotted spectrum shows why a few numbers carry most of it.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
 <meta property="og:url" content="%OG_BASE%/site/foundations/06-eig-svd.html">
 <meta name="twitter:card" content="summary_large_image">
@@ -58,7 +58,7 @@
       <a href="03-broadcasting.html">3 · Broadcasting</a>
       <a href="04-norms.html">4 · Norms</a>
       <a href="05-linear-systems.html">5 · Linear systems</a>
-      <a href="06-eig-svd.html" class="on">6 · Eigen & SVD</a>
+      <a href="06-eig-svd.html" class="on">6 · Eigen &amp; SVD</a>
       <a href="07-chain-rule.html">7 · Chain rule</a>
     </nav>
   </aside>
@@ -67,18 +67,26 @@
     <p class="eyebrow">Foundations · 6</p>
     <h1>Eigenvalues &amp; the SVD</h1>
     <p class="lead">
-      An eigenvector is a direction a matrix only <em>stretches</em>, never turns:
-      <code>A v = λ v</code>. The singular value decomposition generalises that to
-      <em>any</em> matrix, factoring it into a rotation, a scaling, and a rotation
-      (<code>A = U diag(S) Vᵀ</code>) — the workhorse behind PCA, low-rank approximation and
-      much else. Everything below runs in this page, in both languages.
+      Last chapter you <em>solved</em> with a matrix; this one <em>takes it apart</em>.
+      Almost everything a matrix does to space is captured by a handful of numbers — and
+      finding them is how compression, PCA, recommender systems and low-rank fine-tuning
+      (LoRA) all work. Two decompositions do the taking-apart: the eigendecomposition, for
+      the directions a matrix only stretches, and the SVD, which generalises it to
+      <em>any</em> matrix. Everything below runs in this page, in both languages.
     </p>
 
     <h2>Eigenvectors: the directions a matrix only stretches</h2>
     <p>
-      For a symmetric matrix the eigenvalues are real and <code>eigh</code> returns them
-      with their eigenvectors (as the columns of <code>vectors</code>). Take the first pair
-      and check that <code>A·v</code> is just <code>λ·v</code> — same direction, scaled.
+      Multiply most vectors by a matrix and they turn. A special few come out pointing the
+      same way, only longer or shorter — those are its <strong>eigenvectors</strong>, and
+      the factor each is scaled by is its <strong>eigenvalue</strong>:
+      <code>A v = λ v</code>. They are the axes along which the matrix acts simply.
+    </p>
+    <p>
+      For a <em>symmetric</em> matrix the eigenvalues are real and the eigenvectors are
+      orthogonal, so <code>eigh</code> is the tool — it returns the eigenvalues in
+      <code>values</code> and the eigenvectors as the columns of <code>vectors</code>. Take
+      the first pair and confirm that <code>A·v</code> really is just <code>λ·v</code>.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -108,11 +116,14 @@
       </script>
     </div>
 
-    <h2>The SVD factors any matrix</h2>
+    <h2>The SVD: any matrix, three simple pieces</h2>
     <p>
-      <code>A.svd()</code> returns <code>U</code>, the singular values <code>S</code>, and
-      <code>V</code>. Multiplying them back — <code>U diag(S) Vᵀ</code> — returns the
-      original matrix, even though <code>A</code> is not square.
+      Eigenvectors need a square matrix; most matrices in machine learning are not square.
+      The <strong>singular value decomposition</strong> has no such limit. It writes any
+      matrix as <code>A = U diag(S) Vᵀ</code> — geometrically, <em>rotate</em> (Vᵀ),
+      <em>stretch</em> along the axes by the singular values <code>S</code>, then
+      <em>rotate</em> again (U). The singular values are non-negative and sorted largest
+      first: they rank how much each direction matters.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -124,7 +135,7 @@
         log("singular values:", Array.from(await s.toArray()).map((val) => val.toFixed(3)).join(", "));
 
         const recon = u.matmul(s.diag()).matmul(v.transpose());
-        log("max |A - U diag(S) Vᵀ| =", (await A.sub(recon).abs().amax().item()).toExponential(2));
+        log("max |A - U diag(S) Vᵀ| =", (await A.sub(recon).abs().amax().item()).toExponential(2), " (exact)");
       </script>
       <script type="text/plain" data-lang="py">
         import borch_webgpu as torch
@@ -134,15 +145,57 @@
         print("singular values:", ", ".join(f"{val:.3f}" for val in s.tolist()))
 
         recon = u @ torch.diag(s) @ v.t()
-        print("max |A - U diag(S) V^T| =", f"{(A - recon).abs().amax().item():.2e}")
+        print("max |A - U diag(S) V^T| =", f"{(A - recon).abs().amax().item():.2e}", " (exact)")
+      </script>
+    </div>
+
+    <h2>Why a few numbers are enough</h2>
+    <p>
+      Here is the payoff, and it is easier to see than to say. The matrix below is secretly
+      built from only three independent directions, with a little noise on top. Run it and
+      look at the plotted spectrum: the first three singular values tower over the rest. That
+      cliff is why images, embeddings and weight matrices compress — keep the few large
+      singular values, drop the long tail, and you have thrown away almost nothing. It is
+      also exactly what LoRA exploits when it fine-tunes with a low-rank update.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        // a 20x20 matrix that is really rank 3, plus a little noise
+        const lowRank = Tensor.randn([20, 3]).matmul(Tensor.randn([3, 20]));
+        const A = keepAlive(lowRank.add(Tensor.randn([20, 20]).mul(Tensor.full([], 0.1))));
+
+        const { s } = await A.svd();
+        for (const val of Array.from(await s.toArray())) plot("singular value", val);
+
+        log("the first three tower over the rest — the matrix is nearly rank 3");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        # a 20x20 matrix that is really rank 3, plus a little noise
+        low_rank = torch.randn(20, 3) @ torch.randn(3, 20)
+        A = low_rank + torch.randn(20, 20) * 0.1
+
+        _u, s, _v = torch.svd(A)
+        for val in s.tolist():
+            plot("singular value", val)
+
+        print("the first three tower over the rest - the matrix is nearly rank 3")
       </script>
     </div>
 
     <h2>Your turn: rebuild A from its SVD</h2>
     <p>
-      The block reconstructs <code>A</code> from <code>U</code>, <code>S</code> and
-      <code>V</code>, and reports how far it lands from the original. The transpose on
-      <code>V</code> is missing — add it so <code>U diag(S) Vᵀ</code> returns <code>A</code>.
+      Putting the pieces back is the check that you have them right. The block reconstructs
+      <code>A</code> from <code>U</code>, <code>S</code> and <code>V</code> but leaves off the
+      transpose on <code>V</code>. Add it so <code>U diag(S) Vᵀ</code> returns <code>A</code>
+      and the gap falls to zero.
     </p>
 
     <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
@@ -171,6 +224,17 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li><strong>Eigenvector:</strong> a direction a matrix only scales — <code>A v = λ v</code>.
+        Use <code>eigh</code> for symmetric matrices (real eigenvalues, orthogonal eigenvectors).</li>
+      <li><strong>SVD:</strong> <em>any</em> matrix is <code>U diag(S) Vᵀ</code> — rotate, scale by
+        the singular values, rotate. <code>svd</code> returns <code>U</code>, <code>S</code>, <code>V</code>.</li>
+      <li><strong>Singular values are sorted and usually decay fast.</strong> Keeping the top few
+        is low-rank approximation — the idea under compression, PCA, and LoRA.</li>
+      <li>In borch: <code>A.eigh()</code>, <code>A.svd()</code>; both read back with <code>await</code>.</li>
+    </ul>
 
     <div class="note-box">
       <strong>If a block above errors, that is worth knowing.</strong> Every example on

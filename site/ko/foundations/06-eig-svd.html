@@ -5,13 +5,13 @@
 <script src="../../coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>6 · 고윳값과 SVD — borch 배우기</title>
-<meta name="description" content="고유벡터는 행렬이 방향은 안 바꾸고 늘이기만 하는 방향(Av = λv); SVD 는 임의의 행렬을 회전·스케일·회전으로 분해한다. 페이지 안에서, 양 언어로.">
+<meta name="description" content="고유벡터는 행렬이 늘이기만 하는 방향; SVD 는 임의의 행렬을 회전·스케일·회전으로 분해한다 — 그리고 스펙트럼 곡선이 왜 몇 개의 수가 대부분을 담는지 보여준다.">
 <link rel="alternate" hreflang="en" href="../../foundations/06-eig-svd.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="ko_KR">
 <meta property="og:title" content="6 · 고윳값과 SVD — borch 배우기">
-<meta property="og:description" content="고유벡터는 행렬이 방향은 안 바꾸고 늘이기만 하는 방향(Av = λv); SVD 는 임의의 행렬을 회전·스케일·회전으로 분해한다. 페이지 안에서, 양 언어로.">
+<meta property="og:description" content="고유벡터는 행렬이 늘이기만 하는 방향; SVD 는 임의의 행렬을 회전·스케일·회전으로 분해한다 — 그리고 스펙트럼 곡선이 왜 몇 개의 수가 대부분을 담는지 보여준다.">
 <meta property="og:image" content="%OG_BASE%/site/assets/og.png">
 <meta property="og:url" content="%OG_BASE%/site/ko/foundations/06-eig-svd.html">
 <meta name="twitter:card" content="summary_large_image">
@@ -67,17 +67,23 @@
     <p class="eyebrow">기초 수학 · 6</p>
     <h1>고윳값과 SVD</h1>
     <p class="lead">
-      고유벡터는 행렬이 돌리지 않고 <em>늘이기만</em> 하는 방향이다: <code>A v = λ v</code>.
-      특이값 분해(SVD)는 이를 <em>임의의</em> 행렬로 일반화해, 회전·스케일·회전으로 분해한다
-      (<code>A = U diag(S) Vᵀ</code>) — PCA·저랭크 근사 등의 일꾼이다. 아래 모든 것은 이
-      페이지에서, 양 언어로 돈다.
+      지난 장에서는 행렬로 <em>풀었고</em>, 이 장에서는 행렬을 <em>분해한다</em>. 행렬이
+      공간에 하는 일의 거의 전부가 몇 개의 수에 담긴다 — 그 수를 찾는 것이 압축·PCA·추천
+      시스템·저랭크 파인튜닝(LoRA)이 작동하는 방식이다. 분해는 둘이다: 행렬이 늘이기만 하는
+      방향을 주는 고유분해, 그리고 그것을 <em>임의의</em> 행렬로 일반화하는 SVD. 아래 모든
+      것은 이 페이지에서, 양 언어로 돈다.
     </p>
 
     <h2>고유벡터: 행렬이 늘이기만 하는 방향</h2>
     <p>
-      대칭 행렬은 고윳값이 실수이고 <code>eigh</code> 가 그 값과 고유벡터(<code>vectors</code>
-      의 열들)를 준다. 첫 쌍을 꺼내 <code>A·v</code> 가 곧 <code>λ·v</code> — 같은 방향,
-      스케일만 — 인지 확인한다.
+      대부분의 벡터는 행렬을 곱하면 방향이 돈다. 소수의 특별한 벡터만 같은 방향으로, 길이만
+      달라져 나온다 — 그것이 <strong>고유벡터</strong>이고, 각각이 스케일되는 배수가
+      <strong>고윳값</strong>이다: <code>A v = λ v</code>. 행렬이 단순하게 작용하는 축이다.
+    </p>
+    <p>
+      <em>대칭</em> 행렬은 고윳값이 실수이고 고유벡터가 직교하므로 <code>eigh</code> 가
+      도구다 — 고윳값을 <code>values</code> 에, 고유벡터를 <code>vectors</code> 의 열로
+      돌려준다. 첫 쌍을 꺼내 <code>A·v</code> 가 정말 <code>λ·v</code> 인지 확인하라.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -107,11 +113,13 @@
       </script>
     </div>
 
-    <h2>SVD 는 임의의 행렬을 분해한다</h2>
+    <h2>SVD: 임의의 행렬을 세 조각으로</h2>
     <p>
-      <code>A.svd()</code> 는 <code>U</code>, 특이값 <code>S</code>, 그리고 <code>V</code> 를
-      준다. 다시 곱하면 — <code>U diag(S) Vᵀ</code> — <code>A</code> 가 정사각이 아니어도
-      원래 행렬이 돌아온다.
+      고유벡터는 정사각 행렬이 필요하지만, 머신러닝의 행렬은 대개 정사각이 아니다.
+      <strong>특이값 분해</strong>에는 그 제약이 없다. 임의의 행렬을
+      <code>A = U diag(S) Vᵀ</code> 로 쓴다 — 기하로는 <em>회전</em>(Vᵀ), 특이값 <code>S</code>
+      만큼 축을 따라 <em>스케일</em>, 다시 <em>회전</em>(U). 특이값은 음이 아니고 큰 것부터
+      정렬돼 있다: 각 방향이 얼마나 중요한지를 매긴다.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -123,7 +131,7 @@
         log("singular values:", Array.from(await s.toArray()).map((val) => val.toFixed(3)).join(", "));
 
         const recon = u.matmul(s.diag()).matmul(v.transpose());
-        log("max |A - U diag(S) Vᵀ| =", (await A.sub(recon).abs().amax().item()).toExponential(2));
+        log("max |A - U diag(S) Vᵀ| =", (await A.sub(recon).abs().amax().item()).toExponential(2), " (exact)");
       </script>
       <script type="text/plain" data-lang="py">
         import borch_webgpu as torch
@@ -133,15 +141,56 @@
         print("singular values:", ", ".join(f"{val:.3f}" for val in s.tolist()))
 
         recon = u @ torch.diag(s) @ v.t()
-        print("max |A - U diag(S) V^T| =", f"{(A - recon).abs().amax().item():.2e}")
+        print("max |A - U diag(S) V^T| =", f"{(A - recon).abs().amax().item():.2e}", " (exact)")
+      </script>
+    </div>
+
+    <h2>왜 몇 개의 수로 충분한가</h2>
+    <p>
+      여기가 핵심이고, 말보다 보기가 쉽다. 아래 행렬은 사실 세 개의 독립 방향으로만 만들어졌고
+      그 위에 약간의 노이즈가 얹혀 있다. 돌려서 그려지는 스펙트럼을 보라: 처음 세 특이값이
+      나머지를 압도한다. 그 절벽이 이미지·임베딩·가중치 행렬이 압축되는 이유다 — 큰 특이값 몇
+      개만 남기고 긴 꼬리를 버려도 잃는 게 거의 없다. LoRA 가 저랭크 업데이트로 파인튜닝할 때
+      노리는 것도 바로 이것이다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        // a 20x20 matrix that is really rank 3, plus a little noise
+        const lowRank = Tensor.randn([20, 3]).matmul(Tensor.randn([3, 20]));
+        const A = keepAlive(lowRank.add(Tensor.randn([20, 20]).mul(Tensor.full([], 0.1))));
+
+        const { s } = await A.svd();
+        for (const val of Array.from(await s.toArray())) plot("singular value", val);
+
+        log("the first three tower over the rest — the matrix is nearly rank 3");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        # a 20x20 matrix that is really rank 3, plus a little noise
+        low_rank = torch.randn(20, 3) @ torch.randn(3, 20)
+        A = low_rank + torch.randn(20, 20) * 0.1
+
+        _u, s, _v = torch.svd(A)
+        for val in s.tolist():
+            plot("singular value", val)
+
+        print("the first three tower over the rest - the matrix is nearly rank 3")
       </script>
     </div>
 
     <h2>직접: SVD 로 A 를 되짚기</h2>
     <p>
-      이 블록은 <code>U</code>·<code>S</code>·<code>V</code> 로 <code>A</code> 를 재구성하고
-      원본에서 얼마나 벗어났는지 보고한다. <code>V</code> 의 전치가 빠져 있다 —
-      <code>U diag(S) Vᵀ</code> 가 <code>A</code> 를 되돌리도록 더해라.
+      조각을 다시 맞추는 것이 제대로 이해했는지의 확인이다. 이 블록은 <code>U</code>·
+      <code>S</code>·<code>V</code> 로 <code>A</code> 를 재구성하지만 <code>V</code> 의 전치를
+      빠뜨린다. 더해서 <code>U diag(S) Vᵀ</code> 가 <code>A</code> 를 되돌리고 gap 이 0 으로
+      떨어지게 하라.
     </p>
 
     <div class="runnable" data-lang="js" data-verdict="loss<0.0001">
@@ -170,6 +219,17 @@
         print("loss", gap)
       </script>
     </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li><strong>고유벡터:</strong> 행렬이 스케일만 하는 방향 — <code>A v = λ v</code>. 대칭
+        행렬엔 <code>eigh</code>(실수 고윳값, 직교 고유벡터).</li>
+      <li><strong>SVD:</strong> <em>임의의</em> 행렬은 <code>U diag(S) Vᵀ</code> — 회전·스케일·회전.
+        <code>svd</code> 가 <code>U</code>·<code>S</code>·<code>V</code> 를 준다.</li>
+      <li><strong>특이값은 정렬돼 있고 대개 빨리 감쇠한다.</strong> 상위 몇 개만 남기는 것이
+        저랭크 근사 — 압축·PCA·LoRA 밑에 있는 생각이다.</li>
+      <li>borch 에서는 <code>A.eigh()</code>·<code>A.svd()</code>; 둘 다 <code>await</code> 로 읽는다.</li>
+    </ul>
 
     <div class="note-box">
       <strong>위 블록이 에러를 내면, 그것도 알아둘 값이다.</strong> 이 페이지의 모든 예제는
