@@ -490,8 +490,8 @@ for step in range(201):
     <h2>얼마나 빠른가 · 얼마나 맞는가</h2>
     <p class="lead">대체한 TF.js 런타임보다 빠르고(2–3×), 그 밑의 matmul 은 같은 Metal GPU 에서 torch 에 한 끗 차이로 붙는다. parity 와 golden 결과는 아래에 전부 두고, 기기별로 dispatch 까지 들어간 속도 표는 페이지를 막지 않도록 접어 둔다.</p>
 
-    <details>
-      <summary style="cursor:pointer">속도 — 표 전체, 기기별 (열어서 보기)</summary>
+    <details class="fold">
+      <summary>속도 — 표 전체, 기기별</summary>
       <h3 style="margin-top:2rem">CIFAR ResNet-18, 배치 64 — 같은 기계, 같은 벤치</h3>
     <div class="scroll-x">
     <table class="data">

@@ -499,8 +499,8 @@ for step in range(201):
     <h2>How fast · how correct</h2>
     <p class="lead">Faster than the TF.js runtime it replaced (2–3×), and the matmul underneath is within a whisker of torch on the same Metal GPU. The parity and golden runs are below in full; the speed tables — machine by machine, down to the dispatch — are folded so they do not wall the page.</p>
 
-    <details>
-      <summary style="cursor:pointer">Speed — the full tables, machine by machine (open to read)</summary>
+    <details class="fold">
+      <summary>Speed — the full tables, machine by machine</summary>
       <h3 style="margin-top:2rem">CIFAR ResNet-18, batch 64 — same machine, same bench</h3>
     <div class="scroll-x">
     <table class="data">

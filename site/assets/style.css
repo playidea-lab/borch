@@ -387,6 +387,37 @@ table.data tr td strong { color: var(--fg); }
   font-size: .93rem;
 }
 
+/* A section-level disclosure — the measured tables fold behind one of these. */
+details.fold {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+  margin: 1.4rem 0;
+  padding: 0 1.2rem;
+}
+details.fold > summary {
+  cursor: pointer;
+  list-style: none;                 /* the default triangle is replaced below */
+  padding: .95rem .1rem;
+  font: 600 .92rem/1.4 var(--sans);
+  color: var(--fg-dim);
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before {
+  content: "\25B8";                 /* ▸ — rotates when open */
+  color: var(--ember-text);
+  font-size: .85em;
+  line-height: 1;
+  transition: transform .15s ease;
+}
+details.fold[open] > summary::before { transform: rotate(90deg); }
+details.fold > summary:hover { color: var(--fg); }
+details.fold[open] > summary { border-bottom: 1px solid var(--line-soft); }
+details.fold[open] { padding-bottom: 1.1rem; }
+
 footer {
   border-top: 1px solid var(--line-soft);
   padding: 3rem 0 4rem;
