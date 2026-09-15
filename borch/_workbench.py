@@ -208,6 +208,19 @@ class Session:
         # can separate anything (see `resolution`).
         self.held_out = None
 
+    def _set_score(self, value, name, scored_rows):
+        """One name whatever the task was, and a denominator that is not a claim.
+
+        **`held_out` used to be the whole set when nothing was held out.** With `val=0`
+        every row is scored and the rows scored are the rows trained on, so counting them
+        as held out hands `interval` a denominator it can compute a confidence from — a
+        number that looks like evidence and is not. Held out is zero there, and `interval`
+        answers a whole point of uncertainty, which is the honest width of nothing.
+        """
+        self.score, self.score_name = value, name
+        self.held_out = int(len(scored_rows)) if self.config["val"] > 0 else 0
+        self.measured_on = "held-out" if self.config["val"] > 0 else "the training images"
+
     # -- the split ---------------------------------------------------------------
     def _split(self):
         """`(train rows, scored rows)`. With `val=0` they are the same rows, and
@@ -243,9 +256,7 @@ class Session:
             self.predicted = self._predict()
             given = self._given_masks()
             self.iou = float(_iou(self.predicted[scored_rows], given[scored_rows]).mean())
-            self.score, self.score_name = self.iou, "mean IoU"
-            self.held_out = int(len(scored_rows))
-            self.measured_on = "held-out" if cfg["val"] > 0 else "the training images"
+            self._set_score(self.iou, "mean IoU", scored_rows)
             return self
         if not self._eager:
             if model is not None:
@@ -263,12 +274,7 @@ class Session:
         self.seconds = time.perf_counter() - started
         self.predicted = self._predict()
         self.accuracy = float((self.predicted[scored_rows] == y_all[scored_rows]).mean())
-        # **One name a caller can read whatever the task was**, and the specific ones stay
-        # true: `accuracy` is a share of images and `iou` is an overlap, and calling an
-        # overlap an accuracy would be the quiet kind of wrong.
-        self.score, self.score_name = self.accuracy, "accuracy"
-        self.held_out = int(len(scored_rows))
-        self.measured_on = "held-out" if cfg["val"] > 0 else "the training images"
+        self._set_score(self.accuracy, "accuracy", scored_rows)
         return self
 
     def _steps(self, rows):

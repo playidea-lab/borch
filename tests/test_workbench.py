@@ -511,3 +511,19 @@ def test_masks_that_do_not_match_the_images_are_counted_and_refused(discs):
     fewer_pics, fewer_masks = _discs_and_masks(n=4)
     with pytest.raises(ValueError, match="a mask for each image"):
         Session(borch, pics, masks=ImageFiles(fewer_masks, size=32), epochs=1).fit()
+
+
+def test_nothing_held_out_is_reported_as_nothing_held_out(files):
+    """**A denominator is a claim.** With `val=0` the rows scored are the rows trained on,
+    and counting them as held out hands `interval` something to compute a confidence
+    from — a number that looks like evidence and is not."""
+    from borch._workbench import interval
+
+    s = Session(borch, files, size=32, batch=8, epochs=4, lr=0.05, val=0.0).fit()
+    assert s.measured_on == "the training images"
+    assert s.held_out == 0, "nothing was held out and it said otherwise"
+    assert interval(s.accuracy, s.held_out) == 1.0, "no rows is a whole point of uncertainty"
+
+    kept = Session(borch, files, size=32, batch=8, epochs=4, lr=0.05, val=0.25, seed=0).fit()
+    assert kept.measured_on == "held-out" and kept.held_out == 6
+    assert interval(kept.accuracy, kept.held_out) < 1.0
