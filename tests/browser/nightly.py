@@ -227,6 +227,37 @@ def _become_current():
     os.execv(sys.executable, [sys.executable, str(here), *sys.argv[1:]])
 
 
+def browsers_ready(log):
+    """Put the browser the *resolved* playwright wants on disk, and say which one. True if it
+    is there.
+
+    **2026-09-16 came back `1 of 48`.** Forty-seven rows died on one line —
+    `BrowserType.launch: Executable doesn't exist at .../chromium-1243/` — and nothing in
+    the repository had changed: `--with playwright` is unpinned, it resolved to a newer
+    playwright than the night before, and that one asks for a chromium build the cache did
+    not have. Every browser row failed for a reason that was not about borch, and the log
+    said forty-seven different things about borch.
+
+    **A pin was the obvious fix and is the wrong one here.** `--with playwright` appears in
+    forty-seven rows above; pinning means forty-seven edits, and the next person who wants a
+    newer playwright has to change all of them. Miss one and nothing turns red — the night
+    quietly keeps running an old playwright, which is the failure this file has been bitten
+    by in other shapes: an instrument that is silent about what it did not do.
+
+    So the browser is fetched to match whatever resolved, and **the version is written into
+    the log either way**. Drift stops breaking the night, and it stops being invisible: the
+    line moves, and a person reading the log can see when it did.
+    """
+    ver = subprocess.run(["uv", "run", "--project", str(REPO), "--with", "playwright",
+                          "playwright", "--version"], capture_output=True, text=True,
+                         cwd=WORKTREE).stdout.strip()
+    log.write(f"\n$ playwright --version\n{ver or '(could not be asked)'}\n")
+    code = sh(["uv", "run", "--project", str(REPO), "--with", "playwright",
+               "playwright", "install", "chromium"], WORKTREE, log)
+    log.write(f"\n== browsers: {'ok' if code == 0 else f'FAILED ({code})'}\n")
+    return code == 0
+
+
 def main():
     if "--list" in sys.argv:
         print(f"repo      {REPO}\nworktree  {WORKTREE}\nlogs      {LOGS}\nchecks    {len(CHECKS)}")
@@ -242,6 +273,13 @@ def main():
         if not prepare(log):
             log.write("\n** could not prepare the worktree — nothing was checked **\n")
             return 99
+        # Before the rows, not instead of them: if the browser could not be fetched the
+        # night still runs, because a run that stops here would report nothing at all about
+        # the checks that need no browser — and the failure list is the honest damage.
+        browsers = browsers_ready(log)
+        if not browsers:
+            log.write("\n** the browser could not be installed — every row that needs one is\n"
+                      "   expected to fail below, and those failures are not about borch **\n")
         failed = []
         for label, argv in CHECKS:
             code = sh(argv, WORKTREE, log)
@@ -251,7 +289,10 @@ def main():
         head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=WORKTREE,
                               capture_output=True, text=True).stdout.strip()
         log.write(f"\n{len(CHECKS) - len(failed)} of {len(CHECKS)} passed at {head}"
-                  + (f" — failed: {', '.join(failed)}" if failed else "") + "\n")
+                  + (f" — failed: {', '.join(failed)}" if failed else "")
+                  + ("" if browsers else " — and the browser was never installed, so read"
+                                         " the failures as that, not as forty-seven defects")
+                  + "\n")
     latest = LOGS / "latest.log"
     if latest.exists() or latest.is_symlink():
         latest.unlink()
