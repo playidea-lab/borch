@@ -470,8 +470,11 @@ for step in range(201):
   <div class="wrap">
     <p class="eyebrow">잰 것만 적는다</p>
     <h2>얼마나 빠른가 · 얼마나 맞는가</h2>
+    <p class="lead">대체한 TF.js 런타임보다 빠르고(2–3×), 그 밑의 matmul 은 같은 Metal GPU 에서 torch 에 한 끗 차이로 붙는다. parity 와 golden 결과는 아래에 전부 두고, 기기별로 dispatch 까지 들어간 속도 표는 페이지를 막지 않도록 접어 둔다.</p>
 
-    <h3 style="margin-top:2rem">CIFAR ResNet-18, 배치 64 — 같은 기계, 같은 벤치</h3>
+    <details>
+      <summary style="cursor:pointer">속도 — 표 전체, 기기별 (열어서 보기)</summary>
+      <h3 style="margin-top:2rem">CIFAR ResNet-18, 배치 64 — 같은 기계, 같은 벤치</h3>
     <div class="scroll-x">
     <table class="data">
       <thead><tr><th></th><th>TF.js 판 (걷어냈다)</th><th>borch.ts</th><th>borch-webgpu</th></tr></thead>
@@ -529,6 +532,8 @@ for step in range(201):
       오른쪽 둘은 <strong>같은 커널</strong>이다 — 차이 4.9ms 가 파이썬(Pyodide)을 한 번 지나는 값이다.
       직접 쓴 WGSL 이 같은 벤치에서 TF.js 판보다 빨랐고 랭크 한계도 없어서 그쪽을 걷어냈다.
     </p>
+
+    </details>
 
     <h3 style="margin-top:2.6rem">진짜 PyTorch 와 대조한 결과</h3>
     <div class="scroll-x">
