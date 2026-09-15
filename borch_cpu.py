@@ -56,7 +56,7 @@ import numpy as _np
 
 from borch._data import ImageFiles, decode_images, label_from_name, suspects  # noqa: F401 — the files, the decoder and the review score: the numpy core's, no device needed
 from borch._workbench import Session as _Session
-from borch._workbench import interval, resolution, say  # noqa: F401 — the board's own words  # the workbench's recipe: the core's, no device needed
+from borch._workbench import interval as _interval, resolution as _resolution, say as _say
 
 try:
     import js as _js
@@ -303,6 +303,15 @@ class _Workbench:
         from borch._workbench import pick as _pick
 
         return _pick(borch_cpu, files, **config)
+
+    # **The same spelling on both doors.** These three read a board rather than make one,
+    # so they were left at the module's top level here while the WebGPU surface carries
+    # them inside `workbench` — and then `workbench.say(board)` was a line that had to be
+    # edited to move between the two, which is the one thing this namespace exists to
+    # prevent. Its own comment said so.
+    say = staticmethod(_say)
+    interval = staticmethod(_interval)
+    resolution = staticmethod(_resolution)
 
 
 workbench = _Workbench()

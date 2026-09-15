@@ -11,6 +11,7 @@ here, in a second, without a browser.
 """
 
 import io
+import pathlib
 import zipfile
 
 import numpy as np
@@ -18,6 +19,8 @@ import pytest
 
 import borch
 from borch._workbench import Session
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def _png(rgb):
@@ -527,3 +530,32 @@ def test_nothing_held_out_is_reported_as_nothing_held_out(files):
     kept = Session(borch, files, size=32, batch=8, epochs=4, lr=0.05, val=0.25, seed=0).fit()
     assert kept.measured_on == "held-out" and kept.held_out == 6
     assert interval(kept.accuracy, kept.held_out) < 1.0
+
+
+def test_both_doors_spell_the_workbench_the_same_way():
+    """**A namespace whose names differ by door is not a namespace.**
+
+    `borch_cpu`'s `workbench` exists so a reader moving between the two surfaces can move
+    the line without editing it — its own comment says that. Then `say`, `interval` and
+    `resolution` were put at the module's top level on one side and inside `workbench` on
+    the other, and `workbench.say(board)` became a line that had to be edited. A comment
+    did not keep the promise; this does.
+    """
+    import re
+
+    binding = pathlib.Path(ROOT / "borch_webgpu" / "_workbench.py").read_text(encoding="utf-8")
+    cpu = pathlib.Path(ROOT / "borch_cpu.py").read_text(encoding="utf-8")
+
+    offered = set(re.findall(r"^def (\w+)", binding, re.M))
+    offered |= {n.strip() for n in re.findall(r"^from borch\._workbench import ([\w, ]+)",
+                                              binding, re.M)[-1].split(",")
+                } if "import interval" in binding else offered
+    # What the CPU door's namespace carries: methods of the class, plus names bound on it.
+    door = set(re.findall(r"^    def (\w+)", cpu, re.M)) | set(re.findall(r"^    (\w+) = staticmethod", cpu, re.M))
+
+    shared = {"setup", "compare", "pick", "say", "interval", "resolution"}
+    missing = sorted(shared - door)
+    assert not missing, (
+        "borch_cpu.workbench does not carry these and borch_webgpu.workbench does:\n  "
+        + "\n  ".join(missing)
+        + "\n\n  A reader moving between the doors would have to edit the line.")
