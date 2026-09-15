@@ -99,7 +99,10 @@ def test_the_python_smoke_tests_in_agents_md_run_on_the_numpy_core():
     ran = 0
     for lang, body in FENCE.findall((ROOT / "AGENTS.md").read_text(encoding="utf-8")):
         if lang != "python" or body.lstrip().startswith("%pip") or "borch_webgpu" in body:
-            continue  # the notebook cell needs Pyodide and a GPU; the browser checks cover it
+            # **Nothing runs these.** The line here used to say the browser checks cover
+            # them and no probe reads this file — measured 2026-09-15. What holds them is
+            # the test below, which checks the names they use are names that exist.
+            continue
         exec(compile(textwrap.dedent(body), "AGENTS.md", "exec"), {})  # noqa: S102 — the document's own block
         ran += 1
     assert ran >= 1, "AGENTS.md has no Python block the core can run — the smoke test is gone"
@@ -192,3 +195,51 @@ def test_both_registry_summaries_say_what_only_this_library_claims():
             f"claim no competitor makes:\n    {text}")
         assert "torch" in text.lower(), f"{what}'s summary does not name torch"
         assert len(text) <= 300, f"{what}'s summary is {len(text)} chars; PyPI truncates a long one"
+
+
+WORKBENCH_CALL = re.compile(r"\b(?:wb|torch\.workbench)\.(\w+)")
+SESSION_READ = re.compile(r"\bs\.(\w+)")
+
+
+def test_the_workbench_names_in_agents_md_are_names_that_exist():
+    """**The block that cannot be run has to be held some other way.**
+
+    `AGENTS.md`'s workbench example opens `import borch_webgpu`, which needs Pyodide and a
+    tab, so the runner above skips it and — measured — no browser probe reads this file
+    either. A document nothing checks is a document that goes stale: this repository has
+    found that in `parity.ts`, in `platform_claims`, in the census and in `onnx_trap`.
+
+    So the names are checked even though the code is not: every `wb.x` and every `s.x` the
+    document reads has to be something the surface offers.
+    """
+    import borch._workbench as core                                   # noqa: PLC0415
+
+    whole = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    # **This section only.** `s` is a scope elsewhere in the document (`s.keep`), and a
+    # search over the whole file reads that as a Session field and fails on it.
+    start = whole.index("## One call that trains on a folder of images")
+    text = whole[start:whole.index("\n## ", start + 1)]
+    binding = (ROOT / "borch_webgpu" / "_workbench.py").read_text(encoding="utf-8")
+    offered = {m.group(1) for m in re.finditer(r"^def (\w+)", binding, re.M)}
+    offered |= {n for n in dir(core) if not n.startswith("_")}
+    session = {n for n in dir(core.Session) if not n.startswith("_")}
+
+    missing = sorted({n for n in WORKBENCH_CALL.findall(text) if n not in offered})
+    assert not missing, (
+        "AGENTS.md calls these on the workbench and the surface has no such name:\n  "
+        + "\n  ".join(missing))
+    # `s` is a Session in that block; the fields it reads have to be fields it has.
+    read = {n for n in SESSION_READ.findall(text)} - {"x"}
+    absent = sorted(n for n in read if n not in session and n not in _SESSION_FIELDS)
+    assert not absent, (
+        "AGENTS.md reads these off a Session and it does not carry them:\n  "
+        + "\n  ".join(absent))
+
+
+# Fields a Session sets in `__init__` or `fit` rather than declaring on the class, so
+# `dir(Session)` does not show them.
+_SESSION_FIELDS = {
+    "accuracy", "measured_on", "seconds", "how", "losses", "features", "predicted",
+    "model", "head", "config", "data", "masks", "given", "iou", "score", "score_name",
+    "held_out", "torch", "k",
+}

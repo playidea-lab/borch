@@ -9,6 +9,10 @@ Pick by where the code runs: Python on a machine → `borch`; Pyodide/JupyterLit
 - [AGENTS.md](https://playidea-lab.github.io/borch/AGENTS.md): the one page a coding agent needs — which of the three to use, ten rules that save a rewrite, three smoke tests, where the truth is
 - [README](https://playidea-lab.github.io/borch/README.md): the door — thirty seconds in Python and in TypeScript, where it runs, how it is guaranteed
 
+## One call that trains
+
+- [the workbench](https://playidea-lab.github.io/borch/AGENTS.md): `torch.workbench.setup(files, backbone=…).fit()` — a folder of images in, a trained head, a review queue ordered by doubt, and an ONNX file out; `compare` and `pick` rank the registry's backbones under a byte budget and say what the evidence cannot separate. Not a torch name: it sits under `workbench`, and everything else here is torch's surface.
+
 ## The long document
 
 - [docs/BOOK.md](https://playidea-lab.github.io/borch/docs/BOOK.md): installing and naming, the design principle, how the values are guaranteed, the supported range, borch.ts and its six differences from torch, the binding, the `cpu` device, what is deliberately not supported, conformance

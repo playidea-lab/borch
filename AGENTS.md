@@ -105,6 +105,44 @@ LambdaLR, ReduceLROnPlateau · data: `Dataset`, `TensorDataset`, `DataLoader`,
 
 Absent and refused, with a reason each: `tests/torch_gap.py` prints the ledger.
 
+## One call that trains on a folder of images — `workbench`
+
+**Not a torch name, and it sits one level in so that is visible.** `torch.workbench.setup`
+reads as this library's; `torch.setup` would read as torch's and stop on real torch with
+`AttributeError`. Everything above this line is torch's surface; this is not.
+
+```python
+import borch_webgpu as torch                      # a tab with an adapter
+wb = torch.workbench
+
+s = wb.setup(files, backbone="imagenet-efficientnet-b0", val=0.2, epochs=300).fit()
+s.accuracy, s.measured_on     # 0.94, "held-out" — it says which it measured
+s.order                       # the given labels it doubts, most doubted first
+s.onnx()                      # backbone and head as one file
+s.facts()                     # every setting and the result, flat, for torch.report
+
+wb.setup(files, masks=masks, epochs=30).fit().iou     # masks beside the images: a U-Net
+wb.setup(files, epochs=12).fit(my_model)              # your model, the loop lent
+
+print(wb.say(wb.compare(files, budget_mb=25, val=0.25)))   # every backbone under a budget
+name, tried = wb.pick(files, at_least=0.9, budget_mb=25)   # the smallest that clears it
+```
+
+Four things worth knowing before writing against it:
+
+- **A backbone brings its own preparation.** Naming one and also passing `size` is refused,
+  because the manifest says what those weights were trained on — feeding EfficientNet-B0
+  a 64px square without normalising costs 63 points of top-1, measured.
+- **The data says which task it is.** Masks alongside the images is segmentation and the
+  score is `iou`; labels from the file names is classification and the score is
+  `accuracy`. The other is `None`. There is no `task=`.
+- **A board says what it cannot separate.** On a hundred held-out rows two models have to
+  differ by twelve points before the difference is more than the split, so `compare` marks
+  every row it cannot tell from the best and `say` prints that sentence. Ranking inside
+  that is ranking the split.
+- **`borch_cpu` has it too**, with less: a frozen backbone and a linear head, no autograd,
+  so a model of your own and segmentation are refused there by name.
+
 ## Checking support before writing code
 
 Two files are deployed with the site and regenerated on every deployment from the
