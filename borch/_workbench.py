@@ -35,6 +35,45 @@ from ._data import ImageFiles, label_from_name, suspects as _suspects
 _OPTIMIZERS = ("adam", "sgd")
 
 
+def _unet(torch, width=16):
+    """Three levels down and back, one logit per pixel — `tests/seg_eval.py`'s model.
+
+    The same net the workbench page has trained since before this module existed, where it
+    is held against torch's own. Kept here so the page stops keeping a copy.
+    """
+    nn = torch.nn
+
+    def block(i, o):
+        return nn.Sequential(nn.Conv2d(i, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU(),
+                             nn.Conv2d(o, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU())
+
+    class UNet(nn.Module):
+        def __init__(self, w):
+            super().__init__()
+            self.e1, self.e2, self.e3 = block(3, w), block(w, 2 * w), block(2 * w, 4 * w)
+            self.pool = nn.MaxPool2d(2)
+            self.u2 = nn.ConvTranspose2d(4 * w, 2 * w, 2, stride=2)
+            self.u1 = nn.ConvTranspose2d(2 * w, w, 2, stride=2)
+            self.d2, self.d1 = block(4 * w, 2 * w), block(2 * w, w)
+            self.out = nn.Conv2d(w, 1, 1)
+
+        def forward(self, x):
+            a = self.e1(x)
+            b = self.e2(self.pool(a))
+            c = self.e3(self.pool(b))
+            up = self.d2(torch.cat([self.u2(c), b], 1))
+            return self.out(self.d1(torch.cat([self.u1(up), a], 1)))
+
+    return UNet(width)
+
+
+def _iou(predicted, given):
+    """Intersection over union per image, both `(N, 1, H, W)` and already 0 or 1."""
+    hit = (predicted * given).sum(axis=(1, 2, 3))
+    joined = ((predicted + given) > 0).sum(axis=(1, 2, 3))
+    return _np.where(joined > 0, hit / _np.maximum(joined, 1), 1.0)
+
+
 def _small_cnn(nn, classes):
     """The from-scratch path: three conv blocks to a linear head. The workbench's own."""
     def block(cin, cout):
@@ -66,7 +105,7 @@ class Session:
 
     def __init__(self, torch, files, *, size=None, batch=16, epochs=12, lr=None,
                  optimizer=None, backbone=None, val=0.0, seed=0, k=None,
-                 standardise=True, label=label_from_name):
+                 standardise=True, masks=None, label=label_from_name):
         # **The CPU door is a different library, not a slower one.** `borch_cpu` has no
         # `nn`, no `optim` and no autograd: what it has is a frozen backbone's forward and
         # a linear head that fits itself. So the surface is asked what it can do rather
@@ -92,6 +131,22 @@ class Session:
                     f"optimizer={optimizer!r} is not on this door.")
         self._eager = eager
         self._cpu_head = None
+        # **The data says which task this is, not a flag.** Masks alongside the images and
+        # it is segmentation; labels from the file names and it is classification. A
+        # `task=` argument would be a second place to say the same thing, and the two
+        # would disagree the first time somebody passed masks and forgot to change it.
+        self.masks = masks
+        self._given = None
+        self.iou = self.accuracy = None
+        if masks is not None:
+            if backbone is not None:
+                raise ValueError(
+                    "workbench: a frozen backbone gives one vector per image and a mask "
+                    "needs one answer per pixel — leave the backbone out for segmentation.")
+            if not eager:
+                raise ValueError(
+                    f"workbench: {torch.__name__} has no autograd, and a U-Net has to learn "
+                    "every weight — segmentation needs a tab with an adapter.")
         if not eager and not cpu_door:
             raise ValueError(
                 f"workbench: {torch.__name__} offers neither nn/optim nor a LinearHead — "
@@ -147,6 +202,7 @@ class Session:
         self.model = self.head = self._sample = None
         self.losses = self.features = self.predicted = None
         self.accuracy = self.measured_on = self.seconds = self.how = None
+        self.score = self.score_name = None
         # How many rows the accuracy was measured on. **A number without its denominator
         # is not a measurement**, and a board built from these has to say how finely it
         # can separate anything (see `resolution`).
@@ -181,6 +237,16 @@ class Session:
         train_rows, scored_rows = self._split()
         y_all = self.data.targets
 
+        if self.masks is not None:
+            self._fit_masks(train_rows)
+            self.seconds = time.perf_counter() - started
+            self.predicted = self._predict()
+            given = self._given_masks()
+            self.iou = float(_iou(self.predicted[scored_rows], given[scored_rows]).mean())
+            self.score, self.score_name = self.iou, "mean IoU"
+            self.held_out = int(len(scored_rows))
+            self.measured_on = "held-out" if cfg["val"] > 0 else "the training images"
+            return self
         if not self._eager:
             if model is not None:
                 raise ValueError(
@@ -197,6 +263,10 @@ class Session:
         self.seconds = time.perf_counter() - started
         self.predicted = self._predict()
         self.accuracy = float((self.predicted[scored_rows] == y_all[scored_rows]).mean())
+        # **One name a caller can read whatever the task was**, and the specific ones stay
+        # true: `accuracy` is a share of images and `iou` is an overlap, and calling an
+        # overlap an accuracy would be the quiet kind of wrong.
+        self.score, self.score_name = self.accuracy, "accuracy"
         self.held_out = int(len(scored_rows))
         self.measured_on = "held-out" if cfg["val"] > 0 else "the training images"
         return self
@@ -344,6 +414,65 @@ class Session:
         self.model.eval()
         self.how = f"{cfg['backbone']} frozen · head {cfg['epochs']} steps"
 
+    # -- masks: every weight learns, and the score is an overlap -------------------
+    @property
+    def given(self):
+        """The masks as `(N, 1, H, W)` of 0 and 1 — white is the object, decoded once.
+
+        Public because a page showing the queue puts the given mask beside the model's,
+        and reaching for it under a private name is how a caller ends up decoding them a
+        second time.
+        """
+        if self._given is None:
+            self._given = (self.masks.stack()[:, :1] > 0.5).astype(_np.float32)
+        return self._given
+
+    def _given_masks(self):
+        return self.given
+
+    def _fit_masks(self, train_rows):
+        torch, cfg = self.torch, self.config
+        if len(self.masks) != len(self.data):
+            raise ValueError(
+                f"workbench: {len(self.data)} images and {len(self.masks)} masks — a mask "
+                "for each image, under the same name.")
+        self.model = _unet(torch)
+        given = self._given_masks()
+        pictures = self.data.stack()
+        opt = self._optimizer(self.model.parameters())
+        crit = torch.nn.BCEWithLogitsLoss()
+        model, batch = self.model, cfg["batch"]
+        # The rows are shuffled once, so a batch is not a run of one class.
+        order = _np.random.default_rng(cfg["seed"]).permutation(train_rows)
+
+        def step(xb, mb):
+            opt.zero_grad()
+            loss = crit(model(xb), mb)
+            loss.backward()
+            opt.step()
+            return loss
+
+        self._batch = lambda rows, i: (torch.tensor(pictures[order[i * batch:(i + 1) * batch]]),
+                                       torch.tensor(given[order[i * batch:(i + 1) * batch]]))
+        self._run_steps(step, train_rows, self._steps(train_rows))
+        self.model.eval()
+        self.how = (f"U-Net (width 16) from scratch at {self.data.size} px · "
+                    f"{cfg['epochs']} epochs x {self._steps(train_rows)} steps")
+
+    def _predict_masks(self):
+        torch = self.torch
+        pictures = self.data.stack()
+        out = _np.zeros((len(self.data), 1, self.data.size, self.data.size), dtype=_np.float32)
+        with torch.no_grad():
+            for start in range(0, len(self.data), 32):
+                chunk = torch.tensor(pictures[start:start + 32])
+                if hasattr(torch, "scope"):
+                    with torch.scope():
+                        out[start:start + 32] = (self.model(chunk).numpy() > 0)
+                else:
+                    out[start:start + 32] = (self.model(chunk).numpy() > 0)
+        return out
+
     # -- the CPU door: a frozen forward and a head that fits itself ---------------
     def _fit_head_cpu(self, classes, train_rows, y_all):
         torch, cfg = self.torch, self.config
@@ -371,6 +500,8 @@ class Session:
     # -- what came out -----------------------------------------------------------
     def _predict(self):
         torch = self.torch
+        if self.masks is not None:
+            return self._predict_masks()
         if self._cpu_head is not None:
             return self._cpu_head.predict(self.features).argmax(1)
         with torch.no_grad():
@@ -384,6 +515,13 @@ class Session:
     @property
     def suspects(self):
         """How much each given label is doubted, in [0, 1] — the review queue's score."""
+        if self.masks is not None:
+            # **A mask has no neighbourhood to vote in.** What is doubted is the mask the
+            # model could not reproduce, so the score is one minus the overlap — measured
+            # on Kvasir-SEG with a fifth of the masks swapped or shifted: AUROC 0.90.
+            if self.predicted is None:
+                raise RuntimeError("workbench: call fit() before reading suspects")
+            return (1.0 - _iou(self.predicted, self._given_masks())).astype(_np.float32)
         if self.features is None:
             raise RuntimeError("workbench: call fit() before reading suspects")
         k = self.k if self.k else (5 if len(self.data) < 2000 else 20)

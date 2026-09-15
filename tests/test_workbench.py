@@ -436,3 +436,78 @@ def test_the_board_says_out_loud_what_it_cannot_separate(monkeypatch, files):
     text = say(compare(types.SimpleNamespace(hub=_FakeHub), files, budget_mb=60, val=0.25))
     assert "points apart and no closer" in text
     assert "does not rank" in text and "take the smallest" in text
+
+
+# -- masks: the data says which task this is ----------------------------------------
+
+def _discs_and_masks(n=16, side=32):
+    """Bright discs on noise, and the mask that says where each one is."""
+    rng = np.random.default_rng(2)
+    pics, masks = [], []
+    for i in range(n):
+        cx, cy, r = rng.integers(10, side - 10, 2).tolist() + [6]
+        ys, xs = np.mgrid[0:side, 0:side]
+        inside = ((xs - cx) ** 2 + (ys - cy) ** 2) <= r * r
+        pic = np.clip(rng.normal(0.25, 0.05, (side, side, 3)), 0, 1)
+        pic[inside] = np.clip(pic[inside] + 0.6, 0, 1)
+        pics.append((f"a/a_{i:03d}.png", _png((pic * 255).astype(np.uint8))))
+        m = np.repeat((inside * 255).astype(np.uint8)[:, :, None], 3, axis=2)
+        masks.append((f"a/a_{i:03d}.png", _png(m)))
+    return _zip_from(pics), _zip_from(masks)
+
+
+def _zip_from(members):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, data in members:
+            z.writestr(name, data)
+    return [("set.zip", buf.getvalue())]
+
+
+@pytest.fixture(scope="module")
+def discs():
+    from borch._data import ImageFiles
+
+    pics, masks = _discs_and_masks()
+    return ImageFiles(pics, size=32), ImageFiles(masks, size=32)
+
+
+def test_masks_beside_the_images_are_what_makes_it_segmentation(discs):
+    """**No `task=` flag.** A second name for the same fact is a second thing to disagree."""
+    pics, masks = discs
+    s = Session(borch, pics, masks=masks, epochs=2, batch=8)
+    assert s.masks is masks and s.accuracy is None
+
+
+def test_a_u_net_learns_the_discs_and_the_score_is_an_overlap(discs):
+    pics, masks = discs
+    s = Session(borch, pics, masks=masks, epochs=12, batch=8, lr=1e-2).fit()
+    assert s.score_name == "mean IoU" and s.score == s.iou
+    assert s.accuracy is None, "an overlap is not an accuracy, and calling it one is the quiet kind of wrong"
+    assert s.iou > 0.5, f"the discs were not learned: IoU {s.iou}"
+    assert s.predicted.shape == (len(pics), 1, 32, 32)
+    assert s.losses[-1] < s.losses[0]
+
+
+def test_the_review_queue_for_masks_is_one_minus_the_overlap(discs):
+    pics, masks = discs
+    s = Session(borch, pics, masks=masks, epochs=8, batch=8, lr=1e-2).fit()
+    doubt = s.suspects
+    assert doubt.shape == (len(pics),) and (0.0 <= doubt).all() and (doubt <= 1.0).all()
+    # The worst-drawn mask is the one at the front of the queue.
+    assert s.order[0] == int(np.argmax(doubt))
+
+
+def test_a_backbone_with_masks_is_refused_because_a_vector_is_not_a_mask(discs):
+    pics, masks = discs
+    with pytest.raises(ValueError, match="one answer per pixel"):
+        Session(borch, pics, masks=masks, backbone="imagenet-efficientnet-b0")
+
+
+def test_masks_that_do_not_match_the_images_are_counted_and_refused(discs):
+    from borch._data import ImageFiles
+
+    pics, masks = discs
+    fewer_pics, fewer_masks = _discs_and_masks(n=4)
+    with pytest.raises(ValueError, match="a mask for each image"):
+        Session(borch, pics, masks=ImageFiles(fewer_masks, size=32), epochs=1).fit()

@@ -101,67 +101,16 @@ def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
     if masks is not None and torch is None:
         raise RuntimeError("segmentation needs the WebGPU device — the CPU side runs the frozen backbone and the head only")
     if masks is not None:
-        # Segmentation: a three-level U-Net from scratch on the given masks (the model
-        # of tests/seg_eval.py, where it is measured against torch), one logit per pixel.
-        # `pred` is the model's mask per image; `feats` carries the given masks — the
-        # review ranks masks by their disagreement with the model's, not by neighbours.
-        nn = torch.nn
-        def block(i, o):
-            return nn.Sequential(nn.Conv2d(i, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU(), nn.Conv2d(o, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU())
-        class UNet(nn.Module):
-            def __init__(self, w=16):
-                super().__init__()
-                self.e1, self.e2, self.e3 = block(3, w), block(w, 2 * w), block(2 * w, 4 * w)
-                self.pool = nn.MaxPool2d(2)
-                self.u2, self.u1 = nn.ConvTranspose2d(4 * w, 2 * w, 2, stride=2), nn.ConvTranspose2d(2 * w, w, 2, stride=2)
-                self.d2, self.d1 = block(4 * w, 2 * w), block(2 * w, w)
-                self.out = nn.Conv2d(w, 1, 1)
-            def forward(self, x):
-                a = self.e1(x); b = self.e2(self.pool(a)); c = self.e3(self.pool(b))
-                y_ = self.d2(torch.cat([self.u2(c), b], 1))
-                return self.out(self.d1(torch.cat([self.u1(y_), a], 1)))
-        model = UNet()
-        head = None
-        crit = nn.BCEWithLogitsLoss()
-        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-        Xt = ds.stack()                                            # (N, 3, 96, 96)
-        Mt = (masks.stack()[:, :1] > 0.5).astype(np.float32)       # (N, 1, 96, 96): white is the object
-        BATCH = 16
-        EPOCHS = 30 if N <= 1000 else 15
-        steps = max(1, N // BATCH)
-        shuffled = np.random.default_rng(0).permutation(N)
-        # `torch.compiled`: the step is recorded once per input shape and replayed after —
-        # the same dispatches, the batch copied in, no Python between the kernels, the
-        # elementwise chains fused into single kernels. The eager step to a rounding
-        # (measured), a sixth faster on a laptop GPU.
-        def train_step(xb, mb):
-            opt.zero_grad(); l = crit(model(xb), mb); l.backward(); opt.step(); return l
-        run = torch.compiled(train_step)
-        for epoch in range(EPOCHS):
-            for s in range(steps):
-                take = shuffled[s * BATCH:(s + 1) * BATCH]
-                with torch.scope():
-                    loss = run(torch.tensor(Xt[take]), torch.tensor(Mt[take]))
-                    last = loss.item()
-            losses.append(last)
-        run.dispose()
-        model.eval()
-        pred = np.zeros((N, 1, ds.size, ds.size), np.float32)
-        # The prediction pass through `torch.compiled` too: under `no_grad` the fused
-        # kernels leave every intermediate unwritten, and the last, shorter batch is one
-        # more recording.
-        predict = torch.compiled(model)
-        with torch.no_grad():
-            for s in range(0, N, 32):
-                with torch.scope():
-                    pred[s:s + 32] = (predict(torch.tensor(Xt[s:s + 32])).numpy() > 0)
-        predict.dispose()
-        feats = Mt
-        hit = (pred * Mt).sum(axis=(1, 2, 3)); joined = ((pred + Mt) > 0).sum(axis=(1, 2, 3))
-        ious = np.where(joined > 0, hit / np.maximum(joined, 1), 1.0)
-        acc = float(ious.mean())
-        how = f"U-Net (width 16) from scratch at {ds.size} px · {EPOCHS} epochs × {steps} steps"
-        headline = f"{how} in **{time.perf_counter() - t0:.1f} s** · loss {losses[0]:.3f} → {losses[-1]:.3f} · mean IoU with the given masks **{acc:.2f}**"
+        # **The recipe is the library's.** Masks beside the images and `workbench` trains
+        # the U-Net of tests/seg_eval.py, one logit per pixel, and scores the overlap —
+        # no task flag, because what arrived says which task it is.
+        s = torch.workbench.setup(ds, masks=masks, epochs=30 if N <= 1000 else 15,
+                                  batch=16, lr=1e-3).fit()
+        model, head, pred, losses = s.model, None, s.predicted, s.losses
+        feats = s.given                                    # the review puts the given mask beside the model's
+        acc, how = s.iou, s.how
+        headline = (f"{how} in **{s.seconds:.1f} s** · loss {losses[0]:.3f} -> {losses[-1]:.3f}"
+                    f" · mean IoU with the given masks **{acc:.2f}**")
     elif torch is None:
         # No adapter: the same recipe through the same call. `workbench` asks the surface
         # what it can do — this door has a frozen forward and a head that fits itself, and
