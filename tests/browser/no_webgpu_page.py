@@ -65,6 +65,13 @@ LESSONS = {
     # block for a before and an after.
     "site/learn/05-cnn.html": "runs",
     "site/techniques/03-batchnorm.html": "runs",
+    # **A lesson whose subject is a binding-only Python tool.** Block 0 is pure arithmetic
+    # (the width of a measurement) and runs on the core; the `torch.workbench` blocks below
+    # it are the binding's, so with no adapter they must say so in a sentence — the
+    # binding-only mark, not a traceback. Registered so that path is pressed where there is
+    # no GPU, which is every CI runner.
+    "site/capstones/02-honest-measurement.html": "runs",
+    "site/ko/capstones/02-honest-measurement.html": "runs",
 }
 HANGUL = re.compile(r"[가-힣]")
 # One runs before the page's scripts, so the page boots into the shape rather than being

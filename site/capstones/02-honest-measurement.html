@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Say what you measured on — borch Learn</title>
+<meta name="description" content="An accuracy is not a measurement until you say what it was measured on, and how wide it is. torch.workbench trains in the tab and names both — held-out or the training images, and the split's own resolution.">
+<link rel="alternate" hreflang="ko" href="../ko/capstones/02-honest-measurement.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Say what you measured on — borch Learn">
+<meta property="og:description" content="An accuracy is not a measurement until you say what it was measured on, and how wide it is. torch.workbench trains in the tab and names both — held-out or the training images, and the split's own resolution.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/capstones/02-honest-measurement.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/capstones/02-honest-measurement.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Capstones</h4>
+    <nav>
+      <a href="../learn/">Overview</a>
+      <a href="01-mini-transformer.html">1 · Mini-transformer</a>
+      <a href="02-honest-measurement.html" class="on">2 · Say what you measured on</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Capstones · 2</p>
+    <h1>Say what you measured on</h1>
+    <p class="lead">
+      A model reports an accuracy of 0.92 and it feels like a fact. It is not one yet. A
+      number is a measurement only when it carries two things it almost never does: <em>what
+      it was measured on</em> — the images the model learned, or images it never saw — and
+      <em>how wide</em> the measurement is, because a number read off forty examples can be
+      ten points from the truth. <code>torch.workbench</code> trains a model in this tab and
+      keeps both. Here you make it lie, then make it tell the truth.
+    </p>
+
+    <h2>Every accuracy has a width</h2>
+    <p>
+      Before any model, the arithmetic. An accuracy measured on <code>n</code> held-out
+      examples carries a standard error; at ninety-five per cent confidence that is a band
+      around the number, and telling two models apart needs a gap wider still — two
+      estimates, each with its own band. This runs anywhere, no GPU required; it is exactly
+      what <code>workbench.interval</code> and <code>workbench.resolution</code> compute for
+      a real run.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        // The width of a measurement — pure arithmetic, no GPU needed.
+        // This is what torch.workbench.interval and .resolution compute for a real run.
+        const z = 1.96;                                  // 95% is 1.96 standard errors
+        const interval = (n, p) => z * Math.sqrt(p * (1 - p) / n);
+        const resolution = (n, p) => Math.SQRT2 * interval(n, p);   // two estimates: sqrt(2) wider
+
+        for (const n of [50, 100, 500]) {
+          const half = interval(n, 0.75) * 100;
+          const gap = resolution(n, 0.75) * 100;
+          log(n + " held-out rows: an accuracy near 75% is ±" + half.toFixed(0)
+              + " points, and two models must differ by " + gap.toFixed(0)
+              + " points before it is more than the split");
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>This lesson's real run is Python, in a tab with WebGPU.</strong>
+      <code>torch.workbench</code> is a Python-surface tool — it trains a model, so it lives
+      where the autograd is, not in borch.ts. On a machine with no adapter the blocks below
+      say so in a sentence rather than a traceback; the arithmetic above runs everywhere.
+    </div>
+
+    <h2>Make it lie, then make it tell the truth</h2>
+    <p>
+      One dataset, one model, trained twice — the only change is <code>val</code>, the share
+      of images held back for scoring. With <code>val=0</code> the accuracy is read off the
+      very images the model trained on; with <code>val=0.3</code> it is read off images it
+      never saw. The set here is <em>pure noise with labels that mean nothing</em>, so there
+      is nothing to learn — which is what makes the gap between the two numbers the whole
+      lesson.
+    </p>
+
+    <div class="runnable" data-lang="py">
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        wb = torch.workbench
+
+        # A tiny set with no real signal: 90 noise images, labels assigned round-robin.
+        # Upload your own folder in the workbench; here setup() is handed an in-memory set,
+        # so nothing downloads and there are no files to decode.
+        rng = np.random.default_rng(0)
+        N, S = 90, 16
+        X = rng.random((N, 3, S, S)).astype(np.float32)   # pure noise
+        y = (np.arange(N) % 3).astype(np.int64)            # labels unrelated to the pixels
+
+        class InMemory:
+            size = S
+            classes = ["a", "b", "c"]
+            targets = y
+            def __len__(self): return N
+            def stack(self): return X
+            def batches(self, n=16):
+                for a in range(0, N, n):
+                    idx = np.arange(a, min(a + n, N))
+                    yield X[idx], idx
+
+        dataset = InMemory()
+
+        # Measured on the images it trained on (val=0, the default):
+        a = wb.setup(dataset, epochs=8, lr=0.05, val=0.0).fit()
+        print("val=0.0  accuracy", round(a.accuracy, 2), "measured on", a.measured_on)
+
+        # Measured on images held back and never trained on (val=0.3):
+        b = wb.setup(dataset, epochs=8, lr=0.05, val=0.3, seed=0).fit()
+        print("val=0.3  accuracy", round(b.accuracy, 2), "measured on", b.measured_on)
+
+        print("the first number is memorised noise; the held-out one is the truth")
+      </script>
+    </div>
+
+    <p>
+      The first run scores high on the images it memorised. The second, on images it never
+      saw, falls to roughly one-in-three — chance, for three classes, which is the honest
+      report: there was no signal, and the held-out split is what says so. A number without
+      <code>measured_on</code> beside it hides exactly this difference.
+    </p>
+
+    <h2>And how wide is the honest number?</h2>
+    <p>
+      A held-out accuracy is itself measured on a sample, so it too has a width. A small
+      split gives a wide one — the run below reports how far apart two models would have to
+      score before the difference is more than the luck of which rows landed in the split.
+    </p>
+
+    <div class="runnable" data-lang="py">
+      <script type="text/plain" data-lang="py">
+        import numpy as np
+        import borch_webgpu as torch
+
+        wb = torch.workbench
+
+        rng = np.random.default_rng(0)
+        N, S = 90, 16
+        X = rng.random((N, 3, S, S)).astype(np.float32)
+        y = (np.arange(N) % 3).astype(np.int64)
+
+        class InMemory:
+            size = S
+            classes = ["a", "b", "c"]
+            targets = y
+            def __len__(self): return N
+            def stack(self): return X
+            def batches(self, n=16):
+                for a in range(0, N, n):
+                    idx = np.arange(a, min(a + n, N))
+                    yield X[idx], idx
+
+        b = wb.setup(InMemory(), epochs=8, lr=0.05, val=0.3, seed=0).fit()
+        gap = wb.resolution(b.held_out) * 100
+        print("held out:", b.held_out, "rows")
+        print("two models on this split cannot be told apart unless they differ by",
+              round(gap), "points")
+        print("so a leaderboard whose spread is under that is a board of one answer")
+      </script>
+    </div>
+
+    <h2>What to remember</h2>
+    <ul>
+      <li>An accuracy without <code>measured_on</code> is not a measurement — held-out and the training images are different claims, and only one generalises.</li>
+      <li>Never score on the images the model trained on; hold a share back with <code>val</code> and score there.</li>
+      <li>Every held-out number has a width set by how many rows it was measured on; a small split cannot separate close models.</li>
+      <li><code>torch.workbench</code> trains in the tab and keeps both facts — <code>measured_on</code> and <code>resolution</code> — so the number reports itself honestly.</li>
+    </ul>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="01-mini-transformer.html">← Mini-transformer</a>
+      <a href="../workbench.html" style="text-align:right">The tool<b>Workbench</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+<script type="module" src="../assets/toc.js"></script>
+</body>
+</html>
