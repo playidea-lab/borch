@@ -43,9 +43,13 @@ async def _():
     # one of two words; `data-borch-adapter` is **absent** when there is no adapter, which
     # is what a reader of the attribute has to be able to tell apart from a CPU whose name
     # merely lacks `swiftshader` in it. Rewording `boot` now changes nothing a check reads.
-    door = f'<span data-borch-door="{"webgpu" if torch is not None else "cpu"}"'
-    door += f' data-borch-adapter="{html.escape(adapter, quote=True)}"' if torch is not None else ""
-    mo.vstack([mo.md(boot), mo.Html(door + " hidden></span>")])
+    # **Named `mark`, not `door`.** marimo gives every cell one global namespace, so a name
+    # used twice in the notebook stops the second cell dead — `'door' was also defined by
+    # cell-4` and nothing below it runs. The training cell has the real door in it; this is
+    # the mark that says which one opened.
+    mark = f'<span data-borch-door="{"webgpu" if torch is not None else "cpu"}"'
+    mark += f' data-borch-adapter="{html.escape(adapter, quote=True)}"' if torch is not None else ""
+    mo.vstack([mo.md(boot), mo.Html(mark + " hidden></span>")])
     return adapter, cpu, mo, torch
 
 
@@ -107,49 +111,46 @@ def _(FROZEN, cpu, path, torch, upload):
 
 @app.cell
 def _(CLASSES, FROZEN, cpu, ds, masks, mo, np, path, torch, y):
-    # 2 · Train. Three paths, one output: `model` (what is exported), `feats` (what the
-    # review ranks on), `pred`, and a line saying how well the labels are agreed with.
+    # 2 · Train. **What differs between the four paths is the settings, not the code after
+    # them.** This cell used to branch four ways and then unpack five names four times, so
+    # the one line that matters — `workbench.setup(...).fit()` — was the hardest thing on
+    # the page to see. The recipe's whole claim is that one call carries the settings; a
+    # cell that buries the call under its own bookkeeping argues the opposite.
     import time
     K, N = len(CLASSES), len(ds)
-    t0 = time.perf_counter(); losses = []
     if masks is not None and torch is None:
         raise RuntimeError("segmentation needs the WebGPU device — the CPU side runs the frozen backbone and the head only")
+    # One door, chosen once. `borch_cpu` has no `nn` and no autograd, and `workbench` asks
+    # the surface what it can do rather than what it is called — so the call is the same.
+    door = torch if torch is not None else cpu
     if masks is not None:
-        # **The recipe is the library's.** Masks beside the images and `workbench` trains
-        # the U-Net of tests/seg_eval.py, one logit per pixel, and scores the overlap —
-        # no task flag, because what arrived says which task it is.
-        s = torch.workbench.setup(ds, masks=masks, epochs=30 if N <= 1000 else 15,
-                                  batch=16, lr=1e-3).fit()
-        model, head, pred, losses = s.model, None, s.predicted, s.losses
-        feats = s.given                                    # the review puts the given mask beside the model's
-        acc, how = s.iou, s.how
-        headline = (f"{how} in **{s.seconds:.1f} s** · loss {losses[0]:.3f} -> {losses[-1]:.3f}"
-                    f" · mean IoU with the given masks **{acc:.2f}**")
+        how_many = dict(masks=masks, epochs=30 if N <= 1000 else 15, batch=16, lr=1e-3)
     elif torch is None:
-        # No adapter: the same recipe through the same call. `workbench` asks the surface
-        # what it can do — this door has a frozen forward and a head that fits itself, and
-        # no autograd — and prepares the photographs the way the manifest asks.
-        s = cpu.workbench.setup(ds, backbone="imagenet-efficientnet-b0", epochs=300).fit()
-        feats, pred, losses = s.features, s.predicted, s.losses
-        head, model = s.head, None                         # the head's weights go on; there is no graph to export
-        feat_s = s.seconds
-        how = f"EfficientNet-B0 frozen, on the CPU · features for {N} images in **{feat_s:.1f} s** · head 300 steps"
+        how_many = dict(backbone="imagenet-efficientnet-b0", epochs=300)
     elif path.value == FROZEN:
-        # **The recipe is the library's now.** `workbench.setup` carries every setting in
-        # one call and `fit()` runs it: the backbone forward-only in batches, the 1280-d
-        # pre-logits kept, a linear head the only thing that learns. What is here is the
-        # two lines this page chooses, not the loop it used to keep a copy of.
-        s = torch.workbench.setup(ds, backbone="imagenet-efficientnet-b0", epochs=300, batch=16, lr=1e-2).fit()
-        model, head, feats, pred, losses = s.model, s.head, s.features, s.predicted, s.losses
-        feat_s = s.seconds
-        how = f"EfficientNet-B0 frozen · features for {N} images in **{feat_s:.1f} s** · head 300 steps"
+        how_many = dict(backbone="imagenet-efficientnet-b0", epochs=300, batch=16, lr=1e-2)
     else:
-        s = torch.workbench.setup(ds, epochs=12, batch=16, lr=1e-3).fit()
-        model, head, feats, pred, losses, how = s.model, None, s.features, s.predicted, s.losses, s.how
+        how_many = dict(epochs=12, batch=16, lr=1e-3)
+
+    t0 = time.perf_counter()
+    s = door.workbench.setup(ds, **how_many).fit()
     train_s = time.perf_counter() - t0
-    if masks is None:
+
+    # Every one of these exists on a `Session` whatever path ran — unset ones are `None`,
+    # so there is nothing to choose between here either.
+    model, head, pred, losses = s.model, s.head, s.predicted, s.losses
+    feats = s.given if masks is not None else s.features   # a mask review sits beside the given mask
+    if masks is not None:
+        acc = s.iou
+        headline = (f"{s.how} in **{s.seconds:.1f} s** · loss {losses[0]:.3f} -> {losses[-1]:.3f}"
+                    f" · mean IoU with the given masks **{acc:.2f}**")
+    else:
         acc = float((pred == y).mean())
-        headline = f"{how} in **{train_s:.1f} s** · loss {losses[0]:.2f} → {losses[-1]:.3f} · agrees with the given labels on **{acc * 100:.0f}%**"
+        # `how` already says the door — `... frozen, on the CPU · head 300 steps` — so a
+        # prefix here would say it twice.
+        headline = (f"{s.how} in **{train_s:.1f} s** · loss {losses[0]:.2f} → {losses[-1]:.3f}"
+                    f" · agrees with the given labels on **{acc * 100:.0f}%**")
+    how = s.how
     mo.md(f"### 2 · Trained\n{headline}")
     return acc, feats, head, how, model, pred, train_s
 
