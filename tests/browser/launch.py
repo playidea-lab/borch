@@ -129,6 +129,13 @@ import sys
 FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan"]
 
 # Implementations that run on the CPU. Chrome has SwiftShader; Linux Mesa has lavapipe (llvmpipe).
+#
+# **Shared with a second repository.** `borch-fed`'s `clock/browser.py` re-implements this
+# protocol rather than importing it, so that repository does not depend on a `~/git/borch`
+# path. Three things are matched by hand and only work while they agree: this pattern,
+# `LOCK_PATH`, and `BORCH_PROBE_LOCK_PID`. Widening the pattern here without saying so
+# leaves the other side calling a CPU a GPU; changing either of the other two leaves both
+# sides believing they hold a lock nobody shares. Change any of the three, tell that side.
 _SOFTWARE = re.compile(r"swiftshader|llvmpipe|lavapipe|software", re.I)
 
 
@@ -409,6 +416,9 @@ def _headed(asked):
     return "--headless" not in sys.argv
 
 
+# The name and the environment variable below are the machine-wide handshake, not a
+# detail private to this repository — `borch-fed` waits on this same file. See the note
+# on `_SOFTWARE` above before renaming either.
 LOCK_PATH = pathlib.Path.home() / ".cache" / "borch" / "browser-probe.lock"
 _lock_fd = None
 
