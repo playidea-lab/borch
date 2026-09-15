@@ -15,7 +15,7 @@
 <meta charset="utf-8">
 <script src="coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Workbench — borch</title>
+<title>torch.workbench — borch</title>
 <link rel="alternate" hreflang="ko" href="ko/workbench.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
@@ -62,50 +62,88 @@
   <aside class="sidebar">
     <h4>Workbench</h4>
     <nav>
-      <a href="#differs">How it differs</a>
-      <a href="#knowing">Worth knowing</a>
-      <a href="notebook.html">The notebook →</a>
+      <a href="#call">The call</a>
+      <a href="#folder">What it reads</a>
+      <a href="#evidence">Does the order hold up</a>
+      <a href="notebook.html">The notebooks →</a>
     </nav>
   </aside>
 
   <main class="doc-main">
     <p class="eyebrow">Workbench</p>
-    <h1>Upload, train, review, take it away</h1>
+    <h1>One call that trains on a folder of images</h1>
     <p class="lead">
-      A marimo notebook in the browser — reactive cells, UI elements like tables and
-      buttons, and an AI assistant you give your own key to. The first cell installs
-      <code>pyborch</code>; the rest is one review job: upload images → train on this
-      tab's GPU → a review table with the labels the model doubts first →
-      <code>torch.onnx.export</code>. Two model paths: a frozen ImageNet EfficientNet-B0 with a
-      linear head (<code>torch.hub.load</code>, one feature vector per image, hundreds of images are
-      enough) or a small CNN from scratch. Nothing is installed. A zip with <code>images/</code>
-      and <code>masks/</code> makes it a segmentation job instead: a U-Net trains on the masks, the
-      review table shows the given mask beside the model's, worst agreement first, and the export is the U-Net.
-      Measured on the same laptop GPU, a training step here takes about one and a half times torch's — and the images never leave the tab.
+      <code>torch.workbench</code> is a recipe, not a torch name — it sits one level in so
+      that is visible. Hand it a folder: it reads the labels off the file names, trains,
+      scores every label by how much the model doubts it, and hands back an ONNX file.
+      The images stay in the tab. It is what the
+      <a href="notebook.html">marimo notebook</a> runs, and you can call it yourself in
+      <a href="notebook.html">either notebook</a> on this site.
     </p>
     <p class="cta-row">
-      <a class="btn primary" href="marimo/index.html">Open the workbench →</a>
-      <a class="btn ghost" href="notebook.html">The Jupyter notebook instead →</a>
+      <a class="btn primary" href="notebook.html">Run it in marimo →</a>
+      <a class="btn ghost" href="api/">API reference →</a>
     </p>
-    <h2 id="differs">How it differs from the notebook</h2>
+
+    <h2 id="call">The call</h2>
+<pre><code>import borch_webgpu as torch          # or borch_cpu — same spelling, no device
+wb = torch.workbench
+
+s = wb.setup(files, val=0.2)         # train, holding a fifth back
+print(s.accuracy, s.held_out)        # and what it was measured on
+s.suspects()                         # the labels it doubts, worst first
+s.onnx()                             # take the model away</code></pre>
+    <p>
+      Two more calls answer the question before that one — <strong>which backbone</strong>.
+      <code>wb.compare(files, budget_mb=60)</code> trains every candidate that fits the
+      budget and prints a board; <code>wb.pick(files, at_least=0.9)</code> returns the
+      smallest one that clears a bar. Both mark the rows they <em>cannot</em> tell apart:
+      with a hundred held out, two backbones four points apart are one result, and
+      <code>wb.resolution(held_out)</code> says how far apart they would have to be before
+      the difference is real. A board that hides that invites a decision the data does not
+      support.
+    </p>
+    <p class="small muted">
+      The same names are on both doors. <code>borch_cpu</code> has no <code>nn</code> and
+      no autograd, so the frozen-backbone path runs there and the from-scratch CNN and the
+      ONNX export do not — the surface is asked what it can do rather than what it is
+      called, and a caller who wants the other path is told which door to open.
+    </p>
+
+    <h2 id="folder">What it reads, and what comes back</h2>
     <ul>
-      <li><strong>Reactive.</strong> Change a cell and only what depends on it reruns. Pick a row in the review table and the cell below follows.</li>
-      <li><strong>UI elements.</strong> A file upload, a table, a button become Python values — no widget code.</li>
-      <li><strong>AI assistant.</strong> Put your own API key in the settings and cells can be generated and errors fixed on request. Code and errors leave; images do not.</li>
-      <li><strong>The same wheel.</strong> <code>import borch_webgpu as torch</code> boots borch.ts here too.</li>
+      <li><strong>Labels come from the file names.</strong> A label is the part of the name
+        before the first <code>_</code> — <code>ok_014.png</code>, <code>ng_003.png</code>.
+        A zip of class folders works too, and nothing in it is decoded until a batch asks
+        for it, so thousands of images cost what a batch costs. Upload nothing and a
+        synthetic three-class set runs instead.</li>
+      <li><strong>Two model paths.</strong> A frozen ImageNet EfficientNet-B0 with a linear
+        head on top (one feature vector per image, computed once — hundreds of images are
+        enough), or a small CNN where every weight learns. The frozen one is the field
+        trainer's path and the default.</li>
+      <li><strong>Masks make it segmentation.</strong> A zip with <code>images/</code> and
+        <code>masks/</code> — the same names in both — trains a U-Net instead, and the
+        review table puts the given mask beside the model's, worst agreement first.</li>
+      <li><strong>What comes back</strong> is an ONNX file that ONNX Runtime reads anywhere,
+        the review order, and the settings and the result flat enough to paste into a
+        report. Nothing is installed and nothing is uploaded.</li>
+      <li>The calls underneath are the library's, and you can use them without the recipe:
+        <code>torch.decode_images</code> turns files into an NCHW batch with labels from
+        the names, <code>torch.ImageFiles</code> is the same on demand, and
+        <code>torch.suspects</code> scores each label by how many of its nearest neighbours
+        in the model's features disagree with it — that score is the review order.</li>
     </ul>
-    <h2 id="knowing">Worth knowing</h2>
+
+    <h2 id="evidence">Does the review order hold up</h2>
     <ul>
-      <li>The kernel takes about ten seconds to come up (Pyodide and marimo download). Cells do not run by themselves: press the run button at the bottom right.</li>
-      <li>A label is the part of the file name before the first <code>_</code>. Upload nothing and a synthetic three-class set runs instead. The two calls doing the work are the library's: <code>torch.decode_images</code> turns the files into an NCHW batch with labels from the names, (<code>torch.ImageFiles</code> is the same on demand — a zipped folder of thousands, decoded a batch at a time, the folder as the label), and <code>torch.suspects</code> scores each label by how many of its five nearest neighbours in the model's features disagree with it — the review table's order.</li>
       <li><strong>Does the review order find the real mislabels?</strong> Measured on CIFAR-10N, fifty thousand images with the labels people actually gave and the clean labels known, through this very path (frozen B0 pre-logits → <code>torch.suspects</code>): with 9 % of labels wrong, the queue's first 20 are 65 % mislabels (random order: 9 %), AUROC 0.948, and reading 18 % of the queue catches 90 % of them; with 40 % wrong, the first 20 are all mislabels. The browser path on a 5,000-image subset lands within a few points of the native run (AUROC 0.929 vs 0.917). Harder sets say where it thins: CIFAR-100N (a hundred fine classes, 40 % wrong) AUROC 0.842 with the first 100 of the queue 78 % mislabels; Food-101N (web-collected food, 18 % wrong, the wrong ones being other dishes that look alike) AUROC 0.767, the first 20 65 % mislabels — twice random, not seven times. Larger neighbourhoods help at scale: at fifty thousand rows k = 20 lifts CIFAR-100N with 10 % flipped from AUROC 0.913 to 0.962, and the workbench uses twenty from two thousand images up. Three domain sets, with 10 % of clean labels flipped (k = 20): NEU-CLS steel-surface defects AUROC 1.000 and the queue's first 20 all mislabels; ISIC 2019 dermoscopy 0.920; PatchCamelyon histology patches 0.918 — the inspection camera's kind of picture is where the frozen backbone is at home, and tissue is where a partial fine-tune starts to matter. <code>tests/review_eval.py</code> holds every number.</li>
       <li><strong>Segmentation, the same two questions.</strong> A three-level U-Net on Kvasir-SEG (a thousand endoscopy images with a polyp mask each, at 96 px) with a fifth of the training masks corrupted — swapped with another image's, or shifted off the polyp. Held-out IoU against the clean masks, trained on clean masks: torch 0.55, the browser 0.51–0.57 across the day's kernel versions; trained with a fifth of the masks wrong: torch 0.40–0.50 over six seeds, the browser 0.46 (the number after thirty epochs on corrupted masks moves with the arithmetic's summation order, so it is reported as a range). 34 s for 800 images × 30 epochs on the Mac's GPU against torch's 20 s — it was 104 s two days earlier, before a day of kernel work measured with GPU timestamps (BatchNorm's statistics, the convolution's tiles and gathers, the broadcast fold, `cat`, BatchNorm paired with its ReLU, the loss in one kernel). One training step at batch 16 is 18 ms against torch's 12; of the 15 ms the GPU itself spends, nine are the convolutions — the narrow layers now run a direct kernel, and the weight gradient's GEMM is the largest single item. A mask has no neighbourhood to vote in, so the queue here is the model's own disagreement (one minus the IoU between its mask and the given one): AUROC 0.88–0.93 in torch across seeds, 0.91 in the browser, and reading about a third of the queue catches 90 % of the wrong masks. <code>tests/seg_eval.py</code> and <code>tests/browser/seg_eval_py.py</code>.</li>
-      <li>The last cell is a <strong>support report</strong>: <code>torch.report()</code> gathers the adapter, validation faults, memory and versions with this run's facts into <code>report.json</code>, and says in words when something is off (a software rasteriser, a fault, a lost device).</li>
-      <li>The same notebook ships as <strong>one folder</strong> for a network that lets nothing out: <code>python3 site/build_bundle.py</code> mirrors Pyodide, marimo's packages and the backbone beside the page (75 MB), and a check presses it with every outside request refused.</li>
-      <li>It lives inside the tab's memory and Pyodide's package range — the same list as the <a href="notebook.html">notebook page</a>.</li>
     </ul>
     <p class="small muted">
-      Measured by <code>tests/browser/marimo_probe.py</code>, nightly: opening the page, pressing run, and the moment each of the four sections (adapter, trained, review table, export) appears.
+      Every number above is held by a check that runs nightly — <code>tests/review_eval.py</code>
+      and <code>tests/seg_eval.py</code> for the orders, <code>tests/test_workbench.py</code> for
+      the recipe's 39 invariants, and <code>tests/browser/marimo_probe.py</code> for the whole
+      path through a real tab, which refuses to report at all if that tab has no GPU.
     </p>
   </main>
 </div>

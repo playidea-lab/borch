@@ -62,30 +62,58 @@
   <aside class="sidebar">
     <h4>노트북</h4>
     <nav>
+      <a href="#two">노트북 둘</a>
       <a href="#two-lines">두 줄</a>
       <a href="#limits">탭이 못 하는 것</a>
-      <a href="workbench.html">워크벤치 →</a>
+      <a href="workbench.html">torch.workbench →</a>
     </nav>
   </aside>
 
   <main class="doc-main">
     <p class="eyebrow">Notebook</p>
-    <h1>노트북, 설치 없이</h1>
+    <h1>노트북 둘, 설치 없이</h1>
     <p class="lead">
-      이 탭 안의 JupyterLite 이고, 선반에 <code>pyborch</code> 가 미리 올라가 있다. 커널은
-      워커 안의 Python(Pyodide) 이고, <code>import borch_webgpu as torch</code> 가 이 탭의
-      GPU 에서 borch.ts 를 띄운다. CUDA 도, 기계에 깐 Python 도, 계정도 없다.
+      이 탭 안에서 도는 Python 이고, 선반에 <code>pyborch</code> 가 미리 올라가 있다. 커널은
+      워커 안의 Pyodide 이고, <code>import borch_webgpu as torch</code> 가 이 탭의 GPU 에서
+      borch.ts 를 띄운다. CUDA 도, 기계에 깐 Python 도, 계정도 없다. 여기 둘이 올라가 있다 —
+      아무거나 하는 <strong>JupyterLite</strong>, 그리고 할 일이 이미 쓰여 있는
+      <strong>마리모</strong>.
     </p>
-    <p class="cta-row">
-      <a class="btn primary" href="../lab/lab/index.html?path=borch.ipynb">노트북 열기 →</a>
-      <a class="btn ghost" href="../lab/lab/index.html">빈 JupyterLab →</a>
-    </p>
+    <h2 id="two">노트북 둘</h2>
+    <div class="grid c2" style="margin-top:1.4rem">
+      <div>
+        <h3>JupyterLite — 빈 노트북</h3>
+        <p>
+          이미 아는 그 노트북인데 차릴 것이 없다. 셀은 Shift+Enter 를 누른 순서대로 돈다.
+          뭔가 해 보거나, 레슨을 내 숫자로 따라가거나, 새로고침해도 남는 연습장으로 쓴다.
+        </p>
+        <p class="cta-row">
+          <a class="btn primary" href="../lab/lab/index.html?path=borch.ipynb">노트북 열기 →</a>
+          <a class="btn ghost" href="../lab/lab/index.html">빈 JupyterLab →</a>
+        </p>
+      </div>
+      <div>
+        <h3>마리모 — 할 일이 이미 쓰여 있다</h3>
+        <p>
+          <strong>반응형</strong> 노트북이다: 셀을 고치면 그것에 기대는 것만 다시 돌고, 표나
+          버튼이 위젯 코드가 아니라 Python 값이다. 여기 올라간 것은 검수 작업 하나를 끝까지
+          해 둔 것이다 — 이미지 폴더를 넣으면 이 탭의 GPU 에서 학습하고, 의심스러운 라벨을
+          위로 올리고, ONNX 파일을 돌려준다. 이미지는 탭 밖으로 나가지 않는다.
+          <a href="workbench.html"><code>torch.workbench</code></a> 를 부르는 것이고, 그
+          레시피와 근거는 그 페이지에 있다.
+        </p>
+        <p class="cta-row">
+          <a class="btn primary" href="../marimo/index.html">마리모 열기 →</a>
+          <a class="btn ghost" href="workbench.html">무엇을 돌리나 →</a>
+        </p>
+      </div>
+    </div>
     <h2 id="two-lines">두 줄</h2>
 <pre><code>%pip install pyborch
 import borch_webgpu as torch</code></pre>
     <p>
-      같은 두 줄이 <strong>어느</strong> Pyodide 에서든 된다 — 직접 띄운 JupyterLite, PyScript,
-      marimo 의 wasm 판. wheel 이 borch.ts 를 안에 지니고 import 때 장치를 띄우기 때문이다.
+      같은 두 줄이 <strong>어느</strong> Pyodide 에서든 된다 — 위의 두 노트북, 직접 띄운
+      JupyterLite, PyScript. wheel 이 borch.ts 를 안에 지니고 import 때 장치를 띄우기 때문이다.
       torch 코드에서 바뀌는 것은 <a href="python.html#changes">Python 페이지</a>에 있다 — 짧다.
     </p>
     <h2 id="limits">탭이 못 하는 것</h2>
@@ -93,6 +121,9 @@ import borch_webgpu as torch</code></pre>
       <li>메모리는 탭의 것, 몇 GB. 데이터셋과 사전학습 가중치는 매번 다운로드다.</li>
       <li>패키지는 Pyodide 의 것: CUDA 계열은 없고, 일부 C 확장도 없다.</li>
       <li>긴 학습은 커널을 붙잡는다. 노트북이 원래 그렇다.</li>
+      <li>마리모는 열고 10초쯤 커널이 뜬다(Pyodide 와 marimo 를 받는 시간). 셀은 자동 실행되지 않으니 오른쪽 아래 실행 버튼을 누른다.</li>
+      <li>마지막 셀은 <strong>지원 보고</strong>다: <code>torch.report()</code>가 어댑터·검증 오류·메모리·버전과 이번 실행의 사실을 <code>report.json</code> 하나로 모으고, 이상(소프트웨어 래스터라이저, 오류, 장치 손실)이 있으면 말로 적는다.</li>
+      <li>마리모 쪽이 아무것도 못 내보내는 망을 위해 <strong>폴더 하나</strong>로 나온다: <code>python3 site/build_bundle.py</code>가 Pyodide·marimo 패키지·백본을 페이지 옆에 미러하고(75 MB), 검사가 바깥 요청을 전부 막은 채 눌러 본다.</li>
       <li>NVIDIA 카드를 단 리눅스는 Chrome 플래그 둘이 필요하다 — <a href="setup.html">GPU 페이지</a>에 있다.</li>
     </ul>
     <p class="small muted">
