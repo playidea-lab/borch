@@ -14,19 +14,57 @@ import tempfile
 import time
 
 from first_run import FLAGS, ROOT, refuse_if_screen_off, serve
-from launch import _headed, refuse_if_software
+from launch import _headed, is_software, refuse_if_software
 
 GIVE_UP_MS = 300_000     # the frozen path exports a 21 MB EfficientNet — tracing and encoding take a while
 # What the notebook rendered, and only that. `document.body.innerText` would also carry
 # every cell's source (the editors are text), so "KB of ONNX" matched at 5 s before any
 # cell had run; and the table's "90 rows, 5 columns" line lives in a shadow root, which
 # innerText never crosses. So: the output blocks, plus the shadow text of each table.
+# **Everything scraped here is prose a person reads.** That is the whole contract of this
+# function, and it is written down because it used to be broken: the adapter was read out
+# of `borch on (...)` in the rendered text and then handed to `refuse_if_software`, which
+# put a guard's judgement inside a sentence anybody was free to reword. **Do not add a
+# value a guard consumes to this list.** Facts a check decides on ride in markup — see
+# `DOOR` below and `data-borch-door` in `site/marimo-src/review.py`.
 OUTPUTS = """() => {
   const outs = [...document.querySelectorAll('.output-area, marimo-cell-output')].map(e => e.innerText);
   const leaves = (root) => [...root.querySelectorAll('*')].filter(x => x.children.length === 0).map(x => x.textContent);
   const tables = [...document.querySelectorAll('marimo-table')].flatMap(e => e.shadowRoot ? leaves(e.shadowRoot) : []);
   return outs.concat(tables).join('\\n');
 }"""
+def door_refusal(door):
+    """Why this run cannot speak for the GPU path, or None. **Asked as soon as the door is
+    known, not after the measurement** — the first version of this refused correctly and
+    still made the caller wait out the full timeout, because it was asked at the end. The
+    adapter is known at eleven seconds; a run that cannot prove anything should cost that,
+    not ten minutes.
+
+    Three cases, because the fix for each is a different action. A missing adapter is not a
+    software adapter — `is_software(None)` is False, so a browser with no WebGPU walked
+    straight past `refuse_if_software` and failed later looking like something else.
+    """
+    if door is None:
+        return ("**The page never said which door it opened.** No `[data-borch-door]` in the\n"
+                "  rendered output — the notebook did not boot, or it is older than this probe.")
+    if door["adapter"] is None:
+        return ("**No WebGPU adapter — the workbench page fell back to the CPU door.**\n"
+                "  This run proves nothing about the GPU path. Open a served page (WebGPU is\n"
+                "  absent outside a secure context, so `about:blank` looks exactly like a\n"
+                "  machine with no GPU) in a headed browser on a machine with a GPU, or pass\n"
+                "  `--no-webgpu` to measure the CPU door on purpose.")
+    return None
+
+
+# The door the notebook opened, as markup rather than as a sentence. `adapter` is null
+# when there is no WebGPU adapter at all — which is a different thing from a CPU adapter
+# whose name happens not to say `swiftshader`, and the two have to stay distinguishable.
+DOOR = """() => {
+  const e = document.querySelector('[data-borch-door]');
+  if (!e) return null;
+  return {door: e.dataset.borchDoor, adapter: e.dataset.borchAdapter ?? null};
+}"""
+
 KERNEL_WAIT_MS = 10_000     # the run buttons exist before the kernel does; a click at 0.6 s closed the page
 
 
@@ -207,6 +245,8 @@ def main(argv):
     profile = tempfile.mkdtemp(prefix="borch-marimo-")
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     marks = {}
+    door = None            # `{door, adapter}` from the page's markup; None until the notebook boots
+    refused = None         # set the moment the door is known, so a void run stops there
     try:
         with sync_playwright() as pw:
             # Alone, without FLAGS: `--enable-unsafe-webgpu` beside it brings the adapter back (measured).
@@ -228,16 +268,26 @@ def main(argv):
                 page.wait_for_timeout(KERNEL_WAIT_MS)
                 page.query_selector_all('[data-testid="run-button"]')[-1].click()
                 deadline = time.time() + GIVE_UP_MS / 1000
-                want = {"adapter": r"borch on ([a-z]+ / [a-z0-9-]+)", "trained": r"agrees with the given labels on \*?\*?(\d+)%",
+                want = {"trained": r"agrees with the given labels on \*?\*?(\d+)%",
                         "queue": r"(\d+) rows, 5 columns", "export": r"(\d+) KB of ONNX",
                         "report": r"faults (\d+) · warnings (\d+)"}
                 if no_webgpu:
-                    want["adapter"] = r"borch on (the CPU)"
                     want["export"] = r"(\d+) KB of head weights"
                 body = ""
-                while time.time() < deadline and len(marks) < len(want):
+                while time.time() < deadline and len(marks) < len(want) + 1:
                     page.wait_for_timeout(500)
                     body = page.evaluate(OUTPUTS)
+                    if "adapter" not in marks:
+                        # From the attribute, never from `body` — see the note on `OUTPUTS`.
+                        d = page.evaluate(DOOR)
+                        if d:
+                            door = d
+                            marks["adapter"] = (time.time() - t0, d["adapter"] or "the CPU")
+                            if not no_webgpu:
+                                refused = door_refusal(door) or (
+                                    "software" if is_software(door["adapter"]) else None)
+                                if refused:
+                                    break
                     for key, pat in want.items():
                         if key not in marks:
                             m = re.search(pat, body)
@@ -246,7 +296,9 @@ def main(argv):
                     if "Traceback" in body:
                         break
                 errors = [l for l in body.splitlines() if "Traceback" in l or "Error:" in l][:3]
-                if len(marks) < len(want):
+                if refused:
+                    pass            # the door already decided it; the dump would say nothing
+                elif len(marks) < len(want) + 1:
                     print("  rendered so far:", repr(body[:1500]))
                 else:
                     # Second pass: real files through `mo.ui.file` → `torch.decode_images`.
@@ -276,9 +328,13 @@ def main(argv):
             print(f"  {key:8s}   —    (not reached)")
     for e in errors if "errors" in dir() else []:
         print("  error:", e[:200])
-    adapter = marks.get("adapter", (0, None))[1]
-    if not no_webgpu and refuse_if_software(adapter, "the workbench page"):
-        return 1
+    if not no_webgpu:
+        if refused == "software":
+            refuse_if_software(door["adapter"], "the workbench page")
+            return 1
+        if refused:
+            print(refused, file=sys.stderr)
+            return 1
     ok = all(marks.get(k) for k in ("adapter", "trained", "queue", "export", "report", "uploaded", "scratch", "segment"))
     ok = ok and marks["report"][1] == "0"                   # faults — the warnings count rides in the text
     ok = ok and (no_webgpu or int(marks["scratch"][1].split("%")[0]) >= 90)

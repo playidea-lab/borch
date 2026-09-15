@@ -9,6 +9,7 @@ app = marimo.App(width="medium", app_title="borch workbench")
 
 @app.cell
 async def _():
+    import html
     import js, micropip, marimo as mo
     # The wheel sits beside this page. The kernel is a worker whose `location` is its
     # script's — under `<page>/assets/` — so the page's directory is two steps up.
@@ -31,7 +32,20 @@ async def _():
         workers = cpu.threads()
         boot = (f"**borch on the CPU{f', {workers} workers' if workers else ''}** — no WebGPU adapter here (`{why}`), so `borch_cpu` runs the frozen backbone "
                 f"and the head on WebAssembly SIMD, {f'{workers} threads' if workers else 'one thread'}. Slower, same numbers; the small-CNN path and the ONNX export need the GPU.")
-    mo.md(boot)
+    # **Which door opened is said in markup, not in the sentence above.** A probe used to
+    # read the adapter by matching `borch on (...)` in the rendered text, which made every
+    # word of that sentence part of a guard: reword it and `refuse_if_software` stops
+    # seeing an adapter, with no error anywhere — the run burns its whole timeout and
+    # reports `adapter — (not reached)`, which points at nothing. The same shape turned up
+    # in `borch-fed` on the same day, there as `startswith("없음")` against a Korean phrase.
+    #
+    # So the fact goes in attributes and the prose stays prose. `data-borch-door` is always
+    # one of two words; `data-borch-adapter` is **absent** when there is no adapter, which
+    # is what a reader of the attribute has to be able to tell apart from a CPU whose name
+    # merely lacks `swiftshader` in it. Rewording `boot` now changes nothing a check reads.
+    door = f'<span data-borch-door="{"webgpu" if torch is not None else "cpu"}"'
+    door += f' data-borch-adapter="{html.escape(adapter, quote=True)}"' if torch is not None else ""
+    mo.vstack([mo.md(boot), mo.Html(door + " hidden></span>")])
     return adapter, cpu, mo, torch
 
 
