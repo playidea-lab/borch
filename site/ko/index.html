@@ -62,8 +62,8 @@
 
 <nav class="subnav" aria-label="on this page">
   <div class="wrap">
-    <a href="#try">체험</a>
     <a href="#start">시작</a>
+    <a href="#try">체험</a>
     <a href="#why">왜</a>
     <a href="#how">구조</a>
     <a href="#python">파이썬</a>
@@ -111,6 +111,70 @@
       <a class="btn ghost mono" style="margin-left:auto" href="#install">npm install borch-ts</a>
     </p>
     <p class="install">런타임 의존성 0개 · ES 모듈 gzip 186KB(압축 전 663KB) · 체크포인트는 safetensors</p>
+  </div>
+</section>
+
+<!-- ── 플레이그라운드 ─────────────────────────────────────────────── -->
+<section id="start">
+  <div class="wrap">
+    <p class="eyebrow">배우기 · 튜토리얼 · 모델 · 비전 · API · Playground</p>
+    <h2>들어가는 길 여섯, 전부 도는 것</h2>
+    <p class="lead">
+      강의를 읽으면서 읽고 있는 그 페이지에서 Run 을 누른다. 이름을 찾으면 컴파일러가 낸
+      시그니처를 그대로 본다. 아니면 손실 곡선과 GPU 계측이 붙은 큰 편집기를 연다.
+      셋 다 설치할 것이 없다.
+    </p>
+
+    <div class="grid c2" style="margin-top:2rem">
+      <a class="tile" href="learn/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>배우기 — 열 강</h3>
+        <p class="small">텐서 → autograd → 모듈 → 학습 → 합성곱 → 저장 → 데이터 → 디버깅.
+          모든 코드 블록이
+          그 페이지에서 돌고, 돌리기 전에 고칠 수 있다.</p>
+      </a>
+      <a class="tile" href="tutorials/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>튜토리얼 — 프로젝트 열</h3>
+        <p class="small">문제 하나를 끝까지: 분류기, 날텐서에서 다시 세운 학습 루프,
+          CIFAR-10, 적대적 예제, 문자 RNN, FFT, 어텐션, 오토인코더, 최소제곱.</p>
+      </a>
+      <a class="tile" href="api/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>API 레퍼런스</h3>
+        <p class="small">공개된 모든 이름을 컴파일러의 선언 파일에서 뽑았다 — 시그니처,
+          갈래, 그리고 대응하는 torch 이름. 검색된다.</p>
+      </a>
+      <a class="tile" href="playground.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Playground</h3>
+        <p class="small">자바스크립트와 파이썬을 받는 큰 편집기. 손실 곡선과 dispatch 수,
+          그 실행이 쥔 GPU 메모리가 함께 보인다.</p>
+      </a>
+      <a class="tile" href="models.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>모델 — 허브</h3>
+        <p class="small">탭으로 바로 실리는 사전학습 가중치. 페이지가 하나를 받아서
+          발행자가 얼려둔 샘플과 눈앞에서 대조한다.</p>
+      </a>
+      <a class="tile" href="vision.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>비전 — torchvision 의 자리</h3>
+        <p class="small">transforms, v2, 박스·마스크·키포인트의 기하, 그리고 데이터셋
+          디코더 — 각각이 조용히 틀어지는 방식과 함께.</p>
+      </a>
+    </div>
+
+    <p class="small muted" style="margin-top:1.6rem">
+      넷 다 같은 런타임이다. 강의의 블록, 튜토리얼의 블록, 플레이그라운드의 편집기가
+      같은 코드를 돌린다 — 다른 것은 페이지에서 글이 차지하는 몫과 당신이 차지하는
+      몫의 비율뿐이다.
+    </p>
+    <p style="margin-top:1.6rem">
+      <a class="btn primary" href="learn/">강의 시작 →</a>
+      <a class="btn ghost" href="tutorials/">아니면 만들어 보기</a>
+      <a class="btn ghost" href="check.html">내 GPU 로 확인</a>
+    </p>
   </div>
 </section>
 
@@ -254,70 +318,6 @@
       일치하는 것만 담는다 — 주석에만 적힌 분기는 다음 사람이 주석을 안 읽고 바꾸는
       분기다.</span>
     </div>
-  </div>
-</section>
-
-<!-- ── 플레이그라운드 ─────────────────────────────────────────────── -->
-<section id="start">
-  <div class="wrap">
-    <p class="eyebrow">배우기 · 튜토리얼 · 모델 · 비전 · API · Playground</p>
-    <h2>들어가는 길 여섯, 전부 도는 것</h2>
-    <p class="lead">
-      강의를 읽으면서 읽고 있는 그 페이지에서 Run 을 누른다. 이름을 찾으면 컴파일러가 낸
-      시그니처를 그대로 본다. 아니면 손실 곡선과 GPU 계측이 붙은 큰 편집기를 연다.
-      셋 다 설치할 것이 없다.
-    </p>
-
-    <div class="grid c2" style="margin-top:2rem">
-      <a class="tile" href="learn/" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>배우기 — 열 강</h3>
-        <p class="small">텐서 → autograd → 모듈 → 학습 → 합성곱 → 저장 → 데이터 → 디버깅.
-          모든 코드 블록이
-          그 페이지에서 돌고, 돌리기 전에 고칠 수 있다.</p>
-      </a>
-      <a class="tile" href="tutorials/" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>튜토리얼 — 프로젝트 열</h3>
-        <p class="small">문제 하나를 끝까지: 분류기, 날텐서에서 다시 세운 학습 루프,
-          CIFAR-10, 적대적 예제, 문자 RNN, FFT, 어텐션, 오토인코더, 최소제곱.</p>
-      </a>
-      <a class="tile" href="api/" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>API 레퍼런스</h3>
-        <p class="small">공개된 모든 이름을 컴파일러의 선언 파일에서 뽑았다 — 시그니처,
-          갈래, 그리고 대응하는 torch 이름. 검색된다.</p>
-      </a>
-      <a class="tile" href="playground.html" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>Playground</h3>
-        <p class="small">자바스크립트와 파이썬을 받는 큰 편집기. 손실 곡선과 dispatch 수,
-          그 실행이 쥔 GPU 메모리가 함께 보인다.</p>
-      </a>
-      <a class="tile" href="models.html" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>모델 — 허브</h3>
-        <p class="small">탭으로 바로 실리는 사전학습 가중치. 페이지가 하나를 받아서
-          발행자가 얼려둔 샘플과 눈앞에서 대조한다.</p>
-      </a>
-      <a class="tile" href="vision.html" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>비전 — torchvision 의 자리</h3>
-        <p class="small">transforms, v2, 박스·마스크·키포인트의 기하, 그리고 데이터셋
-          디코더 — 각각이 조용히 틀어지는 방식과 함께.</p>
-      </a>
-    </div>
-
-    <p class="small muted" style="margin-top:1.6rem">
-      넷 다 같은 런타임이다. 강의의 블록, 튜토리얼의 블록, 플레이그라운드의 편집기가
-      같은 코드를 돌린다 — 다른 것은 페이지에서 글이 차지하는 몫과 당신이 차지하는
-      몫의 비율뿐이다.
-    </p>
-    <p style="margin-top:1.6rem">
-      <a class="btn primary" href="learn/">강의 시작 →</a>
-      <a class="btn ghost" href="tutorials/">아니면 만들어 보기</a>
-      <a class="btn ghost" href="check.html">내 GPU 로 확인</a>
-    </p>
   </div>
 </section>
 

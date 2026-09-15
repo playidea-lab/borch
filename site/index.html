@@ -67,8 +67,8 @@
 
 <nav class="subnav" aria-label="on this page">
   <div class="wrap">
-    <a href="#try">Try</a>
     <a href="#start">Start</a>
+    <a href="#try">Try</a>
     <a href="#why">Why</a>
     <a href="#how">How it works</a>
     <a href="#python">Python</a>
@@ -116,6 +116,71 @@
       <a class="btn ghost mono" style="margin-left:auto" href="#install">npm install borch-ts</a>
     </p>
     <p class="install">Zero runtime dependencies · 186KB gzipped ES module (663KB raw) · safetensors checkpoints</p>
+  </div>
+</section>
+
+<!-- ── Playground ─────────────────────────────────────────────────── -->
+<section id="start">
+  <div class="wrap">
+    <p class="eyebrow">Learn · Tutorials · Models · Vision · API · Playground</p>
+    <h2>Six ways in, all of them running</h2>
+    <p class="lead">
+      Read a lesson and press Run on the page you are reading. Look a name up and see the
+      signature the compiler emitted. Or open the full editor with a loss curve and the GPU
+      counters. Nothing to install for any of them.
+    </p>
+
+    <div class="grid c2" style="margin-top:2rem">
+      <a class="tile" href="learn/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Learn — eleven lessons</h3>
+        <p class="small">Tensors → autograd → modules → training → convolution → saving.
+          Every code block executes in the page, and you can edit it first.</p>
+      </a>
+      <a class="tile" href="tutorials/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Tutorials — ten projects</h3>
+        <p class="small">One problem taken to the end: a classifier, the training loop
+          rebuilt from raw tensors, CIFAR-10, adversarial examples, a character RNN,
+          the FFT, attention, an autoencoder, least squares.</p>
+      </a>
+      <a class="tile" href="api/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>API reference</h3>
+        <p class="small">Every exported name, extracted from the compiler's own declarations —
+          signatures, kinds, and the torch name each answers to. Searchable.</p>
+      </a>
+      <a class="tile" href="playground.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Playground</h3>
+        <p class="small">A full editor in JavaScript or Python, with the loss curve, the
+          dispatch count and the GPU memory a run held.</p>
+      </a>
+      <a class="tile" href="models.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Models — the hub</h3>
+        <p class="small">Pretrained weights that load straight into a tab. The page
+          downloads one and checks it against the sample its publisher froze, in front
+          of you.</p>
+      </a>
+      <a class="tile" href="vision.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Vision — torchvision's seat</h3>
+        <p class="small">Transforms, v2, the geometry of boxes, masks and keypoints, and
+          the dataset decoders — with the way each of them goes quietly wrong.</p>
+      </a>
+    </div>
+
+    <p class="small muted" style="margin-top:1.6rem">
+      All four are the same runtime. A lesson block, a tutorial block and the
+      playground editor run identical code — the difference is how much of the page
+      is prose and how much is yours.
+    </p>
+    <p style="margin-top:1.6rem">
+      <a class="btn primary" href="learn/">Start the lessons →</a>
+      <a class="btn ghost" href="tutorials/">Or build something</a>
+      <a class="btn ghost" href="check.html">Check your GPU</a>
+    </p>
   </div>
 </section>
 
@@ -261,71 +326,6 @@
       golden holds only what agrees with torch; a divergence written in a comment alone
       is one the next person changes without reading it.</span>
     </div>
-  </div>
-</section>
-
-<!-- ── Playground ─────────────────────────────────────────────────── -->
-<section id="start">
-  <div class="wrap">
-    <p class="eyebrow">Learn · Tutorials · Models · Vision · API · Playground</p>
-    <h2>Six ways in, all of them running</h2>
-    <p class="lead">
-      Read a lesson and press Run on the page you are reading. Look a name up and see the
-      signature the compiler emitted. Or open the full editor with a loss curve and the GPU
-      counters. Nothing to install for any of them.
-    </p>
-
-    <div class="grid c2" style="margin-top:2rem">
-      <a class="tile" href="learn/" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>Learn — eleven lessons</h3>
-        <p class="small">Tensors → autograd → modules → training → convolution → saving.
-          Every code block executes in the page, and you can edit it first.</p>
-      </a>
-      <a class="tile" href="tutorials/" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>Tutorials — ten projects</h3>
-        <p class="small">One problem taken to the end: a classifier, the training loop
-          rebuilt from raw tensors, CIFAR-10, adversarial examples, a character RNN,
-          the FFT, attention, an autoencoder, least squares.</p>
-      </a>
-      <a class="tile" href="api/" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>API reference</h3>
-        <p class="small">Every exported name, extracted from the compiler's own declarations —
-          signatures, kinds, and the torch name each answers to. Searchable.</p>
-      </a>
-      <a class="tile" href="playground.html" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>Playground</h3>
-        <p class="small">A full editor in JavaScript or Python, with the loss curve, the
-          dispatch count and the GPU memory a run held.</p>
-      </a>
-      <a class="tile" href="models.html" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>Models — the hub</h3>
-        <p class="small">Pretrained weights that load straight into a tab. The page
-          downloads one and checks it against the sample its publisher froze, in front
-          of you.</p>
-      </a>
-      <a class="tile" href="vision.html" style="text-decoration:none">
-        <span class="icon">◆</span>
-        <h3>Vision — torchvision's seat</h3>
-        <p class="small">Transforms, v2, the geometry of boxes, masks and keypoints, and
-          the dataset decoders — with the way each of them goes quietly wrong.</p>
-      </a>
-    </div>
-
-    <p class="small muted" style="margin-top:1.6rem">
-      All four are the same runtime. A lesson block, a tutorial block and the
-      playground editor run identical code — the difference is how much of the page
-      is prose and how much is yours.
-    </p>
-    <p style="margin-top:1.6rem">
-      <a class="btn primary" href="learn/">Start the lessons →</a>
-      <a class="btn ghost" href="tutorials/">Or build something</a>
-      <a class="btn ghost" href="check.html">Check your GPU</a>
-    </p>
   </div>
 </section>
 
