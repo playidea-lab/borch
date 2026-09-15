@@ -158,6 +158,15 @@ TypeScript declarations (`site/build_api.py`), so they are never older than the 
 The Python core and the binding follow torch's names, so a borch-ts name under `nn.`,
 `optim.`, `fft.`, `data.` or `linalg.` is `torch.nn.…`, `torch.optim.…` and so on in Python.
 
+**What the index does not cover, and why an absent name is not always an absent thing.**
+Both files are generated from borch-ts's declarations, so they carry the TypeScript
+surface — which is torch's surface, and that is what the rule above is for. The names that
+exist only in a browser are not in them: `hub`, `workbench`, `suspects`, `report`,
+`ImageFiles`, `decode_images`, `fetch_cached`, `empty_cache`, `backend`. Those
+are not torch's and are not claimed to be; they are listed here, and reading them out of
+`borch_webgpu` or `borch_cpu` is the check. Everything else absent from the index is
+absent from borch: say so, do not polyfill.
+
 ```python
 import json
 import urllib.request

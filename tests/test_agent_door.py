@@ -243,3 +243,36 @@ _SESSION_FIELDS = {
     "model", "head", "config", "data", "masks", "given", "iou", "score", "score_name",
     "held_out", "torch", "k",
 }
+
+
+# The names the document says are outside the index, as it spells them.
+OUTSIDE_INDEX = re.compile(r"The names that\nexist only in a browser are not in them: (.+?)\. Those", re.S)
+
+
+def test_the_names_agents_md_says_are_outside_the_index_are_outside_it_and_real():
+    """**An instruction that makes an agent deny something true is worse than none.**
+
+    `AGENTS.md` tells a reader to check `api-index.json` and, for anything absent, to say
+    it does not exist. The index is generated from borch-ts's declarations, so every
+    browser-only name is absent from it — `hub`, `workbench`, `suspects`, `report` were
+    all measured absent, and all four exist. The document lists them; this holds the list
+    to both halves of what it claims.
+    """
+    text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    listed = OUTSIDE_INDEX.search(text)
+    assert listed, "AGENTS.md no longer names what the index leaves out, in the form this reads"
+    names = [n.strip().strip("`") for n in listed.group(1).replace("\n", " ").split(",")]
+    assert len(names) >= 5, names
+
+    index_path = ROOT / "site" / "assets" / "api-index.json"
+    if index_path.exists():
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        wrong = [n for n in names if n in index]
+        assert not wrong, ("these are in the index after all, so the document is telling a "
+                           f"reader to ignore it for nothing: {wrong}")
+
+    binding = (ROOT / "borch_webgpu" / "__init__.py").read_text(encoding="utf-8")
+    cpu = (ROOT / "borch_cpu.py").read_text(encoding="utf-8")
+    absent = [n for n in names if n not in binding and n not in cpu]
+    assert not absent, ("AGENTS.md names these as real and neither browser surface "
+                        f"mentions them: {absent}")
