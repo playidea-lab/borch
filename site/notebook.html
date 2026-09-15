@@ -15,7 +15,7 @@
 <meta charset="utf-8">
 <script src="coi.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Notebook — borch</title>
+<title>Notebooks — borch</title>
 <link rel="alternate" hreflang="ko" href="ko/notebook.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
@@ -62,30 +62,60 @@
   <aside class="sidebar">
     <h4>Notebook</h4>
     <nav>
+      <a href="#two">Two notebooks</a>
       <a href="#two-lines">The two lines</a>
       <a href="#limits">What a tab cannot do</a>
-      <a href="workbench.html">The workbench →</a>
+      <a href="workbench.html">torch.workbench →</a>
     </nav>
   </aside>
 
   <main class="doc-main">
     <p class="eyebrow">Notebook</p>
-    <h1>A notebook, nothing installed</h1>
+    <h1>Two notebooks, nothing installed</h1>
     <p class="lead">
-      JupyterLite in this tab, with <code>pyborch</code> already on its shelf. The kernel
-      is Python (Pyodide) in a worker; <code>import borch_webgpu as torch</code> boots
-      borch.ts on this tab's GPU. No CUDA, no Python on the machine, no account.
+      Python in this tab, with <code>pyborch</code> already on the shelf. The kernel is
+      Pyodide in a worker; <code>import borch_webgpu as torch</code> boots borch.ts on
+      this tab's GPU. No CUDA, no Python on the machine, no account. Two of them are
+      hosted here — <strong>JupyterLite</strong> for anything at all, and
+      <strong>marimo</strong> for one job already written.
     </p>
-    <p class="cta-row">
-      <a class="btn primary" href="lab/lab/index.html?path=borch.ipynb">Open the notebook →</a>
-      <a class="btn ghost" href="lab/lab/index.html">Empty JupyterLab →</a>
-    </p>
+    <h2 id="two">Two notebooks</h2>
+    <div class="grid c2" style="margin-top:1.4rem">
+      <div>
+        <h3>JupyterLite — an empty one</h3>
+        <p>
+          The notebook you already know, with nothing to set up. Cells run when you press
+          Shift+Enter, in the order you press them. Use it to try something, to follow a
+          lesson with your own numbers, or to keep a scratch file that survives a reload.
+        </p>
+        <p class="cta-row">
+          <a class="btn primary" href="lab/lab/index.html?path=borch.ipynb">Open the notebook →</a>
+          <a class="btn ghost" href="lab/lab/index.html">Empty JupyterLab →</a>
+        </p>
+      </div>
+      <div>
+        <h3>marimo — one job, already written</h3>
+        <p>
+          A <strong>reactive</strong> notebook: change a cell and only what depends on it
+          reruns, and a table or a button is a Python value rather than widget code. The
+          one hosted here is a review job end to end — put in a folder of images, it
+          trains on this tab's GPU, sorts the labels it doubts to the top, and hands back
+          an ONNX file. The images stay in the tab. It drives
+          <a href="workbench.html"><code>torch.workbench</code></a>, and that page is
+          where the recipe and its evidence are.
+        </p>
+        <p class="cta-row">
+          <a class="btn primary" href="marimo/index.html">Open marimo →</a>
+          <a class="btn ghost" href="workbench.html">What it runs →</a>
+        </p>
+      </div>
+    </div>
     <h2 id="two-lines">The two lines</h2>
 <pre><code>%pip install pyborch
 import borch_webgpu as torch</code></pre>
     <p>
-      The same two lines work in <strong>any</strong> Pyodide — a JupyterLite you host,
-      PyScript, marimo's wasm build — because the wheel carries borch.ts inside it and
+      The same two lines work in <strong>any</strong> Pyodide — either notebook above, a
+      JupyterLite you host, PyScript — because the wheel carries borch.ts inside it and
       brings the device up on import. What torch code has to change is on the
       <a href="python.html#changes">Python page</a>; it is short.
     </p>
@@ -95,13 +125,21 @@ import borch_webgpu as torch</code></pre>
         every time.</li>
       <li>Packages are Pyodide's: no CUDA family, and some C extensions are absent.</li>
       <li>A long training run holds the kernel. That is a notebook's shape too.</li>
+      <li>marimo's kernel takes about ten seconds to come up (Pyodide and marimo
+        download), and its cells do not run by themselves — press the run button at the
+        bottom right.</li>
+      <li>The last cell is a <strong>support report</strong>: <code>torch.report()</code> gathers the adapter, validation faults, memory and versions with this run's facts into <code>report.json</code>, and says in words when something is off (a software rasteriser, a fault, a lost device).</li>
+      <li>The marimo one ships as <strong>one folder</strong> for a network that lets nothing out: <code>python3 site/build_bundle.py</code> mirrors Pyodide, marimo's packages and the backbone beside the page (75 MB), and a check presses it with every outside request refused.</li>
       <li>Linux with an NVIDIA card needs two Chrome flags — the
         <a href="setup.html">GPU page</a> has them.</li>
     </ul>
     <p class="small muted">
-      Measured by <code>tests/browser/lab_probe.py</code>, nightly: opening this
-      notebook and pressing Shift+Enter once, apple / metal-3 sees the learned line
-      6.3 s later, the wheel's install and borch.ts's boot included.
+      Both are pressed nightly. <code>tests/browser/lab_probe.py</code> opens the
+      JupyterLite one and presses Shift+Enter once: on apple / metal-3 the learned line
+      is there 6.3 s later, the wheel's install and borch.ts's boot included.
+      <code>tests/browser/marimo_probe.py</code> opens the marimo one and waits for each
+      section to appear — and refuses the run outright if the tab has no GPU, so a number
+      from this page is never a CPU's number wearing a GPU's name.
     </p>
   </main>
 </div>
