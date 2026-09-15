@@ -62,6 +62,8 @@
   <aside class="sidebar">
     <h4>Workbench</h4>
     <nav>
+      <a href="#try">Try it on your folder</a>
+      <a href="#yourself">Called yourself</a>
       <a href="#call">The call</a>
       <a href="#folder">What it reads</a>
       <a href="#evidence">Does the order hold up</a>
@@ -81,8 +83,56 @@
       <a href="notebook.html">either notebook</a> on this site.
     </p>
     <p class="cta-row">
-      <a class="btn primary" href="notebook.html">Run it in marimo →</a>
-      <a class="btn ghost" href="api/">API reference →</a>
+      <a class="btn primary" href="marimo/index.html">Open it on your own folder →</a>
+      <a class="btn ghost" href="#try">Walk through it first →</a>
+    </p>
+
+    <h2 id="try">Try it on your own folder</h2>
+    <p>
+      Five steps, no Python needed for any of them. What you need is a folder of images
+      you already know the answers to. A few hundred is enough for the frozen-backbone
+      path, which is the default; a thousand is comfortable.
+    </p>
+    <ol>
+      <li><strong>Name the files so the label is in front.</strong> Everything before the
+        first <code>_</code> is the label: <code>ok_001.jpg</code>, <code>ng_002.jpg</code>,
+        <code>crack_017.jpg</code>. A zip of folders works too, and then the folder name is
+        the label. Nothing else about the names matters.</li>
+      <li><strong>Open the page and wait about ten seconds.</strong> Python and the
+        notebook are downloading into the tab. There is nothing to install and no account
+        to make.</li>
+      <li><strong>Drop the folder in and press run</strong> (bottom right). The images are
+        read in the tab and stay there — nothing is uploaded, and you can watch that in
+        your browser's network panel.</li>
+      <li><strong>Read the review table from the top.</strong> It is sorted by how much the
+        model disagrees with the label you gave, worst first. That is where your mislabels
+        are: on a public set with 9&nbsp;% of labels wrong, the first twenty rows are about
+        two-thirds mislabels, against nine in a hundred if you had read in a random order.</li>
+      <li><strong>Take the model.</strong> The export button writes an ONNX file, which is
+        the format ONNX Runtime reads on a phone, a server or a PC — it does not need borch
+        or a browser afterwards.</li>
+    </ol>
+    <p class="cta-row">
+      <a class="btn primary" href="marimo/index.html">Start at step 2 →</a>
+    </p>
+    <p class="small muted">
+      Nothing above is a screenshot of an ideal run: the same five steps are pressed nightly
+      by <code>tests/browser/marimo_probe.py</code> on a real GPU, and that check refuses to
+      report at all if the tab it opened has no GPU.
+    </p>
+
+    <h2 id="yourself">The same thing, called yourself</h2>
+    <p>
+      If you would rather write it, the five steps above are four lines. They run in
+      <a href="notebook.html">either notebook on this site</a>, and in any Pyodide.
+    </p>
+<pre><code>import borch_webgpu as torch
+s = torch.workbench.setup(files).fit()   # train on the folder
+s.suspects()                             # the labels it doubts, worst first
+s.onnx()                                 # take the model away</code></pre>
+    <p>
+      Everything below is what those four lines let you change, and what the review order
+      is worth. <a href="api/">The API reference →</a>
     </p>
 
     <h2 id="call">The call</h2>
