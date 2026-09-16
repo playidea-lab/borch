@@ -19,10 +19,11 @@ candidate already exists as a cell; an "author" candidate needs a new cell writt
 
 ---
 
-## Shipped (15)
+## Shipped (16)
 
 | Widget | lesson · cell | Shows |
 |---|---|---|
+| Watch a network learn a boundary | decision-boundary · 0 | An MLP bends the plane to separate two moons |
 | Attention, live | mini-transformer · 4 | The causal-attention matrix as a heatmap |
 | A conv layer's kernels | cnn · 3 | Six 3×3 filters at initialisation |
 | A loss curve falling | adam · 3 | Adam training a tiny problem |
@@ -45,7 +46,7 @@ candidate already exists as a cell; an "author" candidate needs a new cell writt
 
 ### ★ Flagship
 
-- **Live decision boundary** — a small MLP on 2-D points (moons / spiral / circles); the
+- **Live decision boundary** — ✅ **shipped** (`capstones/03`, leads the gallery). A small MLP on 2-D points (moons / spiral / circles); the
   decision boundary bends to fit as it trains. The most-embedded live-ML widget ever is
   this (TensorFlow Playground). Feasible: evaluate the net on a grid, draw the grid with
   `show()`. **Effort L · highest pull.** Author as a lesson (foundations or basics).
