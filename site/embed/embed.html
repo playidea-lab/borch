@@ -12,8 +12,20 @@
   needs SharedArrayBuffer, which a non-isolated foreign host cannot grant, so the embed is
   JavaScript-only: the py source is dropped before the cell is mounted.
 
+  **Where it does not work, and why that is not a bug here.** The embed is served without
+  `Cross-Origin-Resource-Policy: cross-origin`, so a host page that *is* cross-origin
+  isolated (one sending `COEP: require-corp`) blocks this iframe outright. Ordinary blogs
+  and docs sites are not isolated, which is the case this route is for; a host that went
+  out of its way to isolate itself is the one that cannot take the widget. The header
+  cannot be added from here either — GitHub Pages serves this file and attaches no
+  response headers of ours. Anyone building a copy-embed surface should say this next to
+  the snippet rather than let a reader find it as a blank frame.
+
   This directory is excluded from the full-page site guards (nav, share-metadata, sidebar)
   because an embed is deliberately chrome-less — see `_pages()` in tests/test_site.py.
+  What looks at it instead is `tests/browser/embed_probe.py`, nightly: four widgets in a
+  genuinely foreign iframe, and every lesson in `curriculum.json` resolved statically to
+  an embeddable cell, so a lesson added tomorrow is covered without a list being edited.
 -->
 <html lang="en">
 <head>
