@@ -114,6 +114,14 @@ CHECKS = [
     ("example",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/readme.py"]),
     # `--py`: every Python twin on the lesson pages is pressed too (Pyodide from vendor/).
     ("lessons",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "borch-ts/test/lessons.py", "--py"]),
+    # **The row `lessons` above cannot cover.** `site/embed/` is left out of every
+    # full-page guard on purpose — it is chrome-less, so `nav`, `share-metadata` and
+    # `sidebar` would fire on it wrongly — and an exclusion is a decision to not look
+    # there, not a decision that there is nothing to see. Until this row existed the
+    # embed was watched by the coi header sweep and nothing else, while sitting on the
+    # four most breakable joints in the site: a foreign origin, no cross-origin
+    # isolation, the Python twin stripped before mount, and a postMessage resize.
+    ("embed",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/embed_probe.py"]),
     ("scope",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/scope_escape.py"]),
     # The backward of expand, repeat and flip: the folded kernel against the walking one,
     # which is the only thing that says the fold is an optimisation and not a new answer.
