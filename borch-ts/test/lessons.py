@@ -128,6 +128,8 @@ PAGES = [
     "/site/ko/capstones/01-mini-transformer.html",
     "/site/capstones/02-honest-measurement.html",
     "/site/ko/capstones/02-honest-measurement.html",
+    "/site/capstones/03-decision-boundary.html",
+    "/site/ko/capstones/03-decision-boundary.html",
 ]
 
 # **What is pressed is a decision; what is not pressed used to be a silence.** A page

@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>신경망이 경계를 배우는 걸 지켜보기 — borch Learn</title>
+<meta name="description" content="작은 MLP가 얽힌 두 반달을 가르도록 학습한다; 결정경계가 평면을 가로질러 휘는 걸 학습 전과 후로 그린다. 페이지에서 돌고, 양 언어.">
+<link rel="alternate" hreflang="en" href="../../capstones/03-decision-boundary.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="신경망이 경계를 배우는 걸 지켜보기 — borch Learn">
+<meta property="og:description" content="작은 MLP가 얽힌 두 반달을 가르도록 학습한다; 결정경계가 평면을 가로질러 휘는 걸 학습 전과 후로 그린다. 페이지에서 돌고, 양 언어.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/capstones/03-decision-boundary.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../widgets.html">위젯</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../capstones/03-decision-boundary.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>캡스톤</h4>
+    <nav>
+      <a href="../learn/">길잡이</a>
+      <a href="01-mini-transformer.html">1 · 미니 트랜스포머</a>
+      <a href="02-honest-measurement.html">2 · 무엇으로 측정했는지 말하라</a>
+      <a href="03-decision-boundary.html" class="on">3 · 신경망이 경계를 배우는 걸 지켜보기</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Capstones · 3</p>
+    <h1>신경망이 경계를 배우는 걸 지켜보기</h1>
+    <p class="lead">
+      분류기가 하는 일은 결국 입력 공간을 클래스별 영역으로 가르는 것이다. 평면 위 점이라면
+      그 가르기를 <em>볼 수</em> 있다: 모든 점을 신경망이 줄 클래스로 색칠하면, 색 사이의 경계가
+      바로 <em>결정경계</em>다. 선형 모델은 직선밖에 못 긋지만, 은닉층을 가진 신경망은 그것을
+      휠 수 있다. 여기서 작은 MLP 가 얽힌 두 반달을 가른다 — 경계를 학습 전(무작위)과 후(맞게
+      휜)로 그린다.
+    </p>
+
+    <h2>경계, 전과 후</h2>
+    <p>
+      각각 한 클래스인 두 반달, 어떤 직선도 못 가르는. 아래 격자는 평면의 모든 점에서 신경망의
+      결정을 읽어 히트맵으로 그린다: 두 색조가 두 클래스이고, 그 사이 이음매가 경계다. Run 을
+      눌러라 — 첫 히트맵은 학습 안 된 망의 무작위 가르기, 둘째는 140 스텝 학습이 휘게 만든 것,
+      그리고 곡선은 내려가는 손실이다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        // two interleaving half-moons — 2-D points in two classes
+        const N = 200, G = 44;
+        const xy = new Float32Array(N * 2), lab = new Float32Array(N);
+        for (let i = 0; i < N / 2; i++) {
+          const t = Math.PI * i / (N / 2 - 1), j = i * 2;
+          xy[j * 2]     = Math.cos(t) + (Math.random() - 0.5) * 0.25;
+          xy[j * 2 + 1] = Math.sin(t) + (Math.random() - 0.5) * 0.25;  lab[j] = 0;
+          xy[(j + 1) * 2]     = 1 - Math.cos(t) + (Math.random() - 0.5) * 0.25;
+          xy[(j + 1) * 2 + 1] = 0.5 - Math.sin(t) + (Math.random() - 0.5) * 0.25;  lab[j + 1] = 1;
+        }
+        const X = keepAlive(Tensor.from(xy, [N, 2]));
+        const y = keepAlive(Tensor.from(lab, [N], { dtype: "int64" }));
+
+        // a grid over the plane, to read the network's decision at every point
+        const lo = -1.6, hi = 2.6, span = hi - lo;
+        const gpts = new Float32Array(G * G * 2);
+        for (let r = 0; r < G; r++) for (let c = 0; c < G; c++) {
+          const k = (r * G + c) * 2;
+          gpts[k]     = lo + span * c / (G - 1);
+          gpts[k + 1] = hi - span * r / (G - 1);
+        }
+        const grid = keepAlive(Tensor.from(gpts, [G * G, 2]));
+
+        // one hidden layer is what lets the boundary bend; without it, a straight line
+        const net = new nn.Sequential(new nn.Linear(2, 16), new nn.ReLU(),
+                                      new nn.Linear(16, 16), new nn.ReLU(), new nn.Linear(16, 2));
+        const opt = new optim.Adam(net.parameters(), 0.05);
+        const crit = new nn.CrossEntropyLoss();
+        const boundary = () => noGrad(() => net.call(grid).argmax(1).reshape([G, G]));
+
+        log("before training — the plane is split at random:");
+        await show(boundary(), { scale: 6 });
+
+        for (let e = 1; e <= 140; e++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(net.call(X), y);
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+
+        const acc = noGrad(() => net.call(X).argmax(1).eq(y).float().mean());
+        log("after training — the boundary bent to separate the two moons.");
+        log("train accuracy:", (await acc.item()).toFixed(3));
+        await show(boundary(), { scale: 6 });
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math, random
+
+        torch.manual_seed(0)
+        nn, optim = torch.nn, torch.optim
+        N, G = 200, 44
+
+        # two interleaving half-moons — 2-D points in two classes
+        rng = random.Random(0)
+        xy, lab = [], []
+        for i in range(N // 2):
+            t = math.pi * i / (N // 2 - 1)
+            xy.append([math.cos(t) + (rng.random() - 0.5) * 0.25, math.sin(t) + (rng.random() - 0.5) * 0.25]); lab.append(0)
+            xy.append([1 - math.cos(t) + (rng.random() - 0.5) * 0.25, 0.5 - math.sin(t) + (rng.random() - 0.5) * 0.25]); lab.append(1)
+        X = torch.tensor(xy)
+        y = torch.tensor(lab)
+
+        # a grid over the plane, to read the network's decision at every point
+        lo, hi = -1.6, 2.6; span = hi - lo
+        gpts = [[lo + span * c / (G - 1), hi - span * r / (G - 1)] for r in range(G) for c in range(G)]
+        grid = torch.tensor(gpts)
+
+        # one hidden layer is what lets the boundary bend; without it, a straight line
+        net = nn.Sequential(nn.Linear(2, 16), nn.ReLU(), nn.Linear(16, 16), nn.ReLU(), nn.Linear(16, 2))
+        opt = optim.Adam(net.parameters(), 0.05)
+        crit = nn.CrossEntropyLoss()
+
+        def boundary():
+            with torch.no_grad():
+                return net(grid).argmax(1).reshape(G, G)
+
+        print("before training - the plane is split at random:")
+        show(boundary(), scale=6)
+
+        for e in range(1, 141):
+            opt.zero_grad()
+            loss = crit(net(X), y)
+            loss.backward()
+            opt.step()
+            plot("loss", loss.item())
+
+        with torch.no_grad():
+            acc = (net(X).argmax(1) == y).float().mean().item()
+        print("after training - the boundary bent to separate the two moons.")
+        print("train accuracy:", round(acc, 3))
+        show(boundary(), scale=6)
+      </script>
+    </div>
+
+    <h2>기억할 것</h2>
+    <ul>
+      <li>분류기는 입력 공간을 나눈다; 2차원 데이터라면 그 나눔을 격자 위 히트맵으로 그릴 수 있다 — 이음매가 결정경계다.</li>
+      <li>선형 모델은 직선 경계를 긋는다. 비선형(<code>ReLU</code>)을 낀 은닉층이 그것을 휘게 해, 어떤 직선도 못 가르는 클래스를 가른다.</li>
+      <li>모델을 촘촘한 격자에서 읽어 그리는 건, 작은 모델이 무엇을 배웠는지 보는 일반적 기법이다.</li>
+      <li><code>nn.Sequential</code>·<code>CrossEntropyLoss</code>·Adam 으로 만들었다 — 여기 모든 학습 모델과 같은 루프, 볼 수 있게 2차원으로.</li>
+    </ul>
+
+    <div class="note-box">
+      <strong>위 블록이 에러를 내면, 그것도 알 가치가 있다.</strong> 이 페이지의 모든 예제는
+      테스트가 돌리는 것과 같은 라이브러리에서 돈다 — 여기 어떤 것도 스크린샷이 아니다. Reset 을
+      누르면 원래 코드로 돌아온다.
+    </div>
+
+    <div class="pager">
+      <a href="02-honest-measurement.html">← 무엇으로 측정했는지 말하라</a>
+      <a href="../widgets.html" style="text-align:right">임베드하기<b>Widgets</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+<script type="module" src="../../assets/toc.js"></script>
+</body>
+</html>
