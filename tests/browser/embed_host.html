@@ -1,0 +1,28 @@
+<!doctype html>
+<!--
+  A test "foreign host" for embed_probe.py. Served from a *different* port than the embed,
+  so the iframe it holds is cross-origin. It carries no coi.js, so it is a non-isolated
+  top-level document — the realistic "someone else's blog" case. The iframe's URL comes in
+  on `?src=` so one file works for every widget, and the port (which changes per run) never
+  has to be baked in.
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>embed host</title></head>
+<body>
+<script>
+  // Record the height the embedded widget posts, so the probe can prove auto-resize works.
+  window.__h = 0;
+  addEventListener("message", (e) => {
+    if (e.data && e.data.type === "borch-embed-height") window.__h = e.data.height;
+  });
+  const src = new URLSearchParams(location.search).get("src");
+  if (src) {
+    const f = document.createElement("iframe");
+    f.id = "w";
+    f.src = src;
+    f.style = "width:640px;height:200px;border:0";
+    document.body.appendChild(f);
+  }
+</script>
+</body>
+</html>
