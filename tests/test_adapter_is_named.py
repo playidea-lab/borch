@@ -153,3 +153,53 @@ def test_the_ts_runner_names_the_adapter_beside_its_score():
         "  Printing it earlier passes nothing here on purpose: whoever wants the count\n"
         "  reads the last lines, and a whole session of runs went by on\n"
         "  `google / swiftshader` with the warning on screen every time.")
+
+
+# The four words that mean a CPU pretended to be a GPU. Kept here as data rather than
+# imported, so that a change to the one definition has to meet this list too.
+_NAMES = ("swiftshader", "llvmpipe", "lavapipe", "software")
+
+
+def test_only_one_place_in_the_repository_names_the_software_adapters():
+    """**One definition, or a green run says the wrong word.**
+
+    `tests/browser/run.py` kept its own tuple of these names beside `launch.py`'s regex —
+    the same four words, two spellings — while importing `is_software` from that module
+    four lines from the top. Nothing would have reddened if a fifth rasteriser reached one
+    and not the other. The run would keep passing and simply stop calling a CPU a CPU on
+    the line carrying the score, which is the one line a person reads.
+
+    **This is why the rule is worth a check while a skip list is not.** A page-skip list
+    that drifts turns CI red the same day, as `clipped.py` did. This one drifts into a
+    green run wearing a wrong word, and nobody looks for a failure that never happened.
+
+    Asked of the tree rather than of a list of files: a second copy put somewhere new is
+    exactly the case a list of files would miss.
+
+    **Comment lines are skipped, and that is a decision rather than an oversight.** The
+    first version counted `launch.py`'s own comment — *Chrome has SwiftShader; Linux Mesa
+    has lavapipe (llvmpipe)* — as a second copy, which would have taught the next person
+    to delete the sentence that explains the definition. A comment cannot make two runs
+    disagree; only code can. So the check asks about code, and prose is free to name as
+    many rasterisers as it takes to be clear.
+    """
+    offenders = []
+    for path in sorted((ROOT / "tests").rglob("*.py")) + sorted((ROOT / "borch-ts" / "test").rglob("*.py")):
+        if path.name == pathlib.Path(__file__).name:
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            low = line.lower()
+            if sum(name in low for name in _NAMES) >= 3:
+                offenders.append(f"{path.relative_to(ROOT)}:{n}  {line.strip()[:100]}")
+
+    assert len(offenders) == 1, (
+        "the software-adapter names should be written once, in `tests/browser/launch.py`.\n"
+        "Found " + str(len(offenders)) + ":\n  " + "\n  ".join(offenders) + "\n\n"
+        "  Import `is_software` from `launch` instead of spelling the names again. Two\n"
+        "  copies do not disagree on the day they are written; they disagree on the day\n"
+        "  one of them learns a new rasteriser's name.")
+    assert "launch.py" in offenders[0], (
+        "the one definition is no longer in `tests/browser/launch.py` but in:\n  "
+        + offenders[0])

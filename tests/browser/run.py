@@ -149,10 +149,15 @@ def run(lib, headed, probe=None, js=None):
     return result, probed
 
 
-# Adapter names that mean **the GPU was never reached.** SwiftShader is Chrome's
-# software rasteriser and llvmpipe is Mesa's; both answer WebGPU calls correctly and
-# neither proves a shader compiled anywhere real.
-_SOFTWARE = ("swiftshader", "llvmpipe", "lavapipe", "software")
+# **The names that mean the GPU was never reached live in `launch.py`.** This file used
+# to keep its own tuple of them beside the one over there — the same four words, one as a
+# tuple and one as a regex — while already importing `is_software` from that module four
+# lines from the top. Two spellings of one fact, and nothing would have turned red if a
+# fifth rasteriser were added to one and not the other: the run would simply stop calling
+# a CPU a CPU, on the line that carries the score, and pass.
+#
+# That is worse than the divergence this repository has been fixing all day. A skip list
+# that drifts reddens CI; this one drifts into a green run with a wrong word on it.
 
 
 def _adapter_note(result):
@@ -183,8 +188,7 @@ def _adapter_note(result):
     backend = result.get("backend") or ""
     if not backend or "no browser GPU" in backend:
         return ""                                   # the core is numpy; no shaders ran
-    low = backend.lower()
-    if any(mark in low for mark in _SOFTWARE):
+    if is_software(backend):
         return (f"  [{backend}]\n"
                 "  **A software adapter.** The values are proved; that the same values "
                 "come off a real\n  GPU is not — WGSL goes through a different compiler "
