@@ -62,10 +62,14 @@
       const chosen = blocks[cell];
       if (!chosen) throw new Error(`embed: lesson ${id} has no cell ${cell} (it has ${blocks.length})`);
 
-      // JavaScript-only in an embed: drop the Python twin (it needs SharedArrayBuffer,
-      // which a non-isolated foreign host cannot grant). Leave a py-only cell as it is.
+      // Keep Python only where it can run. Pyodide's synchronous readback needs
+      // SharedArrayBuffer, which exists only in a cross-origin-isolated frame — the case on
+      // an isolated host (this site's own pages, a same-origin embed). On a plain foreign
+      // host the twin cannot work, so it is dropped there rather than shown broken. A
+      // py-only cell is left as it is either way.
       const node = document.importNode(chosen, true);
-      if (node.querySelector('script[type="text/plain"][data-lang="js"]')) {
+      if (!window.crossOriginIsolated
+          && node.querySelector('script[type="text/plain"][data-lang="js"]')) {
         node.querySelectorAll('script[type="text/plain"][data-lang="py"]').forEach((s) => s.remove());
         node.setAttribute("data-lang", "js");
       }

@@ -48,7 +48,7 @@ import urllib.parse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from launch import FLAGS  # noqa: E402
-from run import ROOT  # noqa: E402
+from run import ROOT, serve  # noqa: E402 — serve() sends COOP/COEP, for the isolated case
 
 
 def serve_plain(root):
@@ -150,6 +150,24 @@ def main():
             page.set_default_timeout(0)
             for lesson_id, cell in SAMPLE:
                 press(page, host_url, embed_port, lesson_id, cell, problems)
+
+            # The other half of the rule: where the host IS isolated (this site's own
+            # pages, a same-origin embed), the Python twin is **kept** — Pyodide can get
+            # SharedArrayBuffer there. `serve` sends COOP/COEP, so a page it serves is
+            # isolated; a dual-language cell must still show its Python tab.
+            iso_port, stop_iso = serve(ROOT)
+            try:
+                page.goto(f"http://127.0.0.1:{iso_port}/site/embed/embed.html"
+                          "?lesson=mini-transformer&cell=4", wait_until="load")
+                page.wait_for_timeout(1200)
+                if not page.evaluate("window.crossOriginIsolated"):
+                    problems.append("isolated: served COOP/COEP but the frame is not isolated"
+                                    " — the Python-kept path cannot be tested here")
+                elif not page.locator('button.tab[data-lang="py"]').count():
+                    problems.append("isolated: the Python tab was stripped on an isolated host"
+                                    " — the twin should be kept where it can run")
+            finally:
+                stop_iso()
             browser.close()
     finally:
         stop_embed()
