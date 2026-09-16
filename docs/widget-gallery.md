@@ -19,7 +19,7 @@ candidate already exists as a cell; an "author" candidate needs a new cell writt
 
 ---
 
-## Shipped (16)
+## Shipped (22)
 
 | Widget | lesson · cell | Shows |
 |---|---|---|
@@ -39,6 +39,12 @@ candidate already exists as a cell; an "author" candidate needs a new cell writt
 | Layer norm, drawn | layernorm · 3 | Each row centred on its own |
 | Attention weights | attention · 2 | Which positions attend to which |
 | The FFT | signals-fft · 1 | A signal and its frequencies |
+| Curve fitting | curve-fitting · 0 | A curve learned to fit points |
+| Autoencoder | autoencoder · 0 | An image squeezed through a bottleneck |
+| Adversarial example | adversarial · 0 | A tiny change that flips the label |
+| Character RNN | char-rnn · 0 | Text, one character at a time |
+| A batch, drawn | data · 4 | Samples stacked into a batch |
+| Quickstart | quickstart · 0 | The smallest end-to-end run |
 
 ---
 
