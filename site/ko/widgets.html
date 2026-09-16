@@ -1,0 +1,182 @@
+<!doctype html>
+<!-- 위젯 갤러리 — 라이브·임베드 가능한 ML, 각각 가져갈 한 줄과 함께. 영문판은 ../widgets.html. -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>위젯 — borch</title>
+<meta name="description" content="라이브·임베드 가능한 ML 위젯 — 어텐션·손실 곡선·합성곱 커널 — 각각 독자의 브라우저에서 학습하고 한 줄로 아무 페이지에나 얹힌다. 서버 없는 Gradio 데모처럼.">
+<link rel="alternate" hreflang="en" href="../widgets.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="위젯 — borch">
+<meta property="og:description" content="라이브·임베드 가능한 ML 위젯 — 어텐션·손실 곡선·합성곱 커널 — 각각 독자의 브라우저에서 학습하고 한 줄로 아무 페이지에나 얹힌다. 서버 없는 Gradio 데모처럼.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/widgets.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">배우기</a>
+      <a href="tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="api/">API</a>
+      <a href="vision.html">비전</a>
+      <a href="models.html">모델</a>
+      <a href="python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="workbench.html">Workbench</a>
+      <a href="widgets.html" class="on" aria-current="page">위젯</a>
+      <a href="tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="setup.html">GPU</a>
+      <a href="check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../widgets.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">임베드 · 서버 없음</p>
+    <h1>아무 페이지에나 얹는 <span class="accent">라이브 ML</span>.</h1>
+    <p class="sub lead">
+      아래 위젯들은 각각 당신의 브라우저, 당신의 GPU 에서 학습한다. Run 을 눌러 보고, 복사를
+      눌러 당신의 블로그·문서·강의에 떨어뜨릴 한 줄을 가져가라 — 서버도, 가입도 없이. 서버
+      없는 Gradio 데모처럼.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="grid c2" style="margin-top:.5rem">
+
+      <div class="card">
+        <div class="card-head">
+          <span>어텐션, 라이브</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>임베드 코드 복사</a>
+        </div>
+        <iframe src="../embed/embed.html?lesson=mini-transformer&cell=4&lang=ko" title="borch 위젯: 인과 어텐션"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">인과 어텐션 행렬을 히트맵으로 · <a href="capstones/01-mini-transformer.html">레슨 열기 →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>합성곱 층의 커널</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>임베드 코드 복사</a>
+        </div>
+        <iframe src="../embed/embed.html?lesson=cnn&cell=3&lang=ko" title="borch 위젯: 합성곱 커널"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">초기화 직후의 3×3 필터 여섯 개 · <a href="learn/05-cnn.html">레슨 열기 →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>떨어지는 손실 곡선</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>임베드 코드 복사</a>
+        </div>
+        <iframe src="../embed/embed.html?lesson=adam&cell=3&lang=ko" title="borch 위젯: Adam 손실 곡선"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">Adam 이 작은 문제를 학습 · <a href="techniques/01-adam.html">레슨 열기 →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>깊이엔 왜 skip 이 필요한가</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>임베드 코드 복사</a>
+        </div>
+        <iframe src="../embed/embed.html?lesson=resnet&cell=3&lang=ko" title="borch 위젯: 기울기 소실"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">깊이에 따라 줄어드는 기울기 · <a href="learn/09-resnet.html">레슨 열기 →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>배치 정규화, 그려보기</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>임베드 코드 복사</a>
+        </div>
+        <iframe src="../embed/embed.html?lesson=batchnorm&cell=3&lang=ko" title="borch 위젯: 배치 정규화"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">전과 후의 활성값 · <a href="techniques/03-batchnorm.html">레슨 열기 →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>Dropout 의 마스크</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>임베드 코드 복사</a>
+        </div>
+        <iframe src="../embed/embed.html?lesson=dropout&cell=3&lang=ko" title="borch 위젯: dropout 마스크"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">정규화하는 무작위 마스크 · <a href="techniques/02-dropout.html">레슨 열기 →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>특이값 스펙트럼</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>임베드 코드 복사</a>
+        </div>
+        <iframe src="../embed/embed.html?lesson=eig-svd&cell=2&lang=ko" title="borch 위젯: 특이값"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">SVD 의 특이값을 그래프로 · <a href="foundations/06-eig-svd.html">레슨 열기 →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>확률로서의 Softmax</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>임베드 코드 복사</a>
+        </div>
+        <iframe src="../embed/embed.html?lesson=softmax-ce&cell=3&lang=ko" title="borch 위젯: softmax"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">로짓을 분포로 바꾸기 · <a href="techniques/05-softmax-ce.html">레슨 열기 →</a></p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">어떻게 임베드되나</p>
+    <h2>한 줄, 그리고 독자의 GPU 에서 돈다</h2>
+    <p class="lead">
+      각 카드의 복사 버튼이 <code>&lt;iframe&gt;</code> 한 줄을 준다 — 설치하거나 호스팅할 것이
+      없다. 독자의 브라우저에서 학습하고, WebGPU 없는 브라우저에선 깨지지 않고 한 문장으로
+      알려준다. 내 것을 만들고 싶은가? <a href="playground.html">플레이그라운드</a>에서 셀을
+      쓰거나, <a href="learn/">레슨</a>에서 시작해 그 코드를 임베드하라.
+    </p>
+    <p class="cta-row" style="margin-top:1.2rem">
+      <a class="btn primary" href="playground.html">플레이그라운드 열기 →</a>
+      <a class="btn ghost" href="learn/">레슨 둘러보기</a>
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    borch — 브라우저에서 WebGPU 위에 도는 PyTorch 모양의 텐서 라이브러리 · Apache-2.0
+  </div>
+</footer>
+
+<script type="module" src="../assets/embed-copy.js"></script>
+</body>
+</html>

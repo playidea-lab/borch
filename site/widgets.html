@@ -1,0 +1,187 @@
+<!doctype html>
+<!--
+  The widget gallery — live, embeddable ML, each with the one line to take it away.
+  Every card is an iframe into `embed/embed.html`; the Copy button reads the card's own
+  iframe.src (assets/embed-copy.js). The Korean edition is `ko/widgets.html`.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widgets — borch</title>
+<meta name="description" content="Live, embeddable ML widgets — attention, a loss curve, conv kernels — each trains in the reader's browser and drops into any page with one line. Serverless, like a Gradio demo minus the server.">
+<link rel="alternate" hreflang="ko" href="ko/widgets.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Widgets — borch">
+<meta property="og:description" content="Live, embeddable ML widgets — attention, a loss curve, conv kernels — each trains in the reader's browser and drops into any page with one line. Serverless, like a Gradio demo minus the server.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/widgets.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<!-- Cloudflare Web Analytics (cookieless, no PII; user photos/sounds never leave the tab) -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="api/">API</a>
+      <a href="vision.html">Vision</a>
+      <a href="models.html">Models</a>
+      <a href="python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="playground.html">Playground</a>
+      <a href="notebook.html">Notebook</a>
+      <a href="workbench.html">Workbench</a>
+      <a href="widgets.html" class="on" aria-current="page">Widgets</a>
+      <a href="tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="setup.html">GPU</a>
+      <a href="check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/widgets.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Embeddable · no server</p>
+    <h1>Live ML you can put on <span class="accent">any page</span>.</h1>
+    <p class="sub lead">
+      Each widget below trains in your browser, on your GPU. Press Run to see it; press Copy
+      to take the one line that drops it into your blog, your docs, your course — no server,
+      no sign-up. Like a Gradio demo, minus the server.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="grid c2" style="margin-top:.5rem">
+
+      <div class="card">
+        <div class="card-head">
+          <span>Attention, live</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=mini-transformer&cell=4" title="borch widget: causal attention"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">The causal-attention matrix as a heatmap · <a href="capstones/01-mini-transformer.html">open the lesson →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>A conv layer's kernels</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=cnn&cell=3" title="borch widget: convolution kernels"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">Six 3×3 filters, drawn at initialisation · <a href="learn/05-cnn.html">open the lesson →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>A loss curve falling</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=adam&cell=3" title="borch widget: Adam loss curve"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">Adam training a tiny problem · <a href="techniques/01-adam.html">open the lesson →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>Why depth needs a skip</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=resnet&cell=3" title="borch widget: vanishing gradient"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">The gradient shrinking with depth · <a href="learn/09-resnet.html">open the lesson →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>Batch norm, drawn</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=batchnorm&cell=3" title="borch widget: batch normalization"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">Activations before and after · <a href="techniques/03-batchnorm.html">open the lesson →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>Dropout's mask</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=dropout&cell=3" title="borch widget: dropout mask"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">The random mask that regularises · <a href="techniques/02-dropout.html">open the lesson →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>The singular-value spectrum</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=eig-svd&cell=2" title="borch widget: singular values"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">The SVD's singular values, plotted · <a href="foundations/06-eig-svd.html">open the lesson →</a></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>Softmax as probabilities</span><span class="grow"></span>
+          <a class="btn ghost mono" href="#" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=softmax-ce&cell=3" title="borch widget: softmax"
+                loading="lazy" style="width:100%;height:380px;border:0;display:block"></iframe>
+        <p class="small muted" style="margin:.6rem 0 0">Logits turned into a distribution · <a href="techniques/05-softmax-ce.html">open the lesson →</a></p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">How it embeds</p>
+    <h2>One line, and it runs on your reader's GPU</h2>
+    <p class="lead">
+      The Copy button on each card hands you an <code>&lt;iframe&gt;</code> — nothing else to
+      install or host. It trains in the reader's browser; on a browser without WebGPU it says
+      so in a sentence rather than breaking. Want one of your own? Write a cell in the
+      <a href="playground.html">playground</a>, or start from a <a href="learn/">lesson</a> and
+      embed its code.
+    </p>
+    <p class="cta-row" style="margin-top:1.2rem">
+      <a class="btn primary" href="playground.html">Open the playground →</a>
+      <a class="btn ghost" href="learn/">Browse the lessons</a>
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    borch — a PyTorch-shaped tensor library running on WebGPU in the browser · Apache-2.0
+  </div>
+</footer>
+
+<script type="module" src="assets/embed-copy.js"></script>
+</body>
+</html>
