@@ -19,7 +19,7 @@ candidate already exists as a cell; an "author" candidate needs a new cell writt
 
 ---
 
-## Shipped (22)
+## Shipped (23)
 
 | Widget | lesson · cell | Shows |
 |---|---|---|
@@ -45,6 +45,7 @@ candidate already exists as a cell; an "author" candidate needs a new cell writt
 | Character RNN | char-rnn · 0 | Text, one character at a time |
 | A batch, drawn | data · 4 | Samples stacked into a batch |
 | Quickstart | quickstart · 0 | The smallest end-to-end run |
+| Learning rate matters | adam · 4 | Three rates, three fates: diverge, converge, crawl |
 
 ---
 
@@ -59,9 +60,10 @@ candidate already exists as a cell; an "author" candidate needs a new cell writt
 
 ### Live-contrast — the whole point is watching two runs differ
 
-- **Learning rate: too high / too low / right** — the same problem three times; one
-  diverges, one crawls, one converges. The commonest beginner mistake, made visible.
-  **Effort M.**
+- **Learning rate: too high / too low / right** — ✅ **shipped** (`adam · 4`): the same
+  problem three times as a [3×T] loss heatmap — one row diverges, one converges, one
+  crawls. (Three separate loss *curves* aren't possible — `plot` is single-series — so the
+  three runs are stacked into one heatmap instead.)
 - **Overfitting, live** — train on a handful of points; train loss → 0 while a held-out
   curve turns back up. The memorise-vs-generalise story as a curve. (The
   "honest-measurement" capstone is its prose sibling.) **Effort M.**

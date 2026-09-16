@@ -310,6 +310,107 @@
       </script>
     </div>
 
+    <h2>The rate itself is fragile</h2>
+    <p>
+      Adam gives each parameter its own effective rate; with plain SGD the one rate is yours
+      to choose, and the choice is unforgiving. The same small regression is trained three
+      times below, changing only the learning rate — each row of the heatmap is a run, left
+      to right the steps, brightness the loss. One row diverges, one converges, one barely
+      moves.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        // one small regression, trained three times — only the learning rate changes
+        const D = 4, T = 40;
+        const Xd = keepAlive(Tensor.randn([64, D]));
+        const wtrue = keepAlive(Tensor.randn([D, 1]));
+        const y = keepAlive(noGrad(() => Xd.mm(wtrue)));   // targets = X w*
+
+        const LRs = [[1.5, "too high"], [0.1, "just right"], [0.005, "too low"]];
+        const crit = new nn.MSELoss();
+        const curves = [];
+        for (const [lr, name] of LRs) {
+          manualSeed(0);
+          const net = new nn.Linear(D, 1);
+          const opt = new optim.SGD(net.parameters(), lr);
+          const c = [];
+          for (let t = 0; t < T; t++) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(net.call(Xd), y);
+              loss.backward();
+              opt.step();
+              c.push(await loss.item());
+            });
+          }
+          curves.push({ name, lr, c });
+        }
+
+        // clip so the diverging run does not blacken the rest; a [3, T] heatmap
+        const cap = 2 * Math.max(curves[0].c[0], curves[1].c[0], curves[2].c[0]);
+        const flat = [];
+        for (const { c } of curves) for (const v of c) flat.push(Number.isFinite(v) ? Math.min(v, cap) : cap);
+        await show(Tensor.from(flat, [3, T]), { scale: 8 });
+
+        log("three learning rates, three fates — each row a run, left→right the steps, bright = high loss:");
+        for (const { name, lr, c } of curves) {
+          const last = c[c.length - 1];
+          const fate = !Number.isFinite(last) || last > cap * 0.5 ? "diverged"
+            : last < 0.05 * c[0] ? "converged" : "still crawling";
+          log("  lr " + String(lr).padEnd(6) + " (" + name + "): " + fate
+            + " — final loss " + (Number.isFinite(last) ? last.toFixed(3) : "inf"));
+        }
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+        import math
+
+        torch.manual_seed(0)
+        nn, optim = torch.nn, torch.optim
+        D, T = 4, 40
+
+        # one small regression, trained three times — only the learning rate changes
+        Xd = torch.randn(64, D)
+        wtrue = torch.randn(D, 1)
+        with torch.no_grad():
+            y = Xd @ wtrue
+
+        LRs = [(1.5, "too high"), (0.1, "just right"), (0.005, "too low")]
+        crit = nn.MSELoss()
+        curves = []
+        for lr, name in LRs:
+            torch.manual_seed(0)
+            net = nn.Linear(D, 1)
+            opt = optim.SGD(net.parameters(), lr)
+            c = []
+            for t in range(T):
+                opt.zero_grad()
+                loss = crit(net(Xd), y)
+                loss.backward()
+                opt.step()
+                c.append(loss.item())
+            curves.append((name, lr, c))
+
+        # clip so the diverging run does not blacken the rest; a [3, T] heatmap
+        cap = 2 * max(curves[0][2][0], curves[1][2][0], curves[2][2][0])
+        flat = []
+        for _, _, c in curves:
+            for v in c:
+                flat.append(min(v, cap) if math.isfinite(v) else cap)
+        show(torch.tensor(flat).reshape(3, T), scale=8)
+
+        print("three learning rates, three fates - each row a run, left-right the steps, bright = high loss:")
+        for name, lr, c in curves:
+            last = c[-1]
+            fate = "diverged" if (not math.isfinite(last) or last > cap * 0.5) else ("converged" if last < 0.05 * c[0] else "still crawling")
+            print("  lr", lr, "(" + name + "):", fate, "- final loss", round(last, 3) if math.isfinite(last) else "inf")
+      </script>
+    </div>
+
     <h2>What to remember</h2>
     <ul>
       <li>Adam keeps two running averages per parameter — the gradient and its square — and steps by their ratio.</li>
