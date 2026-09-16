@@ -68,6 +68,7 @@
 <nav class="subnav" aria-label="on this page">
   <div class="wrap">
     <a href="#start">Start</a>
+    <a href="#embed">Embed</a>
     <a href="#try">Try</a>
     <a href="#why">Why</a>
     <a href="#how">How it works</a>
@@ -118,6 +119,48 @@
     <p class="install">Zero runtime dependencies · 186KB gzipped ES module (663KB raw) · safetensors checkpoints</p>
   </div>
 </section>
+
+<!-- ── Embed ──────────────────────────────────────────────────────── -->
+<section id="embed">
+  <div class="wrap">
+    <p class="eyebrow">Embeddable · no server</p>
+    <h2>Drop a live model into any page — one line</h2>
+    <p class="lead">
+      Everything you just ran can live on your blog, your docs, your course — an iframe, no
+      server, no sign-up. It trains in the reader's browser, on their GPU. Like a Gradio
+      demo, minus the server.
+    </p>
+
+    <div class="grid c2" style="margin-top:2rem">
+      <div class="card">
+        <div class="card-head">
+          <span>Attention, live</span>
+          <span class="grow"></span>
+          <a class="btn ghost mono" href="#embed" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=mini-transformer&cell=4" title="borch widget: causal attention"
+                loading="lazy" style="width:100%;height:440px;border:0;display:block"></iframe>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <span>A loss curve falling</span>
+          <span class="grow"></span>
+          <a class="btn ghost mono" href="#embed" data-copy-embed>Copy embed code</a>
+        </div>
+        <iframe src="embed/embed.html?lesson=adam&cell=3" title="borch widget: Adam loss curve"
+                loading="lazy" style="width:100%;height:440px;border:0;display:block"></iframe>
+      </div>
+    </div>
+
+    <p class="small muted" style="margin-top:1.4rem">
+      Press Run inside a frame above — it trains right there. The Copy button hands you the
+      one line to paste; change nothing. A widget on a browser without WebGPU says so in a
+      sentence rather than breaking.
+    </p>
+  </div>
+</section>
+
+<script type="module" src="assets/embed-copy.js"></script>
 
 <!-- ── Playground ─────────────────────────────────────────────────── -->
 <section id="start">
