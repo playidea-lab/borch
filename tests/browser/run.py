@@ -43,6 +43,13 @@ from launch import browser as browser_of, is_software
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
+# The one list of top-level `site/` directories that are not this site's own pages, so
+# every guard and probe that walks `site/*.html` skips the same set: `lab`/`lab-src`
+# (JupyterLite, built), `marimo`/`marimo-src` (the workbench notebook, built) and
+# `embed` (the chrome-less widget route). It lived in four hand-synced copies until one
+# fell behind and reddened CI; this is the source they all read now.
+SITE_SKIP = ("lab", "lab-src", "marimo", "marimo-src", "embed")
+
 _vspec = importlib.util.spec_from_file_location(
     "bt_vendor", pathlib.Path(__file__).resolve().parent / "vendor.py")
 vendor = importlib.util.module_from_spec(_vspec)

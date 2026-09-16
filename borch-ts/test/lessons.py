@@ -38,6 +38,15 @@ from launch import browser as browser_of
 
 ROOT = runner.ROOT
 
+# The page-dir exclusion is one list shared with the site guards. Its source is
+# tests/browser/run.py — a *different* `run` than this tree's (this file's `run` is
+# borch-ts/test/run.py), so it is loaded by path rather than imported by name.
+import importlib.util as _il  # noqa: E402
+_bspec = _il.spec_from_file_location("bt_browser_run", ROOT / "tests" / "browser" / "run.py")
+_brun = _il.module_from_spec(_bspec)
+_bspec.loader.exec_module(_brun)
+SITE_SKIP = _brun.SITE_SKIP
+
 # **The pages to press.** The ones with runnable JS blocks that use borch.ts.
 PAGES = [
     "/site/learn/06-save-load.html",
@@ -158,7 +167,7 @@ def coverage():
     count and out of the run's reach.
     """
     found = {}
-    for path in sorted(p for p in (ROOT / "site").rglob("*.html") if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src", "marimo", "marimo-src", "embed")):
+    for path in sorted(p for p in (ROOT / "site").rglob("*.html") if p.relative_to(ROOT / "site").parts[0] not in SITE_SKIP):
         text = path.read_text(encoding="utf-8")
         n = text.count('data-lang="js"')
         if n:

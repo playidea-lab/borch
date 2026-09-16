@@ -73,6 +73,29 @@ def _runner():
     return mod
 
 
+def _browser_run():
+    """`tests/browser/run.py`, loaded as a module — its directory on `sys.path` only
+    for the load, as `_runner` does for the sister tree. It holds `SITE_SKIP`, the one
+    list of `site/` directories that are not this site's pages; read here so this file
+    keeps no fifth copy that could fall behind the others."""
+    import importlib.util  # noqa: PLC0415
+
+    here = str(ROOT / "tests" / "browser")
+    sys.path.insert(0, here)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "bt_browser_run", ROOT / "tests" / "browser" / "run.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        if here in sys.path:
+            sys.path.remove(here)
+    return mod
+
+
+SITE_SKIP = _browser_run().SITE_SKIP
+
+
 def _stale_dist():
     """The reason `dist` is out of date, or `None`.
 
@@ -600,7 +623,7 @@ LINK_TEXT = re.compile(r'<a [^>]*>([^<]*)</a>')
 def _pages():
     # `site/lab/` is JupyterLite (built by site/build_lab.py, gitignored) — its pages are
     # not this site's, and `site/lab-src/` is its source. Neither is checked here.
-    return sorted(p for p in SITE.rglob("*.html") if p.relative_to(SITE).parts[0] not in ("lab", "lab-src", "marimo", "marimo-src", "embed"))
+    return sorted(p for p in SITE.rglob("*.html") if p.relative_to(SITE).parts[0] not in SITE_SKIP)
 
 
 # **Which adapter names mean "this is the CPU" had three homes and now has two.**
@@ -1702,7 +1725,7 @@ _VISION_MODULES = ("vision", "vision_v2", "vision_v2_twins", "ops", "datasets")
 # So this walks every page that marks a count rather than a list of pages, and a page that
 # starts marking one is covered the moment it does.
 def _pages_marking_counts():
-    return [p for p in sorted((ROOT / "site").rglob("*.html")) if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src", "marimo", "marimo-src", "embed")
+    return [p for p in sorted((ROOT / "site").rglob("*.html")) if p.relative_to(ROOT / "site").parts[0] not in SITE_SKIP
             if _COUNT_SPAN.search(p.read_text(encoding="utf-8"))]
 
 

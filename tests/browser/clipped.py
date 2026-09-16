@@ -66,11 +66,11 @@ SCAN = """() => {
 def main():
     from playwright.sync_api import sync_playwright                  # noqa: PLC0415
     sys.path.insert(0, str(ROOT / "tests" / "browser"))
-    from run import serve                                            # noqa: PLC0415
+    from run import serve, SITE_SKIP                                            # noqa: PLC0415
     from launch import browser                                       # noqa: PLC0415
 
     # JupyterLite's pages (`site/lab/`, built) are not this site's layout.
-    pages = sorted(p for p in (ROOT / "site").rglob("*.html") if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src", "marimo", "marimo-src", "embed"))
+    pages = sorted(p for p in (ROOT / "site").rglob("*.html") if p.relative_to(ROOT / "site").parts[0] not in SITE_SKIP)
     port, shutdown = serve(ROOT)
     problems, checked = [], 0
     try:
