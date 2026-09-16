@@ -62,6 +62,8 @@
   <aside class="sidebar">
     <h4>torch.workbench</h4>
     <nav>
+      <a href="#try">내 폴더로 따라 하기</a>
+      <a href="#yourself">직접 부르면</a>
       <a href="#call">한 번의 호출</a>
       <a href="#folder">무엇을 읽나</a>
       <a href="#evidence">검수 순서는 믿을 만한가</a>
@@ -80,8 +82,53 @@
       <a href="notebook.html">두 노트북</a> 어느 쪽에서든 직접 부를 수 있다.
     </p>
     <p class="cta-row">
-      <a class="btn primary" href="notebook.html">마리모에서 돌려보기 →</a>
-      <a class="btn ghost" href="../api/">API 레퍼런스 →</a>
+      <a class="btn primary" href="../marimo/index.html">내 폴더로 열기 →</a>
+      <a class="btn ghost" href="#try">먼저 따라 해 보기 →</a>
+    </p>
+
+    <h2 id="try">내 폴더로 따라 하기</h2>
+    <p>
+      다섯 걸음이고, 어느 걸음에도 Python 은 필요 없다. 필요한 건 답을 이미 아는 이미지
+      폴더 하나다. 기본값인 동결 백본 경로는 수백 장이면 되고, 천 장이면 넉넉하다.
+    </p>
+    <ol>
+      <li><strong>라벨이 앞에 오도록 파일 이름을 짓는다.</strong> 첫 <code>_</code> 앞이
+        전부 라벨이다: <code>ok_001.jpg</code>, <code>ng_002.jpg</code>,
+        <code>crack_017.jpg</code>. 폴더를 담은 zip 도 되고, 그때는 폴더 이름이 라벨이다.
+        이름의 나머지는 아무 상관 없다.</li>
+      <li><strong>페이지를 열고 10초쯤 기다린다.</strong> Python 과 노트북이 탭으로
+        내려받아지는 시간이다. 설치할 것도, 만들 계정도 없다.</li>
+      <li><strong>폴더를 넣고 실행을 누른다</strong>(오른쪽 아래). 이미지는 탭 안에서 읽히고
+        탭에 남는다 — 아무것도 올라가지 않으며, 브라우저의 네트워크 패널에서 직접 확인할 수
+        있다.</li>
+      <li><strong>검수 표를 위에서부터 읽는다.</strong> 내가 준 라벨과 모델이 얼마나
+        어긋나는지로 정렬돼 있다. 오라벨은 거기 있다: 라벨의 9&nbsp;% 가 틀린 공개 데이터셋에서
+        첫 스무 줄의 3분의 2 가량이 오라벨이었다 — 아무 순서로 읽었다면 100 장에 9 장이다.</li>
+      <li><strong>모델을 가져간다.</strong> 내보내기 버튼이 ONNX 파일을 쓴다. 휴대폰·서버·PC
+        에서 ONNX Runtime 이 읽는 형식이고, 그 뒤로는 borch 도 브라우저도 필요 없다.</li>
+    </ol>
+    <p class="cta-row">
+      <a class="btn primary" href="../marimo/index.html">2번부터 시작하기 →</a>
+    </p>
+    <p class="small muted">
+      위의 어느 것도 잘 된 실행의 스크린샷이 아니다: 같은 다섯 걸음을
+      <code>tests/browser/marimo_probe.py</code> 가 매일 밤 실제 GPU 에서 누르고, 그 검사는
+      연 탭에 GPU 가 없으면 아예 보고를 거부한다.
+    </p>
+
+    <h2 id="yourself">같은 것을 직접 부르면</h2>
+    <p>
+      코드로 쓰는 편이 낫다면, 위의 다섯 걸음은 네 줄이다.
+      <a href="notebook.html">이 사이트의 두 노트북</a> 어느 쪽에서든, 그리고 어느 Pyodide
+      에서든 돈다.
+    </p>
+<pre><code>import borch_webgpu as torch
+s = torch.workbench.setup(files).fit()   # 폴더로 학습
+s.suspects()                             # 의심하는 라벨부터
+s.onnx()                                 # 모델을 들고 나간다</code></pre>
+    <p>
+      아래는 전부 그 네 줄에서 무엇을 바꿀 수 있는지, 그리고 검수 순서가 얼마나 믿을 만한지다.
+      <a href="../api/">API 레퍼런스 →</a>
     </p>
 
     <h2 id="call">한 번의 호출</h2>
