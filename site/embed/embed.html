@@ -1,0 +1,91 @@
+<!doctype html>
+<!--
+  A chrome-less borch widget, for embedding on any page by iframe.
+
+      <iframe src=".../site/embed/embed.html?lesson=mini-transformer&cell=1"
+              width="100%" height="480" style="border:0"></iframe>
+
+  It reads a lesson id from the query, finds the lesson in `assets/curriculum.json`, pulls
+  the one runnable cell out of that lesson's page, and activates it with the same
+  `runnable.js` the site uses. **No page chrome, no coi.js** — a WebGPU cell runs in a
+  cross-origin iframe without cross-origin isolation (measured, Phase 0). The Python twin
+  needs SharedArrayBuffer, which a non-isolated foreign host cannot grant, so the embed is
+  JavaScript-only: the py source is dropped before the cell is mounted.
+
+  This directory is excluded from the full-page site guards (nav, share-metadata, sidebar)
+  because an embed is deliberately chrome-less — see `_pages()` in tests/test_site.py.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>borch widget</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  html, body { margin: 0; background: var(--bg); }
+  body { padding: 12px; }
+  .runnable { margin: 0; }
+  #err { font: 13px var(--mono, monospace); color: var(--bad, #ff6b6b); padding: 8px 0; }
+  /* a quiet backlink, so an embed says where it came from without shouting */
+  .credit { margin: 10px 2px 0; font: 11px var(--sans, system-ui); }
+  .credit a { color: var(--fg-faint, #7b8799); text-decoration: none; }
+  .credit a:hover { color: var(--ember-text, #d1500f); }
+</style>
+</head>
+<body>
+  <div id="mount"></div>
+  <div id="err" hidden></div>
+  <p class="credit" hidden><a id="credit-link" target="_blank" rel="noopener">▶ runs live · borch</a></p>
+
+  <script type="module">
+    const q = new URLSearchParams(location.search);
+    const id = q.get("lesson");
+    const cell = parseInt(q.get("cell") || "0", 10);
+    const lang = q.get("lang") === "ko" ? "ko" : "en";
+    const errBox = document.getElementById("err");
+    const fail = (msg) => { errBox.hidden = false; errBox.textContent = msg; };
+
+    // The parent iframe can size itself to us: we post our height on every change.
+    const postHeight = () => parent.postMessage(
+      { type: "borch-embed-height", height: document.documentElement.scrollHeight }, "*");
+
+    try {
+      if (!id) throw new Error("embed: no ?lesson=<id> given");
+      const cur = await fetch("../assets/curriculum.json").then((r) => r.json());
+      const lesson = cur.lessons.find((l) => l.id === id);
+      if (!lesson) throw new Error(`embed: no lesson with id ${id}`);
+      const url = "../" + (lang === "ko" ? lesson.ko_url : lesson.url);
+
+      const html = await fetch(url).then((r) => r.text());
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const blocks = [...doc.querySelectorAll("div.runnable")];
+      const chosen = blocks[cell];
+      if (!chosen) throw new Error(`embed: lesson ${id} has no cell ${cell} (it has ${blocks.length})`);
+
+      // JavaScript-only in an embed: drop the Python twin (it needs SharedArrayBuffer,
+      // which a non-isolated foreign host cannot grant). Leave a py-only cell as it is.
+      const node = document.importNode(chosen, true);
+      if (node.querySelector('script[type="text/plain"][data-lang="js"]')) {
+        node.querySelectorAll('script[type="text/plain"][data-lang="py"]').forEach((s) => s.remove());
+        node.setAttribute("data-lang", "js");
+      }
+      document.getElementById("mount").appendChild(node);
+      document.documentElement.lang = lang;
+
+      // The backlink points at the lesson this cell came from, on borch's own origin.
+      const link = document.getElementById("credit-link");
+      link.href = new URL(url, location.href).href;
+      link.parentElement.hidden = false;
+
+      // runnable.js runs mountRunnables() on load; the cell is already in the DOM.
+      await import("../assets/runnable.js");
+
+      postHeight();
+      new ResizeObserver(postHeight).observe(document.documentElement);
+    } catch (e) {
+      fail(String((e && e.message) || e));
+      postHeight();
+    }
+  </script>
+</body>
+</html>

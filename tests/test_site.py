@@ -600,7 +600,7 @@ LINK_TEXT = re.compile(r'<a [^>]*>([^<]*)</a>')
 def _pages():
     # `site/lab/` is JupyterLite (built by site/build_lab.py, gitignored) — its pages are
     # not this site's, and `site/lab-src/` is its source. Neither is checked here.
-    return sorted(p for p in SITE.rglob("*.html") if p.relative_to(SITE).parts[0] not in ("lab", "lab-src", "marimo", "marimo-src"))
+    return sorted(p for p in SITE.rglob("*.html") if p.relative_to(SITE).parts[0] not in ("lab", "lab-src", "marimo", "marimo-src", "embed"))
 
 
 # **Which adapter names mean "this is the CPU" had three homes and now has two.**
@@ -1702,7 +1702,7 @@ _VISION_MODULES = ("vision", "vision_v2", "vision_v2_twins", "ops", "datasets")
 # So this walks every page that marks a count rather than a list of pages, and a page that
 # starts marking one is covered the moment it does.
 def _pages_marking_counts():
-    return [p for p in sorted((ROOT / "site").rglob("*.html")) if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src", "marimo", "marimo-src")
+    return [p for p in sorted((ROOT / "site").rglob("*.html")) if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src", "marimo", "marimo-src", "embed")
             if _COUNT_SPAN.search(p.read_text(encoding="utf-8"))]
 
 

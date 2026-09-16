@@ -158,7 +158,7 @@ def coverage():
     count and out of the run's reach.
     """
     found = {}
-    for path in sorted(p for p in (ROOT / "site").rglob("*.html") if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src", "marimo", "marimo-src")):
+    for path in sorted(p for p in (ROOT / "site").rglob("*.html") if p.relative_to(ROOT / "site").parts[0] not in ("lab", "lab-src", "marimo", "marimo-src", "embed")):
         text = path.read_text(encoding="utf-8")
         n = text.count('data-lang="js"')
         if n:
