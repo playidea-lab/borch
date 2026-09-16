@@ -72,6 +72,18 @@
       document.getElementById("mount").appendChild(node);
       document.documentElement.lang = lang;
 
+      // An embed lands on strangers' browsers — a WebGPU-less one (mobile Safari before 26,
+      // a locked-down Chrome) should meet a clean line, not the runner's stack trace on Run.
+      if (!navigator.gpu) {
+        const note = document.createElement("div");
+        note.className = "note-box";
+        note.style.margin = "0 0 12px";
+        note.innerHTML = lang === "ko"
+          ? "<strong>이 위젯은 WebGPU가 필요합니다.</strong> Chrome·Edge 113+, Firefox 141+, Safari 26+ 에서 돕니다 — 그 브라우저로 열면 학습이 보입니다."
+          : "<strong>This widget needs WebGPU.</strong> It runs in Chrome and Edge 113+, Firefox 141+, and Safari 26+ — open it in one of those to watch it train.";
+        document.getElementById("mount").prepend(note);
+      }
+
       // The backlink points at the lesson this cell came from, on borch's own origin.
       const link = document.getElementById("credit-link");
       link.href = new URL(url, location.href).href;
