@@ -138,6 +138,7 @@ def main():
     from playwright.sync_api import sync_playwright  # noqa: PLC0415
 
     problems, n_lessons = lessons_resolve()
+    kept_on_isolated = False       # set by the isolated half below; stays False if it never ran
     # Two origins from the same tree, both plain (non-isolated): one serves the embed, the
     # other is the foreign host — a cross-origin iframe between them, the realistic case.
     embed_port, stop_embed = serve_plain(ROOT)
@@ -160,10 +161,11 @@ def main():
                 page.goto(f"http://127.0.0.1:{iso_port}/site/embed/embed.html"
                           "?lesson=mini-transformer&cell=4", wait_until="load")
                 page.wait_for_timeout(1200)
+                kept_on_isolated = bool(page.locator('button.tab[data-lang="py"]').count())
                 if not page.evaluate("window.crossOriginIsolated"):
                     problems.append("isolated: served COOP/COEP but the frame is not isolated"
                                     " — the Python-kept path cannot be tested here")
-                elif not page.locator('button.tab[data-lang="py"]').count():
+                elif not kept_on_isolated:
                     problems.append("isolated: the Python tab was stripped on an isolated host"
                                     " — the twin should be kept where it can run")
             finally:
@@ -178,7 +180,13 @@ def main():
     if problems:
         print("**the embed route is broken** — see above")
         return 1
-    print(f"embed route ok — {len(SAMPLE)} widgets ran cross-origin, "
+    # **Both halves are named, because a line that reports one of them is how a check
+    # quietly loses the other.** The isolated case runs above; said this way, its absence
+    # would show — an early return, or a `serve` that stopped isolating, would print a
+    # green line with a clause missing rather than the same green line as before.
+    print(f"embed route ok — {len(SAMPLE)} widgets ran cross-origin with the Python twin "
+          f"stripped, the twin kept on an isolated host"
+          f"{'' if kept_on_isolated else ' (NOT REACHED)'}, "
           f"all {n_lessons} lessons resolve to an embeddable cell")
     return 0
 
