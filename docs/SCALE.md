@@ -373,6 +373,14 @@ nightly on a real adapter (`refuse_if_software` holds).
   tolerance); `accuracy.ts` top-1 on EfficientNet-B0 with f16 weights within **0.3 pt** of
   f32; Step 3's window gate re-run with half the bytes per block; on an adapter without
   f16 the same program runs f32 and says so.
+- **Where these run** (measured 2026-09-18): the f16 path is developed and verified
+  **headed on this Mac** — `apple / metal-3` offers `shader-f16` (a headed run gets the
+  real adapter; only *headless* falls to SwiftShader). The **f32-fallback** path has a
+  measured witness in the RTX 5080 (`nvidia / blackwell`, Chrome on Linux/Vulkan), which
+  offers **no** `shader-f16` at all — so "the same program runs f32 and says so" is tested
+  on real hardware, not assumed. That card's `maxStorageBufferBindingSize` is also 2048 MiB
+  against Apple's 4096, so the window (Step 3) must read the binding tier per device, never
+  hardcode Apple's.
 - **Why storage first**: the window's cost is bytes moved per block; halving them is the
   whole win for a frozen backbone, and it changes no arithmetic the golden reasons about.
   Compute-f16 is a speed lever with a numerics bill; it waits for a number that says it
