@@ -365,6 +365,23 @@ nightly on a real adapter (`refuse_if_software` holds).
     whether the core accepts `float16` as a label too (keeping parity) or borch-ts takes a
     documented, separately-tested divergence. Either way this is a focused, ledger-touching
     unit of its own, not a tail-of-session edit.
+  - **2026-09-18, decided — do NOT make `float16` a Tensor dtype; the window holds it as a
+    raw buffer.** Going one level deeper into "float16 as a real storage dtype across all
+    three implementations" found it reverses the codebase's central axiom, stated at the top
+    of both `dtype.ts` and `borch/_base.py`: **storage is float32, and only that.** The
+    one-width-per-category promotion model, the `_requested_dtype` narrowing throat (which
+    narrows even `float64` to float32 on purpose), and the golden parity all rest on that
+    axiom; a second float width disturbs all of them. And it buys nothing in the core — the
+    core has no GPU and no memory pressure, so an `np.float16` array there only breaks the
+    axiom for no gain. **ADR-003 decision 5 already ruled this out**: quantised and f16
+    weights are *not* Tensors — they are raw `GPUBuffer`s in the window, so `DType` and
+    `floatsPerElement` keep their invariant and the numpy core never learns a narrow dtype.
+    So Step 4a's "float16 enters DType" line is **withdrawn**: the f16 weight operand is a
+    window-owned raw buffer (Step 3), packed with `pack2x16float` (no `shader-f16` needed to
+    pack; the matmul's f16 *read* path uses `Device.f16` where present and upcasts to f32
+    otherwise). What stays from Step 4 is `Device.f16` (landed) and, later, the matmul f16
+    weight-read on a windowed buffer. Net: **Step 4 folds into Step 3** — there is no
+    standalone f16-dtype refactor.
   - Kernels: the matmul and conv **weight operand only** typed `array<f16>` under a
     generator parameter `weight: "f32"|"f16"` on the four matmul generators and the two
     conv generators (six functions, not 162); `enable f16;` prepended like `:1681`; the
