@@ -146,6 +146,11 @@ CHECKS = [
     # stops coming back), the limit tiers, shader-f16, and what two hub models cost the
     # host and the GPU. A measurement; it fails only when nothing could be measured.
     ("ceiling",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/ceiling.py"]),
+    # docs/SCALE.md Step 6: gradient checkpointing. The recomputed backward against the
+    # fully-taped one — the gradients must agree within the golden tolerance and the buffers
+    # held after the forward must fall. Adapter-independent (values + counts), so it runs in
+    # CI on SwiftShader too.
+    ("checkpoint",  ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/checkpoint_probe.py"]),
 ]
 
 

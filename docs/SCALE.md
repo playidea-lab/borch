@@ -419,6 +419,19 @@ nightly on a real adapter (`refuse_if_software` holds).
   gradients dominate, and checkpointing is what makes a backward through a *windowed*
   block self-contained (Step 7). No WebGPU implementation exists; this one will be the
   first, which is a reason to keep it small and measured.
+- **2026-09-18, landed** (borch-ts `checkpoint.ts`, exported): `checkpoint(fn, ...inputs)`
+  runs the forward under `noGrad` in a `scope()` that keeps only the output, and a node
+  whose backward re-runs `fn` on detached leaves inside its own `scope()`, `flow`s the
+  incoming gradient in, and keeps only the returned input grads. Gradient routes to the
+  passed `inputs`; a grad-requiring tensor *closed over* rather than passed is refused
+  (the recompute graph is walked for stray grad-requiring leaves), so a captured parameter
+  is a loud throw, never a silent zero — Step 7 passes the adapter as an input, the frozen
+  backbone does not require grad and is not flagged. `checkpoint_probe.py` (adapter-
+  independent, in CI and nightly): the recomputed gradients are **bit-identical** to the
+  taped ones (max |Δ| 0.00e0 across x, first/last W, b), a captured grad tensor is refused,
+  and the buffers held after the forward fall (68 % at 8 blocks, the win growing with
+  depth). `Sequential.checkpointEvery(n)` is the convenience left for Step 7, where the
+  block's grad-requiring params are collected and passed.
 
 ### Step 7 — LoRA on a streamed frozen backbone  · size L · depends on 3, 6 (4 recommended)
 

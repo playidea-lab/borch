@@ -112,6 +112,9 @@ export type { Availability, DeviceKind, InitOptions } from "./device.js";
 // is not broken).
 export { manualSeed } from "./random.js";
 export { einsum } from "./einsum.js";
+// Gradient checkpointing — recompute a segment's intermediates in the backward rather
+// than hold them. `docs/SCALE.md` Step 6.
+export { checkpoint } from "./checkpoint.js";
 // The place brackets occupy. `x[1:3]` resolves to `x[slice(1, 3)]` in Python too, so it
 // is the same name.
 export { slice } from "./indexing.js";

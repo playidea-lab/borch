@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>checkpoint — the recomputed backward against the taped one</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Step 6 of docs/SCALE.md, verified two ways.** A chain of blocks is run twice on the
+  // same parameters: once fully taped, once with every block wrapped in `checkpoint`. The
+  // gradients must agree within the golden tolerance (a checkpoint that recomputed wrongly
+  // is a silently wrong gradient — the worst kind), and the buffers held after the forward,
+  // before the backward, must fall — that fall is the whole reason the feature exists.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  // The golden's tolerance — a recompute uses the same kernels, so the expectation is bit
+  // equality and this is only the ceiling. `tests/export_json.py`.
+  const ATOL = 1e-4, RTOL = 1e-4;
+  try {
+    const { init, device, scope, checkpoint, nn, Tensor, keepAlive } = await import("borch-ts");
+    await init();
+    say(`adapter: ${device().constructor.name} · ${(await import("borch-ts")).Device.adapterInfo}`);
+
+    const D = 48, BLOCKS = 8;
+    // One set of parameters, kept alive across both runs so the two see the same weights.
+    const seedRandn = (shape, s) => {
+      // A deterministic fill so the two runs and a rerun match; values in a tanh-friendly range.
+      const n = shape.reduce((a, b) => a * b, 1);
+      const a = new Float32Array(n);
+      let x = s >>> 0;
+      for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 0.5; }
+      return Tensor.from(a, shape);
+    };
+    const blocks = [];
+    for (let i = 0; i < BLOCKS; i++) {
+      const W = keepAlive(seedRandn([D, D], 1000 + i)); W.requiresGrad = true;
+      const b = keepAlive(seedRandn([D], 5000 + i)); b.requiresGrad = true;
+      blocks.push({ W, b });
+    }
+    const x0 = keepAlive(seedRandn([16, D], 42)); x0.requiresGrad = true;
+
+    // One block: matmul, a broadcast add, a tanh — three intermediates a backward wants.
+    // W and b are passed as arguments (not closed over), so checkpoint routes their
+    // gradient too — the contract the stray-leaf guard enforces.
+    const step = (h, W, b) => h.matmul(W).add(b).tanh();
+
+    const run = async (useCkpt) => scope(async () => {
+      x0.grad = null;
+      for (const blk of blocks) { blk.W.grad = null; blk.b.grad = null; }
+      let y = x0;
+      for (const blk of blocks) {
+        y = useCkpt ? checkpoint(step, y, blk.W, blk.b) : step(y, blk.W, blk.b);
+      }
+      const loss = y.sum();
+      const lossVal = (await loss.toArray())[0];
+      const heldAfterForward = device().memory.bytes;   // pool excluded — live intermediates
+      loss.backward();
+      return {
+        loss: lossVal,
+        held: heldAfterForward,
+        gx: Array.from(await x0.grad.toArray()),
+        gW0: Array.from(await blocks[0].W.grad.toArray()),
+        gWlast: Array.from(await blocks[BLOCKS - 1].W.grad.toArray()),
+        gb0: Array.from(await blocks[0].b.grad.toArray()),
+      };
+    });
+
+    const plain = await run(false);
+    const ckpt = await run(true);
+
+    // A captured grad-requiring tensor must be refused, not silently given a zero gradient.
+    let refusedCapture = false;
+    await scope(async () => {
+      x0.grad = null; blocks[0].W.grad = null; blocks[0].b.grad = null;
+      const W = blocks[0].W, b = blocks[0].b;
+      const bad = checkpoint((h) => h.matmul(W).add(b).tanh(), x0);  // W, b closed over
+      try { bad.sum().backward(); } catch (e) { refusedCapture = /closed over|not passed|checkpoint/.test(String(e)); }
+    });
+    say(`a captured grad-requiring tensor is refused: ${refusedCapture ? "yes" : "NO"}`);
+
+    const worst = (a, b) => {
+      let m = 0;
+      for (let i = 0; i < a.length; i++) {
+        const abs = Math.abs(a[i] - b[i]);
+        const tol = ATOL + RTOL * Math.abs(b[i]);
+        m = Math.max(m, abs - tol);   // margin over the allowed band; ≤0 is a pass
+      }
+      return m;
+    };
+    const worstAbs = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+
+    const marginX = worst(ckpt.gx, plain.gx);
+    const marginW0 = worst(ckpt.gW0, plain.gW0);
+    const marginWlast = worst(ckpt.gWlast, plain.gWlast);
+    const marginB0 = worst(ckpt.gb0, plain.gb0);
+    const gradsAgree = Math.max(marginX, marginW0, marginWlast, marginB0) <= 0;
+    const lossAgree = Math.abs(plain.loss - ckpt.loss) <= ATOL + RTOL * Math.abs(plain.loss);
+    const heldFell = ckpt.held < plain.held;
+
+    say(`loss: plain ${plain.loss.toFixed(6)} · checkpoint ${ckpt.loss.toFixed(6)} — ${lossAgree ? "agree" : "DIFFER"}`);
+    say(`grad max |Δ|: x ${worstAbs(ckpt.gx, plain.gx).toExponential(2)} · `
+      + `W0 ${worstAbs(ckpt.gW0, plain.gW0).toExponential(2)} · `
+      + `Wlast ${worstAbs(ckpt.gWlast, plain.gWlast).toExponential(2)} · `
+      + `b0 ${worstAbs(ckpt.gb0, plain.gb0).toExponential(2)}`);
+    say(`grads within golden tolerance (margin ≤ 0): ${gradsAgree ? "yes" : "NO — " + Math.max(marginX, marginW0, marginWlast, marginB0).toExponential(2)}`);
+    say(`held after forward: plain ${(plain.held / 1024).toFixed(1)} KB · checkpoint ${(ckpt.held / 1024).toFixed(1)} KB `
+      + `— ${heldFell ? `fell to ${(100 * ckpt.held / plain.held).toFixed(0)}%` : "DID NOT FALL"}`);
+    say(`faults: ${device().faults.count}`);
+
+    const ok = gradsAgree && lossAgree && heldFell && refusedCapture && device().faults.count === 0;
+    say(ok ? "\ncheckpoint: recomputed backward matches, holds less, refuses a captured grad" : "\n**checkpoint: a check did not hold**");
+    window.__checkpoint = {
+      text: lines.join("\n"), ok, gradsAgree, lossAgree, heldFell, refusedCapture,
+      heldPlain: plain.held, heldCkpt: ckpt.held, faults: device().faults.count,
+    };
+  } catch (err) {
+    window.__checkpoint = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>
