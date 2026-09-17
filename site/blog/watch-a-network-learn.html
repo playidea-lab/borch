@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch a neural network learn — live, in your browser</title>
+<meta name="description" content="A network carves the plane into regions; here you watch the decision boundary bend to fit two moons, trained live in your own browser. Every figure is a real model running as you read — press Run.">
+<link rel="alternate" hreflang="ko" href="../ko/blog/watch-a-network-learn.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Watch a neural network learn — live, in your browser">
+<meta property="og:description" content="A network carves the plane into regions; here you watch the decision boundary bend to fit two moons, trained live in your own browser. Every figure is a real model running as you read.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/blog/watch-a-network-learn.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../tutorials/">Tutorials</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">Vision</a>
+      <a href="../models.html">Models</a>
+      <a href="../python.html">Python</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../widgets.html">Widgets</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">Check</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../ko/blog/watch-a-network-learn.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-main lesson" style="max-width:52rem;margin:0 auto">
+  <p class="eyebrow">Live explainer</p>
+  <h1>Watch a neural network learn</h1>
+  <p class="lead">
+    A classifier's whole job is to carve the input space into regions — one per class. For
+    points on a plane you can <em>see</em> that carving. And you don't have to take my word
+    for the figures below: each is a real network training in <strong>your</strong> browser,
+    on your GPU, as you read. Press Run on any of them.
+  </p>
+
+  <h2>Two moons no straight line can split</h2>
+  <p>
+    Here are two interleaving half-moons, each a class. A linear model can only draw a
+    straight boundary between them — and no straight line separates these. So we give the
+    network one hidden layer with a non-linearity, and the boundary can <em>bend</em>. The
+    grid below colours every point on the plane by the class the network would give it; the
+    seam between the colours is the decision boundary. It starts as a random split and, over
+    a hundred-odd steps, bends to fit.
+  </p>
+
+  <iframe src="../embed/embed.html?lesson=decision-boundary&cell=0&auto=1"
+          title="borch: a network learning a decision boundary" loading="lazy"
+          style="width:100%;height:560px;border:1px solid var(--line);border-radius:14px;display:block;margin:1.5rem 0"></iframe>
+
+  <p class="small muted">
+    That trained just now, in this tab — no server was called. It is
+    <a href="../capstones/03-decision-boundary.html">a borch lesson</a>; the whole thing is a
+    few lines of PyTorch-shaped code you can read and edit in the frame.
+  </p>
+
+  <h2>The rate you train at decides everything</h2>
+  <p>
+    A network learns by stepping downhill on its error, and the step size — the learning
+    rate — is the one knob that most often decides whether it learns at all. Too large and it
+    diverges; too small and it crawls. The figure below trains the same small problem three
+    times, changing only the rate. Each row of the heatmap is a run, left to right the steps,
+    brightness the loss: one row stays bright (diverged), one goes dark (converged), one sits
+    in between (too slow).
+  </p>
+
+  <iframe src="../embed/embed.html?lesson=adam&cell=4&auto=1"
+          title="borch: learning rate matters" loading="lazy"
+          style="width:100%;height:520px;border:1px solid var(--line);border-radius:14px;display:block;margin:1.5rem 0"></iframe>
+
+  <h2>Why this reads better than a screenshot</h2>
+  <p>
+    Everything above is the point of borch: a PyTorch-shaped library that runs on WebGPU in
+    the browser, so a demo of a model <em>learning</em> can live on a page and run for the
+    reader — no server, no install, no sign-up. Each figure here is an
+    <code>&lt;iframe&gt;</code>; you can put the same one on your own blog or docs with one
+    line. Browse the <a href="../widgets.html">widget gallery</a> and copy any of them, or
+    open the <a href="../playground.html">playground</a> to write your own.
+  </p>
+  <p class="cta-row" style="margin-top:1.4rem">
+    <a class="btn primary" href="../widgets.html">See the widget gallery →</a>
+    <a class="btn ghost" href="../learn/">Start the lessons</a>
+    <a class="btn ghost" href="https://github.com/playidea-lab/borch">GitHub</a>
+  </p>
+</main>
+
+<footer>
+  <div class="wrap">
+    borch — a PyTorch-shaped tensor library running on WebGPU in the browser · Apache-2.0
+  </div>
+</footer>
+
+</body>
+</html>

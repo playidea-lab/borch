@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<script src="../../coi.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>신경망이 배우는 걸 지켜보기 — 당신 브라우저에서, 살아있게</title>
+<meta name="description" content="신경망은 평면을 클래스별 영역으로 가른다; 결정경계가 두 반달에 맞춰 휘는 걸, 당신 브라우저에서 실시간으로 학습시키며 본다. 모든 그림이 읽는 동안 도는 진짜 모델 — Run 을 눌러라.">
+<link rel="alternate" hreflang="en" href="../../blog/watch-a-network-learn.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="신경망이 배우는 걸 지켜보기 — 당신 브라우저에서, 살아있게">
+<meta property="og:description" content="신경망은 평면을 클래스별 영역으로 가른다; 결정경계가 두 반달에 맞춰 휘는 걸, 당신 브라우저에서 실시간으로 학습시키며 본다. 모든 그림이 읽는 동안 도는 진짜 모델.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/blog/watch-a-network-learn.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0b481a9645d84297ba7a4817229abed8"}'></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../api/">API</a>
+      <a href="../vision.html">비전</a>
+      <a href="../models.html">모델</a>
+      <a href="../python.html">파이썬</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../playground.html">Playground</a>
+      <a href="../notebook.html">Notebook</a>
+      <a href="../workbench.html">Workbench</a>
+      <a href="../widgets.html">위젯</a>
+      <a href="../tmplus.html">TM++</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="../setup.html">GPU</a>
+      <a href="../check.html">확인</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../blog/watch-a-network-learn.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-main lesson" style="max-width:52rem;margin:0 auto">
+  <p class="eyebrow">라이브 설명</p>
+  <h1>신경망이 배우는 걸 지켜보기</h1>
+  <p class="lead">
+    분류기가 하는 일은 결국 입력 공간을 클래스별 영역으로 가르는 것이다. 평면 위 점이라면
+    그 가르기를 <em>볼 수</em> 있다. 그리고 아래 그림들을 말로만 믿을 필요가 없다 — 각각은
+    읽는 지금 <strong>당신의</strong> 브라우저, 당신의 GPU 에서 학습하는 진짜 신경망이다.
+    아무거나 Run 을 눌러 보라.
+  </p>
+
+  <h2>어떤 직선도 못 가르는 두 반달</h2>
+  <p>
+    각각 한 클래스인, 얽힌 두 반달이다. 선형 모델은 이 사이에 직선 경계밖에 못 긋는데 —
+    어떤 직선도 이걸 못 가른다. 그래서 비선형을 낀 은닉층 하나를 주면, 경계가 <em>휠 수</em>
+    있다. 아래 격자는 평면의 모든 점을 신경망이 줄 클래스로 색칠하고, 색 사이 이음매가
+    결정경계다. 무작위 가르기에서 시작해 백여 스텝에 걸쳐 맞게 휜다.
+  </p>
+
+  <iframe src="../../embed/embed.html?lesson=decision-boundary&cell=0&auto=1&lang=ko"
+          title="borch: 결정경계를 배우는 신경망" loading="lazy"
+          style="width:100%;height:560px;border:1px solid var(--line);border-radius:14px;display:block;margin:1.5rem 0"></iframe>
+
+  <p class="small muted">
+    방금 이 탭에서 학습했다 — 서버는 호출되지 않았다. 이건
+    <a href="../capstones/03-decision-boundary.html">borch 레슨</a>이고, 전체가 프레임 안에서
+    읽고 고칠 수 있는 몇 줄의 PyTorch 모양 코드다.
+  </p>
+
+  <h2>학습률이 모든 걸 가른다</h2>
+  <p>
+    신경망은 자기 오차의 내리막을 밟아 배우고, 그 보폭 — 학습률 — 이 학습이 되느냐 마느냐를
+    가장 자주 결정하는 유일한 손잡이다. 너무 크면 발산하고, 너무 작으면 긴다. 아래 그림은 같은
+    작은 문제를 학습률만 바꿔 세 번 학습한다. 히트맵의 각 행이 한 번의 학습, 왼쪽에서 오른쪽이
+    스텝, 밝기가 손실: 한 행은 밝게 남고(발산), 한 행은 어두워지고(수렴), 한 행은 그 사이에
+    있다(너무 느림).
+  </p>
+
+  <iframe src="../../embed/embed.html?lesson=adam&cell=4&auto=1&lang=ko"
+          title="borch: 학습률이 중요하다" loading="lazy"
+          style="width:100%;height:520px;border:1px solid var(--line);border-radius:14px;display:block;margin:1.5rem 0"></iframe>
+
+  <h2>왜 이게 스크린샷보다 나은가</h2>
+  <p>
+    위의 전부가 borch 의 요점이다: 브라우저에서 WebGPU 위에 도는 PyTorch 모양 라이브러리라,
+    모델이 <em>배우는</em> 데모가 페이지에 얹혀 독자를 위해 돈다 — 서버도, 설치도, 가입도 없이.
+    여기 각 그림은 <code>&lt;iframe&gt;</code> 하나다; 같은 걸 당신 블로그·문서에 한 줄로 얹을 수
+    있다. <a href="../widgets.html">위젯 갤러리</a>에서 아무거나 복사하거나,
+    <a href="../playground.html">플레이그라운드</a>에서 직접 써 보라.
+  </p>
+  <p class="cta-row" style="margin-top:1.4rem">
+    <a class="btn primary" href="../widgets.html">위젯 갤러리 보기 →</a>
+    <a class="btn ghost" href="../learn/">레슨 시작</a>
+    <a class="btn ghost" href="https://github.com/playidea-lab/borch">GitHub</a>
+  </p>
+</main>
+
+<footer>
+  <div class="wrap">
+    borch — 브라우저에서 WebGPU 위에 도는 PyTorch 모양의 텐서 라이브러리 · Apache-2.0
+  </div>
+</footer>
+
+</body>
+</html>
