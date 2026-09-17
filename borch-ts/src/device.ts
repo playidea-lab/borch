@@ -493,12 +493,22 @@ export class Device {
     const sg = adapter.features.has("subgroups" as GPUFeatureName);
     if (sg) features.push("subgroups" as GPUFeatureName);
     if (sgm) features.push("chromium-experimental-subgroup-matrix" as GPUFeatureName);
+    // **`shader-f16` is requested where the adapter has it — and it is not everywhere.**
+    // Apple's Metal offers it; a recent NVIDIA card (RTX 5080) through Chrome on
+    // Linux/Vulkan offers none (measured, `docs/SCALE-MEASURED.md`). So it is an optional
+    // capability read per device, never assumed. The kernels that use it (a half-precision
+    // weight operand, `docs/SCALE.md` Step 4) ask `Device.f16` before choosing their path,
+    // and a device without it stays on the f32 kernels. Requesting a feature the adapter
+    // lacks makes `requestDevice` refuse, so it goes in only when present.
+    const f16 = adapter.features.has("shader-f16" as GPUFeatureName);
+    if (f16) features.push("shader-f16" as GPUFeatureName);
     const descriptor = {
       requiredLimits: want,
       requiredFeatures: features,
     };
     Device.subgroupMatrix = sgm;
     Device.subgroups = sg;
+    Device.f16 = f16;
     Device.workgroupStorage = adapter.limits.maxComputeWorkgroupStorageSize;
 
     let device: GPUDevice;
@@ -1760,6 +1770,14 @@ export class Device {
   static subgroupMatrix = false;
   /** Whether the device has subgroup operations (`subgroupAdd`, `subgroupMax`). */
   static subgroups = false;
+  /**
+   * Whether the device was built with `shader-f16` — half-precision arithmetic and storage
+   * in WGSL. **Optional and not universal**: Apple Metal has it, a recent NVIDIA card
+   * through Chrome on Linux/Vulkan does not (measured, `docs/SCALE-MEASURED.md`). A kernel
+   * with a half-precision path asks this first; without it, the f32 kernel runs and the
+   * program answers the same, only larger and slower. `docs/SCALE.md` Step 4.
+   */
+  static f16 = false;
 
   /** The adapter's workgroup storage in bytes — 16 KB is the guaranteed floor, Apple
    *  gives 32 KB. A kernel that stages more than the floor asks this first. */

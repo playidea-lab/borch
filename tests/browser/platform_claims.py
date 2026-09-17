@@ -176,31 +176,32 @@ def _claims(got):
          "8-bit float type at all, in the shading language or as a feature; if one "
          "appears the sentence is spent."),
 
-        # **The opposite direction, and the only claim here asserted as a presence.**
+        # **`shader-f16` is optional, and this row asserts exactly that — no more.**
         #
-        # It went red in CI the first time another machine ran it, and **the red was
-        # the check disagreeing with its own last sentence.** That sentence says half
-        # precision is declined because `shader-f16` is *optional* and machines with
-        # it and without it diverge — and then the row asserted every machine has it.
-        # A runner that lacks it does not falsify that reason; it is the reason.
+        # An earlier version asserted every hardware adapter *has* it, and defended
+        # `autocast`'s "declined, a decision not the hardware" with the presence of the
+        # feature. That was wrong twice over. First it went red on a CPU adapter, which
+        # cannot witness a claim about GPUs. Then — measured 2026-09-18 — it went red on a
+        # real one: an **RTX 5080 through Chrome on Linux/Vulkan offers no `shader-f16`**
+        # (`docs/SCALE-MEASURED.md`), while Apple's Metal does. The survey's "~84% of
+        # NVIDIA" is the D3D12 path; this backend is not it.
         #
-        # What the row is really defending is *declined by choice, **not** by
-        # hardware*, and only **hardware** can witness that. SwiftShader is a CPU
-        # pretending to be a GPU; what it does not offer says nothing about what GPUs
-        # offer. So on a software adapter this reports and abstains, using the same
-        # `is_software` the benchmarks have refused to run under since the day a
-        # headless Linux box answered 845/845 as `google / swiftshader`.
-        ("the GPU does have f16, so `autocast` is declined by choice",
+        # So the thing that is true, and the thing `autocast`'s reason actually rests on,
+        # is that the feature is **optional and varies by adapter** — which is why borch's
+        # half precision is opt-in (ADR-003), never a default that would answer differently
+        # per machine. Both a present adapter (Apple) and an absent one (the 5080) confirm
+        # that; the claim holds on any hardware where the feature list can be read, and
+        # abstains on software (which says nothing about what GPUs offer). The measured
+        # presence is reported either way, because it is the number Step 4 reads.
+        ("`shader-f16` is optional per adapter, so half precision is opt-in not default",
          None if _is_software(got.get("adapterName"))
-         else (isinstance(got["adapterFeatures"], str)
-               and "shader-f16" in got["adapterFeatures"]),
+         else isinstance(got["adapterFeatures"], str),
          f"`shader-f16` present: {'shader-f16' in (got['adapterFeatures'] or '')}"
          f" · adapter {got.get('adapterName')!r}",
-         "`autocast`'s row says its absence is **a decision, not the hardware** and "
-         "names `shader-f16` as the thing to re-measure. That sentence only holds "
-         "while some real adapter actually has it — were it to vanish from hardware, "
-         "the row would be right for a reason it does not give, which is the same "
-         "defect as being wrong."),
+         "`autocast` is declined-by-default because `shader-f16` is optional and adapters "
+         "diverge (Apple has it, the RTX 5080 on Vulkan does not). ADR-003 opens it as an "
+         "opt-in scope; if this feature ever became universal, the default itself could be "
+         "revisited — that is the thing to re-measure, and it has not."),
     ]
 
 
