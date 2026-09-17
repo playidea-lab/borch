@@ -227,6 +227,17 @@ nightly on a real adapter (`refuse_if_software` holds).
 - **Why first**: the window's size, the shard size and the f16 decision all read from
   this table. Without it the plan is an estimate, and the project's rule is measured or
   nothing.
+- **2026-09-18, Apple metal-3 measured** (`SCALE-MEASURED.md`): the 4 GiB tier holds as
+  one buffer with its marker; 32 GiB of 256 MiB chunks hold together (the cap, half the
+  machine's RAM — no wall found below it); `shader-f16` and `subgroups` present; storage
+  quota 10 GiB on this profile. **And the hub finding that reorders Step 2**: loading
+  EfficientNet-B0 (21 MB) leaves **+149 MB** resident on the GPU, ViT-B/16 (346 MB)
+  **+1,193 MB** — 3.4–7× the file, with the pool at +0. Nothing was pooled because
+  nothing was scoped: `borch-hub`'s `load` decodes every tensor and `verify` runs a 224 px
+  forward with no `scope()` open (`load.ts:509-513`, `verify.ts:77`), so the decoded
+  copies and the forward's intermediates are never returned. Host peak was exactly 2.0×
+  the file (the chunk list plus its concatenation). NVIDIA is still to be measured
+  (the 4090 through cq, or the peer's headed run).
 
 ### Step 1 — OOM becomes catchable; a budget exists  · size S · depends on 0
 
@@ -246,6 +257,13 @@ nightly on a real adapter (`refuse_if_software` holds).
 ### Step 2 — Lazy tensors and a byte source in the hub  · size M · depends on 0
 
 - **Build** (borch-hub, borch-ts `serialize.ts`):
+  - **2a, first and separately: scope the load.** `decode` + `loadStateDict` inside one
+    `scope()` (the values are copied into the kept parameters; the decoded buffers go
+    back), `verify`'s forward and readback inside another, and `emptyCache()` after — a
+    load is rare and the pool it leaves is shaped like weights, not activations. Gate:
+    the ceiling probe's "gpu resident" for ViT-B/16 drops from +1,193 MB to within 10 %
+    of the file (346 MB). This alone gives back 2.4× the weights on every model the
+    workbench loads today.
   - `ByteSource { size, read(offset, length): Promise<Uint8Array> }` with three backings:
     in-memory (today's path, unchanged), **OPFS** (Worker sync handle; falls back to the
     async handle outside a Worker), and HTTP Range (the existing `pull` logic,

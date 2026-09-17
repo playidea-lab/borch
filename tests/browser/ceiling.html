@@ -1,0 +1,193 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the ceiling — how much GPU memory this tab can actually hold</title>
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "/borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.10.0?external=borch-ts",
+    "borch-hub": "https://esm.sh/borch-hub@0.4.1?external=borch-ts,bimm-ts"
+} }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Step 0 of docs/SCALE.md: measure the wall before building against it.**
+  //
+  // WebGPU reports no total memory (gpuweb #5505, #6957 open), Chrome reports its limits
+  // as tiers rather than values, and `createBuffer` never throws on out-of-memory — the
+  // failure arrives later, as an uncaptured error, and a dispatch on the missing bytes
+  // reads back zeros. So the only honest way to know what a tab can hold is to allocate
+  // until it cannot, with each step confirmed two ways: an `out-of-memory` error scope
+  // around the allocation, and a marker written to the buffer's last word and read
+  // back. A buffer whose marker does not come back is not there, whatever the scope said.
+  //
+  // Two halves. The first talks to WebGPU directly (its own device, destroyed before the
+  // second begins) so the numbers are the platform's and not this library's. The second
+  // loads two hub models through borch and records what each costs the host and the GPU,
+  // which is where SCALE.md's Step 2 and 3 read their starting point from.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const q = new URLSearchParams(location.search);
+  const MB = 1 << 20, GB = 1 << 30;
+  // How far the total probe is allowed to go. Apple's unified memory would let a probe eat
+  // the machine; a ceiling above what SCALE.md's windows ask for is not a number we need.
+  const cap = Number(q.get("cap") || 8) * GB;
+  const models = (q.get("models") || "imagenet-efficientnet-b0,imagenet-vit-base-patch16-224").split(",").filter(Boolean);
+  const result = { adapter: null, limits: {}, features: [], single: null, total: null, chunk: null,
+                   storage: null, models: [], faults: 0 };
+  try {
+    if (!navigator.gpu) throw new Error("no navigator.gpu");
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+    if (!adapter) throw new Error("no adapter");
+    result.adapter = [adapter.info?.vendor, adapter.info?.architecture].filter(Boolean).join(" / ") || "(unnamed)";
+    result.features = [...adapter.features].sort();
+    const L = adapter.limits;
+    for (const k of ["maxBufferSize", "maxStorageBufferBindingSize", "maxStorageBuffersPerShaderStage",
+                     "maxComputeWorkgroupStorageSize", "maxComputeWorkgroupsPerDimension", "minStorageBufferOffsetAlignment"]) {
+      result.limits[k] = L[k];
+    }
+    say(`adapter: ${result.adapter}`);
+    say(`features: ${result.features.join(" ") || "(none)"}`);
+    say(`shader-f16 ${adapter.features.has("shader-f16") ? "yes" : "NO"} · subgroups ${adapter.features.has("subgroups") ? "yes" : "NO"}`);
+    say(`limits: buffer ${(L.maxBufferSize / MB).toFixed(0)} MiB · binding ${(L.maxStorageBufferBindingSize / MB).toFixed(0)} MiB · `
+      + `storage buffers/stage ${L.maxStorageBuffersPerShaderStage} · workgroup ${(L.maxComputeWorkgroupStorageSize / 1024).toFixed(0)} KiB · `
+      + `offset align ${L.minStorageBufferOffsetAlignment}`);
+
+    // ── half one: the platform, asked directly ─────────────────────────────────────
+    // The same limits borch asks for (device.ts `Device.create`): the adapter's maxima.
+    const dev = await adapter.requestDevice({
+      requiredLimits: { maxBufferSize: L.maxBufferSize, maxStorageBufferBindingSize: L.maxStorageBufferBindingSize },
+    });
+    let lost = null;
+    dev.lost.then((info) => { lost = info; });
+    const stage = dev.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const marker = new Uint32Array([0xB0C4B0C4, 0x5CA1E000]);
+    const markerBuf = dev.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    dev.queue.writeBuffer(markerBuf, 0, marker);
+
+    // Allocate `size` bytes and prove they exist: the marker goes to the first and the
+    // last word and comes back through the staging buffer. Returns the buffer or null.
+    const tryAlloc = async (size) => {
+      dev.pushErrorScope("out-of-memory");
+      dev.pushErrorScope("validation");
+      const buf = dev.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+      const enc = dev.createCommandEncoder();
+      enc.copyBufferToBuffer(markerBuf, 0, buf, 0, 4);
+      enc.copyBufferToBuffer(markerBuf, 4, buf, size - 4, 4);
+      enc.copyBufferToBuffer(buf, 0, stage, 0, 4);
+      enc.copyBufferToBuffer(buf, size - 4, stage, 4, 4);
+      dev.queue.submit([enc.finish()]);
+      const validation = await dev.popErrorScope();
+      const oom = await dev.popErrorScope();
+      if (oom || validation || lost) { buf.destroy(); return { buf: null, why: oom ? "oom" : validation ? "validation" : "lost" }; }
+      await stage.mapAsync(GPUMapMode.READ);
+      const back = new Uint32Array(stage.getMappedRange().slice(0));
+      stage.unmap();
+      const ok = back[0] === marker[0] && back[1] === marker[1];
+      if (!ok) { buf.destroy(); return { buf: null, why: `marker ${back[0].toString(16)},${back[1].toString(16)}` }; }
+      return { buf, why: "" };
+    };
+
+    // The largest single buffer: doubling from 64 MiB, then the last gap bisected once.
+    let lo = 0, hi = null, size = 64 * MB;
+    while (size <= L.maxBufferSize && size <= cap) {
+      const { buf, why } = await tryAlloc(size);
+      if (!buf) { hi = size; say(`  single ${(size / MB).toFixed(0)} MiB: ${why}`); break; }
+      buf.destroy(); lo = size;
+      say(`  single ${(size / MB).toFixed(0)} MiB: ok`);
+      size *= 2;
+    }
+    // The doubling overshoots the limit by a step (Dawn's top tier is 4 GiB − 4, one
+    // short of the next double), so the edge itself is tried last: the limit or the cap,
+    // whichever is nearer, rounded down to the offset alignment.
+    const edge = Math.floor(Math.min(L.maxBufferSize, cap, hi ?? Infinity) / 256) * 256;
+    if (edge > lo) {
+      const { buf, why } = await tryAlloc(edge);
+      say(`  single ${(edge / MB).toFixed(0)} MiB: ${buf ? "ok" : why}`);
+      if (buf) { buf.destroy(); lo = edge; } else if (hi === null) hi = edge;
+    }
+    if (hi !== null && hi - lo > 256 * MB) {
+      const mid = Math.floor((lo + hi) / 2 / 256) * 256;
+      const { buf, why } = await tryAlloc(mid);
+      say(`  single ${(mid / MB).toFixed(0)} MiB: ${buf ? "ok" : why}`);
+      if (buf) { buf.destroy(); lo = mid; }
+    }
+    result.single = lo;
+    say(`largest single buffer that holds its marker: ${(lo / MB).toFixed(0)} MiB` +
+        (hi === null ? ` (the ${edge >= cap ? "cap" : "limit"} itself holds — no failure found)` : ""));
+
+    // The largest total: chunks of a quarter of the single max (256 MiB at most), held
+    // together until one fails or the cap is reached. Every chunk carries its marker.
+    const chunk = Math.min(256 * MB, Math.max(64 * MB, Math.floor(lo / 4 / 256) * 256));
+    result.chunk = chunk;
+    const held = [];
+    let total = 0, stop = "cap";
+    while (total + chunk <= cap) {
+      const { buf, why } = await tryAlloc(chunk);
+      if (!buf) { stop = why; break; }
+      held.push(buf); total += chunk;
+      if (held.length % 4 === 0) say(`  total ${(total / GB).toFixed(2)} GiB: ok`);
+    }
+    for (const b of held) b.destroy();
+    result.total = total;
+    say(`largest total that holds every marker: ${(total / GB).toFixed(2)} GiB in ${held.length} × ${(chunk / MB).toFixed(0)} MiB` +
+        ` (stopped at ${stop === "cap" ? "the cap — raise ?cap= to go further" : stop})`);
+    dev.destroy();
+
+    // Storage: what OPFS and the Cache API may use on this origin.
+    if (navigator.storage?.estimate) {
+      const est = await navigator.storage.estimate();
+      result.storage = { quota: est.quota, usage: est.usage };
+      say(`storage: ${(est.usage / MB).toFixed(1)} MB used of ${(est.quota / GB).toFixed(1)} GiB quota`);
+    }
+
+    // ── half two: what a hub model costs through borch ─────────────────────────────
+    const [{ init, Device, device }, hub] = await Promise.all([import("borch-ts"), import("borch-hub")]);
+    await init();
+    say(`borch adapter: ${Device.adapterInfo}`);
+    const index = await (await fetch("https://models.pilab.kr/index.json")).json();
+    const rows = Array.isArray(index) ? index : index.models ?? index.entries ?? [];
+    const d = device();
+    // Host memory during a load. `measureUserAgentSpecificMemory` counts ArrayBuffers and
+    // needs cross-origin isolation (the local server sends it); `performance.memory` is the
+    // JS heap only and misses large buffers — reported when it is all there is.
+    const hostNow = async () => {
+      if (performance.measureUserAgentSpecificMemory) {
+        try { return (await performance.measureUserAgentSpecificMemory()).bytes; } catch (_) { /* falls through */ }
+      }
+      return performance.memory?.usedJSHeapSize ?? NaN;
+    };
+    const hostHow = performance.measureUserAgentSpecificMemory && self.crossOriginIsolated ? "UA-specific (all bytes)" : "JS heap only";
+    for (const name of models) {
+      const entry = rows.filter((r) => r.name === name).pop();
+      if (!entry) { say(`${name}: not in the registry`); continue; }
+      const host0 = await hostNow();
+      const gpu0 = d.memory.bytes, pool0 = d.pooled.bytes, faults0 = d.faults.count;
+      let hostPeak = host0, ticking = true;
+      const tick = (async () => { while (ticking) { hostPeak = Math.max(hostPeak, await hostNow()); await new Promise((r) => setTimeout(r, 100)); } })();
+      const t0 = performance.now();
+      let loaded = null, error = "";
+      try { loaded = await hub.load(entry.manifestUrl); } catch (e) { error = String(e && e.message || e); }
+      const ms = performance.now() - t0;
+      ticking = false; await tick;
+      const host1 = await hostNow();
+      const row = { name, bytes: entry.bytes, ms, hostHow, host0, hostPeak, host1,
+                    gpuResident: d.memory.bytes - gpu0, pooled: d.pooled.bytes - pool0, faults: d.faults.count - faults0, error };
+      result.models.push(row);
+      if (error) { say(`${name} (${(entry.bytes / 1e6).toFixed(1)} MB): FAILED ${error.slice(0, 160)}`); continue; }
+      say(`${name} (${(entry.bytes / 1e6).toFixed(1)} MB): loaded in ${(ms / 1000).toFixed(1)} s · ` +
+          `gpu resident +${(row.gpuResident / 1e6).toFixed(0)} MB (pool +${(row.pooled / 1e6).toFixed(0)}) · ` +
+          `host peak +${((hostPeak - host0) / 1e6).toFixed(0)} MB = ${((hostPeak - host0) / entry.bytes).toFixed(2)}× file (${hostHow}) · ` +
+          `after +${((host1 - host0) / 1e6).toFixed(0)} MB · faults ${row.faults}`);
+      loaded = null;
+    }
+    result.faults = d.faults.count;
+    say(`validation faults: ${d.faults.count}`);
+    window.__ceiling = { text: lines.join("\n"), ...result };
+  } catch (err) {
+    window.__ceiling = { error: String(err && err.stack || err), text: lines.join("\n"), ...result };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

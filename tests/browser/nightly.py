@@ -142,6 +142,10 @@ CHECKS = [
     # The person's clock, not the GPU's: Python ready, the click, the first loss line.
     ("learner:site", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/learner_path.py",
                       "--url=https://playidea-lab.github.io/borch/site/index.html"]),
+    # docs/SCALE.md Step 0: how much GPU memory this tab holds (allocated until a marker
+    # stops coming back), the limit tiers, shader-f16, and what two hub models cost the
+    # host and the GPU. A measurement; it fails only when nothing could be measured.
+    ("ceiling",    ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/ceiling.py"]),
 ]
 
 
