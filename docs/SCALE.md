@@ -348,6 +348,23 @@ nightly on a real adapter (`refuse_if_software` holds).
     converting values (so f16 bits are never smuggled in as integers). Safetensors `F16`
     accepted by `serialize.ts:338-343` when the target is a window; still refused for a
     trainable parameter.
+  - **2026-09-18, scoped — 4a is bigger than "add a dtype", and here is why.** `float16`
+    is not merely absent from `borch-ts`; it is a **deliberate, golden-frozen, cross-
+    implementation refusal**. The numpy core makes it an `_AbsentDtype` gathered into
+    float32 (`borch/_base.py:241`, `half = float16` at `:252`), `borch-ts` refuses it as a
+    golden case (`weRefuse("half")`, `borch-ts/test/cases.ts:834`), and the same wording is
+    frozen in `tests/test_dtype_throat.py`, `test_messages.py`, `test_why_failing.py`,
+    `borch_webgpu/_base.py:1681` and the `torch_gap` ledger. borch's axiom is that the three
+    implementations agree (one-name-one-list). So making `float16` a real storage dtype in
+    `borch-ts` alone **breaks parity by construction** unless the change is coordinated: it
+    is not the `int64` case (int64 is a *working* label everywhere), it is reversing a
+    refusal asserted in ~10 places across core, binding and ts plus a golden regen. The
+    foundation (`Device.f16`) landed at fccd287; the packing itself uses WGSL
+    `pack2x16float`/`unpack2x16float`, which need **no** `shader-f16` (so the storage
+    round-trip is adapter-independent — Mac, the 5080, and CI). The open design question is
+    whether the core accepts `float16` as a label too (keeping parity) or borch-ts takes a
+    documented, separately-tested divergence. Either way this is a focused, ledger-touching
+    unit of its own, not a tail-of-session edit.
   - Kernels: the matmul and conv **weight operand only** typed `array<f16>` under a
     generator parameter `weight: "f32"|"f16"` on the four matmul generators and the two
     conv generators (six functions, not 162); `enable f16;` prepended like `:1681`; the
