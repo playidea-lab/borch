@@ -253,6 +253,17 @@ nightly on a real adapter (`refuse_if_software` holds).
   any readback; `cost.ts` frozen numbers unmoved (dispatches 34, submits 1, survived 0).
 - **Why**: every later step's fallback ("spill", "shrink the window") needs a failure it
   can catch. Today there is none.
+- **2026-09-18, landed** (borch-ts `device.ts`): a fresh `alloc` wraps its `createBuffer`
+  in `pushErrorScope("out-of-memory")` and parks the pop; `drainAllocations()` awaits the
+  parked scopes at the next `read`/`synchronize` and folds a real OOM into `faults`, where
+  the existing throw surfaces it — validation errors still travel to the uncaptured
+  handler untouched (only the OOM filter is pushed). After warm-up the pool serves the
+  repeats, so the parked list is empty every step and the drain is a resolved
+  `Promise.all`. `Device.budget` (bytes, 0 = off) makes `alloc` throw *before* the buffer
+  when the live footprint would cross it; it does **not** reclaim, because a flush inside a
+  step would add a submit. `cost.ts` gained the budget-throw check and its frozen counts
+  are unmoved. The reclaim rung (`emptyCache` on over-budget) is the caller's, and lands
+  with the window in Step 3.
 
 ### Step 2 — Lazy tensors and a byte source in the hub  · size M · depends on 0
 

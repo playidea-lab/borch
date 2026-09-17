@@ -588,6 +588,20 @@ export class Device {
   /** How many faults the last readback had already reported — `read` throws when the
    *  count has grown since. */
   private faultsReported = 0;
+
+  /**
+   * **Out-of-memory scopes waiting to be read.** `createBuffer` never throws on OOM —
+   * the failure arrives asynchronously, and the only witness was the uncaptured-error
+   * handler surfacing at the next readback (the day that cost, `faults` above). So a
+   * fresh allocation is wrapped in `pushErrorScope("out-of-memory")` and the pop's
+   * promise parked here; {@link drainAllocations} awaits them at the next readback and
+   * folds any real OOM into `faults`, where the existing throw already lives. Only the
+   * `out-of-memory` filter is pushed, so a *validation* error still travels to the
+   * uncaptured handler unchanged. After warm-up the pool serves the repeats and this
+   * list is empty every step — the cost is paid where allocations are actually made
+   * (a load, a shape change), not in the training loop.
+   */
+  private oomPending: Promise<GPUError | null>[] = [];
   /**
    * Errors the device reported and nobody caught.
    *
@@ -1173,10 +1187,37 @@ export class Device {
     // recorded dispatch of this very step.
     const reused = recycle && !this.pinned ? this.spare.get(size)?.pop() : undefined;
     if (reused) this.inPool.delete(reused);   // out of the pool — no longer a double-return risk
-    const buf = reused ?? this.device.createBuffer({
-      size,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-    });
+    let buf: GPUBuffer;
+    if (reused) {
+      buf = reused;
+    } else {
+      // **A soft budget, checked before the buffer is made.** `held` is what `memory`
+      // reports — built minus pooled, the live footprint. Over budget it throws here,
+      // naming the number and the request, rather than letting the allocation fail
+      // asynchronously and read back as zeros. It does **not** reclaim: `emptyCache`
+      // flushes, and a flush inside a forward would add a submit and break the one-submit
+      // step. Reclaiming is the caller's to do between steps (the streaming window does).
+      // `budget = 0` is off, which it is unless someone measured a ceiling and set it.
+      if (Device.budget > 0) {
+        const held = this.madeBytes - this.pooled.bytes;
+        if (held + size > Device.budget) {
+          throw new Error(
+            `allocation would cross the budget: ${((held + size) / 1048576).toFixed(1)}MB ` +
+              `> ${(Device.budget / 1048576).toFixed(0)}MB (Device.budget). ` +
+              "Free something (emptyCache, or drop a window slot) before allocating, or " +
+              "raise the budget if the device has the memory.",
+          );
+        }
+      }
+      // **Catch the OOM the API will not throw.** Only this allocation is inside the
+      // scope; the pop's promise is drained at the next readback (`drainAllocations`).
+      this.device.pushErrorScope("out-of-memory");
+      buf = this.device.createBuffer({
+        size,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+      });
+      this.oomPending.push(this.device.popErrorScope());
+    }
     if (this.pinned) { this.pinned.add(buf); this.owned.add(buf); }
     if (!reused) {
       this.made += 1;
@@ -1599,6 +1640,28 @@ export class Device {
   async synchronize(): Promise<void> {
     this.flush();
     await this.device.queue.onSubmittedWorkDone();
+    await this.drainAllocations();
+  }
+
+  /**
+   * **Reads the out-of-memory scopes parked by `alloc`.** A non-null one is an
+   * allocation the device could not make — folded into `faults` exactly as the
+   * uncaptured handler would have (count, `outOfMemory`, and `first` if it is the first
+   * word of a fault), so the throw already in `read` surfaces it and every existing
+   * reader of `faults` is unchanged. Awaiting an empty list is a resolved `Promise.all`,
+   * which is what every step after warm-up hits.
+   */
+  private async drainAllocations(): Promise<void> {
+    if (this.oomPending.length === 0) return;
+    const pending = this.oomPending;
+    this.oomPending = [];
+    const errors = await Promise.all(pending);
+    for (const err of errors) {
+      if (err === null) continue;
+      this.faults.count += 1;
+      this.faults.outOfMemory += 1;
+      if (this.faults.first === "") this.faults.first = err.message;
+    }
   }
 
   async read(buffer: GPUBuffer, count: number): Promise<Float32Array> {
@@ -1637,6 +1700,10 @@ export class Device {
       // The accumulated commands ride the same encoder and go out **once, here.**
       this.openEncoder().copyBufferToBuffer(buffer, 0, stage, 0, bytes);
       this.flush();
+      // Read the parked OOM scopes before this value is trusted — a failed allocation
+      // upstream makes this readback a value of nothing, and the throw below is what
+      // says so. Draining here folds it into `faults` so that throw fires.
+      await this.drainAllocations();
       await stage.mapAsync(GPUMapMode.READ);
       // Mapped memory disappears on unmap. It is always copied before going out.
       const out = new Float32Array(stage.getMappedRange().slice(0));
@@ -1701,4 +1768,15 @@ export class Device {
   /** How many storage buffers one compute stage may bind — 8 is the guaranteed floor.
    *  The fusion pass sizes its trees by this. */
   static storageBuffersPerStage = 8;
+
+  /**
+   * **A soft allocation budget in bytes — `0` is off, the default.** When set, `alloc`
+   * throws before making a buffer that would carry the live footprint past it, rather
+   * than letting WebGPU fail the allocation silently and read back as zeros (there is no
+   * synchronous OOM signal — see `oomPending`). It does not reclaim; freeing is the
+   * caller's, so the check never adds a submit to a step. A ceiling probe
+   * (`tests/browser/ceiling.py`) measures what a device can hold; a caller that wants a
+   * guard rail sets this from that number.
+   */
+  static budget = 0;
 }

@@ -47,6 +47,7 @@
  */
 
 import * as nn from "../src/nn.js";
+import { Device } from "../src/device.js";
 import { SGD } from "../src/optim.js";
 import { device, keepAlive, scope, Tensor } from "../src/tensor.js";
 
@@ -404,6 +405,41 @@ export async function report(): Promise<Report> {
     want("a training step runs after emptyCache",
       dev.faults.count === faultsBefore && Number.isFinite(afterEmpty),
       `loss ${afterEmpty.toFixed(4)} · ${dev.faults.count - faultsBefore} fault(s)`);
+  }
+
+  // ── A budget throws before the buffer is made ───────────────────────
+  //
+  // `alloc` cannot learn of an out-of-memory failure synchronously — WebGPU reports it
+  // later, and the value reads back as zeros (the day that cost, `device.ts` faults). The
+  // budget is the guard rail for a streamed window: over it, `alloc` throws *before*
+  // createBuffer, so nothing has to be read to find out. It must not reclaim, because a
+  // flush inside a step would add a submit — the frozen `submits: 1` above is what says
+  // it did not. Here the budget is set below the live footprint and a fresh allocation
+  // (an odd size the pool cannot serve) is asked for; it has to throw, and the step after
+  // has to run untouched.
+  {
+    const saved = Device.budget;
+    Device.budget = 1;                     // one byte — no fresh buffer fits under it
+    let threw = false;
+    dev.beginScope();
+    try {
+      Tensor.owned([999983], 1);           // a prime-ish size the pool does not hold
+    } catch {
+      threw = true;
+    } finally {
+      dev.endScope([]);
+      Device.budget = saved;
+    }
+    want("a budget throws before the buffer is made", threw,
+      threw ? "over-budget alloc refused synchronously" : "it allocated past the budget");
+    const faultsBefore = dev.faults.count;
+    const submitsBefore = dev.submits;
+    const afterBudget = await step();
+    want("a step runs after a budget throw, still one submit",
+      dev.faults.count === faultsBefore && dev.submits - submitsBefore === 1
+        && Number.isFinite(afterBudget),
+      `loss ${afterBudget.toFixed(4)} · ${dev.submits - submitsBefore} submit(s) · ` +
+      `${dev.faults.count - faultsBefore} fault(s)`);
   }
 
   const bad = checks.filter((c) => !c.ok);
