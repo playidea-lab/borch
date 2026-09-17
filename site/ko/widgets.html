@@ -310,6 +310,13 @@
       알려준다. 내 것을 만들고 싶은가? <a href="playground.html">플레이그라운드</a>에서 셀을
       쓰거나, <a href="learn/">레슨</a>에서 시작해 그 코드를 임베드하라.
     </p>
+    <pre class="small" style="overflow-x:auto"><code>&lt;iframe src="https://playidea-lab.github.io/borch/site/embed/embed.html?lesson=mini-transformer&amp;cell=4"
+        width="100%" height="480" style="border:0"&gt;&lt;/iframe&gt;</code></pre>
+    <p class="small muted">
+      정직한 주의 둘: 독자에게 WebGPU 가 필요하다(Chrome·Edge 113+, Firefox 141+, Safari 26+) —
+      없으면 위젯이 깨지지 않고 그렇게 말한다. 그리고 호스트 페이지 자체가 cross-origin-isolated 면
+      (드묾; 대부분 블로그는 아님) 프레임이 차단된다 — 보통 페이지는 괜찮다.
+    </p>
     <p class="cta-row" style="margin-top:1.2rem">
       <a class="btn primary" href="playground.html">플레이그라운드 열기 →</a>
       <a class="btn ghost" href="learn/">레슨 둘러보기</a>

@@ -315,6 +315,13 @@
       <a href="playground.html">playground</a>, or start from a <a href="learn/">lesson</a> and
       embed its code.
     </p>
+    <pre class="small" style="overflow-x:auto"><code>&lt;iframe src="https://playidea-lab.github.io/borch/site/embed/embed.html?lesson=mini-transformer&amp;cell=4"
+        width="100%" height="480" style="border:0"&gt;&lt;/iframe&gt;</code></pre>
+    <p class="small muted">
+      Two honest notes: the reader needs WebGPU (Chrome/Edge 113+, Firefox 141+, Safari 26+) —
+      without it the widget says so, it does not break. And a host page that is itself
+      cross-origin-isolated (rare; most blogs are not) will block the frame — ordinary pages are fine.
+    </p>
     <p class="cta-row" style="margin-top:1.2rem">
       <a class="btn primary" href="playground.html">Open the playground →</a>
       <a class="btn ghost" href="learn/">Browse the lessons</a>
