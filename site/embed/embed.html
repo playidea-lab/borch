@@ -110,6 +110,17 @@
 
       postHeight();
       new ResizeObserver(postHeight).observe(document.documentElement);
+
+      // `?auto=1` presses Run once on load — for the gallery, where the widgets are the
+      // point and code is not. The gallery's iframes are `loading="lazy"`, so the embed
+      // only loads (and so only auto-runs) once it is scrolled near the viewport: the cards
+      // come alive as you reach them, not all at once. Lessons and the landing showcase
+      // leave it off, so a reader meets the code first. A run needs WebGPU; without it the
+      // banner above stands instead.
+      if (q.get("auto") && navigator.gpu) {
+        const run = document.querySelector(".runnable button.go");
+        if (run) run.click();
+      }
     } catch (e) {
       fail(String((e && e.message) || e));
       postHeight();
