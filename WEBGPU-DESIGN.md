@@ -543,7 +543,9 @@ the graph is disposed.
 - **f16** — WebGPU's `shader-f16` is an optional feature. Using it raises throughput
   considerably, but mixed precision is on the core's list of deliberate refusals.
   Should the sister library allow it? (Falling short of 300× in S4 would force this
-  answer)
+  answer) — **answered 2026-09-18 by ADR-003**: yes, as an explicit `autocast()` scope
+  with f32 the default, storage-f16 for frozen weights first, compute-f16 only on a
+  measured need; never in the core.
 - **the package name** — `borch[webgpu]` extras need index resolution, and this
   repository is still private, so it is not on PyPI. **Making the repository public
   is a precondition**
@@ -625,3 +627,62 @@ are taken.
   moves 152 optimizer dispatches into 152 copies. So the order is: placed outputs in
   autograd first (a `Tensor.make` that takes a destination), then the arena. Not
   started; the measured ceiling is 0.9 ms in ViT-tiny, 0.2 in the GPT.
+- **2026-09-18, status.** The SGD arena is built (`optim.ts:708-734`, one dispatch,
+  2.8× measured) and is whole-or-nothing, single group, SGD only; Adam/AdamW/RMSprop
+  have none. It assumes every *trainable* parameter resident — which ADR-003 keeps
+  true by putting only *frozen* weights in a window.
+
+### ADR-003: The frozen half in a window — what raises the memory ceiling (2026-09-18)
+
+- **상태**: 제안 — the plan is [docs/SCALE.md](docs/SCALE.md); this records the
+  decision and what it must not break.
+- **맥락**: storage is f32 only (`dtype.ts:38`, `device.ts:23`), the hub decodes and
+  uploads whole models (`load.ts:509-513`), nothing evicts, and OOM cannot be caught
+  (no `pushErrorScope` in `src/`; `faults.outOfMemory` arrives at the next readback,
+  `device.ts:530-555, 1652-1660`). The curriculum did not ask for scale; the workbench
+  did — its go/no-go is a 224 px pretrained backbone in two minutes (`envelope.py`), its
+  frozen pass loads the whole backbone for one `no_grad` sweep
+  (`_workbench.py:379-392`), and a 346 MB weight file already failed the cache
+  (`load.ts:306-309`). The survey (2026-09): nobody offloads in a browser — WebLLM, ORT
+  Web and llama.cpp-web keep quantised models fully resident; `shader-f16` is not
+  universal (Apple 99.99 %, NVIDIA 83.8 %, Qualcomm 71.1 %); no WebGPU gradient
+  checkpointing or QLoRA exists.
+- **결정 (제안)**: two memory regions with different owners. *Trainable* parameters stay
+  as they are — scope-managed, resident, arena-eligible. *Frozen* weights
+  (`requiresGrad = false`, the line `peft.ts:59-61` already draws) live in a **window**:
+  one buffer outside the pool, filled by a `MAP_WRITE` staging ring through `copyRange`
+  (`device.ts:1395`) — never `writeBuffer`, which jumps the queue (`:1152-1159`) — bound
+  as offset slices through the `BindSlot` the binder already accepts (`:315,
+  1303-1326`), evicted by an age bump so a stale read throws through `refuseIfDead`
+  (`tensor.ts:1024`). A scheduler walks bimm's plan tables as their third consumer
+  (after the constructors and `cpuGraphFor`), one block ahead, the prefetch resolved
+  before the block's first encode. Half precision becomes an explicit `autocast()`
+  scope: f32 stays the default and the frozen golden answer, f16 gets its own tolerance
+  tier witnessed by hardware only, and a device without `shader-f16` makes the scope
+  throw rather than run f32 in silence. Quantised weights are raw buffers in the window,
+  never Tensors; `DType`'s invariant and the numpy core are untouched. Gradient
+  checkpointing is an ordinary node (`makeNode`) whose backward recomputes inside its
+  own `scope()`. The payoff step is LoRA on a windowed backbone: block k refilled in the
+  backward too, QLoRA's per-layer dequant with "dequant" read as "refill".
+- **근거**: the seams exist and are few — one allocation door, one binding door, two
+  weight funnels (`tensor.ts:2099`, `:779`), one readback line (`device.ts:1642`), and a
+  proven in-place repoint (`ensureOwned`, `tensor.ts:1250-1258`) that keeps the Tensor
+  identity `optim.ts:150` requires. The instrumentation to gate every step is already
+  frozen in `cost.ts`. And the refusal of mixed precision named its own re-measurement
+  ("whether `shader-f16` has become effectively universal", `torch_gap.py:457-460`): it
+  has not, which is exactly why f16 can be an addition and never a default.
+- **대안**: (a) grow into f16 compute first for speed — rejected as first step: the
+  window's cost is bytes per block, and storage-f16 halves them without touching the
+  arithmetic the golden reasons about; (b) quantise first — rejected: int8 cannot enter
+  the subgroup GEMM (`kernels.ts:1650-1653`) and lands on the 4.5 TFLOP/s scalar tile,
+  a memory-for-speed trade taken only if f16 is not enough; (c) evict trainable
+  parameters too — rejected: the arena and the optimizer assume residency, and the
+  trainable half is the small half; (d) LLM scale — not planned (SCALE.md §8).
+- **결과 / 미해결**: streaming and `compiled` are exclusive until refill-in-place is
+  proven under a capture (replay bakes buffer objects, `device.ts:900-903`,
+  `fuse.ts:397/413`); OOM catching makes allocation deferred-confirmed at `flush()`,
+  which `cost.ts`'s `submits: 1` must survive; the pass-boundary cost of a copy per
+  block (`openEncoder`, `:1560-1567`) is the number Step 3 lives or dies on and is
+  measured before the scheduler is generalised; f16 and the window can be verified only
+  on a real adapter — this Mac's nightly is SwiftShader, so those gates are the peer's.
+  Step 0 of the plan ships the ceiling probe and its table before any window code.

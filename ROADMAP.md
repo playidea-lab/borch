@@ -341,7 +341,8 @@ All the items are closed. What to keep in view when deciding what comes next:
 
 | | why |
 |---|---|
-| **CUDA, distributed, mixed precision** | not in a browser. Imitating them loses the lesson |
+| **CUDA, distributed** | not in a browser. Imitating them loses the lesson |
+| **mixed precision — in the core** | the core stays f32 (imitated half precision teaches nothing: 65600 → inf never happens in f32). The sister library may open `shader-f16` as an explicit, opt-in scope — [ADR-003](WEBGPU-DESIGN.md), plan in [docs/SCALE.md](docs/SCALE.md) |
 | **shipping pre-trained weights from here** | the bytes are somebody else's to host — `borch-hub` fetches what a manifest points at and re-hashes it, and this repository carries none of them |
 | **JIT and `torch.compile`** | out of range |
 | **speed** | see below |
