@@ -155,6 +155,10 @@ CHECKS = [
     # slices of one STORAGE buffer, filled through staging + copyRange, read back at each
     # offset. Adapter-independent (copyRange, slice bindings are core), so it runs in CI too.
     ("window",      ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/window_probe.py"]),
+    # docs/SCALE.md Step 3 ④b: a real bimm ResNet-18's layer1 streamed block-by-block through
+    # a small window — the resident layer output must come back bit-identical. Needs bimm-ts
+    # from esm.sh, so it runs where the CDN is reachable (not offline CI).
+    ("stream-model", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/stream_model_probe.py"]),
 ]
 
 

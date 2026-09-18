@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>streaming a real model's blocks through the window</title>
+<script type="importmap">
+{ "imports": {
+    "borch-ts": "/borch-ts/dist/src/index.js",
+    "bimm-ts": "https://esm.sh/bimm-ts@0.12.0?external=borch-ts"
+} }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **Step 3 ④b: a real model's blocks streamed through the window.** A bimm ResNet-18's
+  // `layer1` is a Sequential of BasicBlocks — the real op mix of a backbone (conv, BN, ReLU,
+  // residual). Each block becomes a StreamBlock whose weights are its conv kernels; the
+  // scheduler places a block's kernels, runs the real forward with them, and evicts. The
+  // streamed layer output must match the resident one. The conv kernels are restored to
+  // their resident tensors after each block runs, so this is a clean correctness test that
+  // can be repeated (streaming otherwise *consumes* a block — its weights are evicted).
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  try {
+    const bt = await import("borch-ts");
+    const { init, device, Device, Tensor, noGrad, streamSequential } = bt;
+    const bimm = await import("bimm-ts");
+    await init();
+    say(`adapter: ${Device.adapterInfo}`);
+
+    const model = bimm.resnet18(10);
+    model.eval();
+    const layer1 = model.getSubmodule("layer1");
+    const blockMods = layer1.children();
+    say(`resnet18 layer1: ${blockMods.length} BasicBlocks`);
+
+    // The conv modules of a block, in field order, are its 4-D-weight submodules.
+    // `namedModules()` returns an array of [name, module] pairs.
+    const convsOf = (block) => block.namedModules()
+      .filter(([, m]) => m.weight && m.weight.shape && m.weight.shape.length === 4)
+      .map(([, m]) => m);
+
+    const inC = convsOf(blockMods[0])[0].weight.shape[1];
+    const h0 = Tensor.randn([1, inC, 8, 8]);
+
+    // Reference: the resident layer.
+    const ref = Array.from(await noGrad(() => layer1.forward(h0)).toArray());
+
+    // A StreamBlock per block: its conv kernels (host copies) + a forward that swaps the
+    // windowed kernels into the block's conv modules, runs the real forward, and restores
+    // the resident kernels so the model stays runnable.
+    const streamBlocks = [];
+    for (const block of blockMods) {
+      const convs = convsOf(block);
+      const weights = [];
+      const shapes = [];
+      for (const c of convs) { weights.push(await c.weight.toArray()); shapes.push([...c.weight.shape]); }
+      streamBlocks.push({
+        weights, shapes,
+        run: (h, w) => noGrad(() => {
+          const saved = convs.map((c) => c.weight);
+          convs.forEach((c, i) => { c.weight = w[i]; });
+          const y = block.forward(h);
+          convs.forEach((c, i) => { c.weight = saved[i]; });   // restore so the model stays runnable
+          return y;
+        }),
+      });
+    }
+
+    const align = device().storageAlign;
+    const need = Math.max(...streamBlocks.flatMap((b) => b.shapes.map((s) =>
+      Math.ceil(s.reduce((a, v) => a * v, 1) * 4 / align) * align)));
+    const win = device().window(4 * need);   // room for a few kernels, not the whole layer
+    const streamedT = await streamSequential(win, h0, streamBlocks);
+    const streamed = Array.from(await streamedT.toArray());
+    const winUsed = win.used;
+    win.free();
+
+    const eq = ref.length === streamed.length && ref.every((v, i) => v === streamed[i]);
+    let maxAbs = 0;
+    for (let i = 0; i < ref.length; i++) maxAbs = Math.max(maxAbs, Math.abs((ref[i] ?? 0) - (streamed[i] ?? 0)));
+    say(`layer1 (${blockMods.length} blocks) streamed vs resident: ${eq ? "bit-identical" : "DIFFER"} (max |Δ| ${maxAbs.toExponential(2)})`);
+    say(`window ${(4 * need / 1024) | 0} KB (~4 kernels) · used ${(winUsed / 1024) | 0} KB · layer1 conv bytes ${(streamBlocks.reduce((a, b) => a + b.shapes.reduce((x, s) => x + s.reduce((p, v) => p * v, 1) * 4, 0), 0) / 1024) | 0} KB`);
+    say(`faults: ${device().faults.count}`);
+    const ok = eq && device().faults.count === 0;
+    say(ok ? "\nreal model: a layer's blocks stream through the window with the resident answer"
+          : "\n**real model: the streamed layer did not match**");
+    window.__streamModel = { text: lines.join("\n"), ok, eq, maxAbs, blocks: blockMods.length, faults: device().faults.count };
+  } catch (err) {
+    window.__streamModel = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>

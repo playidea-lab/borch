@@ -395,6 +395,18 @@ nightly on a real adapter (`refuse_if_software` holds).
   lever (needs the staging ring); this establishes correctness and bounded memory. Next:
   the bimm adapter — turn a real EfficientNet/ViT into `StreamBlock`s (needs the upstream
   `bimm-ts` plan-table re-export) and land it on the workbench feature pass.
+- **2026-09-18, the real model streams (Step 3 ④b).** `stream_model_probe.{html,py}`: a
+  bimm ResNet-18's `layer1` — a `Sequential` of `BasicBlock`s, the real conv/BN/ReLU/
+  residual mix — turned into `StreamBlock`s whose weights are each block's conv kernels,
+  streamed through a window sized for ~4 kernels. Each block's forward swaps the windowed
+  kernels into its conv modules, runs the genuine `block.forward`, and restores the resident
+  kernels so the model stays runnable. **The streamed layer output is bit-identical to the
+  resident one** (max |Δ| 0.00, faults 0), on a window a fraction of the layer's conv bytes.
+  This closes the abstraction against a real backbone: not a hand-built Linear stack but a
+  shipped model's own blocks. Wired into the census (fifty-one entry points), nightly, and
+  `stream-model:py`; needs `bimm-ts@0.12.0` from esm.sh, so it runs where the CDN is
+  reachable. Remaining ④: the reusable bimm adapter (this probe hand-builds the blocks) and
+  a memory-window variant that frees the resident kernels instead of restoring them.
 - **2026-09-18, speed lever — direct f16 read (Step 4).** The scalar matmul tile gains a
   `weightF16` variant (`enable f16;`, `B: array<f16>`, `f32(B[…])`), and the matmul funnel
   takes it (`mat2.f16WeightBinding()`) where the weight is an f16 window weight **and** the
