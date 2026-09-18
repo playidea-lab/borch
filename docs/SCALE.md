@@ -643,8 +643,20 @@ nightly on a real adapter (`refuse_if_software` holds).
   LoRA stack trained one step with the base streamed through a window sized for ~2 bases gives
   adapter gradients **bit-identical** to the fully-resident run (max |Δ| 0.00 on A and B), loss
   equal, window used a quarter of the backbone's base bytes, faults 0 — on apple/metal-3.
-  Remaining Step 7: the Python mirror (`borch_webgpu`), and the `finetune.py` GPU gate (≥ 300 MB
-  backbone in a ≤ 256 MB window, held-out accuracy ≥ the frozen-head baseline).
+- **2026-09-18, the Python mirror landed** (`borch_webgpu/_peft.py`, `torch.peft`). The
+  individual layers bridge to `_ts.peft` (`LoRALinear`/`LoRAConv2d` are classes over there), but
+  `apply_lora` cannot: the WebGPU binding composes models **Python-side** (its `nn.Sequential` is
+  a Python class, not a `_ts` module), so a Python-built model has no TypeScript tree for the TS
+  `applyLora` to walk. So the walk is Python — over `named_modules()` — swapping each matched
+  `Linear`/`Conv2d` for its LoRA wrapper, whose base bridges from the leaf's `_ts` layer; the
+  leaf kind is read from `describe()` (every wrapped leaf is the one Python class `Module`) and
+  the swap is the same read-back-guarded replace. `peft_py.py` (nightly `peft`, wheel-based):
+  `apply_lora` on a Python-composed model adapts every Linear with the forward unchanged and
+  params reduced to adapters, a name target hits only its match, a Conv2d keeps its geometry, and
+  an indexed leaf is refused — all pass through the wheel on apple/metal-3. Three source-tree
+  loader lists (`runner.js`, `runner.html`, `scope_escape.html`, `onnx_binding.html`) carry the
+  new module. Remaining Step 7: the `finetune.py` GPU gate (≥ 300 MB backbone in a ≤ 256 MB
+  window, held-out accuracy ≥ the frozen-head baseline).
 
 ### Step 8 — What this plan does not do
 

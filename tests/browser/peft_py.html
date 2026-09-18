@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>borch.peft on the WebGPU runtime — apply_lora over a Python-composed model</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The Python peft mirror (docs/SCALE.md Step 7).** The WebGPU binding composes models
+  // Python-side (`nn.Sequential` here is a Python class), so `apply_lora` walks the Python tree
+  // and swaps each matched Linear/Conv2d for its LoRA wrapper, whose base bridges from the leaf's
+  // borch.ts layer. This trains nothing — it checks the swap: every Linear adapted, the forward
+  // unchanged (adapters start at zero), parameters reduced to the adapters, a name target hitting
+  // only its match, a Conv2d adapted with geometry kept, and a Linear held in a container's list
+  // refused rather than silently skipped.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import numpy as np, js
+import borch_webgpu as torch
+nn = torch.nn
+fails = []
+rng = np.random.default_rng(0)
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(12, 8)
+        self.qkv = nn.Linear(8, 8)       # stands in for an attention projection
+        self.head = nn.Linear(8, 6)
+    def forward(self, x):
+        return self.head(self.qkv(self.fc1(x)))
+
+x = torch.tensor(rng.standard_normal((3, 12)).astype(np.float32))
+
+# 1) default adapts every Linear; forward unchanged; params reduced to adapters; idempotent.
+net = Net()
+before = net(x).numpy()
+swapped = torch.peft.apply_lora(net, r=4, alpha=8)
+after = net(x).numpy()
+if sorted(swapped) != ["fc1", "head", "qkv"]:
+    fails.append("swapped=" + str(swapped))
+if not np.allclose(before, after, atol=1e-4):
+    fails.append("forward changed after apply, max|d|=" + str(float(np.max(np.abs(before - after)))))
+pnames = [n for n, _ in net.named_parameters()]
+if not (len(pnames) == 6 and all(n.endswith("lora_A") or n.endswith("lora_B") for n in pnames)):
+    fails.append("params not adapter-only: " + str(pnames))
+if torch.peft.apply_lora(net) != []:
+    fails.append("second call was not a no-op")
+
+# 2) a name target adapts only its match.
+net2 = Net()
+sw2 = torch.peft.apply_lora(net2, targets=["qkv"])
+if sw2 != ["qkv"]:
+    fails.append("name target swapped " + str(sw2))
+
+# 3) a Conv2d is adapted, its geometry kept (forward unchanged).
+class CNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(4, 6, 3, stride=2, padding=1)
+    def forward(self, x):
+        return self.conv(x)
+cnet = CNet()
+img = torch.tensor(rng.standard_normal((2, 4, 8, 8)).astype(np.float32))
+cbefore = cnet(img).numpy()
+csw = torch.peft.apply_lora(cnet, r=4)
+cafter = cnet(img).numpy()
+if csw != ["conv"] or not np.allclose(cbefore, cafter, atol=1e-4):
+    fails.append("conv adapt: swapped=" + str(csw) + " max|d|=" + str(float(np.max(np.abs(cbefore - cafter)))))
+
+# 4) a Linear held in a Sequential's list is refused, not silently skipped.
+seq = nn.Sequential(nn.Linear(12, 8), nn.ReLU(), nn.Linear(8, 6))
+threw = False
+try:
+    torch.peft.apply_lora(seq)
+except Exception:
+    threw = True
+if not threw:
+    fails.append("indexed Linear was not refused")
+
+adapter = str(js.borch.Device.adapterInfo)
+("peft: " + ("all checks passed" if not fails else "FAILS: " + " | ".join(fails))
+ + f" · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

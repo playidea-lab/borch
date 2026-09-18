@@ -224,6 +224,9 @@ from ._report import report                              # noqa: E402,F401
 from . import _workbench as workbench                    # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
+# borch's own LoRA (torch.nn has none), mirroring borch-ts's `peft`. Imported after `_nn`
+# because `apply_lora` walks a model built from it.
+from . import _peft as peft                              # noqa: E402,F401
 # **Named here or `borch_webgpu.autograd` is an `AttributeError`.** A submodule is
 # not pulled in by importing the package, and `_ops.__getattr__` above answers
 # unknown names — so the miss would come out as this library's *not in the browser
@@ -293,6 +296,7 @@ def install(name="borch_webgpu", modules=None):
                       ("nn.utils", nn.utils), ("nn.utils.rnn", nn.utils.rnn),
                       ("nn.utils.fusion", nn.utils.fusion),
                       ("onnx", onnx),
+                      ("peft", peft),
                       ("optim.lr_scheduler", optim.lr_scheduler)):
         full = f"{name}.{path}"
         modules[full] = mod

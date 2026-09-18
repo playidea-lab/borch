@@ -100,6 +100,10 @@ CHECKS = [
     # A BatchNorm CNN and a scalar parameter trained under torch.compiled, then read after
     # dispose — the capture must not retire a kept buffer (the workbench's scratch/segment).
     ("compiled-train:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/compiled_train_probe.py", "--build"]),
+    # docs/SCALE.md Step 7: the Python peft mirror. `apply_lora` walks a Python-composed model
+    # and swaps each matched Linear/Conv2d for its LoRA wrapper (base bridged from the leaf's
+    # borch.ts layer) — forward unchanged, params reduced to adapters, indexed leaves refused.
+    ("peft:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/peft_py.py", "--build"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),
