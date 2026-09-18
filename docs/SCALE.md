@@ -405,6 +405,15 @@ nightly on a real adapter (`refuse_if_software` holds).
   matmul)** — both bit-identical to the host f16-rounded reference, golden 4057/0. The
   wall-clock trade (scalar-f16 vs subgroup-f32) is unmeasured; a `bench` on a real model
   through the window will settle it.
+- **2026-09-18, speed lever — the fill no longer stalls the GPU.** `Window.place` used to
+  `synchronize()` (submit **and** wait for the GPU) after every copy, so each block's upload
+  stalled the device before the block could run. It now `flush()`es — submits the copy but
+  does not block — because the block that reads the slot runs in a later submit and the
+  queue keeps submit order, so the bytes are in place before they are read. The wait moves
+  to the next `place`'s `mapAsync` (which needs only the one staging buffer free), and by
+  then the block between has run: the upload overlaps the compute instead of stalling. No
+  staging ring needed. `window_probe.py` still passes (correctness); the latency win is not
+  measurable adapter-independently, so it, too, awaits a real-model `bench`.
   and the f16 raw weight.
 
 ### Step 4 — `shader-f16`: storage first, compute second  · size M+M · depends on 0; parallel to 2–3

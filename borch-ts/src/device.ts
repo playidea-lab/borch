@@ -1926,9 +1926,15 @@ export class Window {
       new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
     this.staging.unmap();
     this.dev.copyRange(this.buffer, offset, this.staging, 0, bytes);
-    // The copy is encoded, not sent. Send and wait so the staging buffer is free to be
-    // mapped again for the next slot — and so the slot's bytes are really in place.
-    await this.dev.synchronize();
+    // **Submit the copy, but do not block on it.** It only has to be *submitted* here so the
+    // staging buffer is not held by an open encoder; it does not have to be *done*, because
+    // the block that reads this slot runs in a later submit and the queue keeps submit order
+    // — the bytes are in place before they are read. The wait moves to the next `place`'s
+    // `mapAsync`, which needs only this staging buffer free, and by then the block between
+    // has run: the upload overlaps the compute instead of stalling the GPU every slot. (A
+    // ring of staging buffers would overlap two uploads too; this removes the full stall
+    // with none of that machinery.)
+    this.dev.flush();
     this.reserved.set(offset, need);
     this.tick += 1;
     this.gens.set(offset, this.tick);
