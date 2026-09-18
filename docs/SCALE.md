@@ -802,6 +802,20 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   BatchNorm + a separate `.relu()` in `y`, `dx`, `dw`, `db`, on both the vec4 and scalar lanes, faults 0.
   It is the fifty-eighth browser entry point. The saved input is now version-guarded (`saved:[this]`),
   so an in-place edit of a BatchNorm input before backward is refused rather than silently recomputed wrong.
+- **2026-09-19, the step's overhead measured, and bind-group caching ruled out** (no code kept). With
+  conv and BatchNorm at their floors, the U-Net 96 px step is **≈ 26 % overhead** — GPU-time table sum
+  6.75 ms against a 9.1 ms wall, over 258 dispatches. So the remaining lever is fewer dispatches, not
+  faster kernels. The tractable candidate was **bind-group caching**: `bindGroupFor` builds a fresh
+  `createBindGroup` every dispatch (hundreds a step), and eager training reruns the same ops on the
+  same pooled buffers, so the bind groups recur and could be kept. Built it (keyed by pipeline + each
+  bound buffer's identity, offset, size; bounded, insertion-order eviction) and measured: **the overhead
+  did not move** (2.35 → 2.50 ms, within noise), golden still 4057/0. So the 26 % is **GPU kernel-launch
+  latency between dispatches, not CPU bind-group construction** — reverted, keeping only what moves the
+  table. What is left to recover it is genuine dispatch reduction: a **fused optimiser** (Adam is 45
+  dispatches a step, one per parameter, ≈ 0.4 ms of the overhead — but the params are separate buffers,
+  so it needs them flattened into one, a model-level change) or **cross-op fusion kernels** (conv→BN
+  stats, the BatchNorm finish passes when a channel is one workgroup). Both are their own project; the
+  per-kernel perf levers in conv and BatchNorm are spent.
 
 ### Step 8 — What this plan does not do
 
