@@ -99,6 +99,31 @@
     say(`conv2d windowed weight == normal (3->4, 8x8): ${convA ? "ok" : "WRONG"}`);
     say(`conv2d windowed weight == normal (16->16, 16x16): ${convB ? "ok" : "WRONG"}`);
 
+    // **A conv reads an int8 window weight too** (Step 5) — the weight funnel dequantises the
+    // slot to f32 scratch on the way in, so a conv needs no int8 kernel of its own. The
+    // reference is the same weight reconstructed on the host; the slot is a quarter of f32.
+    const convInt8ThroughWindow = async (N, C, H, O, kh, s) => {
+      const xd = seed(N * C * H * H, s), wd = seed(O * C * kh * kh, s + 5);
+      const x = Tensor.from(xd, [N, C, H, H]);
+      const rounded = dequantInt8PerChannel(wd, O);   // the int8-rounded values the window holds
+      const ref = Array.from(await x.conv2d(Tensor.from(rounded, [O, C, kh, kh]), null, 1, 1).toArray());
+      const cw = dev.window(1 << 20);
+      const { weight: wWin } = await Tensor.inWindowInt8(cw, wd, [O, C, kh, kh]);
+      const live = cw.live;
+      const got = Array.from(await x.conv2d(wWin, null, 1, 1).toArray());
+      const gw = dev.window(1 << 20);
+      await Tensor.inWindow(gw, wd, [O, C, kh, kh]);
+      const f32Live = gw.live;
+      gw.free(); cw.free();
+      return { eq: ref.length === got.length && ref.every((v, i) => v === got[i]), quarter: live <= f32Live / 4 };
+    };
+    const ci8A = await convInt8ThroughWindow(1, 3, 8, 4, 3, 21);   // direct kernel
+    const ci8B = await convInt8ThroughWindow(1, 16, 16, 16, 3, 33); // tiled kernel
+    // Both must be correct; the quarter-bytes claim is checked on the larger weight only — a
+    // small kernel (108 floats) rounds up to the 256-byte alignment floor at any precision.
+    const convInt8 = ci8A.eq && ci8B.eq && ci8B.quarter;
+    say(`int8 conv2d windowed weight == host int8-rounded (direct 3->4, tiled 16->16): ${ci8A.eq && ci8B.eq ? "ok" : "WRONG"} · large slot a quarter: ${ci8B.quarter ? "yes" : "NO"}`);
+
     // A windowed weight is a weight operand only — a generic op must refuse it, not read
     // the window from offset 0 (another slot's values).
     let refusedGeneric = false;
@@ -249,10 +274,10 @@
     win2.free();
     say(`faults: ${dev.faults.count}`);
     const ok = sameBuffer && offsetsOk && aOk && bOk && cOk && win.used === 2 * align
-      && sub.eqf && scl.eqf && convA && convB && refusedGeneric && evictWorks && evictThrows
+      && sub.eqf && scl.eqf && convA && convB && convInt8 && refusedGeneric && evictWorks && evictThrows
       && streamOk && streamBounded && f16Eq && f16Half && i8Eq && i8Quarter && netEq && netBounded && dev.faults.count === 0;
     say(ok ? "\nwindow: offset slices of one buffer fill and read back intact" : "\n**window: a check did not hold**");
-    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, refusedGeneric, evictWorks, evictThrows, streamOk, streamBounded, f16Eq, f16Half, i8Eq, i8Quarter, netEq, netBounded, used: win.used, faults: dev.faults.count };
+    window.__window = { text: lines.join("\n"), ok, sameBuffer, offsetsOk, aOk, bOk, cOk, subEq: sub.eqf, sclEq: scl.eqf, convA, convB, convInt8, refusedGeneric, evictWorks, evictThrows, streamOk, streamBounded, f16Eq, f16Half, i8Eq, i8Quarter, netEq, netBounded, used: win.used, faults: dev.faults.count };
   } catch (err) {
     window.__window = { error: String(err && err.stack || err), text: lines.join("\n") };
     say(`it could not be measured: ${err}`);

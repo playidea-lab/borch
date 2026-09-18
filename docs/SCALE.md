@@ -562,9 +562,20 @@ nightly on a real adapter (`refuse_if_software` holds).
 - **2026-09-18, the int8 accuracy gate passed** (`finetune.html`, `streamSequential({int8:true})`).
   The same ViT-Base fine-tune, its frozen blocks then streamed **as int8** for the held-out
   evaluation: **top-1 100 % = the f32 backbone's, within 1.0 pt**, on a window a quarter of the
-  f32 bytes, apple/metal-3. So Step 5 holds for the matmul path. What is left is the tiled **conv**
-  int8 read (for a CNN like EfficientNet-B0); the ≥ 300 MB model the plan targets is the ViT, and
-  it is done.
+  f32 bytes, apple/metal-3. So Step 5 holds for the matmul path.
+- **2026-09-18, int8 conv landed — Step 5 complete.** A conv reads an int8 window weight through
+  the **dequant fallback** in `weightBinding`: the slot is unpacked to an f32 scratch (a pooled,
+  transient buffer freed at the scope) on the way into the conv funnel, so the conv needs no int8
+  kernel of its own and both conv paths (direct and tiled) get it at once. `window_probe`: **an
+  int8 window weight through both conv2d kernels equals the host-reconstructed weight bit for
+  bit, at a quarter of the f32 slot's bytes** — on apple/metal-3 **and** google/swiftshader. The
+  window (the resident cost) is quartered; the dequant scratch is one weight's f32 at a time. A
+  *direct* int8 read in the tiled conv kernel (`convNDForwardTiled`, avoiding the dequant pass and
+  the scratch) is a **perf optimisation not taken** — the memory win is already had by the
+  quartered window, int8 is optional and its models (EfficientNet-B0, 21 MB) fit resident anyway,
+  and it would thread a scale binding through every conv-kernel permutation for a compute saving
+  on a path the plan never made hot. **Step 5 done: the whole int8 weight surface — matmul direct,
+  conv via dequant — a quarter of the bytes, values within a rounding, on every adapter.**
 
 ### Step 6 — Gradient checkpointing  · size M · depends on nothing; parallel to 2–5
 
