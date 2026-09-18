@@ -1,0 +1,102 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>torch.streaming on the WebGPU runtime — a frozen backbone streamed and fine-tuned</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The Python streaming bridge (docs/SCALE.md Step 7).** The workbench composes models
+  // Python-side; this checks that `torch.streaming` reaches borch.ts's scale primitives from
+  // Python: freeze a small stack, apply_lora it, offload its frozen bases and stream-train one
+  // step, and confirm the adapters (and a head trained through the loss) got gradients — and a
+  // no-grad streamed forward runs. The bridge, not a golden: torch has no streaming to match.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage("numpy");
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import numpy as np, js
+import borch_webgpu as torch
+nn = torch.nn
+fails = []
+rng = np.random.default_rng(0)
+D, K, B = 16, 3, 8
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.b0 = nn.Linear(D, D)
+        self.b1 = nn.Linear(D, D)
+    def forward(self, x):
+        return self.b1(self.b0(x))
+
+net = Net()
+net.requires_grad_(False)                      # freeze the backbone
+swapped = torch.peft.apply_lora(net, r=4)      # adapt b0, b1
+head = nn.Linear(D, K)
+x = torch.tensor(rng.standard_normal((B, D)).astype(np.float32))
+labs = torch.tensor((np.arange(B) % K).astype(np.int64))
+ce = nn.CrossEntropyLoss()
+
+# Offload the frozen bases and stream-train one step; the loss runs a head on the last block's
+# output, so head + adapters must all come back with a gradient.
+blocks = [torch.streaming.train_block(net.b0, offload=True),
+          torch.streaming.train_block(net.b1, offload=True)]
+win = torch.streaming.window(4 * D * D * 4 + 8192)
+
+def loss_fn(o):
+    return ce(head(o), labs)
+
+loss = torch.streaming.stream_train_step(win, x, blocks, loss_fn, loss_params=list(head.parameters()))
+lval = float(loss.item())
+if not np.isfinite(lval):
+    fails.append("loss not finite: " + str(lval))
+
+for who, m in (("b0", net.b0), ("b1", net.b1)):
+    ps = list(m.parameters())
+    if not ps:
+        fails.append(who + " has no trainable params")
+    for p in ps:
+        if p.grad is None:
+            fails.append(who + " adapter got no gradient")
+if any(p.grad is None for p in head.parameters()):
+    fails.append("head got no gradient through the loss")
+
+# A no-grad streamed forward reproduces a resident forward on the same (offloaded) blocks.
+with torch.no_grad():
+    streamed = torch.streaming.stream_sequential(win, x, blocks).numpy()
+if streamed.shape != (B, D):
+    fails.append("streamed forward wrong shape " + str(streamed.shape))
+win.free()
+
+adapter = str(js.borch.Device.adapterInfo)
+("streaming: " + ("bridge works — adapters and head trained, forward streamed" if not fails else "FAILS: " + " | ".join(fails))
+ + f" · loss {lval:.4f} · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

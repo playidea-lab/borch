@@ -104,6 +104,10 @@ CHECKS = [
     # and swaps each matched Linear/Conv2d for its LoRA wrapper (base bridged from the leaf's
     # borch.ts layer) — forward unchanged, params reduced to adapters, indexed leaves refused.
     ("peft:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/peft_py.py", "--build"]),
+    # docs/SCALE.md Step 7: the Python streaming bridge. torch.streaming reaches borch.ts's
+    # scale primitives from Python — freeze a stack, apply_lora, offload and stream-train one
+    # step, adapters and a head trained through the loss get gradients, a streamed forward runs.
+    ("streaming:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/streaming_py.py", "--build"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),
