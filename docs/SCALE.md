@@ -745,6 +745,30 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   cannot touch the recompute. Conclusion: the design is right; streaming perf is not the lever to
   pull. `stream_bench.py` re-measures it after any streaming change.
 
+- **2026-09-19, the conv input-gradient moved onto subgroup matrices** (`tensor.ts` conv
+  backward, `conv_dx_probe.{html,py}`). The subgroup forward already carried a `turned`
+  mode — dX as a GEMM, `M = C`, `K = O`, the kernel reversed — but nothing called it, so
+  every input gradient fell to the scalar direct tile (`cnd`). Wired in for the shapes that
+  qualify (`sgfFits` + same-padding); the rest still take the direct kernel. Measured on
+  U-Net 96 px, batch 16, apple/metal-3: dX left `cnd` for `cnft` at ≈ the forward's speed
+  (76 µs vs the forward's 69 µs on 16→16 96×96), step GPU ≈ 7.7 → 7.1 ms. Correct two ways
+  — golden 4057/0, and a direct probe comparing subgroup-on vs subgroup-off dX bit-identical
+  (max |Δ| 0.00e+0) across four 8-aligned shapes the golden's conv cases are too small to
+  reach. `conv_dx_probe.py` re-checks it; it is the fifty-seventh browser entry point.
+- **2026-09-19, the conv perf ceiling, measured.** With dX on subgroups, the U-Net step's
+  GPU table (`profile_py.py`, 96 px, batch 16) is: weight-grad `cnwg` 21 %, `cnft` 12 %,
+  forward `cnf` 11 %, pad `pdw` 8 %, stride-2 input-grad `cnxt` 7 %, the rest BatchNorm and
+  reductions. The three big items are each at a floor, not a lever: **`cnwg` is already the
+  tuned subgroup GEMM** (`convGradWeightSubgroupGlobal`, `SGW_WANT` picked by measuring
+  512/1024/2048, "≈2× the direct kernel everywhere, within 1e-6" — its own docstring is the
+  record); **`pdw` is structural** — `subgroupMatrixLoad` reads a clean strided 8×8 block and
+  cannot bounds-check individual cells, so the input must be pre-padded (pad-on-the-fly would
+  mean abandoning the matrix loader that runs at 11 TFLOP/s); **`cnxt` is a different shape** —
+  the stride-2 downsample convs' dX is a transposed conv, which `sgfFits` rejects (stride ≠ 1)
+  and which needs a new strided-subgroup kernel, not a knob. The tractable Option-2 lever (the
+  unwired dX subgroup path) is spent; the next conv win is that stride-2 transposed kernel, a
+  project of its own, and is left for when a stride-2-heavy model makes its 7 % worth the risk.
+
 ### Step 8 — What this plan does not do
 
 - **LLM scale (multi-GB)**: needs int4, multi-window tiers, Firefox's 10 GiB storage wall
