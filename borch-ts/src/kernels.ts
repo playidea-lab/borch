@@ -2016,7 +2016,7 @@ export function scalarMatmulSplit(M: number, K: number, N: number): number {
   return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
 }
 
-export function matmul(M: number, K: number, N: number, transA = false, transB = false, splits = 1): string {
+export function matmul(M: number, K: number, N: number, transA = false, transB = false, splits = 1, weightF16 = false): string {
   const decl: string[] = [];
   const zero: string[] = [];
   const fma: string[] = [];
@@ -2045,9 +2045,15 @@ export function matmul(M: number, K: number, N: number, transA = false, transB =
   const stageB = transB
     ? `let bk = idx % 16u; let bc = idx / 16u;`
     : `let bk = idx / 64u; let bc = idx % 64u;`;
-  return `
+  // **The weight operand may be read as f16 directly** where the device has `shader-f16`
+  // (`Device.f16`) and the weight lives in a window as half precision — no unpack pass and
+  // no f32 scratch. Unpacking to f32 first is the fallback where f16 is absent. The
+  // accumulation stays f32 either way (`Bs` is f32); only the storage read narrows.
+  const bexpr = transB ? "bcol * K + brow" : "brow * N + bcol";
+  const bread = weightF16 ? `f32(B[${bexpr}])` : `B[${bexpr}]`;
+  return `${weightF16 ? "enable f16;\n" : ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
-@group(0) @binding(1) var<storage, read> B: array<f32>;
+@group(0) @binding(1) var<storage, read> B: array<${weightF16 ? "f16" : "f32"}>;
 @group(0) @binding(2) var<storage, read_write> Out: array<f32>;
 const M: u32 = ${M}u; const K: u32 = ${K}u; const N: u32 = ${N}u;
 var<workgroup> As: array<f32, 1024>;
@@ -2076,7 +2082,7 @@ ${zero.join("\n")}
       As[ar * 16u + ak] = select(0.0, A[${transA ? "acol * M + arow" : "arow * K + acol"}], arow < M && acol < kTo);
       ${stageB}
       let brow = kFrom + t * 16u + bk; let bcol = wid.x * 64u + bc;
-      Bs[bk * 64u + bc] = select(0.0, B[${transB ? "bcol * K + brow" : "brow * N + bcol"}], brow < kTo && bcol < N);
+      Bs[bk * 64u + bc] = select(0.0, ${bread}, brow < kTo && bcol < N);
     }
     workgroupBarrier();
     for (var k = 0u; k < 16u; k = k + 1u) {

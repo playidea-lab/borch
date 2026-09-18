@@ -394,7 +394,17 @@ nightly on a real adapter (`refuse_if_software` holds).
   apple/metal-3 and the 5080, faults 0, golden 4057/0. Prefetch-one-ahead is a later speed
   lever (needs the staging ring); this establishes correctness and bounded memory. Next:
   the bimm adapter — turn a real EfficientNet/ViT into `StreamBlock`s (needs the upstream
-  `bimm-ts` plan-table re-export) and land it on the workbench feature pass;
+  `bimm-ts` plan-table re-export) and land it on the workbench feature pass.
+- **2026-09-18, speed lever — direct f16 read (Step 4).** The scalar matmul tile gains a
+  `weightF16` variant (`enable f16;`, `B: array<f16>`, `f32(B[…])`), and the matmul funnel
+  takes it (`mat2.f16WeightBinding()`) where the weight is an f16 window weight **and** the
+  device has `shader-f16` — reading the half-precision slot directly, no unpack pass, no f32
+  scratch. It bypasses the subgroup matrix (whose loader cannot narrow), so it trades that
+  path for the saved unpack; where f16 is absent the unpack fallback runs. `window_probe.py`:
+  on apple/metal-3 the f16 matmul is **1 dispatch (direct read)**, on the 5080 **2 (unpack +
+  matmul)** — both bit-identical to the host f16-rounded reference, golden 4057/0. The
+  wall-clock trade (scalar-f16 vs subgroup-f32) is unmeasured; a `bench` on a real model
+  through the window will settle it.
   and the f16 raw weight.
 
 ### Step 4 — `shader-f16`: storage first, compute second  · size M+M · depends on 0; parallel to 2–3

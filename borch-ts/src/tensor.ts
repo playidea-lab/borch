@@ -1132,6 +1132,22 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
+   * The f16 slot to read **directly** as a weight, or `null` to fall back to `weightBinding`
+   * (which unpacks). Returns the slot only when the weight is half-precision in a window
+   * *and* the device has `shader-f16` — the matmul then reads `array<f16>` with no unpack
+   * pass. Where f16 is absent (measured: the RTX 5080 on Vulkan), this is `null` and the
+   * unpack fallback runs. `docs/SCALE.md` Step 3 ⑤ / Step 4.
+   */
+  f16WeightBinding(): BindSlot | null {
+    if (this.windowF16Count === undefined || !Device.f16 || this.windowSlot === undefined) {
+      return null;
+    }
+    this.refuseIfDead();
+    this.windowLive?.();
+    return this.windowSlot;
+  }
+
+  /**
    * Where the values are. Where torch's `t.device` goes.
    *
    * **`'cpu'` is a place values are held, not a device that computes.**
@@ -2239,10 +2255,24 @@ export class Tensor implements Node<Tensor> {
     }
     const flags = `${transA ? "t" : "n"}${transB ? "t" : "n"}`;
     const out = dev().alloc(M * N);
-    // The hardware's matrix multiply where the device has it and the shape is whole
-    // eights; the scalar tile otherwise. Both give the same answer (golden), the first
-    // at torch's speed (see `matmulSubgroup`).
-    if (Device.subgroupMatrix && subgroupMatmulFits(M, K, N)) {
+    // **A half-precision window weight read directly** — the scalar tile with `array<f16>`,
+    // no unpack pass — where the device has `shader-f16`. It bypasses the subgroup matrix
+    // (whose 8×8×8 loader reads storage as its own type, with no place to narrow), trading
+    // that path for the saved unpack; the fallback (no f16) unpacks and takes the normal
+    // routes below. `docs/SCALE.md` Step 3 ⑤.
+    const f16Slot = mat2.f16WeightBinding();
+    if (f16Slot !== null) {
+      const splits = scalarMatmulSplit(M, K, N);
+      const target = splits > 1 ? dev().alloc(M * N * splits) : out;
+      dev().run(
+        dev().pipeline(`mmh:${M}:${K}:${N}:${flags}:${splits}`, () => matmul(M, K, N, transA, transB, splits, true)),
+        [this.buffer, f16Slot, target],
+        [Math.ceil(N / 64), Math.ceil(M / 64), splits],
+      );
+      if (splits > 1) {
+        dev().run1d(dev().pipeline(`sumsplits:${M * N}:${splits}`, () => sumSplits(M * N, splits)), [target, out], M * N);
+      }
+    } else if (Device.subgroupMatrix && subgroupMatmulFits(M, K, N)) {
       const { TM, TN } = subgroupMatmulTile(M, N);
       const splits = subgroupMatmulSplit(M, K, N);
       // Split, the pieces land in a slab each and are summed in a fixed order.

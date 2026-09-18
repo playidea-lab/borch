@@ -169,7 +169,14 @@
       const ref = Array.from(await x.matmul(Tensor.from(rounded, [Kd, Nn])).toArray());
       const fw = dev.window(1 << 20);
       const { weight } = await Tensor.inWindowF16(fw, wd, [Kd, Nn]);
-      const got = Array.from(await x.matmul(weight).toArray());
+      // Count the dispatches the f16 matmul makes: 1 where the device reads f16 directly
+      // (Device.f16), 2 where it unpacks first (unpack + matmul). Both give the same value.
+      const d0 = dev.dispatches;
+      const gt = x.matmul(weight);
+      const f16Dispatch = dev.dispatches - d0;
+      const got = Array.from(await gt.toArray());
+      const pathOk = Device.f16 ? f16Dispatch === 1 : f16Dispatch === 2;
+      say(`f16 matmul path: ${f16Dispatch} dispatch(es) — ${Device.f16 ? "direct f16 read" : "unpack fallback"} (${pathOk ? "as expected" : "UNEXPECTED"})`);
       const f16Live = fw.live;
       fw.free();
       // What the same weight would reserve as f32, for the halving comparison.
@@ -177,7 +184,7 @@
       await Tensor.inWindow(gw, wd, [Kd, Nn]);
       const f32Live = gw.live;
       gw.free();
-      f16Eq = ref.length === got.length && ref.every((v, i) => v === got[i]);
+      f16Eq = (ref.length === got.length && ref.every((v, i) => v === got[i])) && pathOk;
       f16Half = f16Live <= f32Live / 2;
       say(`f16 window weight == host f16-rounded (matmul): ${f16Eq ? "ok" : "WRONG"}`);
       say(`f16 slot is half an f32 slot: ${f16Live}B vs ${f32Live}B — ${f16Half ? "yes" : "NO"}`);
