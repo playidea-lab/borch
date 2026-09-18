@@ -728,6 +728,22 @@ borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB back
   held-out), and exports a model — apple/metal-3, faults 0. This closes the workbench page's own
   stated gap ("a linear probe reads what the frozen backbone already sees; tissue is where a
   partial fine-tune starts to matter"). `streaming_py.py` and `peft_py.py` hold the bridges.
+- **2026-09-18, the streaming tax measured** (`stream_bench.{html,py}`, a diagnostic). The same
+  LoRA stack trained one step four ways — resident/streamed × forward-only/full — turns "streaming
+  is slower" into a number. On apple/metal-3, a 12-block D=384 stack at batch 16: **a streamed step
+  is ≈2.9× a resident one** (6.47 ms vs 2.25 ms; +100 dispatches, ≈ a whole extra forward). The
+  breakdown: **recompute + backward streaming 57 %, placement + swap 18 %, forward compute 25 %.**
+  So the tax is **the checkpointing recompute, not the placement** — a first, reasoned review had
+  that backwards. And the recompute is **inherent to offload**: the frozen weights were freed, so
+  the backward must rebuild them; the only way not to pay it is not to stream, which is right when
+  the model fits — exactly what `_fit_lora` does (resident under budget, streamed above it). Two
+  caveats keep this honest: the bench is **dispatch-bound** (a resident forward is 99 dispatches in
+  1.5 ms ≈ 65 µs each — overhead, not FLOPs), so a real 224 px ViT with heavy per-block compute
+  pays a **smaller fraction**; and each block here has one weight, so it does not exercise the one
+  real optimisation — **coalescing a multi-weight block's placements into a single staging fill**
+  (a ViT block has four: qkv/proj/fc1/fc2), which would cut most of the 18–25 % placement share but
+  cannot touch the recompute. Conclusion: the design is right; streaming perf is not the lever to
+  pull. `stream_bench.py` re-measures it after any streaming change.
 
 ### Step 8 — What this plan does not do
 

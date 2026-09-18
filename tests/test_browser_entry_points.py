@@ -198,6 +198,9 @@ UNWIRED = {
                                          "five numbers and no verdict, and it wants a thousand photographs that "
                                          "are not in this repository"),
     "why_failing.py": ("on-demand", "groups already-failed golden cases by reason; nothing to run when they pass"),
+    "stream_bench.py": ("diagnostic", "where a streamed training step's time goes — the same LoRA stack "
+                                      "resident vs streamed, forward vs full step — a breakdown and no verdict "
+                                      "(docs/SCALE.md Step 7 performance)"),
 }
 
 # **Zero, and that is the point of the number rather than the end of it.** Nothing above is

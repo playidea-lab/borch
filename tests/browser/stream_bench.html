@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>streaming vs resident — where a training step's time goes</title>
+<script type="importmap">
+{ "imports": { "borch-ts": "/borch-ts/dist/src/index.js" } }
+</script>
+<body>
+<pre id="out">measuring…</pre>
+<script type="module">
+  // **A measurement, not a check** (docs/SCALE.md Step 7 performance). The same LoRA-adapted
+  // stack trained one step four ways, so the cost of streaming is a number rather than a guess:
+  //   1. resident forward (no grad)      2. streamed forward (streamSequential)
+  //   3. resident full step (fwd+bwd)    4. streamed full step (streamTrainStep)
+  // (2)-(1) is what placement+swap adds on the forward; (4)-(3) is the whole streaming tax
+  // (placement + the checkpointing recompute). Dispatch counts sit beside each.
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  const P = new URLSearchParams(location.search);
+  const D = +(P.get("d")) || 384;      // block width — ViT-small-ish matmul
+  const NB = +(P.get("blocks")) || 12; // depth
+  const BATCH = +(P.get("batch")) || 16;
+  const ITERS = +(P.get("iters")) || 12;
+  const WARM = 3;
+  try {
+    const bt = await import("borch-ts");
+    const { init, device, Device, Tensor, nn, optim, noGrad, scope, peft,
+            streamSequential, trainBlock, streamTrainStep } = bt;
+    await init();
+    const dev = device();
+    say(`adapter: ${Device.adapterInfo} · D=${D} blocks=${NB} batch=${BATCH} iters=${ITERS}`);
+
+    // A stack of LoRA-adapted Linear blocks, frozen base + a non-zero adapter.
+    const seed = (n, s) => { const a = new Float32Array(n); let x = s >>> 0; for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; a[i] = (x / 4294967296 - 0.5) * 0.3; } return a; };
+    const blocks = [];
+    for (let i = 0; i < NB; i++) {
+      const lin = peft.LoRALinear.fromLinear(Object.assign(new nn.Linear(D, D), {}), { r: 8, alpha: 8 });
+      const w = lin;
+      w.weight = bt.keepAlive(Tensor.from(seed(D * D, 1000 + i), [D, D])); w.weight.requiresGrad = false; lin.registerBuffer("weight", w.weight);
+      w.bias = bt.keepAlive(Tensor.from(seed(D, 5000 + i), [D])); w.bias.requiresGrad = false; lin.registerBuffer("bias", w.bias);
+      w.loraA = bt.keepAlive(Tensor.from(seed(8 * D, 2000 + i), [8, D])); w.loraA.requiresGrad = true;
+      w.loraB = bt.keepAlive(Tensor.from(seed(D * 8, 3000 + i), [D, 8])); w.loraB.requiresGrad = true;
+      blocks.push(lin);
+    }
+    const K = 3;
+    const head = new nn.Linear(D, K);
+    const x0 = bt.keepAlive(Tensor.from(seed(BATCH * D, 42), [BATCH, D]));
+    const labs = Tensor.from(Array.from({ length: BATCH }, (_, i) => i % K), [BATCH]);
+    const ce = new nn.CrossEntropyLoss();
+    const trainable = [...blocks.flatMap((b) => [b.loraA, b.loraB]), ...head.parameters()];
+    const zero = () => { for (const p of trainable) p.grad = null; };
+
+    // The frozen bases as host bytes, once — the streamed paths reuse these (offload off: the
+    // resident copies stay so the resident paths still run; this measures the streaming machinery,
+    // not the offload).
+    const trainBlocks = [];
+    for (const b of blocks) trainBlocks.push(await trainBlock(b, { offload: false }));
+    const slot = Math.ceil(D * D * 4 / dev.storageAlign) * dev.storageAlign;
+
+    const timed = async (fn) => {
+      for (let i = 0; i < WARM; i++) await fn();
+      const d0 = dev.dispatches;
+      const t = performance.now();
+      for (let i = 0; i < ITERS; i++) await fn();
+      const ms = (performance.now() - t) / ITERS;
+      const disp = (dev.dispatches - d0) / ITERS;
+      return { ms, disp };
+    };
+
+    // 1. Resident forward (no grad).
+    const residentFwd = async () => scope(async () => {
+      let h = x0; for (const b of blocks) h = b.forward(h);
+      return head.forward(h).toArray();
+    });
+    // 2. Streamed forward.
+    const win = dev.window(2 * slot);
+    const streamedFwd = async () => scope(async () => {
+      const outT = await streamSequential(win, x0, trainBlocks);
+      return head.forward(outT).toArray();
+    });
+    // 3. Resident full step (full tape).
+    const residentStep = async () => scope(async () => {
+      zero();
+      let h = x0; for (const b of blocks) h = b.forward(h);
+      const loss = ce.forward(head.forward(h), labs);
+      loss.backward();
+      return loss.toArray();
+    });
+    // 4. Streamed full step (checkpointing recompute).
+    const streamedStep = async () => {
+      zero();
+      const loss = await streamTrainStep(win, x0, trainBlocks, (o) => ce.forward(head.forward(o), labs), { lossParams: head.parameters() });
+      return loss.toArray();
+    };
+
+    const rF = await timed(residentFwd);
+    const sF = await timed(streamedFwd);
+    const rS = await timed(residentStep);
+    const sS = await timed(streamedStep);
+    win.free();
+
+    const pct = (a, b) => `${((a / b - 1) * 100).toFixed(0)}%`;
+    say(`\n(1) resident forward:     ${rF.ms.toFixed(2)} ms · ${rF.disp.toFixed(0)} dispatches`);
+    say(`(2) streamed forward:     ${sF.ms.toFixed(2)} ms · ${sF.disp.toFixed(0)} dispatches   [+${pct(sF.ms, rF.ms)} over resident = placement+swap]`);
+    say(`(3) resident full step:   ${rS.ms.toFixed(2)} ms · ${rS.disp.toFixed(0)} dispatches`);
+    say(`(4) streamed full step:   ${sS.ms.toFixed(2)} ms · ${sS.disp.toFixed(0)} dispatches   [+${pct(sS.ms, rS.ms)} over resident = the streaming tax]`);
+    say(`\nbreakdown of the streamed step (${sS.ms.toFixed(2)} ms):`);
+    say(`  · placement+swap on the forward:  ~${(sF.ms - rF.ms).toFixed(2)} ms  (${(100 * (sF.ms - rF.ms) / sS.ms).toFixed(0)}%)`);
+    say(`  · recompute + backward streaming: ~${(sS.ms - sF.ms).toFixed(2)} ms  (${(100 * (sS.ms - sF.ms) / sS.ms).toFixed(0)}%)`);
+    say(`  · resident forward compute:       ~${rF.ms.toFixed(2)} ms  (${(100 * rF.ms / sS.ms).toFixed(0)}%)`);
+    const placements = NB * 2;   // forward + backward, one weight per block
+    say(`\nplacements per streamed step: ${placements} (each a staging map + copyRange + flush)`);
+    say(`resident step forward compute is ${rF.ms.toFixed(2)} ms; a placement's amortised cost ≈ ${((sS.ms - rS.ms) / placements).toFixed(3)} ms`);
+    say(`faults: ${dev.faults.count}`);
+    window.__streamBench = { text: lines.join("\n"), residentFwd: rF, streamedFwd: sF, residentStep: rS, streamedStep: sS, D, NB, BATCH, faults: dev.faults.count, adapter: Device.adapterInfo };
+  } catch (err) {
+    window.__streamBench = { error: String(err && err.stack || err), text: lines.join("\n") };
+    say(`it could not be measured: ${err}`);
+  }
+</script>
+</body>
