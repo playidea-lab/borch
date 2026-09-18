@@ -52,6 +52,26 @@
         worst = Math.max(worst, m); allOk = allOk && ok;
         say(`dX ${C}->${O} ${H}x${W} k${K} s${S}: max |Δ| ${m.toExponential(2)} — ${ok ? "ok" : "WRONG"}`);
       }
+      // The transpose forward is the same non-overlapping GEMM+scatter (`convGradInputSubgroupStrided`),
+      // reached the other way — C = Cout, O = Cin, the weight laid out (Cin, Cout, …). Verified here too,
+      // since it is inherently C ≠ O and the golden's transpose cases may not reach the subgroup path.
+      // (Cin, Cout, H, W) for a k=s=2 up-sample.
+      const tshapes = [[2, 32, 16, 16, 16], [4, 64, 12, 12, 32], [2, 16, 24, 24, 8]];
+      for (const [N, Cin, H, W, Cout] of tshapes) {
+        const xd = seed(N * Cin * H * W, 5), wd = seed(Cin * Cout * 4, 17);
+        const fwdFor = async (useSub) => {
+          Device.subgroupMatrix = useSub;
+          const x = Tensor.from(xd, [N, Cin, H, W]);
+          const w = Tensor.from(wd, [Cin, Cout, 2, 2]);
+          return Array.from(await x.convTransposeND(w, null, 2, 0).toArray());
+        };
+        const ref = await fwdFor(false); const got = await fwdFor(true);
+        Device.subgroupMatrix = true;
+        let m = 0; for (let i = 0; i < ref.length; i++) m = Math.max(m, Math.abs((ref[i] ?? 0) - (got[i] ?? 0)));
+        const ok = ref.length === got.length && m <= 1e-4;
+        worst = Math.max(worst, m); allOk = allOk && ok;
+        say(`convT ${Cin}->${Cout} ${H}x${W} k2 s2: max |Δ| ${m.toExponential(2)} — ${ok ? "ok" : "WRONG"}`);
+      }
       say(`faults: ${bt.device().faults.count}`);
       const ok = allOk && bt.device().faults.count === 0;
       say(ok ? "\ndX subgroup == direct reference across shapes" : "\n**dX subgroup diverges from the reference**");
