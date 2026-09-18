@@ -95,6 +95,19 @@ def apply_lora(model, targets=None, r=8, alpha=None):
     predicate is not bridged here); the default is every adaptable leaf. Returns the dotted
     names swapped. The adapters start at zero, so the forward is unchanged until they train, and
     the call is idempotent — a `LoRALinear` is not a `Linear`."""
+    # A **wrapped** borch.ts module (a hub-loaded backbone) keeps its whole tree on the TS side,
+    # invisible to a Python walk (`_children` reads Python attributes only). The TS `applyLora`
+    # walks that tree, so delegate to it and the adapters live where `forward_features` reads them.
+    base = getattr(model, "_m", None)
+    if base is not None:
+        opts = {}
+        if r is not None:
+            opts["r"] = int(r)
+        if alpha is not None:
+            opts["alpha"] = int(alpha)
+        if targets is not None:
+            opts["targets"] = _to_js(list(targets))
+        return [str(s) for s in _ts.peft.applyLora(base, _js_options(**opts))]
     match = _make_match(targets)
     hits = []
     for name, module in model.named_modules():

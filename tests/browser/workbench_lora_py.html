@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the workbench fine-tunes a backbone with LoRA — Step 7 on the surface it was for</title>
+<body>
+<pre id="out">probing…</pre>
+<script>
+  // **The workbench's fine-tune path (docs/SCALE.md Step 7 / the workbench).** The page's own
+  // limit — "a linear probe reads what the frozen backbone already sees; tissue is where a
+  // partial fine-tune starts to matter" — is what apply_lora closes. This trains a folder of
+  // three colour classes two ways through `torch.workbench.setup(...).fit()`: the frozen head
+  // (a linear probe) and the LoRA fine-tune (finetune=True), and checks the fine-tune runs,
+  // scores, and exports a model that predicts — the adapters over a resident backbone.
+  const out = document.getElementById("out");
+  const q = new URLSearchParams(location.search);
+  const wheel = location.origin + q.get("wheel");
+  const origin = location.origin;
+  const code = `
+    importScripts(${JSON.stringify(origin + "/vendor/pyodide/pyodide.js")});
+    (async () => {
+      const t0 = performance.now();
+      const say = (s) => postMessage({ say: s });
+      try {
+        const py = await loadPyodide({ indexURL: ${JSON.stringify(origin + "/vendor/pyodide/")} });
+        say("Pyodide " + py.version + " in a worker");
+        await py.loadPackage(["numpy", "Pillow"]);
+        await py.loadPackage(${JSON.stringify(wheel)});
+        say("installed the wheel · " + (performance.now() - t0).toFixed(0) + " ms so far");
+        const text = await py.runPythonAsync(\`
+import io, numpy as np, js
+from PIL import Image
+import borch_webgpu as torch
+fails = []
+rng = np.random.default_rng(0)
+
+# A folder of three colour classes — a solid dominant colour plus noise, named class-first so
+# the workbench reads the label from the name.
+COLORS = {"red": (200, 60, 60), "green": (60, 200, 60), "blue": (60, 60, 200)}
+def png(name, base, i):
+    a = np.clip(np.array(base, np.float32) + rng.normal(0, 25, (48, 48, 3)), 0, 255).astype(np.uint8)
+    buf = io.BytesIO(); Image.fromarray(a, "RGB").save(buf, format="PNG")
+    return (f"{name}_{i:03d}.png", buf.getvalue())
+files = [png(n, c, i) for n, c in COLORS.items() for i in range(24)]
+
+backbone = "imagenet-vit-tiny-patch16-224"
+# The frozen head (linear probe) for a reference number.
+probe = torch.workbench.setup(files, backbone=backbone, epochs=40, val=0.3, seed=0).fit()
+probe_acc = float(probe.accuracy)
+
+# The LoRA fine-tune — the same folder, the backbone adapted rather than frozen.
+ft = torch.workbench.setup(files, backbone=backbone, finetune=True, epochs=3, val=0.3, seed=0).fit()
+ft_acc = float(ft.accuracy)
+if ft.model is None:
+    fails.append("fine-tune left no model to export")
+# It predicts on the held-out split (accuracy is computed from that).
+if not (0.0 <= ft_acc <= 1.0):
+    fails.append("fine-tune accuracy out of range: " + str(ft_acc))
+# On three plainly separable colours a tiny backbone should clear well above chance.
+if ft_acc < 0.7:
+    fails.append("fine-tune accuracy below 0.70: " + str(ft_acc))
+if "LoRA" not in (ft.how or ""):
+    fails.append("how did not record LoRA: " + str(ft.how))
+
+adapter = str(js.borch.Device.adapterInfo)
+("workbench-lora: " + ("fine-tune trains, scores and exports" if not fails else "FAILS: " + " | ".join(fails))
+ + f" · probe {probe_acc:.2f} · finetune {ft_acc:.2f} · faults {int(js.borch.device().faults.count)} · adapter {adapter}")
+\`);
+        postMessage({ done: text, ms: performance.now() - t0 });
+      } catch (err) {
+        postMessage({ error: String(err && err.stack || err) });
+      }
+    })();
+  `;
+  const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const lines = [];
+  const show = () => { out.textContent = lines.join("\n"); };
+  worker.onmessage = (e) => {
+    if (e.data.say) { lines.push(e.data.say); show(); }
+    if (e.data.done) { lines.push(e.data.done + " · the run " + e.data.ms.toFixed(0) + " ms"); show(); window.__wheel = { text: lines.join("\n"), done: lines.join("\n") }; worker.terminate(); }
+    if (e.data.error) { lines.push("error: " + e.data.error); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: e.data.error }; worker.terminate(); }
+  };
+  worker.onerror = (e) => { lines.push("worker error: " + (e.message || e)); show(); window.__wheel = { text: lines.join("\n"), ok: false, error: String(e.message || e) }; };
+</script>
+</body>

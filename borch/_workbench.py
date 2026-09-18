@@ -105,7 +105,7 @@ class Session:
 
     def __init__(self, torch, files, *, size=None, batch=16, epochs=12, lr=None,
                  optimizer=None, backbone=None, val=0.0, seed=0, k=None,
-                 standardise=True, masks=None, label=label_from_name):
+                 standardise=True, masks=None, label=label_from_name, finetune=False):
         # **The CPU door is a different library, not a slower one.** `borch_cpu` has no
         # `nn`, no `optim` and no autograd: what it has is a frozen backbone's forward and
         # a linear head that fits itself. So the surface is asked what it can do rather
@@ -195,7 +195,7 @@ class Session:
         self.config = {
             "size": int(size), "batch": int(batch), "epochs": int(epochs), "lr": float(lr),
             "optimizer": optimizer, "backbone": backbone, "val": float(val), "seed": int(seed),
-            "standardise": bool(standardise),
+            "standardise": bool(standardise), "finetune": bool(finetune),
             "images": len(self.data), "classes": list(self.data.classes),
         }
         self.k = k
@@ -263,9 +263,17 @@ class Session:
                 raise ValueError(
                     f"workbench: {torch.__name__} cannot train a model of your own — there is "
                     "no autograd on this door. It fits a linear head on a frozen backbone.")
+            if cfg["finetune"]:
+                raise ValueError(
+                    f"workbench: finetune=True adapts the backbone with LoRA, which needs "
+                    f"autograd — {torch.__name__} has none. Use borch_webgpu, or leave finetune "
+                    "off for the linear head on frozen features.")
             self._fit_head_cpu(classes, train_rows, y_all)
         elif cfg["backbone"] is not None and model is None:
-            self._fit_head(classes, train_rows, y_all)
+            if cfg["finetune"]:
+                self._fit_lora(classes, train_rows, y_all)
+            else:
+                self._fit_head(classes, train_rows, y_all)
         else:
             mine = model is not None
             self.model = model if mine else _small_cnn(torch.nn, classes)
@@ -419,6 +427,82 @@ class Session:
         self.model = _Frozen(torch.nn, net, head)
         self.model.eval()
         self.how = f"{cfg['backbone']} frozen · head {cfg['epochs']} steps"
+
+    def _fit_lora(self, classes, train_rows, y_all):
+        """The fine-tune path: adapt the backbone with LoRA and train it with a new head, rather
+        than freezing it and training the head alone. A linear probe reads what the frozen
+        backbone already sees; when the images are unlike the backbone's training set — tissue,
+        say — adapting the backbone is what moves the score. Needs autograd (this surface has it).
+
+        The backbone is frozen and `apply_lora` adds a low-rank adapter beside each of its
+        Linears; only the adapters and the head train, so the update is a couple of MB, and the
+        base stays exactly itself until the adapters learn. Backbones under the workbench budget
+        fit resident, so this trains resident; a backbone too large to fit is `torch.streaming`'s
+        (`docs/SCALE.md` Step 7), the same adapters over a streamed frozen base.
+        """
+        torch, cfg = self.torch, self.config
+        if not hasattr(torch, "peft"):
+            raise RuntimeError(
+                f"workbench: finetune=True adapts the backbone with LoRA, and {torch.__name__} "
+                "has no `peft`. Use borch_webgpu.")
+        net = torch.hub.load(cfg["backbone"])
+        transform = getattr(net, "transform", None)
+        if transform is None:
+            raise RuntimeError(
+                f"workbench: {cfg['backbone']} arrived without the preparation its weights "
+                "were trained under — `hub.load` attaches it as `.transform`, and an older "
+                "wheel does not.")
+        self.config["size"] = int(net.manifest["preprocess"]["inputSize"][1])
+        net.requires_grad_(False)                          # freeze the base
+        r = 8
+        swapped = torch.peft.apply_lora(net, r=r)           # a low-rank adapter beside each Linear
+        head = torch.nn.Linear(net.num_features, classes)
+        self.head = head
+        # One prepared photograph for the export, at the manifest's size.
+        self._sample = next(iter(self._prepared(transform, 1)))[0]
+        trainable = [p for p in net.parameters() if p.requires_grad] + list(head.parameters())
+        opt = self._optimizer(trainable)
+        crit = torch.nn.CrossEntropyLoss()
+        train_set = set(int(i) for i in train_rows)
+        scope = getattr(torch, "scope", None)
+        losses = []
+        for _epoch in range(cfg["epochs"]):
+            last = None
+            for xb, idx in self._prepared(transform, cfg["batch"]):
+                keep = [j for j, i in enumerate(idx) if int(i) in train_set]
+                if not keep:
+                    continue
+                xk = xb[keep]
+                yk = y_all[idx][keep]
+
+                def step(xk=xk, yk=yk):
+                    opt.zero_grad()
+                    feats = net.forward_head(net.forward_features(torch.tensor(xk)), pre_logits=True)
+                    loss = crit(head(feats), torch.tensor(yk))
+                    loss.backward()
+                    opt.step()
+                    return loss
+
+                if scope:
+                    with scope():
+                        last = float(step().item())
+                else:
+                    last = float(step().item())
+            losses.append(last)
+        self.losses = losses
+        # Cache the **adapted** backbone's features for every image, so `_predict` scores through
+        # `head(features)` exactly as the frozen-head path does — the features are the fine-tuned
+        # ones now, not the frozen ones.
+        net.eval()
+        chunks = []
+        with torch.no_grad():
+            for xb, _idx in self._prepared(transform, cfg["batch"]):
+                chunks.append(net.forward_head(net.forward_features(torch.tensor(xb)),
+                                               pre_logits=True).numpy())
+        self.features = _np.concatenate(chunks)
+        self.model = _Frozen(torch.nn, net, head)
+        self.model.eval()
+        self.how = f"{cfg['backbone']} LoRA r={r} ({len(swapped)} layers) · {cfg['epochs']} epochs"
 
     # -- masks: every weight learns, and the score is an overlap -------------------
     @property

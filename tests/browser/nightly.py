@@ -108,6 +108,10 @@ CHECKS = [
     # scale primitives from Python — freeze a stack, apply_lora, offload and stream-train one
     # step, adapters and a head trained through the loss get gradients, a streamed forward runs.
     ("streaming:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/streaming_py.py", "--build"]),
+    # docs/SCALE.md Step 7 / the workbench: torch.workbench.setup(..., finetune=True).fit() adapts
+    # a backbone with LoRA (a folder of colour classes), scores it, and exports a model — the
+    # fine-tune path the workbench page says tissue needs. Network (hub fetches a ViT-Tiny) + GPU.
+    ("workbench-lora:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/workbench_lora_py.py", "--build"]),
     # The buffer pool's invariants watched through a real training run — no kept or
     # capture-owned buffer pooled, none pooled twice, each in its size's bucket.
     ("invariants:py", ["uv", "run", "--project", str(REPO), "--with", "playwright", "python", "tests/browser/invariants_probe.py", "--build"]),

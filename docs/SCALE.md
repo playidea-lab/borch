@@ -704,6 +704,20 @@ nightly on a real adapter (`refuse_if_software` holds).
 **Step 7 done. The plan's payoff — fine-tuning a model that does not fit, in a tab, with a
 borch-fed-carriable adapter — is demonstrated end to end on a real 346 MB backbone.**
 
+- **2026-09-18, wired into the workbench** (`torch.workbench.setup(..., finetune=True)`). The
+  scale work reached the surface it was for. Three pieces landed on the Python side: the peft
+  mirror's `apply_lora` now **delegates a wrapped (hub-loaded) backbone to the TS `applyLora`**
+  (its tree lives on the TS side, invisible to a Python walk); `torch.streaming`
+  (`borch_webgpu/_stream.py`) bridges `trainBlock`/`streamTrainStep`/`streamSequential` through
+  JSPI (`run_sync`) with the loss as a `create_proxy` callback; and the workbench `Session` gains
+  a `_fit_lora` path — freeze the backbone, `apply_lora` it, train the adapters and a new head
+  through the backbone (resident for a budget-sized model; `torch.streaming` for one too large).
+  `workbench_lora_py.py` (nightly `workbench-lora`, wheel + network): a folder of three colour
+  classes fine-tuned through `setup(..., finetune=True).fit()` on ViT-Tiny trains, scores (1.00
+  held-out), and exports a model — apple/metal-3, faults 0. This closes the workbench page's own
+  stated gap ("a linear probe reads what the frozen backbone already sees; tissue is where a
+  partial fine-tune starts to matter"). `streaming_py.py` and `peft_py.py` hold the bridges.
+
 ### Step 8 — What this plan does not do
 
 - **LLM scale (multi-GB)**: needs int4, multi-window tiers, Firefox's 10 GiB storage wall

@@ -89,6 +89,7 @@
     "compiled-train:py": "uv run --with playwright python tests/browser/compiled_train_probe.py --build",
     "peft:py": "uv run --with playwright python tests/browser/peft_py.py --build",
     "streaming:py": "uv run --with playwright python tests/browser/streaming_py.py --build",
+    "workbench-lora:py": "uv run --with playwright python tests/browser/workbench_lora_py.py --build",
     "finetune:py": "uv run --with playwright python tests/browser/finetune.py",
     "invariants:py": "uv run --with playwright python tests/browser/invariants_probe.py --build",
     "onnx-trap:py": "uv run --with playwright python tests/browser/onnx_trap_probe.py --build",
