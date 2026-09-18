@@ -11668,7 +11668,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
               dev().run1d(
                 dev().pipeline(`tmwt:${key}`, () => tapMajorWeights(s.O, s.C, kSpace, true, false)),
                 [weight.weightBinding(), turnedW], kSpace * Mp * Kp);
-              const paddedG = padForSubgroup(s, `${key}:dx`, g.buffer);
+              // The gradient is the turned conv's *input*, so it is padded with **O channels**, not
+              // C — `convForwardSubgroup` turned reads K = O channels of it. Same-padding here, so its
+              // spatial matches the forward's padded input. (Padding by C silently read past the
+              // buffer whenever C ≠ O.)
+              const gradShape: ConvNDShape = { ...s, C: s.O, inDims: s.outDims };
+              const paddedG = padForSubgroup(gradShape, `${key}:dx`, g.buffer);
               dev().run(
                 dev().pipeline(`cnft:${key}`, () => convForwardSubgroup(s, false, true)),
                 [paddedG, turnedW, gi], sgfGrid(s, true));

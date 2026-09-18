@@ -31,7 +31,7 @@
       const xd = seed(N * C * H * W, 7), wd = seed(C, 13), bd = seed(C, 29);
       // One side fused (relu inside the kernel), the other the same BatchNorm with a separate
       // ReLU. Fresh leaves each time so the grads do not accumulate across the two.
-      const run = (fused) => {
+      const run = async (fused) => {
         const x = Tensor.from(xd, [N, C, H, W]); x.requiresGrad = true;
         const w = Tensor.from(wd, [C]); w.requiresGrad = true;
         const b = Tensor.from(bd, [C]); b.requiresGrad = true;
@@ -40,11 +40,11 @@
         // A non-uniform upstream gradient, so a wrong mask cannot hide behind ones.
         const g = Tensor.from(seed(N * C * H * W, 91), [N, C, H, W]);
         y.mul(g).sum().backward();
-        return { y: Array.from(y.toArray()), dx: Array.from(x.grad.toArray()),
-                 dw: Array.from(w.grad.toArray()), db: Array.from(b.grad.toArray()) };
+        return { y: Array.from(await y.toArray()), dx: Array.from(await x.grad.toArray()),
+                 dw: Array.from(await w.grad.toArray()), db: Array.from(await b.grad.toArray()) };
       };
-      const ref = run(false);  // BatchNorm(relu off) + separate ReLU — golden-covered pieces
-      const got = run(true);   // the fused-relu kernel
+      const ref = await run(false);  // BatchNorm(relu off) + separate ReLU — golden-covered pieces
+      const got = await run(true);   // the fused-relu kernel
       const cmp = (a, b2) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs((a[i] ?? 0) - (b2[i] ?? 0))); return m; };
       const my = Math.max(cmp(ref.y, got.y), cmp(ref.dx, got.dx), cmp(ref.dw, got.dw), cmp(ref.db, got.db));
       const ok = my <= 1e-4;

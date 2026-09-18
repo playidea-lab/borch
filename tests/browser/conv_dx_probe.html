@@ -37,15 +37,15 @@
       let worst = 0, allOk = true;
       for (const [N, C, H, W, O, K, P, S] of shapes) {
         const xd = seed(N * C * H * W, 11), wd = seed(O * C * K * K, 22);
-        const dxFor = (useSub) => {
+        const dxFor = async (useSub) => {
           Device.subgroupMatrix = useSub;
           const x = Tensor.from(xd, [N, C, H, W]); x.requiresGrad = true;
           const w = Tensor.from(wd, [O, C, K, K]);
           x.conv2d(w, null, S, P).sum().backward();
-          return Array.from(x.grad.toArray());
+          return Array.from(await x.grad.toArray());
         };
-        const ref = dxFor(false);          // direct / GEMM kernel — the reference
-        const got = dxFor(true);           // subgroup path
+        const ref = await dxFor(false);    // direct / GEMM kernel — the reference
+        const got = await dxFor(true);     // subgroup path
         Device.subgroupMatrix = true;
         let m = 0; for (let i = 0; i < ref.length; i++) m = Math.max(m, Math.abs((ref[i] ?? 0) - (got[i] ?? 0)));
         const ok = ref.length === got.length && m <= 1e-4;
